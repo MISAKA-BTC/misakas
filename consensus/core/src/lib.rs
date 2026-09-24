@@ -252,6 +252,9 @@ pub mod palw_fp_objects_v3;
 pub mod palw_freeprompt_v3;
 pub mod palw_genesis_v2;
 pub mod palw_heartbeat_v1;
+/// ADR-0152 v3.1 H-1 — the lifecycle objects a heartbeat must be able to carry: the one list the
+/// miner's carrier lane and the relay's exemption read (P2-9). Node policy; no rule reads it.
+pub mod palw_heartbeat_carriers_v1;
 /// ADR-0103 — the context is held off the chain: the seat's interval of positions, its route, its
 /// width and its fetch, as pure functions. Consensus-inert.
 pub mod palw_held_context_v1;
@@ -419,6 +422,8 @@ pub mod palw_transcendental;
 pub mod palw_v2;
 pub mod palw_verification_profile_v1;
 pub mod palw_verification_v2;
+/// ADR-0152 V-1…V-8, read side: `getPalwVesting` (op 199) and claim row v3 (phase2-plan P2-10).
+pub mod palw_vesting_read_v1;
 pub mod palw_vesting_v1;
 pub mod palw_weight;
 pub mod palw_work_target_v1;

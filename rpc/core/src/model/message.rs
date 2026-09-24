@@ -2365,6 +2365,21 @@ pub struct GetPalwProducerFactsResponse {
     /// holds no class and reads the network's). A version-7 or older node cannot have a class that
     /// differs, so it reads as `prompt_ids_merkle`.
     pub class_prompt_ids_merkle: bool,
+    /// **ADR-0152 P6 (version 9): the one committed ledger** — decimal `u128`,
+    /// `PalwProducerBondFactsV2::committed`, the number the fold compares with the ceiling past
+    /// `palw_rcore_plus` (below it, the same ledger `bond_reserved_exposure` reports). A reader
+    /// that sized room from `bond_reserved_exposure` past the fence saw room the fold refuses. A
+    /// version-8 or older node reads as its `bond_reserved_exposure` — the only ledger it has.
+    pub bond_committed: String,
+    /// **ADR-0152 U2 (version 9): how far the bond's posted collateral is below the producer
+    /// floor**, in sompi; `0` when it meets the floor or the fence is not in force. Past the fence
+    /// a bond short of it produces nothing (`ProducerBelowFloor` on both lanes) and
+    /// `not_ready_reason` says so. An older node reads as `0`: it cannot be asserting a floor.
+    pub bond_producer_floor_shortfall: u64,
+    /// **ADR-0152 A-6 (version 9): what the bond holds as an accuser** — decimal `u128`, counted
+    /// against its collateral beside `bond_committed` by every gate. `"0"` below the fence and
+    /// from an older node.
+    pub bond_accuser_exposure: String,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2393,7 +2408,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &8, writer)?;
+        store!(u16, &9, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2424,6 +2439,9 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(bool, &self.prompt_ids_merkle, writer)?;
         store!(bool, &self.fp_decode_constraint_armed, writer)?;
         store!(bool, &self.class_prompt_ids_merkle, writer)?;
+        store!(String, &self.bond_committed, writer)?;
+        store!(u64, &self.bond_producer_floor_shortfall, writer)?;
+        store!(String, &self.bond_accuser_exposure, writer)?;
         Ok(())
     }
 }
@@ -2477,6 +2495,13 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // the network's (it refuses the held fence past genesis), so its class form IS the network
         // form it reported — the one reading that neither invents a difference nor hides one.
         let class_prompt_ids_merkle = if version >= 8 { load!(bool, reader)? } else { prompt_ids_merkle };
+        // Version 9 (ADR-0152 P6): an older node has one ledger, the one it reported; it cannot be
+        // asserting a producer floor or an accuser ledger.
+        let (bond_committed, bond_producer_floor_shortfall, bond_accuser_exposure) = if version >= 9 {
+            (load!(String, reader)?, load!(u64, reader)?, load!(String, reader)?)
+        } else {
+            (bond_reserved_exposure.clone(), 0, "0".to_string())
+        };
         Ok(Self {
             available,
             chain_point,
@@ -2508,6 +2533,9 @@ impl Deserializer for GetPalwProducerFactsResponse {
             prompt_ids_merkle,
             fp_decode_constraint_armed,
             class_prompt_ids_merkle,
+            bond_committed,
+            bond_producer_floor_shortfall,
+            bond_accuser_exposure,
         })
     }
 }
@@ -4197,11 +4225,35 @@ pub struct RpcPalwClaimRow {
     pub exec_tickets_spent: u32,
     pub exec_first_round: Option<u64>,
     pub exec_last_round: Option<u64>,
+    /// **Version 3 — ADR-0152 R-core+ (phase2-plan §1.6): where this claim's reward stands past
+    /// Final.** On testnet-12 a Final names its reward in a vesting row instead of paying it: the
+    /// row matures on two clocks (V-4), latches, waits its turn (V-7), moves into the queue at step
+    /// 3d and is minted by the next coinbase. `vesting_stage`: `maturing` (not latched), `latched`,
+    /// `moved` (left the row; `payout_pending_sompi` says whether the next coinbase still has to
+    /// mint it), or empty — the claim did not vest (not Final, below the fence, no escrow, the
+    /// prompt lane) or was voided. A convicted Final shows as its void: the claim record cannot tell
+    /// a burned row from a void before Final, and `getPalwVesting`'s `burnedSompi` counts burns.
+    pub vesting_stage: String,
+    /// Every sompi the row names (producer + credited seats + reserve); 0 once moved.
+    pub vesting_sompi: u64,
+    /// Σ of the row's legs that pay the queried bond (its producer leg, or its seat's).
+    pub vesting_payee_sompi: u64,
+    /// The DAA clock: the row cannot mature before it.
+    pub vesting_expiry_daa: Option<u64>,
+    /// Anchors settled since Final, and how many the second clock needs (`None`: no second clock).
+    pub vesting_licences_since_final: u64,
+    pub vesting_licences_needed: Option<u64>,
+    /// The latch.
+    pub vesting_matured_at: Option<u64>,
+    /// The earliest DAA the row can move — the next block's when its plan takes it, else a lower
+    /// bound (`vesting_eta_estimated`).
+    pub vesting_eta_daa: Option<u64>,
+    pub vesting_eta_estimated: bool,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
         store!(String, &self.class_id, writer)?;
@@ -4230,6 +4282,17 @@ impl Serializer for RpcPalwClaimRow {
         store!(u32, &self.exec_tickets_spent, writer)?;
         store!(Option<u64>, &self.exec_first_round, writer)?;
         store!(Option<u64>, &self.exec_last_round, writer)?;
+        // Version 3: the vesting row (ADR-0152). Appended, so a version-2 reader stops before it —
+        // each row is its own length-prefixed payload inside the response's list.
+        store!(String, &self.vesting_stage, writer)?;
+        store!(u64, &self.vesting_sompi, writer)?;
+        store!(u64, &self.vesting_payee_sompi, writer)?;
+        store!(Option<u64>, &self.vesting_expiry_daa, writer)?;
+        store!(u64, &self.vesting_licences_since_final, writer)?;
+        store!(Option<u64>, &self.vesting_licences_needed, writer)?;
+        store!(Option<u64>, &self.vesting_matured_at, writer)?;
+        store!(Option<u64>, &self.vesting_eta_daa, writer)?;
+        store!(bool, &self.vesting_eta_estimated, writer)?;
         Ok(())
     }
 }
@@ -4269,6 +4332,17 @@ impl Deserializer for RpcPalwClaimRow {
             row.exec_first_round = load!(Option<u64>, reader)?;
             row.exec_last_round = load!(Option<u64>, reader)?;
         }
+        if version >= 3 {
+            row.vesting_stage = load!(String, reader)?;
+            row.vesting_sompi = load!(u64, reader)?;
+            row.vesting_payee_sompi = load!(u64, reader)?;
+            row.vesting_expiry_daa = load!(Option<u64>, reader)?;
+            row.vesting_licences_since_final = load!(u64, reader)?;
+            row.vesting_licences_needed = load!(Option<u64>, reader)?;
+            row.vesting_matured_at = load!(Option<u64>, reader)?;
+            row.vesting_eta_daa = load!(Option<u64>, reader)?;
+            row.vesting_eta_estimated = load!(bool, reader)?;
+        }
         Ok(row)
     }
 }
@@ -4297,11 +4371,17 @@ pub struct GetPalwClaimsResponse {
     /// The classes this bond is seated for: a bond judges only the classes it declared, and a
     /// registration declares none.
     pub bond_capable_classes: Vec<String>,
+    /// **Version 2 — ADR-0152 R-core+**: claims that RETIRED from the state while their reward
+    /// still vests (asked with `include_terminal`). A claim retires `claim_retirement` after Final;
+    /// its row lives until it moves, so from retirement on it is the only record of the reward.
+    /// Each is shaped as a `final` claim row carrying its vesting fields; newest Final first.
+    pub vesting_only_rows: Vec<RpcPalwClaimRow>,
+    pub vesting_only_truncated: bool,
 }
 
 impl Serializer for GetPalwClaimsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.tip_daa, writer)?;
         store!(String, &self.bond, writer)?;
@@ -4315,13 +4395,18 @@ impl Serializer for GetPalwClaimsResponse {
         store!(u64, &self.bond_slashed, writer)?;
         store!(u64, &self.bond_registered_daa, writer)?;
         store!(Vec<String>, &self.bond_capable_classes, writer)?;
+        // Version 2: the retired claims' vesting rows (ADR-0152).
+        serialize!(Vec<RpcPalwClaimRow>, &self.vesting_only_rows, writer)?;
+        store!(bool, &self.vesting_only_truncated, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwClaimsResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        // The version gates the tail (phase2-plan §1.6): a version-1 peer's answer ends at the
+        // capable classes, and reading on would fail at the end of its frame.
+        let version = load!(u16, reader)?;
         let available = load!(bool, reader)?;
         let tip_daa = load!(u64, reader)?;
         let bond = load!(String, reader)?;
@@ -4335,6 +4420,8 @@ impl Deserializer for GetPalwClaimsResponse {
         let bond_slashed = load!(u64, reader)?;
         let bond_registered_daa = load!(u64, reader)?;
         let bond_capable_classes = load!(Vec<String>, reader)?;
+        let (vesting_only_rows, vesting_only_truncated) =
+            if version >= 2 { (deserialize!(Vec<RpcPalwClaimRow>, reader)?, load!(bool, reader)?) } else { (Vec::new(), false) };
         Ok(Self {
             available,
             tip_daa,
@@ -4349,6 +4436,8 @@ impl Deserializer for GetPalwClaimsResponse {
             bond_slashed,
             bond_registered_daa,
             bond_capable_classes,
+            vesting_only_rows,
+            vesting_only_truncated,
         })
     }
 }
@@ -5100,8 +5189,14 @@ pub struct RpcPalwClassLedgerTotals {
     pub redrawn: u64,
     pub paid_at_acceptance: u64,
     pub escrow_final_sompi: String,
-    pub producer_paid_sompi: String,
-    pub panel_paid_sompi: String,
+    /// What the `Final`s NAMED the producers and panels — paid below ADR-0152's `palw_rcore_plus`,
+    /// VESTED past it (testnet-12), where the row can still burn; `getPalwVesting` says which moved.
+    /// Renamed from `producerPaidSompi` / `panelPaidSompi` (the Borsh position is unchanged, and a
+    /// JSON reader still accepts the old names).
+    #[serde(alias = "producerPaidSompi")]
+    pub producer_named_sompi: String,
+    #[serde(alias = "panelPaidSompi")]
+    pub panel_named_sompi: String,
     pub reserve_sompi: String,
     pub burned_sompi: String,
     pub attempted_compute: String,
@@ -5136,8 +5231,8 @@ impl Serializer for RpcPalwClassLedgerTotals {
         store!(u64, &self.redrawn, writer)?;
         store!(u64, &self.paid_at_acceptance, writer)?;
         store!(String, &self.escrow_final_sompi, writer)?;
-        store!(String, &self.producer_paid_sompi, writer)?;
-        store!(String, &self.panel_paid_sompi, writer)?;
+        store!(String, &self.producer_named_sompi, writer)?;
+        store!(String, &self.panel_named_sompi, writer)?;
         store!(String, &self.reserve_sompi, writer)?;
         store!(String, &self.burned_sompi, writer)?;
         store!(String, &self.attempted_compute, writer)?;
@@ -5175,8 +5270,8 @@ impl Deserializer for RpcPalwClassLedgerTotals {
             redrawn: load!(u64, reader)?,
             paid_at_acceptance: load!(u64, reader)?,
             escrow_final_sompi: load!(String, reader)?,
-            producer_paid_sompi: load!(String, reader)?,
-            panel_paid_sompi: load!(String, reader)?,
+            producer_named_sompi: load!(String, reader)?,
+            panel_named_sompi: load!(String, reader)?,
             reserve_sompi: load!(String, reader)?,
             burned_sompi: load!(String, reader)?,
             attempted_compute: load!(String, reader)?,
@@ -7149,6 +7244,497 @@ impl Deserializer for GetPalwModelCertificationResponse {
             class_id: load!(String, reader)?,
             end_to_end_certified: load!(bool, reader)?,
             families: deserialize!(Vec<RpcPalwModelCertifiedFamily>, reader)?,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0152 V-1…V-8 (R-core+, testnet-12), phase2-plan §1.6 P2-10: `getPalwVesting` (op 199)
+// ---------------------------------------------------------------------------------------------
+
+/// ADR-0152 P2-10: `getPalwVesting` — the vesting table as the next block's step 3d will find it.
+/// Name at most one of `bond` (`<txid>:<index>`: the rows it produced or was credited on, its
+/// reporter rewards, and whether B-3 holds its collateral), `payout_address` (every leg and reporter
+/// reward paid there) or `claim_id` (that claim's row); none of them reads the chain-wide totals
+/// and the head of the queue. **Op 199 is new: a node built before it drops the WebSocket on it**,
+/// so a client asks it last on a connection, or reconnects.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwVestingRequest {
+    pub bond: String,
+    pub payout_address: String,
+    pub claim_id: String,
+    /// At most this many rows; 0 asks for the node's cap (500).
+    pub limit: u32,
+    /// `<expiry_daa>:<claim_id>` — a previous answer's `next_after`; empty for the first page.
+    pub after: String,
+}
+
+impl Serializer for GetPalwVestingRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.payout_address, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(u32, &self.limit, writer)?;
+        store!(String, &self.after, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwVestingRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            bond: load!(String, reader)?,
+            payout_address: load!(String, reader)?,
+            claim_id: load!(String, reader)?,
+            limit: load!(u32, reader)?,
+            after: load!(String, reader)?,
+        })
+    }
+}
+
+/// One leg of a vesting row or move: `producer`, `seat`, `reserve` or `reporter`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwVestingLeg {
+    pub kind: String,
+    /// `<txid>:<index>`; empty for the reserve and for an awarded reporter reward.
+    pub payee_bond: String,
+    /// The 64-byte payout payload, hex (the coinbase pays `P2PKH-ML-DSA-87(payload)`); empty for
+    /// the reserve.
+    pub payload: String,
+    pub sompi: u64,
+    /// The `pending_payouts` key it lands on; empty for the reserve.
+    pub queue_key: String,
+}
+
+impl Serializer for RpcPalwVestingLeg {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.kind, writer)?;
+        store!(String, &self.payee_bond, writer)?;
+        store!(String, &self.payload, writer)?;
+        store!(u64, &self.sompi, writer)?;
+        store!(String, &self.queue_key, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwVestingLeg {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            kind: load!(String, reader)?,
+            payee_bond: load!(String, reader)?,
+            payload: load!(String, reader)?,
+            sompi: load!(u64, reader)?,
+            queue_key: load!(String, reader)?,
+        })
+    }
+}
+
+/// **One vesting row** (ADR-0152 V-1), with V-4's maturity at the next block, its place in V-7's
+/// order and the earliest DAA it can move.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwVestingRow {
+    pub claim_id: String,
+    pub class_id: String,
+    pub producer_bond: String,
+    /// The door of the Final-basis licence set: `quorum`, `coverage`, `optimistic`, `shard_part`.
+    pub licence_door: String,
+    pub basis_k: u32,
+    pub escrow_sompi: u64,
+    pub buyback_bound_sompi: u64,
+    /// Every sompi the row holds (producer + seats + reserve).
+    pub total_sompi: u64,
+    pub reserve_sompi: u64,
+    pub final_daa: u64,
+    /// The DAA clock: the row cannot mature before it.
+    pub expiry_daa: u64,
+    /// The anchors settled at Final — the second clock counts from here.
+    pub settled_at_final: u64,
+    /// The latch (V-4 held once): set, the row is mature for good.
+    pub matured_at: Option<u64>,
+    /// `maturing` (not latched) or `latched`.
+    pub stage: String,
+    pub daa_clock_met: bool,
+    pub licences_since_final: u64,
+    /// The configured second-clock depth; `None`: no second clock on this network.
+    pub licences_needed: Option<u64>,
+    /// Where the second clock's per-obligation bound releases the row (an upper bound).
+    pub second_clock_bound_daa: Option<u64>,
+    pub da_session_open: bool,
+    /// V-4 holds at the next block, or the row is latched.
+    pub mature_now: bool,
+    /// **V-4(a) alone: the row is still unmatured** — unlatched, its DAA clock or its second clock
+    /// still running. While it is, B-3 locks the collateral of every bond it pays. Not
+    /// `!matureNow`: a halt or a DA session keeps a row from maturing without holding its payees.
+    pub lock_live: bool,
+    /// `(moves, keys)` ahead of it in V-7's order.
+    pub moves_ahead: Option<u64>,
+    pub keys_ahead: Option<u64>,
+    /// The next block's step 3d moves it; its mint is the block after.
+    pub in_next_block: bool,
+    /// The earliest DAA it can move — exact (the next block's) when `in_next_block`, else a lower
+    /// bound and `eta_estimated`.
+    pub eta_daa: u64,
+    pub eta_estimated: bool,
+    /// The legs the query is about (the payee's own, or all of them).
+    pub legs: Vec<RpcPalwVestingLeg>,
+    pub legs_sompi: u64,
+}
+
+impl Serializer for RpcPalwVestingRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.producer_bond, writer)?;
+        store!(String, &self.licence_door, writer)?;
+        store!(u32, &self.basis_k, writer)?;
+        store!(u64, &self.escrow_sompi, writer)?;
+        store!(u64, &self.buyback_bound_sompi, writer)?;
+        store!(u64, &self.total_sompi, writer)?;
+        store!(u64, &self.reserve_sompi, writer)?;
+        store!(u64, &self.final_daa, writer)?;
+        store!(u64, &self.expiry_daa, writer)?;
+        store!(u64, &self.settled_at_final, writer)?;
+        store!(Option<u64>, &self.matured_at, writer)?;
+        store!(String, &self.stage, writer)?;
+        store!(bool, &self.daa_clock_met, writer)?;
+        store!(u64, &self.licences_since_final, writer)?;
+        store!(Option<u64>, &self.licences_needed, writer)?;
+        store!(Option<u64>, &self.second_clock_bound_daa, writer)?;
+        store!(bool, &self.da_session_open, writer)?;
+        store!(bool, &self.mature_now, writer)?;
+        store!(bool, &self.lock_live, writer)?;
+        store!(Option<u64>, &self.moves_ahead, writer)?;
+        store!(Option<u64>, &self.keys_ahead, writer)?;
+        store!(bool, &self.in_next_block, writer)?;
+        store!(u64, &self.eta_daa, writer)?;
+        store!(bool, &self.eta_estimated, writer)?;
+        serialize!(Vec<RpcPalwVestingLeg>, &self.legs, writer)?;
+        store!(u64, &self.legs_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwVestingRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            producer_bond: load!(String, reader)?,
+            licence_door: load!(String, reader)?,
+            basis_k: load!(u32, reader)?,
+            escrow_sompi: load!(u64, reader)?,
+            buyback_bound_sompi: load!(u64, reader)?,
+            total_sompi: load!(u64, reader)?,
+            reserve_sompi: load!(u64, reader)?,
+            final_daa: load!(u64, reader)?,
+            expiry_daa: load!(u64, reader)?,
+            settled_at_final: load!(u64, reader)?,
+            matured_at: load!(Option<u64>, reader)?,
+            stage: load!(String, reader)?,
+            daa_clock_met: load!(bool, reader)?,
+            licences_since_final: load!(u64, reader)?,
+            licences_needed: load!(Option<u64>, reader)?,
+            second_clock_bound_daa: load!(Option<u64>, reader)?,
+            da_session_open: load!(bool, reader)?,
+            mature_now: load!(bool, reader)?,
+            lock_live: load!(bool, reader)?,
+            moves_ahead: load!(Option<u64>, reader)?,
+            keys_ahead: load!(Option<u64>, reader)?,
+            in_next_block: load!(bool, reader)?,
+            eta_daa: load!(u64, reader)?,
+            eta_estimated: load!(bool, reader)?,
+            legs: deserialize!(Vec<RpcPalwVestingLeg>, reader)?,
+            legs_sompi: load!(u64, reader)?,
+        })
+    }
+}
+
+/// One reporter reward (S-7): `pending` in its reveal window (payee: the best reveal so far),
+/// `awarded` once the window closed and step 3d has yet to move it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwReporterReward {
+    pub offence_key: String,
+    pub stage: String,
+    /// The best reveal's bond while pending; empty once awarded.
+    pub reporter_bond: String,
+    pub payload: String,
+    pub sompi: u64,
+    pub reveal_until: Option<u64>,
+    pub in_next_block: bool,
+}
+
+impl Serializer for RpcPalwReporterReward {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.offence_key, writer)?;
+        store!(String, &self.stage, writer)?;
+        store!(String, &self.reporter_bond, writer)?;
+        store!(String, &self.payload, writer)?;
+        store!(u64, &self.sompi, writer)?;
+        store!(Option<u64>, &self.reveal_until, writer)?;
+        store!(bool, &self.in_next_block, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwReporterReward {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            offence_key: load!(String, reader)?,
+            stage: load!(String, reader)?,
+            reporter_bond: load!(String, reader)?,
+            payload: load!(String, reader)?,
+            sompi: load!(u64, reader)?,
+            reveal_until: load!(Option<u64>, reader)?,
+            in_next_block: load!(bool, reader)?,
+        })
+    }
+}
+
+/// One move of the next block's plan: a `row` (by claim id) or a `reporter` reward (by offence
+/// key), with its legs.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwVestingMove {
+    pub source: String,
+    pub id: String,
+    pub legs: Vec<RpcPalwVestingLeg>,
+}
+
+impl Serializer for RpcPalwVestingMove {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.source, writer)?;
+        store!(String, &self.id, writer)?;
+        serialize!(Vec<RpcPalwVestingLeg>, &self.legs, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwVestingMove {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { source: load!(String, reader)?, id: load!(String, reader)?, legs: deserialize!(Vec<RpcPalwVestingLeg>, reader)? })
+    }
+}
+
+/// Live rows of one licence door (ADR-0152 §8.4 O-2's "p").
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwVestingDoorCount {
+    pub door: String,
+    pub rows: u64,
+    pub latched_rows: u64,
+    /// Decimal `u128`.
+    pub sompi: String,
+}
+
+impl Serializer for RpcPalwVestingDoorCount {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.door, writer)?;
+        store!(u64, &self.rows, writer)?;
+        store!(u64, &self.latched_rows, writer)?;
+        store!(String, &self.sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwVestingDoorCount {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            door: load!(String, reader)?,
+            rows: load!(u64, reader)?,
+            latched_rows: load!(u64, reader)?,
+            sompi: load!(String, reader)?,
+        })
+    }
+}
+
+/// **ADR-0152 P2-10: the `getPalwVesting` answer.** `u128` sums are decimal strings. Everything is
+/// read at the NEXT block's DAA (`next_daa`) on the committed tip (`tip_daa`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwVestingResponse {
+    /// False off `ConsensusV2`, or before the node has PALW state.
+    pub available: bool,
+    /// `Params::palw_rcore_plus` is in force: rewards vest. Below it nothing vests and the tables
+    /// are empty.
+    pub rcore_plus_active: bool,
+    pub tip_daa: u64,
+    pub next_daa: u64,
+    /// V-4(b): a licence halt — nothing latches while it lasts.
+    pub halted: bool,
+    /// The configured second-clock depth (`None`: no second clock), and the depth after the
+    /// liveness escape.
+    pub second_clock_depth: Option<u64>,
+    pub second_clock_escaped_depth: Option<u64>,
+    /// Anchors settled so far (the second clock's count).
+    pub settled_anchors: u64,
+    /// This node's measure of the chain's pace: milliseconds per DAA over the last sampled span
+    /// (`None` when it has no span to measure) — what an ETA in DAA is converted with.
+    pub measured_ms_per_daa: Option<u64>,
+    /// V-3's rooted counters: created, moved and burned since genesis.
+    pub created_sompi: String,
+    pub moved_sompi: String,
+    pub burned_sompi: String,
+    pub live_rows: u64,
+    pub latched_rows: u64,
+    pub live_sompi: String,
+    pub latched_sompi: String,
+    /// Latched rows held behind an unlatched head (stop, never skip).
+    pub latched_behind_head: u64,
+    pub reporter_pending_rows: u64,
+    pub reporter_awarded_rows: u64,
+    /// The next block's step 3d: its moves, legs, new queue keys, and why it stops (`not_latched`,
+    /// `budget_full`, `empty`) at which row or reward.
+    pub next_block_moves: Vec<RpcPalwVestingMove>,
+    pub next_block_legs: u32,
+    pub next_block_new_keys: u32,
+    pub next_block_stopped: String,
+    pub next_block_stopped_at: String,
+    /// The latched backlog in payout keys — every awarded reporter reward and every latched row
+    /// (behind an unlatched head included) at its cost as a block's first move — and the blocks it
+    /// takes at V-7's full width of eight keys: an estimate (the market's reserve narrows a block
+    /// to six; seat payees shared in one block widen it).
+    pub backlog_keys: u64,
+    pub backlog_blocks_est: u64,
+    pub licence_histogram: Vec<RpcPalwVestingDoorCount>,
+    /// The query, echoed.
+    pub bond: String,
+    pub payout_address: String,
+    pub claim_id: String,
+    /// A claim query's stage: `maturing` or `latched` while its row lives, `moved` once a vested
+    /// Final's row left for the payout queue (minted by the block after the move), empty for a
+    /// claim that did not vest, was voided — a convicted Final included, its row burned — or
+    /// retired with no row left. Empty for other queries.
+    pub claim_stage: String,
+    /// The bond is in the registry (true for other queries).
+    pub bond_known: bool,
+    /// **B-3**: the bond is payee of a row still unmatured by V-4(a), so its collateral is locked.
+    pub payee_holds_collateral: bool,
+    /// Of every row the query matched — not only this page — those whose lock is live
+    /// (`lockLive`), and the latest DAA clock among them. For a bond, the rows B-3 holds it for:
+    /// `payeeHoldsCollateral == (lockLiveRows > 0)`. V-7's order puts them LAST, so a page's own
+    /// `lockLive` rows can be none of them; count with these.
+    pub lock_live_rows: u64,
+    pub lock_live_last_expiry_daa: Option<u64>,
+    pub rows: Vec<RpcPalwVestingRow>,
+    /// Rows the query matched, before the page.
+    pub rows_total: u64,
+    /// Pass back as `after` for the next page; empty on the last.
+    pub next_after: String,
+    /// Σ of the query's legs over every matched row: not latched, and latched.
+    pub maturing_sompi: String,
+    pub query_latched_sompi: String,
+    pub reporter_rewards: Vec<RpcPalwReporterReward>,
+}
+
+impl Serializer for GetPalwVestingResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(bool, &self.rcore_plus_active, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(u64, &self.next_daa, writer)?;
+        store!(bool, &self.halted, writer)?;
+        store!(Option<u64>, &self.second_clock_depth, writer)?;
+        store!(Option<u64>, &self.second_clock_escaped_depth, writer)?;
+        store!(u64, &self.settled_anchors, writer)?;
+        store!(Option<u64>, &self.measured_ms_per_daa, writer)?;
+        store!(String, &self.created_sompi, writer)?;
+        store!(String, &self.moved_sompi, writer)?;
+        store!(String, &self.burned_sompi, writer)?;
+        store!(u64, &self.live_rows, writer)?;
+        store!(u64, &self.latched_rows, writer)?;
+        store!(String, &self.live_sompi, writer)?;
+        store!(String, &self.latched_sompi, writer)?;
+        store!(u64, &self.latched_behind_head, writer)?;
+        store!(u64, &self.reporter_pending_rows, writer)?;
+        store!(u64, &self.reporter_awarded_rows, writer)?;
+        serialize!(Vec<RpcPalwVestingMove>, &self.next_block_moves, writer)?;
+        store!(u32, &self.next_block_legs, writer)?;
+        store!(u32, &self.next_block_new_keys, writer)?;
+        store!(String, &self.next_block_stopped, writer)?;
+        store!(String, &self.next_block_stopped_at, writer)?;
+        store!(u64, &self.backlog_keys, writer)?;
+        store!(u64, &self.backlog_blocks_est, writer)?;
+        serialize!(Vec<RpcPalwVestingDoorCount>, &self.licence_histogram, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.payout_address, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.claim_stage, writer)?;
+        store!(bool, &self.bond_known, writer)?;
+        store!(bool, &self.payee_holds_collateral, writer)?;
+        store!(u64, &self.lock_live_rows, writer)?;
+        store!(Option<u64>, &self.lock_live_last_expiry_daa, writer)?;
+        serialize!(Vec<RpcPalwVestingRow>, &self.rows, writer)?;
+        store!(u64, &self.rows_total, writer)?;
+        store!(String, &self.next_after, writer)?;
+        store!(String, &self.maturing_sompi, writer)?;
+        store!(String, &self.query_latched_sompi, writer)?;
+        serialize!(Vec<RpcPalwReporterReward>, &self.reporter_rewards, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwVestingResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            rcore_plus_active: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            next_daa: load!(u64, reader)?,
+            halted: load!(bool, reader)?,
+            second_clock_depth: load!(Option<u64>, reader)?,
+            second_clock_escaped_depth: load!(Option<u64>, reader)?,
+            settled_anchors: load!(u64, reader)?,
+            measured_ms_per_daa: load!(Option<u64>, reader)?,
+            created_sompi: load!(String, reader)?,
+            moved_sompi: load!(String, reader)?,
+            burned_sompi: load!(String, reader)?,
+            live_rows: load!(u64, reader)?,
+            latched_rows: load!(u64, reader)?,
+            live_sompi: load!(String, reader)?,
+            latched_sompi: load!(String, reader)?,
+            latched_behind_head: load!(u64, reader)?,
+            reporter_pending_rows: load!(u64, reader)?,
+            reporter_awarded_rows: load!(u64, reader)?,
+            next_block_moves: deserialize!(Vec<RpcPalwVestingMove>, reader)?,
+            next_block_legs: load!(u32, reader)?,
+            next_block_new_keys: load!(u32, reader)?,
+            next_block_stopped: load!(String, reader)?,
+            next_block_stopped_at: load!(String, reader)?,
+            backlog_keys: load!(u64, reader)?,
+            backlog_blocks_est: load!(u64, reader)?,
+            licence_histogram: deserialize!(Vec<RpcPalwVestingDoorCount>, reader)?,
+            bond: load!(String, reader)?,
+            payout_address: load!(String, reader)?,
+            claim_id: load!(String, reader)?,
+            claim_stage: load!(String, reader)?,
+            bond_known: load!(bool, reader)?,
+            payee_holds_collateral: load!(bool, reader)?,
+            lock_live_rows: load!(u64, reader)?,
+            lock_live_last_expiry_daa: load!(Option<u64>, reader)?,
+            rows: deserialize!(Vec<RpcPalwVestingRow>, reader)?,
+            rows_total: load!(u64, reader)?,
+            next_after: load!(String, reader)?,
+            maturing_sompi: load!(String, reader)?,
+            query_latched_sompi: load!(String, reader)?,
+            reporter_rewards: deserialize!(Vec<RpcPalwReporterReward>, reader)?,
         })
     }
 }
@@ -10334,6 +10920,11 @@ mod palw_producer_facts_wire_tests {
             // Version 8 (ADR-0118 Decision 3): DIFFERENT from `prompt_ids_merkle`, so a field lost
             // on the wire, or read from the wrong slot, cannot pass as carried.
             class_prompt_ids_merkle: false,
+            // Version 9 (ADR-0152 P6): committed DIFFERENT from reserved, so the old ledger cannot
+            // pass as the new one.
+            bond_committed: "7000".to_string(),
+            bond_producer_floor_shortfall: 4_200,
+            bond_accuser_exposure: "320".to_string(),
         }
     }
 
@@ -10357,6 +10948,11 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.class_target, response.class_target);
         assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
         assert_eq!(back.not_ready_reason, response.not_ready_reason);
+        assert_eq!(
+            (back.bond_committed.as_str(), back.bond_producer_floor_shortfall, back.bond_accuser_exposure.as_str()),
+            ("7000", 4_200, "320"),
+            "ADR-0152 P6: the one ledger, the floor and the accuser ledger"
+        );
     }
 
     /// **ADR-0080 design A: a declared close's arrival bitmap survives the wRPC wire.**
@@ -10478,6 +11074,11 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.fp_quanta_per_canonical_job, r.fp_quanta_per_canonical_job);
         assert_eq!(back.fp_max_quanta_per_receipt, r.fp_max_quanta_per_receipt);
         assert!(!back.fp_decode_rules_armed, "a version-3 peer knows nothing about the fence — read fail-closed");
+        assert_eq!(
+            (back.bond_committed.as_str(), back.bond_producer_floor_shortfall, back.bond_accuser_exposure.as_str()),
+            (r.bond_reserved_exposure.as_str(), 0, "0"),
+            "a pre-P6 peer: its one ledger, no floor, no accuser ledger"
+        );
     }
 }
 
@@ -10644,5 +11245,134 @@ mod palw_model_market_wire_tests {
         let back = <GetPalwModelMarketResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
         assert!(back.class_lifecycle.is_empty() && back.market_refusal.is_empty());
         assert_eq!((back.burn_permille, back.leg_permille, back.leg_v2_activation_daa), (50, 50, 3_500));
+    }
+}
+
+/// **ADR-0152 P2-10 (T51's wire half): claim row v3 and `getPalwClaims` v2 against older peers.**
+#[cfg(test)]
+mod palw_vesting_wire_tests {
+    use super::*;
+
+    fn v3_row(id: &str) -> RpcPalwClaimRow {
+        RpcPalwClaimRow {
+            claim_id: id.to_string(),
+            class_id: "c1".to_string(),
+            phase: "final".to_string(),
+            escrow_sompi: 1_000,
+            exec_stage: "credited".to_string(),
+            exec_credit: 7,
+            vesting_stage: "latched".to_string(),
+            vesting_sompi: 1_000,
+            vesting_payee_sompi: 500,
+            vesting_expiry_daa: Some(9_000),
+            vesting_licences_since_final: 12,
+            vesting_licences_needed: Some(30),
+            vesting_matured_at: Some(9_100),
+            vesting_eta_daa: Some(9_101),
+            vesting_eta_estimated: false,
+            ..Default::default()
+        }
+    }
+
+    /// The version-2 reader exactly as it shipped: the version-1 fields, then the version-2 ones,
+    /// and nothing after.
+    struct V2Reader(RpcPalwClaimRow);
+
+    impl Deserializer for V2Reader {
+        fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+            let version = load!(u16, reader)?;
+            let mut row = RpcPalwClaimRow {
+                claim_id: load!(String, reader)?,
+                is_free_prompt: load!(bool, reader)?,
+                class_id: load!(String, reader)?,
+                executor_bond: load!(String, reader)?,
+                phase: load!(String, reader)?,
+                void_reason: load!(String, reader)?,
+                phase_daa: load!(u64, reader)?,
+                accepted_daa: load!(u64, reader)?,
+                accepted_block: load!(String, reader)?,
+                rebound_daa: load!(Option<u64>, reader)?,
+                bound_daa: load!(Option<u64>, reader)?,
+                seats: load!(Vec<String>, reader)?,
+                deadline_daa: load!(Option<u64>, reader)?,
+                reserved_sompi: load!(String, reader)?,
+                escrow_sompi: load!(u64, reader)?,
+                payout_pending_sompi: load!(Option<u64>, reader)?,
+                quanta: load!(u32, reader)?,
+                quanta_spent: load!(u32, reader)?,
+                work_leaves: load!(u64, reader)?,
+                open_courts: load!(u32, reader)?,
+                ..Default::default()
+            };
+            if version >= 2 {
+                row.exec_stage = load!(String, reader)?;
+                row.exec_credit = load!(u64, reader)?;
+                row.exec_span = load!(Option<u64>, reader)?;
+                row.exec_tickets = load!(u32, reader)?;
+                row.exec_tickets_spent = load!(u32, reader)?;
+                row.exec_first_round = load!(Option<u64>, reader)?;
+                row.exec_last_round = load!(Option<u64>, reader)?;
+            }
+            Ok(Self(row))
+        }
+    }
+
+    /// **T51: a v2 client decodes a v3 row** — each row of the list is its own length-prefixed
+    /// payload, so the old reader stops before the vesting fields and the NEXT row still lands.
+    #[test]
+    fn t51_a_version_2_client_decodes_version_3_rows() {
+        let rows = vec![v3_row("a"), v3_row("b")];
+        let mut bytes = Vec::new();
+        serialize!(Vec<RpcPalwClaimRow>, &rows, &mut bytes).unwrap();
+        let old = deserialize!(Vec<V2Reader>, &mut bytes.as_slice()).unwrap();
+        assert_eq!(old.iter().map(|r| r.0.claim_id.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!((old[1].0.escrow_sompi, old[1].0.exec_credit), (1_000, 7), "the fields it knows are intact");
+        assert!(old[1].0.vesting_stage.is_empty(), "and it never saw the new ones");
+        // The v3 reader reads them all.
+        let new = deserialize!(Vec<RpcPalwClaimRow>, &mut bytes.as_slice()).unwrap();
+        assert_eq!(new, rows);
+    }
+
+    /// A version-2 peer's row reads with no vesting stage; its version-2 fields stand.
+    #[test]
+    fn a_version_2_row_reads_as_not_vesting() {
+        let row = RpcPalwClaimRow { exec_credit: 9, ..Default::default() };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&row, &mut bytes).unwrap();
+        // Version 3 appended: "" (4) + u64 + u64 + None + u64 + None + None + None + bool.
+        let tail = 4 + 8 + 8 + 1 + 8 + 1 + 1 + 1 + 1;
+        bytes.truncate(bytes.len() - tail);
+        bytes[..2].copy_from_slice(&2u16.to_le_bytes());
+        let back = <RpcPalwClaimRow as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(back, row);
+    }
+
+    /// `getPalwClaims` v2 carries the retired claims' vesting rows; a version-1 answer (no tail)
+    /// reads with none, rather than failing at the end of its frame.
+    #[test]
+    fn the_claims_answer_gates_its_vesting_tail_on_its_version() {
+        let response = GetPalwClaimsResponse {
+            available: true,
+            bond: "b:0".to_string(),
+            claims: vec![v3_row("live")],
+            bond_capable_classes: vec!["c1".to_string()],
+            vesting_only_rows: vec![v3_row("retired")],
+            vesting_only_truncated: true,
+            ..Default::default()
+        };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwClaimsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(back.vesting_only_rows, response.vesting_only_rows);
+        assert!(back.vesting_only_truncated);
+        // A version-1 peer: the same bytes without the tail.
+        let mut tail = Vec::new();
+        serialize!(Vec<RpcPalwClaimRow>, &response.vesting_only_rows, &mut tail).unwrap();
+        bytes.truncate(bytes.len() - tail.len() - 1);
+        bytes[..2].copy_from_slice(&1u16.to_le_bytes());
+        let old = <GetPalwClaimsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert!(old.vesting_only_rows.is_empty() && !old.vesting_only_truncated);
+        assert_eq!(old.claims, response.claims);
+        assert_eq!(old.bond_capable_classes, response.bond_capable_classes);
     }
 }

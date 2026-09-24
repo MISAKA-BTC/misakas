@@ -474,7 +474,14 @@ impl VirtualStateProcessor {
                     ))
                     .objects
                     .first()
-                    .map(|carried| kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v1(&carried.object))
+                    // ADR-0152 v3.1 (the Phase 3 review): past `palw_offence_attribution` a whole-prompt
+                    // `PromptNotAnchored` pays its prompt's carriage too; below it this is v1 exactly.
+                    .map(|carried| {
+                        kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(
+                            &carried.object,
+                            self.palw_offence_attribution_at(pov_daa_score),
+                        )
+                    })
                     .unwrap_or(0)
                     .min(validated_tx.calculated_fee)
                 } else {

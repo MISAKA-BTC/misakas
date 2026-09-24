@@ -477,6 +477,7 @@ fn dos_g2_a_conviction_prunes_the_minted_schedule_and_a_revert_restores_it() {
         claim_id: f.claim_id,
         execution_root: f.execution_root,
         credit: 4 * PALW_EXECUTION_QUANTUM_V1,
+        accepted_blue_score: 0,
     };
     let honest = PalwExecFinalV1 {
         domain: h(0xD2),
@@ -485,6 +486,7 @@ fn dos_g2_a_conviction_prunes_the_minted_schedule_and_a_revert_restores_it() {
         claim_id: h(0x4011_E57),
         execution_root: h(0x4011_E57_0000),
         credit: 3 * PALW_EXECUTION_QUANTUM_V1,
+        accepted_blue_score: 0,
     };
     let span = 3u64;
     let schedule = minted(span, &[convicted, honest]);
@@ -547,6 +549,7 @@ fn dos_g2_pruning_every_ticket_does_not_reopen_the_lottery() {
         claim_id: f.claim_id,
         execution_root: f.execution_root,
         credit: 2 * PALW_EXECUTION_QUANTUM_V1,
+        accepted_blue_score: 0,
     };
     let span = 3u64;
     let schedule = minted(span, &[convicted]);

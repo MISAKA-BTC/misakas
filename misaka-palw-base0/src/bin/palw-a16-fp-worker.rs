@@ -207,7 +207,10 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
         ))
     })
     .with_step_ladder_cap(court.max_step_leaf_count())
-    .with_prompt_ids_form(prompt_ids_form);
+    .with_prompt_ids_form(prompt_ids_form)
+    // ADR-0152 v3.1 post-edit 4: the network's attempt rule, so the output root this worker commits
+    // is the one rendered rule the chain holds a free-prompt claim to where the fence is armed.
+    .with_attempt_rules(misaka_palw_base0::fp_worker::fp_worker_attempt_rules_v1(&String::from_utf8_lossy(&net)).unwrap_or_else(|why| die(why)));
     FpWorkerRuntime::new(
         backend,
         &entry.profile,

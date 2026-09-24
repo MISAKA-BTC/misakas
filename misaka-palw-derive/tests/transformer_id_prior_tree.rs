@@ -49,6 +49,52 @@ const PRIOR_PINNED: &[(&str, &str)] = &[
     ),
 ];
 
+/// The ids the tree after it gave — `fa80f768…`, from ea2fd48e (2026-09-11, ADR-0096's json kind)
+/// until 7681c203 moved it without a re-pin: the pin as `transformer_id_pin.rs` read through
+/// 2026-09-24, and the tree testnet-11's 2026-09-12 fleet release 13520042 shipped to every host.
+/// A derivation filed on testnet-11 by a gateway on that build names one of these. Moved here
+/// verbatim when the current tree was re-pinned, for the reason the rows above were: the stranger
+/// parses every pair in the pin file as the CURRENT pin set.
+const SECOND_PRIOR_SOURCE_TREE: &str = "fa80f7680783b644eb90a2722f5ca0cc2f001788f4fe7a82e521cf1005585303";
+const SECOND_PRIOR_PINNED: &[(&str, &str)] = &[
+    (
+        "cad/stl/v1",
+        "902ca5144d15c1f09a143b0078424bde981c8b2dc5d677ab8818dedc86f4a1c383cff7d8ac0b1445899c2db7e7ef7e25aa749a8811cdc7d45e837b2f883c0935",
+    ),
+    (
+        "code/evm/v1",
+        "c691c66ee5ccb7f575772683dae599c69ff50d4084ba445a9f7b6ac2893f22d56e1b755c212545a0490badad0cb5835821f7c2e349702914168533fac6588403",
+    ),
+    (
+        "contract/evm/v1",
+        "a5b34c70a41b2fe6513a2b8f6b2b9abaed0f59b38ece3ce2eb39d4af4b71c74834efece6683e835b0abe35268fb76942c805c7d3e728d6acf450bbc39ca51572",
+    ),
+    (
+        "image/png/v1",
+        "afc299335937bb65552ce74984569684cc468b5799a5abecf535575177f5e5bbcf0c6b418aaec0f2deb8f02f30d01f6a3e4e262b440b2f7e8fbd0c5a6291d5f9",
+    ),
+    (
+        "json/canonical/v1",
+        "74d4a76930d7beec8848c74edf05f1e8f982e1b585576db7dc9fd6615cceb7c4d754130962966eab4283675271a4d4603814041c1732b88f99f229e67bfd8b37",
+    ),
+    (
+        "map/mmap/v1",
+        "9a0f3765c6ea48efa211985a671878e6b9f85d5c42d118719d92db546e17603e2451e67cd7e229a830f654cfb3557e2f3ef82f82c113815b1fa58d17f174a613",
+    ),
+    (
+        "music/smf/v1",
+        "4f47c5786c58affbf0a24e3203d50728385e26aece93737d56b79eebe95cbfff91d10ba03b3ee4cf22cdd836bbe295537fcf810210c8b4cd16a77afa1e5eb50e",
+    ),
+    (
+        "scene/glb/v1",
+        "62931736fd5b306f158a9b945757c7ce8076ce8a9115297b00cb91afa466a62edc2ff7b92d629a8a13a0dce06272ebd1233ea5ac1ec8079b99382944a67c1cb2",
+    ),
+    (
+        "simulation/trace/v1",
+        "c92cdad2eca5a3326537281ff48cdf40df139187329accbae7f4a7e96baf4e115f10efc8e4c071fc4498d1cd86d69f580649a71462def3ef3d7f09afae238734",
+    ),
+];
+
 /// **The ids a live chain already carries still resolve — to the transformer they always named,
 /// and to a manifest that hashes back to them.** Without this, the tree move in ADR-0096 would have
 /// turned every published derivation into `UnknownTransformer` for anyone on the new build.
@@ -57,17 +103,19 @@ fn the_previous_trees_ids_still_resolve_to_what_they_named() {
     use misaka_palw_derive::registry::{
         PRIOR_SOURCE_TREES_SHA256_HEX, TransformerIdTree, manifest_for_id, transformer_by_id_with_tree,
     };
-    assert!(PRIOR_SOURCE_TREES_SHA256_HEX.contains(&PRIOR_SOURCE_TREE), "the tree testnet-11's derivations name must stay listed");
-    for (name, hex) in PRIOR_PINNED {
-        let mut bytes = [0u8; 64];
-        faster_hex::hex_decode(hex.as_bytes(), &mut bytes).unwrap();
-        let id = kaspa_hashes::Hash64::from_bytes(bytes);
-        let (transformer, tree) =
-            transformer_by_id_with_tree(&id).unwrap_or_else(|| panic!("{name}: the chain's id no longer resolves"));
-        assert_eq!(transformer.manifest().name, *name, "{name}: an earlier id must name the transformer it always named");
-        assert_eq!(tree, TransformerIdTree::Prior(PRIOR_SOURCE_TREE), "{name}");
-        let served = manifest_for_id(&id).unwrap();
-        assert_eq!(served.source_tree_sha256, PRIOR_SOURCE_TREE, "{name}: the manifest served for an earlier id is that tree's");
-        assert_eq!(transformer_id(&served), id, "{name}: the manifest served for an earlier id hashes back to it");
+    for (tree, pinned) in [(PRIOR_SOURCE_TREE, PRIOR_PINNED), (SECOND_PRIOR_SOURCE_TREE, SECOND_PRIOR_PINNED)] {
+        assert!(PRIOR_SOURCE_TREES_SHA256_HEX.contains(&tree), "{tree}: the tree testnet-11's derivations name must stay listed");
+        for (name, hex) in pinned {
+            let mut bytes = [0u8; 64];
+            faster_hex::hex_decode(hex.as_bytes(), &mut bytes).unwrap();
+            let id = kaspa_hashes::Hash64::from_bytes(bytes);
+            let (transformer, resolved) =
+                transformer_by_id_with_tree(&id).unwrap_or_else(|| panic!("{name}: the chain's id no longer resolves"));
+            assert_eq!(transformer.manifest().name, *name, "{name}: an earlier id must name the transformer it always named");
+            assert_eq!(resolved, TransformerIdTree::Prior(tree), "{name}");
+            let served = manifest_for_id(&id).unwrap();
+            assert_eq!(served.source_tree_sha256, tree, "{name}: the manifest served for an earlier id is that tree's");
+            assert_eq!(transformer_id(&served), id, "{name}: the manifest served for an earlier id hashes back to it");
+        }
     }
 }

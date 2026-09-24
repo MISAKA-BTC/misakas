@@ -122,6 +122,7 @@ fn one_final(credit: u64) -> PalwExecFinalV1 {
         claim_id: Hash64::from_u64_word(4),
         execution_root: Hash64::from_u64_word(5),
         credit,
+        accepted_blue_score: 0,
     }
 }
 

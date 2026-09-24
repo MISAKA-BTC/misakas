@@ -177,6 +177,9 @@ fn validate_refuses_the_fence_without_each_prerequisite() {
         ("attribution", Box::new(|p| p.palw_offence_attribution = None), "without palw_offence_attribution"),
         ("independence", Box::new(|p| p.palw_admission_independence = None), "without palw_admission_independence"),
         ("audit fence", Box::new(|p| p.palw_audit_2026_09_23 = None), "without palw_audit_2026_09_23"),
+        // M4 review finding 4: SW-8's one state is the walk's object-by-object base.
+        ("audit fence 09-11", Box::new(|p| p.palw_audit_2026_09_11 = None), "without palw_audit_2026_09_11"),
+        ("audit fence 09-11 above", Box::new(move |p| p.palw_audit_2026_09_11 = Some(late)), "without palw_audit_2026_09_11"),
         ("economic safety", Box::new(|p| p.palw_economic_safety = None), "without palw_economic_safety"),
         ("objective offence", Box::new(|p| p.palw_objective_offence = None), "without palw_objective_offence"),
         ("panel economy", Box::new(|p| p.palw_panel_economy = None), "without palw_panel_economy"),

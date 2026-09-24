@@ -80,16 +80,21 @@ const BIND_REAL_SHAPED: &str = "Ok(())";
 /// consumed offence's `collected`/`claim_id`, all dormant) move every root; the lock, both
 /// collaterals and every verdict string are unchanged, which is the parity this file pins. v21:
 /// licensed `5406163a…`, after the conviction `9c9d4a01…`, the next empty block `4c1670c8…`.
+/// Within v22, before it shipped (the S-4 review's G freeze), `PalwClaimRcoreV1` gained
+/// `g_res_sompi` at its tail — 16 zero bytes per claim on testnet-11, which never writes it — so the
+/// three roots moved once more and nothing else did: the lock, both collaterals and every verdict are
+/// the same values. Pre-field: licensed `fa02c3ff…`, after the conviction `46e89978…`, the next empty
+/// block `a5b94a7a…`.
 const ROOT_LICENSED: &str =
-    "fa02c3ffa9521e5c8daed3ff4ebdf689da96217c6dc4741e4cf09b347cb861b2258376fb6d1f2d412e6460b301ab0c15e804bacc9bb14caa59396cf841856770";
+    "5a95c61d556352f416bd60181f879bdde8b2651072df8775a325fe8ad4fb1705b69dc7a45709e3540f5d7bf4281a31bd20c8f9bddc64c231fd91ebf2093071a4";
 const SEAT_LOCK_SOMPI: u128 = 162_677_341;
 const SEAT_COLLATERAL_BEFORE: u64 = 1_000_000_000_000;
 const ROOT_AFTER_V1_CONVICTION: &str =
-    "46e8997848ab4d0636d2ddcb0c65bd05f5fec6e863433c53b82b851e488feaaae66b4200b463d7d66c30fa77c22559f8d0444430f4f46c95920b74d9e47bdec5";
+    "6b4662d0e9064ee8a4241b891dc7bf68b57c0df2d3ff9549a2baf26904d3312243a828a5032ac8caa8b527c3e76f116f4b7f40cd83418df2c6494f16072dd2de";
 const SEAT_COLLATERAL_AFTER: u64 = 999_837_322_659;
 /// The root the next block folds to when it carries nothing.
 const ROOT_EMPTY_NEXT: &str =
-    "a5b94a7ab98bad42ddb2e28fd44a387d7e31dce1f745acac9e5fda30e5894563102c49264b5c3ddd7a69a1e1b39f4779093847246e795b2e7cdff424e0b284e5";
+    "94f497ccc4b92f3aa198b063c469b974bbb2f36f9923f76bb47311cc610a5809f3914a49311cc30b3e6d56443bf49ae2f56f1c70aaea5a27efc07d818586c266";
 
 // ---- The fixture ---------------------------------------------------------------------------------
 
@@ -496,8 +501,8 @@ fn t11_the_v2_kind_is_dormant_at_the_gate_and_in_the_fold() {
 
 // ---- F1 (ADR-0152 v3.1): the attribution-only tags and kinds leave testnet-11 where it was -------
 
-/// **T18x: a V1 payload carrying tag 9 or 10 is refused on testnet-11 exactly as an undecodable tag
-/// was** — at the processor's V1 gate (`PanelFalseValidNeedsContradiction`, before the seat, the
+/// **T18x: a V1 payload carrying any of tags 9–13 is refused on testnet-11 exactly as an undecodable
+/// tag was** — at the processor's V1 gate (`PanelFalseValidNeedsContradiction`, before the seat, the
 /// receipt or the signature is read) and in the V1 fold ("does not decode"), and the carrying block
 /// folds to the empty block's pinned root. The same payload bytes with the tag byte replaced by one
 /// no build decodes are refused with the same two answers — so no testnet-11 verdict moved when the
@@ -511,9 +516,31 @@ fn t11_attribution_tags_and_kinds_are_refused_as_they_were() {
     let seat_kp = generate_key_pair([0x74; 32]);
     let dormant = processor_extras(&f.p, f.daa);
     let refusal_of = |object: &PalwConsensusObjectV2| format!("{:?}", fold_with(&f, std::slice::from_ref(object), &dormant).err());
+    use kaspa_consensus_core::palw_offence_v1::{PalwForgedOutputTiledProofV1, PalwPromptProofV1};
+    use kaspa_consensus_core::palw_step_refute::{PalwTiledDecodeTokensV1, PalwTraceEventDisclosureV1};
+    let opening = kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1 {
+        leaf_index: 0,
+        leaf_hash: Hash64::from_u64_word(1),
+        siblings: vec![],
+    };
     for contradiction in [
         PalwPanelContradictionV1::IdentityMismatch { binding: f.binding.clone() },
         PalwPanelContradictionV1::OutputMismatch { binding: f.binding.clone(), pin: PalwDecodeTokenPinV1::Base0V1(f.pin.clone()) },
+        // ADR-0152 v3.1 F1c / F1-M: 11, 12 and 13, appended — refused as the undecodable tag was.
+        PalwPanelContradictionV1::ForgedOutputTiled {
+            binding: f.binding.clone(),
+            proof: PalwForgedOutputTiledProofV1::OutOfVocab {
+                position: 0,
+                tokens: PalwTiledDecodeTokensV1 { rows_root: Hash64::from_u64_word(2), generated_token_ids: vec![1] },
+            },
+        },
+        PalwPanelContradictionV1::LogitsNotStepOutput {
+            event: PalwTraceEventDisclosureV1::Flat { binding: Box::new(f.binding.clone()), pin: f.pin.clone() },
+            row: 0,
+            head_tile: 0,
+            head_opening: opening.clone(),
+        },
+        PalwPanelContradictionV1::PromptNotAnchored { binding: f.binding.clone(), proof: PalwPromptProofV1::Whole },
     ] {
         let payload = v1_payload(f.claim_id, seat, &seat_kp, domain(&f.p), contradiction.clone(), false);
         let bytes = borsh::to_vec(&payload).unwrap();

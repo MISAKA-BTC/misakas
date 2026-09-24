@@ -127,7 +127,9 @@ pub enum PalwExecQuantumPhaseV1 {
 
 /// Mint unique execution quanta from a span's Finals once the ADR-0130 future seed exists.
 ///
-/// * Finals are first collapsed by `execution_root` so 100 copies of one inference are one job.
+/// * Finals are first collapsed by `execution_root` so 100 copies of one inference are one job —
+///   the EARLIEST-accepted copy's (`palw_exec_final_acceptance_order_v1`; the claim id alone where
+///   no Final records its acceptance, below `palw_offence_attribution`).
 /// * Each surviving Final yields `palw_execution_quantum_count_v1` tickets.
 /// * Tickets are assigned to distinct rounds at or after `open_round` by
 ///   `H(seed ‖ quantum_id)` with linear probe, so one round never holds two quanta of this mint
@@ -195,7 +197,10 @@ pub fn palw_execution_mint_quanta_bounded_v1(
         .filter(|f| f.credit > 0)
         .filter(|f| !crate::palw_economic_safety_v1::palw_exec_rights_are_forfeit_v1(forfeited_roots, &f.execution_root))
         .collect();
-    by_work.sort_by(|a, b| a.execution_root.cmp(&b.execution_root).then(a.claim_id.cmp(&b.claim_id)));
+    // ADR-0152 v3.1 (review M-1): a root's tickets go to its EARLIEST-accepted Final.
+    by_work.sort_by(|a, b| {
+        a.execution_root.cmp(&b.execution_root).then(crate::palw_execution_lane_v1::palw_exec_final_acceptance_order_v1(a, b))
+    });
     by_work.dedup_by(|a, b| a.execution_root == b.execution_root);
 
     let mut taken: BTreeSet<u64> = BTreeSet::new();
@@ -284,7 +289,10 @@ pub fn palw_execution_mint_quanta_windowed_v1(
         .filter(|f| f.credit > 0)
         .filter(|f| !crate::palw_economic_safety_v1::palw_exec_rights_are_forfeit_v1(forfeited_roots, &f.execution_root))
         .collect();
-    by_work.sort_by(|a, b| a.execution_root.cmp(&b.execution_root).then(a.claim_id.cmp(&b.claim_id)));
+    // ADR-0152 v3.1 (review M-1): a root's tickets go to its EARLIEST-accepted Final.
+    by_work.sort_by(|a, b| {
+        a.execution_root.cmp(&b.execution_root).then(crate::palw_execution_lane_v1::palw_exec_final_acceptance_order_v1(a, b))
+    });
     by_work.dedup_by(|a, b| a.execution_root == b.execution_root);
 
     let mut drawn: Vec<(Hash64, PalwExecQuantumV1)> = Vec::new();
@@ -395,6 +403,7 @@ mod tests {
             claim_id: h(claim),
             execution_root: h(root),
             credit,
+            accepted_blue_score: 0,
         }
     }
 

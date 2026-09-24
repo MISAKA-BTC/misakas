@@ -140,7 +140,10 @@ fn load() -> FpWorkerRuntime<Qwen36Backend> {
         net.clone(),
     )
     .with_step_ladder_cap(court.max_step_leaf_count())
-    .with_prompt_ids_form(prompt_ids_form);
+    .with_prompt_ids_form(prompt_ids_form)
+    // ADR-0152 v3.1 post-edit 4 (the 3a review's H-B): the network's attempt rule, as the A16
+    // worker sets it — `FpWorkerRuntime::new` refuses a backend without it.
+    .with_attempt_rules(misaka_palw_base0::fp_worker::fp_worker_attempt_rules_v1(&String::from_utf8_lossy(&net)).unwrap_or_else(|why| die(why)));
     if !backend.supports_court() {
         die(format!("this build cannot serve {model_id}'s registered graph, so it cannot commit a step leg for it"));
     }

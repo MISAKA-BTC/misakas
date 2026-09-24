@@ -144,6 +144,9 @@ pub fn extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
         // is refused by name. F2's own suites arm it explicitly
         // (`p.palw_offence_attribution_active_at(daa)`), which is what the processor resolves.
         offence_attribution_active: false,
+        // ADR-0152 X7 / N9: the processor passes P2-7's constant and nothing else, so the fixture
+        // folds with it too (signer liability armed past `palw_rcore_plus` since P2-7).
+        seat_da_answer_landed: kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
         objective_offence_daa: p.palw_objective_offence_daa(),
         seat_gate_possession_daa: p.palw_seat_gate_possession_daa(),
         model_registry: registry_fold(p, daa),

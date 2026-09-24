@@ -386,10 +386,9 @@ fn r2_a_pre_drained_bond_collects_its_remainder() {
 /// **T81 (the DA half) / T22 (S3): a DA default after `Final` writes a `DaDefault` record with
 /// `claim_id` and `collected`, reverses the `Final` as the withholding, and charges S3 only through
 /// the burn hook.** A bystander's session outlives the claim's challenge window; the claim is `Final`
-/// with a vesting row (written through the carriage — the row writer is the vesting work's) and
-/// defaults at `FinalRow`. The producer's S3 `min(25% · C₀, 3 G)` is charged iff `burn_vesting_row`
-/// burned the row — the vesting work's body, which lands with `PALW_RCORE_VESTING_ROWS_LANDED_V1`; S's
-/// stub burns none, so this build charges 0 and the record says so (`amount` = `collected` = the S3
+/// with the vesting row the vesting work wrote at `Final`, and defaults at `FinalRow`. The producer's S3
+/// `min(25% · C₀, 3 G)` is charged because `burn_vesting_row` burned the row (the vesting work's body,
+/// with `PALW_RCORE_VESTING_ROWS_LANDED_V1`), and the record says so (`amount` = `collected` = the S3
 /// actually charged). Rights are forfeited by claim; nothing strikes after `Final`.
 #[test]
 fn t81_a_post_final_da_default_records_its_claim_and_collected_and_s3_rides_the_burn_hook() {
@@ -403,33 +402,10 @@ fn t81_a_post_final_da_default_records_its_claim_and_collected_and_s3_rides_the_
     c.step(&[accuse(id, bond_key(1), 0)]);
     c.finalize(id);
     let PalwClaimPhaseV2::Final { final_daa } = c.claim(&id).phase else { panic!("Final") };
-    c.s = edited(&c.sp, &c.s, |carriage| {
-        carriage.vesting.insert(
-            id,
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
-                claim_id: id,
-                producer_bond: producer,
-                class_id: genesis_classes(&c.p)[0].0,
-                execution_root: Hash64::default(),
-                artifact_root: Hash64::default(),
-                job_identity: Hash64::default(),
-                free_prompt: false,
-                trace_root: Hash64::default(),
-                segment_count: 0,
-                licence_door: PalwLicenceDoorTagV1::Quorum,
-                basis_k: 3,
-                escrowed_reward: 0,
-                buyback_bound: 0,
-                producer: kaspa_consensus_core::palw_state_v2::PalwPayoutV2 { payload: h(0x81), amount: 0 },
-                seats: Vec::new(),
-                reserve: 0,
-                final_daa,
-                expiry_daa: final_daa + c.sp.window_court(),
-                settled_at_final: c.s.settled_attempt_finals(),
-                matured_at: None,
-            },
-        );
-    });
+    // The vesting work wrote the claim's row at `Final` (integration: the row writer is on this line,
+    // so the test reads the real row instead of writing one through the carriage).
+    let row = c.s.vesting_row(&id).expect("the vesting work's row, written at Final").clone();
+    assert_eq!((row.producer_bond, row.final_daa), (producer, final_daa), "the claim's own row");
     let before = collateral(&c, &producer);
     let g = g_of(&c, &id);
     let deadline = c.s.da_session(&id, &bond_key(1)).expect("the session outlived the Final").deadline_daa;
@@ -441,12 +417,9 @@ fn t81_a_post_final_da_default_records_its_claim_and_collected_and_s3_rides_the_
     );
     let debit = u128::from(before - collateral(&c, &producer));
     let s3 = palw_rcore_s3s4_action_v1(before, g);
-    if PALW_RCORE_VESTING_ROWS_LANDED_V1 {
-        assert_eq!(debit, s3, "S3: the row burned, the producer charged min(25% · C₀, 3 G)");
-    } else {
-        assert!(c.s.vesting_row(&id).is_some(), "S's stub hook burns nothing");
-        assert_eq!(debit, 0, "no row burned, no S3");
-    }
+    assert!(PALW_RCORE_VESTING_ROWS_LANDED_V1, "the vesting rows are on this line");
+    assert!(c.s.vesting_row(&id).is_none(), "the row is burned: S3's marker");
+    assert_eq!(debit, s3, "S3: the row burned, the producer charged min(25% · C₀, 3 G)");
     let row = c.s.consumed_offence(&palw_da_offence_id_v1(&producer.0, &id)).expect("the DaDefault record").clone();
     assert_eq!(
         (row.kind, u128::from(row.amount), u128::from(row.collected), row.claim_id, row.execution_root, row.accepted_daa),
@@ -460,10 +433,12 @@ fn t81_a_post_final_da_default_records_its_claim_and_collected_and_s3_rides_the_
 /// **S2 for a court DEFAULT, and no record: charged exactly as a proven fraud, recorded as the default
 /// it is.** A bystander's court on a licensed floor claim runs out on the responder's silence: past
 /// `palw_offence_attribution` the claim voids `CourtDefault`, the producer forfeits its commitment
-/// plus S2's `min(10% · C₀, 3 G)` (M2's rule: a court default is charged exactly as `CourtFraud`,
-/// so silence is never the cheaper way to lose) plus the court time — and NO `CourtConviction`
-/// (kind 6) is written: that record is a proven verdict's (the user's decision). The fence-off twin:
-/// the same void, no action.
+/// plus S2's `min(10% · C₀, 3 G)` plus the court time — the user-approved addition to ADR §3.6's S2
+/// table (2026-09-24, deviation 2: silence must not be cheaper than losing) — and NO
+/// `CourtConviction` (kind 6) is written: that record is a proven verdict's (the user's decision).
+/// The lib test `deviation_2_a_court_default_pays_the_losing_charge_with_no_record_and_no_reward`
+/// pins the equality with a lost verdict at the same DAA and that no reward opens. The fence-off
+/// twin: the same void, no action.
 #[test]
 fn s2_a_court_default_is_charged_as_a_fraud_and_writes_no_court_conviction() {
     for armed in [true, false] {
@@ -551,4 +526,188 @@ fn fence_off_the_funnel_writes_no_s4_field() {
         assert_eq!((row.collected, row.claim_id), (0, Hash64::default()), "dormant: the v22 fields stay default");
     }
     let _ = PalwStateV2Error::DaCourtDormant;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The S-4 review's G freeze: a conviction reads the gain the licence priced its locks with.
+// ---------------------------------------------------------------------------------------------
+
+/// The live inputs `G_res` is read from, moved after the licence: the execution lane's quantum
+/// halved and the permit value tenfold (the lane advances; `R` moves) — the conviction block's extras.
+fn moved(e: &mut PalwTransitionExtrasV1) {
+    if let Some(lane) = e.round_lane.as_mut() {
+        lane.execution_quantum = (lane.execution_quantum / 2).max(1);
+    }
+    if let Some(safety) = e.economic_safety.as_mut() {
+        safety.permit_value_sompi = safety.permit_value_sompi.saturating_mul(10).max(1);
+    }
+}
+
+/// A pair opened on the claim's line after its licence (the market input `s`): the claim's root, its
+/// owner row and a seeded market, written through the carriage.
+fn open_a_pair(c: &mut Chain, id: Hash64, line: u64) {
+    let (floor, _, _, _) = genesis_classes(&c.p)[0];
+    let root = c.s.class(&floor).expect("the floor").artifact_root;
+    let at = c.daa;
+    c.s = edited(&c.sp, &c.s, |k| {
+        k.claim_roots.insert(id, root);
+        k.artifact_owners.insert(
+            (floor, root),
+            kaspa_consensus_core::palw_model_lines_v1::PalwArtifactOwnerV1 { class_id: floor, line_id: h(line), version: 1 },
+        );
+        k.model_markets.insert(h(line), kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1::seed_v1(at, 100_000 * MSK, h(line + 1)));
+    });
+}
+
+/// The block past `claim`'s session deadline (its default) — with signer liability armed (P2-7's
+/// constant overridden, so the covering signers' S4 prices `G`) and the inputs [`moved`] — checked as
+/// `Chain::step` checks one: the delta re-applies and reverts, the carriage reloads under its root.
+fn run_out_moved(c: &mut Chain, claim: Hash64, accuser: PalwBondKeyV2) -> u64 {
+    let deadline = c.s.da_session(&claim, &accuser).expect("an open session").deadline_daa;
+    if deadline > c.daa + 1 {
+        c.step_at(deadline, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    }
+    let daa = deadline + 1;
+    let x = ctx(0xCA_0000 + daa, daa, daa, 0);
+    let mut e = c.extras_at(daa);
+    e.seat_da_answer_landed = true;
+    moved(&mut e);
+    let parent = c.s.clone();
+    let (child, delta, skips) =
+        fold_with(&c.p, &c.sp, &parent, &x, &[], PalwBlockWorkV3::None, Hash64::default(), &e).expect("the default's block folds");
+    assert!(skips.is_empty());
+    assert_eq!(kaspa_consensus_core::palw_state_v2::apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child);
+    assert_eq!(kaspa_consensus_core::palw_state_v2::revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent, "the delta reverts");
+    let reloaded = PalwStateCarriageV2::from_state(&child).into_state(&c.sp, Some(child.state_root())).expect("reloads");
+    assert_eq!(reloaded, child, "reload is the state");
+    c.s = child;
+    c.daa = daa;
+    daa
+}
+
+/// The live `G_res` a price read now would give, under the [`moved`] extras at the next DAA.
+fn live_g_res(c: &Chain, id: &Hash64) -> u128 {
+    let at = c.daa + 1;
+    let mut e = c.extras_at(at);
+    moved(&mut e);
+    let claim = c.claim(id);
+    kaspa_consensus_core::palw_state_v2::palw_rcore_bind_prices_v1(&c.s, &c.sp, &e, id, &claim, 5, at).g_res
+}
+
+/// **The S-4 review's G freeze: every conviction prices its tiers on the `G_res` the licence priced
+/// its locks with — pre-`Final`, after `Final` before retirement, and after retirement — whatever
+/// moves after the licence.** Two floor claims licensed by a V1 quorum record `G_res` once
+/// (`PalwClaimRcoreV1::g_res_sompi`, exactly the value each lock was priced on). Then the inputs move:
+/// a pair opens on the claims' line (`s`: 5% of `E`) and the conviction blocks read a halved lane
+/// quantum and a tenfold permit value (`R`) — the live gain moves, the frozen one does not.
+///
+/// * **Pre-`Final`** (claim A): a seat's DA session pauses the licensed claim and defaults; each
+///   covering `Valid` signer's S4 is its lock + `min(25% · C₀, 3 G)` on the licence-time `G`
+///   (`C₀/4` does not bind on a genesis seat), and the void's liability row copies it.
+/// * **After `Final`** (claim B): the `Final` block writes the licence-time `G_res` into the row —
+///   not the live value the pair has moved; DA-6's `FinalRow` accusation price reads it
+///   (`palw_da_accusation_admissible_v2`); a bystander's session outliving the challenge window
+///   defaults at `FinalRow` and the covering signers' S4 reads it too.
+/// * **After retirement** the row alone is left, and `palw_claim_g_v1` reads the licence value.
+///
+/// Every block re-applies, reverts and reloads exactly.
+#[test]
+fn g_freeze_every_conviction_reads_the_licence_time_gain() {
+    use kaspa_consensus_core::palw_state_v2::{palw_claim_g_v1, palw_rcore_lock_v1};
+    let mut c = Chain::new(t12());
+    c.step(&[bond_obj(1, 20_000 * MSK), bond_obj(2, 20_000 * MSK)]);
+    let seats = c.floor_seats();
+    let licence = |c: &mut Chain, seed: u64| -> (Hash64, u128) {
+        let id = c.floor_claim(seed);
+        let bound = c.bind(id, &seats);
+        let g_res = licence_g_res(c, &id);
+        c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats[..3].iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+        let claim = c.claim(&id);
+        assert_eq!(claim.rcore.g_res_sompi, g_res, "the licence records the G_res it priced with");
+        for (seat, _) in &seats[..3] {
+            assert_eq!(
+                c.s.slashable_lock(*seat, id).expect("a backed Valid locks").amount,
+                palw_rcore_lock_v1(g_res, claim.escrowed_reward, 0, 3),
+                "each lock is priced on the recorded G_res (no pair yet: s = 0)"
+            );
+        }
+        (id, g_res)
+    };
+    let (a, g_a) = licence(&mut c, 0x6A01);
+    let (b, g_b) = licence(&mut c, 0x6A02);
+    // The inputs move.
+    open_a_pair(&mut c, a, 0x6A_1000);
+    open_a_pair(&mut c, b, 0x6A_1000);
+    let (e_a, e_b) = (c.claim(&a).escrowed_reward, c.claim(&b).escrowed_reward);
+    assert!(live_g_res(&c, &a) > g_a && live_g_res(&c, &b) > g_b, "the live gain has moved (the pair's s, the lane's R)");
+    assert_eq!(palw_claim_g_v1(&c.s, &a).unwrap().g_res, g_a, "the frozen gain has not");
+
+    // Pre-Final: a seat of A's panel that signed nothing accuses (its session pauses the licensed claim).
+    c.step(&[accuse(a, seats[3].0, 0)]);
+    let before: Vec<u64> = seats[..3].iter().map(|(k, _)| collateral(&c, k)).collect();
+    let locks: Vec<u128> = seats[..3].iter().map(|(k, _)| c.s.slashable_lock(*k, a).unwrap().amount).collect();
+    run_out_moved(&mut c, a, seats[3].0);
+    assert!(matches!(c.claim(&a).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+    let g = g_a + u128::from(e_a);
+    for (i, (seat, _)) in seats[..3].iter().enumerate() {
+        let s4 = locks[i] + palw_rcore_s3s4_action_v1(before[i], g);
+        assert!(u128::from(before[i]) / 4 > 3 * g, "the premise: 3G binds on a genesis seat");
+        assert_eq!(u128::from(before[i] - collateral(&c, seat)), s4, "pre-Final: seat {i}'s S4 on the licence-time G");
+    }
+    assert_eq!(c.s.panel_liability(&a).expect("the void's row").g_res_sompi, g_a, "the row copies the frozen G_res");
+
+    // After Final, before retirement (B's challenge window closed while A's session ran; its Final
+    // block read the pair the carriage opened).
+    if matches!(c.claim(&b).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+        c.finalize(b);
+    }
+    assert!(matches!(c.claim(&b).phase, PalwClaimPhaseV2::Final { .. }), "B is Final");
+    assert_eq!(c.s.panel_liability(&b).expect("the Final's row").g_res_sompi, g_b, "the Final block copies the licence value, not the live one");
+    assert!(live_g_res(&c, &b) > g_b);
+    let (producer, _, _) = floor_producer(&c.p);
+    // The Final block wrote B's real vesting row (the vesting flag is landed); it is unmatured.
+    let row = c.s.vesting_row(&b).expect("the Final block writes the vesting row");
+    assert!(row.matured_at.is_none(), "B's row has not matured");
+    assert_eq!(row.producer_bond, producer);
+    let at = c.daa + 1;
+    let mut e = c.extras_at(at);
+    moved(&mut e);
+    let admission = kaspa_consensus_core::palw_state_v2::palw_da_accusation_admissible_v2(&c.s, &c.sp, &e, &b, &bond_key(2), at)
+        .expect("a Final claim with an unmatured row is accusable");
+    let full = palw_claim_bond_reservation_v1(&c.sp, &c.claim(&b)).unwrap();
+    let producer_c = collateral(&c, &producer);
+    let g = g_b + u128::from(e_b);
+    assert_eq!(
+        admission.exposure,
+        kaspa_consensus_core::palw_da_rcore_v1::palw_da_session_exposure_v1(
+            kaspa_consensus_core::palw_da_rcore_v1::palw_da_stage_reward_base_v1(
+                kaspa_consensus_core::palw_da_rcore_v1::PalwDaStageV1::FinalRow,
+                full,
+                producer_c,
+                g
+            ),
+            c.sp.min_collateral_sompi()
+        ),
+        "DA-6's FinalRow price reads the frozen G"
+    );
+    // A bystander accuses the Final claim (its row unmatured: FinalRow) and the producer is silent.
+    c.step(&[accuse(b, bond_key(1), 0)]);
+    let before: Vec<u64> = seats[..3].iter().map(|(k, _)| collateral(&c, k)).collect();
+    let locks: Vec<u128> = seats[..3].iter().map(|(k, _)| c.s.slashable_lock(*k, b).unwrap().amount).collect();
+    run_out_moved(&mut c, b, bond_key(1));
+    assert!(matches!(c.claim(&b).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+    for (i, (seat, _)) in seats[..3].iter().enumerate() {
+        assert_eq!(
+            u128::from(before[i] - collateral(&c, seat)),
+            locks[i] + palw_rcore_s3s4_action_v1(before[i], g),
+            "post-Final: seat {i}'s S4 on the licence-time G"
+        );
+    }
+
+    // After retirement: the row alone, and it holds the licence value.
+    let retire = c.s.deadline_of(&b).expect("the retirement");
+    c.step_at(retire + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(c.s.claim(&b).is_none(), "the claim retired");
+    let frozen = palw_claim_g_v1(&c.s, &b).expect("the row outlives the claim");
+    assert_eq!((frozen.g_res, frozen.escrowed_reward), (g_b, e_b), "post-retirement: the licence-time G");
 }

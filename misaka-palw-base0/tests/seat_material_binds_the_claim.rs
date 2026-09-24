@@ -615,7 +615,14 @@ fn attempt_claim<'a>(
         backend,
         family,
         material: out.material,
-        roots: PalwClaimRootsV1 { execution_root: out.execution_root, trace_root: out.trace_root, anchor, attempt_draw: Some(draw) },
+        roots: PalwClaimRootsV1 {
+            execution_root: out.execution_root,
+            trace_root: out.trace_root,
+            anchor,
+            attempt_draw: Some(draw),
+            output_root: None,
+            job_pin: None,
+        },
         fp: None,
     }
 }
@@ -634,6 +641,8 @@ fn fp_claim<'a>(label: String, backend: &'a dyn PalwExecutionBackendV1, family: 
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&q.job),
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         },
         fp: Some(q),
     }
@@ -788,6 +797,8 @@ fn an_attempt_served_as_a_fold_is_held_to_the_same_rules() {
                     trace_root: run.trace_root,
                     anchor,
                     attempt_draw: Some(draw),
+                    output_root: None,
+                    job_pin: None,
                 },
                 fp: None,
             };

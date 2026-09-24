@@ -142,8 +142,10 @@ fn legacy_rows_only_material_is_not_licensed_on_a_court_capable_a16_class() {
             let run = Qwen25A16RunV1 { logits_rows, generated };
             let (trace_root, _, execution_root, _) = qwen25_a16_roots_v1(&job, artifact.artifact_digest(), &run).expect("roots");
             let bytes = qwen25_a16_material_encode_v1(&run);
-            let verdict =
-                backend.verify_material(&bytes, PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: Some(draw) });
+            let verdict = backend.verify_material(
+                &bytes,
+                PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: Some(draw), output_root: None, job_pin: None },
+            );
             eprintln!("A16 held v7 legacy draw={draw} seed={seed}: {} bytes, verdict {verdict:?}", bytes.len());
             if verdict == PalwMaterialVerdictV1::Matches {
                 licensed_roots.push(execution_root);
@@ -202,8 +204,10 @@ fn legacy_rows_only_material_is_not_licensed_on_a_registered_qwen36_class() {
             let run = Qwen36RunV1 { logits_rows, generated };
             let (trace_root, _, execution_root, _) = qwen36_roots_v1(&job, backend.shape_id(), &run).expect("roots");
             let bytes = qwen36_material_encode_v1(&run);
-            let verdict =
-                backend.verify_material(&bytes, PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: Some(draw) });
+            let verdict = backend.verify_material(
+                &bytes,
+                PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: Some(draw), output_root: None, job_pin: None },
+            );
             eprintln!("Qwen3.6 held v7 legacy draw={draw} seed={seed}: verdict {verdict:?}");
             licensed += usize::from(verdict == PalwMaterialVerdictV1::Matches);
         }
@@ -254,7 +258,14 @@ fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> BentFoldAttempt {
     let honest = base0_fp_material_decode_v2(&base0_fp_material_encode_v2(&run, &ids).expect("fold")).expect("decodes");
     let honest_verdict = backend.verify_material(
         &base0_fp_material_encode_v2(&run, &ids).unwrap(),
-        PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor, attempt_draw: Some(draw) },
+        PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor,
+            attempt_draw: Some(draw),
+            output_root: None,
+            job_pin: None,
+        },
     );
     let replay = backend.execute_for_verdict(&job, &prompt).expect("the seat's replay runs");
     let mut bent = Vec::new();
@@ -276,6 +287,8 @@ fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> BentFoldAttempt {
             trace_root: m.binding.full_logits_trace_root,
             anchor,
             attempt_draw: Some(draw),
+            output_root: None,
+            job_pin: None,
         };
         let verdict = backend.verify_material(&bytes, roots);
         eprintln!(
@@ -378,6 +391,8 @@ fn crafted_profile_is_refused_not_a_panic_on_the_floor_fp_route() {
         trace_root: binding.full_logits_trace_root,
         anchor: binding.job_context.job_id,
         attempt_draw: None,
+        output_root: None,
+        job_pin: None,
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.verify_material(&bytes, roots)));
     eprintln!("verify_material on the crafted profile: {result:?}");
@@ -534,7 +549,14 @@ fn liveness_other_graph_versions() {
             let out = backend.execute(&job, &prompt).expect("honest attempt");
             let verdict = backend.verify_material(
                 &out.material,
-                PalwClaimRootsV1 { execution_root: out.execution_root, trace_root: out.trace_root, anchor, attempt_draw: Some(draw) },
+                PalwClaimRootsV1 {
+                    execution_root: out.execution_root,
+                    trace_root: out.trace_root,
+                    anchor,
+                    attempt_draw: Some(draw),
+                    output_root: None,
+                    job_pin: None,
+                },
             );
             let rules = seat_rules_on(&out.material, *family);
             eprintln!("{label} attempt draw={draw} ({cadence:?}): verdict {verdict:?}, SEAT-0 rules {rules:?}");
@@ -576,6 +598,8 @@ fn liveness_other_graph_versions() {
                         trace_root: run.outcome.trace_root,
                         anchor: fp_job_id_v3(&job),
                         attempt_draw: None,
+                        output_root: None,
+                        job_pin: None,
                     },
                 );
                 let rules = seat_rules_on(&run.outcome.material, *family);

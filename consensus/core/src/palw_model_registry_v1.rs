@@ -1425,6 +1425,33 @@ pub fn palw_model_registry_ready_seats_v1(
     ready
 }
 
+/// **ADR-0152 SW-9: op 186's ready count for a class's panel room** — the bonds
+/// [`palw_model_registry_ready_seats_v1`] counts, handed to
+/// [`crate::palw_state_v2::palw_panel_room_ready_count_v1`]: their number below `palw_rcore_plus`
+/// (and for a C7 class past it, or a class without a row), `ready_eff` over their operators' capped
+/// weights past it — the one decision the fold's `panel_rate_v1` / `panel_room_v1` read, so op 186's
+/// `panel_room` and the fold's gate agree (T91). `ready_seats_now` stays the bond count.
+pub fn palw_model_registry_room_ready_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    class_id: &Hash64,
+    now_daa: u64,
+    fold: &PalwModelRegistryFoldV1,
+) -> u32 {
+    let ready = state
+        .bonds_iter()
+        .filter(|(bond_key, _)| {
+            state
+                .seat_readiness(bond_key, class_id)
+                .is_some_and(|row| palw_seat_not_ready_reason_v1(state, params, bond_key, row, now_daa, fold).is_none())
+        })
+        .map(|(_, bond)| bond);
+    match state.model_lifecycle(class_id) {
+        Some(row) => crate::palw_state_v2::palw_panel_room_ready_count_v1(params, row, now_daa, fold.globals.seat_count as u64, ready),
+        None => ready.count().min(u32::MAX as usize) as u32,
+    }
+}
+
 /// [`palw_model_registry_inflight_v1`], and past `palw_audit_2026_09_23` (`count_free_prompts`)
 /// the class's free-prompt claims in flight too, in whole jobs of their quanta — the count the
 /// fold's class gate reads ([`crate::palw_state_v2::palw_inflight_claims_counted_v1`]).
@@ -1567,7 +1594,8 @@ pub fn palw_model_registry_read_v2(
             panel_room: if *class_id == base {
                 0
             } else {
-                let ready = fold.map(|f| palw_model_registry_ready_seats_v1(state, params, class_id, tip_daa, f)).unwrap_or(0) as u128;
+                // ADR-0152 SW-9: the fold's room count — `ready_eff` past `palw_rcore_plus` outside C7.
+                let ready = fold.map(|f| palw_model_registry_room_ready_v1(state, params, class_id, tip_daa, f)).unwrap_or(0) as u128;
                 let per_span =
                     ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
                 if rate_rule {
@@ -2156,6 +2184,7 @@ mod tests {
             claim_id: h(100),
             execution_root: h(7),
             credit: 1,
+            accepted_blue_score: 0,
         }];
         let snapshot = palw_execution_schedule_snapshot_v1(3, &finals);
         assert!(snapshot.domains.iter().any(|d| d.domain == h(1)) && snapshot.domains.iter().all(|d| d.domain != h(2)));

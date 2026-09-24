@@ -2223,6 +2223,21 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_duties_v2_impl(&mine)
     }
 
+    fn palw_disclosure_duties_v1(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutiesV1 {
+        self.virtual_processor.palw_disclosure_duties_v1_impl(&mine)
+    }
+
+    fn palw_da_accusation_check_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1> {
+        self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
+    }
+
     fn palw_claim_readers_v2(&self, claim: kaspa_consensus_core::Hash64) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
     }
@@ -2263,7 +2278,26 @@ impl ConsensusApi for Consensus {
         include_terminal: bool,
         limit: usize,
     ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
-        self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit)
+        self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit, false)
+    }
+
+    fn palw_claim_rows_with_vesting_v1(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        role: kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1,
+        include_terminal: bool,
+        limit: usize,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
+        self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit, true)
+    }
+
+    fn palw_vesting_v1(
+        &self,
+        query: kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+    ) -> Option<kaspa_consensus_core::palw_vesting_read_v1::PalwVestingReadV1> {
+        self.virtual_processor.palw_vesting_v1_impl(query, limit, after)
     }
 
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
@@ -2362,6 +2396,15 @@ impl ConsensusApi for Consensus {
         mine: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         self.virtual_processor.palw_v2_supplementary_receipt_assemble_impl(claim, &mine)
+    }
+
+    fn palw_v2_supplementary_assemble(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        v3_candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3>,
+        v2_candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
+        self.virtual_processor.palw_v2_supplementary_assemble_impl(claim, &v3_candidates, &v2_candidates)
     }
 
     fn import_pruning_point_palw_state(
@@ -2643,10 +2686,11 @@ impl ConsensusApi for Consensus {
             .map_err(|e| kaspa_consensus_core::errors::consensus::ConsensusError::GeneralOwned(e.to_string()))
     }
 
-    fn evm_activation_fences(&self) -> (u64, u64, u64) {
+    fn evm_activation_fences(&self) -> (u64, u64, u64, u64) {
         (
             self.config.params.evm_gas_pool_v2_activation_daa_score,
             self.config.params.evm_f002_withdraw_cap_activation_daa_score,
+            self.config.params.evm_bridge_ledger_activation_daa_score,
             self.config.params.evm_f003_mldsa_verify_activation_daa_score,
         )
     }

@@ -1229,6 +1229,10 @@ Do you confirm? (y/n)";
         config.palw_model_market.is_some(),
         evm_fee_recipient,
         attestation_policy,
+        // ADR-0152 v3.1 H-1 (P2-9): templates take H-1's lifecycle carriers first, and a full pool
+        // keeps a reserve for them, where R-core+ is armed — testnet-12 only; every other preset
+        // selects and evicts exactly as before.
+        kaspa_mining::mempool::config::palw_h1_carrier_priority_for(&config.params),
     )));
     let mining_monitor =
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));
@@ -1916,6 +1920,9 @@ Do you confirm? (y/n)";
             consensus_manager.clone(),
             app_dir.join(network.to_prefixed()).join("palw-retention"),
             std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
+            // ADR-0152 DA-8 (P2-7): past it a `Final` free-prompt claim is still accused, so its
+            // capture is kept to the claim's retention.
+            config_for_palw_panel.params.palw_rcore_plus_fence(),
         )));
     }
     // **ADR-0067 Decision 6: declarations this node did not watch arrive.** A pruned sync brings
@@ -2121,6 +2128,20 @@ mod tests {
         let mut argv = vec!["kaspad"];
         argv.extend_from_slice(extra);
         Args::parse(argv).expect("args parse")
+    }
+
+    /// **ADR-0152 v3.1 H-1 (P2-9 review, finding 6): the mining manager's carrier switch is the
+    /// ruleset's.** `palw_h1_carrier_priority_for` is pinned per network in `kaspa-mining`; this pins
+    /// that the daemon hands the manager THAT answer, so replacing it with a constant fails a test.
+    #[test]
+    fn the_mining_manager_reads_the_h1_carrier_switch_from_the_ruleset() {
+        let source = include_str!("daemon.rs");
+        let start = source.find("MiningManager::new_with_extended_config(").expect("the daemon builds its mining manager");
+        let call = &source[start..start + source[start..].find(")));").expect("the call closes")];
+        assert!(
+            call.contains("kaspa_mining::mempool::config::palw_h1_carrier_priority_for(&config.params)"),
+            "the daemon passes the ruleset's H-1 carrier switch to the mining manager"
+        );
     }
 
     /// **The producer gate looks where the panel actually writes** (audit3 S-21).

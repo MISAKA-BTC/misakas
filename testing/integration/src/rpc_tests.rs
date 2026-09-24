@@ -1098,6 +1098,27 @@ async fn sanity_test() {
                     assert!(rpc_client.get_palw_model_certification_call(None, malformed).await.is_err());
                 })
             }
+            KaspadPayloadOps::GetPalwVesting => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // ADR-0152 P2-10: a malformed selector is an error before any state is read,
+                    // and two selectors at once are refused; a well-formed read on a network that is
+                    // not ConsensusV2 answers `available: false`, echoing the query.
+                    let two = GetPalwVestingRequest {
+                        bond: format!("{}:0", "00".repeat(64)),
+                        claim_id: "00".repeat(64),
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_vesting_call(None, two).await.is_err());
+                    let malformed = GetPalwVestingRequest { claim_id: "not-hex".to_string(), ..Default::default() };
+                    assert!(rpc_client.get_palw_vesting_call(None, malformed).await.is_err());
+                    let bad_cursor = GetPalwVestingRequest { after: "x".to_string(), ..Default::default() };
+                    assert!(rpc_client.get_palw_vesting_call(None, bad_cursor).await.is_err());
+                    let chain = rpc_client.get_palw_vesting_call(None, GetPalwVestingRequest::default()).await.unwrap();
+                    assert!(!chain.available, "a non-ConsensusV2 network has no vesting table");
+                    assert!(chain.rows.is_empty());
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

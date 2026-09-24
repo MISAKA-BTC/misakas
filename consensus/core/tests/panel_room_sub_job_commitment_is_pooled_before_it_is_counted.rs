@@ -36,6 +36,17 @@ use kaspa_consensus_core::palw_work_target_v1::{palw_panel_capacity_by_rate_v1, 
 const PRODUCER: u64 = 41;
 const COMMITTER: u64 = 42;
 
+/// **ADR-0152 v3.1 T-2(a)'s per-bond share (S-6) is a separate rule** — past `palw_rcore_plus`
+/// (testnet-12) no bond holds more than `⌈c_class / 2⌉` unlicensed claims of a class, 3 on the short
+/// row at eight ready seats (`rcore_s6_per_bond_share`). This file measures the ROOM, so its
+/// commitments are spread over committer bonds `COMMITTER + i`, none holding more than its share,
+/// and the room stays the only rule that binds.
+const COMMITTERS: u64 = 4;
+
+fn committer_bonds() -> Vec<PalwConsensusObjectV2> {
+    (0..COMMITTERS).map(|i| bond_obj(COMMITTER + i, RICH)).collect()
+}
+
 fn fp_extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
     let mut e = room_extras(p, daa);
     e.canonical_work_daa = None;
@@ -128,7 +139,7 @@ fn a_one_quantum_commitment_in_the_last_part_job_is_kept_beside_the_2m_attempt()
         &sp,
         &s,
         &ctx(0x4400_0000, now, now, 0),
-        &[bond_obj(PRODUCER, RICH), bond_obj(COMMITTER, RICH)],
+        &[vec![bond_obj(PRODUCER, RICH)], committer_bonds()].concat(),
         PalwBlockWorkV3::None,
         Hash64::default(),
         &fp_extras(&p, now),
@@ -151,7 +162,7 @@ fn a_one_quantum_commitment_in_the_last_part_job_is_kept_beside_the_2m_attempt()
 
     // A second one-quantum commitment raises no class's term (10 quanta, 2 jobs): kept with the 2M
     // attempt reserved. f8c91f19 counted it as a whole claim more and refused it for 2M.
-    let one_q2 = commitment(short, q, 1, COMMITTER, 0xB3);
+    let one_q2 = commitment(short, q, 1, COMMITTER + 1, 0xB3);
     let alone = rehearse(&p, &sp, &block, &s2, &one_q2, None).expect("the commitment fits its own class");
     assert_eq!(owed(&p, &alone, short), 2, "10 quanta are still 2 jobs");
     assert_eq!(op186(&p, &sp, &alone, id2m, next).panel_room, 1, "and the 2M attempt still has its room after it");
@@ -161,8 +172,8 @@ fn a_one_quantum_commitment_in_the_last_part_job_is_kept_beside_the_2m_attempt()
 
     // The boundary is the pooled job: 6 quanta more (16, 2 jobs) are kept; 7 more (17, 3 jobs)
     // leave the 2M attempt no room and are refused on its behalf.
-    let six = commitment(short, q, 6, COMMITTER, 0xB4);
-    let seven = commitment(short, q, 7, COMMITTER, 0xB5);
+    let six = commitment(short, q, 6, COMMITTER + 1, 0xB4);
+    let seven = commitment(short, q, 7, COMMITTER + 1, 0xB5);
     let with_six = rehearse(&p, &sp, &block, &s3, &six, Some(id2m)).expect("16 quanta are 2 jobs: kept");
     assert_eq!(owed(&p, &with_six, short), 2);
     let with_seven = rehearse(&p, &sp, &block, &s3, &seven, Some(id2m));
@@ -207,19 +218,19 @@ fn short_row_at_capacity() -> (Params, PalwStateParamsV2, Hash64, PalwChainState
         &sp,
         &s,
         &ctx(0x4500_0000, now, now, 0),
-        &[bond_obj(COMMITTER, RICH)],
+        &committer_bonds(),
         PalwBlockWorkV3::None,
         Hash64::default(),
         &fp_extras(&p, now),
     )
-    .expect("the bond")
+    .expect("the bonds")
     .0;
     let next = now + 1;
     s = readied(&sp, &s, &honest, short, now);
     assert_eq!(op186(&p, &sp, &s, short, next).panel_room, 5, "eight ready seats hold five short-row jobs");
     // Four whole jobs and one quantum: 33 quanta, 5 jobs.
-    let mut objects: Vec<_> = (0..4).map(|i| commitment(short, q, 8, COMMITTER, 0xC0 + i)).collect();
-    objects.push(commitment(short, q, 1, COMMITTER, 0xC4));
+    let mut objects: Vec<_> = (0..4).map(|i| commitment(short, q, 8, COMMITTER + i / 2, 0xC0 + i)).collect();
+    objects.push(commitment(short, q, 1, COMMITTER + 2, 0xC4));
     s = fold_with(
         &p,
         &sp,
@@ -247,9 +258,9 @@ fn at_zero_room_a_commitment_that_fills_the_last_part_job_is_kept_and_a_whole_jo
     let q = short_quantum_leaves(&p, &sp, short);
     let block = ctx(0x4500_0002, daa, daa, 0);
     let attempt_gate = gate(&p, &sp, &s, short, daa);
-    let one_q = rehearse(&p, &sp, &block, &s, &commitment(short, q, 1, COMMITTER, 0xC5), None);
-    let seven_q = rehearse(&p, &sp, &block, &s, &commitment(short, q, 7, COMMITTER, 0xC6), None);
-    let whole = rehearse(&p, &sp, &block, &s, &commitment(short, q, 8, COMMITTER, 0xC7), None);
+    let one_q = rehearse(&p, &sp, &block, &s, &commitment(short, q, 1, COMMITTER + 3, 0xC5), None);
+    let seven_q = rehearse(&p, &sp, &block, &s, &commitment(short, q, 7, COMMITTER + 3, 0xC6), None);
+    let whole = rehearse(&p, &sp, &block, &s, &commitment(short, q, 8, COMMITTER + 3, 0xC7), None);
     let show = |r: &Result<PalwChainStateV2, PalwStateV2Error>| r.as_ref().map(|_| "kept").map_err(|e| format!("{e:?}"));
     println!(
         "attempt gate {attempt_gate:?}; 1 quantum {:?}; 7 quanta {:?}; a whole job {:?}",

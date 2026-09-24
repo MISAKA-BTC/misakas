@@ -190,8 +190,8 @@ fn rpc_palw_class_ledger_totals(
         redrawn: t.redrawn,
         paid_at_acceptance: t.paid_at_acceptance,
         escrow_final_sompi: t.escrow_final_sompi.to_string(),
-        producer_paid_sompi: t.producer_paid_sompi.to_string(),
-        panel_paid_sompi: t.panel_paid_sompi.to_string(),
+        producer_named_sompi: t.producer_named_sompi.to_string(),
+        panel_named_sompi: t.panel_named_sompi.to_string(),
         reserve_sompi: t.reserve_sompi.to_string(),
         burned_sompi: t.burned_sompi.to_string(),
         attempted_compute: t.attempted_compute.to_string(),
@@ -1516,7 +1516,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let include_terminal = request.include_terminal;
         let session = self.consensus_manager.consensus().unguarded_session();
-        let read = session.spawn_blocking(move |c| c.palw_claim_rows_v1(bond, role, include_terminal, limit)).await;
+        let read = session.spawn_blocking(move |c| c.palw_claim_rows_with_vesting_v1(bond, role, include_terminal, limit)).await;
         let role_name = match role {
             kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor => "executor",
             kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat => "seat",
@@ -1530,6 +1530,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .iter()
             .map(|row| {
                 let (phase, void_reason, phase_daa) = palw_claim_phase_named(&row.phase);
+                let vesting = read.vesting.get(&row.claim_id);
                 RpcPalwClaimRow {
                     claim_id: row.claim_id.to_string(),
                     is_free_prompt: row.free_prompt,
@@ -1558,6 +1559,31 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     exec_tickets_spent: row.exec_lane.as_ref().map(|lane| lane.tickets_spent).unwrap_or(0),
                     exec_first_round: row.exec_lane.as_ref().and_then(|lane| lane.first_round),
                     exec_last_round: row.exec_lane.as_ref().and_then(|lane| lane.last_round),
+                    ..palw_claim_row_vesting_fields(vesting, &bond)
+                }
+            })
+            .collect();
+        // Claim row v3's other half: the retired claims whose reward still vests, each shaped as a
+        // `final` row of the claim it was (ADR-0152, phase2-plan §1.6).
+        let vesting_only_rows = read
+            .vesting_only
+            .iter()
+            .map(|only| {
+                let stage = kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingV1 {
+                    stage: kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingStageV1::of_live_row(&only.row),
+                    read: Some(only.clone()),
+                };
+                RpcPalwClaimRow {
+                    claim_id: only.row.claim_id.to_string(),
+                    is_free_prompt: only.row.free_prompt,
+                    class_id: only.row.class_id.to_string(),
+                    executor_bond: outpoint(&only.row.producer_bond),
+                    phase: "final".to_string(),
+                    phase_daa: only.row.final_daa,
+                    seats: only.row.seats.iter().map(|(seat, _)| outpoint(seat)).collect(),
+                    reserved_sompi: "0".to_string(),
+                    escrow_sompi: only.row.escrowed_reward,
+                    ..palw_claim_row_vesting_fields(Some(&stage), &bond)
                 }
             })
             .collect();
@@ -1576,6 +1602,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             bond_slashed: summary.map_or(0, |b| b.slashed),
             bond_registered_daa: summary.map_or(0, |b| b.registered_daa),
             bond_capable_classes: summary.map(|b| b.capable_classes.iter().map(|c| c.to_string()).collect()).unwrap_or_default(),
+            vesting_only_rows,
+            vesting_only_truncated: read.vesting_only_truncated,
         })
     }
 
@@ -2688,6 +2716,154 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    // ------------------------------------------------------------------------------------------
+    // ADR-0152 P2-10 — the vesting table (op 199)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_vesting_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwVestingRequest,
+    ) -> RpcResult<GetPalwVestingResponse> {
+        use kaspa_consensus_core::palw_vesting_read_v1::{PalwVestingPayeeV1, PalwVestingQueryV1};
+        // Everything the caller sent is parsed before a byte of chain state is read (mainnet audit
+        // M-5): a malformed request is free, and an ERROR — "this payee has no rows" and "you named
+        // nobody readable" must not share a reply.
+        let named = [&request.bond, &request.payout_address, &request.claim_id].iter().filter(|field| !field.is_empty()).count();
+        if named > 1 {
+            return Err(RpcError::General("name at most one of bond, payoutAddress and claimId".to_string()));
+        }
+        let query = if !request.bond.is_empty() {
+            PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(
+                parse_bond_outpoint(&request.bond)?,
+            )))
+        } else if !request.payout_address.is_empty() {
+            PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Payload(palw_payout_payload_of_address(
+                &request.payout_address,
+                self.config.prefix(),
+            )?))
+        } else if !request.claim_id.is_empty() {
+            PalwVestingQueryV1::Claim(parse_hash64(&request.claim_id, "claim id")?)
+        } else {
+            PalwVestingQueryV1::Chain
+        };
+        let after = match request.after.trim() {
+            "" => None,
+            cursor => {
+                let (expiry, claim) = cursor
+                    .split_once(':')
+                    .ok_or_else(|| RpcError::General(format!("after '{cursor}' is not <expiry_daa>:<claim_id>")))?;
+                let expiry: u64 = expiry.parse().map_err(|_| RpcError::General(format!("after '{cursor}' has a non-numeric DAA")))?;
+                Some((expiry, parse_hash64(claim, "after's claim id")?))
+            }
+        };
+        let echo = GetPalwVestingResponse {
+            bond: request.bond.clone(),
+            payout_address: request.payout_address.clone(),
+            claim_id: request.claim_id.clone(),
+            ..Default::default()
+        };
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(echo);
+        }
+        let limit = request.limit as usize;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(read) = session.clone().spawn_blocking(move |c| c.palw_vesting_v1(query, limit, after)).await else {
+            return Ok(echo);
+        };
+        let measured_ms_per_daa = palw_measured_ms_per_daa(&session).await;
+        let outpoint = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
+        let stopped = match read.next_block.stopped {
+            kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::NotLatched => "not_latched",
+            kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::BudgetFull => "budget_full",
+            kaspa_consensus_core::palw_vesting_v1::PalwVestingStopV1::Empty => "empty",
+        };
+        let source_named = |source: &kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1| match source {
+            kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Row { claim_id } => ("row", claim_id.to_string()),
+            kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Reporter { offence_id } => {
+                ("reporter", offence_id.to_string())
+            }
+        };
+        Ok(GetPalwVestingResponse {
+            available: true,
+            rcore_plus_active: read.rcore_plus_active,
+            tip_daa: read.tip_daa,
+            next_daa: read.next_daa,
+            halted: read.halted,
+            second_clock_depth: read.raw_depth,
+            second_clock_escaped_depth: read.escaped_depth,
+            settled_anchors: read.settled_now,
+            measured_ms_per_daa,
+            created_sompi: read.counters.created.to_string(),
+            moved_sompi: read.counters.moved.to_string(),
+            burned_sompi: read.counters.burned.to_string(),
+            live_rows: read.live_rows as u64,
+            latched_rows: read.latched_rows as u64,
+            live_sompi: read.live_sompi.to_string(),
+            latched_sompi: read.latched_sompi.to_string(),
+            latched_behind_head: read.latched_behind_head as u64,
+            reporter_pending_rows: read.reporter_pending_rows as u64,
+            reporter_awarded_rows: read.reporter_awarded_rows as u64,
+            next_block_moves: read
+                .next_block
+                .moves
+                .iter()
+                .map(|next| {
+                    let (source, id) = source_named(&next.source);
+                    RpcPalwVestingMove { source: source.to_string(), id, legs: next.legs.iter().map(rpc_palw_vesting_leg).collect() }
+                })
+                .collect(),
+            next_block_legs: read.next_block.legs as u32,
+            next_block_new_keys: read.next_block.new_keys as u32,
+            next_block_stopped: stopped.to_string(),
+            next_block_stopped_at: read.next_block.stopped_at.as_ref().map(|source| source_named(source).1).unwrap_or_default(),
+            backlog_keys: read.backlog_keys as u64,
+            backlog_blocks_est: read.backlog_blocks_est,
+            licence_histogram: read
+                .licence_histogram
+                .iter()
+                .map(|(door, count)| RpcPalwVestingDoorCount {
+                    door: door.to_string(),
+                    rows: count.rows as u64,
+                    latched_rows: count.latched_rows as u64,
+                    sompi: count.sompi.to_string(),
+                })
+                .collect(),
+            claim_stage: read.claim_stage.map(|stage| stage.name().to_string()).unwrap_or_default(),
+            bond_known: read.bond_known,
+            payee_holds_collateral: read.payee_holds_collateral,
+            lock_live_rows: read.lock_live_rows as u64,
+            lock_live_last_expiry_daa: read.lock_live_last_expiry_daa,
+            rows: read.rows.iter().map(rpc_palw_vesting_row).collect(),
+            rows_total: read.rows_total as u64,
+            next_after: read.next_after.map(|(expiry, claim)| format!("{expiry}:{claim}")).unwrap_or_default(),
+            maturing_sompi: read.maturing_sompi.to_string(),
+            query_latched_sompi: read.latched_sompi_of_query.to_string(),
+            reporter_rewards: read
+                .reporter_rewards
+                .iter()
+                .map(|reward| RpcPalwReporterReward {
+                    offence_key: reward.offence_key.to_string(),
+                    stage: match reward.stage {
+                        kaspa_consensus_core::palw_vesting_read_v1::PalwReporterRewardStageV1::Pending => "pending",
+                        kaspa_consensus_core::palw_vesting_read_v1::PalwReporterRewardStageV1::Awarded => "awarded",
+                    }
+                    .to_string(),
+                    reporter_bond: reward.reporter.as_ref().map(outpoint).unwrap_or_default(),
+                    payload: if reward.payload == kaspa_hashes::Hash64::default() {
+                        String::new()
+                    } else {
+                        reward.payload.to_string()
+                    },
+                    sompi: reward.amount,
+                    reveal_until: reward.reveal_until,
+                    in_next_block: reward.in_next_block,
+                })
+                .collect(),
+            ..echo
+        })
+    }
+
     async fn get_palw_producer_facts_call(
         &self,
         _connection: Option<&DynRpcConnection>,
@@ -2842,6 +3018,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             response.bond_reserved_exposure = bond_facts.reserved_exposure.to_string();
             response.bond_exposure_ceiling = bond_facts.exposure_ceiling.to_string();
             response.bond_claim_exposure = bond_facts.claim_exposure.to_string();
+            // ADR-0152 P6: the ledger the fold measures past `palw_rcore_plus`, the producer floor
+            // and A-6's accuser ledger — read off the same facts the verdict below reads.
+            response.bond_committed = bond_facts.committed.to_string();
+            response.bond_producer_floor_shortfall = bond_facts.producer_floor_shortfall.unwrap_or(0);
+            response.bond_accuser_exposure = bond_facts.accuser_exposure.to_string();
         }
         // **The verdict is computed for every request, not only for bonds that exist.**
         //
@@ -2854,7 +3035,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // sentence of its own rather than an empty string: readiness is a property of a bond, and
         // not asking about one is not the same as asking and being told yes.
         //
-        // The verdict still comes from `ready_to_produce` rather than being re-derived here — the
+        // The verdict still comes from consensus-core (`ready_to_produce_v3`) rather than being re-derived here — the
         // RPC and the producer must not be able to disagree about what "ready" means. Its key check
         // is against the caller's own key, which this server does not hold, so the answer is given
         // for the key the bond registered; with no bond there is no such key and the first arm
@@ -2863,7 +3044,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             "no bond was named in this request — readiness is a property of a bond".to_string()
         } else {
             let key = facts.bond.as_ref().map(|b| b.registered_pubkey.as_slice()).unwrap_or(&[]);
-            match (facts.ready_to_produce(key), facts.class_admission_refusal.as_deref()) {
+            // ADR-0152 P6: `ready_to_produce_v3` at the candidate's DAA — the producer floor and the
+            // committed ledger past `palw_rcore_plus`, `ready_to_produce` byte for byte below it — the
+            // one verdict kaspad's producer loop reads too.
+            let rcore_plus = self.config.params.palw_rcore_plus_active_at(facts.daa_score);
+            match (facts.ready_to_produce_v3(key, rcore_plus), facts.class_admission_refusal.as_deref()) {
                 // The sentence first — the CLI matches on it — then the gate's own words.
                 (Err(why), Some(detail)) if why == kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2 => {
                     format!("{why} [{detail}]")
@@ -4318,6 +4503,137 @@ fn finalize_registration_state(registration: &mut RpcPalwModelRegistration) {
     }
 }
 
+/// **The payout payload a payout address names** (ADR-0152 P2-10's `payoutAddress`): the chain
+/// pays a PALW reward to `P2PKH-ML-DSA-87(payload)`, so an address of this network's prefix and of
+/// that one version is exactly a payload; any other address can be paid nothing and is an error.
+fn palw_payout_payload_of_address(address: &str, prefix: kaspa_addresses::Prefix) -> RpcResult<kaspa_hashes::Hash64> {
+    let address = kaspa_addresses::Address::try_from(address)
+        .map_err(|e| RpcError::General(format!("payout address '{address}' is not an address: {e}")))?;
+    if address.prefix != prefix {
+        return Err(RpcError::General(format!("payout address '{address}' is not of this network ({prefix})")));
+    }
+    if address.version != kaspa_addresses::Version::PubKeyHashMlDsa87 {
+        return Err(RpcError::General(format!(
+            "payout address '{address}' is not an ML-DSA-87 P2PKH address, and PALW pays nothing else"
+        )));
+    }
+    let bytes: [u8; 64] = address
+        .payload
+        .as_slice()
+        .try_into()
+        .map_err(|_| RpcError::General(format!("payout address '{address}' does not carry a 64-byte payload")))?;
+    Ok(kaspa_hashes::Hash64::from_bytes(bytes))
+}
+
+/// **This node's measure of the chain's pace** (ADR-0152 P2-10, for converting a vesting ETA in
+/// DAA to time; the T10 analyzer's "measured seconds per DAA"): milliseconds per DAA between the
+/// sink and the newest chain-block sample at least [`PALW_PACE_MIN_SPAN_DAA`] below it. `None`
+/// while the chain is younger than that. A measurement, never a consensus input.
+async fn palw_measured_ms_per_daa(session: &kaspa_consensusmanager::ConsensusSessionOwned) -> Option<u64> {
+    let sink = session.async_get_header(session.async_get_sink().await).await.ok()?;
+    let samples = session.async_get_chain_block_samples().await;
+    palw_ms_per_daa_since(
+        kaspa_consensus_core::daa_score_timestamp::DaaScoreTimestamp { daa_score: sink.daa_score, timestamp: sink.timestamp },
+        &samples,
+    )
+}
+
+/// [`palw_measured_ms_per_daa`]'s arithmetic, pure: `samples` ascending by DAA (as
+/// `get_chain_block_samples` returns them), the base is the newest one at least
+/// `PALW_PACE_MIN_SPAN_DAA` below `sink`.
+fn palw_ms_per_daa_since(
+    sink: kaspa_consensus_core::daa_score_timestamp::DaaScoreTimestamp,
+    samples: &[kaspa_consensus_core::daa_score_timestamp::DaaScoreTimestamp],
+) -> Option<u64> {
+    const PALW_PACE_MIN_SPAN_DAA: u64 = 1_000;
+    let base = samples.iter().rev().find(|sample| sample.daa_score.saturating_add(PALW_PACE_MIN_SPAN_DAA) <= sink.daa_score)?;
+    let span = sink.daa_score - base.daa_score;
+    Some(sink.timestamp.saturating_sub(base.timestamp) / span.max(1))
+}
+
+/// One vesting leg on the wire.
+fn rpc_palw_vesting_leg(leg: &kaspa_consensus_core::palw_vesting_v1::PalwVestingLegV1) -> RpcPalwVestingLeg {
+    use kaspa_consensus_core::palw_vesting_v1::PalwVestingLegKindV1 as K;
+    RpcPalwVestingLeg {
+        kind: match leg.kind {
+            K::Producer => "producer",
+            K::Seat => "seat",
+            K::Reserve => "reserve",
+            K::Reporter => "reporter",
+        }
+        .to_string(),
+        payee_bond: leg.payee_bond.map(|b| format!("{}:{}", b.0.transaction_id, b.0.index)).unwrap_or_default(),
+        payload: if leg.kind == K::Reserve { String::new() } else { leg.payload.to_string() },
+        sompi: leg.amount,
+        queue_key: leg.queue_key.map(|key| key.to_string()).unwrap_or_default(),
+    }
+}
+
+/// One vesting row on the wire.
+fn rpc_palw_vesting_row(read: &kaspa_consensus_core::palw_vesting_read_v1::PalwVestingRowReadV1) -> RpcPalwVestingRow {
+    let row = &read.row;
+    let m = &read.maturity;
+    RpcPalwVestingRow {
+        claim_id: row.claim_id.to_string(),
+        class_id: row.class_id.to_string(),
+        producer_bond: format!("{}:{}", row.producer_bond.0.transaction_id, row.producer_bond.0.index),
+        licence_door: kaspa_consensus_core::palw_vesting_read_v1::palw_licence_door_name_v1(&row.licence_door).to_string(),
+        basis_k: row.basis_k as u32,
+        escrow_sompi: row.escrowed_reward,
+        buyback_bound_sompi: row.buyback_bound,
+        total_sompi: row.total_sompi(),
+        reserve_sompi: row.reserve,
+        final_daa: row.final_daa,
+        expiry_daa: row.expiry_daa,
+        settled_at_final: row.settled_at_final,
+        matured_at: row.matured_at,
+        stage: kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingStageV1::of_live_row(row).name().to_string(),
+        daa_clock_met: m.daa_clock_met,
+        licences_since_final: m.licences_since_final,
+        licences_needed: m.licences_needed,
+        second_clock_bound_daa: m.second_clock_bound_daa,
+        da_session_open: m.da_session_open,
+        mature_now: m.mature_now,
+        lock_live: read.lock_live,
+        moves_ahead: read.position.map(|(moves, _)| moves as u64),
+        keys_ahead: read.position.map(|(_, keys)| keys as u64),
+        in_next_block: read.in_next_block,
+        eta_daa: read.eta.daa,
+        eta_estimated: read.eta.estimated,
+        legs: read.legs.iter().map(rpc_palw_vesting_leg).collect(),
+        legs_sompi: read.legs_sompi(),
+    }
+}
+
+/// **Claim row v3's vesting fields** (ADR-0152, phase2-plan §1.6) for one claim of `bond`'s — the
+/// row's own stage, amounts, clocks and ETA, and the legs that pay `bond`. Empty for a claim that
+/// did not vest. The rest of the row comes from the claim record.
+fn palw_claim_row_vesting_fields(
+    vesting: Option<&kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingV1>,
+    bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+) -> RpcPalwClaimRow {
+    let Some(vesting) = vesting else { return RpcPalwClaimRow::default() };
+    let mut out = RpcPalwClaimRow { vesting_stage: vesting.stage.name().to_string(), ..Default::default() };
+    if let Some(read) = &vesting.read {
+        out.vesting_sompi = read.row.total_sompi();
+        // The legs that pay `bond` — the read's own selector, so claim row v3 and `getPalwVesting`
+        // name the same legs.
+        out.vesting_payee_sompi = kaspa_consensus_core::palw_vesting_read_v1::palw_vesting_legs_paying_v1(
+            &read.row,
+            &kaspa_consensus_core::palw_vesting_read_v1::PalwVestingPayeeV1::Bond(*bond),
+        )
+        .iter()
+        .fold(0u64, |sum, leg| sum.saturating_add(leg.amount));
+        out.vesting_expiry_daa = Some(read.row.expiry_daa);
+        out.vesting_licences_since_final = read.maturity.licences_since_final;
+        out.vesting_licences_needed = read.maturity.licences_needed;
+        out.vesting_matured_at = read.row.matured_at;
+        out.vesting_eta_daa = Some(read.eta.daa);
+        out.vesting_eta_estimated = read.eta.estimated;
+    }
+    out
+}
+
 /// A 128-hex `Hash64` off the wire, or an error naming the field — a malformed id is a request
 /// error, never an absence (the integration test pins the difference).
 fn parse_hash64(text: &str, what: &str) -> RpcResult<kaspa_hashes::Hash64> {
@@ -4677,5 +4993,164 @@ mod palw_model_market_tests {
 
         let missing = answer(None);
         assert!(!missing.found && !missing.opened);
+    }
+}
+
+/// **The op 199 service layer, pinned field by field** (review of ADR-0152 P2-10, finding 5): the
+/// address→payload parse and its refusals, the pace arithmetic, and the two wire mappings — each
+/// on inputs whose values are all distinct, so a swapped pair of fields reads wrong.
+#[cfg(test)]
+mod palw_vesting_wire_tests {
+    use super::*;
+    use kaspa_consensus_core::daa_score_timestamp::DaaScoreTimestamp;
+    use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1;
+    use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwPayoutV2};
+    use kaspa_consensus_core::palw_vesting_read_v1::{
+        PalwClaimVestingStageV1, PalwClaimVestingV1, PalwVestingEtaV1, PalwVestingPayeeV1, PalwVestingRowReadV1,
+        palw_vesting_legs_paying_v1,
+    };
+    use kaspa_consensus_core::palw_vesting_v1::{PalwVestingMaturityV1, PalwVestingRowV1};
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+
+    fn h(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n)
+    }
+
+    fn bond(n: u64) -> PalwBondKeyV2 {
+        PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(0xB000 + n), n as u32))
+    }
+
+    /// A row paying producer bond 2 (500), seats 3 (101) and 4 (103) and a reserve of 290, every
+    /// number distinct, read with the seat-3 legs.
+    fn read() -> PalwVestingRowReadV1 {
+        let row = PalwVestingRowV1 {
+            claim_id: h(0xC1),
+            producer_bond: bond(2),
+            class_id: h(0xC2),
+            execution_root: h(0xE0),
+            artifact_root: h(0xA0),
+            job_identity: Hash64::default(),
+            free_prompt: false,
+            trace_root: Hash64::default(),
+            segment_count: 0,
+            licence_door: PalwLicenceDoorTagV1::Coverage,
+            basis_k: 3,
+            escrowed_reward: 1_001,
+            buyback_bound: 7,
+            producer: PalwPayoutV2 { payload: h(0x9A02), amount: 500 },
+            seats: vec![
+                (bond(3), PalwPayoutV2 { payload: h(0x9A03), amount: 101 }),
+                (bond(4), PalwPayoutV2 { payload: h(0x9A04), amount: 103 }),
+            ],
+            reserve: 290,
+            final_daa: 11,
+            expiry_daa: 13,
+            settled_at_final: 17,
+            matured_at: Some(43),
+        };
+        let legs = palw_vesting_legs_paying_v1(&row, &PalwVestingPayeeV1::Bond(bond(3)));
+        PalwVestingRowReadV1 {
+            maturity: PalwVestingMaturityV1 {
+                matured_at: Some(43),
+                daa_clock_met: true,
+                licences_since_final: 19,
+                licences_needed: Some(23),
+                second_clock_bound_daa: Some(29),
+                halted: false,
+                da_session_open: false,
+                mature_now: false,
+            },
+            row,
+            lock_live: true,
+            legs,
+            position: Some((31, 37)),
+            in_next_block: false,
+            eta: PalwVestingEtaV1 { daa: 41, estimated: true },
+        }
+    }
+
+    /// Every number lands in its own field, and each bool flips its own field and no other.
+    #[test]
+    fn a_vesting_row_maps_field_by_field() {
+        let w = rpc_palw_vesting_row(&read());
+        assert_eq!((&w.claim_id, &w.class_id), (&h(0xC1).to_string(), &h(0xC2).to_string()));
+        assert_eq!(w.producer_bond, format!("{}:2", TransactionId::from_u64_word(0xB002)));
+        assert_eq!((w.licence_door.as_str(), w.basis_k, w.stage.as_str()), ("coverage", 3, "latched"));
+        assert_eq!((w.escrow_sompi, w.buyback_bound_sompi, w.total_sompi, w.reserve_sompi), (1_001, 7, 500 + 101 + 103 + 290, 290));
+        assert_eq!((w.final_daa, w.expiry_daa, w.settled_at_final, w.matured_at), (11, 13, 17, Some(43)));
+        assert_eq!((w.licences_since_final, w.licences_needed, w.second_clock_bound_daa), (19, Some(23), Some(29)));
+        assert_eq!((w.moves_ahead, w.keys_ahead, w.eta_daa), (Some(31), Some(37), 41));
+        assert_eq!((w.legs.len(), w.legs[0].kind.as_str(), w.legs[0].sompi, w.legs_sompi), (1, "seat", 101, 101));
+        assert_eq!(w.legs[0].payee_bond, format!("{}:3", TransactionId::from_u64_word(0xB003)));
+
+        let bools =
+            |w: &RpcPalwVestingRow| [w.lock_live, w.mature_now, w.daa_clock_met, w.da_session_open, w.in_next_block, w.eta_estimated];
+        let base = bools(&w);
+        let flips: [fn(&mut PalwVestingRowReadV1); 6] = [
+            |r| r.lock_live = !r.lock_live,
+            |r| r.maturity.mature_now = !r.maturity.mature_now,
+            |r| r.maturity.daa_clock_met = !r.maturity.daa_clock_met,
+            |r| r.maturity.da_session_open = !r.maturity.da_session_open,
+            |r| r.in_next_block = !r.in_next_block,
+            |r| r.eta.estimated = !r.eta.estimated,
+        ];
+        for (i, flip) in flips.iter().enumerate() {
+            let mut r = read();
+            flip(&mut r);
+            let mut want = base;
+            want[i] = !want[i];
+            assert_eq!(bools(&rpc_palw_vesting_row(&r)), want, "flipping input {i} flips wire field {i} alone");
+        }
+    }
+
+    /// Claim row v3's half: the stage, the whole row, the legs that pay the ASKING bond, the clocks
+    /// and the ETA; a moved claim carries its stage alone; a claim that did not vest carries nothing.
+    #[test]
+    fn claim_row_v3_vesting_fields_map_field_by_field() {
+        let vesting = PalwClaimVestingV1 { stage: PalwClaimVestingStageV1::Latched, read: Some(read()) };
+        let seat = palw_claim_row_vesting_fields(Some(&vesting), &bond(3));
+        assert_eq!((seat.vesting_stage.as_str(), seat.vesting_sompi, seat.vesting_payee_sompi), ("latched", 994, 101));
+        assert_eq!(
+            (seat.vesting_expiry_daa, seat.vesting_licences_since_final, seat.vesting_licences_needed),
+            (Some(13), 19, Some(23))
+        );
+        assert_eq!((seat.vesting_matured_at, seat.vesting_eta_daa, seat.vesting_eta_estimated), (Some(43), Some(41), true));
+        assert_eq!(palw_claim_row_vesting_fields(Some(&vesting), &bond(2)).vesting_payee_sompi, 500, "the producer's leg");
+        assert_eq!(palw_claim_row_vesting_fields(Some(&vesting), &bond(4)).vesting_payee_sompi, 103);
+        assert_eq!(palw_claim_row_vesting_fields(Some(&vesting), &bond(9)).vesting_payee_sompi, 0, "a bond the row does not pay");
+
+        let moved = PalwClaimVestingV1 { stage: PalwClaimVestingStageV1::Moved, read: None };
+        let moved = palw_claim_row_vesting_fields(Some(&moved), &bond(2));
+        assert_eq!(moved, RpcPalwClaimRow { vesting_stage: "moved".to_string(), ..Default::default() });
+        assert_eq!(palw_claim_row_vesting_fields(None, &bond(2)), RpcPalwClaimRow::default());
+    }
+
+    /// `payoutAddress` names a payload only as an ML-DSA-87 P2PKH address of this network.
+    #[test]
+    fn a_payout_address_is_a_payload_of_this_network_and_that_version() {
+        use kaspa_addresses::{Address, Prefix, Version};
+        let payload = [0x5Au8; 64];
+        let good = Address::new(Prefix::Testnet, Version::PubKeyHashMlDsa87, &payload).to_string();
+        assert_eq!(palw_payout_payload_of_address(&good, Prefix::Testnet).unwrap(), Hash64::from_bytes(payload));
+        let foreign = palw_payout_payload_of_address(&good, Prefix::Mainnet).unwrap_err().to_string();
+        assert!(foreign.contains("is not of this network"), "{foreign}");
+        let schnorr = Address::new(Prefix::Testnet, Version::PubKey, &[0x5Au8; 32]).to_string();
+        let schnorr = palw_payout_payload_of_address(&schnorr, Prefix::Testnet).unwrap_err().to_string();
+        assert!(schnorr.contains("not an ML-DSA-87 P2PKH address"), "{schnorr}");
+        let junk = palw_payout_payload_of_address("misakatest:nonsense", Prefix::Testnet).unwrap_err().to_string();
+        assert!(junk.contains("is not an address"), "{junk}");
+    }
+
+    /// The pace: over the newest sample at least 1,000 DAA below the sink; none while the chain is
+    /// younger than that.
+    #[test]
+    fn the_pace_is_measured_over_the_newest_long_enough_span() {
+        let at = |daa_score, timestamp| DaaScoreTimestamp { daa_score, timestamp };
+        let samples = [at(0, 0), at(1_000, 100_000), at(5_000, 500_000)];
+        assert_eq!(palw_ms_per_daa_since(at(5_500, 550_000), &samples), Some(100), "(550,000 − 100,000) ms over 4,500 DAA");
+        assert_eq!(palw_ms_per_daa_since(at(6_000, 1_100_000), &samples), Some(600), "the 5,000 sample is now 1,000 below");
+        assert_eq!(palw_ms_per_daa_since(at(999, 99_900), &samples), None, "no span of 1,000 DAA yet");
+        assert_eq!(palw_ms_per_daa_since(at(5_500, 550_000), &[]), None);
     }
 }

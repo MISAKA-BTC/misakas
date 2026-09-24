@@ -37,6 +37,11 @@
 //! * **V2c at registration** (paging classes, keyed on `artifact_bytes`, see
 //!   `PalwFoldReadV1::check_class_verify_admits_v1`'s TODO), and **SR-1b's `daa ≥ H`** on its
 //!   supplementary path.
+//! * **S-6's share and SW-9's `ready_eff` read C7, not K-1's hold.** `bond_class_share_v1` sizes
+//!   `c_class` by C7 (`palw_rcore_class_is_c7_v1`) and `palw_panel_room_ready_eff_terms_v1` asks the
+//!   window rule, where K-1's hold is `palw_panel_holds_to_final_v1` (C7 ∪ long-D). A long-D class
+//!   outside C7 would be held to Final by the room yet priced by the rate for its per-bond share and
+//!   counted by `ready_eff`. Must be fixed before any long-D class is accepted (TODOs at both sites).
 //!
 //! # The pruning depth (P-1), in force from genesis
 //!

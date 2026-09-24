@@ -381,12 +381,37 @@ fn m1_a_da_accusation_is_refused_past_the_accusers_free_half() {
             "bond {bond}: the accusation is refused past its free half: {result:?}"
         );
     };
+    // P2-6: the node's read (C-8) refuses exactly what the fold refuses, so a seat whose free half is
+    // full never pays a carrier for an accusation the fold would drop — and waits for room.
+    let read = |bond: u64| {
+        let at = c.daa + 1;
+        kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(
+            &c.s,
+            &c.sp,
+            &c.extras_at(at),
+            &floor_id,
+            &bond_key(bond),
+            at,
+        )
+    };
     // The reviewer's bond: past C on any reading.
     assert!(committed + court + exposure > u128::from(collateral), "the premise: past C");
     refused(2);
     // The free half: no work of its own, and `committed + accuser + new ≤ C` would have admitted it.
     assert!(court + exposure <= u128::from(collateral) && half + court + exposure > u128::from(collateral), "the premise");
     refused(3);
+    for bond in [2, 3] {
+        assert!(
+            matches!(
+                read(bond),
+                kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1::Refused(PalwStateV2Error::AccusationExposureCeiling { ceiling, .. })
+                    if ceiling == u128::from(collateral)
+            ),
+            "bond {bond}: the node's read refuses it for room: {:?}",
+            read(bond)
+        );
+    }
+    assert!(matches!(read(4), kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1::File { .. }), "bond 4 files");
     // An identical bond with no court is not refused.
     c.step(&[accuse(floor_id, bond_key(4), 3)]);
     assert!(c.s.da_session(&floor_id, &bond_key(4)).is_some());
@@ -448,14 +473,14 @@ fn full_mask_seats(c: &Chain, claim: &Hash64, seats: &[(PalwBondKeyV2, Hash64)])
 
 /// Empty blocks until the session `(claim, accuser)` is gone: its deadline's block, then the first
 /// past it — the default — folded with the processor's extras (the shipped
-/// `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`: signer liability dormant).
+/// `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`: signer liability armed since P2-7 landed the answers).
 fn run_out(c: &mut Chain, claim: Hash64, accuser: PalwBondKeyV2) -> u64 {
     run_out_with(c, claim, accuser, kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1)
 }
 
 /// [`run_out`] with `seat_da_answer_landed` set to `landed` for the default's block — the test-only
-/// override of P2-7's constant (the processor always passes the constant), so the covering signers'
-/// S4 is exercised as the ADR specifies it. The block is checked as `Chain::step` checks one: the
+/// override of P2-7's constant (the processor always passes the constant), so both sides of the
+/// covering signers' S4 stay pinned: the shipped rule (`true`) and the dormant one it replaced. The block is checked as `Chain::step` checks one: the
 /// delta re-applies and reverts, the carriage reloads under its root.
 fn run_out_with(c: &mut Chain, claim: Hash64, accuser: PalwBondKeyV2, landed: bool) -> u64 {
     let deadline = c.s.da_session(&claim, &accuser).expect("an open session").deadline_daa;
@@ -467,7 +492,11 @@ fn run_out_with(c: &mut Chain, claim: Hash64, accuser: PalwBondKeyV2, landed: bo
     // The chain's own extras (`Chain::extras_at`: the processor's, the execution lane's round quantum
     // included, so `G`'s `R` is the one every other block of the chain priced).
     let mut e = c.extras_at(daa);
-    assert!(!e.seat_da_answer_landed, "the fixtures' extras carry the shipped value");
+    assert_eq!(
+        e.seat_da_answer_landed,
+        kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+        "the fixtures' extras carry the shipped value"
+    );
     e.seat_da_answer_landed = landed;
     let parent = c.s.clone();
     let (child, delta, skips) =
@@ -528,8 +557,17 @@ fn t18_da7_a_live_default_is_s1_and_writes_one_da_default_record() {
                 "kind 5, root 0 (by claim), the actual debit collected, the claim named"
             );
             assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(1)), 0, "the confirmed session's exposure is returned");
+            // R-4 (S-7, wired at integration): the default opens the reporter reward in its own block,
+            // named — the accuser, no reveal (V3S-03) — at ⌊r × collected⌋ on the producer's debit
+            // (X = 0: the producer's own tier).
+            let key = palw_da_offence_id_v1(&producer.0, &id);
+            let pending = *c.s.reward_pending(&key).expect("the DA default's reward is pending");
+            assert_eq!(pending.amount, kaspa_consensus_core::palw_state_v2::palw_reporter_reward_amount_v1(debit, 0));
+            assert!(pending.amount > 0 && pending.evidence_id == Hash64::default() && !pending.accepts_reveals());
+            assert_eq!(pending.best.map(|winner| winner.reporter), Some(bond_key(1)), "the accuser, named");
         } else {
             assert!(record.is_none(), "fence off: no DaDefault record");
+            assert!(c.s.reward_pending_iter().next().is_none(), "fence off: no reward");
         }
     }
 }
@@ -539,12 +577,16 @@ fn t18_da7_a_live_default_is_s1_and_writes_one_da_default_record() {
 /// the current panel — accuses the run's one event row, which pauses the claim (so it cannot slip into
 /// `Final`), and neither the producer nor any locked signer answers. The claim voids
 /// `ProducerWithholding` and the producer forfeits its commitment either way. With signer liability
-/// armed (P2-7's constant overridden, `landed`), the FULL seat (the only full mask) loses its lock
-/// and `min(25% · C, 3 G)` under the (seat, claim) key, and every partial seat — which attested only
-/// its segment and could not have answered an event row — keeps its lock and collateral (C7). As
-/// shipped (the constant `false`), no signer is charged at all.
+/// armed (`landed`: as shipped since P2-7), the FULL seat (the only full mask) loses its lock and
+/// `min(25% · C, 3 G)` under the (seat, claim) key, and every partial seat — which attested only its
+/// segment and could not have answered an event row — keeps its lock and collateral (C7). The
+/// dormant twin (the pre-P2-7 value, a test-only override) charges no signer at all.
 #[test]
 fn t32_c7_a_licensed_default_charges_s1_and_s4_on_covering_signers_only() {
+    assert!(
+        kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+        "P2-7 landed: the armed twin is the shipped rule"
+    );
     for landed in [false, true] {
         t32_c7_body(landed);
     }
@@ -597,7 +639,7 @@ fn t32_c7_body(landed: bool) {
 }
 
 /// **DA-5 / DA-7 after `Final` (T66's core half, V3S-02, V3S-04).** A `Final` claim with an unmatured
-/// vesting row (written through the carriage — the row writer is the vesting work's) is accusable:
+/// vesting row (the one the vesting work writes at `Final`) is accusable:
 /// the session re-keys the row to at least its deadline plus the challenge window and re-dates every
 /// live lock to it, so neither the row nor a lock can lapse under it. It runs out: the producer takes
 /// S3 (`min(25% · C, 3 G)`), the covering (full-mask) signer S4, the `Final` is reversed — recorded as
@@ -619,36 +661,12 @@ fn t66_body(landed: bool) {
     let full = full_mask_seats(&c, &id, &seats);
     c.finalize(id);
     let PalwClaimPhaseV2::Final { final_daa } = c.claim(&id).phase else { panic!("Final") };
-    assert!(matches!(try_step(&c, &[accuse(id, bond_key(1), 0)]), Err(PalwStateV2Error::DaClaimNotAccusable(_))), "no row, no session");
+    // The vesting work wrote the claim's row at `Final` (integration: the row writer is in this line,
+    // so the test reads the real row rather than writing one through the carriage).
     let (producer, _, _) = floor_producer(&c.p);
-    let expiry = final_daa + c.sp.window_court();
-    c.s = edited(&c.sp, &c.s, |carriage| {
-        carriage.vesting.insert(
-            id,
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
-                claim_id: id,
-                producer_bond: producer,
-                class_id: genesis_classes(&c.p)[0].0,
-                execution_root: Hash64::default(),
-                artifact_root: Hash64::default(),
-                job_identity: Hash64::default(),
-                free_prompt: false,
-                trace_root: Hash64::default(),
-                segment_count: 0,
-                licence_door: PalwLicenceDoorTagV1::Coverage,
-                basis_k: 2,
-                escrowed_reward: 0,
-                buyback_bound: 0,
-                producer: kaspa_consensus_core::palw_state_v2::PalwPayoutV2 { payload: h(0x66), amount: 0 },
-                seats: Vec::new(),
-                reserve: 0,
-                final_daa,
-                expiry_daa: expiry,
-                settled_at_final: c.s.settled_attempt_finals(),
-                matured_at: None,
-            },
-        );
-    });
+    let row = c.s.vesting_row(&id).expect("the vesting work's row, written at Final").clone();
+    assert_eq!((row.producer_bond, row.final_daa), (producer, final_daa), "the claim's own row");
+    let expiry = row.expiry_daa;
     // Accused late in the row's life: the session outlives the row's own expiry.
     let at = expiry - 100;
     c.step_at(at, &[accuse(id, bond_key(1), 0)], PalwBlockWorkV3::None, Hash64::default(), 0);
@@ -671,21 +689,22 @@ fn t66_body(landed: bool) {
         (Some(closed), Some(PalwVoidReasonV2::ProducerWithholding)),
         "the row is marked with the withholding, never CourtFraud"
     );
+    // S3 = min(25% · C₀, 3 G) through the burn hook (S-4): the burned row is S3's once-per-claim
+    // marker, and G is the gain the liability row recorded — `claim_g_v1` reads the record, never the
+    // live facts, whose realizable-rights term shrinks with time (the gain is fixed at the fraud).
     let g = {
         let row = c.s.panel_liability(&id).expect("the liability row");
         row.g_res_sompi + u128::from(row.escrowed_reward)
     };
-    // S3 fires through the burn hook (S-4): `burn_vesting_row` → `Some` (the row burned, its deletion
-    // the once-per-claim marker) ⇒ `min(25% · C₀, 3 G)`; `None` ⇒ nothing. The hook's body is the
-    // vesting work's and lands with `PALW_RCORE_VESTING_ROWS_LANDED_V1`; S's stub burns nothing.
     let debit = u128::from(producer_before - c.s.bond(&producer).unwrap().collateral);
-    if kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1 {
-        assert!(c.s.vesting_row(&id).is_none(), "the row is burned: S3's marker");
-        assert_eq!(debit, (u128::from(producer_before) / 4).min(3 * g), "S3");
-    } else {
-        assert!(c.s.vesting_row(&id).is_some(), "S's stub hook burns no row");
-        assert_eq!(debit, 0, "no row burned: no S3");
-    }
+    assert!(c.s.vesting_row(&id).is_none(), "the row is burned: S3's marker");
+    assert_eq!(debit, (u128::from(producer_before) / 4).min(3 * g), "S3");
+    let record = c
+        .s
+        .consumed_offence(&kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &id))
+        .expect("the DaDefault record")
+        .clone();
+    assert_eq!(u128::from(record.amount), debit, "the record's nominal tier is the S3 debit");
     if landed {
         assert!(full_before > c.s.bond(&full[0]).unwrap().collateral, "S4 on the covering signer, its lock still live");
     } else {
@@ -748,7 +767,7 @@ fn t69_da6_refuted_exposure_is_burned_at_retirement_or_refunded_at_a_conviction(
 /// serialization); the claim cannot reach `Final` while either is open, and when they run out the
 /// producer takes S1 and — with signer liability armed — the three `Valid` signers (full masks) S4;
 /// the two `Unavailable` seats, whose receipts are not `Valid`, pay nothing (N9: never against an
-/// `Unavailable` filer). As shipped (P2-7's constant `false`) no signer pays.
+/// `Unavailable` filer) — as shipped since P2-7. The dormant twin (the pre-P2-7 value) charges no signer.
 #[test]
 fn t27_t68_x2_unserved_seats_accuse_and_only_valid_signers_are_charged() {
     for landed in [false, true] {
@@ -879,8 +898,8 @@ fn da8_the_post_final_window_is_the_records_life_bounded_by_retention() {
     let retention = final_daa + c.sp.claim_retirement_daa() + 1_500;
     c.s = edited(&c.sp, &c.s, |carriage| {
         carriage.claims.get_mut(&id).unwrap().trace_retention_daa = retention;
-        carriage.vesting.insert(id, final_row(&c, id, producer, final_daa));
     });
+    assert_eq!(c.s.vesting_row(&id).map(|row| row.producer_bond), Some(producer), "the vesting work's row, written at Final");
     let retire = c.s.deadline_of(&id).expect("the retirement");
     assert_eq!(retire, final_daa + c.sp.claim_retirement_daa());
     // Fence off, a Final claim is never accusable (ADR-0062: terminal claims refuse).
@@ -903,33 +922,6 @@ fn da8_the_post_final_window_is_the_records_life_bounded_by_retention() {
         "past trace_retention_daa − W_disclose nothing opens"
     );
     run_out(&mut c, id, bond_key(1));
-}
-
-/// A `Final` claim's unmatured vesting row, as the vesting work writes it (the row writer is not in
-/// this line; the row is written through the carriage).
-fn final_row(c: &Chain, id: Hash64, producer: PalwBondKeyV2, final_daa: u64) -> kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
-    kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
-        claim_id: id,
-        producer_bond: producer,
-        class_id: genesis_classes(&c.p)[0].0,
-        execution_root: Hash64::default(),
-        artifact_root: Hash64::default(),
-        job_identity: Hash64::default(),
-        free_prompt: false,
-        trace_root: Hash64::default(),
-        segment_count: 0,
-        licence_door: PalwLicenceDoorTagV1::Quorum,
-        basis_k: 3,
-        escrowed_reward: 0,
-        buyback_bound: 0,
-        producer: kaspa_consensus_core::palw_state_v2::PalwPayoutV2 { payload: h(0x08), amount: 0 },
-        seats: Vec::new(),
-        reserve: 0,
-        final_daa,
-        expiry_daa: final_daa + c.sp.window_court(),
-        settled_at_final: c.s.settled_attempt_finals(),
-        matured_at: None,
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -974,27 +966,44 @@ fn kind3(id: Hash64, seat: PalwBondKeyV2, receipt: PalwSeatReceiptV3, contradict
 }
 
 /// The next block folded with `palw_offence_attribution` armed as the processor arms it on
-/// testnet-12, and signer liability as shipped — the block a filed kind 3 lands in.
-fn try_step_f2(c: &Chain, objects: &[PalwConsensusObjectV2]) -> Result<PalwChainStateV2, PalwStateV2Error> {
+/// testnet-12, and signer liability `landed` (the shipped value is P2-7's `true`; `false` is the
+/// dormant twin) — the block a filed kind 3 lands in.
+fn try_step_f2(c: &Chain, objects: &[PalwConsensusObjectV2], landed: bool) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let daa = c.daa + 1;
     let x = ctx(0xCA_0000 + daa, daa, daa, 0);
     let mut e = c.extras_at(daa);
     e.offence_attribution_active = c.p.palw_offence_attribution_active_at(daa);
-    assert!(e.offence_attribution_active && !e.seat_da_answer_landed, "testnet-12 arms F2; P2-7's constant is shipped false");
+    assert!(e.offence_attribution_active, "testnet-12 arms F2");
+    assert_eq!(
+        e.seat_da_answer_landed,
+        kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+        "the fixtures' extras carry the shipped value"
+    );
+    e.seat_da_answer_landed = landed;
     fold_with(&c.p, &c.sp, &c.s, &x, objects, PalwBlockWorkV3::None, Hash64::default(), &e).map(|(child, _, _)| child)
 }
 
-/// **M3 review F1: a DA default after `Final` is the WITHHOLDING it is, and convicts no signer.**
-/// A bystander's session on a licensed coverage claim does not pause it (V3S-08), so the claim goes
-/// `Final` with the session open (`window_challenge` 120 < `W_disclose` 1,200) and — with no vesting
-/// row in this build — the default lands at `FinalRow`. The reversal writes `ProducerWithholding` on
-/// the claim and on the liability row, so with signer liability dormant (P2-7's constant `false`)
-/// kind 3 against the honest full seat is refused both as `CourtFraud` (no such void) and as
-/// `ProducerWithholding` (N9's `da_confirmed` gate is the only route, and it is shut) — by the
-/// adjudicator and by the fold alike; the seat keeps its lock and its collateral. Before the fix the
-/// reversal wrote `CourtFraud` and the fold took the seat's whole lock.
+/// **M3 review F1: a DA default after `Final` is the WITHHOLDING it is, and kind 3 convicts no signer
+/// on top of it.** A bystander's session on a licensed coverage claim does not pause it (V3S-08), so
+/// the claim goes `Final` with the session open (`window_challenge` 120 < `W_disclose` 1,200) and the
+/// default lands at `FinalRow`. The reversal writes `ProducerWithholding` on the claim and on the
+/// liability row — never `CourtFraud` — so kind 3 against the honest full seat is refused as
+/// `CourtFraud` (no such void) by the adjudicator and by the fold alike. Before the fix the reversal
+/// wrote `CourtFraud` and the fold took the seat's whole lock.
+///
+/// Both sides of P2-7's constant: **dormant** (`false`) — no signer is charged at all, and kind 3's
+/// `ProducerWithholding` is refused too (N9's `da_confirmed` gate is shut); **shipped** (`true`,
+/// since P2-7 landed the seats' answers) — the covering full seat takes DA-7's S4 in the default
+/// itself (T66), and a later kind 3 `ProducerWithholding` against it charges nothing more (N9 shares
+/// DA-7's key).
 #[test]
 fn m3r_f1_a_post_final_da_default_is_withholding_and_convicts_no_signer() {
+    for landed in [false, true] {
+        m3r_f1_body(landed);
+    }
+}
+
+fn m3r_f1_body(landed: bool) {
     let mut c = Chain::new(t12());
     let (id, seats, bound) = covered_floor_claim(&mut c, 0x91);
     c.step(&[bond_obj(1, 20_000 * MSK)]);
@@ -1002,43 +1011,60 @@ fn m3r_f1_a_post_final_da_default_is_withholding_and_convicts_no_signer() {
     assert!(!c.s.da_session(&id, &bond_key(1)).unwrap().accuser_is_seat, "a bystander's session");
     c.finalize(id);
     assert!(c.s.da_session(&id, &bond_key(1)).is_some(), "the session outlives the challenge window");
-    assert!(c.s.vesting_row(&id).is_none(), "FinalRow reached with no vesting row");
+    assert!(c.s.vesting_row(&id).is_some(), "FinalRow reached with the vesting work's row");
     let (full, receipt) = full_seat_receipt(&c, id, &seats, bound);
     let lock = *c.s.slashable_lock(full, id).expect("the full seat's lock");
     let full_before = c.s.bond(&full).unwrap().collateral;
-    let closed = run_out(&mut c, id, bond_key(1));
+    let closed = run_out_with(&mut c, id, bond_key(1), landed);
     assert!(
         matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, voided_daa } if voided_daa == closed),
         "the Final is reversed as the withholding"
     );
+    assert!(c.s.vesting_row(&id).is_none(), "the producer's S3 burned the row");
     let row = c.s.panel_liability(&id).expect("the liability row");
     assert_eq!((row.voided_daa, row.void_reason), (Some(closed), Some(PalwVoidReasonV2::ProducerWithholding)));
     assert!(
         !c.s.palw_void_binds_claim_v1(&id, PalwVoidReasonV2::CourtFraud, closed),
         "no CourtFraud void binds the claim, on the record or the row"
     );
-    for contradiction in
-        [PalwPanelContradictionV1::CourtFraud { voided_daa: closed }, PalwPanelContradictionV1::ProducerWithholding { voided_daa: closed }]
-    {
+    let after_default = c.s.bond(&full).unwrap().collateral;
+    if landed {
+        assert!(after_default < full_before, "shipped: DA-7's S4 on the covering full seat, its lock still live (T66)");
+    } else {
+        assert_eq!(after_default, full_before, "dormant: the honest full seat pays nothing for the producer's silence");
+    }
+    for contradiction in [
+        PalwPanelContradictionV1::CourtFraud { voided_daa: closed },
+        PalwPanelContradictionV1::ProducerWithholding { voided_daa: closed },
+    ] {
         let object = kind3(id, full, receipt.clone(), contradiction.clone());
         let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &object else { unreachable!() };
         let rules = PalwIdentityRulesV1 {
             prompt_ids_form: c.p.palw_prompt_ids_form_v1(),
             base_class_id: c.sp.base_class_id(),
-            da_signer_liability: palw_da_signer_liability_armed_v1(
-                &c.sp,
-                kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
-                c.daa,
-            ),
+            da_signer_liability: palw_da_signer_liability_armed_v1(&c.sp, landed, c.daa),
         };
-        assert!(!rules.da_signer_liability, "shipped: signer liability dormant");
+        assert_eq!(rules.da_signer_liability, landed, "signer liability follows P2-7's constant");
         let finding = palw_check_panel_false_valid_v2(&c.s, &full, evidence, false, false, rules, None);
-        assert!(finding.is_err(), "{contradiction:?}: the adjudicator refuses it: {finding:?}");
-        let folded = try_step_f2(&c, &[object]);
-        assert!(matches!(folded, Err(PalwStateV2Error::ObjectiveOffenceRefused(..))), "{contradiction:?}: the fold refuses it: {folded:?}");
+        let folded = try_step_f2(&c, &[object], landed);
+        let court_fraud = matches!(contradiction, PalwPanelContradictionV1::CourtFraud { .. });
+        if court_fraud || !landed {
+            assert!(finding.is_err(), "{contradiction:?}: the adjudicator refuses it: {finding:?}");
+            assert!(
+                matches!(folded, Err(PalwStateV2Error::ObjectiveOffenceRefused(..))),
+                "{contradiction:?}: the fold refuses it: {folded:?}"
+            );
+        } else if let Ok(child) = folded {
+            assert_eq!(
+                child.bond(&full).unwrap().collateral,
+                after_default,
+                "shipped: kind 3's ProducerWithholding charges nothing on top of DA-7's S4 (N9's shared key)"
+            );
+        }
     }
-    assert_eq!(c.s.bond(&full).unwrap().collateral, full_before, "the honest full seat pays nothing for the producer's silence");
-    assert_eq!(c.s.slashable_lock(full, id).map(|l| l.amount), Some(lock.amount), "and keeps its lock");
+    if !landed {
+        assert_eq!(c.s.slashable_lock(full, id).map(|l| l.amount), Some(lock.amount), "dormant: the seat keeps its lock");
+    }
 }
 
 /// **M3 review F3: no session opens on a unit the chain already holds the answer to — so an answered
@@ -1157,4 +1183,248 @@ fn m3r_signer_liability_is_read_at_the_conviction_daa() {
     assert!(palw_da_signer_liability_armed_v1(&sp, true, 0), "testnet-12: from genesis");
     let dormant = sp.with_rcore_plus_mirrors(None, 0, Vec::new());
     assert!(!palw_da_signer_liability_armed_v1(&dormant, true, u64::MAX));
+}
+
+/// **P2-7 (ADR-0152 X7, DA-4): the R-core court's duty list — the producer's from the open sessions,
+/// a signer's from its covering lock — with its fence-off twin.**
+///
+/// A coverage licence (the full seat, four partials); a partial seat accuses row 7, so its session
+/// demands the named row and the run's one row `(0, 0)` (DA-3). `palw_disclosure_duties_v1`:
+/// * **the producer** owes both units, soonest deadline first, with the session's deadline, the
+///   in-run rows the fold reads and `W_disclose` — and named with the producer role even beside a
+///   lock of its own bond set (one duty a unit);
+/// * **the full seat** (the only full mask) owes the same two units as a covering signer, rank 0;
+/// * **a partial seat** — the accuser included — and **a bystander** owe nothing: a partial mask
+///   covers no unit (C7), and a bystander holds no lock;
+/// * **an answered unit** leaves the list (a `Flat` on record answers `(0, 0)`, not row 7);
+/// * **an expired lock** covers nothing — the fold's `is_live_v3` on both clocks, read through the
+///   exported predicate — and the signer's duty goes with it, while the producer's stays;
+/// * **retention** (P2-7): every bond with a live lock on the claim keeps it while a session can
+///   still open (`now ≤ trace_retention_daa`), the partial seats too; the producer and a bystander
+///   keep nothing by it; an expired lock keeps nothing.
+///
+/// **Fence off** (testnet-12 with `palw_rcore_plus = None`): ADR-0062's accusation takes the claim's
+/// phase, the R-core list is empty for every bond, and the v1 list (`palw_da_duties_v2`) names the
+/// claim for its producer, as before.
+#[test]
+fn p2_7_the_disclosure_duties_follow_the_open_sessions_and_the_covering_locks() {
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1 as U;
+    use kaspa_consensus_core::palw_producer_v2::{PalwDisclosureRoleV1 as Role, palw_da_duties_v2, palw_disclosure_duties_v1};
+    use kaspa_consensus_core::palw_state_v2::{palw_da_disclose_window_daa_v1, palw_da_lock_covers_unit_v1, palw_da_lock_live_v1};
+    for armed in [true, false] {
+        let p = if armed { t12() } else { twin(&t12()) };
+        let mut c = Chain::new(p);
+        c.step(&[bond_obj(1, 20_000 * MSK)]);
+        let bystander = bond_key(1);
+        let (producer, _, _) = floor_producer(&c.p);
+        if !armed {
+            // ADR-0062's court: the accusation takes the phase; R-core's list is empty.
+            let (id, seats, _) = bound_floor_claim(&mut c, 0x27F);
+            c.step(&[accuse(id, bystander, 0)]);
+            assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::DefaultDisputed { .. }), "fence off: the v1 session");
+            let at = c.daa + 1;
+            for mine in [producer, seats[0].0, bystander] {
+                let read = palw_disclosure_duties_v1(&c.s, &c.sp, &c.extras_at(at), &[mine], at);
+                assert!(read.duties.is_empty() && read.retain.is_empty(), "fence off: no R-core duty for {mine:?}");
+            }
+            let v1 = palw_da_duties_v2(&c.s, &c.sp, &[producer]);
+            assert_eq!(v1.iter().map(|d| d.claim_id).collect::<Vec<_>>(), vec![id], "fence off: the v1 list names the claim");
+            continue;
+        }
+        let (id, seats, _) = covered_floor_claim(&mut c, 0x27E);
+        let full = full_mask_seats(&c, &id, &seats);
+        assert_eq!(full.len(), 1, "one full seat in the coverage geometry");
+        let full = full[0];
+        let partials: Vec<PalwBondKeyV2> = seats.iter().map(|(k, _)| *k).filter(|k| *k != full).collect();
+        let accuser = partials[0];
+        c.step(&[accuse(id, accuser, 7)]);
+        let session = c.s.da_session(&id, &accuser).expect("the seat's session").clone();
+        assert_eq!(
+            session.units,
+            vec![U::Event { row: 7, tile: 0 }, U::Event { row: 0, tile: 0 }],
+            "the named row and the run's one row"
+        );
+        let at = c.daa + 1;
+        let extras = c.extras_at(at);
+        let read =
+            |s: &PalwChainStateV2, mine: &[PalwBondKeyV2], at: u64| palw_disclosure_duties_v1(s, &c.sp, &c.extras_at(at), mine, at);
+        let retention = c.claim(&id).trace_retention_daa;
+        // The producer: both units, soonest deadline first (equal here, so in unit order).
+        let own = read(&c.s, &[producer], at);
+        assert_eq!(
+            own.duties.iter().map(|d| d.unit).collect::<Vec<_>>(),
+            vec![U::Event { row: 0, tile: 0 }, U::Event { row: 7, tile: 0 }]
+        );
+        for duty in &own.duties {
+            assert_eq!((duty.role, duty.discloser, duty.signer_rank, duty.executor_bond), (Role::Producer, producer, 0, producer));
+            assert_eq!(duty.deadline_daa, session.deadline_daa, "the session's deadline");
+            assert_eq!(
+                (duty.in_run_rows, duty.disclose_window_daa),
+                (1, palw_da_disclose_window_daa_v1(&c.sp)),
+                "the fold's rows and W"
+            );
+            assert_eq!((duty.claim_id, duty.execution_root, duty.free_prompt), (id, c.claim(&id).execution_root, false));
+        }
+        assert!(own.retain.is_empty(), "the producer holds no lock on its own claim");
+        assert_eq!(read(&c.s, &[producer, full], at).duties.iter().filter(|d| d.role == Role::Producer).count(), 2, "one duty a unit");
+        // The full seat: the same units, as a covering signer, rank 0.
+        let signer = read(&c.s, &[full], at);
+        assert_eq!(signer.duties.iter().map(|d| d.unit).collect::<Vec<_>>(), own.duties.iter().map(|d| d.unit).collect::<Vec<_>>());
+        assert!(signer.duties.iter().all(|d| (d.role, d.discloser, d.signer_rank) == (Role::CoveringSigner, full, 0)));
+        assert!(
+            palw_da_lock_covers_unit_v1(&c.s, &c.sp, &extras, &full, &id, &U::Event { row: 0, tile: 0 }, at),
+            "the fold's predicate"
+        );
+        // Every unit's covering signers, from one walk of the lock map (the P2-7 review's LOW): a list
+        // a unit, in the units' order, each exactly the seats the per-unit predicate reads as covering.
+        {
+            use kaspa_consensus_core::palw_state_v2::palw_da_covering_signers_v1;
+            let asked = [U::Event { row: 0, tile: 0 }, U::Event { row: 7, tile: 0 }];
+            let lists = palw_da_covering_signers_v1(&c.s, &c.sp, &extras, &id, &asked, at);
+            assert_eq!(lists, vec![vec![full], vec![full]], "the full seat covers both, and nobody else");
+            for (unit, list) in asked.iter().zip(&lists) {
+                let one: Vec<PalwBondKeyV2> = seats
+                    .iter()
+                    .map(|(k, _)| *k)
+                    .filter(|k| palw_da_lock_covers_unit_v1(&c.s, &c.sp, &extras, k, &id, unit, at))
+                    .collect();
+                assert_eq!(list, &one, "{unit:?}: the per-unit predicate's set");
+            }
+            assert!(palw_da_covering_signers_v1(&c.s, &c.sp, &extras, &id, &[], at).is_empty());
+        }
+        assert_eq!(signer.retain, vec![(id, retention)], "a live lock keeps the claim's material");
+        // Partial seats (the accuser included) and a bystander: nothing to answer.
+        for mine in partials.iter().copied().chain([bystander]) {
+            assert!(read(&c.s, &[mine], at).duties.is_empty(), "{mine:?} covers no unit");
+            assert!(!palw_da_lock_covers_unit_v1(&c.s, &c.sp, &extras, &mine, &id, &U::Event { row: 0, tile: 0 }, at));
+        }
+        assert_eq!(read(&c.s, &[partials[1]], at).retain, vec![(id, retention)], "a partial seat's live lock keeps it too");
+        assert!(read(&c.s, &[bystander], at).retain.is_empty());
+        // The retention predicate `retain` and the node's janitor share (DA-8): owed through the
+        // claim's retention on every phase a session can carry — `Final` too (a `FinalRow` session,
+        // S3) — and never on a voided claim, whose sessions are released with it.
+        {
+            use kaspa_consensus_core::palw_da_rcore_v1::palw_da_material_owed_v1;
+            let record = c.claim(&id);
+            assert!(palw_da_material_owed_v1(&record, retention) && !palw_da_material_owed_v1(&record, retention + 1));
+            let with = |phase: PalwClaimPhaseV2| kaspa_consensus_core::palw_state_v2::PalwClaimStateV2 { phase, ..record.clone() };
+            assert!(palw_da_material_owed_v1(&with(PalwClaimPhaseV2::Final { final_daa: at }), at), "a Final claim is still accused");
+            let voided = with(PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::ProducerWithholding });
+            assert!(!palw_da_material_owed_v1(&voided, at), "a voided claim owes nothing");
+        }
+        // An answered unit leaves the list: a Flat on record answers (0, 0), never row 7 (past the run).
+        let flat = edited(&c.sp, &c.s, |carriage| carriage.da_claims.get_mut(&id).expect("the record").flat_answered = true);
+        for mine in [producer, full] {
+            assert_eq!(read(&flat, &[mine], at).duties.iter().map(|d| d.unit).collect::<Vec<_>>(), vec![U::Event { row: 7, tile: 0 }]);
+        }
+        // Past the deadline the session is the sweep's: nothing is owed.
+        assert!(read(&c.s, &[producer], session.deadline_daa + 1).duties.is_empty(), "the block past the deadline defaults it");
+        // An expired lock covers nothing: the signer's duty and its retention go; the producer's stay.
+        // The lock's DAA clock released at `at − 1` (written through the carriage — a live claim's
+        // lock outlives its sessions by construction, V3S-04), and the second clock has escaped (no
+        // licence for 2 × window_court: `settled_anchor_depth` reads `None`), so `is_live_v3` is the
+        // DAA clock alone. With the second clock still holding, the same lock is live.
+        let expired = edited(&c.sp, &c.s, |carriage| {
+            carriage.slashable_locks.get_mut(&(full, id)).expect("the full seat's lock").expiry_daa = at - 1;
+        });
+        let mut escaped = c.extras_at(at);
+        escaped.settled_anchor_depth = None;
+        assert!(!palw_da_lock_live_v1(&expired, &c.sp, &escaped, &full, &id, at), "the DAA clock released it");
+        let expired_read = palw_disclosure_duties_v1(&expired, &c.sp, &escaped, &[full], at);
+        assert!(expired_read.duties.is_empty() && expired_read.retain.is_empty(), "no duty and nothing kept by an expired lock");
+        assert_eq!(
+            palw_disclosure_duties_v1(&expired, &c.sp, &escaped, &[producer], at).duties.len(),
+            2,
+            "the producer still owes both"
+        );
+        if c.extras_at(at).settled_anchor_depth.is_some() {
+            assert!(palw_da_lock_live_v1(&expired, &c.sp, &c.extras_at(at), &full, &id, at), "the second clock still holds it");
+            assert_eq!(read(&expired, &[full], at).duties.len(), 2, "and the signer still owes both");
+        }
+    }
+}
+
+/// The node's read of an automatic accusation by `accuser` at the next block (P2-6).
+fn auto_check(c: &Chain, id: Hash64, accuser: PalwBondKeyV2) -> kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 {
+    let at = c.daa + 1;
+    kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(&c.s, &c.sp, &c.extras_at(at), &id, &accuser, at)
+}
+
+/// The node's accusation: the ONE builder, the automatic unit (the fold never reads the signature).
+fn auto_accusation(id: Hash64, accuser: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+    kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(
+        &h(NET),
+        id,
+        kaspa_consensus_core::palw_da_rcore_v1::PALW_DA_AUTO_NAMED_UNIT_V1,
+        accuser,
+        |_, _| Some(vec![1]),
+    )
+    .expect("the node's builder builds it")
+}
+
+/// **T34 (P2 half, core) and C-8: the node's read of an automatic accusation IS the fold's gate, on
+/// every class, once per accuser.** On a live floor claim and on the 8k row's licensed claim the read
+/// says `File` — the automatic unit (row 0, tile 0: inside the run and the fold's bound), the stage,
+/// a seat of the current panel, DA-6's exposure and the deadline — and the object the ONE builder
+/// makes from it opens exactly that session in the fold. From then on the read says `AccusedBefore`
+/// for that accuser (the session is open), and still after the session closed (`opened_by_seat`):
+/// neither a second trigger nor a restart files again. Every other seat still accuses on its own
+/// (DA-6: no serialization); the producer cannot; and below `palw_rcore_plus` nothing is filed
+/// (`DaCourtDormant`).
+#[test]
+fn t34_p2_6_the_nodes_read_is_the_folds_gate_on_every_class_once_per_accuser() {
+    use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as Check;
+    // The floor, live (the `Unavailable`'s accusation: PanelBound).
+    let mut c = Chain::new(t12());
+    let (id, seats, _) = bound_floor_claim(&mut c, 0x346);
+    let (producer, _, _) = floor_producer(&c.p);
+    let seat = seats[0].0;
+    let Check::File { unit, admission } = auto_check(&c, id, seat) else { panic!("the seat files: {:?}", auto_check(&c, id, seat)) };
+    assert_eq!(unit, PalwDaUnitV1::Event { row: 0, tile: 0 }, "the unit its Unavailable names");
+    assert!(admission.accuser_is_seat && admission.stage == PalwDaStageV1::Live);
+    assert_eq!(
+        auto_check(&c, id, producer),
+        Check::Refused(PalwStateV2Error::DaAccuserIsTheProducer(producer)),
+        "the producer never accuses its own claim"
+    );
+    c.step(&[auto_accusation(id, seat)]);
+    let session = c.s.da_session(&id, &seat).expect("the fold opened the session the read promised").clone();
+    assert_eq!(
+        (session.units[0], session.accuser_is_seat, session.exposure, session.deadline_daa, session.stage),
+        (unit, true, admission.exposure, admission.deadline_daa, admission.stage),
+        "exactly what the read said"
+    );
+    assert_eq!(auto_check(&c, id, seat), Check::AccusedBefore, "once: the session is open");
+    assert!(matches!(try_step(&c, &[auto_accusation(id, seat)]), Err(PalwStateV2Error::DaSessionAlreadyOpen { .. })));
+    assert!(matches!(auto_check(&c, id, seats[1].0), Check::File { .. }), "every other seat still accuses its own");
+    run_out(&mut c, id, seat);
+    assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+    assert_eq!(auto_check(&c, id, seat), Check::AccusedBefore, "and still after the session closed (opened_by_seat)");
+
+    // The 8k row, licensed (the licence that landed on an unserved seat).
+    let p = t12();
+    let (short, _) = model_classes(&p);
+    let mut m = model_chain(p, short, 1);
+    let id = model_claim(&mut m, short, 1, 0x346);
+    let seats = honest_seats(&m.p, 5);
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    let bound = m.bind(id, &seats);
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    m.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    let seat = seats[0].0;
+    let Check::File { admission, .. } = auto_check(&m, id, seat) else { panic!("the 8k seat files: {:?}", auto_check(&m, id, seat)) };
+    assert!(admission.accuser_is_seat && admission.stage == PalwDaStageV1::Licensed, "at the licence");
+    m.step(&[auto_accusation(id, seat)]);
+    let session = m.s.da_session(&id, &seat).expect("the 8k session");
+    assert_eq!((session.exposure, session.deadline_daa), (admission.exposure, admission.deadline_daa));
+    assert_eq!(auto_check(&m, id, seat), Check::AccusedBefore);
+
+    // Fence off: nothing is filed.
+    let mut off = Chain::new(twin(&t12()));
+    let (id, seats, _) = bound_floor_claim(&mut off, 0x346);
+    assert_eq!(auto_check(&off, id, seats[0].0), Check::Refused(PalwStateV2Error::DaCourtDormant));
 }

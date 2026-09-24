@@ -1378,6 +1378,12 @@ message GetPalwProducerFactsResponseMessage {
   // ADR-0118 Decision 3: the form THIS class's jobs commit their prompt ids in (true = tiled
   // Merkle root) — `promptIdsMerkle` for every class but a held one on a network minted flat.
   bool classPromptIdsMerkle = 30;
+  // ADR-0152 P6: the one committed ledger (decimal u128), the producer floor's shortfall in sompi
+  // (0 = met or not in force), and A-6's accuser exposure (decimal u128). An older node sends
+  // none: read as its reserved exposure, 0 and "0".
+  string bondCommitted = 31;
+  uint64 bondProducerFloorShortfall = 32;
+  string bondAccuserExposure = 33;
   RPCError error = 1000;
 }
 
@@ -1799,6 +1805,16 @@ message RpcPalwClaimRow {
   uint32 execTicketsSpent = 25;
   optional uint64 execFirstRound = 26;
   optional uint64 execLastRound = 27;
+  // Version 3 (ADR-0152 R-core+): where the claim's vested reward stands.
+  string vestingStage = 28;
+  uint64 vestingSompi = 29;
+  uint64 vestingPayeeSompi = 30;
+  optional uint64 vestingExpiryDaa = 31;
+  uint64 vestingLicencesSinceFinal = 32;
+  optional uint64 vestingLicencesNeeded = 33;
+  optional uint64 vestingMaturedAt = 34;
+  optional uint64 vestingEtaDaa = 35;
+  bool vestingEtaEstimated = 36;
 }
 
 message GetPalwClaimsResponseMessage {
@@ -1815,6 +1831,9 @@ message GetPalwClaimsResponseMessage {
   uint64 bondSlashed = 11;
   uint64 bondRegisteredDaa = 12;
   repeated string bondCapableClasses = 13;
+  // ADR-0152 R-core+: retired claims whose reward still vests.
+  repeated RpcPalwClaimRow vestingOnlyRows = 14;
+  bool vestingOnlyTruncated = 15;
   RPCError error = 1000;
 }
 
@@ -2025,8 +2044,10 @@ message RpcPalwClassLedgerTotals {
   uint64 redrawn = 7;
   uint64 paidAtAcceptance = 8;
   string escrowFinalSompi = 9;
-  string producerPaidSompi = 10;
-  string panelPaidSompi = 11;
+  // ADR-0152: what the Finals NAMED (vested past R-core+); renamed from producerPaidSompi /
+  // panelPaidSompi, same field numbers.
+  string producerNamedSompi = 10;
+  string panelNamedSompi = 11;
   string reserveSompi = 12;
   string burnedSompi = 13;
   string attemptedCompute = 14;
@@ -2621,5 +2642,121 @@ message GetPalwModelCertificationResponseMessage {
   string classId = 4;
   bool endToEndCertified = 5;
   repeated RpcPalwModelCertifiedFamily families = 6;
+  RPCError error = 1000;
+}
+
+// ADR-0152 P2-10: the vesting table (R-core+, testnet-12).
+message GetPalwVestingRequestMessage {
+  string bond = 1;
+  string payoutAddress = 2;
+  string claimId = 3;
+  uint32 limit = 4;
+  string after = 5;
+}
+
+message RpcPalwVestingLeg {
+  string kind = 1;
+  string payeeBond = 2;
+  string payload = 3;
+  uint64 sompi = 4;
+  string queueKey = 5;
+}
+
+message RpcPalwVestingRow {
+  string claimId = 1;
+  string classId = 2;
+  string producerBond = 3;
+  string licenceDoor = 4;
+  uint32 basisK = 5;
+  uint64 escrowSompi = 6;
+  uint64 buybackBoundSompi = 7;
+  uint64 totalSompi = 8;
+  uint64 reserveSompi = 9;
+  uint64 finalDaa = 10;
+  uint64 expiryDaa = 11;
+  uint64 settledAtFinal = 12;
+  optional uint64 maturedAt = 13;
+  string stage = 14;
+  bool daaClockMet = 15;
+  uint64 licencesSinceFinal = 16;
+  optional uint64 licencesNeeded = 17;
+  optional uint64 secondClockBoundDaa = 18;
+  bool daSessionOpen = 19;
+  bool matureNow = 20;
+  optional uint64 movesAhead = 21;
+  optional uint64 keysAhead = 22;
+  bool inNextBlock = 23;
+  uint64 etaDaa = 24;
+  bool etaEstimated = 25;
+  repeated RpcPalwVestingLeg legs = 26;
+  uint64 legsSompi = 27;
+  bool lockLive = 28;
+}
+
+message RpcPalwReporterReward {
+  string offenceKey = 1;
+  string stage = 2;
+  string reporterBond = 3;
+  string payload = 4;
+  uint64 sompi = 5;
+  optional uint64 revealUntil = 6;
+  bool inNextBlock = 7;
+}
+
+message RpcPalwVestingMove {
+  string source = 1;
+  string id = 2;
+  repeated RpcPalwVestingLeg legs = 3;
+}
+
+message RpcPalwVestingDoorCount {
+  string door = 1;
+  uint64 rows = 2;
+  uint64 latchedRows = 3;
+  string sompi = 4;
+}
+
+message GetPalwVestingResponseMessage {
+  bool available = 1;
+  bool rcorePlusActive = 2;
+  uint64 tipDaa = 3;
+  uint64 nextDaa = 4;
+  bool halted = 5;
+  optional uint64 secondClockDepth = 6;
+  optional uint64 secondClockEscapedDepth = 7;
+  uint64 settledAnchors = 8;
+  optional uint64 measuredMsPerDaa = 9;
+  string createdSompi = 10;
+  string movedSompi = 11;
+  string burnedSompi = 12;
+  uint64 liveRows = 13;
+  uint64 latchedRows = 14;
+  string liveSompi = 15;
+  string latchedSompi = 16;
+  uint64 latchedBehindHead = 17;
+  uint64 reporterPendingRows = 18;
+  uint64 reporterAwardedRows = 19;
+  repeated RpcPalwVestingMove nextBlockMoves = 20;
+  uint32 nextBlockLegs = 21;
+  uint32 nextBlockNewKeys = 22;
+  string nextBlockStopped = 23;
+  string nextBlockStoppedAt = 24;
+  repeated RpcPalwVestingDoorCount licenceHistogram = 25;
+  string bond = 26;
+  string payoutAddress = 27;
+  string claimId = 28;
+  bool bondKnown = 29;
+  bool payeeHoldsCollateral = 30;
+  repeated RpcPalwVestingRow rows = 31;
+  uint64 rowsTotal = 32;
+  string nextAfter = 33;
+  string maturingSompi = 34;
+  string queryLatchedSompi = 35;
+  repeated RpcPalwReporterReward reporterRewards = 36;
+  uint64 backlogKeys = 37;
+  uint64 backlogBlocksEst = 38;
+  string claimStage = 39;
+  uint64 lockLiveRows = 40;
+  optional uint64 lockLiveLastExpiryDaa = 41;
   RPCError error = 1000;
 }

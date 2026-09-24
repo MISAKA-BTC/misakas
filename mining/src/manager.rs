@@ -119,12 +119,17 @@ impl MiningManager {
         // template preference). Disabled (`AttestationMempoolPolicy::disabled()`) on nets without
         // `dns_params`; the daemon builds it from the chain's `DnsParams` when present.
         attestation_policy: crate::mempool::attestation::AttestationMempoolPolicy,
+        // ADR-0152 v3.1 H-1 (P2-9): does this network oblige heartbeats to carry H-1's lifecycle
+        // objects? The daemon passes `params.palw_rcore_plus_fence().is_some()`; see
+        // `Config::palw_h1_carrier_priority`.
+        palw_h1_carrier_priority: bool,
     ) -> Self {
         let mut config =
             Config::build_default(target_time_per_block, relay_non_std_transactions, max_block_mass).apply_ram_scale(ram_scale);
         config.pq_only = pq_only;
         config.model_sink_relay_allowed = model_sink_relay_allowed;
         config.attestation_policy = attestation_policy;
+        config.palw_h1_carrier_priority = palw_h1_carrier_priority;
         // kaspa-pq: the production node charges ≈100× a Kaspa transaction's fee (the ×10 relay rate
         // on top of the ~10× ML-DSA compute mass) to reconcile the ~72×-larger post-quantum
         // signature. The `MiningManager::new` test path keeps the upstream base rate so the mempool
@@ -1075,6 +1080,14 @@ impl MiningManager {
         self.mempool.read().has_transaction(transaction_id, query)
     }
 
+    /// **Whether each of `transaction_ids` sits in the transaction pool (not the orphan pool), under
+    /// ONE read lock** — ADR-0152 H-1's relay asks this of a heartbeat it has not validated yet, and a
+    /// lock per carrier was a lever a peer's body could pull (P2-9 review, finding 4).
+    pub fn has_pooled_transactions(&self, transaction_ids: &[TransactionId]) -> Vec<bool> {
+        let mempool = self.mempool.read();
+        transaction_ids.iter().map(|id| mempool.has_transaction(id, TransactionQuery::TransactionsOnly)).collect()
+    }
+
     /// Whether a transaction already in this mempool spends `outpoint` — i.e. whether the outpoint
     /// is still selectable as funding by this node, which "present in the virtual UTXO set" does
     /// NOT answer (see [`Mempool::outpoint_is_spent`]).
@@ -1640,6 +1653,12 @@ impl MiningManagerProxy {
     /// Returns whether the mempool holds this transaction in any form.
     pub async fn has_transaction(self, transaction_id: TransactionId, query: TransactionQuery) -> bool {
         spawn_blocking(move || self.inner.has_transaction(&transaction_id, query)).await.unwrap()
+    }
+
+    /// [`MiningManager::has_pooled_transactions`], synchronously: for a caller already on a blocking
+    /// thread (the relay's H-1 exemption runs its whole decision inside one `spawn_blocking`).
+    pub fn has_pooled_transactions_blocking(&self, transaction_ids: &[TransactionId]) -> Vec<bool> {
+        self.inner.has_pooled_transactions(transaction_ids)
     }
 
     /// Whether a transaction already in this mempool spends `outpoint`. Synchronous on purpose: the

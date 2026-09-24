@@ -51,6 +51,12 @@ pub const PRIOR_SOURCE_TREES_SHA256_HEX: &[&str] = &[
     // ADR-0096's json kind. Every derivation the public chain carries names an id under it; the
     // 2026-09-04 3D job's is cad/stl/v1 83e0f508….
     "637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988",
+    // ea2fd48e (2026-09-11, ADR-0096's json kind) through 7681c203^ — the tree testnet-11's
+    // 2026-09-12 fleet release 13520042 shipped to every host. A derivation filed on testnet-11 by a
+    // gateway on that build names an id under it; 7681c203's fifth-family arm in `derive.rs` moved
+    // the tree without a re-pin, so nothing had listed it. Every manifest field but the tree is
+    // unchanged since, and the corpus goldens still reproduce.
+    "fa80f7680783b644eb90a2722f5ca0cc2f001788f4fe7a82e521cf1005585303",
 ];
 
 /// Which tree gave an id: this build's, or a listed earlier one (`PRIOR_SOURCE_TREES_SHA256_HEX`).

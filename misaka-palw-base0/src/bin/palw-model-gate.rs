@@ -285,7 +285,11 @@ fn main() {
     // The shipped worker's own assembly (`palw-a16-fp-worker::load`).
     let engine_arc = arc.clone();
     let backend = Qwen25A16Backend::new(arc, net.clone(), profile.clone(), registered.canonical_job)
-        .unwrap_or_else(|e| die(format!("::new refuses the n_ctx {n_ctx} row over this artifact: {e}")));
+        .unwrap_or_else(|e| die(format!("::new refuses the n_ctx {n_ctx} row over this artifact: {e}")))
+        // The shipped worker's rule (the 3a review's H-B): `FpWorkerRuntime::new` refuses a backend without it.
+        .with_attempt_rules(
+            misaka_palw_base0::fp_worker::fp_worker_attempt_rules_v1(&String::from_utf8_lossy(&net)).unwrap_or_else(|why| die(why)),
+        );
     eprintln!("[palw-model-gate] backend built; supports_court={}", {
         use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
         backend.supports_court()

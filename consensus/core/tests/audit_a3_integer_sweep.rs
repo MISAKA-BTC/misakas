@@ -80,7 +80,7 @@ fn bondk(v: u64) -> PalwBondKeyV2 {
     PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(v), index: 0 })
 }
 fn final_of(claim: u64, root: u64, credit: u64) -> PalwExecFinalV1 {
-    PalwExecFinalV1 { domain: hh(1), bond: bondk(1), operator_id: hh(2), claim_id: hh(claim), execution_root: hh(root), credit }
+    PalwExecFinalV1 { domain: hh(1), bond: bondk(1), operator_id: hh(2), claim_id: hh(claim), execution_root: hh(root), credit, accepted_blue_score: 0 }
 }
 
 // t12 runtime constants, all re-derived below from the recon brief's measured values.

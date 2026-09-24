@@ -880,6 +880,8 @@ pub fn palw_verify_context_vector_v1(
         trace_root: run.outcome.trace_root,
         anchor: job_id,
         attempt_draw: None,
+        output_root: None,
+        job_pin: None,
     };
     let work_leaves = binding.step_leaf_count;
     let ctx = binding.job_context.clone();
@@ -1129,6 +1131,8 @@ fn tamper_stage_v1(
         trace_root: lying.trace_root,
         anchor: ctx.job_id,
         attempt_draw: None,
+        output_root: None,
+        job_pin: None,
     };
     let work_leaves = binding.step_leaf_count;
     let opening = backend.open_fp_interval(capture, 0, ids)?;
@@ -1308,7 +1312,14 @@ mod tests {
             // file under `misaka-palw-base0` nor `palw_step`, `palw_state_chunk_map`, `palw_step_refute` or
             // `palw_court_v2`, and the document still reads 51,180 leaves with every stage passing.
             // Previous: `d2803bc8…`.
-            "9805d784f554054acf27dfe030c7280ce26493371f50c17d2e3c3addfafd7dca968b39e405e85f18cb0e27e7097364a6c096d6de4ca92762e1dc2fde833f0825",
+            //
+            // **And a fourth time, for the R-core+ v22 skeleton** (`71748a97`): `PALW_STATE_V2_VERSION`
+            // 21 → 22, hashed into every V2 bundle's `consensus_params_id`, so `devnet-held`'s moved to
+            // `943a9e0f…` — on the skeleton itself, and so on every R-core+ stream, which none re-pinned
+            // (found by the rcore/int-1 integration). Checked in that tree, not argued: with the version
+            // hashed as 21 the same tree prints the previous id, `9805d784…`, so nothing else in the
+            // document moved (roots, 51,180 leaves, sizes and verdicts are the pinned ones).
+            "623db8743a2f9c885171b39bd1c3ceeb645c82f3be94a509f0f3d2a2752a7784755fd21bdd4e1376653ef8bdfa8688cb0d631499f0e30446c8382383b68ea69e",
         );
     }
 

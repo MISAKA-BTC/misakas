@@ -250,7 +250,7 @@ impl Outcome {
                     "signature_hex": d.signature.as_ref().map(|s| faster_hex::hex_string(s)),
                     "signed": d.signature.is_some(),
                     "files": { "dsl": d.dsl_path.display().to_string(), "artifact": d.artifact_path.display().to_string(), "object": d.object_path.display().to_string() },
-                    "verify": "recompute dsl_hash = H(grammar_id ‖ canonical dsl) and artifact_hash = H(transformer(dsl)) with `palw-derive verify`; output_root = output_commitment_v2(job_context_hash, output_token_ids, family rendered hash)",
+                    "verify": "recompute dsl_hash = H(grammar_id ‖ canonical dsl) and artifact_hash = H(transformer(dsl)) with `palw-derive verify`; output_root = output_commitment_v2(job_context_hash, output_token_ids, rendered hash) — the family's keyed rendering under the Legacy rule, the empty rendering under CoreV1 (testnet-12): `palw-derive verify --network <net>` picks it",
                 })
             }
         }

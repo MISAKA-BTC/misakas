@@ -163,7 +163,15 @@ footer { color: var(--ink-2); font-size: 12px; }
       ["exposure", f.bond_known ? msk(f.reserved_exposure_sompi) + " / " + msk(f.exposure_ceiling_sompi) : undefined],
       ["class", short(d.class_id, 12) + "…"]]);
     const w = d.wallet;
-    rows($("wallet"), w ? [["spendable", msk(w.spendable_sompi)], ["maturing", msk(w.maturing_sompi)], ["next spendable", w.next_mature_daa ? "DAA " + w.next_mature_daa : "—"], ["pays to", short(w.address, 22) + "…"]] : [["wallet", "not read"]]);
+    // ADR-0152 (testnet-12): what still VESTS toward the pay address — rows, not outputs — beside
+    // what is money; burns are the chain's counter (misaka palw vesting), not per payee.
+    const v = w && w.vesting;
+    rows($("wallet"), w ? [["spendable", msk(w.spendable_sompi)], ["maturing", msk(w.maturing_sompi)], ["next spendable", w.next_mature_daa ? "DAA " + w.next_mature_daa : "—"],
+      ["vesting", v ? msk(v.vesting_sompi + v.latched_sompi) + " in " + v.rows + " row(s)" + (v.halted ? " — HALTED" : "") : undefined],
+      ["next move", v && v.next_move_daa ? "≥ DAA " + v.next_move_daa : undefined],
+      ["reporter", v && (v.reporter_pending_sompi + v.reporter_awarded_sompi) ? msk(v.reporter_pending_sompi + v.reporter_awarded_sompi) : undefined],
+      ["bond", v && v.bond_held ? "held by B-3 (payee of an unmatured row)" : undefined],
+      ["pays to", short(w.address, 22) + "…"]] : [["wallet", "not read"]]);
     $("next").textContent = d.next;
     const c = d.counts;
     $("counts").textContent = "computed " + c.computed + " · submitted " + c.submitted + " · accepted " + c.accepted + " · failed " + c.failed + " · from the " + d.works_source;

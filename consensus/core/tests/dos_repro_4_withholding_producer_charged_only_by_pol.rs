@@ -556,10 +556,13 @@ fn repro4_c_pre_fence_record_da_accusation_takes_claim_reserved_only() {
     assert_eq!(a.reserved, 38_540);
 }
 
-/// **(d) Node policy: kaspad builds no `DefaultAccused`. It builds `DefaultAccusedHeld` from one
-/// path, the leaf pursuit, which is gated on `held_context && da_court`.** A static scan of the
-/// shipped sources, because kaspad is not reachable from a consensus-core test. It is evidence
-/// about policy, not a consensus rule.
+/// **(d) Node policy: kaspad's production code writes no `DefaultAccused` literal — since P2-6 its
+/// automatic accusations are built only by consensus-core's ONE builder
+/// (`palw_da_rcore_v1::palw_da_accusation_object_v1`, whose read is the fold's gate, C-8). It builds
+/// `DefaultAccusedHeld` from one path, the leaf pursuit, which is gated on `held_context &&
+/// da_court`.** A static scan of the shipped sources (top-level `#[cfg(test)] mod … { … }` blocks
+/// skipped: P2-6's policy tests build the object to pin its queue key), because kaspad is not
+/// reachable from a consensus-core test. It is evidence about policy, not a consensus rule.
 #[test]
 fn repro4_d_kaspad_never_constructs_default_accused() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -573,7 +576,20 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
+            // A top-level `#[cfg(test)]` module runs from its `mod … {` line to the next `}` at
+            // column 0.
+            let (mut cfg_test, mut in_test_mod) = (false, false);
             for (n, line) in text.lines().enumerate() {
+                if in_test_mod {
+                    in_test_mod = line != "}";
+                    continue;
+                }
+                if cfg_test && line.starts_with("mod ") && line.ends_with('{') {
+                    in_test_mod = true;
+                    cfg_test = false;
+                    continue;
+                }
+                cfg_test = line == "#[cfg(test)]";
                 let at = format!("{}:{}", path.file_name().unwrap().to_string_lossy(), n + 1);
                 if line.contains("DefaultAccused {") && !line.contains("DefaultAccusedHeld") {
                     if line.contains("{ .. }") { patterns.push(at) } else { constructs.push(at) }
@@ -584,7 +600,8 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
         }
     }
     let panel = std::fs::read_to_string(root.join("kaspad/src/palw_panel.rs")).unwrap();
-    let gate = panel.contains("palw_held_context_active_at(current_daa)") && panel.contains("palw_da_court_in_force_v1(&self.consensus_config, current_daa)");
+    let gate = panel.contains("palw_held_context_active_at(current_daa)")
+        && panel.contains("palw_da_court_in_force_v1(&self.consensus_config, current_daa)");
     // The held demand's `binding` comes off an interval opening the PRODUCER served to this seat;
     // with nothing served, `?` returns None before any accusation is built.
     let needs_served = panel.contains("Base0FpIntervalOpeningV4::decode_v1(bytes).ok().map(|v4| v4.binding))")
@@ -597,7 +614,10 @@ fn repro4_d_kaspad_never_constructs_default_accused() {
     println!("DefaultAccusedHeld constructions: {held:?}; gated on held_context && da_court: {gate}");
     println!("DefaultAccusedHeld needs a binding off an opening the producer served (pursue_named_leaf_v1): {needs_served}");
     println!("misaka-cli `palw da-accuse` builds DefaultAccused for an operator to file by hand: {cli_builds}");
-    assert!(constructs.is_empty(), "kaspad constructs no DefaultAccused");
+    let one_builder = panel.contains("palw_da_rcore_v1::palw_da_accusation_object_v1(");
+    println!("P2-6's automatic accusations go through the ONE consensus-core builder: {one_builder}");
+    assert!(constructs.is_empty(), "kaspad's production code writes no DefaultAccused literal");
+    assert!(one_builder, "P2-6 files DefaultAccused only through palw_da_accusation_object_v1");
     assert_eq!(held.len(), 1, "one DefaultAccusedHeld construction");
     assert!(gate);
     assert!(needs_served, "a producer that serves nothing gives the seat no binding, so no held demand is built");

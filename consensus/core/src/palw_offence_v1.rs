@@ -201,15 +201,70 @@ pub enum PalwPanelContradictionV1 {
     /// `output_root`. Past `Params::palw_offence_attribution` only, as
     /// [`Self::IdentityMismatch`].
     OutputMismatch { binding: crate::palw_step_leg::PalwStepBindingV2, pin: crate::palw_step_refute::PalwDecodeTokenPinV1 } = 10,
+    /// **ADR-0152 v3.1 F1c (addendum §4-bis.5): a TILED class's committed token is not the one its
+    /// own row selects, or is past the vocabulary** — the tiled counterpart of `ForgedOutput` (8),
+    /// which a flat class files. `binding` is the claim's own (it must reproduce the claim's
+    /// execution root; the tiled checker does not run `verify_binding`, so the adjudicator does).
+    /// Execution-proving; forfeiture by root.
+    ForgedOutputTiled { binding: crate::palw_step_leg::PalwStepBindingV2, proof: PalwForgedOutputTiledProofV1 } = 11,
+    /// **ADR-0152 v3.1 F1c (addendum §4-bis.6): a committed logits row is not its step tree's head
+    /// output** — the row's lanes `lo..hi`, authenticated against the claim's trace root by `event`
+    /// (the claim's own binding rides in it), hash to a step leaf that is NOT the one the claim
+    /// committed at the head's coordinate (`palw_logits_head_v1`), which `head_opening` opens
+    /// against the binding's step root. Garbage logits on an honest step tree (F1's residual R1),
+    /// and a head leaf with no preimage. Execution-proving; forfeiture by root.
+    LogitsNotStepOutput {
+        event: crate::palw_step_refute::PalwTraceEventDisclosureV1,
+        row: u32,
+        head_tile: u32,
+        head_opening: crate::palw_step_leg::PalwStepOpeningV1,
+    } = 12,
+    /// **ADR-0152 v3.1 F1-M (addendum §4-bis.3): an attempt's committed prompt is not the one its
+    /// anchor names, on a class whose canonical prompt is past J5b's inline bound (4,096 ids)** — the
+    /// 2M row's 262,143. One tile opened against the binding's prompt root (`Tile`), or the whole
+    /// root recomputed (`Whole`, charged against the block's heavy budget before it is computed —
+    /// the only route for a prompt root with no preimage). Claim-proving; forfeiture by claim.
+    PromptNotAnchored { binding: crate::palw_step_leg::PalwStepBindingV2, proof: PalwPromptProofV1 } = 13,
+}
+
+/// **How a `ForgedOutputTiled` (11) proves the committed token forged.**
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwForgedOutputTiledProofV1 {
+    /// The committed token's lane and a lane that beats it under the pinned selection rule, both
+    /// opened in the row the token was selected from (`pin.position` is the adjudicated position).
+    NotSelected { pin: crate::palw_step_refute::PalwTiledDecodePinV1 } = 0,
+    /// The committed ids, pinned by the rows root, and a position whose id is past the vocabulary.
+    OutOfVocab { position: u32, tokens: crate::palw_step_refute::PalwTiledDecodeTokensV1 } = 1,
+}
+
+/// **How a `PromptNotAnchored` (13) proves the committed prompt is not the anchor's.**
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwPromptProofV1 {
+    /// One tile of the committed prompt, opened against the binding's Merkle prompt root, whose ids
+    /// are not the anchor's ids at that range.
+    Tile(crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1) = 0,
+    /// The anchor's whole prompt root, recomputed — heavy, budgeted per block.
+    Whole = 1,
 }
 
 impl PalwPanelContradictionV1 {
-    /// **A contradiction only the ADR-0152 attribution route reads** (tags 9 and up). A V1 payload
+    /// **A contradiction only the ADR-0152 attribution route reads** (tags 9–13). A V1 payload
     /// carrying one failed to DECODE before these tags existed, which every V1 reader answered with
     /// `PanelFalseValidNeedsContradiction`; each V1 reader now answers the same refusal immediately
     /// after decode, so no V1 verdict moves (addendum §4-bis.7, "V1 parity").
     pub fn is_attribution_only_v1(&self) -> bool {
-        matches!(self, Self::IdentityMismatch { .. } | Self::OutputMismatch { .. })
+        matches!(
+            self,
+            Self::IdentityMismatch { .. }
+                | Self::OutputMismatch { .. }
+                | Self::ForgedOutputTiled { .. }
+                | Self::LogitsNotStepOutput { .. }
+                | Self::PromptNotAnchored { .. }
+        )
     }
 }
 
@@ -367,9 +422,11 @@ fn palw_panel_contradiction_digest_v1(contradiction: &PalwPanelContradictionV1) 
             Ok(palw_tagged_contradiction_digest_v1(b"forged-output", &body))
         }
         // V1 parity: no V1 ledger id exists for a tag the V1 payload could not decode.
-        PalwPanelContradictionV1::IdentityMismatch { .. } | PalwPanelContradictionV1::OutputMismatch { .. } => {
-            Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)
-        }
+        PalwPanelContradictionV1::IdentityMismatch { .. }
+        | PalwPanelContradictionV1::OutputMismatch { .. }
+        | PalwPanelContradictionV1::ForgedOutputTiled { .. }
+        | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
+        | PalwPanelContradictionV1::PromptNotAnchored { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
 
@@ -478,6 +535,8 @@ pub enum PalwOffenceVerifyError {
     IdentityNotRecorded,
     #[error("the claim's lane is not recorded, so its identity rule cannot be chosen")]
     LaneUnknown,
+    #[error("the class's context is too narrow for the canonical job formula, so no attempt context is derivable")]
+    IdentityNotDerivable,
     #[error("the binding does not reproduce its own committed execution root")]
     BindingUnverified,
     #[error("the binding answers this claim's job and class: no identity fault")]
@@ -488,6 +547,17 @@ pub enum PalwOffenceVerifyError {
     PinNotAdmitted(&'static str),
     #[error("an ExecutorRefuted accuses the claim's executor bond and nobody else")]
     AccusedNotTheExecutor,
+    // ---- ADR-0152 v3.1 F1c / F1-M (addendum §4-bis.3–6) -----------------------------------------
+    #[error("the class's graph does not make its logits row a provable step output (palw_logits_head_v1)")]
+    HeadUnproven,
+    #[error("the committed head leaf is the logits lanes' own step leaf: no fault")]
+    LogitsHold,
+    #[error("the committed token is its row's selection and inside the vocabulary: no fault")]
+    TokenHolds,
+    #[error("the committed prompt is the one the anchor names: no fault")]
+    PromptHolds,
+    #[error("the block's heavy prompt-id budget is spent (PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1); file it in a later block")]
+    HeavyBudgetExhausted,
 }
 
 /// **The processor's cryptographic gate** (ADR-0144 §9). A named kind and an evidence id are
@@ -570,7 +640,10 @@ where
     }
     match payload.valid_receipt.verdict {
         crate::palw_panel_v2::PalwReceiptVerdictV2::Valid => {}
-        crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { .. } | crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable => {
+        // ADR-0152 Q-1 / Q-6: `Sampled` is not `Valid`, so it is never a false one.
+        crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { .. }
+        | crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable
+        | crate::palw_panel_v2::PalwReceiptVerdictV2::Sampled => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNotValidVerdict);
         }
     }
@@ -655,7 +728,11 @@ where
             }
         }
         // Refused right after decode above; listed so a new tag cannot slip past this match.
-        PalwPanelContradictionV1::IdentityMismatch { .. } | PalwPanelContradictionV1::OutputMismatch { .. } => {
+        PalwPanelContradictionV1::IdentityMismatch { .. }
+        | PalwPanelContradictionV1::OutputMismatch { .. }
+        | PalwPanelContradictionV1::ForgedOutputTiled { .. }
+        | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
+        | PalwPanelContradictionV1::PromptNotAnchored { .. } => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
         }
     }
@@ -716,9 +793,11 @@ pub fn palw_panel_contradiction_convicts_execution_v1(
         // V1 parity: these tags are judged by the attribution route alone (they prove a claim's
         // identity or output false, not its arithmetic), and a V1 reader refuses them as it
         // refused an undecodable tag.
-        PalwPanelContradictionV1::IdentityMismatch { .. } | PalwPanelContradictionV1::OutputMismatch { .. } => {
-            Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)
-        }
+        PalwPanelContradictionV1::IdentityMismatch { .. }
+        | PalwPanelContradictionV1::OutputMismatch { .. }
+        | PalwPanelContradictionV1::ForgedOutputTiled { .. }
+        | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
+        | PalwPanelContradictionV1::PromptNotAnchored { .. } => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
     }
 }
 
@@ -918,6 +997,8 @@ mod tests {
         for verdict in [
             crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 1 },
             crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable,
+            // ADR-0152 Q-1: `Sampled` is not `Valid`, so no false-Valid evidence can rest on it.
+            crate::palw_panel_v2::PalwReceiptVerdictV2::Sampled,
         ] {
             let payload = mock_panel_false_valid(op(1), claim, &[9u8; 4], b"testnet-11", Hash64::from_u64_word(0xD1), verdict);
             let evidence = borsh::to_vec(&payload).unwrap();
@@ -1216,13 +1297,15 @@ mod tests {
         assert!(borsh::from_slice::<PalwOffenceKindV1>(&[7]).is_err(), "no eighth kind");
     }
 
-    /// **Contradictions 9 and 10 are appended at their fixed discriminants, and every V1 reader
-    /// refuses them as it refused the undecodable tag they used to be** (ADR-0152 v3.1 J-5, addendum
+    /// **Contradictions 9–13 are appended at their fixed discriminants, round-trip, and every V1
+    /// reader refuses them as it refused the undecodable tag they used to be** (ADR-0152 v3.1 J-5, addendum
     /// §4-bis.7 "V1 parity"): the V1 ledger id, the V1 digest and the V1 execution check answer
     /// `PanelFalseValidNeedsContradiction`, and so does the V1 verify gate — immediately after
     /// decode, before the seat, the receipt or the signature is read.
     #[test]
-    fn contradictions_9_and_10_are_appended_and_refused_by_every_v1_reader() {
+    fn contradictions_9_to_13_are_appended_and_refused_by_every_v1_reader() {
+        use crate::palw_step_leg::PalwStepOpeningV1;
+        use crate::palw_step_refute::{PalwTiledDecodePinV1, PalwTiledDecodeTokensV1, PalwTraceEventDisclosureV1};
         let binding = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(
             &Hash64::from_u64_word(0xB1),
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
@@ -1231,11 +1314,56 @@ mod tests {
             logits_rows: vec![vec![1, 2]],
             generated_token_ids: vec![1],
         });
+        let opening =
+            PalwStepOpeningV1 { leaf_index: 3, leaf_hash: Hash64::from_u64_word(4), siblings: vec![Hash64::from_u64_word(5)] };
+        let tiled_pin = PalwTiledDecodePinV1 {
+            position: 0,
+            generated_token_ids: vec![2],
+            row_root: Hash64::from_u64_word(6),
+            row_opening: opening.clone(),
+            committed_tile_lanes: vec![1],
+            committed_opening: opening.clone(),
+            beat_tile_lanes: vec![2],
+            beat_opening: opening.clone(),
+            beat_lane: 1,
+        };
+        let tokens = PalwTiledDecodeTokensV1 { rows_root: Hash64::from_u64_word(7), generated_token_ids: vec![9] };
+        let prompt_tile = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&[1, 2, 3], 0).expect("an opening");
         for (tag, contradiction) in [
             (9u8, PalwPanelContradictionV1::IdentityMismatch { binding: binding.clone() }),
             (10u8, PalwPanelContradictionV1::OutputMismatch { binding: binding.clone(), pin }),
+            (
+                11u8,
+                PalwPanelContradictionV1::ForgedOutputTiled {
+                    binding: binding.clone(),
+                    proof: PalwForgedOutputTiledProofV1::NotSelected { pin: tiled_pin },
+                },
+            ),
+            (
+                11u8,
+                PalwPanelContradictionV1::ForgedOutputTiled {
+                    binding: binding.clone(),
+                    proof: PalwForgedOutputTiledProofV1::OutOfVocab { position: 0, tokens },
+                },
+            ),
+            (
+                12u8,
+                PalwPanelContradictionV1::LogitsNotStepOutput {
+                    event: PalwTraceEventDisclosureV1::OutOfRange { binding: Box::new(binding.clone()) },
+                    row: 0,
+                    head_tile: 1,
+                    head_opening: opening.clone(),
+                },
+            ),
+            (
+                13u8,
+                PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof: PalwPromptProofV1::Tile(prompt_tile) },
+            ),
+            (13u8, PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof: PalwPromptProofV1::Whole }),
         ] {
-            assert_eq!(borsh::to_vec(&contradiction).unwrap()[0], tag, "{tag}: appended, explicit discriminant");
+            let bytes = borsh::to_vec(&contradiction).unwrap();
+            assert_eq!(borsh::from_slice::<PalwPanelContradictionV1>(&bytes).unwrap(), contradiction, "{tag}: round-trips");
+            assert_eq!(bytes[0], tag, "{tag}: appended, explicit discriminant");
             assert!(contradiction.is_attribution_only_v1());
             let accused = TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([7u8; 64]), index: 1 };
             // A payload whose every OTHER field is wrong: the V1 refusal still comes first.
@@ -1281,6 +1409,19 @@ mod tests {
                 "tag {tag}: the V1 gate refuses it before the version, the seat or the signature"
             );
         }
+    }
+
+    /// **The proof sub-enums of 11 and 13 are wire-frozen**: `NotSelected` 0, `OutOfVocab` 1;
+    /// `Tile` 0, `Whole` 1 (addendum §4-bis.3/.5, `use_discriminant`).
+    #[test]
+    fn the_proof_forms_of_11_and_13_are_pinned() {
+        let tokens =
+            crate::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root: Hash64::from_u64_word(1), generated_token_ids: vec![] };
+        assert_eq!(borsh::to_vec(&PalwForgedOutputTiledProofV1::OutOfVocab { position: 7, tokens }).unwrap()[0], 1);
+        assert_eq!(borsh::to_vec(&PalwPromptProofV1::Whole).unwrap(), vec![1]);
+        let tile = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&[1], 0).unwrap();
+        assert_eq!(borsh::to_vec(&PalwPromptProofV1::Tile(tile)).unwrap()[0], 0);
+        assert!(borsh::from_slice::<PalwPromptProofV1>(&[2]).is_err(), "no third prompt proof");
     }
 
     /// The consumed-offence record's two v22 appends ride last, after `execution_root`, in order.

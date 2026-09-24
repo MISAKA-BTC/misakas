@@ -233,6 +233,21 @@ impl ConsensusSessionOwned {
         self.consensus.palw_da_duties_v2(mine)
     }
 
+    pub fn palw_disclosure_duties_v1(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutiesV1 {
+        self.consensus.palw_disclosure_duties_v1(mine)
+    }
+
+    pub fn palw_da_accusation_check_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1> {
+        self.consensus.palw_da_accusation_check_v1(claim, accuser)
+    }
+
     pub fn palw_claim_readers_v2(
         &self,
         claim: kaspa_consensus_core::Hash64,
@@ -359,6 +374,18 @@ impl ConsensusSessionOwned {
         mine: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         self.consensus.palw_v2_supplementary_receipt_assemble(claim, mine)
+    }
+
+    /// ADR-0152 SR-10 / Q-7 / V3S-01: the supplementary set a collector offers for a licensed claim —
+    /// SR-10's V3 set, or a V2 full-replay upgrade of a licence awaiting its replay — with what the
+    /// fold says it does; `None` while the doors are shut or nothing would move.
+    pub fn palw_v2_supplementary_assemble(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        v3_candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3>,
+        v2_candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
+        self.consensus.palw_v2_supplementary_assemble(claim, v3_candidates, v2_candidates)
     }
 
     /// One virtual-UTXO point lookup — the fee-outpoint resolution the PALW panel submitter runs.

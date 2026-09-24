@@ -3579,7 +3579,11 @@ fn seed_token_from_opened_row_v1(
 /// The checkpoint the interval resumes from must be the one the CLAIM committed: its leaf opens
 /// against `checkpoint_merkle_root`, its chunks re-derive its own `state_chunks_root`, and it
 /// covers exactly the decode call the geometry names.
-fn checkpoint_anchor_is_the_bindings_v1(binding: &PalwStepBindingV2, anchor: &PalwCheckpointKvOperandsV1, covered: u32) -> bool {
+pub(crate) fn checkpoint_anchor_is_the_bindings_v1(
+    binding: &PalwStepBindingV2,
+    anchor: &PalwCheckpointKvOperandsV1,
+    covered: u32,
+) -> bool {
     if anchor.leaf.state_chunk_count as usize != anchor.chunks.len() {
         return false;
     }
@@ -5314,6 +5318,8 @@ mod tests {
             trace_root: run.trace_root,
             anchor: run.binding.job_context.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let material: Base0RetainedMaterialV1 = (
@@ -5647,6 +5653,8 @@ mod tests {
             trace_root: binding.full_logits_trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
         let leaf_count = binding.step_leaf_count;
         material.0 = binding;
@@ -6085,6 +6093,8 @@ mod tests {
             trace_root: lying.full_logits_trace_root,
             anchor: lying.job_context.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
         let material: Base0RetainedMaterialV1 = (lying, honest.1.clone(), honest.2.clone(), honest.3.clone(), chunks);
         let opening = base0_open_fp_interval_chunkless_v1(
@@ -6640,6 +6650,8 @@ mod tests {
             trace_root: run.trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         for index in 1..geometry.interval_count {
@@ -7156,6 +7168,8 @@ mod tests {
             trace_root: run.trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         for index in 0..geometry.interval_count {
@@ -7369,6 +7383,8 @@ mod tests {
             trace_root: run.trace_root,
             anchor: run.binding.job_context.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
         let material: Base0RetainedMaterialV1 = (
             run.binding.clone(),
@@ -7690,6 +7706,8 @@ mod tests {
             trace_root: run.trace_root,
             anchor: run.binding.job_context.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
         let material: Base0RetainedMaterialV1 = (
             run.binding.clone(),
@@ -8052,6 +8070,8 @@ mod the_rulesets_ladder {
             trace_root: run.trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
         let consulted = std::cell::Cell::new(0u32);
         let memo = crate::fp_recompute::Base0FpSeatMemoV1::default();
@@ -8161,6 +8181,8 @@ mod the_rulesets_ladder {
             trace_root: run.trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
+            job_pin: None,
         };
 
         let leaves = run.binding.step_leaf_count;

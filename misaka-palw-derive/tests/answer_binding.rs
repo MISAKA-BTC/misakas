@@ -23,8 +23,8 @@ use kaspa_hashes::Hash64;
 use misaka_palw_base0::e2e_drill::PalwRcFamilyV1;
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 use misaka_palw_derive::{
-    ClaimBinding, Derivation, check_tokenizer_pin_v1, derive_named, opened_tokenizer_id_v1, recompute_output_root, render_answer_v1,
-    verify, verify_bound, verify_output_root,
+    ClaimBinding, Derivation, PalwAttemptRulesV1, check_tokenizer_pin_v1, derive_named, opened_tokenizer_id_v1, recompute_output_root,
+    render_answer_v1, verify, verify_bound, verify_bound_under_v1, verify_output_root,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,6 +37,11 @@ const BIN: &str = env!("CARGO_BIN_EXE_palw-derive");
 /// any kind, and a cheap kind keeps this file's cost in the binding.
 const TRANSFORMER: &str = "music/smf/v1";
 const FAMILY: PalwRcFamilyV1 = PalwRcFamilyV1::Qwen25A16;
+/// The network the fixtures below commit their roots under. Their claims are `Legacy` roots (the
+/// family's rendering, [`recompute_output_root`]), so the tool is told a `Legacy` network: without
+/// `--network` it refuses a model family's root rather than guess the rule (see the testnet-12
+/// section at the end of this file).
+const LEGACY_NETWORK: &str = "testnet-11";
 
 fn h(b: u8) -> Hash64 {
     Hash64::from_bytes([b; 64])
@@ -301,6 +306,8 @@ fn the_binary_binds_the_artifact_to_the_claim_and_then_says_consistent() {
         tok.to_str().unwrap(),
         "--family",
         "qwen25-a16",
+        "--network",
+        LEGACY_NETWORK,
     ]);
     assert_eq!(code, 0, "{verdict}");
     assert_eq!(verdict["binding_checked"], serde_json::Value::Bool(true));
@@ -344,6 +351,8 @@ fn the_binary_refuses_a_derivation_whose_dsl_is_not_the_rendering_of_its_ids() {
         tok.to_str().unwrap(),
         "--family",
         "qwen25-a16",
+        "--network",
+        LEGACY_NETWORK,
     ]);
     assert_eq!(code, 2, "{verdict}");
     assert_eq!(verdict["binding_checked"], serde_json::Value::Bool(true));
@@ -446,6 +455,8 @@ fn the_binary_binds_through_a_real_dense_artifact_and_a_real_tokenizer() {
         artifact.to_str().unwrap(),
         "--family",
         "qwen25-a16",
+        "--network",
+        LEGACY_NETWORK,
     ]);
     assert_eq!(code, 0, "{verdict}");
     assert_eq!(verdict["binding_checked"], serde_json::Value::Bool(true));
@@ -482,6 +493,8 @@ fn a_tokenizer_the_claim_does_not_pin_is_refused_rather_than_called_a_forgery() 
             tok.to_str().unwrap(),
             "--family",
             "qwen25-a16",
+            "--network",
+            LEGACY_NETWORK,
         ])
         .output()
         .expect("the tool runs");
@@ -514,4 +527,208 @@ fn a_missing_artifact_file_is_refused_by_name() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("no-such-artifact.glb"), "the refusal names the file: {stderr}");
     assert!(out.stdout.is_empty(), "a refusal prints no verdict at all");
+}
+
+// ------------------------------------------------------------------------------------------
+// testnet-12: the network's rule, CoreV1 (ADR-0152 v3.1 post-edit 4)
+// ------------------------------------------------------------------------------------------
+
+/// The fused dense family testnet-12's held dense row is drilled as — any model family would do:
+/// under `CoreV1` no family's rendering enters the root.
+const T12_FAMILY: PalwRcFamilyV1 = PalwRcFamilyV1::Qwen25A16V5;
+
+/// One honest testnet-12 run: the context names the network the worker stamps, and the claim's
+/// `output_root` is the one the chain holds it to — core's `palw_attempt_output_root_v1`, called.
+fn honest_t12() -> Honest {
+    let answer = corpus("01-single-note.json");
+    let (json, ids) = tokenizer_over(&answer, 24);
+    let tokenizer_bytes = json.into_bytes();
+    let tokenizer = QwenTokenizer::from_json(&tokenizer_bytes).expect("a readable tokenizer.json");
+    let ctx = PalwJobContextV2 { network_id: b"testnet-12".to_vec(), ..job_context(opened_tokenizer_id_v1(&tokenizer_bytes)) };
+    let claim = ClaimBinding {
+        output_root: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&ctx, &ids),
+        ..claim_for(&ctx, &ids)
+    };
+    let derivation = derive_named(TRANSFORMER, &claim, &answer).expect("the corpus answer derives");
+    Honest { tokenizer_bytes, tokenizer, ids, ctx, derivation, answer }
+}
+
+/// **A testnet-12 model-class claim binds under the network's rule — and the verifier this crate
+/// shipped before it would have called the same honest claim false.** `verify_bound` keeps its
+/// signature and is `Legacy`; under it the family's keyed rendering enters the root, and the one
+/// field that disagrees is `output_root`: the accusation this change removes.
+#[test]
+fn a_testnet_12_claim_binds_under_core_v1_and_the_legacy_verifier_would_have_called_it_false() {
+    let h = honest_t12();
+    let opened = opened_tokenizer_id_v1(&h.tokenizer_bytes);
+    let b = verify_bound_under_v1(
+        PalwAttemptRulesV1::CoreV1,
+        &h.derivation.object,
+        T12_FAMILY,
+        &h.ctx,
+        &h.tokenizer,
+        opened,
+        &h.ids,
+        None,
+    )
+    .expect("re-runnable");
+    assert!(b.all_match(), "an honest testnet-12 derivation binds to its claim: {:?}", b.mismatches());
+    assert_eq!(b.output_root_rule, PalwAttemptRulesV1::CoreV1);
+    assert_eq!(b.recomputed_output_root, kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&h.ctx, &h.ids));
+
+    let legacy = verify_bound(&h.derivation.object, T12_FAMILY, &h.ctx, &h.tokenizer, opened, &h.ids, None).expect("re-runnable");
+    assert_eq!(legacy.output_root_rule, PalwAttemptRulesV1::Legacy);
+    assert_eq!(legacy.mismatches(), ["output_root"], "the old rule's only disagreement is the root it re-spelled");
+}
+
+/// **The tool, on testnet-12**: told the network it recomputes the chain's root and says
+/// `consistent`; told another network while holding a context that names testnet-12, or a network
+/// this build does not ship, it refuses by name; told nothing, for a model family, it refuses
+/// rather than guess — and a bare context hash reaches the same root as the whole context, and
+/// under testnet-11's rule the `MISMATCH` the old verifier printed.
+#[test]
+fn the_binary_recomputes_a_testnet_12_root_under_the_networks_rule() {
+    let h = honest_t12();
+    let object = write_object("t12.derived-unsigned.borsh", &h.derivation.object);
+    let ids = write("t12-ids.json", serde_json::to_string(&h.ids).expect("ids").as_bytes());
+    let ctx = write("t12-job-context.borsh", &borsh::to_vec(&h.ctx).expect("borsh"));
+    let tok = write("t12-tokenizer.json", &h.tokenizer_bytes);
+    let bound = |network: Option<&str>| {
+        let mut args = vec![
+            "--object".to_string(),
+            object.display().to_string(),
+            "--output-token-ids".to_string(),
+            ids.display().to_string(),
+            "--job-context".to_string(),
+            ctx.display().to_string(),
+            "--tokenizer".to_string(),
+            tok.display().to_string(),
+            "--family".to_string(),
+            "qwen25-a16-v5".to_string(),
+        ];
+        if let Some(n) = network {
+            args.extend(["--network".to_string(), n.to_string()]);
+        }
+        Command::new(BIN).arg("verify").args(&args).output().expect("the tool runs")
+    };
+
+    let (code, verdict, _) = run_verify_output(bound(Some("testnet-12")));
+    assert_eq!(code, 0, "{verdict}");
+    assert_eq!(word(&verdict), "consistent");
+    assert_eq!(verdict["output_root_rule"], "CoreV1");
+    assert_eq!(verdict["output_root_rule_from"], "--network testnet-12");
+    assert_eq!(
+        verdict["recomputed_output_root"].as_str(),
+        Some(faster_hex::hex_string(h.derivation.object.output_root.as_byte_slice()).as_str())
+    );
+
+    // The context names testnet-12, so a testnet-11 rule is not a verdict to give: it would be a
+    // root for the wrong chain, and the tool refuses the contradiction by name. (That rule's
+    // MISMATCH is still reachable from the bare context hash — below — where nothing names a
+    // network to contradict.)
+    let out = bound(Some("testnet-11"));
+    assert_eq!(out.status.code(), Some(1), "a --network the context contradicts is a refusal, not a MISMATCH");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("contradicts --job-context, which names testnet-12"), "the refusal names both networks: {stderr}");
+    assert!(stderr.contains("--network testnet-12"), "and the flag that would be right: {stderr}");
+    assert!(out.stdout.is_empty(), "a refusal prints no verdict at all");
+
+    // A network this build does not ship: refused like a name that is not a network, exit 1 — it
+    // used to reach `Params::from` and panic, exit 101.
+    let out = bound(Some("testnet-99"));
+    assert_eq!(out.status.code(), Some(1), "an unshipped testnet suffix is a refusal: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--network testnet-99") && stderr.contains("not a network this build ships"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "the refusal is one line, not a panic message: {stderr}");
+    assert!(out.stdout.is_empty(), "a refusal prints no verdict at all");
+
+    let out = bound(None);
+    assert_eq!(out.status.code(), Some(1), "a model family's root without the network is a refusal, not a verdict");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--network is required"), "the refusal names the flag: {stderr}");
+    assert!(stderr.contains("palw_attempt_output_root_v1"), "and the chain's rule it would decide between: {stderr}");
+    assert!(out.stdout.is_empty(), "a refusal prints no verdict at all");
+
+    // The unbound path, from a context HASH: the same root.
+    let answer = write("t12-answer.json", &h.answer);
+    let hash = faster_hex::hex_string(h.ctx.context_hash().as_byte_slice());
+    let (code, verdict, _) = run_verify(&[
+        "--object",
+        object.to_str().unwrap(),
+        "--answer",
+        answer.to_str().unwrap(),
+        "--output-token-ids",
+        ids.to_str().unwrap(),
+        "--job-context-hash",
+        &hash,
+        "--family",
+        "qwen25-a16-v5",
+        "--network",
+        "testnet-12",
+    ]);
+    assert_eq!(code, 0, "{verdict}");
+    assert_eq!(verdict["output_root_matches"], serde_json::Value::Bool(true), "{verdict}");
+    assert_eq!(verdict["output_root_rule"], "CoreV1");
+
+    // The same hash under testnet-11's rule: the family's keyed rendering, a different root — the
+    // `MISMATCH` the Legacy verifier would have printed for this honest testnet-12 claim.
+    let (code, verdict, _) = run_verify(&[
+        "--object",
+        object.to_str().unwrap(),
+        "--answer",
+        answer.to_str().unwrap(),
+        "--output-token-ids",
+        ids.to_str().unwrap(),
+        "--job-context-hash",
+        &hash,
+        "--family",
+        "qwen25-a16-v5",
+        "--network",
+        "testnet-11",
+    ]);
+    assert_eq!(code, 2, "{verdict}");
+    assert!(word(&verdict).starts_with("MISMATCH"), "{}", word(&verdict));
+    assert_eq!(verdict["output_root_matches"], serde_json::Value::Bool(false), "{verdict}");
+    assert_eq!(verdict["output_root_rule"], "Legacy");
+}
+
+/// **The floor needs no network**: BASE-0 renders nothing under either rule, so its root is the same
+/// on every network and the tool recomputes it without being told — and says why it did not ask.
+#[test]
+fn a_floor_claims_root_needs_no_network() {
+    let answer = corpus("01-single-note.json");
+    let (json, ids) = tokenizer_over(&answer, 24);
+    let tokenizer_bytes = json.into_bytes();
+    let ctx = job_context(opened_tokenizer_id_v1(&tokenizer_bytes));
+    let claim =
+        ClaimBinding { output_root: recompute_output_root(PalwRcFamilyV1::Base0, &ctx.context_hash(), &ids), ..claim_for(&ctx, &ids) };
+    let derivation = derive_named(TRANSFORMER, &claim, &answer).expect("derives");
+    let object = write_object("floor.derived-unsigned.borsh", &derivation.object);
+    let ids_file = write("floor-ids.json", serde_json::to_string(&ids).expect("ids").as_bytes());
+    let ctx_file = write("floor-job-context.borsh", &borsh::to_vec(&ctx).expect("borsh"));
+    let tok = write("floor-tokenizer.json", &tokenizer_bytes);
+    let (code, verdict, _) = run_verify(&[
+        "--object",
+        object.to_str().unwrap(),
+        "--output-token-ids",
+        ids_file.to_str().unwrap(),
+        "--job-context",
+        ctx_file.to_str().unwrap(),
+        "--tokenizer",
+        tok.to_str().unwrap(),
+        "--family",
+        "base0",
+    ]);
+    assert_eq!(code, 0, "{verdict}");
+    assert_eq!(word(&verdict), "consistent");
+    assert!(verdict["output_root_rule_from"].as_str().expect("named").contains("none needed"), "{verdict}");
+}
+
+/// [`run_verify`]'s parse, over an output already taken.
+fn run_verify_output(out: std::process::Output) -> (i32, serde_json::Value, String) {
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let verdict = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not the verdict JSON ({e}):\nstdout: {stdout}\nstderr: {stderr}"));
+    (out.status.code().unwrap_or(-1), verdict, stderr)
 }

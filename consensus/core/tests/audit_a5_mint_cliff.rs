@@ -33,6 +33,7 @@ fn one_final(credit: u64) -> PalwExecFinalV1 {
         claim_id: h(3),
         execution_root: h(4),
         credit,
+        accepted_blue_score: 0,
     }
 }
 

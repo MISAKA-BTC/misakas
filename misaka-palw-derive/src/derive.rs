@@ -4,11 +4,16 @@
 use crate::ids::{artifact_hash_v1, dsl_hash_v1, grammar_id_v1, transformer_id};
 use crate::registry::{grammar_by_id, transformer_by_id};
 use crate::{Artifact, DeriveError, Grammar, Transformer};
+use kaspa_consensus_core::palw_attempt_rules_v1::{palw_attempt_output_root_v1, palw_attempt_rendered_output_v1};
 use kaspa_consensus_core::palw_derived_v1::{PALW_DERIVED_V1_VERSION, PalwDerivedArtifactV1, derived_id_v1};
 use kaspa_consensus_core::palw_v2::{PalwJobContextV2, output_commitment_v2, rendered_output_hash_v2};
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::e2e_drill::PalwRcFamilyV1;
 use misaka_palw_base0::tokenizer::QwenTokenizer;
+
+/// Which rule a network commits its output roots under — core's own type, re-exported so a
+/// caller names the rule in the tree's one spelling of it (see [`attempt_rules_of_network_v1`]).
+pub use kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1;
 
 /// What binds a derivation to a claim — the chain-side facts the executor holds when the
 /// inference finishes (ADR-0077 Decision 4's handoff).
@@ -170,9 +175,9 @@ pub fn derive_named(transformer_name: &str, binding: &ClaimBinding, answer: &[u8
 
 /// What a consumer checks over the bytes they hold (Decision 5, X6): from the answer bytes and
 /// the object alone, recompute `dsl_hash` and `artifact_hash` and `artifact_bytes`, and demand
-/// equality. `output_root` is the third of X6's recomputations and is [`verify_output_root`],
-/// because it takes inputs the answer bytes do not carry — the job's context hash and the
-/// family whose rendered-hash rule applies.
+/// equality. `output_root` is the third of X6's recomputations and is
+/// [`recompute_output_root_under_v1`], because it takes inputs the answer bytes do not carry — the
+/// job's context hash, the family, and the network's rule for what the family renders into it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verification {
     pub dsl_hash_matches: bool,
@@ -217,10 +222,14 @@ impl Verification {
     }
 }
 
-/// **X6's third recomputation: the family's rendered-output hash.** Each shipped family's rule is
-/// a keyed hash of the ids (BASE-0 has no tokenizer, so its rendering is empty and says so), and
-/// the family is named with [`PalwRcFamilyV1`] rather than a string of this crate's own so that
-/// there is exactly one spelling of a family name in the tree.
+/// **X6's third recomputation: the family's rendered-output hash — the `Legacy` rule's.** Each
+/// shipped family's rule is a keyed hash of the ids (BASE-0 has no tokenizer, so its rendering is
+/// empty and says so), and the family is named with [`PalwRcFamilyV1`] rather than a string of this
+/// crate's own so that there is exactly one spelling of a family name in the tree.
+///
+/// This is what a family renders; it is not what every network commits. Where a network runs
+/// `CoreV1` no family's rendering enters the root at all — [`rendered_output_hash_under_v1`] is the
+/// question a verifier asks.
 pub fn rendered_output_hash_for_family(family: PalwRcFamilyV1, output_token_ids: &[u32]) -> Hash64 {
     match family {
         // ADR-0078 X6 over the floor class: BASE-0 renders nothing, and the empty rendering is
@@ -245,19 +254,118 @@ pub fn rendered_output_hash_for_family(family: PalwRcFamilyV1, output_token_ids:
     }
 }
 
-/// **X6: `output_root` from the answer's ids.** ADR-0078 Decision 2 records the correction the
-/// ADR's first draft got wrong — `output_root` is NOT a hash over the ids alone but
-/// `output_commitment_v2(job_context_hash, ids, family_rendered_hash)`, three inputs — and this
-/// is the one function that spells it for a consumer. All three are values the person holding the
-/// answer has: the ids are the answer, the job's context hash is the public value the gateway
-/// returns beside it, and the family is the class they asked.
-pub fn recompute_output_root(family: PalwRcFamilyV1, job_context_hash: &Hash64, output_token_ids: &[u32]) -> Hash64 {
-    output_commitment_v2(job_context_hash, output_token_ids, &rendered_output_hash_for_family(family, output_token_ids))
+// -------------------------------------------------------------------------------------------
+// WHICH RULE — ADR-0152 v3.1 post-edit 4: one rendered rule, where the network arms it
+// -------------------------------------------------------------------------------------------
+//
+// Past `palw_offence_attribution` (testnet-12, from genesis) every producer commits `output_root`
+// by core's `CoreV1` rule — the empty rendering, the floor's — on BOTH lanes: the free-prompt
+// lane's rule was unified with the attempt lane's so that `OutputMismatch` (contradiction 10)
+// holds a model class's free-prompt claim to the same arithmetic as the floor's. The chain
+// recomputes `palw_attempt_output_root_v1(ctx, ids)`, a free-prompt worker takes its rule from its
+// network (`fp_worker_attempt_rules_v1`), and a verifier here that kept the family's keyed
+// rendering reported every honest testnet-12 model-class derivation as a false `output_root` —
+// accusing the executor of this crate's own stale rule.
+//
+// On every other network the rule is `Legacy` and nothing moves: the family's own rendering, as
+// before, so testnet-11's derivations verify exactly as they did. On BASE-0 the two rules are the
+// same bytes (both render nothing), so a floor claim's root is the same under either.
+//
+// The rule is a property of the NETWORK (`palw_attempt_rules_of_params_v1`), and a verifier names
+// the network — it is not read off the claim. A job context does carry a network id, but a floor
+// context carries `"misaka-palw-rc"` whatever the chain, and a context is the claimant's own
+// statement: a rule read from it is a test the thing under test chose. What a context that names a
+// network IS good for is the converse, and the `palw-derive` binary does it — a `--network` the
+// context contradicts is refused by name, not answered with a root for the wrong chain. So every
+// rule-taking entry below takes the rule, and the ones that predate it keep their signatures and
+// say they are `Legacy`.
+
+/// **The rule `network_id`'s output roots are committed under** — the free-prompt worker's own
+/// derivation ([`misaka_palw_base0::fp_worker::fp_worker_attempt_rules_v1`]), called rather than
+/// re-spelled, so a verifier and the worker that committed the root read one answer from one
+/// string: the one kaspad prints for `params.net` (`testnet-12`, `testnet-11`, …). `Err` names a
+/// string that is not a network, and a network this build does not ship.
+///
+/// **The second is a panic caught, not a table consulted.** `Params::from` panics on a testnet
+/// suffix it does not know (`testnet-99`), and the worker lets it: a node misconfigured that way
+/// should die. A verifier handed the name by a stranger must not — its documented exits are 0, 2
+/// and 1, and a panic is 101 — but a list of the shipped suffixes kept here would be a second
+/// spelling of core's match, one release behind it the day a network is added. So the one
+/// derivation runs under `catch_unwind`, and its own message becomes the refusal. The panic hook
+/// still prints; a caller that wants the refusal alone silences it around the call, as the
+/// `palw-derive` binary does (a library that swapped the process-wide hook would race every other
+/// thread's panic).
+pub fn attempt_rules_of_network_v1(network_id: &str) -> Result<PalwAttemptRulesV1, String> {
+    std::panic::catch_unwind(|| misaka_palw_base0::fp_worker::fp_worker_attempt_rules_v1(network_id)).unwrap_or_else(|payload| {
+        let why = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "Params::from panicked".to_string());
+        Err(format!("{network_id} is not a network this build ships ({why})"))
+    })
 }
 
-/// Whether the object's `output_root` is the one those ids imply — the cross-check that ties the
-/// derivation to the claim (Decision 4: "a cross-check, not a second source"). `false` is a
-/// demonstrable false object under Decision 5.
+/// **The rendered-output hash `rules` commits**: under `CoreV1` core's one rendered rule
+/// ([`palw_attempt_rendered_output_v1`] — the family renders nothing into the root), under
+/// `Legacy` the family's own ([`rendered_output_hash_for_family`]).
+pub fn rendered_output_hash_under_v1(rules: PalwAttemptRulesV1, family: PalwRcFamilyV1, output_token_ids: &[u32]) -> Hash64 {
+    match rules {
+        PalwAttemptRulesV1::CoreV1 => palw_attempt_rendered_output_v1(output_token_ids),
+        PalwAttemptRulesV1::Legacy => rendered_output_hash_for_family(family, output_token_ids),
+    }
+}
+
+/// **X6: `output_root` from the answer's ids, under the network's rule.** ADR-0078 Decision 2
+/// records the correction the ADR's first draft got wrong — `output_root` is NOT a hash over the ids
+/// alone but `output_commitment_v2(job_context_hash, ids, rendered_hash)`, three inputs. All three
+/// are values the person holding the answer has: the ids are the answer, the job's context hash is
+/// the public value the gateway returns beside it, and the rendered hash is the network's rule over
+/// the family they asked.
+///
+/// This is the form for a caller holding only the context's HASH. A caller holding the context
+/// calls [`recompute_output_root_of_context_v1`], which under `CoreV1` is core's own function; the
+/// two are the same bytes (`derive_recomputes_the_chains_root_on_every_testnet_12_model_class`).
+pub fn recompute_output_root_under_v1(
+    rules: PalwAttemptRulesV1,
+    family: PalwRcFamilyV1,
+    job_context_hash: &Hash64,
+    output_token_ids: &[u32],
+) -> Hash64 {
+    output_commitment_v2(job_context_hash, output_token_ids, &rendered_output_hash_under_v1(rules, family, output_token_ids))
+}
+
+/// **`output_root` from a job context the verifier holds, under the network's rule.** `CoreV1` is
+/// [`palw_attempt_output_root_v1`] itself — the function the chain's `OutputMismatch` check and
+/// every producer past the fence call — so on testnet-12 this crate and the chain agree by calling
+/// one function, not by agreeing to spell one. `Legacy` is the family's three-input commitment over
+/// the context's hash.
+pub fn recompute_output_root_of_context_v1(
+    rules: PalwAttemptRulesV1,
+    family: PalwRcFamilyV1,
+    job_context: &PalwJobContextV2,
+    output_token_ids: &[u32],
+) -> Hash64 {
+    match rules {
+        PalwAttemptRulesV1::CoreV1 => palw_attempt_output_root_v1(job_context, output_token_ids),
+        PalwAttemptRulesV1::Legacy => {
+            recompute_output_root_under_v1(PalwAttemptRulesV1::Legacy, family, &job_context.context_hash(), output_token_ids)
+        }
+    }
+}
+
+/// **X6 under the `Legacy` rule** — the family's rendering, which is every network's but one that
+/// arms `CoreV1`. Kept at its signature for the callers that predate the rule; a testnet-12 claim
+/// is recomputed with [`recompute_output_root_under_v1`], or this answers with a root the chain
+/// never held.
+pub fn recompute_output_root(family: PalwRcFamilyV1, job_context_hash: &Hash64, output_token_ids: &[u32]) -> Hash64 {
+    recompute_output_root_under_v1(PalwAttemptRulesV1::Legacy, family, job_context_hash, output_token_ids)
+}
+
+/// Whether the object's `output_root` is the one those ids imply under the `Legacy` rule — the
+/// cross-check that ties the derivation to the claim (Decision 4: "a cross-check, not a second
+/// source"). `false` is a demonstrable false object under Decision 5 on a `Legacy` network; on a
+/// `CoreV1` one compare [`recompute_output_root_under_v1`] instead.
 pub fn verify_output_root(
     object: &PalwDerivedArtifactV1,
     family: PalwRcFamilyV1,
@@ -394,6 +502,10 @@ pub struct BoundVerification {
     pub rendered_answer_bytes: usize,
     pub output_root_matches: bool,
     pub recomputed_output_root: Hash64,
+    /// The rule `recomputed_output_root` was computed under — the network's, as the caller named
+    /// it. A verdict about `output_root` that did not say which rule it applied could not be told
+    /// apart from one that applied the wrong one.
+    pub output_root_rule: PalwAttemptRulesV1,
     /// Only when the caller ALSO passed an answer file: whether those bytes are the rendering.
     /// `Some(false)` is the defect this whole section exists for, caught in the act — the caller
     /// was handed an answer that is not this claim's answer.
@@ -427,9 +539,14 @@ impl BoundVerification {
 /// value `output_root` was built from, and a caller who could pass the hash beside the context
 /// could pass a hash that belongs to a different context than the `tokenizer_id` they pinned with.
 ///
+/// `rules` is the network's ([`attempt_rules_of_network_v1`]): `output_root` is recomputed by
+/// [`recompute_output_root_of_context_v1`], so on a `CoreV1` network it is the chain's own function
+/// over the same context and ids.
+///
 /// `Err` is the same sentence [`verify`]'s is — the object names a computation these bytes do not
 /// admit — plus [`DeriveError::Mismatch`] when the tokenizer file is not the pinned one.
-pub fn verify_bound(
+pub fn verify_bound_under_v1(
+    rules: PalwAttemptRulesV1,
     object: &PalwDerivedArtifactV1,
     family: PalwRcFamilyV1,
     job_context: &PalwJobContextV2,
@@ -441,15 +558,40 @@ pub fn verify_bound(
     check_tokenizer_pin_v1(job_context, opened_tokenizer_id)?;
     let rendered = render_answer_v1(tokenizer, output_token_ids);
     let verification = verify(object, &rendered)?;
-    let recomputed_output_root = recompute_output_root(family, &job_context.context_hash(), output_token_ids);
+    let recomputed_output_root = recompute_output_root_of_context_v1(rules, family, job_context, output_token_ids);
     Ok(BoundVerification {
         verification,
         tokenizer_id: opened_tokenizer_id,
         rendered_answer_bytes: rendered.len(),
         output_root_matches: recomputed_output_root == object.output_root,
         recomputed_output_root,
+        output_root_rule: rules,
         supplied_answer_is_the_rendering: supplied_answer.map(|a| a == rendered.as_slice()),
     })
+}
+
+/// [`verify_bound_under_v1`] under the `Legacy` rule — every network's but one that arms `CoreV1`.
+/// Kept at its signature for the callers that predate the rule; a testnet-12 claim is verified
+/// under the network's rule, or a model class's honest root reads as a false one.
+pub fn verify_bound(
+    object: &PalwDerivedArtifactV1,
+    family: PalwRcFamilyV1,
+    job_context: &PalwJobContextV2,
+    tokenizer: &QwenTokenizer,
+    opened_tokenizer_id: Hash64,
+    output_token_ids: &[u32],
+    supplied_answer: Option<&[u8]>,
+) -> Result<BoundVerification, DeriveError> {
+    verify_bound_under_v1(
+        PalwAttemptRulesV1::Legacy,
+        object,
+        family,
+        job_context,
+        tokenizer,
+        opened_tokenizer_id,
+        output_token_ids,
+        supplied_answer,
+    )
 }
 
 // -------------------------------------------------------------------------------------------

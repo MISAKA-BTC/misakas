@@ -100,6 +100,7 @@ fn a_final(root: Hash64, credit: u64) -> PalwExecFinalV1 {
         claim_id: Hash64::from_u64_word(root.as_bytes()[0] as u64 + 1),
         execution_root: root,
         credit,
+        accepted_blue_score: 0,
     }
 }
 

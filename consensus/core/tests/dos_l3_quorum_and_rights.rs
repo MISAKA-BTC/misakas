@@ -483,6 +483,7 @@ fn dos_l3_forfeiture_reaches_a_minted_schedule() {
         claim_id: Hash64::from_u64_word(3),
         execution_root: root,
         credit: 5 * PALW_EXECUTION_QUANTUM_V1,
+        accepted_blue_score: 0,
     };
     let seed = Hash64::from_u64_word(9);
     let quanta =

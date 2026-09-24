@@ -313,7 +313,18 @@ fn l5_a_lock_outliving_its_clocks_is_still_committed_and_the_final_moves_nothing
         "the premise: the lock's DAA clock is the licence's, floored at the verification horizon (V5)"
     );
     let duty = c.s.panel_duty_row_of(&claim).expect("duty row").seat_exposure;
-    assert!(lock.amount > duty, "the premise: the lock tops the duty up (the whole-gain price)");
+    // With the vesting rows in (`PALW_RCORE_VESTING_ROWS_LANDED_V1`) L-1 prices the RESIDUAL, which on
+    // the floor sits below the seat's duty (λ binds it), so the price no longer tops the duty up by
+    // itself. The rule under test is the ledger's — `max(duty, lock)` stays committed while the claim
+    // lives, whatever the lock's clocks say — so the lock is set above its duty through the carriage.
+    if lock.amount <= duty {
+        let topped = kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1 { amount: duty + 1_000_000, ..lock };
+        c.s = edited(&c.sp, &c.s, |k| {
+            k.slashable_locks.insert((seat, claim), topped);
+        });
+    }
+    let lock = *c.s.slashable_lock(seat, claim).expect("the seat's lock");
+    assert!(lock.amount > duty, "the premise: the lock tops the duty up");
     // The court that outlives the lock's clocks.
     let record = c.claim(&claim);
     let challenger = bond_key(1);

@@ -123,6 +123,7 @@ impl Factory {
                 GetPalwModelReadiness,
                 GetPalwModelAdmission,
                 GetPalwModelCertification,
+                GetPalwVesting,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,
