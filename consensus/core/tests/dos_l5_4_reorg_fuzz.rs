@@ -303,25 +303,36 @@ fn dos_l5_4_reorg_and_liability_fuzz() {
     );
 }
 
-/// **4b. The lock ledger as a throughput ceiling, and the second ledger over the same collateral.**
-///
-/// Five genesis seats license floor claims (all-Valid) back to back until the fold refuses the next
-/// set as unbacked (`receipt_set_is_backed`, palw_state_v2.rs:9525 — inert past the 09-23 fence, so
-/// the claim stays `PanelBound`). Every Valid seat locks `palw_seat_lock_required_v2(max fraud gain)`
-/// for `window_court` past the claim's `Final` AND `depth` anchors (dos_l5_5). The fixture carries no
-/// execution lane, so the lock omits the realizable-rights term — the measured `K` is an UPPER bound
-/// on t12's.
-#[test]
-#[ignore = "OPEN FINDING row 12 (report §2): the lock ledger double-backs collateral — live Valid locks plus the duty/claim ceiling reach 150% of posted on one seat bond; outside the #1-#14 fix list, left failing on purpose (run with --ignored to see it fail)"]
-fn dos_l5_4b_lock_ledger_caps_licensing_and_double_backs_collateral() {
-    let p = t12();
-    let b = bundle(&p);
+/// What one run of 4b measured.
+struct LockLedgerRun {
+    licensed: u64,
+    stuck: Option<(u64, &'static str)>,
+    lock_each: u128,
+    posted: u128,
+    locks: u128,
+    ceiling: u128,
+    committed: u128,
+    duty_room: u128,
+    /// `(worst committed ÷ ceiling over every step, where)` on the first seat, past the fence.
+    worst_committed: (f64, u64),
+    /// Steps where `palw_bond_committed_v1` differed from Σ over claims of `max(duty, live lock)`
+    /// plus the seat's own ledger — ADR-0152 A-1's identity, recomputed independently (T09).
+    identity_breaks: Vec<String>,
+}
+
+/// Five genesis seats license floor claims (all-Valid) back to back, up to 2,000, until the fold
+/// refuses a set. The fixture carries no execution lane, so the lock omits the realizable-rights
+/// term — the measured counts are UPPER bounds on t12's.
+fn lock_ledger_run(p: &kaspa_consensus_core::config::params::Params) -> LockLedgerRun {
+    use kaspa_consensus_core::palw_state_v2::{palw_bond_committed_v1, palw_seat_duty_of_v1, palw_second_clock_depth_v1};
+    let b = bundle(p);
     let sp = b.state.clone();
     let ratio = sp.fp_max_exposure_ratio_permille() as u128;
     let depth = p.palw_settled_anchor_depth;
-    let (floor, leaves, target, _) = genesis_classes(&p)[0];
+    let rcore = sp.rcore_plus_from_daa().is_some();
+    let (floor, leaves, target, _) = genesis_classes(p)[0];
     let pwu = palw_pwu_v1(target, leaves);
-    let bonds = genesis_bonds(&p);
+    let bonds = genesis_bonds(p);
     let exec = {
         let mut out = None;
         for o in b.genesis_objects.iter() {
@@ -334,27 +345,52 @@ fn dos_l5_4b_lock_ledger_caps_licensing_and_double_backs_collateral() {
     };
     let seats: Vec<(PalwBondKeyV2, Hash64)> = bonds[1..6].iter().map(|(k, o, _)| (*k, *o)).collect();
     let seat_keys: Vec<PalwBondKeyV2> = seats.iter().map(|s| s.0).collect();
-    let mut s = genesis_state(&p);
+    let seat = seats[0].0;
+    let mut s = genesis_state(p);
     let mut daa = 1_000u64;
     let mut blue = 0u64;
     let mut licensed = 0u64;
     let mut lock_each = 0u128;
     let mut stuck = None;
+    let mut worst_committed = (0f64, 0u64);
+    let mut identity_breaks = Vec::new();
     for i in 0..2_000u64 {
         let (env, key, id) = junk_attempt(floor, exec.0, exec.1.clone(), &exec.2, pwu, 50_000 + i, 0x10C0 + i);
         daa += 1;
         blue += 1;
-        s = fold(&p, &sp, &s, &ctx(0x40_0000 + blue, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key).unwrap().0;
+        s = fold(p, &sp, &s, &ctx(0x40_0000 + blue, daa, blue, T12_BLOCK_SUBSIDY_SOMPI), &[], PalwBlockWorkV3::Attempt(&env), key)
+            .unwrap()
+            .0;
         daa += 1;
         blue += 1;
-        s = fold(&p, &sp, &s, &ctx(0x40_0000 + blue, daa, blue, 0), &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(i), seats: seats_of(&seats) }], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+        s = fold(
+            p,
+            &sp,
+            &s,
+            &ctx(0x40_0000 + blue, daa, blue, 0),
+            &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(i), seats: seats_of(&seats) }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+        )
+        .unwrap()
+        .0;
         if !matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }) {
             stuck = Some((i, "PanelBound inert (seat lock not eligible)"));
             break;
         }
         daa += 1;
         blue += 1;
-        s = fold(&p, &sp, &s, &ctx(0x40_0000 + blue, daa, blue, 0), &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: valid_receipts(id, &seat_keys) }], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+        s = fold(
+            p,
+            &sp,
+            &s,
+            &ctx(0x40_0000 + blue, daa, blue, 0),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: valid_receipts(id, &seat_keys) }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+        )
+        .unwrap()
+        .0;
         if !matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
             stuck = Some((i, "ReceiptLicensed inert (a Valid seat cannot post its lock)"));
             break;
@@ -363,32 +399,103 @@ fn dos_l5_4b_lock_ledger_caps_licensing_and_double_backs_collateral() {
             lock_each = s.slashable_lock(seats[0].0, id).unwrap().amount;
         }
         licensed += 1;
+        if rcore {
+            // T09: the one ledger, term by term — the seat's own ledger (its duties, here) plus, per
+            // claim it locks, the live lock's excess over its duty — and it never passes the ceiling.
+            let escaped = palw_second_clock_depth_v1(depth, s.recent_anchor_daas(), daa, sp.window_court());
+            let committed = palw_bond_committed_v1(&s, &seat, daa, escaped, sp.window_court());
+            let settled = s.settled_attempt_finals();
+            let by_claim: u128 = s
+                .slashable_locks_of(&seat)
+                .filter(|(_, lock)| lock.is_live_v3(daa, settled, escaped, sp.window_court()))
+                .map(|((_, c), lock)| lock.amount.saturating_sub(palw_seat_duty_of_v1(&s, c, &seat)))
+                .sum();
+            let expected = s.reserved_exposure(&seat) + s.registration_exposure(&seat) + by_claim;
+            if committed != expected {
+                identity_breaks.push(format!("claim {i}: committed {committed} vs Σ max(duty, lock) {expected}"));
+            }
+            let posted = s.bond(&seat).unwrap().collateral as u128;
+            let share = committed as f64 / (posted * ratio / 1000) as f64;
+            if share > worst_committed.0 {
+                worst_committed = (share, i);
+            }
+        }
     }
-    let seat = seats[0].0;
     let posted = s.bond(&seat).unwrap().collateral as u128;
     let locks = posted - s.slashable_available_v2(&seat, daa, depth).min(posted);
     let ceiling = posted * ratio / 1000;
+    let escaped = palw_second_clock_depth_v1(depth, s.recent_anchor_daas(), daa, sp.window_court());
+    let committed = palw_bond_committed_v1(&s, &seat, daa, escaped, sp.window_court());
     let duty_room = ceiling.saturating_sub(s.reserved_exposure(&seat) + s.registration_exposure(&seat));
-    let lock_life = sp.window_challenge_at(daa) + sp.window_court();
-    let genesis_bonds_n = bonds.len() as u128;
-    let quorum = b.panel.quorum() as u128;
-    let cap_claims_per_daa_all5 = (genesis_bonds_n * licensed as u128) as f64 / (seats.len() as f64 * lock_life as f64);
-    let cap_claims_per_daa_quorum = (genesis_bonds_n * licensed as u128) as f64 / (quorum as f64 * lock_life as f64);
-    println!("=== 4b: lock ledger ===");
-    println!("lock per Valid seat per floor claim   = {lock_each} sompi ({:.2} MSK)  (no execution-lane rights term: a lower bound)", msk(lock_each));
-    println!("claims licensed on the same 5 seats   = {licensed}; then {:?}", stuck);
-    println!("seat posted {:.2} MSK: live locks {:.2} MSK ({:.1}% of posted); duty ceiling still free {:.2} MSK", msk(posted), msk(locks), 100.0 * locks as f64 / posted as f64, msk(duty_room));
-    println!("=> collateral committed = locks + duty ceiling = {:.1}% of posted (no sompi should back two claims: <= 100%)", 100.0 * (locks + ceiling) as f64 / posted as f64);
-    println!("lock life >= challenge {} + window_court {} = {lock_life} DAA (and {depth:?} anchors)", sp.window_challenge_at(daa), sp.window_court());
+    LockLedgerRun { licensed, stuck, lock_each, posted, locks, ceiling, committed, duty_room, worst_committed, identity_breaks }
+}
+
+fn print_lock_ledger_run(label: &str, r: &LockLedgerRun, p: &kaspa_consensus_core::config::params::Params) {
+    let sp = bundle(p).state;
+    println!("=== 4b ({label}): lock ledger ===");
     println!(
-        "network licensing ceiling with {genesis_bonds_n} genesis bonds: {cap_claims_per_daa_all5:.3} claims/DAA (5 Valid receipts carried) .. {cap_claims_per_daa_quorum:.3} (quorum {quorum} only) vs cadence 1 block/DAA"
+        "lock per Valid seat per floor claim   = {} sompi ({:.2} MSK)  (no execution-lane rights term: a lower bound)",
+        r.lock_each,
+        msk(r.lock_each)
     );
-    assert!(stuck.is_some(), "the fixture reaches the lock ledger's end");
+    println!("claims licensed on the same 5 seats   = {}; then {:?}", r.licensed, r.stuck);
+    println!(
+        "seat posted {:.2} MSK: live locks {:.2} MSK ({:.1}% of posted); committed {:.2} MSK; duty ceiling still free {:.2} MSK",
+        msk(r.posted),
+        msk(r.locks),
+        100.0 * r.locks as f64 / r.posted as f64,
+        msk(r.committed),
+        msk(r.duty_room)
+    );
+    println!(
+        "=> locks + duty ceiling = {:.1}% of posted (no sompi should back two claims: <= 100%); worst committed/ceiling {:.3} at claim {}",
+        100.0 * (r.locks + r.ceiling) as f64 / r.posted as f64,
+        r.worst_committed.0,
+        r.worst_committed.1
+    );
+    println!("lock life >= challenge {} + window_court {}", sp.window_challenge_at(0), sp.window_court());
+}
+
+/// **4b / ADR-0152 T09: past `palw_rcore_plus` one ledger backs every lock and every duty.**
+///
+/// Five genesis seats license floor claims (all-Valid) back to back. Below the fence (the twin
+/// test) the Valid locks live on a second ledger over the same collateral — `slashable_available`
+/// at 100% of posted, beside the 500‰ duty/claim ceiling — and the fixture reached that ledger's end
+/// with 150% of a seat's collateral committed. Past it (A-1, A-3, L-4b) a seat's `committed` is its
+/// own ledger plus Σ `max(duty, live lock)` per claim, recomputed here independently at every step,
+/// and the bind and the licence ask it against the one ceiling: no sompi backs two claims.
+#[test]
+fn dos_l5_4b_one_ledger_backs_every_lock_and_duty() {
+    let p = t12();
+    let r = lock_ledger_run(&p);
+    print_lock_ledger_run("R-core+", &r, &p);
+    assert!(r.identity_breaks.is_empty(), "T09: committed = own ledger + Σ max(duty, live lock): {:?}", r.identity_breaks);
+    assert!(r.worst_committed.0 <= 1.0, "A-3: committed stays under the 500‰ ceiling at every step ({:.3})", r.worst_committed.0);
     assert!(
-        locks + ceiling <= posted,
-        "I2: one collateral backs live Valid locks of {:.2} MSK AND a duty/claim ceiling of {:.2} MSK on the same bond ({:.1}% of posted)",
-        msk(locks),
-        msk(ceiling),
-        100.0 * (locks + ceiling) as f64 / posted as f64
+        r.locks + r.ceiling <= r.posted,
+        "I2: no sompi backs two claims ({:.1}% of posted)",
+        100.0 * (r.locks + r.ceiling) as f64 / r.posted as f64
     );
+    if let Some((_, why)) = r.stuck {
+        panic!(
+            "the one ledger stopped licensing within 2,000 claims ({why}) while committed peaked at {:.3} of the ceiling",
+            r.worst_committed.0
+        );
+    }
+}
+
+/// **4b's PRE-FENCE DEFECT RECORD (the fence-off twin: testnet-12 with `palw_rcore_plus = None`)**:
+/// the lock ledger double-backs collateral — live Valid locks plus the duty/claim ceiling reach more
+/// than 100% of a seat's posted collateral, and the 100% lock ledger is what stops licensing. Kept
+/// green as a record of what R-core+ closes (row 12 of the DoS report).
+#[test]
+fn dos_l5_4b_pre_fence_record_the_lock_ledger_double_backs_collateral() {
+    let mut p = t12();
+    p.palw_rcore_plus = None;
+    p.palw_rcore_conservative_classes = &[];
+    p.sync_palw_rcore_plus();
+    let r = lock_ledger_run(&p);
+    print_lock_ledger_run("fence off", &r, &p);
+    assert!(r.stuck.is_some(), "below the fence the 100% lock ledger ends licensing");
+    assert!(r.locks + r.ceiling > r.posted, "the defect: one collateral backs locks AND the whole duty/claim ceiling");
 }

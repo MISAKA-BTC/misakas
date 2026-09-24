@@ -3338,6 +3338,25 @@ pub struct PalwClaimRcoreV1 {
     pub unserved_seen: bool,
 }
 
+/// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms** — `G = g_res + escrowed_reward` —
+/// read from the claim record while it lives and from its liability record after it retires.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwClaimGV1 {
+    pub g_res: u128,
+    pub escrowed_reward: u64,
+    pub basis_k: u8,
+}
+
+/// The backed subset of one licence set (SR-6), its recount and the lock each member posts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PalwRcoreBackedSetV1 {
+    /// `(seat, attested mask)` of every backed `Valid`, in carried order.
+    backed: Vec<(PalwBondKeyV2, crate::palw_verification_v2::PalwSegmentMaskV2)>,
+    basis_k: u8,
+    lock: u128,
+    segments: u16,
+}
+
 /// **What a claim holds on its bond**: its weight (`reserved`), option A's escrow term past its
 /// height, and a free-prompt claim's priced receipt rights. ONE expression for every site that
 /// reserves, releases or re-derives it, so the ledger cannot disagree with itself about a claim.
@@ -9069,8 +9088,12 @@ impl PalwChainStateV2 {
             *open_courts.entry(session.claim).or_insert(0) += 1;
             // An open court also holds the CHALLENGER's stake, so the exposure this check rebuilds
             // is claims plus courts. Opening one used to cost nothing at all, which is why the
-            // summary was once claims alone.
-            if let Some(claim) = self.claims.get(&session.claim) {
+            // summary was once claims alone. **ADR-0152 A-6: past `palw_rcore_plus` it is the
+            // accuser ledger's (`palw_accuser_exposure_v1`), re-derived from the sessions, and not
+            // this one's.**
+            if params.rcore_plus_from_daa().is_none()
+                && let Some(claim) = self.claims.get(&session.claim)
+            {
                 let e = exposure.entry(session.challenger_bond).or_insert(0);
                 *e = e.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
             }
@@ -10175,6 +10198,56 @@ impl PalwFoldReadV1<'_> {
         crate::palw_economic_safety_v1::palw_seat_lock_required_v2(crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts), colluding)
     }
 
+    /// **ADR-0152 L-1's facts** (S-SPEC §2 `claim_g_v1`): the claim's fraud facts as the seat lock
+    /// prices them — the weight in its reservation's unit and, past `palw_economic_safety`, the
+    /// execution rights its Final could realize (or its reserved receipt rights, whichever is more).
+    /// Both fences are R-core+ prerequisites; without the safety fold the reserved rights stand in.
+    fn rcore_fraud_facts(&self, claim: &PalwClaimStateV2) -> crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
+        let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
+        let mut facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash);
+        facts.extra_economic_rights_sompi = match self.extras.economic_safety {
+            Some(safety) => self.claim_realizable_rights_v1(claim, &safety).max(claim.rights_reserved),
+            None => claim.rights_reserved,
+        };
+        facts
+    }
+
+    /// **ADR-0152 L-1: the residual fraud gain** `G_res = palw_max_fraud_gain_v1(facts) −
+    /// escrowed_reward` (`w + R + s`, the buyback bound `s` being 0 — see [`Self::rcore_lock`]).
+    fn rcore_g_res(&self, claim: &PalwClaimStateV2) -> u128 {
+        crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&self.rcore_fraud_facts(claim)).saturating_sub(claim.escrowed_reward as u128)
+    }
+
+    /// **ADR-0152 L-1: what one counted `Valid` signer of a set recounted to `basis_k` locks** —
+    /// [`palw_rcore_lock_v1`] on this claim's `G_res` and escrow. The buyback bound `s` is priced at
+    /// 0: it is 0 on every testnet-12 row (ADR §2's table), and the vesting row records the slice
+    /// actually bought at Final.
+    fn rcore_lock(&self, claim: &PalwClaimStateV2, basis_k: u8) -> u128 {
+        palw_rcore_lock_v1(self.rcore_g_res(claim), claim.escrowed_reward, 0, basis_k)
+    }
+
+    /// **ADR-0152 L-4 / L-4b: a claim's bind-time prices** for a panel of `seat_count` seats at
+    /// `now_daa` — the λ-term (ECON's floor half at this block's multiple), `lock_2`, the commitment
+    /// the duty is capped by, `duty_bind` and the eligibility `max(duty_bind, lock_2)`.
+    fn rcore_bind_prices(&self, claim: &PalwClaimStateV2, seat_count: usize, now_daa: u64) -> PalwRcoreBindPricesV1 {
+        let lock_2 = self.rcore_lock(claim, PALW_RCORE_FINAL_BASIS_K_V1);
+        let lambda_term = crate::palw_panel_economy_v1::palw_panel_seat_reward_floor_v1(
+            claim.escrowed_reward,
+            seat_count,
+            self.extras.panel_reward_multiple_permille,
+        );
+        let commitment = palw_claim_commitment_v1(self.params, claim, now_daa).unwrap_or(u128::MAX);
+        let duty_bind = palw_rcore_duty_bind_v1(lambda_term, lock_2, commitment, seat_count);
+        PalwRcoreBindPricesV1 {
+            g_res: self.rcore_g_res(claim),
+            lock_2,
+            lambda_term,
+            commitment,
+            duty_bind,
+            eligibility: palw_rcore_seat_eligibility_v1(duty_bind, lock_2),
+        }
+    }
+
     /// **2026-09-23 audit #6: what each `Valid` signer of a set arriving through `door` must lock.**
     ///
     /// The lock was priced for three colluders on every door, and the doors do not all need three.
@@ -10619,6 +10692,53 @@ impl PalwFoldReadV1<'_> {
             None => read(&build()),
         }
     }
+}
+
+/// **ADR-0152 L-4 / L-4b: one claim's bind-time prices** (S-SPEC §3.3), as the fold that binds it
+/// computes them. `duty_bind` is what each seat reserves (the `seat_exposure` of the duty row);
+/// `eligibility` is what a seat must have room for under the 500‰ ceiling to be drawn and bound
+/// (`max(duty_bind, lock_2)`); `lock_2` is the price of a `Valid` on a set recounted to 2.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwRcoreBindPricesV1 {
+    /// `G_res`, the residual fraud gain L-1 prices the lock on.
+    pub g_res: u128,
+    /// L-1 at `k′ = 2`.
+    pub lock_2: u128,
+    /// ECON's floor half: the seat's largest reward share times the panel's reward multiple.
+    pub lambda_term: u128,
+    /// The claim's commitment at bind (`w + E` for an attempt, `w + rr` for a free-prompt claim).
+    pub commitment: u128,
+    /// L-4: `min(max(lambda_term, lock_2), commitment / seats)`.
+    pub duty_bind: u128,
+    /// L-4b: `max(duty_bind, lock_2)`.
+    pub eligibility: u128,
+}
+
+/// **ADR-0152 L-4 / L-4b for a reader outside the fold** — the draw's eligibility filter
+/// (`PalwPanelValidLockV1::rcore`, resolved by the processor at the binding block), the stake draw
+/// (M4) and the RPC read the prices the bind will reserve and demand, with the binding block's
+/// `extras`, for a panel of `seat_count` seats at `now_daa`.
+pub fn palw_rcore_bind_prices_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    claim: &PalwClaimStateV2,
+    seat_count: usize,
+    now_daa: u64,
+) -> PalwRcoreBindPricesV1 {
+    PalwFoldReadV1::outside(state, params, extras).rcore_bind_prices(claim, seat_count, now_daa)
+}
+
+/// **ADR-0152 L-1 for a reader outside the fold**: what one counted `Valid` signer of a set
+/// recounted to `basis_k` locks on `claim`, with the licensing block's `extras`.
+pub fn palw_rcore_seat_lock_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    claim: &PalwClaimStateV2,
+    basis_k: u8,
+) -> u128 {
+    PalwFoldReadV1::outside(state, params, extras).rcore_lock(claim, basis_k)
 }
 
 /// **ADR-0152 T-2(a) for a reader outside the fold** (S-SPEC 1g): `bond`'s claims of `class_id` in
@@ -11387,6 +11507,32 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// **A court's challenger stake** (the court opening and the held dissection). Below
+    /// `palw_rcore_plus` exactly [`Self::reserve_accuser_exposure_v2`]: the claim's `reserved` joins
+    /// the challenger's `reserved_exposure` under the 500‰ ceiling (`write_court` gives it back).
+    /// **ADR-0152 A-6 past it: accusers use the free half.** Nothing is written to
+    /// `reserved_exposure` — the stake is the session itself, read by [`palw_accuser_exposure_v1`]
+    /// through the challenger index and by B-3's exit gate — and the check is `committed + accuser
+    /// + new ≤ collateral` (1000‰), so a seat whose 500‰ is full of locks can still accuse.
+    fn reserve_challenger_v1(
+        &mut self,
+        bond: PalwBondKeyV2,
+        collateral: u64,
+        amount: u128,
+        edge: &'static str,
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.params.rcore_plus_active_at(now_daa) {
+            return self.reserve_accuser_exposure_v2(bond, collateral, amount, edge, self.da_court);
+        }
+        let backed = self.committed_at(&bond, now_daa).saturating_add(palw_accuser_exposure_v1(&self.state, &bond));
+        let ceiling = collateral as u128;
+        if backed.saturating_add(amount) > ceiling {
+            return Err(PalwStateV2Error::AccusationExposureCeiling { bond, edge, backed, accusation: amount, ceiling });
+        }
+        Ok(())
+    }
+
     fn write_registration_exposure(&mut self, key: PalwBondKeyV2, new: Option<u128>) {
         let old = match new {
             Some(value) => self.state.registration_exposure.insert(key, value),
@@ -12120,6 +12266,196 @@ impl<'a> TransitionBuilder<'a> {
         Ok(None)
     }
 
+    /// **ADR-0152 A-1 on this fold's clocks**: [`palw_bond_committed_v1`] at `now_daa` and the
+    /// escaped depth every lock of this fold is read at.
+    fn committed_at(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        palw_bond_committed_v1(&self.state, bond, now_daa, self.second_clock_depth(now_daa), self.params.window_court)
+    }
+
+    /// **ADR-0152 SR-7: the 500‰ ceiling of `bond`** — `collateral × fp_max_exposure_ratio_permille
+    /// / 1000`, the one every gate measures `committed` against (0 for a missing bond).
+    fn exposure_ceiling_of(&self, bond: &PalwBondKeyV2) -> u128 {
+        self.state
+            .bonds
+            .get(bond)
+            .map(|record| (record.collateral as u128).saturating_mul(self.params.fp_max_exposure_ratio_permille as u128) / 1000)
+            .unwrap_or(0)
+    }
+
+    /// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms for the action tiers** — from the
+    /// claim record (L-1's facts, [`PalwFoldReadV1::rcore_g_res`]) while it lives, else from its
+    /// liability record's appended fields (S-3 writes them past `palw_rcore_plus`). `G = g_res +
+    /// escrowed_reward`. The conviction funnel (S-4) is its reader.
+    #[allow(dead_code)]
+    fn claim_g_v1(&self, claim_id: &Hash64) -> Option<PalwClaimGV1> {
+        if let Some(claim) = self.state.claims.get(claim_id) {
+            return Some(PalwClaimGV1 {
+                g_res: self.read().rcore_g_res(claim),
+                escrowed_reward: claim.escrowed_reward,
+                basis_k: claim.rcore.basis_k,
+            });
+        }
+        self.state.panel_liabilities.get(claim_id).map(|row| PalwClaimGV1 {
+            g_res: row.g_res_sompi,
+            escrowed_reward: row.escrowed_reward,
+            basis_k: row.basis_k,
+        })
+    }
+
+    /// **ADR-0152 SR-6 + Q-3 + L-1: the backed subset of a licence set and the lock it posts**
+    /// (S-SPEC §3.4 step 1).
+    ///
+    /// A carried `Valid` of panel seat `s` is backed iff `s` already locks this claim, or
+    /// `committed(s) + max(0, lock_{k′} − duty(c, s)) ≤ C_s × 500‰`. `k′ = max(k, 2)` starts at the
+    /// whole set's recount; if the backed subset recounts lower and `k′` falls from 3 to 2 (which
+    /// raises the lock), the set is re-tested once at `lock_2` — it cannot fall again, `k′` being 2
+    /// or 3. The price every backed signer locks is `lock_{max(basis_k, 2)}` of the final subset,
+    /// which is the price it was tested at.
+    fn rcore_backed_set(
+        &self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        carried: &[(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)],
+        now_daa: u64,
+    ) -> PalwRcoreBackedSetV1 {
+        let seats: Vec<PalwBondKeyV2> =
+            self.state.panels.get(&claim_id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
+        let segments = crate::palw_verification_v2::palw_segment_count_v2(seats.len().min(u16::MAX as usize) as u16);
+        let full = crate::palw_verification_v2::PalwSegmentMaskV2::full(segments);
+        let mut valid: Vec<(PalwBondKeyV2, crate::palw_verification_v2::PalwSegmentMaskV2)> = Vec::new();
+        for (receipt, mask) in carried {
+            if matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid)
+                && seats.contains(&receipt.seat_bond)
+                && !valid.iter().any(|(bond, _)| *bond == receipt.seat_bond)
+            {
+                valid.push((receipt.seat_bond, mask.unwrap_or(full)));
+            }
+        }
+        let recount = |set: &[(PalwBondKeyV2, crate::palw_verification_v2::PalwSegmentMaskV2)]| {
+            palw_receipt_set_basis_k_v1(&set.iter().map(|(_, mask)| *mask).collect::<Vec<_>>(), segments)
+        };
+        let backed_at = |lock: u128| -> Vec<(PalwBondKeyV2, crate::palw_verification_v2::PalwSegmentMaskV2)> {
+            valid
+                .iter()
+                .filter(|(bond, _)| {
+                    self.state.slashable_locks.contains_key(&(*bond, claim_id))
+                        || self.committed_at(bond, now_daa).saturating_add(lock.saturating_sub(palw_seat_duty_of_v1(
+                            &self.state,
+                            &claim_id,
+                            bond,
+                        ))) <= self.exposure_ceiling_of(bond)
+                })
+                .copied()
+                .collect()
+        };
+        let first = recount(&valid).max(PALW_RCORE_FINAL_BASIS_K_V1);
+        let mut backed = backed_at(self.read().rcore_lock(claim, first));
+        if recount(&backed).max(PALW_RCORE_FINAL_BASIS_K_V1) < first {
+            backed = backed_at(self.read().rcore_lock(claim, PALW_RCORE_FINAL_BASIS_K_V1));
+        }
+        let basis_k = recount(&backed);
+        PalwRcoreBackedSetV1 { lock: self.read().rcore_lock(claim, basis_k), basis_k, segments, backed }
+    }
+
+    /// **ADR-0152 S-SPEC §3.4: one licence past `palw_rcore_plus`, through any of the three doors.**
+    ///
+    /// The carried set's outsider is required as it always was (ADR-0147, refused by name); then the
+    /// backed subset ([`Self::rcore_backed_set`]) must satisfy the door's rule on its own — a quorum
+    /// of `Valid`s (V1), the quorum and a recount of at least 2, which is coverage (V2), the full seat
+    /// (S2) — and still name its outsider, or the object is INERT (`Ok`, nothing written; SR-6). An
+    /// unbacked `Valid` gets no credit, no lock and no served bit. Every backed signer locks the
+    /// set's price with its attested mask (L-1, L-3; a V2 receipt the full cut); `door_lock_prices`
+    /// and `lock_1` are not read. The record is staged over what the licence reads and written once
+    /// by [`Self::license_claim`].
+    fn license_rcore_v1(
+        &mut self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        door: PalwLicenceDoorV1,
+        carried: &[(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)],
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let all: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = carried.iter().map(|(receipt, _)| receipt.clone()).collect();
+        palw_licence_names_its_outsider_v1(
+            &self.state,
+            &claim_id,
+            claim,
+            &palw_seat_verdicts_of_v2(&all),
+            self.extras.admission_independence_daa,
+        )?;
+        let set = self.rcore_backed_set(claim_id, claim, carried, now_daa);
+        let reads: Vec<(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)> = carried
+            .iter()
+            .filter(|(receipt, _)| {
+                !matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid)
+                    || set.backed.iter().any(|(bond, _)| *bond == receipt.seat_bond)
+            })
+            .cloned()
+            .collect();
+        let read_receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = reads.iter().map(|(receipt, _)| receipt.clone()).collect();
+        let verdicts = palw_seat_verdicts_of_v2(&read_receipts);
+        let quorum = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as usize;
+        let door_holds = match door {
+            PalwLicenceDoorV1::Quorum => set.backed.len() >= quorum,
+            PalwLicenceDoorV1::Coverage => set.backed.len() >= quorum && set.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1,
+            PalwLicenceDoorV1::Optimistic => {
+                let full = self.read().optimistic_full_seat(claim_id);
+                full.is_some_and(|full| set.backed.iter().any(|(bond, _)| *bond == full))
+            }
+            // Dormant on testnet-12 (`palw_shard_licensing` is refused beside R-core+).
+            PalwLicenceDoorV1::ShardPart { .. } => false,
+        };
+        if !door_holds
+            || palw_licence_names_its_outsider_v1(&self.state, &claim_id, claim, &verdicts, self.extras.admission_independence_daa)
+                .is_err()
+        {
+            return Ok(());
+        }
+        self.slash_dissenting_seats(&claim_id, claim, &verdicts, true)?;
+        self.slash_silent_seats(&claim_id, claim, &verdicts)?;
+        self.credit_seat_receipts(claim_id, &read_receipts, now_daa);
+        for (bond, mask) in &set.backed {
+            self.lock_valid_seat_rcore(*bond, claim_id, set.lock, *mask, set.segments, now_daa);
+        }
+        let staged = {
+            let refs: Vec<(&crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)> =
+                reads.iter().map(|(receipt, mask)| (receipt, *mask)).collect();
+            self.staged_licence_v1(claim_id, claim, door, &refs, now_daa)
+        };
+        debug_assert_eq!(staged.rcore.basis_k, set.basis_k, "the record recounts the backed subset");
+        self.license_claim(claim_id, staged, now_daa)
+    }
+
+    /// **ADR-0152 L-1 / L-3: a backed `Valid` signer's lock** past `palw_rcore_plus` — the set's
+    /// price, the signer's attested mask and the claim's segment cut, dated like every lock. Backing
+    /// was established by the caller on the one ledger, so the 100% `slashable_available` ledger is
+    /// not read. A signer already locked on this claim keeps its lock (Q-4: never repriced).
+    fn lock_valid_seat_rcore(
+        &mut self,
+        seat: PalwBondKeyV2,
+        claim_id: Hash64,
+        amount: u128,
+        attested: crate::palw_verification_v2::PalwSegmentMaskV2,
+        segments: u16,
+        now_daa: u64,
+    ) {
+        if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
+            return;
+        }
+        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
+        self.write_slashable_lock(
+            (seat, claim_id),
+            Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
+                claim: claim_id,
+                amount,
+                expiry_daa,
+                settled_at_final: self.state.settled_attempt_finals,
+                attested,
+                segments,
+            }),
+        );
+    }
+
     /// [`PalwFoldReadV1::panel_valid_lock_required`], on this fold's inputs.
     fn panel_valid_lock_required(&self, claim: &PalwClaimStateV2) -> u128 {
         self.read().panel_valid_lock_required(claim)
@@ -12279,6 +12615,29 @@ impl<'a> TransitionBuilder<'a> {
         if !self.extras.objective_offence_at(now_daa) {
             return Ok(());
         }
+        // **ADR-0152 L-4b, generalized (S-SPEC §3.3): past `palw_rcore_plus` a seat binds iff it may
+        // take work at the panel floor and has room under its 500‰ ceiling for `max(duty_bind,
+        // lock_2)`** — the one ledger, not the 100% `slashable_available` ledger (dos_l5_4b's double
+        // backing). The duty it reserves is `duty_bind`; the rest of a lock above it is the top-up
+        // the licence takes from the same room.
+        if self.params.rcore_plus_active_at(now_daa) {
+            let distinct: BTreeSet<PalwBondKeyV2> = seats.iter().map(|seat| seat.bond).collect();
+            let prices = self.read().rcore_bind_prices(claim, distinct.len(), now_daa);
+            let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
+            for seat in &distinct {
+                let may_work = self.state.bonds.get(seat).is_some_and(|record| palw_bond_may_take_work_v2(record, floor));
+                let room = self.exposure_ceiling_of(seat).saturating_sub(self.committed_at(seat, now_daa));
+                if !may_work || room < prices.eligibility {
+                    return Err(PalwStateV2Error::SeatValidLockRefused {
+                        seat: *seat,
+                        claim: claim_id,
+                        required: prices.eligibility,
+                        available: if may_work { room } else { 0 },
+                    });
+                }
+            }
+            return Ok(());
+        }
         let required = self.panel_valid_lock_required(claim);
         for seat in seats {
             let available = self.slashable_available(&seat.bond, now_daa);
@@ -12341,6 +12700,13 @@ impl<'a> TransitionBuilder<'a> {
             Some((daa, reason)) => (Some(daa), Some(reason)),
             None => (None, None),
         };
+        // ADR-0152 v22 row 8 (S-3): what the conviction funnel reads after the claim retires — the
+        // Final-basis door and recount, and `G_res` priced from the lock's facts, so `G = g_res +
+        // escrowed_reward` survives the claim record. Past `palw_rcore_plus` only.
+        let rcore_row = self
+            .params
+            .rcore_plus_active_at(now_daa)
+            .then(|| (claim.rcore.licence_door, claim.rcore.basis_k, self.read().rcore_g_res(claim)));
         self.write_panel_liability(
             claim_id,
             Some(crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1 {
@@ -12363,10 +12729,10 @@ impl<'a> TransitionBuilder<'a> {
                 free_prompt: false,
                 trace_root: Hash64::default(),
                 segment_count: 0,
-                licence_door: None,
-                basis_k: 0,
-                g_res_sompi: 0,
-                escrowed_reward: 0,
+                licence_door: rcore_row.map(|(door, _, _)| door).unwrap_or(None),
+                basis_k: rcore_row.map(|(_, basis_k, _)| basis_k).unwrap_or(0),
+                g_res_sompi: rcore_row.map(|(_, _, g_res)| g_res).unwrap_or(0),
+                escrowed_reward: if rcore_row.is_some() { claim.escrowed_reward } else { 0 },
             }),
         );
         Ok(())
@@ -14330,18 +14696,26 @@ impl<'a> TransitionBuilder<'a> {
         claim_id: Hash64,
         claim: &PalwClaimStateV2,
         seats: &[PalwPanelSeatV2],
+        now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
         // A bond sits once on a panel (the draw dedups by operator); a duplicate is not put on duty
         // twice, so the row holds each seat bond once and the release returns exactly what this took.
         let on_duty: BTreeMap<PalwBondKeyV2, u64> = seats.iter().map(|seat| (seat.bond, 0)).collect();
         // Over the seats ON DUTY — the number `finalize_claim` divides the pool by — so the floor
-        // bounds the share a seat can actually be paid.
-        let seat_exposure = crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1(
-            claim.reserved,
-            claim.escrowed_reward,
-            on_duty.len(),
-            self.extras.panel_reward_multiple_permille,
-        );
+        // bounds the share a seat can actually be paid. **ADR-0152 L-4 / A-4: past `palw_rcore_plus`
+        // the duty is `duty_bind`** — `min(max(λ-term, lock_2), commitment / seats)`, so `seats ×
+        // duty` never exceeds what the claim forfeits (F14) — and the `3 × claim.reserved` term is
+        // retired.
+        let seat_exposure = if self.params.rcore_plus_active_at(now_daa) {
+            self.read().rcore_bind_prices(claim, on_duty.len(), now_daa).duty_bind
+        } else {
+            crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1(
+                claim.reserved,
+                claim.escrowed_reward,
+                on_duty.len(),
+                self.extras.panel_reward_multiple_permille,
+            )
+        };
         // Reserved in the panel's own order, each bond once — the journal order the row was always
         // reserved in.
         let mut reserved: Vec<PalwBondKeyV2> = Vec::with_capacity(on_duty.len());
@@ -14452,14 +14826,34 @@ impl<'a> TransitionBuilder<'a> {
         // Nothing but the credit moves: the phase, the deadlines and the weight are the licensing
         // object's, already written.
         let _ = claim;
+        // **ADR-0152 S-SPEC §3.5, past `palw_rcore_plus`: each new `Valid` locks `lock_{max(k, 2)}`
+        // of the set's recount after it, with the full mask** (a V2 receipt attests the full cut),
+        // backed on the one ledger like a licensing signer — an unbacked one refuses the object as
+        // the quorum price's did. An existing lock is never repriced (Q-4).
+        if self.params.rcore_plus_active_at(ctx.daa_score) {
+            let cap = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as u8;
+            let basis_k = claim.rcore.basis_k.saturating_add(receipts.len().min(u8::MAX as usize) as u8).min(cap);
+            let lock = self.read().rcore_lock(claim, basis_k);
+            let seat_count = self.state.panels.get(&claim_id).map(|panel| panel.seats.len()).unwrap_or(0);
+            let segments = crate::palw_verification_v2::palw_segment_count_v2(seat_count.min(u16::MAX as usize) as u16);
+            for receipt in receipts {
+                let seat = receipt.seat_bond;
+                let top_up = lock.saturating_sub(palw_seat_duty_of_v1(&self.state, &claim_id, &seat));
+                let room = self.exposure_ceiling_of(&seat).saturating_sub(self.committed_at(&seat, ctx.daa_score));
+                if !self.state.slashable_locks.contains_key(&(seat, claim_id)) && room < top_up {
+                    return Err(PalwStateV2Error::SeatValidLockRefused { seat, claim: claim_id, required: top_up, available: room });
+                }
+            }
+            self.credit_seat_receipts(claim_id, receipts, ctx.daa_score);
+            for receipt in receipts {
+                let full = crate::palw_verification_v2::PalwSegmentMaskV2::full(segments);
+                self.lock_valid_seat_rcore(receipt.seat_bond, claim_id, lock, full, segments, ctx.daa_score);
+            }
+            return self.stage_supplementary_v1(claim_id, claim, receipts, deadline, ctx.daa_score);
+        }
         self.credit_seat_receipts(claim_id, receipts, ctx.daa_score);
         // A supplementary `Valid` is not part of the set that licensed: it locks the quorum price.
         self.lock_valid_receipts(claim_id, claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?;
-        // ADR-0152 SR-1b (S-SPEC §3.5): past `palw_rcore_plus` the door also serves, recounts, may
-        // upgrade an S2 licence and may flip the escrow's release.
-        if self.params.rcore_plus_active_at(ctx.daa_score) {
-            self.stage_supplementary_v1(claim_id, claim, receipts, deadline, ctx.daa_score)?;
-        }
         Ok(())
     }
 
@@ -14478,8 +14872,8 @@ impl<'a> TransitionBuilder<'a> {
     ///   record that now satisfies [`palw_rcore_release_due_v1`] flips `escrow_released` and the
     ///   escrow term leaves the producer's ledger in this block; later, never. Never un-flips (SR-4).
     ///
-    /// The lock these receipts take is still the door's quorum price here; L-1's `lock_{max(k,2)}`
-    /// with the mask is S-3's.
+    /// The lock each receipt takes (L-1's `lock_{max(k,2)}` with the full mask) is written by the
+    /// caller before this runs.
     fn stage_supplementary_v1(
         &mut self,
         claim_id: Hash64,
@@ -14735,7 +15129,10 @@ impl<'a> TransitionBuilder<'a> {
             // abandoned-ladder refresh re-indexes the same session under the backstop — and giving
             // the stake back there would release it without the session ending, so a challenger
             // would hold an open court for free after one refresh.
+            // ADR-0152 A-6: past `palw_rcore_plus` a court's stake never entered `reserved_exposure`
+            // (`reserve_challenger_v1`), so nothing comes back out of it.
             if new.is_none()
+                && self.params.rcore_plus_from_daa().is_none()
                 && let Some(claim) = self.state.claims.get(&previous.claim)
             {
                 let held = self.state.reserved_exposure.get(&previous.challenger_bond).copied().unwrap_or(0);
@@ -16041,6 +16438,13 @@ pub fn palw_v2_object_licenses_claim_v1(
         | PalwConsensusObjectV2::OptimisticLicensed { claim, .. } => *claim,
         _ => return false,
     };
+    // ADR-0152 S-SPEC §3.4 step 6: past `palw_rcore_plus` only a `PanelBound → ReceiptLicensed`
+    // transition is a licence for the assemblers — a supplementary set on a licensed claim is not.
+    if params.rcore_plus_active_at(ctx.daa_score)
+        && !base.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }))
+    {
+        return false;
+    }
     palw_v2_apply_one_object_v1(base, params, ctx, object, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)
         .is_ok_and(|next| next.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })))
 }
@@ -16268,7 +16672,7 @@ pub fn apply_palw_transition_v7(
                 // before its first write, so this refusal leaves the builder as it found it — and a
                 // whole-state clone on every block's own attempt would be the price of pretending
                 // otherwise.
-                Err(refused @ PalwStateV2Error::AttemptExposureCeiling { .. }) => {
+                Err(refused @ (PalwStateV2Error::AttemptExposureCeiling { .. } | PalwStateV2Error::ProducerBelowFloor { .. })) => {
                     merged_skips.push((ctx.block, refused.to_string()));
                 }
                 Err(other) => return Err(other),
@@ -16329,6 +16733,8 @@ pub fn apply_palw_transition_v7(
                             canonical_work_daa: builder.extras.canonical_work_daa,
                             base_known_draw: builder.base_known_draw(),
                             audit_2026_09_23_active: builder.extras.audit_2026_09_23_active,
+                            // ADR-0152 SR-7: the raw second-clock depth the fold's own ceiling reads.
+                            settled_anchor_depth: builder.read().settled_anchor_depth(),
                             ..Default::default()
                         },
                     ) {
@@ -16848,13 +17254,7 @@ fn open_held_dissection_v1(
     if builder.state.court_sessions.contains_key(&session_id) {
         return Err(PalwStateV2Error::DuplicateSession(session_id));
     }
-    builder.reserve_accuser_exposure_v2(
-        challenger_bond,
-        challenger_collateral,
-        claim.reserved,
-        "held dissection",
-        builder.da_court,
-    )?;
+    builder.reserve_challenger_v1(challenger_bond, challenger_collateral, claim.reserved, "held dissection", ctx.daa_score)?;
     let mut opened = PalwCourtSessionStateV2 {
         claim: claim_id,
         challenger_bond,
@@ -20028,7 +20428,7 @@ fn apply_object(
             // ADR-0124 Decision 3: past the fence the drawn seats go on duty — a duty row, and each
             // seat's exposure reserved for the claim's life. Below it nothing is written.
             if builder.extras.panel_economy_active {
-                builder.reserve_seat_duties(*claim_id, &claim, seats)?;
+                builder.reserve_seat_duties(*claim_id, &claim, seats, ctx.daa_score)?;
             }
             let mut bound = claim;
             bound.phase = PalwClaimPhaseV2::PanelBound { bound_daa: ctx.daa_score };
@@ -20058,6 +20458,11 @@ fn apply_object(
                 // No plan can exist on a network that never armed the fence, so this never fires there.
                 if builder.claim_licenses_by_parts(claim_id) {
                     return Err(PalwStateV2Error::LicensedByParts(*claim_id));
+                }
+                // ADR-0152 S-SPEC §3.4: past `palw_rcore_plus` the licence is the backed subset's.
+                if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                    let carried: Vec<_> = receipts.iter().map(|receipt| (receipt.clone(), None)).collect();
+                    return builder.license_rcore_v1(*claim_id, &claim, PalwLicenceDoorV1::Quorum, &carried, ctx.daa_score);
                 }
                 // The panel concluded the data WAS served. A seat that signed `Unavailable` accused
                 // the producer of withholding what a quorum of its own panel then verified — and the
@@ -20260,13 +20665,7 @@ fn apply_object(
             // stays open for one that does not — named here rather than left for a reader to
             // discover, because arming is a genesis-time choice somebody has to make knowing that.
             let challenger_collateral = challenger.collateral;
-            builder.reserve_accuser_exposure_v2(
-                *challenger_bond,
-                challenger_collateral,
-                claim.reserved,
-                "court opening",
-                builder.da_court,
-            )?;
+            builder.reserve_challenger_v1(*challenger_bond, challenger_collateral, claim.reserved, "court opening", ctx.daa_score)?;
             let mut opened = PalwCourtSessionStateV2 {
                 claim: *claim_id,
                 challenger_bond: *challenger_bond,
@@ -20482,6 +20881,12 @@ fn apply_object(
             if builder.claim_licenses_by_parts(claim_id) {
                 return Err(PalwStateV2Error::LicensedByParts(*claim_id));
             }
+            // ADR-0152 S-SPEC §3.4: past `palw_rcore_plus` the licence is the backed subset's, each
+            // receipt with the mask it attests (no strip).
+            if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                let carried: Vec<_> = receipts.iter().map(|r| (r.receipt.clone(), Some(r.segments))).collect();
+                return builder.license_rcore_v1(*claim_id, &claim, PalwLicenceDoorV1::Coverage, &carried, ctx.daa_score);
+            }
             let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
             if builder.extras.audit_2026_09_23_active
                 && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)
@@ -20529,6 +20934,12 @@ fn apply_object(
             };
             if builder.claim_licenses_by_parts(claim_id) {
                 return Err(PalwStateV2Error::LicensedByParts(*claim_id));
+            }
+            // ADR-0152 S-SPEC §3.4: past `palw_rcore_plus` the licence is the backed subset's (the full
+            // seat locks `lock_2` like every counted signer; `lock_1` is gone).
+            if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                let carried: Vec<_> = receipts.iter().map(|r| (r.receipt.clone(), Some(r.segments))).collect();
+                return builder.license_rcore_v1(*claim_id, &claim, PalwLicenceDoorV1::Optimistic, &carried, ctx.daa_score);
             }
             let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
             // Audit #6: the full-replay seat is the whole colluding set of this door, so it must be
@@ -20953,6 +21364,11 @@ fn apply_object(
             if let PalwBondStatusV2::Retiring { .. } = bond_record.status {
                 return Err(PalwStateV2Error::RetiringBond(*bond));
             }
+            // **ADR-0152 U2 (S-SPEC §10a): an FP executor commits only with the producer floor posted.**
+            if let Some(shortfall) = palw_bond_producer_floor_shortfall_v1(&builder.state, builder.params, bond, ctx.daa_score) {
+                let floor = builder.params.min_collateral_sompi();
+                return Err(PalwStateV2Error::ProducerBelowFloor { bond: *bond, collateral: floor.saturating_sub(shortfall), floor });
+            }
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
@@ -21095,12 +21511,18 @@ fn apply_object(
             // applies to the SUM, and a reservation nothing reads is not a reservation. Zero while
             // the fence is off, so this lane's admission is byte-identical before it.
             let declared = if builder.capability_bound { palw_bond_capability_exposure_v1(bond_record) } else { 0 };
-            let backed = builder
-                .state
-                .reserved_exposure(bond)
-                .checked_add(builder.state.registration_exposure(bond))
-                .and_then(|sum| sum.checked_add(declared))
-                .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+            // ADR-0152 SR-7: past `palw_rcore_plus` the one committed ledger, with capability
+            // exposure kept as this lane's own gate term (inside `committed` it would pin exit).
+            let own = if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                builder.committed_at(bond, ctx.daa_score)
+            } else {
+                builder
+                    .state
+                    .reserved_exposure(bond)
+                    .checked_add(builder.state.registration_exposure(bond))
+                    .ok_or(PalwStateV2Error::Overflow("total exposure"))?
+            };
+            let backed = own.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
             let ceiling = (bond_record.collateral as u128)
                 .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
                 .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
@@ -21303,6 +21725,28 @@ pub fn palw_fp_bond_room_v1(
     let record = state.bonds.get(bond)?;
     let declared = if capability_bound { palw_bond_capability_exposure_v1(record) } else { 0 };
     let backed = state.reserved_exposure(bond).saturating_add(state.registration_exposure(bond)).saturating_add(declared);
+    let ceiling = (record.collateral as u128).saturating_mul(params.fp_max_exposure_ratio_permille as u128) / 1000;
+    Some(ceiling.saturating_sub(backed))
+}
+
+/// [`palw_fp_bond_room_v1`] on the one ledger (ADR-0152 SR-7): past `palw_rcore_plus` the bond's
+/// backing is [`palw_bond_committed_raw_v1`] at `now_daa` and the raw depth, plus its declared
+/// capability exposure (this lane's own gate term), exactly as the fold's FP ceiling reads it; below
+/// the fence it is v1.
+pub fn palw_fp_bond_room_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    capability_bound: bool,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+) -> Option<u128> {
+    if !params.rcore_plus_active_at(now_daa) {
+        return palw_fp_bond_room_v1(state, params, bond, capability_bound);
+    }
+    let record = state.bonds.get(bond)?;
+    let declared = if capability_bound { palw_bond_capability_exposure_v1(record) } else { 0 };
+    let backed = palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth).saturating_add(declared);
     let ceiling = (record.collateral as u128).saturating_mul(params.fp_max_exposure_ratio_permille as u128) / 1000;
     Some(ceiling.saturating_sub(backed))
 }
@@ -23039,6 +23483,13 @@ fn apply_attempt(
     if let PalwBondStatusV2::Retiring { .. } = bond.status {
         return Err(PalwStateV2Error::RetiringBond(bond_key));
     }
+    // **ADR-0152 U2 (B-4, S-SPEC §10a): producing needs the producer floor posted.** Checked before
+    // any write, so step 4 skips a refused own attempt without restoring anything (non-fatal, like
+    // `AttemptExposureCeiling`); a merged one is skipped generically. Dormant below the fence.
+    if let Some(shortfall) = palw_bond_producer_floor_shortfall_v1(&builder.state, builder.params, &bond_key, ctx.daa_score) {
+        let floor = builder.params.min_collateral_sompi();
+        return Err(PalwStateV2Error::ProducerBelowFloor { bond: bond_key, collateral: floor.saturating_sub(shortfall), floor });
+    }
     let class = builder.state.classes.get(&attempt.class_id).ok_or(PalwStateV2Error::MissingClass(attempt.class_id))?;
     if let PalwClassStatusV2::Frozen { .. } = class.status {
         return Err(PalwStateV2Error::FrozenClass(attempt.class_id));
@@ -23154,13 +23605,20 @@ fn apply_attempt(
     // without restoring anything, which is only sound while nothing above has touched the builder.
     if builder.extras.audit_2026_09_23_active {
         let bond_record = builder.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
-        let backed = builder
-            .state
-            .reserved_exposure(&claim.bond)
-            .checked_add(builder.state.registration_exposure(&claim.bond))
-            .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+        // ADR-0152 SR-7: past `palw_rcore_plus` the ceiling reads the one committed ledger at this
+        // block's DAA and escaped depth (own commitments, registration, every `max(duty, live lock)`)
+        // and the new claim's commitment — the numbers admission and the producer's facts read.
+        let backed = if builder.params.rcore_plus_active_at(ctx.daa_score) {
+            builder.committed_at(&claim.bond, ctx.daa_score)
+        } else {
+            builder
+                .state
+                .reserved_exposure(&claim.bond)
+                .checked_add(builder.state.registration_exposure(&claim.bond))
+                .ok_or(PalwStateV2Error::Overflow("total exposure"))?
+        };
         let adding =
-            palw_claim_bond_reservation_v1(builder.params, &claim).ok_or(PalwStateV2Error::Overflow("claim reservation"))?;
+            palw_claim_commitment_v1(builder.params, &claim, ctx.daa_score).ok_or(PalwStateV2Error::Overflow("claim reservation"))?;
         let ceiling = (bond_record.collateral as u128)
             .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
             .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?

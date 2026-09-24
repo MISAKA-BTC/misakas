@@ -112,6 +112,12 @@ pub struct PalwEpochBudgetFencesV1 {
     /// registry's own height holds no row at all, and without this the floor — the class the
     /// chain's liveness rides on — could not be priced there. `None` by `Default`.
     pub base_known_draw: Option<u128>,
+    /// **ADR-0152 SR-7: the second clock's RAW depth at the candidate block**
+    /// (`Params::palw_settled_anchor_depth` where `palw_audit_2026_09_23` is active, else `None`).
+    /// Past `palw_rcore_plus` item 8 reads the one committed ledger
+    /// (`palw_bond_committed_raw_v1`), whose live locks are read at the escaped depth computed from
+    /// this — the fold's own ceiling and the producer's facts read the same. `None` by `Default`.
+    pub settled_anchor_depth: Option<u64>,
 }
 
 impl PalwAdmissionParamsV2 {
@@ -215,6 +221,11 @@ pub enum PalwAdmissionV2Error {
     EscrowExceedsCollateralBacking { escrow: u64, reserved: u128, required: u128, backing_permille: u32 },
     #[error("attempt {0} already has a claim on this chain — one identity, one claim")]
     DuplicateAttempt(Hash64),
+    /// **ADR-0152 U2 (B-4, S-SPEC §10a): the producing bond posts less than the producer floor**
+    /// (`min_collateral_sompi`) past `Params::palw_rcore_plus`. A top-up (today: re-registration under
+    /// a new key and operator identity, ADR §9.3 Q11) restores production.
+    #[error("bond {bond:?} posts {collateral} sompi, below the producer floor of {floor}: top up before producing")]
+    ProducerBelowFloor { bond: PalwBondKeyV2, collateral: u64, floor: u64 },
     #[error("arithmetic overflow in {0}")]
     Overflow(&'static str),
     #[error("class {class_id} is registered but weightless until DAA {activation_daa} — it holds no cadence share yet")]
@@ -569,16 +580,44 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     //     the composed entry point — and this list, which the state machine re-runs with only the
     //     envelope in hand, deliberately holds nothing the envelope alone cannot decide.
 
+    // 7b. **ADR-0152 U2 (S-SPEC §10a): past `palw_rcore_plus`, producing needs the producer floor**
+    //     — the bond's posted collateral (net of its slashes) at least `min_collateral_sompi`. The
+    //     fold refuses the same attempt (`ProducerBelowFloor`, skipped there when the block's own
+    //     objects moved the bond under it) and the producer's facts carry the shortfall.
+    let rcore = state_params.rcore_plus_active_at(ctx.daa_score);
+    if rcore {
+        let floor = state_params.min_collateral_sompi();
+        let posted =
+            if state_params.bond_collateral_is_net_v1() { bond.collateral } else { bond.collateral.saturating_sub(bond.slashed) };
+        if posted < floor {
+            return Err(PalwAdmissionV2Error::ProducerBelowFloor { bond: bond_key, collateral: posted, floor });
+        }
+    }
+
     // 8. The exposure ceiling (closes P0-10): what this bond already backs, plus what this claim
     //    would reserve, against collateral × ratio. Floor on the ceiling — conservative.
     // **ADR-0056 Decision 3: the ceiling is checked against BOTH ledgers.** A bond's claims and
     // the classes it registered draw on one collateral, so flooding the registry and producing
     // blocks compete for the same capital — which is the whole mechanism, and it lives here, at
     // the one place a ceiling is applied. Two accumulators, summed at the point of use.
-    let reserved = state
-        .reserved_exposure(&bond_key)
-        .checked_add(state.registration_exposure(&bond_key))
-        .ok_or(PalwAdmissionV2Error::Overflow("total exposure"))?;
+    // **ADR-0152 SR-7: past `palw_rcore_plus` the one committed ledger** — own commitments,
+    // registration and every `max(duty, live lock)` at this block's DAA and the escaped depth of the
+    // raw depth the processor resolved — the number the fold's `apply_attempt` and the producer's
+    // facts (`palw_producer_facts_v4`) read.
+    let reserved = if rcore {
+        crate::palw_state_v2::palw_bond_committed_raw_v1(
+            state,
+            state_params,
+            &bond_key,
+            ctx.daa_score,
+            budget_fences.settled_anchor_depth,
+        )
+    } else {
+        state
+            .reserved_exposure(&bond_key)
+            .checked_add(state.registration_exposure(&bond_key))
+            .ok_or(PalwAdmissionV2Error::Overflow("total exposure"))?
+    };
     // **Priced on ONE inference, not on the difficulty** — see `palw_exposure_pwu_v1`. Using
     // `attempt.pwu` here made the ceiling a function of the class target: a class that retargets
     // harder reserves more against unchanged collateral, so its own producers are locked out for

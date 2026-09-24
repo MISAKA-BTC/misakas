@@ -409,3 +409,35 @@ fn t02c_the_free_prompt_abandon_hold_is_the_commitment_to_its_boundary_and_reloa
         assert_eq!(reload(&after), after, "restart after the release");
     }
 }
+
+/// **ADR-0152 T17 / U2 (S-SPEC §10): a free-prompt executor below the producer floor commits
+/// nothing past `palw_rcore_plus`** (`ProducerBelowFloor`; the acceptance walk drops the object and
+/// the block stands). The fence-off twin has no floor gate and folds the same commitment.
+#[test]
+fn t17_an_fp_executor_below_the_producer_floor_commits_nothing() {
+    let twin = {
+        let mut t = t12();
+        t.palw_rcore_plus = None;
+        t.palw_rcore_conservative_classes = &[];
+        t.sync_palw_rcore_plus();
+        t
+    };
+    for (armed, p) in [(true, t12()), (false, twin)] {
+        let sp = bundle(&p).state;
+        let (base, floor_class, wl) = setup(&p);
+        let bond = bond_key(ATTACKER);
+        let floor = sp.min_collateral_sompi();
+        let mut carriage = PalwStateCarriageV2::from_state(&base);
+        carriage.bonds.get_mut(&bond).expect("the attacker's bond").collateral = floor - 1;
+        let below = carriage.into_state_v3(&sp, None, false, p.palw_canonical_work_daa()).expect("reloads");
+        let result = fold_t12(&p, &below, &ctx(0x1711, 1_002, 3, 0), &[fp_commit(floor_class, bond, attacker_pubkey(), wl, 17_001)]);
+        if armed {
+            assert!(
+                matches!(result, Err(PalwStateV2Error::ProducerBelowFloor { collateral, floor: f, .. }) if collateral == floor - 1 && f == floor),
+                "{result:?}"
+            );
+        } else {
+            assert!(result.is_ok(), "fence off: no floor gate: {result:?}");
+        }
+    }
+}

@@ -306,7 +306,11 @@ fn walk(ladder: bool, c7_window: bool) -> Owed {
     )
     .expect("a ladder");
     let mut c = PalwStateCarriageV2::from_state(&licensed);
-    *c.reserved_exposure.entry(bond_key(1)).or_insert(0) += claim.reserved;
+    // The challenger's stake: in `reserved_exposure` below ADR-0152's `palw_rcore_plus`; past it
+    // (A-6) the session itself is the stake, read by the accuser ledger, and nothing is reserved.
+    if sp.rcore_plus_from_daa().is_none() {
+        *c.reserved_exposure.entry(bond_key(1)).or_insert(0) += claim.reserved;
+    }
     c.court_sessions.insert(
         ladder.session_id(),
         PalwCourtSessionStateV2 {

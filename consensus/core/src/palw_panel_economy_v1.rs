@@ -103,9 +103,16 @@ pub fn palw_panel_seat_exposure_v1(
     if reward_multiple_permille == 0 {
         return stake;
     }
+    stake.max(palw_panel_seat_reward_floor_v1(escrowed_reward, seat_count, reward_multiple_permille))
+}
+
+/// **ADR-0130's floor half on its own** — `⌊λ‰ × max_seat_reward / 1000⌋`, the most a seat can be
+/// paid on the claim times the panel's reward multiple. [`palw_panel_seat_exposure_v1`] takes the
+/// larger of it and `3 × reserved`; ADR-0152 L-4 reads it as the λ-term of `duty_bind`
+/// (`palw_rcore_duty_bind_v1`). Saturating.
+pub fn palw_panel_seat_reward_floor_v1(escrowed_reward: u64, seat_count: usize, reward_multiple_permille: u32) -> u128 {
     let max_seat_reward = palw_panel_split_v1(escrowed_reward, seat_count, 0).per_seat;
-    let floor = (max_seat_reward as u128).saturating_mul(reward_multiple_permille as u128) / 1000;
-    stake.max(floor)
+    (max_seat_reward as u128).saturating_mul(reward_multiple_permille as u128) / 1000
 }
 
 /// **A seat may be drawn only while its free collateral covers what the seat would reserve.**

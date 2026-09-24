@@ -1926,7 +1926,8 @@ async fn t46n_session_open() {
 
     // 2. An open court session on the claim (testnet-12's held regime opens none through a
     //    `CourtOpened`, so the session row is written through the carriage with the challenger's
-    //    stake, as the loader demands it).
+    //    stake where the loader demands it — nowhere past `palw_rcore_plus`, where A-6 keeps it off
+    //    the claim ledger).
     let mut court_walk = walk.clone();
     let at = court_walk.daa;
     let reserved = court_walk.state.claim(&id).unwrap().reserved;
@@ -1956,7 +1957,11 @@ async fn t46n_session_open() {
                 dissection: None,
             },
         );
-        *carriage.reserved_exposure.entry(challenger).or_insert(0) += reserved;
+        // The challenger's stake sits in `reserved_exposure` below ADR-0152's `palw_rcore_plus`;
+        // past it (A-6) the open session is the stake, read by the accuser ledger.
+        if h.sp().rcore_plus_from_daa().is_none() {
+            *carriage.reserved_exposure.entry(challenger).or_insert(0) += reserved;
+        }
     });
     assert_eq!(court_walk.state.open_courts_of(&id), 1, "the court is open");
     h.refused(&court_walk, &object, &under_session);

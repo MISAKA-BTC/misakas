@@ -170,6 +170,21 @@ pub struct PalwPanelValidLockV1 {
     pub settled_anchor_depth: Option<u64>,
     /// `window_court`, the bound `is_live_v3` puts on the second clock per lock.
     pub window_court: u64,
+    /// **ADR-0152 L-4b / SR-7 (S-SPEC §3.3): the one-ledger seat filter** — `Some` where
+    /// `Params::palw_rcore_plus` is active at the binding block. Then a bond is drawn iff
+    /// `committed + eligibility ≤ collateral × ceiling_permille / 1000` (the bind's own test) and
+    /// the panel economy's headroom test is not asked; `required` and the 100% `slashable_available`
+    /// ledger are not read. The stake-weighted draw (M4) keeps this as its eligibility filter.
+    pub rcore: Option<PalwRcoreSeatFilterV1>,
+}
+
+/// **ADR-0152 L-4b: what a seat must have room for to be drawn** on one claim — the bind's
+/// `max(duty_bind, lock_2)` (`crate::palw_state_v2::palw_rcore_bind_prices_v1`) and the ceiling it
+/// is measured under (`fp_max_exposure_ratio_permille`, 500‰ on testnet-12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRcoreSeatFilterV1 {
+    pub eligibility: u128,
+    pub ceiling_permille: u32,
 }
 
 impl PalwPanelValidLockV1 {
@@ -179,6 +194,13 @@ impl PalwPanelValidLockV1 {
     /// what it has free is at most what it posted, so no lock can change the answer, and the draw
     /// asks this of every eligible bond of every pending claim (the route-matrix re-audit's #3).
     pub fn admits(&self, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> bool {
+        if let Some(filter) = self.rcore {
+            let Some(record) = state.bond(bond) else { return false };
+            let ceiling = (record.collateral as u128).saturating_mul(filter.ceiling_permille as u128) / 1000;
+            let committed =
+                crate::palw_state_v2::palw_bond_committed_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court);
+            return committed.saturating_add(filter.eligibility) <= ceiling;
+        }
         let posted = state.bond(bond).map(|b| b.collateral as u128).unwrap_or(0);
         if posted < self.required {
             return false;
@@ -735,6 +757,38 @@ pub fn palw_panel_eligible_bonds_judging_v1<'a>(
     economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
     seat_count: u16,
 ) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
+    palw_panel_eligible_bonds_judging_v2(
+        state,
+        claim_id,
+        judged_class,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        readiness,
+        economy,
+        seat_count,
+        true,
+    )
+}
+
+/// [`palw_panel_eligible_bonds_judging_v1`] with the panel economy's headroom test optional:
+/// `headroom = false` where the draw's Valid-lock carries ADR-0152's one-ledger seat filter
+/// (`PalwPanelValidLockV1::rcore`), which asks the bind's own room question instead — the economy's
+/// `3 × reserved` / `λ` stake is not what the seat reserves past `palw_rcore_plus`. The floor, the
+/// exclusions and every other predicate are unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_panel_eligible_bonds_judging_v2<'a>(
+    state: &'a PalwChainStateV2,
+    claim_id: &Hash64,
+    judged_class: &Hash64,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+    economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+    seat_count: u16,
+    headroom: bool,
+) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
     let executor = state.bond(&executor_bond).ok_or(PalwPanelV2Error::SeatBondMissing(executor_bond))?;
@@ -759,7 +813,7 @@ pub fn palw_panel_eligible_bonds_judging_v1<'a>(
         if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor) {
             continue;
         }
-        if let Some(economy) = economy {
+        if headroom && let Some(economy) = economy {
             let backed = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
             if !crate::palw_panel_economy_v1::palw_seat_has_headroom_v1(
                 bond.collateral,
@@ -869,16 +923,19 @@ pub fn derive_panel_v2_with_policy(
         _ => None,
     };
     // Every eligible bond (`palw_panel_eligible_bonds_v2`: the exclusions per Decision 7 and every
-    // seat predicate, spelled once for this draw and the stratified one).
-    let eligible = palw_panel_eligible_bonds_v2(
+    // seat predicate, spelled once for this draw and the stratified one). ADR-0152: under the
+    // one-ledger seat filter the room question is the filter's, not the economy's headroom.
+    let eligible = palw_panel_eligible_bonds_judging_v2(
         state,
         claim_id,
+        &claim.class_id,
         min_collateral_sompi,
         registered_by_daa,
         capability_proof,
         policy.readiness,
         policy.economy,
         params.seat_count,
+        policy.valid_lock.and_then(|lock| lock.rcore).is_none(),
     )?;
     // The 2026-09-23 route-matrix audit's #3: a bond that cannot post the bind's Valid lock is not
     // a candidate — drawn, it failed the bind and held the claim unbound.
@@ -1002,7 +1059,7 @@ pub fn palw_panel_outsider_seat_v1(
     independence: &PalwPanelIndependenceV1,
 ) -> Result<PalwPanelSeatV2, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
-    let population = palw_panel_eligible_bonds_judging_v1(
+    let population = palw_panel_eligible_bonds_judging_v2(
         state,
         claim_id,
         &independence.base_class_id,
@@ -1012,6 +1069,7 @@ pub fn palw_panel_outsider_seat_v1(
         policy.readiness,
         policy.economy,
         params.seat_count,
+        policy.valid_lock.and_then(|lock| lock.rcore).is_none(),
     )?;
     let registrant = state.class(&claim.class_id).and_then(|record| record.registrant_bond);
     let registrant_operator = registrant.and_then(|key| state.bond(&key)).map(|bond| bond.operator_id);
@@ -2976,7 +3034,8 @@ mod tests {
         assert!(required > 101, "the lock ({required}) sits above the registry floor, or this test proves nothing");
         let (state, claim_id) = with_claim(registry(required as u64 - 1));
         assert_eq!(claim_id, probe_claim);
-        let lock = PalwPanelValidLockV1 { required, now_daa: 103, settled_anchor_depth: None, window_court: sp.window_court() };
+        let lock =
+            PalwPanelValidLockV1 { required, now_daa: 103, settled_anchor_depth: None, window_court: sp.window_court(), rcore: None };
         let cheap = PalwBondKeyV2(bond_outpoint(4));
         assert!(!lock.admits(&state, &cheap) && lock.admits(&state, &PalwBondKeyV2(bond_outpoint(2))));
 

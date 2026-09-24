@@ -408,12 +408,37 @@ struct Q2 {
     reverts: bool,
 }
 
-/// Q2's block, folded with the 2026-09-23 audit fence `audit`. The executor (bond 1) posts what #9
-/// admits for THREE concurrent floor attempts: two earlier claims of its own plus the block's own
-/// attempt fill its ceiling exactly on the parent state; the same block's `PanelBound` seats it on
-/// bond 2's claim, and that duty is what the parent-state check cannot see.
+/// testnet-12 with ADR-0152's `palw_rcore_plus = None` (C7 cleared, mirrors re-synced): the rules
+/// these records were measured under before the one ledger.
+fn t12_fence_off_twin() -> Params {
+    let mut p = t12();
+    p.palw_rcore_plus = None;
+    p.palw_rcore_conservative_classes = &[];
+    p.sync_palw_rcore_plus();
+    p
+}
+
+/// What a bond backs, as the attempt ceiling reads it at `daa`: past ADR-0152's `palw_rcore_plus`
+/// the one committed ledger (`palw_bond_committed_raw_v1`, the raw depth the fixture's fences carry),
+/// below it `reserved_exposure` (registration is zero here).
+fn backing(s: &PalwChainStateV2, sp: &PalwStateParamsV2, bond: &PalwBondKeyV2, daa: u64) -> u128 {
+    if sp.rcore_plus_active_at(daa) {
+        kaspa_consensus_core::palw_state_v2::palw_bond_committed_raw_v1(s, sp, bond, daa, fences().settled_anchor_depth)
+    } else {
+        s.reserved_exposure(bond)
+    }
+}
+
+/// Q2's block, folded with the 2026-09-23 audit fence `audit` (and, with it off, on the R-core+
+/// fence-off twin: the pre-fence record is the rule as it stood). The executor (bond 1) holds
+/// earlier claims of its own and posts exactly what leaves room for ONE more attempt on the parent
+/// state; the same block's `PanelBound` seats it on bond 2's claim, and that duty is what the
+/// parent-state check cannot see. Below R-core+ bond 1 posts #9's three concurrent floor attempts
+/// (two earlier claims). **Past it (ADR-0152 L-4b) a seat must hold the panel floor to be bound at
+/// all**, so bond 1 posts `2 × (committed + one attempt)` at the smallest count of earlier claims
+/// that reaches the panel floor — the same race, at a bond the bind seats.
 fn q2_block(audit: bool) -> Q2 {
-    let p = t12();
+    let p = if audit { t12() } else { t12_fence_off_twin() };
     let b = bundle(&p);
     let sp = &b.state;
     let cls = floor_row(&b);
@@ -421,7 +446,7 @@ fn q2_block(audit: bool) -> Q2 {
     let ratio = sp.fp_max_exposure_ratio_permille();
     let big = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
     let (reservation, per_attempt) = probe_reservation(&p, sp, &b.admission, cls);
-    let small = (per_attempt * 3).max(registration_floor(sp));
+    let rcore = sp.rcore_plus_active_at(0);
     let mut extras = armed_with_escrow(&p);
     extras.audit_2026_09_23_active = audit;
     if !audit {
@@ -429,22 +454,36 @@ fn q2_block(audit: bool) -> Q2 {
     }
     let f = Fold { p: sp, admission: &b.admission, extras };
     // Bond 2 produces a claim; bonds 1,3,4,5 will be its panel.
-    let bonds = [(1, small), (2, big), (3, big), (4, big), (5, big)];
+    let first_collateral = if rcore { big } else { (per_attempt * 3).max(registration_floor(sp)) };
+    let bonds = [(1, first_collateral), (2, big), (3, big), (4, big), (5, big)];
     let (s1, _, _) =
         f.go(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &setup(cls, &bonds), PalwBlockWorkV3::None, &[], Hash64::default());
     let pwu = palw_pwu_v1(target, leaves);
     let other = attempt(class_id, pwu, 2, 7);
     let other_id = attempt_id_v2(&other.attempt);
     let (mut s2, _, _) = f.go(&s1, &ctx_paid(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&other), &[], h(0xE7));
-    // Bond 1 already backs two claims of its own (each admitted in its own block).
-    for (i, seed) in [(0u64, 70u64), (1, 71)] {
-        let e = attempt(class_id, pwu, 1, seed);
+    // Bond 1's earlier claims (each admitted in its own block).
+    let panel_floor = kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(sp.min_collateral_sompi()) as u128;
+    let earlier = if rcore { (panel_floor * u128::from(ratio) / 1000).div_ceil(reservation) as u64 } else { 2 };
+    for i in 0..earlier {
+        let e = attempt(class_id, pwu, 1, 70 + i);
         let c = ctx_paid(20 + i, 101, 20 + i);
         check_palw_attempt_admission_v2(&s2, sp, &b.admission, &c, &e, fences()).expect("bond 1's earlier claims are admissible");
         let (next, _, skips) = f.go(&s2, &c, &[], PalwBlockWorkV3::Attempt(&e), &[], h(0xE700 + i));
         assert!(skips.is_empty(), "bond 1's earlier claim {i} is recorded: {skips:?}");
         s2 = next;
     }
+    let small = if rcore {
+        // Room for exactly one more attempt on the parent: `2 × (committed + reservation)`.
+        let x = u64::try_from(2 * (backing(&s2, sp, &bond_key(1), 102) + reservation)).expect("a bond");
+        assert!(u128::from(x) >= panel_floor, "the premise: bond 1 holds the panel floor, so the bind seats it");
+        let mut carriage = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&s2);
+        carriage.bonds.get_mut(&bond_key(1)).expect("bond 1").collateral = x;
+        s2 = carriage.into_state(sp, None).expect("a consistent carriage");
+        x
+    } else {
+        first_collateral
+    };
     // Block 3: its accepted objects bind bond 2's claim to a panel that seats bond 1, and its own
     // work is bond 1's attempt.
     let seats: Vec<PalwPanelSeatV2> = [1u64, 3, 4, 5]
@@ -454,7 +493,8 @@ fn q2_block(audit: bool) -> Q2 {
     let panel = PalwConsensusObjectV2::PanelBound { claim: other_id, anchor: h(0xA2C), seats };
     let own = attempt(class_id, pwu, 1, 8);
     let own_id = attempt_id_v2(&own.attempt);
-    let c3 = ctx_paid(30, 102, 30);
+    // Past every earlier claim's block (their blue scores run from 20).
+    let c3 = ctx_paid(200, 102, 200);
     // The processor's pre-check: against the PARENT (`processor.rs:1891` passes `state`).
     let pre = check_palw_attempt_admission_v2(&s2, sp, &b.admission, &c3, &own, fences());
     let (s3, delta, skips) = f.go(&s2, &c3, &[panel.clone()], PalwBlockWorkV3::Attempt(&own), &[], h(0xE8));
@@ -468,10 +508,10 @@ fn q2_block(audit: bool) -> Q2 {
         reservation,
         small,
         cap: ceiling(small, ratio),
-        parent_reserved: s2.reserved_exposure(&bond_key(1)),
-        after_duty: s3d.reserved_exposure(&bond_key(1)),
+        parent_reserved: backing(&s2, sp, &bond_key(1), 102),
+        after_duty: backing(&s3d, sp, &bond_key(1), 102),
         pre_ok: pre.is_ok(),
-        held: s3.reserved_exposure(&bond_key(1)),
+        held: backing(&s3, sp, &bond_key(1), 102),
         own_recorded: s3.claim(&own_id).is_some(),
         own_skips: skips.iter().map(|(_, r)| r.clone()).collect(),
         merged_skips: mskips.len(),
@@ -482,7 +522,7 @@ fn q2_block(audit: bool) -> Q2 {
 fn print_q2(label: &str, q: &Q2) {
     println!("=== Q2 ({label}): own attempt vs same-block seat duty on the same bond ===");
     println!(
-        "bond 1 collateral {} ({:.2} MSK = #9's 3 concurrent floor attempts)  ceiling {}  one attempt reserves {} (weight + escrow)",
+        "bond 1 collateral {} ({:.2} MSK: room for one more attempt on the parent)  ceiling {}  one attempt reserves {} (weight + escrow)",
         q.small,
         q.small as f64 / 1e8,
         q.cap,
@@ -1103,9 +1143,11 @@ fn dos_l1_q4b_record_v3_alone_outruns_the_seat_liability() {
 // Q6 — seat duty: how much OTHER bonds' headroom one sompi of the claimant's reservation takes
 // =============================================================================================
 
-#[test]
-fn dos_l1_q6_seat_duty_moves_the_claimants_reservation_onto_other_bonds_times_three_per_seat() {
-    let p = t12();
+/// Q6's block on `p`: bond 9 (at the registry minimum) produces a floor claim with no escrow and
+/// five genesis-sized seats are bound on it; returns (the claimant's own reservation, the duty put
+/// on the seats' bonds in all, the seat count).
+fn q6_run(p: &Params) -> (u128, u128, u128) {
+    let p = p.clone();
     let b = bundle(&p);
     let sp = &b.state;
     let cls = floor_row(&b);
@@ -1155,7 +1197,25 @@ fn dos_l1_q6_seat_duty_moves_the_claimants_reservation_onto_other_bonds_times_th
         honest_ceiling / 3,
         honest_ceiling / 3 * 2
     );
-    assert!(on_others >= own * 3 * seat_count as u128, "each seat reserves at least 3x the claim");
+    (own, on_others, seat_count as u128)
+}
+
+/// **Q6 past ADR-0152's `palw_rcore_plus`: the duty is L-4's `duty_bind`, so a claimant can never put
+/// more on the seats' bonds than it forfeits itself** (F14, the ≤ 1 bound: `seats × duty ≤
+/// commitment`), and the `3 × reserved` term (A-4) is retired.
+#[test]
+fn dos_l1_q6_seat_duty_never_exceeds_the_claimants_own_commitment() {
+    let (own, on_others, seat_count) = q6_run(&t12());
+    assert!(on_others <= own, "L-4: {seat_count} seats × duty_bind {on_others} ≤ the claimant's commitment {own}");
+}
+
+/// **Q6's PRE-FENCE DEFECT RECORD (the R-core+ fence-off twin)**: each seat reserved at least 3× the
+/// claim (ADR-0124 D3's multiple), so one sompi of the claimant's reservation took `3 × seats` of
+/// other bonds' headroom.
+#[test]
+fn dos_l1_q6_pre_fence_record_seat_duty_moves_the_claimants_reservation_onto_other_bonds_times_three() {
+    let (own, on_others, seat_count) = q6_run(&t12_fence_off_twin());
+    assert!(on_others >= own * 3 * seat_count, "each seat reserves at least 3x the claim");
 }
 
 /// Q6 with the escrow a real t12 floor claim carries (subsidy 444,562,014,000 sompi, t12's carve):

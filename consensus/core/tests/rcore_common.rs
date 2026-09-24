@@ -6,7 +6,7 @@
 //! re-applies to the child and reverts to the parent, and the child's carriage reloads under its
 //! committed root (`into_state`: the ledger re-derived from the claims' commitments, R-core+'s load
 //! invariants, DL-1's deadlines exactly).
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 #[path = "panel_room_common.rs"]
 mod room;
@@ -93,11 +93,30 @@ impl Chain {
         self.s.reserved_exposure(bond)
     }
 
+    /// **The one pwu admission accepts for a floor attempt at `daa`** (ADR-0149): past the
+    /// canonical-work height `palw_attempt_derived_pwu_v1(effective target, the floor's derived draw)`,
+    /// the draw from the floor's row or, before it has one, from the registry's table
+    /// (`base_known_draw`); below it the declared rule. What the processor's pre-check and the
+    /// producer's facts hand a producer, so the claim's weight term is the real one (ADR §2's `w`).
+    pub fn floor_pwu(&self, daa: u64) -> u64 {
+        let (floor, leaves, target, _) = genesis_classes(&self.p)[0];
+        let Some(height) = self.p.palw_canonical_work_daa().filter(|height| daa >= *height) else {
+            return palw_pwu_v1(target, leaves);
+        };
+        let base_known = registry_fold(&self.p, daa).and_then(|fold| fold.genesis_works.get(&floor).map(|w| w.economic_ccu_per_claim));
+        let per_draw =
+            self.s.palw_attempt_per_draw_v1(&floor, &floor, daa, Some(height), base_known).expect("the floor's draw is derivable");
+        let effective = kaspa_consensus_core::palw_admission_v2::palw_effective_class_target_v1(&self.s, &self.sp, &floor, None)
+            .expect("the floor's effective target");
+        kaspa_consensus_core::palw_admission_v2::palw_attempt_derived_pwu_v1(effective, per_draw)
+    }
+
     /// A floor attempt by the first genesis bond, accepted in its own block.
     pub fn floor_claim(&mut self, seed: u64) -> Hash64 {
-        let (floor, leaves, target, _) = genesis_classes(&self.p)[0];
+        let (floor, _, _, _) = genesis_classes(&self.p)[0];
         let (bond, pubkey, operator) = floor_producer(&self.p);
-        let (env, key, id) = junk_attempt(floor, bond, pubkey, &operator, palw_pwu_v1(target, leaves), seed, 0x10C0 + seed);
+        let pwu = self.floor_pwu(self.daa + 1);
+        let (env, key, id) = junk_attempt(floor, bond, pubkey, &operator, pwu, seed, 0x10C0 + seed);
         self.step_at(self.daa + 1, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI);
         assert!(self.s.claim(&id).is_some(), "the floor attempt is accepted");
         id

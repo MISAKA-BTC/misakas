@@ -4495,11 +4495,14 @@ impl VirtualStateProcessor {
             work_leaves,
         );
         let bond_room = bond.and_then(|outpoint| {
-            kaspa_consensus_core::palw_state_v2::palw_fp_bond_room_v1(
+            // ADR-0152 SR-7: the one committed ledger past `palw_rcore_plus`, as the FP ceiling reads it.
+            kaspa_consensus_core::palw_state_v2::palw_fp_bond_room_v2(
                 &state,
                 state_params,
                 &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
                 self.palw_capability_bound_at(daa_score),
+                daa_score,
+                self.palw_settled_anchor_depth_at(daa_score),
             )
         });
         Some(kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1 { daa_score, price, bond_room })
@@ -7057,6 +7060,7 @@ impl VirtualStateProcessor {
                                 &self.palw_transition_extras_for(point),
                                 claim_record,
                                 point.daa_score,
+                                panel_params.seat_count() as usize,
                             ),
                             ..self.palw_panel_draw_policy_at(anchor_fact.anchor_daa)
                         },
@@ -9204,6 +9208,8 @@ impl VirtualStateProcessor {
         extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
         claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
         now_daa: u64,
+        // The panel's seat count: what `duty_bind` divides the claim's commitment by.
+        seat_count: usize,
     ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwPanelValidLockV1> {
         if !(extras.audit_2026_09_23_active && extras.objective_offence_at(now_daa)) {
             return None;
@@ -9223,6 +9229,20 @@ impl VirtualStateProcessor {
                 now_daa,
             ),
             window_court: state_params.window_court(),
+            // ADR-0152 L-4b / SR-7: past `palw_rcore_plus` the draw asks the bind's own room question
+            // — `committed + max(duty_bind, lock_2)` under the 500‰ ceiling — at the binding block.
+            rcore: state_params.rcore_plus_active_at(now_daa).then(|| kaspa_consensus_core::palw_panel_v2::PalwRcoreSeatFilterV1 {
+                eligibility: kaspa_consensus_core::palw_state_v2::palw_rcore_bind_prices_v1(
+                    state,
+                    state_params,
+                    extras,
+                    claim,
+                    seat_count,
+                    now_daa,
+                )
+                .eligibility,
+                ceiling_permille: state_params.fp_max_exposure_ratio_permille(),
+            }),
         })
     }
 
@@ -9534,6 +9554,9 @@ impl VirtualStateProcessor {
             // Option A: the carve this block's escrow is taken at — the value the fold's own-work
             // origin reads, so the ceiling's escrow term is the `escrowed_reward` the ledger stores.
             escrow_carve: self.palw_escrow_carve_at(daa_score, daa_score),
+            // ADR-0152 SR-7: the RAW second-clock depth, so item 8 reads the one committed ledger at
+            // the escaped depth exactly as the fold's ceiling does (read only past `palw_rcore_plus`).
+            settled_anchor_depth: self.palw_settled_anchor_depth_at(daa_score),
         }
     }
 
@@ -10674,7 +10697,14 @@ impl VirtualStateProcessor {
             // exact panel that layer recomputes.
             let mut policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
             if let Some(state_params) = self.palw_state_params_v2.as_ref() {
-                policy.valid_lock = Self::palw_panel_valid_lock_of_v1(state, state_params, &binding_extras, claim, block_daa);
+                policy.valid_lock = Self::palw_panel_valid_lock_of_v1(
+                    state,
+                    state_params,
+                    &binding_extras,
+                    claim,
+                    block_daa,
+                    panel_params.seat_count() as usize,
+                );
             }
             // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
             // panel of a sharded class would ask shard seats to judge a whole model.

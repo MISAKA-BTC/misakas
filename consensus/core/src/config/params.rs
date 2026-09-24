@@ -5345,6 +5345,16 @@ impl Params {
                      reporter commitments sign under a context only V5 commits to (ADR-0152 IMPL-7)",
                 ));
             }
+            // S-3 (SR-6): the fold re-checks a licence set's backed subset against the door's quorum, and
+            // the fold holds no panel params — it reads the colluding quorum the lock is priced for.
+            // The two must be one number, or a backed subset could license under a quorum the
+            // acceptance layer never asked for.
+            if bundle.panel.quorum() as u64 != crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 {
+                return Err(Invalid(
+                    "palw_rcore_plus is armed with a panel quorum other than PALW_PANEL_COLLUDING_QUORUM_V1: the fold checks a \
+                     licence's backed subset (SR-6) against that quorum",
+                ));
+            }
             // IMPL-6: the three mirrors are the params, byte for byte (the escrow mirror's rule).
             let delay = palw_v2_bond_withdrawal_delay_at_v1(bundle, self.palw_da_court, 0);
             if bundle.state.rcore_plus_from_daa() != Some(fence.daa_score())
