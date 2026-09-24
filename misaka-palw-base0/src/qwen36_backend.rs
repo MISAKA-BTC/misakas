@@ -1245,12 +1245,6 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
     Ok(cache)
 }
 
-fn qwen36_opening_has_hash(opening: &[u8], leaf: u64, hash: Hash64) -> bool {
-    crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(opening)
-        .ok()
-        .is_some_and(|o| o.committed_leaf_hashes.iter().any(|(i, h)| *i == leaf && *h == hash))
-}
-
 /// **The hybrid tier's kernels, as a seat's interval replay needs them** (ADR-0077 Decision 8).
 ///
 /// Genesis from the prompt; a `Checkpoint` restores the composed cache the class registered
@@ -1335,72 +1329,13 @@ impl Qwen36Backend {
         Ok(())
     }
 
-    fn replay_segment_opening_v1(
+    /// The hybrid tier's interval kernels, with this backend's registered plan.
+    fn interval_kernels_v1(
         &self,
-        job: &PalwJobContextV2,
-        prompt: &[usize],
-        opening: &[u8],
-    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+    ) -> Result<(&kaspa_consensus_core::palw_step::PalwShapeProfileV3, Qwen36IntervalKernels<'_>), String> {
         let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
         let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered plan".to_string())?;
-        let opened = crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(opening).map_err(|e| e.to_string())?;
-        let first = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, job, opened.leaf_start)
-            .ok_or_else(|| "the segment start is not a main step coordinate".to_string())?;
-        let last = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, job, opened.leaf_end.saturating_sub(1))
-            .ok_or_else(|| "the segment end is not a main step coordinate".to_string())?;
-        let window = kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentResumeWindowV1 {
-            segment_index: opened.segment_index,
-            leaf_start: opened.leaf_start,
-            leaf_end: opened.leaf_end,
-            first_call: first.call_index,
-            last_call: last.call_index,
-        };
-        let start = if opened.chunks.is_empty() || opened.covered_decode_call == 0 {
-            crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: prompt }
-        } else {
-            crate::fp_interval::Base0FpIntervalStartV1::Checkpoint {
-                covered_decode_call: opened.covered_decode_call,
-                chunks: &opened.chunks,
-                seed_token: opened.seed_token,
-                prompt_tokens: prompt,
-            }
-        };
-        let first_step = if opened.chunks.is_empty() || opened.covered_decode_call == 0 {
-            1
-        } else {
-            let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
-                profile,
-                job,
-                opened.covered_decode_call,
-            );
-            u64::from(positions) + 1
-        };
-        let last_step = crate::fp_interval::Base0FpWindowV1::step_of_coordinate_v1(
-            job.declared_prefill_tokens,
-            last.call_index,
-            last.position,
-        );
-        let fp_window = crate::fp_interval::Base0FpWindowV1 { first_step, last_step };
-        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, job, self.step_ladder_cap())
-            .map_err(|e| e.to_string())?;
-        let kernels = Qwen36IntervalKernels { artifact: &self.artifact, plan };
-        let ctx_hash = job.context_hash();
-        let profile_hash = profile.shape_profile_id();
-        let mut hashes = Vec::new();
-        use crate::fp_interval::Base0FpIntervalKernelsV1;
-        kernels.replay_interval_into(profile, job, &start, fp_window, leaf_count, &mut |i, tile| {
-            hashes.push((i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)));
-            Ok(())
-        })?;
-        let attested: Vec<(u64, Hash64)> =
-            hashes.iter().copied().filter(|(i, _)| *i >= opened.leaf_start && *i < opened.leaf_end).collect();
-        let matches = attested == opened.committed_leaf_hashes;
-        Ok(kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1 {
-            window,
-            leaf_hashes: hashes,
-            calls_replayed: window.calls_from_covered(opened.covered_decode_call).unwrap_or(0),
-            matches,
-        })
+        Ok((profile, Qwen36IntervalKernels { artifact: &self.artifact, plan }))
     }
 }
 
@@ -1466,29 +1401,54 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 execution_root: outcome.execution_root,
                 trace_root: outcome.trace_root,
                 work_leaves: None,
+                output_root: Some(outcome.output_root),
             });
         };
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
         let run =
             qwen36_execute_free_prompt_streaming_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap(), &mut |_| {})?;
+        // SEAT-S2: the output root the producer's run commits, from the ids this replay generated.
         Ok(PalwReplayRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
             work_leaves: Some(run.binding.step_leaf_count),
+            output_root: Some(run.output_root),
         })
     }
 
+    /// SEAT-S4: the authenticated `SC02` opening at this class's ladder.
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
-        crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())
+        crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
+            capture,
+            seat_count,
+            segment_index,
+            self.profile.as_ref(),
+            self.step_ladder_cap(),
+        )
+        .map_err(|e| e.to_string())
     }
 
+    /// SEAT-S4: authenticated against `claim` and this seat's `job`; a resume restores the composed
+    /// cache the class registered (ADR-0133 S1: hybrid execute-from-checkpoint).
     fn replay_segment_from_checkpoint_v1(
         &self,
         job: &PalwJobContextV2,
         prompt: &[usize],
         opening: &[u8],
+        claim: kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1,
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        self.replay_segment_opening_v1(job, prompt, opening)
+        let (profile, kernels) = self.interval_kernels_v1()?;
+        crate::segment_opening::base0_replay_segment_opening_v2(
+            &kernels,
+            profile,
+            job,
+            prompt,
+            opening,
+            claim,
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
+        )
+        .map_err(String::from)
     }
 
     fn replay_accused_segment_v1(
@@ -1499,8 +1459,19 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         job: &PalwJobContextV2,
         prompt: &[usize],
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        let opening = crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())?;
-        self.replay_segment_opening_v1(job, prompt, &opening)
+        let (profile, kernels) = self.interval_kernels_v1()?;
+        crate::segment_opening::base0_replay_capture_segment_v2(
+            &kernels,
+            profile,
+            capture,
+            seat_count,
+            segment_index,
+            Some(job),
+            &crate::segment_opening::base0_court_prompt_v1(self, job.job_id, prompt),
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
+        )
+        .map_err(String::from)
     }
 
     fn replay_layer_site_v3(
@@ -1535,13 +1506,21 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
         let index = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf)
             .unwrap_or(0);
-        let opening = crate::produce::base0_open_segment_checkpoint_v1(capture, seats, index).map_err(|e| e.to_string())?;
-        let prompt: Vec<usize> = match &retention {
-            crate::produce::Base0RetentionV1::Folded(m) => m.prompt_token_ids.iter().map(|t| *t as usize).collect(),
-            crate::produce::Base0RetentionV1::Dense(_) => Vec::new(),
-        };
-        let replay = self.replay_segment_opening_v1(&binding.job_context, &prompt, &opening)?;
-        Ok(replay.leaf_hashes.iter().any(|(i, h)| *i == leaf && qwen36_opening_has_hash(&opening, leaf, *h)))
+        // The segment holding the site, from the capture's own authenticated opening (SEAT-S4).
+        let (profile, kernels) = self.interval_kernels_v1()?;
+        let replay = crate::segment_opening::base0_replay_capture_segment_v2(
+            &kernels,
+            profile,
+            capture,
+            seats,
+            index,
+            None,
+            &crate::segment_opening::base0_court_prompt_v1(self, binding.job_context.job_id, &[]),
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
+        )
+        .map_err(String::from)?;
+        Ok(replay.matches)
     }
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
@@ -1788,8 +1767,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             if claim.attempt_draw.is_some() && !self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1) {
                 return PalwMaterialVerdictV1::Mismatch;
             }
-            if claim.anchor != Hash64::default() && folded.binding.job_context.job_id != claim.anchor {
-                return PalwMaterialVerdictV1::Mismatch;
+            // **SEAT-S1: the whole job, here too** — a held class's attempt is a fold, and this
+            // branch checked the id alone (`base0_material_job_is_the_claims_v1`).
+            if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &folded.binding.job_context, &claim) {
+                return verdict;
             }
             if folded.binding.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
@@ -1806,22 +1787,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             };
         }
         if let Ok(decoded) = crate::produce::base0_material_decode_v1(material) {
-            if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
-                return PalwMaterialVerdictV1::Mismatch;
-            }
-            // **The whole job, not only its id** (ADR-0117): an attempt claim's material must
-            // answer the job the block asked for — `palw_attempt_job_v1` of the anchor's canonical
-            // job at the block's own draw rule. The id alone let a smaller job through: decode calls
-            // skipped, or a prompt of another length, vouched for by every seat that held it.
-            if let Some(prefill_draw) = claim.attempt_draw
-                && claim.anchor != Hash64::default()
-            {
-                let Ok((canonical, _)) = self.job_for_anchor(claim.anchor) else {
-                    return PalwMaterialVerdictV1::Unverifiable;
-                };
-                if decoded.0.job_context != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
-                    return PalwMaterialVerdictV1::Mismatch;
-                }
+            // **The whole job, not only its id** (ADR-0117; SEAT-S1): the fold branch's rule,
+            // `base0_material_job_is_the_claims_v1`.
+            if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &decoded.0.job_context, &claim) {
+                return verdict;
             }
             if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
@@ -2881,7 +2850,8 @@ mod tests {
                     execution_root: out.execution_root,
                     trace_root: out.trace_root,
                     anchor: Hash64::from_u64_word(7),
-                    attempt_draw: None
+                    attempt_draw: None,
+                    output_root: None,
                 }
             ),
             PalwMaterialVerdictV1::Unverifiable
@@ -2908,8 +2878,13 @@ mod tests {
         let anchor = Hash64::from_u64_word(0x5EA7);
         let (job, prompt) = a.job_for_anchor(anchor).expect("a job");
         let honest = a.execute(&job, &prompt).expect("runs");
-        let claim =
-            PalwClaimRootsV1 { execution_root: honest.execution_root, trace_root: honest.trace_root, anchor, attempt_draw: None };
+        let claim = PalwClaimRootsV1 {
+            execution_root: honest.execution_root,
+            trace_root: honest.trace_root,
+            anchor,
+            attempt_draw: None,
+            output_root: None,
+        };
 
         // `rows = 0, generated = 1` — the row a token was selected from is simply absent.
         let mut no_rows = Vec::new();
@@ -2996,7 +2971,13 @@ mod tests {
         assert_eq!(
             planned.verify_material(
                 &a.material,
-                PalwClaimRootsV1 { execution_root: a.execution_root, trace_root: a.trace_root, anchor, attempt_draw: None }
+                PalwClaimRootsV1 {
+                    execution_root: a.execution_root,
+                    trace_root: a.trace_root,
+                    anchor,
+                    attempt_draw: None,
+                    output_root: None,
+                }
             ),
             PalwMaterialVerdictV1::Matches
         );
@@ -3049,6 +3030,7 @@ mod tests {
             trace_root: o.trace_root,
             anchor,
             attempt_draw: Some(draw),
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&short.material, roots(&short, true)), PalwMaterialVerdictV1::Matches);
         assert_eq!(backend.verify_material(&short.material, roots(&short, false)), PalwMaterialVerdictV1::Mismatch);
@@ -3111,8 +3093,13 @@ mod tests {
         assert_eq!(outcome.execution_root, binding.committed_execution_root, "the claim commits the binding's own root");
 
         // The seat's half, against this very claim.
-        let claim =
-            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor, attempt_draw: None };
+        let claim = PalwClaimRootsV1 {
+            execution_root: outcome.execution_root,
+            trace_root: outcome.trace_root,
+            anchor,
+            attempt_draw: None,
+            output_root: None,
+        };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
 
         // One proven oracle over the whole inventory — the production path a close takes.
@@ -3287,6 +3274,7 @@ mod tests {
             trace_root: folded.trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&bytes, claim), PalwMaterialVerdictV1::Matches);
         let dense_bytes = crate::produce::base0_material_encode_v1(&dense).expect("the dense sink retains").len();
@@ -3391,9 +3379,15 @@ mod tests {
         }
     }
 
-    /// **ADR-0133 S1 hybrid: resume from composed checkpoint chunks, not from leaf 0.**
+    /// **ADR-0133 S1 hybrid: a segment resumes only from a leaf that carries the recurrence**
+    /// (SEAT-S4). The per-position leg commits the attention half at every position and the gdn
+    /// state only at the recurrence's spacing (`palw_checkpoint_leaf_carries_recurrence_v1`; 8 here,
+    /// the fixture's whole context, so no such leaf precedes the segment): every committed leaf
+    /// before the segment authenticates and is refused as a resume point by name — a replay from
+    /// one diverged at the first `SsmConv`, which the SC01 test (eight leaves compared) never
+    /// reached — and the segment replays from the prompt to a match.
     #[test]
-    fn a_hybrid_segment_resumes_from_composed_checkpoint_chunks() {
+    fn a_hybrid_segment_resumes_only_from_a_leaf_that_carries_the_recurrence() {
         use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1;
         use kaspa_consensus_core::palw_state_chunk_map as map;
         use kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2;
@@ -3419,66 +3413,97 @@ mod tests {
         );
         let run = qwen36_execute_for_attempt_v1(&artifact, &profile, &plan, &ctx, &prompt).expect("the hybrid job runs");
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
-        let ctx_hash = ctx.context_hash();
-        let profile_hash = profile.shape_profile_id();
-        let committed: Vec<(u64, Hash64)> = run
-            .tiles
-            .tiles
-            .iter()
-            .map(|(i, tile)| (*i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, tile)))
-            .collect();
-        let leaf_start = (0..run.binding.step_leaf_count)
-            .find(|&i| {
-                kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, i)
-                    .is_some_and(|c| c.call_index > 0)
-            })
-            .expect("a job with decode tokens has a leaf past the prefill");
-        let leaf = run
-            .checkpoints
-            .leaves
-            .iter()
-            .find(|l| l.covered_decode_call == ctx.declared_prefill_tokens)
-            .expect("the per-position cadence checkpoints after the prefill");
-        let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&artifact, &plan);
-        let state = crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
-            &profile,
-            &ctx,
-            &ids,
-            &run.generated_token_ids,
-            leaf.covered_decode_call,
-            &mut kernels,
-            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-        )
-        .expect("the seat can recompute the composed checkpoint");
-        let leaf_end = (leaf_start + 8).min(run.binding.step_leaf_count);
-        let positions = palw_checkpoint_positions_at_v1(&profile, &ctx, leaf.covered_decode_call);
-        let first_step = u64::from(positions) + 1;
-        let prefill = ctx.declared_prefill_tokens;
-        let seed = if first_step > u64::from(prefill) {
-            run.generated_token_ids.get((first_step - u64::from(prefill) - 1) as usize).copied().unwrap_or(0)
-        } else {
-            0
+        let capture = crate::produce::base0_material_encode_v1(&run).expect("the dense capture encodes");
+        let retention = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes");
+        let seats = 3u16;
+        let segments = palw_segment_count_v2(seats);
+        let claim_of = |segment_index: u16| kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            seat_count: seats,
+            segment_index,
         };
-        let opening = crate::produce::Base0SegmentCheckpointOpeningV1 {
-            version: crate::produce::PALW_SEGMENT_CHECKPOINT_VERSION_V1,
-            segments: palw_segment_count_v2(3),
-            segment_index: 1,
-            leaf_start,
-            leaf_end,
-            covered_decode_call: leaf.covered_decode_call,
-            checkpoint_leaf: leaf.clone(),
-            chunks: state.chunks,
-            seed_token: seed,
-            committed_leaf_hashes: committed.iter().copied().filter(|(i, _)| *i >= leaf_start && *i < leaf_end).collect(),
+        // The segment that starts in a decode call, and the step it starts at.
+        let segment = (0..segments)
+            .find(|&i| {
+                let (start, _) =
+                    kaspa_consensus_core::palw_verification_v2::palw_segment_leaf_range_v2(run.binding.step_leaf_count, segments, i)
+                        .expect("the cut names the segment");
+                kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, start).is_some_and(|c| c.call_index > 0)
+            })
+            .expect("a segment starts past the prefill");
+        let (start, _) =
+            kaspa_consensus_core::palw_verification_v2::palw_segment_leaf_range_v2(run.binding.step_leaf_count, segments, segment)
+                .expect("the cut names the segment");
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, start).expect("a main leaf");
+        let step =
+            crate::fp_interval::Base0FpWindowV1::step_of_coordinate_v1(ctx.declared_prefill_tokens, coord.call_index, coord.position);
+        // An opening that resumes from the committed checkpoint covering `covered` positions, with the
+        // seat's own recompute of its composed state (the recurrence's chunks where the leaf has them).
+        let opening_at = |covered: u32| {
+            let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&artifact, &plan);
+            let state = crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+                &profile,
+                &ctx,
+                &ids,
+                &run.generated_token_ids,
+                covered,
+                &mut kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("the seat can recompute the composed checkpoint");
+            let mut anchor = crate::fp_interval::base0_checkpoint_operands_v1(&run.binding, &[], &run.checkpoints.leaves, covered)
+                .expect("the leg commits the checkpoint");
+            anchor.chunks = state.chunks;
+            crate::segment_opening::base0_segment_opening_v2(
+                &retention,
+                seats,
+                segment,
+                crate::segment_opening::Base0SegmentAnchorV1::Given(anchor),
+                Some(&profile),
+                backend.step_ladder_cap(),
+            )
+            .expect("the producer opens the segment at the committed checkpoint")
+            .encode_v2()
+            .expect("the opening encodes")
+        };
+        // Every committed per-position leaf before the segment authenticates; only one that carries
+        // the recurrence is a point a hybrid resumes from — the leaves between the recurrence's
+        // spacing commit the attention half alone, and a replay from one diverged at the first
+        // `SsmConv` (the SC01 test compared eight leaves and stopped before it).
+        let mut resumed = 0usize;
+        for covered in 1..step as u32 {
+            let positions = palw_checkpoint_positions_at_v1(&profile, &ctx, covered);
+            assert_eq!(positions, covered, "the hybrid's leg counts positions");
+            let got = backend.replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening_at(covered), claim_of(segment));
+            if kaspa_consensus_core::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1(&profile, positions) {
+                let replay = got.expect("hybrid execute-from-checkpoint must resume");
+                assert!(replay.matches, "segment {segment} from {covered}: the resumed leaves are not the committed ones");
+                assert!(!replay.window.genesis(), "a decode leaf does not resume from the prompt");
+                resumed += 1;
+            } else {
+                assert_eq!(
+                    got.expect_err("no resume point"),
+                    crate::segment_opening::Base0SegmentRefusalV1::AnchorNotAResumePoint.to_string(),
+                    "segment {segment} from {covered}: a leaf without the recurrence is refused, not replayed into a fault"
+                );
+            }
         }
-        .encode_v1()
-        .expect("the constructed opening encodes");
-        let replay = backend
-            .replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening)
-            .expect("hybrid execute-from-checkpoint must resume");
-        assert!(replay.matches, "the resumed leaves are not the committed ones");
-        assert!(replay.calls_replayed < ctx.exact_decode_tokens, "a partial hybrid seat must not pay the whole job");
-        assert!(!replay.window.genesis(), "a decode leaf does not resume from the prompt");
+        // And from the prompt, the same segment roots to the claim.
+        let genesis = crate::segment_opening::base0_segment_opening_v2(
+            &retention,
+            seats,
+            segment,
+            crate::segment_opening::Base0SegmentAnchorV1::Genesis,
+            Some(&profile),
+            backend.step_ladder_cap(),
+        )
+        .expect("genesis")
+        .encode_v2()
+        .expect("encodes");
+        let replay = backend.replay_segment_from_checkpoint_v1(&ctx, &prompt, &genesis, claim_of(segment)).expect("replays");
+        assert!(replay.matches, "the genesis replay of segment {segment} roots to the claim");
+        eprintln!("hybrid segment {segment} (step {step}): {resumed} recurrence-carrying anchors resumed");
     }
 
     /// The drill's forgery at `leaf` — one lane of its tile moved, the commitment re-derived exactly
@@ -3821,6 +3846,7 @@ mod tests {
             trace_root: folded.trace_root,
             anchor: job.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
         let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");

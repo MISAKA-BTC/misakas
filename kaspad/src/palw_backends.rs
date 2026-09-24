@@ -856,6 +856,43 @@ pub fn palw_whole_capture_need_v1(
     need
 }
 
+/// **What a SEAT-S4 segment replay keeps for the leaves it walks, as it keeps them** (the audit's
+/// SEAT-S review, M3): the range fold (`Base0RangeFoldV1`) — one 64-byte digest per `2^level` leaves
+/// in a vector that grows by doubling, the two edge blocks it keeps leaf by leaf, and the block in
+/// flight — at the sparse fold's level, the least a proven range folds at (`base0_segment_opening_
+/// plan_v2` clamps its level up to it), plus the diagnostic `(index, hash)` list the replay keeps up
+/// to its cap (`PALW_SEGMENT_REPLAY_KEPT_LEAVES_V1`, 72 B a leaf).
+///
+/// The resource profile prices a partial seat's capture as `ReplayHashes`, 72 B for EVERY leaf it
+/// walks — the list before SEAT-S4 capped it — which is hundreds of GB for a 2M segment, so a held
+/// 2M partial seat never got its reservation. That profile is node-local (no consensus module reads
+/// `palw_resource_profile_v1`: admission, readiness and prices are the chain's derivations and the
+/// wall `the_economic_derivations_do_not_read_the_resource_profile` holds), so the node re-prices its
+/// own use here. An upper bound over the walk, not the proven range: at five seats about 0.4 MiB at 8k
+/// and 0.2–0.4 GiB at 2M beside the K/V history the profile already prices.
+pub fn palw_partial_seat_streamed_fold_bytes_v1(leaves: u64) -> u64 {
+    use kaspa_consensus_core::palw_resource_profile_v1::palw_fold_capture_bytes_v1;
+    let level = misaka_palw_base0::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1;
+    let edges = 2u64.saturating_mul(1u64 << level).saturating_mul(64);
+    let kept = leaves.min(misaka_palw_base0::segment_opening::PALW_SEGMENT_REPLAY_KEPT_LEAVES_V1 as u64).saturating_mul(72);
+    palw_fold_capture_bytes_v1(leaves, level).saturating_add(edges).saturating_add(kept)
+}
+
+/// **A partial seat's need, its capture term re-priced as the streamed fold** it keeps
+/// ([`palw_partial_seat_streamed_fold_bytes_v1`], M3). Every other term — the K/V history to the
+/// segment's end, the opening, the scratch, the holding — is the profile's. Any other role, or a
+/// family that derives no profile, is returned as it came.
+pub fn palw_partial_seat_streamed_need_v1(mut need: PalwRoleMemoryNeedV1) -> PalwRoleMemoryNeedV1 {
+    use kaspa_consensus_core::palw_resource_profile_v1::PalwCaptureRetentionV1;
+    if let Some(profile) = need.profile.as_mut()
+        && matches!(profile.role, PalwResourceRoleV1::PartialSeat { .. })
+        && profile.capture == PalwCaptureRetentionV1::ReplayHashes
+    {
+        profile.capture_retained_bytes = palw_partial_seat_streamed_fold_bytes_v1(profile.leaves);
+    }
+    need
+}
+
 /// The per-(holdings, class, root, role, door) need figures — see `role_memory_need_v1`. The door
 /// flag keeps a table-only miss (`false`) from answering for the chain arm (`true`).
 type NeedMemoKey = (Vec<PathBuf>, Hash64, Hash64, PalwResourceRoleV1, bool);

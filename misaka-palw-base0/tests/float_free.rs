@@ -84,6 +84,9 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/bin/palw-qwen36-fp-worker.rs",
     "src/fp_capture.rs",
     "src/fp_interval.rs",
+    // SEAT-S4: the segment opening a partial seat authenticates and replays — the seat's half of
+    // the execution path, folding the leaves it recomputed into the claim's step root.
+    "src/segment_opening.rs",
     "src/bin/palw-certify.rs",
     // ADR-0049 Decision F/G, arrived with the canonical IR: the engine's op sequence is COMPILED
     // from `BASE0_LAYER_IR` and its operands are RESOLVED by name. Both are on the execution path
