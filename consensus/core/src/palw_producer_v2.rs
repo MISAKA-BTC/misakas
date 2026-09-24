@@ -1237,7 +1237,10 @@ pub struct PalwClaimRowV1 {
     pub reserved: u128,
     /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
     pub escrowed_reward: u64,
-    /// The payout queued for the next coinbase, once the claim is final.
+    /// The payout queued for the next coinbase, once the claim is final — the producer's leg.
+    /// Below `palw_rcore_plus` it is queued at `Final` under the claim id; past it the leg vests and
+    /// is queued only when step 3d moves it, under its A-KEY key (`palw_vesting_payout_key_v1`), for
+    /// the one block before the next coinbase mints it.
     pub payout_pending: Option<u64>,
     pub work_leaves: u64,
     pub open_courts: usize,
@@ -1389,7 +1392,14 @@ pub fn palw_claim_rows_v1(
                 deadline_daa: palw_claim_phase_deadline_v1(claim, state_params, court.map(|c| c.1)),
                 reserved: claim.reserved,
                 escrowed_reward: claim.escrowed_reward,
-                payout_pending: payouts.get(id).copied(),
+                // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
+                // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
+                payout_pending: match claim.phase {
+                    P::Final { final_daa } if state_params.rcore_plus_active_at(final_daa) => {
+                        payouts.get(&crate::palw_vesting_v1::palw_vesting_payout_key_v1(id)).copied()
+                    }
+                    _ => payouts.get(id).copied(),
+                },
                 work_leaves: claim.work_leaves,
                 open_courts: court.map(|c| c.0).unwrap_or(0),
                 exec_lane: palw_claim_exec_lane_v1(state, id),
@@ -1446,6 +1456,54 @@ pub struct PalwBondClaimsV1 {
     pub truncated: bool,
     /// `None`: the registry holds no bond at that outpoint.
     pub bond: Option<PalwBondSummaryV1>,
+    /// **Claim row v3 (ADR-0152 R-core+, phase2-plan §1.6): where each row's vested reward stands**,
+    /// by claim id — only the rows that vested (past `palw_rcore_plus` at their Final). Kept beside
+    /// the rows rather than in [`PalwClaimRowV1`], whose readers build it by hand.
+    pub vesting: std::collections::BTreeMap<Hash64, crate::palw_vesting_read_v1::PalwClaimVestingV1>,
+    /// The rows of claims that RETIRED while their reward still vests (`include_terminal` only):
+    /// retirement comes `claim_retirement` after Final, the row lives until it moves, and from
+    /// retirement on the row is the reward's only record. Newest Final first.
+    pub vesting_only: Vec<crate::palw_vesting_read_v1::PalwVestingRowReadV1>,
+    pub vesting_only_truncated: bool,
+}
+
+/// **`getPalwClaims`' whole answer at one tip** (ADR-0122 §6.5, claim row v3): the rows
+/// ([`palw_claim_rows_v1`]), the bond, and the vesting half read at the next block — `next_daa` is
+/// the DAA the next block folds at and `raw_depth` the raw second-clock depth there, the facts its
+/// step 3d reads (`palw_vesting_read_v1`'s I-8 inputs). Below `palw_rcore_plus` no row exists and
+/// the vesting half is empty.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_bond_claims_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    role: PalwClaimRoleV1,
+    include_terminal: bool,
+    limit: usize,
+    next_daa: u64,
+    raw_depth: Option<u64>,
+) -> PalwBondClaimsV1 {
+    use crate::palw_vesting_read_v1::{PalwVestingReaderV1, palw_vesting_only_rows_v1};
+    let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+    let (rows, truncated) = palw_claim_rows_v1(state, state_params, bond, role, include_terminal, limit);
+    let reader = PalwVestingReaderV1::new(state, state_params, next_daa, raw_depth);
+    let claims: Vec<(Hash64, Option<&crate::palw_state_v2::PalwClaimStateV2>)> =
+        rows.iter().map(|row| (row.claim_id, state.claim(&row.claim_id))).collect();
+    let vesting = reader.claim_stages(&claims);
+    let (vesting_only, vesting_only_truncated) = if include_terminal {
+        palw_vesting_only_rows_v1(&reader, bond, role == PalwClaimRoleV1::Executor, limit)
+    } else {
+        (Vec::new(), false)
+    };
+    PalwBondClaimsV1 {
+        tip_daa,
+        rows,
+        truncated,
+        bond: palw_bond_summary_v1(state, bond),
+        vesting,
+        vesting_only,
+        vesting_only_truncated,
+    }
 }
 
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {

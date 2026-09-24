@@ -846,6 +846,20 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0152 V-1…V-8, read side: the vesting table at the tip** (`getPalwVesting`, op 199;
+    /// phase2-plan §1.6): the query's rows with their V-4 maturity, V-7 position and the next
+    /// block's plan, a payee's reporter rewards and B-3 hold, and the chain-wide counters, halt and
+    /// door histogram — all asked at the next block's DAA. `limit` bounds the page (0 = the cap) and
+    /// `after` resumes past a `(expiry_daa, claim_id)` cursor. `None` off `ConsensusV2`.
+    fn palw_vesting_v1(
+        &self,
+        _query: crate::palw_vesting_read_v1::PalwVestingQueryV1,
+        _limit: usize,
+        _after: Option<(u64, crate::Hash64)>,
+    ) -> Option<crate::palw_vesting_read_v1::PalwVestingReadV1> {
+        None
+    }
+
     /// The court's half: open sessions this node holds a bond in.
     fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
         Vec::new()

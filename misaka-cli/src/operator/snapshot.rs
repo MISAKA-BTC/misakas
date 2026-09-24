@@ -75,6 +75,51 @@ pub(crate) struct WalletFacts {
     pub(crate) next_mature_daa: Option<u64>,
     pub(crate) bonded_sompi: u64,
     pub(crate) coinbase_outputs: usize,
+    /// ADR-0152 (testnet-12): the rewards still VESTING toward this address — not outputs at all,
+    /// so never counted above and never selectable. `None` where nothing vests, or from a node that
+    /// predates `getPalwVesting` (op 199).
+    pub(crate) vesting: Option<VestingFacts>,
+}
+
+/// **What vests toward the pay address, and what B-3 holds** (`getPalwVesting`, op 199; ADR-0152).
+/// Rows are not UTXOs: a row's sompi reach the address only when the row matures, moves and a
+/// coinbase mints it — as a coinbase output that then matures like any other (the `maturing` line).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct VestingFacts {
+    /// Σ of the address's legs over rows not latched yet, and over latched rows waiting their turn.
+    pub(crate) vesting_sompi: u64,
+    pub(crate) latched_sompi: u64,
+    pub(crate) rows: u64,
+    /// The earliest DAA one of them moves (the node's plan, or a lower bound).
+    pub(crate) next_move_daa: Option<u64>,
+    /// Reporter rewards to this address: in their reveal window, and awarded (moved first, V-7).
+    pub(crate) reporter_pending_sompi: u64,
+    pub(crate) reporter_awarded_sompi: u64,
+    /// B-3: the profile's bond is payee of a row still unmatured, so its collateral stays locked.
+    /// `None` without a bond, or when the node could not say.
+    pub(crate) bond_held: Option<bool>,
+    /// The chain is in a licence halt: nothing latches until an anchor settles.
+    pub(crate) halted: bool,
+}
+
+impl VestingFacts {
+    /// From `getPalwVesting` for the pay address (and, for B-3, the bond's answer).
+    pub(crate) fn of(by_address: &kaspa_rpc_core::GetPalwVestingResponse, by_bond: Option<&kaspa_rpc_core::GetPalwVestingResponse>) -> Self {
+        let sompi = |text: &str| u64::try_from(text.parse::<u128>().unwrap_or(0)).unwrap_or(u64::MAX);
+        let reporter = |stage: &str| {
+            by_address.reporter_rewards.iter().filter(|r| r.stage == stage).fold(0u64, |sum, r| sum.saturating_add(r.sompi))
+        };
+        VestingFacts {
+            vesting_sompi: sompi(&by_address.maturing_sompi),
+            latched_sompi: sompi(&by_address.query_latched_sompi),
+            rows: by_address.rows_total,
+            next_move_daa: by_address.rows.iter().map(|row| row.eta_daa).min(),
+            reporter_pending_sompi: reporter("pending"),
+            reporter_awarded_sompi: reporter("awarded"),
+            bond_held: by_bond.filter(|b| b.available).map(|b| b.payee_holds_collateral),
+            halted: by_address.halted,
+        }
+    }
 }
 
 /// One work, with everything read about it.
@@ -285,8 +330,33 @@ impl Snapshot {
         if params.palw_execution_lane_fence().is_some() {
             snap.round_lane = Some(node.client().get_palw_round_lane().await.map_err(|e| format!("getPalwRoundLane: {e}")));
         }
+        // ADR-0152 P2-11: what vests toward the pay address, and whether B-3 holds the bond — asked
+        // only where this CLI's ruleset vests, and after everything else: a node built before op
+        // 199 drops the connection on it, and then only this read is lost.
+        if params.palw_rcore_plus.is_some()
+            && let Some(Ok(wallet)) = snap.wallet.as_mut()
+        {
+            wallet.vesting = vesting_facts(node, &wallet.address, snap.profile.bond.as_deref()).await;
+        }
         snap
     }
+}
+
+/// [`VestingFacts`] for `address` (and `bond`'s B-3 hold): `None` when the node cannot answer op
+/// 199 — a node that predates it drops the connection, and then the bond is not asked either.
+async fn vesting_facts(node: &NodeRead, address: &str, bond: Option<&str>) -> Option<VestingFacts> {
+    let request = |bond: &str, address: &str| kaspa_rpc_core::GetPalwVestingRequest {
+        bond: bond.to_string(),
+        payout_address: address.to_string(),
+        limit: 50,
+        ..Default::default()
+    };
+    let by_address = node.client().get_palw_vesting(request("", address)).await.ok().filter(|r| r.available && r.rcore_plus_active)?;
+    let by_bond = match bond {
+        Some(bond) => node.client().get_palw_vesting(request(bond, "")).await.ok(),
+        None => None,
+    };
+    Some(VestingFacts::of(&by_address, by_bond.as_ref()))
 }
 
 async fn wallet_facts(node: &NodeRead, address: &str) -> Result<WalletFacts, String> {
@@ -390,6 +460,7 @@ async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<St
                 deadline_daa: row.deadline_daa,
                 escrow_sompi: row.escrow_sompi,
                 payout_pending_sompi: row.payout_pending_sompi,
+                vesting: work::vesting_of(row),
             };
             works.push(WorkRow {
                 lane,
@@ -405,6 +476,29 @@ async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<St
         }
         if resp.truncated {
             errors.push(format!("the node listed the newest {} claims; older ones were left out", resp.claims.len()));
+        }
+        // ADR-0152 (claim row v3): a claim retires `claim_retirement` after Final while its reward
+        // still vests; from then on the row is the work's only record, so it stays a work.
+        for row in &resp.vesting_only_rows {
+            let chain = row_as_claim(row);
+            let reading = work::classify(Lane::Block, None, None, Some(&chain), false, windows.as_ref(), maturity, now);
+            let extra = work::ClaimExtra {
+                deadline_daa: None,
+                escrow_sompi: row.escrow_sompi,
+                payout_pending_sompi: row.payout_pending_sompi,
+                vesting: work::vesting_of(row),
+            };
+            works.push(WorkRow {
+                lane: Lane::Block,
+                claim_id: Some(row.claim_id.clone()),
+                job: None,
+                block: None,
+                seen_ts: None,
+                chain: Some(chain),
+                outbox: None,
+                reading: work::refine(Lane::Block, reading, &extra),
+                extra: Some(extra),
+            });
         }
     }
 

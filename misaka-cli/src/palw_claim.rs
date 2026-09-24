@@ -81,6 +81,15 @@ pub(crate) struct Windows {
     pub(crate) fp_abandon_hold: u64,
     /// A final or voided claim leaves the state this long after it ended; 0 = never.
     pub(crate) claim_retirement: u64,
+    /// **ADR-0152 R-core+: a Final at or past this DAA VESTS** (`Params::palw_rcore_plus`, the
+    /// bundle's mirror; testnet-12 from genesis): its reward is named in a vesting row and minted only
+    /// once the row matures — never at Final + 1. `None` where nothing vests.
+    pub(crate) vesting_from_daa: Option<u64>,
+    /// The conviction window a vesting row's DAA clock runs (`expiry = final + window_court`).
+    pub(crate) window_court: u64,
+    /// The network configures a second clock: a row also waits for settled anchors past its Final,
+    /// released at the latest `2 × window_court` past its expiry.
+    pub(crate) second_clock: bool,
 }
 
 impl Windows {
@@ -99,7 +108,22 @@ impl Windows {
             receipt_use_window: bundle.freeprompt.receipt_use_window_daa(),
             fp_abandon_hold: bundle.state.fp_abandon_hold_daa(),
             claim_retirement: bundle.state.claim_retirement_daa(),
+            vesting_from_daa: bundle.state.rcore_plus_from_daa(),
+            window_court: bundle.state.window_court(),
+            second_clock: params.palw_settled_anchor_depth.is_some(),
         })
+    }
+
+    /// **A Final at `final_daa` vests** (the fold's own `rcore_plus_active_at`, read through the
+    /// bundle's mirror).
+    pub(crate) fn vests(&self, final_daa: u64) -> bool {
+        self.vesting_from_daa.is_some_and(|from| final_daa >= from)
+    }
+
+    /// The vesting row's DAA clock for a Final at `final_daa`: the fold's
+    /// `palw_panel_liability_expiry_v1`, the lock's expiry the row copies.
+    pub(crate) fn vesting_expiry(&self, final_daa: u64) -> u64 {
+        kaspa_consensus_core::palw_panel_var_v1::palw_panel_liability_expiry_v1(final_daa, self.window_court)
     }
 }
 
@@ -1102,6 +1126,9 @@ mod tests {
             receipt_use_window: 606,
             fp_abandon_hold: 607,
             claim_retirement: 3_008,
+            vesting_from_daa: None,
+            window_court: 3_009,
+            second_clock: false,
         }
     }
 

@@ -2266,6 +2266,15 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit)
     }
 
+    fn palw_vesting_v1(
+        &self,
+        query: kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, kaspa_consensus_core::Hash64)>,
+    ) -> Option<kaspa_consensus_core::palw_vesting_read_v1::PalwVestingReadV1> {
+        self.virtual_processor.palw_vesting_v1_impl(query, limit, after)
+    }
+
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         self.virtual_processor.palw_v2_class_table_impl()
     }

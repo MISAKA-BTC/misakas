@@ -13381,6 +13381,20 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     let _ = vp.palw_fp_spendable_v3_impl(bond_key.0);
     let _ = vp.palw_locked_bond_outpoints_v2_impl();
     let _ = vp.palw_v2_receipt_quorum_assemble_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1), &[]);
+    // ADR-0152 P2-10: claim row v3 and `getPalwVesting` (op 199) — every query shape, each a read
+    // of the one cached tip.
+    let _ = vp.palw_claim_rows_v1_impl(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, true, 0);
+    {
+        use kaspa_consensus_core::palw_vesting_read_v1::{PalwVestingPayeeV1, PalwVestingQueryV1};
+        for query in [
+            PalwVestingQueryV1::Chain,
+            PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key)),
+            PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Payload(kaspa_hashes::Hash64::from_u64_word(0xB0B))),
+            PalwVestingQueryV1::Claim(kaspa_hashes::Hash64::from_u64_word(0xC1A1)),
+        ] {
+            assert!(vp.palw_vesting_v1_impl(query, 0, None).is_some(), "a ConsensusV2 node answers {query:?}");
+        }
+    }
 
     let one_carriage = vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().carriage_borsh.len() as u64;
     let grew = vp.palw_state_v2_store.read().tip_bytes_decoded() - baseline;
