@@ -29,6 +29,14 @@
 //! `H(operator-ticket domain ‖ anchor ‖ claim ‖ operator_id)` — a function of who the operator is,
 //! never of how many bonds it holds ([`palw_panel_operator_lottery_v1`]).
 //!
+//! **Past `palw_rcore_plus` the lottery is a stake-weighted race (ADR-0152 v3.1 SW, testnet-12).**
+//! `PalwPanelDrawPolicyV1::stake` is `Some`: every eligible operator keeps its one entry and its
+//! candidate bond, but its key is `−log2(u) / W`, `W` its posted collateral in whole MSK capped at
+//! 1,000,000, and the smallest keys sit — successive sampling without replacement
+//! ([`palw_panel_stake_race_of_v1`]). ADR-0147's outsider races the same way under its own domain; its
+//! admission jury does not (SW-A4). A draw whose eligible operators weigh less than 875‰ of the
+//! base does not bind (SW-10). `stake: None` is the lottery above, byte for byte.
+//!
 //! ## Receipts and the four DA states (Decision 7, the DA half of P0-8's wiring)
 //!
 //! A seat answers with a signed verdict: **`Valid`** (the trace opened and verified) or
@@ -63,6 +71,17 @@ pub const PALW_PANEL_V2_DOMAIN_OUTSIDER_TICKET: &[u8] = b"misaka-palw/panel-v2/o
 /// **ADR-0147: the admission jury's lottery entry** — the jury a `Candidate` class meets at an
 /// audit boundary, drawn from the same network population under its own domain.
 pub const PALW_PANEL_V2_DOMAIN_ADMISSION_JURY_TICKET: &[u8] = b"misaka-palw/panel-v2/admission-jury-ticket/v1";
+/// **ADR-0152 SW-3: an operator's entry in the stake-weighted race for a claim's class seats.**
+/// `u` is the first eight bytes (little-endian) of `H(this domain ‖ anchor ‖ claim ‖ operator_id)`
+/// and the key is `−log2((u + 1) / 2^64) / W` ([`palw_draw_neg_log2_q64_v1`]). A domain of its own,
+/// not ADR-0130's operator ticket reused: the two draws must never be the same function of the
+/// same inputs, or a fence-crossing replay could not tell which one a panel came from.
+pub const PALW_PANEL_V2_DOMAIN_STAKE_TICKET: &[u8] = b"misaka-palw/panel-v2/stake-ticket/v1";
+/// **ADR-0152 SW-3/SW-5: the ADR-0147 outsider's entry in the stake-weighted race**, under its own
+/// domain for ADR-0147's reason — an operator's outsider key must be independent of its key in the
+/// class's own draw. There is no stake-jury domain: the admission jury is NOT weighted (SW-A4), and
+/// [`palw_admission_jury_v1`] stays ADR-0147's.
+pub const PALW_PANEL_V2_DOMAIN_STAKE_OUTSIDER_TICKET: &[u8] = b"misaka-palw/panel-v2/stake-outsider-ticket/v1";
 /// **C-02 (mainnet audit 2026-09-11 deep fence): the ceiling on a bond's stake-weighted
 /// sub-tickets.** Past the fence a bond draws `floor(collateral / min_collateral)` sub-tickets, but
 /// a premine-scale bond would otherwise mint hundreds of thousands (t11's `min_collateral` is
@@ -122,6 +141,13 @@ pub const PALW_DRAW_WEIGHT_CAP_MSK_V1: u64 = 1_000_000;
 /// floor, registered before the anchor, capable) refuses with `InsufficientEligibleStake`: a
 /// saturated honest population halts binding instead of leaving the seats to idle Sybils.
 pub const PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1: u16 = 875;
+
+/// **ADR-0152 SW-2/SW-3: the arithmetic bound on a weight**, `2^40` whole MSK — not a policy value.
+/// The key comparison multiplies `L ≤ 2^70` by a weight in `u128`, so a weight must stay below
+/// `2^58`; `2^40` is the bound §3.14 states (the 10B supply cap is below `2^34`, so it never binds,
+/// and [`PALW_DRAW_WEIGHT_CAP_MSK_V1`] binds long before it). Applied under whatever cap a policy
+/// carries, so a hand-built policy with an absurd cap cannot overflow the comparison.
+pub const PALW_DRAW_WEIGHT_MAX_MSK_V1: u64 = 1 << 40;
 
 /// **ADR-0152 SW (v3.1): the stake-weighted draw's terms**, carried on [`PalwPanelDrawPolicyV1`].
 /// Not Borsh and not state — a policy value, resolved at the anchor like every other field, so the
@@ -267,6 +293,10 @@ pub const PALW_PANEL_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_PANEL_V2_DOMAIN_ADMISSION_JURY_TICKET,
     PALW_RECEIPT_V2_DOMAIN_MESSAGE,
     PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    // ADR-0152 SW-3: hashing domains, not ML-DSA contexts (they do not end `mldsa87/v1`), so the
+    // committed signature-context set does not move.
+    PALW_PANEL_V2_DOMAIN_STAKE_TICKET,
+    PALW_PANEL_V2_DOMAIN_STAKE_OUTSIDER_TICKET,
 ];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
@@ -416,6 +446,18 @@ pub enum PalwPanelV2Error {
     /// licence: the claim licenses when its outsider says `Valid`, or voids at its deadline.
     #[error("claim {claim}: the quorum is reached but its outsider {seat:?} has not answered Valid")]
     OutsiderHasNotAnswered { claim: Hash64, seat: PalwBondKeyV2 },
+    /// **ADR-0152 SW-10: the eligible-stake floor.** The operators the stake draw may seat weigh
+    /// `eligible` whole MSK (capped, SW-2) against a base of `base` — every operator that could sit
+    /// on this claim but for the load-dependent filters (the one ledger's headroom and the
+    /// route-matrix Valid lock) — and `1000 · eligible < floor‰ · base`. The claim does not bind
+    /// here: a saturated honest population halts binding instead of leaving the seats to whoever is
+    /// idle (SW-A1: without the floor the collusion threshold falls to 0.52M MSK at one genesis seat
+    /// eligible and to any five idle Sybils at none). Fail closed, like `InsufficientEligibleBonds`,
+    /// and checked after it, so that refusal keeps exactly the operator lottery's condition (T92).
+    #[error(
+        "the eligible operators weigh {eligible} MSK of a base of {base} MSK, under the eligible-stake floor: the draw does not bind"
+    )]
+    InsufficientEligibleStake { eligible: u128, base: u128 },
 }
 
 impl PalwPanelV2Error {
@@ -789,6 +831,159 @@ pub fn palw_panel_eligible_bonds_judging_v2<'a>(
     seat_count: u16,
     headroom: bool,
 ) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
+    palw_panel_bonds_judging_v1(
+        state,
+        claim_id,
+        judged_class,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        readiness,
+        economy,
+        seat_count,
+        PalwPanelPopulationV1::Eligible { headroom },
+    )
+}
+
+/// **ADR-0152 SW-10: the base population** — [`palw_panel_eligible_bonds_judging_v1`] with every
+/// filter EXCEPT the load-dependent one: the one ledger's exposure headroom (ADR-0124 Decision 4,
+/// ADR-0130's floor). What stays is structural for this claim — `Active` at the floor (the panel's
+/// floor past the economy), registered by the maturity floor (and, under ADR-0147, before the
+/// anchor), not the executor's bond, operator or key, and able to run the judged class (capability
+/// and readiness). The route-matrix Valid-lock filter ([`PalwPanelValidLockV1`]) is load-dependent
+/// too, and the callers leave it off this list as they apply it to the eligible one. Past
+/// `palw_rcore_plus` — the only place the stake draw runs — the one ledger's load question IS that
+/// lock's seat filter (`PalwPanelValidLockV1::rcore`, S-3's L-4b), and the economy's headroom is asked
+/// of neither list ([`palw_panel_eligible_bonds_judging_v2`] with `headroom = false`), so the base is
+/// exactly the eligible list before the lock: the free stake decides WHETHER a bond is drawn, the
+/// posted stake HOW OFTEN (SW-2).
+///
+/// The base is the weight the stake draw WOULD draw from if nobody's collateral were committed:
+/// SW-10 refuses a draw whose eligible operators weigh less than `eligible_floor_permille` of it,
+/// because what empties the eligible list while the base stays is honest seats filling up with the
+/// locks of the work they do, and an idle Sybil never fills. `v31_review_numbers.py`'s
+/// `worst_under_floor` prices the floor on exactly this split (base = every genesis seat and every
+/// Sybil; eligible = the unsaturated seats and every Sybil).
+#[allow(clippy::too_many_arguments)]
+pub fn palw_panel_stake_base_bonds_judging_v1<'a>(
+    state: &'a PalwChainStateV2,
+    claim_id: &Hash64,
+    judged_class: &Hash64,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+    economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+    seat_count: u16,
+) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
+    palw_panel_bonds_judging_v1(
+        state,
+        claim_id,
+        judged_class,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        readiness,
+        economy,
+        seat_count,
+        PalwPanelPopulationV1::StakeBase,
+    )
+}
+
+/// **ADR-0152 SW-10's executor term** (M4 review, 2026-09-24, finding 1): the claim's executor
+/// OPERATOR's own bonds under the base population's structural predicates — `Active` at the floor,
+/// registered by the maturity floor, able to run the judged class — with the executor clause
+/// inverted: exactly the bonds [`palw_panel_stake_base_bonds_judging_v1`] drops for being the
+/// executor's operator, and only those. Empty where the executor could not sit even if it were not
+/// the executor (below the panel floor, unregistered by the floor, incapable of the class), which
+/// is every harness executor below the panel floor and every producer at the producer floor alone.
+///
+/// **Why the draw reads it.** SW-10 was priced on a population of eight (`v31_review_numbers.py`,
+/// §3.14's table: "an honest-only 8-seat population still binds with one seat saturated, 7 of 8
+/// is exactly 875‰"), and that holds only for an executor OUTSIDE the population. testnet-12's
+/// producers are its eight genesis cards, so a genesis card's claim draws from the other seven:
+/// one of them saturated leaves `6/7 = 857‰ < 875‰`, the draw refuses `InsufficientEligibleStake`,
+/// and — a panel binding only in its anchor block (SW-8) — the claim voids. The busiest producer's
+/// own claims fill its own headroom first, so one working card could halt every other card's
+/// binding. [`derive_panel_v2_with_policy`] adds this term's capped weight to BOTH sides of the
+/// floor (`(E + X) · 1000 ≥ (B + X) · 875`), which is SW-10 computed over the population the draw
+/// would have if the executor were not excluded, the executor counted eligible: it cannot sit on
+/// its own panel, so its load says nothing about who does. A genesis executor is back at 8 with one
+/// other seat saturated (7/8 binds, 6/8 refuses); an executor outside the population adds nothing.
+///
+/// **What it gives an attacker.** `X` is the executor operator's SW-2 weight, capped at
+/// `weight_cap_msk` (1,000,000 MSK), and it relaxes the floor exactly as the same capital posted as
+/// an idle Sybil would (`E` and `B` both rise by it) while buying no seat, so in TOTAL attacker
+/// capital no §4.3 threshold moves. Counted in Sybil stake alone (§4.3's unit) a floor-bound row
+/// falls by at most `X`: the worst admitted state for P2 with filing stays 12.74M (k = 6 is bound
+/// by the race, not the floor; k = 5's floor, 116 operators / 15.08M, still needs 108 / 14.04M
+/// beside a capped executor), but P2 with a free redraw at 6 of 8 eligible — floor-bound at 58
+/// operators / 7.54M, the race alone needing 5.98M — falls to 51 / 6.63M beside an executor bond
+/// posted at the cap, below that row's stated worst of 7.15M (7 of 8). ADR-0152 §3.14 SW-10 and
+/// §4.3 are B's to amend (A reviews): the executor term in SW-10's rule, and every floor-bound row
+/// re-run through `v31_review_numbers.py` with `X` up to the cap (the free-redraw worst above is
+/// the one this arithmetic finds moving); the code does not edit the ADR.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_panel_stake_executor_bonds_judging_v1<'a>(
+    state: &'a PalwChainStateV2,
+    claim_id: &Hash64,
+    judged_class: &Hash64,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+    economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+    seat_count: u16,
+) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
+    palw_panel_bonds_judging_v1(
+        state,
+        claim_id,
+        judged_class,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        readiness,
+        economy,
+        seat_count,
+        PalwPanelPopulationV1::StakeExecutor,
+    )
+}
+
+/// Which list [`palw_panel_bonds_judging_v1`] returns — the three populations one spelling of the
+/// seat predicates serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PalwPanelPopulationV1 {
+    /// Every seat predicate: the draw's eligible list. `headroom: true` is byte for byte the list it
+    /// always returned; `headroom: false` leaves the load question to the one-ledger seat filter
+    /// (`PalwPanelValidLockV1::rcore`) the caller applies after (S-3's L-4b).
+    Eligible { headroom: bool },
+    /// SW-10's base: every predicate but the one-ledger headroom.
+    StakeBase,
+    /// SW-10's executor term: the base's structural predicates over the executor operator's own
+    /// bonds (the executor clause inverted), headroom unread.
+    StakeExecutor,
+}
+
+/// The one spelling of the seat predicates behind [`palw_panel_eligible_bonds_judging_v1`]
+/// (`Eligible { headroom: true }`, byte for byte the list it always returned), S-3's
+/// [`palw_panel_eligible_bonds_judging_v2`] (`Eligible { headroom }`), SW-10's
+/// [`palw_panel_stake_base_bonds_judging_v1`] (`StakeBase`: no headroom) and its executor term
+/// [`palw_panel_stake_executor_bonds_judging_v1`] (`StakeExecutor`: no headroom, the executor clause
+/// inverted), so the lists cannot drift apart in anything but the filters that separate them.
+#[allow(clippy::too_many_arguments)]
+fn palw_panel_bonds_judging_v1<'a>(
+    state: &'a PalwChainStateV2,
+    claim_id: &Hash64,
+    judged_class: &Hash64,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+    economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+    seat_count: u16,
+    population: PalwPanelPopulationV1,
+) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
+    let headroom = matches!(population, PalwPanelPopulationV1::Eligible { headroom: true });
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
     let executor = state.bond(&executor_bond).ok_or(PalwPanelV2Error::SeatBondMissing(executor_bond))?;
@@ -813,7 +1008,9 @@ pub fn palw_panel_eligible_bonds_judging_v2<'a>(
         if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor) {
             continue;
         }
-        if headroom && let Some(economy) = economy {
+        // (SW-10's base, and the eligible list where the one-ledger seat filter asks the room
+        // question instead, skip only this test: the headroom is the load.)
+        if let Some(economy) = economy.filter(|_| headroom) {
             let backed = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
             if !crate::palw_panel_economy_v1::palw_seat_has_headroom_v1(
                 bond.collateral,
@@ -828,8 +1025,19 @@ pub fn palw_panel_eligible_bonds_judging_v2<'a>(
         if registered_by_daa.is_some_and(|by| bond.registered_daa > by) {
             continue;
         }
-        if *bond_key == executor_bond || bond.operator_id == executor_operator || bond.pubkey == executor_key {
-            continue;
+        match population {
+            PalwPanelPopulationV1::Eligible { .. } | PalwPanelPopulationV1::StakeBase => {
+                if *bond_key == executor_bond || bond.operator_id == executor_operator || bond.pubkey == executor_key {
+                    continue;
+                }
+            }
+            // SW-10's executor term: only the executor operator's own bonds, which the two lists
+            // above drop for exactly that reason.
+            PalwPanelPopulationV1::StakeExecutor => {
+                if bond.operator_id != executor_operator {
+                    continue;
+                }
+            }
         }
         // **ADR-0071 Decision 3: a seat must be able to RUN the class it is drawn to judge.**
         //
@@ -906,9 +1114,12 @@ pub fn derive_panel_v2_with_policy(
         Some(independence) => Some(independence.registered_by_daa(registered_by_daa)),
         None => registered_by_daa,
     };
-    let outsider = match independence {
+    // Under the stake draw the outsider's SW-10 floor is checked after the class seats' operator
+    // count (below), so `InsufficientEligibleBonds` keeps exactly the lottery's condition (T92);
+    // `None` carries no floor and this is the call it always was.
+    let (outsider, outsider_floor) = match independence {
         Some(independence) if crate::palw_state_v2::palw_claim_is_outsider_judged_v1(state, claim, Some(independence.from_daa)) => {
-            Some(palw_panel_outsider_seat_v1(
+            let (seat, floor) = palw_panel_outsider_draw_v1(
                 state,
                 params,
                 claim_id,
@@ -918,9 +1129,10 @@ pub fn derive_panel_v2_with_policy(
                 capability_proof,
                 &policy,
                 &independence,
-            )?)
+            )?;
+            (Some(seat), floor)
         }
-        _ => None,
+        _ => (None, None),
     };
     // Every eligible bond (`palw_panel_eligible_bonds_v2`: the exclusions per Decision 7 and every
     // seat predicate, spelled once for this draw and the stratified one). ADR-0152: under the
@@ -954,7 +1166,43 @@ pub fn derive_panel_v2_with_policy(
     };
     // **ADR-0130: past the panel economy, one lottery entry per operator.** The eligibility is the
     // same list; only how it is ticketed changes.
-    let mut seats = if policy.economy.is_some() {
+    let mut seats = if let Some(stake) = policy.stake {
+        // **ADR-0152 SW (v3.1): the stake-weighted race replaces the operator lottery**, whatever
+        // `weighted` says — C-02's sub-tickets and ADR-0130's one ticket alike. The same eligible
+        // list, one entry per operator, keyed `L / W` (SW-3); and SW-10's floor over the class's
+        // base population, which excludes exactly what the eligible list excludes structurally —
+        // the outsider's operator included, since it holds its one seat already.
+        let base = palw_panel_stake_base_bonds_judging_v1(
+            state,
+            claim_id,
+            &claim.class_id,
+            min_collateral_sompi,
+            registered_by_daa,
+            capability_proof,
+            policy.readiness,
+            policy.economy,
+            params.seat_count,
+        )?;
+        let base: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = match &outsider {
+            Some(outsider) => base.into_iter().filter(|(_, bond)| bond.operator_id != outsider.operator_id).collect(),
+            None => base,
+        };
+        // SW-10's executor term (M4 review finding 1): the executor operator's capped weight where
+        // it could sit on this class but for being the executor, on both sides of the floor.
+        let executor = palw_panel_stake_executor_bonds_judging_v1(
+            state,
+            claim_id,
+            &claim.class_id,
+            min_collateral_sompi,
+            registered_by_daa,
+            capability_proof,
+            policy.readiness,
+            policy.economy,
+            params.seat_count,
+        )?;
+        let executor_weight = palw_panel_stake_weight_v1(&executor, &stake);
+        palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, &eligible, &base, executor_weight, &stake, outsider_floor)?
+    } else if policy.economy.is_some() {
         palw_panel_operator_lottery_of_v1(needed, claim_id, anchor_block, &eligible)?
     } else {
         // ADR-0124 Decision 5: the panel economy retires stake weighting (see the policy's doc) —
@@ -1046,6 +1294,13 @@ fn palw_panel_bond_lottery_v1(
 ///
 /// Pure and public: a shadow reader can ask, against a state snapshot, which operator WOULD sit as
 /// a claim's outsider and how often the registrant's own would.
+///
+/// **ADR-0152 SW-5: under `policy.stake` the outsider is the smallest stake-outsider key** over the
+/// same population ([`palw_panel_stake_entries_under_v1`] with
+/// [`palw_panel_stake_outsider_ticket_v1`]) — the one seat meant to be independent of the class's own
+/// population would otherwise be the cheapest seat on the panel to capture — and SW-10's floor
+/// holds over the base-class population minus the registrant: below it the claim does not bind
+/// (`InsufficientEligibleStake`). An empty population is `NoOutsider` first, as today.
 #[allow(clippy::too_many_arguments)]
 pub fn palw_panel_outsider_seat_v1(
     state: &PalwChainStateV2,
@@ -1058,6 +1313,38 @@ pub fn palw_panel_outsider_seat_v1(
     policy: &PalwPanelDrawPolicyV1,
     independence: &PalwPanelIndependenceV1,
 ) -> Result<PalwPanelSeatV2, PalwPanelV2Error> {
+    let (seat, floor) = palw_panel_outsider_draw_v1(
+        state,
+        params,
+        claim_id,
+        anchor_block,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        policy,
+        independence,
+    )?;
+    if let (Some((eligible, base)), Some(stake)) = (floor, policy.stake) {
+        palw_panel_stake_floor_v1(eligible, base, stake.eligible_floor_permille)?;
+    }
+    Ok(seat)
+}
+
+/// [`palw_panel_outsider_seat_v1`] with SW-10's floor returned rather than applied —
+/// `Some((eligible weight, base weight))` under `policy.stake`, `None` otherwise — so the class draw
+/// can apply it after its own operator count ([`derive_panel_v2_with_policy`]).
+#[allow(clippy::too_many_arguments)]
+fn palw_panel_outsider_draw_v1(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    policy: &PalwPanelDrawPolicyV1,
+    independence: &PalwPanelIndependenceV1,
+) -> Result<(PalwPanelSeatV2, Option<(u128, u128)>), PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let population = palw_panel_eligible_bonds_judging_v2(
         state,
@@ -1073,17 +1360,67 @@ pub fn palw_panel_outsider_seat_v1(
     )?;
     let registrant = state.class(&claim.class_id).and_then(|record| record.registrant_bond);
     let registrant_operator = registrant.and_then(|key| state.bond(&key)).map(|bond| bond.operator_id);
+    let not_registrant =
+        |(key, bond): &(&PalwBondKeyV2, &PalwBondStateV2)| Some(**key) != registrant && Some(bond.operator_id) != registrant_operator;
     let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = population
         .into_iter()
-        .filter(|(key, bond)| Some(**key) != registrant && Some(bond.operator_id) != registrant_operator)
+        .filter(not_registrant)
         // The route-matrix audit's #3, for the outsider too: its seat is bound like every other.
         .filter(|(key, _)| policy.valid_lock.is_none_or(|lock| lock.admits(state, key)))
         .collect();
-    palw_panel_operator_entries_under_v1(claim_id, anchor_block, &population, palw_panel_outsider_ticket_v1)
+    let Some(stake) = policy.stake else {
+        return palw_panel_operator_entries_under_v1(claim_id, anchor_block, &population, palw_panel_outsider_ticket_v1)
+            .into_iter()
+            .next()
+            .map(|entry| (PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id }, None))
+            .ok_or(PalwPanelV2Error::NoOutsider(*claim_id));
+    };
+    let seat = palw_panel_stake_entries_under_v1(claim_id, anchor_block, &population, palw_panel_stake_outsider_ticket_v1, &stake)
         .into_iter()
         .next()
         .map(|entry| PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id })
-        .ok_or(PalwPanelV2Error::NoOutsider(*claim_id))
+        .ok_or(PalwPanelV2Error::NoOutsider(*claim_id))?;
+    // SW-10 over the outsider's own population: the base class's bonds but for the load-dependent
+    // filters, minus the registrant as the eligible list is.
+    let base: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = palw_panel_stake_base_bonds_judging_v1(
+        state,
+        claim_id,
+        &independence.base_class_id,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        policy.readiness,
+        policy.economy,
+        params.seat_count,
+    )?
+    .into_iter()
+    .filter(not_registrant)
+    .collect();
+    // SW-10's executor term over the same population (M4 review finding 1): the executor operator's
+    // base-class bonds, minus the registrant as the lists above are — so a genesis card's claim on
+    // a bought class keeps the outsider population's tolerance of one saturated seat too.
+    let executor = palw_panel_stake_executor_bonds_judging_v1(
+        state,
+        claim_id,
+        &independence.base_class_id,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        policy.readiness,
+        policy.economy,
+        params.seat_count,
+    )?
+    .into_iter()
+    .filter(not_registrant)
+    .collect::<Vec<_>>();
+    let executor_weight = palw_panel_stake_weight_v1(&executor, &stake);
+    Ok((
+        seat,
+        Some((
+            palw_panel_stake_weight_v1(&population, &stake).saturating_add(executor_weight),
+            palw_panel_stake_weight_v1(&base, &stake).saturating_add(executor_weight),
+        )),
+    ))
 }
 
 /// **ADR-0147: an operator's ticket on a `Candidate` class's admission jury** —
@@ -1236,6 +1573,312 @@ pub fn palw_panel_operator_lottery_of_v1(
         .take(needed as usize)
         .map(|entry| PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id })
         .collect())
+}
+
+// ---- ADR-0152 v3.1 SW: the stake-weighted panel draw (the pure half, §3.14) ----------------------
+
+/// **ADR-0152 SW-3: `−log2((u + 1) / 2^64)` in Q64.64, by integer arithmetic only** — the
+/// normative routine, spelled as §3.14 gives it:
+///
+/// ```text
+/// m    = u + 1                                              // 1 ..= 2^64, as u128
+/// n    = 127 − m.leading_zeros()                            // floor(log2 m), 0 ..= 64
+/// y    = if n >= 63 { m >> (n − 63) } else { m << (63 − n) } // Q63, 2^63 <= y < 2^64
+/// frac = 0
+/// for i in 0..64 { y = (y * y) >> 63; if y >= 2^64 { y >>= 1; frac |= 1 << (63 − i) } }
+/// L    = (64 << 64) − ((n << 64) | frac)
+/// ```
+///
+/// `y < 2^64` on entry to every step, so `y * y < 2^128` never overflows; `L` runs from
+/// `64 · 2^64 = 2^70` (`u = 0`) down to `0` (`u = 2^64 − 1`) and never rises as `u` rises. The
+/// fraction's bits are the binary digits of `log2 y`, each truncated, so `L` sits at most a few
+/// units of `2^-64` above the exact value (T85: under `1.5 × 10^-19` over its vectors, checked
+/// against an 80-digit decimal logarithm; §3.14 states `4 × 10^-15` against a float `log2`, whose
+/// own error dominates that figure). Only the routine's determinism is consensus: its accuracy
+/// shapes the draw's law, never whether two nodes agree on it.
+pub fn palw_draw_neg_log2_q64_v1(u: u64) -> u128 {
+    let m = u as u128 + 1;
+    let n = 127 - m.leading_zeros() as u128;
+    let mut y = if n >= 63 { m >> (n - 63) } else { m << (63 - n) };
+    let mut frac: u128 = 0;
+    for i in 0..64u32 {
+        y = (y * y) >> 63;
+        if y >= 1u128 << 64 {
+            y >>= 1;
+            frac |= 1u128 << (63 - i);
+        }
+    }
+    (64u128 << 64) - ((n << 64) | frac)
+}
+
+/// **ADR-0152 SW-3: a ticket's uniform draw** — the first eight bytes of the digest, little-endian.
+pub fn palw_draw_ticket_u64_v1(ticket: &Hash64) -> u64 {
+    let mut word = [0u8; 8];
+    word.copy_from_slice(&ticket.as_byte_slice()[..8]);
+    u64::from_le_bytes(word)
+}
+
+/// **ADR-0152 SW-2: an operator's weight** from the whole-MSK posted collateral of its eligible
+/// bonds (`Σ ⌊collateral / SOMPI_PER_KASPA⌋`, summed by the caller): capped at the policy's
+/// `weight_cap_msk` (SW-A5: above 1,000,000 MSK an operator gains nothing by staying whole, and one
+/// heavy operator cannot cut a class's room below what the cap allows, SW-A6), under the arithmetic
+/// bound [`PALW_DRAW_WEIGHT_MAX_MSK_V1`], and never below 1 — every eligible operator has a key. At
+/// the t12 seat floor (130,000 MSK) the floor of 1 never binds; on a network whose floor is below one
+/// MSK it makes such an operator weigh what one MSK weighs rather than vanish from the race.
+pub fn palw_draw_operator_weight_msk_v1(posted_msk: u128, weight_cap_msk: u64) -> u64 {
+    posted_msk.min(weight_cap_msk.min(PALW_DRAW_WEIGHT_MAX_MSK_V1) as u128).max(1) as u64
+}
+
+/// **ADR-0152 SW-3: the race's order.** Operator `i` sorts before `j` iff `L_i / W_i < L_j / W_j`,
+/// compared without division as `L_i · W_j < L_j · W_i` in `u128` (`L ≤ 2^70`, `W ≤ 2^40`, so each
+/// product is below `2^110`); equal keys go by `operator_id`, ascending — a total order, so every
+/// node sorts one population into one sequence.
+pub fn palw_draw_key_cmp_v1(l_i: u128, w_i: u64, op_i: &Hash64, l_j: u128, w_j: u64, op_j: &Hash64) -> std::cmp::Ordering {
+    let w_i = w_i.min(PALW_DRAW_WEIGHT_MAX_MSK_V1) as u128;
+    let w_j = w_j.min(PALW_DRAW_WEIGHT_MAX_MSK_V1) as u128;
+    (l_i * w_j).cmp(&(l_j * w_i)).then_with(|| op_i.cmp(op_j))
+}
+
+/// **ADR-0152 SW-3: an operator's stake ticket for a claim's class seats** —
+/// `H(stake-ticket domain ‖ anchor ‖ claim ‖ operator_id)`, the same keyed BLAKE2b-512 and the same
+/// three inputs as ADR-0130's [`palw_panel_operator_ticket_v1`], under its own domain.
+pub fn palw_panel_stake_ticket_v1(anchor_block: BlockHash, claim_id: &Hash64, operator_id: &Hash64) -> Hash64 {
+    let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_STAKE_TICKET);
+    ticket.update(anchor_block.as_byte_slice());
+    ticket.update(claim_id.as_byte_slice());
+    ticket.update(operator_id.as_byte_slice());
+    finish(ticket)
+}
+
+/// **ADR-0152 SW-3/SW-5: an operator's stake ticket for a claim's ADR-0147 outsider seat** —
+/// `H(stake-outsider-ticket domain ‖ anchor ‖ claim ‖ operator_id)`.
+pub fn palw_panel_stake_outsider_ticket_v1(anchor_block: BlockHash, claim_id: &Hash64, operator_id: &Hash64) -> Hash64 {
+    let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_STAKE_OUTSIDER_TICKET);
+    ticket.update(anchor_block.as_byte_slice());
+    ticket.update(claim_id.as_byte_slice());
+    ticket.update(operator_id.as_byte_slice());
+    finish(ticket)
+}
+
+/// One operator's standing in a claim's stake race: its key `neg_log2_q64 / weight_msk` and the
+/// candidate bond it sits with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPanelStakeEntryV1 {
+    /// `L = palw_draw_neg_log2_q64_v1(u)`, Q64.64 — a function of the seed and the operator id only.
+    pub neg_log2_q64: u128,
+    /// `W`, SW-2's capped whole-MSK weight over the operator's eligible bonds, `>= 1`.
+    pub weight_msk: u64,
+    pub operator_id: Hash64,
+    /// Today's candidate rule, unchanged: the operator's eligible bond with the lowest
+    /// [`palw_panel_seat_ticket_v1`], ties by bond key.
+    pub bond: PalwBondKeyV2,
+}
+
+impl PalwPanelStakeEntryV1 {
+    /// [`palw_draw_key_cmp_v1`] on two entries.
+    pub fn key_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        palw_draw_key_cmp_v1(
+            self.neg_log2_q64,
+            self.weight_msk,
+            &self.operator_id,
+            other.neg_log2_q64,
+            other.weight_msk,
+            &other.operator_id,
+        )
+    }
+}
+
+/// **ADR-0152 SW-2/SW-3: every eligible operator's stake entry, in race order** — smallest key
+/// first. `eligible` is the draw's list for this seat (the class population, or the outsider's).
+///
+/// **Per operator, not per bond.** Each operator is entered once, with its candidate bond chosen
+/// by today's rule, and its weight SUMS the whole-MSK posted collateral of all its bonds on the
+/// list before the cap. On testnet-12 `palw_operator_id_unique` is armed at genesis, so an operator
+/// is exactly one bond and the sum is that bond's collateral (SW-A3); where ids are not unique the
+/// sum makes splitting stake across one operator's bonds buy nothing, as ADR-0130 made it buy
+/// nothing in the lottery.
+///
+/// **Posted collateral, never the free stake.** The one ledger decides WHETHER a bond is on the
+/// list (the headroom and the Valid lock); posted stake decides HOW OFTEN it sits (SW-2). So an
+/// operator's key reads the seed, its own id and its own posted collateral and nothing else:
+/// adding or removing any other operator, or any change to another bond's commitments, never moves
+/// it (T87, T93). The first `needed` keys are a weighted sample without replacement — successive
+/// sampling, the exponential race — which a walk over cumulative weight intervals would not be.
+pub fn palw_panel_stake_entries_under_v1(
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    stake_ticket: fn(BlockHash, &Hash64, &Hash64) -> Hash64,
+    stake: &PalwPanelStakeDrawV1,
+) -> Vec<PalwPanelStakeEntryV1> {
+    let mut candidates: std::collections::BTreeMap<Hash64, ((Hash64, PalwBondKeyV2), u128)> = std::collections::BTreeMap::new();
+    for (bond_key, bond) in eligible {
+        let ranked = (palw_panel_seat_ticket_v1(anchor_block, claim_id, bond_key), **bond_key);
+        let posted = (bond.collateral / crate::constants::SOMPI_PER_KASPA) as u128;
+        candidates
+            .entry(bond.operator_id)
+            .and_modify(|(best, sum)| {
+                if ranked < *best {
+                    *best = ranked;
+                }
+                *sum = sum.saturating_add(posted);
+            })
+            .or_insert((ranked, posted));
+    }
+    let mut entries: Vec<PalwPanelStakeEntryV1> = candidates
+        .into_iter()
+        .map(|(operator_id, ((_, bond), posted))| PalwPanelStakeEntryV1 {
+            neg_log2_q64: palw_draw_neg_log2_q64_v1(palw_draw_ticket_u64_v1(&stake_ticket(anchor_block, claim_id, &operator_id))),
+            weight_msk: palw_draw_operator_weight_msk_v1(posted, stake.weight_cap_msk),
+            operator_id,
+            bond,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.key_cmp(b));
+    entries
+}
+
+/// [`palw_panel_stake_entries_under_v1`] for the class seats ([`palw_panel_stake_ticket_v1`]).
+pub fn palw_panel_stake_entries_v1(
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    stake: &PalwPanelStakeDrawV1,
+) -> Vec<PalwPanelStakeEntryV1> {
+    palw_panel_stake_entries_under_v1(claim_id, anchor_block, eligible, palw_panel_stake_ticket_v1, stake)
+}
+
+/// **ADR-0152 SW-10: a population's weight** — the sum, over its operators, of SW-2's capped
+/// weights (the same `W` the race keys on, so the floor and the race cannot weigh one operator
+/// two ways). Operators are counted once however many bonds they hold on the list.
+pub fn palw_panel_stake_weight_v1(population: &[(&PalwBondKeyV2, &PalwBondStateV2)], stake: &PalwPanelStakeDrawV1) -> u128 {
+    let mut posted: std::collections::BTreeMap<Hash64, u128> = std::collections::BTreeMap::new();
+    for (_, bond) in population {
+        let sum = posted.entry(bond.operator_id).or_insert(0);
+        *sum = sum.saturating_add((bond.collateral / crate::constants::SOMPI_PER_KASPA) as u128);
+    }
+    posted.into_values().map(|sum| palw_draw_operator_weight_msk_v1(sum, stake.weight_cap_msk) as u128).sum()
+}
+
+/// **ADR-0152 SW-10: the eligible-stake floor**, `1000 · eligible ≥ floor‰ · base`, else
+/// `InsufficientEligibleStake`. Exactly at the floor binds: seven of the eight genesis seats
+/// eligible is `7/8 = 875‰`, which the review's numbers keep binding (one honest seat may be
+/// saturated or offline; two may not). The draw passes both weights with SW-10's executor term
+/// already added ([`palw_panel_stake_executor_bonds_judging_v1`]), so a genesis card's own claim is
+/// measured over the eight as well, not over the seven that may sit.
+pub fn palw_panel_stake_floor_v1(eligible: u128, base: u128, floor_permille: u16) -> Result<(), PalwPanelV2Error> {
+    if eligible.saturating_mul(1000) >= base.saturating_mul(floor_permille as u128) {
+        Ok(())
+    } else {
+        Err(PalwPanelV2Error::InsufficientEligibleStake { eligible, base })
+    }
+}
+
+/// **ADR-0152 SW (v3.1): the stake-weighted draw of `needed` class seats** — the first `needed`
+/// entries of [`palw_panel_stake_entries_v1`] over `eligible`, in key order (the canonical panel
+/// order `validate_panel_bound_v2_with_policy` compares).
+///
+/// Two refusals, in this order: fewer eligible operators than `needed` is
+/// `InsufficientEligibleBonds`, under exactly the operator lottery's condition (SW-9: the stake draw
+/// changes who sits, never whether enough operators exist, T92); then SW-10's floor of `eligible`'s
+/// weight against `base`'s is `InsufficientEligibleStake`. `base` is
+/// [`palw_panel_stake_base_bonds_judging_v1`]'s list for the same claim, with the same per-claim
+/// exclusions the caller applied to `eligible`.
+pub fn palw_panel_stake_race_of_v1(
+    needed: u16,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    base: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    stake: &PalwPanelStakeDrawV1,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, eligible, base, 0, stake, None)
+}
+
+/// [`palw_panel_stake_race_of_v1`] with an outsider's floor `(eligible, base)` checked between the
+/// operator count and the class's own floor, and SW-10's executor term `executor_weight`
+/// ([`palw_panel_stake_executor_bonds_judging_v1`]'s capped weight, `0` where the executor could not
+/// sit) added to both sides of the class's floor — the reported `InsufficientEligibleStake` weights
+/// include it.
+#[allow(clippy::too_many_arguments)]
+fn palw_panel_stake_race_with_v1(
+    needed: u16,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    base: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    executor_weight: u128,
+    stake: &PalwPanelStakeDrawV1,
+    outsider_floor: Option<(u128, u128)>,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    let entries = palw_panel_stake_entries_v1(claim_id, anchor_block, eligible, stake);
+    if entries.len() < needed as usize {
+        return Err(PalwPanelV2Error::InsufficientEligibleBonds { needed, available: entries.len() as u16 });
+    }
+    if let Some((outsider_eligible, outsider_base)) = outsider_floor {
+        palw_panel_stake_floor_v1(outsider_eligible, outsider_base, stake.eligible_floor_permille)?;
+    }
+    palw_panel_stake_floor_v1(
+        palw_panel_stake_weight_v1(eligible, stake).saturating_add(executor_weight),
+        palw_panel_stake_weight_v1(base, stake).saturating_add(executor_weight),
+        stake.eligible_floor_permille,
+    )?;
+    Ok(entries
+        .into_iter()
+        .take(needed as usize)
+        .map(|entry| PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id })
+        .collect())
+}
+
+/// **ADR-0152 SW-9: the rate room's effective ready count** —
+/// `min(ready operators, max(seat_count, ⌊ΣW / W_max⌋))` over the class's ready operators' SW-2
+/// weights (capped, [`palw_draw_operator_weight_msk_v1`]); `0` with no ready operator.
+///
+/// Under the stake draw the replay load lands on the heaviest operators: with equal compute per
+/// operator, capacity is set by the largest inclusion probability, and under successive sampling
+/// `π_max ≤ min(1, seat_count · W_max / ΣW)`, so `ΣW / W_max` operators' worth of capacity is a
+/// lower bound (the room errs toward refusing). Wired by M4: the fold's `panel_rate_v1` /
+/// `panel_room_v1` and op 186 read it past `palw_rcore_plus` for every class outside C7, through
+/// [`palw_panel_ready_eff_of_bonds_v1`] and [`crate::palw_state_v2::palw_panel_room_ready_count_v1`]
+/// (T91).
+/// Counting operators also removes the over-count of an operator's several ready bonds.
+///
+/// The cap is what bounds the lever SW-A6 found: uncapped, one ready 20M operator beside the eight
+/// genesis seats gave `5`; capped at 1,000,000 MSK it gives `8`.
+pub fn palw_panel_ready_eff_v1(ready_operator_weights: &[u64], seat_count: u64) -> u64 {
+    let ready = ready_operator_weights.len() as u64;
+    let Some(heaviest) = ready_operator_weights.iter().copied().max() else {
+        return 0;
+    };
+    let total: u128 = ready_operator_weights.iter().map(|w| *w as u128).sum();
+    // Weights are >= 1 by SW-2; a list of zeros is read as equal weights rather than divided by.
+    let spread = if heaviest == 0 { ready } else { (total / heaviest as u128).min(ready as u128) as u64 };
+    ready.min(seat_count.max(spread))
+}
+
+/// **ADR-0152 SW-9 (M4): [`palw_panel_ready_eff_v1`] over a class's ready BONDS** — grouped by
+/// operator, each operator's whole-MSK posted collateral summed over its ready bonds and capped by
+/// SW-2's [`palw_draw_operator_weight_msk_v1`] (the weight the draw keys on, so the room and the draw
+/// cannot weigh one operator two ways), then `min(ready operators, max(seat_count, ⌊ΣW / W_max⌋))`.
+///
+/// The caller hands in the bonds its own readiness predicate calls ready — the fold's
+/// (`model_registry_seat_is_ready`) or op 186's (`palw_model_registry_room_ready_v1`) — and decides
+/// WHETHER to count this way at all through
+/// [`crate::palw_state_v2::palw_panel_room_ready_count_v1`]; this function only counts. On
+/// testnet-12 an operator is one bond (`palw_operator_id_unique`), so the grouping only removes the
+/// over-count where ids are not unique.
+pub fn palw_panel_ready_eff_of_bonds_v1<'a>(
+    ready_bonds: impl IntoIterator<Item = &'a PalwBondStateV2>,
+    seat_count: u64,
+    stake: &PalwPanelStakeDrawV1,
+) -> u64 {
+    let mut posted: std::collections::BTreeMap<Hash64, u128> = std::collections::BTreeMap::new();
+    for bond in ready_bonds {
+        let sum = posted.entry(bond.operator_id).or_insert(0);
+        *sum = sum.saturating_add((bond.collateral / crate::constants::SOMPI_PER_KASPA) as u128);
+    }
+    let weights: Vec<u64> = posted.into_values().map(|sum| palw_draw_operator_weight_msk_v1(sum, stake.weight_cap_msk)).collect();
+    palw_panel_ready_eff_v1(&weights, seat_count)
 }
 
 /// May THIS `PanelBound` object be accepted at THIS chain point? Everything is recomputed:
@@ -1419,6 +2062,22 @@ pub fn validate_panel_bound_v2_with_policy(
         .ok_or(PalwPanelV2Error::BindOutsideWindow("bind deadline overflows the DAA score"))?;
     if ctx.daa_score > deadline {
         return Err(PalwPanelV2Error::BindOutsideWindow("the bind window has already lapsed"));
+    }
+    // **ADR-0152 SW-8: under the stake draw a panel binds only in its own anchor block** (a
+    // redraw's panel in the redraw's anchor block). The draw's inputs are the ONE state the anchor
+    // block's acceptance reads — its pre-object base, advanced by its earlier bindings in claim-id
+    // order — so a `PanelBound` carried by any later block would be a second draw of the same seed on
+    // a state someone had time to shape: the retry path (a failed or dropped draw re-derived after
+    // the attacker retired its own seated Sybil, the draft's relabelled 8.97M) that this rule closes.
+    // A claim not bound here stays `Provisional` and voids `BindTimeout` at its bind deadline (S0: no
+    // forfeit; a free-prompt claim keeps its abandon hold). Keyed on `policy.stake`, which the
+    // processor's one resolver (`palw_panel_draw_policy_at`) sets iff `palw_rcore_plus` is active at
+    // the ANCHOR, like every other draw rule; `None` — testnet-11, devnet, mainnet and testnet-12 with
+    // the fence off — never reaches this test, so their windows are the ones above, byte for byte.
+    if policy.stake.is_some() && ctx.block != anchor.anchor_block {
+        return Err(PalwPanelV2Error::BindOutsideWindow(
+            "under the stake-weighted draw a panel binds only in its own anchor block (ADR-0152 SW-8)",
+        ));
     }
 
     let registered_by_daa = palw_seat_maturity_floor_v1(anchor.anchor_daa, bond_maturity_daa);
@@ -5174,5 +5833,2059 @@ mod tests {
         let (provisional, unbound) = populated_state();
         assert!(matches!(provisional.claim(&unbound).unwrap().phase, PalwClaimPhaseV2::Provisional));
         assert!(palw_receipt_pool_facts_v1(&provisional, &[unbound], &[]).panels.is_empty());
+    }
+
+    /// **ADR-0152 v3.1 SW: the stake-weighted panel draw's pure half** (§3.14, T85–T88, T92–T94 on
+    /// synthetic states). The integration — the anchor-time policy value, the room's `ready_eff` in
+    /// the fold, T89–T91 — is M4's, after M3.
+    mod adr0152_stake_draw {
+        use super::*;
+        use crate::palw_panel_economy_v1::{PalwSeatEconomyV1, palw_panel_collateral_floor_v1};
+
+        // ---- T88: the corpus `stake: None` must reproduce byte for byte ----------------------
+
+        /// One state of the T88 corpus: the claim on it, the panel shape, the state params it was
+        /// folded under, and every policy it is drawn with.
+        struct T88Fixture {
+            name: &'static str,
+            state: PalwChainStateV2,
+            claim_id: Hash64,
+            params: PalwPanelParamsV2,
+            policies: Vec<PalwPanelDrawPolicyV1>,
+        }
+
+        fn t88_bond(b: u64, pk: u8, op: u64, collateral: u64, classes: &[u64]) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::BondRegistered {
+                bond: PalwBondKeyV2(bond_outpoint(b)),
+                pubkey: vec![pk; 4],
+                operator_pubkey: op_key(op),
+                collateral,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: classes.iter().map(|c| h64(*c)).collect(),
+                signature: Vec::new(),
+            }
+        }
+
+        /// ADR-0147's BOUGHT class (id 2): a carriage naming `registrant`, which is what makes the
+        /// fold record a `registrant_bond` and so what makes its claims outsider-judged.
+        fn t88_bought_class(registrant: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+            let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+                .expect("the floor's geometry projects");
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(2),
+                artifact_root: h64(12),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: Some(Box::new(crate::palw_state_v2::PalwClassAdmissionCarriageV2 {
+                    registrant_bond: registrant,
+                    canonical: crate::palw_base0_profile::rc_job_context(&profile, 2, 2),
+                    profile,
+                    signature: Vec::new(),
+                })),
+            }
+        }
+
+        /// The floor (class 1) and a bought class 2 registered by bond 9; bonds 2..=5 the
+        /// registrant's (they serve both), bonds 11..=18 the network's (the floor only), and the
+        /// executor's bond 1; one attempt of class 2 by bond 1 at DAA 101.
+        fn t88_bought_state(sp: &PalwStateParamsV2, collateral: impl Fn(u64) -> u64) -> (PalwChainStateV2, Hash64) {
+            let mut objects = vec![adr0130_class(), t88_bond(1, 7, 0x21, collateral(1), &[1])];
+            objects.push(t88_bond(9, 19, 0x29, collateral(9), &[1, 2]));
+            for n in 2..=5u64 {
+                objects.push(t88_bond(n, 20 + n as u8, 0x40 + n, collateral(n), &[1, 2]));
+            }
+            for n in 11..=18u64 {
+                objects.push(t88_bond(n, 20 + n as u8, 0x40 + n, collateral(n), &[1]));
+            }
+            objects.push(t88_bought_class(PalwBondKeyV2(bond_outpoint(9))));
+            let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), sp, &ctx(1, 100, 1), &objects, None).unwrap();
+            let mut env = attempt(40, 1);
+            env.attempt.class_id = h64(2);
+            env.attempt.artifact_root = h64(12);
+            env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, h64(2), &bond_outpoint(1));
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s2, _) =
+                apply_palw_transition_v2(&s1, sp, &PalwBlockContextV2 { subsidy: 100_000, ..ctx(2, 101, 2) }, &[], Some(&env))
+                    .unwrap();
+            (s2, claim_id)
+        }
+
+        fn t88_economy(floor: u64, ratio: u32, lambda: u32) -> PalwSeatEconomyV1 {
+            PalwSeatEconomyV1 { panel_floor_sompi: floor, max_exposure_ratio_permille: ratio, reward_multiple_permille: lambda }
+        }
+
+        /// Every combination of `weighted`, `economy`, `independence` and `valid_lock` the corpus
+        /// draws a state under, `stake: None` throughout.
+        fn t88_policies(
+            economies: &[Option<PalwSeatEconomyV1>],
+            independences: &[Option<PalwPanelIndependenceV1>],
+            locks: &[Option<PalwPanelValidLockV1>],
+        ) -> Vec<PalwPanelDrawPolicyV1> {
+            let mut out = Vec::new();
+            for weighted in [false, true] {
+                for economy in economies {
+                    for independence in independences {
+                        for valid_lock in locks {
+                            out.push(PalwPanelDrawPolicyV1 {
+                                weighted,
+                                economy: *economy,
+                                readiness: None,
+                                independence: *independence,
+                                valid_lock: *valid_lock,
+                                stake: None,
+                            });
+                        }
+                    }
+                }
+            }
+            out
+        }
+
+        fn t88_corpus() -> Vec<T88Fixture> {
+            let lock = |sp: &PalwStateParamsV2, required: u128| PalwPanelValidLockV1 {
+                required,
+                now_daa: 103,
+                settled_anchor_depth: None,
+                window_court: sp.window_court(),
+                rcore: None,
+            };
+            let independence =
+                |from_daa: u64, anchor_daa: u64| PalwPanelIndependenceV1 { from_daa, base_class_id: h64(1), anchor_daa };
+            let mut out = Vec::new();
+
+            // (a) The dedup/exclusion registry: six bonds, bond 5 sharing bond 4's operator, bond 6
+            // the executor's operator.
+            let sp = state_params();
+            let (state, claim_id) = populated_state();
+            out.push(T88Fixture {
+                name: "populated",
+                state,
+                claim_id,
+                params: panel_params(),
+                policies: t88_policies(
+                    &[None, Some(t88_economy(100, 1000, 0)), Some(t88_economy(1_000, 500, 0))],
+                    &[None, Some(independence(0, 150)), Some(independence(0, 100))],
+                    &[None, Some(lock(&sp, 1)), Some(lock(&sp, 2_000_000))],
+                ),
+            });
+
+            // (b) ADR-0130's λ registry: bonds that back the claim-priced stake and not the floor.
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap().with_worker_carve_permille(620).unwrap();
+            let bonds = vec![
+                adr0130_bond(1, 7, 0x21, 1_000_000),
+                adr0130_bond(2, 8, 0x22, 2_000),
+                adr0130_bond(3, 9, 0x23, 2_000),
+                adr0130_bond(4, 10, 0x24, 10_000),
+                adr0130_bond(5, 11, 0x25, 10_000),
+                adr0130_bond(6, 12, 0x26, 9_000),
+                adr0130_bond(7, 13, 0x25, 12_000), // a second bond of bond 5's operator
+            ];
+            let (state, claim_id) = adr0130_state(&sp, bonds, 100_000);
+            let floor = palw_panel_collateral_floor_v1(100);
+            out.push(T88Fixture {
+                name: "adr0130-lambda",
+                state,
+                claim_id,
+                params: panel_params(),
+                policies: t88_policies(
+                    &[
+                        None,
+                        Some(t88_economy(floor, 500, 0)),
+                        Some(t88_economy(floor, 500, 1_000)),
+                        Some(t88_economy(floor, 500, 1_100)),
+                    ],
+                    &[None, Some(independence(0, 150))],
+                    &[None, Some(lock(&sp, 9_500))],
+                ),
+            });
+
+            // (c) A wide registry on a five-seat panel, collateral spread over three orders.
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let mut bonds = vec![adr0130_bond(1, 7, 0x21, 1_000_000)];
+            for n in 2..=13u64 {
+                bonds.push(adr0130_bond(n, 20 + n as u8, 0x60 + n, 1_000 * (1 + (n * 37) % 11) * 10u64.pow((n % 3) as u32)));
+            }
+            let (state, claim_id) = adr0130_state(&sp, bonds, 0);
+            out.push(T88Fixture {
+                name: "wide",
+                state,
+                claim_id,
+                params: PalwPanelParamsV2::new(5, 3, 4).unwrap(),
+                policies: t88_policies(
+                    &[None, Some(t88_economy(1_000, 500, 0)), Some(t88_economy(1_000, 1000, 0))],
+                    &[None, Some(independence(0, 150))],
+                    &[None, Some(lock(&sp, 5_000))],
+                ),
+            });
+
+            // (d) ADR-0147: a claim of a bought class, so an outsider sits first where the policy
+            // configures independence at or below the claim's acceptance.
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let (state, claim_id) = t88_bought_state(&sp, |n| 1_000_000 + 7_919 * n);
+            out.push(T88Fixture {
+                name: "bought",
+                state,
+                claim_id,
+                params: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
+                policies: t88_policies(
+                    &[None, Some(t88_economy(1_000, 500, 0))],
+                    &[None, Some(independence(0, 150)), Some(independence(102, 150)), Some(independence(0, 100))],
+                    &[None, Some(lock(&sp, 1_030_000))],
+                ),
+            });
+            out
+        }
+
+        /// The corpus drawn, every result folded into one digest: `(fixture, policy index, anchor,
+        /// Ok(seats) as Borsh | Err as its Debug)`. Returns the digest and the number of results
+        /// that were panels and refusals, so a caller can see the corpus is not vacuous.
+        fn t88_digest(with: impl Fn(PalwPanelDrawPolicyV1) -> PalwPanelDrawPolicyV1) -> (String, usize, usize) {
+            let mut digest = blake2b_simd::Params::new().hash_length(32).to_state();
+            let (mut panels, mut refusals) = (0usize, 0usize);
+            for fixture in t88_corpus() {
+                for (p, policy) in fixture.policies.iter().enumerate() {
+                    for i in 0..24u64 {
+                        let anchor = BlockHash::from_u64_word(0x8800 + i);
+                        let drawn = derive_panel_v2_with_policy(
+                            &fixture.state,
+                            &fixture.params,
+                            &fixture.claim_id,
+                            anchor,
+                            100,
+                            None,
+                            false,
+                            with(*policy),
+                        );
+                        digest.update(fixture.name.as_bytes());
+                        digest.update(&(p as u64).to_le_bytes());
+                        digest.update(&i.to_le_bytes());
+                        match drawn {
+                            Ok(seats) => {
+                                panels += 1;
+                                digest.update(b"ok");
+                                digest.update(&borsh::to_vec(&seats).unwrap());
+                            }
+                            Err(e) => {
+                                refusals += 1;
+                                digest.update(b"err");
+                                digest.update(format!("{e:?}").as_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+            (faster_hex::hex_string(digest.finalize().as_bytes()), panels, refusals)
+        }
+
+        /// **T88 (SW-1): `stake: None` is today's draw, byte for byte.** The corpus — four
+        /// registries (dedup and executor exclusions, ADR-0130's λ floor with a two-bond operator,
+        /// a wide five-seat registry, and ADR-0147's bought class with its outsider) under every
+        /// combination of `weighted`, `economy`, `independence` and `valid_lock` — is drawn at 24
+        /// anchors each, and the digest of every panel and every refusal is pinned to the value
+        /// the draw produced at `f1dfb33b`, before the stake draw existed.
+        #[test]
+        fn t88_stake_none_is_todays_draw_byte_for_byte() {
+            let (digest, panels, refusals) = t88_digest(|policy| policy);
+            eprintln!("T88 corpus digest {digest}: {panels} panels, {refusals} refusals");
+            assert!(panels > 1_000 && refusals > 100, "the corpus draws panels and refusals both: {panels} / {refusals}");
+            assert_eq!(
+                digest, "76bb846d28e5007f9224ed883ae6252deea8233ecadfda3b2c60aff428c1062a",
+                "stake: None moved a panel or a refusal somewhere in the corpus"
+            );
+        }
+
+        /// **T88's other half: `stake: Some` replaces the lottery, whatever `weighted` says.** The
+        /// same corpus under the stake draw is a different digest (so the pin above is not vacuous),
+        /// and `weighted: true` and `false` draw the same panel or the same refusal at every point.
+        #[test]
+        fn t88_stake_some_replaces_the_lottery_whatever_weighted_says() {
+            let stake = |policy: PalwPanelDrawPolicyV1| PalwPanelDrawPolicyV1 { stake: Some(PalwPanelStakeDrawV1::V1), ..policy };
+            let (digest, panels, _) = t88_digest(stake);
+            assert!(panels > 500, "the stake draw seats panels on the corpus: {panels}");
+            assert_ne!(
+                digest, "76bb846d28e5007f9224ed883ae6252deea8233ecadfda3b2c60aff428c1062a",
+                "the stake draw is a different draw"
+            );
+            let (flat, _, _) = t88_digest(|policy| stake(PalwPanelDrawPolicyV1 { weighted: false, ..policy }));
+            let (bucketed, _, _) = t88_digest(|policy| stake(PalwPanelDrawPolicyV1 { weighted: true, ..policy }));
+            assert_eq!(flat, bucketed, "C-02's `weighted` is not read under the stake draw");
+        }
+
+        // ---- realistic registries (whole-MSK collateral) -----------------------------------------
+
+        const MSK: u64 = crate::constants::SOMPI_PER_KASPA;
+        /// A testnet-12 genesis seat: 939,063.21 MSK (whole-MSK weight 939,063).
+        const GENESIS_SEAT: u64 = 939_063 * MSK + 21_000_000;
+        /// The testnet-12 seat floor, 130,000 MSK — a floor-sized Sybil operator.
+        const FLOOR_SEAT: u64 = 130_000 * MSK;
+
+        fn sw_economy() -> PalwSeatEconomyV1 {
+            t88_economy(FLOOR_SEAT, 500, 0)
+        }
+
+        /// Past `palw_rcore_plus` on testnet-12: the economy and the stake draw's v3.1 terms.
+        fn sw_policy() -> PalwPanelDrawPolicyV1 {
+            PalwPanelDrawPolicyV1 { economy: Some(sw_economy()), stake: Some(PalwPanelStakeDrawV1::V1), ..Default::default() }
+        }
+
+        /// The same network below the fence: ADR-0130's operator lottery.
+        fn lottery_policy() -> PalwPanelDrawPolicyV1 {
+            PalwPanelDrawPolicyV1 { economy: Some(sw_economy()), ..Default::default() }
+        }
+
+        fn five() -> PalwPanelParamsV2 {
+            PalwPanelParamsV2::new(5, 3, 4).unwrap()
+        }
+
+        fn anchor(i: u64) -> BlockHash {
+            BlockHash::from_u64_word(0x5700_0000 + i)
+        }
+
+        /// A class whose attempts may claim `2 × 10^13` pwu, so one of them reserves 1,000,000 MSK
+        /// (at the network's 5 sompi a pwu) on its producer — past any genesis seat's 500‰ ceiling
+        /// (469,531 MSK) — and one attempt SATURATES a bond's one-ledger headroom. Folded without
+        /// the 2026-09-23 audit extras, the only place an attempt is refused at the ceiling, so the
+        /// reservation lands whole.
+        const HEAVY_PWU: u64 = 20_000_000_000_000;
+
+        fn heavy_class() -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(3),
+                artifact_root: h64(13),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(HEAVY_PWU),
+                initial_target: u128::MAX / 2,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            }
+        }
+
+        /// Fold one attempt of `class` by bond `b` (key `pk`, operator `op`) at `daa`, at the first
+        /// nonce the fold admits.
+        #[allow(clippy::too_many_arguments)]
+        fn fold_attempt(
+            parent: &PalwChainStateV2,
+            sp: &PalwStateParamsV2,
+            daa: u64,
+            b: u64,
+            pk: u8,
+            op: u64,
+            class_id: Hash64,
+            root: Hash64,
+            pwu: u64,
+        ) -> (PalwChainStateV2, Hash64) {
+            for nonce in 1..400u64 {
+                let mut env = attempt(pwu, nonce);
+                env.attempt.class_id = class_id;
+                env.attempt.artifact_root = root;
+                env.attempt.executor_bond = bond_outpoint(b);
+                env.attempt.executor_pubkey = vec![pk; 4];
+                env.attempt.operator_id = op_id(op);
+                env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, nonce, class_id, &bond_outpoint(b));
+                let id = attempt_id_v2(&env.attempt);
+                if let Ok((next, _)) = apply_palw_transition_v2(parent, sp, &ctx(daa, daa, daa), &[], Some(&env))
+                    && next.claim(&id).is_some()
+                {
+                    return (next, id);
+                }
+            }
+            panic!("no attempt of bond {b} admits at daa {daa}")
+        }
+
+        /// A registry of `(bond, operator, collateral)` rows beside the executor (bond 1, operator
+        /// 0x21) at DAA 100, every bond serving the floor; one heavy attempt per bond in `saturate`
+        /// (DAA 101, 102, …); then the claim under judgement — the executor's 40-pwu floor attempt,
+        /// `reserved` 200, so a seat reserves 600 sompi. Keys are `30 + bond`.
+        fn sw_state(rows: &[(u64, u64, u64)], saturate: &[u64]) -> (PalwChainStateV2, Hash64) {
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let mut objects = vec![adr0130_class(), heavy_class(), adr0130_bond(1, 7, 0x21, 1_000_000)];
+            objects.extend(rows.iter().map(|(b, op, c)| adr0130_bond(*b, 30 + *b as u8, *op, *c)));
+            let (mut state, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+            let mut daa = 101;
+            for b in saturate {
+                let op = rows.iter().find(|row| row.0 == *b).expect("a saturated bond is a row").1;
+                state = fold_attempt(&state, &sp, daa, *b, 30 + *b as u8, op, h64(3), h64(13), HEAVY_PWU).0;
+                daa += 1;
+            }
+            fold_attempt(&state, &sp, daa, 1, 7, 0x21, h64(1), h64(11), 40)
+        }
+
+        /// The eight testnet-12 genesis seats (bonds 2..=9) and `small` floor-sized operators
+        /// (bonds 10, 11, …).
+        fn genesis_and_small(small: u64) -> Vec<(u64, u64, u64)> {
+            let mut rows: Vec<(u64, u64, u64)> = (2..=9u64).map(|b| (b, 0x40 + b, GENESIS_SEAT)).collect();
+            rows.extend((0..small).map(|i| (10 + i, 0x4A + i, FLOOR_SEAT)));
+            rows
+        }
+
+        /// The class population and SW-10's base for the claim, as `derive_panel_v2_with_policy`
+        /// computes them under `sw_policy()` (no outsider).
+        #[allow(clippy::type_complexity)]
+        fn populations<'a>(
+            state: &'a PalwChainStateV2,
+            claim_id: &Hash64,
+        ) -> (Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>) {
+            let eligible = palw_panel_eligible_bonds_v2(state, claim_id, 100, None, false, None, Some(sw_economy()), 5).unwrap();
+            let base = palw_panel_stake_base_bonds_judging_v1(state, claim_id, &h64(1), 100, None, false, None, Some(sw_economy()), 5)
+                .unwrap();
+            (eligible, base)
+        }
+
+        /// **The exact successive-sampling law by enumeration of ordered draws**: every operator's
+        /// inclusion probability, and `P(A = a)` for the `marked` operators. Independent of the
+        /// race: it draws seat by seat in proportion to weight among those not yet seated.
+        fn exact_law(weights: &[f64], seats: usize, marked: &[bool]) -> (Vec<f64>, Vec<f64>) {
+            #[allow(clippy::too_many_arguments)]
+            fn walk(
+                w: &[f64],
+                seats: usize,
+                marked: &[bool],
+                seq: &mut Vec<usize>,
+                p: f64,
+                rem: f64,
+                inc: &mut [f64],
+                law: &mut [f64],
+            ) {
+                if seq.len() == seats || rem <= 0.0 {
+                    for &i in seq.iter() {
+                        inc[i] += p;
+                    }
+                    law[seq.iter().filter(|&&i| marked[i]).count()] += p;
+                    return;
+                }
+                for (i, wi) in w.iter().enumerate() {
+                    if seq.contains(&i) {
+                        continue;
+                    }
+                    seq.push(i);
+                    walk(w, seats, marked, seq, p * wi / rem, rem - wi, inc, law);
+                    seq.pop();
+                }
+            }
+            let mut inc = vec![0.0; weights.len()];
+            let mut law = vec![0.0; seats + 1];
+            walk(weights, seats, marked, &mut Vec::new(), 1.0, weights.iter().sum(), &mut inc, &mut law);
+            (inc, law)
+        }
+
+        /// `|measured − p| ≤ 4σ` of a binomial proportion over `n` draws.
+        fn within_4_sigma(hits: usize, n: usize, p: f64) -> bool {
+            let measured = hits as f64 / n as f64;
+            (measured - p).abs() <= 4.0 * (p * (1.0 - p) / n as f64).sqrt()
+        }
+
+        // ---- T85: the integer −log2, the key order, the cap ---------------------------------------
+
+        /// `(u, palw_draw_neg_log2_q64_v1(u))`: the six edges, then 64 values of splitmix64 from
+        /// seed `0x5712_A152`. Generated outside the tree by a Python port of §3.14's routine
+        /// (`t85_golden.py`, beside this commit's review notes), which checks every output against
+        /// `−log2((u + 1) / 2^64)` from an 80-digit decimal logarithm: worst error `1.44 × 10^-19`
+        /// (under three units of `2^-64`, always above the exact value — the fraction bits
+        /// truncate), against the `4 × 10^-15` §3.14 states.
+        const T85_VECTORS: [(u64, u128); 70] = [
+            (0x0000000000000000, 0x400000000000000000),
+            (0x0000000000000001, 0x3f0000000000000000),
+            (0x7fffffffffffffff, 0x10000000000000000),
+            (0x8000000000000000, 0xfffffffffffffffe),
+            (0xfffffffffffffffe, 0x2),
+            (0xffffffffffffffff, 0x0),
+            (0x6f0f403721bcd0aa, 0x1346e6e6b1bf945db),
+            (0xcc48eed2a23d2ccc, 0x5357fbf482e9dc53),
+            (0xa5d9f964820d1450, 0xa0520e78dc92b8a3),
+            (0x1d3811b4b2c524b5, 0x32193f887684f1843),
+            (0xc890505e92c5144a, 0x5a221e4aca7d17c9),
+            (0x0dd572e79332baca, 0x435ba6f2e7716b368),
+            (0x70f4e4352085f99e, 0x12e2d10d7faead78c),
+            (0x28164e8dc7cd47ac, 0x2acc861338f9bcf56),
+            (0x8e7d596406d58786, 0xd864b605086db2d2),
+            (0x789235dd2c34f28f, 0x11615161fc80e9ea0),
+            (0xff1cf402f0ab197f, 0x14820c86687c893),
+            (0x81f7c1d9eed22496, 0xfa5d860b1161167d),
+            (0x3639e8beb8807177, 0x23d34741903cfd8cf),
+            (0x4af892770b56e5bf, 0x1c590b92232fc90d7),
+            (0x2bab0702e7601b8c, 0x28d2ea447071b093d),
+            (0xe00339b41b285a75, 0x314bdeb4fa70f6dd),
+            (0xb605ffe5afd25605, 0x7df4ff1090dac063),
+            (0x8c145cfd0f1c21d0, 0xdeb19a924a89178f),
+            (0xf94f9fb8e8d4708e, 0x9c748e17e97ef88),
+            (0x22cd9af9af93a1ab, 0x2e0fc967414b3a5d4),
+            (0xfd2f03424842de22, 0x415edbf7292f5ba),
+            (0x247d8bfc0540f800, 0x2cf807bdd1c4cfa28),
+            (0xe22e0137a0d0e72c, 0x2dbd99ab9518c221),
+            (0xc004ddc0c718c35a, 0x6a368991defac57e),
+            (0xe8af11918c1297d2, 0x2345119e09dbe26e),
+            (0xc78d5daa8ba63461, 0x5c002ac937d1c69d),
+            (0xf72f254e22c46335, 0xcf1560c808af770),
+            (0x3ee13160bb812e38, 0x20685c23837ca6fb9),
+            (0xad1b1d3e35688dba, 0x90825654e2bc48b9),
+            (0xe9ba05e099cba1e8, 0x219e4a1466267fbd),
+            (0x01480ef3d43358be, 0x7a466a3035c381c3f),
+            (0x5f9ed7f03c63fd85, 0x16bb66ae1801f8f26),
+            (0x045a675b561e3d3c, 0x5e0c0eb52a9835556),
+            (0xaa0f6b9e047b73b9, 0x9710a90ac3fbdb4d),
+            (0xad9e506ecb9d3080, 0x8f6ad44a50a48bec),
+            (0x910e54e7d6ff0a0f, 0xd1ccfb0f424ae85f),
+            (0xf205af685e54574c, 0x14bcb3ea5a890d1f),
+            (0xa3340f0d447fae95, 0xa643de728d886c7b),
+            (0x10cc420d47dabf92, 0x3ee06e1765a7b9c45),
+            (0x5095f9c2ac742948, 0x1aae4431af73682d9),
+            (0xbe8eeb226ea39f15, 0x6d088a0d488bbd7b),
+            (0x25d6deed77794673, 0x2c21869bfaca1a418),
+            (0x50d6646795125df1, 0x1a9bd7f34d623cf30),
+            (0x5ab6d28f7e12738e, 0x17f2aa24a6ff67e5e),
+            (0x4d11633eafaca04d, 0x1bb6083a0f0daffb0),
+            (0x2abf4be66f7daa88, 0x2950db21676dc68e2),
+            (0x7c222d3ec2f9dcf5, 0x10b540d12a3d7e077),
+            (0x6c798c8fb6389914, 0x13d20f090f5185f25),
+            (0x5561907a877fa57b, 0x1958b2e27cee38d56),
+            (0x517425c83e98f488, 0x1a6ef7a5e456674b6),
+            (0xa571e6f61813d29d, 0xa13a1894d49e771d),
+            (0x34e44700758e0471, 0x2466863408dcc3bd2),
+            (0x935bbfd164172771, 0xcbfc09d44253174d),
+            (0xb79973b7876bb430, 0x7ac5e7bb25c254a7),
+            (0x8e5361f7bef9c060, 0xd8d18cc2629af30b),
+            (0x7b2dc216fedd9f75, 0x10e2e1266f9b47014),
+            (0xf9db28871146c3ed, 0x8f8cdc246c0f101),
+            (0xa52f4785c864523f, 0xa1cef02837301c3c),
+            (0x90dad5f0caa23611, 0xd2502fc3be7a7583),
+            (0x6b712376f16623bb, 0x140a98172e6b25f91),
+            (0x4c16f1ed05e6584f, 0x1c018626ae9f2dddc),
+            (0xae78235afd59e726, 0x8d9c9849f3a1c036),
+            (0x2eebaf871e547def, 0x272a63b53974b38c7),
+            (0xb278b4a1367eeb4a, 0x853c36ea74408f0e),
+        ];
+
+        fn splitmix64(state: &mut u64) -> u64 {
+            *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = *state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        /// **T85 (SW-3): the integer `−log2` is the normative routine, monotone, and never
+        /// overflows; the key order is the cross-multiplication with ties by operator id; `W` is
+        /// capped.** Debug builds check every `u128` operation for overflow, so running the routine
+        /// over the vectors and the sweep IS the no-overflow check.
+        #[test]
+        fn t85_the_integer_log_the_key_order_and_the_cap() {
+            // The golden vectors, and the table's pseudo-random half is what splitmix64 says.
+            let mut seed = 0x5712_A152u64;
+            for (i, (u, l)) in T85_VECTORS.iter().enumerate() {
+                assert_eq!(palw_draw_neg_log2_q64_v1(*u), *l, "vector {i}: u = {u:#x}");
+                if i >= 6 {
+                    assert_eq!(*u, splitmix64(&mut seed), "vector {i} is splitmix64's");
+                }
+                // And against the float logarithm, loosely (the tight bound is the script's).
+                let float = 64.0 - ((*u as f64) + 1.0).log2();
+                assert!((*l as f64 / 2f64.powi(64) - float).abs() < 1e-9, "vector {i}: {l:#x} against {float}");
+            }
+            assert_eq!(palw_draw_neg_log2_q64_v1(0), 64u128 << 64, "u = 0 is the largest key, 2^70");
+            assert_eq!(palw_draw_neg_log2_q64_v1(u64::MAX), 0, "u = 2^64 − 1 is the smallest");
+
+            // Monotone: never rises as u rises — over 20,000 draws, every power of two and its
+            // neighbours, and every step across the 2^63 and 2^64 boundaries.
+            let mut us: Vec<u64> = (0..20_000).map(|_| splitmix64(&mut seed)).collect();
+            for k in 0..64u32 {
+                let p = 1u64 << k;
+                us.extend([p.wrapping_sub(1), p, p.saturating_add(1)]);
+            }
+            us.extend((0..512u64).map(|d| (1u64 << 63) - 256 + d));
+            us.extend((0..256u64).map(|d| u64::MAX - d));
+            us.sort_unstable();
+            us.dedup();
+            let mut previous = u128::MAX;
+            for u in &us {
+                let l = palw_draw_neg_log2_q64_v1(*u);
+                assert!(l <= previous, "monotone at u = {u:#x}");
+                assert!(l <= 64u128 << 64);
+                previous = l;
+            }
+
+            // The key order: `L_i · W_j < L_j · W_i`, ties by operator id.
+            let (a, b) = (h64(1), h64(2));
+            assert_eq!(palw_draw_key_cmp_v1(6, 3, &b, 5, 3, &a), std::cmp::Ordering::Greater, "6/3 after 5/3");
+            assert_eq!(palw_draw_key_cmp_v1(6, 3, &b, 4, 2, &a), std::cmp::Ordering::Greater, "6/3 = 4/2: the id decides, 2 after 1");
+            assert_eq!(palw_draw_key_cmp_v1(6, 3, &a, 4, 2, &b), std::cmp::Ordering::Less, "…and 1 before 2");
+            assert_eq!(palw_draw_key_cmp_v1(100, 2, &b, 60, 1, &a), std::cmp::Ordering::Less, "50 before 60: the heavier key wins");
+            // The extremes multiply inside u128.
+            let top = 64u128 << 64;
+            assert_eq!(
+                palw_draw_key_cmp_v1(top, PALW_DRAW_WEIGHT_MAX_MSK_V1, &a, top - 1, PALW_DRAW_WEIGHT_MAX_MSK_V1, &b),
+                std::cmp::Ordering::Greater
+            );
+            assert_eq!(palw_draw_key_cmp_v1(top, u64::MAX, &a, top, u64::MAX, &b), std::cmp::Ordering::Less, "clamped, then the id");
+
+            // W: whole MSK, capped at the policy's cap, under 2^40, never below 1.
+            let cap = PalwPanelStakeDrawV1::V1.weight_cap_msk;
+            assert_eq!(cap, 1_000_000);
+            assert_eq!(palw_draw_operator_weight_msk_v1((GENESIS_SEAT / MSK) as u128, cap), 939_063, "a genesis seat, uncapped");
+            assert_eq!(palw_draw_operator_weight_msk_v1(20_000_000, cap), 1_000_000, "a 20M operator weighs the cap");
+            assert_eq!(palw_draw_operator_weight_msk_v1(0, cap), 1, "every eligible operator has a key");
+            assert_eq!(palw_draw_operator_weight_msk_v1(u128::MAX, u64::MAX), PALW_DRAW_WEIGHT_MAX_MSK_V1, "the arithmetic bound");
+
+            // The ticket is H(domain ‖ anchor ‖ claim ‖ operator) under the lottery's hasher, and u
+            // is its first eight bytes little-endian.
+            let (anchor, claim, operator) = (BlockHash::from_u64_word(9), h64(8), h64(7));
+            let mut by_hand = keyed(PALW_PANEL_V2_DOMAIN_STAKE_TICKET);
+            by_hand.update(anchor.as_byte_slice());
+            by_hand.update(claim.as_byte_slice());
+            by_hand.update(operator.as_byte_slice());
+            let ticket = finish(by_hand);
+            assert_eq!(palw_panel_stake_ticket_v1(anchor, &claim, &operator), ticket);
+            assert_eq!(palw_draw_ticket_u64_v1(&ticket).to_le_bytes(), ticket.as_byte_slice()[..8]);
+            assert_ne!(palw_panel_stake_outsider_ticket_v1(anchor, &claim, &operator), ticket, "the outsider has its own domain");
+            assert_ne!(palw_panel_operator_ticket_v1(anchor, &claim, &operator), ticket, "and the lottery's is not reused");
+        }
+
+        // ---- T86: the law ---------------------------------------------------------------------------
+
+        /// **T86 (SW-3, SW-6): the draw is successive sampling.** Eight genesis seats and three
+        /// floor-sized operators on a five-seat panel, over 2^16 anchors: every operator's inclusion
+        /// is within 4σ of the exact successive-sampling inclusion (0.58477 a genesis seat, 0.10729 a
+        /// 130k operator — enumerated here, and `v31_stake_draw.py`'s `dist_A((8, 939,063), (3,
+        /// 130,000))` gives the same `E[A]/3`). The S1 assignment is a hash of `(anchor, claim,
+        /// seat_count)` that the race does not feed, so the full seat and a segment's holder are a
+        /// uniform ordered pair of positions: the measured P2 of the three small operators matches
+        /// `E[A(A − 1)] / 20` of the exact law. And with equal weights the race is today's uniform
+        /// law, `5/11` each.
+        #[test]
+        fn t86_the_draw_is_successive_sampling_and_s1_is_untouched() {
+            let (state, claim_id) = sw_state(&genesis_and_small(3), &[]);
+            let (eligible, base) = populations(&state, &claim_id);
+            assert_eq!((eligible.len(), base.len()), (11, 11));
+            let stake = PalwPanelStakeDrawV1::V1;
+            let operators: Vec<Hash64> = (2..=12u64).map(|b| op_id(if b <= 9 { 0x40 + b } else { 0x4A + b - 10 })).collect();
+            let small = |op: &Hash64| operators[8..].contains(op);
+            let weights: Vec<f64> = (0..11).map(|i| if i < 8 { 939_063.0 } else { 130_000.0 }).collect();
+            let marked: Vec<bool> = (0..11).map(|i| i >= 8).collect();
+            let (inclusion, law) = exact_law(&weights, 5, &marked);
+            assert!((inclusion[0] - 0.584_767_875_6).abs() < 1e-9 && (inclusion[8] - 0.107_285_665_1).abs() < 1e-9);
+            let p2_exact = law.iter().enumerate().map(|(a, p)| (a * a.saturating_sub(1)) as f64 * p).sum::<f64>() / 20.0;
+            assert!((p2_exact - 0.002_431_702_46).abs() < 1e-9, "E[A(A − 1)] / 20 = {p2_exact}");
+
+            const N: usize = 1 << 16;
+            let mut seated = [0usize; 11];
+            let mut p2_hits = 0usize;
+            let lottery = lottery_policy();
+            let mut differs = 0usize;
+            let mut s1_s3 = blake2b_simd::Params::new().hash_length(32).to_state();
+            for i in 0..N as u64 {
+                let at = anchor(i);
+                let seats = palw_panel_stake_race_of_v1(5, &claim_id, at, &eligible, &base, &stake).expect("a full panel");
+                for seat in &seats {
+                    seated[operators.iter().position(|op| *op == seat.operator_id).unwrap()] += 1;
+                }
+                // S1: the full seat and segment 0's partial holder, by position.
+                let assignment = crate::palw_verification_v2::palw_segment_assignment_v2(at, claim_id, 5);
+                let holder = (0..5u16).find(|s| *s != assignment.full_seat && assignment.mask_of(*s).covers(0)).unwrap();
+                p2_hits += usize::from(
+                    small(&seats[assignment.full_seat as usize].operator_id) && small(&seats[holder as usize].operator_id),
+                );
+                if i < 64 {
+                    // The race IS the draw: `derive_panel_v2_with_policy` seats the same panel.
+                    let derived = derive_panel_v2_with_policy(&state, &five(), &claim_id, at, 100, None, false, sw_policy()).unwrap();
+                    assert_eq!(derived, seats);
+                    // SW-6: the assignment and the S3 sites read the bind — `(anchor, claim,
+                    // seat_count)` and `(anchor, claim, seat_index)` — and never the panel, so the race
+                    // cannot move them; their outputs are pinned below against today's.
+                    let other = derive_panel_v2_with_policy(&state, &five(), &claim_id, at, 100, None, false, lottery).unwrap();
+                    differs += usize::from(other != seats);
+                    s1_s3.update(format!("{assignment:?}").as_bytes());
+                    for s in 0..5u16 {
+                        let sites = crate::palw_layer_sample_v3::palw_layer_sample_v3(at, claim_id, s, 4, 64, 3);
+                        s1_s3.update(format!("{sites:?}").as_bytes());
+                    }
+                }
+            }
+            assert!(differs > 0, "the lottery and the race must disagree somewhere, or the comparison is vacuous");
+            assert_eq!(
+                faster_hex::hex_string(s1_s3.finalize().as_bytes()),
+                "67384c79d5fa0ac675d0bdba2d84e1c5a13872ba841530ec1f5be1cbe33ae303",
+                "the S1 assignment and the S3 sites are today's"
+            );
+            for (i, hits) in seated.iter().enumerate() {
+                assert!(
+                    within_4_sigma(*hits, N, inclusion[i]),
+                    "operator {i}: seated {hits} of {N}, exact inclusion {:.5}",
+                    inclusion[i]
+                );
+            }
+            assert!(within_4_sigma(p2_hits, N, p2_exact), "P2 measured {p2_hits} of {N}, exact {p2_exact:.6}");
+
+            // Equal weights: a cap of one MSK makes every weight 1, and the race is uniform.
+            let uniform = PalwPanelStakeDrawV1 { weight_cap_msk: 1, ..stake };
+            let mut seated = [0usize; 11];
+            const M: usize = 1 << 14;
+            for i in 0..M as u64 {
+                for seat in palw_panel_stake_race_of_v1(5, &claim_id, anchor(i), &eligible, &base, &uniform).unwrap() {
+                    seated[operators.iter().position(|op| *op == seat.operator_id).unwrap()] += 1;
+                }
+            }
+            for (i, hits) in seated.iter().enumerate() {
+                assert!(within_4_sigma(*hits, M, 5.0 / 11.0), "equal weights: operator {i} seated {hits} of {M}");
+            }
+        }
+
+        // ---- T87: the weight and the keys ----------------------------------------------------------
+
+        /// **T87 (SW-2, SW-7): an operator's weight sums its eligible bonds, a bond registered at or
+        /// after the anchor adds nothing, no other operator moves a key, and splitting leaves the
+        /// first seat's law and `P(at least one seat)` where they were.**
+        #[test]
+        fn t87_the_weight_sums_eligible_bonds_and_keys_are_the_operators_own() {
+            let stake = PalwPanelStakeDrawV1::V1;
+            // Operator X (0x50) holds two bonds, 400,000 and 300,000 MSK (ids are not unique on this
+            // fixture; on testnet-12 they are, and the sum is one bond's collateral).
+            let mut rows = genesis_and_small(0);
+            rows.truncate(6);
+            rows.extend([(20, 0x50, 400_000 * MSK), (21, 0x50, 300_000 * MSK)]);
+            let (state, claim_id) = sw_state(&rows, &[]);
+            let (eligible, _) = populations(&state, &claim_id);
+            let x = op_id(0x50);
+            for i in 0..16u64 {
+                let entries = palw_panel_stake_entries_v1(&claim_id, anchor(i), &eligible, &stake);
+                let entry = entries.iter().find(|e| e.operator_id == x).unwrap();
+                assert_eq!(entry.weight_msk, 700_000, "the sum of X's two bonds");
+                let best = [20u64, 21]
+                    .iter()
+                    .map(|n| PalwBondKeyV2(bond_outpoint(*n)))
+                    .min_by_key(|bond| (palw_panel_seat_ticket_v1(anchor(i), &claim_id, bond), *bond))
+                    .unwrap();
+                assert_eq!(entry.bond, best, "X sits with today's candidate bond");
+                assert_eq!(entries.iter().filter(|e| e.operator_id == x).count(), 1, "one entry an operator");
+            }
+            // Past the cap the sum stops.
+            let mut heavy = rows.clone();
+            heavy.push((22, 0x50, 600_000 * MSK));
+            let (heavy_state, heavy_claim) = sw_state(&heavy, &[]);
+            assert_eq!(heavy_claim, claim_id);
+            let (heavy_eligible, _) = populations(&heavy_state, &heavy_claim);
+            let entries = palw_panel_stake_entries_v1(&claim_id, anchor(0), &heavy_eligible, &stake);
+            assert_eq!(entries.iter().find(|e| e.operator_id == x).unwrap().weight_msk, 1_000_000, "1.3M capped at 1,000,000");
+
+            // A bond registered AT or after the anchor adds nothing (ADR-0147's cut, SW-8): X's
+            // second bond registers at DAA 150; under independence the claim anchored at DAA 150
+            // draws exactly the panel the registry without that bond draws, and at 151 it counts.
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let mut early = rows.clone();
+            early.pop();
+            let (lean, lean_claim) = sw_state(&early, &[]);
+            assert_eq!(lean_claim, claim_id);
+            let (late, _) =
+                apply_palw_transition_v2(&lean, &sp, &ctx(150, 150, 150), &[adr0130_bond(21, 51, 0x50, 300_000 * MSK)], None)
+                    .expect("the late bond registers");
+            let at = |anchor_daa| PalwPanelDrawPolicyV1 {
+                independence: Some(PalwPanelIndependenceV1 { from_daa: 0, base_class_id: h64(1), anchor_daa }),
+                ..sw_policy()
+            };
+            let mut moved = false;
+            for i in 0..64u64 {
+                let draw = |state: &PalwChainStateV2, policy| {
+                    derive_panel_v2_with_policy(state, &five(), &claim_id, anchor(i), 100, None, false, policy).unwrap()
+                };
+                assert_eq!(draw(&late, at(150)), draw(&lean, at(150)), "anchor {i}: registered at the anchor, it adds nothing");
+                moved |= draw(&late, at(151)) != draw(&lean, at(151));
+            }
+            assert!(moved, "registered before the anchor, the bond adds weight — or the refusal above is vacuous");
+
+            // Adding or removing any OTHER operator never moves an operator's key.
+            let (wide, _) = sw_state(&genesis_and_small(3), &[]);
+            let (all, _) = populations(&wide, &claim_id);
+            let without: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> =
+                all.iter().copied().filter(|(_, bond)| bond.operator_id != op_id(0x44)).collect();
+            let with_stranger_row = {
+                let mut rows = genesis_and_small(3);
+                rows.push((30, 0x70, 250_000 * MSK));
+                rows
+            };
+            let (stranger, _) = sw_state(&with_stranger_row, &[]);
+            let (with, _) = populations(&stranger, &claim_id);
+            for i in 0..32u64 {
+                let full = palw_panel_stake_entries_v1(&claim_id, anchor(i), &all, &stake);
+                for other in [
+                    palw_panel_stake_entries_v1(&claim_id, anchor(i), &without, &stake),
+                    palw_panel_stake_entries_v1(&claim_id, anchor(i), &with, &stake),
+                ] {
+                    for entry in &other {
+                        if let Some(same) = full.iter().find(|e| e.operator_id == entry.operator_id) {
+                            assert_eq!(same, entry, "anchor {i}: an operator's key is its own");
+                        }
+                    }
+                }
+            }
+
+            // Splitting: X of 260,000 MSK against X1 + X2 of 130,000 each, beside the eight genesis
+            // seats. The group's first key is distributed as X's (the minimum of two exponentials of
+            // rate W/2 is one of rate W), so the first seat's law and P(at least one seat) are the
+            // same — exactly in law, and within 4σ here over 2^14 anchors each.
+            let mut whole = genesis_and_small(0);
+            whole.push((20, 0x50, 260_000 * MSK));
+            let mut split = genesis_and_small(0);
+            split.extend([(20, 0x50, FLOOR_SEAT), (21, 0x51, FLOOR_SEAT)]);
+            let group = [op_id(0x50), op_id(0x51)];
+            let mut weights: Vec<f64> = vec![939_063.0; 8];
+            weights.push(260_000.0);
+            let marked: Vec<bool> = (0..9).map(|i| i == 8).collect();
+            let (inclusion, _) = exact_law(&weights, 5, &marked);
+            let first = 260_000.0 / (8.0 * 939_063.0 + 260_000.0);
+            const N: usize = 1 << 14;
+            for (label, rows) in [("whole", whole), ("split", split)] {
+                let (state, claim_id) = sw_state(&rows, &[]);
+                let (eligible, base) = populations(&state, &claim_id);
+                let (mut any, mut head) = (0usize, 0usize);
+                for i in 0..N as u64 {
+                    let seats = palw_panel_stake_race_of_v1(5, &claim_id, anchor(i), &eligible, &base, &stake).unwrap();
+                    any += usize::from(seats.iter().any(|s| group.contains(&s.operator_id)));
+                    head += usize::from(group.contains(&seats[0].operator_id));
+                }
+                assert!(within_4_sigma(any, N, inclusion[8]), "{label}: at least one seat {any} of {N}, exact {:.5}", inclusion[8]);
+                assert!(within_4_sigma(head, N, first), "{label}: the first seat {head} of {N}, exact {first:.5}");
+            }
+        }
+
+        // ---- build = accept ------------------------------------------------------------------------
+
+        /// **Build = accept (SW-1, the pure part of T89).** `validate_panel_bound_v2_with_policy`
+        /// recomputes through the same functions: under the stake policy the race's panel is
+        /// accepted and the lottery's refused wherever they differ, and under `stake: None` the
+        /// reverse — for a genesis class and for an ADR-0147 outsider-judged claim.
+        #[test]
+        fn build_equals_accept_and_each_draw_refuses_the_others_panel() {
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let (state, claim_id) = sw_state(&genesis_and_small(3), &[]);
+            let check = |state: &PalwChainStateV2, claim_id: &Hash64, params: &PalwPanelParamsV2, stake_policy, lottery| {
+                let slot = state.claim(claim_id).unwrap().bind_base_daa() + params.anchor_delay();
+                let mut differs = 0usize;
+                for i in 0..48u64 {
+                    let at = anchor(i);
+                    let fact = PalwAnchorFactV2 { anchor_block: at, anchor_daa: slot, predecessor_daa: slot - 1 };
+                    // SW-8 (M4): the binding block IS the anchor block — `anchor(i)`'s own word.
+                    let in_anchor = ctx(0x5700_0000 + i, slot, 9_000);
+                    let later = ctx(9_000, slot + 1, 9_000);
+                    let validate_at = |at_block: &PalwBlockContextV2, seats: &[PalwPanelSeatV2], policy| {
+                        validate_panel_bound_v2_with_policy(
+                            state, params, &sp, at_block, claim_id, &fact, at, seats, None, false, policy, None,
+                        )
+                    };
+                    let validate = |seats: &[PalwPanelSeatV2], policy| validate_at(&in_anchor, seats, policy);
+                    let raced = derive_panel_v2_with_policy(state, params, claim_id, at, 100, None, false, stake_policy).unwrap();
+                    let drawn = derive_panel_v2_with_policy(state, params, claim_id, at, 100, None, false, lottery).unwrap();
+                    assert_eq!(validate(&raced, stake_policy), Ok(()), "anchor {i}: the race's panel is accepted under its policy");
+                    assert_eq!(validate(&drawn, lottery), Ok(()), "anchor {i}: and the lottery's under its own");
+                    // SW-8: a block after the anchor block — inside the bind window — may carry the
+                    // lottery's panel as it always could, and never the race's.
+                    assert!(
+                        matches!(validate_at(&later, &raced, stake_policy), Err(PalwPanelV2Error::BindOutsideWindow(_))),
+                        "anchor {i}: under the stake draw a later block cannot bind the claim"
+                    );
+                    assert_eq!(validate_at(&later, &drawn, lottery), Ok(()), "anchor {i}: stake None keeps today's window");
+                    if raced != drawn {
+                        differs += 1;
+                        assert_eq!(validate(&drawn, stake_policy), Err(PalwPanelV2Error::PanelMismatch), "anchor {i}");
+                        assert_eq!(validate(&raced, lottery), Err(PalwPanelV2Error::PanelMismatch), "anchor {i}");
+                    }
+                }
+                assert!(differs > 0, "the two draws must differ somewhere, or the refusals are vacuous");
+            };
+            check(&state, &claim_id, &five(), sw_policy(), lottery_policy());
+
+            // The outsider-judged claim: honest network operators (11..=18) at genesis size, the
+            // registrant's four Sybils (2..=5) at the floor, the registrant (9) excluded.
+            let (bought, bought_claim) = t88_bought_state(&sp, |n| if (11..=18).contains(&n) { GENESIS_SEAT } else { FLOOR_SEAT });
+            let independent = |policy: PalwPanelDrawPolicyV1| PalwPanelDrawPolicyV1 {
+                independence: Some(PalwPanelIndependenceV1 { from_daa: 0, base_class_id: h64(1), anchor_daa: 150 }),
+                ..policy
+            };
+            let three = PalwPanelParamsV2::new(3, 2, 4).unwrap();
+            check(&bought, &bought_claim, &three, independent(sw_policy()), independent(lottery_policy()));
+        }
+
+        /// **SW-5: the outsider races by stake over the network's population.** Beside eight honest
+        /// genesis-size operators, the registrant's four 130k Sybils sit as the outsider with the
+        /// first-key probability `520,000 / 8,032,504 = 0.0647` (the uniform outsider ticket gave
+        /// them 4/12); within 4σ over 2^12 anchors. The class's own seats follow, without the
+        /// outsider's operator.
+        #[test]
+        fn sw5_the_outsider_is_the_smallest_stake_outsider_key() {
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let (state, claim_id) = t88_bought_state(&sp, |n| if (11..=18).contains(&n) { GENESIS_SEAT } else { FLOOR_SEAT });
+            let policy = PalwPanelDrawPolicyV1 {
+                independence: Some(PalwPanelIndependenceV1 { from_daa: 0, base_class_id: h64(1), anchor_daa: 150 }),
+                ..sw_policy()
+            };
+            let sybil = |bond: &PalwBondKeyV2| (2..=5u64).any(|n| *bond == PalwBondKeyV2(bond_outpoint(n)));
+            let honest = |bond: &PalwBondKeyV2| (11..=18u64).any(|n| *bond == PalwBondKeyV2(bond_outpoint(n)));
+            const N: usize = 1 << 12;
+            let mut sybil_outsiders = 0usize;
+            for i in 0..N as u64 {
+                let seats = derive_panel_v2_with_policy(
+                    &state,
+                    &PalwPanelParamsV2::new(3, 2, 4).unwrap(),
+                    &claim_id,
+                    anchor(i),
+                    100,
+                    None,
+                    false,
+                    policy,
+                )
+                .expect("the outsider and two class seats");
+                assert!(sybil(&seats[0].bond) || honest(&seats[0].bond), "the outsider comes from the floor's population");
+                assert!(!seats[1..].iter().any(|s| s.operator_id == seats[0].operator_id), "one operator, one seat");
+                sybil_outsiders += usize::from(sybil(&seats[0].bond));
+                if i < 32 {
+                    // The outsider is the population's first stake-outsider entry.
+                    let eligible = palw_panel_eligible_bonds_judging_v1(
+                        &state,
+                        &claim_id,
+                        &h64(1),
+                        100,
+                        Some(149),
+                        false,
+                        None,
+                        Some(sw_economy()),
+                        3,
+                    )
+                    .unwrap()
+                    .into_iter()
+                    .filter(|(key, _)| **key != PalwBondKeyV2(bond_outpoint(9)))
+                    .collect::<Vec<_>>();
+                    let first = palw_panel_stake_entries_under_v1(
+                        &claim_id,
+                        anchor(i),
+                        &eligible,
+                        palw_panel_stake_outsider_ticket_v1,
+                        &PalwPanelStakeDrawV1::V1,
+                    )[0];
+                    assert_eq!((seats[0].bond, seats[0].operator_id), (first.bond, first.operator_id));
+                }
+            }
+            let p = 520_000.0 / (8.0 * 939_063.0 + 520_000.0);
+            assert!(within_4_sigma(sybil_outsiders, N, p), "Sybil outsiders {sybil_outsiders} of {N}, expected {p:.4}");
+        }
+
+        // ---- T92: liveness is the lottery's -------------------------------------------------------
+
+        /// **T92 (SW-9): `InsufficientEligibleBonds` under exactly the operator lottery's condition,
+        /// over the T88 corpus** — for every draw without an outsider the two refuse together, with
+        /// the same `needed` and `available`, and for an outsider-judged claim `NoOutsider` is
+        /// shared; any other refusal is the same refusal. **And an operator holding 95% of the
+        /// weight sits once and the panel fills.**
+        #[test]
+        fn t92_liveness_is_the_lotterys_and_a_95_percent_operator_sits_once() {
+            let (mut short, mut stake_floor) = (0usize, 0usize);
+            for fixture in t88_corpus() {
+                for policy in &fixture.policies {
+                    let lottery = PalwPanelDrawPolicyV1 { stake: None, ..*policy };
+                    let raced = PalwPanelDrawPolicyV1 { stake: Some(PalwPanelStakeDrawV1::V1), ..*policy };
+                    let claim = fixture.state.claim(&fixture.claim_id).unwrap();
+                    let outsider_judged = policy.independence.filter(|i| i.governs(claim)).is_some_and(|i| {
+                        crate::palw_state_v2::palw_claim_is_outsider_judged_v1(&fixture.state, claim, Some(i.from_daa))
+                    });
+                    for i in 0..8u64 {
+                        let at = BlockHash::from_u64_word(0x9200 + i);
+                        let draw = |policy| {
+                            derive_panel_v2_with_policy(
+                                &fixture.state,
+                                &fixture.params,
+                                &fixture.claim_id,
+                                at,
+                                100,
+                                None,
+                                false,
+                                policy,
+                            )
+                        };
+                        let (a, b) = (draw(lottery), draw(raced));
+                        stake_floor += usize::from(matches!(b, Err(PalwPanelV2Error::InsufficientEligibleStake { .. })));
+                        match (&a, &b) {
+                            (Err(PalwPanelV2Error::NoOutsider(x)), other) | (other, Err(PalwPanelV2Error::NoOutsider(x))) => {
+                                assert_eq!(other, &Err(PalwPanelV2Error::NoOutsider(*x)), "{}: NoOutsider together", fixture.name);
+                            }
+                            _ if outsider_judged => {}
+                            (Err(e @ PalwPanelV2Error::InsufficientEligibleBonds { .. }), other)
+                            | (other, Err(e @ PalwPanelV2Error::InsufficientEligibleBonds { .. })) => {
+                                short += 1;
+                                assert_eq!(other, &Err(e.clone()), "{}: InsufficientEligibleBonds together", fixture.name);
+                            }
+                            (Ok(_), Ok(_)) | (Ok(_), Err(PalwPanelV2Error::InsufficientEligibleStake { .. })) => {}
+                            (x, y) => assert_eq!(x, y, "{}: every other refusal is the same refusal", fixture.name),
+                        }
+                    }
+                }
+            }
+            assert!(short > 50, "the corpus reaches the short-panel refusal: {short}");
+            eprintln!("T92: {short} short draws refused together; {stake_floor} stake-floor refusals where the lottery bound");
+
+            // The 95% operator: 1,000,000 MSK (two bonds, 700k + 600k, capped) against ten operators
+            // of 5,263 MSK (52,630 MSK in all), on a network whose floor is 1,000 MSK.
+            let mut rows = vec![(20, 0x50, 700_000 * MSK), (21, 0x50, 600_000 * MSK)];
+            rows.extend((0..10u64).map(|i| (30 + i, 0x60 + i, 5_263 * MSK)));
+            let (state, claim_id) = sw_state(&rows, &[]);
+            let low_floor = PalwPanelDrawPolicyV1 { economy: Some(t88_economy(1_000 * MSK, 500, 0)), ..sw_policy() };
+            let whale = op_id(0x50);
+            for i in 0..256u64 {
+                let seats = derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i), 100, None, false, low_floor)
+                    .expect("the panel fills");
+                assert_eq!(seats.len(), 5, "anchor {i}: five seats");
+                let operators: std::collections::BTreeSet<Hash64> = seats.iter().map(|s| s.operator_id).collect();
+                assert_eq!(operators.len(), 5, "anchor {i}: one seat an operator");
+                assert_eq!(seats.iter().filter(|s| s.operator_id == whale).count(), 1, "anchor {i}: the 95% operator sits, once");
+            }
+        }
+
+        // ---- T93: the one ledger decides eligibility, never a key ---------------------------------
+
+        /// **T93, the pure part (SW-2, SW-8): changing another bond's commitments moves no eligible
+        /// operator's key; only an operator's own eligibility changes the panel.** Nine operators
+        /// of 2,000 sompi (weight 1 each under the 1-MSK floor) back a 600-sompi seat under a 500‰
+        /// ceiling. Bond 3 produces a 10-pwu claim (reserves 50): every entry is unchanged, key for
+        /// key, and so is every panel. Bond 2 produces a 100-pwu claim (reserves 500, so 500 + 600
+        /// exceeds its 1,000): its operator leaves the race and every other entry keeps its key and
+        /// its order — the panel is the old order without it. Eight of nine operators still clear
+        /// SW-10's floor (889‰).
+        #[test]
+        fn t93_another_bonds_commitments_move_no_key() {
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let rows: Vec<(u64, u64, u64)> = (2..=10u64).map(|b| (b, 0x20 + b, 2_000)).collect();
+            let (before, claim_id) = sw_state(&rows, &[]);
+            let (quiet, _) = fold_attempt(&before, &sp, 102, 3, 33, 0x23, h64(1), h64(11), 10);
+            let (loaded, _) = fold_attempt(&quiet, &sp, 103, 2, 32, 0x22, h64(1), h64(11), 100);
+            let economy = Some(t88_economy(1_000, 500, 0));
+            let policy = PalwPanelDrawPolicyV1 { economy, stake: Some(PalwPanelStakeDrawV1::V1), ..Default::default() };
+            let params = panel_params(); // three seats
+            let eligible = |state: &PalwChainStateV2| {
+                palw_panel_eligible_bonds_v2(state, &claim_id, 100, None, false, None, economy, 3)
+                    .unwrap()
+                    .into_iter()
+                    .map(|(k, b)| (*k, b.clone()))
+                    .collect::<Vec<_>>()
+            };
+            fn as_refs(list: &[(PalwBondKeyV2, PalwBondStateV2)]) -> Vec<(&PalwBondKeyV2, &PalwBondStateV2)> {
+                list.iter().map(|(k, b)| (k, b)).collect()
+            }
+            let (e0, e1, e2) = (eligible(&before), eligible(&quiet), eligible(&loaded));
+            assert_eq!((e0.len(), e1.len(), e2.len()), (9, 9, 8), "only bond 2 left the eligible list");
+            assert!(
+                quiet.reserved_exposure(&PalwBondKeyV2(bond_outpoint(3))) > before.reserved_exposure(&PalwBondKeyV2(bond_outpoint(3)))
+            );
+            let gone = op_id(0x22);
+            let mut changed = 0usize;
+            for i in 0..64u64 {
+                let at = anchor(i);
+                let k0 = palw_panel_stake_entries_v1(&claim_id, at, &as_refs(&e0), &PalwPanelStakeDrawV1::V1);
+                let k1 = palw_panel_stake_entries_v1(&claim_id, at, &as_refs(&e1), &PalwPanelStakeDrawV1::V1);
+                let k2 = palw_panel_stake_entries_v1(&claim_id, at, &as_refs(&e2), &PalwPanelStakeDrawV1::V1);
+                assert_eq!(k0, k1, "anchor {i}: another bond's commitments move no key");
+                let without: Vec<PalwPanelStakeEntryV1> = k1.iter().copied().filter(|e| e.operator_id != gone).collect();
+                assert_eq!(k2, without, "anchor {i}: the ineligible operator leaves, and nobody else moves");
+                let draw = |state| derive_panel_v2_with_policy(state, &params, &claim_id, at, 100, None, false, policy).unwrap();
+                assert_eq!(draw(&before), draw(&quiet), "anchor {i}: the same panel");
+                let after = draw(&loaded);
+                let expected: Vec<PalwPanelSeatV2> =
+                    without.iter().take(3).map(|e| PalwPanelSeatV2 { bond: e.bond, operator_id: e.operator_id }).collect();
+                assert_eq!(after, expected, "anchor {i}: the old order without bond 2's operator");
+                changed += usize::from(after != draw(&quiet));
+            }
+            assert!(changed > 0, "bond 2 must have sat somewhere, or its leaving is vacuous");
+        }
+
+        // ---- T94: SW-10 --------------------------------------------------------------------------
+
+        /// **T94 (SW-10): the eligible-stake floor.** The eight genesis seats beside five idle
+        /// floor-sized operators, with `k` genesis seats SATURATED — their one-ledger headroom
+        /// spent by work they produced, so the headroom filter drops them while the base keeps them.
+        /// `k = 1` binds (7,223,441 of 8,162,504 MSK, 885‰); `k = 2` refuses (6,284,378: 770‰); and
+        /// SW-A1's cliff, seven saturated, refuses where the lottery seats at least four idle Sybils
+        /// in five seats. Eight genesis seats alone bind at exactly 875‰ (seven eligible) and refuse at
+        /// six. `stake: None` never refuses for stake.
+        #[test]
+        fn t94_the_eligible_stake_floor() {
+            let g = 939_063u128;
+            for (small, saturated, expected) in [
+                (5u64, vec![], Ok(())),
+                (5, vec![2u64], Ok(())),
+                (5, vec![2, 3], Err((6 * g + 650_000, 8 * g + 650_000))),
+                (5, vec![2, 3, 4, 5, 6, 7, 8], Err((g + 650_000, 8 * g + 650_000))),
+                (0, vec![2], Ok(())),
+                (0, vec![2, 3], Err((6 * g, 8 * g))),
+            ] {
+                let (state, claim_id) = sw_state(&genesis_and_small(small), &saturated);
+                let (eligible, base) = populations(&state, &claim_id);
+                assert_eq!(base.len(), 8 + small as usize, "the base keeps every seat");
+                assert_eq!(eligible.len(), base.len() - saturated.len(), "the headroom drops exactly the saturated seats");
+                for i in 0..8u64 {
+                    let raced = derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i), 100, None, false, sw_policy());
+                    match expected {
+                        Ok(()) => assert!(raced.is_ok(), "{small} small, {saturated:?} saturated: binds, got {raced:?}"),
+                        Err((eligible, base)) => assert_eq!(
+                            raced,
+                            Err(PalwPanelV2Error::InsufficientEligibleStake { eligible, base }),
+                            "{small} small, {saturated:?} saturated: refused"
+                        ),
+                    }
+                    // Below the fence the same state draws whenever five operators are eligible.
+                    let lottery =
+                        derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i), 100, None, false, lottery_policy());
+                    assert!(lottery.is_ok(), "{small} small, {saturated:?} saturated: stake None never refuses for stake");
+                    if saturated.len() == 7 {
+                        let sybils = lottery.unwrap().iter().filter(|s| s.operator_id != op_id(0x49)).count();
+                        assert!(sybils >= 4, "SW-A1: the lottery's panel is the idle Sybils'");
+                    }
+                }
+            }
+            // The rule itself: exactly at the floor binds; one short refuses; no overflow at the top.
+            assert_eq!(palw_panel_stake_floor_v1(875, 1_000, 875), Ok(()));
+            assert_eq!(
+                palw_panel_stake_floor_v1(874, 1_000, 875),
+                Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 874, base: 1_000 })
+            );
+            assert_eq!(palw_panel_stake_floor_v1(7 * g, 8 * g, 875), Ok(()), "7 of 8 genesis seats is exactly 875‰");
+            assert_eq!(palw_panel_stake_floor_v1(0, 0, 875), Ok(()), "an empty base refuses nothing (the count refused first)");
+            assert!(palw_panel_stake_floor_v1(u128::MAX / 2, u128::MAX / 2, 875).is_ok());
+        }
+
+        /// **T94 (SW-10): the class's base keeps the seats the Valid lock refuses.** The route
+        /// matrix's Valid-lock filter ([`PalwPanelValidLockV1`]) is load-dependent like the
+        /// one-ledger headroom: a seat already standing behind the live locks of claims it judged is
+        /// exactly the "locked honest seat" SW-A1 is about, so it leaves the eligible list and stays
+        /// in the base — the base is never filtered by `lock.admits`. The test above spends seats'
+        /// headroom; this one leaves every headroom whole and locks seats instead: a live slashable
+        /// lock of `939,063 − 50,000` MSK on genesis seats, under a Valid lock of 100,000 MSK the
+        /// idle floor-sized operators can post. Two locked seats refuse with the exact split
+        /// (`6 × 939,063` against `8 × 939,063`: 750‰; with five 130k operators beside them 770‰),
+        /// one locked seat binds (exactly 875‰; 885‰), and the locked seat never sits. Applying the
+        /// lock to the base as well would make base equal eligible and bind every row — SW-A1's
+        /// cliff back for locked seats — and fails here. `stake: None` draws every row.
+        #[test]
+        fn t94_the_class_base_keeps_seats_the_valid_lock_refuses() {
+            use crate::palw_panel_var_v1::PalwSlashableLockV1;
+            use crate::palw_state_v2::PalwStateCarriageV2;
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let g = 939_063u128;
+            let lock = PalwPanelValidLockV1 {
+                required: 100_000 * MSK as u128,
+                now_daa: 103,
+                settled_anchor_depth: None,
+                window_court: sp.window_court(),
+                rcore: None,
+            };
+            let with_lock = PalwPanelDrawPolicyV1 { valid_lock: Some(lock), ..sw_policy() };
+            let lottery_with_lock = PalwPanelDrawPolicyV1 { valid_lock: Some(lock), ..lottery_policy() };
+            for (small, locked, expected) in [
+                (0u64, vec![], Ok(())),
+                (0, vec![2u64], Ok(())),
+                (0, vec![2, 3], Err((6 * g, 8 * g))),
+                (5, vec![2], Ok(())),
+                (5, vec![2, 3], Err((6 * g + 650_000, 8 * g + 650_000))),
+            ] {
+                let (unlocked, claim_id) = sw_state(&genesis_and_small(small), &[]);
+                // A live lock on each seat in `locked`, standing on all of its posted collateral but
+                // 50,000 MSK — below the Valid lock's 100,000, so `lock.admits` refuses it.
+                let mut carriage = PalwStateCarriageV2::from_state(&unlocked);
+                for b in &locked {
+                    carriage.slashable_locks.insert(
+                        (PalwBondKeyV2(bond_outpoint(*b)), h64(0x10C4)),
+                        PalwSlashableLockV1 {
+                            claim: h64(0x10C4),
+                            amount: (GENESIS_SEAT - 50_000 * MSK) as u128,
+                            expiry_daa: 1_000_000,
+                            settled_at_final: 0,
+                            // The v22 skeleton's fields (71748a97): unwritten until S-3.
+                            attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                            segments: 0,
+                        },
+                    );
+                }
+                let state = carriage.into_state(&sp, None).expect("consistent");
+                let (eligible, base) = populations(&state, &claim_id);
+                assert_eq!(eligible.len(), 8 + small as usize, "the lock spends no headroom: every seat passes it");
+                assert_eq!(base.len(), eligible.len());
+                let refused: Vec<&PalwBondKeyV2> =
+                    eligible.iter().map(|(key, _)| *key).filter(|key| !lock.admits(&state, key)).collect();
+                let expected_refused: Vec<PalwBondKeyV2> = locked.iter().map(|b| PalwBondKeyV2(bond_outpoint(*b))).collect();
+                assert_eq!(
+                    refused,
+                    expected_refused.iter().collect::<Vec<_>>(),
+                    "{small} small: the Valid lock refuses exactly the locked seats"
+                );
+                for i in 0..8u64 {
+                    let raced = derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i), 100, None, false, with_lock);
+                    match expected {
+                        Ok(()) => {
+                            let seats =
+                                raced.unwrap_or_else(|e| panic!("{small} small, {locked:?} locked, anchor {i}: binds, got {e:?}"));
+                            assert_eq!(seats.len(), 5);
+                            assert!(
+                                seats.iter().all(|seat| !expected_refused.contains(&seat.bond)),
+                                "{small} small, {locked:?} locked, anchor {i}: a locked seat never sits"
+                            );
+                        }
+                        Err((eligible, base)) => assert_eq!(
+                            raced,
+                            Err(PalwPanelV2Error::InsufficientEligibleStake { eligible, base }),
+                            "{small} small, {locked:?} locked, anchor {i}: refused, the base keeping the locked seats"
+                        ),
+                    }
+                    // Without the lock in the policy the same state binds: the refusal is the lock's.
+                    assert!(derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i), 100, None, false, sw_policy()).is_ok());
+                    // Below the fence the lock filters the same seats and six operators still fill five.
+                    let lottery =
+                        derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i), 100, None, false, lottery_with_lock);
+                    let lottery = lottery
+                        .unwrap_or_else(|e| panic!("{small} small, {locked:?} locked: stake None never refuses for stake: {e:?}"));
+                    assert!(lottery.iter().all(|seat| !expected_refused.contains(&seat.bond)));
+                }
+            }
+        }
+
+        /// **The integration's rule (S-3 × SW): past `palw_rcore_plus` the one ledger decides WHETHER a
+        /// bond is drawn, posted stake decides HOW OFTEN.** Under S-3's one-ledger seat filter
+        /// (`PalwPanelValidLockV1::rcore`: `committed + eligibility ≤ collateral × 500‰`) the economy's
+        /// headroom is asked of no list, so the eligible list before the lock IS SW-10's base; the
+        /// filter then drops exactly the seats whose one-ledger commitments leave no room — a seat
+        /// saturated by its own claim's reservation, or standing behind a live lock — and the base keeps
+        /// them. So T94's two tables hold unchanged under the filter that replaces the route matrix's
+        /// posted-collateral lock: one loaded genesis seat binds (7/8, and 885‰ beside five 130k
+        /// operators), two refuse with the exact split, and a loaded seat never sits. The filter's
+        /// `eligibility` is 50,000 MSK, which a 130k operator's 65,000 MSK ceiling covers.
+        #[test]
+        fn t94_under_the_one_ledger_filter_free_stake_decides_whether_and_posted_stake_how_often() {
+            use crate::palw_panel_var_v1::PalwSlashableLockV1;
+            use crate::palw_state_v2::PalwStateCarriageV2;
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let g = 939_063u128;
+            let filter = PalwPanelValidLockV1 {
+                // Unread under the one-ledger filter (S-3): a lock no bond could post shows it.
+                required: u128::MAX,
+                now_daa: 103,
+                settled_anchor_depth: None,
+                window_court: sp.window_court(),
+                rcore: Some(PalwRcoreSeatFilterV1 { eligibility: 50_000 * MSK as u128, ceiling_permille: 500 }),
+            };
+            let policy = PalwPanelDrawPolicyV1 { valid_lock: Some(filter), ..sw_policy() };
+            let key = |b: u64| PalwBondKeyV2(bond_outpoint(b));
+            // Loaded by a live lock (T94's second table) or by its own claim's reservation (T94's
+            // first): the one ledger reads both.
+            let locked = |small: u64, loaded: &[u64]| {
+                let (unlocked, claim_id) = sw_state(&genesis_and_small(small), &[]);
+                let mut carriage = PalwStateCarriageV2::from_state(&unlocked);
+                for b in loaded {
+                    carriage.slashable_locks.insert(
+                        (key(*b), h64(0x10C4)),
+                        PalwSlashableLockV1 {
+                            claim: h64(0x10C4),
+                            amount: (GENESIS_SEAT - 50_000 * MSK) as u128,
+                            expiry_daa: 1_000_000,
+                            settled_at_final: 0,
+                            attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                            segments: 0,
+                        },
+                    );
+                }
+                (carriage.into_state(&sp, None).expect("consistent"), claim_id)
+            };
+            let saturated = |small: u64, loaded: &[u64]| sw_state(&genesis_and_small(small), loaded);
+            for (how, load) in [
+                ("locked", &locked as &dyn Fn(u64, &[u64]) -> (PalwChainStateV2, Hash64)),
+                ("saturated", &saturated as &dyn Fn(u64, &[u64]) -> (PalwChainStateV2, Hash64)),
+            ] {
+                for (small, loaded, expected) in [
+                    (0u64, vec![], Ok(())),
+                    (0, vec![2u64], Ok(())),
+                    (0, vec![2, 3], Err((6 * g, 8 * g))),
+                    (5, vec![2], Ok(())),
+                    (5, vec![2, 3], Err((6 * g + 650_000, 8 * g + 650_000))),
+                ] {
+                    let label = format!("{how}: {small} small, {loaded:?} loaded");
+                    let (state, claim_id) = load(small, &loaded);
+                    let before_lock = palw_panel_eligible_bonds_judging_v2(
+                        &state,
+                        &claim_id,
+                        &h64(1),
+                        100,
+                        None,
+                        false,
+                        None,
+                        Some(sw_economy()),
+                        5,
+                        false,
+                    )
+                    .unwrap();
+                    let (_, base) = populations(&state, &claim_id);
+                    assert_eq!(
+                        before_lock.iter().map(|(k, _)| **k).collect::<Vec<_>>(),
+                        base.iter().map(|(k, _)| **k).collect::<Vec<_>>(),
+                        "{label}: without the economy's headroom the list before the lock is SW-10's base"
+                    );
+                    assert_eq!(base.len(), 8 + small as usize, "{label}: the base keeps every loaded seat");
+                    let refused: Vec<PalwBondKeyV2> = base.iter().map(|(k, _)| **k).filter(|k| !filter.admits(&state, k)).collect();
+                    assert_eq!(
+                        refused,
+                        loaded.iter().map(|b| key(*b)).collect::<Vec<_>>(),
+                        "{label}: the filter drops the loaded seats"
+                    );
+                    for i in 0..8u64 {
+                        let raced = derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i), 100, None, false, policy);
+                        match expected {
+                            Ok(()) => {
+                                let seats = raced.unwrap_or_else(|e| panic!("{label}, anchor {i}: binds, got {e:?}"));
+                                assert_eq!(seats.len(), 5);
+                                assert!(
+                                    seats.iter().all(|seat| !refused.contains(&seat.bond)),
+                                    "{label}, anchor {i}: a loaded seat never sits"
+                                );
+                            }
+                            Err((eligible, base)) => assert_eq!(
+                                raced,
+                                Err(PalwPanelV2Error::InsufficientEligibleStake { eligible, base }),
+                                "{label}, anchor {i}: refused, the base keeping the loaded seats"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+
+        /// **SW-10 for the outsider, and the refusal order.** The outsider's population is the
+        /// floor's minus the registrant: honest operators of 130k and the registrant's Sybils of
+        /// 939k. A Valid lock of 500,000 MSK drops every honest bond (posted below it), which leaves
+        /// the outsider's eligible weight at `4 × 939,063` of a base of `4 × 939,063 + 8 × 130,000`;
+        /// the executor (bond 1, a 939k floor seat) adds its own term to both sides (M4 review
+        /// finding 1), so the floor compares `5 × 939,063` with `5 × 939,063 + 8 × 130,000` (818‰):
+        /// refused, where the lottery seats an outsider. And the class's operator count is checked
+        /// before either floor, so a short class is `InsufficientEligibleBonds` whatever the floors
+        /// say.
+        #[test]
+        fn sw10_the_outsider_floor_and_the_refusal_order() {
+            let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+            let (state, claim_id) = t88_bought_state(&sp, |n| if (11..=18).contains(&n) { FLOOR_SEAT } else { GENESIS_SEAT });
+            let lock = PalwPanelValidLockV1 {
+                required: 500_000 * MSK as u128,
+                now_daa: 103,
+                settled_anchor_depth: None,
+                window_court: sp.window_court(),
+                rcore: None,
+            };
+            let independence = PalwPanelIndependenceV1 { from_daa: 0, base_class_id: h64(1), anchor_daa: 150 };
+            let raced = PalwPanelDrawPolicyV1 { independence: Some(independence), valid_lock: Some(lock), ..sw_policy() };
+            let lottery = PalwPanelDrawPolicyV1 { stake: None, ..raced };
+            let g = 939_063u128;
+            for i in 0..8u64 {
+                let three = PalwPanelParamsV2::new(3, 2, 4).unwrap();
+                assert_eq!(
+                    derive_panel_v2_with_policy(&state, &three, &claim_id, anchor(i), 100, None, false, raced),
+                    Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 5 * g, base: 5 * g + 8 * 130_000 }),
+                    "anchor {i}: the outsider's floor refuses, the executor's term on both sides"
+                );
+                assert!(derive_panel_v2_with_policy(&state, &three, &claim_id, anchor(i), 100, None, false, lottery).is_ok());
+                assert_eq!(
+                    palw_panel_outsider_seat_v1(&state, &three, &claim_id, anchor(i), 100, Some(149), false, &raced, &independence),
+                    Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 5 * g, base: 5 * g + 8 * 130_000 }),
+                    "the public outsider seat applies its own floor"
+                );
+            }
+            // The order inside the race: a short class is refused by count before any floor.
+            let (plain, plain_claim) = sw_state(&genesis_and_small(0), &[]);
+            let (eligible, base) = populations(&plain, &plain_claim);
+            let stake = PalwPanelStakeDrawV1::V1;
+            assert_eq!(
+                palw_panel_stake_race_with_v1(9, &plain_claim, anchor(0), &eligible, &base, 0, &stake, Some((0, 1))),
+                Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: 9, available: 8 })
+            );
+            assert_eq!(
+                palw_panel_stake_race_with_v1(5, &plain_claim, anchor(0), &eligible, &base, 0, &stake, Some((0, 1))),
+                Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 0, base: 1 })
+            );
+        }
+
+        // ---- SW-9: the room's effective ready count ------------------------------------------------
+
+        /// **SW-9 / T91's arithmetic: `ready_eff = min(ready, max(seat_count, ⌊ΣW / W_max⌋))` over
+        /// capped weights.** The ADR's three examples: the eight genesis seats give 8; with forty
+        /// 130k operators beside them, 13 of 48; and one 20M operator beside the eight genesis seats
+        /// — 5 in §3.14's pre-cap text — gives **8** once its weight is capped at 1,000,000
+        /// (`⌊8,512,504 / 1,000,000⌋ = 8`; `v31_review_numbers.out`: "one 20M operator + 8 genesis,
+        /// capped: ready_eff 8"). SW-A6's residual: a class held by forty 130k operators counts 40,
+        /// and one ready operator at the cap cuts it to 6.
+        #[test]
+        fn sw9_ready_eff_over_capped_weights() {
+            let cap = PalwPanelStakeDrawV1::V1.weight_cap_msk;
+            let w = |msk: u128| palw_draw_operator_weight_msk_v1(msk, cap);
+            let genesis = vec![w(939_063); 8];
+            assert_eq!(palw_panel_ready_eff_v1(&genesis, 5), 8);
+            let mut wide = genesis.clone();
+            wide.extend(vec![w(130_000); 40]);
+            assert_eq!(palw_panel_ready_eff_v1(&wide, 5), 13, "8 genesis + 40 × 130k: 13 of 48");
+            let mut whale = vec![w(20_000_000)];
+            whale.extend(genesis.clone());
+            assert_eq!(whale[0], 1_000_000, "the 20M operator weighs the cap");
+            assert_eq!(palw_panel_ready_eff_v1(&whale, 5), 8, "one 20M operator + 8 genesis: 8 capped (5 uncapped)");
+            assert_eq!(
+                palw_panel_ready_eff_v1(&[20_000_000, 939_063, 939_063, 939_063, 939_063, 939_063, 939_063, 939_063, 939_063], 5),
+                5,
+                "uncapped, as §3.14's text had it"
+            );
+            let mut wide_whale = wide.clone();
+            wide_whale.push(w(20_000_000));
+            assert_eq!(palw_panel_ready_eff_v1(&wide_whale, 5), 13, "SW-A6: the cap keeps that lever at 13");
+            let smalls = vec![w(130_000); 40];
+            assert_eq!(palw_panel_ready_eff_v1(&smalls, 5), 40);
+            let mut smalls_whale = smalls.clone();
+            smalls_whale.push(w(1_000_000));
+            assert_eq!(palw_panel_ready_eff_v1(&smalls_whale, 5), 6, "SW-A6's residual: 40 → 6");
+            assert_eq!(palw_panel_ready_eff_v1(&[], 5), 0, "no ready operator");
+            assert_eq!(palw_panel_ready_eff_v1(&[w(130_000); 3], 5), 3, "never more than the ready operators");
+        }
+
+        // ---- M4: the integration (ADR-0152 §3.14 SW-1, SW-8, SW-9, SW-10 at the fold) ----------
+
+        /// **ADR-0152 M4's core half** — the stake draw where the processor wires it: one state per
+        /// block (SW-8), bind only in the anchor block (SW-8), the room's `ready_eff` (SW-9), and the
+        /// fold's side of SW-10's halt. The processor half (the resolver, the chain's derivation on a
+        /// real testnet-12 chain) is `consensus/src/pipeline/virtual_processor/tests/
+        /// t12_stake_draw_integration.rs`; the room through the fold and op 186 on testnet-12's rows is
+        /// `consensus/core/tests/adr0152_sw9_ready_eff_room.rs`.
+        mod m4 {
+            use super::*;
+            use crate::palw_state_v2::{
+                PalwBondStatusV2, PalwClaimPhaseV2, PalwStateCarriageV2, PalwTransitionExtrasV1, PalwVoidReasonV2,
+                apply_palw_transition_v2_with_extras, palw_v2_apply_one_object_v1, palw_v2_pre_object_base_v1, revert_delta_v2,
+            };
+
+            fn key(b: u64) -> PalwBondKeyV2 {
+                PalwBondKeyV2(bond_outpoint(b))
+            }
+
+            /// The fold's extras past the panel economy (seats go on duty and hold their exposure),
+            /// everything else dormant — enough for a binding to load the seats it seats.
+            fn duty_extras() -> PalwTransitionExtrasV1 {
+                PalwTransitionExtrasV1 { panel_economy_active: true, ..Default::default() }
+            }
+
+            /// A block that is `word`'s own anchor at `daa`: the anchor fact every claim anchored there
+            /// reads (its predecessor below both slots), and the chain point that binds in it.
+            fn anchored_at(word: u64, daa: u64, predecessor_daa: u64) -> (PalwAnchorFactV2, PalwBlockContextV2) {
+                (
+                    PalwAnchorFactV2 { anchor_block: BlockHash::from_u64_word(word), anchor_daa: daa, predecessor_daa },
+                    ctx(word, daa, daa),
+                )
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            fn validate(
+                state: &PalwChainStateV2,
+                sp: &PalwStateParamsV2,
+                point: &PalwBlockContextV2,
+                claim_id: &Hash64,
+                fact: &PalwAnchorFactV2,
+                proposed_anchor: Hash64,
+                seats: &[PalwPanelSeatV2],
+                policy: PalwPanelDrawPolicyV1,
+            ) -> Result<(), PalwPanelV2Error> {
+                validate_panel_bound_v2_with_policy(
+                    state,
+                    &five(),
+                    sp,
+                    point,
+                    claim_id,
+                    fact,
+                    proposed_anchor,
+                    seats,
+                    None,
+                    false,
+                    policy,
+                    None,
+                )
+            }
+
+            fn draw(
+                state: &PalwChainStateV2,
+                claim_id: &Hash64,
+                at: BlockHash,
+                policy: PalwPanelDrawPolicyV1,
+            ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+                derive_panel_v2_with_policy(state, &five(), claim_id, at, 100, None, false, policy)
+            }
+
+            /// **T91 through the counting function (SW-9):** `palw_panel_ready_eff_of_bonds_v1` over
+            /// the bonds of a registry reproduces §3.14's examples from the bonds' own posted
+            /// collateral, grouped per operator: 8 genesis seats → 8; with forty 130k operators, 13 of
+            /// 48; one 20M operator more, still 13 (capped); one 20M operator beside the genesis seats,
+            /// 8; forty 130k alone, 40, and one at the cap beside them, 6. One operator's two bonds are
+            /// ONE ready operator whose weight sums before the cap.
+            #[test]
+            fn t91_ready_eff_counts_ready_operators_over_capped_weights() {
+                let mut rows = genesis_and_small(40);
+                rows.push((60, 0x90, 20_000_000 * MSK));
+                rows.push((61, 0x91, 1_000_000 * MSK));
+                rows.push((62, 0x92, 600_000 * MSK));
+                rows.push((63, 0x92, 600_000 * MSK));
+                let (state, _) = sw_state(&rows, &[]);
+                let eff = |bonds: &[u64]| {
+                    palw_panel_ready_eff_of_bonds_v1(
+                        bonds.iter().map(|b| state.bond(&key(*b)).expect("registered")),
+                        5,
+                        &PalwPanelStakeDrawV1::V1,
+                    )
+                };
+                let genesis: Vec<u64> = (2..=9).collect();
+                let smalls: Vec<u64> = (10..50).collect();
+                let with = |a: &[u64], b: &[u64]| [a, b].concat();
+                assert_eq!(eff(&genesis), 8, "8 genesis seats");
+                assert_eq!(eff(&with(&genesis, &smalls)), 13, "8 genesis + 40 × 130k: 13 of 48");
+                assert_eq!(eff(&with(&with(&genesis, &smalls), &[60])), 13, "one ready 20M operator more: still 13 (capped)");
+                assert_eq!(eff(&with(&[60], &genesis)), 8, "one 20M operator + 8 genesis: 8 (5 uncapped)");
+                assert_eq!(eff(&smalls), 40, "40 × 130k");
+                assert_eq!(eff(&with(&smalls, &[61])), 6, "SW-A6's residual: one operator at the cap cuts 40 to 6");
+                assert_eq!(
+                    eff(&with(&smalls, &[62, 63])),
+                    6,
+                    "one operator's two 600k bonds: one ready operator, 1.2M summed and capped at 1M"
+                );
+                assert_eq!(eff(&[]), 0);
+            }
+
+            /// **T89 (SW-8): two claims bound in one block — the second sees the first's duties.**
+            /// Nine operators of equal weight beside the executor; one of them ("thin", bond 2) has
+            /// one-ledger headroom for exactly ONE seat of these claims. Both claims anchor at the same
+            /// block. The processor derives them the way the acceptance walk validates them: on the
+            /// block's pre-object base, advanced by the first binding in claim-id order. Wherever thin
+            /// sits on the first panel, it is not eligible for the second (its duty took its
+            /// headroom), and:
+            ///
+            /// * build = accept: the second panel derived on the advanced state is what the gate
+            ///   accepts there (and the first on the base);
+            /// * the parent-state derivation the chain ran before SW-8 draws thin onto the second panel
+            ///   at some anchors, and the gate refuses that panel on the state it actually reads
+            ///   (`PanelMismatch`) — the drop that used to send the claim to a later block's retry;
+            /// * fold: the block folding both bindings stores exactly the two derived panels.
+            #[test]
+            fn t89_two_claims_in_one_block_the_second_sees_the_first_s_duties() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let mut rows: Vec<(u64, u64, u64)> = (3..=10u64).map(|b| (b, 0x20 + b, 1_000_000)).collect();
+                rows.insert(0, (2, 0x22, 2_000));
+                let (s0, first_claim) = sw_state(&rows, &[]);
+                let (s0, second_claim) = fold_attempt(&s0, &sp, 102, 1, 7, 0x21, h64(1), h64(11), 40);
+                assert_ne!(first_claim, second_claim, "two claims");
+                let (a, b) = if first_claim < second_claim { (first_claim, second_claim) } else { (second_claim, first_claim) };
+                let economy = Some(t88_economy(1_000, 500, 0));
+                let policy = PalwPanelDrawPolicyV1 { economy, stake: Some(PalwPanelStakeDrawV1::V1), ..Default::default() };
+                let thin = key(2);
+                let (mut thin_first, mut legacy_refused) = (0usize, 0usize);
+                for i in 0..48u64 {
+                    let word = 0x5A00_0000 + i;
+                    // Both claims' slots (105, 106) lie behind one anchor at 106.
+                    let (fact, point) = anchored_at(word, 106, 104);
+                    let at = fact.anchor_block;
+                    let base = palw_v2_pre_object_base_v1(&s0, &sp, &point, false, false, false, false, &duty_extras()).unwrap();
+                    let p1 = draw(&base, &a, at, policy).unwrap();
+                    assert_eq!(validate(&base, &sp, &point, &a, &fact, at, &p1, policy), Ok(()), "anchor {i}: build = accept, first");
+                    let first = PalwConsensusObjectV2::PanelBound { claim: a, anchor: at, seats: p1.clone() };
+                    let advanced = palw_v2_apply_one_object_v1(&base, &sp, &point, &first, false, false, false, false, &duty_extras())
+                        .expect("the first binding folds");
+                    let p2 = draw(&advanced, &b, at, policy).unwrap();
+                    assert_eq!(
+                        validate(&advanced, &sp, &point, &b, &fact, at, &p2, policy),
+                        Ok(()),
+                        "anchor {i}: build = accept, second, on the advanced state"
+                    );
+                    if p1.iter().any(|s| s.bond == thin) {
+                        thin_first += 1;
+                        assert!(
+                            advanced.reserved_exposure(&thin) > base.reserved_exposure(&thin),
+                            "the first panel's duty loads thin"
+                        );
+                        assert!(!p2.iter().any(|s| s.bond == thin), "anchor {i}: thin has no headroom left for the second");
+                        let legacy = draw(&base, &b, at, policy).unwrap();
+                        if legacy != p2 {
+                            legacy_refused += 1;
+                            assert_eq!(
+                                validate(&advanced, &sp, &point, &b, &fact, at, &legacy, policy),
+                                Err(PalwPanelV2Error::PanelMismatch),
+                                "anchor {i}: the parent-state panel is refused on the state acceptance reads"
+                            );
+                        }
+                    }
+                    // Fold: the block folding both stores both derived panels.
+                    let second = PalwConsensusObjectV2::PanelBound { claim: b, anchor: at, seats: p2.clone() };
+                    let (folded, _) = apply_palw_transition_v2_with_extras(
+                        &s0,
+                        &sp,
+                        &point,
+                        &[first, second],
+                        None,
+                        false,
+                        false,
+                        false,
+                        false,
+                        &duty_extras(),
+                    )
+                    .expect("the block folds both bindings");
+                    assert_eq!(folded.panel(&a).map(|p| &p.seats), Some(&p1), "anchor {i}: fold = build, first");
+                    assert_eq!(folded.panel(&b).map(|p| &p.seats), Some(&p2), "anchor {i}: fold = build, second");
+                }
+                assert!(
+                    thin_first > 0 && legacy_refused > 0,
+                    "the premise must occur: thin first {thin_first}, legacy refused {legacy_refused}"
+                );
+            }
+
+            /// **T89 (SW-8): the Valid-lock filter excludes a bond, build = accept = fold.** A live
+            /// lock leaves genesis seat 2 unable to post the bind's Valid lock; the draw skips it, the
+            /// gate accepts the panel under the same policy, and the fold binds it. (T94's twin in the
+            /// pure half shows the base keeps the seat for SW-10.)
+            #[test]
+            fn t89_the_valid_lock_filter_excludes_a_bond_build_accept_fold() {
+                use crate::palw_panel_var_v1::PalwSlashableLockV1;
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (unlocked, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let mut carriage = PalwStateCarriageV2::from_state(&unlocked);
+                carriage.slashable_locks.insert(
+                    (key(2), h64(0x10C4)),
+                    PalwSlashableLockV1 {
+                        claim: h64(0x10C4),
+                        amount: (GENESIS_SEAT - 50_000 * MSK) as u128,
+                        expiry_daa: 1_000_000,
+                        settled_at_final: 0,
+                        attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                        segments: 0,
+                    },
+                );
+                let state = carriage.into_state(&sp, None).expect("consistent");
+                let lock = PalwPanelValidLockV1 {
+                    required: 100_000 * MSK as u128,
+                    now_daa: 103,
+                    settled_anchor_depth: None,
+                    window_court: sp.window_court(),
+                    rcore: None,
+                };
+                assert!(!lock.admits(&state, &key(2)) && lock.admits(&state, &key(3)));
+                let policy = PalwPanelDrawPolicyV1 { valid_lock: Some(lock), ..sw_policy() };
+                let slot = state.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                for i in 0..24u64 {
+                    let (fact, point) = anchored_at(0x5B00_0000 + i, slot, slot - 1);
+                    let seats = draw(&state, &claim_id, fact.anchor_block, policy).expect("7 of 8 genesis weight stays eligible");
+                    assert!(!seats.iter().any(|s| s.bond == key(2)), "anchor {i}: the locked seat never sits");
+                    assert_eq!(validate(&state, &sp, &point, &claim_id, &fact, fact.anchor_block, &seats, policy), Ok(()));
+                    let object =
+                        PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: fact.anchor_block, seats: seats.clone() };
+                    let (folded, _) = apply_palw_transition_v2_with_extras(
+                        &state,
+                        &sp,
+                        &point,
+                        &[object],
+                        None,
+                        false,
+                        false,
+                        false,
+                        false,
+                        &duty_extras(),
+                    )
+                    .unwrap();
+                    assert_eq!(folded.panel(&claim_id).map(|p| &p.seats), Some(&seats), "anchor {i}: fold = build");
+                }
+            }
+
+            /// **T89 (SW-8): a redraw binds in the REDRAW's anchor block, and only there.** A bound
+            /// panel whose receipt window closes with no conclusion is revived once (`rebound_daa`),
+            /// and its second panel anchors on the sweep. The gate accepts the second panel at the
+            /// redraw's anchor block, refuses it at any later block inside the redraw's bind window
+            /// (`BindOutsideWindow`, SW-8) and at the FIRST panel's anchor (whose slot the claim has
+            /// left); under `stake: None` the later block still binds, as it always could.
+            #[test]
+            fn t89_a_redraw_binds_only_in_the_redraw_s_anchor_block() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (s0, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let slot = s0.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                let (fact1, point1) = anchored_at(0x5C00_0001, slot, slot - 1);
+                let p1 = draw(&s0, &claim_id, fact1.anchor_block, sw_policy()).unwrap();
+                let (s1, _) = apply_palw_transition_v2_with_extras(
+                    &s0,
+                    &sp,
+                    &point1,
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: fact1.anchor_block, seats: p1 }],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                // The receipt window closes with no conclusion: the sweep revives the claim once.
+                let sweep = slot + sp.window_receipt() + 1;
+                let (s2, _) = apply_palw_transition_v2_with_extras(
+                    &s1,
+                    &sp,
+                    &ctx(0x5C00_0002, sweep, sweep),
+                    &[],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                let revived = s2.claim(&claim_id).unwrap();
+                assert!(matches!(revived.phase, PalwClaimPhaseV2::Provisional), "{:?}", revived.phase);
+                assert_eq!(revived.rebound_daa, Some(sweep));
+                let slot2 = sweep + five().anchor_delay();
+                let (fact2, point2) = anchored_at(0x5C00_0003, slot2, slot2 - 1);
+                let p2 = draw(&s2, &claim_id, fact2.anchor_block, sw_policy()).unwrap();
+                assert_eq!(validate(&s2, &sp, &point2, &claim_id, &fact2, fact2.anchor_block, &p2, sw_policy()), Ok(()));
+                let later = ctx(0x5C00_0004, slot2 + 1, slot2 + 1);
+                assert!(matches!(
+                    validate(&s2, &sp, &later, &claim_id, &fact2, fact2.anchor_block, &p2, sw_policy()),
+                    Err(PalwPanelV2Error::BindOutsideWindow(_))
+                ));
+                assert!(
+                    matches!(
+                        validate(&s2, &sp, &point1, &claim_id, &fact1, fact1.anchor_block, &p2, sw_policy()),
+                        Err(PalwPanelV2Error::AnchorMismatch(_) | PalwPanelV2Error::BindOutsideWindow(_))
+                    ),
+                    "the first panel's anchor is not the redraw's"
+                );
+                let lottery = draw(&s2, &claim_id, fact2.anchor_block, lottery_policy()).unwrap();
+                assert_eq!(validate(&s2, &sp, &later, &claim_id, &fact2, fact2.anchor_block, &lottery, lottery_policy()), Ok(()));
+            }
+
+            /// **T89 (SW-8): a reorg across the bind.** The bind folded at anchor A reverts to the
+            /// exact parent state; the competing chain's anchor B (the first block at the same slot on
+            /// that chain) draws on the same one state, and its gate refuses A's panel (the object
+            /// names A) and accepts B's. Nothing about A's draw survives on B's chain.
+            #[test]
+            fn t89_a_reorg_across_the_bind_re_derives_on_the_new_chain() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (s0, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let slot = s0.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                let (fact_a, point_a) = anchored_at(0x5D00_000A, slot, slot - 1);
+                let (fact_b, point_b) = anchored_at(0x5D00_000B, slot, slot - 1);
+                let pa = draw(&s0, &claim_id, fact_a.anchor_block, sw_policy()).unwrap();
+                let bound_a = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: fact_a.anchor_block, seats: pa.clone() };
+                let (sa, delta) = apply_palw_transition_v2_with_extras(
+                    &s0,
+                    &sp,
+                    &point_a,
+                    &[bound_a],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                assert!(matches!(sa.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }));
+                let back = revert_delta_v2(&sa, &delta, &sp).unwrap();
+                assert_eq!(back.state_root(), s0.state_root(), "the reorg restores the parent state exactly");
+                let pb = draw(&back, &claim_id, fact_b.anchor_block, sw_policy()).unwrap();
+                assert_eq!(pb, draw(&s0, &claim_id, fact_b.anchor_block, sw_policy()).unwrap());
+                assert!(matches!(
+                    validate(&back, &sp, &point_b, &claim_id, &fact_b, fact_a.anchor_block, &pa, sw_policy()),
+                    Err(PalwPanelV2Error::AnchorMismatch(_))
+                ));
+                assert_eq!(validate(&back, &sp, &point_b, &claim_id, &fact_b, fact_b.anchor_block, &pb, sw_policy()), Ok(()));
+                let bound_b = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: fact_b.anchor_block, seats: pb.clone() };
+                let (sb, _) = apply_palw_transition_v2_with_extras(
+                    &back,
+                    &sp,
+                    &point_b,
+                    &[bound_b],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                assert_eq!(sb.panel(&claim_id).map(|p| &p.seats), Some(&pb));
+            }
+
+            /// **T93 at the fold (SW-8): nothing after the anchor moves a bound panel, and nothing
+            /// after it can bind an unbound one.** A panel is derived and folded in its anchor block.
+            /// Then, on the chain after it: the attacker's own claims (a Sybil's attempts), a carried
+            /// licence's lock on a seat, and a slash of an unrelated bond. The stored panel never
+            /// changes, and every operator's key (`L`, `W`) but the slashed one's is what it was — the
+            /// one ledger moves eligibility, a slash moves only its own bond's weight. And for a claim
+            /// whose draw did NOT bind in its anchor block, the attacker retiring its own seated
+            /// Sybil afterwards buys nothing: the panel re-derived on the later state differs, and
+            /// the gate refuses it at every later block (`BindOutsideWindow`) — no retry exists.
+            #[test]
+            fn t93_nothing_after_the_anchor_moves_the_panel() {
+                use crate::palw_panel_var_v1::PalwSlashableLockV1;
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (s0, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let slot = s0.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                let (fact, point) = anchored_at(0x5E00_0001, slot, slot - 1);
+                let at = fact.anchor_block;
+                let panel = draw(&s0, &claim_id, at, sw_policy()).unwrap();
+                let (bound, _) = apply_palw_transition_v2_with_extras(
+                    &s0,
+                    &sp,
+                    &point,
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: at, seats: panel.clone() }],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                let keys_of = |state: &PalwChainStateV2| {
+                    let (eligible, _) = populations(state, &claim_id);
+                    palw_panel_stake_entries_v1(&claim_id, at, &eligible, &PalwPanelStakeDrawV1::V1)
+                        .into_iter()
+                        .map(|e| (e.operator_id, (e.neg_log2_q64, e.weight_msk)))
+                        .collect::<std::collections::BTreeMap<_, _>>()
+                };
+                let keys0 = keys_of(&s0);
+                // The attacker's own claims: a floor-sized Sybil (bond 10, operator 0x4A) produces.
+                let (after_claims, _) = fold_attempt(&bound, &sp, slot + 1, 10, 40, 0x4A, h64(1), h64(11), 40);
+                // A carried licence's Valid lock on the first seat.
+                let seat = panel[0].bond;
+                let mut carriage = PalwStateCarriageV2::from_state(&after_claims);
+                carriage.slashable_locks.insert(
+                    (seat, h64(0x93A1)),
+                    PalwSlashableLockV1 {
+                        claim: h64(0x93A1),
+                        amount: 10_000 * MSK as u128,
+                        expiry_daa: 1_000_000,
+                        settled_at_final: 0,
+                        attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                        segments: 0,
+                    },
+                );
+                // A slash of an unrelated bond: one that does not sit on this panel.
+                let unrelated =
+                    (2..=14u64).map(key).find(|k| !panel.iter().any(|s| s.bond == *k)).expect("thirteen bonds, five seats");
+                let slashed_operator = carriage.bonds.get(&unrelated).unwrap().operator_id;
+                {
+                    let bond = carriage.bonds.get_mut(&unrelated).unwrap();
+                    bond.collateral -= 400_000 * MSK;
+                    bond.slashed += 400_000 * MSK;
+                }
+                let later = carriage.into_state(&sp, None).expect("consistent");
+                for (label, state) in [("the attacker's claims", &after_claims), ("a lock and a slash", &later)] {
+                    assert_eq!(state.panel(&claim_id).map(|p| &p.seats), Some(&panel), "{label}: the bound panel stands");
+                    assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "{label}");
+                }
+                let keys1 = keys_of(&later);
+                for (operator, k) in &keys0 {
+                    if *operator == slashed_operator {
+                        assert_eq!(keys1[operator].0, k.0, "the slashed operator's L is its seed's");
+                        continue;
+                    }
+                    assert_eq!(keys1.get(operator), Some(k), "no other operator's key moved");
+                }
+
+                // The retry path: a draw that did not bind in its anchor block. The attacker retires
+                // its own seated Sybil after seeing the anchor; the re-derived panel on the later
+                // state differs, and no later block may carry it.
+                let mut retry_blocked = 0usize;
+                for i in 0..32u64 {
+                    let (fact, point) = anchored_at(0x5E10_0000 + i, slot, slot - 1);
+                    let first = draw(&s0, &claim_id, fact.anchor_block, sw_policy()).unwrap();
+                    let Some(own) = first.iter().find(|s| (10..=14u64).map(key).any(|k| k == s.bond)) else { continue };
+                    let mut c = PalwStateCarriageV2::from_state(&s0);
+                    c.bonds.get_mut(&own.bond).unwrap().status = PalwBondStatusV2::Retiring { since_daa: slot, settled_at_since: 0 };
+                    let retired = c.into_state(&sp, None).expect("consistent");
+                    let redrawn = draw(&retired, &claim_id, fact.anchor_block, sw_policy()).unwrap();
+                    assert_ne!(redrawn, first, "anchor {i}: the retirement moved the panel it would re-derive");
+                    let after = ctx(0x5E20_0000 + i, slot + 1, slot + 1);
+                    assert!(
+                        matches!(
+                            validate(&retired, &sp, &after, &claim_id, &fact, fact.anchor_block, &redrawn, sw_policy()),
+                            Err(PalwPanelV2Error::BindOutsideWindow(_))
+                        ),
+                        "anchor {i}: a later block cannot carry the retry"
+                    );
+                    // The anchor block itself reads the state before the retirement.
+                    assert_eq!(validate(&s0, &sp, &point, &claim_id, &fact, fact.anchor_block, &first, sw_policy()), Ok(()));
+                    retry_blocked += 1;
+                }
+                assert!(retry_blocked > 0, "a Sybil must have sat somewhere, or the retry case is vacuous");
+            }
+
+            /// **T94 at the fold (SW-10 + SW-8): `InsufficientEligibleStake` halts binding, and the
+            /// claim voids `BindTimeout` without forfeit — AT its anchor block.** Two of the eight
+            /// genesis seats saturated (6/8, 750‰): the draw refuses in the anchor block, and the gate
+            /// refuses ANY proposed panel there with the same error (build = accept on the refusal —
+            /// the lottery's panel included). Nothing binds, and past `palw_rcore_plus` the anchor
+            /// block's own fold voids the claim `BindTimeout` at its step 4c (M4 review finding 3,
+            /// DL-1's exact void DAA: the anchor block's), not 600 DAA later at the window: no bond is
+            /// slashed, no collateral moves, the executor's reservation is released, and the deadline
+            /// index, the carriage rebuild and a revert all agree with it. A block before the slot, or
+            /// one past it that may not anchor (`sw8_anchor_delay` `None`: a heartbeat), voids nothing.
+            /// The fence-off twin (`None` everywhere) keeps the claim until the bind window's sweep.
+            /// `stake: None` binds the same claim.
+            #[test]
+            fn t94_a_refused_draw_binds_nothing_and_the_claim_voids_bind_timeout_without_forfeit() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (s0, claim_id) = sw_state(&genesis_and_small(0), &[2, 3]);
+                let claim = s0.claim(&claim_id).unwrap().clone();
+                let slot = claim.bind_base_daa() + five().anchor_delay();
+                let (fact, point) = anchored_at(0x5F00_0001, slot, slot - 1);
+                let g = 939_063u128;
+                let refusal = PalwPanelV2Error::InsufficientEligibleStake { eligible: 6 * g, base: 8 * g };
+                assert_eq!(draw(&s0, &claim_id, fact.anchor_block, sw_policy()), Err(refusal.clone()));
+                let lottery = draw(&s0, &claim_id, fact.anchor_block, lottery_policy()).expect("stake None never refuses for stake");
+                assert_eq!(
+                    validate(&s0, &sp, &point, &claim_id, &fact, fact.anchor_block, &lottery, sw_policy()),
+                    Err(refusal),
+                    "the gate refuses on the same state for the same reason"
+                );
+                let fold = |at: &PalwBlockContextV2, extras: &PalwTransitionExtrasV1| {
+                    apply_palw_transition_v2_with_extras(&s0, &sp, at, &[], None, false, false, false, false, extras).unwrap()
+                };
+                let phase = |state: &PalwChainStateV2| state.claim(&claim_id).unwrap().phase.clone();
+                let executor_reserved = s0.reserved_exposure(&key(1));
+                let no_forfeit = |after: &PalwChainStateV2, label: &str| {
+                    assert!(after.panel(&claim_id).is_none(), "{label}: no panel was ever bound");
+                    for (k, bond) in s0.bonds_iter() {
+                        let now = after.bond(k).unwrap();
+                        assert_eq!((now.collateral, now.slashed), (bond.collateral, bond.slashed), "{label}: S0, no forfeit on {k:?}");
+                    }
+                    assert!(after.reserved_exposure(&key(1)) < executor_reserved, "{label}: the executor's reservation is released");
+                };
+
+                // Past the fence, on a block that may anchor a panel.
+                let armed = PalwTransitionExtrasV1 { sw8_anchor_delay: Some(five().anchor_delay()), ..duty_extras() };
+                let (before, _) = fold(&ctx(0x5F00_0003, slot - 1, slot - 1), &armed);
+                assert_eq!(phase(&before), PalwClaimPhaseV2::Provisional, "a block below the slot is not the claim's anchor");
+                let (heartbeat, _) = fold(&ctx(0x5F00_0004, slot + 1, slot + 1), &duty_extras());
+                assert_eq!(phase(&heartbeat), PalwClaimPhaseV2::Provisional, "a block that may not anchor voids nothing");
+                let (voided, delta) = fold(&point, &armed);
+                assert_eq!(
+                    phase(&voided),
+                    PalwClaimPhaseV2::Voided { voided_daa: slot, reason: PalwVoidReasonV2::BindTimeout },
+                    "the anchor block voids the claim it did not bind, at its own DAA"
+                );
+                no_forfeit(&voided, "step 4c");
+                voided.assert_deadline_consistency(&sp).expect("the deadline index is the claims' recomputed deadlines");
+                let rebuilt = PalwStateCarriageV2::from_state(&voided).into_state(&sp, None).expect("the carriage rebuild accepts it");
+                assert_eq!(rebuilt.state_root(), voided.state_root(), "a restart reproduces the void");
+                assert_eq!(revert_delta_v2(&voided, &delta, &sp).unwrap().state_root(), s0.state_root(), "a reorg undoes it");
+
+                // The fence-off twin: nothing voids the claim at its anchor; the window's sweep does.
+                let (twin_at_anchor, _) = fold(&point, &duty_extras());
+                assert_eq!(phase(&twin_at_anchor), PalwClaimPhaseV2::Provisional, "fence off: the claim waits");
+                let deadline = claim.bind_base_daa() + sp.window_bind();
+                let (swept, _) = fold(&ctx(0x5F00_0002, deadline + 1, deadline + 1), &duty_extras());
+                assert!(
+                    matches!(phase(&swept), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }),
+                    "{:?}",
+                    phase(&swept)
+                );
+                no_forfeit(&swept, "the window's sweep");
+            }
+
+            /// `sw_state` with the executor ONE OF the eight genesis seats — testnet-12's shape, where
+            /// every producer is a genesis card: bond 1 (key 7, operator 0x21) posts a genesis seat's
+            /// collateral beside the seven others (bonds 2..=8). `saturate` as `sw_state`'s, bond 1
+            /// included (the executor's own heavy claim fills its own headroom).
+            fn genesis_executor_state(saturate: &[u64]) -> (PalwChainStateV2, Hash64) {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let rows: Vec<(u64, u64, u64)> = (2..=8u64).map(|b| (b, 0x40 + b, GENESIS_SEAT)).collect();
+                let mut objects = vec![adr0130_class(), heavy_class(), adr0130_bond(1, 7, 0x21, GENESIS_SEAT)];
+                objects.extend(rows.iter().map(|(b, op, c)| adr0130_bond(*b, 30 + *b as u8, *op, *c)));
+                let (mut state, _) =
+                    apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+                let mut daa = 101;
+                for b in saturate {
+                    let (pk, op) = if *b == 1 { (7, 0x21) } else { (30 + *b as u8, rows.iter().find(|row| row.0 == *b).unwrap().1) };
+                    state = fold_attempt(&state, &sp, daa, *b, pk, op, h64(3), h64(13), HEAVY_PWU).0;
+                    daa += 1;
+                }
+                fold_attempt(&state, &sp, daa, 1, 7, 0x21, h64(1), h64(11), 40)
+            }
+
+            /// **T94, the M4 review's finding 1: a genesis card's own claim keeps SW-10's one-seat
+            /// tolerance.** On testnet-12 the executor is one of the eight genesis seats and may not
+            /// sit, so the seven others are the whole population; with one of them saturated they are
+            /// `6/7 = 857‰`, which alone would refuse. SW-10's executor term counts the executor's own
+            /// capped weight on both sides (`palw_panel_stake_executor_bonds_judging_v1`), so the claim
+            /// is measured over the eight:
+            ///
+            /// * one other seat saturated: `7/8 = 875‰`, the draw binds (and never seats the executor
+            ///   or the saturated seat);
+            /// * the executor saturated as well — the busiest producer, its own claims filling its own
+            ///   headroom — still `7/8`: its load is unread, it cannot sit anyway;
+            /// * two other seats saturated: `6/8`, `InsufficientEligibleStake { 6g, 8g }` — the ADR's
+            ///   "refuses with two", reported with the term on both sides;
+            /// * an executor outside the population (`sw_state`'s, below the panel floor) adds nothing,
+            ///   and eight genesis seats with one saturated bind at `7/8` as the pure half pinned;
+            /// * `stake: None` binds every one of them (no stake floor).
+            #[test]
+            fn t94_a_genesis_executor_keeps_the_one_saturated_seat_tolerance() {
+                let g = 939_063u128;
+                let stake = PalwPanelStakeDrawV1::V1;
+                let weight = |list: &[(&PalwBondKeyV2, &PalwBondStateV2)]| palw_panel_stake_weight_v1(list, &stake);
+                let executor_weight = |state: &PalwChainStateV2, claim: &Hash64| {
+                    weight(
+                        &palw_panel_stake_executor_bonds_judging_v1(
+                            state,
+                            claim,
+                            &h64(1),
+                            100,
+                            None,
+                            false,
+                            None,
+                            Some(sw_economy()),
+                            5,
+                        )
+                        .unwrap(),
+                    )
+                };
+
+                let (one, c1) = genesis_executor_state(&[2]);
+                let (eligible, base) = populations(&one, &c1);
+                assert_eq!((weight(&eligible), weight(&base)), (6 * g, 7 * g), "the seven others, one saturated");
+                assert!(
+                    matches!(palw_panel_stake_floor_v1(6 * g, 7 * g, 875), Err(PalwPanelV2Error::InsufficientEligibleStake { .. })),
+                    "the premise: the seven alone refuse at 857‰"
+                );
+                assert_eq!(executor_weight(&one, &c1), g, "the executor is a genesis seat");
+
+                let (busy, cb) = genesis_executor_state(&[1, 2]);
+                assert!(
+                    busy.reserved_exposure(&key(1)) > one.reserved_exposure(&key(1)),
+                    "the busy executor's own heavy claim loads it"
+                );
+                assert_eq!(executor_weight(&busy, &cb), g, "the executor term reads no headroom");
+
+                for i in 0..24u64 {
+                    for (label, state, claim) in [("one saturated", &one, &c1), ("and the executor busy", &busy, &cb)] {
+                        let seats =
+                            draw(state, claim, anchor(i), sw_policy()).unwrap_or_else(|e| panic!("{label}, anchor {i}: {e:?}"));
+                        assert_eq!(seats.len(), 5, "{label}: a full jury");
+                        assert!(!seats.iter().any(|s| s.bond == key(1) || s.bond == key(2)), "{label}, anchor {i}: {seats:?}");
+                    }
+                }
+
+                let (two, c2) = genesis_executor_state(&[2, 3]);
+                for i in 0..8u64 {
+                    assert_eq!(
+                        draw(&two, &c2, anchor(i), sw_policy()),
+                        Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 6 * g, base: 8 * g }),
+                        "two other seats saturated: 6/8 refuses"
+                    );
+                }
+                for (state, claim) in [(&one, &c1), (&busy, &cb), (&two, &c2)] {
+                    assert!(draw(state, claim, anchor(0), lottery_policy()).is_ok(), "stake None has no stake floor");
+                }
+
+                let (outside, co) = sw_state(&genesis_and_small(0), &[2]);
+                assert_eq!(executor_weight(&outside, &co), 0, "an executor below the panel floor could not sit: no term");
+                assert!(draw(&outside, &co, anchor(0), sw_policy()).is_ok(), "eight genesis seats, one saturated: 7/8 binds");
+            }
+        }
     }
 }

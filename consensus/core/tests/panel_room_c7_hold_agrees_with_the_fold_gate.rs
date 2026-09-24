@@ -4,7 +4,10 @@
 //! 1. The short row at TWELVE ready seats: op 186 reads a room of 8 (its rate capacity, past the
 //!    static cap of 5). The fold's own gate admits exactly 8 unlicensed attempts, refuses the 9th
 //!    with `PanelRoomExhausted`, and agrees with op 186 (`room > 0` iff the gate admits) on every
-//!    parent.
+//!    parent. **ADR-0152 SW-9 (M4):** that is the fence-off twin; on testnet-12 as shipped
+//!    (`palw_rcore_plus` armed) the twelve ready operators — eight genesis seats of 939,063 MSK and
+//!    four of 10M, capped at 1,000,000 — count `ready_eff = ⌊11,512,504 / 1,000,000⌋ = 11`, the room
+//!    is 7, and the gate admits exactly 7.
 //! 2. The 2M row (C7, c = 1) with the block's own 2M attempt reserved: a one-quantum 2M commitment
 //!    in step 3 must meet the cap (the reservation counts), so the hold cannot be bypassed by a
 //!    same-block commitment beside the own attempt.
@@ -24,7 +27,21 @@ use kaspa_consensus_core::palw_work_target_v1::palw_panel_held_to_final_v1;
 fn the_short_row_at_twelve_ready_seats_the_gate_admits_eight() {
     let p = t12();
     let b = bundle(&p);
-    let sp = b.state.clone();
+    // ADR-0152 SW-9: the fence-off twin keeps the bond count (8); as shipped, `ready_eff` (7).
+    let armed = b.state.clone();
+    assert!(armed.rcore_plus_active_at(1_000), "testnet-12's bundle mirrors palw_rcore_plus");
+    let off = armed.clone().with_rcore_plus_mirrors(None, 0, Vec::new());
+    for (sp, expected) in [(off, 8u64), (armed, 7u64)] {
+        the_short_row_at_twelve_ready_seats(&p, &sp, expected);
+    }
+}
+
+fn the_short_row_at_twelve_ready_seats(
+    p: &kaspa_consensus_core::config::params::Params,
+    sp: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+    expected: u64,
+) {
+    let (p, sp) = (p.clone(), sp.clone());
     let (short, _) = model_classes(&p);
     let mut daa = 1_000u64;
     let extra: Vec<PalwBondKeyV2> = (0..4u64).map(|i| bond_key(9_950 + i)).collect();
@@ -64,8 +81,8 @@ fn the_short_row_at_twelve_ready_seats_the_gate_admits_eight() {
         assert!(admitted <= 20);
     };
     println!("12 ready seats: first room {first_room}; (owed, room) {trail:?}; then {refused:?}");
-    assert_eq!(first_room, 8);
-    assert_eq!(admitted, 8, "the fold gate admits the op-186 room of 8, past the static cap of 5");
+    assert_eq!(first_room, expected);
+    assert_eq!(admitted, expected, "the fold gate admits the op-186 room, past the static cap of 5");
     assert!(matches!(refused, PalwStateV2Error::PanelRoomExhausted { class, .. } if class == short), "{refused:?}");
 }
 

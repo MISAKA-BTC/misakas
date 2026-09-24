@@ -225,12 +225,13 @@ pub(super) fn sign_spend(tx: &mut Transaction, utxo: UtxoEntry, i: usize, storag
         ScriptBuilder::new().add_data(&sig_item).expect("the signature fits").add_data(&card_pubkey(i)).expect("the key fits").drain();
 }
 
-/// The chain under construction, with the handful of facts every step needs.
-struct T12Chain {
-    ctx: TestContext,
-    config: Config,
-    bundle: PalwConsensusParamsV2,
-    bonds: Vec<PalwBondKeyV2>,
+/// The chain under construction, with the handful of facts every step needs. `pub(super)` so the
+/// stake-draw integration suite (`t12_stake_draw_integration`, ADR-0152 T89) builds the same chain.
+pub(super) struct T12Chain {
+    pub(super) ctx: TestContext,
+    pub(super) config: Config,
+    pub(super) bundle: PalwConsensusParamsV2,
+    pub(super) bonds: Vec<PalwBondKeyV2>,
     network_domain: Hash64,
     nonce: u64,
     heartbeats: u64,
@@ -238,19 +239,19 @@ struct T12Chain {
 }
 
 impl T12Chain {
-    fn vp(&self) -> Arc<crate::pipeline::virtual_processor::VirtualStateProcessor> {
+    pub(super) fn vp(&self) -> Arc<crate::pipeline::virtual_processor::VirtualStateProcessor> {
         self.ctx.consensus.virtual_processor().clone()
     }
 
-    fn tip_state(&self) -> (BlockHash, PalwChainStateV2) {
+    pub(super) fn tip_state(&self) -> (BlockHash, PalwChainStateV2) {
         self.vp().palw_state_v2_store.read().load_tip(&self.bundle.state).unwrap().expect("the tip loads")
     }
 
-    fn sink(&self) -> BlockHash {
+    pub(super) fn sink(&self) -> BlockHash {
         self.ctx.consensus.get_sink()
     }
 
-    fn daa_of(&self, block: BlockHash) -> u64 {
+    pub(super) fn daa_of(&self, block: BlockHash) -> u64 {
         self.vp().headers_store.get_daa_score(block).unwrap()
     }
 
@@ -286,7 +287,7 @@ impl T12Chain {
 
     /// **A heartbeat (algo 8)**, `step_ms` after the simulated clock — the lane testnet-12's clock
     /// runs on: past `palw_anchor_clock` no other lane moves the DAA score.
-    async fn heartbeat(&mut self, step_ms: u64, txs: Vec<Transaction>) -> Block {
+    pub(super) async fn heartbeat(&mut self, step_ms: u64, txs: Vec<Transaction>) -> Block {
         self.ctx.simulated_time += step_ms;
         self.nonce += 1;
         let mut t = self
@@ -313,7 +314,13 @@ impl T12Chain {
     /// header's anchor — what the processor records as a seed anchor's `execution_key`); the first
     /// draw it keeps is carried. A producer varies its execution the same way: a draw is an
     /// inference, and which winning inference it carries is its own choice.
-    async fn attempt(&mut self, card: usize, step_ms: u64, txs: Vec<Transaction>, keep: &dyn Fn(Hash64) -> bool) -> (Block, Hash64) {
+    pub(super) async fn attempt(
+        &mut self,
+        card: usize,
+        step_ms: u64,
+        txs: Vec<Transaction>,
+        keep: &dyn Fn(Hash64) -> bool,
+    ) -> (Block, Hash64) {
         let (block, claim_id) = self.build_attempt(card, step_ms, txs, keep);
         let block = self.insert_chain_block(block, &format!("card {card}'s attempt block")).await;
         (block, claim_id)
@@ -420,12 +427,37 @@ impl T12Chain {
         }
         assert!(done(self), "{what}: not reached in {cap} heartbeats (DAA {start} -> {})", self.sink_daa());
     }
+
+    /// **The block that binds `claim_id`'s panel on testnet-12** (ADR-0152 SW-8 and the M4 review's
+    /// finding 2): heartbeats until the chain's DAA reaches the claim's anchor slot
+    /// (`bind_base_daa() + anchor_delay`), then card `card`'s attempt. Past `palw_rcore_plus` a panel
+    /// anchors only on an attempt block — a heartbeat's hash costs `2^24` hashes to re-roll, an
+    /// attempt's an inference — so the heartbeats at the slot bind nothing (asserted), and this
+    /// attempt, the first attempt block at or past the slot, is the claim's anchor and binds it in its
+    /// own acceptance. The attempt makes a claim of its own for `card`, which the caller's chain simply
+    /// carries. Returns the anchor block.
+    pub(super) async fn attempt_at_the_anchor_slot(&mut self, claim_id: Hash64, card: usize) -> Block {
+        let slot = {
+            let (_, state) = self.tip_state();
+            state.claim(&claim_id).expect("the claim exists").bind_base_daa() + self.bundle.panel.anchor_delay()
+        };
+        self.beat_until(4 * self.bundle.panel.anchor_delay() + 400, "the claim's anchor slot", |c| c.sink_daa() >= slot).await;
+        let (_, state) = self.tip_state();
+        assert_eq!(
+            state.claim(&claim_id).expect("the claim stays").phase,
+            PalwClaimPhaseV2::Provisional,
+            "a heartbeat at the slot does not anchor a panel past palw_rcore_plus"
+        );
+        let (block, _) = self.attempt(card, self.config.params.target_time_per_block(), Vec::new(), &|_| true).await;
+        assert!(block.header.daa_score >= slot, "the attempt stands at or past the slot");
+        block
+    }
 }
 
 /// **Genesis, as a node starts it**: the premine imported through the node's own
 /// `import_pruning_point_utxo_set` against the recomputed commitment, each card's harness key and
 /// payout asserted registered, and card 0's fee float in the virtual UTXO set.
-fn t12_genesis_chain(
+pub(super) fn t12_genesis_chain(
     config: &Config,
     bundle: &PalwConsensusParamsV2,
     premine: &[(TransactionOutpoint, UtxoEntry)],
@@ -575,17 +607,19 @@ async fn a_floor_final_scheduled(draw: SeedDraw) -> AtTheTargetSpan {
         claim.accepted_daa
     };
 
-    // ---- 2. the chain derives and binds its panel ---------------------------------------------------
-    chain
-        .beat_until(4 * bundle.panel.anchor_delay() + 400, "the claim's panel binds", |c| {
-            let (_, state) = c.tip_state();
-            state.claim(&claim_id).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }))
-        })
-        .await;
+    // ---- 2. the chain derives and binds its panel, in its anchor block (an attempt, SW-8) --------------
+    let anchor_block = chain.attempt_at_the_anchor_slot(claim_id, 7).await;
     let (_, state) = chain.tip_state();
+    assert!(
+        matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
+        "the anchor block binds the claim: {:?}",
+        state.claim(&claim_id).unwrap().phase
+    );
+    assert_eq!(state.panel(&claim_id).unwrap().anchor, anchor_block.header.hash, "anchored on the attempt block");
     let panel = state.panel(&claim_id).expect("a bound claim has a panel").clone();
     let PalwClaimPhaseV2::PanelBound { bound_daa } = state.claim(&claim_id).unwrap().phase.clone() else { unreachable!() };
-    assert_eq!(bound_daa, accepted_daa + bundle.panel.anchor_delay(), "bound at its anchor, the anchor delay after acceptance");
+    assert_eq!(bound_daa, anchor_block.header.daa_score, "bound at its anchor block");
+    assert!(bound_daa >= accepted_daa + bundle.panel.anchor_delay(), "the anchor is at or past the anchor delay after acceptance");
     assert_eq!(panel.seats.len(), bundle.panel.seat_count() as usize, "a full jury");
     assert!(panel.seats.iter().all(|s| s.bond != executor), "the executor never sits on its own panel");
     let seat_cards: Vec<usize> =
@@ -1138,13 +1172,9 @@ async fn t12_a_late_full_seat_licenses_through_the_node_s_own_assemblers() {
 
     chain.heartbeat(ttpb, Vec::new()).await;
     let (_, claim_id) = chain.attempt(0, ttpb, Vec::new(), &|_| true).await;
-    chain
-        .beat_until(4 * bundle.panel.anchor_delay() + 400, "the claim's panel binds", |c| {
-            let (_, state) = c.tip_state();
-            state.claim(&claim_id).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }))
-        })
-        .await;
+    chain.attempt_at_the_anchor_slot(claim_id, 7).await;
     let (_, state) = chain.tip_state();
+    assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "bound in its anchor block");
     let panel = state.panel(&claim_id).expect("a bound claim has a panel").clone();
     assert_eq!(panel.seats.len(), 5, "the shipped jury");
     let assignment = palw_segment_assignment_v2(panel.anchor, claim_id, panel.seats.len() as u16);
