@@ -618,6 +618,10 @@ mod tests {
             // The clock floor (H3/H5) refines the cursor; `validate_palw_v2` wants the cursor at or
             // below it, which the probe does not run — it asks only the hashers and the schedule.
             "palw_clock_floor" => params.palw_clock_floor = Some(at),
+            // ADR-0152 v2 F2: genesis-only and refused without four other fences by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_offence_attribution" => params.palw_offence_attribution = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),

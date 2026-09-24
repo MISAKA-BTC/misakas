@@ -387,7 +387,9 @@ pub enum PalwValidFalsityKindV1 {
     ExecutorEquivocation,
     /// One-step arithmetic refutation of the committed trace.
     StepArithmeticRefutation,
-    /// Structural / legs refutation of the committed program.
+    /// Structural / legs refutation of the committed program. Past `palw_offence_attribution`
+    /// (ADR-0152 v2 F2) it is filed as `StepStructural` checkpoint evidence against the v2 root;
+    /// the V1 `Legs` payload is refused there.
     LegsStructuralRefutation,
     /// Output root forged against the committed execution.
     ForgedOutputRoot,
@@ -621,6 +623,45 @@ mod tests {
         assert_eq!(disc(Contradiction::ProducerWithholding { voided_daa: 1 }), 2, "DA-while-Valid");
         assert_eq!(disc(Contradiction::ConflictingPermit { span: 0, round: 0, permit_index: 0 }), 3);
         assert_eq!(disc(Contradiction::CourtFraud { voided_daa: 1 }), 4);
+
+        // **ADR-0152 v2 F2: past `palw_offence_attribution` a legs refutation is carried as
+        // `StepStructural` with checkpoint evidence.** A claim there commits a v2 execution root,
+        // whose checkpoint leg the step binding holds (`checkpoint_leg_root_v2`), so the step
+        // family's `Checkpoint` / `CheckpointChain` arms are what refute it; the V1 `Legs` payload
+        // rebuilds a v1 root and is refused by name. `LegsStructuralRefutation` therefore stays
+        // `ObjectiveOffenceProofExists` on both sides of the fence, through a different payload.
+        use crate::palw_offence_attribution_v1::{PalwFalseValidAdmissionV1, palw_false_valid_admission_v1};
+        use crate::palw_offence_v1::PalwOffenceVerifyError;
+        use crate::palw_step_leg::{PalwCheckpointLeafV2, PalwStepEvidenceV1, PalwStepOpeningV1, PalwStepRefutationV1};
+        fn zeroed<T: borsh::BorshDeserialize>() -> T {
+            let zeros = vec![0u8; 1 << 16];
+            T::deserialize(&mut zeros.as_slice()).expect("an all-zero encoding decodes")
+        }
+        let binding = crate::palw_step_refute::tests::skeleton_refutation().binding;
+        let checkpoint_arms = [
+            PalwStepEvidenceV1::Checkpoint { opening: zeroed::<PalwStepOpeningV1>(), preimage: zeroed::<PalwCheckpointLeafV2>() },
+            PalwStepEvidenceV1::CheckpointChain {
+                earlier_opening: zeroed::<PalwStepOpeningV1>(),
+                earlier_preimage: zeroed::<PalwCheckpointLeafV2>(),
+                later_opening: zeroed::<PalwStepOpeningV1>(),
+                later_preimage: zeroed::<PalwCheckpointLeafV2>(),
+            },
+        ];
+        for evidence in checkpoint_arms {
+            let legs_as_steps = Contradiction::StepStructural(PalwStepRefutationV1 { binding: binding.clone(), evidence });
+            assert_eq!(
+                palw_false_valid_admission_v1(&legs_as_steps),
+                Ok(PalwFalseValidAdmissionV1::ExecutionProving),
+                "LegsStructuralRefutation past the fence: {legs_as_steps:?}"
+            );
+        }
+        assert!(
+            matches!(
+                palw_false_valid_admission_v1(&Contradiction::Legs(zeroed())),
+                Err(PalwOffenceVerifyError::ContradictionNotAdmitted(_))
+            ),
+            "the V1 Legs payload is refused by name past the fence"
+        );
     }
 
     #[test]

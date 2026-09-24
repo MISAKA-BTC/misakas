@@ -558,6 +558,11 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-23 economic audit's fence, resolved once in [`Self::palw_audit_2026_09_23_at`];
     /// the fold's extras and the registration gate read it there.
     pub(super) palw_audit_2026_09_23: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0152 v2 F2: `Params::palw_offence_attribution` (`Some(0)` on testnet-12 alone), resolved
+    /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
+    /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
+    /// the other way.
+    pub(super) palw_offence_attribution: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
@@ -1047,6 +1052,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
+            palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -5336,6 +5342,130 @@ impl VirtualStateProcessor {
         .map(|(next, _, _)| next)
     }
 
+    /// [`Self::palw_v2_fold_accepted_for_tests`] with the delta the transition wrote beside the
+    /// state — the record a reorg reverts through `revert_delta_v2`. ADR-0152 v2 F2's suite folds a
+    /// conviction through the fold the pipeline runs and then unwinds it, which only the delta can
+    /// do: a test that compared roots alone could not tell a reversible write from a lost one.
+    #[cfg(test)]
+    pub(super) fn palw_v2_fold_accepted_with_delta_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+    ) -> Result<
+        (kaspa_consensus_core::palw_state_v2::PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2),
+        kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
+    > {
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
+            state,
+            state_params,
+            self.palw_admission_params_v2.as_ref(),
+            point,
+            objects,
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+            &[],
+            kaspa_hashes::Hash64::default(),
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )
+        .map(|(next, delta, _)| (next, delta))
+    }
+
+    /// **A block's OWN attempt, folded as the pipeline folds it** — [`Self::palw_v2_fold_accepted_for_tests`]
+    /// with `PalwBlockWorkV3::Attempt(envelope)` and the execution key the pipeline derives from the
+    /// carrying header (`palw_execution_key_v1`: `execution_commitment_v3` under the header's own
+    /// `execution_anchor_v3`), so a claim a test opens is keyed, deduplicated, reserved and escrowed
+    /// exactly as a mined block's own attempt. ADR-0152 v2 F2's suite opens its real producer-built
+    /// claims through it. No merged work, no EVM actions and no round permits: a test block carries
+    /// none. Returns the delta and the skip list beside the state.
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(super) fn palw_v2_fold_attempt_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+        envelope: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2,
+        header: &kaspa_consensus_core::header::Header,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+            kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
+            Vec<(BlockHash, String)>,
+        ),
+        kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
+    > {
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
+            state,
+            state_params,
+            self.palw_admission_params_v2.as_ref(),
+            point,
+            objects,
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
+            &[],
+            self.palw_execution_key_v1(header, &envelope.attempt),
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )
+    }
+
+    /// **[`Self::palw_v2_objects_of_block`]'s free-prompt walk over transactions a test hands it**,
+    /// at `block_daa` against `state` — the extraction a node runs on an accepted 0x4a carrier,
+    /// argument for argument (the bundle's ladder, each class's caps off `state`, the four fences
+    /// at the block's DAA, the network's form and this processor's verifier). The pipeline reads
+    /// the carriers out of acceptance data, which only a mined, funded carrier produces; this lets
+    /// ADR-0152 v2 F2's suite open a real free-prompt claim the way the walk opens it without one.
+    /// A change to the walk's arguments must be made here too.
+    #[cfg(test)]
+    pub(super) fn palw_v2_fp_objects_of_txs_for_tests(
+        &self,
+        txs: &[kaspa_consensus_core::tx::Transaction],
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block_daa: u64,
+    ) -> kaspa_consensus_core::palw_fp_objects_v3::PalwFpExtractionV3 {
+        let freeprompt = self.palw_freeprompt_params_v3.as_ref().expect("a network with a free-prompt lane");
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let ladder = self
+            .palw_v2_bundle
+            .as_ref()
+            .map(|bundle| bundle.court.max_step_leaf_count())
+            .unwrap_or(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+        kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_by_class_v1(
+            txs,
+            network_domain,
+            freeprompt,
+            kaspa_consensus_core::BlockHash::default(),
+            self.palw_panel_da_at(block_daa),
+            |class_id| kaspa_consensus_core::palw_fp_objects_v3::PalwFpClassCapsV1 {
+                step_ladder: state.class_step_ladder_v1(class_id, ladder),
+                held: state.class_is_held_v1(class_id),
+                derived_work: if self.palw_fp_derived_work_at(block_daa) {
+                    match state.fp_work_profile_of(class_id) {
+                        Some(profile) => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Derived(profile),
+                        None => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Unpublished,
+                    }
+                } else {
+                    kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared
+                },
+            },
+            self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
+            self.palw_held_context_at(block_daa),
+            self.palw_prompt_ids_form_at(block_daa),
+            Self::verify_mldsa87_with_context_bool,
+        )
+    }
+
     /// Objects a test hands the filter directly, carried by nobody: `PALW_RENT_UNPRICED` so the
     /// ADR-0075 rent rules read as absent rather than as "every carrier paid zero", which is what
     /// every pre-SA test means and what an unarmed network does.
@@ -8001,6 +8131,72 @@ impl VirtualStateProcessor {
                         self.network_id_bytes.as_slice(),
                         Some(self.genesis.hash),
                     );
+                    // **ADR-0152 v2 F2 (`Params::palw_offence_attribution`): a false `Valid` has ONE
+                    // route past the fence, judged here and in the fold by one adjudicator.** The V1
+                    // `PanelFalseValid` is refused by name: its evidence convicts on
+                    // `job_id == claim_id`, a fixed point no real block-lane or free-prompt claim
+                    // reaches, while a receipt signed by hand in the V2 format still clears it for the
+                    // state-bound contradictions (`ConflictingPermit` names no claim at all).
+                    // `PanelFalseValidV2` is judged by `palw_check_panel_false_valid_v2` with the
+                    // signature half the fold does not run — the receipt verified under THIS chain's
+                    // domain and the key the accused bond registered, in the V2 or V3 form it was
+                    // licensed in — and a (seat, claim) already convicted is refused, since the fold
+                    // would carry it as a no-op. Whether the seat still holds the lock it is charged
+                    // is the fold's question, asked by the per-object rehearsal that follows, so a
+                    // refusal there drops the object too. Below the fence the V2 kind does not exist
+                    // and everything after this block is the gate as it was.
+                    if self.palw_offence_attribution_at(point.daa_score) {
+                        use kaspa_consensus_core::palw_offence_v1::{PalwOffenceKindV1, PalwOffenceVerifyError};
+                        match kind {
+                            PalwOffenceKindV1::PanelFalseValid => {
+                                return Err(PalwOffenceVerifyError::SupersededOnThisNetwork.to_string());
+                            }
+                            PalwOffenceKindV1::PanelFalseValidV2 => {
+                                if evidence.is_empty() {
+                                    return Err(PalwOffenceVerifyError::EvidenceEmpty.to_string());
+                                }
+                                if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
+                                    return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
+                                }
+                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_v2(
+                                    state,
+                                    accused,
+                                    evidence,
+                                    state_params.fp_decode_rules_at(point.daa_score),
+                                    // F7's reporter slot: empty until its own fence arms it.
+                                    false,
+                                    // The carriage a step refutation's prompt is read in — the
+                                    // network's form, as the fold reads it (`prompt_ids_merkle`).
+                                    self.palw_prompt_ids_form_at(point.daa_score),
+                                    Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
+                                        chain_domain: domain,
+                                        seat_pubkey: &record.pubkey,
+                                        seat_active: matches!(
+                                            record.status,
+                                            kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active
+                                                | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }
+                                        ),
+                                        verify: &Self::verify_mldsa87_with_context_bool,
+                                    }),
+                                )
+                                .map_err(|e| e.to_string())?;
+                                let offence_id = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(
+                                    &accused.0,
+                                    &finding.target.claim_id,
+                                );
+                                if state.consumed_offence(&offence_id).is_some() {
+                                    return Err(format!(
+                                        "bond {accused:?}'s false Valid on claim {} is already convicted: one offence per seat and claim",
+                                        finding.target.claim_id
+                                    ));
+                                }
+                                continue;
+                            }
+                            PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
+                        }
+                    } else if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 = kind {
+                        return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string());
+                    }
                     kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_v1(
                         *kind,
                         &accused.0,
@@ -9159,6 +9355,12 @@ impl VirtualStateProcessor {
             audit_2026_09_11_deep_active: self.palw_audit_2026_09_11_deep_at(daa_score),
             audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score),
             settled_anchor_depth: self.palw_settled_anchor_depth_at(daa_score),
+            // ADR-0152 v2 F2: which route a false `Valid` takes at this block — the V1 kind refused
+            // and `PanelFalseValidV2` consumed through the adjudicator the object gate ran. Written
+            // explicitly for the reason every line above gives: an unwritten default here would fold
+            // the V2 kind as dormant after the gate admitted it, and the V1 kind by the old rule
+            // after the gate refused it.
+            offence_attribution_active: self.palw_offence_attribution_at(daa_score),
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.
@@ -9411,6 +9613,14 @@ impl VirtualStateProcessor {
 
     fn palw_audit_2026_09_23_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_23.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0152 v2 F2, resolved in exactly one place, at the BLOCK's own DAA.** Which route a
+    /// false `Valid` takes — the V1 `PanelFalseValid` or `PanelFalseValidV2` — is decided by the
+    /// object gate and again by the fold, and the two must read one answer: a gate that admitted
+    /// the V2 kind under a fold that still read the V1 rule would drop every conviction it let in.
+    fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
+        self.palw_offence_attribution.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// The second clock's depth where the fence carries it; `None` is the DAA-only rule.

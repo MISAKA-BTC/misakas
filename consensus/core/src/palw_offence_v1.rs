@@ -49,6 +49,13 @@ pub enum PalwOffenceKindV1 {
     /// A court (or one-move court) found the executor guilty. Independent of whether the claim
     /// is still live — `Final` does not consume this offence.
     CourtExecutorGuilty = 2,
+    /// **ADR-0152 v2 F2: a panel seat signed `Valid` on a claim, and an objective contradiction
+    /// pinned to that claim's committed `execution_root` shows the work false** — judged by
+    /// [`crate::palw_offence_attribution_v1::palw_check_panel_false_valid_v2`] alone, on the
+    /// receipt form the chain licensed (full or segmented) and under the chain's own domain.
+    /// Appended last, so no existing row or payload moves; admitted only past
+    /// `Params::palw_offence_attribution`, where [`Self::PanelFalseValid`] is refused.
+    PanelFalseValidV2 = 3,
 }
 
 /// The chain's memory that this offence has already been paid.
@@ -183,6 +190,9 @@ pub fn palw_ledger_evidence_id_v1(kind: PalwOffenceKindV1, evidence: &[u8], name
             palw_panel_false_valid_ledger_evidence_id_from_payload_v1(&payload)
         }
         PalwOffenceKindV1::CourtExecutorGuilty => Ok(palw_offence_evidence_digest_v1(evidence)),
+        // Keyed per (seat, claim) by `palw_false_valid_offence_id_v2`, never by the bytes: one
+        // Valid is one offence whatever contradiction or wrapper a filer attaches to it.
+        PalwOffenceKindV1::PanelFalseValidV2 => Err(PalwOffenceVerifyError::AttributionDormant),
     }
 }
 
@@ -347,6 +357,25 @@ pub enum PalwOffenceVerifyError {
     PanelFalseValidWorkMismatch,
     #[error("the Valid receipt signature does not verify under the accused seat's key")]
     PanelFalseValidReceiptUnverified,
+    // ---- ADR-0152 v2 F2 (`palw_offence_attribution_v1`) ----------------------------------------
+    #[error("PanelFalseValidV2 is judged by palw_check_panel_false_valid_v2 past palw_offence_attribution, and nowhere else")]
+    AttributionDormant,
+    #[error("PanelFalseValid is superseded on this network by PanelFalseValidV2 (palw_offence_attribution)")]
+    SupersededOnThisNetwork,
+    #[error("this contradiction is not admitted against a Valid signer past palw_offence_attribution: {0}")]
+    ContradictionNotAdmitted(&'static str),
+    #[error("the false-Valid evidence names neither a live claim nor a liability row")]
+    NoTarget,
+    #[error("the accused seat's receipt does not attest the segment the fault is in")]
+    SiteNotAttested,
+    #[error("the claim's segment cut is no longer known, so a segmented receipt cannot be placed")]
+    SegmentsUnknown,
+    #[error("the claim has an open court or held data-availability session; file again once it closes")]
+    ClaimUnderSession,
+    #[error("the reporter slot must stay empty until its own fence arms it")]
+    ReporterSlotNotArmed,
+    #[error("the false-Valid evidence is above the byte ceiling this ruleset prices")]
+    EvidenceTooLarge,
 }
 
 /// **The processor's cryptographic gate** (ADR-0144 §9). A named kind and an evidence id are
@@ -386,6 +415,9 @@ where
             verify_palw_panel_false_valid_v1(accused, evidence, palw_pubkey, palw_bond_active, network_id, max_step_leaf_count, verify_signature)
         }
         PalwOffenceKindV1::CourtExecutorGuilty => Err(PalwOffenceVerifyError::CourtGuiltyIsNotStandalone),
+        // Never through this gate: past `palw_offence_attribution` the processor sends it to
+        // `palw_check_panel_false_valid_v2`, and below it the kind does not exist.
+        PalwOffenceKindV1::PanelFalseValidV2 => Err(PalwOffenceVerifyError::AttributionDormant),
     }
 }
 
@@ -990,8 +1022,17 @@ mod tests {
         assert_eq!(PalwOffenceKindV1::ExecutorEquivocation as u8, 0);
         assert_eq!(PalwOffenceKindV1::PanelFalseValid as u8, 1);
         assert_eq!(PalwOffenceKindV1::CourtExecutorGuilty as u8, 2);
-        let kinds =
-            [PalwOffenceKindV1::ExecutorEquivocation, PalwOffenceKindV1::PanelFalseValid, PalwOffenceKindV1::CourtExecutorGuilty];
-        assert_eq!(kinds.len(), 3, "ADR-0144 §9: no quality, cache, speedup, delay or unavailability kind");
+        // ADR-0152 v2 F2, appended: the same false Valid, judged against the claim's root.
+        assert_eq!(PalwOffenceKindV1::PanelFalseValidV2 as u8, 3);
+        let kinds = [
+            PalwOffenceKindV1::ExecutorEquivocation,
+            PalwOffenceKindV1::PanelFalseValid,
+            PalwOffenceKindV1::CourtExecutorGuilty,
+            PalwOffenceKindV1::PanelFalseValidV2,
+        ];
+        assert_eq!(kinds.len(), 4, "ADR-0144 §9: no quality, cache, speedup, delay or unavailability kind");
+        for kind in kinds {
+            assert_eq!(borsh::to_vec(&kind).expect("a kind serializes"), vec![kind as u8], "{kind:?}: the tag is the discriminant");
+        }
     }
 }
