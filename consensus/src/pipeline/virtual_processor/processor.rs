@@ -694,6 +694,8 @@ pub struct VirtualStateProcessor {
     #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_f002_withdraw_cap_activation_daa_score: u64,
     #[cfg_attr(not(feature = "evm"), allow(dead_code))]
+    pub(super) evm_bridge_ledger_activation_daa_score: u64,
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_f003_mldsa_verify_activation_daa_score: u64,
     #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_typed_receipt_root_activation_daa_score: u64,
@@ -983,6 +985,7 @@ impl VirtualStateProcessor {
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
+            evm_bridge_ledger_activation_daa_score: params.evm_bridge_ledger_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score: params.evm_f003_mldsa_verify_activation_daa_score,
             evm_typed_receipt_root_activation_daa_score: params.evm_typed_receipt_root_activation_daa_score,
             evm_lane_kpi: EvmLaneKpi::default(),
@@ -2364,6 +2367,7 @@ impl VirtualStateProcessor {
                             Some(seed),
                             self.evm_gas_pool_v2_activation_daa_score,
                             self.evm_f002_withdraw_cap_activation_daa_score,
+                            self.evm_bridge_ledger_activation_daa_score,
                             self.evm_f003_mldsa_verify_activation_daa_score,
                             self.evm_typed_receipt_root_activation_daa_score,
                             user_gas_cap,
@@ -2412,6 +2416,7 @@ impl VirtualStateProcessor {
                             &own_payload,
                             self.evm_gas_pool_v2_activation_daa_score,
                             self.evm_f002_withdraw_cap_activation_daa_score,
+                            self.evm_bridge_ledger_activation_daa_score,
                             self.evm_f003_mldsa_verify_activation_daa_score,
                             self.evm_typed_receipt_root_activation_daa_score,
                             user_gas_cap,
@@ -2689,6 +2694,7 @@ impl VirtualStateProcessor {
             pending,
             self.evm_gas_pool_v2_activation_daa_score,
             self.evm_f002_withdraw_cap_activation_daa_score,
+            self.evm_bridge_ledger_activation_daa_score,
             self.evm_f003_mldsa_verify_activation_daa_score,
             self.evm_typed_receipt_root_activation_daa_score,
         ))
@@ -2939,6 +2945,7 @@ impl VirtualStateProcessor {
                     Some(seed),
                     self.evm_gas_pool_v2_activation_daa_score,
                     self.evm_f002_withdraw_cap_activation_daa_score,
+                    self.evm_bridge_ledger_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
                     self.evm_typed_receipt_root_activation_daa_score,
                     user_gas_cap,
@@ -2982,6 +2989,7 @@ impl VirtualStateProcessor {
                     &own_payload,
                     self.evm_gas_pool_v2_activation_daa_score,
                     self.evm_f002_withdraw_cap_activation_daa_score,
+                    self.evm_bridge_ledger_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
                     self.evm_typed_receipt_root_activation_daa_score,
                     user_gas_cap,

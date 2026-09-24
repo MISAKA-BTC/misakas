@@ -800,9 +800,9 @@ impl NodeEthProvider {
                     Default::default()
                 };
                 // Replay under the SAME activation fences the accepting block executed
-                // with (gas-pool v1/v2, withdraw-cap, F003) — read from the network
-                // Params, not assumed inert (testnet runs a finite gas-pool-v2 fence).
-                let (gas_pool_v2, f002_withdraw_cap, f003_mldsa_verify) = c.evm_activation_fences();
+                // with (gas-pool v1/v2, withdraw-cap, bridge ledger, F003) — read from the
+                // network Params, not assumed inert (testnet runs a finite gas-pool-v2 fence).
+                let (gas_pool_v2, f002_withdraw_cap, bridge_ledger, f003_mldsa_verify) = c.evm_activation_fences();
                 let traced = kaspa_evm::trace::trace_accepted_tx(
                     &parent_snapshot,
                     parent_header.as_ref(),
@@ -811,6 +811,7 @@ impl NodeEthProvider {
                     &view.receipt,
                     gas_pool_v2,
                     f002_withdraw_cap,
+                    bridge_ledger,
                     f003_mldsa_verify,
                     capture_struct_logs,
                     kaspa_evm::trace::TraceLimits::default(),

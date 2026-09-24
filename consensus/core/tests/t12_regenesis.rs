@@ -253,6 +253,8 @@ fn every_rule_is_in_force_from_genesis() {
     assert_eq!(p.evm_f002_withdraw_cap_activation_daa_score, 0);
     assert_eq!(p.evm_f003_mldsa_verify_activation_daa_score, 0);
     assert_eq!(p.evm_typed_receipt_root_activation_daa_score, 0);
+    // The bridge ledger: the L1 refuses to materialize more than it bridged in.
+    assert_eq!(p.evm_bridge_ledger_activation_daa_score, 0);
     // The global scarcity every model shares: one permit a round, one span a DAA, no widening.
     let lane = p.palw_execution_lane.expect("the execution lane is armed");
     assert_eq!(lane.permits_per_round, 1, "one execution permit a round is the ceiling on block rights");

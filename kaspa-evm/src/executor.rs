@@ -99,6 +99,16 @@ pub struct EvmBlockInput<'a> {
     /// L1-materialized withdrawals is bounded. Below the fence (inert), withdrawals
     /// are uncapped and execution is byte-identical to before this change.
     pub f002_withdraw_cap_activation_daa_score: u64,
+    /// **The bridge ledger fence** (`Params::evm_bridge_ledger_activation_daa_score`). When
+    /// `daa_score >= this`, `evm_total_native_balance` stops being a best-effort readout and
+    /// becomes the L1's ledger of the EVM supply it BACKED: deposits and market credits raise it;
+    /// withdrawals, basefee burns and the settlement burns of filled market escrows lower it,
+    /// checked. A user tx whose draw (its basefee burn + its F002 withdrawals + the escrow it hands
+    /// the market writer, which the child's settlement may burn) exceeds the block's headroom (the
+    /// ledger less the escrow already parked in this block) is a deterministic class-2 SKIP, its
+    /// state dropped — so the L1 never materializes more than was bridged in, whatever the EVM's
+    /// balances say. Below the fence (inert), the accumulator saturates exactly as before.
+    pub bridge_ledger_activation_daa_score: u64,
     /// F003 `MLDSA87_VERIFY` precompile fence (`Params::evm_f003_mldsa_verify_activation_daa_score`,
     /// PREA v1.1 §9 / P0-1). When `daa_score >= this`, the F003 verify handler is
     /// registered (`crate::precompiles::register_all_misaka_precompiles`); below it
@@ -166,6 +176,48 @@ fn count_withdraws(result: &ExecutionResult) -> usize {
         }
     }
     n
+}
+
+/// **What one tx takes from the bridge ledger** (`EvmBlockInput::bridge_ledger_activation_daa_score`):
+/// its basefee burn plus its F002 withdrawals (both leave the EVM in this block), plus the value it
+/// hands the market writer (still inside the EVM, but burned by the child's settlement unless the
+/// fold refuses it — so it is reserved now, while the tx that parked it can still be skipped).
+/// `None` on arithmetic overflow, which the caller refuses like any draw the ledger cannot cover.
+fn bridge_ledger_draw(result: &ExecutionResult, basefee: u128) -> Option<u128> {
+    let mut draw = basefee.checked_mul(result.gas_used() as u128)?;
+    for log in result.logs() {
+        if let Some(w) = crate::withdraw::decode_withdraw_log(log) {
+            draw = draw.checked_add(w.amount_wei)?;
+        }
+        if let Some(action) = decode_action_log(log, 0) {
+            draw = draw.checked_add((action.gross_sompi as u128).checked_mul(EVM_NATIVE_SCALE as u128)?)?;
+        }
+    }
+    Some(draw)
+}
+
+/// **The ledger's headroom as a block's user txs open**: the parent's committed ledger, plus what
+/// this block's system ops bridged in (deposits, market sell credits), less the escrow its
+/// settlements burned. Each burned escrow was reserved out of the parent's headroom when the tx that
+/// parked it ran, so the subtraction cannot fail on a chain the ledger has governed throughout; if it
+/// does, the ledger was already overdrawn and the block is refused rather than forgiven.
+fn bridge_ledger_opening(
+    parent: Option<&EvmExecutionHeader>,
+    applied_claims: &[DepositClaim],
+    market_credited_wei: u128,
+    market_burned_wei: u128,
+) -> Result<u128, EvmExecError> {
+    let parent_total = parent.map(|p| evmu256_to_u128(p.evm_total_native_balance)).unwrap_or(0);
+    let deposited = applied_claims.iter().try_fold(0u128, |acc, c| acc.checked_add(c.amount_sompi as u128 * EVM_NATIVE_SCALE as u128));
+    deposited
+        .and_then(|d| parent_total.checked_add(d))
+        .and_then(|t| t.checked_add(market_credited_wei))
+        .and_then(|t| t.checked_sub(market_burned_wei))
+        .ok_or_else(|| {
+            EvmExecError::InvariantViolation(format!(
+                "bridge ledger overdrawn at the settlements: parent {parent_total} wei, market escrow burned {market_burned_wei} wei"
+            ))
+        })
 }
 
 /// Run a block's EVM lane. Returns the committed result and the post-execution
@@ -275,6 +327,13 @@ pub fn execute_block_evm(
             input.market.expected_settlements.len()
         )));
     }
+
+    // The bridge ledger: past its fence, what this block's user txs may still take out of the EVM
+    // (burn, withdraw, or park in the market's escrow) — the backed supply less what is already
+    // spoken for. Zero and unread below the fence.
+    let bridge_ledger_active = input.daa_score >= input.bridge_ledger_activation_daa_score;
+    let mut ledger_headroom: u128 =
+        if bridge_ledger_active { bridge_ledger_opening(input.parent, &applied_claims, market_credited_wei, market_burned_wei)? } else { 0 };
 
     // audit R2-#1: the deposit claims above already consumed `gas_used` worth of
     // SYSTEM gas (≤ 256 × 25k = 6.4M). The user-tx prefix-take must take that out
@@ -436,13 +495,25 @@ pub fn execute_block_evm(
             // and skip (class-2, dropping the state) if this tx's withdrawals would push
             // the block over MAX_WITHDRAWALS_PER_EVM_BLOCK. Inert ⇒ exactly
             // `transact_commit()` (transact + commit), byte-identical to before.
-            let exec = if withdraw_cap_active {
+            let exec = if withdraw_cap_active || bridge_ledger_active {
                 match evm.transact() {
                     Ok(rs) => {
-                        if withdrawals.len() + count_withdraws(&rs.result) > MAX_WITHDRAWALS_PER_EVM_BLOCK {
+                        if withdraw_cap_active && withdrawals.len() + count_withdraws(&rs.result) > MAX_WITHDRAWALS_PER_EVM_BLOCK {
                             skipped_tx_count += 1; // class 2: state dropped — no nonce/burn/withdrawal/gas/receipt
                             outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
                             continue;
+                        }
+                        // The bridge ledger: a tx whose draw the backed supply cannot cover is
+                        // skipped the same way — its state dropped, nothing materialized.
+                        if bridge_ledger_active {
+                            match bridge_ledger_draw(&rs.result, basefee).filter(|draw| *draw <= ledger_headroom) {
+                                Some(draw) => ledger_headroom -= draw,
+                                None => {
+                                    skipped_tx_count += 1; // class 2
+                                    outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
+                                    continue;
+                                }
+                            }
                         }
                         evm.db_mut().commit(rs.state);
                         Ok(rs.result)
@@ -571,13 +642,24 @@ pub fn execute_block_evm(
             // skip with its state DROPPED (no commit ⇒ no gas-pool debit, no
             // nonce/burn/withdrawal, not added to accepted_hashes). Inert ⇒
             // exactly `transact_commit()`, byte-identical.
-            let exec = if withdraw_cap_active {
+            let exec = if withdraw_cap_active || bridge_ledger_active {
                 match evm.transact() {
                     Ok(rs) => {
-                        if withdrawals.len() + count_withdraws(&rs.result) > MAX_WITHDRAWALS_PER_EVM_BLOCK {
+                        if withdraw_cap_active && withdrawals.len() + count_withdraws(&rs.result) > MAX_WITHDRAWALS_PER_EVM_BLOCK {
                             skipped_tx_count += 1; // class 2
                             outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
                             continue;
+                        }
+                        // The bridge ledger, as on the v1 path: dropped before commit, so no pool debit.
+                        if bridge_ledger_active {
+                            match bridge_ledger_draw(&rs.result, basefee).filter(|draw| *draw <= ledger_headroom) {
+                                Some(draw) => ledger_headroom -= draw,
+                                None => {
+                                    skipped_tx_count += 1; // class 2
+                                    outcomes[cand_idx] = Some(kaspa_consensus_core::evm::EvmCandidateOutcome::Skipped { class: 2 });
+                                    continue;
+                                }
+                            }
                         }
                         evm.db_mut().commit(rs.state);
                         Ok(rs.result)
@@ -681,12 +763,26 @@ pub fn execute_block_evm(
     // and the per-account credit/reroute moves are checked and fail closed.)
     // ADR-0089 Decision 8: a filled sell's credit adds (issuance on this side), a filled buy's
     // escrow burn removes (the sink output is on the other side).
-    let total_native_balance = parent_total
-        .saturating_add(deposited)
-        .saturating_add(market_credited_wei)
-        .saturating_sub(withdrawn)
-        .saturating_sub(market_burned_wei)
-        .saturating_sub(burn_this_block);
+    //
+    // **Past the bridge ledger's fence the same identity is CHECKED** — the per-tx skips above keep
+    // every term covered, so the checked form equals the saturating one on every block the ledger
+    // admits, and an underflow here is a defect in the skips, never a user's doing.
+    let total_native_balance = if bridge_ledger_active {
+        parent_total
+            .checked_add(deposited)
+            .and_then(|t| t.checked_add(market_credited_wei))
+            .and_then(|t| t.checked_sub(withdrawn))
+            .and_then(|t| t.checked_sub(market_burned_wei))
+            .and_then(|t| t.checked_sub(burn_this_block))
+            .ok_or_else(|| EvmExecError::InvariantViolation("bridge ledger overdrawn at the block's close".to_string()))?
+    } else {
+        parent_total
+            .saturating_add(deposited)
+            .saturating_add(market_credited_wei)
+            .saturating_sub(withdrawn)
+            .saturating_sub(market_burned_wei)
+            .saturating_sub(burn_this_block)
+    };
     // audit INFO-b (revised): the saturating form above is the committed source of truth and is
     // intentional — it never hard-halts. A previous `debug_assert_eq!` here demanded the EXACT
     // checked identity, but it false-positived on every executor/snapshot test: those harnesses fund
@@ -970,6 +1066,7 @@ mod tests {
             // Cap inert by default (daa_score 42 < u64::MAX) — existing tests keep
             // byte-identical behavior; the cap test below overrides it.
             f002_withdraw_cap_activation_daa_score: u64::MAX,
+            bridge_ledger_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
             typed_receipt_root_activation_daa_score: u64::MAX,
             user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
@@ -1152,6 +1249,7 @@ mod tests {
             accepted_txs: &[],
             gas_pool_v2_activation_daa_score: u64::MAX,
             f002_withdraw_cap_activation_daa_score: u64::MAX,
+            bridge_ledger_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
             typed_receipt_root_activation_daa_score: u64::MAX,
             user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
@@ -1483,6 +1581,7 @@ mod tests {
             let input = EvmBlockInput {
                 gas_pool_v2_activation_daa_score: gas_pool_v2_fence,
                 f002_withdraw_cap_activation_daa_score: 0,
+                bridge_ledger_activation_daa_score: 0,
                 ..input_with(&payload, &cands)
             };
             let (res, mut db) = execute_block_evm(CacheDB::new(EmptyDB::default()), &input).unwrap();
@@ -1496,11 +1595,104 @@ mod tests {
             );
 
             // --- cap INERT (fence u64::MAX) ⇒ uncapped, all MAX+1 materialize ---
+            // The bridge ledger stays ARMED here: every withdrawal is backed by the deposit, so the
+            // ledger refuses none of them — an honest block reads the same under it.
             let inert = EvmBlockInput { f002_withdraw_cap_activation_daa_score: u64::MAX, ..input };
             let (res2, _db2) = execute_block_evm(CacheDB::new(EmptyDB::default()), &inert).unwrap();
             assert_eq!(res2.withdrawals.len(), n, "{label}: inert ⇒ uncapped (all {n} withdrawals)");
             assert_eq!(res2.header.skipped_tx_count, 0, "{label}: inert ⇒ no cap skip");
         }
+    }
+
+    /// **The bridge ledger: the L1 never materializes more than it bridged in.**
+    ///
+    /// The attacker's balance is seeded straight into the EVM state — no deposit, the shape an
+    /// interpreter or intercept defect that mints wei would leave. An honest depositor has bridged in
+    /// `backed` sompi in the same block. Below the fence the attacker withdraws more than was ever
+    /// bridged and the L1 would mint it; past it the withdrawal is a class-2 skip, its state dropped.
+    /// A withdrawal the backed supply covers still goes through — the ledger is an aggregate, so its
+    /// ceiling is exactly a lock-and-mint pool's: what was bridged in, not a cent more.
+    #[test]
+    fn bridge_ledger_refuses_a_withdrawal_the_bridge_never_backed() {
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let scale = EVM_NATIVE_SCALE as u128;
+        let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let f002 = crate::withdraw::f002_address();
+        let backed: u64 = 1_000_000_000; // sompi an honest depositor bridged in (1e19 wei)
+        let payload = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: EvmAddress::from_bytes([0x5A; 20]),
+                amount_sompi: backed,
+                claim_tip_sompi: 0,
+            })],
+            evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+            ..Default::default()
+        };
+        let attacker = signed_call(0x22, 0, f002, scale, 60_000, basefee, withdraw_calldata(&spk)).0;
+        // Unbacked wei: twice the whole backed supply, from nowhere.
+        let unbacked = || funded_seed(attacker, 2 * backed as u128 * scale);
+        let withdraw = |sompi: u64| {
+            let raw = signed_call(0x22, 0, f002, sompi as u128 * scale, 60_000, basefee, withdraw_calldata(&spk)).1;
+            vec![cand(raw, 0xFE)]
+        };
+        let nonce_of = |db: &mut CacheDB<EmptyDB>| db.basic(attacker).unwrap().map(|a| a.nonce).unwrap_or(0);
+
+        for (label, gas_pool_v2_fence) in [("v2", 0u64), ("v1", u64::MAX)] {
+            let run = |cands: &[AcceptedTxCandidate], ledger_fence: u64| {
+                let input = EvmBlockInput {
+                    gas_pool_v2_activation_daa_score: gas_pool_v2_fence,
+                    bridge_ledger_activation_daa_score: ledger_fence,
+                    ..input_with(&payload, cands)
+                };
+                execute_block_evm(unbacked(), &input).unwrap()
+            };
+
+            // More than was ever bridged in.
+            let over = withdraw(backed + 1);
+            let (res, _) = run(&over, u64::MAX);
+            assert_eq!(res.withdrawals.len(), 1, "{label}: inert ⇒ the unbacked withdrawal materializes (the hole)");
+            assert_eq!(res.withdrawals[0].amount_sompi, backed + 1);
+            let (res, mut db) = run(&over, 0);
+            assert!(res.withdrawals.is_empty(), "{label}: armed ⇒ nothing materializes");
+            assert_eq!((res.header.accepted_tx_count, res.header.skipped_tx_count), (0, 1), "{label}: a class-2 skip");
+            assert_eq!(nonce_of(&mut db), 0, "{label}: the skipped tx's state is dropped");
+            assert_eq!(
+                res.header.evm_total_native_balance,
+                EvmU256::from(backed as u128 * scale),
+                "{label}: the ledger is what was bridged in, not what the EVM's balances say"
+            );
+
+            // Within the backed supply: the ledger is an aggregate, so it passes, and the ledger
+            // falls by exactly the withdrawal and the burn.
+            let within = withdraw(backed / 2);
+            let (res, mut db) = run(&within, 0);
+            assert_eq!(res.withdrawals.len(), 1, "{label}: a withdrawal the backed supply covers goes through");
+            assert_eq!(nonce_of(&mut db), 1);
+            // The header's gas includes the deposit claim's SYSTEM gas, which burns nothing.
+            let burn = basefee * (res.header.gas_used - SYSTEM_DEPOSIT_GAS_PER_CLAIM) as u128;
+            assert_eq!(
+                res.header.evm_total_native_balance,
+                EvmU256::from(backed as u128 * scale - (backed / 2) as u128 * scale - burn),
+                "{label}: the checked identity"
+            );
+        }
+    }
+
+    /// The opening can only fail on a ledger that was already overdrawn — a settlement burning escrow
+    /// the parent never held — and then it refuses the block instead of forgiving the difference.
+    #[test]
+    fn bridge_ledger_opening_refuses_an_overdrawn_settlement() {
+        let scale = EVM_NATIVE_SCALE as u128;
+        assert!(matches!(bridge_ledger_opening(None, &[], 0, 1), Err(EvmExecError::InvariantViolation(_))));
+        let parent = EvmExecutionHeader { evm_total_native_balance: EvmU256::from(5 * scale), ..Default::default() };
+        assert_eq!(bridge_ledger_opening(Some(&parent), &[], 0, 5 * scale).unwrap(), 0, "burning exactly the backed escrow");
+        let claim = DepositClaim { deposit_outpoint: Default::default(), evm_address: EvmAddress::from_bytes([1; 20]), amount_sompi: 3, claim_tip_sompi: 1 };
+        assert_eq!(
+            bridge_ledger_opening(Some(&parent), &[claim], 2 * scale, 4 * scale).unwrap(),
+            (5 + 3 + 2 - 4) * scale,
+            "a deposit counts whole (the tip is EVM wei too) and a sell credit is bridged in"
+        );
     }
 
     /// v0.4 §9.3 / §6.1 class 4: user-input faults at F002 (non-multiple
@@ -1809,6 +2001,94 @@ mod tests {
         assert_eq!(res.receipts[0].logs.len(), 1, "the buy's receipt carries the one ActionQueued log");
         assert_eq!(res.receipts[0].logs[0].address, MISAKA_MODEL_WRITER);
         assert_eq!(db.basic(from).unwrap().unwrap().nonce, 3);
+    }
+
+    /// **The bridge ledger on the market's hand: an escrow is reserved while the tx that parks it
+    /// can still be skipped, and the child's settlement burns it out of a ledger that kept room.**
+    ///
+    /// A buy's value stays inside the EVM (in the writer) until the NEXT block's settlement burns it
+    /// and the L1 materializes the sink — by then the tx that parked it is history and cannot be
+    /// skipped. So the ledger takes the escrow at the parking tx: an honest buyer, funded only by
+    /// its own deposit, queues; a buyer holding wei the bridge never backed, bidding for more than
+    /// the whole backed supply, is a class-2 skip and queues nothing. The child then settles the
+    /// honest buy and its ledger falls by exactly the escrow.
+    #[test]
+    fn bridge_ledger_reserves_a_market_escrow_and_the_child_burns_it() {
+        use crate::model_market::{send_action_buy_calldata, writer_address};
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let scale = EVM_NATIVE_SCALE as u128;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let writer = writer_address();
+        let view = line_view(line);
+        const BACKED: u64 = 1_000_000; // sompi, bridged in by the honest buyer's own deposit
+        let (honest, honest_buy) = signed_call(0x11, 0, writer, 7 * scale, 100_000, basefee, send_action_buy_calldata(&line, 1));
+        let (minted, minted_buy) =
+            signed_call(0x22, 0, writer, (BACKED as u128 + 1) * scale, 100_000, basefee, send_action_buy_calldata(&line, 1));
+        let honest_holder = EvmAddress::from_bytes(honest.into_array());
+        let payload = EvmExecutionPayload {
+            evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: honest_holder,
+                amount_sompi: BACKED,
+                claim_tip_sompi: 0,
+            })],
+            ..Default::default()
+        };
+        let accepted = [cand(honest_buy, 0xAA), cand(minted_buy, 0xAA)];
+        let run = |ledger_fence: u64| {
+            let input = EvmBlockInput {
+                market: market_input(&view, true, &[]),
+                bridge_ledger_activation_daa_score: ledger_fence,
+                ..input_v2(&payload, &accepted)
+            };
+            execute_block_evm(funded_seed(minted, 2 * BACKED as u128 * scale), &input).unwrap()
+        };
+
+        let (res, _) = run(u64::MAX);
+        assert_eq!(res.market_actions.len(), 2, "inert ⇒ the unbacked wei is escrowed too, and the child would burn it into a sink");
+
+        let (res, mut db) = run(0);
+        assert_eq!((res.header.accepted_tx_count, res.header.skipped_tx_count), (1, 1), "armed ⇒ the unbacked buy is a class-2 skip");
+        assert_eq!(res.market_actions.len(), 1);
+        assert_eq!(res.market_actions[0].account, honest_holder, "the honest buy queued");
+        assert_eq!(db.basic(writer).unwrap().unwrap().balance, U256::from(7 * scale), "only the honest escrow is parked");
+        assert_eq!(db.basic(minted).unwrap().unwrap().nonce, 0, "the skipped buy's state is dropped");
+        let burn = basefee * (res.header.gas_used - SYSTEM_DEPOSIT_GAS_PER_CLAIM) as u128;
+        assert_eq!(
+            res.header.evm_total_native_balance,
+            EvmU256::from(BACKED as u128 * scale - burn),
+            "the escrow is still inside the EVM: reserved in the headroom, not yet out of the ledger"
+        );
+
+        // The child settles the honest buy: the escrow is burned out of the EVM, the ledger falls by it.
+        let parent = res.header.clone();
+        let settle = [PalwEvmSettlementV1 {
+            seq: 0,
+            account: honest_holder,
+            line_id: line,
+            action: PALW_EVM_ACTION_BUY,
+            escrow_sompi: 7,
+            outcome: PalwEvmSettlementOutcomeV1::Filled { units: 3, gross_sompi: 7, net_sompi: 6, price_after_sompi: 100 },
+        }];
+        let child_payload = EvmExecutionPayload {
+            evm_coinbase: EvmAddress::from_bytes([0xFE; 20]),
+            system_ops: settle.iter().copied().map(EvmSystemOp::MarketSettle).collect(),
+            ..Default::default()
+        };
+        let child = EvmBlockInput {
+            parent: Some(&parent),
+            market: market_input(&view, true, &settle),
+            bridge_ledger_activation_daa_score: 0,
+            ..input_v2(&child_payload, &[])
+        };
+        let (child_res, mut child_db) = execute_block_evm(db, &child).unwrap();
+        assert_eq!(child_db.basic(writer).unwrap().unwrap().balance, U256::ZERO, "the escrow left the EVM");
+        assert_eq!(
+            evmu256_to_u128(child_res.header.evm_total_native_balance),
+            evmu256_to_u128(parent.evm_total_native_balance) - 7 * scale,
+            "the ledger fell by exactly the escrow the parent had reserved"
+        );
     }
 
     /// **The 2026-09-23 Position route matrix, P-B3, on the EVM lane: the writer asks the fold's
