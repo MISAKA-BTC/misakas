@@ -2,16 +2,19 @@
 //! no vesting row exists), M2 (the buyback bound `s` in `G_res`) and L1 (the processor's extras: the
 //! execution lane's quantum counts the execution rights `R`), on testnet-12's own fold.
 //!
-//! H1. L-1 prices the lock on the residual `G_res = G − E` because a Final's escrow is meant to sit in a
-//! vesting row a conviction burns. This build has no such row — `finalize_claim` pays `E` and
-//! `burn_vesting_row` is a stub — so `PALW_RCORE_VESTING_ROWS_LANDED_V1` is `false` and every lock is
-//! priced on the whole `G`: the smallest licensing set's locks, which are all a post-Final conviction
-//! can take, out-value it with the margin. The residual prices are pinned beside it through
-//! `palw_rcore_lock_vested_v1`, which the vesting work arms by flipping the flag.
+//! H1. L-1 prices the lock on the residual `G_res = G − E` because a Final's escrow sits in a vesting
+//! row a conviction burns. A build without the rows had to price the whole `G` (the S review's H1:
+//! the flag `false`); this line has them — `finalize_claim` writes the row, `burn_vesting_row` burns
+//! it, and every post-Final conviction reaches the burn through S-4's funnel — so
+//! `PALW_RCORE_VESTING_ROWS_LANDED_V1` is `true` and the lock is the residual at the buyback cap. What
+//! a post-Final conviction recovers is then the locks AND the burned row, and together they out-value
+//! `G`. The whole-gain prices a build without rows posted are pinned beside it.
 //!
 //! M2. Where the claim's line has an open pair, a Final buys `s` (5% of `E`) from it; `s` never vests,
 //! so the residual gain carries it: `G_res = w + R + s` and the escrow term is on `E − s`. Pricing
-//! `s = 0` made the residual lock cheaper by about `s / k`.
+//! `s = 0` made the residual lock cheaper by about `s / k`. The S re-review: a pair can open between
+//! the licence and the Final, so the price the vesting build arms (`palw_rcore_lock_vested_at_cap_v1`)
+//! takes `s` at its cap, `5% · E`, whatever the pair's state at the licence.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_whole_gain_and_buyback
 
@@ -22,7 +25,8 @@ use common::*;
 use kaspa_consensus_core::palw_model_lines_v1::PalwArtifactOwnerV1;
 use kaspa_consensus_core::palw_model_market_v1::{PalwModelMarketV1, palw_model_buyback_slice_v1};
 use kaspa_consensus_core::palw_state_v2::{
-    PALW_RCORE_VESTING_ROWS_LANDED_V1, palw_rcore_bind_prices_v1, palw_rcore_lock_vested_v1, palw_rcore_seat_lock_v1,
+    PALW_RCORE_VESTING_ROWS_LANDED_V1, palw_rcore_bind_prices_v1, palw_rcore_lock_unvested_v1, palw_rcore_lock_vested_at_cap_v1,
+    palw_rcore_lock_vested_v1, palw_rcore_seat_lock_v1,
 };
 
 const MSK: u128 = 100_000_000;
@@ -50,12 +54,14 @@ fn claim_of(class: Option<Hash64>, seed: u64) -> (Chain, Hash64, Vec<(PalwBondKe
     }
 }
 
-/// **H1: three `lock_3` and two `lock_2` out-value the whole gain on every class, and after the Final
-/// has paid `E` the three quorum signers still hold that much.** Floor 1,173.69 MSK per `lock_3`. The residual prices (the vesting build's) are ADR §2's, from the same
-/// `G_res`: floor 106.74 / 160.11, 8k 306.08 / 459.12, 2M 22,252.74 / 33,379.11.
+/// **H1 with the vesting rows: `k′` locks out-value the residual at the buyback cap on every class, and
+/// after the Final the row holds `E` for a conviction to burn — locks and row together out-value
+/// `G`.** The ADR §2 residual prices at `s = 0` are pinned from the same `G_res`: floor 106.74 / 160.11,
+/// 8k 306.08 / 459.12, 2M 22,252.74 / 33,379.11; and the whole-gain price a build without rows posted,
+/// floor 1,173.69 per `lock_3`.
 #[test]
-fn h1_the_lock_is_priced_on_the_whole_gain_until_vesting_rows_land() {
-    assert!(!PALW_RCORE_VESTING_ROWS_LANDED_V1, "the premise: finalize_claim pays E and no row can burn it");
+fn h1_the_lock_prices_the_residual_and_the_vesting_row_holds_e() {
+    assert!(PALW_RCORE_VESTING_ROWS_LANDED_V1, "the premise: finalize_claim writes the row and every post-Final conviction burns it");
     let p = t12();
     let (short, id2m) = model_classes(&p);
     let near = |got: u128, want: f64| (msk_of(got) - want).abs() < 0.02;
@@ -69,8 +75,12 @@ fn h1_the_lock_is_priced_on_the_whole_gain_until_vesting_rows_land() {
         let gain = prices.g_res + u128::from(claim.escrowed_reward);
         let lock_3 = palw_rcore_seat_lock_v1(&c.s, &c.sp, &e, &id, &claim, 3);
         assert_eq!(prices.lock_2, palw_rcore_seat_lock_v1(&c.s, &c.sp, &e, &id, &claim, 2));
-        assert!(3 * lock_3 > gain + gain / 10 - 3, "{name}: three lock_3 out-value G with the margin");
-        assert!(2 * prices.lock_2 > gain + gain / 10 - 2, "{name}: two lock_2 out-value G with the margin");
+        for (k, lock) in [(3u8, lock_3), (2, prices.lock_2)] {
+            assert_eq!(lock, palw_rcore_lock_vested_at_cap_v1(prices.g_res, claim.escrowed_reward, 0, k), "{name}: lock_{k} at the cap");
+        }
+        let at_cap = prices.g_res + u128::from(palw_model_buyback_slice_v1(claim.escrowed_reward));
+        assert!(3 * lock_3 > at_cap + at_cap / 10 - 3, "{name}: three lock_3 out-value the residual with the margin");
+        assert!(2 * prices.lock_2 > at_cap + at_cap / 10 - 2, "{name}: two lock_2 out-value the residual with the margin");
         let (r3, r2) = (
             palw_rcore_lock_vested_v1(prices.g_res, claim.escrowed_reward, 0, 3),
             palw_rcore_lock_vested_v1(prices.g_res, claim.escrowed_reward, 0, 2),
@@ -83,13 +93,13 @@ fn h1_the_lock_is_priced_on_the_whole_gain_until_vesting_rows_land() {
             residual.0,
             residual.1
         );
-        // The hazard the flag closes: where `E` dominates the gain (the floor, 8k) the residual price
-        // alone leaves a post-Final conviction short of `G`; on 2M `w` dominates and it would not.
+        // Why the row must burn: where `E` dominates the gain (the floor, 8k) the residual price alone
+        // leaves a post-Final conviction short of `G`; on 2M `w` dominates and it would not.
         assert_eq!(3 * r3 < gain, name != "2M", "{name}: whether the residual price alone falls short of G");
         if name == "floor" {
-            assert!(near(lock_3, 1_173.69), "floor lock_3 on G {:.4} MSK", msk_of(lock_3));
-            // Through the licence and the Final: E is paid, and the quorum's three live locks still
-            // out-value G — the whole recovery a post-Final conviction has.
+            assert!(near(palw_rcore_lock_unvested_v1(gain, 3), 1_173.69), "floor whole-gain lock_3 (a build without rows)");
+            // Through the licence and the Final: E is in the row, and the quorum's three live locks plus
+            // the row — what a post-Final conviction burns — out-value G.
             let bound = c.bind(id, &seats);
             c.step(&[PalwConsensusObjectV2::ReceiptLicensed {
                 claim: id,
@@ -101,10 +111,12 @@ fn h1_the_lock_is_priced_on_the_whole_gain_until_vesting_rows_land() {
                 .map(|(k, _)| c.s.slashable_lock(*k, id).expect("each signer's lock outlives the Final").amount)
                 .sum();
             assert_eq!(held, 3 * lock_3, "the three quorum locks");
-            assert!(held > gain, "after the Final paid E, the locks still out-value G");
+            let row = c.s.vesting_row(&id).expect("the Final wrote the vesting row").total_sompi_u128();
+            assert!(row > 0, "the row holds the escrow");
+            assert!(held + row > gain, "after the Final the locks and the burnable row out-value G");
         }
         println!(
-            "H1 {name}: G {:.4} MSK (G_res {:.4}, E {:.4}); lock_3 {:.4} lock_2 {:.4} on G; residual {:.4} / {:.4}",
+            "H1 {name}: G {:.4} MSK (G_res {:.4}, E {:.4}); lock_3 {:.4} lock_2 {:.4} at the cap; residual at s = 0 {:.4} / {:.4}",
             msk_of(gain),
             msk_of(prices.g_res),
             msk_of(u128::from(claim.escrowed_reward)),
@@ -120,7 +132,7 @@ fn h1_the_lock_is_priced_on_the_whole_gain_until_vesting_rows_land() {
 /// is owned by a line with a seeded market: `G_res` rises by exactly `s = 5% · E` (≈ 160 MSK), and the
 /// residual `lock_3` — `palw_seat_lock_required_v2(G_res, 3) + ⌈100‰ · (E − s) / 3⌉` — is about
 /// `s / 3` (≈ 53 MSK) above the `s = 0` price the deviation used (`s` out of both terms). With no market, `s = 0`. The fold's
-/// lock (on `G`, H1) does not move with `s`: the slice is inside `E`.
+/// lock (the residual at the cap, `palw_rcore_lock_vested_at_cap_v1`) does not move with `s`: it takes `s` at its cap whatever the pair.
 #[test]
 fn m2_an_open_pair_puts_the_buyback_bound_in_the_residual_gain() {
     let p = t12();
@@ -156,6 +168,13 @@ fn m2_an_open_pair_puts_the_buyback_bound_in_the_residual_gain() {
         msk_of(dropped)
     );
     assert!(dropped > 50 * MSK, "the deviation's discount was ≈ 53 MSK");
+    // The S re-review: the price the vesting build arms takes `s` at its cap whatever the pair's state
+    // — the pair open at the licence and a pair that opens only before the Final are priced alike.
+    let armed_open = palw_rcore_lock_vested_at_cap_v1(with.g_res, claim.escrowed_reward, s, 3);
+    let armed_closed = palw_rcore_lock_vested_at_cap_v1(without.g_res, claim.escrowed_reward, 0, 3);
+    assert_eq!(armed_closed, armed_open, "the armed price does not depend on the pair's state at the licence");
+    assert_eq!(armed_open, residual_with, "it is the open pair's price: s = 5% · E is the cap");
+    assert!(armed_closed > residual_s0, "a closed pair at the licence no longer discounts the lock");
     assert_eq!(
         palw_rcore_seat_lock_v1(&open, &c.sp, &e, &id, &claim, 3),
         palw_rcore_seat_lock_v1(&c.s, &c.sp, &e, &id, &claim, 3),

@@ -316,7 +316,13 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
         // sompi — the attacker forfeits at least the honest collateral it pins, asserted below — and
         // the residual price the vesting rows re-arm restores the stronger property above.
         println!("H1: the floor duty is the cap (w + E) / 5 per seat; the 2M lane unbindable {daa_2m_dead} DAA");
-        assert!(daa_2m_dead < end - start, "the lane reopens inside the window");
+        // The S re-review's N2: measured 965 of 3,650 DAA — bounded at 30% of the window, not merely
+        // "reopens before the end".
+        assert!(
+            daa_2m_dead * 10 <= 3 * (end - start),
+            "the 2M lane is unbindable for at most 30% of the window: {daa_2m_dead} of {}",
+            end - start
+        );
     }
     assert!(attacker_integral >= honest_integral, "the attacker locks at least the capital x time it pins");
     // **The bound: an attack that denies a lane must cost at least what it denies.** Stated as: a

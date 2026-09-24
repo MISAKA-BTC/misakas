@@ -226,10 +226,13 @@ fn m1_work_and_accusations_share_one_invariant() {
         .expect("admitted with room");
     let total = committed_of(&c, &after, &accuser, at) + palw_accuser_exposure_v1(&after, &accuser);
     assert!(total <= u128::from(RICH), "the invariant after the DA stake");
-    assert!(
-        total - palw_accuser_exposure_v1(&after, &accuser) > committed,
-        "the DA stake is on the bond's ledger (reserved_exposure until M3 moves it)"
-    );
+    // M3 has moved the DA stake (this assertion's interim `reserved_exposure` reading said "until M3
+    // moves it"): it is the session's own exposure, on the ACCUSER ledger (DA-6, A-6) — `committed` is
+    // unchanged and the accuser ledger grows by exactly the session's exposure.
+    let session = after.da_session(&claim, &accuser).expect("the accusation opened a session");
+    assert!(session.exposure > 0);
+    assert_eq!(committed_of(&c, &after, &accuser, at), committed, "the DA stake is not in committed");
+    assert_eq!(palw_accuser_exposure_v1(&after, &accuser), held + session.exposure, "it is on the accuser ledger");
     println!(
         "M1: a {:.4} MSK, accuser {:.4} MSK, slashed to C {:.4} MSK: second attempt refused; DA refused, admitted with room",
         a as f64 / MSK as f64,
@@ -298,7 +301,18 @@ fn l5_a_lock_outliving_its_clocks_is_still_committed_and_the_final_moves_nothing
     let wc = c.sp.window_court();
     assert_eq!(lock.expiry_daa, licensed_daa + wc, "the premise: the lock's DAA clock is the licence's");
     let duty = c.s.panel_duty_row_of(&claim).expect("duty row").seat_exposure;
-    assert!(lock.amount > duty, "the premise: the lock tops the duty up (the whole-gain price)");
+    // With the vesting rows in (`PALW_RCORE_VESTING_ROWS_LANDED_V1`) L-1 prices the RESIDUAL, which on
+    // the floor sits below the seat's duty (λ binds it), so the price no longer tops the duty up by
+    // itself. The rule under test is the ledger's — `max(duty, lock)` stays committed while the claim
+    // lives, whatever the lock's clocks say — so the lock is set above its duty through the carriage.
+    if lock.amount <= duty {
+        let topped = kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1 { amount: duty + 1_000_000, ..lock };
+        c.s = edited(&c.sp, &c.s, |k| {
+            k.slashable_locks.insert((seat, claim), topped);
+        });
+    }
+    let lock = *c.s.slashable_lock(seat, claim).expect("the seat's lock");
+    assert!(lock.amount > duty, "the premise: the lock tops the duty up");
     // The court that outlives the lock's clocks.
     let record = c.claim(&claim);
     let challenger = bond_key(1);
@@ -355,4 +369,78 @@ fn l5_a_lock_outliving_its_clocks_is_still_committed_and_the_final_moves_nothing
     assert_eq!(redated.expiry_daa, c.daa + wc, "the liability begins again at the Final");
     assert_eq!(c.s.panel_duty_row_of(&claim).map(|row| row.seat_exposure).unwrap_or(0), 0, "the duty is released");
     assert_eq!(committed_of(&c, &c.s, &seat, c.daa), before, "the re-date moved nothing: max(duty, lock) = lock throughout");
+}
+
+/// **The S re-review of 0b56c4d8: `committed + accuser ≤ C` across interleavings** (the reviewer's
+/// probe `review_s2_accuser`, made a test). A 65,000 MSK bond accuses a licensed 2M claim and works in
+/// either order — (1) the DA accusation, then its own floor attempts until the fold skips one; (2) the
+/// attempts first, then the accusation — and after every step the one invariant holds, and the room
+/// the accuser gate still offers keeps it (`committed + accuser + room ≤ C`).
+#[test]
+fn m1_the_invariant_holds_across_interleavings() {
+    let p = t12();
+    let (_, id2m) = model_classes(&p);
+    let total = |c: &Chain, b: &PalwBondKeyV2, at: u64| {
+        (kaspa_consensus_core::palw_state_v2::palw_bond_committed_v1(&c.s, b, at, None, c.sp.window_court()), palw_accuser_exposure_v1(&c.s, b), u128::from(c.s.bond(b).unwrap().collateral))
+    };
+    let work_until_refused = |c: &mut Chain, seed0: u64| -> u64 {
+        let mut taken = 0;
+        for i in 0..40u64 {
+            let (env, key, id) = floor_attempt(c, 2, seed0 + i);
+            let daa = c.daa + 1;
+            let at = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: h(0xCA_0000 + daa),
+                daa_score: daa,
+                blue_score: daa,
+                subsidy: T12_BLOCK_SUBSIDY_SOMPI,
+            };
+            let (_, _, skips) = c.try_fold(&c.s.clone(), &at, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands");
+            if !skips.is_empty() {
+                break;
+            }
+            c.step_at(daa, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI);
+            assert!(c.s.claim(&id).is_some());
+            taken += 1;
+        }
+        taken
+    };
+    let accuse = |c: &mut Chain, claim: Hash64, accuser: PalwBondKeyV2| -> bool {
+        let object = PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index: 0, accuser, signature: Vec::new() };
+        let daa = c.daa + 1;
+        let at = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: h(0xDA00_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 0 };
+        if c.try_fold(&c.s.clone(), &at, std::slice::from_ref(&object), PalwBlockWorkV3::None, Hash64::default()).is_err() {
+            return false;
+        }
+        c.step_at(daa, &[object], PalwBlockWorkV3::None, Hash64::default(), 0);
+        true
+    };
+    for order in [1u8, 2] {
+        let mut c = model_chain(p.clone(), id2m, 1);
+        let id = model_claim(&mut c, id2m, 1, 0xDA01 + u64::from(order));
+        let seats = honest_seats(&c.p, 5);
+        c.s = readied(&c.sp, &c.s, &honest(&c.p), id2m, c.daa);
+        let bound = c.bind(id, &seats);
+        c.s = readied(&c.sp, &c.s, &honest(&c.p), id2m, c.daa);
+        c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+        c.step(&[bond_obj(2, 65_000 * MSK as u64)]);
+        let accuser = bond_key(2);
+        let holds = |c: &Chain, what: &str| {
+            let (committed, accused, collateral) = total(c, &accuser, c.daa);
+            assert!(committed + accused <= collateral, "order {order}, {what}: {committed} + {accused} > {collateral}");
+        };
+        let (taken, accepted) = if order == 1 {
+            let accepted = accuse(&mut c, id, accuser);
+            holds(&c, "after the accusation");
+            (work_until_refused(&mut c, 0xB100), accepted)
+        } else {
+            let taken = work_until_refused(&mut c, 0xB200);
+            holds(&c, "after the work");
+            (taken, accuse(&mut c, id, accuser))
+        };
+        holds(&c, "at the end");
+        let room = palw_accuser_room_v1(&c.s, &c.sp, &accuser, c.daa + 1, None);
+        let (committed, accused, collateral) = total(&c, &accuser, c.daa + 1);
+        assert!(committed + accused + room <= collateral, "order {order}: the accuser room keeps the invariant");
+        println!("order {order}: {taken} own attempts, accusation accepted: {accepted}, accuser room left {room}");
+    }
 }

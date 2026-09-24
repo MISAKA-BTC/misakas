@@ -9165,6 +9165,7 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_state_v2::palw_da_signer_liability_armed_v1(
                     &bundle.state,
                     kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+                    daa_score,
                 )
             }),
         }
