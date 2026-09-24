@@ -20525,6 +20525,27 @@ fn rearm_after_challenger_side_close(
     // C-03 (deep fence): and it pays for the time it kept the session open — a losing challenger
     // that stalled to its backstop pays more than one that concedes fast. No-op below the fence.
     builder.charge_court_time_v1(challenger_bond, claim.reserved, session_opened_daa, ctx.daa_score)?;
+    // **ADR-0152 §4-ter C3 (the review's F2): a held session lost on the challenger side leaves the
+    // seats a whole challenge window.** Re-arming at `max(floor, now)` let a Sybil decoy opened late
+    // in the window, and conceded, carry the claim straight to `Final` with no seat able to answer
+    // it. Past `palw_offence_attribution`, over a held class, the licence's anchor moves to the
+    // close — `licensed_daa := max(licensed_daa, now)` — so `Final` is no earlier than `now +
+    // window_challenge_at(now)`. The anchor is the claim's clock (DL-1 derives the deadline from it,
+    // as M3's DA pause credit moves it), so the re-armed deadline stays derivable from rooted data.
+    let claim = &match claim.phase {
+        PalwClaimPhaseV2::ReceiptLicensed { licensed_daa }
+            if builder.extras.offence_attribution_active
+                && builder.extras.held_context_ladder.is_some()
+                && builder.state.class_is_held_v1(&claim.class_id)
+                && licensed_daa < ctx.daa_score =>
+        {
+            let mut moved = claim.clone();
+            moved.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: ctx.daa_score };
+            builder.write_claim(claim_id, Some(moved.clone()));
+            moved
+        }
+        _ => claim.clone(),
+    };
     rearm_claim_after_court_close(builder, ctx, claim_id, claim)
 }
 
@@ -23555,10 +23576,13 @@ fn apply_object(
                         });
                     }
                     // **ADR-0152 §4-ter C3: a session already open admits one more dissection only
-                    // from a seat of the claim's panel** — at another leaf, one per seat, at most
-                    // `1 + seat_count` on the claim — so a decoy the producer's own Sybil opened at
-                    // an honest leaf cannot hold off the seat that replayed the lie. A non-seat's
-                    // dissection waits, as one court at a time always made it.
+                    // from a seat of the claim's panel** — one per seat, at most `1 + seat_count` on
+                    // the claim, AT ANY LEAF: a decoy the producer's own Sybil opened — at an honest
+                    // leaf, or at the lie's own leaf to hold that leaf — holds off no seat (the
+                    // review's F2: a same-leaf refusal let one decoy at the lie lock out the whole
+                    // panel). Two sessions at one leaf do not collide: the session id binds the
+                    // challenger (`open_at_named_leaf`). A non-seat's dissection waits, as one court
+                    // at a time always made it.
                     if open_session.is_some() {
                         let refused = |why| PalwStateV2Error::HeldDissectionFurtherSessionRefused { claim: claim_id, why };
                         let seats = builder.state.panels.get(&claim_id).map(|panel| panel.seats.clone()).unwrap_or_default();
@@ -23573,9 +23597,6 @@ fn apply_object(
                         // `1 + seat_count` sessions at most: the first, and one per seat.
                         if on_claim.len() > seats.len() {
                             return Err(refused("the claim already holds one session and one per seat"));
-                        }
-                        if on_claim.iter().any(|s| s.ladder.terminal_index() == Some(accusation.leaf_index)) {
-                            return Err(refused("a session on the claim already disputes this leaf"));
                         }
                     }
                     open_held_dissection_v1(builder, ctx, claim_id, &claim, accusation, ladder)?;
@@ -51851,8 +51872,8 @@ pub(crate) mod tests {
         /// Sybil (a bonded bystander) opens a held dissection at a leaf the producer can defend, so
         /// that one court at a time would hold off everyone else:
         /// * an outsider's further dissection still waits (a non-seat is not a seat);
-        /// * the claim's seat opens its own dissection at the lie's leaf — not at the decoy's leaf,
-        ///   and not twice;
+        /// * the claim's seat opens its own dissection — at the lie's leaf, or at the decoy's own
+        ///   leaf (the review's F2: no leaf is held by a session on it) — and not twice;
         /// * the silent responder defaults on the seat's session, the claim voids, and the decoy's
         ///   session closes NEUTRALLY: its challenger is not charged, its reservation comes back, and
         ///   every index agrees (the step's consistency, revert and reload checks);
@@ -51873,10 +51894,9 @@ pub(crate) mod tests {
                 matches!(refused(OUTSIDER, drill.narrowed, &launch_extras()), PalwStateV2Error::HeldDissectionFurtherSessionRefused { why, .. } if why.contains("seat")),
                 "an outsider's dissection waits"
             );
-            assert!(
-                matches!(refused(SEAT, decoy_leaf, &launch_extras()), PalwStateV2Error::HeldDissectionFurtherSessionRefused { why, .. } if why.contains("this leaf")),
-                "not at a leaf a session already disputes"
-            );
+            let beside = step(&s, &p, 105, &[drill.accusation(claim, bond_key(SEAT), decoy_leaf)], None, &launch_extras())
+                .expect("a seat opens at the decoy's own leaf: a session at a leaf holds it for nobody");
+            assert_eq!(beside.court_sessions_for_claim(&claim), 2, "two sessions at one leaf, one per challenger");
             for who in [OUTSIDER, SEAT] {
                 assert!(
                     matches!(refused(who, drill.narrowed, &below_the_fence()), PalwStateV2Error::ShardCourtClaimUnderSession { .. }),
@@ -51904,6 +51924,73 @@ pub(crate) mod tests {
             }
             assert!(end.reserved_exposure(&bond_key(BYSTANDER)) < reserved_before, "the decoy's reservation came back");
             assert_eq!(end.court_sessions_for_claim(&claim), 0);
+        }
+
+        /// **The review's F2, the clock half: a held session lost on the challenger side leaves the
+        /// seats a whole challenge window.** The producer's Sybil opens a decoy dissection at the
+        /// lie's own leaf at the last DAA of the licence's challenge window, the producer files its
+        /// (lying) held root claim and one round, and the Sybil concedes by silence. Past the fence the
+        /// challenger-side close moves the licence's anchor to the close, so `Final` is no earlier
+        /// than the close plus `window_challenge` — and a seat opens its own dissection inside that
+        /// window, at the same leaf. Below the fence the claim re-arms at `max(floor, now)` and goes
+        /// `Final` at the next sweep, the seats never having had a turn.
+        #[test]
+        fn a_conceded_held_decoy_leaves_the_seats_a_whole_challenge_window() {
+            let p = drill_params();
+            let drill = HeldDrill::new(Forger::Lies);
+            let window = p.window_challenge_at(0);
+            let run = |extras: &PalwTransitionExtrasV1| {
+                let (s, claim) = licensed(&drill, &p, extras);
+                let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = phase_of(&s, &claim) else { panic!("licensed") };
+                let late = licensed_daa + window - 1;
+                let (s, _) = run_until(&s, &p, 104, 100, extras, |x| x.last_point.expect("a point").daa_score + 1 >= late);
+                let s = step(&s, &p, late, &[drill.accusation(claim, bond_key(BYSTANDER), drill.narrowed)], None, extras)
+                    .expect("the decoy opens at the lie's own leaf, at the window's last DAA");
+                let sid = s
+                    .court_sessions_iter()
+                    .find(|(_, x)| x.challenger_bond == bond_key(BYSTANDER))
+                    .map(|(k, _)| *k)
+                    .expect("the decoy's session");
+                let move_1 = if extras.offence_attribution_active {
+                    drill.root_claimed_held(sid, 2, drill.sub_roots())
+                } else {
+                    drill.root_claimed_anchored(sid, 2)
+                };
+                let s = step(&s, &p, late + 1, &[move_1], None, extras).expect("move 1");
+                let phase = s.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                let children: Vec<_> = phase.child_ranges().iter().map(|&(f, c)| drill.responder_range_claim(f, c)).collect();
+                let s = step(&s, &p, late + 2, &[dissected(sid, children)], None, extras).expect("the round");
+                // The Sybil never chooses: its rung runs out and the session closes on its side.
+                let (closed, at) = run_until(&s, &p, late + 3, 200, extras, |x| x.court_sessions_for_claim(&claim) == 0);
+                assert!(matches!(phase_of(&closed, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "conceded: the claim stands");
+                (s, closed, claim, licensed_daa, at)
+            };
+
+            let (_, closed, claim, licensed_daa, at) = run(&launch_extras());
+            assert_eq!(
+                phase_of(&closed, &claim),
+                PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: at },
+                "past the fence the licence's anchor moves to the close"
+            );
+            assert!(at > licensed_daa + window, "the close came after the licence's own window had run out");
+            // A seat opens inside the fresh window, at the lie's own leaf.
+            let seat = step(&closed, &p, at + 1, &[drill.accusation(claim, bond_key(SEAT), drill.narrowed)], None, &launch_extras())
+                .expect("the seat's dissection opens in the fresh window");
+            assert_eq!(seat.court_sessions_for_claim(&claim), 1);
+            // Left alone, the claim is not Final before the close plus the window.
+            let (finalized, final_at) = run_until(&closed, &p, at + 1, 200, &launch_extras(), |x| {
+                matches!(phase_of(x, &claim), PalwClaimPhaseV2::Final { .. })
+            });
+            assert!(final_at >= at + window, "Final at {final_at}, no earlier than the close {at} + {window}");
+            assert!(matches!(phase_of(&finalized, &claim), PalwClaimPhaseV2::Final { .. }));
+
+            // Below the fence: re-armed at max(floor, now), Final at the next sweep.
+            let (_, closed, claim, licensed_daa, at) = run(&below_the_fence());
+            assert_eq!(phase_of(&closed, &claim), PalwClaimPhaseV2::ReceiptLicensed { licensed_daa }, "the anchor never moves");
+            let (_, final_at) = run_until(&closed, &p, at + 1, 200, &below_the_fence(), |x| {
+                matches!(phase_of(x, &claim), PalwClaimPhaseV2::Final { .. })
+            });
+            assert!(final_at <= at + 1, "below the fence Final follows the close at once ({final_at} after {at})");
         }
 
         /// **T-A6 (C3), the one-move half: a malformed tile the claim committed convicts in one move
