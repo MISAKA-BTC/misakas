@@ -1229,6 +1229,9 @@ Do you confirm? (y/n)";
         config.palw_model_market.is_some(),
         evm_fee_recipient,
         attestation_policy,
+        // ADR-0152 v3.1 H-1 (P2-9): templates take H-1's lifecycle carriers first where R-core+ is
+        // armed — testnet-12 only; every other preset selects exactly as before.
+        config.palw_rcore_plus_fence().is_some(),
     )));
     let mining_monitor =
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));

@@ -420,6 +420,70 @@ impl TemplateTransactionSelector for AttestationPrioritySelector {
     }
 }
 
+/// **ADR-0152 v3.1 H-1 (P2-9): the lifecycle-carrier lane of a block template.**
+///
+/// Yields the pre-chosen carriers (`TransactionsPool::build_palw_carrier_lane`, already bounded to
+/// the lane's share of the block) in the first batch, ahead of everything `rest` selects, and then
+/// hands every refill to `rest`. `rest` is the pool's ordinary composition — attestation lane,
+/// frontier sampling — built over the frontier WITHOUT the carriers and within the mass they left,
+/// so no transaction can be selected twice and the two lanes together never exceed the block.
+///
+/// Not the shared-budget form [`AttestationPrioritySelector`] uses, deliberately: a rejected
+/// carrier's mass is simply not re-offered to `rest` in this template. Rejections here are
+/// validation failures only (a carrier is never a market carrier or an attestation shard, so no
+/// classifier drops it), and a validation failure fails the episode — [`Self::is_successful`] turns
+/// `false`, the builder returns the invalid set, the mining manager evicts it and the next attempt
+/// runs without it. A carrier that can never be mined must not keep the head of every template.
+pub struct PalwCarrierLaneSelector {
+    carriers: Vec<SequenceSelectorTransaction>,
+    /// Whether the carriers have been yielded (they are yielded exactly once).
+    emitted: bool,
+    /// The yielded carriers still standing — a rejection of one of them is the lane's, not `rest`'s.
+    standing: std::collections::HashSet<TransactionId>,
+    /// Carriers refused by transaction validation.
+    rejected: usize,
+    rest: Box<dyn TemplateTransactionSelector>,
+}
+
+impl PalwCarrierLaneSelector {
+    pub fn new(carriers: Vec<SequenceSelectorTransaction>, rest: Box<dyn TemplateTransactionSelector>) -> Self {
+        Self { carriers, emitted: false, standing: Default::default(), rejected: 0, rest }
+    }
+}
+
+impl TemplateTransactionSelector for PalwCarrierLaneSelector {
+    fn select_transactions(&mut self) -> Vec<Transaction> {
+        let mut txs = Vec::new();
+        if !self.emitted {
+            self.emitted = true;
+            for carrier in &self.carriers {
+                self.standing.insert(carrier.tx.id());
+                txs.push(carrier.tx.as_ref().clone());
+            }
+        }
+        txs.extend(self.rest.select_transactions());
+        txs
+    }
+
+    fn reject_selection(&mut self, tx_id: TransactionId) {
+        if self.standing.remove(&tx_id) {
+            self.rejected += 1;
+        } else {
+            self.rest.reject_selection(tx_id);
+        }
+    }
+
+    fn reject_selection_for_refill(&mut self, tx_id: TransactionId) {
+        if !self.standing.remove(&tx_id) {
+            self.rest.reject_selection_for_refill(tx_id);
+        }
+    }
+
+    fn is_successful(&self) -> bool {
+        self.rejected == 0 && self.rest.is_successful()
+    }
+}
+
 /// A selector that selects all the transactions it holds and is always considered successful.
 /// If all mempool transactions have combined mass which is <= block mass limit, this selector
 /// should be called and provided with all the transactions.
@@ -648,5 +712,34 @@ mod tests {
         let refill = sel.select_transactions();
         assert_eq!(refill.len(), 1, "refill must use shard-cap unit freed by the dropped priority shard");
         assert_eq!(refill[0].id(), replacement.id());
+    }
+
+    /// **ADR-0152 H-1: the carrier lane leads once, hands refills to the rest, and fails an episode
+    /// whose carrier is invalid** — so the builder returns it, the manager evicts it, and a carrier
+    /// that can never be mined does not keep the head of every template. A rejection of one of the
+    /// rest's transactions is the rest's to count; a refill drop of a carrier is not a failure.
+    #[test]
+    fn the_carrier_lane_leads_once_and_an_invalid_carrier_fails_the_episode() {
+        let carrier = native_tx(1);
+        let (lead, other) = (native_tx(2), native_tx(3));
+        // A rest that is always successful, so a rejection counted as the lane's would show.
+        let rest = || -> Box<dyn TemplateTransactionSelector> { Box::new(TakeAllSelector::new(vec![lead.clone(), other.clone()])) };
+
+        let mut sel = PalwCarrierLaneSelector::new(vec![SequenceSelectorTransaction::new(carrier.clone(), 100)], rest());
+        let first: Vec<_> = sel.select_transactions().iter().map(|tx| tx.id()).collect();
+        assert_eq!(first, vec![carrier.id(), lead.id(), other.id()], "the carrier leads, then the rest");
+        assert!(sel.select_transactions().is_empty(), "the carrier is yielded once and the rest has nothing left");
+        sel.reject_selection(lead.id());
+        assert!(sel.is_successful(), "a rejection in the rest is the rest's to weigh, not the lane's");
+
+        let mut sel = PalwCarrierLaneSelector::new(vec![SequenceSelectorTransaction::new(carrier.clone(), 100)], rest());
+        let _ = sel.select_transactions();
+        sel.reject_selection_for_refill(carrier.id());
+        assert!(sel.is_successful(), "a refill drop of a carrier is not a failure");
+
+        let mut sel = PalwCarrierLaneSelector::new(vec![SequenceSelectorTransaction::new(carrier.clone(), 100)], rest());
+        let _ = sel.select_transactions();
+        sel.reject_selection(carrier.id());
+        assert!(!sel.is_successful(), "an invalid carrier fails the episode, so the manager evicts it");
     }
 }

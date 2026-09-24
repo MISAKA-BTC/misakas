@@ -945,14 +945,63 @@ impl FlowContext {
         };
         match self.palw_heartbeat_relay.observe(hash, &block.header, parent.daa_score) {
             V::NotHeartbeat | V::First => true,
+            // H-1: a second beat for the slot is still announced when it carries a pending carrier.
+            // The first beat may carry nothing, and a beat kept at the first hop keeps its carriers
+            // out of every other node's DAG until some descendant pulls it in as an orphan root.
             V::Repeat => {
+                let exempt = self.palw_heartbeat_h1_exempt(block, true).await;
                 debug!(
-                    "[palw-heartbeat-relay] heartbeat {hash} is not the first for its slot (DAA {} over {}) — kept, not announced",
-                    block.header.daa_score, parent.daa_score
+                    "[palw-heartbeat-relay] heartbeat {hash} is not the first for its slot (DAA {} over {}) — {}",
+                    block.header.daa_score,
+                    parent.daa_score,
+                    if exempt { "announced: it carries a pending lifecycle carrier (ADR-0152 H-1)" } else { "kept, not announced" }
                 );
-                false
+                exempt
             }
         }
+    }
+
+    /// **ADR-0152 v3.1 H-1's relay half (P2-9): is this heartbeat spared H2's two rules?**
+    ///
+    /// H2 bounds what one peer can make this node download (the allowance) and what a slot's
+    /// surplus beats cost the network (one announcement per slot). H-1 says neither may drop a
+    /// heartbeat for carrying a conviction, DA or reporter object. So a beat is spared when it
+    /// carries an H-1 carrier (`palw_h1_carrier_ids_v1`, the list the miner's lane reads) that is
+    /// PENDING — in this node's mempool: fee paid, scripts and inputs checked, not yet in a block
+    /// this node processed — and that has bought no other beat's exemption
+    /// (`PalwHeartbeatRelayV1::h1_exemption`). Both conditions are the bound: a 0x4b payload costs
+    /// nothing to put in a block, so without them every flooded beat would carry one; with them
+    /// each spared beat costs a relay fee, once. An honest carrier-bearing beat qualifies because a
+    /// carrier travels as a transaction before a miner includes it; one that does not (this node
+    /// never saw the carrier) falls back to H2's own escape, the orphan-root fetch.
+    ///
+    /// `claim` spends the carrier on this beat, and only the announcement — which runs on a
+    /// validated block — passes `true`; the allowance gate runs before validation and only asks.
+    /// Asked only once a rule would drop the beat (an empty allowance, a `Repeat`), and both askers
+    /// run before the block's `on_new_block` takes its transactions out of the mempool. Only where
+    /// R-core+ is in force, the fence H-1 belongs to; elsewhere nothing is spared, as before.
+    pub async fn palw_heartbeat_h1_exempt(&self, block: &Block, claim: bool) -> bool {
+        if block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1
+            || !self.config.params.palw_rcore_plus_active_at(block.header.daa_score)
+        {
+            return false;
+        }
+        let carriers = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_ids_v1(&block.transactions);
+        if carriers.is_empty() {
+            return false;
+        }
+        let mut pending = Vec::with_capacity(carriers.len());
+        for carrier in carriers {
+            if self
+                .mining_manager()
+                .clone()
+                .has_transaction(carrier, kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly)
+                .await
+            {
+                pending.push(carrier);
+            }
+        }
+        self.palw_heartbeat_relay.h1_exemption(block.hash(), &pending, claim)
     }
 
     /// Whether this network runs the PALW ConsensusV2 ruleset — the gate on every PALW gossip

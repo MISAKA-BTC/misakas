@@ -119,12 +119,17 @@ impl MiningManager {
         // template preference). Disabled (`AttestationMempoolPolicy::disabled()`) on nets without
         // `dns_params`; the daemon builds it from the chain's `DnsParams` when present.
         attestation_policy: crate::mempool::attestation::AttestationMempoolPolicy,
+        // ADR-0152 v3.1 H-1 (P2-9): does this network oblige heartbeats to carry H-1's lifecycle
+        // objects? The daemon passes `params.palw_rcore_plus_fence().is_some()`; see
+        // `Config::palw_h1_carrier_priority`.
+        palw_h1_carrier_priority: bool,
     ) -> Self {
         let mut config =
             Config::build_default(target_time_per_block, relay_non_std_transactions, max_block_mass).apply_ram_scale(ram_scale);
         config.pq_only = pq_only;
         config.model_sink_relay_allowed = model_sink_relay_allowed;
         config.attestation_policy = attestation_policy;
+        config.palw_h1_carrier_priority = palw_h1_carrier_priority;
         // kaspa-pq: the production node charges ≈100× a Kaspa transaction's fee (the ×10 relay rate
         // on top of the ~10× ML-DSA compute mass) to reconcile the ~72×-larger post-quantum
         // signature. The `MiningManager::new` test path keeps the upstream base rate so the mempool

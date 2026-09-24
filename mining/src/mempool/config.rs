@@ -90,6 +90,18 @@ pub struct Config {
     /// dedup, recent-epoch template preference). Sourced from the chain's `DnsParams`; defaults to
     /// disabled so behavior is byte-identical to upstream unless explicitly wired (see the daemon).
     pub attestation_policy: AttestationMempoolPolicy,
+
+    /// **ADR-0152 v3.1 H-1 (P2-9): does this network oblige a heartbeat to carry the lifecycle
+    /// objects H-1 names?** Where it does, every template takes those carriers first
+    /// (`TransactionsPool::build_palw_carrier_lane`) — the heartbeat miner's templates included,
+    /// which is the point: during a licence halt heartbeats may be the only blocks, and a conviction
+    /// paying the minimum relay fee must not wait behind a block's worth of better-paying traffic.
+    ///
+    /// The daemon sets it from `params.palw_rcore_plus_fence().is_some()`. R-core+ may only be armed
+    /// at genesis, so presence is in force at every DAA score and no height needs threading here.
+    /// `false` by default, so every other network — testnet-11, devnet, mainnet — and every unit
+    /// fixture selects exactly as it did before: no carrier is indexed and no lane is built.
+    pub palw_h1_carrier_priority: bool,
 }
 
 impl Config {
@@ -146,6 +158,8 @@ impl Config {
             // kaspa-pq DNS-finality: disabled by default (overlay off); the daemon overrides this
             // with values derived from the chain's `DnsParams` when present.
             attestation_policy: AttestationMempoolPolicy::disabled(),
+            // ADR-0152 H-1: off unless the network arms R-core+ (the daemon's wiring).
+            palw_h1_carrier_priority: false,
         }
     }
 
@@ -198,6 +212,8 @@ impl Config {
             // kaspa-pq DNS-finality: disabled by default (overlay off); the daemon overrides this
             // with values derived from the chain's `DnsParams` when present.
             attestation_policy: AttestationMempoolPolicy::disabled(),
+            // ADR-0152 H-1: off unless the network arms R-core+ (the daemon's wiring).
+            palw_h1_carrier_priority: false,
         }
     }
 

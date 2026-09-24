@@ -91,7 +91,27 @@ pub(crate) struct TransactionsPool {
     /// drop" template loop without hard-evicting a recoverable bond. Empty / inert when the
     /// attestation overlay is off.
     attestation_quarantine: AttestationQuarantine,
+
+    /// **ADR-0152 v3.1 H-1: the lifecycle carriers in the pool** — ids of the transactions
+    /// `palw_h1_carrier_tx_v1` names, kept consistent with `all_transactions` at the pool's one
+    /// insertion site and its one removal site, so a template build reads a handful of ids instead
+    /// of decoding every 0x4b payload in the frontier. Empty and never written unless
+    /// `Config::palw_h1_carrier_priority` is set.
+    palw_carrier_index: TransactionIdSet,
 }
+
+/// **ADR-0152 v3.1 H-1: the carrier lane may take at most `1 / PALW_H1_CARRIER_LANE_MASS_DIVISOR`
+/// of a block's mass.**
+///
+/// The lane sells priority by object KIND, and a kind is all a mempool can check: a DefaultAccused
+/// for a session that is already open decodes, rides and pays the relay fee exactly like one that
+/// matters. So the lane is bounded, and half a block is the bound because it is the most a junk
+/// flood at the minimum fee can displace — the other half stays the fee market's, which is also
+/// what keeps licences, receipts and quorums (none of them H-1 kinds) from being starved by a DA
+/// or disclosure storm (the Phase 2 plan's §5.7). Honest demand is far below it: one carrier in
+/// flight per panel (`MAX_INFLIGHT_CARRIERS`), a few tens of thousands of mass each. A carrier
+/// heavier than half a block rides the ordinary lane on its feerate.
+pub(crate) const PALW_H1_CARRIER_LANE_MASS_DIVISOR: u64 = 2;
 
 impl TransactionsPool {
     pub(crate) fn new(config: Arc<Config>) -> Self {
@@ -108,6 +128,7 @@ impl TransactionsPool {
             estimated_size: 0,
             attestation_index: AttestationIndex::default(),
             attestation_quarantine: AttestationQuarantine::default(),
+            palw_carrier_index: TransactionIdSet::default(),
         }
     }
 
@@ -162,6 +183,14 @@ impl TransactionsPool {
             }
         }
 
+        // ADR-0152 H-1: index the lifecycle carriers the template's carrier lane takes first. One
+        // decode per carrier-subnetwork transaction, here, so no template build decodes anything.
+        if self.config.palw_h1_carrier_priority
+            && kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_tx_v1(&transaction.mtx.tx)
+        {
+            self.palw_carrier_index.insert(id);
+        }
+
         self.all_transactions.insert(id, transaction);
         trace!("Added transaction {}", id);
         Ok(())
@@ -205,6 +234,8 @@ impl TransactionsPool {
             // removed (evicted/accepted) shard must not linger as a quarantine entry.
             self.attestation_quarantine.remove(transaction_id);
         }
+        // ADR-0152 H-1: the carrier index follows the pool through the same single removal site.
+        self.palw_carrier_index.remove(transaction_id);
 
         // TODO: consider using `self.parent_transactions.get(transaction_id)`
         // The tradeoff to consider is whether it might be possible that a parent tx exists in the pool
@@ -245,23 +276,96 @@ impl TransactionsPool {
 
     /// Dynamically builds a transaction selector based on the specific state of the ready transactions frontier.
     ///
+    /// **ADR-0152 H-1 first:** where the network obliges heartbeats to carry lifecycle objects, the
+    /// carriers in [`Self::build_palw_carrier_lane`] are yielded before anything else and the rest
+    /// of the template is selected, exactly as below, from the frontier without them and from the
+    /// block mass they leave. With no carrier ready (always, where the flag is off) this is the
+    /// composition below unchanged.
+    ///
     /// When the attestation overlay is enabled and an epoch is ready, the priority attestation
     /// shards are yielded before normal txs, oldest ready epoch first. Optional shard tx/mass
     /// budgets are honored only when configured; the default
     /// overlay policy leaves them unlimited at this selector layer and relies on block mass. When
     /// the overlay is off (or no epoch is ready) this is byte-identical to the upstream path.
     pub(crate) fn build_selector(&self, latest_ready_epoch: Option<u64>) -> Box<dyn TemplateTransactionSelector> {
+        let carriers = self.build_palw_carrier_lane();
+        if carriers.is_empty() {
+            return self.build_selector_behind_carriers(latest_ready_epoch, HashSet::new(), self.config.maximum_mass_per_block);
+        }
+        // The lane is bounded by half the block mass, so the subtraction cannot underflow.
+        let lane_mass: u64 = carriers.iter().map(|carrier| carrier.mass).sum();
+        let lane_ids: HashSet<TransactionId> = carriers.iter().map(|carrier| carrier.tx.id()).collect();
+        let rest = self.build_selector_behind_carriers(latest_ready_epoch, lane_ids, self.config.maximum_mass_per_block - lane_mass);
+        Box::new(crate::mempool::model::frontier::selectors::PalwCarrierLaneSelector::new(carriers, rest))
+    }
+
+    /// **ADR-0152 v3.1 H-1 (P2-9): the lifecycle carriers a template takes before anything else.**
+    ///
+    /// A carrier pays the minimum relay fee (the panel's funder does), so under a block's worth of
+    /// better-paying traffic the feerate-weighted frontier samples it almost never — and during a
+    /// licence halt, when heartbeats may be the only blocks, "almost never" is how a conviction
+    /// misses the window V-8 gives it. So the READY carriers (no parent still in the pool: a chained
+    /// carrier waits for its parent like any transaction, and the panel keeps one in flight) are
+    /// taken first: feerate descending, then lighter first, then txid — a deterministic order in
+    /// which a filer who pays more goes first and, at equal fee, a flood of heavy junk cannot push
+    /// out a light honest carrier. Each is taken if it still fits the lane
+    /// ([`PALW_H1_CARRIER_LANE_MASS_DIVISOR`]); one that does not rides the ordinary lane.
+    ///
+    /// Every template, not only the heartbeat's: the lane is what H-1 asks of a heartbeat, a bonded
+    /// block serving it too only lands a conviction sooner, and one composition keeps the template
+    /// cache honest for every caller. Empty where `Config::palw_h1_carrier_priority` is off.
+    pub(crate) fn build_palw_carrier_lane(&self) -> Vec<crate::mempool::model::frontier::selectors::SequenceSelectorTransaction> {
+        use crate::mempool::model::frontier::{feerate_key::FeerateTransactionKey, selectors::SequenceSelectorTransaction};
+        if !self.config.palw_h1_carrier_priority || self.palw_carrier_index.is_empty() {
+            return Vec::new();
+        }
+        let mut ready: Vec<FeerateTransactionKey> = self
+            .palw_carrier_index
+            .iter()
+            .filter(|id| self.parent_transactions.get(*id).is_some_and(|parents| parents.is_empty()))
+            .filter_map(|id| self.all_transactions.get(id))
+            .map(FeerateTransactionKey::from)
+            .collect();
+        // Feerate compared by cross-multiplication, so the order is exact and the same on every run.
+        ready.sort_by(|a, b| {
+            (b.fee as u128 * a.mass as u128)
+                .cmp(&(a.fee as u128 * b.mass as u128))
+                .then(a.mass.cmp(&b.mass))
+                .then_with(|| a.tx.id().cmp(&b.tx.id()))
+        });
+        let budget = self.config.maximum_mass_per_block / PALW_H1_CARRIER_LANE_MASS_DIVISOR;
+        let mut used = 0u64;
+        let mut lane = Vec::new();
+        for key in ready {
+            let next = used.saturating_add(key.mass);
+            if next <= budget {
+                used = next;
+                lane.push(SequenceSelectorTransaction::new(key.tx, key.mass));
+            }
+        }
+        lane
+    }
+
+    /// The pre-H-1 composition, over the frontier without `exclude` (the carrier lane's
+    /// transactions) and within `block_mass` (what the lane left). With `exclude` empty and the full
+    /// block mass it is exactly the selector this pool built before the lane existed.
+    fn build_selector_behind_carriers(
+        &self,
+        latest_ready_epoch: Option<u64>,
+        mut exclude: HashSet<TransactionId>,
+        block_mass: u64,
+    ) -> Box<dyn TemplateTransactionSelector> {
         let policy = &self.config.attestation_policy;
-        let base_policy = Policy::new(self.config.maximum_mass_per_block)
+        let base_policy = Policy::new(block_mass)
             .with_max_attestation_shard_txs(policy.max_attestation_shard_txs_per_block)
             .with_max_attestation_shard_mass(policy.max_attestation_shard_mass_per_block);
 
         // Fast path: overlay off, no ready epoch, or no attestation shards in the pool.
         let Some(latest_ready_epoch) = latest_ready_epoch else {
-            return self.ready_transactions.build_selector(&base_policy);
+            return self.frontier_selector(&base_policy, &exclude);
         };
         if !policy.enabled || self.attestation_index.is_empty() {
-            return self.ready_transactions.build_selector(&base_policy);
+            return self.frontier_selector(&base_policy, &exclude);
         }
 
         let priority = self.build_attestation_priority_set(latest_ready_epoch);
@@ -277,7 +381,6 @@ impl TransactionsPool {
         // Computing this BEFORE the `priority.is_empty()` fallback closes the single-eligible-shard /
         // DNS-overlay-wedge case (only shard is quarantined/future ⇒ empty priority set), where the
         // old fallback returned an UNFILTERED selector and leaked the shard.
-        let mut exclude: std::collections::HashSet<TransactionId> = std::collections::HashSet::new();
         for (tx_id, meta) in self.attestation_index.by_txid.iter() {
             if meta.shard_epoch > latest_ready_epoch || self.attestation_quarantine.is_active(tx_id, latest_ready_epoch) {
                 exclude.insert(*tx_id);
@@ -287,11 +390,7 @@ impl TransactionsPool {
             // No priority shards, but any quarantined/future shards must STILL be kept out of the
             // fallback selector. When there is nothing to exclude this is byte-identical to the
             // prior fast path.
-            return if exclude.is_empty() {
-                self.ready_transactions.build_selector(&base_policy)
-            } else {
-                self.ready_transactions.build_selector_excluding(&base_policy, &exclude)
-            };
+            return self.frontier_selector(&base_policy, &exclude);
         }
 
         // Compose: priority attestation shards first, then ordinary txs under one shared dynamic
@@ -301,6 +400,16 @@ impl TransactionsPool {
         exclude.extend(priority.iter().map(|t| t.tx.id()));
         let remainder = self.ready_transactions.sequence_excluding(&exclude);
         Box::new(crate::mempool::model::frontier::selectors::AttestationPrioritySelector::new(priority, remainder, base_policy))
+    }
+
+    /// The frontier's own selector, or its excluding form when something must be held out. With
+    /// nothing to exclude this is the upstream selector, byte for byte.
+    fn frontier_selector(&self, policy: &Policy, exclude: &HashSet<TransactionId>) -> Box<dyn TemplateTransactionSelector> {
+        if exclude.is_empty() {
+            self.ready_transactions.build_selector(policy)
+        } else {
+            self.ready_transactions.build_selector_excluding(policy, exclude)
+        }
     }
 
     /// kaspa-pq DNS-finality (P1): pick the priority attestation-shard set from the ready frontier.
@@ -989,5 +1098,171 @@ mod attestation_priority_tests {
         // The parent shard has an in-pool descendant ⇒ the H-6 guard must see it.
         let redeemers = pool.get_redeemer_ids_in_pool(&parent_id);
         assert!(redeemers.contains(&child_id), "the child must be detected as an in-pool redeemer of the parent shard (H-6)");
+    }
+}
+
+/// **ADR-0152 v3.1 H-1 (P2-9, T38's miner half at the pool): the carrier lane.**
+#[cfg(test)]
+mod palw_carrier_lane_tests {
+    use super::*;
+    use crate::mempool::config::Config;
+    use kaspa_consensus_core::{
+        constants::TX_VERSION,
+        mass::NonContextualMasses,
+        palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2},
+        palw_offence_v1::PalwOffenceKindV1,
+        palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
+        subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_LIFECYCLE, SubnetworkId},
+        tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry},
+    };
+    use kaspa_hashes::Hash64;
+    use std::collections::HashMap;
+
+    const BLOCK_MASS: u64 = 10_000;
+
+    fn pool(carrier_priority: bool) -> TransactionsPool {
+        let mut config = Config::build_default(1000, false, BLOCK_MASS);
+        config.palw_h1_carrier_priority = carrier_priority;
+        TransactionsPool::new(Arc::new(config))
+    }
+
+    fn mtx(subnetwork: SubnetworkId, payload: Vec<u8>, salt: u64, mass: u64, fee: u64) -> MutableTransaction {
+        let spk = ScriptPublicKey::from_vec(0, vec![0x51]);
+        let tx = Transaction::new(TX_VERSION, vec![], vec![TransactionOutput::new(salt, spk)], 0, subnetwork, 0, payload);
+        let mut mtx = MutableTransaction::from_tx(tx);
+        mtx.calculated_fee = Some(fee);
+        mtx.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+        mtx
+    }
+
+    fn payload(object: PalwConsensusObjectV2) -> Vec<u8> {
+        borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap()
+    }
+
+    fn accusation(claim: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::DefaultAccused {
+            claim: Hash64::from_u64_word(claim),
+            missing_event_index: 0,
+            accuser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+            signature: vec![1; 8],
+        }
+    }
+
+    fn carrier(claim: u64, mass: u64, fee: u64) -> MutableTransaction {
+        mtx(SUBNETWORK_ID_PALW_LIFECYCLE, payload(accusation(claim)), claim, mass, fee)
+    }
+
+    fn add(pool: &mut TransactionsPool, mtx: MutableTransaction) -> TransactionId {
+        let (size, id) = (mtx.mempool_estimated_bytes(), mtx.id());
+        pool.add_transaction(mtx, 0, Priority::Low, size).unwrap();
+        id
+    }
+
+    /// Fifty native transactions paying 100 sompi a gram, 1,000 mass each: five blocks' worth.
+    fn better_paying_traffic(pool: &mut TransactionsPool) -> HashMap<TransactionId, u64> {
+        (0..50u64).map(|i| (add(pool, mtx(SUBNETWORK_ID_NATIVE, vec![], 1_000 + i, 1_000, 100_000)), 1_000)).collect()
+    }
+
+    /// **T38: under five blocks of traffic paying a hundred times its feerate, a heartbeat's
+    /// template leads with the conviction carrier** — every build, not by luck of the sample — and
+    /// the whole selection still fits one block with nothing selected twice. Without the lane the
+    /// frontier's feerate-cubed sampling would take the carrier about never.
+    #[test]
+    fn a_carrier_leads_the_template_under_a_block_of_better_paying_traffic() {
+        let mut pool = pool(true);
+        let mut masses = better_paying_traffic(&mut pool);
+        let accused = add(&mut pool, carrier(1, 2_000, 2_000));
+        masses.insert(accused, 2_000);
+        for _ in 0..20 {
+            let selected = pool.build_selector(None).select_transactions();
+            assert_eq!(selected.first().map(|tx| tx.id()), Some(accused), "the carrier leads the template");
+            let ids: HashSet<_> = selected.iter().map(|tx| tx.id()).collect();
+            assert_eq!(ids.len(), selected.len(), "nothing is selected twice");
+            let mass: u64 = selected.iter().map(|tx| masses[&tx.id()]).sum();
+            assert!(mass <= BLOCK_MASS, "the lanes together fit one block: {mass}");
+            assert!(selected.len() > 1, "the rest of the block is still the fee market's");
+        }
+    }
+
+    /// **Off the flag nothing changes**: no carrier is indexed and no lane is built, so every
+    /// network but testnet-12 selects exactly as before.
+    #[test]
+    fn without_the_flag_there_is_no_lane() {
+        let mut pool = pool(false);
+        better_paying_traffic(&mut pool);
+        add(&mut pool, carrier(1, 2_000, 2_000));
+        assert!(pool.palw_carrier_index.is_empty(), "nothing is indexed");
+        assert!(pool.build_palw_carrier_lane().is_empty(), "no lane");
+    }
+
+    /// **The lane is bounded to half a block, and orders by what the filer pays.** Higher feerate
+    /// first; at equal feerate the lighter carrier first, so a heavy junk carrier at the minimum fee
+    /// cannot push out a light honest one; a carrier that no longer fits is left to the fee market.
+    #[test]
+    fn the_lane_takes_half_a_block_best_payer_first_lighter_first_on_a_tie() {
+        let mut pool = pool(true);
+        let heavy_min = add(&mut pool, carrier(1, 3_000, 3_000)); // feerate 1
+        let light_min = add(&mut pool, carrier(2, 1_000, 1_000)); // feerate 1, lighter
+        let rich = add(&mut pool, carrier(3, 1_500, 15_000)); // feerate 10
+        let too_heavy = add(&mut pool, carrier(4, 6_000, 600_000)); // feerate 100, over half a block
+        let lane: Vec<_> = pool.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect();
+        // Budget 5,000: rich (1,500) + light (1,000) fit; the heavy junk (3,000) would reach 5,500.
+        assert_eq!(lane, vec![rich, light_min], "best payer first, then the lighter of the tie");
+        assert!(!lane.contains(&heavy_min) && !lane.contains(&too_heavy));
+        let mass: u64 = pool.build_palw_carrier_lane().iter().map(|c| c.mass).sum();
+        assert!(mass <= BLOCK_MASS / PALW_H1_CARRIER_LANE_MASS_DIVISOR);
+    }
+
+    /// Only H-1's kinds ride the lane: a licence, a quorum of `Unavailable` or an unfileable offence
+    /// kind competes for fees like any transaction, and an undecodable 0x4b payload is nothing.
+    #[test]
+    fn only_h1_kinds_ride_the_lane() {
+        let mut pool = pool(true);
+        let licence = PalwConsensusObjectV2::ReceiptLicensed { claim: Hash64::from_u64_word(5), receipts: vec![] };
+        let fold_only = PalwConsensusObjectV2::ObjectiveOffence {
+            kind: PalwOffenceKindV1::DaDefault,
+            accused: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB1), 0)),
+            evidence_id: Hash64::from_u64_word(6),
+            evidence: vec![1],
+        };
+        add(&mut pool, mtx(SUBNETWORK_ID_PALW_LIFECYCLE, payload(licence), 10, 1_000, 1_000));
+        add(&mut pool, mtx(SUBNETWORK_ID_PALW_LIFECYCLE, payload(fold_only), 11, 1_000, 1_000));
+        add(&mut pool, mtx(SUBNETWORK_ID_PALW_LIFECYCLE, vec![0xFF; 40], 12, 1_000, 1_000));
+        assert!(pool.build_palw_carrier_lane().is_empty());
+        let reveal = PalwConsensusObjectV2::ReporterRevealed {
+            offence_key: Hash64::from_u64_word(7),
+            reporter: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB2), 0)),
+            salt: [9; 32],
+        };
+        let revealed = add(&mut pool, mtx(SUBNETWORK_ID_PALW_LIFECYCLE, payload(reveal), 13, 1_000, 1_000));
+        assert_eq!(pool.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect::<Vec<_>>(), vec![revealed]);
+    }
+
+    /// A carrier whose parent is still in the pool waits for it like any transaction (it cannot be
+    /// mined first), joins the lane once the parent leaves, and leaves the lane with the pool.
+    #[test]
+    fn the_lane_follows_readiness_and_removal() {
+        let mut pool = pool(true);
+        let parent = add(&mut pool, mtx(SUBNETWORK_ID_NATIVE, vec![], 1, 1_000, 1_000));
+        let spk = ScriptPublicKey::from_vec(0, vec![0x51]);
+        let child_tx = Transaction::new(
+            TX_VERSION,
+            vec![TransactionInput::new(TransactionOutpoint::new(parent, 0), vec![], 0, 0)],
+            vec![TransactionOutput::new(1, spk.clone())],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload(accusation(8)),
+        );
+        let mut child = MutableTransaction::from_tx(child_tx);
+        child.entries[0] = Some(UtxoEntry::new(1, spk, 0, false));
+        child.calculated_fee = Some(1_000);
+        child.calculated_non_contextual_masses = Some(NonContextualMasses::new(1_000, 1_000));
+        let chained = add(&mut pool, child);
+        assert!(pool.build_palw_carrier_lane().is_empty(), "a chained carrier waits for its parent");
+        pool.remove_transaction(&parent).unwrap();
+        assert_eq!(pool.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect::<Vec<_>>(), vec![chained]);
+        pool.remove_transaction(&chained).unwrap();
+        assert!(pool.palw_carrier_index.is_empty() && pool.build_palw_carrier_lane().is_empty(), "removal clears the index");
     }
 }

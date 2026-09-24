@@ -29,6 +29,16 @@
 //! block becomes the selected parent. A producer whose blocks can never take the chain — a wedged
 //! bond at its exposure ceiling, a key that paid the lottery and has no bond — costs the clock at
 //! most that hour, once, and then the lane ticks at cadence until the bonded lane really returns.
+//!
+//! ## It carries convictions first (ADR-0152 v3.1 H-1, P2-9)
+//!
+//! During a licence halt this lane may be the only one minting, and V-8 needs the conviction, DA
+//! and reporter objects filed during the halt to land during it. Where R-core+ is armed the mining
+//! manager's templates take those carriers before any other transaction (the carrier lane,
+//! `TransactionsPool::build_palw_carrier_lane`, bounded to half a block), so this service needs no
+//! selector of its own: the template it asks for already leads with them. Each minted beat says how
+//! many it carries, and the relay spares a carrier-bearing beat its H2 limits
+//! (`FlowContext::palw_heartbeat_h1_exempt`).
 
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::network::NetworkId;
@@ -216,6 +226,8 @@ enum PassOutcomeV1 {
     Minted {
         hash: kaspa_consensus_core::BlockHash,
         role: HeartbeatRoleV1,
+        /// How many of H-1's lifecycle carriers the beat carries (ADR-0152).
+        carriers: usize,
     },
     /// The pass waited (a taken slot, a yield, a slot opening shortly): the wait was the rest.
     Waited,
@@ -379,9 +391,15 @@ impl PalwHeartbeatMinerService {
                 continue;
             }
             match self.mine_one(&session, miner_data.clone()).await {
-                Ok(PassOutcomeV1::Minted { hash, role }) => {
+                Ok(PassOutcomeV1::Minted { hash, role, carriers }) => {
                     mined += 1;
                     self.say_hold(None);
+                    if carriers > 0 {
+                        info!(
+                            "[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} carries {carriers} lifecycle carrier(s) — conviction, DA or \
+                             reporter objects the lane is obliged to carry (ADR-0152 H-1)"
+                        );
+                    }
                     match role {
                         HeartbeatRoleV1::Stepped { daa } => {
                             stepped += 1;
@@ -571,11 +589,18 @@ impl PalwHeartbeatMinerService {
         );
         let block: kaspa_consensus_core::block::Block = template.block.to_immutable();
         let hash = block.hash();
+        // Counted only where H-1 binds (R-core+, genesis-armed), so the line never claims an
+        // obligation a network does not have.
+        let carriers = if self.flow_context.config.params.palw_rcore_plus_fence().is_some() {
+            kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_ids_v1(&block.transactions).len()
+        } else {
+            0
+        };
         self.flow_context
             .submit_rpc_block(session, block)
             .await
             .map_err(|e| format!("the chain refused a heartbeat this node mined: {e}"))?;
-        Ok(PassOutcomeV1::Minted { hash, role })
+        Ok(PassOutcomeV1::Minted { hash, role, carriers })
     }
 }
 

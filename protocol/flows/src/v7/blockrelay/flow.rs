@@ -269,10 +269,17 @@ impl HandleRelayInvsFlow {
             // validate. An orphan root is exempt: it is a beat some descendant needs, and refusing
             // it would strand the descendant. A skipped beat is not an offence — it is valid, it
             // is simply not this peer's to push past the allowance.
+            //
+            // **ADR-0152 H-1: so is a beat carrying a pending lifecycle carrier** — a conviction, DA
+            // or reporter object this node holds in its mempool and no other beat has claimed
+            // (`FlowContext::palw_heartbeat_h1_exempt`). Asked only once the allowance is spent, so
+            // an honest beat never pays the decode; asked without claiming, because the block is
+            // not validated yet.
             if !inv.is_orphan_root
                 && block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1
                 && self.ctx.palw_heartbeat_relay_governs(block.header.daa_score)
                 && !self.heartbeat_budget.take(kaspa_core::time::unix_now())
+                && !self.ctx.palw_heartbeat_h1_exempt(&block, false).await
             {
                 debug!(
                     "Relay heartbeat {} from {} is over the peer's heartbeat allowance — not processed (a descendant brings it back as an orphan root if the chain needs it)",
