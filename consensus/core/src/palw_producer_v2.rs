@@ -1373,6 +1373,87 @@ pub fn palw_disclosure_duties_v1(
     PalwDisclosureDutiesV1 { duties, retain }
 }
 
+/// **P2-6: what an automatic data-availability accusation of a claim by `accuser` comes to** — node
+/// policy's read of the fold's own gate at the block the carrier is expected to fold in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwDaAccusationCheckV1 {
+    /// File it: the unit it names (C-9) and what the fold answers the accusation (C-8: the stage the
+    /// session opens at, whether the accuser is a seat of the current panel, DA-6's exposure on its
+    /// free half, the session's deadline).
+    File { unit: crate::palw_da_rcore_v1::PalwDaUnitV1, admission: crate::palw_state_v2::PalwDaAdmissionV1 },
+    /// This accuser has accused the claim already: a session of its own is open on it, or it opened
+    /// one as a seat of the claim's panel before (the fold's `opened_by_seat`, kept until the claim
+    /// record retires). Node policy accuses a claim once per accuser; DA-8's further seat sessions
+    /// are for naming a divergent leaf from a disclosed binding (P2-8d), not for asking again.
+    AccusedBefore,
+    /// The unit it would name is answered on chain already ([`crate::palw_da_rcore_v1::palw_da_unit_answered_v1`]):
+    /// the material is on chain, so a session naming it could only be refuted at the accuser's cost
+    /// (the ADR's DA-7 names the refusal, `DaUnitAlreadyAnswered`, which the fold's opening does not
+    /// yet make — node policy does not wait for it).
+    Answered,
+    /// The fold would refuse it, with its own reason.
+    Refused(crate::palw_state_v2::PalwStateV2Error),
+}
+
+/// **ADR-0152 §3.8 / DA-1 / DA-3 / DA-6 / DA-8 (Phase 2, P2-6): may `accuser` accuse `claim_id` of
+/// withholding at `now_daa`, and is it worth a carrier?** The gate is the fold's own, read through
+/// C-8 ([`crate::palw_state_v2::palw_da_accusation_admissible_v2`], the `da_admission_v1` the fold's
+/// opening reads): the claim accusable at its stage, retention, the accuser's standing, DA-8's caps,
+/// and A-6's room — DA-6's exposure on the accuser's free half, the fold's own
+/// `max(committed, 500‰·C) + accuser + new ≤ C`, the same inequality `palw_rcore_gate_room_of_v1`
+/// computes for the Accuser gate. The named unit ([`crate::palw_da_rcore_v1::PALW_DA_AUTO_NAMED_UNIT_V1`])
+/// is held to the fold's bound (`palw_da_max_accusable_rows_v1`), which C-8 leaves to the object.
+///
+/// Before the gate, the two answers that make a carrier pure cost (plan §5.3: only a successful
+/// conviction repays the filer): an accuser that accused before ([`PalwDaAccusationCheckV1::AccusedBefore`]
+/// — every seat of a withheld claim opens its OWN session, DA-6/DA-9, but each opens it once, so no
+/// storm of duplicates rides), and a named unit already answered on chain. `extras` are the fold's
+/// at `now_daa` (the second clock the room reads, the in-run rows' fence), as the processor resolves
+/// them for the next block. Below `palw_rcore_plus` the answer is the gate's `DaCourtDormant`.
+pub fn palw_da_accusation_check_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+    claim_id: &Hash64,
+    accuser: &PalwBondKeyV2,
+    now_daa: u64,
+) -> PalwDaAccusationCheckV1 {
+    use crate::palw_da_rcore_v1::{PALW_DA_AUTO_NAMED_UNIT_V1, PalwDaUnitV1, palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+    use crate::palw_state_v2::{
+        PalwStateV2Error, palw_da_accusation_admissible_v2, palw_da_event_index_v1, palw_da_max_accusable_rows_v1,
+    };
+    if !params.rcore_plus_active_at(now_daa) {
+        return PalwDaAccusationCheckV1::Refused(PalwStateV2Error::DaCourtDormant);
+    }
+    let unit = PALW_DA_AUTO_NAMED_UNIT_V1;
+    let record = state.da_claim(claim_id);
+    if state.da_session(claim_id, accuser).is_some() || record.is_some_and(|record| record.opened_by_seat.contains_key(accuser)) {
+        return PalwDaAccusationCheckV1::AccusedBefore;
+    }
+    if let Some(claim) = state.claim(claim_id) {
+        if let Some(record) = record
+            && palw_da_unit_answered_v1(record, &unit, palw_da_in_run_rows_v1(claim, extras.fp_da_pins_active))
+        {
+            return PalwDaAccusationCheckV1::Answered;
+        }
+        let PalwDaUnitV1::Event { row, tile } = unit else { unreachable!("the automatic unit is an event") };
+        let count = palw_da_max_accusable_rows_v1(claim.trace_chunk_count);
+        if row >= count {
+            return PalwDaAccusationCheckV1::Refused(PalwStateV2Error::DaIndexOutOfRange {
+                claim: *claim_id,
+                index: palw_da_event_index_v1(row, tile),
+                count,
+            });
+        }
+    }
+    match palw_da_accusation_admissible_v2(state, params, extras, claim_id, accuser, now_daa) {
+        Ok(admission) => PalwDaAccusationCheckV1::File { unit, admission },
+        // Unreachable after the session read above; mapped rather than trusted.
+        Err(PalwStateV2Error::DaSessionAlreadyOpen { .. }) => PalwDaAccusationCheckV1::AccusedBefore,
+        Err(e) => PalwDaAccusationCheckV1::Refused(e),
+    }
+}
+
 /// Which claims an operator asks about: the ones its bond made, or the ones its bond judges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwClaimRoleV1 {

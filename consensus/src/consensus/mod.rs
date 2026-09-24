@@ -2230,6 +2230,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_disclosure_duties_v1_impl(&mine)
     }
 
+    fn palw_da_accusation_check_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1> {
+        self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
+    }
+
     fn palw_claim_readers_v2(&self, claim: kaspa_consensus_core::Hash64) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
     }

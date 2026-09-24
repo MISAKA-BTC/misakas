@@ -4478,6 +4478,154 @@ mod m3_da_court {
         assert_eq!(walk.state.da_claim(&id).unwrap().refuted_held, vec![(h.cards[BYSTANDER], session.exposure)]);
         h.reloads(&walk.state);
     }
+
+    // ---- Phase 2, P2-6: the node accuses automatically -------------------------------------------
+    //
+    // The node's half of §3.8 on real claims: the read kaspad asks before it files
+    // (`palw_da_accusation_check_v1`, through the processor's own extras at the next block — C-8 and
+    // A-6's room), and the ONE builder of an event `DefaultAccused` (`palw_da_accusation_object_v1`),
+    // signed by the seat's card — each object then taken the whole way: the gate (the signature), the
+    // acceptance walk and the fold.
+
+    /// The node's read of an automatic accusation by `card` at the next block.
+    fn auto_check(h: &H, walk: &Walk, claim: Hash64, card: usize) -> kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 {
+        let point = walk.next();
+        h.vp().palw_da_accusation_check_v1_at(&walk.state, point.block, point.daa_score, &claim, &h.cards[card])
+    }
+
+    /// The node's accusation as `card` files it: the unit the read named, the ONE builder, the card's key.
+    fn auto_accusation(h: &H, claim: Hash64, card: usize, unit: PalwDaUnitV1) -> Obj {
+        kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(
+            &h.domain,
+            claim,
+            unit,
+            h.cards[card],
+            |message, context| Some(sign(card, message, context)),
+        )
+        .expect("the node's builder builds it")
+    }
+
+    /// **T34 (node half) + T54a at processor level (and the ADR's §3.8 "a seat whose fetch has failed
+    /// files `Unavailable` and a `DefaultAccused`"): an unserved seat's automatic accusation defaults
+    /// a silent producer — S1, and the reporter reward paid to the seat through step 3d.**
+    /// A real floor claim, bound (`PanelBound`: the `Unavailable`'s moment). The seat's node reads
+    /// `File` — row 0, tile 0, `Live`, a seat of the current panel, DA-6's exposure — builds the object
+    /// with the ONE builder and its card's key, and it clears the gate (the accusation's signature), the
+    /// walk and the fold, opening exactly the session the read described; the same object signed by
+    /// another card is refused by the gate. From then on the read says `AccusedBefore` (no duplicate
+    /// rides), while another seat of the panel still accuses on its own. The producer answers nothing:
+    /// the first block past the deadline voids the claim `ProducerWithholding`, takes the producer's
+    /// whole commitment (S1), records the `DaDefault`, and opens the
+    /// reward named for the accuser; when its reveal window closes, step 3d moves the award into the
+    /// payout queue under the reporter key, to the seat's payout, and the next block drains it into its
+    /// coinbase.
+    ///
+    /// T54a's "+ strike" is not asserted: `withholding_strikes` is declared by the v22 skeleton and no
+    /// fold rule writes it yet (the ejection ledger is Phase 1's; reported with P2-6).
+    ///
+    /// What this does NOT run is kaspad: the node's trigger (`palw_seat_da_accuse_by_v1`), its book
+    /// (`PalwSeatAccusationsV1`) and the carrier lanes run in `kaspad::palw_panel::p2_6_da_accusation_policy`;
+    /// plan §4's T54a proper, a node e2e on a devnet preset, is a POST-LAUNCH item (the operator
+    /// deferred every drill and node launch until after the t12 launch, 2026-09-24).
+    #[tokio::test]
+    async fn t34_t54a_an_unserved_seats_automatic_accusation_defaults_a_silent_producer_and_pays_it_through_3d() {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PALW_DA_AUTO_NAMED_UNIT_V1, PalwDaStageV1};
+        use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as Check;
+        let h = harness(true);
+        let mut walk = h.genesis_walk();
+        let claim = h.open_claim(&mut walk, Fault::Honest);
+        let id = claim.claim_id;
+        h.bind(&mut walk, id);
+        let seat = PANEL[0];
+        let Check::File { unit, admission } = auto_check(&h, &walk, id, seat) else {
+            panic!("the unserved seat files: {:?}", auto_check(&h, &walk, id, seat))
+        };
+        assert_eq!(unit, PALW_DA_AUTO_NAMED_UNIT_V1);
+        assert!(admission.accuser_is_seat && admission.stage == PalwDaStageV1::Live, "a seat, before the licence");
+        assert!(matches!(auto_check(&h, &walk, id, EXECUTOR), Check::Refused(PalwStateV2Error::DaAccuserIsTheProducer(_))));
+        let forged =
+            kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(&h.domain, id, unit, h.cards[seat], |m, c| {
+                Some(sign(BYSTANDER, m, c))
+            })
+            .expect("built: the builder signs with the key it is handed");
+        h.refused(&walk, &forged, &format!("claim {id}'s accusation is not signed by the bond it names"));
+        let producer = h.cards[EXECUTOR];
+        let producer_before = walk.state.bond(&producer).unwrap().collateral;
+        let commitment =
+            kaspa_consensus_core::palw_state_v2::palw_claim_bond_reservation_v1(h.sp(), walk.state.claim(&id).unwrap()).unwrap();
+        h.carry(&mut walk, vec![auto_accusation(&h, id, seat, unit)]);
+        let session = walk.state.da_session(&id, &h.cards[seat]).expect("the session the read described").clone();
+        assert_eq!(
+            (session.units[0], session.accuser_is_seat, session.exposure, session.deadline_daa, session.stage),
+            (unit, true, admission.exposure, admission.deadline_daa, PalwDaStageV1::Live)
+        );
+        assert_eq!(walk.state.deadline_of(&id), None, "the seat's session pauses the claim (DA-5)");
+        assert_eq!(auto_check(&h, &walk, id, seat), Check::AccusedBefore, "filed once");
+        assert!(matches!(auto_check(&h, &walk, id, PANEL[1]), Check::File { .. }), "every other seat accuses its own");
+        h.reloads(&walk.state);
+        // The producer is silent.
+        run_out(&h, &mut walk, id, seat);
+        let voided_at = walk.daa;
+        assert!(matches!(
+            walk.state.claim(&id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+        ));
+        let debit = producer_before - walk.state.bond(&producer).unwrap().collateral;
+        assert_eq!(u128::from(debit), commitment, "S1: the whole commitment");
+        let key = palw_da_offence_id_v1(&producer.0, &id);
+        let record = walk.state.consumed_offence(&key).expect("the DaDefault");
+        assert_eq!(
+            (record.kind, record.accepted_daa, u128::from(record.collected)),
+            (PalwOffenceKindV1::DaDefault, voided_at, commitment)
+        );
+        assert_eq!(palw_accuser_exposure_v1(&walk.state, &h.cards[seat]), 0, "the confirmed session's exposure comes back");
+        assert_eq!(auto_check(&h, &walk, id, seat), Check::AccusedBefore, "and never again");
+        let pending = *walk.state.reward_pending(&key).expect("the DA default's reward");
+        assert_eq!(pending.best.map(|winner| winner.reporter), Some(h.cards[seat]), "named for the accuser (R-4)");
+        let payload = walk.state.bond(&h.cards[seat]).unwrap().payout_payload;
+        let amount = pending.amount;
+        assert!(amount > 0);
+        // The reveal window closes; step 3d moves the award in the same block.
+        let point = walk.at(pending.reveal_until + 1);
+        let next = h.fold(&walk.state, &point, &[]).expect("the award's block folds");
+        walk.advance(&point, next);
+        assert!(walk.state.reward_pending(&key).is_none() && walk.state.reporter_rewards_iter().all(|(k, _)| *k != key));
+        let row = kaspa_consensus_core::palw_vesting_v1::palw_reporter_payout_key_v1(&key);
+        let queued = walk.state.pending_payout(&row).copied().expect("moved into the payout queue by step 3d");
+        assert_eq!((queued.payload, queued.amount), (payload, amount), "to the seat's payout");
+        h.reloads(&walk.state);
+        let point = walk.next();
+        let next = h.fold(&walk.state, &point, &[]).expect("the mint's block folds");
+        walk.advance(&point, next);
+        assert!(walk.state.pending_payout(&row).is_none(), "drained into the next coinbase");
+    }
+
+    /// **P2-6: the node does not accuse a unit already on chain.** A partial seat of a licensed claim
+    /// accuses automatically (the read's `Licensed` stage — the licence that landed on it) and the
+    /// honest producer answers with the run's `Flat` (the node's own answer builder): the session is
+    /// refuted. The accuser's read is `AccusedBefore` (its session closed, `opened_by_seat` remains);
+    /// another seat's read is `Answered` — the material is on chain, and a session naming it could
+    /// only be refuted at that seat's cost.
+    #[tokio::test]
+    async fn p2_6_an_answered_unit_is_not_accused_again() {
+        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaStageV1;
+        use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as Check;
+        let h = harness(true);
+        let (mut walk, claim, licence) = h.licensed(Fault::Honest);
+        let id = claim.claim_id;
+        let partials = licence.partials();
+        let Check::File { unit, admission } = auto_check(&h, &walk, id, partials[0]) else { panic!("files") };
+        assert_eq!(admission.stage, PalwDaStageV1::Licensed);
+        h.carry(&mut walk, vec![auto_accusation(&h, id, partials[0], unit)]);
+        let read = duties_of(&h, &walk, &[EXECUTOR]);
+        assert_eq!(read.duties.len(), 1, "the run's one row");
+        let answer = node_event_answer(&h, &claim, &read.duties[0], EXECUTOR);
+        h.carry(&mut walk, vec![answer]);
+        assert!(walk.state.da_session(&id, &h.cards[partials[0]]).is_none(), "refuted");
+        assert_eq!(auto_check(&h, &walk, id, partials[0]), Check::AccusedBefore, "once, after the session closed too");
+        assert_eq!(auto_check(&h, &walk, id, partials[1]), Check::Answered, "row 0 is on chain");
+        h.reloads(&walk.state);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

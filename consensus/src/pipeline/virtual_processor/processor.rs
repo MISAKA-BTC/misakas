@@ -4050,6 +4050,46 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_disclosure_duties_v1(state, state_params, &extras, mine, now_daa)
     }
 
+    /// **ADR-0152 §3.8 (Phase 2, P2-6): what an automatic accusation of `claim` by `accuser` comes
+    /// to** — at the tip, for the DAA the virtual's next block folds at, under the extras that block
+    /// folds with (the second clock A-6's room reads, the in-run rows' fence), so an accusation the
+    /// seat files is one the fold opens a session for. `None` with no tip state.
+    pub fn palw_da_accusation_check_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let candidate_daa = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score)?;
+        Some(self.palw_da_accusation_check_v1_at(&state, chain_point, candidate_daa, &claim, &accuser))
+    }
+
+    /// [`Self::palw_da_accusation_check_v1_impl`] on a given state, for the block at `now_daa` on
+    /// `chain_point` — the one place the fold's extras are resolved for the accusation read (the
+    /// real-claim tests call it on the state they folded). No state params: the court is dormant.
+    pub(crate) fn palw_da_accusation_check_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        chain_point: kaspa_consensus_core::BlockHash,
+        now_daa: u64,
+        claim: &kaspa_consensus_core::Hash64,
+        accuser: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1::Refused(
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::DaCourtDormant,
+            );
+        };
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: now_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(state, state_params, &extras, claim, accuser, now_daa)
+    }
+
     /// **Who may be served a claim's private material**, at the tip (ADR-0077 Decision 16's
     /// transport half) — see `PalwChainStateV2::claim_readers_v2`.
     pub fn palw_claim_readers_v2_impl(

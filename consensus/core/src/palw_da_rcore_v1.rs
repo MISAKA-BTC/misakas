@@ -695,6 +695,66 @@ pub fn palw_da_material_owed_v1(claim: &crate::palw_state_v2::PalwClaimStateV2, 
     !matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::Voided { .. }) && now_daa <= claim.trace_retention_daa
 }
 
+/// **C-9 (P2-6): the unit an automatic accusation names** — the event its seat's `Unavailable`
+/// receipt names (`chunk_index: 0`): the run's first row, tile 0. A seat that was served nothing
+/// holds no binding, so it cannot name a held unit or a divergent leaf (those are P2-8d's, named from
+/// a disclosed binding); the fold draws the rest inside the committed run (DA-3), which is what makes
+/// one named unit enough. Row 0 is inside the fold's bound for every claim that pins a chunk
+/// (`palw_da_max_accusable_rows_v1`: `trace_chunk_count` is 1 on the attempt lane and `⌈rows/256⌉`
+/// on the free-prompt lane), and inside the run for every claim with a decode row, so an honest
+/// producer answers it with the run's own `Flat`, never `OutOfRange`. The node's read
+/// (`palw_producer_v2::palw_da_accusation_check_v1`) asks the fold's bound anyway.
+pub const PALW_DA_AUTO_NAMED_UNIT_V1: PalwDaUnitV1 = PalwDaUnitV1::Event { row: 0, tile: 0 };
+
+/// **Why node policy builds no `DefaultAccused`** — each a refusal the acceptance layer would make
+/// of the object, found before a carrier is paid for.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwDaAccusationBuildErrorV1 {
+    /// `DefaultAccused` names an event; a held unit rides `DefaultAccusedHeld` with a binding.
+    #[error("an event accusation names an event unit, not {0:?}")]
+    NotAnEvent(PalwDaUnitV1),
+    /// The row does not survive `palw_da_event_index_v1`'s packing (`row << 8 | tile`), so the
+    /// object would name another event than the one asked for.
+    #[error("event {0:?} does not pack into an accusation's index")]
+    Unpackable(PalwDaUnitV1),
+    #[error("no signing key for the accuser")]
+    Unsigned,
+    #[error("the accusation cannot ride a carrier: {0}")]
+    CannotRide(&'static str),
+}
+
+/// **DA-1 / DA-3 (P2-6): the ONE builder of an event `DefaultAccused`** — what kaspad's seat files
+/// beside its `Unavailable` receipt, and when a licence lands on a claim that never served it.
+///
+/// It packs the unit as the fold unpacks it (`PalwDaUnitV1::event_of_index`, refusing a row the
+/// packing would move), signs `palw_da_accusation_message_v2` over the network, the claim, the index
+/// and the accuser under `PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT` with `sign(message, context)` — the
+/// accuser's key, which the acceptance layer verifies against the bond the object names — and holds
+/// the object to the stateless ride rule (`palw_lifecycle_object_may_ride_v2`: signed). Whether the
+/// fold opens a session for it (C-8: the claim accusable, the accuser's standing, DA-8's caps and
+/// A-6's room) is state, read by `palw_producer_v2::palw_da_accusation_check_v1` before this is
+/// called and by the fold again.
+pub fn palw_da_accusation_object_v1(
+    network_domain: &Hash64,
+    claim: Hash64,
+    unit: PalwDaUnitV1,
+    accuser: PalwBondKeyV2,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<crate::palw_state_v2::PalwConsensusObjectV2, PalwDaAccusationBuildErrorV1> {
+    let PalwDaUnitV1::Event { row, tile } = unit else { return Err(PalwDaAccusationBuildErrorV1::NotAnEvent(unit)) };
+    let index = crate::palw_state_v2::palw_da_event_index_v1(row, tile);
+    if PalwDaUnitV1::event_of_index(index) != unit {
+        return Err(PalwDaAccusationBuildErrorV1::Unpackable(unit));
+    }
+    let message = crate::palw_state_v2::palw_da_accusation_message_v2(*network_domain, &claim, index, &accuser);
+    let signature = sign(message.as_byte_slice(), crate::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT)
+        .filter(|signature| !signature.is_empty())
+        .ok_or(PalwDaAccusationBuildErrorV1::Unsigned)?;
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index: index, accuser, signature };
+    crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(PalwDaAccusationBuildErrorV1::CannotRide)?;
+    Ok(object)
+}
+
 /// Every domain and context this module keys — listed in `PALW_STATE_V2_ALL_DOMAINS` (the family
 /// the cross-family uniqueness sweep and the committed context set are derived from).
 pub const PALW_DA_RCORE_ALL_DOMAINS: &[&[u8]] = &[
@@ -916,5 +976,53 @@ mod tests {
         assert_eq!(distinct.len(), moved.len() + 1, "every field moves the message");
         let names: BTreeSet<&[u8]> = PALW_DA_RCORE_ALL_DOMAINS.iter().copied().collect();
         assert_eq!(names.len(), PALW_DA_RCORE_ALL_DOMAINS.len(), "five distinct domains");
+    }
+
+    /// **P2-6: the ONE `DefaultAccused` builder signs what the acceptance layer verifies and names
+    /// the unit the fold reads back.** The automatic unit packs to index 0 and unpacks to itself; the
+    /// signature is asked over `palw_da_accusation_message_v2` of exactly the network, claim, index
+    /// and accuser, under the accusation context; a held unit, a row the packing would move, and a
+    /// missing or empty signature build nothing.
+    #[test]
+    fn p2_6_the_accusation_builder_signs_the_packed_unit_and_refuses_what_would_not_ride() {
+        use crate::palw_state_v2::{PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT, PalwConsensusObjectV2, palw_da_accusation_message_v2};
+        let net = Hash64::from_bytes([3; 64]);
+        let claim = Hash64::from_bytes([1; 64]);
+        let mut asked: Option<(Vec<u8>, Vec<u8>)> = None;
+        let object = palw_da_accusation_object_v1(&net, claim, PALW_DA_AUTO_NAMED_UNIT_V1, bond(4), |message, context| {
+            asked = Some((message.to_vec(), context.to_vec()));
+            Some(vec![0xA5; 8])
+        })
+        .expect("built");
+        let PalwConsensusObjectV2::DefaultAccused { claim: named, missing_event_index, accuser, signature } = &object else {
+            panic!("a DefaultAccused: {object:?}")
+        };
+        assert_eq!((*named, *missing_event_index, *accuser, signature.clone()), (claim, 0, bond(4), vec![0xA5; 8]));
+        assert_eq!(PalwDaUnitV1::event_of_index(*missing_event_index), PALW_DA_AUTO_NAMED_UNIT_V1, "the fold reads the same unit");
+        let message = palw_da_accusation_message_v2(net, &claim, 0, &bond(4));
+        assert_eq!(asked, Some((message.as_byte_slice().to_vec(), PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT.to_vec())));
+        let tiled = PalwDaUnitV1::Event { row: 7, tile: 2 };
+        let PalwConsensusObjectV2::DefaultAccused { missing_event_index, .. } =
+            palw_da_accusation_object_v1(&net, claim, tiled, bond(4), |_, _| Some(vec![1])).expect("built")
+        else {
+            unreachable!()
+        };
+        assert_eq!(PalwDaUnitV1::event_of_index(missing_event_index), tiled);
+        let held = PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf: 1 });
+        assert_eq!(
+            palw_da_accusation_object_v1(&net, claim, held, bond(4), |_, _| Some(vec![1])),
+            Err(PalwDaAccusationBuildErrorV1::NotAnEvent(held))
+        );
+        let wide = PalwDaUnitV1::Event { row: 1 << 24, tile: 0 };
+        assert_eq!(
+            palw_da_accusation_object_v1(&net, claim, wide, bond(4), |_, _| Some(vec![1])),
+            Err(PalwDaAccusationBuildErrorV1::Unpackable(wide))
+        );
+        for unsigned in [None, Some(Vec::new())] {
+            assert_eq!(
+                palw_da_accusation_object_v1(&net, claim, PALW_DA_AUTO_NAMED_UNIT_V1, bond(4), |_, _| unsigned.clone()),
+                Err(PalwDaAccusationBuildErrorV1::Unsigned)
+            );
+        }
     }
 }

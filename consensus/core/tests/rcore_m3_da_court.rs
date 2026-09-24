@@ -373,12 +373,37 @@ fn m1_a_da_accusation_is_refused_past_the_accusers_free_half() {
             "bond {bond}: the accusation is refused past its free half: {result:?}"
         );
     };
+    // P2-6: the node's read (C-8) refuses exactly what the fold refuses, so a seat whose free half is
+    // full never pays a carrier for an accusation the fold would drop — and waits for room.
+    let read = |bond: u64| {
+        let at = c.daa + 1;
+        kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(
+            &c.s,
+            &c.sp,
+            &c.extras_at(at),
+            &floor_id,
+            &bond_key(bond),
+            at,
+        )
+    };
     // The reviewer's bond: past C on any reading.
     assert!(committed + court + exposure > u128::from(collateral), "the premise: past C");
     refused(2);
     // The free half: no work of its own, and `committed + accuser + new ≤ C` would have admitted it.
     assert!(court + exposure <= u128::from(collateral) && half + court + exposure > u128::from(collateral), "the premise");
     refused(3);
+    for bond in [2, 3] {
+        assert!(
+            matches!(
+                read(bond),
+                kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1::Refused(PalwStateV2Error::AccusationExposureCeiling { ceiling, .. })
+                    if ceiling == u128::from(collateral)
+            ),
+            "bond {bond}: the node's read refuses it for room: {:?}",
+            read(bond)
+        );
+    }
+    assert!(matches!(read(4), kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1::File { .. }), "bond 4 files");
     // An identical bond with no court is not refused.
     c.step(&[accuse(floor_id, bond_key(4), 3)]);
     assert!(c.s.da_session(&floor_id, &bond_key(4)).is_some());
@@ -1032,4 +1057,89 @@ fn p2_7_the_disclosure_duties_follow_the_open_sessions_and_the_covering_locks() 
             assert_eq!(read(&expired, &[full], at).duties.len(), 2, "and the signer still owes both");
         }
     }
+}
+
+/// The node's read of an automatic accusation by `accuser` at the next block (P2-6).
+fn auto_check(c: &Chain, id: Hash64, accuser: PalwBondKeyV2) -> kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 {
+    let at = c.daa + 1;
+    kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(&c.s, &c.sp, &c.extras_at(at), &id, &accuser, at)
+}
+
+/// The node's accusation: the ONE builder, the automatic unit (the fold never reads the signature).
+fn auto_accusation(id: Hash64, accuser: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+    kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(
+        &h(NET),
+        id,
+        kaspa_consensus_core::palw_da_rcore_v1::PALW_DA_AUTO_NAMED_UNIT_V1,
+        accuser,
+        |_, _| Some(vec![1]),
+    )
+    .expect("the node's builder builds it")
+}
+
+/// **T34 (P2 half, core) and C-8: the node's read of an automatic accusation IS the fold's gate, on
+/// every class, once per accuser.** On a live floor claim and on the 8k row's licensed claim the read
+/// says `File` — the automatic unit (row 0, tile 0: inside the run and the fold's bound), the stage,
+/// a seat of the current panel, DA-6's exposure and the deadline — and the object the ONE builder
+/// makes from it opens exactly that session in the fold. From then on the read says `AccusedBefore`
+/// for that accuser (the session is open), and still after the session closed (`opened_by_seat`):
+/// neither a second trigger nor a restart files again. Every other seat still accuses on its own
+/// (DA-6: no serialization); the producer cannot; and below `palw_rcore_plus` nothing is filed
+/// (`DaCourtDormant`).
+#[test]
+fn t34_p2_6_the_nodes_read_is_the_folds_gate_on_every_class_once_per_accuser() {
+    use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as Check;
+    // The floor, live (the `Unavailable`'s accusation: PanelBound).
+    let mut c = Chain::new(t12());
+    let (id, seats, _) = bound_floor_claim(&mut c, 0x346);
+    let (producer, _, _) = floor_producer(&c.p);
+    let seat = seats[0].0;
+    let Check::File { unit, admission } = auto_check(&c, id, seat) else { panic!("the seat files: {:?}", auto_check(&c, id, seat)) };
+    assert_eq!(unit, PalwDaUnitV1::Event { row: 0, tile: 0 }, "the unit its Unavailable names");
+    assert!(admission.accuser_is_seat && admission.stage == PalwDaStageV1::Live);
+    assert_eq!(
+        auto_check(&c, id, producer),
+        Check::Refused(PalwStateV2Error::DaAccuserIsTheProducer(producer)),
+        "the producer never accuses its own claim"
+    );
+    c.step(&[auto_accusation(id, seat)]);
+    let session = c.s.da_session(&id, &seat).expect("the fold opened the session the read promised").clone();
+    assert_eq!(
+        (session.units[0], session.accuser_is_seat, session.exposure, session.deadline_daa, session.stage),
+        (unit, true, admission.exposure, admission.deadline_daa, admission.stage),
+        "exactly what the read said"
+    );
+    assert_eq!(auto_check(&c, id, seat), Check::AccusedBefore, "once: the session is open");
+    assert!(matches!(try_step(&c, &[auto_accusation(id, seat)]), Err(PalwStateV2Error::DaSessionAlreadyOpen { .. })));
+    assert!(matches!(auto_check(&c, id, seats[1].0), Check::File { .. }), "every other seat still accuses its own");
+    run_out(&mut c, id, seat);
+    assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+    assert_eq!(auto_check(&c, id, seat), Check::AccusedBefore, "and still after the session closed (opened_by_seat)");
+
+    // The 8k row, licensed (the licence that landed on an unserved seat).
+    let p = t12();
+    let (short, _) = model_classes(&p);
+    let mut m = model_chain(p, short, 1);
+    let id = model_claim(&mut m, short, 1, 0x346);
+    let seats = honest_seats(&m.p, 5);
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    let bound = m.bind(id, &seats);
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    m.step(&[PalwConsensusObjectV2::ReceiptLicensed {
+        claim: id,
+        receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
+    }]);
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    let seat = seats[0].0;
+    let Check::File { admission, .. } = auto_check(&m, id, seat) else { panic!("the 8k seat files: {:?}", auto_check(&m, id, seat)) };
+    assert!(admission.accuser_is_seat && admission.stage == PalwDaStageV1::Licensed, "at the licence");
+    m.step(&[auto_accusation(id, seat)]);
+    let session = m.s.da_session(&id, &seat).expect("the 8k session");
+    assert_eq!((session.exposure, session.deadline_daa), (admission.exposure, admission.deadline_daa));
+    assert_eq!(auto_check(&m, id, seat), Check::AccusedBefore);
+
+    // Fence off: nothing is filed.
+    let mut off = Chain::new(twin(&t12()));
+    let (id, seats, _) = bound_floor_claim(&mut off, 0x346);
+    assert_eq!(auto_check(&off, id, seats[0].0), Check::Refused(PalwStateV2Error::DaCourtDormant));
 }
