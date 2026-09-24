@@ -1460,15 +1460,18 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 execution_root: outcome.execution_root,
                 trace_root: outcome.trace_root,
                 work_leaves: None,
+                output_root: Some(outcome.output_root),
             });
         };
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
         let run =
             qwen36_execute_free_prompt_streaming_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap(), &mut |_| {})?;
+        // SEAT-S2: the output root the producer's run commits, from the ids this replay generated.
         Ok(PalwReplayRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
             work_leaves: Some(run.binding.step_leaf_count),
+            output_root: Some(run.output_root),
         })
     }
 
@@ -2848,7 +2851,8 @@ mod tests {
                     execution_root: out.execution_root,
                     trace_root: out.trace_root,
                     anchor: Hash64::from_u64_word(7),
-                    attempt_draw: None
+                    attempt_draw: None,
+                    output_root: None,
                 }
             ),
             PalwMaterialVerdictV1::Unverifiable
@@ -2875,8 +2879,13 @@ mod tests {
         let anchor = Hash64::from_u64_word(0x5EA7);
         let (job, prompt) = a.job_for_anchor(anchor).expect("a job");
         let honest = a.execute(&job, &prompt).expect("runs");
-        let claim =
-            PalwClaimRootsV1 { execution_root: honest.execution_root, trace_root: honest.trace_root, anchor, attempt_draw: None };
+        let claim = PalwClaimRootsV1 {
+            execution_root: honest.execution_root,
+            trace_root: honest.trace_root,
+            anchor,
+            attempt_draw: None,
+            output_root: None,
+        };
 
         // `rows = 0, generated = 1` — the row a token was selected from is simply absent.
         let mut no_rows = Vec::new();
@@ -2963,7 +2972,13 @@ mod tests {
         assert_eq!(
             planned.verify_material(
                 &a.material,
-                PalwClaimRootsV1 { execution_root: a.execution_root, trace_root: a.trace_root, anchor, attempt_draw: None }
+                PalwClaimRootsV1 {
+                    execution_root: a.execution_root,
+                    trace_root: a.trace_root,
+                    anchor,
+                    attempt_draw: None,
+                    output_root: None,
+                }
             ),
             PalwMaterialVerdictV1::Matches
         );
@@ -3016,6 +3031,7 @@ mod tests {
             trace_root: o.trace_root,
             anchor,
             attempt_draw: Some(draw),
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&short.material, roots(&short, true)), PalwMaterialVerdictV1::Matches);
         assert_eq!(backend.verify_material(&short.material, roots(&short, false)), PalwMaterialVerdictV1::Mismatch);
@@ -3078,8 +3094,13 @@ mod tests {
         assert_eq!(outcome.execution_root, binding.committed_execution_root, "the claim commits the binding's own root");
 
         // The seat's half, against this very claim.
-        let claim =
-            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor, attempt_draw: None };
+        let claim = PalwClaimRootsV1 {
+            execution_root: outcome.execution_root,
+            trace_root: outcome.trace_root,
+            anchor,
+            attempt_draw: None,
+            output_root: None,
+        };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
 
         // One proven oracle over the whole inventory — the production path a close takes.
@@ -3254,6 +3275,7 @@ mod tests {
             trace_root: folded.trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&bytes, claim), PalwMaterialVerdictV1::Matches);
         let dense_bytes = crate::produce::base0_material_encode_v1(&dense).expect("the dense sink retains").len();
@@ -3788,6 +3810,7 @@ mod tests {
             trace_root: folded.trace_root,
             anchor: job.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
         let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");

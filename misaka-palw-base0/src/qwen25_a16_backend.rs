@@ -1880,6 +1880,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 execution_root: outcome.execution_root,
                 trace_root: outcome.trace_root,
                 work_leaves: None,
+                output_root: Some(outcome.output_root),
             });
         }
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
@@ -1895,10 +1896,13 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             None,
             self.runtime_profile,
         )?;
+        // SEAT-S2: the output root the producer's `execute` puts in the claim — the same run
+        // struct's, computed by the same executor over the ids this replay generated.
         Ok(PalwReplayRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
             work_leaves: Some(run.binding.step_leaf_count),
+            output_root: Some(run.output_root),
         })
     }
 
@@ -3387,6 +3391,7 @@ mod free_prompt_tests {
             trace_root: folded.trace_root,
             anchor: job.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
         let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");
@@ -3710,6 +3715,7 @@ mod free_prompt_tests {
             trace_root: outcome.trace_root,
             anchor: Hash64::from_u64_word(0xA16C0117),
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(
             backend.verify_material(&outcome.material, claim),
@@ -3915,6 +3921,7 @@ mod free_prompt_tests {
                     trace_root: outcome.trace_root,
                     anchor: Hash64::from_u64_word(0xE95),
                     attempt_draw: None,
+                    output_root: None,
                 }
             ),
             kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
@@ -4031,6 +4038,7 @@ mod free_prompt_tests {
             trace_root: dense.trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval).expect("a geometry");
         for index in 0..count {
@@ -5144,6 +5152,7 @@ mod free_prompt_tests {
                 trace_root: outcome.trace_root,
                 anchor: job.job_id,
                 attempt_draw: None,
+                output_root: None,
             };
             let annexed = backend.open_fp_interval_with_close(&outcome.material, 0, &ids, &[leaf]).expect("the annex");
             let generated = backend.fp_committed_output_ids(&outcome.material).expect("the answer's ids");
@@ -5206,6 +5215,7 @@ mod free_prompt_tests {
             trace_root: o.trace_root,
             anchor: job.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         let leaves = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().step_leaf_count;
         let opened = backend.open_fp_interval(&honest.material, 0, &ids).expect("interval 0 opens");
@@ -5724,6 +5734,7 @@ mod held_real_row_probe {
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         let count = honest.fp_interval_count(&capture).expect("a held capture has intervals");
         assert_eq!(Some(count), honest.fp_interval_count_for(positions, decode), "the executor's count is the chain's");
@@ -5802,6 +5813,7 @@ mod held_real_row_probe {
             trace_root: lying.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         assert_ne!(lying_claim.execution_root, claim.execution_root, "the lie is committed");
         let t = std::time::Instant::now();
@@ -5970,6 +5982,7 @@ mod held_real_row_probe {
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         let mid = honest.fp_interval_count(&capture).expect("intervals") / 2;
         let opening = honest.open_fp_interval(&capture, mid, &ids).expect("the interval opens");
@@ -6007,6 +6020,7 @@ mod held_real_row_probe {
             trace_root: lying.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         let lie = liar.open_fp_interval(&lying_capture, mid, &ids).expect("the liar serves its interval");
         let verdict = honest.verify_fp_interval_opening(&lie, lying_claim, mid, &ids, leaves);

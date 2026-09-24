@@ -2202,6 +2202,7 @@ impl PalwPanelService {
             trace_root,
             anchor,
             attempt_draw: self.attempt_draw_for_claim(session, accepted_block),
+            output_root: None,
         };
         let work = ReplayWork::Attempt(job, prompt);
         let (backend, outcome) = offload(backend, move |b| work.run(b)).await?;
@@ -3669,8 +3670,13 @@ impl PalwPanelService {
                         )
                         .unwrap_or_default(),
                 };
-                let roots =
-                    PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor, attempt_draw };
+                let roots = PalwClaimRootsV1 {
+                    execution_root: duty.execution_root,
+                    trace_root: duty.trace_root,
+                    anchor,
+                    attempt_draw,
+                    output_root: None,
+                };
                 let pool_has_it = materials
                     .get(&duty.claim_id)
                     .map(|pool| {
@@ -4985,6 +4991,7 @@ impl PalwPanelService {
                                     trace_root: duty.trace_root,
                                     anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
                                     attempt_draw: None,
+                                    output_root: Some(duty.output_root),
                                 };
                                 if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
                                     continue;
@@ -5324,6 +5331,7 @@ impl PalwPanelService {
                                     trace_root: duty.trace_root,
                                     anchor,
                                     attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                                    output_root: Some(duty.output_root),
                                 },
                             ) == PalwMaterialVerdictV1::Matches
                             {
@@ -5359,6 +5367,7 @@ impl PalwPanelService {
                                     trace_root: duty.trace_root,
                                     anchor,
                                     attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                                    output_root: Some(duty.output_root),
                                 },
                             ) == PalwMaterialVerdictV1::Matches
                         {
@@ -7557,7 +7566,13 @@ impl PalwPanelService {
             }
             return None;
         };
-        let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor, attempt_draw: None };
+        let roots = PalwClaimRootsV1 {
+            execution_root: duty.execution_root,
+            trace_root: duty.trace_root,
+            anchor,
+            attempt_draw: None,
+            output_root: Some(duty.output_root),
+        };
         // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
         // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
         // cache POSITIONS on a per-position one, and the two differ by the prefill — so a panel
@@ -7971,6 +7986,7 @@ impl PalwPanelService {
             trace_root,
             anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
             attempt_draw: None,
+            output_root: None,
         };
         kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
             backend.as_ref(),
@@ -9244,7 +9260,12 @@ mod replay_rule_tests {
     use kaspa_hashes::Hash64;
 
     fn roots(work: Option<u64>) -> PalwReplayRootsV1 {
-        PalwReplayRootsV1 { execution_root: Hash64::from_u64_word(0xE), trace_root: Hash64::from_u64_word(0x7), work_leaves: work }
+        PalwReplayRootsV1 {
+            execution_root: Hash64::from_u64_word(0xE),
+            trace_root: Hash64::from_u64_word(0x7),
+            work_leaves: work,
+            output_root: None,
+        }
     }
 
     /// An attempt-lane claim prices no leaves; the replay's own count is the class's space.

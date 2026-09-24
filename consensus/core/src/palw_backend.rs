@@ -81,6 +81,14 @@ pub struct PalwReplayRootsV1 {
     pub execution_root: Hash64,
     pub trace_root: Hash64,
     pub work_leaves: Option<u64>,
+    /// **The output root the replayed execution commits** (SEAT-S2) — the value the claim carries
+    /// as `output_root` when its producer ran this job, computed by the family's own producer rule
+    /// over the ids the replay generated, bit for bit. Every shipped family's replay fills it; `None`
+    /// is a replay that cannot name one. The roots above say the arithmetic is the claim's; this says
+    /// the ANSWER is, and a seat licensing by replay compares it with the claim's committed
+    /// `output_root` (`replay_licenses_v1`) — a claim whose roots are the honest run's and whose
+    /// output root is not is otherwise licensed by every seat that replayed it.
+    pub output_root: Option<Hash64>,
 }
 
 /// The two roots a seat checks material against — the claim's own, read from chain state.
@@ -115,6 +123,12 @@ pub struct PalwClaimRootsV1 {
     /// smaller job — its decode calls skipped, or a prompt of another length — and every seat that
     /// held its material vouched for it, while only the seats that replayed caught it.
     pub attempt_draw: Option<bool>,
+    /// **The claim's committed `output_root`, when the caller has it** (SEAT-S2) — read from chain
+    /// state like the two roots above, never off the material. `None` is a caller with no claim
+    /// output to hand (the producer's own run, the fixtures). Carried beside the roots so every
+    /// check that judges a claim can bind its answer; the replay's own is
+    /// [`PalwReplayRootsV1::output_root`], and the comparison is the caller's.
+    pub output_root: Option<Hash64>,
 }
 
 /// What a seat concluded about served material.
@@ -236,7 +250,12 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// and keeps the roots, which is right for a family that has no fold.
     fn execute_for_verdict(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwReplayRootsV1, String> {
         let outcome = self.execute(job, prompt)?;
-        Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None })
+        Ok(PalwReplayRootsV1 {
+            execution_root: outcome.execution_root,
+            trace_root: outcome.trace_root,
+            work_leaves: None,
+            output_root: Some(outcome.output_root),
+        })
     }
 
     /// **ADR-0133 S1 (1): the producer publishes the checkpoint at a V2 segment's start.**
@@ -1147,5 +1166,56 @@ mod price_rule_tests {
         assert!(palw_opening_is_at_the_claims_price_v1(6_630_544, 0), "an attempt-lane claim prices no leaves");
         assert!(palw_opening_is_at_the_claims_price_v1(30, 30));
         assert!(!palw_opening_is_at_the_claims_price_v1(31, 30), "a priced claim must reproduce its price");
+    }
+}
+
+#[cfg(test)]
+mod output_root_tests {
+    use super::*;
+
+    /// A family with no fold: its replay IS its `execute`, and whatever that commits is the claim's.
+    struct ExecuteOnly(Hash64);
+
+    impl PalwExecutionBackendV1 for ExecuteOnly {
+        fn model_id(&self) -> &str {
+            "execute-only"
+        }
+        fn job_for_anchor(&self, _anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
+            Err("not used".into())
+        }
+        fn execute(&self, _job: &PalwJobContextV2, _prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
+            Ok(PalwExecutionOutcomeV1 {
+                trace_root: Hash64::from_u64_word(1),
+                output_root: self.0,
+                execution_root: Hash64::from_u64_word(3),
+                trace_manifest_root: Hash64::from_u64_word(4),
+                trace_chunk_count: 1,
+                material: Vec::new(),
+            })
+        }
+        fn verify_material(&self, _material: &[u8], _claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
+            PalwMaterialVerdictV1::Unverifiable
+        }
+    }
+
+    /// **SEAT-S2: the default replay carries the output root its execution commits** — the value a
+    /// producer running the same verb put in its claim, so the seat's comparison has something to
+    /// compare, and an answer that moved is a different root.
+    #[test]
+    fn the_default_replay_carries_the_executions_output_root() {
+        let job = crate::palw_base0_profile::rc_job_context(
+            &crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("the floor"),
+            8,
+            4,
+        );
+        let honest = ExecuteOnly(Hash64::from_u64_word(0x0A)).execute_for_verdict(&job, &[]).expect("replays");
+        assert_eq!(honest.output_root, Some(Hash64::from_u64_word(0x0A)));
+        assert_eq!(
+            (honest.execution_root, honest.trace_root, honest.work_leaves),
+            (Hash64::from_u64_word(3), Hash64::from_u64_word(1), None)
+        );
+        let moved = ExecuteOnly(Hash64::from_u64_word(0x0B)).execute_for_verdict(&job, &[]).expect("replays");
+        assert_ne!(moved.output_root, honest.output_root, "another answer is another output root");
+        assert_eq!(moved.execution_root, honest.execution_root, "the roots alone cannot tell the two apart");
     }
 }

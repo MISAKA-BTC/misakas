@@ -115,3 +115,39 @@ pub fn qwen36_backend(
         .with_step_ladder_cap(PALW_STEP_LEG_MAX_LEAVES)
         .with_prompt_ids_form(PalwPromptIdsFormV1::MerkleV1)
 }
+
+/// A greedy free-prompt job of `class`, its prompt committed under `form` (the class's own).
+pub fn fp_job(
+    class: &PalwShapeProfileV3,
+    form: PalwPromptIdsFormV1,
+    prompt: &[usize],
+    decode: u32,
+) -> kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+    let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+    PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: Hash64::from_u64_word(0xD0),
+        class_id: class.shape_profile_id(),
+        executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+        executor_pubkey: vec![0x11; 32],
+        operator_id: Hash64::from_u64_word(0x0B),
+        anchor_block: Hash64::from_u64_word(0xA0),
+        anchor_daa: 4242,
+        job_nonce: [0x5A; 32],
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &ids)
+            .expect("the ids commit"),
+        prompt_tokens: prompt.len() as u32,
+        decode_token_limit: decode,
+        max_context_tokens: class.n_ctx,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+    }
+}
