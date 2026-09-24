@@ -1239,6 +1239,74 @@ impl VirtualStateProcessor {
         })
     }
 
+    /// **ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the fold's own answer on an H-1 carrier, before
+    /// this node admits, relays, spares or mines it** — the P-B3 pattern for the objects H-1 obliges a
+    /// heartbeat to carry (`palw_heartbeat_carriers_v1`).
+    ///
+    /// Those objects buy three privileges on testnet-12: the first half of every template (the
+    /// carrier lane), a reserve in a full mempool, and a heartbeat's pass through the relay's H2
+    /// limits. Sold by object KIND, all three went to anything that decodes — five 8-byte-signature
+    /// accusations out-ranked one honest ML-DSA-87 filing at the same feerate. So the carrier is put to
+    /// the fold before it gets any of them: the acceptance layer (`palw_v2_validate_objects` — the
+    /// bond it names exists and signed it, the evidence adjudicates) and then the object's own arm
+    /// (`palw_v2_apply_one_object_v1` — the claim exists and is in its window, no session is open, the
+    /// offence is not already convicted, the reveal has a pending reward), on the tip, at the
+    /// virtual's DAA. Asked by `validate_mempool_transaction_impl` when the carrier enters and by
+    /// `validate_block_template_transaction` every time a template is built, so one that the tip
+    /// stops taking (the second accusation of a claim, once the first has opened its session) is
+    /// evicted as `InvalidInBlockTemplate` instead of mined into a drop its filer pays for. "Node
+    /// policy never builds what the fold refuses."
+    ///
+    /// Node-local, never a block rule: the fold alone judges a block another node mined. `None` for
+    /// every transaction that carries no H-1 object and below `Params::palw_rcore_plus`, so every
+    /// network but testnet-12 admits and templates exactly as before. It reads the TIP and skips the
+    /// next block's pre-object sweeps, so it can be one fold step behind in either direction — what
+    /// slips through is the fold's, as it always was.
+    pub(super) fn palw_mempool_h1_carrier_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
+        if !self.palw_rcore_plus_at(virtual_daa_score) {
+            return None;
+        }
+        let object = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(tx)?;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: virtual_daa_score,
+            // The next block's: past the tip's, which is all the fold asks of it for these objects.
+            blue_score: state.last_point().map_or(0, |last| last.blue_score.saturating_add(1)),
+            subsidy: 0,
+        };
+        self.palw_h1_carrier_refusal_on(&state, state_params, &point, &object)
+    }
+
+    /// [`Self::palw_mempool_h1_carrier_refusal`]'s question on a given state and point: the
+    /// acceptance layer first (cheap refusals — an unknown bond, a signature that does not verify —
+    /// before any state is cloned), then the fold's own arm. `None` when both take it.
+    pub(super) fn palw_h1_carrier_refusal_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<String> {
+        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+            return Some(why);
+        }
+        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )
+        .err()
+        .map(|why| why.to_string())
+    }
+
     /// **P-B1 at the template: one payout-queue budget across every market carrier the template
     /// selects**, so two carriers that each fit the room alone but not together are not both mined —
     /// the second stays in the pool for a later template. `None` below `palw_audit_2026_09_23`
@@ -13804,6 +13872,12 @@ impl VirtualStateProcessor {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
         }
         self.validate_mempool_transaction_in_utxo_context(mutable_tx, virtual_utxo_view, virtual_daa_score, args)?;
+        // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
+        // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
+        // rehearsal — and the template asks again (`validate_block_template_transaction`).
+        if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+        }
         Ok(())
     }
 
@@ -13908,6 +13982,13 @@ impl VirtualStateProcessor {
         let ValidatedTransaction { calculated_fee, .. } =
             // `None`: mempool/template single-tx context, not mergeset acceptance (bond spend-gate inert here).
             self.validate_transaction_in_utxo_context(tx, utxo_view, virtual_state.daa_score, TxValidationFlags::Full, None)?;
+        // **ADR-0152 H-1 at the template** (P2-9 review, finding 5): the tip moves after admission —
+        // the first accusation of a claim opens its session and every other one becomes a drop — so
+        // the gate is asked again here, and a refused carrier is `InvalidInBlockTemplate`: the mining
+        // manager evicts it rather than leading a template with it. `None` below R-core+.
+        if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(tx, virtual_state.daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+        }
         Ok(calculated_fee)
     }
 

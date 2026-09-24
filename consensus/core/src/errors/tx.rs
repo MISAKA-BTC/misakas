@@ -225,6 +225,17 @@ pub enum TxRuleError {
     /// fold's, so the fold still refuses what slips through (refunded past the fence, P-B1).
     #[error("a model-market carrier the fold would refuse: {0}")]
     PalwModelMarketNotEligible(String),
+
+    /// **ADR-0152 v3.1 H-1 (P2-9 review, finding 5): a mempool and template refusal, never a block
+    /// rule.** The transaction carries a conviction, DA, reporter or court object — one H-1 obliges a
+    /// heartbeat to carry, so one the template's carrier lane takes first and the relay spares a
+    /// beat for — and the fold at the tip refuses it (the acceptance layer or the object's own arm).
+    /// Refused when it enters the mempool and again whenever this node builds a template (the P-B3
+    /// pattern), so this node never sells H-1's priority to an object the fold would drop. Past
+    /// `Params::palw_rcore_plus` only (testnet-12). The tip can be one fold step behind the block
+    /// the carrier would land in, so the fold still judges what slips through.
+    #[error("an H-1 lifecycle carrier the fold would refuse: {0}")]
+    PalwH1CarrierRefused(String),
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;

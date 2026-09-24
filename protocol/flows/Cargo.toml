@@ -27,6 +27,9 @@ kaspa-addressmanager.workspace = true
 kaspa-consensusmanager.workspace = true
 kaspa-mining.workspace = true
 kaspa-notify.workspace = true
+# ADR-0152 H-1 (P2-9 review, finding 4): the relay checks a heartbeat's constant-target proof of
+# work before it reads the body of a beat it has not validated (`palw_heartbeat_pow_passes_v1`).
+kaspa-pow.workspace = true
 
 async-trait.workspace = true
 borsh.workspace = true

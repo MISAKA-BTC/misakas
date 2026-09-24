@@ -13489,6 +13489,31 @@ fn p_b3_the_template_asks_the_market_gate_the_mempool_asks() {
     );
 }
 
+/// **ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the template asks the H-1 gate the mempool asks,
+/// and the gate asks the fold** — the acceptance layer and the object's own arm, the two halves the
+/// block's rehearsal runs. Pinned on the source for P-B3's reason: deleting either call leaves every
+/// behavioural test that drives only the other one green.
+#[test]
+fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
+    let source = include_str!("processor.rs");
+    let body_of = |name: &str| -> String {
+        let start = source.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("{name} exists"));
+        let rest = &source[start..];
+        let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
+        assert!(
+            body_of(caller).contains("self.palw_mempool_h1_carrier_refusal("),
+            "{caller} must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"
+        );
+    }
+    assert!(body_of("palw_mempool_h1_carrier_refusal").contains("self.palw_h1_carrier_refusal_on("));
+    let on = body_of("palw_h1_carrier_refusal_on");
+    assert!(on.contains("self.palw_v2_validate_objects("), "the acceptance layer");
+    assert!(on.contains("palw_v2_apply_one_object_v1("), "and the fold's own arm");
+}
+
 /// **`getPalwProducerFacts` answers from one tip materialization, not two per call** (mainnet
 /// audit M-5).
 ///
@@ -16211,6 +16236,9 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
 // Test-only: the scenario lives in `tests/t12_round_lane_e2e.rs` beside this file, as a child of
 // this module so it reuses `TestContext` and the harness identities.
 mod t12_clock_floor;
+// ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the node's H-1 gate asks the fold about a carrier
+// before this node admits, relays, spares or mines it.
+mod t12_h1_carrier_gate;
 mod t12_offence_attribution_gate;
 // ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
 // refused by the fold until their owners land them.
