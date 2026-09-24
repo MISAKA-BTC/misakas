@@ -6333,6 +6333,10 @@ impl PalwPanelService {
                                 "[{PALW_PANEL}] claim {}: cannot answer {:?} of an open data-availability session as {:?}: {why}",
                                 duty.claim_id, duty.unit, duty.role
                             );
+                            // Tried again a re-plan later, not every tick: building the answer may
+                            // have replayed the claim's whole job (`rcore_da_capture_v1`), and one
+                            // that does not reproduce the roots will not on the next tick either.
+                            court_moved.insert(key, current_daa);
                             *court_stalls
                                 .entry("a data-availability unit cannot be answered from what this node holds")
                                 .or_default() += 1;
