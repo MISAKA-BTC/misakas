@@ -761,6 +761,8 @@ pub struct Qwen25A16Backend {
     /// and not a class fact — and `KV_STORAGE_SHIPPED_V1` is what a backend built without
     /// saying holds.
     runtime_profile: kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1,
+    /// This instance's seat state and walk; nothing outside the instance reaches it.
+    seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
 }
 
 /// **Can a class with this graph carry a capture at all — the ONE spelling of the predicate.**
@@ -845,6 +847,7 @@ impl Qwen25A16Backend {
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             drill_fault: std::sync::Mutex::new(None),
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+            seat_memo: Default::default(),
         })
     }
 
@@ -1058,6 +1061,7 @@ impl Qwen25A16Backend {
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             drill_fault: std::sync::Mutex::new(None),
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
+            seat_memo: Default::default(),
         })
     }
 
@@ -1387,6 +1391,7 @@ impl Qwen25A16Backend {
         // The walk is kept between questions about one job (ADR-0110 §9.5): an executor answering
         // several openings, a leaf's evidence and the held units of one claim walks it once.
         crate::fp_recompute::base0_fp_a16_seat_state_v1(
+            &self.seat_memo,
             &self.artifact,
             self.plan.as_ref(),
             &material.binding.shape_profile,
@@ -2325,6 +2330,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // one, the replay resumes from the seat's OWN bytes and a chunkless opening is evidence;
         // without one, this is ADR-0077 Decision 8 unchanged.
         let state = crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+            &self.seat_memo,
             opening,
             prompt_token_ids,
             self.checkpoint_interval(),
@@ -2383,6 +2389,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         covered: u32,
     ) -> Result<Hash64, String> {
         crate::fp_interval::base0_fp_accept_resume_v1(
+            &self.seat_memo,
             resume,
             context,
             prompt_token_ids,
@@ -2586,6 +2593,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     self.checkpoint_interval(),
@@ -2630,6 +2638,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     self.checkpoint_interval(),
@@ -2717,6 +2726,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     self.checkpoint_interval(),
@@ -2726,6 +2736,10 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1(), storage: self.runtime_profile },
             self.prompt_ids_form,
         )
+    }
+
+    fn fp_forget_seat_state_v1(&self) {
+        crate::fp_recompute::base0_fp_seat_state_forget_v1(&self.seat_memo)
     }
 
     fn fp_committed_output_ids(&self, capture: &[u8]) -> Option<Vec<u32>> {
@@ -2804,6 +2818,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         }
         // A seat's drawn intervals of one claim walk the job once (ADR-0110 §9.5).
         crate::fp_recompute::base0_fp_a16_seat_state_v1(
+            &self.seat_memo,
             &self.artifact,
             self.plan.as_ref(),
             &self.profile,
@@ -4044,10 +4059,11 @@ mod free_prompt_tests {
         let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval).expect("a geometry");
         for index in 0..count {
             // ADR-0086 Decision 2: the anchor is named; the seat holds the state it recomputed.
-            crate::fp_recompute::base0_fp_seat_state_forget_v1();
+            backend.fp_forget_seat_state_v1();
             if let Some(covered) = geometry.anchor_covered_call(index) {
                 let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, None).expect("recompute kernels");
                 crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+                    &backend.seat_memo,
                     &profile,
                     &ctx,
                     &ids,

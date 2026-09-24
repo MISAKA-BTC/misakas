@@ -474,6 +474,17 @@ pub struct PalwPanelConfig {
     pub producer_class: Option<Hash64>,
 }
 
+/// **The executor's kept backend** (ADR-0110 §9.5): the one instance this node answers openings,
+/// leaf evidence and held units from, keyed by the class and the artifact root it was resolved
+/// for. The walk and the seat state a family keeps are the instance's own
+/// (`fp_recompute::Base0FpSeatMemoV1`), so keeping the instance is what keeps the walk between
+/// requests about one claim. Seats never use it: a seat's duty resolves its own instance.
+struct PalwExecutorBackendV1 {
+    class_id: Hash64,
+    artifact_root: Hash64,
+    backend: std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+}
+
 /// **One named leaf a seat is pursuing** (ADR-0111 Decision 6).
 #[derive(Clone, Copy, Debug)]
 struct LeafPursuitV1 {
@@ -571,6 +582,13 @@ pub struct PalwPanelService {
     /// FIRST answer arrives in a fraction of the time. Taken on a blocking thread, never on the
     /// runtime's.
     opening_gate: std::sync::Mutex<()>,
+    /// **The executor's one kept backend** (ADR-0110 §9.5): one entry, keyed by (class_id,
+    /// artifact_root), so the openings, leaf evidence and held units of one claim reuse the walk
+    /// the family keeps inside its instance rather than walking the job from row zero per request.
+    /// Seats never use it — each seat duty resolves, and drops, its own instance — and it is
+    /// released before an interval seat or a court's close reserves, so an idle executor walk
+    /// never sits beside a reserved replay.
+    executor_backend: std::sync::Mutex<Option<PalwExecutorBackendV1>>,
     /// The prompt-ids form of every class `class_prompt_ids_form` has READ a profile for. A class's
     /// form is a function of its id — the held map is inside `shape_profile_id` — so an answer
     /// once read never changes, and the profile behind it (a full state read and a carriage
@@ -646,6 +664,87 @@ impl PalwPanelService {
         artifact_root: Hash64,
     ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
         self.backends().resolve_or_chain(class_id, artifact_root, |id| self.chain_carriage_v1(session, id))
+    }
+
+    /// **The executor's backend for a class** (ADR-0110 §9.5): the kept instance when it was
+    /// resolved for this class and artifact root, otherwise a fresh one through the one door
+    /// ([`Self::resolve_backend`]), kept in its place. The family's walk lives inside the
+    /// instance, so this is what lets the requests about one claim continue one walk. Seats never
+    /// come here: a seat's recompute and its row check must meet on an instance nothing else uses.
+    fn executor_backend_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+    ) -> Result<std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
+        {
+            let kept = self.executor_backend.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(kept) = kept.as_ref().filter(|kept| kept.class_id == class_id && kept.artifact_root == artifact_root) {
+                return Ok(kept.backend.clone());
+            }
+        }
+        // The previous class's walk is released before the next class resolves, so the executor
+        // never holds two.
+        self.release_executor_backend_v1();
+        let backend = self.resolve_backend(session, class_id, artifact_root)?;
+        Ok(self.keep_executor_backend_v1(class_id, artifact_root, backend))
+    }
+
+    /// Keep `backend` as the executor's one instance, replacing whatever was kept. The replaced
+    /// entry is dropped after the lock is released; its memory goes when the last request still
+    /// using it returns.
+    fn keep_executor_backend_v1(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+    ) -> std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> {
+        let backend: std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> = std::sync::Arc::from(backend);
+        let replaced = self.executor_backend.lock().unwrap_or_else(|e| e.into_inner()).replace(PalwExecutorBackendV1 {
+            class_id,
+            artifact_root,
+            backend: backend.clone(),
+        });
+        drop(replaced);
+        backend
+    }
+
+    /// **Release the executor's kept backend** — its walk and its state are unreserved memory. The
+    /// memory is freed when the last request still using the instance returns.
+    fn release_executor_backend_v1(&self) {
+        let released = self.executor_backend.lock().unwrap_or_else(|e| e.into_inner()).take();
+        drop(released);
+    }
+
+    /// [`Self::backend_for_raw_capture_v1`] for the executor: the kept instance when its class is
+    /// still the chain's under the same artifact root and it reads the bytes as its own class's
+    /// capture, otherwise the class-table scan, with the backend it finds kept in its place.
+    fn executor_backend_for_raw_capture_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        bytes: &[u8],
+    ) -> Option<(
+        std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+        kaspa_consensus_core::palw_backend::PalwCaptureShapeV1,
+    )> {
+        let kept = self
+            .executor_backend
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|kept| (kept.class_id, kept.artifact_root, kept.backend.clone()));
+        if let Some((class_id, artifact_root, backend)) = kept
+            && session.palw_producer_facts_v2(class_id, None).is_some_and(|facts| facts.artifact_root == artifact_root)
+            && let Some(shape) = backend.capture_shape(bytes)
+            && shape.job_context.shape_profile_id == class_id
+        {
+            return Some((backend, shape));
+        }
+        self.release_executor_backend_v1();
+        let (backend, shape) = self.backend_for_raw_capture_v1(session, bytes)?;
+        let class_id = shape.job_context.shape_profile_id;
+        let artifact_root = session.palw_producer_facts_v2(class_id, None)?.artifact_root;
+        Some((self.keep_executor_backend_v1(class_id, artifact_root, backend), shape))
     }
 
     /// The chain arm of the one door: the class's registered profile and canonical job, read from
@@ -784,6 +883,7 @@ impl PalwPanelService {
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
+            executor_backend: std::sync::Mutex::new(None),
             class_forms: std::sync::Mutex::new(HashMap::new()),
             class_ladders: std::sync::Mutex::new(HashMap::new()),
             seat_faults: std::sync::Mutex::new(Default::default()),
@@ -4363,6 +4463,12 @@ impl PalwPanelService {
                         // here as a full seat — an upper bound over what the resume and the leaf's
                         // replay walk — and a court that cannot reserve waits for the next tick
                         // instead of dying mid-case with a session open against it.
+                        //
+                        // The executor's kept walk is released first, as the interval seat releases
+                        // it: a close from served intervals walks the job on this duty's own
+                        // instance, and under the process-wide slot that walk evicted the
+                        // executor's idle one, so the two were never resident together.
+                        self.release_executor_backend_v1();
                         let court_need = self.backends().role_memory_need_for_backend_or_chain_v1(
                             backend.as_ref(),
                             duty.class_id,
@@ -7034,7 +7140,7 @@ impl PalwPanelService {
             kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.payload_prompt_ids_form(&bytes))
         {
             let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
-            let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
+            let backend = self.executor_backend_v1(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
             // The ids the interval consumed: the user's own, hash-bound to the job by
             // `palw_fp_capture_decode_v1` before this line is reached. Never logged (SA-7).
             return remember(serve(backend.as_ref(), &payload.capture, &payload.material.prompt_token_ids, "free-prompt capture"));
@@ -7042,7 +7148,7 @@ impl PalwPanelService {
         // A raw family capture — the attempt lane's retention (ADR-0084 Decision 4). The prompt is
         // the anchor's derivation, which the asking seat re-derives on its own; an opening over
         // any other prompt binds to nothing there.
-        let Some((backend, shape)) = self.backend_for_raw_capture_v1(&session, &bytes) else {
+        let Some((backend, shape)) = self.executor_backend_for_raw_capture_v1(&session, &bytes) else {
             info!("[{PALW_PANEL}] claim {claim}: no held class reads its retained capture — request {interval_index:#x} not opened");
             return None;
         };
@@ -7533,10 +7639,13 @@ impl PalwPanelService {
         // **Nothing this claim's replay resumes from was computed for another claim.** The state
         // the row check reads is keyed by the class, the context, the prompt and the covered call
         // — the four things an opening can name — and the answer's ids are not among them, because
-        // the check is handed an opening and no ids. Dropping the held state at the claim
-        // boundary is what makes that safe: the only state this claim's row check can find is the
-        // one this claim's own recompute put there, seconds earlier and from this claim's ids.
-        misaka_palw_base0::fp_recompute::base0_fp_seat_state_forget_v1();
+        // the check is handed an opening and no ids. The state lives in this duty's own resolved
+        // instance and is dropped with it, so no other duty, executor opening or court computation
+        // can evict it between this seat's recompute and its row check: the only state this
+        // claim's row check can find is the one this claim's own recompute put there, seconds
+        // earlier and from this claim's ids. The forget at the claim boundary keeps that true if a
+        // resolve ever hands back a kept instance.
+        backend.fp_forget_seat_state_v1();
         // Both counts are the context's own — a free-prompt job's, built from the answer the chain
         // committed (ADR-0084 Decision 1), or the anchor-derived job's — never read off a capture,
         // which is the executor's to shape.
@@ -7599,6 +7708,12 @@ impl PalwPanelService {
         // (with none there is only a request to send), and a refusal defers the claim: nothing is
         // filed, and the caller's next arm takes its own reservation or none.
         let _held_for_the_intervals = if held > 0 {
+            // The executor's kept walk and state are unreserved memory: released before a seat
+            // reserves and walks, so a node never holds an idle executor walk beside a reserved
+            // seat — the bound the process-wide forget used to give. It changes no executor answer:
+            // a request in flight holds its own handle on the instance, and the next request
+            // resolves a fresh one and walks from zero.
+            self.release_executor_backend_v1();
             // Through the one door (the route-matrix re-audit's #5): a chain-registered class's
             // holding is found through its registration, never priced at zero bytes.
             let need = self.backends().role_memory_need_for_backend_or_chain_v1(
@@ -8014,7 +8129,7 @@ impl PalwPanelService {
         claim: Hash64,
     ) -> Result<
         (
-            Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+            std::sync::Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
             kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1,
         ),
         String,
@@ -8028,7 +8143,7 @@ impl PalwPanelService {
                 .ok_or("the retained material is not a free-prompt capture")?;
         let class_id = payload.material.job.class_id;
         let facts = session.palw_producer_facts_v2(class_id, None).ok_or("the chain names no such class")?;
-        let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
+        let backend = self.executor_backend_v1(session, class_id, facts.artifact_root)?;
         Ok((backend, payload))
     }
 
@@ -8917,6 +9032,53 @@ mod tests {
         }
         let readiness = &production[production.find("    fn readiness_duties(").expect("the readiness duty")..];
         assert!(readiness.contains("self.resolve_backend(session, class.class_id, class.artifact_root)"), "proofs use the door");
+    }
+
+    /// **A seat judges on its own instance; the executor keeps one** (ADR-0082 Decision 9; ADR-0110
+    /// §9.5; the straddle flake of 2026-09-24). The seat state a row check reads and the walk a
+    /// recompute continues are owned by the backend instance, so a seat's recompute and its row
+    /// check meet only on the instance its duty resolved — never on the executor's kept one, which
+    /// its own openings would move. The executor reaches its instance through the kept-backend door,
+    /// so the requests about one claim continue one walk; the seat and a court's close release it
+    /// before reserving, so an idle executor walk never sits beside a reserved replay; and no
+    /// production path clears a process-wide memo, because there is none.
+    #[test]
+    fn a_seat_judges_on_its_own_instance_and_the_executor_keeps_one() {
+        let whole = include_str!("palw_panel.rs");
+        let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
+        let body = |signature: &str| -> &str {
+            let rest = &production[production.find(signature).unwrap_or_else(|| panic!("no `{signature}` in production"))..];
+            &rest[..rest.find("\n    }\n").expect("its end")]
+        };
+        let executor = body("    fn open_retained_interval(");
+        for fresh in ["self.resolve_backend(", "self.backend_for_raw_capture_v1("] {
+            assert!(
+                !executor.contains(fresh),
+                "the executor's openings resolve a fresh instance through `{fresh}` and walk from zero"
+            );
+        }
+        assert!(executor.contains("self.executor_backend_v1("), "the free-prompt arm reaches the kept instance");
+        assert!(executor.contains("self.executor_backend_for_raw_capture_v1("), "and so does the raw-capture arm");
+        let retained = body("    fn retained_fp_capture_v1(");
+        assert!(retained.contains("self.executor_backend_v1("), "leaf evidence and the held answers reach the kept instance");
+        let seat = body("    async fn interval_seat_outcome_v1(");
+        assert!(seat.contains("backend.fp_forget_seat_state_v1();"), "the seat drops its own instance's state at the claim boundary");
+        for kept in ["self.executor_backend_v1(", "self.executor_backend_for_raw_capture_v1(", "self.keep_executor_backend_v1("] {
+            assert!(!seat.contains(kept), "a seat must not judge on the executor's instance (`{kept}`)");
+        }
+        let released = seat.find("self.release_executor_backend_v1();").expect("the seat releases the executor's walk");
+        let reserved = seat.find("self.reserve_replay_v1(\"interval-seat\"").expect("the seat reserves");
+        assert!(released < reserved, "the executor's idle walk is released before the seat reserves");
+        // And before a court's close reserves: its walk from served intervals is on its own instance.
+        let court = production.find("self.reserve_replay_v1(\"court\"").expect("the court reserves its close");
+        let released =
+            production[..court].rfind("self.release_executor_backend_v1();").expect("the court releases the executor's walk");
+        let between = &production[released..court];
+        assert!(
+            !between.contains("\n    fn ") && !between.contains("\n    async fn ") && !between.contains("reserve_replay_v1("),
+            "the release is the court arm's own, just before its reservation"
+        );
+        assert!(!production.contains("base0_fp_seat_state_forget_v1("), "no production path clears another instance's memo");
     }
 }
 

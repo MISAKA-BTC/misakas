@@ -671,17 +671,21 @@ impl Base0FpRecomputeKernelsV1 for Base0RecomputeKernelsV1<'_> {
 // One forward pass, not two
 // =================================================================================================
 
-/// **The last state this process recomputed, keyed by the question it answers.**
+/// **The last state this backend instance recomputed, keyed by the question it answers.**
 ///
 /// A seat asks twice about the same interval: once for the 64-byte root
 /// (`PalwBackend::fp_recompute_checkpoint_root`, the panel's comparison) and once for the replay
 /// that resumes from the state. Both are the SAME forward pass, and Decision 9 prices a seat at
 /// one — so the second question is answered from here rather than by running the job again.
 ///
-/// One entry, and deliberately: the memo exists to join two calls a panel makes back to back
-/// about one duty, not to be a cache of the fleet's claims. The key is every input the state is a
-/// function of, so a hit cannot be a state computed for another job, another class or another
-/// call — and the value is the seat's own arithmetic either way, never anything received.
+/// One entry per instance, and deliberately: the memo exists to join two calls a panel makes back
+/// to back about one duty, not to be a cache of the fleet's claims. The key is every input the
+/// state is a function of, so a hit cannot be a state computed for another job, another class or
+/// another call — and the value is the seat's own arithmetic either way, never anything received.
+/// A process-wide slot let any computation in the process (another duty, an executor's opening, a
+/// neighbouring test) evict the state between a seat's recompute and its row check, which filed
+/// `Unverifiable` on an honest producer (2026-09-24, the straddle test's flake); ownership by the
+/// instance ([`Base0FpSeatMemoV1`]) closes that by construction.
 /// **The key is exactly what BOTH askers can compute**, which is what makes the second question
 /// answerable at all: the row check (`PalwBackend::verify_fp_interval_opening`) is handed an
 /// opening and no ids, so it can name the class, the job context, the prompt and the covered call
@@ -705,7 +709,15 @@ struct SeatStateKeyV1 {
     covered: u32,
 }
 
-static SEAT_STATE_MEMO: std::sync::Mutex<Option<(SeatStateKeyV1, Hash64, Base0FpSeatStateV1)>> = std::sync::Mutex::new(None);
+/// **The seat state and the dense tier's walk ONE backend instance holds** (ADR-0082 Decision 9;
+/// ADR-0110 §9.5). Owned by the instance, freed with it, reached by nothing else: a seat's
+/// recompute and its row check meet here only if they ran on the same instance, and no other
+/// instance — another duty, an executor, a neighbouring test — can evict what one holds.
+#[derive(Default)]
+pub struct Base0FpSeatMemoV1 {
+    state: std::sync::Mutex<Option<(SeatStateKeyV1, Hash64, Base0FpSeatStateV1)>>,
+    walk: std::sync::Mutex<Option<A16WalkV1>>,
+}
 
 fn seat_state_key_v1(profile: &PalwShapeProfileV3, ctx: &PalwJobContextV2, prompt_token_ids: &[u32], covered: u32) -> SeatStateKeyV1 {
     SeatStateKeyV1 {
@@ -724,7 +736,9 @@ fn seat_state_key_v1(profile: &PalwShapeProfileV3, ctx: &PalwJobContextV2, promp
 ///
 /// `kernels` is built by the caller and only used on a miss, so a family pays for its engine setup
 /// once per real recompute.
+#[allow(clippy::too_many_arguments)]
 pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    memo: &Base0FpSeatMemoV1,
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
@@ -735,7 +749,7 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
     let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
     let ids = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(output_token_ids);
-    if let Ok(guard) = SEAT_STATE_MEMO.lock()
+    if let Ok(guard) = memo.state.lock()
         && let Some((held, held_ids, state)) = guard.as_ref()
         && *held == key
         && *held_ids == ids
@@ -744,7 +758,7 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     }
     let state =
         base0_fp_recompute_state_at_covered_v1(profile, ctx, prompt_token_ids, output_token_ids, covered, kernels, prompt_ids_form)?;
-    if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
+    if let Ok(mut guard) = memo.state.lock() {
         *guard = Some((key, ids, state.clone()));
     }
     Ok(state)
@@ -761,10 +775,11 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
 ///
 /// Keyed on everything a row is a function of: the artifact (held, so its identity cannot be
 /// reused while this entry names it), whether the walk is the planned one, the class, the context,
-/// the prompt and the committed output ids. One entry, like the memo above, for the same reason:
-/// it joins the questions about one job, and it is not a cache of the fleet's claims. Only this
-/// tier has it. A recurrence's state is not a prefix of a later one, so the hybrid tier keeps
-/// walking from zero.
+/// the prompt and the committed output ids. One per instance, like the memo above, for the same
+/// reason: it joins the questions about one job, and it is not a cache of the fleet's claims. An
+/// executor keeps reuse across requests because kaspad keeps one executor backend
+/// (`PalwPanelService::executor_backend`); a seat's walk is its duty's. Only this tier has it. A
+/// recurrence's state is not a prefix of a later one, so the hybrid tier keeps walking from zero.
 struct A16WalkV1 {
     artifact: std::sync::Arc<crate::artifact::Base0ArtifactV1>,
     job: A16WalkKeyV1,
@@ -780,9 +795,7 @@ struct A16WalkKeyV1 {
     output_ids_hash: Hash64,
 }
 
-static A16_WALK: std::sync::Mutex<Option<A16WalkV1>> = std::sync::Mutex::new(None);
-
-/// **The dense tier's seat state at `covered`, from the walk this process already has**
+/// **The dense tier's seat state at `covered`, from the walk this instance already has**
 /// (ADR-0110 §9.5) — [`base0_fp_seat_state_memoized_v1`] for the A16 family, with the walk kept.
 ///
 /// The same question twice is answered from the memo. Otherwise, if the last walk was of the same
@@ -794,6 +807,7 @@ static A16_WALK: std::sync::Mutex<Option<A16WalkV1>> = std::sync::Mutex::new(Non
 /// keeps it.
 #[allow(clippy::too_many_arguments)]
 pub fn base0_fp_a16_seat_state_v1(
+    memo: &Base0FpSeatMemoV1,
     artifact: &std::sync::Arc<crate::artifact::Base0ArtifactV1>,
     plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
     profile: &PalwShapeProfileV3,
@@ -805,7 +819,7 @@ pub fn base0_fp_a16_seat_state_v1(
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
     let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
     let ids = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(output_token_ids);
-    if let Ok(guard) = SEAT_STATE_MEMO.lock()
+    if let Ok(guard) = memo.state.lock()
         && let Some((held, held_ids, state)) = guard.as_ref()
         && *held == key
         && *held_ids == ids
@@ -824,7 +838,8 @@ pub fn base0_fp_a16_seat_state_v1(
     };
     // Taken out of the slot for the walk, so the lock is never held across a forward pass. A
     // second thread meanwhile finds nothing and walks from zero, which is slower and still exact.
-    let held = A16_WALK
+    let held = memo
+        .walk
         .lock()
         .ok()
         .and_then(|mut slot| slot.take())
@@ -838,17 +853,17 @@ pub fn base0_fp_a16_seat_state_v1(
         walk_rows_v1(&mut kernels, prompt_token_ids, output_token_ids, prefill, rows, positions as usize)?;
     }
     let state = Base0FpSeatStateV1 { covered_decode_call: covered, ..seat_state_here_v1(profile, decode_calls, positions, &kernels)? };
-    if let Ok(mut slot) = A16_WALK.lock() {
+    if let Ok(mut slot) = memo.walk.lock() {
         *slot = Some(A16WalkV1 { artifact: artifact.clone(), job, cache: kernels.into_cache() });
     }
-    if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
+    if let Ok(mut guard) = memo.state.lock() {
         *guard = Some((key, ids, state.clone()));
     }
     Ok(state)
 }
 
 /// **The state this seat recomputed for this class, context, prompt and covered call, if it is
-/// still the last one it computed** — the row check's only way to reach it.
+/// still the last one THIS instance computed** — the row check's only way to reach it.
 ///
 /// `None` is not a fault and never an accusation: it says this seat has not done the recompute
 /// this interval's replay would have to resume from, so it cannot judge the interval, and
@@ -856,13 +871,14 @@ pub fn base0_fp_a16_seat_state_v1(
 /// (`PalwBackend::fp_recompute_checkpoint_root`), because only the caller holds the committed
 /// output ids the teacher-forcing needs.
 pub fn base0_fp_seat_state_held_v1(
+    memo: &Base0FpSeatMemoV1,
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
     covered: u32,
 ) -> Option<Base0FpSeatStateV1> {
     let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
-    let guard = SEAT_STATE_MEMO.lock().ok()?;
+    let guard = memo.state.lock().ok()?;
     let (held, _ids, state) = guard.as_ref()?;
     (*held == key).then(|| state.clone())
 }
@@ -872,24 +888,25 @@ pub fn base0_fp_seat_state_held_v1(
 /// route). The row check finds it exactly as it finds a recomputed one: the key is the class, the
 /// context, the prompt and the covered counter, and nothing about where the bytes came from.
 pub fn base0_fp_seat_state_remember_v1(
+    memo: &Base0FpSeatMemoV1,
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
     state: &Base0FpSeatStateV1,
 ) {
     let key = seat_state_key_v1(profile, ctx, prompt_token_ids, state.covered_decode_call);
-    if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
+    if let Ok(mut guard) = memo.state.lock() {
         *guard = Some((key, Hash64::default(), state.clone()));
     }
 }
 
-/// Drop the memo. For tests that measure how many forward passes a sequence costs, and for a node
-/// that wants the memory back.
-pub fn base0_fp_seat_state_forget_v1() {
-    if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
+/// Drop this instance's state and walk. For tests that measure how many forward passes a sequence
+/// costs, and for a node that wants the memory back.
+pub fn base0_fp_seat_state_forget_v1(memo: &Base0FpSeatMemoV1) {
+    if let Ok(mut guard) = memo.state.lock() {
         *guard = None;
     }
-    if let Ok(mut slot) = A16_WALK.lock() {
+    if let Ok(mut slot) = memo.walk.lock() {
         *slot = None;
     }
 }
@@ -1241,8 +1258,9 @@ mod tests {
             let mut kernels = A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("the dense kernels");
             base0_fp_recompute_state_at_covered_v1(&profile, ctx, ids, out, covered, &mut kernels, Flat).expect("a walk from zero")
         };
+        let memo = Base0FpSeatMemoV1::default();
         let resumed = |ctx: &PalwJobContextV2, ids: &[u32], out: &[u32], covered: u32| {
-            base0_fp_a16_seat_state_v1(&artifact, Some(&plan), &profile, ctx, ids, out, covered, Flat).expect("a resumed walk")
+            base0_fp_a16_seat_state_v1(&memo, &artifact, Some(&plan), &profile, ctx, ids, out, covered, Flat).expect("a resumed walk")
         };
 
         let (ctx, ids, out, checkpoints) = job(0xA16_0001);
@@ -1388,8 +1406,9 @@ mod tests {
         let output = vec![1u32, 2, 3];
         let mut kernels = CountingKernels { forwards: std::cell::Cell::new(0), chunks: vec![vec![0u8; 8]] };
 
-        base0_fp_seat_state_forget_v1();
+        let memo = Base0FpSeatMemoV1::default();
         let first = base0_fp_seat_state_memoized_v1(
+            &memo,
             &profile,
             &ctx,
             &ids,
@@ -1403,14 +1422,30 @@ mod tests {
         assert_eq!(after_first, ids.len() as u32 + 1, "the prefill plus one teacher-forced decode call");
         // The row check's question, asked the way `verify_fp_interval_opening` asks it: by the
         // class, the context, the prompt and the covered call — the four things an opening names.
-        let held = base0_fp_seat_state_held_v1(&profile, &ctx, &ids, 1).expect("the state is held");
+        let held = base0_fp_seat_state_held_v1(&memo, &profile, &ctx, &ids, 1).expect("the state is held");
         assert_eq!(held, first, "the second question is answered with the first question's state");
         assert_eq!(kernels.forwards.get(), after_first, "and it costs no second forward pass");
 
         // A different covered call is a different question, and is not answered from the memo.
-        assert!(base0_fp_seat_state_held_v1(&profile, &ctx, &ids, 2).is_none());
-        base0_fp_seat_state_forget_v1();
-        assert!(base0_fp_seat_state_held_v1(&profile, &ctx, &ids, 1).is_none(), "forgetting is what a node gets its memory back with");
+        assert!(base0_fp_seat_state_held_v1(&memo, &profile, &ctx, &ids, 2).is_none());
+        // Another instance's memo is its own: it holds nothing of this one's, and its forget does
+        // not reach this one.
+        let neighbour = Base0FpSeatMemoV1::default();
+        assert!(
+            base0_fp_seat_state_held_v1(&neighbour, &profile, &ctx, &ids, 1).is_none(),
+            "another instance holds nothing of this one's"
+        );
+        base0_fp_seat_state_forget_v1(&neighbour);
+        assert_eq!(
+            base0_fp_seat_state_held_v1(&memo, &profile, &ctx, &ids, 1).as_ref(),
+            Some(&first),
+            "and its forget does not reach this one"
+        );
+        base0_fp_seat_state_forget_v1(&memo);
+        assert!(
+            base0_fp_seat_state_held_v1(&memo, &profile, &ctx, &ids, 1).is_none(),
+            "forgetting is what a node gets its memory back with"
+        );
     }
 
     /// **What the seat's one forward pass actually costs, on this host** — the measurement
@@ -1483,7 +1518,6 @@ mod tests {
             }
         }
 
-        base0_fp_seat_state_forget_v1();
         let mut kernels =
             FloorRecompute { engine: crate::engine::Base0Engine::new(&artifact), cache: crate::engine::KvCache::new(&artifact) };
         let started = std::time::Instant::now();
