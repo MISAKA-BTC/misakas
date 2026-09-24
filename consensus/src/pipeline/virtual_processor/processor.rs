@@ -1244,6 +1244,74 @@ impl VirtualStateProcessor {
         })
     }
 
+    /// **ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the fold's own answer on an H-1 carrier, before
+    /// this node admits, relays, spares or mines it** — the P-B3 pattern for the objects H-1 obliges a
+    /// heartbeat to carry (`palw_heartbeat_carriers_v1`).
+    ///
+    /// Those objects buy three privileges on testnet-12: the first half of every template (the
+    /// carrier lane), a reserve in a full mempool, and a heartbeat's pass through the relay's H2
+    /// limits. Sold by object KIND, all three went to anything that decodes — five 8-byte-signature
+    /// accusations out-ranked one honest ML-DSA-87 filing at the same feerate. So the carrier is put to
+    /// the fold before it gets any of them: the acceptance layer (`palw_v2_validate_objects` — the
+    /// bond it names exists and signed it, the evidence adjudicates) and then the object's own arm
+    /// (`palw_v2_apply_one_object_v1` — the claim exists and is in its window, no session is open, the
+    /// offence is not already convicted, the reveal has a pending reward), on the tip, at the
+    /// virtual's DAA. Asked by `validate_mempool_transaction_impl` when the carrier enters and by
+    /// `validate_block_template_transaction` every time a template is built, so one that the tip
+    /// stops taking (the second accusation of a claim, once the first has opened its session) is
+    /// evicted as `InvalidInBlockTemplate` instead of mined into a drop its filer pays for. "Node
+    /// policy never builds what the fold refuses."
+    ///
+    /// Node-local, never a block rule: the fold alone judges a block another node mined. `None` for
+    /// every transaction that carries no H-1 object and below `Params::palw_rcore_plus`, so every
+    /// network but testnet-12 admits and templates exactly as before. It reads the TIP and skips the
+    /// next block's pre-object sweeps, so it can be one fold step behind in either direction — what
+    /// slips through is the fold's, as it always was.
+    pub(super) fn palw_mempool_h1_carrier_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
+        if !self.palw_rcore_plus_at(virtual_daa_score) {
+            return None;
+        }
+        let object = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(tx)?;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: virtual_daa_score,
+            // The next block's: past the tip's, which is all the fold asks of it for these objects.
+            blue_score: state.last_point().map_or(0, |last| last.blue_score.saturating_add(1)),
+            subsidy: 0,
+        };
+        self.palw_h1_carrier_refusal_on(&state, state_params, &point, &object)
+    }
+
+    /// [`Self::palw_mempool_h1_carrier_refusal`]'s question on a given state and point: the
+    /// acceptance layer first (cheap refusals — an unknown bond, a signature that does not verify —
+    /// before any state is cloned), then the fold's own arm. `None` when both take it.
+    pub(super) fn palw_h1_carrier_refusal_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<String> {
+        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+            return Some(why);
+        }
+        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )
+        .err()
+        .map(|why| why.to_string())
+    }
+
     /// **P-B1 at the template: one payout-queue budget across every market carrier the template
     /// selects**, so two carriers that each fit the room alone but not together are not both mined —
     /// the second stays in the pool for a later template. `None` below `palw_audit_2026_09_23`
@@ -6883,13 +6951,20 @@ impl VirtualStateProcessor {
         if !matches!(record.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
             return None;
         }
-        let duties = state.panel_duties_of(&claim)?;
+        state.panel_duties_of(&claim)?;
+        // The door's own predicate: a seat not yet credited, or (ADR-0152 V3S-01, on a licence that
+        // awaits its replay) a credited seat not yet counted over the whole job.
         let receipts: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = mine
             .iter()
             .filter(|receipt| {
                 receipt.claim == claim
                     && matches!(receipt.verdict, kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid)
-                    && duties.get(&receipt.seat_bond).is_some_and(|at| *at == 0)
+                    && kaspa_consensus_core::palw_state_v2::palw_rcore_v2_door_takes_seat_v1(
+                        &state,
+                        &claim,
+                        record,
+                        &receipt.seat_bond,
+                    )
             })
             .cloned()
             .collect();
@@ -6913,12 +6988,106 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts })
     }
 
+    /// **ADR-0152 SR-10 / Q-7 / V3S-01: the supplementary set a collector offers**, on the tip state at
+    /// virtual's point — where the carrying transaction would be accepted, as every assembler here
+    /// evaluates ([`Self::palw_v2_supplementary_assemble_on_v1`]).
+    pub fn palw_v2_supplementary_assemble_impl(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        v3_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+        v2_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        self.palw_v2_supplementary_assemble_on_v1(&state, state_params, &point, claim, v3_candidates, v2_candidates)
+    }
+
+    /// [`Self::palw_v2_supplementary_assemble_impl`] on a given state and point (the tests fold their
+    /// own). The selection is `palw_select_supplementary_offer_v1` — SR-10's V3 set, or on a licence
+    /// awaiting its replay the V2 door's full-replay upgrade before any pay set — and every one of its
+    /// judges is the chain's: `validate_supplementary_receipts_v3` and `validate_supplementary_receipts_v1`
+    /// bound exactly as the acceptance arms bind them (the chain's network domain, the ML-DSA-87
+    /// verify), and the fold's own answer (`palw_v2_supplementary_effect_v1`, at this processor's
+    /// fences and extras). So the object it returns is the one the gate admits and the door credits,
+    /// every seat of it — the property the collector exists for.
+    pub(crate) fn palw_v2_supplementary_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        claim: kaspa_hashes::Hash64,
+        v3_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+        v2_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
+        use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+        if !state_params.rcore_plus_active_at(point.daa_score)
+            || !state.claim(&claim).is_some_and(|record| matches!(record.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }))
+        {
+            return None;
+        }
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let extras = self.palw_transition_extras_for(point);
+        let validate_v3 = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3]| {
+            kaspa_consensus_core::palw_panel_v2::validate_supplementary_receipts_v3(
+                state,
+                state_params,
+                point,
+                network_domain,
+                &claim,
+                receipts,
+                Self::verify_mldsa87_with_context_bool,
+            )
+        };
+        let validate_v2 = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2]| {
+            kaspa_consensus_core::palw_panel_v2::validate_supplementary_receipts_v1(
+                state,
+                state_params,
+                point,
+                network_domain,
+                &claim,
+                receipts,
+                Self::verify_mldsa87_with_context_bool,
+            )
+        };
+        let effect = |object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2| {
+            kaspa_consensus_core::palw_state_v2::palw_v2_supplementary_effect_v1(
+                state,
+                state_params,
+                point,
+                object,
+                self.palw_unavailable_abstains_at(point.daa_score),
+                self.palw_capability_bound_at(point.daa_score),
+                self.palw_uncertified_weightless_at(point.daa_score),
+                self.palw_da_court_at(point.daa_score),
+                &extras,
+            )
+        };
+        kaspa_consensus_core::palw_panel_v2::palw_select_supplementary_offer_v1(
+            state,
+            &claim,
+            v3_candidates,
+            v2_candidates,
+            validate_v3,
+            validate_v2,
+            effect,
+        )
+    }
+
     pub fn palw_v2_receipt_quorum_assemble_impl(
         &self,
         claim: kaspa_hashes::Hash64,
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let panel_params = self.palw_panel_params_v2.as_ref()?;
         let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
@@ -6934,6 +7103,21 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
+        self.palw_v2_receipt_quorum_assemble_on_v1(&state, state_params, panel_params, &point, claim, candidates)
+    }
+
+    /// [`Self::palw_v2_receipt_quorum_assemble_impl`] on a given state and point — the tests fold their
+    /// own (ADR-0152 X22: the V1 door a node offers before S2).
+    pub(crate) fn palw_v2_receipt_quorum_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -7085,6 +7269,20 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
+        self.palw_v2_receipt_coverage_assemble_on_v1(&state, state_params, panel_params, &point, claim, candidates)
+    }
+
+    /// [`Self::palw_v2_receipt_coverage_assemble_impl`] on a given state and point — the tests fold
+    /// their own (ADR-0152 X22). The caller has checked the Verification V2 fence.
+    pub(crate) fn palw_v2_receipt_coverage_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -7143,6 +7341,20 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
+        self.palw_v2_optimistic_assemble_on_v1(&state, state_params, panel_params, &point, claim, candidates)
+    }
+
+    /// [`Self::palw_v2_optimistic_assemble_impl`] on a given state and point — the tests fold their
+    /// own (ADR-0152 X22). The caller has checked the S2 fence.
+    pub(crate) fn palw_v2_optimistic_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -13767,6 +13979,12 @@ impl VirtualStateProcessor {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
         }
         self.validate_mempool_transaction_in_utxo_context(mutable_tx, virtual_utxo_view, virtual_daa_score, args)?;
+        // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
+        // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
+        // rehearsal — and the template asks again (`validate_block_template_transaction`).
+        if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+        }
         Ok(())
     }
 
@@ -13871,6 +14089,13 @@ impl VirtualStateProcessor {
         let ValidatedTransaction { calculated_fee, .. } =
             // `None`: mempool/template single-tx context, not mergeset acceptance (bond spend-gate inert here).
             self.validate_transaction_in_utxo_context(tx, utxo_view, virtual_state.daa_score, TxValidationFlags::Full, None)?;
+        // **ADR-0152 H-1 at the template** (P2-9 review, finding 5): the tip moves after admission —
+        // the first accusation of a claim opens its session and every other one becomes a drop — so
+        // the gate is asked again here, and a refused carrier is `InvalidInBlockTemplate`: the mining
+        // manager evicts it rather than leading a template with it. `None` below R-core+.
+        if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(tx, virtual_state.daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+        }
         Ok(calculated_fee)
     }
 
