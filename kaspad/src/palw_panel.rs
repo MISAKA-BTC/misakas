@@ -4117,6 +4117,25 @@ impl PalwPanelService {
         true
     }
 
+    /// **May a replay's licence be signed? Only if the job it licensed is kept** (P2-7; the review's
+    /// LOW). Below `palw_rcore_plus` a free-prompt `Valid` owes nothing afterwards and is signed as
+    /// before, kept or not. Past it a full mask's `Valid` owes every unit a data-availability session
+    /// can demand (X7), answered from this job — not chain data — or charged S4 if the producer
+    /// withholds (DA-7); so a seat that could not keep it files nothing this tick (silence costs a seat
+    /// nothing, X10) and is asked again on the next.
+    fn licensed_job_kept_v1(&self, claim: &Hash64, bytes: Option<Vec<u8>>, current_daa: u64) -> bool {
+        let kept = bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes));
+        if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+            warn!(
+                "[{PALW_PANEL}] claim {claim}: licensed by replay, but its job could not be kept on disk — no Valid: a full \
+                 mask's Valid owes every unit a data-availability session can demand, from material this seat does not hold \
+                 (ADR-0152 X7, DA-7 S4)"
+            );
+            return false;
+        }
+        true
+    }
+
     /// Bound `retention/foreign/` by BOTH age and count, oldest first.
     ///
     /// The age sweep alone was not a bound (audit M2-2): 72 hours of anything is unbounded when an
@@ -7070,19 +7089,8 @@ impl PalwPanelService {
                                 .await
                             {
                                 (PalwSeatReplayStepV1::Licensed, bytes) => {
-                                    let kept = bytes.is_none_or(|bytes| self.persist_foreign_material(&duty.claim_id, &bytes));
-                                    // Past `palw_rcore_plus` this `Valid` is a full mask's X7 liability:
-                                    // every unit a DA session can demand, answered from the job kept
-                                    // here — not chain data — or charged S4 if the producer withholds.
-                                    // A seat that could not keep the job files nothing (silence costs
-                                    // a seat nothing, X10), and tries again next tick.
-                                    if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
-                                        warn!(
-                                            "[{PALW_PANEL}] claim {}: licensed by replay, but its job could not be kept on disk — no \
-                                             Valid: a full mask's Valid owes every unit a data-availability session can demand, from \
-                                             material this seat does not hold (ADR-0152 X7, DA-7 S4)",
-                                            duty.claim_id
-                                        );
+                                    // X7: past the fence, a job this seat could not keep is a Valid it cannot answer for.
+                                    if !self.licensed_job_kept_v1(&duty.claim_id, bytes, current_daa) {
                                         break 'verdict None;
                                     }
                                     debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::FreePromptReplay));
@@ -15875,9 +15883,16 @@ mod p2_7_disclosure_policy {
         let licensed = &source[source.find("(PalwSeatReplayStepV1::Licensed, bytes) => {").expect("the licence arm")..];
         let valid = licensed.find("break 'verdict Some(PalwReceiptVerdictV2::Valid);").expect("its Valid");
         let abstain = licensed
-            .find("if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {")
+            .find("if !self.licensed_job_kept_v1(&duty.claim_id, bytes, current_daa) {\n                                        break 'verdict None;")
             .expect("the kept-or-abstain gate");
         assert!(abstain < valid, "past the fence nothing is signed that this seat cannot answer for");
+        let gate = &source[source.find("    fn licensed_job_kept_v1(").expect("the gate")..];
+        let gate = &gate[..gate.find("\n    }\n").expect("its end")];
+        assert!(
+            gate.contains("bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes))")
+                && gate.contains("if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {"),
+            "the job is kept, or past the fence the licence is not signed"
+        );
     }
 
     /// **The queue key names the claim and the unit**: the same unit keys the same entry (so a
