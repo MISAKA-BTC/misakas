@@ -14849,6 +14849,7 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
             credit: 1,
+            accepted_blue_score: 0,
         }],
     );
     let with_schedule = |used: &[(u64, u64)]| {
@@ -14947,6 +14948,7 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
             credit: 1,
+            accepted_blue_score: 0,
         }],
     );
     let scheduled = {
@@ -15124,6 +15126,7 @@ async fn adr0130_a_span_is_seeded_at_its_first_block_from_the_anchor_of_the_span
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
             credit: 1,
+            accepted_blue_score: 0,
         }],
     );
     let planted = {
@@ -15228,6 +15231,7 @@ async fn execution_quanta_turn_one_final_into_n_algo10_round_permits() {
                 claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
                 execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
                 credit: 500_000,
+                accepted_blue_score: 0,
             },
             PalwExecFinalV1 {
                 domain: bundle.base_class_id,
@@ -15236,6 +15240,7 @@ async fn execution_quanta_turn_one_final_into_n_algo10_round_permits() {
                 claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A2),
                 execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
                 credit: 500_000,
+                accepted_blue_score: 0,
             },
         ],
     );
@@ -15331,6 +15336,7 @@ async fn adr0130_a_round_block_whose_permit_the_previous_round_held_is_not_grant
         claim_id: kaspa_hashes::Hash64::from_u64_word(claim),
         execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
         credit,
+        accepted_blue_score: 0,
     };
     let schedule = adr0125_schedule_of(0, &[earned(bundle.base_class_id, 0xC1A1, 5), earned(other_domain, 0xC1A2, 1)]);
     assert_eq!(schedule.domains.len(), 2, "two domains");
@@ -15509,6 +15515,7 @@ async fn adr0127_round_burst(with_round_blocks: bool) -> Adr0127BurstOutcome {
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
             credit: 1,
+            accepted_blue_score: 0,
         }],
     );
     let scheduled = {

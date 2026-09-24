@@ -38,6 +38,7 @@ fn a3_12_mint_cost_fit_past_the_probe_horizon() {
             claim_id: hh(3),
             execution_root: hh(4),
             credit,
+            accepted_blue_score: 0,
         };
         let t0 = Instant::now();
         let issued = palw_execution_mint_quanta_v1(&[f], seed, q, 1_000);

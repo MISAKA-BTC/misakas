@@ -197,6 +197,7 @@ fn a2_the_mint_cliff_is_the_probe_horizon() {
             claim_id: Hash64::from_u64_word(3),
             execution_root: Hash64::from_u64_word(4),
             credit: n * PALW_EXECUTION_QUANTUM_V1,
+            accepted_blue_score: 0,
         };
         let t = Instant::now();
         let issued = palw_execution_mint_quanta_v1(&[f], Hash64::from_u64_word(9), PALW_EXECUTION_QUANTUM_V1 as u128, 1_000);

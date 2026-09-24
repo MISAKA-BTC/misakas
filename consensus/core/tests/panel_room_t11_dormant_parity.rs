@@ -306,7 +306,13 @@ fn run(p: &Params, force_audit_off: bool) -> String {
 /// else it prints: the length and the line count are the parent's to the byte, as they must be when
 /// only fixed-width 128-hex roots changed. Derived from the build under test (the parent cannot print
 /// a v22 root); the v21 digest was `50f81bb0…`.
-const PARENT_DUMP_BLAKE2B_256: &str = "8254eab6f35a92cc9e73f85d2282d5a12c1d54dd29b9c8ba532195588d8e85a7";
+///
+/// **And once more for the v22 layout's `PalwExecFinalV1::accepted_blue_score`** (ADR-0152 v3.1, the
+/// Phase 1–2 review's M-1): 0 on every Final below `palw_offence_attribution`, so the fold is
+/// unchanged, but eight bytes more per rooted Final record. Measured: with the field
+/// `#[borsh(skip)]` the dump is `8254eab6…` to the byte; serialized, exactly 11 `  root` lines
+/// differ (the blocks holding a Final) and nothing else — length and line count unchanged.
+const PARENT_DUMP_BLAKE2B_256: &str = "7bf3238f4394776c077b19cc4b555909f672060dbb4d177ac5660c441c50b0d2";
 const PARENT_DUMP_BYTES: usize = 686_879;
 const PARENT_DUMP_LINES: usize = 1_953;
 

@@ -79,6 +79,7 @@ fn audit_c_quantum_maturity_versus_schedule_retention() {
         claim_id: Hash64::from_u64_word(3),
         execution_root: Hash64::from_u64_word(4),
         credit: 21_657_728, // BASE-0 floor: derived MAC-eq per draw, the unit record_round_final uses
+        accepted_blue_score: 0,
     };
     let open_round = 1_000u64; // the wall-clock round the span opened at
     let issued = palw_execution_mint_quanta_matured_v1(

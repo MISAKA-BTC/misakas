@@ -267,6 +267,7 @@ fn a_final(domain: u64, bond: u64, claim: u64, credit: u64) -> PalwExecFinalV1 {
         claim_id: Hash64::from_u64_word(claim),
         execution_root: Hash64::from_u64_word(claim ^ 0xE0E0),
         credit,
+        accepted_blue_score: 0,
     }
 }
 
