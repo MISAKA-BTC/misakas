@@ -9215,6 +9215,9 @@ impl VirtualStateProcessor {
             },
             // Per claim, at the binding block: `palw_panel_valid_lock_of_v1` fills it where armed.
             valid_lock: None,
+            // ADR-0152 SW: `Some(PalwPanelStakeDrawV1::V1)` past `palw_rcore_plus` at THIS anchor's
+            // DAA — filled with the stake-weighted draw (M4); `None` until then.
+            stake: None,
         }
     }
 
