@@ -711,11 +711,14 @@ pub fn base0_disclose_trace_event_v1(
 /// The dense check rebuilds the step root from the tiles; this reads it off the retained tree,
 /// which is the same root by construction (`Base0CaptureSinkV1::finish`) and is checked against
 /// the binding here rather than trusted. Everything after that is
-/// [`base0_material_tail_matches_v1`] — one rule for both retentions.
+/// [`base0_material_tail_matches_v1`] — one rule for both retentions. `family` is the SEAT's
+/// backend's (SEAT-0, [`Base0SeatFamilyV1`]); a fold keeps no tiles, so SEAT-0's head rule has
+/// nothing to read here and the tail is handed `None` for it.
 pub fn base0_fp_material_matches_claim_v2(
     material: &Base0FpMaterialV2,
     committed_execution_root: Hash64,
     committed_trace_root: Hash64,
+    family: Base0SeatFamilyV1,
 ) -> Result<bool, ProduceError> {
     let binding = &material.binding;
     if material.step_tree.validate_v1().is_err() || material.step_tree.leaf_count() != binding.step_leaf_count {
@@ -733,6 +736,8 @@ pub fn base0_fp_material_matches_claim_v2(
         &material.generated_token_ids,
         &material.checkpoint_chunks,
         &material.checkpoint_leaves,
+        None,
+        family,
         committed_execution_root,
         committed_trace_root,
     )
@@ -1342,6 +1347,8 @@ pub fn base0_replay_accused_segment_v1(
 /// `Err` is "I could not verify", which is a seat's honest `Unavailable`; `Ok(false)` is "the
 /// material does not match what was committed", which is the same verdict for a different reason.
 /// Neither is a conviction: convicting is the court's, on evidence a challenger assembles.
+///
+/// BASE-0's own name: it checks under the floor's family ([`Base0SeatFamilyV1::IntegerKv`]).
 pub fn base0_material_matches_claim_v1(
     material: &Base0RetainedMaterialV1,
     committed_execution_root: Hash64,
@@ -1352,18 +1359,10 @@ pub fn base0_material_matches_claim_v1(
         committed_execution_root,
         committed_trace_root,
         kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+        Base0SeatFamilyV1::IntegerKv,
     )
 }
 
-/// [`base0_material_matches_claim_v1`] against the ladder top the CALLER states — the ruleset's
-/// `PalwCourtParamsV2::max_step_leaf_count`, which a backend holds through `with_step_ladder_cap`
-/// (ADR-0080 W1b).
-///
-/// The bound below is an ALLOCATION guard and it stays; what moves is the ceiling. At the leg's
-/// default a seat answered `Ok(false)` — "the material does not match what was committed" — for
-/// every honest dense capture of a class registered against a deeper ladder, which is the same
-/// sentence said about an honest producer. `Ok(false)` is a verdict, not an error, so nothing
-/// downstream could tell the two apart.
 /// **A dense material's step leaves, rebuilt from its tiles under the ruleset's ladder** — one
 /// spelling for the material verifier ([`base0_material_matches_claim_capped_v1`]) and the interval
 /// opener (`fp_interval`), which is how the two cannot bound the space differently again. `None`
@@ -1399,18 +1398,32 @@ pub fn base0_dense_step_root_capped_v1(
     kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&leaves, max_step_leaf_count).ok()
 }
 
+/// [`base0_material_matches_claim_v1`] against the ladder top the CALLER states — the ruleset's
+/// `PalwCourtParamsV2::max_step_leaf_count`, which a backend holds through `with_step_ladder_cap`
+/// (ADR-0080 W1b) — and under the family of the backend that is asking (SEAT-0,
+/// [`Base0SeatFamilyV1`]).
+///
+/// The bound below is an ALLOCATION guard and it stays; what moves is the ceiling. At the leg's
+/// default a seat answered `Ok(false)` — "the material does not match what was committed" — for
+/// every honest dense capture of a class registered against a deeper ladder, which is the same
+/// sentence said about an honest producer. `Ok(false)` is a verdict, not an error, so nothing
+/// downstream could tell the two apart.
 pub fn base0_material_matches_claim_capped_v1(
     material: &Base0RetainedMaterialV1,
     committed_execution_root: Hash64,
     committed_trace_root: Hash64,
     max_step_leaf_count: u64,
+    family: Base0SeatFamilyV1,
 ) -> Result<bool, ProduceError> {
     let (binding, tiles, logits_rows, generated, checkpoint_chunks) = material;
-    let Some(root) = base0_dense_step_root_capped_v1(binding, tiles, max_step_leaf_count) else {
+    // [`base0_dense_step_root_capped_v1`], with the leaves KEPT: once they are proven to be the
+    // committed ones, SEAT-0's head rule reads its tiles off them rather than off a second copy.
+    let Some(leaves) = base0_dense_step_leaves_capped_v1(binding, tiles, max_step_leaf_count) else {
         return Ok(false); // an empty space, one above the ladder, or a tile outside it
     };
-    if root != binding.step_merkle_root {
-        return Ok(false);
+    match kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&leaves, max_step_leaf_count) {
+        Ok(root) if root == binding.step_merkle_root => {}
+        _ => return Ok(false),
     }
     // The DENSE retention is the per-call one and carries no leaf vector: its leg comes from its
     // chunks, which is the arm this hands the empty slice to.
@@ -1420,27 +1433,45 @@ pub fn base0_material_matches_claim_capped_v1(
         generated,
         checkpoint_chunks,
         &[],
+        Some(&leaves),
+        family,
         committed_execution_root,
         committed_trace_root,
     )
 }
 
-/// **Everything a retained material must reproduce that is not the step leg**: the logits trace
-/// root under the scheme the class registered, the checkpoint leg re-derived from the served
-/// chunks, and the binding's own two roots against the claim's.
+/// **Everything a retained material must reproduce that is not the step leg**: the binding's own
+/// two roots against the claim's, SEAT-0's rules ([`base0_seat_rules_v1`]), the logits trace root
+/// under the scheme the class registered, and the checkpoint leg re-derived from the served chunks.
 ///
 /// One function because there are two retentions and one rule (ADR-0082 Decision 7): the dense
 /// tuple rebuilds its step root from tiles, the folded one reads it off the retained tree, and
-/// from there they owe exactly the same things.
+/// from there they owe exactly the same things. `dense_step_leaves` is the dense retention's
+/// committed leaf vector, already proven to root to `binding.step_merkle_root`; `None` for a fold.
+#[allow(clippy::too_many_arguments)]
 pub fn base0_material_tail_matches_v1(
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     logits_rows: &[Vec<i32>],
     generated: &[u32],
     checkpoint_chunks: &[Vec<Vec<u8>>],
     checkpoint_leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2],
+    dense_step_leaves: Option<&[Hash64]>,
+    family: Base0SeatFamilyV1,
     committed_execution_root: Hash64,
     committed_trace_root: Hash64,
 ) -> Result<bool, ProduceError> {
+    // The binding the producer kept must be the one its CLAIM committed — otherwise it retained a
+    // consistent execution of some other job. Two comparisons, so they come first.
+    if binding.committed_execution_root != committed_execution_root || binding.full_logits_trace_root != committed_trace_root {
+        return Ok(false);
+    }
+    // **SEAT-0: and the claim's root must be a commitment to THIS execution, not a free field.**
+    // Everything below reproduces a root the binding CARRIES; nothing below asked whether that root
+    // is the hash of the binding's parts, so `committed_execution_root` — which the attempt's
+    // ticket hashes — could be any 64 bytes the producer liked, and every honest seat licensed it.
+    if base0_seat_rules_v1(binding, logits_rows, generated, dense_step_leaves, family).is_err() {
+        return Ok(false);
+    }
     // The logits rows and generated ids must REPRODUCE the trace root the binding carries —
     // equality of the binding's field against the claim says the producer kept the right
     // commitment; this says it kept the execution behind it, which is what a decode-side dispute
@@ -1517,12 +1548,249 @@ pub fn base0_material_tail_matches_v1(
     let Ok(rebuilt) = rebuilt else {
         return Ok(false);
     };
-    if rebuilt.merkle_root != binding.checkpoint_merkle_root || rebuilt.leaf_hashes.len() as u32 != binding.checkpoint_count {
-        return Ok(false);
+    Ok(rebuilt.merkle_root == binding.checkpoint_merkle_root && rebuilt.leaf_hashes.len() as u32 == binding.checkpoint_count)
+}
+
+// ---------------------------------------------------------------------------------------------
+// SEAT-0: a seat licenses only material bound to the claim
+// ---------------------------------------------------------------------------------------------
+//
+// The grind this closes. An attempt's lottery ticket hashes its `execution_root`, and the seat's
+// material check compared that root with the binding's `committed_execution_root` and never asked
+// whether the binding's parts HASH to it (`verify_binding_v1`). So the root was a free 512-bit
+// field: a producer re-rolled it for nothing and every honest seat signed `Valid` over the result.
+// Three more fields were free the same way, each with a real preimage — the activation leg, the
+// checkpoint interval (which also decides how many checkpoints there are to keep), and the decode
+// ids beside rows they were never selected from — and on dense material the rows themselves,
+// which nothing tied to the head step the capture committed.
+//
+// Seat-only. No consensus rule, parameter, fingerprint or hashed object moves: every value below
+// is recomputed from the binding with the producer's own derivation, so a seat refuses exactly the
+// material no honest producer of this build writes.
+
+/// **Whose producer filed a binding** — the one input SEAT-0 needs that a binding cannot state
+/// about itself. The checkpoint interval is a FAMILY fact, fixed by the producer's code rather than
+/// by the class's profile, so it is the SEAT's backend that names it: a rule guessed from the
+/// profile (say, "a class with recurrence heads checkpoints at `n_ctx`") would refuse every honest
+/// producer of the first class it guessed wrong about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0SeatFamilyV1 {
+    /// BASE-0 (`base0_execute_for_attempt_streaming_capped_v1`, both lanes) and the A16 tier
+    /// (`qwen25_a16_backend::a16_execute_streaming_v1`, dense and fold): the integer-kv profile at
+    /// `PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1`.
+    IntegerKv,
+    /// The Qwen3.6 hybrid (`qwen36_backend::qwen36_execute_streaming_v1`, dense and fold):
+    /// [`crate::qwen36_backend::qwen36_checkpoint_profile_v1`], interval `n_ctx`.
+    Qwen36,
+}
+
+impl Base0SeatFamilyV1 {
+    /// **J7: the checkpoint profile this family's producer files for `profile`** — the Legacy rule
+    /// (the only one this line has). The same expression, or the same function, the producer calls.
+    pub fn checkpoint_profile_v1(self, profile: &PalwShapeProfileV3) -> kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1 {
+        match self {
+            Self::IntegerKv => kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
+            Self::Qwen36 => crate::qwen36_backend::qwen36_checkpoint_profile_v1(profile),
+        }
     }
-    // And the binding the producer kept must be the one its CLAIM committed — otherwise it retained
-    // a consistent execution of some other job.
-    Ok(binding.committed_execution_root == committed_execution_root && binding.full_logits_trace_root == committed_trace_root)
+}
+
+/// **Which SEAT-0 rule refused**, so a test — and a reader of one — can tell which door shut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0SeatRefusalV1 {
+    /// (0) The profile's node slots do not fit a `u32` ([`base0_global_node_count_checked_v1`]):
+    /// no class's, and a sum the rules below would otherwise overflow.
+    NodeCountOverflows,
+    /// (1) `verify_binding_v1` refused: the committed execution root is not the hash of the
+    /// binding's own context and leg roots (or the binding is malformed). T1, the free root.
+    BindingNotItsOwnRoot,
+    /// (2) J6: the activation leg is not `base0_activation_leg_root_v1` of the context. T2.
+    ActivationLegNotTheFamilys,
+    /// (3) J7: the checkpoint profile is not the family's. T3.
+    CheckpointProfileNotTheFamilys,
+    /// (4) The committed ids are not one per decode call of the context, each beside its row.
+    DecodeNotTheJobs,
+    /// (4) A committed id outside the registered vocabulary. T5.
+    TokenOutOfVocab { position: u32 },
+    /// (4) A committed id the selection rule does not pick from its own row. T4.
+    TokenNotSelected { position: u32 },
+    /// (5) Dense material: a committed logits row is not the head step's committed output.
+    LogitsNotTheHeadOutput { row: u32 },
+}
+
+/// **SEAT-0, the one place its rules live** — both retentions reach it through
+/// [`base0_material_tail_matches_v1`], and the dense one alone hands it `dense_step_leaves`.
+///
+/// 0. The profile's node count fits a `u32` ([`base0_global_node_count_checked_v1`]), asked first
+///    because the profile is a stranger's and the rules below sum it unchecked.
+/// 1. `verify_binding_v1(binding)`: the committed execution root is rebuilt from the context and the
+///    leg roots. Without it the root is a free field (T1).
+/// 2. J6: `binding.activation_leg_root == base0_activation_leg_root_v1(ctx)` — the function every
+///    producer of this line calls (floor, A16, Qwen3.6) (T2).
+/// 3. J7: `binding.checkpoint_profile == family.checkpoint_profile_v1(profile)` (T3).
+/// 4. One id per decode call of the context, each with its row, and for each: `id < vocab` (T5)
+///    and `id == base0_decode_token_select_v1(row)` (T4). The rule is GREEDY on every claim this
+///    build can see: `validate_palw_v2` refuses to arm `palw_fp_decode_rules` or
+///    `palw_fp_decode_constraint`, the chain refuses a sampled job (`SamplingNotArmed`), and every
+///    engine here selects with this function. A build that arms a sampler must take the claim's
+///    sampler here, never the material's.
+/// 5. Dense material only: every committed logits row IS the head step's committed output — row
+///    `r`'s tiles at `(call r, slot G − 1, position r == 0 ? P − 1 : 0)`, hashed exactly as the
+///    capture hashed them, equal to the committed leaves. Only for a class whose head this seat
+///    knows ([`base0_logits_head_v1`]); for any other the rule is not this seat's to guess.
+///
+/// Every refusal is `Err`, never a panic: the binding, the rows and the ids are a stranger's bytes.
+pub fn base0_seat_rules_v1(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    logits_rows: &[Vec<i32>],
+    generated: &[u32],
+    dense_step_leaves: Option<&[Hash64]>,
+    family: Base0SeatFamilyV1,
+) -> Result<(), Base0SeatRefusalV1> {
+    use Base0SeatRefusalV1 as R;
+    // (0) Before anything reads the profile: a stranger's may be too large to count.
+    if base0_global_node_count_checked_v1(&binding.shape_profile).is_none() {
+        return Err(R::NodeCountOverflows);
+    }
+    // (1) First: every field read below is authenticated by it — the profile the job declares, the
+    // context the leaves are hashed under, the vocabulary and the prefill the head rule reads.
+    kaspa_consensus_core::palw_step_leg::verify_binding_v1(binding).map_err(|_| R::BindingNotItsOwnRoot)?;
+    let ctx = &binding.job_context;
+    let profile = &binding.shape_profile;
+    // (2)
+    if binding.activation_leg_root != base0_activation_leg_root_v1(ctx) {
+        return Err(R::ActivationLegNotTheFamilys);
+    }
+    // (3)
+    if binding.checkpoint_profile != family.checkpoint_profile_v1(profile) {
+        return Err(R::CheckpointProfileNotTheFamilys);
+    }
+    // (4)
+    if generated.len() != ctx.exact_decode_tokens as usize || logits_rows.len() != generated.len() {
+        return Err(R::DecodeNotTheJobs);
+    }
+    for ((row, id), position) in logits_rows.iter().zip(generated).zip(0u32..) {
+        if *id >= profile.vocab_size {
+            return Err(R::TokenOutOfVocab { position });
+        }
+        // An empty row selects nothing; `base0_decode_token_select_v1` would answer 0 for it.
+        if row.is_empty() || kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u64 != u64::from(*id) {
+            return Err(R::TokenNotSelected { position });
+        }
+    }
+    // (5)
+    match dense_step_leaves {
+        Some(leaves) => base0_logits_rows_are_the_heads_output_v1(binding, logits_rows, leaves),
+        None => Ok(()),
+    }
+}
+
+/// A class's logits head: its global node slot and the head node's tile width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base0LogitsHeadV1 {
+    pub slot: u32,
+    pub tile_len: u32,
+}
+
+/// **`PalwShapeProfileV3::global_node_count`, counted so that it cannot overflow** — `None` for a
+/// profile whose slots do not fit a `u32`. The profile's own count is an unchecked `u32` sum, and
+/// the profile a seat reads here is a stranger's bytes: 65,535 layers of a wide table overflow it,
+/// which under the release build's overflow checks is a panic and, under the node's panic hook, an
+/// exit. No class has such a profile, so a seat refuses one before anything sums it unchecked.
+pub fn base0_global_node_count_checked_v1(profile: &PalwShapeProfileV3) -> Option<u32> {
+    use kaspa_consensus_core::palw_step::PalwStepTableV1;
+    let layers = |table: PalwStepTableV1, nodes: usize| (profile.table_layer_span(table) as u64).checked_mul(nodes as u64);
+    let count = (profile.pre_nodes.len() as u64)
+        .checked_add(profile.post_nodes.len() as u64)?
+        .checked_add(layers(PalwStepTableV1::Attn, profile.attn_nodes.len())?)?
+        .checked_add(layers(PalwStepTableV1::Gdn, profile.gdn_nodes.len())?)?;
+    u32::try_from(count).ok()
+}
+
+/// **The logits head of a class whose committed logits rows ARE its head step's output** — the
+/// F1c identity, as far as this seat can vouch for it.
+///
+/// Slot `G − 1`, the last post node — where every family's capture puts the row its token is
+/// selected from (`fp_interval`'s `logits_node_slot_v1` makes the same reading) — on an `Int32`
+/// class, as a `MatMulQuant` exactly `vocab` wide, under one of the three kernels whose output is
+/// the row this build's engines return: `KDESC_BASE0_MATMUL` (the floor), `KDESC_A16_MATMUL_REQUANT`
+/// (the A16 tier) and `KDESC_Q36_MATMUL_GROUPED` (Qwen3.6). `None` for any other class: the seat
+/// skips rule 5 rather than guess, because a wrong guess refuses every honest producer of it.
+pub fn base0_logits_head_v1(profile: &PalwShapeProfileV3) -> Option<Base0LogitsHeadV1> {
+    use kaspa_consensus_core::palw_step::{PalwStepLaneV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1};
+    use kaspa_consensus_core::palw_step_refute::{KDESC_A16_MATMUL_REQUANT, KDESC_BASE0_MATMUL, KDESC_Q36_MATMUL_GROUPED};
+    if profile.lane != PalwStepLaneV1::Int32 {
+        return None;
+    }
+    let slot = base0_global_node_count_checked_v1(profile)?.checked_sub(1)?;
+    let (node, layer) = profile.resolve_node_slot(slot)?;
+    if layer.is_some() || !std::ptr::eq(node, profile.post_nodes.last()?) {
+        return None;
+    }
+    if node.op_kind != PalwStepOpKindV1::MatMulQuant
+        || node.out_len != (PalwStepOutLenV1::Fixed { elements: profile.vocab_size })
+        || node.tile_len == 0
+    {
+        return None;
+    }
+    [KDESC_BASE0_MATMUL, KDESC_A16_MATMUL_REQUANT, KDESC_Q36_MATMUL_GROUPED]
+        .iter()
+        .any(|descriptor| kernel_semantics_id_v1(descriptor) == node.kernel_semantics_id)
+        .then_some(Base0LogitsHeadV1 { slot, tile_len: node.tile_len })
+}
+
+/// SEAT-0's rule 5 on dense material: every committed row, cut into the head's tiles and hashed
+/// exactly as `Base0StepCaptureV1::push_call` hashes them, must be the committed leaf at the head's
+/// coordinate for that row. `committed_leaves` roots to `binding.step_merkle_root` (the caller
+/// proved it), so equality here ties each row to the step tree the claim's root commits.
+fn base0_logits_rows_are_the_heads_output_v1(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    logits_rows: &[Vec<i32>],
+    committed_leaves: &[Hash64],
+) -> Result<(), Base0SeatRefusalV1> {
+    use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, canonical_step_leaf_index};
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_tile_leaf_hash_v1};
+    let profile = &binding.shape_profile;
+    let Some(head) = base0_logits_head_v1(profile) else {
+        return Ok(());
+    };
+    let ctx = &binding.job_context;
+    let ctx_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
+    let vocab = profile.vocab_size as usize;
+    let tile_len = head.tile_len as usize;
+    let tiles = vocab.div_ceil(tile_len);
+    for (row, row_index) in logits_rows.iter().zip(0u32..) {
+        let refused = Base0SeatRefusalV1::LogitsNotTheHeadOutput { row: row_index };
+        if row.len() != vocab || tiles == 0 {
+            return Err(refused);
+        }
+        // Call 0's logits exist only at its last position; each decode call has one position.
+        let position = if row_index == 0 { ctx.declared_prefill_tokens.checked_sub(1).ok_or(refused)? } else { 0 };
+        let coord = |tile_index: u32| PalwStepCoordinateV1 { call_index: row_index, node_slot: head.slot, position, tile_index };
+        let last_tile = u32::try_from(tiles - 1).map_err(|_| refused)?;
+        let first = canonical_step_leaf_index(profile, ctx, &coord(0)).ok_or(refused)?;
+        // One node's tiles are consecutive leaves; checked at the last one rather than assumed.
+        let last = canonical_step_leaf_index(profile, ctx, &coord(last_tile)).ok_or(refused)?;
+        if last.checked_sub(first) != Some(u64::from(last_tile)) {
+            return Err(refused);
+        }
+        for (chunk, tile_index) in row.chunks(tile_len).zip(0u32..) {
+            let leaf = PalwStepTileLeafV1 {
+                version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                coord: coord(tile_index),
+                value_count: chunk.len() as u32,
+                values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            };
+            let committed = usize::try_from(first + u64::from(tile_index)).ok().and_then(|at| committed_leaves.get(at));
+            if committed != Some(&step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf)) {
+                return Err(refused);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

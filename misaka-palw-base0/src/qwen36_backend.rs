@@ -1770,13 +1770,26 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         // and its step root is read off the retained tree rather than rebuilt from tiles there are
         // none of.
         if let Ok(folded) = crate::produce::base0_fp_material_decode_v2(material) {
+            // **An attempt is never served as a fold** — this build's `execute` writes the dense
+            // capture for every attempt — and a fold's rows are tied to its step tree by no rule a
+            // seat can run (SEAT-0's head rule reads dense leaves), so under an attempt claim its
+            // selecting row is a free field: bend it, move the token, re-derive the roots, and
+            // every seat licensed each bend. Refused, as material no honest producer serves.
+            if claim.attempt_draw.is_some() {
+                return PalwMaterialVerdictV1::Mismatch;
+            }
             if claim.anchor != Hash64::default() && folded.binding.job_context.job_id != claim.anchor {
                 return PalwMaterialVerdictV1::Mismatch;
             }
             if folded.binding.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
             }
-            return match crate::produce::base0_fp_material_matches_claim_v2(&folded, claim.execution_root, claim.trace_root) {
+            return match crate::produce::base0_fp_material_matches_claim_v2(
+                &folded,
+                claim.execution_root,
+                claim.trace_root,
+                crate::produce::Base0SeatFamilyV1::Qwen36,
+            ) {
                 Ok(true) => PalwMaterialVerdictV1::Matches,
                 Ok(false) => PalwMaterialVerdictV1::Mismatch,
                 Err(_) => PalwMaterialVerdictV1::Unverifiable,
@@ -1808,6 +1821,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 claim.execution_root,
                 claim.trace_root,
                 self.network_ladder,
+                crate::produce::Base0SeatFamilyV1::Qwen36,
             ) {
                 Ok(true) => PalwMaterialVerdictV1::Matches,
                 Ok(false) => PalwMaterialVerdictV1::Mismatch,
@@ -1817,6 +1831,13 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let Some(run) = qwen36_material_decode_v1(material) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
+        // **The legacy composite is the ledger-compiled class's alone.** A court-capable backend's
+        // `execute` writes the family codec for every attempt, and this decode re-derives the roots
+        // from the rows it was sent with no execution behind them — so on this backend every new
+        // set of rows was a new root the seat licensed, and SEAT-0's rules never saw them.
+        if self.supports_court() {
+            return PalwMaterialVerdictV1::Mismatch;
+        }
         // **The claim carries the anchor now**, so the seat recomputes under the job the CHAIN
         // asked for rather than under one the material names about itself. That is the whole point
         // of the field: without it a gossiped capture is a re-usable asset — mine a fresh block,
