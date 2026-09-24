@@ -20,7 +20,10 @@ carries about a derivation:
   dsl_hash           = H_dsl( grammar_id ‖ len(u64 le) ‖ canonical DSL )
   artifact bytes     = the transformer, re-implemented here
   artifact_hash      = H_artifact( artifact bytes )
-  output_root        = H_output( job_context_hash ‖ u32 count ‖ ids ‖ family rendered hash )
+  output_root        = H_output( job_context_hash ‖ u32 count ‖ ids ‖ rendered hash ), where the
+                       rendered hash is the family's keyed rendering under the Legacy rule and
+                       H_rendered( u32 0 ) — the empty rendering, every family — under CoreV1
+                       (testnet-12, where `palw_offence_attribution` is armed); `verify --rule`
   derived_id         = H_id( borsh(PalwDerivedArtifactV1) )
 ```
 
@@ -85,6 +88,21 @@ DOMAIN_TRANSFORMER_ID = b"misaka-palw/derived-v1/transformer-id/v1"
 DOMAIN_DSL_HASH = b"misaka-palw/derived-v1/dsl-hash/v1"
 DOMAIN_ARTIFACT_HASH = b"misaka-palw/derived-v1/artifact-hash/v1"
 DOMAIN_OUTPUT = b"misaka-palw/output/v2"
+DOMAIN_RENDERED_OUTPUT = b"misaka-palw/rendered-output/v2"
+CORE_V1_RENDERED_OUTPUT_HEX = (
+    "7fdc18652f51bc53dc873f4ae569c4f9f1e27b222a93d0753ab1948d8a35a841"
+    "5c129aebeff6217b39d9fecc4fd5fa5ac8eec5ccfd2bf79fca9008165c4cbee9"
+)
+# `output_commitment_v2(0x11 × 64, [1, 2, 3], CoreV1 rendered)` — the whole root, pinned.
+CORE_V1_OUTPUT_ROOT_HEX = (
+    "4b535b595041f77f126c83c03fc705428c079f3ba147a5b50cc54212c0129939"
+    "5efbdb61e8ce2b4a858d47084f6903f89cb3c86400da67b959d6a0a388295dcb"
+)
+# The same root under the Legacy rule for the qwen36 family's keyed rendering.
+LEGACY_QWEN36_OUTPUT_ROOT_HEX = (
+    "2d24e97b82fdb2594a6a1b9fd6871d43a5d89e374854cd3d758596f2ba95f8d0"
+    "c78f85a27c4cac91bafa7ab2fea8b3f7101725aa34e1a21ba9dbf21eebff8cef"
+)
 DOMAIN_QWEN25_A16_EXECUTION = b"misaka-palw/qwen25-a16/execution/v1"
 DOMAIN_QWEN36_EXECUTION = b"misaka-palw/qwen36/execution/v1"
 
@@ -148,15 +166,41 @@ def rendered_output_hash_v1(family: str, ids: list) -> bytes:
     return h.digest()
 
 
+def rendered_output_hash_core_v1(ids: list) -> bytes:
+    """`kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rendered_output_v1` — the CoreV1
+    rule renders nothing: `rendered_output_hash_v2(&[])` (the CanonicalWriter's u32 length 0,
+    keyed) for every family and every ids, so the root binds the ids and the context alone.
+    `CanonicalWriter::keyed64` hashes its buffer with NO outer length frame."""
+    del ids
+    h = keyed(DOMAIN_RENDERED_OUTPUT)
+    h.update(struct.pack("<I", 0))
+    return h.digest()
+
+
+def rendered_output_hash_under(rule: str, family: str, ids: list) -> bytes:
+    """The rendered hash `output_root` is committed over under the network's attempt rule."""
+    if rule == "core-v1":
+        return rendered_output_hash_core_v1(ids)
+    return rendered_output_hash_v1(family, ids)
+
+
 def output_commitment_v2(job_context_hash: bytes, ids: list, rendered: bytes) -> bytes:
-    """`kaspa_consensus_core::palw_v2::output_commitment_v2` — the CanonicalWriter buffer, keyed."""
+    """`kaspa_consensus_core::palw_v2::output_commitment_v2` — the CanonicalWriter buffer, keyed.
+
+    `CanonicalWriter::keyed64` is keyed BLAKE2b-512 over the buffer as it stands: NO outer u64
+    length frame (unlike `canonical_id`). This used `canonical_id` until 2026-09-24, so its
+    output_root never agreed with the chain's; the selftest only round-tripped its own value.
+    `CORE_V1_OUTPUT_ROOT_HEX` now pins one root against the Rust (misaka-palw-derive's
+    output_root_rules.rs holds core to the same literal)."""
     buf = bytearray()
     buf += job_context_hash
     buf += struct.pack("<I", len(ids))
     for t in ids:
         buf += struct.pack("<I", int(t))
     buf += rendered
-    return canonical_id(DOMAIN_OUTPUT, bytes(buf))
+    h = keyed(DOMAIN_OUTPUT)
+    h.update(bytes(buf))
+    return h.digest()
 
 
 def derived_id_v1(obj: dict) -> bytes:
@@ -995,6 +1039,21 @@ def cmd_selftest(args) -> int:
     pin_file = os.path.join(root, "tests", "transformer_id_pin.rs")
     failures = []
     checked = 0
+    # CoreV1's rendered hash, pinned on both sides: misaka-palw-derive's output_root_rules.rs holds
+    # core's `palw_attempt_rendered_output_v1` to this same literal, so the two implementations of
+    # `verify --rule core-v1` cannot drift apart silently.
+    checked += 1
+    core_v1_rendered = rendered_output_hash_core_v1([]).hex()
+    if core_v1_rendered != CORE_V1_RENDERED_OUTPUT_HEX:
+        failures.append(f"CoreV1 rendered hash {core_v1_rendered} is not the pinned {CORE_V1_RENDERED_OUTPUT_HEX}")
+    checked += 1
+    core_v1_root = output_commitment_v2(bytes([0x11]) * 64, [1, 2, 3], rendered_output_hash_core_v1([1, 2, 3])).hex()
+    if core_v1_root != CORE_V1_OUTPUT_ROOT_HEX:
+        failures.append(f"output_commitment_v2 {core_v1_root} is not the pinned {CORE_V1_OUTPUT_ROOT_HEX}")
+    checked += 1
+    legacy_root = output_commitment_v2(bytes([0x11]) * 64, [1, 2, 3], rendered_output_hash_v1("qwen36", [1, 2, 3])).hex()
+    if legacy_root != LEGACY_QWEN36_OUTPUT_ROOT_HEX:
+        failures.append(f"Legacy qwen36 root {legacy_root} is not the pinned {LEGACY_QWEN36_OUTPUT_ROOT_HEX}")
 
     print("== oracle 1: the source-tree hash and the transformer id pins ==")
     pinned_tree, pinned_ids = _pinned_from_test_file(pin_file)
@@ -1182,6 +1241,8 @@ def cmd_selftest(args) -> int:
                 ns = _argparse.Namespace(
                     crate_root=root, chain=_write("chain.json", doc), answer=ans_p,
                     gateway=_write("gw.json", gateway_doc), artifact=art_p,
+                    # The round-trip above commits the family's keyed (Legacy) root.
+                    rule="legacy",
                 )
                 with contextlib.redirect_stdout(io.StringIO()):
                     return cmd_verify(ns)
@@ -1379,8 +1440,16 @@ def cmd_verify(args) -> int:
 
         # X6's first recomputation: the claim's own output_root, from ids the chain does not hold.
         if ids is not None and ctx and family:
+            # The rule is the network's and the reader must name it: a model family's Legacy
+            # rendering and CoreV1's empty one differ, and guessing either one calls an honest
+            # executor's object false on the other network.
+            if args.rule is None:
+                raise Refused(
+                    f"family {family!r}: pass --rule core-v1 (testnet-12) or --rule legacy (testnet-11 and "
+                    "older) — the network's attempt rule decides how output_root is recomputed"
+                )
             recomputed_root = output_commitment_v2(
-                bytes.fromhex(ctx), ids, rendered_output_hash_v1(family, ids)
+                bytes.fromhex(ctx), ids, rendered_output_hash_under(args.rule, family, ids)
             ).hex()
             ok = recomputed_root == chain.get("output_root")
             entry["output_root"] = {
@@ -1388,6 +1457,7 @@ def cmd_verify(args) -> int:
                 "recomputed": recomputed_root,
                 "matches": ok,
                 "family": family,
+                "rule": args.rule,
                 "token_count": len(ids),
             }
             if not ok:
@@ -1459,6 +1529,12 @@ def main() -> int:
     v.add_argument("--answer", required=True, help="the answer the derivation consumed")
     v.add_argument("--gateway", help="the gateway's chat response (its `misaka` block)")
     v.add_argument("--artifact", help="the artifact file, if the consumer kept one")
+    v.add_argument(
+        "--rule",
+        choices=["legacy", "core-v1"],
+        help="the network's attempt rule for output_root: core-v1 on testnet-12, legacy before it "
+        "(required when --gateway supplies ids)",
+    )
     args = p.parse_args()
     try:
         if args.cmd == "selftest":

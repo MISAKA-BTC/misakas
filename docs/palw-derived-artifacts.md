@@ -215,18 +215,29 @@ misaka palw fp-submit --tx <rail tx> --material-out <node>/palw-retention --capt
 # the derivation alone: is this artifact what the named transformer makes of THESE BYTES?
 palw-derive verify --object <derived-object.borsh> --answer <the DSL or the raw answer> \
     [--artifact <the derived artifact's bytes>] \
-    [--output-token-ids <ids.json> --job-context-hash <hex> --family qwen25-a16|qwen36]
+    [--output-token-ids <ids.json> --job-context-hash <hex> --family qwen25-a16|qwen36 \
+     --network testnet-12|testnet-11]
 
 # the derivation AND its binding: is this artifact what came out of THAT INFERENCE?
 palw-derive verify --object <derived-object.borsh> \
     --output-token-ids <ids.json> --job-context <job-context.borsh> \
     --tokenizer <tokenizer.json> --family qwen25-a16|qwen36|base0|qwen25-a16-v5 \
+    [--network testnet-12|testnet-11] \
     [--artifact <the class's .palwart>] [--answer <the answer you were handed>]
 ```
 
 The tool re-runs the grammar and the transformer and compares `dsl_hash`, `artifact_hash` and
 `artifact_bytes`; with the ids, the job's context and the family it recomputes the claim's
 `output_root`.
+
+**`--network` names the attempt rule the root is recomputed under** (ADR-0152 v3.1 post-edit 4):
+testnet-12 arms `palw_offence_attribution`, so its roots are CoreV1's — the context and the ids
+over the EMPTY rendering, for every family — while testnet-11 and older keep each family's keyed
+rendering (Legacy). The floor's root is the same under both, so `base0` needs no `--network`; a
+model family without one is refused by name rather than guessed, because either guess accuses an
+honest executor on the other network. A `--job-context` whose `network_id` names a different
+network than `--network` is refused too. The stranger's script takes the same choice as
+`verify --rule core-v1|legacy`.
 
 ### The two verdict words, and why there are two
 

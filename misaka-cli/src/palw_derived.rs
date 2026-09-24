@@ -68,6 +68,10 @@ use std::time::Duration;
 pub(crate) struct Reader {
     pub(crate) client: KaspaRpcClient,
     network_domain: Hash64,
+    /// The node's network's attempt rule (`CoreV1` where `palw_offence_attribution` is armed —
+    /// testnet-12): the rule the chain recomputes a claim's `output_root` under, so the one this
+    /// reader must recompute it under too, or it prints MISMATCH at every honest model-class run.
+    attempt_rules: misaka_palw_derive::PalwAttemptRulesV1,
 }
 
 pub(crate) async fn connect(ctx: &Ctx) -> Result<Reader, CliError> {
@@ -103,7 +107,8 @@ pub(crate) async fn connect(ctx: &Ctx) -> Result<Reader, CliError> {
         params.net.to_string().as_bytes(),
         Some(params.genesis.hash),
     );
-    Ok(Reader { client, network_domain })
+    let attempt_rules = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(&params);
+    Ok(Reader { client, network_domain, attempt_rules })
 }
 
 pub(crate) fn parse_claim_id(s: &str) -> Result<Hash64, CliError> {
@@ -454,6 +459,18 @@ pub(crate) fn compare(
     chain_derived_id: Hash64,
     evidence: &Evidence<'_>,
 ) -> Result<Vec<Mismatch>, String> {
+    compare_under(misaka_palw_derive::PalwAttemptRulesV1::Legacy, object, chain_derived_id, evidence)
+}
+
+/// [`compare`] under the network's attempt rule — `rules` decides how check 1 recomputes the
+/// `output_root` ([`misaka_palw_derive::verify_bound_under_v1`] /
+/// [`misaka_palw_derive::recompute_output_root_under_v1`]); the other checks do not read it.
+pub(crate) fn compare_under(
+    rules: misaka_palw_derive::PalwAttemptRulesV1,
+    object: &PalwDerivedArtifactV1,
+    chain_derived_id: Hash64,
+    evidence: &Evidence<'_>,
+) -> Result<Vec<Mismatch>, String> {
     let mut out = Vec::new();
     match evidence {
         Evidence::Bound(b) => {
@@ -465,7 +482,8 @@ pub(crate) fn compare(
             // normalises anything at all, and this command would print MISMATCH at the executor.
             // Nothing is lost: `dsl_hash_matches` below is already computed over the rendering, so
             // it says the rendering IS the derivation's preimage, which is the whole binding.
-            let v = misaka_palw_derive::verify_bound(
+            let v = misaka_palw_derive::verify_bound_under_v1(
+                rules,
                 object,
                 b.family,
                 b.job_context,
@@ -486,7 +504,7 @@ pub(crate) fn compare(
         }
         Evidence::Unbound { answer, output_root_inputs } => {
             if let Some((family, job_context_hash, ids)) = output_root_inputs {
-                let recomputed = misaka_palw_derive::recompute_output_root(*family, job_context_hash, ids);
+                let recomputed = misaka_palw_derive::recompute_output_root_under_v1(rules, *family, job_context_hash, ids);
                 if recomputed != object.output_root {
                     out.push(Mismatch {
                         field: "output_root",
@@ -644,7 +662,7 @@ pub async fn verify(ctx: &Ctx, args: DerivedVerifyArgs<'_>) -> CliResult {
     for row in &response.artifacts {
         let (object, chain_derived_id) = object_from_chain(&response, row, reader.network_domain)?;
         let name = kind::name(object.kind).unwrap_or("?");
-        let verdict = match compare(&object, chain_derived_id, &evidence) {
+        let verdict = match compare_under(reader.attempt_rules, &object, chain_derived_id, &evidence) {
             Ok(mismatches) if mismatches.is_empty() => {
                 let checked = describe_checked(material.answer.is_some(), output_root_inputs.is_some(), binding_checked);
                 let word = if binding_checked { "consistent" } else { "consistent-given-the-supplied-answer" };

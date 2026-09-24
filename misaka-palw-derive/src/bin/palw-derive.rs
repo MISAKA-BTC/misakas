@@ -4,9 +4,9 @@
 //! palw-derive list
 //! palw-derive derive --transformer <name|kind> --answer <file> --out <dir> [--claim <hex> --output-root <hex> --network-domain <hex> --executor-pubkey <hex>]
 //! palw-derive verify --object <derived-unsigned.borsh|derived-object.borsh> [--answer <file>] [--artifact <file>]
-//!                    [--output-token-ids <json array file> --family <base0|qwen36|qwen25-a16|qwen25-a16-v5>]
+//!                    [--output-token-ids <json array file> --family <base0|qwen36|qwen36-v6|qwen25-a16|qwen25-a16-v5>]
 //!                    [--job-context <PalwJobContextV2 borsh|hex> | --job-context-hash <hex>]
-//!                    [--tokenizer <tokenizer.json>]
+//!                    [--tokenizer <tokenizer.json>] [--network <testnet-12|testnet-11|…>]
 //! palw-derive manifest --transformer <name|id> | --all
 //! palw-derive drill [--corpus <dir>] [--report <file.json>] [--check <file.json>]
 //! palw-derive inspect --object <file>
@@ -34,6 +34,19 @@
 //! magic says which, and the verdict names the role it was read in. Exit codes are unchanged (0
 //! consistent, 2 MISMATCH or UNVERIFIABLE, 1 refusal) and printed in the verdict's `exit_status`.
 //!
+//! **`output_root` is recomputed under the NETWORK's rule, and `--network` names it.** testnet-12
+//! commits every class's root by core's `CoreV1` rule — the one rendered rule the chain's
+//! `OutputMismatch` holds both lanes to (ADR-0152 v3.1 post-edit 4) — and every other network by
+//! the family's own rendering (`Legacy`). The two give different roots for a model family, so a
+//! verifier that guessed would call an honest claim false on one network or the other; without
+//! `--network` the tool recomputes `output_root` only where the two rules agree (the floor renders
+//! nothing under either) and otherwise refuses by name. The verdict says which rule it applied
+//! (`output_root_rule`) and why (`output_root_rule_from`). A `--network` this build does not ship
+//! (`testnet-99`) is a refusal, exit 1, and so is one the supplied `--job-context` contradicts: a
+//! free-prompt worker stamps its network into the context, and that context's hash is what the root
+//! hangs off, so a root recomputed under another network's rule would be a `MISMATCH` against the
+//! honest executor of the chain the context names.
+//!
 //! `manifest` is SA-5's: the document behind a
 //! `transformer_id`, with the exact preimage, so a consumer can recompute the id themselves — a
 //! derivation whose manifest this tree does not publish is refused rather than made. `drill` is
@@ -59,6 +72,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 
+use kaspa_consensus_core::network::NetworkId;
 use kaspa_consensus_core::palw_derived_v1::{PalwDerivedArtifactV1, derived_id_v1, kind};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
@@ -67,7 +81,9 @@ use misaka_palw_base0::artifact::{BASE0_ARTIFACT_FILE_MAGIC, BASE0_ARTIFACT_FILE
 use misaka_palw_base0::e2e_drill::PalwRcFamilyV1;
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 use misaka_palw_derive::{
-    ClaimBinding, derive_named, opened_tokenizer_id_v1, recompute_output_root, registry, verify, verify_artifact_bytes, verify_bound,
+    ClaimBinding, PalwAttemptRulesV1, attempt_rules_of_network_v1, derive_named, opened_tokenizer_id_v1,
+    recompute_output_root_of_context_v1, recompute_output_root_under_v1, registry, rendered_output_hash_under_v1, verify,
+    verify_artifact_bytes, verify_bound_under_v1,
 };
 
 fn die(msg: String) -> ! {
@@ -298,6 +314,74 @@ fn unverifiable_note(e: &misaka_palw_derive::DeriveError) -> String {
     )
 }
 
+/// **`--network`'s rule, or a refusal — never a panic.** The library turns core's panic on a
+/// testnet suffix this build does not ship (`Params::from`) into an `Err`, and leaves the panic
+/// hook to print; this tool is still single-threaded here, so swapping the process-wide hook for
+/// the one call races nobody, and the refusal is the one line `die` prints under exit 1 rather
+/// than a panic message stacked above it.
+fn rules_of_network(name: &str) -> PalwAttemptRulesV1 {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let rules = attempt_rules_of_network_v1(name);
+    std::panic::set_hook(hook);
+    rules.unwrap_or_else(|why| die(format!("--network {name}: {why}")))
+}
+
+/// **A `--network` the job context contradicts is refused by name.** A free-prompt worker stamps
+/// the string kaspad prints for `params.net` into `PalwJobContextV2::network_id` (`testnet-12`),
+/// and the context's hash absorbs it — so the claim was committed on the network the context
+/// names, and a root recomputed under another's rule is a `MISMATCH` against its honest executor.
+/// The flag is still what names the rule; the context only vetoes a flag that cannot be right.
+///
+/// A context whose `network_id` is not a network name says nothing either way and is not checked:
+/// a floor or attempt context carries `"misaka-palw-rc"` whatever the chain.
+fn refuse_a_network_the_context_contradicts(name: &str, ctx: &PalwJobContextV2) {
+    let Some(stamped) = std::str::from_utf8(&ctx.network_id).ok().and_then(|s| s.parse::<NetworkId>().ok()) else { return };
+    // `name` parsed already: `rules_of_network` refused every string that does not.
+    if name.parse::<NetworkId>().ok() != Some(stamped) {
+        die(format!(
+            "--network {name} contradicts --job-context, which names {stamped}: the worker stamped that network into the \
+             context the claim's output_root hangs off, so the claim was committed on {stamped} and {name}'s rule would \
+             recompute a root no honest executor there committed. Pass --network {stamped}"
+        ));
+    }
+}
+
+/// **The rule `output_root` is recomputed under, and where the tool got it.**
+///
+/// `--network` names it. Without one, the tool asks whether the rule could change the answer —
+/// it compares the two rules' renderings of THESE ids under THIS family — and proceeds only when
+/// it cannot (the floor renders nothing under either). Otherwise it refuses by name: a root
+/// recomputed under a guessed rule is a `MISMATCH` against an honest executor on one network or the
+/// other, and a verdict word is not the place to find out which.
+fn output_root_rule(
+    network: Option<&(String, PalwAttemptRulesV1)>,
+    family: PalwRcFamilyV1,
+    ids: &[u32],
+) -> (PalwAttemptRulesV1, String) {
+    if let Some((name, rules)) = network {
+        return (*rules, format!("--network {name}"));
+    }
+    let legacy = rendered_output_hash_under_v1(PalwAttemptRulesV1::Legacy, family, ids);
+    if legacy == rendered_output_hash_under_v1(PalwAttemptRulesV1::CoreV1, family, ids) {
+        return (
+            PalwAttemptRulesV1::Legacy,
+            format!(
+                "no --network, and none needed: {} renders these ids to the same hash under Legacy and CoreV1, so every \
+                 network's rule gives this root",
+                family.name()
+            ),
+        );
+    }
+    die(format!(
+        "--network is required to recompute output_root for {}: the network decides what the family renders into the \
+         root — testnet-12 commits CoreV1's one rendered rule (ADR-0152 v3.1 post-edit 4; the chain's \
+         palw_attempt_output_root_v1), every other network the family's own — and for these ids the two roots differ. \
+         Pass the string kaspad prints for params.net (e.g. --network testnet-12)",
+        family.name()
+    ))
+}
+
 fn cmd_verify(mut args: VecDeque<String>) {
     let mut object_path = None;
     let mut answer = None;
@@ -307,6 +391,7 @@ fn cmd_verify(mut args: VecDeque<String>) {
     let mut job_context_path = None;
     let mut tokenizer_path = None;
     let mut family_name = None;
+    let mut network_name = None;
     while let Some(arg) = args.pop_front() {
         match arg.as_str() {
             "--object" => object_path = Some(PathBuf::from(flag(&mut args, "--object"))),
@@ -317,9 +402,16 @@ fn cmd_verify(mut args: VecDeque<String>) {
             "--job-context" => job_context_path = Some(PathBuf::from(flag(&mut args, "--job-context"))),
             "--tokenizer" => tokenizer_path = Some(PathBuf::from(flag(&mut args, "--tokenizer"))),
             "--family" => family_name = Some(flag(&mut args, "--family")),
+            "--network" => network_name = Some(flag(&mut args, "--network")),
             other => die(format!("unknown argument {other:?}")),
         }
     }
+    // The network's output-root rule, resolved before anything is read: a name that is not a
+    // network, or not one this build ships, is a refusal, like a file that is not there.
+    let network: Option<(String, PalwAttemptRulesV1)> = network_name.map(|name| {
+        let rules = rules_of_network(&name);
+        (name, rules)
+    });
     let (object, signature) = read_object(&object_path.unwrap_or_else(|| die("--object <file> is required".into())));
 
     // Every input, read BEFORE any verdict is formed — a missing file is a refusal by name here,
@@ -336,8 +428,17 @@ fn cmd_verify(mut args: VecDeque<String>) {
             .into());
     }
     let job_context = job_context_path.as_ref().map(|p| read_job_context(p));
+    if let (Some((name, _)), Some(ctx)) = (&network, &job_context) {
+        refuse_a_network_the_context_contradicts(name, ctx);
+    }
     let context_hash = job_context.as_ref().map(|c| c.context_hash()).or(job_context_hash);
     let family = family_name.as_deref().map(family_by_name);
+    // The rule `output_root` is recomputed under, resolved with the inputs: a recomputation that
+    // needs one and was not given it is a refusal by name, before any verdict exists.
+    let rule: Option<(PalwAttemptRulesV1, String)> = match (&ids, context_hash, family) {
+        (Some(ids), Some(_), Some(family)) => Some(output_root_rule(network.as_ref(), family, ids)),
+        _ => None,
+    };
     let tokenizer_bytes: Option<Vec<u8>> =
         tokenizer_path.as_ref().map(|p| std::fs::read(p).unwrap_or_else(|e| die(format!("{}: {e}", p.display()))));
     let tokenizer = tokenizer_bytes.as_ref().map(|b| {
@@ -377,7 +478,7 @@ fn cmd_verify(mut args: VecDeque<String>) {
     // **"I cannot check this" is not "this is a forgery."** An object naming a grammar or a
     // transformer THIS build does not publish is SA-5's case, and it is the ordinary consequence
     // of a rebuild: `transformer_id` covers the crate's source tree, so every edit under
-    // `misaka-palw-derive/src/` moves all eight ids and orphans every derivation already filed
+    // `misaka-palw-derive/src/` moves all nine ids and orphans every derivation already filed
     // under the old ones. Reporting that as "a demonstrable false object" accuses an honest
     // executor of the one thing Decision 5 exists to make provable, on the strength of the
     // reader's own version. `misaka palw derived-verify` already separates UNVERIFIABLE from
@@ -448,7 +549,8 @@ fn cmd_verify(mut args: VecDeque<String>) {
         if let Err(e) = misaka_palw_derive::check_tokenizer_pin_v1(ctx, opened) {
             die(e.to_string());
         }
-        match verify_bound(&object, family, ctx, tok, opened, ids, supplied_answer.as_deref()) {
+        let (rules, rule_from) = rule.clone().expect("ids, a context and a family resolve a rule or refuse");
+        match verify_bound_under_v1(rules, &object, family, ctx, tok, opened, ids, supplied_answer.as_deref()) {
             Ok(b) => {
                 all_ok &= b.all_match();
                 insert_verification(&mut verdict, &b.verification);
@@ -456,6 +558,8 @@ fn cmd_verify(mut args: VecDeque<String>) {
                 verdict.insert("rendered_answer_bytes".into(), b.rendered_answer_bytes.into());
                 verdict.insert("output_root_matches".into(), b.output_root_matches.into());
                 verdict.insert("recomputed_output_root".into(), hex(b.recomputed_output_root).into());
+                verdict.insert("output_root_rule".into(), format!("{:?}", b.output_root_rule).into());
+                verdict.insert("output_root_rule_from".into(), rule_from.into());
                 verdict.insert("job_context_hash".into(), hex(ctx.context_hash()).into());
                 if let Some(same) = b.supplied_answer_is_the_rendering {
                     verdict.insert("supplied_answer_is_the_rendering".into(), same.into());
@@ -534,19 +638,27 @@ fn cmd_verify(mut args: VecDeque<String>) {
                 );
             }
         }
-        match (&ids, context_hash, family) {
-            (Some(ids), Some(ctx), Some(family)) => {
-                let recomputed = recompute_output_root(family, &ctx, ids);
+        match (&ids, context_hash, family, rule.clone()) {
+            (Some(ids), Some(ctx_hash), Some(family), Some((rules, rule_from))) => {
+                // The context, when it was handed over, goes to the rule whole — under `CoreV1`
+                // that is the chain's own function over it; a bare hash takes the hash form, which
+                // is the same bytes.
+                let recomputed = match &job_context {
+                    Some(ctx) => recompute_output_root_of_context_v1(rules, family, ctx, ids),
+                    None => recompute_output_root_under_v1(rules, family, &ctx_hash, ids),
+                };
                 let ok = recomputed == object.output_root;
                 all_ok &= ok;
                 verdict.insert("output_root_matches".into(), ok.into());
                 verdict.insert("recomputed_output_root".into(), hex(recomputed).into());
+                verdict.insert("output_root_rule".into(), format!("{rules:?}").into());
+                verdict.insert("output_root_rule_from".into(), rule_from.into());
             }
             _ => {
                 verdict.insert(
                     "output_root".into(),
                     "not checked: pass --output-token-ids, --job-context (or --job-context-hash) and --family to recompute \
-                     the claim's output_root (ADR-0078 X6)"
+                     the claim's output_root (ADR-0078 X6), and --network where the network's rule decides it"
                         .into(),
                 );
             }
