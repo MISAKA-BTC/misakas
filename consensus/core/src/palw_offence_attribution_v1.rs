@@ -1085,6 +1085,15 @@ pub fn palw_check_panel_false_valid_v2(
                  convicted only by a proof of the execution",
             ));
         }
+        // ADR-0152 §4-ter (the review's F3, decision (B)): a held dissection's verdict proves the
+        // producer's own DISCLOSURE false — a responder may split a lie across siblings over an honest
+        // root — never the execution the seats replayed. The producer pays for it; no signer does.
+        if state.palw_void_binds_claim_v1(&target.claim_id, PalwVoidReasonV2::CourtHeldVerdict, voided_daa) {
+            return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+                "the claim was voided by a HELD DISSECTION's verdict, which proves the producer's disclosure false, not the \
+                 execution; a Valid signer is convicted only by a proof of the execution",
+            ));
+        }
         if !state.palw_void_binds_claim_v1(&target.claim_id, reason, voided_daa) {
             return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
         }

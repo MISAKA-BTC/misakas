@@ -108,6 +108,8 @@ pub(crate) fn own_claim_events_at_v1(
                     R::NotReplayBacked => "not_replay_backed",
                     // ADR-0152 F2 residual: a court default, past `palw_offence_attribution`.
                     R::CourtDefault => "court_default",
+                    // ADR-0152 §4-ter (F3, decision (B)): a held dissection's verdict, past `palw_offence_attribution`.
+                    R::CourtHeldVerdict => "court_held_verdict",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }

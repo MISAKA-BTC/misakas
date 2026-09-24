@@ -526,3 +526,249 @@ fn every_accuser_gate_counts_a_held_session_at_its_charge() {
         }
     }
 }
+
+// ---- The review's F3 and the user's decision (B): a dissection's verdict is the producer's ------
+//
+// The reviewer's probe and the split-δ probe (review_aheld_honest_execution_self_conviction.rs,
+// review_aheld_split_disclosure_self_conviction.rs), adopted: the court's own kernels, an HONEST
+// execution, and a bottom that reads `ExecutorGuilty` anyway — the verdict proves the responder's
+// disclosure false, not the execution. The fold then records it `CourtHeldVerdict` on testnet-12,
+// and kind 3 refuses it against the signers who replayed that execution.
+
+mod probe {
+    use kaspa_consensus_core::Hash64;
+    use kaspa_consensus_core::palw_attn_court_v1::{
+        PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnDissectChoiceV1, PalwAttnDissectPhaseV1,
+    };
+    use kaspa_consensus_core::palw_attn_dissect::{
+        PALW_ATTN_DISSECT_OBJECT_VERSION_V1, PalwAttnDissectRoundV1, PalwAttnRangeClaimV1, PalwAttnRootClaimV1, palw_attn_fold_v1,
+    };
+    use kaspa_consensus_core::palw_base0_a16::{
+        A16AttnFusedParamsV1, A16QuantParams, a16_attn_finalize_v1, a16_attn_root_claim_v1, a16_attn_tile_triple_v1,
+    };
+    use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
+
+    fn params() -> A16AttnFusedParamsV1 {
+        A16AttnFusedParamsV1 {
+            scores: A16QuantParams { multiplier: 1 << 10, shift: 30, zero: 3 },
+            probs: A16QuantParams { multiplier: 1 << 15, shift: 24, zero: 0 },
+            values: A16QuantParams { multiplier: 1, shift: 22, zero: -5 },
+            up_bits: 2,
+        }
+    }
+
+    const D: usize = 4; // d_head = kv_dim (one KV head)
+    const H: usize = 12; // history positions
+    const TILE: usize = 4; // positions per history tile: three tiles
+
+    fn series() -> (Vec<i32>, Vec<i32>, Vec<i32>) {
+        let q = vec![900, -1_200, 3_000, 150];
+        let k: Vec<i32> = (0..H * D).map(|i| ((i as i32 * 7_919) % 20_000) - 10_000).collect();
+        let v: Vec<i32> = (0..H * D).map(|i| ((i as i32 * 104_729) % 30_000) - 15_000).collect();
+        (q, k, v)
+    }
+
+    /// The honest claim over tiles `[first, first + count)`, against the root's `(m*, S*)`.
+    fn honest_range(first: u64, count: u64, m: i32, s: i64) -> PalwAttnRangeClaimV1 {
+        let (q, k, v) = series();
+        let tiles: Vec<PalwAttnRangeClaimV1> = (first..first + count)
+            .map(|t| {
+                let (a, b) = (t as usize * TILE, ((t as usize + 1) * TILE).min(H));
+                a16_attn_tile_triple_v1(&q, &k[a * D..b * D], &v[a * D..b * D], D, 0, (0, D), params(), m, s).expect("a tile")
+            })
+            .collect();
+        palw_attn_fold_v1(&tiles).expect("folds")
+    }
+
+    /// **The court's own kernels on an HONEST execution.** `root_lie` moves the filed root's `V*` (it
+    /// still finalizes to the honest committed tile); `split` leaves the root honest and splits `+lie
+    /// / −lie` across the first round's two children. Either way the lie then rides child 0, the
+    /// challenger names it at every round, and the result is the narrowed claim beside the bottom's
+    /// recompute of that tile.
+    pub(super) fn play(lie: i64, split: bool) -> (PalwAttnRangeClaimV1, PalwAttnRangeClaimV1) {
+        let (q, k, v) = series();
+        let honest = a16_attn_root_claim_v1(&q, &k, &v, D, 0, (0, D), params(), TILE).expect("the honest root");
+        let committed = a16_attn_finalize_v1(&honest.v_acc, params().values);
+        let mut claimed = honest.clone();
+        if !split {
+            claimed.v_acc[0] += lie;
+        }
+        assert_eq!(a16_attn_finalize_v1(&claimed.v_acc, params().values), committed, "the filed root finalizes to the honest tile");
+        let root = PalwAttnRootClaimV1 {
+            version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+            head: 0,
+            lane_first: 0,
+            lane_count: D as u16,
+            history_positions: H as u32,
+            claim: claimed,
+        };
+        let session = Hash64::from_u64_word(0x5E1F);
+        let mut phase = PalwAttnDissectPhaseV1::open_with_arity(
+            session,
+            &root,
+            (0, 0, D as u16),
+            H as u32,
+            &committed,
+            params().values,
+            2,
+            TILE as u32,
+            0,
+            10,
+            true,
+        )
+        .expect("the phase opens");
+        let (m, s) = phase.root_scale();
+        let (mut daa, mut first) = (1, true);
+        while phase.turn() != PalwBisectTurnV1::Terminal {
+            let mut children: Vec<PalwAttnRangeClaimV1> =
+                phase.child_ranges().iter().map(|&(f, c)| honest_range(f, c, m, s)).collect();
+            children[0].v_acc[0] += lie;
+            if split && first {
+                children[1].v_acc[0] -= lie;
+            }
+            first = false;
+            phase
+                .apply_round(
+                    &PalwAttnDissectRoundV1 { version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1, children: children.clone() },
+                    daa,
+                    10,
+                )
+                .expect("the disclosure folds to the filed root");
+            let named = phase
+                .child_ranges()
+                .iter()
+                .zip(&children)
+                .position(|(&(f, c), claim)| honest_range(f, c, m, s) != *claim)
+                .map(|i| i as u8)
+                .unwrap_or(0);
+            let choice = PalwAttnDissectChoiceV1 {
+                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id: session,
+                round: phase.round(),
+                child: named,
+            };
+            phase.apply_choice(&choice, daa + 1, 10).expect("a legal choice");
+            daa += 2;
+        }
+        let tile = phase.terminal_tile().expect("narrowed");
+        (phase.claim().clone(), honest_range(tile, 1, m, s))
+    }
+}
+
+/// **The review's F3 on testnet-12's own ruleset, decision (B): a held dissection's verdict convicts
+/// the producer and no signer.**
+///
+/// The premise, on the court's kernels (the reviewer's probe and the split-δ probe): an HONEST
+/// execution's dissection bottoms `ExecutorGuilty` when its responder lies in the root (`V* + 1`) or
+/// splits a lie across one round's children over an honest root — the verdict proves the disclosure
+/// false, never the execution. On testnet-12's fold, a held dissection's `ExecutorGuilty` close (an
+/// `AttnDissection` proof over the 8k row) therefore voids `CourtHeldVerdict`: the producer is charged
+/// (S-4's tier), S-4's `CourtConviction` record is written and the challenger's reward opened; the
+/// full-mask `Valid` signer's lock is untouched, and kind 3's `CourtFraud` naming the void is refused
+/// by name — the red twin (the same void as `CourtFraud`) is admitted. Below the fence the same close
+/// voids `CourtFraud`, as it always did.
+#[test]
+fn a_held_dissections_verdict_convicts_the_producer_and_no_signer_on_testnet_12() {
+    use kaspa_consensus_core::palw_attn_court_v1::{
+        PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnDissectBottomV1, PalwAttnRowOpeningV1, PalwAttnTileEvidenceV1,
+    };
+    use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
+    use kaspa_consensus_core::palw_state_v2::{PalwCourtVerdictV2, palw_court_conviction_offence_id_v1};
+    for (name, split) in [("the reviewer's V*+1", false), ("the split-δ", true)] {
+        let (narrowed, recomputed) = probe::play(1, split);
+        assert_ne!(narrowed, recomputed, "{name}: an honest execution's bottom reads ExecutorGuilty — the premise");
+    }
+
+    for rule in [Rule::T12, Rule::Below] {
+        let (mut c, row, seats) = chain(rule, 1_300_000_000_000);
+        let claim_id = licensed(&mut c, &row, &seats, 1);
+        open(&mut c, &row, claim_id).expect("the bystander's held dissection opens");
+        let sid = c.s.court_sessions_iter().find(|(_, x)| x.claim == claim_id).map(|(k, _)| *k).expect("the session");
+        let before = c.s.clone();
+        // The close of a held dissection: its bottom's proof (the fold records the acceptance layer's
+        // adjudicated verdict; it reads the proof's form, never re-derives it).
+        let PalwConsensusObjectV2::ShardCourtAccused { accusation } = accusation(&c, &row, claim_id) else { unreachable!() };
+        let tile = |index: u64| PalwAttnRowOpeningV1 {
+            leaf: accusation.refutation.output_preimage.clone(),
+            opening: PalwStepOpeningV1 { leaf_index: index, leaf_hash: h(0xBAD5), siblings: vec![] },
+        };
+        let proof = PalwCourtVerdictProofV2::AttnDissection {
+            binding: Box::new(accusation.refutation.binding.clone()),
+            bottom: Box::new(PalwAttnDissectBottomV1 {
+                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id: sid,
+                tile: 0,
+                query: tile(0),
+                anchor: None,
+                k: PalwAttnTileEvidenceV1::CacheWrites { rows: vec![] },
+                v: PalwAttnTileEvidenceV1::CacheWrites { rows: vec![] },
+                out_tile: tile(accusation.leaf_index),
+            }),
+            operand_openings: vec![],
+        };
+        c.step(
+            &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+            rule,
+        )
+        .expect("the close folds");
+        let PalwClaimPhaseV2::Voided { voided_daa, reason } = c.s.claim(&claim_id).unwrap().phase else {
+            panic!("{rule:?}: the close voids the claim: {:?}", c.s.claim(&claim_id).unwrap().phase)
+        };
+        if rule == Rule::Below {
+            assert_eq!(reason, PalwVoidReasonV2::CourtFraud, "below the fence the verdict is the fraud it always was");
+            continue;
+        }
+        assert_eq!(reason, PalwVoidReasonV2::CourtHeldVerdict, "a held dissection's verdict (decision (B))");
+        assert!(
+            c.s.bond(&bond_key(EXECUTOR)).unwrap().collateral < before.bond(&bond_key(EXECUTOR)).unwrap().collateral,
+            "the producer is charged"
+        );
+        let key = palw_court_conviction_offence_id_v1(&bond_key(EXECUTOR).0, &claim_id);
+        assert!(c.s.consumed_offence(&key).is_some(), "S-4's CourtConviction record");
+        assert!(
+            c.s.reward_pending(&key)
+                .and_then(|reward| reward.best.as_ref())
+                .is_some_and(|winner| winner.reporter == bond_key(BYSTANDER)),
+            "the challenger's reporter reward"
+        );
+        let seat = seats[0].0;
+        assert_eq!(c.s.bond(&seat).unwrap().collateral, before.bond(&seat).unwrap().collateral, "the Valid signer is not charged");
+
+        // Kind 3 naming the void, against the full-mask Valid signer: refused by name.
+        let rules = PalwIdentityRulesV1 {
+            prompt_ids_form: c.p.palw_prompt_ids_form_at(c.daa),
+            base_class_id: c.sp.base_class_id(),
+            da_signer_liability: false,
+        };
+        let receipt = valid_receipts(claim_id, &[seat]).pop().expect("the licence's receipt");
+        let kind3 = |state: &PalwChainStateV2| {
+            let payload = PalwPanelFalseValidEvidenceV2 {
+                version: PALW_PANEL_FALSE_VALID_VERSION_V2,
+                claim_id,
+                accused_seat: seat.0,
+                receipt: PalwFalseValidReceiptV1::Full(receipt.clone()),
+                contradiction: PalwPanelContradictionV1::CourtFraud { voided_daa },
+                prompt_ids_opening: None,
+                reporter_reveal: vec![],
+            };
+            palw_check_panel_false_valid_v2(state, &seat, &borsh::to_vec(&payload).unwrap(), false, false, rules, None)
+        };
+        let refused = kind3(&c.s).expect_err("a held verdict convicts no signer");
+        assert!(
+            matches!(&refused, PalwOffenceVerifyError::ContradictionNotAdmitted(why) if why.contains("HELD DISSECTION")),
+            "{refused:?}"
+        );
+        let mut carriage = PalwStateCarriageV2::from_state(&c.s);
+        carriage.claims.get_mut(&claim_id).unwrap().phase =
+            PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::CourtFraud };
+        if let Some(row) = carriage.panel_liabilities.get_mut(&claim_id) {
+            row.void_reason = Some(PalwVoidReasonV2::CourtFraud);
+        }
+        let red = carriage
+            .into_state_v3(&c.sp, None, flags(&c.p, 0).uncertified_weightless, c.p.palw_canonical_work_daa())
+            .expect("the red twin rebuilds");
+        assert!(kind3(&red).is_ok(), "recorded as CourtFraud, the same void would convict the honest signer: {:?}", kind3(&red));
+    }
+}

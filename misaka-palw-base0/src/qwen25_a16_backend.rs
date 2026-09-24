@@ -7910,7 +7910,8 @@ mod aheld_end_to_end {
     /// layer 0 of the last decode call) files the held root claim its own fold builds, with the least
     /// lie in its root; the honest challenger reads the filing off the object, names the lie's child
     /// at every round, and bottoms — with the FILED sub-roots the close convicts and the claim is
-    /// voided `CourtFraud`; with its own top path the close does not adjudicate. The fence-off twin:
+    /// voided `CourtHeldVerdict` (the review's F3, decision (B): the producer charged as a fraud, no
+    /// kind-3 basis); with its own top path the close does not adjudicate. The fence-off twin:
     /// below `palw_offence_attribution` the forger files the anchored form and the challenger's only
     /// bottom does not reach its anchor — the escape C2 closes.
     #[test]
@@ -7969,9 +7970,9 @@ mod aheld_end_to_end {
             assert!(
                 matches!(
                     end.claim(&claim).expect("claim").phase,
-                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtHeldVerdict, .. }
                 ),
-                "a proof, recorded as one: {:?}",
+                "a held dissection's verdict, recorded as one (decision (B)): {:?}",
                 end.claim(&claim).expect("claim").phase
             );
             assert!(collateral(&end, PRODUCER) < collateral(&s, PRODUCER), "the forger is charged");
@@ -7989,7 +7990,8 @@ mod aheld_end_to_end {
     /// * the decoy plays its dispute to the bottom it asked for and loses — `ChallengerDefeated`
     ///   charges the Sybil (C4) and the claim stands;
     /// * the forger must then answer the seat: its lying root, the rounds, and the seat's bottom through
-    ///   the filed sub-roots convict — voided `CourtFraud`, no session left, the seat not charged.
+    ///   the filed sub-roots convict — voided `CourtHeldVerdict` (decision (B)), no session left, the
+    ///   seat not charged.
     #[test]
     fn a_decoy_shields_no_consistent_forger_end_to_end() {
         let (artifact, profile) = held_fixture(2, 128);
@@ -8081,7 +8083,7 @@ mod aheld_end_to_end {
         .expect("the conviction folds");
         assert!(matches!(
             end.claim(&claim).expect("claim").phase,
-            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtHeldVerdict, .. }
         ));
         assert_eq!(end.court_sessions_for_claim(&claim), 0);
         assert_eq!(collateral(&end, SEAT), collateral(&s4, SEAT), "the winning seat pays nothing");
