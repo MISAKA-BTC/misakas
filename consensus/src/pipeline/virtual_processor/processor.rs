@@ -8312,25 +8312,51 @@ impl VirtualStateProcessor {
                     if !self.palw_verification_v2_at(point.daa_score) {
                         return Err(format!("claim {claim}: a segment-scoped receipt set below Verification V2's fence (ADR-0133)"));
                     }
-                    let quorum = kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
-                        state,
-                        panel_params,
-                        state_params,
-                        point,
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
-                            self.network_id_bytes.as_slice(),
-                            Some(self.genesis.hash),
-                        ),
-                        claim,
-                        receipts,
-                        Self::verify_mldsa87_with_context_bool,
-                        self.palw_unavailable_abstains_at(point.daa_score),
-                        // ADR-0147: coverage by the class's own seats is still the class's own seats.
-                        self.palw_admission_independence_daa(),
-                    )
-                    .map_err(|e| format!("claim {claim}'s segment receipts do not license: {e}"))?;
+                    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    // **ADR-0152 SR-10: the V3 supplementary door.** Past `palw_rcore_plus` the same
+                    // object on a claim already licensed is a supplementary set of V3 receipts, not a
+                    // licence; it is verified as one (routed on the claim's phase, as the fold routes
+                    // it). Below the fence nothing is routed and a licensed claim refuses it as before.
+                    let supplementary = state_params.rcore_plus_active_at(point.daa_score)
+                        && state.claim(claim).is_some_and(|record| {
+                            matches!(record.phase, kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { .. })
+                        });
+                    let quorum = if supplementary {
+                        kaspa_consensus_core::palw_panel_v2::validate_supplementary_receipts_v3(
+                            state,
+                            state_params,
+                            point,
+                            network_domain,
+                            claim,
+                            receipts,
+                            Self::verify_mldsa87_with_context_bool,
+                        )
+                        .map_err(|e| format!("claim {claim}'s supplementary V3 receipts are refused: {e}"))?
+                    } else {
+                        kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
+                            state,
+                            panel_params,
+                            state_params,
+                            point,
+                            network_domain,
+                            claim,
+                            receipts,
+                            Self::verify_mldsa87_with_context_bool,
+                            self.palw_unavailable_abstains_at(point.daa_score),
+                            // ADR-0147: coverage by the class's own seats is still the class's own seats.
+                            self.palw_admission_independence_daa(),
+                        )
+                        .map_err(|e| format!("claim {claim}'s segment receipts do not license: {e}"))?
+                    };
                     match quorum {
-                        kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. } => {}
+                        kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. } if !supplementary => {}
+                        kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Supplementary { .. } if supplementary => {}
+                        kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. } => {
+                            return Err(format!("claim {claim} is already licensed; a supplementary set licenses nothing"));
+                        }
                         kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::ProducerUnavailable { .. } => {
                             return Err(format!("claim {claim} is licensed by a quorum that says the producer withheld"));
                         }

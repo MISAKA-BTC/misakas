@@ -16175,6 +16175,9 @@ mod t12_offence_attribution_gate;
 // ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
 // refused by the fold until their owners land them.
 mod t12_rcore_skeleton_gate;
+// ADR-0152 SR-10: the processor's gate routes a set on a licensed claim to the V3 supplementary door
+// past `palw_rcore_plus`, and nothing below it (M4 review, finding 1).
+mod t12_rcore_sr10_door_gate;
 mod t12_round_lane_e2e;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.

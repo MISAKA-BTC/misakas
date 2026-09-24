@@ -6665,6 +6665,8 @@ fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
         PalwReceiptVerdictV2::Valid => "Valid",
         PalwReceiptVerdictV2::Unavailable { .. } => "Unavailable",
         PalwReceiptVerdictV2::Incapable => "Incapable",
+        // ADR-0152 Q-1: named only; no seat of this binary signs it yet (Q-7's S3 path).
+        PalwReceiptVerdictV2::Sampled => "Sampled",
     }
 }
 

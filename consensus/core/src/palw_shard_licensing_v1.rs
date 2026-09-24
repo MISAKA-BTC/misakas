@@ -102,7 +102,10 @@ pub fn palw_shard_quorum_v1(
         match verdict {
             PalwReceiptVerdictV2::Valid => valid += 1,
             PalwReceiptVerdictV2::Unavailable { .. } => unavailable += 1,
-            PalwReceiptVerdictV2::Incapable => {}
+            // ADR-0152 Q-1: `Sampled` is audit and counts for neither side. The door is dormant
+            // wherever R-core+ is armed (`validate_palw_rcore_plus_v1` refuses the two together),
+            // and below that fence the acceptance layer and the fold refuse the verdict first.
+            PalwReceiptVerdictV2::Incapable | PalwReceiptVerdictV2::Sampled => {}
         }
     }
     Ok(if valid >= quorum {
