@@ -11292,6 +11292,74 @@ impl<'a> PalwFoldReadV1<'a> {
 }
 
 impl PalwFoldReadV1<'_> {
+    /// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms for the action tiers** — from its
+    /// liability record's appended fields (S-3 writes them at licence past `palw_rcore_plus`) where
+    /// it has one, else from the claim record (L-1's facts, [`Self::rcore_g_res`]). `G = g_res +
+    /// escrowed_reward`. The builder's `claim_g_v1` is this read (see its note: the gain is fixed at
+    /// the fraud); read here so the accuser gates outside the builder price a held session with the
+    /// same `G`.
+    fn claim_g_v1(&self, claim_id: &Hash64) -> Option<PalwClaimGV1> {
+        let claim = self.state.claims.get(claim_id);
+        if let Some(row) = self.state.panel_liabilities.get(claim_id) {
+            return Some(PalwClaimGV1 {
+                g_res: row.g_res_sompi,
+                escrowed_reward: row.escrowed_reward,
+                basis_k: claim.map_or(row.basis_k, |claim| claim.rcore.basis_k),
+            });
+        }
+        claim.map(|claim| PalwClaimGV1 {
+            g_res: self.rcore_g_res(claim_id, claim),
+            escrowed_reward: claim.escrowed_reward,
+            basis_k: claim.rcore.basis_k,
+        })
+    }
+
+    /// **ADR-0152 §4-ter C4: what a held dissection's losing challenger is charged, before the
+    /// floor's cap** — `max(claim.reserved, G)`, `G = g_res + escrowed_reward` ([`Self::claim_g_v1`]).
+    /// The one spelling for the charge (`rearm_after_challenger_side_close`), the reservation that
+    /// makes it certain (`open_held_dissection_v1`) and every gate that counts a held session
+    /// ([`Self::held_accuser_surplus_v1`]).
+    fn held_dissection_charge_v1(&self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> u128 {
+        let g = self.claim_g_v1(claim_id).map(|g| g.g_res.saturating_add(u128::from(g.escrowed_reward))).unwrap_or(0);
+        claim.reserved.max(g)
+    }
+
+    /// **Is a session over `class_id` a held dissection charged at `max(reserved, G)`?** Past
+    /// `palw_offence_attribution` on a held network, over a held class — exactly where
+    /// `rearm_after_challenger_side_close` charges it so.
+    fn held_charge_applies_v1(&self, class_id: &Hash64) -> bool {
+        self.extras.offence_attribution_active && self.extras.held_context_ladder.is_some() && self.state.class_is_held_v1(class_id)
+    }
+
+    /// **ADR-0152 §4-ter C4 (the review's F7): what `bond`'s open held dissections hold beyond the
+    /// court index's count.** [`palw_accuser_exposure_v1`] counts every session its bond challenges
+    /// at the claim's `reserved` (what `write_court` releases); a held one costs its losing
+    /// challenger `min(max(reserved, G), floor)` (C4) — on an 8k claim ≈ 3,250 MSK more. Past
+    /// `palw_rcore_plus` every accuser gate adds this surplus to the accuser ledger, so no DA
+    /// accusation, court opening, work gate or declaration spends room a held session's charge
+    /// already needs. Zero below either fence.
+    fn held_accuser_surplus_v1(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        if !self.params.rcore_plus_active_at(now_daa) {
+            return 0;
+        }
+        let floor = u128::from(self.params.min_collateral_sompi());
+        self.state
+            .courts_by_challenger
+            .range((*bond, ZERO_HASH64)..)
+            .take_while(|(challenger, _)| challenger == bond)
+            .filter_map(|(_, session)| self.state.court_sessions.get(session))
+            .filter_map(|session| self.state.claims.get(&session.claim).map(|claim| (session.claim, claim)))
+            .filter(|(_, claim)| self.held_charge_applies_v1(&claim.class_id))
+            .map(|(claim_id, claim)| self.held_dissection_charge_v1(&claim_id, claim).min(floor).saturating_sub(claim.reserved))
+            .fold(0u128, u128::saturating_add)
+    }
+
+    /// **The accuser ledger every gate reads past `palw_rcore_plus`** — [`palw_accuser_exposure_v1`]
+    /// with each open held dissection counted at its charge ([`Self::held_accuser_surplus_v1`]).
+    fn accuser_ledger_v1(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        palw_accuser_exposure_v1(self.state, bond).saturating_add(self.held_accuser_surplus_v1(bond, now_daa))
+    }
+
     /// **ADR-0152 DA-1 / DA-6 / DA-8 (M3): may `accuser` open a session on `claim_id` at `now_daa`,
     /// and at what stage and price?** The one gate [`palw_da_accusation_admissible_v2`] exports and the
     /// fold's opening reads, so the filer's fee-safe de-duplication and the fold cannot disagree.
@@ -11389,7 +11457,7 @@ impl PalwFoldReadV1<'_> {
             record.collateral,
             self.params.fp_max_exposure_ratio_permille,
             committed,
-            palw_accuser_exposure_v1(state, accuser),
+            self.accuser_ledger_v1(accuser, now_daa),
             PalwRcoreGateV1::Accuser,
         );
         if exposure > room {
@@ -14477,7 +14545,8 @@ impl<'a> TransitionBuilder<'a> {
             record.collateral,
             self.params.fp_max_exposure_ratio_permille,
             self.committed_at(bond, now_daa),
-            palw_accuser_exposure_v1(&self.state, bond),
+            // ADR-0152 §4-ter C4 (the review's F7): a held session at its charge, not its `reserved`.
+            self.read().accuser_ledger_v1(bond, now_daa),
             gate,
         )
     }
@@ -14486,10 +14555,10 @@ impl<'a> TransitionBuilder<'a> {
     /// floor's cap** — `max(claim.reserved, G)`, `G = g_res + escrowed_reward` from
     /// [`Self::claim_g_v1`] (S's gain terms, `w + E + R + s`). One spelling for the charge
     /// (`rearm_after_challenger_side_close`) and the reservation that makes it certain
-    /// (`open_held_dissection_v1`).
+    /// (`open_held_dissection_v1`). The rule is the read's ([`PalwFoldReadV1::held_dissection_charge_v1`]),
+    /// so the accuser gates price a held session with it too.
     fn held_dissection_charge_v1(&self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> u128 {
-        let g = self.claim_g_v1(claim_id).map(|g| g.g_res.saturating_add(u128::from(g.escrowed_reward))).unwrap_or(0);
-        claim.reserved.max(g)
+        self.read().held_dissection_charge_v1(claim_id, claim)
     }
 
     /// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms for the action tiers** — from its
@@ -14505,19 +14574,9 @@ impl<'a> TransitionBuilder<'a> {
     /// Only a claim with no row yet (before its licence) is priced from its own lock facts. `basis_k`
     /// is the live claim's recount where the claim still lives, else the row's.
     fn claim_g_v1(&self, claim_id: &Hash64) -> Option<PalwClaimGV1> {
-        let claim = self.state.claims.get(claim_id);
-        if let Some(row) = self.state.panel_liabilities.get(claim_id) {
-            return Some(PalwClaimGV1 {
-                g_res: row.g_res_sompi,
-                escrowed_reward: row.escrowed_reward,
-                basis_k: claim.map_or(row.basis_k, |claim| claim.rcore.basis_k),
-            });
-        }
-        claim.map(|claim| PalwClaimGV1 {
-            g_res: self.read().rcore_g_res(claim_id, claim),
-            escrowed_reward: claim.escrowed_reward,
-            basis_k: claim.rcore.basis_k,
-        })
+        // The rule lives on the read ([`PalwFoldReadV1::claim_g_v1`]) so the accuser gates outside
+        // the builder price a held session with the same `G` (ADR-0152 §4-ter, the review's F7).
+        self.read().claim_g_v1(claim_id)
     }
 
     /// **ADR-0152 SR-6 + Q-3 + L-1: the backed subset of a licence set and the lock it posts**
@@ -21201,22 +21260,13 @@ fn open_held_dissection_v1(
     // `palw_offence_attribution` with R-core+'s one ledger in force, the opening asks S's one accuser
     // gate (`gate_room(.., Accuser)`, [`palw_rcore_gate_room_of_v1`]: `max(committed, 500‰·C) +
     // accuser + new ≤ C`) for the charge a losing challenger will pay, `min(max(reserved, G),
-    // floor)`, and counts this bond's other open held dissections at their own charge (the court
-    // index counts each at `reserved`). Below either fence the reservation is the one it always was.
+    // floor)`; the gate's accuser ledger already counts this bond's other open held dissections at
+    // their own charge ([`PalwFoldReadV1::accuser_ledger_v1`], the review's F7). Below either fence
+    // the reservation is the one it always was.
     if builder.extras.offence_attribution_active && builder.params.rcore_plus_active_at(ctx.daa_score) {
         let floor = u128::from(builder.params.min_collateral_sompi());
         let charge = builder.held_dissection_charge_v1(&claim_id, claim).min(floor);
-        let surplus: u128 = builder
-            .state
-            .courts_by_challenger
-            .range((challenger_bond, ZERO_HASH64)..)
-            .take_while(|(bond, _)| *bond == challenger_bond)
-            .filter_map(|(_, session)| builder.state.court_sessions.get(session))
-            .filter_map(|session| builder.state.claims.get(&session.claim).map(|other| (session.claim, other)))
-            .filter(|(_, other)| builder.state.class_is_held_v1(&other.class_id))
-            .map(|(other_id, other)| builder.held_dissection_charge_v1(&other_id, other).min(floor).saturating_sub(other.reserved))
-            .fold(0u128, u128::saturating_add);
-        let room = builder.gate_room(&challenger_bond, ctx.daa_score, PalwRcoreGateV1::Accuser).saturating_sub(surplus);
+        let room = builder.gate_room(&challenger_bond, ctx.daa_score, PalwRcoreGateV1::Accuser);
         if charge > room {
             let ceiling = u128::from(challenger_collateral);
             return Err(PalwStateV2Error::AccusationExposureCeiling {
@@ -24054,7 +24104,7 @@ fn apply_object(
                 // declaration's 100% check extends to (capability exposure is non-slashable
                 // standing, priced against the whole collateral as before).
                 let already = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                    builder.committed_at(bond, ctx.daa_score).saturating_add(palw_accuser_exposure_v1(&builder.state, bond))
+                    builder.committed_at(bond, ctx.daa_score).saturating_add(builder.read().accuser_ledger_v1(bond, ctx.daa_score))
                 } else {
                     builder
                         .state
@@ -24254,7 +24304,7 @@ fn apply_object(
                     let backing = if builder.params.rcore_plus_active_at(ctx.daa_score) {
                         builder
                             .committed_at(&carriage_bond, ctx.daa_score)
-                            .saturating_add(palw_accuser_exposure_v1(&builder.state, &carriage_bond))
+                            .saturating_add(builder.read().accuser_ledger_v1(&carriage_bond, ctx.daa_score))
                     } else {
                         builder
                             .state

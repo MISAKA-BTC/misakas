@@ -434,3 +434,95 @@ fn the_2m_row_opens_no_held_dissection_on_testnet_12() {
     open(&mut c, &row, claim_id).expect("below the fence the 2M row's dissection opens");
     assert_eq!(c.s.court_sessions_for_claim(&claim_id), 1);
 }
+
+/// **The review's F7: every accuser gate counts an open held session at its charge.** A bystander at
+/// the producer floor (13,000 MSK: a free half of 6,500) opens one held dissection — its charge,
+/// `min(max(reserved, G), floor)` ≈ 3,695 MSK, where the court index counts `reserved` ≈ 494 — and
+/// then accuses other claims through the data-availability court (eight `Final` 8k claims whose
+/// vesting rows are unmatured: DA-8 keeps them accusable, and the class's inflight cap of five is
+/// not held by them). Past the fence the DA gate reads the accuser ledger with the held session at
+/// its charge: the accusations stop where `charge + Σ exposure` would pass the free half, where the
+/// court index's count alone would still fit them. Below the fence (`palw_offence_attribution` off,
+/// R-core+ on) the held session counts at `reserved` and the accusation refused past the fence opens
+/// — the ≈ 3,200 MSK over-commit the review measured.
+#[test]
+fn every_accuser_gate_counts_a_held_session_at_its_charge() {
+    let floor = 1_300_000_000_000u64; // 13,000 MSK
+    let free_half = u128::from(floor) / 2;
+    let accuse = |id: Hash64| PalwConsensusObjectV2::DefaultAccused {
+        claim: id,
+        missing_event_index: kaspa_consensus_core::palw_state_v2::palw_da_event_index_v1(0, 0),
+        accuser: bond_key(BYSTANDER),
+        signature: vec![],
+    };
+    let mut refused_at = None;
+    for rule in [Rule::T12, Rule::Below] {
+        let (mut c, row, seats) = chain(rule, floor);
+        // Eight claims licensed four at a time and run to `Final` (the inflight cap is five).
+        let mut finals = Vec::new();
+        for batch in 0..2u64 {
+            let ids: Vec<Hash64> = (0..4).map(|n| licensed(&mut c, &row, &seats, 10 * (batch + 1) + n)).collect();
+            for _ in 0..400 {
+                c.empty();
+                if ids.iter().all(|id| matches!(c.s.claim(id).unwrap().phase, PalwClaimPhaseV2::Final { .. })) {
+                    break;
+                }
+            }
+            assert!(
+                ids.iter().all(|id| matches!(c.s.claim(id).unwrap().phase, PalwClaimPhaseV2::Final { .. })),
+                "batch {batch} Final"
+            );
+            finals.extend(ids);
+        }
+        let held_claim = licensed(&mut c, &row, &seats, 1);
+        open(&mut c, &row, held_claim).expect("the held dissection opens");
+        let held = palw_accuser_exposure_v1(&c.s, &bond_key(BYSTANDER));
+        let mut exposures = Vec::new();
+        let mut refusal = None;
+        for id in &finals {
+            match c.step(&[accuse(*id)], PalwBlockWorkV3::None, Hash64::default(), rule) {
+                Ok(()) => exposures.push(c.s.da_session(id, &bond_key(BYSTANDER)).expect("the DA session").exposure),
+                Err(e) => {
+                    refusal = Some(e);
+                    break;
+                }
+            }
+        }
+        assert_eq!(c.s.court_sessions_for_claim(&held_claim), 1, "the held session stayed open throughout");
+        let sum: u128 = exposures.iter().sum();
+        match rule {
+            Rule::T12 => {
+                let refusal = refusal.expect("past the fence the DA gate stops the bystander");
+                let PalwStateV2Error::AccusationExposureCeiling { edge, accusation, backed, .. } = &refusal else {
+                    panic!("refused by the accuser gate: {refusal:?}")
+                };
+                assert_eq!(*edge, "data-availability session");
+                // The ledger the gate read (backed = C − room = C/2 + ledger, the bystander committing
+                // no work): above the court index's count by the held session's surplus, and past the
+                // free half with the next accusation — where the index's count alone still fits it.
+                let ledger = *backed - free_half;
+                assert!(ledger > held + sum, "the held session is counted at its charge, not at {held} reserved");
+                assert!(ledger + *accusation > free_half, "refused because it does not fit the free half");
+                assert!(held + sum + *accusation <= free_half, "counted at reserved, it would have fit: the over-commit closed");
+                println!(
+                    "past the fence: {} DA sessions ({:.2} MSK) beside a held session reserved {:.2} MSK and charged {:.2} MSK; the next ({:.2} MSK) refused",
+                    exposures.len(),
+                    msk(sum),
+                    msk(held),
+                    msk(ledger - sum),
+                    msk(*accusation)
+                );
+                refused_at = Some(exposures.len());
+            }
+            _ => {
+                let n = refused_at.expect("the fence first");
+                assert!(
+                    exposures.len() > n,
+                    "below the fence the held session counts at reserved and the accusation refused past it opens ({} > {n})",
+                    exposures.len()
+                );
+                assert!(held + sum <= free_half, "the old ledger: reserved + Σ exposure within the free half");
+            }
+        }
+    }
+}
