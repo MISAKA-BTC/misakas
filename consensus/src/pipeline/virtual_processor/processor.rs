@@ -8199,9 +8199,6 @@ impl VirtualStateProcessor {
                                     state_params.fp_decode_rules_at(point.daa_score),
                                     // F7's reporter slot: empty until its own fence arms it.
                                     false,
-                                    // The carriage a step refutation's prompt is read in — the
-                                    // network's form, as the fold reads it (`prompt_ids_merkle`).
-                                    self.palw_prompt_ids_form_at(point.daa_score),
                                     Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
                                         chain_domain: domain,
                                         seat_pubkey: &record.pubkey,

@@ -428,12 +428,14 @@ pub enum PalwOffenceVerifyError {
     SiteNotAttested,
     #[error("the claim's segment cut is no longer known, so a segmented receipt cannot be placed")]
     SegmentsUnknown,
-    #[error("the claim has an open court or held data-availability session; file again once it closes")]
+    #[error("the claim has an open court or data-availability session; file again once it closes")]
     ClaimUnderSession,
     #[error("the reporter slot must stay empty until its own fence arms it")]
     ReporterSlotNotArmed,
-    #[error("the false-Valid evidence is above the byte ceiling this ruleset prices")]
+    #[error("the false-Valid evidence is above the one carrier a kind-3 object rides")]
     EvidenceTooLarge,
+    #[error("the accused seat's segmented receipt carries a partial mask the claim's panel did not assign it")]
+    SegmentMaskNotAssigned,
     // ---- ADR-0152 v3.1 §6, the v22 skeleton ----------------------------------------------------
     /// A kind the v22 layout declares (4, 5, 6) whose owner has not landed its rule: refused by
     /// name at every gate ([`PalwOffenceKindV1::is_declared_not_landed_v1`]).

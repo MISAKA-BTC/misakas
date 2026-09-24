@@ -11988,11 +11988,14 @@ impl<'a> TransitionBuilder<'a> {
     ///    FIRST — before any void below, so `persist_panel_liability` does not list the convicted
     ///    seat again; a seat that holds none but that the liability row lists is convicted for 0 (its
     ///    lock was already spent or pruned with the row's horizon); any other seat is refused, as
-    ///    the audit branch of the V1 fold refuses it.
+    ///    the audit branch of the V1 fold refuses it. The consumed row records what the bond
+    ///    actually paid — `slash_bond` clamps a debit at the collateral, and the S stage reads these
+    ///    rows as debits (F2 review, F-4).
     /// 3. **The execution, when the fault proves it false.** The consumed row records the claim's
     ///    root only for an execution-proving contradiction (and only where ADR-0151 is armed): a
-    ///    `ProducerWithholding` or `CourtFraud` void names a claim, not a root, and a borrowed root
-    ///    recorded here would forfeit the honest lender's rights. For such a fault the claim is then
+    ///    `CourtFraud` void names a claim, not a root, and a borrowed root recorded here would forfeit
+    ///    the honest lender's rights (a `ProducerWithholding` void is refused past the fence until F3,
+    ///    F2 review F-2). For an execution-proving fault the claim is then
     ///    acted on by phase — voided `CourtFraud` with its executor slashed before `Final` (which
     ///    closes the hole where a pre-`Final` conviction left the claim to finalise), the `Final`
     ///    reversed after it, and the liability row marked either way.
@@ -12018,8 +12021,6 @@ impl<'a> TransitionBuilder<'a> {
             evidence,
             self.params.fp_decode_rules_at(ctx.daa_score),
             false,
-            // The network's prompt-id form, as the processor's gate reads it.
-            self.extras.prompt_ids_form_v1(),
             None,
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
@@ -12046,7 +12047,9 @@ impl<'a> TransitionBuilder<'a> {
                     .into(),
             ));
         };
-        self.slash_bond(accused, amount as u128)?;
+        // What the bond can pay: `slash_bond` clamps at the collateral, and the row says what it took.
+        let debit = amount.min(self.state.bonds.get(&accused).ok_or(PalwStateV2Error::MissingBond(accused))?.collateral);
+        self.slash_bond(accused, debit as u128)?;
         let recorded_root = if finding.execution_proving && self.extras.economic_safety.is_some() {
             finding.target.execution_root
         } else {
@@ -12057,7 +12060,7 @@ impl<'a> TransitionBuilder<'a> {
             Some(PalwConsumedOffenceV1 {
                 kind: PalwOffenceKindV1::PanelFalseValidV2,
                 accused: accused.0,
-                amount,
+                amount: debit,
                 accepted_daa: ctx.daa_score,
                 execution_root: recorded_root,
                 // ADR-0152 v22 skeleton: S-4's conviction funnel records these past `palw_rcore_plus`.
@@ -47631,6 +47634,7 @@ pub(crate) mod tests {
                 signature: Vec::new(),
             }),
             contradiction,
+            prompt_ids_opening: None,
             reporter_reveal: Vec::new(),
         }
     }
@@ -47787,6 +47791,30 @@ pub(crate) mod tests {
         let refused =
             f2_apply(&licensed, &p, &ctx(4, 104, 104), &[f2_offence(PalwOffenceKindV1::PanelFalseValidV2, 5, stranger)], &f2_extras());
         assert!(matches!(refused, Err(PalwStateV2Error::ObjectiveOffenceRefused(..))), "{refused:?}");
+    }
+
+    /// **The consumed row records the debit the bond actually paid** (F2 review, F-4). A seat whose
+    /// collateral fell below its lock (an earlier slash) pays what it has — `slash_bond` clamps at the
+    /// collateral — and the kind-3 row says exactly that, not the lock, since the S stage reads the
+    /// rows as debits. The lock is still spent whole.
+    #[test]
+    fn f2_the_consumed_row_records_the_debit_after_the_collateral_clamp() {
+        use crate::palw_offence_v1::PalwOffenceKindV1;
+        let p = params();
+        let (mut licensed, claim_id, contradiction, _) = f2_licensed_false_execution(&p);
+        let lock = licensed.slashable_lock(bond_key(2), claim_id).copied().expect("the Valid seat locked");
+        assert!(lock.amount > 1, "a lock worth clamping");
+        let short = u64::try_from(lock.amount / 2).unwrap();
+        licensed.bonds.get_mut(&bond_key(2)).expect("the seat's bond").collateral = short;
+        let evidence = borsh::to_vec(&f2_payload(claim_id, 2, contradiction)).unwrap();
+        let (s4, _) =
+            f2_apply(&licensed, &p, &ctx(4, 104, 104), &[f2_offence(PalwOffenceKindV1::PanelFalseValidV2, 2, evidence)], &f2_extras())
+                .expect("a proven false execution convicts");
+        assert_eq!(s4.bond(&bond_key(2)).unwrap().collateral, 0, "the bond pays what it has");
+        assert!(s4.slashable_lock(bond_key(2), claim_id).is_none(), "and the lock is spent");
+        let id = crate::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&bond_key(2).0, &claim_id);
+        let row = s4.consumed_offence(&id).expect("recorded under the (seat, claim) key");
+        assert_eq!((row.kind, row.amount), (PalwOffenceKindV1::PanelFalseValidV2, short), "the row is the debit, not the lock");
     }
 
     /// **After `Final`, the conviction reverses the `Final`**: the claim is voided `CourtFraud`,

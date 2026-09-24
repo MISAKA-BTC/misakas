@@ -94,7 +94,7 @@ fn card_payout_payload(i: usize) -> Hash64 {
     Hash64::from_bytes(kaspa_hashes::blake2b_512_address_payload(&card_pubkey(i)).as_bytes())
 }
 
-fn card_payout_spk(i: usize) -> ScriptPublicKey {
+pub(super) fn card_payout_spk(i: usize) -> ScriptPublicKey {
     p2pkh_mldsa87_spk(card_payout_payload(i).as_byte_slice())
 }
 
@@ -204,7 +204,7 @@ pub(super) fn stamp_harness_time(params: &Params, header: &mut kaspa_consensus_c
 
 /// Sign input 0 of `tx`, which spends `utxo`, under card `i`'s key — the P2PKH-ML-DSA-87 spend
 /// `adr0127_round_burst` builds.
-fn sign_spend(tx: &mut Transaction, utxo: UtxoEntry, i: usize, storage_mass_parameter: u64) {
+pub(super) fn sign_spend(tx: &mut Transaction, utxo: UtxoEntry, i: usize, storage_mass_parameter: u64) {
     use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
     use kaspa_consensus_core::mass::MassCalculator;

@@ -44,6 +44,17 @@
 //! free-prompt lane in its params but does not publish the class's graph that ADR-0145's
 //! derived-work fence (armed at genesis) prices commitments with, so a floor commitment is skipped
 //! until a `FamilyCertified` and a `ClassLaneCertified` publish it — which T46g carries.
+//!
+//! **The F2 review.** (F-1) A partial seat vouches for its segment's leaves as the function of what
+//! it resumed from, never for their agreement with other segments' committed leaves, so it is liable
+//! only for a step every leaf of which — the output and each input read — lies in its segment: T46b's
+//! lie is placed at such a leaf (and pins the site), T46p runs the reviewer's probe (one lie in
+//! segment 1, its downstream readers in segments 2 and 3 convicting no partial seat) and T46b's old
+//! boundary leaf. (F-2) `ProducerWithholding` is refused: T46r. (F-3) A step refutation's prompt rides
+//! as the evidence's `prompt_ids_opening` (T46o), and every offence this suite files is weighed in a
+//! signed 0x4b carrier against one standard transaction (`H::fits_one_carrier`). (F-4) A partial mask
+//! must be the assigned one while a full mask is a full attestation (T46q), and every session on the
+//! claim — a non-held data-availability one included — defers a conviction (T46n).
 use super::TestContext;
 use crate::consensus::test_consensus::TestConsensus;
 use crate::pipeline::virtual_processor::VirtualStateProcessor;
@@ -57,8 +68,9 @@ use kaspa_consensus_core::palw_attempt_v2::{
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2;
 use kaspa_consensus_core::palw_offence_attribution_v1::{
-    PALW_FALSE_VALID_NETWORK_LADDER_V1, PALW_PANEL_FALSE_VALID_VERSION_V2, PalwFalseValidReceiptV1, PalwPanelFalseValidEvidenceV2,
-    palw_check_panel_false_valid_v2, palw_false_valid_admission_v1, palw_false_valid_convicts_execution_v2,
+    PALW_FALSE_VALID_NETWORK_LADDER_V1, PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES, PALW_PANEL_FALSE_VALID_VERSION_V2,
+    PalwFalseValidReceiptV1, PalwFaultSiteV1, PalwPanelFalseValidEvidenceV2, palw_check_panel_false_valid_v2,
+    palw_false_valid_admission_v1, palw_false_valid_convicts_execution_v2, palw_false_valid_fault_site_v1,
     palw_false_valid_offence_id_v2,
 };
 use kaspa_consensus_core::palw_offence_v1::{
@@ -69,6 +81,7 @@ use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PALW_RECEIPT_V3_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3,
     palw_receipt_message_v2, palw_receipt_message_v3,
 };
+use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsOpeningV1;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwConsensusObjectV2 as Obj,
     PalwPanelSeatV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error, PalwVoidReasonV2, revert_delta_v2,
@@ -78,7 +91,10 @@ use kaspa_consensus_core::palw_step_leg::{
     step_leg_root_v1, verify_binding_v1,
 };
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
-use kaspa_consensus_core::palw_verification_v2::{PalwSegmentAssignmentV2, palw_segment_assignment_v2, palw_segment_index_of_leaf_v2};
+use kaspa_consensus_core::palw_verification_v2::{
+    PalwSegmentAssignmentV2, PalwSegmentMaskV2, palw_segment_assignment_v2, palw_segment_count_v2, palw_segment_index_of_leaf_v2,
+};
+use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::backend::Base0Backend;
 use std::collections::BTreeSet;
@@ -163,8 +179,19 @@ enum Fault {
     Honest,
     /// (A) `execute_with_injected_fault`: one lane of one step tile moved by one, the capture
     /// re-committed from the corrupted tiles — a self-consistent lie only re-execution finds. At the
-    /// first leaf the capture holds from the middle of the step space on.
+    /// first leaf the capture holds from the middle of the step space on WHOSE STEP READS ONLY ITS
+    /// OWN SEGMENT: the lie a partial seat's replay decides by itself, so the partial holder is
+    /// liable too (F2 review, F-1). The middle itself, `n / 2`, is the first leaf of segment 2 under
+    /// the four-way cut and reads the last four leaves of segment 1 — [`Fault::StepAt`] files it.
     Step,
+    /// (A) at a named leaf.
+    StepAt(u64),
+    /// (A) at the first K-cache write of a segment of the four-way cut that the drill's move keeps an
+    /// int8 — the reviewer's probe: a cache row every later position's attention reads, in other
+    /// segments. The drill moves the low byte of lane 0 by one (`corrupt_capture_v1`), so a lane at
+    /// 127 or −1 leaves the int8 range and no reader of the row can even be adjudicated (`base0 int8
+    /// lane out of range`); such a row is passed over for the next.
+    KCacheWrite { segment: u16 },
     /// (A) at the first leaf of the step space: the embedding gather of prompt position 0, a step
     /// the court recomputes from the prompt id it read.
     StepGather,
@@ -257,13 +284,15 @@ struct H {
     /// ladder and the network's prompt form.
     backend: Base0Backend,
     artifact_root: Hash64,
+    /// Each card's fee float in the genesis UTXO set — what a filer's 0x4b carrier spends.
+    floats: Vec<(TransactionOutpoint, UtxoEntry)>,
 }
 
 /// testnet-12 with harness cards at genesis; `armed = false` unsets `palw_offence_attribution`.
 fn harness(armed: bool) -> H {
     use misaka_palw_base0::classes::resolve_class_v1;
     kaspa_core::log::try_init_logger("warn");
-    let (config, bundle, _premine, _floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
+    let (config, bundle, _premine, floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
     assert!(config.params.palw_offence_attribution.is_some_and(|f| f.is_active(0)), "testnet-12 arms the fence from genesis");
     let config: Config = if armed {
         config
@@ -310,7 +339,7 @@ fn harness(armed: bool) -> H {
     )
     .with_step_ladder_cap(bundle.court.max_step_leaf_count())
     .with_prompt_ids_form(config.params.palw_prompt_ids_form_v1());
-    H { ctx, config, bundle, domain, cards, genesis, backend, artifact_root }
+    H { ctx, config, bundle, domain, cards, genesis, backend, artifact_root, floats }
 }
 
 impl H {
@@ -370,6 +399,7 @@ impl H {
     fn carry(&self, walk: &mut Walk, objects: Vec<Obj>) -> (PalwChainStateV2, PalwStateDeltaV2) {
         let point = walk.next();
         for object in &objects {
+            self.fits_one_carrier(object);
             if let Err(why) = self.validate(&walk.state, &point, object) {
                 panic!("the gate refuses an object this test needs admitted: {why}");
             }
@@ -389,6 +419,7 @@ impl H {
     /// **A refusal at the gate, by its exact reason** — and the acceptance walk drops the object,
     /// so the block that carried it folds as if it had not.
     fn refused(&self, walk: &Walk, object: &Obj, want: &str) {
+        self.fits_one_carrier(object);
         let point = walk.next();
         assert_eq!(self.validate(&walk.state, &point, object), Err(want.to_string()), "the gate's reason");
         assert!(self.accepted(&walk.state, &point, std::slice::from_ref(object)).is_empty(), "the walk drops what the gate refused");
@@ -396,6 +427,7 @@ impl H {
 
     /// The fold's own refusal of `object` at the next point, with its reason.
     fn fold_refusal(&self, walk: &Walk, object: &Obj) -> String {
+        self.fits_one_carrier(object);
         match self.fold(&walk.state, &walk.next(), std::slice::from_ref(object)) {
             Err(PalwStateV2Error::ObjectiveOffenceRefused(_, why)) => why,
             other => panic!("the fold refuses the object: {other:?}"),
@@ -460,12 +492,37 @@ impl H {
         PalwSeatReceiptV3 { receipt, segments: mask }
     }
 
-    fn v2_payload(
+    /// **A contradiction as a filer on this network sends it** (F2 review, F-3): a step
+    /// refutation's prompt in the job's carriage — the id list the prover carries taken out, and the
+    /// one tile the step reads opened against the Merkle root, as
+    /// `palw_refutation_prompt_carriage_v1` builds the one-move court's pair — and every other
+    /// contradiction as it is.
+    fn carried(&self, contradiction: C) -> (C, Option<PalwPromptIdsOpeningV1>) {
+        match contradiction {
+            C::StepArithmetic { refutation, operand_openings } => {
+                let (refutation, opening) =
+                    kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(self.form(), refutation)
+                        .expect("the prover's list is the job's");
+                (C::StepArithmetic { refutation, operand_openings }, opening)
+            }
+            other => (other, None),
+        }
+    }
+
+    /// The adjudicator's execution check on `contradiction` in this network's carriage.
+    fn convicts(&self, contradiction: &C, execution_root: Hash64, ladder: u64) -> Result<(), E> {
+        let (carried, opening) = self.carried(contradiction.clone());
+        palw_false_valid_convicts_execution_v2(&carried, opening.as_ref(), execution_root, self.artifact_root, ladder)
+    }
+
+    /// The evidence exactly as given — the carriage is the caller's (T46o's controls).
+    fn v2_payload_raw(
         &self,
         card: usize,
         claim: Hash64,
         receipt: PalwFalseValidReceiptV1,
         contradiction: C,
+        prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
     ) -> PalwPanelFalseValidEvidenceV2 {
         PalwPanelFalseValidEvidenceV2 {
             version: PALW_PANEL_FALSE_VALID_VERSION_V2,
@@ -473,13 +530,62 @@ impl H {
             accused_seat: self.cards[card].0,
             receipt,
             contradiction,
+            prompt_ids_opening,
             reporter_reveal: Vec::new(),
         }
+    }
+
+    /// The evidence a filer sends: the contradiction in the network's carriage.
+    fn v2_payload(
+        &self,
+        card: usize,
+        claim: Hash64,
+        receipt: PalwFalseValidReceiptV1,
+        contradiction: C,
+    ) -> PalwPanelFalseValidEvidenceV2 {
+        let (contradiction, opening) = self.carried(contradiction);
+        self.v2_payload_raw(card, claim, receipt, contradiction, opening)
     }
 
     fn v2(&self, card: usize, claim: Hash64, receipt: PalwFalseValidReceiptV1, contradiction: C) -> Obj {
         let payload = self.v2_payload(card, claim, receipt, contradiction);
         offence(PalwOffenceKindV1::PanelFalseValidV2, self.cards[card], borsh::to_vec(&payload).unwrap())
+    }
+
+    /// **Every offence this suite files fits ONE carrier** (F2 review, F-3): the object in the 0x4b
+    /// lifecycle payload the extractor reads, on a transaction spending the bystander's fee float and
+    /// signed with its key, weighed by the consensus's own mass calculator (the masses block
+    /// validation and the mempool read) against the mempool's standard mass and the block's. A
+    /// kind-3 object cannot be chunked, so one that failed here could never reach a block. Returns
+    /// the transient mass.
+    fn fits_one_carrier(&self, object: &Obj) -> u64 {
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{
+            PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2, validate_palw_lifecycle_tx,
+        };
+        use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutput};
+        let Obj::ObjectiveOffence { evidence, .. } = object else { return 0 };
+        assert!(evidence.len() as u64 <= PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES, "the evidence is within the one-carrier cap");
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
+            .expect("the carriage serializes");
+        validate_palw_lifecycle_tx(&payload, false).expect("the lifecycle admission takes the payload");
+        let (outpoint, entry) = self.floats[BYSTANDER].clone();
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(entry.amount - 300_000, super::t12_round_lane_e2e::card_payout_spk(BYSTANDER))],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload,
+        );
+        super::t12_round_lane_e2e::sign_spend(&mut tx, entry, BYSTANDER, self.config.params.storage_mass_parameter);
+        let masses = self.ctx.consensus.calculate_transaction_non_contextual_masses(&tx);
+        let standard = kaspa_consensus_core::palw_mode_v2::PALW_MIRRORED_STANDARD_TX_MASS;
+        for (what, mass) in [("transient", masses.transient_mass), ("compute", masses.compute_mass)] {
+            assert!(mass <= standard, "the carrier's {what} mass {mass} is within a standard transaction's {standard}");
+            assert!(mass <= self.config.params.max_block_mass, "and within a block's");
+        }
+        masses.transient_mass
     }
 
     fn v1(&self, card: usize, claim: Hash64, valid_receipt: PalwSeatReceiptV2, contradiction: C) -> Obj {
@@ -499,11 +605,16 @@ impl H {
 
     /// **A claim opened from the producer's own work**, folded as the template block's own attempt.
     fn open_claim(&self, walk: &mut Walk, fault: Fault) -> RealClaim {
+        self.open_claim_at_nonce(walk, fault, 0)
+    }
+
+    /// [`Self::open_claim`] on a template carrying `nonce` — another anchor, so another job.
+    fn open_claim_at_nonce(&self, walk: &mut Walk, fault: Fault, nonce: u64) -> RealClaim {
         use kaspa_consensus_core::hashing::header::pre_pow_hash_64;
         use misaka_palw_base0::produce::{base0_execute_for_attempt_v1, base0_material_decode_v1};
 
         // The template this node builds, and the job its anchor implies.
-        let template = self.ctx.build_block_template_keeping_time(0);
+        let template = self.ctx.build_block_template_keeping_time(nonce);
         let mut header: Header = template.block.header.clone();
         assert!(
             kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id),
@@ -554,21 +665,49 @@ impl H {
                 let (binding, ..) = base0_material_decode_v1(&honest.material).expect("the capture decodes");
                 (of(&honest), binding, honest.material.clone(), None, None)
             }
-            Fault::Step | Fault::StepGather => {
+            Fault::Step | Fault::StepGather | Fault::StepAt(_) | Fault::KCacheWrite { .. } => {
                 // The first leaf the capture holds and the prover opens, from the middle of the step
-                // space on (or from its first leaf). Nothing is chosen for convictability: that the
-                // lie at this leaf convicts is asserted once the claim is open.
+                // space on (or from its first leaf, or at a named one). Nothing is chosen for
+                // convictability: that the lie at this leaf convicts is asserted once the claim is
+                // open. `Step` asks one more thing — that the step reads only its own segment, as the
+                // adjudicator reads the step (`palw_false_valid_fault_site_v1` over the honest
+                // capture's refutation at that leaf: the same coordinates, the same inputs).
                 let (hb, tiles, ..) = base0_material_decode_v1(&honest.material).expect("the capture decodes");
                 let held: BTreeSet<u64> = tiles.iter().map(|(i, _)| *i).collect();
                 let n = hb.step_leaf_count;
-                let start = if fault == Fault::StepGather { 0 } else { n / 2 };
-                let leaf = (start..n)
-                    .find(|leaf| {
-                        held.contains(leaf)
-                            && kaspa_consensus_core::palw_step::canonical_step_coordinates(&hb.shape_profile, &hb.job_context, *leaf)
-                                .is_some()
-                    })
-                    .expect("the capture holds an openable step leaf");
+                let k = palw_segment_count_v2(PANEL.len() as u16);
+                let coords =
+                    |leaf: u64| kaspa_consensus_core::palw_step::canonical_step_coordinates(&hb.shape_profile, &hb.job_context, leaf);
+                let openable = |leaf: &u64| held.contains(leaf) && coords(*leaf).is_some();
+                let segment = |leaf: u64| palw_segment_index_of_leaf_v2(n, k, leaf).expect("in the cut");
+                let reads_its_own_segment = |leaf: u64| {
+                    let refutation = self.backend.refutation_for_index(&honest.material, leaf).expect("the honest capture opens");
+                    let step = C::StepArithmetic { refutation, operand_openings: Vec::new() };
+                    match palw_false_valid_fault_site_v1(&step, ladder) {
+                        Ok((PalwFaultSiteV1::Leaf { first_read, last_read, .. }, _)) => {
+                            segment(first_read) == segment(leaf) && segment(last_read) == segment(leaf)
+                        }
+                        _ => false,
+                    }
+                };
+                let leaf = match fault {
+                    Fault::StepGather => (0..n).find(openable),
+                    Fault::StepAt(leaf) => Some(leaf).filter(openable),
+                    Fault::KCacheWrite { segment: wanted } => (0..n).find(|leaf| {
+                        let stays_int8 = tiles.iter().find(|(i, _)| i == leaf).is_some_and(|(_, tile)| {
+                            let mut lane = [tile.values_le[0], tile.values_le[1], tile.values_le[2], tile.values_le[3]];
+                            lane[0] = lane[0].wrapping_add(1);
+                            (-128..=127).contains(&i32::from_le_bytes(lane))
+                        });
+                        openable(leaf)
+                            && segment(*leaf) == wanted
+                            && coords(*leaf).and_then(|c| hb.shape_profile.resolve_node_slot(c.node_slot)).map(|(node, _)| node.role)
+                                == Some(kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite)
+                            && stays_int8
+                    }),
+                    _ => (n / 2..n).find(|leaf| openable(leaf) && reads_its_own_segment(*leaf)),
+                }
+                .expect("the capture holds an openable step leaf");
                 let lying = self.backend.execute_with_injected_fault(&job, &prompt, leaf).expect("the drill's fault runs");
                 let refutation = self.backend.refutation_for_index(&lying.material, leaf).expect("the lying capture opens");
                 let operand_openings = self.backend.operand_openings_for(&refutation).expect("the class opens the rows");
@@ -671,8 +810,7 @@ impl H {
         assert!(matches!(claim.phase, PalwClaimPhaseV2::Provisional) && matches!(claim.source, PalwClaimSourceV2::Attempt));
         assert_eq!((claim.execution_root, claim.trace_root, claim.bond), (roots.execution, roots.trace, bond));
         if let Some(contradiction) = &contradiction {
-            palw_false_valid_convicts_execution_v2(contradiction, claim.execution_root, self.artifact_root, ladder, self.form())
-                .expect("the proof convicts the claim's own committed root");
+            self.convicts(contradiction, claim.execution_root, ladder).expect("the proof convicts the claim's own committed root");
         }
         RealClaim { claim_id, anchor, job, prompt, envelope, binding, material, contradiction, fault_leaf }
     }
@@ -731,8 +869,13 @@ impl H {
 
     /// A real claim of `fault`, bound and licensed through Verification V2.
     fn licensed(&self, fault: Fault) -> (Walk, RealClaim, Licence) {
+        self.licensed_at_nonce(fault, 0)
+    }
+
+    /// [`Self::licensed`] on a template carrying `nonce`.
+    fn licensed_at_nonce(&self, fault: Fault, nonce: u64) -> (Walk, RealClaim, Licence) {
         let mut walk = self.genesis_walk();
-        let claim = self.open_claim(&mut walk, fault);
+        let claim = self.open_claim_at_nonce(&mut walk, fault, nonce);
         self.bind(&mut walk, claim.claim_id);
         let licence = self.license_v2(&mut walk, claim.claim_id);
         (walk, claim, licence)
@@ -863,8 +1006,11 @@ async fn t46a_real_claim_is_red_on_the_v1_rule() {
 // ---------------------------------------------------------------------------------------------
 
 /// **T46b: the drill's injected step fault convicts before `Final`.** The full seat and the partial
-/// holder of the faulted leaf's segment are convicted in one block; the other three partial seats
-/// attested other segments and are refused `SiteNotAttested`. The claim is voided `CourtFraud` and
+/// holder of the faulted leaf's segment are convicted in one block — the step at that leaf reads only
+/// leaves of the same segment (asserted on the adjudicator's own site), so the holder's replay alone
+/// had to see the lie; the other three partial seats attested other segments and are refused
+/// `SiteNotAttested`. (A leaf whose step reads another segment convicts no partial seat: T46p.) The
+/// claim is voided `CourtFraud` and
 /// its executor charged; a sweep past the height the unconvicted claim reaches `Final` at leaves it
 /// voided and `safe_weight` where the licence left it — while the same sweep without the conviction
 /// finalises the lie and adds its weight.
@@ -884,6 +1030,19 @@ async fn t46b_injected_step_fault_convicts_before_final() {
         "[t46b] leaf {leaf} of {} is in segment {segment}; full seat card {full}, holder card {holder}, others {others:?}",
         claim.binding.step_leaf_count
     );
+    let payload = borsh::to_vec(&h.v2_payload(full, id, licence.segmented(full), c.clone())).unwrap();
+    let finding =
+        palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, None).expect("the full seat is liable");
+    let PalwFaultSiteV1::Leaf { leaf: at, first_read, last_read } = finding.site else { panic!("a step site: {:?}", finding.site) };
+    eprintln!("[t46b] the step read leaves {first_read}..={last_read}");
+    assert_eq!(at, leaf, "the site is the faulted leaf");
+    for read in [first_read, last_read] {
+        assert_eq!(
+            palw_segment_index_of_leaf_v2(claim.binding.step_leaf_count, licence.assignment.segments, read),
+            Some(segment),
+            "every leaf the step read is in the holder's segment"
+        );
+    }
     for &other in &others {
         h.refused(&walk, &h.v2(other, id, licence.segmented(other), c.clone()), &E::SiteNotAttested.to_string());
     }
@@ -1127,6 +1286,14 @@ async fn t46f_after_retirement() {
 /// on a 0x4a transaction and extracted by the processor's own walk; its binding's job id is
 /// `fp_job_id_v3(job)` and not the claim id, and the full seat and the leaf's partial holder are
 /// convicted.
+///
+/// A multi-token free prompt decodes, so the lie is placed as T46b places it (F2 review, F-1): at
+/// the first leaf from the middle on whose step reads only its own segment — here a step at a decode
+/// call that reads no generated token, which the prover's refutation nonetheless pins. The pinned
+/// proof convicts the full seat but reads (as far as the adjudicator can tell) the generated tokens,
+/// which a partial seat derives from its own replay and never compares: its holder is
+/// `SiteNotAttested`. The filer files the same proof without the pin — the checker adjudicates the
+/// step without it, which is the proof it was never read — and the holder is convicted.
 #[tokio::test]
 async fn t46g_fp_claim() {
     use kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3;
@@ -1212,16 +1379,50 @@ async fn t46g_fp_claim() {
     let held: BTreeSet<u64> = tiles.iter().map(|(i, _)| *i).collect();
     let n = hb.step_leaf_count;
     let ladder = h.ladder(&walk.state);
+    // The honest step at `leaf`, as a filer would send it without the generated-token pin: it must
+    // adjudicate without it (it reads no token) and read only its own segment of the four-way cut.
+    let resolved = misaka_palw_base0::classes::resolve_class_v1(&h.bundle.court, floor, h.artifact_root, &[]).expect("resolves");
+    let inventory =
+        misaka_palw_base0::inventory::base0_inventory_v1(&resolved.artifact, resolved.inventory_geometry).expect("inventory");
+    let k = palw_segment_count_v2(PANEL.len() as u16);
+    let decides_alone = |leaf: u64| {
+        let Ok(mut refutation) = h.backend.refutation_for_free_prompt_index(&honest.outcome.material, leaf, &ids) else {
+            return false;
+        };
+        refutation.decode_tokens = None;
+        let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
+        let adjudicable = matches!(
+            kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_carried_capped_v1(
+                &refutation,
+                &recorder,
+                h.form(),
+                h.backend.step_ladder_cap()
+            ),
+            Err(kaspa_consensus_core::palw_step_refute::PalwStepRefuteError::NoFaultFound)
+        );
+        let segment = |l: u64| palw_segment_index_of_leaf_v2(n, k, l);
+        adjudicable
+            && matches!(
+                palw_false_valid_fault_site_v1(&C::StepArithmetic { refutation, operand_openings: Vec::new() }, ladder),
+                Ok((PalwFaultSiteV1::Leaf { first_read, last_read, .. }, _))
+                    if segment(first_read) == segment(leaf) && segment(last_read) == segment(leaf)
+            )
+    };
     let leaf = (n / 2..n)
         .find(|leaf| {
             held.contains(leaf)
                 && kaspa_consensus_core::palw_step::canonical_step_coordinates(&hb.shape_profile, &hb.job_context, *leaf).is_some()
+                && decides_alone(*leaf)
         })
-        .expect("the capture holds an openable step leaf");
+        .expect("the capture holds an openable step leaf a segment decides alone");
     let lying = h.backend.execute_free_prompt_with_injected_fault(&job, &prompt, leaf).expect("the drill's FP fault runs");
     let refutation = h.backend.refutation_for_free_prompt_index(&lying.outcome.material, leaf, &ids).expect("opens");
     let operand_openings = h.backend.operand_openings_for(&refutation).expect("the class opens the rows");
-    let c = C::StepArithmetic { refutation, operand_openings };
+    assert!(refutation.output_preimage.coord.call_index > 0 && refutation.decode_tokens.is_some(), "a decode step the prover pinned");
+    let pinned = C::StepArithmetic { refutation: refutation.clone(), operand_openings: operand_openings.clone() };
+    let mut unpinned = refutation;
+    unpinned.decode_tokens = None;
+    let c = C::StepArithmetic { refutation: unpinned, operand_openings };
     let context = h.backend.capture_shape(&lying.outcome.material).expect("the capture has a shape").job_context;
     let commitment = palw_fp_commitment_from_context_v3(&job, &context, &lying, walk.daa + facts.min_trace_retention_daa)
         .expect("the run becomes a commitment");
@@ -1254,8 +1455,7 @@ async fn t46g_fp_claim() {
     // The FP lane's own fixed point, and why F2 cannot keep the equality.
     assert_eq!(context.job_id, fp_job_id_v3(&job), "the binding's job id is the job's");
     assert_ne!(context.job_id, id, "and not the claim id");
-    palw_false_valid_convicts_execution_v2(&c, opened.execution_root, h.artifact_root, ladder, h.form())
-        .expect("the proof pins the claim's root");
+    h.convicts(&c, opened.execution_root, ladder).expect("the proof pins the claim's root");
 
     h.bind(&mut walk, id);
     let licence = h.license_v2(&mut walk, id);
@@ -1263,6 +1463,18 @@ async fn t46g_fp_claim() {
     let segment = palw_segment_index_of_leaf_v2(binding.step_leaf_count, licence.assignment.segments, leaf).expect("in the cut");
     let full = licence.full_card();
     let holder = licence.holder_of(segment);
+    eprintln!("[t46g] leaf {leaf} of {} is in segment {segment}", binding.step_leaf_count);
+    h.convicts(&pinned, opened.execution_root, ladder).expect("the pinned proof convicts too");
+    let site_of = |proof: &C| {
+        let payload = borsh::to_vec(&h.v2_payload(full, id, licence.segmented(full), proof.clone())).unwrap();
+        palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, None)
+            .expect("the full seat is liable")
+            .site
+    };
+    assert_eq!(site_of(&pinned), PalwFaultSiteV1::Whole, "a decode step carrying the generated tokens is the whole's");
+    h.refused(&walk, &h.v2(holder, id, licence.segmented(holder), pinned), &E::SiteNotAttested.to_string());
+    let PalwFaultSiteV1::Leaf { first_read, last_read, .. } = site_of(&c) else { panic!("a step site without the pin") };
+    eprintln!("[t46g] without the pin the step read leaves {first_read}..={last_read}");
     for other in licence.partials().into_iter().filter(|card| *card != holder) {
         h.refused(&walk, &h.v2(other, id, licence.segmented(other), c.clone()), &E::SiteNotAttested.to_string());
     }
@@ -1461,7 +1673,7 @@ async fn t46i_honest_run_no_fault() {
         let payload = h.v2_payload(full, id, licence.segmented(full), C::StepArithmetic { refutation, operand_openings });
         let bytes = borsh::to_vec(&payload).unwrap();
         assert_eq!(
-            palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &bytes, false, false, h.form(), None),
+            palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &bytes, false, false, None),
             Err(E::PanelFalseValidNeedsContradiction),
             "leaf {leaf}"
         );
@@ -1608,10 +1820,8 @@ async fn t46l_one_offence_per_seat_claim() {
     );
     // Armed, the slot changes nothing the adjudicator finds, so nothing the ledger keys on.
     let plain_bytes = borsh::to_vec(&h.v2_payload(full, id, licence.segmented(full), c.clone())).unwrap();
-    let plain =
-        palw_check_panel_false_valid_v2(&licensed, &h.cards[full], &plain_bytes, false, true, h.form(), None).expect("convicts");
-    let armed =
-        palw_check_panel_false_valid_v2(&licensed, &h.cards[full], &revealed_bytes, false, true, h.form(), None).expect("convicts");
+    let plain = palw_check_panel_false_valid_v2(&licensed, &h.cards[full], &plain_bytes, false, true, None).expect("convicts");
+    let armed = palw_check_panel_false_valid_v2(&licensed, &h.cards[full], &revealed_bytes, false, true, None).expect("convicts");
     assert_eq!(armed, plain, "the reveal is outside the finding");
     assert_eq!(palw_false_valid_offence_id_v2(&h.cards[full].0, &armed.target.claim_id), offence_id, "and outside the ledger key");
 
@@ -1662,9 +1872,12 @@ async fn t46m_reorg_and_restart() {
 }
 
 /// **T46n: a claim under a session is not convicted — the filer waits.** A held data-availability
-/// session opened by a bonded bystander through the real gate, and an open court session, each make
-/// the full seat's conviction `ClaimUnderSession`: refused at the gate and in the fold, dropped by the
-/// walk, and nothing written — the lock, the bond and the ledger as they were.
+/// session opened by a bonded bystander through the real gate, an open court session, and a NON-held
+/// data-availability session (a real `DefaultAccused` through the gate — F2 review, F-4: the claim is
+/// `DefaultDisputed` with no held unit, which the adjudicator did not see before, and a void in the
+/// middle of it is unhandled until F3) each make the full seat's conviction `ClaimUnderSession`:
+/// refused at the gate and in the fold, dropped by the walk, and nothing written — the lock, the bond
+/// and the ledger as they were.
 #[tokio::test]
 async fn t46n_session_open() {
     use kaspa_consensus_core::palw_held_da_v1::{
@@ -1749,18 +1962,51 @@ async fn t46n_session_open() {
     h.refused(&court_walk, &object, &under_session);
     assert_eq!(h.fold_refusal(&court_walk, &object), under_session);
     untouched(&walk.state, &court_walk.state);
+
+    // 3. A non-held data-availability session: a bonded bystander accuses one trace event.
+    let mut da_walk = walk.clone();
+    let accuser = h.cards[BYSTANDER];
+    let message = kaspa_consensus_core::palw_state_v2::palw_da_accusation_message_v2(h.domain, &id, 0, &accuser);
+    let accused = Obj::DefaultAccused {
+        claim: id,
+        missing_event_index: 0,
+        accuser,
+        signature: sign(
+            BYSTANDER,
+            message.as_byte_slice(),
+            kaspa_consensus_core::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+        ),
+    };
+    h.carry(&mut da_walk, vec![accused]);
+    assert!(matches!(da_walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::DefaultDisputed { .. }), "the session is open");
+    assert!(
+        da_walk.state.held_da_missing_of(&id).is_none() && da_walk.state.open_courts_of(&id) == 0,
+        "and it is neither held nor a court"
+    );
+    h.refused(&da_walk, &object, &under_session);
+    assert_eq!(h.fold_refusal(&da_walk, &object), under_session);
+    let point = da_walk.next();
+    let carried = h.accepted(&da_walk.state, &point, std::slice::from_ref(&object));
+    let block = h.fold(&da_walk.state, &point, &carried).expect("folds");
+    assert_eq!(block.state_root(), h.fold(&da_walk.state, &point, &[]).unwrap().state_root(), "nothing is written");
+    untouched(&da_walk.state, &block);
 }
 
-/// **The carriage fix, pinned on the step it matters most for: the embedding gather of prompt
-/// position 0** (found by this suite; see `palw_false_valid_convicts_execution_v2`). testnet-12
-/// commits its prompts in the Merkle form. The drill's lie at the first leaf is recomputed from the
-/// prompt id it read, so the refutation must carry the prompt: the V1 route's flat comparison
-/// refuses the whole list (`NeedsContradiction` — the adjudicator as first written), a list stripped
-/// to the network's carriage without its opening cannot adjudicate a gather at all, and the V2 check
-/// — the list carried whole, the tile opened from it and proven against the Merkle root — convicts.
-/// Through the gate, the walk and the fold, the full seat is convicted.
+/// **The carriage, pinned on the step it matters most for: the embedding gather of prompt position
+/// 0** (found by this suite; made ONE route by the F2 review, F-3). testnet-12 commits its prompts
+/// in the Merkle form. The drill's lie at the first leaf is recomputed from the prompt id it read, so
+/// the refutation must carry the prompt. The whole list the prover builds is refused against a
+/// Merkle commitment — by the V1 route's flat comparison, and by the adjudicator with no opening,
+/// which IS that route; a list stripped without its opening cannot adjudicate a gather at all; the
+/// list and an opening together are two answers and refused; and the pair
+/// `palw_refutation_prompt_carriage_v1` builds — no list, the one tile opened against the Merkle root,
+/// carried in the evidence's `prompt_ids_opening` — convicts, in evidence that grows with a path and
+/// never with the prompt. Through the gate, the walk and the fold the whole-list evidence is refused
+/// and the carried one convicts the full seat and the holder of the leaf's segment (a gather reads
+/// no other leaf).
 #[tokio::test]
 async fn t46o_a_prompt_gather_fault_convicts_in_the_networks_carriage() {
+    use kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1;
     let h = harness(true);
     assert_eq!(
         h.form(),
@@ -1781,25 +2027,367 @@ async fn t46o_a_prompt_gather_fault_convicts_in_the_networks_carriage() {
     );
     let root = claim.envelope.attempt.execution_root;
     let ladder = h.ladder(&walk.state);
+    let needs = E::PanelFalseValidNeedsContradiction;
     assert_eq!(
         palw_panel_contradiction_convicts_execution_v1(&c, root, h.artifact_root, ladder),
-        Err(E::PanelFalseValidNeedsContradiction),
+        Err(needs.clone()),
         "the V1 route's flat comparison refuses the prover's refutation on a Merkle network"
     );
-    let C::StepArithmetic { refutation, operand_openings } = c.clone() else { unreachable!() };
-    let mut stripped = refutation.clone();
-    stripped.prompt_token_ids.clear();
-    let stripped = C::StepArithmetic { refutation: stripped, operand_openings };
     assert_eq!(
-        palw_false_valid_convicts_execution_v2(&stripped, root, h.artifact_root, ladder, h.form()),
-        Err(E::PanelFalseValidNeedsContradiction),
+        palw_false_valid_convicts_execution_v2(&c, None, root, h.artifact_root, ladder),
+        Err(needs.clone()),
+        "with no opening the adjudicator is that route: a whole list against a Merkle root"
+    );
+    let C::StepArithmetic { refutation, operand_openings } = c.clone() else { unreachable!() };
+    let (carried, opening) = palw_refutation_prompt_carriage_v1(h.form(), refutation.clone()).expect("the prover's list is the job's");
+    let opening = opening.expect("a prefill gather's tile is opened");
+    assert!(carried.prompt_token_ids.is_empty(), "the carriage takes the list out");
+    let stripped = C::StepArithmetic { refutation: carried, operand_openings };
+    assert_eq!(
+        palw_false_valid_convicts_execution_v2(&stripped, None, root, h.artifact_root, ladder),
+        Err(needs.clone()),
         "a gather cannot be recomputed without the id it read"
     );
-    palw_false_valid_convicts_execution_v2(&c, root, h.artifact_root, ladder, h.form())
-        .expect("read in the network's carriage, it convicts");
+    assert_eq!(
+        palw_false_valid_convicts_execution_v2(&c, Some(&opening), root, h.artifact_root, ladder),
+        Err(needs.clone()),
+        "the list and an opening at once are two answers"
+    );
+    palw_false_valid_convicts_execution_v2(&stripped, Some(&opening), root, h.artifact_root, ladder)
+        .expect("read in the job's carriage, it convicts");
+    let full = licence.full_card();
+    let whole_list = borsh::to_vec(&h.v2_payload_raw(full, id, licence.segmented(full), c.clone(), None)).unwrap();
+    let in_carriage = borsh::to_vec(&h.v2_payload(full, id, licence.segmented(full), c.clone())).unwrap();
+    eprintln!("[t46o] evidence: {} bytes with the whole list, {} in the carriage", whole_list.len(), in_carriage.len());
+    h.refused(&walk, &offence(PalwOffenceKindV1::PanelFalseValidV2, h.cards[full], whole_list), &needs.to_string());
     let segment = palw_segment_index_of_leaf_v2(claim.binding.step_leaf_count, licence.assignment.segments, leaf).unwrap();
-    let (full, holder) = (licence.full_card(), licence.holder_of(segment));
+    let holder = licence.holder_of(segment);
     let (licensed, _) =
         h.carry(&mut walk, vec![h.v2(full, id, licence.segmented(full), c.clone()), h.v2(holder, id, licence.segmented(holder), c)]);
     assert_convicted_before_final(&h, &licensed, &walk.state, id, &[full, holder], walk.daa);
+}
+
+// ---------------------------------------------------------------------------------------------
+// T46p–r — the F2 review
+// ---------------------------------------------------------------------------------------------
+
+/// **T46p: a lie in one segment convicts no honest partial seat downstream** (F2 review, F-1 — the
+/// reviewer's probe, on a real producer-built claim). The drill corrupts one lane of the first
+/// K-cache write of segment 1 — leaf 1432, the key row of prompt position 2, unless the drill's move
+/// would push that lane out of int8 (then the next key row: [`Fault::KCacheWrite`]) — and re-commits,
+/// every later tile as the honest run computed it. A later position's attention scores read that row, so
+/// where the query lane does not cancel the change the step recomputes, from the committed (wrong)
+/// key, to something other than its committed (honest) value and "convicts" (the probe's job: leaves
+/// 2820 and 3512 in segment 2, 4204 and 4896 in segment 3). Their holders replayed their segments and
+/// matched; the adjudicator reads that each such step also read leaves of earlier segments and
+/// refuses every partial seat `SiteNotAttested`, while the full seat, which attested the whole, is
+/// convicted by any of them. The step at 1432 itself reads only leaves of segment 1: its holder is
+/// convicted with the full seat, and the other holders are not. And T46b's first leaf, `n / 2` =
+/// 2780 — the first leaf of segment 2, whose step reads the last four leaves of segment 1 — convicts
+/// the full seat and neither holder.
+#[tokio::test]
+async fn t46p_a_lie_in_one_segment_convicts_no_honest_partial_downstream() {
+    let h = harness(true);
+    // The premise, found rather than assumed: one lane of a key row moves a later score only where
+    // that position's query lane does not cancel it, which depends on the prompt — so the template
+    // nonce (another anchor, another job) is stepped until the lie is read, convictingly, in both
+    // later segments. What is asserted of those readers is asserted of every one found.
+    let mut found = None;
+    for nonce in 0..8u64 {
+        let (walk, claim, licence) = h.licensed_at_nonce(Fault::KCacheWrite { segment: 1 }, nonce);
+        let (n, k) = (claim.binding.step_leaf_count, licence.assignment.segments);
+        let readers = convicting_readers(&h, &claim, claim.fault_leaf.unwrap(), h.ladder(&walk.state));
+        let reached: BTreeSet<u16> = readers.iter().filter_map(|(leaf, _)| palw_segment_index_of_leaf_v2(n, k, *leaf)).collect();
+        eprintln!("[t46p] nonce {nonce}: convicting readers {:?}", readers.iter().map(|(leaf, _)| *leaf).collect::<Vec<_>>());
+        if reached.contains(&2) && reached.contains(&3) {
+            found = Some((walk, claim, licence, readers));
+            break;
+        }
+    }
+    let (mut walk, claim, licence, readers) = found.expect("a job whose one-lane lie is read in segments 2 and 3");
+    let id = claim.claim_id;
+    let b = claim.binding.clone();
+    let n = b.step_leaf_count;
+    let k = licence.assignment.segments;
+    let seg = |leaf: u64| palw_segment_index_of_leaf_v2(n, k, leaf).expect("in the cut");
+    let coord = |leaf: u64| {
+        kaspa_consensus_core::palw_step::canonical_step_coordinates(&b.shape_profile, &b.job_context, leaf).expect("a step")
+    };
+    let lie = claim.fault_leaf.unwrap();
+    eprintln!("[t46p] the lie is at leaf {lie}: {:?}", coord(lie));
+    assert_eq!(n, 5_560, "the floor's attempt job");
+    assert_eq!(
+        b.shape_profile.resolve_node_slot(coord(lie).node_slot).map(|(node, _)| node.role),
+        Some(kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite),
+        "a key row"
+    );
+    assert_eq!(
+        (coord(lie).call_index, seg(lie)),
+        (0, 1),
+        "of the prefill, in segment 1 (leaf 1432, prompt position 2, in the probe's job)"
+    );
+    let full = licence.full_card();
+    let site_for = |state: &PalwChainStateV2, card: usize, c: &C| {
+        let payload = borsh::to_vec(&h.v2_payload(card, id, licence.segmented(card), c.clone())).unwrap();
+        palw_check_panel_false_valid_v2(state, &h.cards[card], &payload, false, false, None).map(|finding| finding.site)
+    };
+
+    // Downstream: every reader "convicts" the root; only the full seat is liable for it.
+    for (reader, c) in &readers {
+        let reader = *reader;
+        assert!(seg(reader) >= 2 && coord(reader).call_index == 0 && coord(reader).position > 2, "leaf {reader}: a later position");
+        let site = site_for(&walk.state, full, c).expect("the full seat attested everything the step read");
+        let PalwFaultSiteV1::Leaf { leaf, first_read, last_read } = site else { panic!("a step site: {site:?}") };
+        eprintln!(
+            "[t46p] reader {reader} (segment {}, position {}, node {}) read leaves {first_read}..={last_read}",
+            seg(reader),
+            coord(reader).position,
+            coord(reader).node_slot
+        );
+        assert_eq!(leaf, reader);
+        assert!(first_read <= lie && lie <= last_read, "leaf {reader}'s step read the lie");
+        assert!(seg(first_read) < seg(reader), "and leaves of segments before its own");
+        for partial in licence.partials() {
+            h.refused(&walk, &h.v2(partial, id, licence.segmented(partial), c.clone()), &E::SiteNotAttested.to_string());
+        }
+    }
+    let downstream: Vec<C> = readers.iter().map(|(_, c)| c.clone()).collect();
+
+    // The step at the lie reads only segment 1.
+    let at_lie = claim.contradiction();
+    let holder = licence.holder_of(1);
+    let site = site_for(&walk.state, holder, &at_lie).expect("the holder of segment 1 replayed the lie");
+    let PalwFaultSiteV1::Leaf { leaf, first_read, last_read } = site else { panic!("a step site: {site:?}") };
+    eprintln!("[t46p] the lie at {lie} read leaves {first_read}..={last_read}");
+    assert_eq!((leaf, seg(first_read), seg(last_read)), (lie, 1, 1), "the lie's own step reads only segment 1");
+    let others: Vec<usize> = [0u16, 2, 3].into_iter().map(|s| licence.holder_of(s)).collect();
+    for &other in &others {
+        h.refused(&walk, &h.v2(other, id, licence.segmented(other), at_lie.clone()), &E::SiteNotAttested.to_string());
+    }
+    // One block: the full seat by a downstream reader's proof, segment 1's holder by the lie's own.
+    let (licensed, _) = h.carry(
+        &mut walk,
+        vec![h.v2(full, id, licence.segmented(full), downstream[0].clone()), h.v2(holder, id, licence.segmented(holder), at_lie)],
+    );
+    assert_convicted_before_final(&h, &licensed, &walk.state, id, &[full, holder], walk.daa);
+    for &other in &others {
+        assert!(walk.state.slashable_lock(h.cards[other], id).is_some(), "card {other}'s lock stands");
+        assert_eq!(walk.state.bond(&h.cards[other]).unwrap().collateral, licensed.bond(&h.cards[other]).unwrap().collateral);
+    }
+
+    // T46b's first leaf: the first of segment 2, reading the end of segment 1.
+    let (walk, boundary, licence) = h.licensed(Fault::StepAt(n / 2));
+    let c = boundary.contradiction();
+    let full = licence.full_card();
+    let payload = borsh::to_vec(&h.v2_payload(full, boundary.claim_id, licence.segmented(full), c.clone())).unwrap();
+    let site = palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, None)
+        .expect("the full seat attested it")
+        .site;
+    let PalwFaultSiteV1::Leaf { leaf, first_read, last_read } = site else { panic!("a step site: {site:?}") };
+    eprintln!("[t46p] n/2 = {leaf} read leaves {first_read}..={last_read}");
+    assert_eq!((leaf, seg(leaf), seg(first_read), last_read), (n / 2, 2, 1, n / 2), "the first leaf of segment 2 reads segment 1");
+    for s in [1u16, 2] {
+        let holder = licence.holder_of(s);
+        h.refused(&walk, &h.v2(holder, boundary.claim_id, licence.segmented(holder), c.clone()), &E::SiteNotAttested.to_string());
+    }
+    h.validate(&walk.state, &walk.next(), &h.v2(full, boundary.claim_id, licence.segmented(full), c))
+        .expect("the full seat is admitted");
+}
+
+/// **Every step of the later half of `claim`'s step space (segments 2 and 3 of the four-way cut)
+/// whose refutation reads committed leaf `lie` and convicts the claim's root** — built as T46i builds
+/// its refutations (the backend's prover over one decode of the capture, the rows a recording oracle
+/// resolves), and judged by the adjudicator's execution check in the network's carriage.
+fn convicting_readers(h: &H, claim: &RealClaim, lie: u64, ladder: u64) -> Vec<(u64, C)> {
+    use kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1;
+    use kaspa_consensus_core::palw_step_refute::{
+        PalwBase0DecodeTokensV1, PalwDecodeTokenPinV1, check_execution_step_refutation_carried_capped_v1,
+    };
+    use misaka_palw_base0::produce::base0_material_decode_v1;
+    let (binding, tiles, rows, toks, _) = base0_material_decode_v1(&claim.material).expect("decodes");
+    let pin = PalwBase0DecodeTokensV1 { logits_rows: rows, generated_token_ids: toks };
+    let resolved = misaka_palw_base0::classes::resolve_class_v1(&h.bundle.court, h.floor(), h.artifact_root, &[]).expect("resolves");
+    let inventory =
+        misaka_palw_base0::inventory::base0_inventory_v1(&resolved.artifact, resolved.inventory_geometry).expect("inventory");
+    let ctx_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
+    for (index, tile) in &tiles {
+        leaves[*index as usize] = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, tile);
+    }
+    let capture = misaka_palw_base0::legs::Base0StepTilesV1 { leaves, tiles };
+    let prompt_ids: Vec<u32> = claim.prompt.iter().map(|t| *t as u32).collect();
+    let coordinates =
+        |leaf: u64| kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, leaf);
+    let lie_at = coordinates(lie).expect("the lie is a step coordinate");
+    let root = claim.envelope.attempt.execution_root;
+    let n = binding.step_leaf_count;
+    let mut readers = Vec::new();
+    for leaf in n / 2..n {
+        let Some(coord) = coordinates(leaf) else { continue };
+        let Ok(refutation) = misaka_palw_base0::legs::base0_refutation_from_capture_capped_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            &capture,
+            binding.clone(),
+            coord,
+            prompt_ids.clone(),
+            Some(PalwDecodeTokenPinV1::Base0V1(pin.clone())),
+            None,
+            h.bundle.court.max_step_leaf_count(),
+        ) else {
+            continue;
+        };
+        if !refutation.inputs.iter().flat_map(|row| row.preimages.iter()).any(|p| p.coord == lie_at) {
+            continue;
+        }
+        let recorder = PalwRecordingOracleV1::new(inventory.operands());
+        let _ = check_execution_step_refutation_carried_capped_v1(&refutation, &recorder, h.form(), h.backend.step_ladder_cap());
+        let Some(operand_openings) = recorder.openings() else { continue };
+        let c = C::StepArithmetic { refutation, operand_openings };
+        if h.convicts(&c, root, ladder).is_ok() {
+            readers.push((leaf, c));
+        }
+    }
+    readers
+}
+
+/// **T46q: a partial mask is the one the panel assigned, and a full mask is a full attestation**
+/// (F2 review, F-4, with the peer's plan until SEAT-S4: a partial-assigned seat may replay the whole
+/// job and sign a full `Valid`, licensed through the V1 door). On the injected fault, whose step
+/// reads only its own segment:
+///
+/// 1. a partial seat's V3 `Valid` over a mask the panel did not assign it — the faulted segment,
+///    signed by a seat assigned another — is refused `SegmentMaskNotAssigned` at the gate and in the
+///    fold (under its assigned mask the same seat is `SiteNotAttested`);
+/// 2. licensed through the V1 door with every seat's full V2 `Valid`, a partial-assigned seat whose
+///    own segment does not hold the fault is convicted as a full-mask signer — neither a mask
+///    mismatch nor `SiteNotAttested`; and so is another such seat's V3 `Valid` over the FULL mask,
+///    which is representable (a seat's signature covers whichever mask it signs) and is a full
+///    attestation whatever the assignment.
+#[tokio::test]
+async fn t46q_the_mask_is_the_assigned_one_and_a_full_mask_is_a_full_attestation() {
+    let h = harness(true);
+
+    // 1. A mask the panel did not assign.
+    let (walk, claim, licence) = h.licensed(Fault::Step);
+    let id = claim.claim_id;
+    let c = claim.contradiction();
+    let segment = palw_segment_index_of_leaf_v2(claim.binding.step_leaf_count, licence.assignment.segments, claim.fault_leaf.unwrap())
+        .expect("in the cut");
+    let holder = licence.holder_of(segment);
+    let other = licence.partials().into_iter().find(|card| *card != holder).expect("another partial seat");
+    let faulted = licence.receipt(holder).segments;
+    assert_ne!(faulted, licence.receipt(other).segments);
+    let unassigned = h.v2(
+        other,
+        id,
+        PalwFalseValidReceiptV1::Segmented(h.v3_receipt(other, id, h.domain, licence.licensed_daa, faulted)),
+        c.clone(),
+    );
+    let why = E::SegmentMaskNotAssigned.to_string();
+    h.refused(&walk, &unassigned, &why);
+    assert_eq!(h.fold_refusal(&walk, &unassigned), why);
+    h.refused(&walk, &h.v2(other, id, licence.segmented(other), c), &E::SiteNotAttested.to_string());
+
+    // 2. The V1 door: every seat signed a full V2 `Valid`.
+    let mut walk = h.genesis_walk();
+    let claim = h.open_claim(&mut walk, Fault::Step);
+    let id = claim.claim_id;
+    let c = claim.contradiction();
+    h.bind(&mut walk, id);
+    let receipts = h.license_v1(&mut walk, id);
+    let panel = walk.state.panel(&id).expect("a bound panel").clone();
+    let assignment = palw_segment_assignment_v2(panel.anchor, id, panel.seats.len() as u16);
+    let segment = palw_segment_index_of_leaf_v2(claim.binding.step_leaf_count, assignment.segments, claim.fault_leaf.unwrap())
+        .expect("in the cut");
+    let away: Vec<(usize, PalwSegmentMaskV2)> = panel
+        .seats
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != assignment.full_seat as usize && !assignment.mask_of(*i as u16).covers(segment))
+        .map(|(i, seat)| (h.card_of(&seat.bond), assignment.mask_of(i as u16)))
+        .collect();
+    assert!(away.len() >= 2, "partial-assigned seats whose own segment does not hold the fault");
+    let ((a, a_mask), (b, _)) = (away[0], away[1]);
+    let signed_daa = receipts[0].1.signed_daa;
+    // Under their assigned partial masks they would not be liable.
+    for (card, mask) in [away[0], away[1]] {
+        let partial = PalwFalseValidReceiptV1::Segmented(h.v3_receipt(card, id, h.domain, signed_daa, mask));
+        h.refused(&walk, &h.v2(card, id, partial, c.clone()), &E::SiteNotAttested.to_string());
+    }
+    assert!(!a_mask.is_full(assignment.segments));
+    let a_full = receipts.iter().find(|(card, _)| *card == a).expect("the V1 licence carried a's receipt").1.clone();
+    let b_full_mask = h.v3_receipt(b, id, h.domain, signed_daa, PalwSegmentMaskV2::full(assignment.segments));
+    let (licensed, _) = h.carry(
+        &mut walk,
+        vec![
+            h.v2(a, id, PalwFalseValidReceiptV1::Full(a_full), c.clone()),
+            h.v2(b, id, PalwFalseValidReceiptV1::Segmented(b_full_mask), c),
+        ],
+    );
+    assert_convicted_before_final(&h, &licensed, &walk.state, id, &[a, b], walk.daa);
+}
+
+/// **T46r: a `ProducerWithholding` void convicts no seat** (F2 review, F-2). An HONEST claim is
+/// licensed; a bonded bystander files a held data-availability demand through the gate; the producer
+/// — colluding — stays silent, and the sweep voids the claim `ProducerWithholding`. The honest full
+/// seat owes no disclosure and has no move in that session, yet a kind-3 `ProducerWithholding` would
+/// take its whole lock. Past the fence it is refused `ContradictionNotAdmitted` at the gate and in
+/// the fold, the walk drops it, and the block that carried it folds to the empty block's root: the
+/// lock, the bond and the ledger are as they were.
+#[tokio::test]
+async fn t46r_a_producer_withholding_void_convicts_no_seat() {
+    use kaspa_consensus_core::palw_held_da_v1::{
+        PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldAccusationV1, PalwHeldMissingV1,
+        palw_held_da_accusation_message_v1,
+    };
+    let h = harness(true);
+    let (mut walk, claim, licence) = h.licensed(Fault::Honest);
+    let id = claim.claim_id;
+    let mut accusation = PalwHeldAccusationV1 {
+        version: PALW_HELD_DA_VERSION_V1,
+        claim: id,
+        missing: PalwHeldMissingV1::StepRange { first: 0, count: 1 },
+        accuser: h.cards[BYSTANDER],
+        binding: claim.binding.clone(),
+        signature: Vec::new(),
+    };
+    accusation.signature = sign(
+        BYSTANDER,
+        palw_held_da_accusation_message_v1(h.domain.as_byte_slice(), &accusation).as_byte_slice(),
+        PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT,
+    );
+    h.carry(&mut walk, vec![Obj::DefaultAccusedHeld { accusation: Box::new(accusation) }]);
+    assert!(matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::DefaultDisputed { .. }), "the session is open");
+    // The producer's silence: empty blocks until the disclose window closes.
+    let mut voided_daa = None;
+    for _ in 0..20_000 {
+        let point = walk.next();
+        let next = h.fold(&walk.state, &point, &[]).expect("an empty block folds");
+        walk.advance(&point, next);
+        if let PalwClaimPhaseV2::Voided { voided_daa: daa, reason } = walk.state.claim(&id).unwrap().phase {
+            assert_eq!(reason, PalwVoidReasonV2::ProducerWithholding, "silence voids ProducerWithholding");
+            voided_daa = Some(daa);
+            break;
+        }
+    }
+    let voided_daa = voided_daa.expect("the disclose window closes");
+    assert!(walk.state.palw_void_binds_claim_v1(&id, PalwVoidReasonV2::ProducerWithholding, voided_daa), "the void the chain wrote");
+    let full = licence.full_card();
+    assert!(walk.state.slashable_lock(h.cards[full], id).is_some(), "the honest full seat still holds its lock");
+    let contradiction = C::ProducerWithholding { voided_daa };
+    let why = palw_false_valid_admission_v1(&contradiction).expect_err("refused by name").to_string();
+    assert!(why.contains("ProducerWithholding"), "{why}");
+    let object = h.v2(full, id, licence.segmented(full), contradiction);
+    h.refused(&walk, &object, &why);
+    assert_eq!(h.fold_refusal(&walk, &object), why, "the fold refuses it by the same name");
+    let point = walk.next();
+    let carried = h.accepted(&walk.state, &point, std::slice::from_ref(&object));
+    let block = h.fold(&walk.state, &point, &carried).expect("folds");
+    assert_eq!(block.state_root(), h.fold(&walk.state, &point, &[]).unwrap().state_root(), "nothing is written");
+    let seat = h.cards[full];
+    assert_eq!(block.slashable_lock(seat, id), walk.state.slashable_lock(seat, id));
+    assert_eq!(block.bond(&seat).unwrap().collateral, walk.state.bond(&seat).unwrap().collateral);
+    assert!(block.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &id)).is_none());
 }
