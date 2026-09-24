@@ -161,7 +161,7 @@ pub struct Qwen36Backend {
     /// **ADR-0152 §4-ter N4's selector**, as the dense tier's
     /// (`Qwen25A16Backend::with_held_answerability_v1`): past `palw_offence_attribution` no held class
     /// this family serves answers a dissection — it has no windowed builder (the review's F4).
-    held_answer_turn: Option<u64>,
+    held_answerability: bool,
 }
 
 impl Qwen36Backend {
@@ -255,7 +255,7 @@ impl Qwen36Backend {
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
-            held_answer_turn: None,
+            held_answerability: false,
         }
     }
 
@@ -267,11 +267,10 @@ impl Qwen36Backend {
         self
     }
 
-    /// **ADR-0152 §4-ter N4: the court turn of a chain past `palw_offence_attribution`** —
-    /// `Some(bundle.court.turn_deadline_daa())` where the fence is armed, `None` elsewhere (the dense
-    /// tier's `with_held_answerability_v1`).
-    pub fn with_held_answerability_v1(mut self, court_turn_daa: Option<u64>) -> Self {
-        self.held_answer_turn = court_turn_daa;
+    /// **ADR-0152 §4-ter N4: whether the chain this backend serves is past `palw_offence_attribution`**
+    /// (the dense tier's `with_held_answerability_v1`).
+    pub fn with_held_answerability_v1(mut self, armed: bool) -> Self {
+        self.held_answerability = armed;
         self
     }
 
@@ -357,7 +356,7 @@ impl Qwen36Backend {
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
-            held_answer_turn: None,
+            held_answerability: false,
         }
     }
 
@@ -402,7 +401,7 @@ impl Qwen36Backend {
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
-            held_answer_turn: None,
+            held_answerability: false,
         })
     }
 
@@ -1392,9 +1391,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     /// ADR-0152 §4-ter N4: the setter form of [`Self::with_held_answerability_v1`] — what a node's
-    /// registry applies to every backend it resolves (`Params::palw_held_answer_turn_v1()`).
-    fn set_held_answerability_v1(&mut self, court_turn_daa: Option<u64>) {
-        self.held_answer_turn = court_turn_daa;
+    /// registry applies to every backend it resolves (`Params::palw_held_answerability_v1()`).
+    fn set_held_answerability_v1(&mut self, armed: bool) {
+        self.held_answerability = armed;
     }
 
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
@@ -2727,7 +2726,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     fn supports_dissection(&self) -> bool {
         self.plan.is_some()
             && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1)
-            && !(self.held_answer_turn.is_some()
+            && !(self.held_answerability
                 && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4))
     }
 
@@ -4023,16 +4022,16 @@ mod tests {
         let v6 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v6(geometry).expect("the v6 projection");
         let v7 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(geometry).expect("the v7 projection");
         let artifact = std::sync::Arc::new(artifact);
-        let build = |profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, turn: Option<u64>| {
+        let build = |profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, armed: bool| {
             Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (3, 4))
                 .expect("servable")
-                .with_held_answerability_v1(turn)
+                .with_held_answerability_v1(armed)
         };
-        assert!(build(&v7, None).supports_dissection(), "below the fence the held hybrid answered as before");
-        assert!(!build(&v7, Some(42)).supports_dissection(), "past it no held hybrid class takes the turn");
-        assert!(build(&v6, None).supports_dissection() && build(&v6, Some(42)).supports_dissection(), "a non-held row is unchanged");
+        assert!(build(&v7, false).supports_dissection(), "below the fence the held hybrid answered as before");
+        assert!(!build(&v7, true).supports_dissection(), "past it no held hybrid class takes the turn");
+        assert!(build(&v6, false).supports_dissection() && build(&v6, true).supports_dissection(), "a non-held row is unchanged");
         assert!(matches!(
-            kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&v7, 42),
+            kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&v7),
             Some(kaspa_consensus_core::palw_class_admission_v2::PalwHeldUnanswerableV1::Recurrent { .. })
         ));
     }

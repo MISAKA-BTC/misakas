@@ -715,9 +715,10 @@ fn t_a9_a_lying_producer_is_convicted_by_the_seats_node_as_a_held_verdict() {
 
 /// **T-A10, the node half: N4 is live on a node past the fence, and dormant below it.** The registry
 /// a node's services resolve through (`PalwBackendRegistry::for_node_v1`, the producer's and the
-/// panel's one constructor) on testnet-12's params hands every backend the court's turn
-/// (`Params::palw_held_answer_turn_v1`). A held row this build answers inside that turn (context
-/// 8,192) dissects and is produced; one past the answerable context (16,384) does not dissect, and
+/// panel's one constructor) on testnet-12's params makes every backend held-aware
+/// (`Params::palw_held_answerability_v1`). A held row this build answers (context 8,192, its compute
+/// turn inside the cap) dissects and is produced; one past the answerable context (16,384) does not
+/// dissect, and
 /// the producer's guard (`palw_dissection_refusal_v1`, which the panel's canonical claim asks too)
 /// refuses it by name. The twin — the same ruleset with `palw_offence_attribution` unset — resolves
 /// both as before N4: both dissect and neither is refused. Both rows resolve through the
@@ -729,10 +730,10 @@ fn t_a10_n4_is_live_on_a_node_past_the_fence_and_dormant_below_it() {
     use crate::palw_producer::palw_dissection_refusal_v1;
     use kaspa_consensus_core::config::params::palw_t12_shipped_params;
     let past = palw_t12_shipped_params();
-    assert!(past.palw_held_answer_turn_v1().is_some(), "testnet-12 arms palw_offence_attribution");
+    assert!(past.palw_held_answerability_v1(), "testnet-12 arms palw_offence_attribution");
     let mut below = past.clone();
     below.palw_offence_attribution = None;
-    assert_eq!(below.palw_held_answer_turn_v1(), None);
+    assert!(!below.palw_held_answerability_v1());
     let court = match &past.palw_consensus_mode {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.court,
         _ => panic!("testnet-12 is a V2 network"),
@@ -755,8 +756,8 @@ fn t_a10_n4_is_live_on_a_node_past_the_fence_and_dormant_below_it() {
             );
             assert_eq!(
                 registry.sdk().held_answerability_v1(),
-                params.palw_held_answer_turn_v1(),
-                "the node's registry carries the turn"
+                params.palw_held_answerability_v1(),
+                "the node's registry carries the selector"
             );
             let backend = registry
                 .resolve_or_chain(class_id, root, |_| Some((profile.clone(), canonical.clone())))
@@ -790,30 +791,30 @@ fn t_a10_every_node_registry_answers_held_dissections_through_one_constructor() 
     }
     let registry = include_str!("../palw_backends.rs");
     let constructor = body(registry, "    pub fn for_node_v1(");
-    assert!(constructor.contains(".with_held_answerability_v1(params.palw_held_answer_turn_v1())"), "the turn off the node's params");
+    assert!(constructor.contains(".with_held_answerability_v1(params.palw_held_answerability_v1())"), "off the node's params");
     assert!(constructor.contains("palw_attempt_rules_of_params_v1(params)"), "beside the attempt rule");
     let sdk = include_str!("../../../misaka-palw-sdk/src/sdk.rs");
     assert!(
-        body(sdk, "    fn ruled_v1(").contains("backend.set_held_answerability_v1(self.held_answer_turn);"),
+        body(sdk, "    fn ruled_v1(").contains("backend.set_held_answerability_v1(self.held_answerability);"),
         "every lineage's backend"
     );
     let chain_arm = body(sdk, "    pub fn resolve_chain_registered(");
-    assert_eq!(chain_arm.matches(".with_held_answerability_v1(self.held_answer_turn)").count(), 2, "both families of the chain arm");
+    assert_eq!(chain_arm.matches(".with_held_answerability_v1(self.held_answerability)").count(), 2, "both families of the chain arm");
     assert!(
-        body(sdk, "    pub fn with_lineage(").contains(".with_held_answerability_v1(held_answer_turn)"),
+        body(sdk, "    pub fn with_lineage(").contains(".with_held_answerability_v1(held_answerability)"),
         "kept across a composed lineage"
     );
 }
 
-/// **The tabled path too: a class a lineage serves gets the turn through the trait's setter.**
+/// **The tabled path too: a class a lineage serves is made held-aware through the trait's setter.**
 /// testnet-12's genesis rows are the build's own table rows, so a node resolves them through a
-/// lineage — the SDK's `ruled_v1`, which hands the turn to the resolved backend by
+/// lineage — the SDK's `ruled_v1`, which hands the selector to the resolved backend by
 /// `PalwExecutionBackendV1::set_held_answerability_v1` — not through the chain arm's builder. A
-/// lineage serving the held fixture row past the answerable context: an SDK carrying testnet-12's
-/// turn resolves a backend that declines the dissection, one carrying none (every other network)
+/// lineage serving the held fixture row past the answerable context: an SDK armed as testnet-12's
+/// params arm it resolves a backend that declines the dissection, one unarmed (every other network)
 /// resolves it as it was.
 #[test]
-fn t_a10_a_tabled_held_class_takes_the_turn_through_the_lineage_door() {
+fn t_a10_a_tabled_held_class_is_made_held_aware_through_the_lineage_door() {
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
     use misaka_palw_sdk::{PalwClassEntryV1, PalwClassSdk, PalwLoadedArtifactV1, PalwModelLineageV1, PalwWeightResidencyV1};
     struct HeldRowLineage(Arc<Base0ArtifactV1>, PalwShapeProfileV3);
@@ -855,9 +856,9 @@ fn t_a10_a_tabled_held_class_takes_the_turn_through_the_lineage_door() {
     }
     let (artifact, profile) = held_fixture(16_384);
     let class_id = profile.shape_profile_id();
-    let turn = kaspa_consensus_core::config::params::palw_t12_shipped_params().palw_held_answer_turn_v1();
-    assert!(turn.is_some());
-    for (carried, dissects) in [(turn, false), (None, true)] {
+    let armed = kaspa_consensus_core::config::params::palw_t12_shipped_params().palw_held_answerability_v1();
+    assert!(armed);
+    for (carried, dissects) in [(armed, false), (false, true)] {
         let sdk = PalwClassSdk::with_lineages(
             vec![Arc::new(HeldRowLineage(artifact.clone(), profile.clone()))],
             PalwCourtParamsV2::new(LADDER, 20, 2).expect("a court"),
@@ -866,6 +867,6 @@ fn t_a10_a_tabled_held_class_takes_the_turn_through_the_lineage_door() {
         )
         .with_held_answerability_v1(carried);
         let backend = sdk.resolve(class_id, h64(0x2007), &[]).expect("the lineage serves the row");
-        assert_eq!(backend.supports_dissection(), dissects, "turn {carried:?}");
+        assert_eq!(backend.supports_dissection(), dissects, "armed {carried}");
     }
 }

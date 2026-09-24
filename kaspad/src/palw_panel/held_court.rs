@@ -27,9 +27,11 @@
 //! **Deadlines are the chain's.** A move is due by the deadline the session carries
 //! (`PalwCourtDutyV2::rung_deadline_daa`, the fold's own `court_turn_and_rung_deadline_v2`: the
 //! opening rung's for the root claim, the phase's clock after it; the session's backstop for a
-//! close). Nothing here spells a turn length, so when the held compute turn (the review's F5:
-//! `m = 2 ×` the class's reference replay, ≈ 58 DAA at 8k; a response-only turn stays 42) lands in
-//! the fold, the node reads it from the same field.
+//! close). Nothing here spells a turn length: the held compute turn (the review's F5,
+//! `palw_held_move_turn_daa_v1` = max(the court's turn, `⌈2 ×` the class's reference replay `/ 120 s⌉`),
+//! 58 DAA on the 8k row) is stamped by the fold on the moves whose builder re-executes the job — the
+//! responder's root claim, and through the first disclosure the challenger's first choice — and every
+//! response keeps the court's 42; the node reads whichever the session carries.
 //!
 //! **Carried like every court move**: queued on `court_pending` under `(session, round, role)`,
 //! re-planned after `COURT_MOVE_REPLAN_DAA`, sent on the priority lane of the one carrier scheduler
@@ -780,9 +782,9 @@ mod tests {
 
     /// **Whose move, and by when — off the duty the chain reports.** The responder's root claim before
     /// a phase, its rounds after; the challenger's choices; either party's close at `Terminal`; nothing
-    /// on the other party's turn. The due DAA is the session's own field: a duty whose fold stamped a
-    /// 58-DAA compute turn (the review's F5) is due at 58, not at a 42 spelled here; a close is due by
-    /// the backstop.
+    /// on the other party's turn. The due DAA is the session's own field: a duty whose fold stamped the
+    /// 8k row's 58-DAA compute turn (the review's F5) is due at 58, not at a 42 spelled here; a close is
+    /// due by the backstop.
     #[test]
     fn the_move_and_its_deadline_are_read_off_the_session() {
         use kaspa_consensus_core::palw_attn_court_v1::PalwAttnDissectPhaseV1;

@@ -1504,11 +1504,11 @@ impl AsyncService for PalwProducerService {
 /// there; on a chain whose k-ary court is armed that is a refusal, as the DA court's is.
 ///
 /// **Past `palw_offence_attribution` the same question is held-aware** (N4, the A-held launch gate):
-/// the node's registry hands every backend the court's turn (`Params::palw_held_answer_turn_v1`, see
+/// the node's registry makes every backend held-aware (`Params::palw_held_answerability_v1`, see
 /// `PalwBackendRegistry::for_node_v1`), and a held class's `supports_dissection` is then `true` only
-/// where the family has the windowed builders (N1 and N2) AND the class is answerable inside that
-/// turn (`palw_held_class_unanswerable_v1`: the context bound, a recurrent layer, a whole-context
-/// reference replay past the turn). So on testnet-12 the node refuses the 2M row and any held
+/// where the family has the windowed builders (N1 and N2) AND the class is answerable
+/// (`palw_held_class_unanswerable_v1`: the context bound, a recurrent layer, a compute turn — `m = 2`
+/// reference replays — past the cap). So on testnet-12 the node refuses the 2M row and any held
 /// hybrid, and produces the 8k row, whose held dissection it answers (the panel's held route). Below
 /// the fence, and on every network that does not arm it, byte for byte what it was.
 pub(crate) fn palw_dissection_refusal_v1(
@@ -1521,9 +1521,9 @@ pub(crate) fn palw_dissection_refusal_v1(
         format!(
             "this node will not produce for class {class_id}: its fused attention site cannot be dissected by this build, and a \
              claim disputed down to that leaf is convicted by the silence it could not answer (ADR-0093){}",
-            if params.palw_held_answer_turn_v1().is_some() {
+            if params.palw_held_answerability_v1() {
                 "; past palw_offence_attribution a held class is dissected only where its family has the windowed builders and \
-                 its reference replay fits the court's turn (ADR-0152 §4-ter N4)"
+                 its compute turn fits the cap (ADR-0152 §4-ter N4)"
             } else {
                 ""
             }

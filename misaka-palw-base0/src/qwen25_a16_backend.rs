@@ -856,12 +856,12 @@ pub struct Qwen25A16Backend {
     /// (a fold keeps no tiles: what it serves it replays). Keyed by the job's context hash, so the
     /// same instance judges every other job honestly. `None` everywhere but a drill.
     drill_fault: std::sync::Mutex<Option<(Hash64, A16DrillLieV1)>>,
-    /// **ADR-0152 §4-ter N4's selector** ([`Self::with_held_answerability_v1`]): the court turn of the
-    /// chain this backend serves where `palw_offence_attribution` is armed, `None` elsewhere. Past it
+    /// **ADR-0152 §4-ter N4's selector** ([`Self::with_held_answerability_v1`]): whether the chain this
+    /// backend serves arms `palw_offence_attribution`. Past it
     /// [`PalwExecutionBackendV1::supports_dissection`] asks the consensus predicate
-    /// (`palw_held_class_unanswerable_v1`); `None` (every network without the fence) keeps it byte for
-    /// byte what it was.
-    held_answer_turn: Option<u64>,
+    /// (`palw_held_class_unanswerable_v1`, a pure function of the profile); `false` (every network
+    /// without the fence) keeps it byte for byte what it was.
+    held_answerability: bool,
     /// **The representation the cache is held in** (ADR-0151 follow-up): a node-local, named
     /// choice the resource profile prices and the telemetry reports. The same canonical execution
     /// commits the same rows and roots under every value — that is what makes it a runtime profile
@@ -958,7 +958,7 @@ impl Qwen25A16Backend {
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             drill_fault: std::sync::Mutex::new(None),
-            held_answer_turn: None,
+            held_answerability: false,
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
@@ -1079,13 +1079,12 @@ impl Qwen25A16Backend {
         self.drill_fault_v1().filter(|(context, _)| *context == ctx.context_hash()).and_then(|(_, lie)| lie.attn())
     }
 
-    /// **ADR-0152 §4-ter N4: the court turn of a chain past `palw_offence_attribution`** —
-    /// `Some(bundle.court.turn_deadline_daa())` where the node's `palw_offence_attribution_fence()`
-    /// is armed, `None` elsewhere. Past it a held class answers a dissection only where an honest
-    /// party can inside that turn ([`PalwExecutionBackendV1::supports_dissection`], the predicate C1
-    /// and C5 read: the context bound, a recurrent layer, a whole-context replay past the turn).
-    pub fn with_held_answerability_v1(mut self, court_turn_daa: Option<u64>) -> Self {
-        self.held_answer_turn = court_turn_daa;
+    /// **ADR-0152 §4-ter N4: whether the chain this backend serves is past `palw_offence_attribution`**
+    /// — the node's `palw_offence_attribution_fence().is_some()`. Past it a held class answers a
+    /// dissection only where an honest party can ([`PalwExecutionBackendV1::supports_dissection`], the
+    /// predicate C1 and C5 read: the context bound, a recurrent layer, a compute turn past the cap).
+    pub fn with_held_answerability_v1(mut self, armed: bool) -> Self {
+        self.held_answerability = armed;
         self
     }
 
@@ -1207,7 +1206,7 @@ impl Qwen25A16Backend {
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             drill_fault: std::sync::Mutex::new(None),
-            held_answer_turn: None,
+            held_answerability: false,
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
@@ -2151,9 +2150,9 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     }
 
     /// ADR-0152 §4-ter N4: the setter form of [`Self::with_held_answerability_v1`] — what a node's
-    /// registry applies to every backend it resolves (`Params::palw_held_answer_turn_v1()`).
-    fn set_held_answerability_v1(&mut self, court_turn_daa: Option<u64>) {
-        self.held_answer_turn = court_turn_daa;
+    /// registry applies to every backend it resolves (`Params::palw_held_answerability_v1()`).
+    fn set_held_answerability_v1(&mut self, armed: bool) {
+        self.held_answerability = armed;
     }
 
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
@@ -3368,9 +3367,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     fn supports_dissection(&self) -> bool {
         self.court_capable
             && kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1(&self.profile)
-            && !self.held_answer_turn.is_some_and(|turn| {
-                kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&self.profile, turn).is_some()
-            })
+            && !(self.held_answerability
+                && kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&self.profile).is_some())
     }
 
     /// **ADR-0152 §4-ter N1/N2: a held fused site's evidence, windowed** — see
@@ -7163,13 +7161,13 @@ mod aheld_windowed_builder {
             assert!(palw_profile_is_held_v4(&profile));
             let below = backend(&artifact, &profile, PAST_THE_CAP);
             assert!(below.supports_dissection(), "n_ctx {n_ctx}: below the fence the answer is what it was");
-            let fenced = backend(&artifact, &profile, PAST_THE_CAP).with_held_answerability_v1(Some(42));
+            let fenced = backend(&artifact, &profile, PAST_THE_CAP).with_held_answerability_v1(true);
             assert_eq!(fenced.supports_dissection(), !past, "n_ctx {n_ctx}: past the fence");
             // N4 is the consensus predicate C1 and C5 read (the review's F5 bound included — the
             // fixture's replay is milliseconds, so the context bound is what refuses it here).
             assert_eq!(
                 fenced.supports_dissection(),
-                kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&profile, 42).is_none(),
+                kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&profile).is_none(),
                 "n_ctx {n_ctx}: the backend's answer is the predicate's"
             );
         }

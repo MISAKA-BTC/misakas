@@ -1408,19 +1408,18 @@ pub const PALW_SHORT_CHALLENGE_WINDOW_DAA_V1: u64 = 120;
 /// a fused accusation of it is refused, and a registration of such a class is refused (C5).
 pub const PALW_HELD_ANSWERABLE_N_CTX_V1: u32 = 8_192;
 
-/// **The held classes a bundle's genesis registers that no honest party can dissect inside a turn of
-/// `turn_deadline_daa`** — the one derivation `Params::sync_palw_held_answerability` writes into the
-/// mirror and `validate_palw_v2` checks it against: every genesis `ClassRegistered` whose published
-/// held profile [`crate::palw_class_admission_v2::palw_held_class_unanswerable_v1`] refuses (past
-/// [`PALW_HELD_ANSWERABLE_N_CTX_V1`], a recurrent layer, or a whole-context replay past the turn),
-/// by class id, ascending. The same predicate C5 refuses a registration by and N4 declines a
-/// dissection by.
-pub fn palw_held_unanswerable_classes_of_v1(genesis_objects: &[PalwConsensusObjectV2], turn_deadline_daa: u64) -> Vec<Hash64> {
+/// **The held classes a bundle's genesis registers that no honest party can dissect** — the one
+/// derivation `Params::sync_palw_held_answerability` writes into the mirror and `validate_palw_v2`
+/// checks it against: every genesis `ClassRegistered` whose published held profile
+/// [`crate::palw_class_admission_v2::palw_held_class_unanswerable_v1`] refuses (past
+/// [`PALW_HELD_ANSWERABLE_N_CTX_V1`], a recurrent layer, or a compute turn past the cap), by class id,
+/// ascending. The same predicate C5 refuses a registration by and N4 declines a dissection by.
+pub fn palw_held_unanswerable_classes_of_v1(genesis_objects: &[PalwConsensusObjectV2]) -> Vec<Hash64> {
     let mut classes: Vec<Hash64> = genesis_objects
         .iter()
         .filter_map(|object| match object {
             PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. }
-                if crate::palw_class_admission_v2::palw_held_class_unanswerable_v1(&carriage.profile, turn_deadline_daa).is_some() =>
+                if crate::palw_class_admission_v2::palw_held_class_unanswerable_v1(&carriage.profile).is_some() =>
             {
                 Some(*class_id)
             }
@@ -21556,11 +21555,22 @@ fn open_held_dissection_v1(
     let challenger_collateral =
         builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;
     let deadline_daa = ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
-    let first_deadline_daa = ctx
-        .daa_score
-        .checked_add(builder.params.turn_deadline_daa())
-        .ok_or(PalwStateV2Error::Overflow("court opening rung deadline"))?
-        .min(deadline_daa);
+    // **ADR-0152 §4-ter (the review's F5, decision): the root claim is a COMPUTE move.** For an
+    // answerable held class past the fence the responder re-executes to the site before it can file
+    // (N1), so its rung is the class's compute turn — `palw_held_move_turn_daa_v1` of the profile the
+    // accusation's binding carries, authenticated to the claim's class by the bound verdict. Every
+    // other opening keeps the court's turn.
+    let opening_turn = match &accusation.refutation.binding.shape_profile {
+        profile
+            if palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id)
+                && profile.shape_profile_id() == claim.class_id =>
+        {
+            crate::palw_class_admission_v2::palw_held_move_turn_daa_v1(profile, builder.params.turn_deadline_daa())
+        }
+        _ => builder.params.turn_deadline_daa(),
+    };
+    let first_deadline_daa =
+        ctx.daa_score.checked_add(opening_turn).ok_or(PalwStateV2Error::Overflow("court opening rung deadline"))?.min(deadline_daa);
     // The space a bisection would have declared: the ruleset's own leaf cap — the ladder the
     // one-move court adjudicated the accusation at — never a count the accuser chose.
     let space_size = ladder;
@@ -26086,6 +26096,16 @@ fn apply_object(
             let committed =
                 crate::palw_attn_court_v1::palw_attn_opened_lanes_v1(out_tile, &derived.binding, derived.head_lanes.2 as usize)
                     .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            // **ADR-0152 §4-ter (the review's F5, decision): the challenger's first choice is a
+            // COMPUTE move** — it re-executes to the site (N2) once the filing is on the chain. The
+            // phase opens with the class's compute turn for a held root claim (the profile is the
+            // filing's own binding, the class's), and the first disclosure carries that window over
+            // to the choice (`CourtAttnDissected` below). Every other phase keeps the court's turn.
+            let first_window = if held_sub_roots.is_some() {
+                crate::palw_class_admission_v2::palw_held_move_turn_daa_v1(&binding.shape_profile, builder.params.turn_deadline_daa())
+            } else {
+                builder.params.turn_deadline_daa()
+            };
             let phase = crate::palw_attn_court_v1::PalwAttnDissectPhaseV1::open_with_arity(
                 *session_id,
                 root,
@@ -26096,7 +26116,7 @@ fn apply_object(
                 *arity,
                 derived.tile_positions,
                 ctx.daa_score,
-                builder.params.turn_deadline_daa(),
+                first_window,
                 true,
             )
             .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
@@ -26107,9 +26127,24 @@ fn apply_object(
         PalwConsensusObjectV2::CourtAttnDissected { session_id, round, signature: _ } => {
             let mut session =
                 builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            let claim_of_session =
+                builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
             let phase = session.dissection.as_mut().ok_or(PalwStateV2Error::NoDissection(*session_id))?;
+            // **ADR-0152 §4-ter (the review's F5, decision): the challenger's first choice keeps the
+            // compute window move 1 opened.** For an answerable held class past the fence, the first
+            // disclosure's deadline was the root claim's DAA plus the class's compute turn; the choice
+            // after it is due no earlier than that deadline, and never less than a turn after the
+            // disclosure. Every later move is a response and takes the court's turn.
+            let base = builder.params.turn_deadline_daa();
+            let window = if phase.round() == 0
+                && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim_of_session.class_id)
+            {
+                base.max(phase.last_deadline_daa().saturating_sub(ctx.daa_score))
+            } else {
+                base
+            };
             phase
-                .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
+                .apply_round(round, ctx.daa_score, window)
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session))?;
@@ -51430,7 +51465,11 @@ pub(crate) mod tests {
 
         impl HeldDrill {
             pub(crate) fn new(forger: Forger) -> Self {
-                let geometry = crate::palw_checkpoint_court_v1::tests::tiny_dense_geometry(64);
+                Self::with_geometry(forger, crate::palw_checkpoint_court_v1::tests::tiny_dense_geometry(64))
+            }
+
+            /// The drill over `geometry` (one KV head, one head a tile — the drill's site reads head 0).
+            pub(crate) fn with_geometry(forger: Forger, geometry: crate::palw_qwen25_profile::PalwQwen25GeometryV1) -> Self {
                 let profile = crate::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("the held v7 row builds");
                 assert!(crate::palw_state_chunk_map::palw_profile_is_held_v4(&profile), "a held row");
                 let prompt = crate::palw_checkpoint_court_v1::tests::fixture_prompt_ids(PREFILL);
@@ -52622,6 +52661,93 @@ pub(crate) mod tests {
             // Below the fence the same bottom is the fraud it always was.
             let (_, end, claim_id, _, _, _, at) = play(&liar, &below, false);
             assert_eq!(phase_of(&end, &claim_id), PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::CourtFraud });
+        }
+
+        /// **The review's F5, the user's decision: a held dissection's COMPUTE moves get the class's
+        /// compute turn; every response keeps the court's.** A held row whose profile prices a
+        /// whole-context replay at a compute turn between the court's turn and the cap (sixteen
+        /// layers, sixteen 32-wide heads, one head a tile, `n_ctx` 8,192: 192.6 s at the reference
+        /// rate, a 4-DAA compute turn — the job itself is the drill's 40 positions), under a 2-DAA
+        /// court turn:
+        /// * the opening rung — the responder's held root claim, a re-execution — is due at the
+        ///   opening plus the compute turn, not the court's turn: a root claim filed past the court's
+        ///   turn still lands, and silence defaults only past the compute turn;
+        /// * move 1 opens the phase with that window, and the challenger's first choice keeps it: due
+        ///   no earlier than the root claim plus the compute turn, however early the disclosure;
+        /// * every later disclosure and choice is due a court's turn after the move before it;
+        /// * below the fence every rung is the court's turn, as it was.
+        #[test]
+        fn f5_the_held_compute_moves_get_the_classs_compute_turn() {
+            let geometry = crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+                layer_count: 16,
+                hidden_dim: 512,
+                ffn_dim: 512,
+                attn_heads: 16,
+                attn_kv_heads: 1,
+                attn_head_dim: 32,
+                vocab_size: 64,
+                n_ctx: 8_192,
+                n_threads: 1,
+                rms_eps_q: 1,
+                tile_len: 32,
+            };
+            let drill = HeldDrill::with_geometry(Forger::Lies, geometry);
+            let fused = drill.profile.attn_nodes.iter().find(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+            assert_eq!(fused.tile_len as usize, drill.d_head, "one head a tile: the drill's site");
+            let compute = crate::palw_class_admission_v2::palw_held_compute_turn_daa_v1(&drill.profile).expect("a held row is priced");
+            assert_eq!(compute, 4, "192,574 ms at the reference rate, twice, over 120 s");
+            let p = drill_params().with_turn_deadline_daa(2).expect("a 2-DAA court turn");
+            let base = p.turn_deadline_daa();
+            // Room between the two: a move filed a DAA past the court's turn is still inside the compute turn.
+            assert!(compute >= base + 2 && compute <= crate::palw_class_admission_v2::PALW_HELD_COMPUTE_TURN_CAP_DAA_V1, "{compute}");
+            assert_eq!(crate::palw_class_admission_v2::palw_held_move_turn_daa_v1(&drill.profile, base), compute);
+            assert_eq!(crate::palw_class_admission_v2::palw_held_class_unanswerable_v1(&drill.profile), None, "answerable");
+
+            for x in [launch_extras(), below_the_fence()] {
+                let past = x.offence_attribution_active;
+                let expect_open = if past { compute } else { base };
+                let (s, claim, sid) = opened(&drill, &p, &x, SEAT);
+                // The opening rung: the responder's silence defaults only past it.
+                let (end, at) = run_until(&s, &p, 105, 400, &x, |y| y.court_sessions_for_claim(&claim) == 0);
+                assert!(at > 104 + expect_open, "past {past}: the opening rung ran {} DAA, not less than {expect_open}", at - 104);
+                assert!(at <= 104 + expect_open + 1, "past {past}: and it ran out right after ({at})");
+                let _ = end;
+                // Move 1 filed after the court's turn, before the compute turn: it lands past the fence.
+                let late = 104 + base + 1;
+                let (s_late, _) = run_until(&s, &p, 105, 400, &x, |y| y.last_point.expect("a point").daa_score + 1 >= late);
+                let move_1 =
+                    if past { drill.root_claimed_held(sid, 2, drill.sub_roots()) } else { drill.root_claimed_anchored(sid, 2) };
+                let landed = step(&s_late, &p, late, std::slice::from_ref(&move_1), None, &x);
+                assert_eq!(landed.is_ok(), past, "past {past}: a root claim after the court's turn: {landed:?}");
+
+                // Move 1 on time; the first disclosure at once; the challenger's first choice keeps the window.
+                let s1 = step(&s, &p, 105, &[move_1], None, &x).expect("move 1");
+                let phase = s1.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                assert_eq!(phase.last_deadline_daa(), 105 + expect_open, "past {past}: the phase opens with the compute window");
+                let children: Vec<_> = phase.child_ranges().iter().map(|&(f, c)| drill.responder_range_claim(f, c)).collect();
+                let s2 = step(&s1, &p, 106, &[dissected(sid, children.clone())], None, &x).expect("the first disclosure");
+                let phase = s2.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                let first_choice = if past { (105 + compute).max(106 + base) } else { 106 + base };
+                assert_eq!(phase.last_deadline_daa(), first_choice, "past {past}: the challenger's first choice");
+                // A response-only move: the responder's next disclosure is due a court's turn later.
+                let named = phase
+                    .child_ranges()
+                    .iter()
+                    .zip(&children)
+                    .position(|(&(f, c), claimed)| *claimed != drill.honest_range_claim(f, c));
+                let s3 =
+                    step(&s2, &p, 107, &[child_chosen(sid, phase.round(), named.unwrap_or(0) as u8)], None, &x).expect("the choice");
+                let phase = s3.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                assert_ne!(phase.turn(), PalwBisectTurnV1::Terminal, "past {past}: the history takes a second round");
+                assert_eq!(phase.last_deadline_daa(), 107 + base, "past {past}: a response keeps the court's turn");
+                let children: Vec<_> = phase.child_ranges().iter().map(|&(f, c)| drill.responder_range_claim(f, c)).collect();
+                let s4 = step(&s3, &p, 108, &[dissected(sid, children)], None, &x).expect("the second disclosure");
+                assert_eq!(
+                    s4.court_session(&sid).unwrap().dissection.as_ref().unwrap().last_deadline_daa(),
+                    108 + base,
+                    "past {past}: a later choice keeps the court's turn"
+                );
+            }
         }
 
         /// **T-A7 (C4): a held dissection's losing challenger pays `max(reserved, G)`.** An honest

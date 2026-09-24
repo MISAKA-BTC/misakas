@@ -8243,12 +8243,11 @@ impl VirtualStateProcessor {
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                     // ADR-0152 §4-ter C5: past `palw_offence_attribution` a held class is admitted
                     // only where its attention lie is attributable — its dissection answerable
-                    // inside a turn of this ruleset's court (`palw_held_class_unanswerable_v1`: the
-                    // context bound, a recurrent layer, a whole-context replay past the turn).
+                    // (`palw_held_class_unanswerable_v1`: the context bound, a recurrent layer, a
+                    // compute turn past the cap — a pure function of the profile).
                     kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v1(
                         &carriage.profile,
                         self.palw_offence_attribution_at(point.daa_score),
-                        bundle.court.turn_deadline_daa(),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                     // **ADR-0152 v3.1 addendum §4-bis.8: every claim of the class must be
