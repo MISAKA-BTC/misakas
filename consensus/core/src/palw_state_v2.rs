@@ -9336,12 +9336,14 @@ impl PalwFoldReadV1<'_> {
         }
     }
 
-    /// `incoming` is how many of the class's claims the new one counts as — `1` for an attempt and
-    /// for every caller below the fence, a free-prompt claim's whole jobs of quanta past it
-    /// ([`palw_inflight_claims_counted_v1`], 2026-09-24 DoS audit #11) — and the room and the cap
-    /// must hold that many.
-    fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: u64) -> Result<(), PalwStateV2Error> {
+    /// `incoming` is the claim asked about ([`PalwGatedClaimV1`]): an attempt — every caller below
+    /// the fence — or, past it, a free-prompt commitment of so many quanta (2026-09-24 DoS audit
+    /// #11). Past the fence the rate room counts it POOLED with its class's claims in flight; a held
+    /// class's static cap, the rule below the fence, and the cap before the registry governs count it
+    /// as its whole claims.
+    fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
+        let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
         if let Some(state) = self.class_lifecycle_refusal(class_id) {
             return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state });
         }
@@ -9368,13 +9370,15 @@ impl PalwFoldReadV1<'_> {
             // is read once, before step 3's first object (`TransitionBuilder::own_attempt_fit`), and
             // every gated object in step 3 is refused rather than taking it (below). Step 4 then
             // asks only the lifecycle for it. The re-charges take effect for the next block.
-            let exempt = audited && incoming <= 1 && self.room_exempt_class == Some(*class_id);
+            let exempt = audited && incoming == PalwGatedClaimV1::Attempt && self.room_exempt_class == Some(*class_id);
             // **A held class is held to its static cap past the fence too** (the review's item 1,
             // ADR-0152 T-2(b)): c_2M = 1 until ADR-0153. The rate room alone lets a held class run
             // as many claims as the panel's replay holds, which is exactly what the hold forbids.
+            // The claim asked about counts whole here, not pooled as the room counts it: it draws a
+            // panel of its own, and c_2M = 1 is one claim, so no part-job slack admits a second.
             if audited && !exempt && self.state.class_is_held_v1(class_id) {
                 let inflight = self.model_registry_inflight(class_id);
-                if (inflight as u64).saturating_add(incoming.max(1)) > row.profile.max_inflight_claims as u64 {
+                if (inflight as u64).saturating_add(whole) > row.profile.max_inflight_claims as u64 {
                     return Err(PalwStateV2Error::ClassInflightCapped {
                         class: *class_id,
                         inflight,
@@ -9382,11 +9386,18 @@ impl PalwFoldReadV1<'_> {
                     });
                 }
             }
-            // ADR-0137 D5: one network-wide replay budget in place of the per-class cap.
+            // ADR-0137 D5: one network-wide replay budget in place of the per-class cap. **Past the
+            // fence the claim is pooled before it is counted** (the audit #4 review's item 4, and its
+            // verification): what the class would owe with it ([`palw_panel_owed_v1`] with `extra`)
+            // against what the class holds — the budget is replay, and a free-prompt commitment that
+            // fills its class's last part-job adds no job of it. An attempt adds one, as before.
             if !exempt {
-                let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
-                if room < incoming.max(1) {
-                    return Err(PalwStateV2Error::PanelRoomExhausted { class: *class_id, inflight_replay, budget, horizon_spans });
+                let pooled_fits = audited && self.panel_rate_v1(class_id, row, fold, now_daa, Some((*class_id, incoming))).fits();
+                if !pooled_fits {
+                    let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
+                    if audited || room < whole {
+                        return Err(PalwStateV2Error::PanelRoomExhausted { class: *class_id, inflight_replay, budget, horizon_spans });
+                    }
                 }
             }
             // **And a gated object of ANOTHER class may not take the own attempt's room** (the
@@ -9398,7 +9409,7 @@ impl PalwFoldReadV1<'_> {
                 && let Some(own_row) = self.state.model_lifecycles.get(&own)
             {
                 let before = self.panel_rate_v1(&own, own_row, fold, now_daa, None);
-                let after = self.panel_rate_v1(&own, own_row, fold, now_daa, Some((*class_id, incoming.max(1) as u128)));
+                let after = self.panel_rate_v1(&own, own_row, fold, now_daa, Some((*class_id, incoming)));
                 if before.fits() && !after.fits() {
                     return Err(PalwStateV2Error::PanelRoomExhausted {
                         class: own,
@@ -9411,7 +9422,7 @@ impl PalwFoldReadV1<'_> {
             return Ok(());
         }
         let inflight = self.model_registry_inflight(class_id);
-        if (inflight as u64).saturating_add(incoming.max(1)) > row.profile.max_inflight_claims as u64 {
+        if (inflight as u64).saturating_add(whole) > row.profile.max_inflight_claims as u64 {
             return Err(PalwStateV2Error::ClassInflightCapped { class: *class_id, inflight, cap: row.profile.max_inflight_claims });
         }
         Ok(())
@@ -9507,14 +9518,15 @@ impl PalwFoldReadV1<'_> {
         (room, rate.inflight_replay(), rate.per_span.saturating_mul(rate.window as u128), rate.window)
     }
 
-    /// One class's [`PalwPanelRateV1`] reading, with `extra` claims of some class counted as owed.
+    /// One class's [`PalwPanelRateV1`] reading, with an `extra` claim of some class pooled into what
+    /// that class owes.
     fn panel_rate_v1(
         &self,
         class_id: &Hash64,
         row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
         now_daa: u64,
-        extra: Option<(Hash64, u128)>,
+        extra: Option<(Hash64, PalwGatedClaimV1)>,
     ) -> PalwPanelRateV1 {
         let g = &fold.globals;
         let seat_count = g.seat_count as u128;
@@ -9632,9 +9644,9 @@ pub fn palw_class_admits_claim_v1(
     class_id: &Hash64,
     now_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
-    // One claim of `class_id` — an attempt's count; a free-prompt claim's whole jobs are the fold's
-    // own `incoming` (`palw_inflight_claims_counted_v1`).
-    PalwFoldReadV1::outside(state, params, extras).check_class_admits_claim(class_id, now_daa, 1)
+    // One attempt of `class_id`; a free-prompt commitment's quanta are the fold's own `incoming`
+    // (`PalwGatedClaimV1`).
+    PalwFoldReadV1::outside(state, params, extras).check_class_admits_claim(class_id, now_daa, PalwGatedClaimV1::Attempt)
 }
 
 /// **Would the fold at a block with these `extras` take a seed or a buy on a line of `class_id`, as
@@ -9908,6 +9920,33 @@ pub fn palw_inflight_claims_counted_v1(attempts: u64, fp_claims: u64, fp_quanta:
     attempts.saturating_add(fp).min(u32::MAX as u64) as u32
 }
 
+/// **The claim a class gate is asked about** (`check_class_admits_claim`): an attempt, or a
+/// free-prompt commitment of `quanta`. Past the 2026-09-23 audit fence the rate room pools it with
+/// its class's claims in flight before counting ([`palw_panel_owed_v1`]); [`Self::whole_claims`]
+/// is what it counts as alone — all it adds below the fence and before the registry governs, and
+/// the most it adds past it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PalwGatedClaimV1 {
+    Attempt,
+    FreePrompt { quanta: u64 },
+}
+
+impl PalwGatedClaimV1 {
+    /// `(attempts, free-prompt claims, their quanta)`: the tally's lanes.
+    fn lanes(self) -> (u64, u64, u64) {
+        match self {
+            Self::Attempt => (1, 0, 0),
+            Self::FreePrompt { quanta } => (0, 1, quanta),
+        }
+    }
+
+    /// The claim counted alone, in whole jobs, and never less than one claim.
+    fn whole_claims(self, quanta_per_job: u64) -> u64 {
+        let (attempts, fp, quanta) = self.lanes();
+        (palw_inflight_claims_counted_v1(attempts, fp, quanta, quanta_per_job, true) as u64).max(1)
+    }
+}
+
 /// One class's claims in flight, by lane — the value `TransitionBuilder::inflight_index` holds.
 /// `u64` so an increment never wraps; readers clamp to `u32` exactly where the walk clamped its
 /// `count()`.
@@ -10018,23 +10057,32 @@ fn palw_inflight_index_build_v1(state: &PalwChainStateV2) -> BTreeMap<Hash64, Pa
 ///   free-prompt claims alike, since a licence carries every receipt of either), plus each
 ///   LICENSED claim with a court open on it (a court puts jury replay back on the same panel, so
 ///   the licence's release lasts only while no court is open);
-/// * a HELD class (`class_is_held_v1`, the 2M regime) owes every claim in flight until Final —
+/// * a HELD class (`class_is_held_v1`: a class that recorded its own step ladder — on testnet-12
+///   both genesis model rows, the short-window row and 2M) owes every claim in flight until Final —
 ///   ADR-0152 T-2(b): its slot is held to Final until ADR-0153 measures its replay — so no licence
 ///   releases it and a court adds nothing it does not already owe;
 /// * the block's own attempt (`own_attempt_class`) is one attempt more on its class, as the
 ///   common-horizon rule reserved it;
-/// * `extra` — a claim some gate is asking about — is added last, in the same units.
+/// * `extra` — a claim some gate is asking about ([`PalwGatedClaimV1`]) — is one claim more on
+///   its class, in its lane.
 ///
 /// Each class's attempts, free-prompt claims and quanta are POOLED before they are counted
 /// ([`palw_inflight_claims_counted_v1`], whole canonical jobs over the class), so a courted
-/// free-prompt claim rounds with the pending ones, as the in-flight count always pooled them. The
-/// base class owes nothing to a panel budget.
+/// free-prompt claim, and a commitment a gate is asking about, round with the pending ones, as the
+/// in-flight count always pooled them. The base class owes nothing to a panel budget.
+///
+/// A held class's row is its whole tally, and the row is what every OTHER class's `others` term
+/// reads too ([`PalwPanelRateV1::read`]): a licensed claim of a held class stays on the budget of
+/// every class until Final, not only on its own class's cap. Deliberately — the hold's premise is
+/// that the panel is not known to have finished a held claim's replay at its licence (a 2M
+/// reference replay does not fit its window, ADR-0152 T-2(b)), and the seats that owe it are the
+/// seats every class's budget is counted on.
 fn palw_panel_owed_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     index: &BTreeMap<Hash64, PalwInflightTallyV1>,
     own_attempt_class: Option<Hash64>,
-    extra: Option<(Hash64, u128)>,
+    extra: Option<(Hash64, PalwGatedClaimV1)>,
 ) -> BTreeMap<Hash64, u128> {
     let base = params.base_class_id();
     let per_job = params.fp_quanta_per_canonical_job as u64;
@@ -10072,15 +10120,15 @@ fn palw_panel_owed_v1(
         let slot = pooled.entry(id).or_default();
         slot.0 = slot.0.saturating_add(1);
     }
-    let mut owed: BTreeMap<Hash64, u128> = pooled
+    if let Some((id, claim)) = extra.filter(|(id, _)| *id != base) {
+        let (attempts, fp, quanta) = claim.lanes();
+        let slot = pooled.entry(id).or_default();
+        *slot = (slot.0.saturating_add(attempts), slot.1.saturating_add(fp), slot.2.saturating_add(quanta));
+    }
+    pooled
         .into_iter()
         .map(|(id, (attempts, fp, quanta))| (id, palw_inflight_claims_counted_v1(attempts, fp, quanta, per_job, true) as u128))
-        .collect();
-    if let Some((id, claims)) = extra.filter(|(id, _)| *id != base) {
-        let slot = owed.entry(id).or_insert(0);
-        *slot = slot.saturating_add(claims);
-    }
-    owed
+        .collect()
 }
 
 /// **Each rowed class's term of the per-span demand, scaled by
@@ -12281,10 +12329,9 @@ impl<'a> TransitionBuilder<'a> {
         self.read().panel_room_v1(class_id, row, fold, now_daa)
     }
 
-    /// `incoming` is how many of the class's claims the new one counts as — `1` for an attempt and
-    /// for every caller below the fence, a free-prompt claim's whole jobs of quanta past it
-    /// ([`palw_inflight_claims_counted_v1`]) — and the room and the cap must hold that many.
-    fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: u64) -> Result<(), PalwStateV2Error> {
+    /// `incoming` is the claim asked about ([`PalwGatedClaimV1`]): an attempt, or past the fence a
+    /// free-prompt commitment of so many quanta, which the rate room pools with its class.
+    fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
         self.read().check_class_admits_claim(class_id, now_daa, incoming)
     }
 
@@ -14667,12 +14714,23 @@ pub fn apply_palw_transition_v7(
     //    while the objects fold (`TransitionBuilder::own_attempt_class`, the audit review of #11):
     //    a free-prompt commitment that would leave the attempt no room is the object refused, not
     //    the attempt at step 4. Released before step 4, where the attempt counts itself.
+    //
+    //    The reservation is held for whatever attempt the header carries, including one step 4
+    //    then SKIPS at its exposure ceiling (finding 17) — so at a class's last slot such an attempt
+    //    costs this block the commitments it refuses, of its own class and, past audit #4's review,
+    //    of any other class whose object would take its room. That is the reservation's price, and
+    //    it is accepted: the ceiling is `apply_attempt`'s verdict on the state step 3 leaves, the
+    //    acceptance rehearsal knows only the header's class, and a rehearsal that reserved less
+    //    than this fold would let through an object the fold refuses — which fails the block. An
+    //    honest producer's headroom pre-check does not attach such an attempt; one that does gains
+    //    no more than an attempt its bond can back already takes, the last slot for its own work.
     if extras.audit_2026_09_23_active
         && let PalwBlockWorkV3::Attempt(envelope) = &block_work
     {
         // The attempt's room, read before any object of this block moves the demand (audit #4
         // review, item 2): step 4 asks it no room question again.
-        builder.own_attempt_fit = builder.check_class_admits_claim(&envelope.attempt.class_id, ctx.daa_score, 1).is_ok();
+        builder.own_attempt_fit =
+            builder.check_class_admits_claim(&envelope.attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt).is_ok();
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
     for object in accepted_objects {
@@ -19419,8 +19477,10 @@ fn apply_object(
             // class is never gated (the gate's own first clause), so the floor's free-prompt lane
             // is exactly what it was. Below the fence nothing here runs and the arm is
             // byte-identical.
+            // Asked for one quantum here — the least a commitment carries, so the least room it can
+            // need — and for the priced quanta below.
             if builder.extras.audit_2026_09_23_active {
-                builder.check_class_admits_claim(class_id, ctx.daa_score, 1)?;
+                builder.check_class_admits_claim(class_id, ctx.daa_score, PalwGatedClaimV1::FreePrompt { quanta: 1 })?;
             }
             // **Priced in leaves against the class's own canonical job** (ADR-0074 Decision 5):
             // the quantum is a fraction of the class's job size, quanta are whole quanta of the
@@ -19505,15 +19565,14 @@ fn apply_object(
             )?;
             let (quanta, pwu, reserved, in_compute) = (price.quanta, price.pwu, price.reserved, price.priced_in_compute);
             // **2026-09-24 DoS audit review of #11: the gate holds the jobs this claim will count as.**
-            // The early gate above asks for one claim's room; a commitment of more than one canonical
-            // job's quanta counts as `⌈quanta / per_job⌉` of the class's claims once in flight
-            // (`palw_inflight_claims_counted_v1`), so it must find that much room, or it would
-            // overshoot the budget it is measured against. Only past the fence, like the gate.
-            if builder.extras.audit_2026_09_23_active {
-                let jobs = (quanta as u64).div_ceil(per_job as u64);
-                if jobs > 1 {
-                    builder.check_class_admits_claim(class_id, ctx.daa_score, jobs)?;
-                }
+            // The early gate above asks for one quantum's room; the commitment's quanta are pooled
+            // with its class's claims in flight (`palw_inflight_claims_counted_v1`, whole jobs over
+            // the class), so it must find the room its priced quanta take there, or it would
+            // overshoot the budget it is measured against. Only past the fence, like the gate. (The
+            // audit #4 review's item 4, and its verification: pooled before it is counted, a
+            // commitment that fills its class's last part-job needs no job of room.)
+            if builder.extras.audit_2026_09_23_active && quanta > 1 {
+                builder.check_class_admits_claim(class_id, ctx.daa_score, PalwGatedClaimV1::FreePrompt { quanta: quanta as u64 })?;
             }
             let derived = price.derived_work;
             // **Fail-closed on the one field the court cannot do without (audit C3).** A claim
@@ -21479,7 +21538,7 @@ fn apply_attempt(
     }
     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
     // claim, and one at its inflight cap takes none until a claim leaves flight.
-    builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, 1)?;
+    builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, PalwGatedClaimV1::Attempt)?;
     // **ADR-0145: past the fence the collateral is priced on the DERIVED work of one draw**, not on
     // the step-leaf count the class's registrant declared. `None` — every shipped preset — leaves
     // the reservation byte-identical.
