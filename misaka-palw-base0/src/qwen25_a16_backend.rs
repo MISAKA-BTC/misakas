@@ -2082,8 +2082,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             if claim.attempt_draw.is_some() && !kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&self.profile) {
                 return PalwMaterialVerdictV1::Mismatch;
             }
-            if claim.anchor != Hash64::default() && folded.binding.job_context.job_id != claim.anchor {
-                return PalwMaterialVerdictV1::Mismatch;
+            // **SEAT-S1: the whole job, here too.** This branch checked the id alone, and a held
+            // class's attempt IS a fold — so a fold of a smaller job under the right id (a
+            // shortened prefill, the decode call skipped) was licensed by every seat holding it.
+            if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &folded.binding.job_context, &claim) {
+                return verdict;
             }
             if folded.binding.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
@@ -2100,22 +2103,10 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             };
         }
         if let Ok(decoded) = crate::produce::base0_material_decode_v1(material) {
-            if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
-                return PalwMaterialVerdictV1::Mismatch;
-            }
-            // **The whole job, not only its id** (ADR-0117): an attempt claim's material must
-            // answer the job the block asked for — `palw_attempt_job_v1` of the anchor's canonical
-            // job at the block's own draw rule. The id alone let a smaller job through: decode calls
-            // skipped, or a prompt of another length, vouched for by every seat that held it.
-            if let Some(prefill_draw) = claim.attempt_draw
-                && claim.anchor != Hash64::default()
-            {
-                let Ok((canonical, _)) = self.job_for_anchor(claim.anchor) else {
-                    return PalwMaterialVerdictV1::Unverifiable;
-                };
-                if decoded.0.job_context != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
-                    return PalwMaterialVerdictV1::Mismatch;
-                }
+            // **The whole job, not only its id** (ADR-0117; SEAT-S1): the same rule as the fold
+            // branch above, `base0_material_job_is_the_claims_v1`.
+            if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &decoded.0.job_context, &claim) {
+                return verdict;
             }
             // A capture for some OTHER class of this family is not this backend's to vouch for.
             if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {

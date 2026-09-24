@@ -1336,6 +1336,50 @@ pub fn base0_replay_accused_segment_v1(
     base0_replay_segment_from_checkpoint_v1(artifact, &binding.shape_profile, &binding.job_context, &held, &opening, step_ladder_cap)
 }
 
+/// **SEAT-S1: the material answers the WHOLE job the claim's block asked for** (ADR-0117) — one
+/// rule for every retention of every family, dense tuple and fold alike.
+///
+/// Two questions, in order. Which job: the material's `job_id` must be the claim's anchor, derived
+/// from the claim's own block — never read off the material (`PalwClaimRootsV1::anchor`). And, for
+/// a claim of the attempt lane (`attempt_draw` is `Some`), the whole job: the material's context
+/// must equal `palw_attempt_job_v1(job_for_anchor(anchor), draw)` field for field. The id alone let
+/// a producer answer the right question with a smaller job — a shortened prefill, a decode call
+/// skipped, a context field of its own choosing — and every seat that held the material vouched
+/// for it.
+///
+/// The fold branch of the model tiers checked only the id, and on this line a HELD class's attempt
+/// folds (`palw_attempt_capture_folds_v1`), so a held attempt was exactly the material that
+/// escaped the rule. It lived as two spellings in two branches of each backend; it is one function
+/// now, and each branch calls it before it reads a root.
+///
+/// `Ok(())` is "this is the claim's job"; `Err(verdict)` is the seat's answer: `Mismatch` for the
+/// wrong job, `Unverifiable` when this backend cannot derive the anchor's job at all. A caller with
+/// no block (`anchor == Hash64::default()`: the producer's own run, the fixtures) skips both
+/// questions, as it always has.
+pub fn base0_material_job_is_the_claims_v1<B: kaspa_consensus_core::palw_backend::PalwExecutionBackendV1 + ?Sized>(
+    backend: &B,
+    material_job: &PalwJobContextV2,
+    claim: &kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+) -> Result<(), kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1> {
+    use kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1;
+    if claim.anchor == Hash64::default() {
+        return Ok(());
+    }
+    if material_job.job_id != claim.anchor {
+        return Err(PalwMaterialVerdictV1::Mismatch);
+    }
+    let Some(prefill_draw) = claim.attempt_draw else {
+        return Ok(());
+    };
+    let Ok((canonical, _)) = backend.job_for_anchor(claim.anchor) else {
+        return Err(PalwMaterialVerdictV1::Unverifiable);
+    };
+    if *material_job != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
+        return Err(PalwMaterialVerdictV1::Mismatch);
+    }
+    Ok(())
+}
+
 /// **What a panel seat checks before it signs `Valid`.**
 ///
 /// A seat's receipt is an attestation that the producer served material matching what its claim

@@ -562,22 +562,11 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // would be a tautology — and it is precisely the tautology that made a gossiped capture
         // re-mineable by anyone, forever, with no inference. The caller derives the anchor from the
         // BLOCK; here we only insist the capture answers it.
-        if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
-            return PalwMaterialVerdictV1::Mismatch;
-        }
-        // **The whole job, not only its id** (ADR-0117): an attempt claim's material must
-        // answer the job the block asked for — `palw_attempt_job_v1` of the anchor's canonical
-        // job at the block's own draw rule. The id alone let a smaller job through: decode calls
-        // skipped, or a prompt of another length, vouched for by every seat that held it.
-        if let Some(prefill_draw) = claim.attempt_draw
-            && claim.anchor != Hash64::default()
-        {
-            let Ok((canonical, _)) = self.job_for_anchor(claim.anchor) else {
-                return PalwMaterialVerdictV1::Unverifiable;
-            };
-            if decoded.0.job_context != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
-                return PalwMaterialVerdictV1::Mismatch;
-            }
+        //
+        // **The whole job, not only its id** (ADR-0117; SEAT-S1): one rule for every family and
+        // retention, `base0_material_job_is_the_claims_v1`.
+        if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &decoded.0.job_context, &claim) {
+            return verdict;
         }
         // **A capture for some other profile is not this backend's to vouch for** — the check the
         // A16 and Qwen3.6 tiers already make. A free-prompt claim's roots are tied to no profile
