@@ -98,6 +98,10 @@ pub(crate) enum TxRemovalReason {
     /// classifier dropped with a TERMINAL reason (malformed / validator-id mismatch / bad
     /// signature) — evicted from the mempool so it is not re-selected into every template forever.
     AttestationTemplateDropped,
+    /// **V01 (the 2026-09-25 sweep): an H-1 carrier the tip's fold now refuses**, evicted with its
+    /// redeemers by the gate sweep every node runs at each new block
+    /// (`MiningManager::evict_palw_refused_carriers`) — not only by a template build.
+    PalwCarrierRefused,
 }
 
 impl TxRemovalReason {
@@ -116,6 +120,7 @@ impl TxRemovalReason {
             TxRemovalReason::AttestationDuplicate => "attestation duplicate",
             TxRemovalReason::AttestationReplaced => "attestation replaced",
             TxRemovalReason::AttestationTemplateDropped => "attestation template-dropped",
+            TxRemovalReason::PalwCarrierRefused => "PALW carrier refused by the tip's fold",
         }
     }
 

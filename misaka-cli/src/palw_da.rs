@@ -51,7 +51,7 @@ pub(crate) async fn accuse(ctx: &Ctx, ks: &KeySource, args: DaAccuseArgs<'_>) ->
     // carrier's fee is gone — the same reason `court-close` refuses to default `--side`.
     let facts = nv
         .client
-        .get_palw_producer_facts(String::new(), accuser.0.transaction_id.to_string(), accuser.0.index, true)
+        .get_palw_producer_facts(crate::bond::bond_lookup_class(&nv)?, accuser.0.transaction_id.to_string(), accuser.0.index, true)
         .await
         .map_err(|e| CliError::connection(format!("cannot read the bond's facts from the node: {e}")))?;
     if !facts.bond_known {

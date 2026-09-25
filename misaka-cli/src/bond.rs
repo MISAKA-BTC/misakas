@@ -63,6 +63,25 @@ pub(crate) fn network_domain(nv: &NodeView) -> kaspa_consensus_core::Hash64 {
     )
 }
 
+/// **The class a with-bond `getPalwProducerFacts` read names** (V09, the 2026-09-25 sweep). The
+/// wire shape asks for a class although a bond's registration and key are not class-specific, and
+/// the node answers an EMPTY class with no bond at all (`bondKnown: false`) — so the DA accusation,
+/// the shard court and the shard licensing prechecks, which passed `String::new()`, refused every
+/// bond as one "the chain knows no bond at". The network's base class is registered from genesis on
+/// every ConsensusV2 chain; `bond status` reads the same one. `Err` off ConsensusV2 (no registry).
+pub(crate) fn bond_lookup_class(nv: &NodeView) -> Result<String, CliError> {
+    bond_lookup_class_of(&nv.params)
+        .ok_or_else(|| CliError::new(exit::GENERIC, format!("{} has no PALW Bond registry; check --network and --rpc", nv.params.net)))
+}
+
+/// [`bond_lookup_class`] on the chain's parameters: its base class id, `None` off ConsensusV2.
+pub(crate) fn bond_lookup_class_of(params: &kaspa_consensus_core::config::params::Params) -> Option<String> {
+    match &params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id.to_string()),
+        _ => None,
+    }
+}
+
 /// **`misaka bond status`** (D3) — what the chain says about a key's collateral or one
 /// exact outpoint.
 ///
@@ -783,6 +802,35 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id:
         ),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod bond_lookup_class_tests {
+    use super::*;
+    use kaspa_consensus_core::config::params::Params;
+    use kaspa_consensus_core::network::{NetworkId, NetworkType};
+
+    /// **V09 (the 2026-09-25 sweep): a with-bond facts read names the network's base class, never
+    /// an empty one** — the node answers an empty class with `bondKnown: false`, so `palw
+    /// da-accuse`, `shard court` and `shard licensing` refused every bond. The class is the one
+    /// genesis registers (testnet-12's bundle), and no with-bond read in those three commands names
+    /// an empty class again.
+    #[test]
+    fn a_with_bond_facts_read_names_the_base_class() {
+        let params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
+        let class = bond_lookup_class_of(&params).expect("testnet-12 has a bond registry");
+        assert_eq!(class, bundle.base_class_id.to_string());
+        assert!(!class.is_empty());
+        for (file, source) in [
+            ("palw_da.rs", include_str!("palw_da.rs")),
+            ("palw_shard_court.rs", include_str!("palw_shard_court.rs")),
+            ("palw_shard_licensing.rs", include_str!("palw_shard_licensing.rs")),
+        ] {
+            assert!(!source.contains("get_palw_producer_facts(String::new()"), "{file} reads a bond under an empty class");
+            assert!(source.contains("bond_lookup_class("), "{file} names the base class");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -13502,7 +13502,8 @@ fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
         let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
         rest[..end].to_string()
     };
-    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
+    // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block.
+    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction", "palw_h1_carrier_refusals_v1_impl"] {
         assert!(
             body_of(caller).contains("self.palw_mempool_h1_carrier_refusal("),
             "{caller} must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"

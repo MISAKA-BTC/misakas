@@ -156,6 +156,67 @@ async fn h1_the_gate_is_inert_below_rcore_plus() {
     assert_eq!(g.tx_refusal(junk), None);
 }
 
+/// **V01 (the 2026-09-25 sweep): the API every node's mempool sweeps its carriers with at each new
+/// block is the H-1 gate itself** — one answer per transaction, in order, each the gate's own
+/// (`palw_mempool_h1_carrier_refusal` at the virtual's DAA): the honest commitment passes, so the
+/// sweep never evicts it; the forged commitment, the 8-byte accusation and the reveal nothing is
+/// pending for are refused, so the sweep evicts them from a pool no template is built from; a
+/// licence and a native transaction are not the gate's to judge. Below R-core+ it refuses nothing.
+#[tokio::test]
+async fn v01_the_mempool_sweep_asks_the_h1_gate_itself() {
+    let g = gate(true);
+    let junk = Obj::DefaultAccused {
+        claim: Hash64::from_u64_word(0x38FF),
+        missing_event_index: 0,
+        accuser: g.cards[1],
+        signature: vec![1; 8],
+    };
+    let objects = vec![
+        g.commitment(Hash64::from_u64_word(0x3811), 1, 1),
+        g.commitment(Hash64::from_u64_word(0x3812), 1, 2),
+        junk.clone(),
+        Obj::ReporterRevealed { offence_key: Hash64::from_u64_word(0x3813), reporter: g.cards[1], salt: [0x38; 32] },
+        Obj::ReceiptLicensed { claim: Hash64::from_u64_word(0x3814), receipts: vec![] },
+    ];
+    let mut txs: Vec<std::sync::Arc<Transaction>> =
+        objects.into_iter().map(|object| std::sync::Arc::new(carrier_tx(object))).collect();
+    txs.push(std::sync::Arc::new(Transaction::new(
+        0,
+        vec![],
+        vec![TransactionOutput::new(1, ScriptPublicKey::from_vec(0, vec![0x51]))],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+        0,
+        vec![],
+    )));
+    let daa = g.ctx.consensus.get_virtual_daa_score();
+    let swept = g.ctx.consensus.palw_h1_carrier_refusals_v1(&txs);
+    let gated: Vec<Option<String>> =
+        txs.iter().map(|tx| g.ctx.consensus.virtual_processor().palw_mempool_h1_carrier_refusal(tx, daa)).collect();
+    assert_eq!(swept, gated, "the sweep's answer is the gate's, transaction by transaction");
+    let refused: Vec<bool> = swept.iter().map(Option::is_some).collect();
+    assert_eq!(refused, vec![false, true, true, true, false, false], "honest kept; forged, junk and orphan reveal refused: {swept:?}");
+    assert!(g.ctx.consensus.palw_h1_carrier_refusals_v1(&[]).is_empty());
+
+    let off = gate(false);
+    let junk_tx = std::sync::Arc::new(carrier_tx(junk));
+    assert_eq!(off.ctx.consensus.palw_h1_carrier_refusals_v1(&[junk_tx]), vec![None], "below R-core+ the sweep evicts nothing");
+}
+
+/// A lifecycle transaction carrying `object`, as `Gate::tx_refusal` builds it.
+fn carrier_tx(object: Obj) -> Transaction {
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+    Transaction::new(
+        0,
+        vec![],
+        vec![TransactionOutput::new(1, ScriptPublicKey::from_vec(0, vec![0x51]))],
+        0,
+        SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    )
+}
+
 /// A possession proof naming card `bond` for `class_id` at `span`, with an 8-byte signature and an
 /// empty multiproof — kind-valid, and nothing the fold would take.
 fn junk_proof(bond: PalwBondKeyV2, class_id: Hash64, span: u64) -> Obj {

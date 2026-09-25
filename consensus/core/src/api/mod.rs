@@ -1001,6 +1001,18 @@ pub trait ConsensusApi: Send + Sync {
         vec![None; carriers.len()]
     }
 
+    /// **The 2026-09-25 sweep, V01: the H-1 carrier gate's answer on each of `txs` at the tip** — one
+    /// per transaction, in order: `Some(reason)` for a carrier the tip's fold would refuse, by the
+    /// one predicate the mempool asks at admission and the template asks at every build
+    /// (`palw_mempool_h1_carrier_refusal`), at the virtual's DAA; `None` for every other transaction.
+    /// Every node's mempool asks it at each new block over the carriers it holds, so a carrier the
+    /// fold stopped taking leaves the pool of a node that never builds a template (a seat-only node,
+    /// a relay) exactly as it leaves a miner's. All `None` below `palw_rcore_plus` (every network but
+    /// testnet-12), off `ConsensusV2` and with no tip state. Node-local: never a block rule.
+    fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        vec![None; txs.len()]
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {
