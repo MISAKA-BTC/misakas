@@ -137,14 +137,17 @@ pub fn palw_candidate_audit_period_spans_v1(params: &Params, span_daa: u64) -> u
 }
 
 /// **Is `span` an admission audit of `class_id` — the fold's own predicate, asked as the fold asks
-/// it** (`admission_jury_seated`). On this branch ADR-0147's: every positive multiple of the period,
-/// for every class, so `params` and `class_id` are not read yet. Past R2 the fold keys it by class;
-/// the merge that brings R2 makes this
-/// `if params.palw_activation_pool_fence().is_some() { palw_admission_audit_due_staggered_v1(class_id,
-/// span, period) } else { palw_admission_audit_due_v1(span, period) }` (R2's fence is genesis-only),
-/// and `the_node_asks_the_folds_own_audit_predicate` holds it to that.
-pub fn palw_candidate_audit_due_v1(_params: &Params, _class_id: &Hash64, span: u64, period_spans: u64) -> bool {
-    kaspa_consensus_core::palw_model_registry_v1::palw_admission_audit_due_v1(span, period_spans)
+/// it** (`admission_jury_v1`). Past `palw_activation_pool` (R2) the fold keys it by class — each
+/// class meets its jury at its own span of the period — and below it ADR-0147's: every positive
+/// multiple of the period, for every class. R2's fence is genesis-only, so the fence's presence is the
+/// fold's `extras.activation_pool.is_some()` at every height; `the_node_asks_the_folds_own_audit_predicate`
+/// holds this to the fold.
+pub fn palw_candidate_audit_due_v1(params: &Params, class_id: &Hash64, span: u64, period_spans: u64) -> bool {
+    if params.palw_activation_pool_fence().is_some() {
+        kaspa_consensus_core::palw_activation_pool_v1::palw_admission_audit_due_staggered_v1(class_id, span, period_spans)
+    } else {
+        kaspa_consensus_core::palw_model_registry_v1::palw_admission_audit_due_v1(span, period_spans)
+    }
 }
 
 /// **Where a Candidate's proof goes, in spans before its audit `S`.**
@@ -861,8 +864,15 @@ mod tests {
         let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
         assert_eq!(palw_candidate_audit_period_spans_v1(&t12, 1), PERIOD, "ADR-0147's 100-DAA standard in one-DAA spans");
         assert!(palw_candidate_proof_timing_armed_v1(&t12, 0), "testnet-12 from its first block");
-        assert!(palw_candidate_audit_due_v1(&t12, &Hash64::from_u64_word(7), 300, PERIOD));
-        assert!(!palw_candidate_audit_due_v1(&t12, &Hash64::from_u64_word(7), 0, PERIOD), "span zero never");
+        // Testnet-12 arms R2 at genesis: class 7 meets its jury once a period, at its own span.
+        let class = Hash64::from_u64_word(7);
+        let due: Vec<u64> = (0..3 * PERIOD).filter(|s| palw_candidate_audit_due_v1(&t12, &class, *s, PERIOD)).collect();
+        assert!(due.len() >= 2 && due.windows(2).all(|w| w[1] - w[0] == PERIOD), "one audit a period: {due:?}");
+        assert!(
+            due.iter()
+                .all(|s| { kaspa_consensus_core::palw_activation_pool_v1::palw_admission_audit_due_staggered_v1(&class, *s, PERIOD) })
+        );
+        assert!(!palw_candidate_audit_due_v1(&t12, &class, 0, PERIOD), "span zero never");
     }
 
     /// **The Own order**: with no Candidate proof the duties are today's, in today's order; every
