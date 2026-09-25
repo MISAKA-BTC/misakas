@@ -2214,6 +2214,73 @@ const MAX_INFLIGHT_CARRIERS: usize = 1;
 /// gets on the order of ten retries rather than one.
 const COURT_MOVE_REPLAN_DAA: u64 = 10;
 
+/// **When a carrier of ours is LATE** — unconfirmed this many DAA after it was sent: M1's landing
+/// margin (`PALW_READINESS_ESCALATION_LANDING_DAA_V1`, a carrier included by the next block and
+/// accepted by the chain block that merges it). An escalated possession proof behind a late carrier
+/// replaces it ([`palw_readiness_replaces_carrier_v1`]).
+pub(crate) const PALW_CARRIER_LATE_DAA_V1: u64 =
+    kaspa_consensus_core::palw_readiness_escalation_v1::PALW_READINESS_ESCALATION_LANDING_DAA_V1;
+
+/// **When a carrier of ours is LOST** — unconfirmed for the court lane's own re-plan horizon
+/// (`COURT_MOVE_REPLAN_DAA`): any possession proof that is due replaces it.
+pub(crate) const PALW_CARRIER_LOST_DAA_V1: u64 = COURT_MOVE_REPLAN_DAA;
+
+/// **Does a possession proof replace our own tip carrier, unconfirmed `unconfirmed_daa` after it was
+/// sent?** (the pre-t12 drill of 2026-09-25). One carrier is in flight per panel and a carrier the
+/// fold stopped taking is evicted only by a template build, which a seat that mines nothing never
+/// runs — so a carrier no block will take held the slot, and every proof behind it, until the row
+/// lapsed. An ESCALATED proof (its row about to lapse, M1) replaces a carrier past the landing margin
+/// ([`PALW_CARRIER_LATE_DAA_V1`]): M1 already ranks it above whatever took the slot, and waiting
+/// longer is waiting past the row. A proof that is merely due replaces only a LOST one
+/// ([`PALW_CARRIER_LOST_DAA_V1`]), so an ordinary proof never cuts ahead of a court move that is
+/// only slow.
+pub(crate) fn palw_readiness_replaces_carrier_v1(escalates: bool, unconfirmed_daa: u64) -> bool {
+    unconfirmed_daa >= if escalates { PALW_CARRIER_LATE_DAA_V1 } else { PALW_CARRIER_LOST_DAA_V1 }
+}
+
+/// **What a possession proof built from the full leaf vector holds** (a family that cannot stream,
+/// `PalwExecutionBackendV1::artifact_readiness_material`, or V1's digest-rooted opening): the vector
+/// of every leaf hash at up to twice its length while it grows, the builder's level copy and the
+/// level above it — four vectors' worth of 64-byte hashes — plus the streamed figure for the rows
+/// and the drawn bytes. Priced so the proof lane never takes less than it touches.
+pub(crate) fn palw_readiness_proof_materialized_need_v1(leaf_count: u32) -> u64 {
+    (leaf_count as u64)
+        .saturating_mul(64)
+        .saturating_mul(4)
+        .saturating_add(crate::palw_memory_ledger::PALW_READINESS_PROOF_CARVE_BYTES_V1)
+}
+
+/// **May this carrier of ours be replaced by a possession proof?** A lane object is: its lane re-offers
+/// it when it does not land (a court move re-plans, a licence is re-assembled, a filer re-files). A
+/// carrier that moves money or registers something — a bond, a class, a claim's commitment — is not
+/// replaced: it carries outputs or a payment a proof's carrier would drop. Exactly the one input and
+/// the one change output every lane carrier has.
+pub(crate) fn palw_carrier_replaceable_v1(tx: &Transaction) -> bool {
+    if tx.inputs.len() != 1 || tx.outputs.len() != 1 || tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE {
+        return false;
+    }
+    match borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) {
+        Ok(payload) => !matches!(
+            payload.object,
+            PalwConsensusObjectV2::BondRegistered { .. }
+                | PalwConsensusObjectV2::ClassRegistered { .. }
+                | PalwConsensusObjectV2::FreePromptCommitted { .. }
+        ),
+        Err(_) => false,
+    }
+}
+
+/// **The fee a replacement pays** so the pool takes it over the carrier it replaces: the relay floor,
+/// and above `replaced_feerate` (sompi a gram) by a sixteenth plus one sompi over `mass` — the pool
+/// replaces only at a strictly higher feerate. A sixteenth, not more: a proof that replaces a proof
+/// of its own that did not land either compounds it, and fifteen replacements are then 2.5× the
+/// floor, not 28×.
+pub(crate) fn palw_replacement_fee_v1(relay_floor: u64, replaced_feerate: f64, mass: u64) -> u64 {
+    let over = (replaced_feerate.max(0.0) * (1.0 + 1.0 / 16.0) * mass as f64).ceil();
+    let over = if over.is_finite() && over < u64::MAX as f64 { over as u64 } else { u64::MAX };
+    relay_floor.max(over.saturating_add(1))
+}
+
 /// **The round a court move is de-duplicated under** (ADR-0093 as built). One session runs three
 /// sequences of moves — the ladder's rounds, the fused terminal's root claim, and the dissection's
 /// own rounds, which restart at 0 — and keyed by the bare number a dissection move would be taken
@@ -2714,6 +2781,15 @@ impl PalwCarrierSlotsV1 {
                 PalwCarrierSiteV1::PriorityAfterLicences => self.licence_turn,
                 PalwCarrierSiteV1::Own | PalwCarrierSiteV1::Licences | PalwCarrierSiteV1::OwnReceipts => true,
             }
+    }
+
+    /// **The site the tick is at sent nothing after all** — it was entered as if the slot were free
+    /// (a late carrier of ours it meant to replace, `palw_readiness_replaces_carrier_v1`) and the
+    /// replacement did not go out: the site is re-marked at `inflight`, so it is not the lane of record.
+    pub(crate) fn rewind_v1(&mut self, inflight: usize) {
+        if let Some((site, _)) = self.at {
+            self.at = Some((site, inflight));
+        }
     }
 
     /// The tick's last site is done: the lane the next tick's turn reads.
@@ -3536,7 +3612,9 @@ impl PalwPanelService {
                     if let (Some(full), Some(producer)) = (full, producer) {
                         by_role = Some((producer, full));
                     }
-                    if self.replay_memory_budget_v1(session, Some((class.class_id, class.artifact_root))).is_err() {
+                    // The readiness proofs' own test (capacity, not the moment), so the status says
+                    // what the seat does.
+                    if self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root))).is_err() {
                         hold = Some(PalwPanelHoldReasonV1::ReplayBudgetInsufficient);
                     }
                 }
@@ -3702,7 +3780,13 @@ impl PalwPanelService {
             //
             // The figure is the one [`Self::resolve_backend`] below would replay with — the tables,
             // then the chain's registration (the route-matrix re-audit's #5) — not the widest holding.
-            if let Err(why) = self.replay_memory_budget_v1(session, Some((class.class_id, class.artifact_root))) {
+            //
+            // **CAPACITY, not the moment** (the pre-t12 drill of 2026-09-25): whether this host could
+            // ever replay the class, never whether a second replay fits beside the one in flight.
+            // Asked of the moment, a 3.5 GiB seat replaying anything proved nothing for the 8k class
+            // (3.37 GiB), its rows lapsed at the horizon and the class went HELD with two claims
+            // voided `no_capable_panel`. A replay still reserves its own bytes when it starts.
+            if let Err(why) = self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root))) {
                 self.readiness_note(class.class_id, format!("no proof — {why}"));
                 continue;
             }
@@ -3849,11 +3933,52 @@ impl PalwPanelService {
                         let seed_v2 = palw_readiness_v2_challenge_seed_v1(&class.class_id, &bond_bytes, span_now);
                         let draw = palw_readiness_v2_draw_v1(&seed_v2, leaf_count);
                         let started = std::time::Instant::now();
-                        let (_, leaves, drawn) = match backend.artifact_readiness_material(&draw) {
-                            Ok(material) => material,
-                            Err(e) => {
+                        // **The proof's own bytes, from the ledger's proof lane** (the pre-t12 drill of
+                        // 2026-09-25): streamed — `O(k · log n)` hashes and one row at a time — within
+                        // the lane's standing carve, which no replay may take; a family that cannot
+                        // stream is priced at its leaf vector and folds, and takes what is free.
+                        let streamed_need = crate::palw_memory_ledger::PALW_READINESS_PROOF_CARVE_BYTES_V1;
+                        let mut proof_bytes = match self.reserve_readiness_proof_v1(class.class_id, span_now, streamed_need) {
+                            Ok(held) => held,
+                            Err(why) => {
+                                self.readiness_note(class.class_id, format!("no proof — {why}"));
+                                continue;
+                            }
+                        };
+                        let mut stream = kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofStreamV1::new(leaf_count, &draw);
+                        let streamed = match stream.as_mut() {
+                            Some(stream) => backend.artifact_readiness_material_streamed_v1(&draw, &mut |leaf| stream.push(leaf)),
+                            None => None,
+                        };
+                        let (leaves, drawn) = match streamed {
+                            Some(Ok((_, _, drawn))) => (None, drawn),
+                            Some(Err(e)) => {
                                 self.readiness_note(class.class_id, format!("no proof — the drawn leaves cannot be opened ({e})"));
                                 continue;
+                            }
+                            None => {
+                                drop(proof_bytes);
+                                proof_bytes = match self.reserve_readiness_proof_v1(
+                                    class.class_id,
+                                    span_now,
+                                    palw_readiness_proof_materialized_need_v1(leaf_count),
+                                ) {
+                                    Ok(held) => held,
+                                    Err(why) => {
+                                        self.readiness_note(class.class_id, format!("no proof — {why}"));
+                                        continue;
+                                    }
+                                };
+                                match backend.artifact_readiness_material(&draw) {
+                                    Ok((_, leaves, drawn)) => (Some(leaves), drawn),
+                                    Err(e) => {
+                                        self.readiness_note(
+                                            class.class_id,
+                                            format!("no proof — the drawn leaves cannot be opened ({e})"),
+                                        );
+                                        continue;
+                                    }
+                                }
                             }
                         };
                         // **The draw is spent in bytes, in the draw's own order** — the prover opens
@@ -3893,11 +4018,17 @@ impl PalwPanelService {
                             continue;
                         }
                         opened.sort_by_key(|(index, _)| *index);
-                        let Some(proof) = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &opened) else {
+                        let built = match (leaves.as_deref(), stream) {
+                            (Some(leaves), _) => kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(leaves, &opened),
+                            (None, Some(stream)) => stream.finish(&opened),
+                            (None, None) => None,
+                        };
+                        let Some(proof) = built else {
                             self.readiness_note(class.class_id, "no proof — the opened leaves are not the inventory's".to_string());
                             continue;
                         };
                         drop(leaves);
+                        drop(proof_bytes);
                         if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, class.artifact_root) {
                             self.readiness_note(class.class_id, format!("no proof — the multiproof does not open the registered root ({e})"));
                             continue;
@@ -3936,6 +4067,16 @@ impl PalwPanelService {
                 });
                 continue;
             }
+            // V1's opening roots its path in the class's inventory digest: priced as the vector, from
+            // the proof lane (the pre-t12 drill of 2026-09-25), held while the opening is built.
+            let v1_need = palw_readiness_proof_materialized_need_v1(leaf_count);
+            let _proof_bytes = match self.reserve_readiness_proof_v1(class.class_id, span_now, v1_need) {
+                Ok(held) => held,
+                Err(why) => {
+                    self.readiness_note(class.class_id, format!("no proof — {why}"));
+                    continue;
+                }
+            };
             let (start, width) = palw_readiness_window_v1(&seed, leaf_count);
             let mut opened = None;
             for offset in 0..width.max(1) {
@@ -4064,6 +4205,90 @@ impl PalwPanelService {
         }
     }
 
+    /// **Carry one possession proof IN PLACE OF our own late tip carrier `stuck`** (the pre-t12 drill
+    /// of 2026-09-25; [`palw_readiness_replaces_carrier_v1`] decides when). The proof spends the late
+    /// carrier's own input — confirmed, since one carrier is in flight at a time — at a feerate above
+    /// it, and the pool replaces the late carrier with it (RBF): the slot and the funding chain are the
+    /// proof's from here, `inflight` is one again, and the replaced object is left to its lane, which
+    /// re-offers what did not land. Nothing is replaced when the late carrier is not one of ours this
+    /// node can read, spends an input the chain has not confirmed, or moves money
+    /// ([`palw_carrier_replaceable_v1`]). `true` when the pool took the proof.
+    #[allow(clippy::too_many_arguments)]
+    async fn replace_late_carrier_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        duty: &PalwReadinessDutyV1,
+        stuck: kaspa_consensus_core::tx::TransactionId,
+        unconfirmed_daa: u64,
+        current_daa: u64,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: &mut usize,
+    ) -> bool {
+        let (class_id, span) = match &duty.object {
+            PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. }
+            | PalwConsensusObjectV2::SeatReadinessProvedV2 { class_id, span, .. } => (*class_id, *span),
+            _ => return false,
+        };
+        let Some(late) = self
+            .flow_context
+            .mining_manager()
+            .clone()
+            .get_transaction(stuck, kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly)
+            .await
+        else {
+            return false;
+        };
+        if !palw_carrier_replaceable_v1(&late.tx) {
+            crate::palw_backends::note_throttled_v1("panel-proof-replace-refused", || {
+                format!(
+                    "[{PALW_PANEL}] a possession proof for class {class_id} waits behind carrier {stuck} ({unconfirmed_daa} DAA \
+                     unconfirmed): it moves money or registers, and is not replaced"
+                )
+            });
+            return false;
+        }
+        let input = late.tx.inputs[0].previous_outpoint;
+        let Some(entry) = session.get_virtual_utxo_entry(input) else { return false };
+        let late_feerate = late.calculated_feerate().unwrap_or(0.0);
+        let tx = match self.build_lifecycle_tx_priced_v1(&duty.object, input, &entry, &[], Some(late_feerate)) {
+            Ok(tx) => tx,
+            Err(e) => {
+                warn!("[{PALW_PANEL}] cannot build the readiness proof carrier replacing {stuck} for class {class_id}: {e}");
+                return false;
+            }
+        };
+        let txid = tx.id();
+        let change = tx.outputs[0].clone();
+        match self.flow_context.submit_rpc_transaction_replacement(session, tx).await {
+            Ok(replaced) => {
+                warn!(
+                    "[{PALW_PANEL}] replaced our carrier {} ({unconfirmed_daa} DAA unconfirmed, never mined) with the readiness proof \
+                     for class {class_id} (span {span}) in tx {txid}{} — the replaced object is its lane's to re-offer",
+                    replaced.id(),
+                    if duty.escalates() { ", escalated: its row is lapsing or lapsed" } else { "" }
+                );
+                self.readiness_submitted.lock().unwrap().insert(class_id, span);
+                let next = TransactionOutpoint::new(txid, 0);
+                self.persist_fee_outpoint(next);
+                *funding = Some((
+                    next,
+                    UtxoEntry {
+                        amount: change.value,
+                        script_public_key: change.script_public_key,
+                        block_daa_score: current_daa,
+                        is_coinbase: false,
+                    },
+                ));
+                *inflight = MAX_INFLIGHT_CARRIERS;
+                true
+            }
+            Err(e) => {
+                warn!("[{PALW_PANEL}] the mempool refused the readiness proof replacing carrier {stuck} for class {class_id}: {e}");
+                false
+            }
+        }
+    }
+
     /// The bytes a replay of a held class needs on this host: the holding that serves that class
     /// (ADR-0112 residency for a Qwen3.6 mmap, otherwise the file) plus one replay's scratch.
     /// **What a replay of THIS class needs on this host** (H-4 of the 2026-09-18 audit). It used to
@@ -4115,6 +4340,54 @@ impl PalwPanelService {
     ) -> Result<(), String> {
         let need = self.replay_memory_need_v1(session, class);
         crate::palw_backends::ledger_admits_v1(need.total_bytes()).map_err(|why| format!("a replay needs {} and {why}", need.describe()))
+    }
+
+    /// **Could a full-seat replay of this class EVER be reserved on this host?** The ledger's capacity
+    /// (`capacity_admits`: its bound with nothing reserved, less the readiness proof lane's carve),
+    /// not its moment — what a possession proof certifies (the pre-t12 drill of 2026-09-25). A seat
+    /// busy with one replay is still a seat for the class; whether the next replay may START is still
+    /// [`Self::replay_memory_budget_v1`]'s question, asked when it starts, and the reservation taken
+    /// then keeps the host under its share.
+    fn replay_memory_capacity_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class: Option<(Hash64, Hash64)>,
+    ) -> Result<(), String> {
+        let need = self.replay_memory_need_v1(session, class);
+        crate::palw_memory_ledger::host_ledger_v1().capacity_admits(need.total_bytes()).map_err(|refusal| {
+            format!(
+                "a replay needs {} and this host's memory caps any one duty at {:.2} GiB ({}) — this node cannot replay the class",
+                need.describe(),
+                refusal.available_bytes as f64 / (1u64 << 30) as f64,
+                match (refusal.share_bytes, refusal.live_bytes) {
+                    (Some(share), _) => format!("declared share {:.2} GiB", share as f64 / (1u64 << 30) as f64),
+                    (None, Some(live)) => format!("host headroom {:.2} GiB", live as f64 / (1u64 << 30) as f64),
+                    (None, None) => "no bound known".to_string(),
+                }
+            )
+        })
+    }
+
+    /// **Take the proof lane's reservation for a possession proof's own bytes** (the pre-t12 drill of
+    /// 2026-09-25): `need` under [`crate::palw_memory_ledger::PALW_READINESS_PROOF_ROLE_V1`], which may
+    /// take the lane's standing carve and whatever is free, never past the bound. Held while the proof
+    /// is built. `Err` names the ledger's arithmetic.
+    fn reserve_readiness_proof_v1(
+        &self,
+        class_id: Hash64,
+        span: u64,
+        need: u64,
+    ) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
+        crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: crate::palw_memory_ledger::PALW_READINESS_PROOF_ROLE_V1,
+                    class_id,
+                    job: Hash64::from_u64_word(span),
+                },
+                need,
+            )
+            .map_err(|refusal| format!("the proof's own {:.1} MiB are not free ({refusal})", need as f64 / (1u64 << 20) as f64))
     }
 
     /// **Take the ledger's reservation for a replay of `role`** — held for the replay's life, so a
@@ -4874,6 +5147,20 @@ impl PalwPanelService {
         funding: &UtxoEntry,
         extra_outputs: &[kaspa_consensus_core::tx::TransactionOutput],
     ) -> Result<Transaction, String> {
+        self.build_lifecycle_tx_priced_v1(object, funding_outpoint, funding, extra_outputs, None)
+    }
+
+    /// [`Self::build_lifecycle_tx_with_outputs`] paying above `replaces_feerate` (sompi a gram) when
+    /// it is `Some` — the carrier that replaces one of ours in the pool
+    /// ([`Self::replace_late_carrier_v1`]; [`palw_replacement_fee_v1`]).
+    fn build_lifecycle_tx_priced_v1(
+        &self,
+        object: &PalwConsensusObjectV2,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        extra_outputs: &[kaspa_consensus_core::tx::TransactionOutput],
+        replaces_feerate: Option<f64>,
+    ) -> Result<Transaction, String> {
         let kp = self.keypair.as_ref().ok_or("no signing key")?;
         // **Refuse before signing, and name the field.**
         //
@@ -4943,7 +5230,19 @@ impl PalwPanelService {
                 .map_err(|e| format!("sig script shape: {e}"))?
         };
         let priced = build(1, dummy_sig_script)?;
-        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass);
+        let masses = mass_calculator.calc_non_contextual_masses(&priced);
+        let fee = relay_fee_for_compute_mass(masses.compute_mass);
+        let fee = match replaces_feerate {
+            // The pool compares feerates over the widest mass it knows — storage mass included.
+            Some(rate) => {
+                let storage = mass_calculator
+                    .calc_contextual_masses(&MutableTransaction::with_entries(priced.clone(), vec![funding.clone()]).as_verifiable())
+                    .map(|c| c.storage_mass)
+                    .unwrap_or(0);
+                palw_replacement_fee_v1(fee, rate, masses.max().max(storage))
+            }
+            None => fee,
+        };
 
         let unsigned = build(fee, vec![])?;
         let mtx = MutableTransaction::with_entries(unsigned, vec![funding.clone()]);
@@ -10064,7 +10363,24 @@ impl PalwPanelService {
                         inflight = 0;
                     }
                 }
-                let held = inflight >= MAX_INFLIGHT_CARRIERS;
+                let mut held = inflight >= MAX_INFLIGHT_CARRIERS;
+                // **Our own tip carrier, unconfirmed since it was sent, and for how long** (the pre-t12
+                // drill of 2026-09-25). Held means the checks above found it neither mined nor gone:
+                // it is in this node's mempool, and `block_daa_score` on its change is the DAA it was
+                // sent at (every site writes `current_daa` there). A carrier the fold stopped taking is
+                // evicted only at a TEMPLATE build (`palw_mempool_h1_carrier_refusal`), and a seat that
+                // mines nothing builds none — m7's duplicate `ObjectiveOffence` (18:24:32) sat in its
+                // own mempool for 56 minutes, peers had refused it, and the one carrier slot it held
+                // kept every possession proof behind it until the 8k class went HELD. A proof that is
+                // due replaces such a carrier (`palw_readiness_replaces_carrier_v1`).
+                let stuck_tip: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = if held {
+                    chained_funding
+                        .as_ref()
+                        .map(|(tip, entry)| (tip.transaction_id, current_daa.saturating_sub(entry.block_daa_score)))
+                } else {
+                    None
+                };
+                let mut tip_replaced = false;
                 // Once per transition, at info: a held submitter stops EVERYTHING it carries —
                 // receipts, quorums, canonical claims — and used to say so only at trace level,
                 // which is silence. Seen on the Qwen3.5-2B add-model rehearsal: the canonical seat
@@ -10121,8 +10437,39 @@ impl PalwPanelService {
                     None
                 };
                 let mut slots = PalwCarrierSlotsV1::new(last_lane);
+                // **An escalated proof behind our own late carrier replaces it** (the pre-t12 drill of
+                // 2026-09-25): past the landing margin the carrier holding the slot has not landed, and
+                // M1 already ranks a proof whose row is about to lapse above whatever took the slot — so
+                // the proof spends that carrier's input, replaces it, and the slot is the proof's. The
+                // alternation M1 keeps (never two escalated slots running) shares LANDING slots; a
+                // carrier that does not land gives nobody a slot, so it is not asked here.
+                let replacing = stuck_tip.filter(|(_, late)| {
+                    palw_readiness_replaces_carrier_v1(true, *late)
+                        && readiness
+                            .as_ref()
+                            .is_some_and(|duties| crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties).is_some())
+                });
+                if replacing.is_some() {
+                    // The late carrier leaves with its replacement: the site is entered with the slot free.
+                    inflight = 0;
+                }
                 slots.at(PalwCarrierSiteV1::ReadinessEscalated, inflight);
-                if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, inflight)
+                if let Some((stuck, late)) = replacing
+                    && let Some(duties) = readiness.as_mut()
+                    && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
+                {
+                    let duty = duties.remove(at);
+                    if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight).await {
+                        readiness_waiting = false;
+                        held = false;
+                        tip_replaced = true;
+                    } else {
+                        // The late carrier still holds the slot: nothing went out at this site.
+                        inflight = MAX_INFLIGHT_CARRIERS;
+                        slots.rewind_v1(inflight);
+                        readiness_waiting = true;
+                    }
+                } else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, inflight)
                     && funding.is_some()
                     && let Some(duties) = readiness.as_mut()
                     && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
@@ -10131,6 +10478,9 @@ impl PalwPanelService {
                     if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {
                         readiness_waiting = false;
                     }
+                }
+                if replacing.is_some() && !tip_replaced {
+                    inflight = inflight.max(MAX_INFLIGHT_CARRIERS);
                 }
                 slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);
                 if slots.offers(PalwCarrierSiteV1::PriorityFirst, inflight) {
@@ -10317,6 +10667,22 @@ impl PalwPanelService {
                     None => self.readiness_duties_for_tick(&session, current_daa, readiness_waiting).await,
                 };
                 for duty in duties {
+                    // **A due proof behind a LOST carrier of ours replaces it** (the pre-t12 drill of
+                    // 2026-09-25): unconfirmed for the court lane's own re-plan horizon, the carrier is
+                    // lost by every lane's reckoning, and the proof takes its input and its slot. Once a
+                    // tick; a replacement that fails leaves the proof waiting as before.
+                    if held
+                        && !tip_replaced
+                        && let Some((stuck, late)) = stuck_tip
+                        && palw_readiness_replaces_carrier_v1(duty.escalates(), late)
+                    {
+                        tip_replaced = true;
+                        if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight).await {
+                            readiness_waiting = false;
+                            held = false;
+                            continue;
+                        }
+                    }
                     if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, inflight) {
                         readiness_waiting = true;
                         crate::palw_backends::note_throttled_v1("panel-proof-waits", || {
@@ -19224,5 +19590,313 @@ mod q7_sampled_and_collector_tests {
         assert!(palw_supplementary_idle_v1(none_at, print, 500 + COURT_MOVE_REPLAN_DAA - 1), "the same pool, inside the interval");
         assert!(!palw_supplementary_idle_v1(none_at, print ^ 1, 501), "a changed pool is asked at once");
         assert!(!palw_supplementary_idle_v1(none_at, print, 500 + COURT_MOVE_REPLAN_DAA), "and the same pool once an interval");
+    }
+}
+
+/// **The pre-t12 drill of 2026-09-25 (int-3 4edf02ef): the 8k class went HELD at DAA 52** — seats
+/// whose readiness rows lapsed because (a) a proof was asked whether a second full-seat REPLAY fit
+/// beside the one in flight on a 3.5 GiB share, and (b) a carrier no block would take held the one
+/// carrier slot (m7's duplicate `ObjectiveOffence`, 56 minutes; s2–s4's reporter carriers from
+/// 18:16–18:31). Each cause reproduced, and the fix held against it.
+#[cfg(test)]
+mod readiness_memory_and_stuck_carrier_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_readiness_escalation_v1::PALW_READINESS_ESCALATION_LANDING_DAA_V1;
+
+    fn production() -> &'static str {
+        let whole = include_str!("palw_panel.rs");
+        &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")]
+    }
+
+    /// The drill's A16 geometry, derived in-tree — the seat's own prover path runs on it.
+    fn a16_fixture() -> (misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend, Hash64) {
+        let geometry = kaspa_consensus_core::palw_e2e_adjudicability::PALW_RC_A16_DRILL_GEOMETRY;
+        let shape = misaka_palw_base0::artifact::Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: misaka_palw_base0::artifact::LN_THETA_10000_GEN_Q,
+            eps_q: kaspa_consensus_core::palw_qwen25_profile::QWEN25_A16_ARTIFACT_EPS_Q,
+        };
+        let artifact = misaka_palw_base0::artifact::Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .unwrap()
+            .with_a16_params(misaka_palw_base0::engine_a16::derived_a16_store(&shape))
+            .unwrap();
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(geometry).unwrap();
+        let class_id = profile.shape_profile_id();
+        let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+            std::sync::Arc::new(artifact),
+            b"misaka-palw-rc".to_vec(),
+            profile,
+            (4, 2),
+        )
+        .unwrap();
+        (backend, class_id)
+    }
+
+    /// **(a) reproduced and held: a 3.5 GiB seat proves the 8k class while a replay holds its share.**
+    /// The seat's share is 3,584 MiB and the 8k full seat 3,456 MiB. With the floor's replay (as it
+    /// was priced, 2.18 GiB) or the 8k's own in flight, the old gate — a second full seat, now —
+    /// refuses: the drill's `no proof — … 0.13 GiB available`. The new path asks the host's capacity,
+    /// takes the proof's own bytes from the carve, and builds the proof STREAMED through the backend's
+    /// own walk — the very proof the leaf-vector builder makes, verified against the root — while the
+    /// ledger never holds more than the share.
+    #[test]
+    fn the_8k_proof_is_built_streamed_beside_a_replay_on_a_three_and_a_half_gib_seat() {
+        use crate::palw_memory_ledger::{
+            PALW_READINESS_PROOF_CARVE_BYTES_V1, PALW_READINESS_PROOF_ROLE_V1, PalwMemoryLedgerV1, PalwMemoryPoolV1,
+            PalwMemoryReservationKeyV1,
+        };
+        use kaspa_consensus_core::palw_artifact::{
+            PalwArtifactMultiproofStreamV1, palw_artifact_multiproof_v1, verify_artifact_multiproof_v1,
+        };
+        use kaspa_consensus_core::palw_model_registry_v1::{
+            PALW_READINESS_V2_BUDGET_BYTES_V1, palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1,
+        };
+        const MIB: u64 = 1 << 20;
+        let (share, full_8k) = (3_584 * MIB, 3_456 * MIB);
+        let carve = PALW_READINESS_PROOF_CARVE_BYTES_V1;
+        let ledger = PalwMemoryLedgerV1::new_with_proof_carve(PalwMemoryPoolV1::Host, Some(share), carve, || None);
+        let (backend, class_id) = a16_fixture();
+        let (root, leaf_count) = backend.artifact_root_and_leaf_count().unwrap();
+        let bond = borsh::to_vec(&PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB2), 0))).unwrap();
+        for (in_flight, what) in [(2_232 * MIB, "the floor's replay as the drill priced it"), (full_8k, "the 8k's own replay")] {
+            let replay_key =
+                PalwMemoryReservationKeyV1 { role: "full-seat", class_id: Hash64::from_u64_word(1), job: Hash64::from_u64_word(1) };
+            let replay = ledger.reserve(replay_key, in_flight).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert!(ledger.can_reserve(full_8k).is_err(), "{what}: the drill's gate proves nothing");
+            ledger.capacity_admits(full_8k).unwrap_or_else(|e| panic!("{what}: capacity: {e}"));
+            for span in [26u64, 27, 28] {
+                let held = ledger
+                    .reserve(
+                        PalwMemoryReservationKeyV1 { role: PALW_READINESS_PROOF_ROLE_V1, class_id, job: Hash64::from_u64_word(span) },
+                        PALW_READINESS_PROOF_CARVE_BYTES_V1,
+                    )
+                    .unwrap_or_else(|e| panic!("{what} span {span}: the proof's bytes: {e}"));
+                assert!(ledger.reserved_bytes() <= share, "{what}: never past the share");
+                let draw = palw_readiness_v2_draw_v1(&palw_readiness_v2_challenge_seed_v1(&class_id, &bond, span), leaf_count);
+                let mut stream = PalwArtifactMultiproofStreamV1::new(leaf_count, &draw).expect("the draw is inside the inventory");
+                let (streamed_root, streamed_count, drawn) = backend
+                    .artifact_readiness_material_streamed_v1(&draw, &mut |leaf| stream.push(leaf))
+                    .expect("the A16 family streams")
+                    .expect("the walk succeeds");
+                assert_eq!((streamed_root, streamed_count), (root, leaf_count));
+                // The seat's budget, in the draw's order — `readiness_duties` exactly.
+                let (mut opened, mut bytes) = (Vec::new(), 0usize);
+                for (index, operand) in drawn.clone() {
+                    if bytes >= PALW_READINESS_V2_BUDGET_BYTES_V1 {
+                        break;
+                    }
+                    bytes += operand.bytes.len();
+                    opened.push((index, operand));
+                }
+                opened.sort_by_key(|(index, _)| *index);
+                let proof = stream.finish(&opened).expect("the stream proves");
+                let (_, leaves, material) = backend.artifact_readiness_material(&draw).unwrap();
+                assert_eq!(material, drawn, "the same walk, the same drawn rows");
+                assert_eq!(Some(&proof), palw_artifact_multiproof_v1(&leaves, &opened).as_ref(), "the builder's proof, byte for byte");
+                verify_artifact_multiproof_v1(&proof, root).expect("and it opens the registered root");
+                drop(held);
+            }
+            drop(replay);
+        }
+        // A class this share can never replay is still refused — capacity is not a waiver.
+        assert!(ledger.capacity_admits(share).is_err(), "past the share less the carve");
+    }
+
+    /// **The panel asks these questions, in this order** (a): capacity — never the moment — before a
+    /// proof; the proof lane's reservation before the walk; the streamed walk first; and the floor's
+    /// figure without another class's holding (`palw_backends`).
+    #[test]
+    fn the_readiness_duty_asks_capacity_and_takes_its_bytes_from_the_proof_lane() {
+        let source = production();
+        let duties = &source[source.find("    fn readiness_duties(").expect("readiness_duties")..];
+        let duties = &duties[..duties.find("\n    }\n").expect("its end")];
+        assert!(duties.contains("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
+        assert!(!duties.contains("replay_memory_budget_v1("), "the moment's gate starved the drill's proofs");
+        let reserve = duties.find("self.reserve_readiness_proof_v1(class.class_id, span_now, streamed_need)").expect("the proof lane");
+        let streamed = duties.find("backend.artifact_readiness_material_streamed_v1(").expect("the streamed walk");
+        let vector = duties.find("backend.artifact_readiness_material(&draw)").expect("the vector, for a family that cannot stream");
+        assert!(reserve < streamed && streamed < vector, "reserve, stream, and only then the vector");
+        assert!(duties.contains("palw_readiness_proof_materialized_need_v1(leaf_count)"), "the vector is priced before it is built");
+        // The status says what the seat does.
+        let status = &source[source.find("    fn publish_local_panel_status(").expect("the status")..];
+        let status = &status[..status.find("\n    }\n").expect("its end")];
+        assert!(status.contains("self.replay_memory_capacity_v1(session, Some((class.class_id, class.artifact_root)))"));
+        // The seat's REPLAY still asks the moment, and still reserves when it starts.
+        assert!(source.contains("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))"));
+        let backends = include_str!("palw_backends.rs");
+        assert!(backends.contains("fn serves_without_a_holding_v1("), "the derived floor is priced without a holding");
+        // A vector build is priced at four vectors' worth of hashes plus the streamed figure.
+        assert_eq!(
+            palw_readiness_proof_materialized_need_v1(649_480),
+            649_480 * 64 * 4 + crate::palw_memory_ledger::PALW_READINESS_PROOF_CARVE_BYTES_V1
+        );
+    }
+
+    /// **(b) reproduced and held: a carrier stuck in our own mempool yields to the proof inside the
+    /// escalation margin.** Testnet-12's horizon: a row proved at 100 is due past 112 (the Own site),
+    /// escalates from 122 and counts through 124. A carrier of ours sent at `stuck_at` never lands —
+    /// the drill's shape, a duplicate the fold stopped taking, which only a template build evicts and
+    /// a seat that mines nothing never builds. The old tick sends nothing while it holds the slot and
+    /// the row lapses at 125 whatever `stuck_at` was. The new tick replaces it: an escalated proof
+    /// once the carrier is late, a merely-due proof once it is lost — and for every carrier stuck
+    /// before the escalation's own landing margin, the proof lands by the row's last DAA.
+    #[test]
+    fn a_carrier_stuck_in_our_own_mempool_yields_to_the_proof_within_the_escalation_margin() {
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        use kaspa_consensus_core::palw_model_registry_v1::{PalwSeatReadinessRowV1, palw_readiness_duty_due_v2};
+        let t12 = kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else {
+            panic!("testnet-12 is ConsensusV2")
+        };
+        let g = kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1(bundle);
+        let row = PalwSeatReadinessRowV1 { proved_daa: 100, proved_span: 100, leaf_index: 0, proof_version: 2, chunks: 16 };
+        let (first_escalated, last_fresh) = (122u64, 124u64);
+        let tick = |now: u64, stuck_at: u64, fixed: bool| -> bool {
+            let last = Some(100u64);
+            let urgency =
+                crate::palw_readiness_escalation::palw_readiness_duty_urgency_v1(true, Some(&row), now, 2, last, now, 1, &g, true);
+            let due = palw_readiness_duty_due_v2(Some(&row), now, now, last, 1, &g, true)
+                && !crate::palw_readiness_escalation::palw_readiness_duty_waits_v1(true, last, now, 1);
+            if !fixed {
+                return false; // the slot is held: every site finds `inflight` at the cap
+            }
+            let late = now - stuck_at;
+            // The tick's two sites, as wired: the escalated one (late), then the Own site (lost).
+            (urgency.is_some() && palw_readiness_replaces_carrier_v1(true, late))
+                || ((due || urgency.is_some()) && palw_readiness_replaces_carrier_v1(urgency.is_some(), late))
+        };
+        let at = first_escalated;
+        assert_eq!(
+            crate::palw_readiness_escalation::palw_readiness_duty_urgency_v1(true, Some(&row), at, 2, Some(100), at, 1, &g, true),
+            Some(kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: last_fresh }),
+            "testnet-12's horizon, as the tick reads it"
+        );
+        for stuck_at in 100..=last_fresh {
+            let old = (stuck_at + 1..=stuck_at + 40).find(|now| tick(*now, stuck_at, false));
+            assert_eq!(old, None, "stuck at {stuck_at}: the drill's tick never sends, and the row lapses");
+            let sent = (stuck_at + 1..=stuck_at + 40).find(|now| tick(*now, stuck_at, true)).expect("the proof goes out");
+            // Lost before the escalation: the Own site's proof replaced it; late at it: the escalated one.
+            assert!(sent <= first_escalated.max(stuck_at + PALW_CARRIER_LATE_DAA_V1), "stuck at {stuck_at}: sent at {sent}");
+            if stuck_at + PALW_CARRIER_LATE_DAA_V1 <= first_escalated {
+                assert!(
+                    sent + PALW_READINESS_ESCALATION_LANDING_DAA_V1 <= last_fresh,
+                    "stuck at {stuck_at}: the proof sent at {sent} lands by the row's last DAA {last_fresh}"
+                );
+            }
+        }
+        // The drill's case: stuck since 110 and never landing, replaced by the due proof at 120 — two
+        // DAA before the row would even escalate.
+        assert_eq!((111..=125).find(|now| tick(*now, 110, true)), Some(110 + PALW_CARRIER_LOST_DAA_V1));
+        // A merely-due proof never cuts ahead of a carrier that is only slow.
+        assert!(!palw_readiness_replaces_carrier_v1(false, PALW_CARRIER_LOST_DAA_V1 - 1));
+        assert!(palw_readiness_replaces_carrier_v1(false, PALW_CARRIER_LOST_DAA_V1));
+        assert!(!palw_readiness_replaces_carrier_v1(true, PALW_CARRIER_LATE_DAA_V1 - 1));
+        assert!(palw_readiness_replaces_carrier_v1(true, PALW_CARRIER_LATE_DAA_V1));
+        assert_eq!(PALW_CARRIER_LATE_DAA_V1, PALW_READINESS_ESCALATION_LANDING_DAA_V1, "late is M1's landing margin");
+    }
+
+    /// **The tick is wired as the simulation above reads it** (b): the late tip is measured off the
+    /// chained funding while held; the escalated site replaces it before it would carry, the Own site
+    /// replaces a lost one; the replacement is the pool's RBF over the late carrier's own input, only
+    /// for a carrier that moves no money; and a replaced tip writes the chain back.
+    #[test]
+    fn the_tick_replaces_our_own_late_carrier_with_the_proof() {
+        let source = production();
+        let tick = &source[source.find("let mut held = inflight >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
+        let stuck =
+            tick.find("let stuck_tip: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = if held {").expect("the late tip");
+        let escalated = tick.find("palw_readiness_replaces_carrier_v1(true, *late)").expect("the escalated site's test");
+        let replace = tick
+            .find("self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight)")
+            .expect("replace");
+        let carry =
+            tick.find("self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight)").expect("the carry");
+        let own = tick.find("palw_readiness_replaces_carrier_v1(duty.escalates(), late)").expect("the Own site's test");
+        assert!(
+            stuck < escalated && escalated < replace && replace < carry && carry < own,
+            "measured, then the escalated site, then the Own site"
+        );
+        assert!(tick.contains("slots.rewind_v1(inflight);"), "a failed replacement is not the lane of record");
+        let tail = &tick[tick.find("last_lane = slots.finish(inflight);").expect("the tail")..];
+        assert!(tail.contains("if !held {\n                    chained_funding = funding;"), "a replaced tip writes the chain back");
+        let body = &source[source.find("    async fn replace_late_carrier_v1(").expect("the replacement fn")..];
+        let body = &body[..body.find("\n    }\n").expect("its end")];
+        assert!(body.contains("palw_carrier_replaceable_v1(&late.tx)"));
+        assert!(body.contains("session.get_virtual_utxo_entry(input)"), "only a confirmed input");
+        assert!(body.contains("Some(late_feerate)"), "above the late carrier's feerate");
+        assert!(body.contains("submit_rpc_transaction_replacement(session, tx)"), "the pool's RBF, never a double spend");
+    }
+
+    fn carrier(object: PalwConsensusObjectV2, outputs: usize) -> Transaction {
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+        let input = TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(9), 0), vec![], 0, 1);
+        let out = TransactionOutput::new(1_000, kaspa_consensus_core::tx::ScriptPublicKey::from_vec(0, vec![0x51]));
+        Transaction::new(0, vec![input], vec![out; outputs], 0, SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload)
+    }
+
+    /// **What a proof may replace, and what it pays** (b): a lane object with one input and one change
+    /// output — never a carrier that moves money or registers — and strictly above the replaced
+    /// feerate, at the drill's own figures (m7's `ObjectiveOffence`: 388,312 sompi over 31,065 mass).
+    #[test]
+    fn a_proof_replaces_only_a_lane_carrier_and_pays_above_it() {
+        let proof = PalwConsensusObjectV2::SeatReadinessProvedV2 {
+            bond: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(1), 0)),
+            class_id: Hash64::from_u64_word(2),
+            span: 3,
+            proof: Box::new(kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1 {
+                leaf_count: 1,
+                opened: vec![],
+                siblings: vec![],
+            }),
+            signature: vec![],
+        };
+        assert!(palw_carrier_replaceable_v1(&carrier(proof.clone(), 1)), "a lane object on one input and its change");
+        assert!(!palw_carrier_replaceable_v1(&carrier(proof.clone(), 2)), "a carrier with an output beside its change");
+        let bond = PalwConsensusObjectV2::BondRegistered {
+            bond: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(1), 0)),
+            pubkey: vec![1],
+            operator_pubkey: vec![2],
+            collateral: 1,
+            payout_payload: Hash64::from_u64_word(3),
+            capable_classes: Default::default(),
+            signature: vec![],
+        };
+        assert!(!palw_carrier_replaceable_v1(&carrier(bond, 1)), "a registration is never replaced");
+        let mut garbage = carrier(proof.clone(), 1);
+        garbage.payload = vec![0xFF; 3];
+        assert!(!palw_carrier_replaceable_v1(&garbage), "an object this node cannot read");
+        let mut native = carrier(proof, 1);
+        native.subnetwork_id = kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
+        assert!(!palw_carrier_replaceable_v1(&native), "not a lifecycle carrier");
+        let replaced_feerate = 388_312f64 / 31_065f64;
+        for mass in [20_000u64, 31_065, 45_000] {
+            let floor = kaspa_pq_validator_core::relay_fee_for_compute_mass(mass);
+            let fee = palw_replacement_fee_v1(floor, replaced_feerate, mass);
+            assert!(fee >= floor, "never under the relay floor");
+            assert!(fee as f64 / mass as f64 > replaced_feerate, "mass {mass}: strictly above the replaced feerate");
+        }
+        assert_eq!(palw_replacement_fee_v1(500, 0.0, 0), 500, "nothing to beat: the floor");
+    }
+
+    /// A replacement that did not go out leaves the site it entered with nothing sent.
+    #[test]
+    fn a_rewound_site_is_not_the_lane_of_record() {
+        let mut slots = PalwCarrierSlotsV1::new(Some(PalwCarrierLaneV1::Licence));
+        slots.at(PalwCarrierSiteV1::ReadinessEscalated, 0);
+        slots.rewind_v1(1);
+        assert_eq!(slots.finish(1), Some(PalwCarrierLaneV1::Licence), "the lane before it stands");
+        let mut sent = PalwCarrierSlotsV1::new(Some(PalwCarrierLaneV1::Licence));
+        sent.at(PalwCarrierSiteV1::ReadinessEscalated, 0);
+        assert!(
+            matches!(sent.finish(1), Some(PalwCarrierLaneV1::Readiness { .. })),
+            "a replacement that went out is the proof's slot"
+        );
     }
 }

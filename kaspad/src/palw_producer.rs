@@ -389,6 +389,34 @@ pub(crate) fn palw_rcore_plus_producer_floor_v1(
     params.palw_rcore_plus_active_at(candidate_daa).then(|| bundle.state.min_collateral_sompi())
 }
 
+/// **How long an attempt of ours may ride a block the tip has not merged before it is counted as never
+/// merging**: twice M1's landing margin (a block included by the next and accepted by the chain block
+/// that merges it). Past it the attempt's block is red, orphaned or lost, and holding the share for
+/// it would only stop this producer.
+pub(crate) const PALW_PRODUCER_UNMERGED_HORIZON_DAA_V1: u64 =
+    2 * kaspa_consensus_core::palw_readiness_escalation_v1::PALW_READINESS_ESCALATION_LANDING_DAA_V1;
+
+/// **T-2(a) with this producer's own unmerged attempts counted** (the pre-t12 drill of 2026-09-25,
+/// F2). The fold's question — `unlicensed + 1 > share` refuses — is asked by the chain at the tip,
+/// and the tip does not hold the attempts of this node's blocks that are still side blocks: an 8k
+/// inference (150–200 s) is longer than the chain-block interval, so an 8k producer's blocks are
+/// often side blocks when it asks, and it started a fourth inference its share could not admit — the
+/// fold skips such an attempt, its inference spent and its worker carve burned. `own_unmerged` is how
+/// many of this producer's attempts of the class ride blocks the tip has not merged; with any, the
+/// hold is the fold's own arithmetic over them. `None` below the share's rule (`share` is `None`) and
+/// with nothing unmerged — then the fold's own refusal, in the facts, already answers.
+pub(crate) fn palw_producer_share_hold_v1(share: Option<(u64, u32)>, own_unmerged: usize) -> Option<String> {
+    let (share, unlicensed) = share?;
+    let pending = own_unmerged as u64;
+    (pending > 0 && (unlicensed as u64).saturating_add(pending).saturating_add(1) > share).then(|| {
+        format!(
+            "T-2(a): this bond may hold {share} unlicensed claims of the class; the tip holds {unlicensed} and {pending} more of \
+             this producer's attempts ride blocks the tip has not merged — another attempt would be skipped by the fold, its \
+             inference spent and its carve burned"
+        )
+    })
+}
+
 /// **The attempt lane's pre-check, on the ledger the chain measures it by** (ADR-0152 P6).
 ///
 /// Below the fence (`rcore_plus` is `None`) — testnet-11, devnet, mainnet — this IS
@@ -815,6 +843,9 @@ impl PalwProducerService {
         // holds, on that branch's 5 s cadence, so an unchanging failure must not repeat per tick.
         let mut last_receipt_err: Option<String> = None;
         let mut last_receipt_err_at: Option<std::time::Instant> = None;
+        // This producer's attempts whose blocks the tip has not merged yet, and the DAA each was
+        // produced at (`palw_producer_share_hold_v1`, F2 of the pre-t12 drill of 2026-09-25).
+        let mut own_unmerged: std::collections::BTreeMap<Hash64, u64> = std::collections::BTreeMap::new();
         loop {
             if !self.tick(std::time::Duration::from_millis(200)).await {
                 break;
@@ -971,6 +1002,39 @@ impl PalwProducerService {
                 }
                 continue;
             }
+            // **F2: the share with this producer's unmerged attempts counted** — the tip's count is
+            // the fold's, and the attempts of blocks still riding the DAG's side are not in it yet.
+            if facts.bond_class_share.is_some() && !own_unmerged.is_empty() {
+                let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
+                let merged: std::collections::HashSet<Hash64> = self
+                    .consensus_manager
+                    .consensus()
+                    .unguarded_session()
+                    .spawn_blocking(move |c| {
+                        c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, true, 500)
+                    })
+                    .await
+                    .map(|read| read.rows.iter().map(|row| row.claim_id).collect())
+                    .unwrap_or_default();
+                own_unmerged.retain(|claim, at| {
+                    !merged.contains(claim) && facts.daa_score.saturating_sub(*at) <= PALW_PRODUCER_UNMERGED_HORIZON_DAA_V1
+                });
+            } else if facts.bond_class_share.is_none() {
+                own_unmerged.clear();
+            }
+            if let Some(detail) = palw_producer_share_hold_v1(facts.bond_class_share, own_unmerged.len()) {
+                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
+                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
+                    last_hold = Some(detail);
+                    last_hold_at = Some(std::time::Instant::now());
+                }
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
+                }
+                continue;
+            }
             // Cleared so the next hold, whatever it is, prints immediately rather than being
             // suppressed as a repeat of one the node has since recovered from.
             last_hold = None;
@@ -987,6 +1051,9 @@ impl PalwProducerService {
                 Ok(Some((hash, claim))) => {
                     draws += 1;
                     produced += 1;
+                    if facts.bond_class_share.is_some() {
+                        own_unmerged.insert(claim, facts.daa_score);
+                    }
                     last_progress_at = std::time::Instant::now();
                     info!(
                         "[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket under target; Layer-0 as the fence reads it)"
@@ -1705,8 +1772,9 @@ mod tests {
 #[cfg(test)]
 mod p6_tests {
     use super::{
-        PalwProducerHoldV1, PalwRcorePlusReadsV1, palw_canonical_claim_bond_room_v1, palw_canonical_claim_room_v1,
-        palw_producer_hold_detail_v1, palw_producer_ready_v1, palw_rcore_plus_producer_floor_v1,
+        PALW_PRODUCER_UNMERGED_HORIZON_DAA_V1, PalwProducerHoldV1, PalwRcorePlusReadsV1, palw_canonical_claim_bond_room_v1,
+        palw_canonical_claim_room_v1, palw_producer_hold_detail_v1, palw_producer_ready_v1, palw_producer_share_hold_v1,
+        palw_rcore_plus_producer_floor_v1,
     };
     use kaspa_consensus_core::palw_admission_v2::{
         PalwAdmissionParamsV2, PalwAdmissionV2Error, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2,
@@ -2114,6 +2182,30 @@ mod p6_tests {
         }
         // The price's room check: nothing below the fence, however far over the room.
         assert_eq!(palw_canonical_claim_bond_room_v1(&fp_price(u128::MAX, 1), Some(0), false), Ok(()));
+    }
+
+    /// **F2 of the pre-t12 drill (2026-09-25): the share with this producer's own unmerged attempts
+    /// counted.** The fold refuses `unlicensed + 1 > share` at the tip; the tip does not hold an 8k
+    /// producer's attempts still riding side blocks (an inference is longer than a chain block), so
+    /// with a share of 3 and two claims at the tip, one attempt in a side block already fills it and
+    /// a fourth inference would be skipped by the fold. Nothing unmerged, or no share rule: no hold
+    /// here — the fold's own refusal in the facts answers.
+    #[test]
+    fn the_share_counts_this_producers_attempts_the_tip_has_not_merged() {
+        assert_eq!(palw_producer_share_hold_v1(None, 5), None, "below R-core+, the base class: no share");
+        assert_eq!(palw_producer_share_hold_v1(Some((3, 2)), 0), None, "the tip's own count is the fold's refusal's");
+        assert_eq!(palw_producer_share_hold_v1(Some((3, 1)), 1), None, "1 + 1 + 1 = 3 fits");
+        let held = palw_producer_share_hold_v1(Some((3, 2)), 1).expect("2 + 1 unmerged + 1 > 3");
+        assert!(held.contains("T-2(a)") && held.contains("3") && held.contains("not merged"), "{held}");
+        assert!(palw_producer_share_hold_v1(Some((3, 0)), 3).is_some(), "three attempts in side blocks fill a share of 3");
+        assert_eq!(PALW_PRODUCER_UNMERGED_HORIZON_DAA_V1, 4, "twice M1's landing margin");
+        // The loop asks it before a draw, and records what it produced.
+        let source = include_str!("palw_producer.rs");
+        let worker = &source[source.find("    pub async fn worker(").expect("the worker")..];
+        let gate = worker.find("palw_producer_share_hold_v1(facts.bond_class_share, own_unmerged.len())").expect("the gate");
+        let draw = worker.find("let outcome = self.produce_one(").expect("the draw");
+        assert!(gate < draw, "asked before an inference is spent");
+        assert!(worker.contains("own_unmerged.insert(claim, facts.daa_score);"), "every produced attempt is counted until merged");
     }
 
     /// **The SW-10 seam holds only on a known shortfall, and only past the fence**, after every

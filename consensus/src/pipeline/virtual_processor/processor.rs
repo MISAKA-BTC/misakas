@@ -5367,6 +5367,18 @@ impl VirtualStateProcessor {
             .err()
             .map(|refusal| refusal.to_string());
         }
+        // The share and the tip's count beside the refusal — a read the producer adds its own
+        // unmerged attempts to (node policy; the fold's question above is unchanged).
+        facts.bond_class_share = bond.and_then(|outpoint| {
+            kaspa_consensus_core::palw_state_v2::palw_bond_class_share_read_v1(
+                &state,
+                state_params,
+                &extras,
+                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                &class_id,
+                candidate_daa,
+            )
+        });
         Some(facts)
     }
 

@@ -801,6 +801,21 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Ok((digest.root(), leaves, opened))
     }
 
+    /// **The readiness material as a STREAM** (the pre-t12 drill of 2026-09-25): the same walk as
+    /// [`Self::artifact_readiness_material`], but every leaf hash goes to `on_leaf` in inventory order
+    /// instead of into a vector — `(root, leaf_count, drawn operands in the draw's order)` back. With
+    /// `palw_artifact::PalwArtifactMultiproofStreamV1` the prover then holds `O(k · log n)` hashes, not
+    /// 64 bytes a leaf, so a seat can prove beside a replay that holds the rest of its memory share.
+    /// `None`: this family cannot stream, and the caller builds from the vector.
+    #[allow(clippy::type_complexity)]
+    fn artifact_readiness_material_streamed_v1(
+        &self,
+        _draw: &[u32],
+        _on_leaf: &mut dyn FnMut(crate::Hash64),
+    ) -> Option<Result<(crate::Hash64, u32, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String>> {
+        None
+    }
+
     /// **The free-prompt run, streamed** (ADR-0077 Decision 2): `on_token` is called with each
     /// generated id in decode order, as soon as it is selected, from the SAME run whose capture
     /// and commitment the returned [`PalwFpRunV1`] carries — never from a second inference. The

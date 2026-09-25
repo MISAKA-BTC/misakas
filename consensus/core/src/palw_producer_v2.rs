@@ -178,6 +178,13 @@ pub struct PalwProducerFactsV2 {
     /// `Prefetching` reported no reason not to produce, and its producer mined claims its own chain
     /// refused (the 2026-09-23 route-matrix audit's #7).
     pub class_admission_refusal: Option<String>,
+    /// **T-2(a)'s share of this class for the named bond, and what the bond holds against it at the
+    /// tip** — `(share, unlicensed)` from `palw_bond_class_share_read_v1`, filled by the caller that
+    /// fills [`Self::class_admission_refusal`]; `None` where the share is no rule (below R-core+, the
+    /// base class, no row). A READ for the producer's own count (the pre-t12 drill of 2026-09-25):
+    /// the tip does not hold this node's attempts still riding side blocks, so a producer that asked
+    /// only the refusal started inferences its share could no longer admit.
+    pub bond_class_share: Option<(u64, u32)>,
 }
 
 impl PalwProducerFactsV2 {
@@ -485,6 +492,7 @@ pub fn palw_producer_facts_v4(
     Some(PalwProducerFactsV2 {
         // The caller that holds the block's fences asks the fold's class gate (route-matrix #7).
         class_admission_refusal: None,
+        bond_class_share: None,
         is_base_class: class_id == state_params.base_class_id(),
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
             || state.fp_lane_certification(&class_id).is_some(),
@@ -563,6 +571,51 @@ mod tests {
         ];
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(1), daa_score: 100, blue_score: 1, subsidy: 0 };
         apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx, &objects, None).unwrap().0
+    }
+
+    /// **F3 of the pre-t12 drill (2026-09-25): a licensed claim's `deadlineDaa` is the fold's `Final`
+    /// floor.** `getPalwClaims` read `L + window_challenge` — the base 1,200 — for claims the fold
+    /// finalizes at `L + window_challenge_at(L)` (120 past the short-window fence), raised to the
+    /// claim's verification horizon. The row now reads `palw_claim_final_floor_v1`; a court's backstop
+    /// still comes first; below the fence the base window is what it was.
+    #[test]
+    fn a_licensed_claims_deadline_is_the_folds_final_floor() {
+        use crate::palw_state_v2::{PalwClaimPhaseV2, PalwClaimStateV2, palw_claim_final_floor_v1};
+        let claim = |licensed_daa: u64| PalwClaimStateV2 {
+            source: crate::palw_state_v2::PalwClaimSourceV2::Attempt,
+            class_id: h64(1),
+            bond: PalwBondKeyV2(bond_outpoint()),
+            pwu: 7,
+            accepted_daa: 150,
+            rebound_daa: None,
+            accepted_blue_score: 150,
+            accepted_block: crate::BlockHash::from_u64_word(0xB0),
+            trace_root: h64(0x71),
+            output_root: h64(0x72),
+            execution_root: h64(0xE0),
+            trace_chunk_count: 4,
+            trace_retention_daa: 700,
+            reserved: 1_000,
+            immature_contribution: 0,
+            escrowed_reward: 0,
+            work_leaves: 0,
+            work_id: None,
+            phase: PalwClaimPhaseV2::ReceiptLicensed { licensed_daa },
+            rights_reserved: 0,
+            job_identity: Hash64::default(),
+            rcore: crate::palw_state_v2::PalwClaimRcoreV1::default(),
+        };
+        let state = state();
+        let id = h64(0xC1);
+        let short = state_params().with_short_challenge_window_from_daa(Some(0));
+        let c = claim(200);
+        let floor = palw_claim_final_floor_v1(&state, &short, &id, &c, 200).expect("no overflow");
+        assert_eq!(floor, 200 + crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1, "the window in force at L");
+        assert_eq!(palw_claim_phase_deadline_v1(&state, &id, &c, &short, None), Some(floor), "the row reads the fold's date");
+        assert_ne!(Some(floor), Some(200 + short.window_challenge()), "…not the base window it printed");
+        assert_eq!(palw_claim_phase_deadline_v1(&state, &id, &c, &short, Some(999)), Some(999), "a court's backstop first");
+        let base = state_params();
+        assert_eq!(palw_claim_phase_deadline_v1(&state, &id, &c, &base, None), Some(200 + base.window_challenge()), "below the fence");
     }
 
     /// **ADR-0152 S-SPEC §2 / §10a: v4 hands the producer the ledger admission measures it by** —
@@ -1839,10 +1892,17 @@ pub fn palw_claim_exec_lane_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> O
 }
 
 /// **When a claim's phase ends by itself**, from the network's windows — the dates the sweep acts
-/// on (`window_bind` from acceptance or the redraw, `window_receipt` from binding,
-/// `window_challenge` from licensing, the disclose window from an accusation), a court's backstop
-/// while one is open, and the retirement of a record that has ended.
+/// on (`window_bind` from acceptance or the redraw, `window_receipt` from binding, the licence's
+/// `Final` floor from licensing, the disclose window from an accusation), a court's backstop while
+/// one is open, and the retirement of a record that has ended.
+///
+/// **A licensed claim's date is the fold's own `Final` floor** (`palw_claim_final_floor_v1`:
+/// `L + window_challenge_at(L)`, raised to the claim's verification horizon past its fence) — the
+/// pre-t12 drill of 2026-09-25 (F3) read `deadlineDaa = L + 1,200` from `getPalwClaims` for claims the
+/// fold finalized at `max(L + 120, bound + D + 1)`: the base window, not the one in force at `L`.
 pub fn palw_claim_phase_deadline_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
     claim: &crate::palw_state_v2::PalwClaimStateV2,
     state_params: &PalwStateParamsV2,
     court_backstop: Option<u64>,
@@ -1851,7 +1911,11 @@ pub fn palw_claim_phase_deadline_v1(
     match &claim.phase {
         P::Provisional => Some(claim.rebound_daa.unwrap_or(claim.accepted_daa).saturating_add(state_params.window_bind())),
         P::PanelBound { bound_daa } => Some(bound_daa.saturating_add(state_params.window_receipt())),
-        P::ReceiptLicensed { licensed_daa } => court_backstop.or(Some(licensed_daa.saturating_add(state_params.window_challenge()))),
+        P::ReceiptLicensed { licensed_daa } => court_backstop.or_else(|| {
+            crate::palw_state_v2::palw_claim_final_floor_v1(state, state_params, claim_id, claim, *licensed_daa)
+                .ok()
+                .or(Some(licensed_daa.saturating_add(state_params.window_challenge())))
+        }),
         P::DefaultDisputed { accused_daa, .. } => {
             Some(accused_daa.saturating_add(crate::palw_state_v2::palw_da_disclose_window_daa_v1(state_params)))
         }
@@ -1915,7 +1979,7 @@ pub fn palw_claim_rows_v1(
                 rebound_daa: claim.rebound_daa,
                 seats: panel.map(|p| p.seats.iter().map(|s| s.bond).collect()).unwrap_or_default(),
                 bound_daa: panel.map(|p| p.bound_daa),
-                deadline_daa: palw_claim_phase_deadline_v1(claim, state_params, court.map(|c| c.1)),
+                deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
                 reserved: claim.reserved,
                 escrowed_reward: claim.escrowed_reward,
                 // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never

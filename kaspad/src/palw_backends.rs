@@ -132,10 +132,28 @@ impl PalwBackendRegistry {
     /// seat defer QWEN36 forever (`class needs 34.49 GiB` against a ~13 GiB budget) even after the
     /// process had already pinned ~6 GiB. Dense holdings still report the file: they decode it.
     pub fn holding_bytes_for_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<u64> {
+        if self.serves_without_a_holding_v1(class_id, artifact_root) {
+            return Some(0);
+        }
         self.holdings
             .iter()
             .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
             .and_then(holding_replay_bytes_v1)
+    }
+
+    /// **Does this class resolve with no holding at all?** The derived floor does (its artifact is
+    /// derived from a seed, `ArtifactSourceV1::Derived`): its replay touches none of this node's
+    /// holdings, so it is priced with none of their bytes.
+    ///
+    /// Asking each holding "does the class resolve with this one?" said yes for the floor on EVERY
+    /// holding — a derived class resolves whatever it is handed — so the floor's replay on an
+    /// 8k-holding seat was priced at the 8k artifact plus scratch: 2.18 GiB instead of 0.50 GiB,
+    /// held for the replay's life in a 3.5 GiB share (the pre-t12 drill of 2026-09-25, 18:27 and
+    /// 19:08: the floor's reservation left 1.32 GiB and the class's own readiness proof, asked
+    /// against it, never fitted). A class that needs a file refuses an empty slice, so this is the
+    /// derived case and nothing else.
+    fn serves_without_a_holding_v1(&self, class_id: Hash64, artifact_root: Hash64) -> bool {
+        self.sdk.resolve(class_id, artifact_root, &[]).is_ok()
     }
 
     /// **Bytes a replay of this class still has to take from MemAvailable** — a full seat's need,
@@ -177,11 +195,16 @@ impl PalwBackendRegistry {
         {
             return hit.clone();
         }
-        let figure = self.holdings.iter().find_map(|holding| {
-            let backend = self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok()?;
-            let holding_bytes = incremental_replay_bytes_v1(holding)?;
-            Some(Self::compose_need_v1(backend.as_ref(), holding_bytes, None, role))
-        });
+        // A derived class (the floor) first: it resolves with no holding, so none of theirs is
+        // its bytes ([`Self::serves_without_a_holding_v1`]).
+        let figure = match self.sdk.resolve(class_id, artifact_root, &[]) {
+            Ok(backend) => Some(Self::compose_need_v1(backend.as_ref(), 0, None, role)),
+            Err(_) => self.holdings.iter().find_map(|holding| {
+                let backend = self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok()?;
+                let holding_bytes = incremental_replay_bytes_v1(holding)?;
+                Some(Self::compose_need_v1(backend.as_ref(), holding_bytes, None, role))
+            }),
+        };
         if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
             memo.insert(key, figure.clone());
         }
@@ -198,12 +221,15 @@ impl PalwBackendRegistry {
         job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
         role: PalwResourceRoleV1,
     ) -> PalwRoleMemoryNeedV1 {
-        let holding_bytes = self
-            .holdings
-            .iter()
-            .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
-            .and_then(incremental_replay_bytes_v1)
-            .unwrap_or(0);
+        let holding_bytes = if self.serves_without_a_holding_v1(class_id, artifact_root) {
+            0
+        } else {
+            self.holdings
+                .iter()
+                .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
+                .and_then(incremental_replay_bytes_v1)
+                .unwrap_or(0)
+        };
         Self::compose_need_v1(backend, holding_bytes, job, role)
     }
 
@@ -311,10 +337,13 @@ impl PalwBackendRegistry {
         )
             -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
     {
-        let holding_bytes = self
-            .serving_holding_or_chain_v1(class_id, artifact_root, fetch)
-            .and_then(|(holding, _)| incremental_replay_bytes_v1(holding))
-            .unwrap_or(0);
+        let holding_bytes = if self.serves_without_a_holding_v1(class_id, artifact_root) {
+            0
+        } else {
+            self.serving_holding_or_chain_v1(class_id, artifact_root, fetch)
+                .and_then(|(holding, _)| incremental_replay_bytes_v1(holding))
+                .unwrap_or(0)
+        };
         Self::compose_need_v1(backend, holding_bytes, job, role)
     }
 
@@ -2133,6 +2162,52 @@ mod tests {
 
         let paged = load_class_holdings_v1("test-replay-paged", &sdk(), std::slice::from_ref(&path), 0, Residency::PageCache);
         assert_eq!(holding_replay_bytes_v1(&paged[0]), Some(file), "page cache: the file is what will fault in");
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **The floor's replay is priced without another class's holding** (the pre-t12 drill of
+    /// 2026-09-25, FINDING 18:27): the derived floor resolves with ANY holding — it is handed one and
+    /// ignores it — so the per-holding lookup priced its replay on an 8k seat at the 8k artifact plus
+    /// scratch (2.18 GiB), reserved for the replay's life in a 3.5 GiB share. Every figure a duty
+    /// reserves for the floor now carries no holding bytes; a holding is still its own class's.
+    #[test]
+    fn the_floors_replay_is_priced_without_another_classs_holding() {
+        use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
+        use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
+        let _guard = exclusive();
+        let path = temp_artifact("floor-need");
+        write_qwen36_fixture_with(&path, 2, 256);
+        let file = std::fs::metadata(&path).expect("the fixture is on disk").len();
+        let holdings = load_class_holdings_v1("test-floor-need", &sdk(), std::slice::from_ref(&path), 0, Residency::PageCache);
+        assert_eq!(incremental_replay_bytes_v1(&holdings[0]), Some(file), "the holding's own bytes are the file");
+        let registry = PalwBackendRegistry::new(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            holdings,
+            b"misaka-palw-rc".to_vec(),
+        );
+        let entry = misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court(), "PALW-BASE-0/rc").expect("the floor");
+        let (floor, root) = (entry.class_id(), misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("pinned"));
+        for role in [PalwResourceRoleV1::FullSeat, PalwResourceRoleV1::Producer] {
+            let need = registry.role_memory_need_v1(floor, root, role).expect("the floor resolves");
+            assert_eq!(need.holding_bytes, 0, "{role:?}: the floor touches none of the holding's pages");
+            let chained = registry.role_memory_need_or_chain_v1(floor, root, role, |_| None).expect("the floor resolves");
+            assert_eq!(chained.holding_bytes, 0, "{role:?}: through the chain's door too");
+        }
+        let backend = registry.resolve(floor, root).expect("the floor");
+        let seat = registry.role_memory_need_for_backend_v1(backend.as_ref(), floor, root, None, PalwResourceRoleV1::FullSeat);
+        assert_eq!(seat.holding_bytes, 0, "a seat's replay of a floor claim");
+        let producer = registry.role_memory_need_for_backend_or_chain_v1(
+            backend.as_ref(),
+            floor,
+            root,
+            None,
+            PalwResourceRoleV1::Producer,
+            |_| None,
+        );
+        assert_eq!(producer.holding_bytes, 0, "the floor producer's attempt (m6 reserved 2.18 GiB for it)");
+        assert_eq!(registry.holding_bytes_for_v1(floor, root), Some(0));
         evict_held_artifacts_v1(std::slice::from_ref(&path));
         std::fs::remove_file(&path).ok();
     }
