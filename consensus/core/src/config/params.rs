@@ -1484,6 +1484,34 @@ pub struct Params {
     /// lies are attributable, U-D8); hashed into the params id only when non-empty. A `&'static`
     /// slice for the reason `palw_rcore_conservative_classes` is one.
     pub palw_class_verify_rows: &'static [crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1],
+    // ---- lane bind-deadlock (post-launch, 2026-09-26): an attempt at its ceiling still anchors ----
+    /// **Lane bind-deadlock (post-launch fence, 2026-09-26; HIGH): an attempt block whose bond is at
+    /// its exposure ceiling may still be the anchor — the BINDER — of the claims due at it.**
+    ///
+    /// Past `palw_rcore_plus` a claim binds its panel only in its own anchor block (ADR-0152 SW-8),
+    /// the anchor is the first attempt block at or past `bind_base + anchor_delay` (heartbeats never
+    /// anchor), and a chain block whose own attempt fails admission item 8 (`ExposureCeilingExceeded`
+    /// against its parent state) is `StatusDisqualifiedFromChain`. So when every attempt-capable
+    /// producer stands at its ceiling no anchor can exist: `Provisional` claims hold that very room
+    /// until the `BindTimeout` backstop voids them, unpaid, and the cycle can repeat (audit-lifecycle
+    /// T12-052, measured in `t12_bind_deadlock`). Past this fence — keyed on the candidate chain
+    /// block's own DAA — such a block is not disqualified when it is the anchor of at least one claim
+    /// (`palw_sw8_anchor_delay_for`: an attempt block that may anchor, which past the operator-anchor
+    /// fence is an operator's; and a claim `Provisional` in its parent with its slot at or below the
+    /// block) and it passes every other item of the full admission (signature, pins, pwu, class
+    /// lottery, identity) with item 8 waived. The fold then treats its attempt exactly as
+    /// finding 17's step-4 skip already does (`AttemptExposureCeiling`): no claim, no reservation, the
+    /// worker carve withheld (`palw_v2_skipped_own_attempt_carve`) — while its derived bindings bind
+    /// every claim due at it. A second binder with nothing left to bind is disqualified as before, so
+    /// binders are bounded by the anchor events claims create.
+    ///
+    /// Refused by `validate_palw_v2` off ConsensusV2 and without `palw_rcore_plus` at or below it
+    /// (below R-core+ a heartbeat anchors, so there is no deadlock to break). Dormant (`None`) on every
+    /// shipped preset, testnet-12 included, until the post-launch release arms it; hashed Some-only and
+    /// collapsed from `Some(never())`, so a build that carries the field fingerprints and peers exactly
+    /// as one that does not until the fence is armed.
+    pub palw_anchor_at_ceiling: Option<ForkActivation>,
+    // ---- end lane bind-deadlock ---------------------------------------------------------------
     /// **ADR-0152-adjacent: the Activation Pool, R1 and R2** (user decision 2026-09-25) — see
     /// [`PalwActivationPoolParamsV1`]. `Some` at genesis on testnet-12 only; hashed Some-only.
     pub palw_activation_pool: Option<PalwActivationPoolParamsV1>,
@@ -3932,6 +3960,8 @@ impl Params {
         // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis
         // only, over the registry and readiness V2 at genesis, inside [8, 30] spans, mirrored.
         self.validate_palw_readiness_v2_max_age_v1()?;
+        // Lane bind-deadlock (post-launch): ConsensusV2 with R-core+ at or below it, on both paths.
+        self.validate_palw_anchor_at_ceiling_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -5033,6 +5063,12 @@ impl Params {
         // ADR-0152 §4-quater's class-verify-deadline fence: Some-only hashed, so the same collapse.
         if self.palw_class_verify_deadline == Some(ForkActivation::never()) {
             self.palw_class_verify_deadline = None;
+        }
+        // Lane bind-deadlock (post-launch): Some-only hashed, so the same collapse — without it a build
+        // that schedules the fence and one that does not would refuse each other on deploy day over a
+        // height neither has reached.
+        if self.palw_anchor_at_ceiling == Some(ForkActivation::never()) {
+            self.palw_anchor_at_ceiling = None;
         }
         // ADR-0152-adjacent (Activation Pool): Some-only hashed, the carve's shape — the whole option
         // collapses, so the terms beside a never-armed fence leave the identity with it.
@@ -6666,6 +6702,47 @@ impl Params {
         self.palw_class_verify_deadline_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    // ---- lane bind-deadlock (post-launch, 2026-09-26): an attempt at its ceiling still anchors ----
+
+    /// **Lane bind-deadlock's fence** ([`Self::palw_anchor_at_ceiling`]), resolved off a ConsensusV2
+    /// ruleset.
+    pub fn palw_anchor_at_ceiling_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_anchor_at_ceiling) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Whether a chain block at `daa_score` whose own attempt is at its bond's exposure ceiling may
+    /// still bind the claims it anchors (a binder). `false` on every shipped preset.
+    pub fn palw_anchor_at_ceiling_active_at(&self, daa_score: u64) -> bool {
+        self.palw_anchor_at_ceiling_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **What lane bind-deadlock's fence refuses**: arming it off ConsensusV2, or without
+    /// `palw_rcore_plus` at or below it — below R-core+ every lane but the receipt and round lanes
+    /// anchors (a heartbeat among them), so a claim never waits on an attempt and there is no deadlock
+    /// to break; the rule is written for SW-8's one-anchor-block world. Any other height is legal; on a
+    /// live testnet-12 the post-launch release arms it with the other post-launch fences at one
+    /// independent height (never 1,000, `palw_bond_maturity`'s).
+    pub fn validate_palw_anchor_at_ceiling_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_anchor_at_ceiling.filter(|f| *f != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid("palw_anchor_at_ceiling is armed on a network that is not ConsensusV2: there is no V2 anchor to bind"));
+        }
+        if !self.palw_rcore_plus.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score()) {
+            return Err(Invalid(
+                "palw_anchor_at_ceiling is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat anchors a panel, \
+                 so no claim waits on an attempt block and there is no ceiling deadlock to break",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane bind-deadlock ----------------------------------------------------------------
+
     /// **ADR-0152-adjacent: the Activation Pool's fence** (R1, R2 and the pool), resolved off a
     /// ConsensusV2 ruleset — the ONE place it is decided; the fold's extras, the transaction
     /// validator's sink rule and the mempool read this and never the raw field.
@@ -6841,6 +6918,8 @@ impl Params {
             palw_rcore_conservative_classes: _,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
+            // Lane bind-deadlock (post-launch).
+            palw_anchor_at_ceiling,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
@@ -6949,6 +7028,9 @@ impl Params {
             ("palw_offence_attribution", *palw_offence_attribution),
             ("palw_rcore_plus", *palw_rcore_plus),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
+            // Lane bind-deadlock (post-launch): a top-level fence an un-upgraded peer does not implement,
+            // so it is on the schedule and gates the fork id like every other.
+            ("palw_anchor_at_ceiling", *palw_anchor_at_ceiling),
             ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
             ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
@@ -7331,6 +7413,12 @@ impl Params {
             h.write(b"palw_class_verify_deadline");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane bind-deadlock (post-launch), NAMED for the same reason and Some-only: it changes which
+        // chain blocks a node disqualifies, so an operator reading the schedule must see it.
+        if let Some(activation) = self.palw_anchor_at_ceiling {
+            h.write(b"palw_anchor_at_ceiling");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0152-adjacent (Activation Pool), NAMED for the same reason and Some-only, with its terms
         // beside the height for the SA-4 reason the carve's numbers are: two operators arming the
         // pool with different terms must see it in the log.
@@ -7544,6 +7632,8 @@ impl Params {
             palw_rcore_conservative_classes: _,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
+            // Lane bind-deadlock (post-launch).
+            palw_anchor_at_ceiling,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
@@ -7872,6 +7962,11 @@ impl Params {
         // ADR-0152 §4-quater's class-verify-deadline fence: SOME-ONLY, as the floor above and for its
         // reason.
         if let Some(activation) = palw_class_verify_deadline.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane bind-deadlock (post-launch): SOME-ONLY, as the floor above and for its reason; its
+        // `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_anchor_at_ceiling.as_mut() {
             fork(activation, visit);
         }
         // ADR-0152-adjacent (Activation Pool): the height only, SOME-ONLY, as the floor above and for
@@ -8471,6 +8566,8 @@ impl Params {
             palw_rcore_conservative_classes,
             palw_class_verify_deadline,
             palw_class_verify_rows,
+            // Lane bind-deadlock (post-launch).
+            palw_anchor_at_ceiling,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
@@ -8797,6 +8894,13 @@ impl Params {
                 h.write(row.canonical_positions.to_le_bytes());
                 h.write(row.leaves_per_position.to_le_bytes());
             }
+        }
+        // Lane bind-deadlock (post-launch): the height only, Some-only (and collapsed from
+        // `Some(never())` for the identity), so a build that leaves it dormant fingerprints
+        // byte-identically to one without the field.
+        if let Some(activation) = palw_anchor_at_ceiling {
+            h.write(b"palw_anchor_at_ceiling");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0152-adjacent (Activation Pool): the height and its terms, Some-only, so every preset
         // but testnet-12 fingerprints byte-identically to a build without the field.
@@ -9596,6 +9700,8 @@ impl Params {
             // the 2M row.
             palw_class_verify_deadline: self.palw_class_verify_deadline,
             palw_class_verify_rows: self.palw_class_verify_rows,
+            // Lane bind-deadlock (post-launch): CARRIED beside its one prerequisite, which is carried too.
+            palw_anchor_at_ceiling: self.palw_anchor_at_ceiling,
             // ADR-0152-adjacent (Activation Pool): CARRIED for R-core+'s reason — an overridden
             // testnet-12 fails `validate_palw_v2` on the prerequisite the override dropped
             // (`palw_admission_independence`) instead of silently disarming R1, R2 and the pool.
@@ -10628,6 +10734,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_anchor_at_ceiling: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
@@ -10853,6 +10960,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_anchor_at_ceiling: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
@@ -11060,6 +11168,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_anchor_at_ceiling: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
@@ -17425,6 +17534,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_anchor_at_ceiling: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,

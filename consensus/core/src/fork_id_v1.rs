@@ -632,6 +632,10 @@ mod tests {
             // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
             // hashers and the schedule.
             "palw_class_verify_deadline" => params.palw_class_verify_deadline = Some(at),
+            // Lane bind-deadlock (post-launch): refused without R-core+ at or below it by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_anchor_at_ceiling" => params.palw_anchor_at_ceiling = Some(at),
             // ADR-0152-adjacent (Activation Pool): the height with the user's terms beside it.
             "palw_activation_pool" => {
                 params.palw_activation_pool = Some(crate::config::params::PalwActivationPoolParamsV1 {

@@ -118,6 +118,14 @@ pub struct PalwEpochBudgetFencesV1 {
     /// (`palw_bond_committed_raw_v1`), whose live locks are read at the escaped depth computed from
     /// this — the fold's own ceiling and the producer's facts read the same. `None` by `Default`.
     pub settled_anchor_depth: Option<u64>,
+    /// **Lane bind-deadlock (`Params::palw_anchor_at_ceiling`): item 8 is computed and NOT enforced.**
+    /// Set only by the processor's re-check of a chain block that the walk found to be the anchor
+    /// of a due claim and whose own attempt the plain admission refused — every other item (the
+    /// entitlement, the pwu, the budget, the producer floor, the escrow backing, the identity, and
+    /// the composed entry point's stateless shape, signature, DA pins and class lottery) still
+    /// refuses. Such a block carries no claim: the fold's own ceiling (`AttemptExposureCeiling`,
+    /// finding 17) skips its attempt. `false` by `Default` — every other caller, byte for byte.
+    pub exposure_ceiling_waived: bool,
 }
 
 impl PalwAdmissionParamsV2 {
@@ -690,7 +698,8 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
             / 1000
     };
     let would_reserve = reserved.checked_add(claim_reservation).ok_or(PalwAdmissionV2Error::Overflow("reserved exposure"))?;
-    if would_reserve > ceiling {
+    // Lane bind-deadlock: a binder's re-check waives the refusal (never the arithmetic above).
+    if would_reserve > ceiling && !budget_fences.exposure_ceiling_waived {
         return Err(PalwAdmissionV2Error::ExposureCeilingExceeded {
             reserved,
             claim: claim_reservation,

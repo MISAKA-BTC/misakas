@@ -583,6 +583,11 @@ pub struct VirtualStateProcessor {
     /// (testnet-12: 120 DAA, the challenge window it applies), handed to it as
     /// `PalwEconomicSafetyFoldV1::maturity_daa` wherever `palw_economic_safety` is in force.
     pub(super) palw_exec_quantum_maturity_daa: u64,
+    /// **Lane bind-deadlock (post-launch): `Params::palw_anchor_at_ceiling`, resolved** — past it (at
+    /// a chain block's own DAA) an attempt block refused only by admission item 8 still binds the
+    /// claims it anchors ([`Self::palw_v2_anchor_at_ceiling_binder_v1`]). `None` on every shipped
+    /// preset.
+    pub(super) palw_anchor_at_ceiling: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -1081,6 +1086,7 @@ impl VirtualStateProcessor {
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_exec_quantum_maturity_daa: params.palw_exec_quantum_maturity_v1(),
+            palw_anchor_at_ceiling: params.palw_anchor_at_ceiling_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -2187,15 +2193,29 @@ impl VirtualStateProcessor {
                                 let attempt =
                                     match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
                                         Ok(attempt) => attempt,
-                                        Err(adm_error) => {
-                                            info!(
-                                                "Block {} is disqualified from virtual chain (PALW admission): {}",
-                                                current, adm_error
-                                            );
-                                            self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
-                                            chain_disqualified_counter += 1;
-                                            continue;
-                                        }
+                                        // Lane bind-deadlock (`palw_anchor_at_ceiling`): an anchor whose
+                                        // bond is at its ceiling still binds the claims due at it.
+                                        Err(adm_error) => match self
+                                            .palw_v2_anchor_at_ceiling_binder_v1(&header, state, state_params, &point, bootstrap)
+                                        {
+                                            Some(envelope) => {
+                                                info!(
+                                                    "Block {} anchors at its bond's exposure ceiling ({}): it binds the claims due at \
+                                                     it and its own attempt carries no claim (palw_anchor_at_ceiling)",
+                                                    current, adm_error
+                                                );
+                                                Some(envelope)
+                                            }
+                                            None => {
+                                                info!(
+                                                    "Block {} is disqualified from virtual chain (PALW admission): {}",
+                                                    current, adm_error
+                                                );
+                                                self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                                chain_disqualified_counter += 1;
+                                                continue;
+                                            }
+                                        },
                                     };
                                 let receipt_spend = match self.palw_v2_check_receipt_spend(&header, state, state_params, &point) {
                                     Ok(spend) => spend,
@@ -11294,6 +11314,9 @@ impl VirtualStateProcessor {
             // ADR-0152 SR-7: the RAW second-clock depth, so item 8 reads the one committed ledger at
             // the escaped depth exactly as the fold's ceiling does (read only past `palw_rcore_plus`).
             settled_anchor_depth: self.palw_settled_anchor_depth_at(daa_score),
+            // Lane bind-deadlock: enforced here; only the binder re-check
+            // (`palw_v2_anchor_at_ceiling_binder_v1`) waives it.
+            exposure_ceiling_waived: false,
         }
     }
 
@@ -11452,6 +11475,12 @@ impl VirtualStateProcessor {
     /// The second clock's depth where the fence carries it; `None` is the DAA-only rule.
     fn palw_settled_anchor_depth_at(&self, daa_score: u64) -> Option<u64> {
         if self.palw_audit_2026_09_23_at(daa_score) { self.palw_settled_anchor_depth } else { None }
+    }
+
+    /// **Lane bind-deadlock (the anchor at the ceiling, post-launch), at a chain block's own DAA.**
+    /// `false` on every shipped preset.
+    pub(super) fn palw_anchor_at_ceiling_at(&self, daa_score: u64) -> bool {
+        self.palw_anchor_at_ceiling.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// The second clock's depth at `daa_score` AFTER the liveness escape
@@ -12089,6 +12118,21 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
+        self.palw_v2_check_attempt_admission_waiving_v1(header, state, state_params, point, bootstrap_state, false)
+    }
+
+    /// [`Self::palw_v2_check_attempt_admission`] with admission item 8 (the exposure ceiling) waived
+    /// when `waive_ceiling` — lane bind-deadlock's binder re-check
+    /// ([`Self::palw_v2_anchor_at_ceiling_binder_v1`]) and nothing else passes `true`.
+    fn palw_v2_check_attempt_admission_waiving_v1(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        waive_ceiling: bool,
+    ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
         use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
         // ADR-0072 SA-4: EITHER attempt id. Which one is a lane at this height was already decided
         // by the header processor and the pruning-proof gate, both of which refuse the closed side
@@ -12145,10 +12189,61 @@ impl VirtualStateProcessor {
             bootstrap_bond.as_ref(),
             // ADR-0045/ADR-0123: resolve both budget policies from the same block DAA, and pass
             // them as named fields so boundary and release cannot be transposed at this callsite.
-            self.palw_epoch_budget_fences_at(point.daa_score),
+            // Lane bind-deadlock: item 8 waived for a binder's re-check only.
+            {
+                let mut fences = self.palw_epoch_budget_fences_at(point.daa_score);
+                fences.exposure_ceiling_waived = waive_ceiling;
+                fences
+            },
         )
         .map_err(|e| e.to_string())?;
         Ok(Some(envelope))
+    }
+
+    /// **Lane bind-deadlock: the binder — a chain block whose own attempt admission refused on its
+    /// bond's exposure ceiling alone, and which is the anchor of a due claim** (`Params::palw_anchor_at_ceiling`,
+    /// at the block's own DAA).
+    ///
+    /// Past `palw_rcore_plus` a claim binds only in its anchor block (SW-8) and only an attempt block
+    /// anchors; an attempt a full bond cannot back was disqualified here, so a fleet whose producers all
+    /// stood at their ceilings had no anchor at all and its `Provisional` claims — the very room that
+    /// held it there — waited for the `BindTimeout` backstop. `Some(envelope)` — the walk keeps the block
+    /// and hands the fold its attempt — exactly when:
+    ///
+    /// 1. the fence is active at the block's DAA;
+    /// 2. the block may anchor a panel ([`Self::palw_sw8_anchor_delay_for`]: R-core+ at the block and
+    ///    the one anchor predicate, which past the operator-anchor fence admits an operator's attempt
+    ///    only — the two rules compose through that predicate and nothing else);
+    /// 3. the parent holds a claim `Provisional` with its slot at or below the block's DAA — so this
+    ///    block IS that claim's anchor (every anchor-capable block at or past a slot binds or voids the
+    ///    claim there, step 4c) and binds or voids it now; a block with nothing to anchor stays
+    ///    disqualified, so binders are bounded by the anchor events claims create;
+    /// 4. the full admission passes with item 8 waived — signature, pins, pwu, producer floor, budget,
+    ///    identity, class lottery: an anchor still costs a won draw by a registered bond's key.
+    ///
+    /// The fold then runs the attempt through `apply_attempt`, whose own ceiling (finding 17,
+    /// `AttemptExposureCeiling`, on the state this block's objects leave) skips it: no claim, no
+    /// reservation, the worker carve withheld and burned (`palw_v2_skipped_own_attempt_carve`). If this
+    /// block's own objects freed the room first, the fold admits the claim on the ceiling it measures
+    /// — the invariant `committed ≤ ceiling` is the fold's, whichever block the claim rides.
+    fn palw_v2_anchor_at_ceiling_binder_v1(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+    ) -> Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2> {
+        if !self.palw_anchor_at_ceiling_at(point.daa_score) {
+            return None;
+        }
+        let anchor_delay = self.palw_sw8_anchor_delay_for(point)?;
+        if kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1(state, point.daa_score, anchor_delay)
+            .is_empty()
+        {
+            return None;
+        }
+        self.palw_v2_check_attempt_admission_waiving_v1(header, state, state_params, point, bootstrap_state, true).ok().flatten()
     }
 
     /// Unit C step 4's consumer: a receipt-lane (algo-7) block's spend, admitted against a beacon

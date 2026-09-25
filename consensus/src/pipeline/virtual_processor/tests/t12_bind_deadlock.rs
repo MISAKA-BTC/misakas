@@ -19,7 +19,8 @@
 //!   chain, so nothing binds; the claims void `BindTimeout` at the backstop, unpaid.
 //! * `f1`: the fix across its fence — below `palw_anchor_at_ceiling` the at-ceiling attempt is still
 //!   disqualified; from it the same producer's attempt is a BINDER: it anchors and binds every claim
-//!   due at it, carries no claim of its own (the fold's finding-17 skip) and is paid no worker carve;
+//!   due at it, carries no claim of its own (the fold's finding-17 skip) and is paid no worker carve
+//!   (on testnet-12 the carve is the whole worker share, so a binder is paid nothing but its fees);
 //!   a second binder with nothing left to bind is disqualified as before.
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
@@ -50,8 +51,10 @@ fn card_pubkey(card: usize) -> Vec<u8> {
 /// testnet-12 with harness cards, the post-launch fence at `fence` (`None` = the released rule).
 fn t12_at(fence: Option<u64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
-    let Some(_at) = fence else { return (config, bundle, premine, floats) };
-    let params = config.params.clone();
+    assert_eq!(config.params.palw_anchor_at_ceiling, None, "the fence is dormant on testnet-12 as shipped");
+    let Some(at) = fence else { return (config, bundle, premine, floats) };
+    let mut params = config.params.clone();
+    params.palw_anchor_at_ceiling = Some(kaspa_consensus_core::config::params::ForkActivation::new(at));
     let config = ConfigBuilder::new(params).skip_proof_of_work().build();
     config.params.validate_palw_v2().expect("testnet-12 with the fence armed is a runnable ruleset");
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
@@ -435,4 +438,85 @@ async fn t12_bind_deadlock_r1_a_producer_at_its_ceiling_cannot_anchor_its_own_cl
     assert_eq!(voided, claims.len(), "the backstop voids every one BindTimeout");
     assert_eq!(state.bond(&f.chain.bonds[7]).unwrap().slashed, 0, "without forfeit (S0)");
     assert_eq!(f.ready(7), Ok(()), "and only then may card 7 produce again");
+}
+
+/// **`f1`: the binder, across its fence.** The same scenario as `r1` with `palw_anchor_at_ceiling` at
+/// `3 × anchor_delay`: below the fence card 7's at-ceiling attempt is disqualified exactly as released;
+/// from the fence the same producer's attempt is the claims' anchor — every one of the 146 binds in it,
+/// the attempt itself carries no claim (card 7's commitment does not move), its worker carve is withheld,
+/// and a second binder with nothing left to anchor is disqualified as before.
+#[tokio::test]
+async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_claims_due_at_it() {
+    let anchor_delay = t12_at(None).1.panel.anchor_delay();
+    let fence = 3 * anchor_delay;
+    let mut f = Fleet::new(Some(fence));
+    assert!(f.chain.config.params.palw_anchor_at_ceiling_active_at(fence));
+    assert!(!f.chain.config.params.palw_anchor_at_ceiling_active_at(fence - 1));
+    f.chain.heartbeat(f.ttpb(), Vec::new()).await;
+    let claims = f.fill_the_ceiling(7).await;
+    let accepted = f.state().claim(&claims[0]).unwrap().accepted_daa;
+    let committed_at_ceiling = f.committed(7);
+    let slot = accepted + anchor_delay;
+    println!("[f1] card 7 at its ceiling after {} claims at DAA {accepted}; slot {slot}; fence {fence}", claims.len());
+
+    // Below the fence: the released rule, at the slot and at the last DAA before the fence.
+    for below in [slot, fence - 1] {
+        f.beat_to(below).await;
+        let sink = f.chain.sink();
+        let (block, _) = f.build_attempt(7);
+        let daa = block.header.daa_score;
+        assert!(daa < fence, "built below the fence (DAA {daa})");
+        let (hash, status) = f.insert(block).await;
+        assert_eq!(status, BlockStatus::StatusDisqualifiedFromChain, "below the fence the at-ceiling attempt {hash} is disqualified");
+        assert_eq!(f.chain.sink(), sink);
+        assert_eq!(phases(&f.state(), &claims).get("Provisional"), Some(&claims.len()));
+        println!("[f1] DAA {daa} (below the fence): card 7's attempt {status:?}; all {} claims Provisional", claims.len());
+    }
+
+    // From the fence: the binder.
+    f.beat_to(fence).await;
+    let parent = f.state();
+    let (block, binder_attempt) = f.build_attempt(7);
+    let daa = block.header.daa_score;
+    assert!(daa >= fence, "built at or past the fence (DAA {daa})");
+    let (binder, status) = f.insert(block).await;
+    assert_eq!(status, BlockStatus::StatusUTXOValid, "past the fence the at-ceiling attempt {binder} is a valid chain block");
+    assert_eq!(f.chain.sink(), binder, "and the chain takes it");
+    let state = f.state();
+    let bound = phases(&state, &claims);
+    println!("[f1] DAA {daa} (past the fence): binder {binder}: {bound:?}");
+    assert_eq!(bound.get("PanelBound"), Some(&claims.len()), "every claim due at the binder binds in it");
+    for claim_id in &claims {
+        let panel = state.panel(claim_id).expect("a bound claim has a panel");
+        assert_eq!(panel.seats.len(), f.chain.bundle.panel.seat_count() as usize, "a full jury");
+        assert!(panel.seats.iter().all(|seat| seat.bond != f.chain.bonds[7]), "the executor never sits on its own panel");
+        assert!(matches!(state.claim(claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa } if bound_daa == daa));
+    }
+    assert!(parent.claim(&binder_attempt).is_none() && state.claim(&binder_attempt).is_none(), "the binder's attempt carries no claim");
+    assert_eq!(f.committed(7), committed_at_ceiling, "card 7's commitment does not move: the binder reserved nothing");
+    let withheld = f.chain.vp().palw_v2_escrow_withheld_at(&state, binder);
+    let vp = f.chain.vp();
+    let carve = f.chain.bundle.state.worker_carve_at(vp.coinbase_manager.calc_block_subsidy(daa), vp.palw_escrow_carve_at(daa, daa));
+    println!("[f1] the binder's worker carve withheld: {:.4} MSK (carve {:.4})", withheld as f64 / MSK, carve as f64 / MSK);
+    assert!(withheld > 0 && withheld == carve, "the binder's carve is withheld as a skipped own attempt's is");
+
+    // Nothing left to anchor at this DAA: a second binder is disqualified, as released.
+    let (block, _) = f.build_attempt(7);
+    let (hash, status) = f.insert(block).await;
+    assert_eq!(status, BlockStatus::StatusDisqualifiedFromChain, "a binder with nothing due ({hash}) is disqualified");
+    assert_eq!(f.chain.sink(), binder);
+    // Nor does a heartbeat bind anything; the claims wait for receipts as any bound claim does. The
+    // heartbeat's coinbase pays the binder its block's worker share LESS the withheld carve — what any
+    // attempt block is paid at once (the carve is what a claim would have escrowed to its Final).
+    let child = f.chain.heartbeat(f.ttpb(), Vec::new()).await;
+    assert_eq!(phases(&f.state(), &claims).get("PanelBound"), Some(&claims.len()));
+    let paid: u64 =
+        child.transactions[0].outputs.iter().filter(|out| out.script_public_key == card_payout_spk(7)).map(|out| out.value).sum();
+    println!(
+        "[f1] the merging heartbeat pays card 7 {:.4} MSK at once for the binder (subsidy {:.4}, carve withheld {:.4})",
+        paid as f64 / MSK,
+        vp.coinbase_manager.calc_block_subsidy(daa) as f64 / MSK,
+        withheld as f64 / MSK
+    );
+    assert_eq!(paid, 0, "testnet-12 escrows the whole worker share, so a binder (no fees here) is paid nothing: a duty, not an income");
 }
