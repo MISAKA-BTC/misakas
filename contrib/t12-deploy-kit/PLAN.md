@@ -236,10 +236,10 @@ gRPC は .113 以外 `--nogrpc`（同一 host 2 node で既定ポートが衝突
    "PALW DRILL" を名乗れば止め、起動直後の `PALW duties` の 1 行で panel と round lane が ON であることを確かめ（idle なら警告）、
    RPC で `EXPECT_GENESIS` を確かめ、違えばその node を止めて後続を起動しない。
 
-**8270cf03 での暫定値（出荷値ではない）**（`scripts/t12-repin.sh` が build から計算した値。`--apply` が値とこの表示の commit を、出荷 commit での `--apply --shipping` が表示を出荷値に書き換える。経緯は checklist §3）:
-`EXPECT_FP=99eae89db05887c0ee21e451d5a78bd296533db59eb818edb3a4a320565c0ba3`、
+**出荷 commit（57c1fe32 ＋ 再 pin）の値**（`scripts/t12-repin.sh` が build から計算した値。`--apply` が値とこの表示の commit を、出荷 commit での `--apply --shipping` が表示を出荷値に書き換える。経緯は checklist §3）:
+`EXPECT_FP=b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f`、
 `EXPECT_GENESIS=a27f8f44fe4d91a5…a8ca1f23`（全桁は checklist §3）、`PREMINE_TXID=5e0d5f1b37a71288…e55e2669`、
-schedule id `5f53b691…`、rule manifest digest `9def81a1…`。
+schedule id `93da24cc…`、rule manifest digest `9def81a1…`。
 
 ## 5. 手順（誰が・どの順で）
 

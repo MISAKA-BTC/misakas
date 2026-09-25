@@ -31,9 +31,10 @@ const BEFORE_THE_POOL: &[(&str, &str, &str, &str)] = &[
         "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
     ),
     (
+        // re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was badaa8e9…, 00d98599…)
         "mainnet",
-        "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1",
-        "00d98599bd45867f4a7b3bef1043431ccb8ef0d41cedbc552a87926b5e3b8af5",
+        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
+        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
         "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
     ),
 ];

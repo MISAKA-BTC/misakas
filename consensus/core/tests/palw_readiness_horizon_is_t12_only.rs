@@ -39,9 +39,10 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
         "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
     ),
     (
+        // re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was badaa8e9…, 00d98599…)
         "mainnet",
-        "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1",
-        "00d98599bd45867f4a7b3bef1043431ccb8ef0d41cedbc552a87926b5e3b8af5",
+        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
+        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
         "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
     ),
 ];
@@ -56,10 +57,11 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
 /// Re-pinned 2026-09-25 (`rcore/exec-maturity-120`): testnet-12's 120-DAA execution-quantum maturity
 /// (`palw_exec_maturity_is_t12_only`) is in this twin — and so are c6ffd812's mainnet values, which the
 /// merge `2004c588` left un-re-pinned here. Previous: `fd7353c0…` / `a7fe561c…` / `28d866f1…`.
+// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was 3d8670a6…, af69b742…, 6cb1aaaa…)
 const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
-    "3d8670a6e7933fa52d17ef208ac2d88f3f3a0f9b1053becc4ccf64a83c7ccb93",
-    "af69b742a7d9853565da8332da071ad9c03c84183fbbaf888890fc2f64c8a9f4",
-    "6cb1aaaa2e487d68594b3aab556aa6439854890f6ccdd08d08546e365b59fe85",
+    "71777608d6ca83717313202c59989604d615049b53365a69f79f3cb0a48ce85c",
+    "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
+    "c9964f908e0a16e5c0664c9b962506e96966f7bd53db4fc2bde6892055d65989",
 );
 
 /// testnet-12 with the horizon, on the same tree (at `3e9ae4ba`, before the pool and int-3 merges:
@@ -69,10 +71,11 @@ const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
 /// (= `palw_exec_maturity_is_t12_only`'s `T12_WITH_THE_MATURITY`; at `2004c588` they were `2790d7ce…` /
 /// `1fd06c99…` / `e0af0218…`, which this pin never caught up with). Previous: `4d38b3f1…` / `2477a803…` /
 /// `06dd5566…`.
+// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was 730d7f10…, 50990e0f…, 01854a38…)
 const T12_WITH_THE_HORIZON: (&str, &str, &str) = (
-    "730d7f10dc1416980ff88c9825a5279e4e7fd64f8f475f11b4e13d572ba17e47",
-    "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "01854a388d6e40393e6752261076eab7c1b0f11f62d4ec92bf356b7c8e977de6",
+    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
+    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
 );
 
 fn shipped(name: &str) -> Params {

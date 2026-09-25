@@ -377,18 +377,18 @@ gate 全体は未達**: item 1（T57 の規則欠と一部の cell）、2、4、
 
 ## 3. testnet-12 の identity（§5 の tool が書く）
 
-**8270cf03 での暫定値（出荷値ではない）** — `scripts/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
+**出荷 commit（57c1fe32 ＋ 再 pin）の値** — `scripts/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
 `REPIN` 行。node が起動ログに出すのと同じ関数: fingerprint は `Params::from(testnet-12).consensus_params_id()`、genesis は premine から
 再計算した utxo commitment・merkle root・header hash）。下の block は §5 の `--apply` が書き換え（`# re-pin` 行が理由）、太字の表示も
 tool が書く（`--apply` は計算した commit に、出荷 commit での `--apply --shipping` は「出荷 commit（<commit> ＋ 再 pin）の値」に）。
 release build の probe（§4 step 10〜11 の `IDENTITY`）がこれと一致しなければ止める。
 
 ```
-# re-pin 2026-09-25 @8270cf032d24: provisional ids at rcore/int-3 8270cf03 (the class-verify-deadline merge a66509f9 moved t12's params and schedule ids after a0af3c92) (was 8a481023…, 8b0ee13c…)
-EXPECT_FP=99eae89db05887c0ee21e451d5a78bd296533db59eb818edb3a4a320565c0ba3
+# re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was 99eae89d…, 5f53b691…)
+EXPECT_FP=b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f
 EXPECT_GENESIS=a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23
 PREMINE_TXID=5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669
-# schedule id 5f53b691c98dbd4352835d18699c3051af209064c8ff79e2a920bbcfae421c1b（fence schedule "1000"）
+# schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd（fence schedule "1000"）
 # rule manifest digest 9def81a1c56c02d5d1f9d24c5ddbe78d6f7598b31928ab6f388a2a074f14b4d4d4cf8c2245666bc13b9c91688c106efe428e8643075b68b40c4820adb4201d8d
 ```
 

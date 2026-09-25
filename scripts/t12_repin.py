@@ -91,6 +91,8 @@ HARVEST_TARGETS = [
     "palw_same_fingerprint_same_verdict",
     "palw_readiness_horizon_is_t12_only",
     "palw_exec_maturity_is_t12_only",
+    "palw_clock_lead_cap_is_t12_only",
+    "t12_mainnet_values_moved_only_these",
 ]
 HARVEST_FILTERS = [
     "print_every_value_the_pins_hold",
@@ -104,6 +106,8 @@ HARVEST_FILTERS = [
     "the_stored_corpus_gets_the_verdicts_this_build_pinned",
     "the_horizon_moves_testnet12s_fingerprint_and_nothing_else_did",
     "the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did",
+    "the_cap_moves_testnet12s_fingerprint_and_a_never_collapses",
+    "the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",
 ]
 # The one lib test whose value is only visible in its own failure message (or, when it passes, is
 # the pin itself): run alone, so its result line is unambiguous.
@@ -139,7 +143,12 @@ HARVEST_LINES = [
     # `palw_exec_maturity_is_t12_only` likewise (the execution-quantum maturity, user decision 2026-09-25).
     (r'testnet-12 with the maturity \("(\w+)", "(\w+)", "(\w+)"\) / without the maturity \("(\w+)", "(\w+)", "(\w+)"\)',
      ["twin.with_maturity.params_id", "twin.with_maturity.identity_id", "twin.with_maturity.schedule_id",
-      "twin.no_maturity.params_id", "twin.no_maturity.identity_id", "twin.no_maturity.schedule_id"]),
+      "twin.no_maturity.params_id", "twin.no_maturity.identity_id", "twin.no_maturity.schedule_id"]),    # `palw_clock_lead_cap_is_t12_only` (the beat lead cap, 2026-09-25) prints each triple on its own line.
+    (r'testnet-12 without it:\s+\("(\w+)", "(\w+)", "(\w+)"\)',
+     ["twin.no_cap.params_id", "twin.no_cap.identity_id", "twin.no_cap.schedule_id"]),
+    # `t12_mainnet_values_moved_only_these` (the mainnet values, 2026-09-25): testnet-12 with the three values set back.
+    (r"testnet-12 mainnet-values parent twin: params (\w+) identity (\w+) schedule (\w+)",
+     ["twin.mnv_parent.params_id", "twin.mnv_parent.identity_id", "twin.mnv_parent.schedule_id"]),
 ]
 T41_RECORD = re.compile(r"T41 record (\w+)[^:\n]*: ([0-9a-f]{64})")
 REPIN_LINE = re.compile(r"REPIN (\S+) (\S+)")
@@ -240,6 +249,8 @@ DEADLINE = "consensus/core/tests/palw_class_verify_deadline_is_t12_only.rs"
 POOL = "consensus/core/tests/palw_activation_pool_is_t12_only.rs"
 HORIZON = "consensus/core/tests/palw_readiness_horizon_is_t12_only.rs"
 MATURITY = "consensus/core/tests/palw_exec_maturity_is_t12_only.rs"
+CAP = "consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs"
+MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 PARAMS = "consensus/core/src/config/params.rs"
@@ -396,6 +407,19 @@ def registry() -> list[Pin]:
                     "twin.no_maturity", maturity_twin)
     pins += _triple("maturity.T12_WITH_THE_MATURITY", "t12", MATURITY, "const T12_WITH_THE_MATURITY: (&str, &str, &str) = (",
                     "shipped.testnet-12", maturity_twin)
+    # The beat lead cap (2026-09-25): the unmoved presets, testnet-10 / simnet as history, and testnet-12's twin.
+    cap_tests = (f"{CAP}::every_other_preset_fingerprints_as_it_did_before_the_cap",)
+    cap_twin = (f"{CAP}::the_cap_moves_testnet12s_fingerprint_and_a_never_collapses",)
+    pins += _rows("cap.BEFORE_THE_CAP", _net_scope, CAP, "const BEFORE_THE_CAP: &[(&str, &str, &str, &str)] = &[", _shipped, cap_tests)
+    for const_ in ("TESTNET_10_IDS", "SIMNET_IDS"):
+        pins += [Pin(key=f"cap.{const_}.{what}", scope="history", file=CAP, anchors=[re.escape(f"const {const_}: (&str, &str, &str) = (")],
+                     nth=i_, length=64, until=r"^\);", value=None, tests=cap_tests)
+                 for i_, what in enumerate(["params_id", "identity_id", "schedule_id"])]
+    pins += _triple("cap.T12_BEFORE_THE_CAP", "t12", CAP, "const T12_BEFORE_THE_CAP: (&str, &str, &str) = (", "twin.no_cap", cap_twin)
+    pins += _triple("cap.T12_WITH_THE_CAP", "t12", CAP, "const T12_WITH_THE_CAP: (&str, &str, &str) = (", "shipped.testnet-12", cap_twin)
+    # The mainnet values (2026-09-25): testnet-12 with the three values set back (and the later fences taken away).
+    pins += _triple("mnv.PARENT_WITHOUT_THE_ATTRIBUTION", "t12", MNV, "const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
+                    "twin.mnv_parent", (f"{MNV}::the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)

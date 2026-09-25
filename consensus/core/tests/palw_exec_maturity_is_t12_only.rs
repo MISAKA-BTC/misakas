@@ -67,18 +67,20 @@ const UNMOVED: &[(&str, &str, &str, &str)] = &[
 /// `palw_offence_attribution_is_t12_only`, `evm_bridge_ledger_is_t12_only` and
 /// `t12_mainnet_values_moved_only_these` hold unchanged with it taken away — so nothing else moved).
 /// The re-pin (`scripts/t12_repin.py`, `maturity.*`) moves it with every other twin.
+// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was 2790d7ce…, 1fd06c99…, e0af0218…)
 const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (
-    "2790d7cedc05f4aa6f7689323a9ccbfa9ea4d62992ff3a6a36a3f704d2126db5",
-    "1fd06c99f4ba1fe47c4e42c50531d2c8b4a5c23925c744954ec6d119623bd403",
-    "e0af02184935725c7b669d12ec5f3c6ea90d2caaee0c7360c45a663c96fc83f9",
+    "4620b0d42717916c33dba9ff2136c81cd0e54a5a5d608ea356eeb5ab1a4f34bf",
+    "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
+    "62808b8da549f0589c04e05f9dc89814cb1a03a32d43d996af5b675d9e195dec",
 );
 
 /// testnet-12 with the 120-DAA maturity: the shipped preset's full ids (= `palw_readiness_horizon_is_t12_only`'s
 /// `T12_WITH_THE_HORIZON`). Taken from this test's own output.
+// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was 730d7f10…, 50990e0f…, 01854a38…)
 const T12_WITH_THE_MATURITY: (&str, &str, &str) = (
-    "730d7f10dc1416980ff88c9825a5279e4e7fd64f8f475f11b4e13d572ba17e47",
-    "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "01854a388d6e40393e6752261076eab7c1b0f11f62d4ec92bf356b7c8e977de6",
+    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
+    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
 );
 
 fn shipped(name: &str) -> Params {

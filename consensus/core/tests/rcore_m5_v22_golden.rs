@@ -217,12 +217,13 @@ fn t41_the_v22_golden_vectors_empty_and_inhabited() {
         ("inhabited root", full.state_root().to_string()),
         ("inhabited carriage", carriage_digest(full)),
     ];
+    // re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was cd18ed25…, f5b6e2c2…)
     let want = [
         // `palw_state_v2`'s own v22 empty root (`the_version_22_state_root_golden_vectors`), re-read.
         "63e5e4480416252619a5ee106aeeb32fb884bba58b5660c990396970e6f2f5fa26d8780b2901567db8c539291aaca64eb4c0a8dab75d0436238d8fbe65553529",
         "d1daaf1d50b5b7b368ceeb8096316c6109d7aea07016a146c5525db43560a2a4",
-        "cd18ed25b74ba8442ee116f99a89dbde2393728ca4d7087554e9ceebdd63794fe5890df10bf1388ca69136847d80b960a21714fa7321f34efb5def573c78a807",
-        "f5b6e2c249b9cc0c7ac06dc8380a5913a81c4c03b5293190d4a79952babe3f52",
+        "6afd3a7c573f5113daae9ae420eb8044f56262aa5f9269b51f9639e890bf2549b013be87812112b899b703db1a6631cc8eac562c21487fe486c89426e794f678",
+        "7590901d4673f96b9111c0a1570e0b8640af9662ce93c59b59b2b3ba8dac6e0a",
     ];
     let mut moved = Vec::new();
     for ((what, value), want) in got.iter().zip(want) {

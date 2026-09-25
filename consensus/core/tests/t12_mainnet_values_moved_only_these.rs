@@ -40,10 +40,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
+// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): the mainnet-values twin re-pinned on the integrated line (its parent carries the Activation Pool and readiness-horizon fences merged after 8270cf03). (was db3a479a…, e9a37a6e…, 5c4272bd…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "f5b564f3267e3a0a5c19dafaf5901069481132c05f4bfa464773848a3e44f1d0",
-    "8eaabe3eea0f6feb11e6a211f893bc590dc2e2427771e73c8f0629cf6dbe830c",
-    "b758ee801d47058306f97dcc7d558009f27c8162439990259bbee756c2a90478",
+    "89337fb7aa05f667a3c452282741ceae99ccd606f83e9544c7efd62c1cc54244",
+    "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
+    "e36f26a9c36a9343831147f24505a3413714a39809ed41f4c300e1034f0939dc",
 );
 
 #[test]
@@ -79,6 +80,9 @@ fn the_three_mainnet_values_are_the_only_thing_that_moved_testnet12() {
     // was taken; taken away as well, and `palw_exec_maturity_is_t12_only` pins what it moves.
     parent_without.palw_exec_quantum_maturity_daa = None;
     let got = ids(&parent_without);
+    // On the integrated line (rcore/int-3) the parent also carries the fences merged after `8270cf03`
+    // (the Activation Pool, the readiness horizon, ...), so this is re-pinned there, not `f5b564f3…`.
+    println!("testnet-12 mainnet-values parent twin: params {} identity {} schedule {}", got.0, got.1, got.2);
     assert_eq!(
         (got.0.as_str(), got.1.as_str(), got.2.as_str()),
         PARENT_WITHOUT_THE_ATTRIBUTION,
