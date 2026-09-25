@@ -110,7 +110,7 @@ misaka --network testnet-12 verifier start --detach
 ## seat が選ばれる条件
 
 - Bond が class の capability を宣言している(Floor の場合)。model class の場合は、新しい readiness(possession)証明がある。証明は artifact を持った panel が自動で提出します。
-- seat の空き collateral が、その claim で `Valid` 署名が取る lock を満たしている(floor claim で約 112.56 MSK)。満たせない bond は、選ばれてから失敗するのではなく、最初から抽選で外されます。
+- seat の 500‰ ceiling の下に、bind される panel 1 つにつき約 640.17 MSK の空きがある(floor と 8k)。満たせない bond は、選ばれてから失敗するのではなく、最初から抽選で外されます。
 - model class の readiness には、空き collateral が 39,000 MSK(producer floor の 3 倍)必要です。
 - DAA 1,000 以降は、bond の登録から 1,000 DAA 経っている。
 
@@ -167,7 +167,7 @@ misaka --network testnet-12 logs node
 | `0 peers` | DNS、firewall、peer の ruleset の不一致 | `--addpeer=169.58.232.113:26311`、P2P `26311/tcp`、ログの fork-id を確認 |
 | `bond unknown` | outpoint の間違い、または別のネットワーク | `bond status --bond <txid>:<index>` で outpoint を確認。genesis の bond は txid `5e0d5f1b…` の上にある |
 | `judges nothing` | Bond が capability を宣言していない | `verifier setup --model ...` を実行する。登録済みの Bond は登録し直さない |
-| seat が選ばれない | 空き collateral が `Valid` lock に足りない、bond が 1,000 DAA 未満、readiness 証明がない | `bond status`、`model readiness`、`palw panel list` を確認 |
+| seat が選ばれない | panel 1 つあたり約 640.17 MSK の空きがない、bond が 1,000 DAA 未満、readiness 証明がない | `bond status`、`model readiness`、`palw panel list` を確認 |
 | `readiness … no proof — a replay needs 3.37 GiB` | memory share が足りない | `--palw-host-memory-share=3758096384` 以上を `extra_kaspad_args` に書く |
 | artifact missing / mismatch | class に合わない artifact、またはパスの間違い | `model list` で class を確認し、絶対パスを指定する。`palw-class manifest --check` で sidecar を確認 |
 | panel が動かない | node が同期中、key file が読めない、bond が解釈できない | `PALW duties NOT as planned: …` の行、`doctor`、`getPalwNodeStatus.panelRunning` を確認 |

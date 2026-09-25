@@ -91,4 +91,4 @@ producer と verifier は同じ artifact のバイト列を検証できなけれ
 
 ## Collateral
 
-必要な collateral は、class と現在の規則から CLI が導出します。testnet-12 では claim ごとに escrow + weight を予約するので、同時 1 本あたりの目安は Floor 約 6,402 MSK、8k 約 6,452 MSK、2M 約 125,888 MSK です。それでも Wiki に固定の額を書き写さず、`mining setup` と `bond status` の表示を使ってください。登録済みの Bond には collateral を追加できず、同じ key では再登録できません。
+必要な collateral は、class と現在の規則から CLI が導出します。testnet-12 では claim ごとに escrow + weight を予約するので、同時 1 本あたりの目安は Floor 約 6,402 MSK、8k 約 6,451 MSK、2M 約 125,888 MSK です(escrow は block の subsidy に比例します)。ノードの既定 collateral(`--palw-bond-collateral` を省略したときの値)は devnet 由来の古い weight だけの式で、Floor で約 31,191 MSK(同時 4 本)、**8k class では約 2,000,332,625 MSK と調達できない額**になります。額はいつも明示してください。実際の空きは `bond status` の `exposure_ceiling` と `reserved_exposure` で確認してください。登録済みの Bond には collateral を追加できず、同じ key では再登録できません。

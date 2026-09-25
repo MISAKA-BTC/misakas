@@ -11,7 +11,7 @@ misaka --network testnet-12 mining setup
 ウィザードは node、network、model、key、資金、Bond registry、artifact、capability、fee output を順に確認し、`~/.misaka/mining.toml` を作ります。途中で止まっても、同じコマンドを実行すればチェーンとローカルの状態から再開します。
 
 - 登録には `kaspad --palw-register-bond` を使います(operator-possession 署名つき)。
-- `--palw-bond-collateral` は渡しません。ノードが導出した既定の collateral を登録し、その額に合う資金を求めます。額を自分で決めるときは [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形を使います。
+- `--palw-bond-collateral` は渡しません。ノードが導出した既定の collateral を登録し、その額に合う資金を求めます(Floor で約 31,191 MSK、`--model` に 8k を指定すると約 2,000,332,625 MSK で調達できません)。額を自分で決めるとき、および model class のときは [参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形を使います。
 - testnet-12 には faucet がまだないので、ウィザードは faucet の案内を出しません。
 
 ## 既存 Bond の確認

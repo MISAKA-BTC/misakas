@@ -83,7 +83,7 @@ misaka --network testnet-12 bond status --key-file ~/.misaka/miner.seed
 
 - `registry: REGISTERED`: 正式に登録された PALW bond です。登録し直さないでください。
 - `registry: NOT REGISTERED`: ふつうの UTXO、予約された output、または lock された output で、registry の記録ではありません。
-- `UNDERSIZED`: 登録済みですが、確認した class をずっと生産し続けるには collateral が足りません。
+- `UNDERSIZED`: 古い weight だけの式(Floor で約 31,191 MSK)より collateral が少ない、という表示です。testnet-12 では 13,000 MSK 以上なら生産でき、同時に持てる本数が collateral に比例するだけです(下の表)。
 
 ## 6. Floor producer
 
@@ -93,7 +93,7 @@ misaka --network testnet-12 bond status --key-file ~/.misaka/miner.seed
 misaka --network testnet-12 mining setup
 ```
 
-ウィザードは `kaspad --palw-register-bond` で登録します。collateral にはノードが導出した既定値を使い、その額に合う資金を求めます。collateral の額を自分で決めたい場合は、[参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形で `--palw-bond-collateral=<sompi>` を明示してください。
+ウィザードは `kaspad --palw-register-bond` で登録します。collateral にはノードが導出した既定値(Floor で約 31,191 MSK。`--model` に 8k を指定すると約 2,000,332,625 MSK と調達できない額)を使い、その額に合う資金を求めます。額を自分で決めたい場合と model class の場合は、[参加手順 §5](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) の手動の形で `--palw-bond-collateral=<sompi>` を明示してください。
 
 既存の key と Bond を指定する場合:
 

@@ -52,7 +52,7 @@ PALW Bond は、開いている claim の exposure の上限を持ちます。te
 | class | 同時 1 本あたりの collateral |
 |---|---|
 | Floor | 約 6,402 MSK |
-| 8k | 約 6,452 MSK |
+| 8k | 約 6,451 MSK |
 | 2M | 約 125,888 MSK |
 
 ```bash
