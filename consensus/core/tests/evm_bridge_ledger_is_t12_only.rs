@@ -32,10 +32,13 @@ fn ids(p: &Params) -> (String, String, String) {
 /// **Re-pinned 2026-09-25 for testnet-12's mainnet values** (λ 2,000 -> 5,000 ‰, the future-time
 /// tolerance 132 -> 1,620 s, `max_block_level` 250 -> 225; `t12_mainnet_values_moved_only_these`
 /// pins that they are the only thing that moved). Previous: `f5eee474…` / `75666d42…` / `75282ad2…`.
+///
+/// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
+/// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "58c047566f871c33e6e5c7e9a40a2325405832ba8711bd16bafe9fdeb8ef54a7",
-    "6388b87b757e442bdb87200e1e4b32c29f1eb67e976dd6f57e70f4c71f0a77c3",
-    "2c2f7c0e1fd79b56e93b3886cc1d366881f0652c3650ac741b4e067376c3ad40",
+    "8e395c26a6eac260b9c509fe6977e85709ab7948482d3660fe255b2eaf60c51a",
+    "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
+    "9451ec5dbf480f4966de343e67e53f8e2d97a7705d1b5771a364a4b26bcda211",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

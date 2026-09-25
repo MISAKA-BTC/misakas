@@ -32,6 +32,9 @@ fn at_the_parent(mut p: Params) -> Params {
         Some(PalwPanelExposureFloorV1 { activation: ForkActivation::always(), reward_multiple_permille: 2_000 });
     p.timestamp_deviation_tolerance = 132;
     p.max_block_level = 250;
+    // The lead cap (`palw_clock_lead_cap`, added after this change for its review's HIGH) did not
+    // exist at `8270cf03` either; `palw_clock_lead_cap_is_t12_only` pins what it moved.
+    p.palw_clock_lead_cap = None;
     p
 }
 

@@ -505,6 +505,21 @@ impl PalwHeartbeatMinerService {
                 // Past the cursor this is the slot a beat waiting in the virtual was granted, a few
                 // seconds ahead of this node's clock (its miner's clock runs ahead of ours). The
                 // step has to be stamped at or past it, so wait the difference.
+                //
+                // **The lead cap is kept here by construction** (`palw_clock_lead_cap`): no beat is
+                // minted while its stamp is past this node's clock, so none is past the 132 s its
+                // peers admit. A wait longer than that means the chain's median or slot stands that
+                // far ahead of this clock — say so, since a peer's beat stamped there is refused too.
+                if earliest - now > kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS
+                    && self.flow_context.config.params.palw_clock_lead_cap.is_some()
+                {
+                    self.say_hold(Some(format!(
+                        "the next beat would be stamped {} s past this node's clock — more than the 132 s a clock-moving \
+                         header may lead it (palw_clock_lead_cap), so the chain's past-median time or its slot stands ahead \
+                         of this clock: waiting for wall time (check this host's clock, and the peers')",
+                        (earliest - now) / 1000
+                    )));
+                }
                 trace!("[{PALW_HEARTBEAT}] the step's slot opens in {} ms", earliest - now);
             } else {
                 // Inside the slot. Sleep up to the boundary (capped so a ladder change mid-wait is

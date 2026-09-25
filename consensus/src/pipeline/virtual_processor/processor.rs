@@ -609,6 +609,10 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-24 heartbeat audit's H3/H5 (`Params::palw_clock_floor`): templates keep a
     /// heartbeat chain paced and stamp a step at or past its slot, as the header stage demands.
     pub(super) palw_clock_floor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-25 mainnet-values review's HIGH (`Params::palw_clock_lead_cap`): a template that
+    /// would step the clock more than 132 s past this node's clock is refused (the builder waits),
+    /// because this node's own header stage — and every peer's — would refuse the block.
+    pub(super) palw_clock_lead_cap: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
     /// the lane resolves to `Unfenced` and the template keeps declaring algo-6.
@@ -898,6 +902,7 @@ impl VirtualStateProcessor {
             palw_anchor_clock: params.palw_anchor_clock,
             palw_clock_cursor: params.palw_clock_cursor,
             palw_clock_floor: params.palw_clock_floor,
+            palw_clock_lead_cap: params.palw_clock_lead_cap,
             palw_receipt_rows_unpriced: params
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
@@ -15898,14 +15903,35 @@ impl VirtualStateProcessor {
         // raise is at most the granted beat's own lead over this node's clock, which peers accepted
         // for the beat and accept for this block likewise. Decided on the virtual's own clock
         // decision — the one this block's DAA score was computed from.
+        let lead_capped = self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let clock = if self.palw_clock_floor.is_some() || lead_capped {
+            Some(self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock)
+        } else {
+            None
+        };
+        let now = unix_now();
         let timestamp = {
-            let proposed = u64::max(min_block_time, unix_now());
-            if self.palw_clock_floor.is_some() {
-                self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock.floor_stamp(proposed)
-            } else {
-                proposed
+            let proposed = u64::max(min_block_time, now);
+            match clock {
+                Some(clock) if self.palw_clock_floor.is_some() => clock.floor_stamp(proposed),
+                _ => proposed,
             }
         };
+        // **The lead cap's construction half** (`palw_clock_lead_cap`): a template that steps the
+        // clock is stamped `max(now, median + 1, slot)`, and past `now + 132 s` the header stage — this
+        // node's and every peer's — refuses it. Wait instead of building it. Only this lane-agnostic
+        // half is asked here: the heartbeat adapter stamps a beat at `max(template, slot)` and hands
+        // back that stamp as `earliest`, and the miner mints no beat while `earliest` is past its own
+        // clock. The slot cannot put a step past the cap — a granted beat this node admitted was
+        // stamped at or past it and within the cap — so what reaches this refusal is a past-median
+        // time held more than 132 s ahead of this clock (the stall the header stage documents), or
+        // this host's clock stepping back.
+        if lead_capped
+            && clock.is_some_and(|clock| clock.granted)
+            && let Err(latest) = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(timestamp, now)
+        {
+            return Err(RuleError::ClockStepTemplateTooFarAhead(timestamp, latest, timestamp - latest));
+        }
         let header = Header::new_finalized(
             version,
             parents_by_level,

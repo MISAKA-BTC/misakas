@@ -165,6 +165,26 @@ pub enum RuleError {
     )]
     MergeSetHeartbeatChainUnpaced(u64, u64, u64),
 
+    /// **The lead cap (`palw_clock_lead_cap`):** a header that moves the heartbeat clock — a
+    /// heartbeat, or the block that steps the clock on a beat's grant — stamped more than 132 s past
+    /// this node's clock. A local-clock rule like [`RuleError::TimeTooFarIntoTheFuture`]: never
+    /// cached as invalid, and the same header is admitted once the clock reaches the stamp less the cap.
+    #[error(
+        "block {0} moves the heartbeat clock and is stamped {1}, past {2} — this node's clock plus the 132 s a clock-moving \
+         header may lead it (palw_clock_lead_cap); not invalid, admissible once the clock catches up"
+    )]
+    ClockLeadTooFarAhead(BlockHash, u64, u64),
+
+    /// **The lead cap's construction half:** the template this node would build steps the clock at a
+    /// stamp its own header stage refuses — `max(now, median + 1, slot)` past this node's clock plus
+    /// 132 s. The builder waits rather than hand out a block every peer refuses; it happens only
+    /// while the chain's past-median time or its slot stands more than 132 s ahead of this clock.
+    #[error(
+        "the template would step the heartbeat clock at {0}, past {1} — this node's clock plus the 132 s a clock-moving header \
+         may lead it (palw_clock_lead_cap): waiting {2} ms for wall time instead of building a block peers refuse"
+    )]
+    ClockStepTemplateTooFarAhead(u64, u64, u64),
+
     /// A header whose lane does not commit PALW state carries a non-zero `palw_state_root`. The
     /// field is hash-invisible on such a header (see `hashing::header::write_header_preimage`),
     /// so non-empty bytes there would be block-hash malleability — the

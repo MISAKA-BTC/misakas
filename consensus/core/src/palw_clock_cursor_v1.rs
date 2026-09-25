@@ -65,6 +65,35 @@ impl ClockSlotTooEarly {
 pub fn palw_clock_slot_admits_v1(cursor: &PalwClockCursorV1, proposed_ms: u64) -> Result<(), ClockSlotTooEarly> {
     if proposed_ms >= cursor.next_slot_ms { Ok(()) } else { Err(ClockSlotTooEarly { next_slot_ms: cursor.next_slot_ms, proposed_ms }) }
 }
+
+/// **The lead cap (`Params::palw_clock_lead_cap`): how far past the RECEIVING node's clock a header
+/// that moves the heartbeat clock may be stamped** — 132 s, one recovery interval plus 12 s, the
+/// future-drift tolerance testnet-12 ran before 2026-09-25.
+///
+/// The clock floor spaces clock-moving STAMPS one interval apart, and nothing else bounds them in
+/// WALL time but the header's future-drift tolerance. At mainnet's 1,620 s one producer can mint every
+/// slot stamped at or below `now + T` at once — `⌊T / I⌋ + 1` = 14 DAA with no other block in
+/// between (2 at 132 s) — and a burst that outlasts a readiness row's remaining age lapses the row
+/// with no possession proof able to land (the 2026-09-25 mainnet-values review, HIGH). Under the cap
+/// every step is stamped at least one interval after the last and at most this far past the
+/// receiver's clock, so a burst is `⌊132 / 120⌋ + 1` = 2 steps, inside the readiness escalation's
+/// 2-DAA margin — whatever the tolerance ordinary blocks keep.
+///
+/// **A local-clock rule, like the tolerance itself**: the answer depends on when the header is
+/// judged, so a refusal is never a verdict about the block — it is not cached as invalid, and the
+/// same header is admitted once wall time reaches `timestamp − cap`. History (IBD, header sync, a
+/// node that was offline) is stamped in the past and always passes; trusted blocks imported with a
+/// pruning proof never reach the header stage that asks it.
+pub const PALW_CLOCK_LEAD_CAP_MS: u64 = crate::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS + 12_000;
+
+/// **The lead cap's arithmetic** — `Ok` when `timestamp` is at most [`PALW_CLOCK_LEAD_CAP_MS`] past
+/// `now_ms`; otherwise `Err` with the latest stamp `now_ms` admits. Header validation, the template
+/// builder and the tests all ask this one function.
+#[inline]
+pub fn palw_clock_lead_admits_v1(timestamp: u64, now_ms: u64) -> Result<(), u64> {
+    let latest = now_ms.saturating_add(PALW_CLOCK_LEAD_CAP_MS);
+    if timestamp <= latest { Ok(()) } else { Err(latest) }
+}
 // **The carried cursor is gone, and that is the point of ADR-0142 §6a.**
 //
 // This module once also opened, advanced and carried a cursor from block to block. That half was
@@ -220,6 +249,25 @@ impl PalwClockStepV1 {
             Some(cursor) if self.floor => palw_clock_slot_admits_v1(&cursor, timestamp),
             _ => Ok(()),
         }
+    }
+
+    /// **Does the lead cap ([`PALW_CLOCK_LEAD_CAP_MS`]) govern a header of lane `pow_algo_id` on
+    /// these parents?** Two kinds of header move the clock, and both are capped:
+    ///
+    /// * **the block that STEPS it** — `granted`, exactly the condition that takes one beat out of
+    ///   the exempt count (any lane: on testnet-12 the first block of any lane built after a granted
+    ///   beat carries the tick, and a beat built on a beat is one too). Its stamp is the next slot's
+    ///   reference, so capping it is what bounds a burst in wall time;
+    /// * **every heartbeat** — the beat a step is granted on. Its own stamp opens nothing, but an
+    ///   uncapped beat is the cheap way to fill the past-median window with far-future stamps
+    ///   (`2^24` hashes a beat), and a median pushed past `now + cap` holds every honest step, which is
+    ///   stamped above it. Capped, that lever costs blocks of a lane `bits` or a ticket prices. An
+    ///   honest beat is never stamped ahead of its miner's clock: the miner waits for its slot.
+    ///
+    /// Every other block keeps the network's full future-drift tolerance.
+    #[inline]
+    pub fn lead_capped(&self, pow_algo_id: u8) -> bool {
+        self.granted || pow_algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
     }
 }
 
@@ -425,6 +473,40 @@ mod tests {
             assert!(relaxed.step_stamp_admits(0).is_ok(), "{relaxed:?}");
             assert_eq!(relaxed.floor_stamp(1), 1, "{relaxed:?}");
         }
+    }
+
+    /// **The lead cap: a step and a heartbeat are admitted at most 132 s past the receiver's clock,
+    /// every other header is not asked, and a burst under it is two steps.**
+    #[test]
+    fn the_lead_cap_governs_steps_and_beats_and_bounds_a_burst_to_two() {
+        assert_eq!(PALW_CLOCK_LEAD_CAP_MS, 132_000, "one interval plus 12 s — testnet-12's tolerance before 2026-09-25");
+        let now = 1_788_000_000_000u64;
+        assert!(palw_clock_lead_admits_v1(now + PALW_CLOCK_LEAD_CAP_MS, now).is_ok(), "the cap itself is admitted");
+        assert_eq!(palw_clock_lead_admits_v1(now + PALW_CLOCK_LEAD_CAP_MS + 1, now), Err(now + PALW_CLOCK_LEAD_CAP_MS));
+        assert!(palw_clock_lead_admits_v1(0, now).is_ok(), "history always passes");
+        assert!(palw_clock_lead_admits_v1(u64::MAX, u64::MAX).is_ok(), "no overflow at the top");
+        // The same stamp is refused now and admitted once wall time reaches `stamp - cap`.
+        let stamp = now + 1_000_000;
+        assert!(palw_clock_lead_admits_v1(stamp, now).is_err());
+        assert!(palw_clock_lead_admits_v1(stamp, stamp - PALW_CLOCK_LEAD_CAP_MS).is_ok());
+
+        let hb = crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
+        let other = hb.wrapping_add(1);
+        let cursor = Some(PalwClockCursorV1 { next_slot_ms: 10_000, slots_consumed: 0 });
+        let step = PalwClockStepV1 { governs: true, cursor, granted: true, floor: true };
+        let holder = PalwClockStepV1 { granted: false, ..step };
+        assert!(step.lead_capped(other), "a step of any lane");
+        assert!(step.lead_capped(hb), "a beat that steps");
+        assert!(holder.lead_capped(hb), "a beat that holds the slot");
+        assert!(!holder.lead_capped(other), "a block that moves no clock keeps the full tolerance");
+        assert!(!PalwClockStepV1::default().lead_capped(other));
+
+        // The burst: from a reference one interval behind wall time (a slot open NOW), a producer
+        // stamps each step at its slot, as fast as it can mint. Under a bound `b` it gets
+        // `⌊b / I⌋ + 1` ticks before the next slot opens past `now + b`.
+        let burst = |bound: u64| (0u64..).take_while(|k| now + k * I <= now + bound).count() as u64;
+        assert_eq!(burst(PALW_CLOCK_LEAD_CAP_MS), 2, "under the cap: two steps, the readiness escalation's margin");
+        assert_eq!(burst(1_620_000), 14, "under mainnet's tolerance alone: fourteen");
     }
 
     /// The type is rooted state, so its encoding is a consensus fact: pin the byte layout.

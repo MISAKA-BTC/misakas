@@ -1391,6 +1391,26 @@ pub struct Params {
     /// Refines the cursor, so `validate_palw_v2` refuses it without `palw_clock_cursor` armed at or
     /// below its height. `Some(0)` on testnet-12 only; `None` elsewhere; hashed Some-only.
     pub palw_clock_floor: Option<ForkActivation>,
+    /// **The lead cap (the 2026-09-25 mainnet-values review, HIGH; the user's option (a)).** Past
+    /// it a header that moves the heartbeat clock — every heartbeat, and the block that steps the
+    /// clock on a beat's grant ([`crate::palw_clock_cursor_v1::PalwClockStepV1::lead_capped`]) — is
+    /// refused while stamped more than
+    /// [`PALW_CLOCK_LEAD_CAP_MS`](crate::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS) (132 s) past
+    /// the RECEIVING node's clock. Every other block keeps `timestamp_deviation_tolerance`.
+    ///
+    /// Why: the floor spaces clock-moving stamps one interval apart but nothing spaced them in wall
+    /// time, so at 1,620 s one producer minted `⌊T / I⌋ + 1` = 14 DAA at once and every readiness row
+    /// lapsed. Under the cap a burst is 2 steps. A local-clock rule, like the tolerance: the refusal
+    /// is not cached as invalid and the header is admitted once wall time catches up. An attacker who
+    /// holds the past-median time more than 132 s ahead stalls the DAA clock — steps must be stamped
+    /// above the median — until wall time catches up; DAA-denominated windows do not shrink, so no
+    /// row lapses (`palw_clock_cursor_v1`'s cap and `t12_clock_floor`'s tests say how).
+    ///
+    /// Armed from genesis wherever the tolerance is 1,620 s — testnet-12 and a mainnet card — and
+    /// `None` elsewhere; hashed Some-only, so every other preset fingerprints byte-identically to a
+    /// build without it. Independent of the floor: on a network without the cursor nothing is ever
+    /// `granted` and the cap bounds heartbeats alone.
+    pub palw_clock_lead_cap: Option<ForkActivation>,
     /// **ADR-0152 v2, stage F2: a false `Valid` is judged by one adjudicator bound to the claim's
     /// committed root.** Past it the V1 `PanelFalseValid` is refused by name — its
     /// `job_id == claim_id` check is a fixed point no real block-lane or free-prompt claim can
@@ -4972,6 +4992,10 @@ impl Params {
         if self.palw_clock_floor == Some(ForkActivation::never()) {
             self.palw_clock_floor = None;
         }
+        // The lead cap: Some-only hashed, so the same collapse.
+        if self.palw_clock_lead_cap == Some(ForkActivation::never()) {
+            self.palw_clock_lead_cap = None;
+        }
         // ADR-0152 v2 F2's attribution fence: Some-only hashed, so the same collapse.
         if self.palw_offence_attribution == Some(ForkActivation::never()) {
             self.palw_offence_attribution = None;
@@ -6711,6 +6735,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_clock_floor,
+            palw_clock_lead_cap,
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes: _,
@@ -6817,6 +6842,7 @@ impl Params {
             ("palw_anchor_clock", *palw_anchor_clock),
             ("palw_clock_cursor", *palw_clock_cursor),
             ("palw_clock_floor", *palw_clock_floor),
+            ("palw_clock_lead_cap", *palw_clock_lead_cap),
             ("palw_offence_attribution", *palw_offence_attribution),
             ("palw_rcore_plus", *palw_rcore_plus),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
@@ -7172,6 +7198,12 @@ impl Params {
             h.write(b"palw_clock_floor");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // The lead cap, NAMED: it changes which clock-moving headers a node admits now, so an operator
+        // reading the schedule must see it. Some-only.
+        if let Some(activation) = self.palw_clock_lead_cap {
+            h.write(b"palw_clock_lead_cap");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0152 v2 F2's attribution fence, NAMED: it changes which objective offences a block may
         // carry and what one convicts, so an operator reading the schedule must see it. Some-only.
         if let Some(activation) = self.palw_offence_attribution {
@@ -7397,6 +7429,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_clock_floor,
+            palw_clock_lead_cap,
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes: _,
@@ -7710,6 +7743,10 @@ impl Params {
         // The clock floor (H3/H5). SOME-ONLY, unlike the cursor above: a `None` visited as a
         // sentinel would put a new value into every preset's schedule id, testnet-11's included.
         if let Some(activation) = palw_clock_floor.as_mut() {
+            fork(activation, visit);
+        }
+        // The lead cap: SOME-ONLY, as the floor above and for its reason.
+        if let Some(activation) = palw_clock_lead_cap.as_mut() {
             fork(activation, visit);
         }
         // ADR-0152 v2 F2's attribution fence: SOME-ONLY, as the floor above and for its reason.
@@ -8316,6 +8353,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_clock_floor,
+            palw_clock_lead_cap,
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes,
@@ -8600,6 +8638,12 @@ impl Params {
         // — all but testnet-12 — fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_clock_floor {
             h.write(b"palw_clock_floor");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The lead cap: the height only, Some-only, for the floor's reason (the 132 s it caps at is a
+        // constant of the rule, named by the field).
+        if let Some(activation) = palw_clock_lead_cap {
+            h.write(b"palw_clock_lead_cap");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0152 v2 F2's attribution fence: the height only, Some-only, for the floor's reason.
@@ -9415,6 +9459,9 @@ impl Params {
             // Rides with the cursor it refines: an override that drops the cursor drops the floor,
             // or `validate_palw_v2` would refuse the result.
             palw_clock_floor: None,
+            // The lead cap: CARRIED — it has no prerequisite an override could drop, and an
+            // overridden testnet-12 keeps the bound its 1,620 s tolerance needs.
+            palw_clock_lead_cap: self.palw_clock_lead_cap,
             // Rides with `palw_economic_safety`, which an override drops below: armed without it,
             // `validate_palw_v2` would refuse the result.
             palw_offence_attribution: None,
@@ -10451,6 +10498,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_clock_floor: None,
+    palw_clock_lead_cap: None,
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
@@ -10674,6 +10722,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_clock_floor: None,
+    palw_clock_lead_cap: None,
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
@@ -10879,6 +10928,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_clock_floor: None,
+    palw_clock_lead_cap: None,
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
@@ -15151,6 +15201,10 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
         BlockrateParams::new_two_minute_bps().past_median_time_sample_rate,
         BlockrateParams::new_two_minute_bps().target_time_per_block,
     );
+    // **The lead cap rides with that tolerance** (the 2026-09-25 mainnet-values review, HIGH): a
+    // header that moves the heartbeat clock keeps the 132 s bound, so the tolerance above is never
+    // a burst of clock ticks (`Params::palw_clock_lead_cap`). Stated as testnet-12 states it.
+    base.palw_clock_lead_cap = Some(ForkActivation::always());
     // **ADR-0045 Decision 2's boundary sentence, in force from block one** (mainnet audit
     // 2026-09-06, M-2). Free on a fresh chain: no epoch has closed, so no history was judged under
     // the other reading, and a card is the one network that can be born obeying the ADR the tree
@@ -16666,6 +16720,10 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // a step is stamped at or past the cursor, and the reference is the earliest tied step. The
     // cursor it refines is armed by pass 2 (testnet-11 schedules it; the walk moves it to 0).
     params.palw_clock_floor = Some(at);
+    // **The lead cap** (`Params::palw_clock_lead_cap`, the 2026-09-25 mainnet-values review's HIGH):
+    // a heartbeat or a clock step is admitted at most 132 s past the receiving node's clock, so the
+    // 1,620 s tolerance this network runs cannot be spent as a 14-DAA burst.
+    params.palw_clock_lead_cap = Some(at);
     // **ADR-0152 v2 F2** (`Params::palw_offence_attribution`): a false `Valid` is judged by one
     // adjudicator bound to the claim's committed root, on the receipt form the chain licensed, and
     // the V1 payload whose job-id check no real claim can pass is refused. The objective-offence
@@ -17227,6 +17285,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_clock_floor: None,
+    palw_clock_lead_cap: None,
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
@@ -22953,6 +23012,9 @@ mod consensus_params_id_tests {
             "palw_capability_bound",
             "palw_certification_rent",
             "palw_chunk_cap_charge",
+            // The lead cap (the 2026-09-25 mainnet-values review, HIGH): stated beside the 1,620 s
+            // tolerance a card derives, as testnet-12 arms it; testnet-11 runs 132 s and leaves it off.
+            "palw_clock_lead_cap",
             "palw_compute_overlay_retired",
             "palw_context_ladder",
             "palw_court_ladder",

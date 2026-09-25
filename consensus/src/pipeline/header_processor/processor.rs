@@ -140,6 +140,10 @@ pub struct HeaderProcessor {
     /// bound must be paced by its own timestamps (`heartbeat_chain_capacity_v1`). The per-header
     /// stamp rules read the same fence through `DaaWindow::clock`.
     pub(super) palw_clock_floor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-25 mainnet-values review's HIGH (`Params::palw_clock_lead_cap`): past this fence
+    /// a header that moves the heartbeat clock is refused while stamped more than 132 s past this
+    /// node's clock — a local-clock rule, in `pre_pow_validation`, whose errors are never cached.
+    pub(super) palw_clock_lead_cap: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0083 Decision 1's fence, the third argument of `palw_lane_advances_daa_v1`.
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0125: the execution lane, mode folded in (`Params::palw_execution_lane_fence`) — its
@@ -262,6 +266,7 @@ impl HeaderProcessor {
             palw_anchor_clock: params.palw_anchor_clock,
             palw_clock_cursor: params.palw_clock_cursor,
             palw_clock_floor: params.palw_clock_floor,
+            palw_clock_lead_cap: params.palw_clock_lead_cap,
             palw_receipt_rows_unpriced: params
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),

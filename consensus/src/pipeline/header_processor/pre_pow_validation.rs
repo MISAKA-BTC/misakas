@@ -95,6 +95,31 @@ impl HeaderProcessor {
         if let Err(early) = clock.step_stamp_admits(header.timestamp) {
             return Err(RuleError::ClockStepBeforeItsSlot(header.hash, header.timestamp, early.next_slot_ms));
         }
+        // **The lead cap (the 2026-09-25 mainnet-values review, HIGH): a header that moves the clock
+        // is stamped at most 132 s past THIS node's clock.** The rule above floors a step's stamp at
+        // its slot, and the future-drift tolerance was the only ceiling — at 1,620 s one producer
+        // minted 14 slots' ticks at once and every readiness row lapsed. Capping every heartbeat and
+        // every block that steps the clock (`PalwClockStepV1::lead_capped`, the grant the DAA score
+        // was just computed from) makes a burst 2 steps; every other block keeps the tolerance.
+        //
+        // **A local-clock rule, so it lives HERE**: `validate_header` caches only post-PoW errors as
+        // `StatusInvalid`, so a header refused here is not a verdict — it is re-validated whenever it
+        // comes back (a relay, an orphan's missing parent, IBD) and admitted once wall time reaches
+        // its stamp less the cap, exactly like `TimeTooFarIntoTheFuture`, and it reaches a peer's
+        // flow along the same generic path (the relay drops the connection; nobody is banned). Trusted
+        // blocks imported with a pruning proof never reach this stage; history is stamped in the
+        // past and passes. **What it costs, stated**: a producer holding the past-median time more
+        // than 132 s ahead of wall time holds every step (a step is stamped above the median), so the
+        // DAA clock stalls until wall time catches up — it does not run: DAA-denominated windows keep
+        // their wall length, and no readiness row lapses for lack of a block
+        // (`t12_a_median_pushed_ahead_stalls_the_clock_and_lapses_no_row`).
+        if self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(header.daa_score))
+            && clock.lead_capped(header.pow_algo_id)
+            && let Err(latest) =
+                kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(header.timestamp, kaspa_core::time::unix_now())
+        {
+            return Err(RuleError::ClockLeadTooFarAhead(header.hash, header.timestamp, latest));
+        }
         let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(header.daa_score));
         if !clock_cursor_governs
             && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
