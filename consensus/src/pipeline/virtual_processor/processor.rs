@@ -563,6 +563,10 @@ pub struct VirtualStateProcessor {
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
     /// the other way.
     pub(super) palw_offence_attribution: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): `Params::palw_activation_pool`
+    /// (`Some` at genesis on testnet-12 alone), resolved once in [`Self::palw_activation_pool_at`];
+    /// the fold's R1, R2 and pool rules and the mempool's pool gate read it there.
+    pub(super) palw_activation_pool: Option<kaspa_consensus_core::config::params::PalwActivationPoolParamsV1>,
     /// **ADR-0152 R-core+: `Params::palw_rcore_plus`** (`Some(0)` on testnet-12 alone; genesis-only
     /// by `validate_palw_rcore_plus_v1`), resolved once in [`Self::palw_rcore_plus_at`]. M4 reads it
     /// at a claim's ANCHOR for the stake-weighted draw (`palw_panel_draw_policy_at`, SW-1) and at the
@@ -1068,6 +1072,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
+            palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
@@ -4169,6 +4174,18 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&state, mine)
     }
 
+    /// **ADR-0152 §4-ter.3 step 6: the held forfeits and open DA sessions `mine` holds**, at the tip.
+    pub fn palw_held_pursuit_seeds_v1_impl(
+        &self,
+        mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwHeldPursuitSeedsV1 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Default::default() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
+            return Default::default();
+        };
+        kaspa_consensus_core::palw_producer_v2::palw_held_pursuit_seeds_v1(&state, mine)
+    }
+
     /// **The data-availability duties this node holds** (ADR-0062 D3): every claim under an open
     /// accusation whose producing bond is in `mine`, with the event it must open.
     pub fn palw_da_duties_v2_impl(
@@ -4370,6 +4387,80 @@ impl VirtualStateProcessor {
             leaf,
             now_daa,
         )
+    }
+
+    /// **ADR-0152 Phase 2, P2-8e: what the fold makes of `object` in the virtual's next block** — at
+    /// the tip, for the virtual's DAA, the acceptance layer and then the object's own arm
+    /// ([`Self::palw_object_rehearsal_v1_on`]). `None` with no tip state. A read: node policy asks it
+    /// before it queues an object no H-1 gate rehearses (the held dissection's opening).
+    pub fn palw_object_rehearsal_v1_impl(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score,
+            // The next block's: past the tip's, as the H-1 gate reads it.
+            blue_score: state.last_point().map_or(0, |last| last.blue_score.saturating_add(1)),
+            subsidy: 0,
+        };
+        Some(self.palw_object_rehearsal_v1_on(&state, state_params, &point, object))
+    }
+
+    /// [`Self::palw_object_rehearsal_v1_impl`] on a given state and point — the H-1 gate's two
+    /// layers ([`Self::palw_h1_carrier_refusal_on`]) with the fold's reason kept typed. The acceptance
+    /// layer first (cheap refusals before any state is cloned), then `palw_v2_apply_one_object_v1`
+    /// under the point's own flags and extras.
+    pub(crate) fn palw_object_rehearsal_v1_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 {
+        use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
+        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+            return PalwObjectRehearsalV1::NotAccepted(why);
+        }
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        ) {
+            Ok(_) => PalwObjectRehearsalV1::Accepted,
+            Err(why) => PalwObjectRehearsalV1::Refused(why),
+        }
+    }
+
+    /// **ADR-0152 Phase 2, P2-8e review (MED): each asked claim's one deadline in the sweep queue**,
+    /// at the tip ([`Self::palw_claim_deadlines_v1_on`]). Empty with no tip state. A read: node policy
+    /// dates a seat's court filing by it.
+    pub fn palw_claim_deadlines_v1_impl(
+        &self,
+        claims: &[kaspa_consensus_core::Hash64],
+    ) -> Vec<(kaspa_consensus_core::Hash64, Option<u64>)> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return Vec::new() };
+        Self::palw_claim_deadlines_v1_on(&state, claims)
+    }
+
+    /// [`Self::palw_claim_deadlines_v1_impl`] on a given state: the index the sweep reads
+    /// (`PalwChainStateV2::deadline_of`), one scan a claim — asked only for the few claims a seat has
+    /// a court filing queued on.
+    pub(crate) fn palw_claim_deadlines_v1_on(
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        claims: &[kaspa_consensus_core::Hash64],
+    ) -> Vec<(kaspa_consensus_core::Hash64, Option<u64>)> {
+        claims.iter().map(|claim| (*claim, state.deadline_of(claim))).collect()
     }
 
     /// **The 2026-09-25 model-registry review, M1: how urgently do `carriers`' rows need them at the
@@ -4673,6 +4764,37 @@ impl VirtualStateProcessor {
             work.as_ref(),
             self.palw_audit_2026_09_23_at(tip_daa),
             panel_room_enforced,
+        ))
+    }
+
+    /// **ADR-0152-adjacent (op 200): one class's Activation Pool at the tip** — the row, the terms
+    /// in force at the tip's DAA, what (a) would pay now and the span its next audit falls at (R2's
+    /// stagger over the registry fold's period). `None` off ConsensusV2 or before the first state.
+    pub fn palw_activation_pool_v1_impl(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_activation_pool_v1::PalwActivationPoolReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let tip_daa = self.headers_store.get_header(tip).map(|h| h.daa_score).unwrap_or(0);
+        let fold = self.palw_model_registry_fold_at(tip_daa);
+        let schedule = fold.as_ref().map(|fold| {
+            (
+                fold.span_daa,
+                kaspa_consensus_core::palw_model_registry_v1::palw_admission_audit_period_spans_v2(
+                    state_params.epoch_length(),
+                    fold.span_daa,
+                    fold.admission_audit_period_daa,
+                ),
+            )
+        });
+        Some(kaspa_consensus_core::palw_activation_pool_v1::palw_activation_pool_read_v1(
+            &state,
+            &class_id,
+            &state_params.base_class_id(),
+            self.palw_activation_pool_at(tip_daa),
+            tip_daa,
+            schedule,
         ))
     }
 
@@ -8502,6 +8624,19 @@ impl VirtualStateProcessor {
                         return Err(format!("a model seed of line {line_id} on a chain where the model market is not in force"));
                     }
                 }
+                // **ADR-0152-adjacent (Activation Pool): a top-up exists only past the pool's fence**,
+                // refused by name before it (the drop-not-invalidate shape; its MSK comes back through
+                // P-B1 where the carrier is refunded). Its sink binding was checked at extraction
+                // (`palw_activation_pool_binds_its_carrier_v1`), and an activation sink nothing binds
+                // made the block invalid at isolation; the class, its status and the least top-up are
+                // the fold's (`palw_activation_pool_admits_v1`).
+                Obj::ActivationPoolFunded { class_id, .. } => {
+                    if self.palw_activation_pool_at(point.daa_score).is_none() {
+                        return Err(format!(
+                            "a top-up of class {class_id}'s Activation Pool on a chain where the pool is not in force"
+                        ));
+                    }
+                }
                 Obj::ModelSell { line_id, holder, units_in, min_msk_out, held_units, not_after_daa, pubkey, signature } => {
                     if !self.palw_model_market_active_at(point.daa_score) {
                         return Err(format!("a model sell of line {line_id} on a chain where the model market is not in force"));
@@ -8783,13 +8918,24 @@ impl VirtualStateProcessor {
                 // other court move uses.
                 // -------------------------------------------------------------------------
                 Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. }
-                | Obj::CourtAttnRootClaimedAnchored { session_id, root, arity, signature, .. } => {
+                | Obj::CourtAttnRootClaimedAnchored { session_id, root, arity, signature, .. }
+                | Obj::CourtAttnRootClaimedHeld { session_id, root, arity, signature, .. } => {
                     // ADR-0093 Decision 8: the anchored form exists only where its fence does. (The
                     // plain form's refusal past the fence needs the site, so the fold makes it.)
                     if matches!(object, Obj::CourtAttnRootClaimedAnchored { .. }) && !self.palw_attn_anchored_root_at(point.daa_score)
                     {
                         return Err(format!(
                             "session {session_id}: an anchored root claim before palw_attn_anchored_root is armed (ADR-0093 Decision 8)"
+                        ));
+                    }
+                    // ADR-0152 §4-ter C2: the held form (tag 57) exists only past
+                    // `palw_offence_attribution`, at the block's own DAA. Whether the class is an
+                    // answerable held one, and whether the sub-roots root to the anchor, need the
+                    // session and the site, so the fold makes those refusals; the signature and the
+                    // arity are the same checks as the other two forms', below.
+                    if matches!(object, Obj::CourtAttnRootClaimedHeld { .. }) && !self.palw_offence_attribution_at(point.daa_score) {
+                        return Err(format!(
+                            "session {session_id}: a held root claim before palw_offence_attribution is armed (ADR-0152 §4-ter)"
                         ));
                     }
                     kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
@@ -9074,6 +9220,15 @@ impl VirtualStateProcessor {
                         // 2026-09-23 audit C-4: past its fence a non-fused class's priced geometry
                         // must fit the query row its graph reads.
                         self.palw_audit_2026_09_23_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
+                    // ADR-0152 §4-ter C5: past `palw_offence_attribution` a held class is admitted
+                    // only where its attention lie is attributable — its dissection answerable
+                    // (`palw_held_class_unanswerable_v1`: the context bound, a recurrent layer, a
+                    // compute turn past the cap — a pure function of the profile).
+                    kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v1(
+                        &carriage.profile,
+                        self.palw_offence_attribution_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                     // **ADR-0152 v3.1 addendum §4-bis.8: every claim of the class must be
@@ -9795,11 +9950,18 @@ impl VirtualStateProcessor {
                     let class = state
                         .class(&claim.class_id)
                         .ok_or_else(|| format!("claim {claim_id} names class {} this chain does not have", claim.class_id))?;
-                    match kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_verdict_v1(
+                    // t12 (`palw_audit_2026_09_23`): bound to the claim before a fused site is deferred —
+                    // the same function, at the same fence, the fold derives the verdict with.
+                    let bound_to = kaspa_consensus_core::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                        execution_root: claim.execution_root,
+                        class_id: claim.class_id,
+                        artifact_root: class.artifact_root,
+                    };
+                    match kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_verdict_at_v2(
                         accusation,
-                        claim.class_id,
-                        class.artifact_root,
+                        &bound_to,
                         ladder,
+                        self.palw_audit_2026_09_23_at(point.daa_score),
                     ) {
                         // ADR-0103 Decision 5: under the held regime the accusation at a fused leaf IS
                         // the challenge — the fold opens the dissection there. Dormant, refused.
@@ -9807,8 +9969,22 @@ impl VirtualStateProcessor {
                             if !self.palw_held_context_at(point.daa_score) =>
                         {
                             return Err(format!(
-                                "claim {claim_id}: leaf {} is a fused-attention site; its terminal is the dissection, not one move",
+                                "claim {claim_id}: leaf {} is a fused-attention site, which one move cannot try, and this network \
+                                 opens no held dissection at a named leaf",
                                 accusation.leaf_index
+                            ));
+                        }
+                        // ADR-0152 §4-ter (A-held): past `palw_offence_attribution` a held class no
+                        // honest party can dissect inside a turn (the 2M row) opens no session — the
+                        // fold refuses it (`ShardCourtHeldSiteUnanswerable`) off the same mirror.
+                        Ok(kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection)
+                            if self.palw_offence_attribution_at(point.daa_score)
+                                && state_params.held_class_is_unanswerable_v1(&claim.class_id) =>
+                        {
+                            return Err(format!(
+                                "claim {claim_id}: leaf {} is a fused-attention site of held class {}, whose dissection no honest \
+                                 party can play inside a turn: refused, not opened (ADR-0152 §4-ter)",
+                                accusation.leaf_index, claim.class_id
                             ));
                         }
                         Ok(_) => {}
@@ -10944,6 +11120,10 @@ impl VirtualStateProcessor {
             // the V2 kind as dormant after the gate admitted it, and the V1 kind by the old rule
             // after the gate refused it.
             offence_attribution_active: self.palw_offence_attribution_at(daa_score),
+            // ADR-0152-adjacent (Activation Pool): R1, R2 and the pool's terms at this block. Written
+            // explicitly for the reason every line above gives: an unwritten default here would
+            // reclaim a listing by the old rule on a network that has armed the new one.
+            activation_pool: self.palw_activation_pool_at(daa_score),
             // ADR-0152 X7 / N9 (M3): the peer's P2-7 constant, and nothing else.
             seat_da_answer_landed: kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
@@ -11216,6 +11396,16 @@ impl VirtualStateProcessor {
     /// the V2 kind under a fold that still read the V1 rule would drop every conviction it let in.
     pub(super) fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
         self.palw_offence_attribution.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0152-adjacent: the Activation Pool's terms at `daa_score`, resolved in exactly one
+    /// place** — `Some` past `Params::palw_activation_pool` (genesis on testnet-12), `None` on every
+    /// other network.
+    pub(super) fn palw_activation_pool_at(
+        &self,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_activation_pool_v1::PalwActivationPoolTermsV1> {
+        self.palw_activation_pool.filter(|pool| pool.activation.is_active(daa_score)).map(|pool| pool.terms)
     }
 
     /// **ADR-0152 R-core+, resolved in exactly one place.** `false` on every network but
@@ -11538,12 +11728,16 @@ impl VirtualStateProcessor {
             return None;
         }
         let lane = self.palw_execution_lane_at(daa_score)?;
-        // The panel's seat count is the network's (the bundle's panel params), not the global
-        // constant's: a devnet with three-seat panels needs five ready seats, testnet-11 seven.
-        let mut globals = kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1;
-        if let Some(panel) = self.palw_panel_params_v2.as_ref() {
-            globals.seat_count = panel.seat_count();
-        }
+        // The network's globals, from its bundle in one place (`palw_registry_globals_of_bundle_v1`):
+        // the panel's seat count, not the global constant's (a devnet with three-seat panels needs
+        // five ready seats, testnet-11 seven), and the readiness-V2 horizon every judge of a row reads
+        // (`Params::palw_readiness_v2_max_age_spans`: 24 spans on testnet-12, eight elsewhere — user
+        // decision 2026-09-25, readiness capacity option (a)).
+        let globals = self
+            .palw_v2_bundle
+            .as_ref()
+            .map(kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1)
+            .unwrap_or(kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1);
         let activation_daa = self.palw_model_registry.map(|f| f.daa_score()).unwrap_or(0);
         Some(kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryFoldV1 {
             globals,
@@ -11609,7 +11803,8 @@ impl VirtualStateProcessor {
         }
         let state = self.palw_state_params_v2.as_ref()?;
         // **The readiness-age sweep (2026-09-24): the draw judges a row by the registry's rule** —
-        // readiness V2's eight spans and no V1 row — but only past the 2026-09-23 audit fence, since
+        // readiness V2's horizon (the fold's globals: eight spans, 24 on testnet-12) and no V1 row —
+        // but only past the 2026-09-23 audit fence, since
         // the draw is consensus (the panel a claim is bound to). Below it (testnet-11) the old rule
         // stands byte for byte: any row, the V1 age.
         let readiness_v2 = self.palw_audit_2026_09_23_at(anchor_daa) && self.palw_readiness_v2_at(anchor_daa);
@@ -12624,6 +12819,9 @@ impl VirtualStateProcessor {
             let paid = match &carried.object {
                 MObj::ModelBuy { msk_in, .. } => *msk_in,
                 MObj::ModelSeed { msk_seed, .. } => *msk_seed,
+                // ADR-0152-adjacent (Activation Pool): a top-up the fold refuses (a missing or Frozen
+                // class, under the least top-up) is paid back by the same route, against the same cap.
+                MObj::ActivationPoolFunded { amount, .. } => *amount,
                 _ => 0,
             };
             if !refunds_armed || paid == 0 {
@@ -16715,8 +16913,12 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
         // ADR-0093 Decision 8 — move 1 with its anchor.
         O::CourtAttnRootClaimedAnchored { .. } => "CourtAttnRootClaimedAnchored",
+        // ADR-0152 §4-ter C2 — move 1 of a held class, with its anchor's slice sub-roots (tag 57).
+        O::CourtAttnRootClaimedHeld { .. } => "CourtAttnRootClaimedHeld",
         O::CourtAttnDissected { .. } => "CourtAttnDissected",
         O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
+        // ADR-0152-adjacent — a sink-bound top-up of a class's Activation Pool (tag 58).
+        O::ActivationPoolFunded { .. } => "ActivationPoolFunded",
     }
 }
 

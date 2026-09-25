@@ -5215,6 +5215,11 @@ async fn t18n_a_convicted_representatives_unspent_tickets_pass_to_the_lender() {
 #[path = "t47_model_class_attribution.rs"]
 mod t47_model_class_attribution;
 
+/// **ADR-0152 v3.1 Phase 2, P2-8e (T54g's processor half)** — the fold's rehearsal of one object, the
+/// read kaspad's held-dissection filer asks before it queues an opening; a child, like T54f.
+#[path = "t54g_object_rehearsal.rs"]
+mod t54g_object_rehearsal;
+
 /// **ADR-0152 Phase 2, T29's processor half** — a same-block conviction and maturity on this
 /// suite's real claim and real conviction: the rehearsal and the fold agree, and the burn comes
 /// before step 3d. A child of this suite for the reason `t47_model_class_attribution` is.
@@ -5235,3 +5240,14 @@ mod t54d_false_valid_filer;
 /// this suite's real claims, every object it leads to through this suite's doors; a child, like T47.
 #[path = "t54f_replay_filer.rs"]
 mod t54f_replay_filer;
+
+/// **ADR-0152 v3.1 T28 (§8.1, S): a conviction after retirement under a held second clock burns the
+/// row, `basis_k` read from the row** — on this suite's real claim and real conviction; a child, like T47.
+#[path = "t28_a_retired_claims_row_burns.rs"]
+mod t28_a_retired_claims_row_burns;
+
+/// **ADR-0152 v3.1 T62 (§8.1, A [M2/S]): the unique path (J-6) as a property** — every conviction kind
+/// this suite produces resolves claim → root → job → index → signer → fault → target through the claim
+/// record, the liability record and the vesting row's copies (N8), a retired claim included; a child, like T47.
+#[path = "t62_the_unique_path.rs"]
+mod t62_the_unique_path;

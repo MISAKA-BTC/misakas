@@ -1121,6 +1121,7 @@ pub fn palw_attn_move_is_admissible_v2(
         object,
         Obj::CourtAttnRootClaimed { .. }
             | Obj::CourtAttnRootClaimedAnchored { .. }
+            | Obj::CourtAttnRootClaimedHeld { .. }
             | Obj::CourtAttnDissected { .. }
             | Obj::CourtAttnChildChosen { .. }
     );

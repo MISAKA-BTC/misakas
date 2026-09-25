@@ -119,18 +119,27 @@ DNS set は production から次の点だけ変えている。120 s cadence へ�
 （testnet-11 の値。production の値は 10 bps の kHeavyHash 用で、PALW chain では何年も届かず DNS 確認が
 永久に起きないため）。validator 数・bond・stake の 3 値と coinbase long maturity（600）は、2026-09-25 に
 production（mainnet）側がこの値に移ったので、上書きではなく production から継承している（t12 の値は不変）。
+それ以外（`required_stake_depth`、`min_anchor_attesters` = 2、報酬、stake preference 無効、VLT inert）は
+production のまま。
 
 ### mainnet の値へ（2026-09-25、ユーザー決定「t12 は bond・validator stake など全て mainnet 想定の数値で」）
 
 | | 変更前 | testnet-12 | 備考 |
 |---|---|---|---|
-| panel exposure floor λ（ADR-0130） | 2（2,000 ‰） | **5（5,000 ‰）** | ADR-0130 D1 の mainnet 候補 5–10 から 5。R-core+ の seat duty（λ 項）: floor・8k とも 640.17 MSK/claim（λ = 2 では 256.07 / 459.12）、2M は上限 12,588.76 のまま |
-| timestamp_deviation_tolerance | 132 s | **1,620 s** | card と同じ導出（27 sample × 120 s / 2）。producer は DAA clock を実時間より最大 1,620 s（約 13 slot）先行させられる（132 s では約 1 slot）。一度きりの先行で、速度は変わらない（clock floor が tick 間隔を 1 interval 以上に保つ） |
-| max_block_level | 250 | **225** | mainnet の値。t12 は全 block が level 0（single lottery）なので header は不変。pruning proof の header 予算が 502,000 → 452,000 |
-| mainnet card の overlay carve | なし（validator 30 %、escrow 620 ‰） | — | mainnet card が validator 20 %・escrow 720 ‰ を genesis から宣言（t12 と同じ） |
-それ以外（`required_stake_depth`、`min_anchor_attesters` = 2、報酬、stake preference 無効、VLT inert）は
-production のまま。testnet-11・mainnet・devnet の fingerprint は動かない（`palw_the_release_did_not_move` と
-preset の fingerprint pin で確認）。
+| panel exposure floor λ（ADR-0130） | 2（2,000 ‰） | **5（5,000 ‰）** | ADR-0130 D1 の mainnet 候補 5–10 から 5。R-core+ の seat duty（λ 項）: floor・8k とも 640.17 MSK/claim（λ = 2 では 256.07 / 459.12）、2M は上限 12,588.76 のまま。**DoS（`dos_l5_6_composite`、junk floor claim 1,200 本）**: honest 担保の上限 3,756,252.84 MSK の 99.70 %（3,744,990.41 MSK）が拘束され、公開時に開いている floor lane が 6 DAA、2M lane が 970 / 3,650 DAA 使えない（λ = 2 ではどちらも 0、拘束 1,535,125.98 MSK）。攻撃者は拘束額以上（3,841,016.26 MSK）を没収される。ただし停止時間は flood の規模で伸びる（1,500 本で 2M lane 32 %、floor lane 18 DAA）。**運用者判断の項目** |
+| timestamp_deviation_tolerance | 132 s | **1,620 s** | card と同じ導出（27 sample × 120 s / 2）。producer は DAA clock を実時間より最大 1,620 s（約 13 slot）先行させられる（132 s では約 1 slot）。stamp の間隔は clock floor が 1 interval 以上に保つが、実時間では一度に mint できる: 1 producer が他の block を挟まずに DAA を `⌊T / I⌋ + 1` = **14** 進められる（132 s では 2）。DAA で数える窓はすべてその分だけ実時間が縮む。readiness row（t12 の V2 寿命 8 DAA、int-3 の horizon で 24）はこの burst で失効し、model class が HELD → Probation{0} に戻る（`t12_run_ahead_burst_vs_readiness` で fold 上で実測）。**未解決・公開前にユーザー判断**（下の「open」） |
+| max_block_level | 250 | **225** | mainnet の値。t12 は全 block が level 0（single lottery）なので header は不変。pruning proof の header 予算が 502,000 → 452,000。level 0 の proof は pruning point より下の全履歴なので、予算に届くのは 2 block/slot で pruning point の下に約 314 日分（250 では約 348 日）。pruning point 自体は最初の claim が Final になるまで genesis から動かない（PALW safe frontier）。225 で pruning point を動かした proof の作成・検証・適用を `t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225` で確認 |
+| mainnet card の overlay carve | なし（validator 30 %、escrow 620 ‰） | — | mainnet card が validator 20 %・escrow 720 ‰ を genesis から宣言（t12 と同じ）。`the_mainnet_card_states_testnet_12_s_carve_and_escrows_3_200_85_msk_a_claim` が固定 |
+
+fingerprint: testnet-11・devnet は動かない（`palw_the_release_did_not_move` と preset の fingerprint pin で確認）。
+mainnet は 2026-09-25 に DNS 値（validator 6・bond 20,000,000 MSK・active stake 120,000,000 MSK・coinbase long
+maturity 600）を t12 と同じにしたので、params id が `badaa8e9…` → `eb866c61…` に移動した（schedule id は不変）。
+
+**open（1,620 s の burst、公開前にユーザー判断）**: (a) clock を進める beat の stamp だけを受信側時計 + 1 interval
+程度で上限にする t12 規則を足し、通常 block の 1,620 s は残す（consensus 変更。beat の skew 許容が 132 s 時代並みに戻る）、
+(b) readiness の再証明を row の年齢が horizon − (14 + 2) を超えた時点で行う（horizon 24 なら 13 DAA ごとが 9 DAA ごとになり、
+proof の量は約 1.4 倍。node の policy だけの変更。horizon を上げるだけでは足りず、上限の 30 でも揃って証明した fleet は落ちる。
+readiness 以外の DAA 窓の圧縮は残る）、(c) t12 だけ 132 s に戻す。
 
 ## 担保: option A（監査 U2 に対する運用者の決定）
 

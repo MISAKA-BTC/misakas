@@ -5,6 +5,9 @@ pub mod daemon;
 pub mod eth_rpc;
 pub mod palw_agent;
 pub mod palw_backends;
+/// The Activation Pool research's P3: a `Candidate` class is proved for its own admission audit
+/// (node policy).
+pub mod palw_candidate_proof_timing;
 pub mod palw_class_context;
 pub mod palw_drill;
 pub mod palw_dump;

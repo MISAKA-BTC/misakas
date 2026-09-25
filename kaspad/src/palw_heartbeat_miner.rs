@@ -470,12 +470,16 @@ impl PalwHeartbeatMinerService {
             let now = kaspa_core::time::unix_now();
             let away = opens.saturating_sub(now);
             // Two intervals is more than any honest reference can put between now and the next
-            // slot (the future-drift bound is 132 s); say so, because a clock held that far out is
-            // a reference stamped in the future and an operator should see it.
+            // slot — an honest beat is stamped at its miner's clock or at the slot; say so, because
+            // a clock held that far out is a reference stamped in the future and an operator should
+            // see it. The future-drift bound decides how far out one can be: 132 s on the hash
+            // lineage's presets, 1,620 s on testnet-12 since 2026-09-25 — about 13 intervals, which
+            // a producer running the clock ahead can take in one burst.
             if away > 2 * kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS {
                 self.say_hold(Some(format!(
                     "the next slot opens {} s from now — more than two intervals, so the reference it is measured from \
-                     carries a timestamp ahead of this node's clock (check this host's clock, and the peers')",
+                     carries a timestamp ahead of this node's clock (check this host's clock and the peers' — or a \
+                     producer is running the clock ahead of wall time)",
                     away / 1000
                 )));
             } else {

@@ -1355,3 +1355,82 @@ fn the_payee_index_answers_b3_as_the_walk_does() {
     assert!(legs.iter().all(|(_, leg)| leg.kind == PalwVestingLegKindV1::Seat && leg.payee_bond == Some(bond_key(9))));
 }
 
+
+/// **The Activation Pool's review P3, the pool's fix round F5: scheduled pool payouts never stall a
+/// 6-key vesting move, and the market keeps its two slots.** Three latched rows of six keys (a
+/// producer and five credited seats — t12's panel), a hundred market rows waiting, and five pool
+/// payouts scheduled (ADR-0152-adjacent: Activation Pool). Before the fix the pool wrote its rows in
+/// the span step, ahead of 3d: one waiting pool row and two market rows left vesting a width of 5 and
+/// the 6-key move stalled. Now the pool is flushed by 3d′ AFTER vesting with only the width left: each
+/// block moves exactly one row (8 − 2 for the market = 6 keys), the pool waits while vesting and the
+/// market fill the drain, and flushes the block vesting is done. The non-market part never exceeds
+/// what the next drain takes whole.
+#[test]
+fn pool_payouts_scheduled_never_stall_a_six_key_vesting_move() {
+    use crate::palw_activation_pool_v1::*;
+    let p = vp();
+    let rows: Vec<PalwVestingRowV1> = (0..3u64)
+        .map(|i| PalwVestingRowV1 {
+            matured_at: Some(1),
+            ..row(h64(0x500 + i), 40 + i, &[11 + i, 30 + i, 50 + i, 70 + i, 90 + i], 100 + i, 0)
+        })
+        .collect();
+    let mut s = seeded(&rows);
+    for i in 0..100u64 {
+        s.pending_payouts.insert(market_key(i), PalwPayoutV2 { payload: h64(1), amount: 1 });
+    }
+    // A listed class with five payouts owed.
+    let class = h64(0x7777);
+    s.classes.insert(
+        class,
+        PalwClassStateV2 {
+            artifact_root: h64(0x7778),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+            status: PalwClassStatusV2::Active,
+            registered_daa: 0,
+            registrant_bond: None,
+            fused_attention: false,
+        },
+    );
+    s.class_shares.insert(class, 1_000);
+    let owed: Vec<Hash64> = (0..5u64).map(|n| h64(0xAA00 + n)).collect();
+    for payee in &owed {
+        s.activation_pool_scheduled.insert((class, *payee), 1_000);
+    }
+    let pool = PalwActivationPoolV1 {
+        bonus_sompi: 5_000,
+        scheduled_sompi: 5_000,
+        funded_sompi: 10_000,
+        ..PalwActivationPoolV1::opened_at(0)
+    };
+    s.activation_pool_counters = PalwActivationPoolCountersV1::of_rows([&pool]);
+    s.activation_pools.insert(class, pool);
+    s.assert_internal_consistency(&p).expect("the fixture is consistent (I1–I5)");
+    let pooled = PalwTransitionExtrasV1 { activation_pool: Some(PALW_ACTIVATION_POOL_TERMS_V1), ..Default::default() };
+    let pool_rows = |state: &PalwChainStateV2| {
+        state.pending_payouts_iter().filter(|(key, _)| key.as_byte_slice()[..2] == PALW_ACTIVATION_POOL_PAYOUT_KEY_PREFIX_V1).count()
+    };
+    let mut daa = 200;
+    for block in 0..5 {
+        let market_before = s.pending_payouts_iter().filter(|(k, _)| k.as_byte_slice()[0] == 0xFF).count();
+        let (child, delta) = fold(&s, &p, daa, &pooled);
+        let market_after = child.pending_payouts_iter().filter(|(k, _)| k.as_byte_slice()[0] == 0xFF).count();
+        assert!(market_before - market_after >= 2, "block {block}: the market keeps its two slots of the drain (V-7)");
+        assert!(non_market(&child) + 2 <= PALW_V2_MAX_PAYOUTS_PER_BLOCK, "block {block}: the next drain takes every non-market row");
+        if block < 3 {
+            assert_eq!(moved_rows(&delta), 1, "block {block}: the 6-key move is never stalled by the pool");
+            assert_eq!(pool_rows(&child), 0, "block {block}: vesting and the market fill the width, the pool waits");
+            assert_eq!(child.activation_pool(&class).unwrap().scheduled_sompi, 5_000);
+        } else if block == 3 {
+            assert_eq!(moved_rows(&delta), 0);
+            assert_eq!(pool_rows(&child), 5, "the block vesting is done, the pool flushes into the width left (6)");
+            let pool = child.activation_pool(&class).unwrap();
+            assert_eq!((pool.scheduled_sompi, pool.paid_sompi), (0, 5_000));
+        }
+        s = child;
+        daa += 1;
+    }
+    assert_eq!(s.vesting_len(), 0);
+    assert_eq!(pool_rows(&s), 0, "and the next drain paid them");
+}

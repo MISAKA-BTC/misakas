@@ -163,6 +163,34 @@ mod tests {
         assert_eq!(palw_escalated_readiness_pick_v1(&duties[..1]), None, "nothing escalates: nothing is picked");
     }
 
+    /// **On testnet-12's horizon the seat's duty and its escalation follow it** (user decision
+    /// 2026-09-25, readiness capacity option (a)): the globals testnet-12's processor hands the fold
+    /// carry 24 spans, so a row proved at 100 is re-proved past 112 (the Own site, 13 DAA old) and
+    /// escalates from 122 (`24 − 2`) through 124, the last DAA it counts; past it the row lapsed —
+    /// the same functions, with the horizon as their input. The default globals keep 4 and 106.
+    #[test]
+    fn on_testnet12s_horizon_the_duty_is_twelve_and_the_escalation_twenty_two() {
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        let t12 = kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else {
+            panic!("testnet-12 is ConsensusV2")
+        };
+        let g = kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1(bundle);
+        assert_eq!(g.readiness_v2_max_age_spans, 24, "testnet-12's fold is handed the 24-span horizon");
+        assert_eq!(palw_readiness_max_age_daa_v1(1, &g, true), 24);
+        let r = row(100);
+        for (globals, duty, escalates, last) in [(&G, 4u64, 106u64, 108u64), (&g, 12, 122, 124)] {
+            let due = |now: u64| palw_readiness_duty_due_v2(Some(&r), now, now, None, 1, globals, true);
+            assert!(!due(100 + duty) && due(100 + duty + 1), "the duty is due past {duty}");
+            let urgency = |now: u64| palw_readiness_duty_urgency_v1(true, Some(&r), now, 2, None, now, 1, globals, true);
+            assert_eq!(urgency(escalates - 1), None, "{} DAA old: the Own site", escalates - 1 - 100);
+            let lapsing = Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: last });
+            assert_eq!(urgency(escalates), lapsing, "max − 2: escalated");
+            assert_eq!(urgency(last), lapsing, "the last DAA it counts");
+            assert_eq!(urgency(last + 1), Some(PalwReadinessUrgencyV1::Lapsed), "past it: lapsed");
+        }
+    }
+
     /// **The panel reads these rules, not copies of them**: `readiness_duties` holds a due proof back
     /// while the seat's last one for the class is still landing (`palw_readiness_duty_waits_v1`, past
     /// R-core+) and asks `palw_readiness_duty_urgency_v1` for its escalation, and the tick's
@@ -232,8 +260,9 @@ mod tests {
         lapsed: Vec<(u64, usize)>,
     }
 
-    /// **One seat's tick, one DAA at a time, on testnet-12's clock** (one block a DAA, one-DAA spans,
-    /// eight-DAA rows): the tick's own scheduler and site order, the seat's own duty rule and the
+    /// **One seat's tick, one DAA at a time, on testnet-12's clock** (one block a DAA, one-DAA spans)
+    /// **with the default eight-DAA rows** — the tightest horizon a network may configure, so the
+    /// storm is at its hardest (testnet-12's own 24-DAA rows are `network_at`'s): the tick's own scheduler and site order, the seat's own duty rule and the
     /// escalation, and a carrier's life — sent at `t`, carried by block `t + 1` (which frees the
     /// slot), accepted by block `t + 2` (which writes the row, dated at the span the proof names).
     /// The registry counts the rows a block's parent left, before the block's own objects.
@@ -447,6 +476,14 @@ mod tests {
     /// (the fee market is not the limit modelled here). A proof past the fold's landing window is
     /// evicted by the gate and its seat funds afresh. A carried proof writes its row a DAA later.
     fn network(seats: usize, classes: usize, ticks: u64, armed: bool, lane: Lane) -> Network {
+        network_at(&G, seats, classes, ticks, armed, lane)
+    }
+
+    /// [`network`] under the globals `g` — the horizon a network's fold is handed (testnet-12's
+    /// twenty-four spans, user decision 2026-09-25, readiness capacity option (a)): the rows stand
+    /// `g`'s horizon, the seats re-prove at half of it and escalate from `max − 2`, and a class is
+    /// HELD below `g`'s seat count.
+    fn network_at(g: &PalwRegistryGlobalsV1, seats: usize, classes: usize, ticks: u64, armed: bool, lane: Lane) -> Network {
         #[derive(Clone, Copy, PartialEq, Eq)]
         enum Carrier {
             Court { sent: u64 },
@@ -454,11 +491,13 @@ mod tests {
             Proof { class: usize, span: u64, sent: u64 },
         }
         let storm = !matches!(lane, Lane::Open(_));
-        let max_age = palw_readiness_max_age_daa_v1(1, &G, true);
+        let max_age = palw_readiness_max_age_daa_v1(1, g, true);
         let landing_window = kaspa_consensus_core::palw_model_registry_v1::palw_readiness_landing_spans_v1(1);
-        // Rows staggered over the half-age cadence, so the network is not all due in one DAA.
+        // Rows staggered over the half-age cadence (`max_age / 2 + 1`: five at eight spans), so the
+        // network is not all due in one DAA.
+        let cadence = (max_age / 2 + 1) as usize;
         let mut rows: Vec<Vec<PalwSeatReadinessRowV1>> =
-            (0..seats).map(|s| (0..classes).map(|c| row(((s + 3 * c) % 5) as u64)).collect()).collect();
+            (0..seats).map(|s| (0..classes).map(|c| row(((s + 3 * c) % cadence) as u64)).collect()).collect();
         let mut last_submitted = vec![vec![None::<u64>; classes]; seats];
         let mut last_lane = vec![None::<PalwCarrierLaneV1>; seats];
         let mut pending = vec![None::<Carrier>; seats];
@@ -471,7 +510,7 @@ mod tests {
                 let fresh = (0..seats).filter(|s| t.saturating_sub(rows[*s][c].proved_daa) <= max_age).count();
                 out.rows += seats as u64;
                 out.lapsed += (seats - fresh) as u64;
-                out.held += u64::from(fresh < G.seat_count as usize);
+                out.held += u64::from(fresh < g.seat_count as usize);
             }
             landing.retain(|(at, s, c, span)| {
                 if *at == t {
@@ -492,7 +531,7 @@ mod tests {
                     Some(Carrier::Proof { span, .. }) if t > span + landing_window => pending[s] = None,
                     Some(Carrier::Proof { class, span, sent }) => {
                         // The pool's tip read: the row at the tip, this DAA (M1's pools).
-                        let urgency = palw_readiness_proof_urgency_v1(Some(&rows[s][class]), span, 2, t, 1, &G, true);
+                        let urgency = palw_readiness_proof_urgency_v1(Some(&rows[s][class]), span, 2, t, 1, g, true);
                         if urgency.is_some() || matches!(lane, Lane::Open(_)) {
                             heads.push((urgency, sent, s));
                         }
@@ -529,9 +568,9 @@ mod tests {
                     out.blocked += 1;
                 }
                 let mut duties: Vec<(usize, Option<PalwReadinessUrgencyV1>)> = (0..classes)
-                    .filter(|c| palw_readiness_duty_due_v2(Some(&rows[s][*c]), t, t, last_submitted[s][*c], 1, &G, true))
+                    .filter(|c| palw_readiness_duty_due_v2(Some(&rows[s][*c]), t, t, last_submitted[s][*c], 1, g, true))
                     .filter(|c| !palw_readiness_duty_waits_v1(armed, last_submitted[s][*c], t, 1))
-                    .map(|c| (c, palw_readiness_duty_urgency_v1(armed, Some(&rows[s][c]), t, 2, last_submitted[s][c], t, 1, &G, true)))
+                    .map(|c| (c, palw_readiness_duty_urgency_v1(armed, Some(&rows[s][c]), t, 2, last_submitted[s][c], t, 1, g, true)))
                     .collect();
                 let mut slots = PalwCarrierSlotsV1::new(last_lane[s]);
                 let mut inflight = usize::from(pending[s].is_some());
@@ -773,7 +812,13 @@ mod tests {
         let params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
         let span_daa = params.palw_execution_lane.as_ref().expect("testnet-12 schedules the lane").schedule_span_daa;
         assert!(params.palw_readiness_v2_at(0) && params.palw_rcore_plus_active_at(0), "testnet-12 arms both from genesis");
-        let max_age = palw_readiness_max_age_daa_v1(span_daa, &G, true);
+        // testnet-12's own globals — the ones its processor hands the fold (the bundle's seat count and
+        // the 24-span readiness horizon, user decision 2026-09-25, readiness capacity option (a)).
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(t12_bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-12 is ConsensusV2")
+        };
+        let g = kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1(t12_bundle);
+        let max_age = palw_readiness_max_age_daa_v1(span_daa, &g, true);
         let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x5E; 32]);
         let bond = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0));
         let bond_bytes = borsh::to_vec(&bond).unwrap();
@@ -935,10 +980,10 @@ mod tests {
             "testnet-12 demand: {bonds} genesis bonds x {classes} held classes = {} rows; a class needs {} fresh rows to stay out of \
              HELD and {} to leave it — {} and {} rows across the classes",
             bonds * classes,
-            G.seat_count,
-            G.seat_count + G.spare_seats,
-            G.seat_count as usize * classes,
-            (G.seat_count + G.spare_seats) as usize * classes
+            g.seat_count,
+            g.seat_count + g.spare_seats,
+            g.seat_count as usize * classes,
+            (g.seat_count + g.spare_seats) as usize * classes
         );
         // What the storm's ML-DSA-87 carriers weigh (an accusation's carrier), for the head's rule.
         let accusation = PalwConsensusObjectV2::DefaultAccused {
@@ -985,22 +1030,29 @@ mod tests {
             );
         }
         // The realized figures (the network model: the seats' own cadence and copy guard, one carrier
-        // in flight per seat, the head's queue), 8 seats × 2 classes over 1,000 DAA.
+        // in flight per seat, the head's queue), 8 seats × 2 classes over 1,000 DAA — at testnet-12's
+        // horizon, and beside it at the default eight spans the user moved it from.
+        let needed = g.seat_count as usize * classes;
+        let mut realized = Vec::new();
         for (name, lane) in [
             ("no other traffic, 2 proofs a block", Lane::Open(2)),
             ("a DA storm, p50 proofs (the lead alternates)", Lane::Storm { shipped: true, beside: 0 }),
             ("a DA storm, typical proofs (a head every block)", Lane::Storm { shipped: true, beside: 1 }),
         ] {
-            let n = network(bonds, classes, 1_000, true, lane);
+            let n = network_at(&g, bonds, classes, 1_000, true, lane);
+            let eight = network_at(&G, bonds, classes, 1_000, true, lane);
             println!(
-                "realized, {name}: {:.1} fresh rows a DAA of {} (at least {} keep both classes out of HELD); a class HELD in {} of {} \
-                 class-DAA",
+                "realized, {name}: {:.1} fresh rows a DAA of {} at {max_age} DAA (at least {needed} keep both classes out of HELD); a \
+                 class HELD in {} of {} class-DAA — at {} DAA: {:.1} fresh, HELD in {}",
                 n.fresh_rows_per_daa(1_000),
                 bonds * classes,
-                G.seat_count as usize * classes,
                 n.held,
-                1_000 * classes
+                1_000 * classes,
+                palw_readiness_max_age_daa_v1(span_daa, &G, true),
+                eight.fresh_rows_per_daa(1_000),
+                eight.held
             );
+            realized.push((n, eight));
         }
         println!(
             "the staleness horizon buys queueing slack as well as capacity: at {max_age} DAA the seats' cadence asks {:.1} proofs a \
@@ -1009,7 +1061,14 @@ mod tests {
             bonds * classes,
             per_block(&typical)
         );
-        assert_eq!((cadence, latest), (5, 6), "testnet-12's clock");
+        assert_eq!((cadence, latest), (13, 22), "testnet-12's clock: 24-DAA rows, re-proved past 12, escalated from 22");
+        // What the horizon bought (the user's option (a)): in every lane at least as many fresh rows and
+        // no more HELD class-DAA than at eight spans, and on an open lane both classes never HELD.
+        for (n, eight) in &realized {
+            assert!(n.fresh_rows_per_daa(1_000) >= eight.fresh_rows_per_daa(1_000) && n.held <= eight.held, "{n:?} vs {eight:?}");
+        }
+        assert_eq!(realized[0].0.held, 0, "no other traffic: both genesis classes stay out of HELD at 24 DAA");
+        assert!(realized[0].0.fresh_rows_per_daa(1_000) >= needed as f64, "and at least {needed} rows fresh a DAA");
         assert_eq!(per_block(&typical), 2, "two typical A16 proofs a block, and no third");
         assert!(typical.transient_mass <= lane, "a typical A16 proof fits the lane's head");
         assert!(worst.transient_mass > lane, "a worst-span A16 proof does not: it rides the fee market even escalated");

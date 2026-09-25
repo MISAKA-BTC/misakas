@@ -2216,6 +2216,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_court_duties_v2_impl(&mine)
     }
 
+    fn palw_held_pursuit_seeds_v1(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwHeldPursuitSeedsV1 {
+        self.virtual_processor.palw_held_pursuit_seeds_v1_impl(&mine)
+    }
+
     fn palw_da_duties_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
@@ -2255,6 +2262,17 @@ impl ConsensusApi for Consensus {
         leaf: u64,
     ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
         self.virtual_processor.palw_da_step_leaf_demand_check_v1_impl(claim, accuser, leaf)
+    }
+
+    fn palw_object_rehearsal_v1(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1> {
+        self.virtual_processor.palw_object_rehearsal_v1_impl(object)
+    }
+
+    fn palw_claim_deadlines_v1(&self, claims: Vec<kaspa_consensus_core::Hash64>) -> Vec<(kaspa_consensus_core::Hash64, Option<u64>)> {
+        self.virtual_processor.palw_claim_deadlines_v1_impl(&claims)
     }
 
     fn palw_readiness_urgency_v1(
@@ -2356,6 +2374,13 @@ impl ConsensusApi for Consensus {
 
     fn palw_model_registry_v1(&self) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryReadV1> {
         self.virtual_processor.palw_model_registry_v1_impl()
+    }
+
+    fn palw_activation_pool_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_activation_pool_v1::PalwActivationPoolReadV1> {
+        self.virtual_processor.palw_activation_pool_v1_impl(class_id)
     }
 
     fn palw_panel_network_view_v1(&self) -> Option<kaspa_consensus_core::palw_panel_view_v1::PalwPanelNetworkViewV1> {

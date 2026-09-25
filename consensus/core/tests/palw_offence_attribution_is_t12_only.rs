@@ -172,17 +172,19 @@ fn the_fence_moves_testnet12s_fingerprint_and_nothing_else_did() {
     let t12 = palw_t12_shipped_params();
     let mut without = t12.clone();
     without.palw_offence_attribution = None;
+    // ADR-0152-adjacent: the Activation Pool landed after this pin was taken; taken away as well,
+    // and `palw_activation_pool_is_t12_only` pins what it moves.
+    without.palw_activation_pool = None;
+    // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)) landed after
+    // it too; taken away as well (its mirror synced), and `palw_readiness_horizon_is_t12_only` pins
+    // what it moves.
+    without.palw_readiness_v2_max_age_spans = None;
+    without.sync_palw_readiness_v2_max_age_spans();
     let before = ids(&without);
     println!("testnet-12 without the fence: params {} identity {} schedule {}", before.0, before.1, before.2);
     println!("testnet-12 with the fence:    params {} identity {} schedule {}", ids(&t12).0, ids(&t12).1, ids(&t12).2);
-    assert_eq!(
-        (before.0.as_str(), before.1.as_str(), before.2.as_str()),
-        T12_BEFORE_THE_ATTRIBUTION,
-        "testnet-12 without the fence is testnet-12 at the parent"
-    );
-    assert_ne!(t12.consensus_params_id(), without.consensus_params_id(), "the ruleset a node announces names the fence");
-    assert_ne!(t12.consensus_identity_id(), without.consensus_identity_id(), "in force from block one: two identities");
-    assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and the schedule the operator log names it");
+    // Both twins are computed and printed before either pin is asserted, so one run shows both values
+    // (`scripts/t12-repin.sh` reads these two lines).
     let mut without_both = without.clone();
     without_both.palw_class_verify_deadline = None;
     without_both.sync_palw_class_verify_deadline();
@@ -197,6 +199,15 @@ fn the_fence_moves_testnet12s_fingerprint_and_nothing_else_did() {
     );
     assert_eq!(without_both.blockrate.pruning_depth, 12_002, "the pre-fence depth");
     let both = ids(&without_both);
+    println!("testnet-12 without the fence or the deadline fence: params {} identity {} schedule {}", both.0, both.1, both.2);
+    assert_eq!(
+        (before.0.as_str(), before.1.as_str(), before.2.as_str()),
+        T12_BEFORE_THE_ATTRIBUTION,
+        "testnet-12 without the fence is testnet-12 at the parent"
+    );
+    assert_ne!(t12.consensus_params_id(), without.consensus_params_id(), "the ruleset a node announces names the fence");
+    assert_ne!(t12.consensus_identity_id(), without.consensus_identity_id(), "in force from block one: two identities");
+    assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and the schedule the operator log names it");
     assert_eq!(
         (both.0.as_str(), both.1.as_str(), both.2.as_str()),
         T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE,

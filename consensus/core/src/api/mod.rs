@@ -896,6 +896,16 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **ADR-0152 §4-ter.3 step 6: the held forfeits `mine` holds and `mine`'s open data-availability
+    /// sessions**, at the tip — what a challenger's node rebuilds its step-6 pursuits from at start
+    /// ([`crate::palw_producer_v2::palw_held_pursuit_seeds_v1`]).
+    fn palw_held_pursuit_seeds_v1(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> crate::palw_producer_v2::PalwHeldPursuitSeedsV1 {
+        Default::default()
+    }
+
     /// The data-availability court's half (ADR-0062 D3): claims this node produced that are under
     /// an open accusation, with the event each must open.
     fn palw_da_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwDaDutyV2> {
@@ -952,6 +962,28 @@ pub trait ConsensusApi: Send + Sync {
         _leaf: u64,
     ) -> Option<crate::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
         None
+    }
+
+    /// **ADR-0152 Phase 2, P2-8e: what the fold makes of `object` in the virtual's next block** — the
+    /// acceptance layer, then the object's own arm, on the tip at the virtual's DAA
+    /// (`palw_producer_v2::PalwObjectRehearsalV1`). A read for node policy, never a block rule. `None`
+    /// off `ConsensusV2` or with no tip state.
+    fn palw_object_rehearsal_v1(
+        &self,
+        _object: &crate::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<crate::palw_producer_v2::PalwObjectRehearsalV1> {
+        None
+    }
+
+    /// **ADR-0152 Phase 2, P2-8e review (MED): each asked claim's one deadline in the sweep queue at
+    /// the tip** (`PalwChainStateV2::deadline_of`, DL-1's row: the receipt deadline of a bound panel,
+    /// `Final` of a licence at `window_challenge_at` and every floor the fold adds, a DA session's
+    /// disclose deadline; `None` while a court or a seat's DA session pauses it, or for a claim the
+    /// tip does not hold). What node policy dates a seat's court filing by, so the date is the fold's
+    /// own and never a second spelling of it. A read, never a block rule; empty off `ConsensusV2` or
+    /// with no tip state.
+    fn palw_claim_deadlines_v1(&self, _claims: Vec<crate::Hash64>) -> Vec<(crate::Hash64, Option<u64>)> {
+        Vec::new()
     }
 
     /// **The 2026-09-25 model-registry review, M1: how urgently do these possession proofs' rows need
@@ -1082,6 +1114,15 @@ pub trait ConsensusApi: Send + Sync {
 
     /// Panel observability: class status, bonded seats, and per-claim assignments as the tip holds
     /// them. `None` off `ConsensusV2`. Seat counts stay distinct — bonded / ready / selected / valid.
+    /// **ADR-0152-adjacent (Activation Pool): one class's pool at the tip** (`getPalwActivationPool`,
+    /// op 200). `None` off ConsensusV2 or before the first state.
+    fn palw_activation_pool_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<crate::palw_activation_pool_v1::PalwActivationPoolReadV1> {
+        None
+    }
+
     fn palw_panel_network_view_v1(&self) -> Option<crate::palw_panel_view_v1::PalwPanelNetworkViewV1> {
         None
     }

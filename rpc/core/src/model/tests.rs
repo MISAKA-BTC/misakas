@@ -2378,6 +2378,60 @@ mod mockery {
     }
     test!(GetPalwModelCertificationResponse);
 
+    // ADR-0152-adjacent (Activation Pool): op 200 round-trips.
+    impl Mock for GetPalwActivationPoolRequest {
+        fn mock() -> Self {
+            GetPalwActivationPoolRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwActivationPoolRequest);
+
+    impl Mock for GetPalwActivationPoolResponse {
+        fn mock() -> Self {
+            GetPalwActivationPoolResponse {
+                available: mock(),
+                pool_armed: mock(),
+                tip_daa: mock(),
+                class_found: mock(),
+                class_id: mock_hex(),
+                class_status: "active".into(),
+                lifecycle: "Candidate".into(),
+                has_pool: mock(),
+                prep_sompi: mock(),
+                bonus_sompi: mock(),
+                funded_sompi: mock(),
+                paid_sompi: mock(),
+                withheld_sompi: mock(),
+                opened_daa: mock(),
+                prep_paid: vec![mock_hex()],
+                bonus_paid: vec![mock_hex(), mock_hex()],
+                probe_credited: Vec::new(),
+                registrant_operator: mock_hex(),
+                prep_reward_now_sompi: mock(),
+                prep_cap_now_sompi: mock(),
+                next_audit_span: mock(),
+                span_daa: mock(),
+                sink_script: mock_hex(),
+                min_topup_sompi: mock(),
+                prep_base_sompi: mock(),
+                prep_share_permille: mock(),
+                bonus_share_permille: mock(),
+                ramp_daa: mock(),
+                prep_payee_cap: mock(),
+                bonus_payee_cap: mock(),
+                total_funded_sompi: mock(),
+                total_paid_sompi: mock(),
+                total_withheld_sompi: mock(),
+                total_available_sompi: mock(),
+                scheduled_sompi: mock(),
+                class_is_floor: mock(),
+                recommended_pool_sompi: mock(),
+                bonus_cap_sompi: mock(),
+            }
+        }
+    }
+    test!(GetPalwActivationPoolResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {
@@ -2537,6 +2591,7 @@ mod mockery {
                 max_inflight_claims: mock(),
                 required_ready_seats: mock(),
                 registration_bond_sompi: mock(),
+                recommended_pool_sompi: mock(),
                 admission_claims_per_span_milli: mock(),
                 probes_passed: mock(),
                 probes_failed: mock(),

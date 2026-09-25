@@ -263,6 +263,15 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         crate::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy
     }
 
+    /// **ADR-0152 §4-ter N4: whether this backend's chain is past `palw_offence_attribution`** — the
+    /// node's `Params::palw_held_answerability_v1()`. Set once, from the node's params, on every
+    /// backend its registry resolves (as [`Self::set_attempt_rules_v1`] is), so past the fence
+    /// [`Self::supports_dissection`] is held-aware on a real node (the consensus predicate
+    /// `palw_held_class_unanswerable_v1`) and the producer's guard refuses a held class this build
+    /// cannot defend. A family with no fused site (the floor) keeps the default no-op; `false` leaves
+    /// every family byte for byte what it was.
+    fn set_held_answerability_v1(&mut self, _armed: bool) {}
+
     /// Run the job and commit to it. Pure CPU/GPU work with no chain access: the caller runs it off
     /// the async runtime.
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;
@@ -487,6 +496,81 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _carried_prompt: Option<&[u32]>,
     ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
         Err("this family cannot read a fused site out of a filing".to_string())
+    }
+
+    /// **ADR-0152 §4-ter N1/N2: a HELD class's fused site, windowed** — the one builder both parties
+    /// of a held dissection call, past `palw_offence_attribution` (N3 routes a held class here).
+    ///
+    /// [`Self::attn_site_evidence`] re-executes the job densely and holds every tile, which a held
+    /// class's canonical job is past at 8k (≈ 10^8 leaves against the `2^26` materialization cap).
+    /// Nothing the court asks needs the tiles: the site reads the query slice at its position and
+    /// layer ℓ's K and V over the history, and the bottom reads the checkpoint after the position
+    /// (`covered = p + 1`), whose state holds exactly those rows. So the evidence is one plain
+    /// forward to the anchor — `O(state)` — plus two committed leaves opened:
+    ///
+    /// * `filing = None` — **the RESPONDER** (the accused executor): `material` is its own
+    ///   retention. The out tile and the query row are opened out of its fold (a block replayed from
+    ///   the interval's anchor, the path from the digests it retained), the anchor is its own
+    ///   retained checkpoint leaf, and the slice sub-roots it files are its own state's. What
+    ///   [`crate::palw_attn_responder_v1::PalwAttnHeldEvidenceV1::root_claim_held_v1`] turns into
+    ///   the `CourtAttnRootClaimedHeld` it must file (tag 57).
+    /// * `filing = Some(..)` — **a CHALLENGER**: `material` is not read (pass `&[]`). The out tile,
+    ///   the anchor and the sub-roots are the accused's, off its held root claim
+    ///   ([`crate::palw_attn_responder_v1::PalwAttnHeldFilingV1::from_object_v1`]); the query row is
+    ///   opened against the accused's step root from a stream of this node's own honest leaves
+    ///   before the disputed one (`PalwStepPrefixStreamV1`, a frontier per level); the state is this
+    ///   node's own, whose slice `(K|V, ℓ)` precedes any lie at the site. When this node's sub-root
+    ///   of that slice is not the filed one the bottom cannot be built from the filing, and
+    ///   `fallback_v1` names the slice (4-ter.3 step 6: the held-DA `StateChunk` route).
+    ///
+    /// `carried_prompt` is as [`Self::attn_site_evidence`] takes it. `Err` by default: a family
+    /// without the windowed builder says so through [`Self::supports_dissection`] for a held class.
+    ///
+    /// **What it costs a node, stated for the timing drill (T-A5; the review's F8).** Not the
+    /// 470 MB the design note gave: at 8,192 positions of the 1.5B row the cache alone is 28 layers ×
+    /// K and V × 8,192 × 256 codes, and the evidence holds the anchor's chunks beside it (the bytes and
+    /// their leaf hashes) with the engine's working set on top — ≈ 1.5–2 GB at the peak, per build.
+    /// The responder's state walk is the seat memo's, and the memo serialises its forwards: two held
+    /// sessions against one executor's claims answer one after the other, each a whole-context forward
+    /// (`palw_held_class_unanswerable_v1` prices one inside the turn). There is deliberately no
+    /// consensus cap on concurrent held sessions per executor: the cap would be a shield — the
+    /// executor's own Sybils would fill it with decoys on its OTHER claims and a seat holding the lie
+    /// would be refused — so the bound is the node's: T-A5 measures the root-claim latency and the
+    /// peak memory at `k` concurrent sessions per executor, and the operator sizes the host.
+    fn attn_site_evidence_held_v1(
+        &self,
+        _material: &[u8],
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+        _filing: Option<&crate::palw_attn_responder_v1::PalwAttnHeldFilingV1>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
+        Err("this family has no windowed builder for a held fused site".to_string())
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6: the accused's committed cache-write row, opened against ITS step
+    /// root** — what a `CheckpointAccused` carries beside the chunk the producer disclosed.
+    ///
+    /// When a challenger's own sub-root of slice `(K|V, ℓ)` is not the one the accused filed
+    /// (`PalwAttnHeldEvidenceV1::fallback_v1`), the accused's checkpoint disagrees with rows that
+    /// precede its lie; once the producer discloses the disputed tile's chunk (the held DA court's
+    /// `StateChunk`), a row of it that is not the honest row is accused against the row the accused's
+    /// step tree committed at that position: every tile of layer `attn_layer`'s `KCacheWrite`
+    /// (`kind` Key) or `VCacheWrite` (Value) node at history position `history_position`. Those
+    /// leaves precede the narrowed leaf (the cache write comes before the fused site in the canonical
+    /// order, and the anchor holds no position past the site's), so they are the accused's committed
+    /// rows exactly when they are this node's honest ones; each is opened against the accused's step
+    /// root from a stream of this node's own leaves before the narrowed one and the filed path of it
+    /// — one replay to the site, as the windowed challenger's. `Err` by default.
+    fn attn_held_cache_write_rows_v1(
+        &self,
+        _filing: &crate::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+        _kind: crate::palw_state_chunk_map::PalwStateChunkKindV1,
+        _attn_layer: u16,
+        _history_position: u32,
+    ) -> Result<Vec<crate::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
+        Err("this family cannot open a held claim's cache-write rows from a filing".to_string())
     }
 
     /// **Can this backend take a FUSED dissection's turn?** — deliberately not
@@ -1158,6 +1242,21 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this backend has no free-prompt drill fault".to_string())
     }
 
+    /// **The free-prompt drill, with the lie named** (ADR-0152 §4-ter N5) — `fault` is either the
+    /// shipped tile lie ([`PalwFreePromptDrillFaultV1::Leaf`], what [`Self::execute_free_prompt_with_injected_fault`]
+    /// makes) or a lie in a fused attention output, followed downstream or not
+    /// ([`PalwFreePromptDrillFaultV1::AttnOutput`]). What this instance serves for the job afterwards replays
+    /// the same lie. Same rule as every drill verb: callers refuse to reach it on a network carrying
+    /// value.
+    fn execute_free_prompt_with_drill_fault_v2(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _fault: PalwFreePromptDrillFaultV1,
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt drill fault".to_string())
+    }
+
     /// **A DRILL fault of any kind** ([`PalwDrillFaultV1`], ADR-0152 v3.1 addendum §4-bis.10) on the
     /// attempt lane: the job run through this family's own dense capture path — the prompt, context
     /// or prefill moved before the run, or the rows, ids, legs or roots moved after it — and every
@@ -1172,6 +1271,35 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<PalwExecutionOutcomeV1, String> {
         Err("this backend has no drill".to_string())
     }
+}
+
+/// **DRILL ONLY: the lie a free-prompt drill run commits** (ADR-0152 §4-ter N5; the trait's contract:
+/// never on a network carrying value). The free-prompt lane's own set, apart from the attempt lane's
+/// [`PalwDrillFaultV1`] (v3.1 addendum §4-bis.10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwFreePromptDrillFaultV1 {
+    /// The committed tile at `leaf` with its first lane moved by one; the execution honest — the
+    /// shipped drill.
+    Leaf { leaf: u64 },
+    /// **A lie in a fused attention output.** Layer `layer`'s fused site at the canonical
+    /// coordinate `(call, position)` (a decode call `c > 0` is position 0 of its call), lane
+    /// `head · d_head + lane` of its output row, moved by `delta`.
+    ///
+    /// `follow = false`: only the committed row moves and every row after it is the honest
+    /// execution's — the inconsistent forger, whose next checkpoint convicts it. `follow = true`:
+    /// the engine computes everything after it FROM the lie — the rest of the layer, every later
+    /// layer, every later position through the cache — so the checkpoints after it hold rows the
+    /// lie fed: the consistent forger 4-ter F9 names, whose anchor an honest challenger reaches only
+    /// through the filed slice sub-roots.
+    AttnOutput { call: u32, layer: u16, position: u32, head: u16, lane: u16, delta: i32, follow: bool },
+    /// **A lie in a CACHE row** (ADR-0152 §4-ter.3 step 6's forger): the `kind` (0 = K, 1 = V) row
+    /// layer `layer` writes at the canonical coordinate `(call, position)` is committed HONEST as its
+    /// cache-write step row, while the cache — every checkpoint that holds the position, every later
+    /// read — holds lane `lane` of it moved by `delta`. The attention at that position and after
+    /// reads the moved row (the committed outputs follow it), so the anchor's slice `(K|V, layer)`
+    /// disagrees with the producer's own cache-write rows: the held dissection's bottom cannot be
+    /// built from the filing, and the checkpoint court convicts on the disclosed chunk.
+    CacheRow { call: u32, layer: u16, position: u32, kind: u8, lane: u16, delta: i32 },
 }
 
 /// **How a `BendLogits` drill moves a lane** (ADR-0152 v3.1 addendum §4-bis.10).

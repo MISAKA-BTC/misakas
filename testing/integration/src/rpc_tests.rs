@@ -1119,6 +1119,21 @@ async fn sanity_test() {
                     assert!(chain.rows.is_empty());
                 })
             }
+            KaspadPayloadOps::GetPalwActivationPool => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // ADR-0152-adjacent (op 200): a malformed class id is an error before any state is
+                    // read; a well-formed read on a network that is not ConsensusV2 answers
+                    // `available: false` with no pool armed.
+                    let malformed = GetPalwActivationPoolRequest { class_id: "not-hex".to_string() };
+                    assert!(rpc_client.get_palw_activation_pool_call(None, malformed).await.is_err());
+                    let read = rpc_client
+                        .get_palw_activation_pool_call(None, GetPalwActivationPoolRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!read.available && !read.pool_armed && !read.has_pool);
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

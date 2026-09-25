@@ -65,6 +65,41 @@ impl PalwBackendRegistry {
         self
     }
 
+    /// **Every backend this registry resolves is held-aware where `armed`** (ADR-0152 §4-ter N4) —
+    /// the node passes `Params::palw_held_answerability_v1()`, `true` where `palw_offence_attribution`
+    /// is armed. Past it a resolved backend's `supports_dissection` is held-aware, which is what the
+    /// producer's guard reads.
+    pub fn with_held_answerability_v1(mut self, armed: bool) -> Self {
+        self.sdk = self.sdk.with_held_answerability_v1(armed);
+        self
+    }
+
+    /// **The registry a node's service resolves through, ruled by the node's `Params`** — the ONE
+    /// constructor the producer's and the panel's `backends()` call, so both halves of a node run the
+    /// same rules on every backend they resolve: the attempt rule (ADR-0152 v3.1 J-5,
+    /// `palw_attempt_rules_of_params_v1`) and held answerability (ADR-0152 §4-ter N4,
+    /// `Params::palw_held_answerability_v1`). `chain_classes` is the operator's `--palw-chain-classes`:
+    /// the chain-registered arm is armed here or the flag is half a flag (the SDK's
+    /// `resolve_chain_registered` refuses unless the SDK itself was armed). On a network without
+    /// `palw_offence_attribution` both rules are their defaults and every backend is what it was.
+    pub fn for_node_v1(
+        params: &kaspa_consensus_core::config::params::Params,
+        court: PalwCourtParamsV2,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        holdings: Vec<PalwLoadedArtifactV1>,
+        network_id: Vec<u8>,
+        chain_classes: bool,
+    ) -> Self {
+        let registry = if chain_classes {
+            Self::new_with_chain_classes(court, prompt_ids_form, holdings, network_id)
+        } else {
+            Self::new(court, prompt_ids_form, holdings, network_id)
+        };
+        registry
+            .with_attempt_rules_v1(kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(params))
+            .with_held_answerability_v1(params.palw_held_answerability_v1())
+    }
+
     /// The SDK this registry dispatches through — the panel's registration builder asks it for
     /// candidates and admission preflight, against the same holdings `resolve` serves.
     pub fn sdk(&self) -> &PalwClassSdk {

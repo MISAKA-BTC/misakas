@@ -957,3 +957,8 @@ async fn t18u_holding_the_heavy_slot_costs_what_it_consumes() {
     );
     assert!(licensed.bond(&h.cards[full]).unwrap().collateral > walk.state.bond(&h.cards[full]).unwrap().collateral);
 }
+
+/// **ADR-0152 v3.1 T18m's kind-3 and after-`Final` cells (F1-M, §8.3 item 1)** on this module's
+/// held model fixtures — a child of this module, so it runs their claims through T46's doors.
+#[path = "t18m_forged_output_tiled.rs"]
+mod t18m_forged_output_tiled;

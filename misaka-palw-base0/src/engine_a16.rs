@@ -177,8 +177,47 @@ struct LayerParams {
     ffn_residual: A16QuantParams,
 }
 
+/// **DRILL ONLY: an attention output this engine lies about, and computes downstream FROM**
+/// (ADR-0152 §4-ter N5, `PalwFreePromptDrillFaultV1::AttnOutput { follow: true }`): the fused attention site
+/// of `layer` at cache position `position` commits lane `lane` of its output row moved by `delta`,
+/// and every node after it — the rest of the layer, every later layer, every later position through
+/// the cache — reads the moved row. The consistent forger 4-ter F9 names: its checkpoints after the
+/// lie hold rows the lie fed. `None` on every engine but a drill's.
+///
+/// **`cache: Some(kind)` — the lie is a CACHE row instead** (ADR-0152 §4-ter.3 step 6's forger,
+/// `PalwFreePromptDrillFaultV1::CacheRow`): the `kind` (0 = K, 1 = V) row `layer` writes at cache
+/// position `position` is committed honest as its cache-write step row, and the cache — every later
+/// read, every checkpoint — holds it moved at lane `lane` by `delta`. The attention at that position
+/// and after reads the moved row: its committed output follows the lie (the consistent forger), and
+/// its checkpoints' slice `(K|V, layer)` disagrees with its own cache-write rows — the case the held
+/// dissection's bottom cannot be built from the filing and the checkpoint court convicts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct A16DrillAttnLieV1 {
+    pub layer: usize,
+    pub position: usize,
+    pub lane: usize,
+    pub delta: i32,
+    pub cache: Option<u8>,
+}
+
+impl A16DrillAttnLieV1 {
+    /// The moved code, kept inside the A16 range the next kernel reads (the lie goes the other way
+    /// when `delta` would leave it).
+    fn apply(&self, row: &mut [i32]) {
+        if let Some(value) = row.get_mut(self.lane) {
+            let up = value.saturating_add(self.delta);
+            *value = if (-32_767..=32_767).contains(&up) { up } else { value.saturating_sub(self.delta) };
+        }
+    }
+}
+
 pub struct A16Engine<'a> {
     pub artifact: &'a Base0ArtifactV1,
+    /// DRILL ONLY — see [`A16DrillAttnLieV1`]. `None` everywhere else.
+    drill_attn: Option<A16DrillAttnLieV1>,
+    /// The cache position the stepped walk is at, for [`A16DrillAttnLieV1`] (the table walk does not
+    /// otherwise carry it). An atomic because the one-pass prefill runs a layer's positions on the pool.
+    walk_position: std::sync::atomic::AtomicUsize,
     /// Whether the two projections run through `kernels` or through the catalog ops directly.
     /// Both produce the same bits — that is what `A16Engine::new_reference` exists to keep true —
     /// and the catalog path is roughly thirteen times slower, so it is a test instrument rather
@@ -746,6 +785,8 @@ impl<'a> A16Engine<'a> {
         }
         Ok(Self {
             artifact,
+            drill_attn: None,
+            walk_position: std::sync::atomic::AtomicUsize::new(0),
             fast: true,
             embed_lift: one("embed_lift.a16", None, "embed_lift")?,
             final_norm: many("final_norm.a16", None, d, "final_norm")?,
@@ -858,8 +899,9 @@ impl<'a> A16Engine<'a> {
                     Ok(out)
                 };
                 q_rot.push(rope_heads(&q[i], shape.n_heads, "rope_q")?);
-                cache.push_key(li, &rope_heads(&k[i], shape.n_kv_heads, "rope_k")?)?;
-                cache.push_value(li, &v[i])?;
+                let k_rot = rope_heads(&k[i], shape.n_kv_heads, "rope_k")?;
+                cache.push_key(li, &self.drill_cache_row(li, history_before + i, 0, &k_rot))?;
+                cache.push_value(li, &self.drill_cache_row(li, history_before + i, 1, &v[i]))?;
             }
 
             // The whole series is the storage itself; row `i` reads the prefix that ends at its
@@ -943,6 +985,40 @@ impl<'a> A16Engine<'a> {
         Ok(Self { fast: false, ..Self::new(artifact)? })
     }
 
+    /// DRILL ONLY: this engine, lying at `lie` (see [`A16DrillAttnLieV1`]); `None` is the honest
+    /// engine every other caller builds.
+    pub fn with_drill_attn_lie_v1(mut self, lie: Option<A16DrillAttnLieV1>) -> Self {
+        self.drill_attn = lie;
+        self
+    }
+
+    /// The drill's lie on a fused site's row of layer `li` at cache position `position`, if it is
+    /// this one — a no-op on every honest engine.
+    fn drill_attn_at(&self, li: usize, position: usize, row: &mut [i32]) {
+        if let Some(lie) = self.drill_attn
+            && lie.cache.is_none()
+            && lie.layer == li
+            && lie.position == position
+        {
+            lie.apply(row);
+        }
+    }
+
+    /// DRILL ONLY: the `kind` (0 = K, 1 = V) row layer `li` writes into the cache at `position`, as
+    /// the cache holds it — moved when the drill's lie is this cache row
+    /// ([`A16DrillAttnLieV1::cache`]), the row itself on every honest engine. The committed
+    /// cache-write step row is never this: it is `row`, honest.
+    fn drill_cache_row<'r>(&self, li: usize, position: usize, kind: u8, row: &'r [i32]) -> std::borrow::Cow<'r, [i32]> {
+        match self.drill_attn {
+            Some(lie) if lie.cache == Some(kind) && lie.layer == li && lie.position == position => {
+                let mut moved = row.to_vec();
+                lie.apply(&mut moved);
+                std::borrow::Cow::Owned(moved)
+            }
+            _ => std::borrow::Cow::Borrowed(row),
+        }
+    }
+
     /// One token; returns the COMMITTED logit row: i16 codes in i32 lanes. Ties in any argmax
     /// over this row break to the lowest index, here and in court alike.
     pub fn forward_token(&self, cache: &mut A16Cache, token_id: usize, position: usize) -> Result<Vec<i32>, A16EngineError> {
@@ -1023,8 +1099,8 @@ impl<'a> A16Engine<'a> {
             };
             let q_rot = push(&mut nodes, rope_heads(&q, shape.n_heads, "rope_q")?);
             let k_rot = push(&mut nodes, rope_heads(&k, shape.n_kv_heads, "rope_k")?);
-            cache.push_key(li, &k_rot)?;
-            cache.push_value(li, &v)?;
+            cache.push_key(li, &self.drill_cache_row(li, position, 0, &k_rot))?;
+            cache.push_value(li, &self.drill_cache_row(li, position, 1, &v))?;
             let history = cache.rows_in(li);
 
             // The cache series, EXACTLY as the court's canonical input set concatenates them:
@@ -1809,6 +1885,7 @@ impl<'a> A16Engine<'a> {
         let (cos_row, sin_row) = self.artifact.rope.row(position).ok_or(A16EngineError::PositionOutOfRange)?;
         let sink = position == 0;
         let mut trace = A16TraceV1::default();
+        self.walk_position.store(position, std::sync::atomic::Ordering::Relaxed);
 
         let mut h: Vec<i32> = Vec::new();
         // ---- pre --------------------------------------------------------------------------
@@ -2059,15 +2136,21 @@ impl<'a> A16Engine<'a> {
                     })
                     .collect::<Result<_, _>>()?,
             };
+            let mut outs = outs;
+            if matches!(node.op, PlanOp::AttnFused) {
+                for (i, out) in outs.iter_mut().enumerate() {
+                    self.drill_attn_at(li, first_position + i, out);
+                }
+            }
             match node.role {
                 Role::KCacheWrite => {
-                    for out in &outs {
-                        cache.push_key(li, out)?;
+                    for (i, out) in outs.iter().enumerate() {
+                        cache.push_key(li, &self.drill_cache_row(li, first_position + i, 0, out))?;
                     }
                 }
                 Role::VCacheWrite => {
-                    for out in &outs {
-                        cache.push_value(li, out)?;
+                    for (i, out) in outs.iter().enumerate() {
+                        cache.push_value(li, &self.drill_cache_row(li, first_position + i, 1, out))?;
                     }
                 }
                 Role::Plain => {}
@@ -2109,8 +2192,11 @@ impl<'a> A16Engine<'a> {
             // same history the compiled engine hands the kernels — as a slice of the storage.
             let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
             let kv = layer.as_ref().map(|(li, cache)| (cache.keys(*li), cache.values(*li)));
-            let out =
+            let mut out =
                 self.eval_node(node, &|k| resolve(&node.inputs[k], &rows), kv, token_id, sink, cos_row, sin_row, li, attn_history)?;
+            if layer.is_some() && matches!(node.op, PlanOp::AttnFused) {
+                self.drill_attn_at(li, self.walk_position.load(std::sync::atomic::Ordering::Relaxed), &mut out);
+            }
 
             // The declared cache write, honored where declared — the ROTATED key and the raw V
             // are conventions of the DECLARATION (the IR carries the role on those nodes), so a
@@ -2118,12 +2204,14 @@ impl<'a> A16Engine<'a> {
             // read the same declaration.
             match node.role {
                 kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite => {
+                    let position = self.walk_position.load(std::sync::atomic::Ordering::Relaxed);
                     let (li, cache) = layer.as_mut().ok_or(A16EngineError::MalformedParams("a cache write outside a layer"))?;
-                    cache.push_key(*li, &out)?;
+                    cache.push_key(*li, &self.drill_cache_row(*li, position, 0, &out))?;
                 }
                 kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::VCacheWrite => {
+                    let position = self.walk_position.load(std::sync::atomic::Ordering::Relaxed);
                     let (li, cache) = layer.as_mut().ok_or(A16EngineError::MalformedParams("a cache write outside a layer"))?;
-                    cache.push_value(*li, &out)?;
+                    cache.push_value(*li, &self.drill_cache_row(*li, position, 1, &out))?;
                 }
                 kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::Plain => {}
             }

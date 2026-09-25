@@ -295,9 +295,27 @@ preflight_common() { # $1 = MiB this host keeps for everything that is not a t12
 # ---------------------------------------------------------------------------------------------
 # stage: binaries + artifact + launch scripts + unit files, all under $REL_ROOT. No service touched.
 # ---------------------------------------------------------------------------------------------
+# The build's own probe ($INCOMING/$REV/IDENTITY, written by build-release-local.sh / build-release-5104.sh
+# and shipped by distribute-from-mac.sh) against fleet.env's pins: a stale EXPECT_FP / EXPECT_GENESIS /
+# PREMINE_TXID is refused at stage, not found at switch after the public unit has stopped.
+identity_check() { # <IDENTITY file>
+    local f=$1 v got bad=""
+    for v in EXPECT_FP EXPECT_GENESIS PREMINE_TXID; do
+        got=$(sed -n "s/^$v=//p" "$f" | head -1)
+        [ "$got" = "${!v}" ] || bad+=" $v: build ${got:0:16}…, fleet.env ${!v:0:16}…;"
+    done
+    [ -z "$bad" ] || die "$f (the build's own probe) and fleet.env disagree:$bad fleet.env is not this build's"
+}
+
 stage_binaries() { # list of binaries this host needs
     local b exp src
     mkdir -p "$REL/bin"
+    if [ -f "$INCOMING/$REV/IDENTITY" ]; then
+        identity_check "$INCOMING/$REV/IDENTITY"
+        say "  IDENTITY of $REV = fleet.env's EXPECT_FP / EXPECT_GENESIS / PREMINE_TXID"
+    else
+        warn "no $INCOMING/$REV/IDENTITY — fleet.env's EXPECT_FP / EXPECT_GENESIS / PREMINE_TXID are first checked at switch"
+    fi
     for b in "$@"; do
         case $b in
             kaspad) exp=$KASPAD_SHA256 ;; misaka) exp=$MISAKA_SHA256 ;;

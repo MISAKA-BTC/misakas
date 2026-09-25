@@ -48,6 +48,9 @@ pub(crate) struct ModelAddArgs {
     pub(crate) seat_ms_per_position: Option<u64>,
     pub(crate) yes: bool,
     pub(crate) no_wait: bool,
+    /// The sompi to sponsor into the class's Activation Pool once its registration folds
+    /// (`--sponsor` / `--no-sponsor`; 500 MSK by default — the pool's P4). `None`: no sponsor.
+    pub(crate) sponsor: Option<u64>,
 }
 
 /// A certified family as the chain holds it.
@@ -684,6 +687,20 @@ async fn register(
     } else {
         "share     0 ‰ — weightless until its block lane is certified (the next step)".to_string()
     });
+    // The pool's P4 (user decision 2026-09-25): the registration sponsors its own listing, where
+    // the chain arms a pool — one follow-up carrier once the registration folds.
+    let pool_terms = walk.params.palw_activation_pool_at(walk.node.daa());
+    let sponsor = walk.args.sponsor.filter(|_| pool_terms.is_some());
+    if let (Some(terms), Some(amount)) = (pool_terms, sponsor) {
+        let recommended =
+            kaspa_consensus_core::palw_activation_pool_v1::palw_activation_recommended_pool_sompi_v1(&terms);
+        flow.ui.sub(&format!(
+            "sponsor   {} into its Activation Pool once registered — a donation to its preparers, never refunded once \
+             folded (recommended pool {}, non-binding; --sponsor <MSK> changes it, --no-sponsor skips it)",
+            crate::palw_model::msk(amount),
+            crate::palw_model::msk(recommended)
+        ));
+    }
     flow.ask("Register it?", false, "the class was not registered").await?;
     let object_bytes = borsh::to_vec(&object).unwrap_or_default();
     let object_id = kaspa_consensus_core::palw_model_registration_v1::palw_registration_object_id_v1(&object_bytes).to_string();
@@ -733,6 +750,24 @@ async fn register(
             Finding::error("E-OBJECT-REFUSED", exit::NOT_READY, "The registration was not included")
                 .current(kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded.code().to_string()),
         ));
+    }
+    if let Some(amount) = sponsor {
+        let class_id = entry.class_id();
+        flow.ui.mark(Severity::Info, "sponsor", &format!("filing {} into its Activation Pool…", crate::palw_model::msk(amount)));
+        match crate::palw_activation_pool::sponsor_listing(&walk.submit_ctx(), &ks, class_id, amount, Duration::from_secs(20 * 60)).await
+        {
+            Ok(txid) => flow.row(
+                Severity::Ok,
+                "sponsored",
+                format!("{} into its Activation Pool · tx {}", crate::palw_model::msk(amount), if txid.len() > 16 { &txid[..16] } else { &txid }),
+            ),
+            // The registration stands: a sponsor not filed is a warning and a command, never a halt.
+            Err(why) => flow.row(
+                Severity::Warning,
+                "sponsor",
+                format!("not filed: {why} — {}", crate::palw_activation_pool::sponsor_retry_hint(&class_id, amount)),
+            ),
+        }
     }
     Ok(())
 }

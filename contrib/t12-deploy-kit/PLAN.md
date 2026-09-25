@@ -204,9 +204,24 @@ gRPC は .113 以外 `--nogrpc`（同一 host 2 node で既定ポートが衝突
 2. **Mac で先に identity を読む**: `./probe-identity-local.sh --build`（または `--kaspad <path>`）。隔離した node（127.0.0.1 のみ、
    peer 無し、DNS 無し、使い捨て appdir と HOME、`env -i`、PALW flag 無し）を起動して `EXPECT_FP`・`EXPECT_GENESIS`・
    `PREMINE_TXID` を読み、止める。値は profile や CPU に依らない（params と genesis の関数）。
-3. 5.104 で `build-release-5104.sh <commit>` — `/root/t12-rel/src`（blobless clone）→ `/root/t12-rel/incoming/<rev12>/`。最後に同じ
-   隔離 probe（`env -i`・使い捨て HOME: root の `~/.misaka/testnet-12/endpoints.json` は live node のものなので書き換えない）で
-   `IDENTITY` を出す。**Mac の probe と 3 値が一致しなければ止める**。**（ユーザー確認: 5.104 でのビルド開始）**
+3. **release build は Mac で（推奨、§13）**: `colima start` の後、出荷 commit の checkout で
+   `PROBE_IMAGE=rust:latest NATIVE_PROBE=1 ./build-release-local.sh <commit>`。出荷 commit の clean な
+   worktree（`git worktree add --detach`）から `cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.39` で
+   5.104 版と同じ 4 本（kaspad（既定 feature = `evm` 込み）・misaka・palw-class・misaka-dnsseeder、1 回の呼び出し）を作り、
+   `.cache/<rev12>/` に SHA256SUMS・REV・BUILD-INFO・ELF-CHECK（x86-64 ELF、interpreter `/lib64/ld-linux-x86-64.so.2`、NEEDED が glibc
+   だけ、GLIBC_ の最大が 2.39 以下）を置く。source path は remap するので、同じ commit はどの directory で build しても同じ sha になる。続けて **release の kaspad そのもの** を、この Mac に既にある linux/amd64 の image
+   （`PROBE_IMAGE`: glibc ≥ 2.39・bash・python3。`--pull never`・`--network none`）の中で colima の qemu で動かして隔離 probe し、
+   `IDENTITY` を書く。`NATIVE_PROBE=1` で同じ commit の Mac 用 dev build も probe し、header（時刻・binary の path・sha256・source・log）
+   以外の**全行**（3 値・schedule id・rule manifest digest・起動時の `court_e2e_root`・genesis の CLASS 行と BOND 行）の一致を確かめる
+   （step 2 を兼ねる）。最後に貼る `fleet.env` の行を出す。リモートには触れない。**5.104 の MemAvailable にも公開 node にも触れない**。
+   cargo は `env -i`（PATH・HOME・TMPDIR・CARGO_HOME/RUSTUP_HOME・target dir・remap・`CARGO_INCREMENTAL=0` だけ）で走り、commit の外の
+   cargo config（`$CARGO_HOME/config.toml`、checkout より上の `.cargo/config.toml`）があれば止まる（`ALLOW_CARGO_CONFIG=1` なら build して
+   BUILD-INFO に記録）。ELF の glibc 検査は script の定数 `FLEET_GLIBC=2.39` に対して行い、`GLIBC_FLOOR` がそれより上なら始めない。
+   同じ WORK・target dir・`<rev12>` を使う run は同時に 1 本だけ（lock。生きている run が持っていれば 2 本目は何も触らずに止まる）。
+   **フォールバック**（Mac が使えないとき）: 5.104 で `build-release-5104.sh <commit>` — `/root/t12-rel/src`（blobless clone）→
+   `/root/t12-rel/incoming/<rev12>/`。最後に同じ隔離 probe（`env -i`・使い捨て HOME: root の `~/.misaka/testnet-12/endpoints.json` は
+   live node のものなので書き換えない）で `IDENTITY` を出す。**Mac の probe と 3 値が一致しなければ止める**。
+   **（ユーザー確認: 5.104 でのビルド開始）**
 4. Mac の `fleet.env` に `REV`・`KASPAD_SHA256`・`MISAKA_SHA256`・`PALW_CLASS_SHA256`・`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID` を
    貼る。`SEEDER_SHA256` は既定 `KEEP`（§10 Q9）。genesis が a27f8f44 から動いた場合は a27f8f44 を `FORBIDDEN_GENESIS` に足す（c8652a97 の
    build はそれを走らせる）。公開後の drill は salt ごとに genesis が変わるので、drill を始める前に
@@ -216,10 +231,10 @@ gRPC は .113 以外 `--nogrpc`（同一 host 2 node で既定ポートが衝突
    108 回 loop した事故の再発防止）。switch は node ごとに journal の `Consensus params fingerprint:` を `EXPECT_FP` と照合し、
    "PALW DRILL" を名乗れば止め、RPC で `EXPECT_GENESIS` を確かめ、違えばその node を止めて後続を起動しない。
 
-**a0af3c92 での暫定値**（2026-09-25 に Mac の dev build で probe。出荷値ではない — 上の R1 の merge で動く）:
-`EXPECT_FP=8a4810231e4f54e7d62b57ef0c4bc7973b23ebb87b1943b6541c05190b2d5ee6`、
+**8270cf03 での暫定値（出荷値ではない）**（`scripts/t12-repin.sh` が build から計算した値。`--apply` が値とこの表示の commit を、出荷 commit での `--apply --shipping` が表示を出荷値に書き換える。経緯は checklist §3）:
+`EXPECT_FP=99eae89db05887c0ee21e451d5a78bd296533db59eb818edb3a4a320565c0ba3`、
 `EXPECT_GENESIS=a27f8f44fe4d91a5…a8ca1f23`（全桁は checklist §3）、`PREMINE_TXID=5e0d5f1b37a71288…e55e2669`、
-schedule id `8b0ee13c…`、rule manifest digest `9def81a1…`。
+schedule id `5f53b691…`、rule manifest digest `9def81a1…`。
 
 ## 5. 手順（誰が・どの順で）
 
@@ -233,8 +248,8 @@ release build → fleet.env → 確認 → 配備 → explorer → seeder → �
 | A0 | 実装・監査 → **ユーザー** | 出荷 commit を決める（checklist §4 step 1〜8: 未 merge の 4 本、再 pin、battery 2 回）。push は **【確認】** |
 | A1 | ユーザー（Mac） | `./probe-identity-local.sh --build --layout` で出荷 commit の identity を読み、kit の写し（CLASS_8K・ART_8K_BYTES（sidecar と）・CLASS_2M_PREFIX・FEE_FLOAT_BASE・explorer の表）が binary と一致することを確かめる（exit 4 なら §5 の再 pin。リモートに触れない） |
 | A2 | ユーザー（Mac） | `cp fleet.env.example fleet.env`（初回のみ）、`HB_ADDR`（card 0 の payout address が入っている）を確認 → `./distribute-from-mac.sh kit`（3 host の `/root/t12-rel/kit` に kit を置く）**【確認】** |
-| A3 | ユーザー（5.104） | `cd /root/t12-rel/kit && ./build-release-5104.sh <commit>`（~21 分。MemAvailable ≥ 10 GiB が条件）**【確認】**。`IDENTITY` が A1 の 3 値と一致すること |
-| A4 | ユーザー（Mac） | `fleet.env` を埋める → もう一度 `kit` → `binaries` → `artifact`（8k は 09-24 に配置済みなら skip）**【確認】** |
+| A3 | ユーザー（Mac） | `PROBE_IMAGE=rust:latest ./build-release-local.sh <commit>`（§13: 空の target dir から 22〜32 分・-j4、container probe 12〜22 分。リモートに触れない）。`IDENTITY` が A1 の 3 値と一致すること。**フォールバック**: 5.104 で `cd /root/t12-rel/kit && ./build-release-5104.sh <commit>`（~21 分。MemAvailable ≥ 10 GiB が条件）**【確認】** |
+| A4 | ユーザー（Mac） | `fleet.env` を埋める（A3 が最後に出す行）→ もう一度 `kit` → `binaries`（`.cache/<REV>` に Mac の build があれば 5.104・.113・ibm の 3 台へ、無ければ 5.104 の build を Mac 経由で .113・ibm へ。`BIN_SOURCE=local\|5104` で固定。**送る前に build の `IDENTITY` と `fleet.env` の `EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID` を照合し、違えば何も送らない**。`IDENTITY` の無い build（`PROBE=skip`）は `IDENTITY_UNCHECKED=1` が要る。`IDENTITY` は binary と一緒に送られ、A5 の stage も同じ照合をする）→ `artifact`（8k は 09-24 に配置済みなら skip）**【確認】** |
 | A5 | ユーザー（各 host） | `./install-<host>.sh preflight` → `./install-<host>.sh stage`（binary・artifact を sha 検証して `/root/t12-rel/<REV>/` に置き、launch script と unit を**その下に**書き、各 launch script の `--check` を通すだけ。/etc も稼働中 service も触らない）。preflight は drill node がホストで動いていれば NOT OK。stage は MemoryMax < share ＋ artifact ＋ 1 GiB の行を拒否 |
 
 ### Phase B — 切替（公開 chain の停止は ~10 分）— **B1〜B4 は公開 node を止めて置き換える: それぞれ【確認】**
@@ -325,8 +340,9 @@ host ごとに逆順（5.104 → .113 → ibm）: `./install-<host>.sh rollback`
 | `probe-identity-local.sh` | Mac | 出荷 commit の kaspad を隔離して起動し、`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID`（＋schedule id・rule manifest digest）を読み、genesis の class（id・artifact bytes・root）と bond outpoint を kit の写しと比べる（不一致は exit 4）。`--layout` で `t12_deploy_kit_constants`（premine の index 配置・class id・explorer の表）と 8k sidecar の sha も。`--drill-salt` で drill genesis も出す。リモートに触れない |
 | `SEEDERS.md`・`seeders/` | Mac | seeder 専用の手順と script（変更なし）。`fleet.env` の `SEEDER_SHA256`・`EXPECT_FP` を読む |
 | `t12check.py` | host / Mac | stdlib だけの JSON wRPC checker（fp・genesis・peer・lane mix・producer・memory・registry）。`--expect-premine`・`--expect-class`・`--expect-class-prefix` で kit の写しを確かめ（switch の gate と check が使う）、live が share を下回れば警告。`--probe` は隔離 node の fp/genesis、`--premine` は genesis bond の txid、`--layout` は genesis の class と bond |
-| `build-release-5104.sh` | 5.104 | 独自 clone で release build → `incoming/<rev12>` + SHA256SUMS + 隔離 probe（`env -i`・使い捨て HOME）で IDENTITY |
-| `distribute-from-mac.sh` | Mac | kit / binary / 8k artifact を Mac 経由で配布（host 間に鍵を足さない）、各段で sha 検証 |
+| `build-release-local.sh` | Mac | **推奨の release build**（§13）: clean worktree → `cargo zigbuild`（x86_64 Linux、glibc 2.39 floor、`env -i`）→ `.cache/<rev12>/` に 4 本 + SHA256SUMS・REV・BUILD-INFO・ELF-CHECK → release の kaspad を linux/amd64 container で隔離 probe（`PROBE_IMAGE`、pull しない・network none）して IDENTITY → `fleet.env` の行。WORK・target dir・`<rev12>` ごとに lock。リモートに触れない |
+| `build-release-5104.sh` | 5.104 | **フォールバック**: 独自 clone で release build → `incoming/<rev12>` + SHA256SUMS + 隔離 probe（`env -i`・使い捨て HOME）で IDENTITY |
+| `distribute-from-mac.sh` | Mac | kit / binary / 8k artifact を Mac 経由で配布（host 間に鍵を足さない）、各段で sha 検証。`binaries` は Mac の build（`.cache/<REV>/BUILD-INFO`）があれば 3 host へ、無ければ 5.104 の build を .113・ibm へ |
 | `check-fleet.sh` | Mac | 読み取りのみ: 全 host の check、`seeders/40-verify.sh`、公開 DNS、外からの P2P 疎通 |
 | （tree の test）`consensus/core/tests/t12_deploy_kit_constants.rs` | Mac / CI | kit と explorer の写し（`FEE_FLOAT_BASE`・`CLASS_8K`・`ART_8K_BYTES`・`CLASS_2M_PREFIX`・`LLM_CLASSES`・`PANEL_BOND_TX`・`FORBIDDEN_GENESIS`）がこの build の genesis と一致することの pin |
 | （tree の test）`kaspad/tests/t12_role_memory_figures.rs` | Mac | `#[ignore]` の worksheet: 仕事ごとの予約額と、install-*.sh の各行の share・MemoryMax の下限（§2） |
@@ -414,3 +430,71 @@ drill marker・未知 flag（接頭辞 `--palw-produc`）・sha 不一致がそ�
 - **.113 の validator**: `install-113.sh switch` は `misaka-validator` / `misaka-validator-2` が動いていれば拒否する。
 - **60-join-check**: `env -i`・使い捨て HOME・`--ram-scale=0.1`・MemAvailable ≥ 2 GiB。コメントを switch 後の実態に直した。
 - **HB_ADDR**: 旧 kit の `qf6hf5v0…` は card 0 の payout address だった。全桁を `fleet.env.example` に入れた（運用者が確認）。
+
+## 13. release build は Mac で（2026-09-25、`rcore/release-build`）
+
+**経路**: `build-release-local.sh <commit>`（Mac）→ `.cache/<rev12>/`（4 本 + SHA256SUMS・REV・BUILD-INFO・ELF-CHECK・IDENTITY）→
+`distribute-from-mac.sh binaries`（BUILD-INFO があれば 5.104・.113・ibm の 3 台へ）。5.104 の `build-release-5104.sh` はフォールバック
+（5.104 は公開 node を載せ OOM の履歴がある。Mac の build なら 5.104 の MemAvailable に依らない）。2 つの build を混ぜない:
+`binaries` は `.cache/<REV>` に Mac の build があるのに 5.104 から取ろうとすると拒否する。fleet の sha256 は **出荷する方の build** の値。
+
+**前提（この Mac に既にあるもの。この作業では何も入れていない・何も pull していない）**: rustup の `1.93.0`（rust-toolchain.toml の pin）に
+`x86_64-unknown-linux-gnu` の std、zig 0.16.0（Homebrew。clang/lld 21.1.8）、cargo-zigbuild 0.23.4、brew の llvm（`llvm-readelf`）。
+container probe には colima（vz・aarch64・`binfmt: true` = qemu-x86_64。既存 VM の起動に download は無かった）と、既に取ってある
+`rust:latest` の linux/amd64（Debian 13、glibc 2.41、bash・python3）。無ければ `PROBE=skip` と `NATIVE_PROBE=1`（IDENTITY は同じ commit の
+Mac 用 dev build の probe から。release の binary そのものは走らない — switch が node ごとに fp・genesis を再確認する）。
+
+**同時実行・環境・glibc の固定（2026-09-25 のレビュー後）**: run は `$WORK.lock`・`<target dir>/.build-release-local.lock`・
+`$CACHE/.<rev12>.lock` を最後まで持ち、生きている run が持っていれば 2 本目は何も触らずに止まる（checkout `$WORK/src` を共有した 2 本は
+片方の build 中に source を別 commit に差し替え、2 つの commit が混ざった binary を片方の rev の名前で出しうる。target dir を共有すれば
+互いの binary を拾い、`<rev12>` を共有すれば互いの staging を消す）。kill -9 等で残った死んだ run の lock は引き継ぐ。checkout は固定の
+`$WORK/src`（remap がこの path を含むので、固定しておけば依存の build を再利用できる）で、この run が作ったときだけ終了時に消す。
+cargo は `env -i` で走る: 呼び出し側の `CARGO_PROFILE_RELEASE_*`・`CC`/`CXX`/`CFLAGS`/`CXXFLAGS`（cc crate が rocksdb・secp256k1・blst・
+c-kzg・ring・zstd の compile に読む）・`*_SYS`・`ROCKSDB_*`・`RUSTUP_TOOLCHAIN` は届かない。commit の外の cargo config
+（`[build]`・`[profile]`・`[env]`・`[target]`）は止める（`ALLOW_CARGO_CONFIG=1` なら path と sha256 を BUILD-INFO に）。ELF の glibc
+検査の基準は script の定数 `FLEET_GLIBC=2.39`（fleet の Ubuntu 24.04）で、zig の link 先を選ぶ `GLIBC_FLOOR` とは独立（2.41 などを
+渡すと始まる前に止まる）。`NATIVE_PROBE=1` の照合は header 以外の全行（schedule id・rule manifest・`court_e2e_root`・CLASS・BOND を含む）で、
+不一致は `probe-diff.txt` に出して止まる。native の dev build も `env -i`、`OFFLINE=1` なら `--offline`。
+
+**再現性（path の remap）**: rustc は compile した source file の絶対 path を binary に埋める（panic の位置、`include!` した OUT_DIR の
+生成物）。remap 無しでは同じ 8270cf03 を別の directory で build すると sha256 が変わり（`2543bd94…` と `ed45bbcd…`。違いは埋め込まれた
+path だけ）、binary に build した人の home directory（`/Users/…`）が入る。script は `--remap-path-prefix` で checkout → `/misaka`、
+target dir → `/target`、`~/.cargo` → `/cargo` に写す（`CARGO_ENCODED_RUSTFLAGS`。呼び出し側の RUSTFLAGS は捨てる）。**別の checkout・別の
+target dir・空の cache からの 2 回の build で 4 本とも byte 一致した**（下の表）。同じ toolchain（rustc 1.93.0・zig 0.16.0・cargo-zigbuild
+0.23.4）なら誰の Mac でも同じ sha になるはずで、監査が出荷 binary を作り直して照合できる。
+
+**8270cf03 での実測**（**暫定**: 出荷 commit ではない。R1 の merge と再 pin で sha も identity も変わる）:
+
+| | |
+|---|---|
+| build | `cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.39 --bin kaspad --bin misaka --bin palw-class --bin misaka-dnsseeder`、-j4。空の target dir から 31 分 53 秒（1 回目、他の lane が cargo を回していた）/ 22 分 30 秒（remap 付き、別の空の target dir）。依存 crate を再利用できる 2 回目以降は workspace と LTO だけで ~7〜20 分（4edf02ef の run は 8 分 12 秒、7d95a7e9 の run は 6 分 57 秒）。**build 設定の変更は不要**だった: librocksdb-sys（bindgen・C++）、ring、blst・c-kzg、secp256k1-sys、zstd/lz4/bzip2/libz、mimalloc（Linux では `override`）、kaspa-hashes の keccak asm、protoc（vendored）がそのまま通る。openssl は依存に無い |
+| ELF | 4 本とも `ELF 64-bit LSB pie executable, x86-64`、stripped、interpreter `/lib64/ld-linux-x86-64.so.2`、NEEDED は `libc.so.6`・`libm.so.6`・`ld-linux-x86-64.so.2` だけ（C++ runtime は zig の libc++ を静的に。libstdc++・libgcc_s は要らない）。`/Users/` を含む文字列は 0 |
+| glibc | 必要な最大 version: kaspad・misaka **GLIBC_2.39**（Rust std の `pidfd_spawnp`・`pidfd_getpid`。WEAK 参照だが version need は 2.39）、palw-class・misaka-dnsseeder 2.34。fleet は 2.39 なので可。floor を 2.39 より上げない |
+| size | kaspad 65,688,280 B・misaka 26,691,264 B・palw-class 8,339,624 B・misaka-dnsseeder 8,038,672 B（remap 付き。path が短くなった分だけ remap 無しより小さい） |
+| sha256（remap 付き、2 回一致） | kaspad `37dfea9d02e92d51ecb3de63c67bc1b64985ca6121bdfb00d983d974b838a823`、misaka `988c3aeb211fb0c4ca3163cba3910994c2a5c8a129a7aa94f3d5664ec81d99fc`、palw-class `7f76c0ab8d315881b3f11039c8a56db6cebdf19dd5da1621349d3f071460c9a5`、misaka-dnsseeder `666dcb31ba1297241f6ac225cb531936d4a48784759607fda11d9e6ff61943ab`（**暫定・配らない**） |
+| identity | **release の kaspad そのもの** を `rust:latest` linux/amd64（qemu、`--network none`）で隔離 probe: `EXPECT_FP=99eae89db05887c0ee21e451d5a78bd296533db59eb818edb3a4a320565c0ba3`、`EXPECT_GENESIS=a27f8f44…a8ca1f23`（a0af3c92 から不変）、`PREMINE_TXID=5e0d5f1b…e55e2669`、schedule id `5f53b691…`、rule manifest `9def81a1…`、genesis class 3 本と bond 8 本。**Mac の dev build（arm64）の probe と全行一致**、起動時の court 自己検査の `court_e2e_root 9afbd2da…` も一致（x86_64 の zig build と arm64 の build が PALW の実行経路で同じ根を出す）。kit の写しの比較も exit 0 |
+| 推奨の 1 コマンド | `PROBE_IMAGE=rust:latest NATIVE_PROBE=1 OFFLINE=1 ./build-release-local.sh 7d95a7e9`（kit だけ変えた commit。env -i・lock 入り）を通しで実行: build 417 s（依存を再利用）、container probe 6 分、native dev build 2 分 + probe 1 分。**4 本の sha256 は 8270cf03 の 2 回と byte 一致**（env -i にしても bytes は変わらない）。header 以外の 20 行（`COURT_E2E_ROOT=9afbd2da…` を含む）が native と一致し、`probe-diff.txt` は空。死んだ run の lock（pid 999999）は引き継ぎ、実行中に同じ WORK・同じ target dir・同じ `<rev12>` で始めた 3 本はどれも何も触らずに止まった。終了後に lock と `$WORK/src` は残っていない |
+| probe 時間 | qemu の下で 6〜22 分（起動時の court 自己検査が native の ~20 倍。native dev build は ~1 分）。`PROBE_WAIT_S` の既定は container で 3600 s。起動直後の数秒は seat / registry の RPC が空を返すことがあり（qemu の下で 1 度、kit の写しの不一致として出た）、probe は `--premine`・`--layout` を 60 s まで取り直す |
+
+**5.104 の build との違い**（どちらを出荷しても identity は同じ。sha は違う）:
+- C/C++ 部分（rocksdb・secp256k1・blst/c-kzg・ring・mimalloc・keccak asm）の compiler が 5.104 の gcc/libstdc++ ではなく clang 21 と
+  静的 libc++（zig）。Rust の部分（consensus・PALW の整数演算）は同じ rustc 1.93.0・同じ target・同じ baseline CPU（target-cpu 指定なし）で、
+  codegen は build host に依らない。上の probe が fp・genesis・court_e2e_root の一致でそれを確かめた。
+- glibc は zig が持つ 2.39 の stub に対して link する（5.104 は実 glibc 2.39 に link）。どちらも要求する version の上限は 2.39 で、
+  ELF-CHECK が build ごとに確かめる。
+- 5.104 の build は path を remap しない（`/root/t12-rel/src/…` が入る）。
+
+**Mac でできなかったこと**: fleet と同じ OS（Ubuntu 24.04・glibc 2.39・EPYC）の上での実行。container は Debian 13（glibc 2.41）の qemu
+（CPU model は qemu のもの）。fleet の上では `install-*.sh stage` が各 launch script の `--check`（binary の sha・flag 自己検査）を、
+`switch` が node ごとの fp・genesis を確かめる。これが最初の実機実行になる。
+
+**最終 build でやり直すこと**（出荷 commit が決まったら。checklist §4 step 10）: 出荷 commit の checkout（この kit を含む = `rcore/release-build`
+が merge 済み）で `PROBE_IMAGE=rust:latest NATIVE_PROBE=1 ./build-release-local.sh <出荷 commit>`（`colima start` が要る。空の target dir
+から ~30 分 + container probe 12〜22 分 + native dev build と probe ~15 分）→ IDENTITY が step 6 の再 pin の値と一致 → 出た `fleet.env` の
+行を貼る → `distribute-from-mac.sh kit`・`binaries`。上の表の sha・fp は 8270cf03 のもので、**貼らない**。
+
+**colima の副作用**: `colima start` は restart 方針が `unless-stopped` の container（この Mac では `misaka-searxng-core`）も起動する。
+probe が終わったら `colima stop` で元の Stopped に戻す。
+
+**運用者の判断（任意）**: container probe を速くするなら colima を Rosetta で動かす（`colima stop && colima start --vz-rosetta`。
+colima.yaml の `rosetta` が true になる = 設定の変更。Rosetta はこの Mac に入っている）。変えなくても probe は通る（遅いだけ）。

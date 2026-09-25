@@ -649,9 +649,8 @@ impl PalwReporterFilerV1 {
     /// this filer into: `(key, round, responder)` is the queue entry's own key. A filing with no
     /// `file_by_daa` (P2-8c's kind 3, a kind 4 made past its receipt deadline) is dated by its court
     /// window's end, which past the claim's Final can be later than its target's own expiry — the
-    /// approximation [`palw_filer_step_due_v1`] states. (Not called on this line yet: the court queue
-    /// is carried in its own order here; the A-held node line's earliest-deadline-first lane is where
-    /// it is read.)
+    /// approximation [`palw_filer_step_due_v1`] states. The panel's earliest-deadline-first lane reads
+    /// the dates in bulk ([`Self::queued_dues_v1`]) after each of the filer's passes.
     #[allow(dead_code)]
     pub(crate) fn queued_due_v1(&self, queue_key: &(Hash64, u32, bool)) -> Option<u64> {
         self.queued_due.get(queue_key).copied()
@@ -659,7 +658,6 @@ impl PalwReporterFilerV1 {
 
     /// Every dated item this book has queued, `(queue key, due DAA)` — [`Self::queued_due_v1`] in
     /// bulk, for a lane that keeps its due dates in one map (`court_due.extend(..)`).
-    #[allow(dead_code)]
     pub(crate) fn queued_dues_v1(&self) -> impl Iterator<Item = ((Hash64, u32, bool), u64)> + '_ {
         self.queued_due.iter().map(|(key, due)| (*key, *due))
     }

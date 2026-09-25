@@ -582,9 +582,12 @@ pub fn palw_vesting_market_rows_waiting_after_drain_v1(state: &PalwChainStateV2)
 
 /// Non-market rows waiting in the queue — every key below the market's `0xFF`. **Zero at every
 /// step 3d on testnet-12** (the queue lemma: the parent's non-market part is ≤ 8 and the 1b drain
-/// takes the first eight keys; past `palw_rcore_plus` nothing but 3d writes a non-market key), so
-/// the fold's belt that subtracts it from the budget it passes never binds while the lemma holds.
-/// On a committed state it is the keys the last step 3d wrote (≤ 8), which the next drain takes.
+/// takes the first eight keys; past `palw_rcore_plus` nothing but 3d and, right after it, the
+/// Activation Pool's 3d′ flush writes a non-market key — and 3d′ adds only
+/// `8 − non-market − min(2, market)` new keys, the width 3d and the market left), so the fold's belt
+/// that subtracts it from the budget it passes never binds while the lemma holds. On a committed
+/// state it is the keys the last step 3d and 3d′ wrote (≤ 8 − the market's reserve), which the next
+/// drain takes whole.
 pub fn palw_vesting_non_market_rows_waiting_v1(state: &PalwChainStateV2) -> usize {
     state.pending_payouts_iter().take_while(|(key, _)| key.as_byte_slice()[0] != PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX).count()
 }
@@ -700,6 +703,9 @@ pub fn palw_vesting_next_block_plan_v1(
     if !params.rcore_plus_active_at(next_daa) {
         return PalwVestingMintPlanV1 { moves: Vec::new(), legs: 0, new_keys: 0, stopped: PalwVestingStopV1::Empty, stopped_at: None };
     }
+    // The parent's non-market part — 3d's keys and the Activation Pool's 3d′ flush, together at most
+    // the width the market's reserve leaves — is drained whole by the next block's 1b, so this is 0
+    // on testnet-12; the pool's flush runs after 3d and never takes vesting's width.
     let non_market_after_drain = palw_vesting_non_market_rows_waiting_v1(state).saturating_sub(PALW_V2_MAX_PAYOUTS_PER_BLOCK);
     palw_vesting_plan_while_v1(
         state,

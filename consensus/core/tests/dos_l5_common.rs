@@ -144,6 +144,9 @@ pub fn extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
         // is refused by name. F2's own suites arm it explicitly
         // (`p.palw_offence_attribution_active_at(daa)`), which is what the processor resolves.
         offence_attribution_active: false,
+        // ADR-0152-adjacent (Activation Pool): resolved as the processor resolves it — R1, R2 and the
+        // pool are in force from genesis on testnet-12.
+        activation_pool: p.palw_activation_pool_at(daa),
         // ADR-0152 X7 / N9: the processor passes P2-7's constant and nothing else, so the fixture
         // folds with it too (signer liability armed past `palw_rcore_plus` since P2-7).
         seat_da_answer_landed: kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
@@ -165,8 +168,9 @@ pub fn registry_fold(p: &Params, daa: u64) -> Option<kaspa_consensus_core::palw_
     }
     let lane = p.palw_execution_lane_at(daa)?;
     let b = bundle(p);
-    let mut globals = PALW_REGISTRY_GLOBALS_V1;
-    globals.seat_count = b.panel.seat_count();
+    // The processor's one builder: the bundle's seat count and the readiness-V2 horizon (24 spans on
+    // testnet-12 — user decision 2026-09-25, readiness capacity option (a)).
+    let globals = palw_registry_globals_of_bundle_v1(&b);
     let mut works = palw_genesis_model_works_v1(&b.genesis_objects);
     for (id, w) in palw_rc_typed_class_works_v1() {
         works.entry(id).or_insert(w);

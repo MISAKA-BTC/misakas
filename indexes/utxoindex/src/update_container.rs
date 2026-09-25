@@ -40,6 +40,10 @@ impl UtxoIndexChanges {
     /// shipped preset), so this is a no-op until one does.
     fn is_dead_by_script(entry: &UtxoEntry) -> bool {
         kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&entry.script_public_key).is_some()
+            // ADR-0152-adjacent (Activation Pool): an activation sink is dead by script the same way,
+            // and its value is the pool's (credited by the fold, paid back out through the coinbase),
+            // so counting it as circulating supply as well would double-count every top-up.
+            || kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_class_v1(&entry.script_public_key).is_some()
     }
 
     /// Add a [`UtxoDiff`] the [`UtxoIndexChanges`] struct.

@@ -632,6 +632,21 @@ mod tests {
             // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
             // hashers and the schedule.
             "palw_class_verify_deadline" => params.palw_class_verify_deadline = Some(at),
+            // ADR-0152-adjacent (Activation Pool): the height with the user's terms beside it.
+            "palw_activation_pool" => {
+                params.palw_activation_pool = Some(crate::config::params::PalwActivationPoolParamsV1 {
+                    activation: at,
+                    terms: crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1,
+                })
+            }
+            // The readiness-V2 horizon (user decision 2026-09-25): the height with testnet-12's spans
+            // beside it; genesis-only by `validate_palw_v2`, which the probe does not run.
+            "palw_readiness_v2_max_age_spans" => {
+                params.palw_readiness_v2_max_age_spans = Some(crate::config::params::PalwReadinessV2MaxAgeParamsV1 {
+                    activation: at,
+                    max_age_spans: crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1,
+                })
+            }
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),

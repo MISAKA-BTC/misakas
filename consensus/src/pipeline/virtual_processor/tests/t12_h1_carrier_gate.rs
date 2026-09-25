@@ -209,7 +209,9 @@ async fn m1_every_possession_proof_is_put_to_the_fold_and_the_tip_read_says_how_
     assert!(g.ctx.consensus.palw_readiness_urgency_v1(&[]).is_empty());
 
     // A row proved at DAA 100 for one of testnet-12's genesis classes, on the tip's own registry
-    // clock (one-DAA spans, eight-DAA rows).
+    // clock (one-DAA spans, 24-DAA rows — `Params::palw_readiness_v2_max_age_spans`, user decision
+    // 2026-09-25, readiness capacity option (a)): the escalation's threshold is the configured
+    // `max − 2`, read through the same function.
     let class_id = *g.state.classes_iter().map(|(id, _)| id).last().expect("testnet-12 registers classes at genesis");
     let carrier = PalwReadinessCarrierV1 { class_id, ..carrier };
     let mut carriage = PalwStateCarriageV2::from_state(&g.state);
@@ -223,10 +225,10 @@ async fn m1_every_possession_proof_is_put_to_the_fold_and_the_tip_read_says_how_
         let v1 = PalwReadinessCarrierV1 { proof_version: 1, ..proof };
         g.ctx.consensus.virtual_processor().palw_readiness_urgency_on(&state, &[proof, v1], now)
     };
-    assert_eq!(at(105), vec![None, None], "age 5: the ordinary lane");
-    assert_eq!(at(106), vec![Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 108 }), None], "age 6: lapsing");
-    assert_eq!(at(108), vec![Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 108 }), None], "the last DAA it counts");
-    assert_eq!(at(109), vec![Some(PalwReadinessUrgencyV1::Lapsed), None], "past it: lapsed; a V1 proof renews nothing");
+    assert_eq!(at(121), vec![None, None], "age 21: the ordinary lane");
+    assert_eq!(at(122), vec![Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 124 }), None], "age 22 (24 − 2): lapsing");
+    assert_eq!(at(124), vec![Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 124 }), None], "the last DAA it counts");
+    assert_eq!(at(125), vec![Some(PalwReadinessUrgencyV1::Lapsed), None], "past it: lapsed; a V1 proof renews nothing");
 
     let off = gate(false);
     let daa = off.ctx.consensus.get_virtual_daa_score();
@@ -337,4 +339,107 @@ async fn m1_an_honest_possession_proof_passes_the_gate() {
     assert_eq!(through_the_gate(proved(card as u64, daa + 1)), None, "the next span: judged at its own first DAA, and taken");
     assert!(through_the_gate(proved(card as u64, daa + 2)).is_some(), "two spans ahead: refused");
     assert!(through_the_gate(proved(2, daa + 1)).is_some(), "the skew buys no pass to a forgery");
+
+    // **A replay never reaches a block** (the readiness horizon's replay fix, past
+    // `Params::palw_readiness_v2_max_age_spans`): once the seat's row stands at this span, the same
+    // proof — or any proof naming this span or an older one — is refused by the gate, by name, as the
+    // fold refuses it; the next span's proof still passes.
+    let mut rowed = PalwStateCarriageV2::from_state(&state);
+    rowed.seat_readiness.insert(
+        (bond, class_id),
+        kaspa_consensus_core::palw_model_registry_v1::PalwSeatReadinessRowV1 {
+            proved_daa: daa,
+            proved_span: daa,
+            leaf_index: 0,
+            proof_version: 2,
+            chunks: 16,
+        },
+    );
+    let rowed = rowed.into_state(&g.params, None).expect("a consistent state");
+    let gate_rowed = |daa_score: u64, object: &Obj| {
+        let point = PalwBlockContextV2 { daa_score, ..g.point };
+        g.ctx.consensus.virtual_processor().palw_h1_carrier_refusal_on(&rowed, &g.params, &point, object)
+    };
+    assert!(
+        gate_rowed(daa, &proved(card as u64, daa)).is_some_and(|why| why.contains("is a replay")),
+        "an equal-span duplicate is a replay"
+    );
+    let tx_gate_rowed = |object: Obj| {
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+        let tx = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput::new(1, ScriptPublicKey::from_vec(0, vec![0x51]))],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload,
+        );
+        let object = kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(&tx).expect("gated");
+        g.ctx.consensus.virtual_processor().palw_mempool_h1_carrier_refusal_with(&object, daa, g.point.block, &rowed)
+    };
+    assert!(
+        tx_gate_rowed(proved(card as u64, daa)).is_some_and(|why| why.contains("is a replay")),
+        "the mempool's transaction gate refuses it too"
+    );
+    assert_eq!(tx_gate_rowed(proved(card as u64, daa + 1)), None, "a newer proof still passes");
+}
+
+/// **The processor hands testnet-12's fold the configured readiness horizon, and every reader of the
+/// fold takes it** (user decision 2026-09-25, readiness capacity option (a);
+/// `Params::palw_readiness_v2_max_age_spans`): the fold's globals, the age the registry judges a row
+/// by, the registry read the RPC serves and the node's duty reads (`readiness_max_age_daa`, `globals`),
+/// and the M1 escalation's `max − 2` — 24 spans on testnet-12, and eight on the twin with the horizon
+/// taken away (its mirror synced), which is still a legal ruleset. One function builds the globals
+/// (`palw_registry_globals_of_bundle_v1`); nothing here restates the rule.
+#[tokio::test]
+async fn t12_the_fold_the_registry_read_and_the_escalation_take_the_configured_horizon() {
+    use kaspa_consensus_core::palw_model_registry_v1::PalwSeatReadinessRowV1;
+    use kaspa_consensus_core::palw_readiness_escalation_v1::{PalwReadinessCarrierV1, PalwReadinessUrgencyV1};
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let (config, _harness_bundle, _premine, _floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
+    let mut twin = config.params.clone();
+    twin.palw_readiness_v2_max_age_spans = None;
+    twin.sync_palw_readiness_v2_max_age_spans();
+    twin.validate_palw_v2().expect("the horizon is optional: testnet-12 without it is a legal ruleset");
+    let twin: Config = ConfigBuilder::new(twin).skip_proof_of_work().build();
+    for (config, max_age) in [(config, 24u64), (twin, 8)] {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
+            unreachable!("testnet-12 is ConsensusV2")
+        };
+        let (params, genesis_objects) = (bundle.state.clone(), bundle.genesis_objects.clone());
+        let ctx = TestContext::new(TestConsensus::new(&config));
+        let vp = ctx.consensus.virtual_processor();
+        let daa = ctx.consensus.get_virtual_daa_score();
+        let fold = vp.palw_model_registry_fold_at(daa).expect("testnet-12's registry is in force from genesis");
+        assert_eq!((fold.span_daa, fold.globals.readiness_v2_max_age_spans as u64), (1, max_age), "the fold's globals");
+        assert_eq!(fold.readiness_max_age_daa(), max_age, "the age every judge of a row asks");
+        let read = ctx.consensus.palw_model_registry_v1().expect("the registry read");
+        assert_eq!(read.readiness_max_age_daa, max_age, "the RPC's `expires` and `readinessProbeMaxAgeSpans`");
+        assert_eq!(read.globals.map(|g| g.readiness_v2_max_age_spans as u64), Some(max_age), "the globals the node's duty reads");
+
+        // The escalation, on a row proved at DAA 100: lapsing from `max − 2`, lapsed past `max`.
+        let (_, state) = vp.palw_state_v2_store.read().load_tip(&params).unwrap().expect("the tip loads");
+        let bond = genesis_objects
+            .iter()
+            .find_map(|o| match o {
+                Obj::BondRegistered { bond, .. } => Some(*bond),
+                _ => None,
+            })
+            .expect("testnet-12 registers bonds at genesis");
+        let class_id = *state.classes_iter().map(|(id, _)| id).last().expect("testnet-12 registers classes at genesis");
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.seat_readiness.insert(
+            (bond, class_id),
+            PalwSeatReadinessRowV1 { proved_daa: 100, proved_span: 100, leaf_index: 0, proof_version: 2, chunks: 16 },
+        );
+        let state = carriage.into_state(&params, None).expect("a consistent state");
+        let at = |now: u64| {
+            vp.palw_readiness_urgency_on(&state, &[PalwReadinessCarrierV1 { bond, class_id, span: now, proof_version: 2 }], now)[0]
+        };
+        let last = 100 + max_age;
+        assert_eq!(at(last - 3), None, "{max_age}: the ordinary lane");
+        assert_eq!(at(last - 2), Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: last }), "{max_age}: max − 2");
+        assert_eq!(at(last + 1), Some(PalwReadinessUrgencyV1::Lapsed), "{max_age}: past the horizon");
+    }
 }

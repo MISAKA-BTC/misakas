@@ -351,6 +351,8 @@ pub fn palw_void_reason_name_v1(reason: &PalwVoidReasonV2) -> &'static str {
         PalwVoidReasonV2::NotReplayBacked => "not_replay_backed",
         // ADR-0152 F2 residual: a court default, past `palw_offence_attribution`.
         PalwVoidReasonV2::CourtDefault => "court_default",
+        // ADR-0152 §4-ter (F3, decision (B)): a held dissection's verdict, past `palw_offence_attribution`.
+        PalwVoidReasonV2::CourtHeldVerdict => "court_held_verdict",
     }
 }
 

@@ -1389,6 +1389,52 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelCertificationResponse>, proto
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::GetPalwActivationPoolRequest, protowire::GetPalwActivationPoolRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwActivationPoolResponse>, protowire::GetPalwActivationPoolResponseMessage, {
+    Self {
+        available: item.available,
+        pool_armed: item.pool_armed,
+        tip_daa: item.tip_daa,
+        class_found: item.class_found,
+        class_id: item.class_id.clone(),
+        class_status: item.class_status.clone(),
+        lifecycle: item.lifecycle.clone(),
+        has_pool: item.has_pool,
+        prep_sompi: item.prep_sompi,
+        bonus_sompi: item.bonus_sompi,
+        funded_sompi: item.funded_sompi,
+        paid_sompi: item.paid_sompi,
+        withheld_sompi: item.withheld_sompi,
+        opened_daa: item.opened_daa,
+        prep_paid: item.prep_paid.clone(),
+        bonus_paid: item.bonus_paid.clone(),
+        probe_credited: item.probe_credited.clone(),
+        registrant_operator: item.registrant_operator.clone(),
+        prep_reward_now_sompi: item.prep_reward_now_sompi,
+        prep_cap_now_sompi: item.prep_cap_now_sompi,
+        next_audit_span: item.next_audit_span,
+        span_daa: item.span_daa,
+        sink_script: item.sink_script.clone(),
+        min_topup_sompi: item.min_topup_sompi,
+        prep_base_sompi: item.prep_base_sompi,
+        prep_share_permille: item.prep_share_permille,
+        bonus_share_permille: item.bonus_share_permille,
+        ramp_daa: item.ramp_daa,
+        prep_payee_cap: item.prep_payee_cap,
+        bonus_payee_cap: item.bonus_payee_cap,
+        total_funded_sompi: item.total_funded_sompi,
+        total_paid_sompi: item.total_paid_sompi,
+        total_withheld_sompi: item.total_withheld_sompi,
+        total_available_sompi: item.total_available_sompi,
+        scheduled_sompi: item.scheduled_sompi,
+        class_is_floor: item.class_is_floor,
+        recommended_pool_sompi: item.recommended_pool_sompi,
+        bonus_cap_sompi: item.bonus_cap_sompi,
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetPalwVestingRequest, protowire::GetPalwVestingRequestMessage, {
     Self {
         bond: item.bond.clone(),
@@ -1521,6 +1567,7 @@ from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifec
         max_inflight_claims: item.max_inflight_claims,
         required_ready_seats: item.required_ready_seats,
         registration_bond_sompi: item.registration_bond_sompi,
+        recommended_pool_sompi: item.recommended_pool_sompi,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -3312,6 +3359,51 @@ try_from!(item: &protowire::GetPalwModelCertificationResponseMessage, RpcResult<
         families: item.families.iter().map(kaspa_rpc_core::RpcPalwModelCertifiedFamily::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
+try_from!(item: &protowire::GetPalwActivationPoolRequestMessage, kaspa_rpc_core::GetPalwActivationPoolRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwActivationPoolResponseMessage, RpcResult<kaspa_rpc_core::GetPalwActivationPoolResponse>, {
+    Self {
+        available: item.available,
+        pool_armed: item.pool_armed,
+        tip_daa: item.tip_daa,
+        class_found: item.class_found,
+        class_id: item.class_id.clone(),
+        class_status: item.class_status.clone(),
+        lifecycle: item.lifecycle.clone(),
+        has_pool: item.has_pool,
+        prep_sompi: item.prep_sompi,
+        bonus_sompi: item.bonus_sompi,
+        funded_sompi: item.funded_sompi,
+        paid_sompi: item.paid_sompi,
+        withheld_sompi: item.withheld_sompi,
+        opened_daa: item.opened_daa,
+        prep_paid: item.prep_paid.clone(),
+        bonus_paid: item.bonus_paid.clone(),
+        probe_credited: item.probe_credited.clone(),
+        registrant_operator: item.registrant_operator.clone(),
+        prep_reward_now_sompi: item.prep_reward_now_sompi,
+        prep_cap_now_sompi: item.prep_cap_now_sompi,
+        next_audit_span: item.next_audit_span,
+        span_daa: item.span_daa,
+        sink_script: item.sink_script.clone(),
+        min_topup_sompi: item.min_topup_sompi,
+        prep_base_sompi: item.prep_base_sompi,
+        prep_share_permille: item.prep_share_permille,
+        bonus_share_permille: item.bonus_share_permille,
+        ramp_daa: item.ramp_daa,
+        prep_payee_cap: item.prep_payee_cap,
+        bonus_payee_cap: item.bonus_payee_cap,
+        total_funded_sompi: item.total_funded_sompi,
+        total_paid_sompi: item.total_paid_sompi,
+        total_withheld_sompi: item.total_withheld_sompi,
+        total_available_sompi: item.total_available_sompi,
+        scheduled_sompi: item.scheduled_sompi,
+        class_is_floor: item.class_is_floor,
+        recommended_pool_sompi: item.recommended_pool_sompi,
+        bonus_cap_sompi: item.bonus_cap_sompi,
+    }
+});
 try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {
     Self {
         bond: item.bond.clone(),
@@ -3459,6 +3551,7 @@ try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelL
         max_inflight_claims: item.max_inflight_claims,
         required_ready_seats: item.required_ready_seats,
         registration_bond_sompi: item.registration_bond_sompi,
+        recommended_pool_sompi: item.recommended_pool_sompi,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,

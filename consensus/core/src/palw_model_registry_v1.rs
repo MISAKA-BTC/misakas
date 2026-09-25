@@ -77,6 +77,14 @@ pub struct PalwRegistryGlobalsV1 {
     pub readiness_collateral_multiple: u32,
     /// How recently a seat's probe verification must have succeeded, in spans.
     pub readiness_probe_max_age_spans: u32,
+    /// **How long a readiness-V2 row stands, in spans** — the horizon
+    /// [`palw_readiness_max_age_daa_v1`] reads past `Params::palw_readiness_v2`. The constant carries
+    /// [`PALW_READINESS_V2_MAX_AGE_SPANS_V1`] (eight), which is every network's without
+    /// `Params::palw_readiness_v2_max_age_spans`; a network's fold is handed its own through
+    /// [`palw_registry_globals_of_bundle_v1`] (testnet-12: twenty-four — user decision 2026-09-25,
+    /// readiness capacity option (a)). A global because it is one: the same for every class, set once
+    /// at genesis, never per model.
+    pub readiness_v2_max_age_spans: u32,
 }
 
 /// The reference the fleet measured (ADR-0133): 4 G MAC-eq/s → 2.4 T a span; 1 GB/s → 600 GB a
@@ -98,7 +106,24 @@ pub const PALW_REGISTRY_GLOBALS_V1: PalwRegistryGlobalsV1 = PalwRegistryGlobalsV
     budget_ccu_per_span: 10 * 166_204_342_272,
     readiness_collateral_multiple: 3,
     readiness_probe_max_age_spans: 30,
+    readiness_v2_max_age_spans: PALW_READINESS_V2_MAX_AGE_SPANS_V1,
 };
+
+/// **The globals a network's registry fold is handed** — [`PALW_REGISTRY_GLOBALS_V1`] with the two
+/// numbers a network sets: the panel's seat count (the bundle's panel params, not the constant's: a
+/// devnet with three-seat panels needs five ready seats, testnet-11 seven) and the readiness-V2
+/// horizon (`Params::palw_readiness_v2_max_age_spans`, through the bundle's mirror,
+/// [`crate::palw_state_v2::PalwStateParamsV2::readiness_v2_max_age_spans_v1`]). The virtual
+/// processor builds its fold from this and nothing else, so the ready-seat count, ADR-0147's jury,
+/// the draw's policy, the registry read the RPC serves, the node's re-prove duty and the M1
+/// escalation — every reader of `fold.globals` — take the one horizon.
+pub fn palw_registry_globals_of_bundle_v1(bundle: &crate::palw_mode_v2::PalwConsensusParamsV2) -> PalwRegistryGlobalsV1 {
+    PalwRegistryGlobalsV1 {
+        seat_count: bundle.panel.seat_count(),
+        readiness_v2_max_age_spans: bundle.state.readiness_v2_max_age_spans_v1(),
+        ..PALW_REGISTRY_GLOBALS_V1
+    }
+}
 
 /// A manifest is refused before it is a class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -471,6 +496,27 @@ pub fn palw_admission_jury_seed_v1(class_id: &Hash64, span: u64, anchor_block: &
     finish64(state)
 }
 
+/// **ADR-0147's jury seed without the anchor's block hash** (ADR-0152-adjacent: Activation Pool, the
+/// fix round's F2) — `H(domain ‖ class ‖ span ‖ anchor execution key)`, under its own domain.
+///
+/// [`palw_admission_jury_seed_v1`] hashes the anchor's chain block as well, and ADR-0130's own
+/// argument for the lane (`PalwExecSeedAnchorV1`) is that a block hash is not seed material: every
+/// nonce of the header's bucket and every timestamp gives the same winning draw and a different
+/// hash, so the anchor's producer re-rolls it for free. Measured on the review's probe (P1): five
+/// colluding operators of twenty seat a jury majority on 7.24 % of free re-rolls — and once the
+/// Activation Pool pays drawn jurors, choosing the jury is choosing the payees. Past
+/// `Params::palw_activation_pool` the jury is drawn from this seed; moving it costs another
+/// execution that wins its draw. Below the fence the v1 seed, byte for byte.
+pub const PALW_ADMISSION_JURY_SEED_V2_DOMAIN: &[u8] = b"misaka-palw/admission-jury/seed/v2";
+
+pub fn palw_admission_jury_seed_v2(class_id: &Hash64, span: u64, execution_key: &Hash64) -> Hash64 {
+    let mut state = keyed64(PALW_ADMISSION_JURY_SEED_V2_DOMAIN);
+    state.update(class_id.as_byte_slice());
+    state.update(&span.to_le_bytes());
+    state.update(execution_key.as_byte_slice());
+    finish64(state)
+}
+
 /// `PalwManifestVerdictV1`, as a flag the observation carries (`Valid` or not).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PalwManifestVerdictV1Flag {
@@ -768,11 +814,16 @@ impl PalwModelRegistryFoldV1 {
 }
 
 /// **How long a readiness row stands, in DAA — the one rule** (the 2026-09-24 readiness-age sweep).
-/// Past `Params::palw_readiness_v2` a row stands for [`PALW_READINESS_V2_MAX_AGE_SPANS_V1`] spans
-/// (the challenge rotates every span, and the rotation has to bite); before it, for the globals'
-/// `readiness_probe_max_age_spans` (thirty).
+/// Past `Params::palw_readiness_v2` a row stands for the globals' `readiness_v2_max_age_spans` (the
+/// challenge rotates every span, and the rotation has to bite): eight spans on every network but
+/// testnet-12, which arms `Params::palw_readiness_v2_max_age_spans` at genesis with twenty-four (user
+/// decision 2026-09-25, readiness capacity option (a)); before it, for the globals'
+/// `readiness_probe_max_age_spans` (thirty). The configured horizon is an INPUT here, never a second
+/// copy of this rule: every judge of a row — the fold's count, ADR-0147's jury, the draw, the RPC,
+/// the panel view, the node's half-age duty and the M1 escalation's `max − 2` — reaches it through
+/// `g`.
 pub fn palw_readiness_max_age_daa_v1(span_daa: u64, g: &PalwRegistryGlobalsV1, readiness_v2: bool) -> u64 {
-    let spans = if readiness_v2 { PALW_READINESS_V2_MAX_AGE_SPANS_V1 } else { g.readiness_probe_max_age_spans };
+    let spans = if readiness_v2 { g.readiness_v2_max_age_spans } else { g.readiness_probe_max_age_spans };
     (spans as u64).saturating_mul(span_daa.max(1))
 }
 
@@ -808,7 +859,8 @@ pub struct PalwReadinessPolicyV1 {
     pub max_age_daa: u64,
     pub base_class_id: Hash64,
     /// **Whether the draw judges a row by the readiness-V2 rule** — the one the registry counts by
-    /// ([`palw_readiness_row_is_fresh_v1`]): a V1 row never, a V2 row for eight spans. Set only past
+    /// ([`palw_readiness_row_is_fresh_v1`]): a V1 row never, a V2 row for the globals'
+    /// `readiness_v2_max_age_spans` (eight spans; twenty-four on testnet-12). Set only past
     /// `Params::palw_audit_2026_09_23` AND `Params::palw_readiness_v2` at the anchor, so on every
     /// network without the audit fence (testnet-11) the draw keeps its old rule byte for byte: any
     /// row, for `max_age_daa` (the V1 age).
@@ -853,10 +905,28 @@ pub const PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/seat-rea
 /// fraction `f` of the artifact answers a challenge with probability `f¹⁶`, so possession is what is
 /// shown rather than reach. Capped at the inventory's own size for a small artifact.
 pub const PALW_READINESS_V2_CHUNKS_V1: u32 = 16;
-/// **How fresh a V2 row must be to count a seat ready**, in execution spans. The challenge already
-/// rotates every span (the seed carries it); this is what makes the rotation bite — a proof stands
-/// for eight spans, not the thirty a V1 row was given.
+/// **How fresh a V2 row must be to count a seat ready**, in execution spans — the DEFAULT horizon,
+/// every network's without `Params::palw_readiness_v2_max_age_spans` (the globals carry the one a
+/// network's fold is handed: [`PalwRegistryGlobalsV1::readiness_v2_max_age_spans`]). The challenge
+/// already rotates every span (the seed carries it); this is what makes the rotation bite — a proof
+/// stands for eight spans, not the thirty a V1 row was given.
 pub const PALW_READINESS_V2_MAX_AGE_SPANS_V1: u32 = 8;
+/// **testnet-12's readiness-V2 horizon, in spans** (user decision 2026-09-25, readiness capacity
+/// option (a); `Params::palw_readiness_v2_max_age_spans`). A V2 proof is ~48.9 KB — ~195,508
+/// transient mass, two a block — and at one block a DAA the integration owner's network model (eight
+/// seats × two genesis classes, the real scheduler) kept about 6.4 of sixteen rows fresh on empty
+/// blocks and 2.7–4.2 in a DA storm at eight spans, against the ten both classes need to stay out of
+/// HELD. Twenty-four spans (24 DAA on testnet-12's one-DAA spans) is the longer horizon the user
+/// chose; the node re-proves at half of it (12) and escalates from `24 − 2`.
+pub const PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1: u32 = 24;
+/// **The longest readiness-V2 horizon a network may configure, in spans**: the V1 age
+/// (`PALW_REGISTRY_GLOBALS_V1.readiness_probe_max_age_spans`, thirty). A V2 row exists to make
+/// possession bite harder than the one-leaf row it replaced; a horizon past the V1 age would make
+/// the multiproof row the longer licence of the two. The shortest is the default,
+/// [`PALW_READINESS_V2_MAX_AGE_SPANS_V1`]: a horizon never shortens below today's, so the half-age
+/// duty (due past `max / 2`) always comes before the M1 escalation (from `max − 2`) — at eight, age
+/// 5 before age 6; at 24, age 13 before age 22.
+pub const PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1: u32 = PALW_REGISTRY_GLOBALS_V1.readiness_probe_max_age_spans;
 /// **The frame a V2 proof carries besides its operands**: the Merkle siblings, the ML-DSA-87
 /// signature and the object's own framing. 32 KiB covers sixteen paths of a tree up to 2^27 leaves
 /// (16 x 27 x 64 = 27,648) plus a 4,627-byte signature; the shipped A16 class measures 19,789.
@@ -1176,8 +1246,8 @@ pub struct PalwModelRegistryReadV1 {
     pub span_daa: u64,
     pub globals: Option<PalwRegistryGlobalsV1>,
     /// **The readiness age the registry judges a row by now, in DAA** — the one rule
-    /// ([`palw_readiness_max_age_daa_v1`]): readiness V2's eight spans past its fence, the globals'
-    /// thirty before it; 0 without a registry fold. A seat's proof `expires` this long after it was
+    /// ([`palw_readiness_max_age_daa_v1`]): readiness V2's horizon past its fence (eight spans;
+    /// twenty-four on testnet-12), the globals' thirty before it; 0 without a registry fold. A seat's proof `expires` this long after it was
     /// dated, and what a reader prints as "the readiness age" is this, not the globals' V1 number.
     pub readiness_max_age_daa: u64,
     pub classes: Vec<PalwModelRegistryClassReadV1>,
@@ -1800,10 +1870,12 @@ pub fn palw_readiness_duty_due_v1(
 }
 
 /// **ADR-0133 §11.2: the same question past readiness V2.** The chain stops counting a V1 row the
-/// moment the fence bites and gives a V2 row eight spans instead of thirty — so a seat that asked
+/// moment the fence bites and gives a V2 row its V2 horizon instead of thirty — so a seat that asked
 /// the old question would sit on a fresh-looking V1 row while the registry counted it out, lose its
 /// seat, and take the class's panel with it. Past the fence a V1 row is always due, and a V2 row is
-/// due at half the V2 window.
+/// due at half the V2 window — half of the globals' `readiness_v2_max_age_spans`, the same number the
+/// registry judges the row by: past 4 DAA on eight-span networks, past 12 on testnet-12 (user
+/// decision 2026-09-25, readiness capacity option (a)).
 pub fn palw_readiness_duty_due_v2(
     row: Option<&PalwSeatReadinessRowV1>,
     now_daa: u64,
@@ -2304,6 +2376,58 @@ mod tests {
             assert!(!flag(&t11, daa), "testnet-11 at {daa}: the draw keeps the V1 readiness rule");
         }
         assert!(flag(&t12, 0) && flag(&t12, 1_000_000), "testnet-12: the draw judges rows as its registry counts them");
+    }
+
+    /// **The readiness-V2 horizon is an input of the one rule, and every judge of a row follows it**
+    /// (user decision 2026-09-25, readiness capacity option (a)). At the default eight spans and at
+    /// testnet-12's twenty-four, on one-DAA spans: a V2 row stands exactly the horizon and not a DAA
+    /// more — for the rule, the fold's own question and the draw's policy alike; a V1 row still never
+    /// counts; the V1 age is untouched; and the node's duty is due past half the horizon (4, then 12).
+    #[test]
+    fn the_readiness_v2_horizon_is_an_input_every_judge_of_a_row_follows() {
+        let span = 1u64;
+        let now = 1_000u64;
+        let row = |proved_daa: u64, proof_version: u8| PalwSeatReadinessRowV1 {
+            proved_daa,
+            proved_span: proved_daa / span,
+            leaf_index: 0,
+            proof_version,
+            chunks: 16,
+        };
+        let base = Hash64::from_u64_word(1);
+        for (spans, duty) in [(PALW_READINESS_V2_MAX_AGE_SPANS_V1, 4u64), (PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1, 12)] {
+            let g = PalwRegistryGlobalsV1 { readiness_v2_max_age_spans: spans, ..PALW_REGISTRY_GLOBALS_V1 };
+            let age = spans as u64;
+            assert_eq!(palw_readiness_max_age_daa_v1(span, &g, true), age, "{spans}: the horizon, in DAA");
+            assert_eq!(palw_readiness_max_age_daa_v1(span, &g, false), 30, "{spans}: the V1 age does not move");
+            let fold = PalwModelRegistryFoldV1 {
+                globals: g,
+                span_daa: span,
+                genesis_works: BTreeMap::new(),
+                grace_until_daa: 0,
+                admission_audit_period_daa: None,
+                readiness_v2_active: true,
+            };
+            let policy = PalwReadinessPolicyV1::at(&fold, now, base, true);
+            assert_eq!(fold.readiness_max_age_daa(), age);
+            for (at_age, fresh) in [(age, true), (age + 1, false)] {
+                let r = row(now - at_age, 2);
+                assert_eq!(palw_readiness_row_is_fresh_v1(&r, now, span, &g, true), fresh, "{spans}: age {at_age}");
+                assert_eq!(fold.readiness_row_is_fresh(&r, now), fresh, "{spans}: the fold's own question, age {at_age}");
+                assert_eq!(policy.admits(&r), fresh, "{spans}: the draw's policy, age {at_age}");
+            }
+            assert!(!fold.readiness_row_is_fresh(&row(now, 1), now), "{spans}: a one-leaf row never counts");
+            // The node's duty: due past half the horizon, not at it.
+            let r = row(now, 2);
+            assert!(!palw_readiness_duty_due_v2(Some(&r), now + duty, now + duty, None, span, &g, true), "{spans}: at {duty}");
+            assert!(palw_readiness_duty_due_v2(Some(&r), now + duty + 1, now + duty + 1, None, span, &g, true), "{spans}: past it");
+        }
+        // The bounds a network may configure: never below the default, never past the V1 age.
+        assert_eq!(PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1, PALW_REGISTRY_GLOBALS_V1.readiness_probe_max_age_spans);
+        const {
+            assert!(PALW_READINESS_V2_MAX_AGE_SPANS_V1 <= PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1);
+            assert!(PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1 <= PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1);
+        }
     }
 
     #[test]

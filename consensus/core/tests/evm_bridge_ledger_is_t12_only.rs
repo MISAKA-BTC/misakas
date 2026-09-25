@@ -63,7 +63,16 @@ fn the_ledger_is_the_only_thing_that_moved_testnet12() {
     assert_eq!(parent.blockrate.pruning_depth, 12_002, "the parent's depth");
     println!("testnet-12 at the parent (the ledger and the deadline fence taken away): {:?}", ids(&parent));
     parent.palw_offence_attribution = None;
+    // ADR-0152-adjacent: the Activation Pool landed after this pin was taken; it is taken away
+    // here too, and `palw_activation_pool_is_t12_only` pins what it moves.
+    parent.palw_activation_pool = None;
+    // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)) landed after
+    // it too; taken away as well (its mirror synced), and `palw_readiness_horizon_is_t12_only` pins
+    // what it moves.
+    parent.palw_readiness_v2_max_age_spans = None;
+    parent.sync_palw_readiness_v2_max_age_spans();
     let now = ids(&parent);
+    println!("testnet-12 at the parent without the attribution: params {} identity {} schedule {}", now.0, now.1, now.2);
     assert_eq!((now.0.as_str(), now.1.as_str(), now.2.as_str()), T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION);
 }
 

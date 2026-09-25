@@ -256,6 +256,14 @@ Registered ──(登録者以外の operator の seat が ready)──> Prefetc
 規則が無い**（未強制。将来 fence で強制され得る）。実際に縛るのは ready seats と
 `collateral_ok`（seat の担保 ≥ 露出 × 倍率）。
 
+**2026-09-25（Activation Pool の P4、ユーザー決定）: `registration_bond_sompi` は価格ではない。**
+RPC では DEPRECATED（意味・wire 位置は据え置き、refund 0 のまま未強制）。代わりに
+`recommendedPoolSompi`（非拘束の推奨 pool、`16 · A_MAX / α`、現行 terms で 2,400 MSK）を見る。
+`misaka model add` と `misaka palw extension submit` は、登録が fold された後に別 carrier で
+500 MSK（`10·A0/α`）をその class の Activation Pool に sponsor する（寄付・fold 後は返金なし。
+`--sponsor <MSK>` で変更、`--no-sponsor` で無し）。Candidate 以外の class への top-up は全額 (b)
+になり、次の formation（または再 formation）でしか払われない — `misaka palw model-pool` が警告する。
+
 実測（testnet-12 の globals、`palw_derive_profile_v1`）:
 
 | 行 | verification CCU | window | 表示 bond | required seats | seat 1 席の K/V（i16） |

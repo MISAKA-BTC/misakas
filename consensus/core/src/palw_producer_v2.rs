@@ -1121,6 +1121,90 @@ pub fn palw_disputable_claims_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2
     out
 }
 
+/// **ADR-0152 §4-ter.3 step 6: one held forfeit this node's bond holds, as a pursuit to rebuild** —
+/// the record, and the court duty its session would have shown at its bottom (`Terminal`, the
+/// narrowed leaf, the claim's facts; no phase: the session is gone, and past it step 6 never files a
+/// bottom). What a restarted challenger's node pursues its step 6 from (the A-held node's second
+/// review, MEDIUM: pursuits lived in memory only).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwHeldPursuitSeedV1 {
+    pub duty: PalwCourtDutyV2,
+    pub record: crate::palw_state_v2::PalwHeldForfeitV1,
+}
+
+/// One open data-availability session of this node's bond: its claim, when it opened and the unit it
+/// named — so a restarted node never files a step-6 demand the fold already holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwHeldOpenDemandV1 {
+    pub claim_id: Hash64,
+    pub accuser: PalwBondKeyV2,
+    pub opened_daa: u64,
+    pub named: crate::palw_da_rcore_v1::PalwDaUnitV1,
+}
+
+/// [`palw_held_pursuit_seeds_v1`]'s answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwHeldPursuitSeedsV1 {
+    pub pursuits: Vec<PalwHeldPursuitSeedV1>,
+    pub open_demands: Vec<PalwHeldOpenDemandV1>,
+}
+
+/// **The held forfeits `mine` holds, and `mine`'s open data-availability sessions** — read off the
+/// state at the tip; what a challenger's node rebuilds its step-6 pursuits from at start. A record
+/// whose claim or class is gone yields nothing (the record would not be there: every terminal door
+/// drops it).
+pub fn palw_held_pursuit_seeds_v1(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) -> PalwHeldPursuitSeedsV1 {
+    let mut seeds = PalwHeldPursuitSeedsV1::default();
+    for ((claim_id, session_id), record) in state.held_forfeits_iter() {
+        if !mine.contains(&record.challenger) {
+            continue;
+        }
+        let Some(claim) = state.claim(claim_id) else { continue };
+        let Some(artifact_root) = state.class(&claim.class_id).map(|class| class.artifact_root) else { continue };
+        let leaf = record.narrowed_leaf;
+        seeds.pursuits.push(PalwHeldPursuitSeedV1 {
+            duty: PalwCourtDutyV2 {
+                accepted_block: claim.accepted_block,
+                session_id: *session_id,
+                claim_id: *claim_id,
+                class_id: claim.class_id,
+                artifact_root,
+                executor_bond: claim.bond,
+                challenger_bond: record.challenger,
+                i_am_responder: false,
+                round: 0,
+                interval: (leaf, leaf.saturating_add(1)),
+                midpoint: None,
+                terminal_index: Some(leaf),
+                last_disclosure: None,
+                turn: crate::palw_bisect::PalwBisectTurnV1::Terminal,
+                rung_deadline_daa: u64::MAX,
+                session_deadline_daa: u64::MAX,
+                trace_root: claim.trace_root,
+                execution_root: claim.execution_root,
+                free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+                fused_class: true,
+                dissection: None,
+                panel_seat_count: state.panel(claim_id).map(|panel| panel.seats.len() as u16).unwrap_or(0),
+            },
+            record: record.clone(),
+        });
+    }
+    for ((claim_id, accuser), session) in state.da_sessions_iter() {
+        if mine.contains(accuser)
+            && let Some(named) = session.units.first()
+        {
+            seeds.open_demands.push(PalwHeldOpenDemandV1 {
+                claim_id: *claim_id,
+                accuser: *accuser,
+                opened_daa: session.opened_daa,
+                named: *named,
+            });
+        }
+    }
+    seeds
+}
+
 /// **What a party owes in a court session it is a party to** — the court's half of
 /// [`palw_seat_duties_v2`].
 ///
@@ -1558,6 +1642,27 @@ pub fn palw_da_accusation_check_v1(
         Err(PalwStateV2Error::DaSessionAlreadyOpen { .. }) => PalwDaAccusationCheckV1::AccusedBefore,
         Err(e) => PalwDaAccusationCheckV1::Refused(e),
     }
+}
+
+/// **ADR-0152 Phase 2, P2-8e: what the fold makes of ONE object in the virtual's next block** — node
+/// policy's "never build what the fold refuses" for an object no H-1 gate rehearses. The acceptance
+/// layer first (`palw_v2_validate_objects`: the bond named exists and signed it, the evidence
+/// adjudicates), then the object's own arm (`palw_state_v2::palw_v2_apply_one_object_v1`), on the tip
+/// at the virtual's DAA — the P-B3 pattern H-1's carriers are held to at the mempool
+/// (`palw_mempool_h1_carrier_refusal`). The held dissection's opening (`ShardCourtAccused` at a
+/// fused-attention leaf, DA-3) buys no lane, so it is not in H-1's list and nothing rehearses it
+/// before a carrier is paid for; the replay filer asks this before it queues one (C3's seat rule,
+/// C4's reservation, the court's capacity, a claim gone terminal — every one the fold's own answer).
+/// Read at the tip without the next block's pre-object sweeps, so it can be one fold step behind in
+/// either direction; what slips through is the fold's, as it always was. A read, never a block rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwObjectRehearsalV1 {
+    /// Both layers take it.
+    Accepted,
+    /// The acceptance layer refuses it, with its reason.
+    NotAccepted(String),
+    /// The object's own arm refuses it, with the fold's reason.
+    Refused(crate::palw_state_v2::PalwStateV2Error),
 }
 
 /// **P2-8d: what a `StepLeaf` demand of a claim by `accuser` comes to** — node policy's read of the

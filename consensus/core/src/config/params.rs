@@ -693,6 +693,76 @@ pub struct PalwPanelExposureFloorV1 {
     pub reward_multiple_permille: u32,
 }
 
+/// **ADR-0152-adjacent: the Activation Pool and the listing rules it rides on** (user decision
+/// 2026-09-25; the adversarial review's §4, R1 and R2) — see
+/// [`crate::palw_activation_pool_v1`].
+///
+/// One fence arms three rules: R1 (silence reclamation spares a class that cannot produce and a
+/// genesis row), R2 (the registry's span step skips Dormant and Frozen classes and audits a
+/// `Candidate` only at its own staggered span) and the pool (a per-class side map funded by
+/// sink-bound top-ups, paying a once-per-operator preparation reward at the audit and an activation
+/// bonus at `Probation → ActiveLimited`). `terms` is the companion value: hashed into
+/// `consensus_params_id`, reported beside the height in `consensus_schedule_id`, invisible to the
+/// fence visitor.
+///
+/// Genesis-only — R1 and R2 change rules every existing class is stepped by, and a crossing would
+/// need a drill that crosses it — and refused by [`Params::validate_palw_v2`] without
+/// `palw_model_registry`, `palw_admission_independence` and `palw_audit_2026_09_23` armed at
+/// genesis beside it, or with terms that cannot run. `Some(0)` on testnet-12 only; `None` on every
+/// other preset, and hashed Some-only everywhere, so every other network's ids are byte-identical
+/// to a build without it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwActivationPoolParamsV1 {
+    /// When R1, R2 and the pool take effect — genesis or never.
+    pub activation: ForkActivation,
+    /// The pool's numbers ([`crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1`] on
+    /// testnet-12).
+    pub terms: crate::palw_activation_pool_v1::PalwActivationPoolTermsV1,
+}
+
+/// **The readiness-V2 horizon** (user decision 2026-09-25, readiness capacity option (a)) — how many
+/// execution spans a `SeatReadinessProvedV2` row stands past `Params::palw_readiness_v2`, where every
+/// network without this fence keeps the eight of
+/// [`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1`].
+///
+/// A seat counts as READY for a class only while its latest possession proof is fresh, and a V2
+/// proof is ~48.9 KB (~195,508 transient mass, two a block at one block a DAA): at eight spans the
+/// integration owner's network model kept about 6.4 of testnet-12's sixteen rows fresh on empty
+/// blocks and 2.7–4.2 in a DA storm, against the ten that keep both genesis model classes out of
+/// HELD. The user chose the longer horizon, with the node's re-prove cadence (half of it) scaled to
+/// it; `max_age_spans` is the companion value, hashed into `consensus_params_id` and reported
+/// beside the height in `consensus_schedule_id`, invisible to the fence visitor.
+///
+/// Genesis-only — a crossing would count one row ready and not ready either side of one height,
+/// with no drill that crosses it — and refused by [`Params::validate_palw_v2`] off ConsensusV2,
+/// above genesis, without `palw_model_registry` and `palw_readiness_v2` armed at genesis beside it,
+/// with a horizon outside `[8, 30]` spans
+/// ([`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1`]), or with the V2
+/// bundle's mirror unsynced. `Some(always, 24)` on testnet-12 only; `None` on every other preset,
+/// and hashed Some-only everywhere, so every other network's ids are byte-identical to a build
+/// without it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwReadinessV2MaxAgeParamsV1 {
+    /// When the horizon takes effect — genesis or never.
+    pub activation: ForkActivation,
+    /// How long a V2 row stands, in execution spans
+    /// ([`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1`] on testnet-12).
+    pub max_age_spans: u32,
+}
+
+/// The Activation Pool's terms, in declaration order, into a fingerprint (`consensus_params_id`
+/// and `consensus_schedule_id` write the same bytes).
+fn palw_activation_pool_terms_write_v1(h: &mut ConsensusParamsId, terms: &crate::palw_activation_pool_v1::PalwActivationPoolTermsV1) {
+    h.write(terms.prep_base_sompi.to_le_bytes());
+    h.write(terms.prep_share_permille.to_le_bytes());
+    h.write(terms.bonus_share_permille.to_le_bytes());
+    h.write(terms.ramp_daa.to_le_bytes());
+    h.write(terms.prep_payee_cap.to_le_bytes());
+    h.write(terms.bonus_payee_cap.to_le_bytes());
+    h.write(terms.min_topup_sompi.to_le_bytes());
+    h.write(terms.bonus_cap_sompi.to_le_bytes());
+}
+
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
 /// fork-choice work leaves `calc_work(header.bits)`.**
 ///
@@ -1414,6 +1484,13 @@ pub struct Params {
     /// lies are attributable, U-D8); hashed into the params id only when non-empty. A `&'static`
     /// slice for the reason `palw_rcore_conservative_classes` is one.
     pub palw_class_verify_rows: &'static [crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1],
+    /// **ADR-0152-adjacent: the Activation Pool, R1 and R2** (user decision 2026-09-25) — see
+    /// [`PalwActivationPoolParamsV1`]. `Some` at genesis on testnet-12 only; hashed Some-only.
+    pub palw_activation_pool: Option<PalwActivationPoolParamsV1>,
+    /// **The readiness-V2 horizon** (user decision 2026-09-25, readiness capacity option (a)) — see
+    /// [`PalwReadinessV2MaxAgeParamsV1`]. `Some` at genesis on testnet-12 only (24 spans); hashed
+    /// Some-only. The bundle's mirror is made by `sync_palw_readiness_v2_max_age_spans`.
+    pub palw_readiness_v2_max_age_spans: Option<PalwReadinessV2MaxAgeParamsV1>,
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -3780,6 +3857,62 @@ impl Params {
                 ));
             }
         }
+        // **ADR-0152-adjacent: the Activation Pool, R1 and R2 (user decision 2026-09-25) are armed at
+        // genesis or not at all.** R1 and R2 change how every existing class is reclaimed and stepped,
+        // and the pool's rows open at registration: a later crossing would reclaim or keep a class by
+        // two rules either side of one height, with no drill that crosses it. They read the registry
+        // rows (`palw_model_registry`), ADR-0147's jury and its `Candidate` state
+        // (`palw_admission_independence`) and the P-B1 refund route and payout cap
+        // (`palw_audit_2026_09_23`), so all three must be armed at genesis beside it.
+        if let Some(pool) = self.palw_activation_pool
+            && pool.activation != ForkActivation::never()
+        {
+            if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_activation_pool is armed on a network that is not ConsensusV2: its rows and rules are the V2 \
+                     registry's (ADR-0152-adjacent: Activation Pool)",
+                ));
+            }
+            if pool.activation.daa_score() != 0 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_activation_pool may only be armed at genesis (DAA 0): R1 and R2 change how every class is reclaimed \
+                     and stepped, and a crossing would reclaim one class by two rules (ADR-0152-adjacent: Activation Pool)",
+                ));
+            }
+            let at_genesis = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() == 0);
+            if !(at_genesis(self.palw_model_registry)
+                && at_genesis(self.palw_admission_independence)
+                && at_genesis(self.palw_audit_2026_09_23))
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_activation_pool is armed without palw_model_registry, palw_admission_independence and \
+                     palw_audit_2026_09_23 all armed at genesis: the pool reads the registry's rows, ADR-0147's jury and \
+                     the P-B1 refund route (ADR-0152-adjacent: Activation Pool)",
+                ));
+            }
+            // The fix round's L5: the rest of what the rules read, at genesis too — the execution lane
+            // (the span R2 staggers and (a) dates by, and the seed anchor the jury is drawn from),
+            // readiness V2 (the possession proof (a) pays and F4 dates), the panel economy (the panel
+            // floor (a) asks and the credited seats (b) pays) and one-bond-per-operator (the unit (a)
+            // and (b) pay once each).
+            if !(at_genesis(self.palw_execution_lane.map(|lane| lane.activation))
+                && at_genesis(self.palw_readiness_v2)
+                && at_genesis(self.palw_panel_economy)
+                && at_genesis(self.palw_operator_id_unique))
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_activation_pool is armed without palw_execution_lane, palw_readiness_v2, palw_panel_economy and \
+                     palw_operator_id_unique all armed at genesis: the pool dates by the lane's spans, pays verified \
+                     possession, asks the panel floor and pays each operator once (ADR-0152-adjacent: Activation Pool)",
+                ));
+            }
+            if let Some(why) = pool.terms.refusal() {
+                return Err(PalwModeV2Error::Invalid(why));
+            }
+        }
+        // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis
+        // only, over the registry and readiness V2 at genesis, inside [8, 30] spans, mirrored.
+        self.validate_palw_readiness_v2_max_age_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -4616,8 +4749,10 @@ impl Params {
                 ));
             }
         }
-        // ADR-0152 R-core+, last (see the non-V2 return above).
-        self.validate_palw_rcore_plus_v1()
+        // ADR-0152 R-core+ (see the non-V2 return above), and then — after every fence's own
+        // refusal, so a missing prerequisite names itself first — the §4-ter answerability mirror.
+        self.validate_palw_rcore_plus_v1()?;
+        self.validate_palw_held_answerability_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -4872,6 +5007,16 @@ impl Params {
         // ADR-0152 §4-quater's class-verify-deadline fence: Some-only hashed, so the same collapse.
         if self.palw_class_verify_deadline == Some(ForkActivation::never()) {
             self.palw_class_verify_deadline = None;
+        }
+        // ADR-0152-adjacent (Activation Pool): Some-only hashed, the carve's shape — the whole option
+        // collapses, so the terms beside a never-armed fence leave the identity with it.
+        if self.palw_activation_pool.is_some_and(|pool| pool.activation == ForkActivation::never()) {
+            self.palw_activation_pool = None;
+        }
+        // The readiness-V2 horizon (user decision 2026-09-25): Some-only hashed, the pool's shape — the
+        // whole option collapses, so the spans beside a never-armed fence leave the identity with it.
+        if self.palw_readiness_v2_max_age_spans.is_some_and(|horizon| horizon.activation == ForkActivation::never()) {
+            self.palw_readiness_v2_max_age_spans = None;
         }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
@@ -5396,6 +5541,76 @@ impl Params {
             let delay = if from_daa.is_some() { palw_v2_bond_withdrawal_delay_at_v1(bundle, da_court, 0) } else { 0 };
             bundle.state = bundle.state.clone().with_rcore_plus_mirrors(from_daa, delay, classes);
         }
+        // Every caller that re-mirrors R-core+ after moving a fence re-mirrors this one too: it reads
+        // `palw_offence_attribution`, R-core+'s own prerequisite.
+        self.sync_palw_held_answerability();
+    }
+
+    /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
+    /// [`crate::palw_state_v2::palw_held_unanswerable_classes_of_v1`] over the bundle's genesis rows
+    /// where `palw_offence_attribution` is armed, empty everywhere else (every preset but testnet-12).
+    pub fn palw_held_unanswerable_classes_v1(&self) -> Vec<crate::Hash64> {
+        let armed = self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never());
+        match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if armed => {
+                crate::palw_state_v2::palw_held_unanswerable_classes_of_v1(&bundle.genesis_objects)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// **ADR-0152 §4-ter N4: are this node's backends held-aware?** — `true` exactly where
+    /// [`Self::palw_held_unanswerable_classes_v1`] lists (a ConsensusV2 network that arms
+    /// `palw_offence_attribution`), so a node's `supports_dissection` and the chain's mercy list read
+    /// one predicate (`palw_held_class_unanswerable_v1`, a pure function of the class's profile: the
+    /// context bound, a recurrent layer, a compute turn past the cap); `false` on every other network,
+    /// whose backends are then byte for byte what they were. Handed to every backend a node resolves
+    /// (`PalwExecutionBackendV1::set_held_answerability_v1`). Node-side only: nothing hashes it.
+    pub fn palw_held_answerability_v1(&self) -> bool {
+        self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never())
+            && matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+    }
+
+    /// **ADR-0152 §4-ter (A-held): mirror [`Self::palw_held_unanswerable_classes_v1`] into the V2
+    /// bundle** — the `#[borsh(skip)]` copy on `PalwStateParamsV2` the fold's mercy and one-move
+    /// refusal read (the fold holds no `Params`). Called by `sync_palw_rcore_plus`, so every site
+    /// that assembles or re-fences a bundle re-mirrors it; `validate_palw_v2` refuses a ruleset whose
+    /// copy disagrees, so a missed call is a startup refusal, never a 2M class read as answerable.
+    pub fn sync_palw_held_answerability(&mut self) {
+        let classes = self.palw_held_unanswerable_classes_v1();
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_held_unanswerable_classes(classes);
+        }
+    }
+
+    /// **ADR-0152 §4-ter (A-held): the answerability mirror is the derivation, byte for byte.**
+    pub fn validate_palw_held_answerability_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.held_unanswerable_classes() != self.palw_held_unanswerable_classes_v1().as_slice()
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "the V2 bundle's held_unanswerable_classes disagrees with its genesis held rows under palw_offence_attribution: \
+                 mirror it with Params::sync_palw_held_answerability after the bundle is assembled (ADR-0152 §4-ter)",
+            ));
+        }
+        // ADR-0152 §4-ter (the review's F5): a network that arms the attribution fence over the held
+        // regime must hold a whole held dissection at the compute cap inside its court window.
+        let armed = self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never())
+            && self.palw_held_context.is_some_and(|f| f != ForkActivation::never());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && armed
+            && !crate::palw_class_admission_v2::palw_held_dissection_fits_court_v1(
+                bundle.court.turn_deadline_daa(),
+                bundle.state.window_court(),
+                crate::palw_state_v2::palw_close_assembly_daa_v1(crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS),
+            )
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "a held dissection at the compute-turn cap does not fit this ruleset's court window (ADR-0152 §4-ter, \
+                 palw_held_dissection_fits_court_v1)",
+            ));
+        }
+        Ok(())
     }
 
     /// **ADR-0152 v3.1 §6: what `palw_rcore_plus` refuses** (T24's fence part). Called by
@@ -5642,6 +5857,85 @@ impl Params {
         // sized for D_cap holds. Past this fence `validate_palw_v2`'s claim-lattice check (K18) reads
         // `palw_v2_claim_lattice_daa_v1` — the D_cap lattice, the same number `with_palw_v2_depths`
         // derives the depth from — so no row, and no fence, can stand on a shorter horizon.
+        Ok(())
+    }
+
+    /// **The readiness-V2 horizon's mirror** (user decision 2026-09-25, readiness capacity option
+    /// (a)): the `#[borsh(skip)]` copy on `PalwStateParamsV2` the registry fold's globals are built
+    /// from (`palw_registry_globals_of_bundle_v1`), written here and nowhere else. `None` where the
+    /// fence is not armed. Called where a bundle is assembled over a preset that armed the fence,
+    /// beside `sync_palw_class_verify_deadline`; `validate_palw_v2` refuses a ruleset whose copy
+    /// disagrees, so a missed call is a startup refusal rather than a fold counting by eight spans.
+    pub fn sync_palw_readiness_v2_max_age_spans(&mut self) {
+        let spans = self
+            .palw_readiness_v2_max_age_spans
+            .filter(|horizon| horizon.activation != ForkActivation::never())
+            .map(|horizon| horizon.max_age_spans);
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_readiness_v2_max_age_spans(spans);
+        }
+    }
+
+    /// **What `palw_readiness_v2_max_age_spans` refuses** (user decision 2026-09-25, readiness capacity
+    /// option (a)). Called by `validate_palw_v2`, and public so a test can name each refusal alone.
+    /// Below the fence it checks only that the bundle's mirror is the dormant `None`.
+    pub fn validate_palw_readiness_v2_max_age_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_model_registry_v1::{PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1, PALW_READINESS_V2_MAX_AGE_SPANS_V1};
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.readiness_v2_max_age_spans()),
+            _ => None,
+        };
+        let Some(horizon) = self.palw_readiness_v2_max_age_spans.filter(|horizon| horizon.activation != ForkActivation::never())
+        else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a readiness-V2 horizon without palw_readiness_v2_max_age_spans armed: mirror the \
+                     fence with Params::sync_palw_readiness_v2_max_age_spans after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans is armed on a network that is not ConsensusV2: the horizon is the V2 \
+                 registry's readiness rule",
+            ));
+        };
+        // Genesis only: a crossing would count one row ready and not ready either side of one height —
+        // the registry's count, ADR-0147's jury and the draw all move at once — with no drill that
+        // crosses it.
+        if horizon.activation.daa_score() != 0 {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans may only be armed at genesis (DAA 0): the horizon decides which seats \
+                 are ready, and a crossing would count one row by two horizons",
+            ));
+        }
+        // The horizon is readiness V2's and the registry's: both from genesis beside it, so no block
+        // judges a V2 row by any other horizon.
+        let at_genesis = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() == 0);
+        if !(at_genesis(self.palw_model_registry) && at_genesis(self.palw_readiness_v2)) {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans is armed without palw_model_registry and palw_readiness_v2 both armed \
+                 at genesis: the horizon is the V2 possession row's, which only the registry past readiness V2 counts",
+            ));
+        }
+        // Never below the default (at eight the half-age duty, due past `max / 2` — age 5 — still
+        // comes before the M1 escalation from `max − 2` — age 6; at six they would meet), never past
+        // the V1 age (a V2 row exists to make possession bite harder than the one-leaf row it
+        // replaced).
+        if !(PALW_READINESS_V2_MAX_AGE_SPANS_V1..=PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1).contains(&horizon.max_age_spans) {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans is outside [8, 30] spans: never shorter than the eight a V2 row stands \
+                 by default, never longer than the V1 age (thirty), which would make the V2 row the laxer one",
+            ));
+        }
+        if mirror != Some(horizon.max_age_spans) {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_readiness_v2_max_age_spans after the bundle is assembled",
+            ));
+        }
         Ok(())
     }
 
@@ -6272,6 +6566,48 @@ impl Params {
         self.palw_class_verify_deadline_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// **ADR-0152-adjacent: the Activation Pool's fence** (R1, R2 and the pool), resolved off a
+    /// ConsensusV2 ruleset — the ONE place it is decided; the fold's extras, the transaction
+    /// validator's sink rule and the mempool read this and never the raw field.
+    pub fn palw_activation_pool_fence(&self) -> Option<PalwActivationPoolParamsV1> {
+        match (&self.palw_consensus_mode, self.palw_activation_pool) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(pool)) if pool.activation != ForkActivation::never() => {
+                Some(pool)
+            }
+            _ => None,
+        }
+    }
+
+    /// The pool's terms where R1, R2 and the pool are in force at `daa_score`
+    /// (`PalwTransitionExtrasV1::activation_pool`), else `None` — every preset but testnet-12.
+    pub fn palw_activation_pool_at(&self, daa_score: u64) -> Option<crate::palw_activation_pool_v1::PalwActivationPoolTermsV1> {
+        self.palw_activation_pool_fence().filter(|pool| pool.activation.is_active(daa_score)).map(|pool| pool.terms)
+    }
+
+    /// **The readiness-V2 horizon's fence** (user decision 2026-09-25, readiness capacity option
+    /// (a)), resolved off a ConsensusV2 ruleset — `Some` on testnet-12 alone.
+    pub fn palw_readiness_v2_max_age_spans_fence(&self) -> Option<PalwReadinessV2MaxAgeParamsV1> {
+        match (&self.palw_consensus_mode, self.palw_readiness_v2_max_age_spans) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(horizon))
+                if horizon.activation != ForkActivation::never() =>
+            {
+                Some(horizon)
+            }
+            _ => None,
+        }
+    }
+
+    /// **How long a readiness-V2 row stands on this network, in spans**: the fence's horizon where it
+    /// is armed (genesis-only, so at every DAA), else the default eight
+    /// ([`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1`]). The fold reads the
+    /// bundle's mirror (`PalwStateParamsV2::readiness_v2_max_age_spans_v1`), which `validate_palw_v2`
+    /// holds equal to this.
+    pub fn palw_readiness_v2_max_age_spans_v1(&self) -> u32 {
+        self.palw_readiness_v2_max_age_spans_fence()
+            .map(|horizon| horizon.max_age_spans)
+            .unwrap_or(crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1)
+    }
+
     /// Whether a false `Valid` is judged by `palw_check_panel_false_valid_v2` at `daa_score`
     /// (`PalwTransitionExtrasV1::offence_attribution_active`): the V1 kind refused, the V2 kind
     /// admitted. `false` on every preset but testnet-12.
@@ -6405,6 +6741,8 @@ impl Params {
             palw_rcore_conservative_classes: _,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
+            palw_activation_pool,
+            palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6508,6 +6846,8 @@ impl Params {
             ("palw_offence_attribution", *palw_offence_attribution),
             ("palw_rcore_plus", *palw_rcore_plus),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
+            ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
+            ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -6882,6 +7222,22 @@ impl Params {
             h.write(b"palw_class_verify_deadline");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0152-adjacent (Activation Pool), NAMED for the same reason and Some-only, with its terms
+        // beside the height for the SA-4 reason the carve's numbers are: two operators arming the
+        // pool with different terms must see it in the log.
+        if let Some(pool) = self.palw_activation_pool {
+            h.write(b"palw_activation_pool");
+            h.write(pool.activation.daa_score().to_le_bytes());
+            palw_activation_pool_terms_write_v1(&mut h, &pool.terms);
+        }
+        // The readiness-V2 horizon (user decision 2026-09-25), NAMED and Some-only, with its spans
+        // beside the height for the pool's SA-4 reason: two operators arming it with different
+        // horizons count different seats ready and must see it in the log.
+        if let Some(horizon) = self.palw_readiness_v2_max_age_spans {
+            h.write(b"palw_readiness_v2_max_age_spans");
+            h.write(horizon.activation.daa_score().to_le_bytes());
+            h.write(horizon.max_age_spans.to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -7079,6 +7435,8 @@ impl Params {
             palw_rcore_conservative_classes: _,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
+            palw_activation_pool,
+            palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7403,6 +7761,16 @@ impl Params {
         // reason.
         if let Some(activation) = palw_class_verify_deadline.as_mut() {
             fork(activation, visit);
+        }
+        // ADR-0152-adjacent (Activation Pool): the height only, SOME-ONLY, as the floor above and for
+        // its reason — the terms are a value beside it (the D1 rule).
+        if let Some(pool) = palw_activation_pool.as_mut() {
+            fork(&mut pool.activation, visit);
+        }
+        // The readiness-V2 horizon (user decision 2026-09-25): the height only, SOME-ONLY, as the pool
+        // above and for its reason — the spans are a value beside it (the D1 rule).
+        if let Some(horizon) = palw_readiness_v2_max_age_spans.as_mut() {
+            fork(&mut horizon.activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
         match palw_artifact_root_ownership.as_mut() {
@@ -7991,6 +8359,8 @@ impl Params {
             palw_rcore_conservative_classes,
             palw_class_verify_deadline,
             palw_class_verify_rows,
+            palw_activation_pool,
+            palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -8314,6 +8684,20 @@ impl Params {
                 h.write(row.canonical_positions.to_le_bytes());
                 h.write(row.leaves_per_position.to_le_bytes());
             }
+        }
+        // ADR-0152-adjacent (Activation Pool): the height and its terms, Some-only, so every preset
+        // but testnet-12 fingerprints byte-identically to a build without the field.
+        if let Some(pool) = palw_activation_pool {
+            h.write(b"palw_activation_pool");
+            h.write(pool.activation.daa_score().to_le_bytes());
+            palw_activation_pool_terms_write_v1(&mut h, &pool.terms);
+        }
+        // The readiness-V2 horizon (user decision 2026-09-25): the height and its spans, Some-only, so
+        // every preset but testnet-12 fingerprints byte-identically to a build without the field.
+        if let Some(horizon) = palw_readiness_v2_max_age_spans {
+            h.write(b"palw_readiness_v2_max_age_spans");
+            h.write(horizon.activation.daa_score().to_le_bytes());
+            h.write(horizon.max_age_spans.to_le_bytes());
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
         if let Some(activation) = palw_artifact_root_ownership {
@@ -9091,6 +9475,15 @@ impl Params {
             // the 2M row.
             palw_class_verify_deadline: self.palw_class_verify_deadline,
             palw_class_verify_rows: self.palw_class_verify_rows,
+            // ADR-0152-adjacent (Activation Pool): CARRIED for R-core+'s reason — an overridden
+            // testnet-12 fails `validate_palw_v2` on the prerequisite the override dropped
+            // (`palw_admission_independence`) instead of silently disarming R1, R2 and the pool.
+            palw_activation_pool: self.palw_activation_pool,
+            // The readiness-V2 horizon (user decision 2026-09-25): CARRIED for the pool's reason — an
+            // overridden testnet-12 keeps the horizon its rows are counted by, and fails
+            // `validate_palw_v2` on a prerequisite the override dropped rather than silently
+            // counting them by eight spans.
+            palw_readiness_v2_max_age_spans: self.palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -10111,6 +10504,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_activation_pool: None,
+    palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10333,6 +10728,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_activation_pool: None,
+    palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10537,6 +10934,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_activation_pool: None,
+    palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -11564,6 +11963,9 @@ pub fn palw_v2_params_with_class_rows_v1(
         ));
     }
 
+    // ADR-0152 §4-ter: the answerability mirror is a function of the genesis rows this function
+    // just installed, so it is re-mirrored here, after them — the base's own sync saw the base's rows.
+    params.sync_palw_held_answerability();
     // Both gates again, from scratch, over the network actually being shipped.
     params.validate_palw_v2()?;
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
@@ -15840,8 +16242,11 @@ pub fn palw_rc_base_params() -> Params {
             schedule_span_daa: 1,
         },
     });
-    params.palw_overlay_carve =
-        Some(PalwOverlayCarveV1 { activation: flag_day_6001, subsidy_validator_bps: 2_000, worker_carve_permille: 720 });
+    params.palw_overlay_carve = Some(PalwOverlayCarveV1 {
+        activation: flag_day_6001,
+        subsidy_validator_bps: 2_000,
+        worker_carve_permille: PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1,
+    });
     // **ADR-0135 Protocol Upgrade A and ADR-0132 Protocol Upgrade C, on the same flag day** (the
     // operator's decision, after the devnet drill): the permissionless model registry governs every
     // class the node can describe from 6,001 (rows open at the first span boundary past it, the
@@ -16041,6 +16446,19 @@ pub const PALW_SUBSIDY_MONTH0_BASE_SOMPI: u64 = 3_704_683_450;
 /// block time, pinned so the card's escrow input is a number an operator can read.
 pub const PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI: u64 = 444_562_014_000;
 
+/// **The overlay's worker carve, 720 ‰ of the subsidy** (ADR-0126): testnet-11's flag-day value,
+/// carried to testnet-12 by its base card. One spelling for the preset and for the figures derived
+/// from what a claim escrows.
+pub const PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1: u16 = 720;
+
+/// **`E`: the escrow a testnet-12 genesis-era claim of the heaviest class carries** — its first
+/// block's subsidy through the overlay's worker carve, `escrow_for_a_genesis_claim_v1`'s arithmetic
+/// (3,200.85 MSK). The price of work pays the heaviest weight-bearing class the escrow whole, so
+/// this is the most one claim pays. Pinned against the card by
+/// `palw_t12_genesis_claim_escrow_is_the_cards`.
+pub const PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI: u64 =
+    PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI / 1_000 * PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1 as u64;
+
 fn escrow_for_a_genesis_claim_v1((subsidy, carve_permille): &(u64, Option<u16>)) -> u64 {
     let permille = carve_permille.unwrap_or(0) as u64;
     subsidy / 1_000 * permille
@@ -16060,8 +16478,15 @@ pub fn palw_t12_base_params() -> Params {
     // keep. **The effect, stated:** testnet-12's heartbeat clock is paced by header stamps, and a
     // stamp is bounded above only by this tolerance, so a producer that stamps every beat at its
     // slot can run the DAA clock up to 1,620 s — about 13 slots — ahead of wall time (about 1 slot at
-    // 132 s): a one-time lead, not a rate change, since the clock floor still spaces two ticks at
-    // least one interval apart (`t12_a_producer_runs_the_clock_at_most_the_drift_budget_ahead`).
+    // 132 s). The lead is a one-time offset in STAMPS (the clock floor still spaces two stamps at
+    // least one interval apart, `t12_a_producer_runs_the_clock_at_most_the_drift_budget_ahead`), but
+    // not in wall time: those ticks can be minted at once, so one producer can advance the DAA by
+    // `⌊T / I⌋ + 1` = 14 with no other block in between (2 at 132 s) — every DAA-denominated window
+    // is shortened by that much wall time, and a burst that outlasts a readiness row's remaining age
+    // lapses the row with no proof able to land (the 2026-09-25 mainnet-values review, HIGH; measured
+    // on the lifecycle fold by `t12_a_run_ahead_burst_outlasts_a_readiness_row`). **Open, for the
+    // user's decision before launch** — cap the clock-stepping beat's stamp near the receiver's clock,
+    // re-prove far enough ahead of the horizon, or keep 132 s here.
     params.timestamp_deviation_tolerance = palw_v2_timestamp_deviation_tolerance_v1(
         params.past_median_time_window_size,
         BlockrateParams::new_two_minute_bps().past_median_time_sample_rate,
@@ -16074,7 +16499,12 @@ pub fn palw_t12_base_params() -> Params {
     // header budget, `(225 + 1) x 2 x m` = 452,000 slots (502,000 at 250). Headers are unchanged: a
     // header lists parents only up to the first genesis-only level. **Owed at either ceiling, not
     // caused by this one:** with every block at level 0 the level-0 proof is the whole history below
-    // the pruning point, so that budget, not the level pyramid, is what eventually bounds a proof.
+    // the pruning point, so that budget, not the level pyramid, is what eventually bounds a proof —
+    // about 314 days of two-block heartbeat slots below the pruning point at 225 (348 at 250). And
+    // the pruning point itself does not leave genesis until the first claim is `Final` (the PALW
+    // safe frontier caps it). Both measured at 225 on a moved pruning point — built, validated by a
+    // node at genesis, applied by a staging node — by
+    // `t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225`.
     params.max_block_level = MAINNET_PARAMS.max_block_level;
     palw_t12_arm_every_rule_from_genesis(&mut params);
     params
@@ -16313,6 +16743,24 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // Its prerequisites (§11.3's receipt window, the derived free-prompt work) are armed at 0 by pass
     // 2's walk. The bundle's mirror is re-made by `sync_palw_class_verify_deadline`.
     params.palw_class_verify_deadline = Some(at);
+    // **ADR-0152-adjacent: the Activation Pool, R1 and R2** (`Params::palw_activation_pool`, user
+    // decision 2026-09-25): a listing is not reclaimed for the network's absence, the registry's
+    // step audits a `Candidate` only at its own staggered span and skips Dormant and Frozen classes,
+    // and a per-class pool pays preparation and activation out of sink-bound top-ups. Genesis-only;
+    // its three prerequisites are armed above or by pass 2's walk. The terms are the user's
+    // illustrative scale, to be tuned.
+    params.palw_activation_pool =
+        Some(PalwActivationPoolParamsV1 { activation: at, terms: crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1 });
+    // **The readiness-V2 horizon** (`Params::palw_readiness_v2_max_age_spans`, user decision
+    // 2026-09-25, readiness capacity option (a)): a possession row stands twenty-four spans (24 DAA)
+    // instead of eight, so two proofs a block keep both genesis model classes' seats counted, and the
+    // node re-proves at half of it. Genesis-only; its prerequisites (`palw_model_registry`,
+    // `palw_readiness_v2`) are armed at 0 by pass 2's walk. The bundle's mirror is re-made by
+    // `sync_palw_readiness_v2_max_age_spans`.
+    params.palw_readiness_v2_max_age_spans = Some(PalwReadinessV2MaxAgeParamsV1 {
+        activation: at,
+        max_age_spans: crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1,
+    });
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
@@ -16686,6 +17134,9 @@ pub fn palw_v2_params_on_base(
     // ADR-0152 §4-quater, for the same reason and in the same place: the fence's height and its
     // measured rows, mirrored onto the bundle this function built.
     params.sync_palw_class_verify_deadline();
+    // The readiness-V2 horizon (user decision 2026-09-25), for the same reason and in the same place:
+    // its spans, mirrored onto the bundle this function built.
+    params.sync_palw_readiness_v2_max_age_spans();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -16840,6 +17291,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_activation_pool: None,
+    palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -22181,6 +22634,49 @@ mod consensus_params_id_tests {
         .expect("a mainnet card assembles")
     }
 
+    /// **The mainnet card states testnet-12's carve, and a card that states another fails here**
+    /// (user decision 2026-09-25, ADR-0126). The 2026-09-25 mainnet-values review (LOW) found that
+    /// nothing read the card's carve: `worker_carve_permille` 720 → 620 left every consensus-core
+    /// test green. Validators 20 %, the worker base the lowered split leaves 72 %, and a claim's
+    /// escrow 720‰ of a 120 s block — 3,200.85 MSK, the G every ADR-0152 tier and the genesis-seat
+    /// sizing are built on — each exactly testnet-12's.
+    #[test]
+    fn the_mainnet_card_states_testnet_12_s_carve_and_escrows_3_200_85_msk_a_claim() {
+        let card = mainnet_card_fixture_v1(false);
+        let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let carve = card.palw_overlay_carve;
+        assert_eq!(
+            carve,
+            Some(PalwOverlayCarveV1 {
+                activation: ForkActivation::always(),
+                subsidy_validator_bps: 2_000,
+                worker_carve_permille: 720
+            }),
+            "the card states the carve from genesis: validators 20 %, escrow 720‰"
+        );
+        assert_eq!(carve, t12.palw_overlay_carve, "testnet-12's carve, field for field");
+        let carve = carve.unwrap();
+        let dns = card.dns_params.as_ref().expect("a card runs the overlay");
+        let lowered =
+            palw_overlay_fee_split_at_v1(dns, Some(carve), dns.full_reward_split_daa_score).expect("the full split is staged");
+        assert_eq!(
+            (lowered.subsidy_validator_bps, lowered.subsidy_worker_base_bps),
+            (2_000, 7_200),
+            "the validator pool's subsidy share is 20 % and the worker base the lowered split leaves is 72 %"
+        );
+        let subsidy = palw_genesis_block_subsidy_sompi(&card);
+        assert_eq!(subsidy, PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI, "a card's 120 s block pays what testnet-12's first block pays");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &card.palw_consensus_mode else {
+            panic!("a mainnet card is ConsensusV2")
+        };
+        assert_eq!(bundle.state.worker_carve_at(subsidy, carve.escrow_carve()), 320_084_650_080, "3,200.85 MSK a claim");
+        assert_eq!(
+            bundle.state.worker_carve_at(subsidy, None),
+            275_628_448_680,
+            "without the card's carve the bundle would escrow its own 620‰: 2,756.28 MSK"
+        );
+    }
+
     /// **Every ConsensusV2 ruleset this tree can assemble is minted at its own ambient target.**
     ///
     /// The RULE, not the patch: it names no constant and no network-specific value, so it holds for
@@ -24471,6 +24967,20 @@ mod palw_overlay_carve_tests {
 
     fn t11_carve() -> PalwOverlayCarveV1 {
         PalwOverlayCarveV1 { activation: ForkActivation::new(T11_HEIGHT), subsidy_validator_bps: 2_000, worker_carve_permille: 720 }
+    }
+
+    /// **`E`, as the card computes it** (the Activation Pool's P1 derives `b_cap` from it): testnet-12's
+    /// first-block subsidy through its own overlay carve is `PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI`,
+    /// 3,200.85 MSK — and testnet-11's carve is the same constant, so the literal left no preset.
+    #[test]
+    fn palw_t12_genesis_claim_escrow_is_the_cards() {
+        let t12 = palw_t12_shipped_params();
+        let carve = t12.palw_overlay_carve.map(|carve| carve.worker_carve_permille);
+        assert_eq!(carve, Some(PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1));
+        assert_eq!(palw_genesis_block_subsidy_sompi(&t12), PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI);
+        assert_eq!(escrow_for_a_genesis_claim_v1(&(palw_genesis_block_subsidy_sompi(&t12), carve)), PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI);
+        assert_eq!(PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI, 320_084_650_080);
+        assert_eq!(palw_rc_shipped_params().palw_overlay_carve.map(|carve| carve.worker_carve_permille), Some(720));
     }
 
     fn armed(carve: PalwOverlayCarveV1) -> Params {
