@@ -602,6 +602,11 @@ pub struct VirtualStateProcessor {
     /// [`Self::palw_frontier_provenance_outcome`].
     pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
+    /// lane: rcore/f1-forkchoice-attacks — the deep-reorg strict-economic-win fence, `None` on
+    /// every shipped preset. Past it `dns_reorg_outcome` allows a deep reorg only on a strict
+    /// economic win, keeping the incumbent on an all-economic tie rather than the candidate hash.
+    pub(super) palw_reorg_strict_economic_win: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
     /// **ADR-0018 §E's payout bounds** (mainnet audit 2026-09-06 — H-2/H-3/M-1), mode folded in.
     /// `None` on testnet-11, devnet and simnet; `always()` on a card. Resolved at the BLOCK's DAA
     /// on both the coinbase construction and the validation path — they must agree, or every node
@@ -1088,6 +1093,7 @@ impl VirtualStateProcessor {
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_exec_quantum_maturity_daa: params.palw_exec_quantum_maturity_v1(),
             palw_frontier_provenance: params.palw_frontier_provenance,
+            palw_reorg_strict_economic_win: params.palw_reorg_strict_economic_win,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
@@ -13991,7 +13997,22 @@ impl VirtualStateProcessor {
             // silently downgraded to blue work.
             return match (self.palw_candidate_order_v2(prev_sink), self.palw_candidate_order_v2(candidate)) {
                 (Some(incumbent), Some(challenger)) => {
-                    match kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger) {
+                    // **lane: rcore/f1-forkchoice-attacks — an all-economic tie keeps the incumbent
+                    // past the fence.** `decide_deep_reorg_v2` allows a `Greater` challenger, whose
+                    // last tie-break is the candidate hash, so a private branch tying the incumbent on
+                    // all three economic keys wins the reorg by grinding a higher hash (the fork-choice
+                    // attack probes measure it). Past `palw_reorg_strict_economic_win` a reorg is
+                    // allowed only on a STRICT economic win. The fence is read at the INCUMBENT's DAA
+                    // — a candidate's own score is attacker-chosen — exactly as the confirmed-anchor
+                    // TTL and `palw_frontier_provenance_outcome` read it. Below the fence this is
+                    // byte-identical to `decide_deep_reorg_v2`.
+                    let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
+                    let decision = if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
+                        kaspa_consensus_core::palw_fork_authority_v2::palw_deep_reorg_strict_economic_v1(&incumbent, &challenger)
+                    } else {
+                        kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger)
+                    };
+                    match decision {
                         kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => {
                             self.palw_frontier_provenance_outcome(candidate, prev_sink)
                         }

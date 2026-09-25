@@ -565,38 +565,45 @@ async fn hb_probe_b_future_stamped_beats_run_the_private_branch_ahead() {
             private.len(),
             (last as f64 - now as f64) / 1_000.0
         );
-        // **On the release this probe now sits on (`0e8ec984e`), the beat lead cap is armed**
-        // (`palw_clock_lead_cap`, merged after the probe was measured): a clock-moving header is
-        // refused 132 s past the receiving clock whatever the tolerance, so the run-ahead is bounded
-        // by `min(T, 132 s)` and the refusal may be the cap's own. At 1,620 s the probe measured
-        // thirteen slots of lead and a landed double spend on the uncapped base; capped, it is the
-        // 132 s case.
-        let capped = d.config.params.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(0));
-        let bound_ms = if capped {
-            (tolerance * 1_000).min(kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS)
-        } else {
-            tolerance * 1_000
-        };
+        // **What stops the run-ahead on the RELEASE (0e8ec984e), and it is the beat lead cap.** The
+        // probe was written on rcore/hb-fork-choice-probe, whose base carried the 1,620 s tolerance
+        // with NO cap, and it asserted the run-ahead was stopped by `TimeTooFarIntoTheFuture` at
+        // floor(T / I) slots. The launch release ships `palw_clock_lead_cap` armed on testnet-12
+        // (the 2026-09-25 mainnet-values review's HIGH, merged as `ce75beff`), which refuses any
+        // clock-moving header stamped more than `PALW_CLOCK_LEAD_CAP_MS` = 132 s past THIS node's
+        // clock — tighter than the 1,620 s tolerance. So at 1,620 s the stopper is
+        // `ClockLeadTooFarAhead`, not the future bound, and the run-ahead is bounded by the CAP,
+        // not the tolerance. This is verdict 4's "the rate is closed": measured, not asserted away.
+        let cap_ms = kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS;
+        let capped = matches!(refusal, RuleError::ClockLeadTooFarAhead(..));
         assert!(
-            matches!(refusal, RuleError::TimeTooFarIntoTheFuture(..) | RuleError::ClockLeadTooFarAhead(..)),
-            "{tag}: only the future bound (or, capped, the lead cap) stops the run-ahead"
+            matches!(refusal, RuleError::TimeTooFarIntoTheFuture(..)) || capped,
+            "{tag}: the run-ahead is stopped by the future bound or the lead cap, and by nothing else — got {refusal}"
         );
+        if tolerance == 1_620 {
+            assert!(capped, "{tag}: past 132 s the lead cap (not the 1,620 s tolerance) is what stops the run-ahead");
+        }
         let r = release(&tag, &mut d.victim, &private, fork, &mut d.nonce, 8).await;
         assert!(r.refused.is_empty(), "{tag}: the victim accepts every beat its bound admitted a moment ago");
         let (x, y) = payments(&tag, &d);
         assert_eq!(r.flipped(), y && !x, "{tag}: the flip is exactly the double spend");
-        if bound_ms == 1_620_000 {
-            assert!(r.flipped() && y && !x, "{tag}: thirteen slots of lead carry the double spend (uncapped)");
-        }
         let lead = private_slots as i64 - public_slots as i64;
-        let budget = (bound_ms / I) as i64;
+        // The run-ahead is bounded by the SMALLER of the tolerance and the lead cap, in whole slots.
+        let effective_ms = (tolerance * 1_000).min(cap_ms);
+        let budget = (effective_ms / I) as i64;
         eprintln!(
-            "[hb-probe {tag}] lead: private {private_slots} slots vs public {public_slots} = {lead} slots ahead (floor(T / I) = {budget}); blue work +{} vs +{}; the victim's sink now at DAA +{} above the fork after {public_slots} slots of wall time",
+            "[hb-probe {tag}] lead: private {private_slots} slots vs public {public_slots} = {lead} slots ahead (min(T, cap {} s) / I = {budget} slots); blue work +{} vs +{}; the victim's sink now at DAA +{} above the fork after {public_slots} slots of wall time; double spend landed: {}",
+            cap_ms / 1_000,
             r.private_bw_max,
             r.public_bw,
-            d.victim.daa_of(d.victim.sink()) - d.victim.daa_of(fork)
+            d.victim.daa_of(d.victim.sink()) - d.victim.daa_of(fork),
+            y && !x
         );
-        assert!(lead == budget || lead == budget + 1, "{tag}: the run-ahead is the drift budget in whole slots");
+        // The lead is at most the cap's worth of slots (plus the boundary slot the loop mines before
+        // its stamp trips the cap). At 1,620 s this is ~1 slot, NOT the 13 the uncapped tolerance
+        // would give — the residual is what verdict 4 calls "partial": a small run-ahead survives the
+        // cap, and it still flips a deep reorg whose PALW keys tie (see the fenced fix on this branch).
+        assert!(lead <= budget + 2, "{tag}: the run-ahead is bounded by min(tolerance, lead cap) in whole slots, got {lead} > {budget}+2");
     }
 }
 
@@ -1647,4 +1654,182 @@ async fn proof_round_trip(same_chain: Option<u64>) -> bool {
         if draw2_blue { "blue" } else { "red" }
     );
     draw2_blue
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// lane: rcore/f1-forkchoice-attacks — the dormant fence `palw_reorg_strict_economic_win`, exercised
+// through the real pipeline. Two things a unit test cannot see (the `a-flag-day-needs-a-drill-that-
+// crosses-it` lesson: fork-choice/colouring fences have frozen the DAA clock before while every unit
+// test was green): (1) a chain that CROSSES the armed fence must keep ticking the DAA, and (2) the
+// fence must actually change a reorg outcome end to end — the tie both `hb_probe_b_*` probes above
+// measure being Allowed on the shipped rule is Refused once it is armed, and X stands.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// [`duel`], with `palw_reorg_strict_economic_win` armed at `fence_daa`. Nothing else moves; the
+/// genesis, premine and every window are testnet-12's, and the ruleset is re-validated.
+fn duel_reorg_armed(fence_daa: u64) -> Duel {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let mut params = config.params.clone();
+    params.palw_reorg_strict_economic_win = Some(ForkActivation::new(fence_daa));
+    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    config.params.validate_palw_v2().expect("arming the reorg fence is a runnable testnet-12 ruleset");
+    assert_eq!(
+        config.params.palw_reorg_strict_economic_win,
+        Some(ForkActivation::new(fence_daa)),
+        "the fence is armed at {fence_daa}"
+    );
+    let victim = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let attacker = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let pay = |to: ScriptPublicKey| {
+        let (outpoint, entry) = floats[1].clone();
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(entry.amount - 300_000, to)],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        sign_spend(&mut tx, entry, 1, config.params.storage_mass_parameter);
+        tx
+    };
+    let x = pay(card_payout_spk(5));
+    let y = pay(card_payout_spk(6));
+    Duel { config, victim, attacker, x, y, nonce: 1 << 40, floats }
+}
+
+/// **The flag-day drill: a chain crosses the armed fence and the DAA keeps advancing.** Armed at a
+/// LOW height so the drill passes THROUGH it (arrival is not the test — a fence that retires the
+/// only clock freezes the DAA at exactly the height it fires). Honest heartbeat slots are mined from
+/// genesis to well past the fence; each slot must tick the DAA by one, and every block must stay
+/// UTXO-valid and the sink (`honest_slot`/`heartbeat` assert the sink). The fence changes only the
+/// deep-reorg comparator, so forward progress must be untouched — this proves it.
+#[tokio::test]
+async fn hb_probe_fence_the_armed_fence_is_crossed_with_the_daa_advancing() {
+    kaspa_core::log::try_init_logger("warn");
+    const FENCE_AT: u64 = 5;
+    let mut d = duel_reorg_armed(FENCE_AT);
+    assert!(d.config.params.palw_reorg_strict_economic_win.unwrap().is_active(FENCE_AT), "active at the fence height");
+    let mut last = d.victim.daa_of(d.victim.sink());
+    let mut crossed = false;
+    for slot in 0..(FENCE_AT + 6) {
+        honest_slot(&mut d.victim, if slot == 0 { vec![d.x.clone()] } else { Vec::new() }).await;
+        let daa = d.victim.daa_of(d.victim.sink());
+        assert_eq!(daa, last + 1, "slot {slot}: the DAA advances by one across the fence — it is not frozen at {FENCE_AT}");
+        if daa > FENCE_AT {
+            crossed = true;
+        }
+        last = daa;
+    }
+    assert!(crossed, "the chain advanced past the armed fence at {FENCE_AT}");
+    // The blocks below and above the fence are all real chain: X is still in the UTXO set.
+    let x_out = TransactionOutpoint::new(d.x.id(), 0);
+    assert!(has_utxo(&d.victim, x_out), "X is accepted and the chain keeps producing across the fence");
+    eprintln!(
+        "[hb-probe fence-drill] armed at DAA {FENCE_AT}: mined {} slots, sink DAA {} — the clock crossed the fence and never stalled",
+        FENCE_AT + 6,
+        last
+    );
+}
+
+/// **The fence changes the reorg outcome end to end.** The same heartbeat-only economic tie that
+/// `hb_probe_b_sibling_beats_outweigh_a_heartbeat_only_chain` (m = 2) lets flip on the shipped rule —
+/// the private branch is heavier on blue work, both sides read `{frontier 0, safe 0, live 0}`, and
+/// `decide_deep_reorg_v2` Allows on the candidate hash — is REFUSED once the fence is armed: the
+/// private branch is still offered (heavier blue work tops the heap), but the deep-reorg gate keeps
+/// the incumbent on the all-economic tie, so the double spend does NOT land and X stands.
+#[tokio::test]
+async fn hb_probe_fence_refuses_the_tied_reorg_the_shipped_rule_allows() {
+    kaspa_core::log::try_init_logger("warn");
+    // Armed at DAA 1 — active by the time the fork forms (the incumbent sits well past it).
+    let mut d = duel_reorg_armed(1);
+    for _ in 0..3 {
+        honest_slot_mirrored(&mut d).await;
+    }
+    let fork = d.victim.sink();
+    honest_slot(&mut d.victim, vec![d.x.clone()]).await;
+    for _ in 0..9 {
+        honest_slot(&mut d.victim, Vec::new()).await;
+    }
+    let mut private = private_slot(&mut d.attacker, &mut d.nonce, 2, vec![d.y.clone()]).await;
+    for _ in 0..9 {
+        private.extend(private_slot(&mut d.attacker, &mut d.nonce, 2, Vec::new()).await);
+    }
+    let r = release("fence m=2", &mut d.victim, &private, fork, &mut d.nonce, 8).await;
+    assert!(r.refused.is_empty(), "every private beat is a valid block");
+    assert!(r.private_bw_max > r.public_bw, "the private branch is heavier on blue work (offered), as in hb_probe_b m=2");
+    assert!(r.offered_at.is_some(), "and it does reach the top of the heap — the fence acts at the reorg gate, not the heap");
+    let depth = bs(&d.victim, d.victim.sink()) - bs(&d.victim, fork);
+    assert!(depth < d.config.params.finality_depth(), "inside the finality depth, so only the reorg gate can refuse it ({depth})");
+    let (x, y) = payments("fence m=2", &d);
+    assert!(!r.flipped(), "the armed fence keeps the incumbent on the all-economic tie: no flip");
+    assert!(x && !y, "X stands — the double spend hb_probe_b lands on the shipped rule does not land past the fence");
+    eprintln!(
+        "[hb-probe fence m=2] private heavier (+{} vs +{} blue work), offered at {:?}, flipped {:?}: the fence refused the tied reorg and X stands",
+        r.private_bw_max, r.public_bw, r.offered_at, r.flipped_at
+    );
+}
+
+/// **Verdict 1, the exact claim: a block whose attempt did NOT win the lottery still earns 2^20
+/// blue work.** `hb_probe_a_*` measured that a winning attempt adds 2^20; this builds a shape-valid,
+/// correctly signed attempt header by a registered card whose class ticket LOSES its lottery
+/// (`class_ticket_v3 > class_target`) as a child of the sink, and inserts it. The lottery is
+/// chain-relative, so it cannot gate DAG entry: the header is admitted, while the virtual processor
+/// refuses it the SELECTED CHAIN (`palw_v2_check_attempt_admission` fails the lottery →
+/// `StatusDisqualifiedFromChain`). A block's own work is carried by the blocks that merge it
+/// (`blue_work = selected parent's + Σ work(mergeset blues)`), so its weight is read off the
+/// GHOSTDAG data this node's own manager computes for the children it could have:
+/// * a child whose only parent is the losing attempt adds exactly 2^20 over it;
+/// * the attack shape: an honest heartbeat sibling H of the losing attempt L (same parent), and a
+///   block merging {H, L}: L is coloured BLUE (ADR-0105 transparency: a heartbeat never reddens an
+///   attempt) and the merging block carries L's 2^20 on top of the sink's — when H is its selected
+///   parent, that is a VALID chain block (H → sink) weighing a lottery loss as a full attempt.
+#[tokio::test]
+async fn hb_probe_verdict1_a_losing_lottery_attempt_still_earns_2_20_blue_work() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut d = duel(None);
+    for _ in 0..2 {
+        honest_slot(&mut d.victim, Vec::new()).await;
+    }
+    let sink = d.victim.sink();
+    let sink_bw = bw(&d.victim, sink);
+    let vp = d.victim.vp();
+
+    // The LOSING attempt, a child of the sink.
+    let (lose_block, _) = d.victim.build_attempt_drawn(2, 1_000, Vec::new(), &|_| true, false);
+    let lose = lose_block.header.hash;
+    assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(lose_block.header.pow_algo_id), "on the attempt lane");
+    assert_eq!(lose_block.header.direct_parents().to_vec(), vec![sink], "a child of the sink");
+    let inserted = d.victim.ctx.consensus.validate_and_insert_block(lose_block.to_immutable()).virtual_state_task.await;
+    let lose_status = d.victim.ctx.consensus.block_status(lose);
+    assert!(inserted.is_ok(), "the header is admitted: the lottery cannot gate DAG entry ({inserted:?})");
+    assert_eq!(
+        lose_status,
+        kaspa_consensus_core::blockstatus::BlockStatus::StatusDisqualifiedFromChain,
+        "and the chain refuses it: it did not win"
+    );
+    assert_eq!(d.victim.sink(), sink, "so the sink does not move");
+
+    // (1) A child with the losing attempt as its only parent: the losing attempt's own work.
+    let only = vp.ghostdag_manager.ghostdag(&[lose]);
+    let lose_work = only.blue_work.as_u128() as i128 - bw(&d.victim, lose);
+    // (2) The attack shape: an honest heartbeat sibling H of L, then a block merging {H, L}.
+    let h = d.victim.heartbeat(1_000, Vec::new()).await;
+    assert_eq!(h.header.direct_parents().to_vec(), vec![sink], "H is L's sibling: the virtual does not merge a disqualified tip");
+    let both = vp.ghostdag_manager.ghostdag(&[h.header.hash, lose]);
+    let l_blue = both.selected_parent == lose || both.mergeset_blues.contains(&lose);
+    let added = both.blue_work.as_u128() as i128 - sink_bw;
+    let over_honest = both.blue_work.as_u128() as i128 - vp.ghostdag_manager.ghostdag(&[h.header.hash]).blue_work.as_u128() as i128;
+    eprintln!(
+        "[hb-probe verdict1] LOSING-lottery attempt {lose}: status {lose_status:?}, its own work (carried by a child) +{lose_work}; \
+         a block merging {{honest sibling H, L}}: L blue = {l_blue}, selected parent = {} ({}), blue work +{added} over the sink, \
+         +{over_honest} over the same block without L",
+        if both.selected_parent == h.header.hash { "H" } else { "L" },
+        if both.selected_parent == h.header.hash { "a valid chain H -> sink" } else { "chain through L: disqualified" },
+    );
+    assert_eq!(lose_work, 1 << 20, "a LOSING-lottery attempt carries the same 2^20 as a winning one — header work alone earns blue work");
+    assert!(l_blue, "merged beside an honest heartbeat, the losing attempt is coloured blue");
+    assert_eq!(over_honest, 1 << 20, "and the merging block weighs exactly 2^20 more for it");
 }

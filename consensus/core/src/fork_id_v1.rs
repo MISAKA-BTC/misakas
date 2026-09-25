@@ -570,6 +570,8 @@ mod tests {
                 params.palw_bond_maturity = Some(crate::config::params::PalwBondMaturityV1 { activation: at, window_daa: 1_000 })
             }
             "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
+            // lane: rcore/f1-forkchoice-attacks
+            "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
             "palw_heartbeat" => {
                 let hb = params.palw_heartbeat.as_mut().expect("the RC probe base carries the heartbeat lane");
                 hb.activation = at;
