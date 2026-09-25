@@ -41,7 +41,7 @@ Mac 上で `drill-host.sh self-test` と host guard の空打ち（拒否され�
 drill できない**（guard が拒否する）。95.111.236.186 は seeder ホストで、drill script の `check-host` が拒否する（unit file が salt 無しの
 testnet-12 を名指す）うえ、11 GiB・egress 制限。ADR §8.3 item 3 は **4 台以上の fleet ホスト**を求める。8k の ready は 7 seat（別 operator）
 が要るので、manifest の 8 seat を「1 ホストに複数 seat（`node <seat>` を seat ごとに、ポートは P2P_BASE+seat など）」か「7 台以上に 1 seat」
-で配る。メモリは deploy kit PLAN §2 の算術（8k の仕事 1 本 3,493 MiB、producer はその上に attempt 3,456 MiB）で見積もる。
+で配る。メモリは deploy kit PLAN §2 の算術（8k の仕事 1 本 3,500 MiB、producer はその上に attempt 3,456 MiB。`kaspad/tests/t12_role_memory_figures.rs` が印字する）で見積もる。
 
 ## 3. 手順（公開後）
 

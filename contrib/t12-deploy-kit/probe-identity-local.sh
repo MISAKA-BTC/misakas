@@ -4,7 +4,7 @@
 # hash, the premine txid its genesis bonds sit on, the fence schedule id and the rule manifest digest.
 # Prints the fleet.env lines. LOCAL ONLY: it contacts no host.
 #
-#   ./probe-identity-local.sh [--build] [--kaspad <path>] [--drill-salt <64 hex>]
+#   ./probe-identity-local.sh [--build] [--kaspad <path>] [--drill-salt <64 hex>] [--layout]
 #
 #   --build            cargo build -p kaspad --bin kaspad first (PROFILE=release|dev, default release;
 #                      CARGO_TARGET_DIR / CARGO_BUILD_JOBS as the caller sets them). The identity is a
@@ -14,6 +14,18 @@
 #   --drill-salt <hex> ALSO derive the drill genesis this salt gives (kaspad --palw-drill-write-keyring into
 #                      a throwaway dir: it writes files and exits, dials nobody) and print its
 #                      `DRILL_GENESES+=…` line. The node probe itself never carries a drill flag.
+#   --layout           ALSO run this tree's pin of the kit's copies of chain facts
+#                      (consensus/core/tests/t12_deploy_kit_constants.rs: card N = bond index N and fee
+#                      float FEE_FLOAT_BASE+N paid to the card's payout key, CLASS_8K, ART_8K_BYTES (the
+#                      committed sidecar's artifact_bytes),
+#                      CLASS_2M_PREFIX, the explorer's class table and PANEL_BOND_TX) and print its
+#                      layout table; and check the committed 8k sidecar against MANIFEST_8K_SHA256.
+#                      Needs cargo (one test target of kaspa-consensus-core).
+#
+# Always: the probe node's genesis classes (id, artifact bytes, root) and genesis bond outpoints are
+# read over RPC and compared with fleet.env CLASS_8K / PREMINE_TXID and lib.sh CLASS_2M_PREFIX — the facts
+# `--check` and the fp/genesis gate do not see (exit 4 on a mismatch). The registry's `bytes=` is the work
+# derivation's artifact figure, not the file's size, so ART_8K_BYTES is checked by --layout (sidecar), not here.
 #
 # The probe node is isolated: 127.0.0.1 listeners only (P2P, wRPC JSON), --nogrpc, --nodnsseed,
 # --disable-upnp, --outpeers=0, no --addpeer/--connect, a fresh throwaway --appdir, HOME pointed at the
@@ -25,13 +37,14 @@ set -euo pipefail
 KIT=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$KIT/../.." && pwd)
 PROFILE=${PROFILE:-release}
-BUILD=0; KASPAD=""; SALT=""
+BUILD=0; KASPAD=""; SALT=""; LAYOUT=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --build) BUILD=1 ;;
+        --layout) LAYOUT=1 ;;
         --kaspad) KASPAD=${2:?--kaspad needs a path}; shift ;;
         --drill-salt) SALT=${2:?--drill-salt needs 64 hex}; shift ;;
-        -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
     shift
@@ -89,6 +102,7 @@ for _ in $(seq 1 90); do
 done
 [ -n "$FP" ] && [ -n "$GEN" ] || { tail -30 "$LOG" >&2; die "no identity over RPC within 180 s — see $LOG"; }
 PREMINE=$(python3 "$KIT/t12check.py" --port "$JSON" --premine 2>/dev/null | sed -n 's/^PREMINE_TXID=//p' || true)
+GLAYOUT=$(python3 "$KIT/t12check.py" --port "$JSON" --layout 2>/dev/null || true)
 kill -INT "$PID" 2>/dev/null || true
 for _ in $(seq 1 30); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
 PID_EXITED=1; kill -0 "$PID" 2>/dev/null && PID_EXITED=0
@@ -114,6 +128,28 @@ if [ -n "$SALT" ]; then
     [ "$DRILL_GEN" != "$GEN" ] || die "the salt did not move the genesis"
 fi
 
+# ---- the kit's copies of chain facts, against what this binary's genesis registers ----
+CLASS_2M_PREFIX=$(sed -n 's/^CLASS_2M_PREFIX=//p' "$KIT/lib.sh" | head -1)
+kitbad=""
+row8k=$(grep -E "^CLASS ${CLASS_8K:-none} " <<<"$GLAYOUT" || true)
+[ -n "$row8k" ] || kitbad+=" CLASS_8K ${CLASS_8K:0:16}… is not a genesis class of this binary;"
+grep -qE "^CLASS ${CLASS_2M_PREFIX:-none}" <<<"$GLAYOUT" || kitbad+=" lib.sh CLASS_2M_PREFIX ${CLASS_2M_PREFIX:-?} names no genesis class;"
+if [ -n "$PREMINE" ]; then
+    for n in 0 1 2 3 4 5 6 7; do grep -qx "BOND $PREMINE:$n" <<<"$GLAYOUT" || kitbad+=" no genesis bond at PREMINE_TXID:$n;"; done
+fi
+LAYOUT_OUT=""
+if [ "$LAYOUT" = 1 ]; then
+    side="$REPO/consensus/core/src/config/class-manifests/qwen25-1.5b-a16-8k.palwmanifest"
+    sside=$( (command -v sha256sum >/dev/null && sha256sum "$side" || shasum -a 256 "$side") | cut -d' ' -f1)
+    [ "$sside" = "${MANIFEST_8K_SHA256:-none}" ] || kitbad+=" MANIFEST_8K_SHA256 ${MANIFEST_8K_SHA256:0:16}… != the committed 8k sidecar's ${sside:0:16}…;"
+    say "running the kit-constants pin (cargo test -p kaspa-consensus-core --test t12_deploy_kit_constants)"
+    if LAYOUT_OUT=$(cd "$REPO" && cargo test --locked -p kaspa-consensus-core --test t12_deploy_kit_constants -- --nocapture 2>&1); then
+        LAYOUT_OUT=$(grep -E '^(LAYOUT|CLASSES|GENESIS) ' <<<"$LAYOUT_OUT")
+    else
+        tail -25 <<<"$LAYOUT_OUT" >&2; kitbad+=" the kit-constants pin FAILED (above);"; LAYOUT_OUT=""
+    fi
+fi
+
 REVSRC=""; if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then REVSRC=$(git -C "$REPO" rev-parse --short=12 HEAD); [ -z "$(git -C "$REPO" status --porcelain --untracked-files=no)" ] || REVSRC="$REVSRC-dirty"; fi
 cat <<EOF
 
@@ -130,5 +166,10 @@ PREMINE_TXID=${PREMINE:-__FILL_ME__}
 # RULE_MANIFEST_DIGEST=${MANI:-?}
 EOF
 [ -n "$DRILL_GEN" ] && echo "DRILL_GENESES+=\" $DRILL_GEN\"   # drill salt id: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("salt_id","?"))' "$KR/manifest.json")"
+echo "# genesis classes (bytes = the registry's work figure, not the file) and bonds this binary registers (compared with CLASS_8K, CLASS_2M_PREFIX, PREMINE_TXID):"
+sed 's/^/#   /' <<<"$GLAYOUT"
+[ -n "$LAYOUT_OUT" ] && { echo "# premine layout (t12_deploy_kit_constants: card N = bond N, fee float FEE_FLOAT_BASE+N = ${FEE_FLOAT_BASE:-?}+N):"; sed 's/^/#   /' <<<"$LAYOUT_OUT"; }
+[ -z "$kitbad" ] || say "KIT MISMATCH:$kitbad — fix fleet.env.example / lib.sh / app.js at the re-pin (checklist §5) before staging"
 if [ -n "$bad" ]; then say "WARNING: this build's genesis ${bad:0:16}… is FORBIDDEN (fleet.env FORBIDDEN_GENESIS / DRILL_GENESES) — install-*.sh will refuse it"; exit 3; fi
+[ -z "$kitbad" ] || exit 4
 exit 0

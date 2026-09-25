@@ -160,6 +160,11 @@ echo "--- current explorer wiring"
 grep -nE 'server 127\.0\.0\.1:|proxy_pass http://127\.0\.0\.1:(2|3|8)[0-9]{3}' "$NGX" | sed 's/^/nginx: /'
 for u in kaspa-t11-db-filler kaspa-t11-rest-server; do
   printf '%s: %s; drop-ins: %s\n' "$u" "$(systemctl is-active $u)" "$(ls /etc/systemd/system/$u.service.d 2>/dev/null | tr '\n' ' ')"
+  # The deploy kit's other wiring (install-113.sh explorer-apply) leaves zz-t12r.conf, which sorts after
+  # this script's t12g.conf and would silently win: the two are exclusive (DEPLOY.md §9).
+  if [ -e "/etc/systemd/system/$u.service.d/zz-t12r.conf" ]; then
+    echo "PREFLIGHT FAIL: $u carries install-113.sh explorer-apply's zz-t12r.conf — the explorer is already wired the other way (DEPLOY.md §9); run install-113.sh explorer-rollback first, or keep that wiring"; rc=1
+  fi
 done
 grep -o '/app.js?v=[^"]*' "$SITE/index.html" | sed 's/^/live index: /'
 exit ${rc:-0}
@@ -217,6 +222,9 @@ units(){
   say "filler + REST -> $NODE_GRPC / $NEW_DB"
   remote <<'EOF'
 set -euo pipefail
+for u in kaspa-t11-db-filler kaspa-t11-rest-server; do
+  [ ! -e "/etc/systemd/system/$u.service.d/zz-t12r.conf" ] || { echo "refusing: $u carries install-113.sh explorer-apply's zz-t12r.conf (it would override t12g.conf) — one wiring only, DEPLOY.md §9"; exit 1; }
+done
 systemctl stop kaspa-t11-db-filler
 for u in kaspa-t11-db-filler kaspa-t11-rest-server; do
   d=/etc/systemd/system/$u.service.d

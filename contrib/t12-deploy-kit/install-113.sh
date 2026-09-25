@@ -5,14 +5,22 @@
 #
 #   b6  misaka-t12-node (drop-in)  0.0.0.0:26311  gRPC 26312  borsh 26313  json 26314  EVM 8545
 #       floor producer + 8k seat + HEARTBEAT
-#       share 8,192 MiB (R-core+, PLAN.md §2) = floor attempt 2,228 + its own floor DA answer 2,228 + one
-#       8k seat duty 3,493 (+ 243)
+#       share 8,192 MiB (R-core+, PLAN.md §2) = floor attempt 2,229 + its own floor DA answer 2,229 + one
+#       8k seat duty 3,500 (+ 234); MemoryMax 17G = a crash guard sized so the ledger's cgroup term
+#       (memory.max − memory.current, page cache included) never binds below the share (PLAN.md §2)
 #   gRPC 26312 → kaspa-t11-db-filler / kaspa-t11-rest-server; borsh 26313 → seeder (and the t11
 #   validators' --node-wrpc-borsh); json 26314 → nginx upstream misaka_json and wallet.misakascan.com
 #   /kaspa; EVM 8545 → nginx /evm.
 #
-# Explorer: `explorer-apply` points nginx/filler/REST at b6 and a FRESH database (the old one holds
-# the old genesis's blocks); `explorer-rollback` undoes exactly that. Run it after `switch` + `check`.
+# Explorer: ONE of two wirings, never both (DEPLOY.md §9 — the operator's choice, `../misakascan-t12/
+# deploy.sh` recommended): `explorer-apply` here points nginx/filler/REST at b6 and a FRESH database
+# `kaspa_t12r` (drop-in zz-t12r.conf, no cursor seed); `deploy.sh` writes t12g.conf and seeds `kaspa_t12`
+# at genesis. zz-t12r.conf sorts after t12g.conf and would silently win, so each refuses when the
+# other's drop-in is present. `explorer-rollback` undoes explorer-apply. Run after `switch` + `check`.
+#
+# switch refuses while the t11 DNS-finality validators (misaka-validator, misaka-validator-2) run: they
+# dial 127.0.0.1:26313 with testnet-11 settings and restart-loop against b6 (PLAN.md §10 Q7) — stop them
+# first; they come back as testnet-12 validators after launch (checklist §4 step 18).
 #
 # Run as root on .113 from $REL_ROOT/kit:  ./install-113.sh preflight | stage | switch | check | explorer-apply | rollback
 . "$(dirname "$0")/lib.sh"
@@ -22,7 +30,7 @@ RESERVE_MIB=4096             # non-kaspad RSS 1.3 GiB measured 09-23 + postgres 
 START_GAP=10
 BINARIES=(kaspad misaka palw-class)
 NODES=(
-  "6|misaka-t12-node|dropin|0.0.0.0:26311|26313|26314|26312|8545|8192|11|floor|1|1|169.58.39.220:26311,169.58.39.220:26321"
+  "6|misaka-t12-node|dropin|0.0.0.0:26311|26313|26314|26312|8545|8192|17|floor|1|1|169.58.39.220:26311,169.58.39.220:26321"
 )
 OLD_APPDIRS=(/root/.t12)
 EXPLORER_DB=${EXPLORER_DB:-kaspa_t12r}
@@ -36,16 +44,31 @@ host_preflight() {
     local u; for u in "${EXPLORER_UNITS[@]}"; do
         say "  $u: $(systemctl show -p Environment --value $u | tr ' ' '\n' | grep -E '^KASPAD_HOST_1=' | tail -1) db=$(systemctl show -p Environment --value $u | tr ' ' '\n' | grep -E '^SQL_URI=' | tail -1 | sed 's#.*/##')"
     done
-    say "  t11 validators on this host use --node-wrpc-borsh 127.0.0.1:26313 (they already talk to the t12 node today)"
+    local v; for v in "${T11_VALIDATORS[@]}"; do say "  $v: $(systemctl show -p ActiveState --value "$v") — switch refuses while it runs (t11 settings against b6's 26313, PLAN.md §10 Q7)"; done
+    [ -z "$(explorer_other_wiring)" ] || say "  explorer: deploy.sh's t12g.conf is present — explorer-apply will refuse (DEPLOY.md §9)"
     ls -l /root/palw-class/qwen25-1.5b-a16-8k.palwart* 2>/dev/null | sed 's/^/  /' || true
 }
 
+T11_VALIDATORS=(misaka-validator misaka-validator-2)
+
 host_guard_switch() {
     systemctl is-active --quiet misaka-t11-node && die "misaka-t11-node is running — it would fight b6 for 26311"
+    local v running=""
+    for v in "${T11_VALIDATORS[@]}"; do systemctl is-active --quiet "$v" && running+="$v "; done
+    [ -z "$running" ] || die "the t11 DNS-finality validators are running (${running% }): with testnet-11 settings they dial 127.0.0.1:26313 and restart-loop against b6 — \`systemctl stop ${T11_VALIDATORS[*]}\` first (PLAN.md §10 Q7, operator decision)"
+    return 0
+}
+
+# the other explorer wiring's drop-in (DEPLOY.md §9): deploy.sh's t12g.conf
+explorer_other_wiring() {
+    local u
+    for u in "${EXPLORER_UNITS[@]}"; do [ -e "/etc/systemd/system/$u.service.d/t12g.conf" ] && echo "/etc/systemd/system/$u.service.d/t12g.conf"; done
     return 0
 }
 
 explorer_apply() {
+    local other; other=$(explorer_other_wiring)
+    [ -z "$other" ] || die "misakascan deploy.sh already wired the explorer ($other) — the two wirings are exclusive (DEPLOY.md §9); use deploy.sh's rollback, or keep it"
     systemctl is-active --quiet misaka-t12-node || die "misaka-t12-node is not running"
     python3 "$KIT_DIR/t12check.py" --port 26314 --expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS" \
         || die "b6 does not pass its check — not pointing the public explorer at it"

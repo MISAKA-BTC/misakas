@@ -73,6 +73,11 @@ verify_sha() { # file expected
 # Node table. Each host script defines NODES=( "spec" ... ) with fields
 #   id|unit|mode|listen|borsh|json|grpc|evm|share_mib|memmax_gib|produce|heartbeat|seat8k|peers
 #   mode    : dropin (the unit exists; ExecStart is replaced by a drop-in) | new (unit file created)
+#   memmax  : the unit's MemoryMax in GiB, or '-' for none (MemoryMax=infinity). A crash guard, never a
+#             division of the host: the node's memory ledger reads memory.max − memory.current as a second
+#             live bound (kaspad palw_backends host_available_bytes_v1), so a MemoryMax that does not clear
+#             share + base + artifact page cache + running working sets + 1 GiB refuses duties the share
+#             admits (PLAN.md §2). check_memmax refuses the plainly impossible ones at stage.
 #   grpc/evm: port or '-'
 #   produce : none | floor | 8k
 #   heartbeat, seat8k : 0|1
@@ -130,6 +135,19 @@ build_args() { # fills ARGS from the parsed node
                 [[ "${a#*=}" =~ ^[0-9a-f]{128}:[0-9]+$ ]] || die "b$N_ID: $a is not <128-hex premine txid>:<index>" ;;
         esac
     done
+}
+
+# check_memmax — refuse a MemoryMax under which the ledger's cgroup term (memory.max − memory.current −
+# 1 GiB) could never reach the share: share + the 8k artifact's page cache (charged to the first node that
+# faults it in) + the 1 GiB reserve is the floor; PLAN.md §2 derives the real figure (+ base, + the other
+# running duties' working sets, + a cache allowance) and kaspad/tests/t12_role_memory_figures.rs prints it.
+check_memmax() {
+    [ "$N_MEMMAX" = - ] && return 0
+    [[ "$N_MEMMAX" =~ ^[0-9]+$ ]] || die "b$N_ID: memmax must be GiB or '-', got $N_MEMMAX"
+    local art_mib=0 floor
+    [ "$N_SEAT8K" = 1 ] && art_mib=$(( (ART_8K_BYTES + 1048575) / 1048576 ))
+    floor=$((N_SHARE + art_mib + 1024))
+    [ $((N_MEMMAX * 1024)) -ge "$floor" ] || die "b$N_ID: MemoryMax ${N_MEMMAX}G (${N_MEMMAX}×1024 MiB) < share ${N_SHARE} + artifact ${art_mib} + 1024 = ${floor} MiB — the ledger's cgroup term would refuse duties the share admits (PLAN.md §2)"
 }
 
 atomic_write() { # path mode  (content on stdin)
@@ -194,11 +212,12 @@ TimeoutStopSec=180
 StandardOutput=journal
 StandardError=journal
 MemoryHigh=infinity
-MemoryMax=${N_MEMMAX}G
+MemoryMax=$( [ "$N_MEMMAX" = - ] && echo infinity || echo "${N_MEMMAX}G" )
 EOF
 }
 
 write_unit() { # into $REL/units — nothing under /etc yet
+    check_memmax
     mkdir -p "$REL/units"
     if [ "$N_MODE" = dropin ]; then
         atomic_write "$REL/units/$N_UNIT.zz-t12-regenesis.conf" 0644 <<EOF
@@ -415,16 +434,27 @@ start_node() { # parsed node
     wait_genesis "$N_UNIT"
 }
 
+# the checker's expectations: the release identity AND the kit's copies of chain facts a node never checks
+# at start (the genesis bonds on PREMINE_TXID:0..7, the 8k class CLASS_8K registered, a class under the 2M
+# row's prefix) — a merge that moved one of them fails the switch gate here instead of idling a producer later.
+# (ART_8K_BYTES is the FILE's size and is pinned to the committed sidecar by t12_deploy_kit_constants; the
+# registry's artifactBytes is the work derivation's figure — 2,620,391,424 for both dense rows — not the file.)
+t12check_expect() { # sets EXPECT_ARGS
+    EXPECT_ARGS=(--expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS"
+                 --expect-premine "$PREMINE_TXID" --expect-class "$CLASS_8K" --expect-class-prefix "$CLASS_2M_PREFIX")
+}
+
 wait_genesis() { # unit — the node's own RPC names EXPECT_GENESIS (a fresh node's pruning point IS its genesis)
     local u=$1 i
+    t12check_expect
     for i in $(seq 1 20); do
-        if python3 "$KIT_DIR/t12check.py" --port "$N_JSON" --expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS" >/dev/null 2>&1; then
-            say "  $u genesis OK ${EXPECT_GENESIS:0:16}… (json 127.0.0.1:$N_JSON)"; return 0
+        if python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" --registry >/dev/null 2>&1; then
+            say "  $u genesis OK ${EXPECT_GENESIS:0:16}…, bonds on ${PREMINE_TXID:0:16}…:0..7, class ${CLASS_8K:0:16}… registered (json 127.0.0.1:$N_JSON)"; return 0
         fi
         sleep 3
     done
-    warn "$u does not answer with genesis ${EXPECT_GENESIS:0:16}… on 127.0.0.1:$N_JSON — stopping it"
-    python3 "$KIT_DIR/t12check.py" --port "$N_JSON" --expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS" >&2 || true
+    warn "$u does not answer with genesis ${EXPECT_GENESIS:0:16}… / the kit's bonds and classes on 127.0.0.1:$N_JSON — stopping it"
+    python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" --registry >&2 || true
     systemctl stop "$u" || true
     return 1
 }
@@ -441,13 +471,30 @@ switch_node() { # parsed node: record prior state, stop, install unit, start
 # ---------------------------------------------------------------------------------------------
 # post-start checks (read-only)
 # ---------------------------------------------------------------------------------------------
+# cgroup_memory <unit> — the unit's memory.max / memory.current (anon + file) and its main process's RSS:
+# the figures the ledger's cgroup term reads (PLAN.md §2). Warns when that term is below the share.
+cgroup_memory() {
+    local u=$1 cg d max cur anon file pid rss_kb live
+    cg=$(systemctl show -p ControlGroup --value "$u" 2>/dev/null); d="/sys/fs/cgroup${cg}"
+    [ -n "$cg" ] && [ -r "$d/memory.current" ] || { say "  cgroup: (no cgroup v2 memory files for $u)"; return 0; }
+    max=$(cat "$d/memory.max"); cur=$(cat "$d/memory.current")
+    anon=$(awk '$1=="anon"{print $2}' "$d/memory.stat"); file=$(awk '$1=="file"{print $2}' "$d/memory.stat")
+    pid=$(systemctl show -p MainPID --value "$u"); rss_kb=$(awk '/VmRSS/{print $2}' "/proc/$pid/status" 2>/dev/null || echo 0)
+    say "  cgroup: memory.max $([ "$max" = max ] && echo none || echo "$((max / 1048576)) MiB"), current $((cur / 1048576)) MiB (anon $((anon / 1048576)), file/page cache $((file / 1048576))), process RSS $((${rss_kb:-0} / 1024)) MiB"
+    if [ "$max" != max ]; then
+        live=$(( (max - cur) / 1048576 - 1024 ))
+        [ "$live" -ge "$N_SHARE" ] || warn "b$N_ID: memory.max − memory.current − 1 GiB = ${live} MiB < share ${N_SHARE} MiB — the ledger is bound by the cgroup, not the share (page cache ${file:+$((file / 1048576)) MiB}); PLAN.md §2: raise this node's memmax or set '-'"
+    fi
+}
+
 check_nodes() {
     local spec rc=0
+    t12check_expect
     for spec in "${NODES[@]}"; do
         parse_node "$spec"
         say "== b$N_ID $N_UNIT: $(systemctl show -p ActiveState,SubState,NRestarts --value "$N_UNIT" | tr '\n' ' ')"
-        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" --expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS" \
-            ${CHECK_REGISTRY:+--registry} || rc=1
+        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" ${CHECK_REGISTRY:+--registry} || rc=1
+        cgroup_memory "$N_UNIT"
         journalctl -u "$N_UNIT" --since "-15min" --no-pager -o cat 2>/dev/null \
             | grep -E 'WrongGenesis|WrongConsensusParams|panicked|ERROR|class manifest|does not know|refusing \(exit 78\)|PALW DRILL|memory ledger cannot cover|does not configure the execution lane' \
             | sed -E 's/^[0-9-]+ [0-9:.+]+ //' | cut -c1-200 | sort | uniq -c | sort -rn | head -6 || true

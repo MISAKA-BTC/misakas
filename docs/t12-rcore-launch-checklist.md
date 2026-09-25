@@ -64,7 +64,10 @@ D-1〜D-10 の中身は `scripts/misaka-palw-t12-rcore-drill.sh steps`。drill �
 `p2_t29_conviction_and_maturity.rs`、`consensus/core/src/palw_vesting_read_v1.rs` / `misaka-cli/src/palw_vesting.rs`（T51）、
 `misaka-cli/src/operator/*` / `kaspad/src/palw_panel.rs`（T52）、`consensus/src/pipeline/virtual_processor/tests/t53_drill_isolation.rs` と
 `kaspad/src/palw_drill.rs`（T53）、`consensus/core/src/palw_state_v2/tests/vesting_fold_v1.rs`（T47、T58）。
-T54a/b/c・T54d〜T54g・T55 は所在不明または P2-8（`rcore/p2-file`、未 merge）に依存。D-4 と D-5 は P2-7 と P2-8 が要る。
+T54a と T54b は processor 層の半分が `consensus/src/pipeline/virtual_processor/tests/t46_false_valid_real_claim.rs` にある:
+`t34_t54a_an_unserved_seats_automatic_accusation_defaults_a_silent_producer_and_pays_it_through_3d`（T54a、:4771）と
+`t32_t54b_a_silent_producers_covering_signer_answers_and_the_accusers_pay`（T54b、:4546）。どちらも doc が「devnet preset 上の node e2e は
+公開後」と書いている。T54c・T54d〜T54g・T55 は所在不明または P2-8（`rcore/p2-file`、未 merge）に依存。D-4 と D-5 は P2-7 と P2-8 が要る。
 
 ### item 6 — SEAT-R は F2 の fence と同じ binary（T18p-M GREEN）、SEAT-S1〜S4 と `PalwDrillFaultV1` も
 
@@ -72,8 +75,16 @@ a0af3c92: `palw_seat_r_in_force_v1`（`kaspad/src/palw_panel.rs`、test `seat_r_
 `PalwDrillFaultV1`（`consensus/core/src/palw_backend.rs`、`misaka-palw-base0/src/{backend,produce}.rs`）、T18p-M（`seat_material_duty.rs`）、
 SEAT-S1/S2/S4（`fix/t12-seat-s1s2s4` は merge 済み、`misaka-palw-base0/tests/seat_s1_whole_job.rs`・`seat_s2_output_root.rs`・`seat_s4_*.rs`）、
 SEAT-0（`fix/t12-seat0-launch` は merge 済み。`fix/t12-live-seat0` cec601e7 は live 用で未 merge — 公開 line には不要か監査が確認）。
-添付: 上の test の PASS と、`AnyValid` の site（contradiction 9 と 13）が SEAT-S1・S3・S4 と T18p-M の GREEN の上で立っていること（Q-6。
-さもなければ build の前に `Whole` へ）。
+SEAT-S3（`AnyValid` の site が立つ条件の一つ）: `palw_seat_s3_sample_v1`（`kaspad/src/palw_panel.rs`、doc は「capture は
+`verify_material(capture, roots) == Matches` の後にだけ使う」）、test `seat_s_tests::c1_s3_never_attests_past_the_fence_without_verify_material`
+と `q7_sampled_and_collector_tests::s3_samples_only_a_capture_seat_s3_verified`（どちらも `kaspad/src/palw_panel.rs`）。
+添付: 上の test（SEAT-S1・S2・S3・S4・T18p-M・SEAT-R）の PASS と、`AnyValid` の site（contradiction 9 と 13）が SEAT-S1・S3・S4 と
+T18p-M の GREEN の上で立っていること（Q-6。さもなければ build の前に `Whole` へ）。
+
+```bash
+cargo test --locked -p kaspad --lib -- seat_s_tests::c1_s3_never_attests_past_the_fence_without_verify_material \
+    q7_sampled_and_collector_tests::s3_samples_only_a_capture_seat_s3_verified seat_r_is_in_force_on_testnet_12_from_genesis_and_nowhere_else
+```
 
 ### item 7 — `AttnFused` の held-class の穴（8k は A-held、2M は閉じる）
 
@@ -98,9 +109,9 @@ a0af3c92: licence-stall（a4dfe903、d94d3a1b）あり、panel-room の C7 re-ke
 |---|---|---|---|
 | 9-1 | F2 と F1 の fence（`palw_offence_attribution`）は SEAT-S1・SEAT-S2・SEAT-R と一緒にだけ出す。SEAT-S2 の kaspad 半分は `palw_seat_replay_step_v1` で `CoreV1` の `output_root` を比べる | あり（`449fd892` の実 model-class replay test、`palw_seat_replay_step_v1`） | `449fd892` の test（held A16 v7 行: 正直な `CoreV1` claim が licence、Legacy の `output_root` は refute）の PASS |
 | 9-2 | `AnyValid` fence の H-1（S3 の layer-sample は `verify_material` の前に Valid を署名しない）と H-2（FP S1 resume は `palw_fp_job_pin_of_context_v1(&ctx) == duty.fp_job_pin_v1()`） | H-1 あり（`1e20edd50`、test `c1_s3_never_attests_past_the_fence_without_verify_material`）。H-2 あり（`kaspad/src/palw_panel.rs` の `palw_fp_job_pin_of_context_v1(&ctx) != pin` の拒否、`d675423d` 取り込み済み） | 両 test の PASS、T18p-M の PASS。H-2 が入っていなければ identity site は `Whole` のまま |
-| 9-3 | producer の V2 DA responder が `palw_rcore_plus` を武装する全 build にある（honest producer が告発に答え、課金されない processor e2e） | P2-7 merge 済み（7c2850b3、`palw_disclosure_duties_v1` が自分の claim と lock が覆う claim の session を列挙） | processor の e2e test（正直な producer が答えて課金されない）の名前と PASS。監査の M3 review F2（CRITICAL）が閉じたことの確認 |
+| 9-3 | producer の V2 DA responder が `palw_rcore_plus` を武装する全 build にある（honest producer が告発に答え、課金されない processor e2e） | P2-7 merge 済み（7c2850b3、`palw_disclosure_duties_v1` が自分の claim と lock が覆う claim の session を列挙）。processor e2e は `t46_false_valid_real_claim.rs` の `p2_7_an_honest_producer_answers_two_accusers_with_the_nodes_builder_and_is_not_charged`（:4428）と `p2_7_a_held_session_on_an_attempt_claim_is_answered_from_its_capture`（:4655） | 両 test の PASS。監査の M3 review F2（CRITICAL）が閉じたことの確認。**運用上の飢え**（seat replay 2 本が DA 応答の余地を取る、PLAN §2.5 R-2b）は §7 の open item |
 | 9-4 | `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1` は seat の DA 自動応答（P2-7）と同じ commit でだけ `true` | `true`（`consensus/core/src/palw_da_rcore_v1.rs:67`）、P2-7 と同じ line | flag の値と、covering signer の `MaterialDisclosedV2` の test |
-| 9-5 | `misaka-palw-derive` と stranger script は network の attempt rule（t12 は `CoreV1`）で `output_root` を再計算。FP worker も | あり（`a4682a8d`、`d675423d`） | `misaka-palw-derive` の test と FP worker の rule の test の PASS |
+| 9-5 | `misaka-palw-derive` と stranger script は network の attempt rule（t12 は `CoreV1`）で `output_root` を再計算。FP worker も | あり（`a4682a8d`、`d675423d`）。stranger script は `scripts/misaka-palw-derive-stranger.py` | `cargo test --locked -p misaka-palw-derive --test output_root_rules`（`the_network_names_the_rule_testnet_12_core_v1_and_testnet_11_legacy`、`derive_recomputes_the_chains_root_on_every_testnet_12_model_class`、`the_output_commitment_is_the_strangers_pinned_literal`）、`python3 scripts/misaka-palw-derive-stranger.py selftest`（build 不要）、FP worker の rule の test の PASS |
 | 9-6 | `PALW_RCORE_VESTING_ROWS_LANDED_V1 = true` と S-4 の funnel（kaspad は false なら起動しない） | `true`（`consensus/core/src/palw_state_v2.rs:2846`）、S-4 merge 済み | flag の値と `rcore_s4_conviction_funnel.rs` の PASS |
 | 9-7 | 4-quater の consensus 半分と P-1（`palw_class_verify_deadline`、pruning depth ≈ 74,920 DAA、D_cap 16,000）が genesis params にある — 2M は規則で閉じる | **無い**（`feat/t12-class-verify-deadline` 未 merge）。pruning depth は regenesis でしか決められない | 出荷 commit の t12 params の値（`probe-identity-local.sh` の fingerprint が動くこと）と O-11 の拒否 test |
 | 9-8 | A-held と shard court（`feat/t12-aheld`、8be0f661 の上）が監査の review 後に merge、B の routing・object 57 の自動応答・N4 | **無い** | 監査 review の結論、merge commit、item 7 の test |
@@ -136,14 +147,14 @@ fingerprint `8a481023…` は EVM bridge ledger（fad522c6、int-3 への merge 
 | 3 | **Activation Pool**（`feat/t12-activation-pool`）を merge（genesis の行を動かし得る） | 実装 | |
 | 4 | **B の lane**（`rcore/p2-file` の P2-8 filer 3 本、`rcore/m5b-tests`、必要なら `rcore/readiness-escalation`）を merge。merge は手で解いたら push 前に build（メモリ則） | 実装 | |
 | 5 | §1・§2 の各 test を出荷候補で確認し、所在不明の番号を監査と詰める | 実装・監査 | |
-| 6 | **再 pin**（§5）。t12 の identity を読み直し（`probe-identity-local.sh --build`）、resource profile を再評価して PLAN §2 の表を直す（`misaka-palw-base0` の profile の scratch test、PLAN §2） | 実装 | |
-| 7 | genesis が a27f8f44 から動いたら、a27f8f44 を `fleet.env.example` の `FORBIDDEN_GENESIS` に足し、docs（`docs/testnet12-join-mining.md`、`docs/testnet-12-regenesis-2026-09-23.md`）と explorer の `PANEL_BOND_TX` を直す | 実装 | |
+| 6 | **再 pin**（§5）。t12 の identity と kit の写しを読み直し（`probe-identity-local.sh --build --layout`、exit 0 が条件）、resource profile を再評価して PLAN §2 の表と install-*.sh の share / memmax を直す: `cargo test --locked -p kaspad --test t12_role_memory_figures -- --ignored --nocapture`（全行が `OK`） | 実装 | |
+| 7 | genesis が a27f8f44 から動いたら、a27f8f44 を `fleet.env.example` の `FORBIDDEN_GENESIS` と `t12_regenesis.rs` の superseded 接頭辞リストに足し、docs（`docs/testnet12-join-mining.md`、`docs/testnet-12-regenesis-2026-09-23.md`）と explorer の `PANEL_BOND_TX` を直す。class id・premine 配置・kit の写しは §5 の 7〜9 | 実装 | |
 | 8 | **最終 battery を 2 回**（§1 item 2 のコマンド、既定と `--features evm`）。同じ commit で core・kaspad・base0・cli も | 実装 | |
 | 9 | 出荷 commit を origin に push | ユーザー | **【確認】** |
 | 10 | **fleet の build host（5.104）で release build**: `build-release-5104.sh <commit>`。IDENTITY が step 6 の値と一致 | ユーザー | **【確認】**（公開予定ホストでの 20 分超のビルド） |
 | 11 | `fleet.env` を埋める（`REV`・sha256 3 本・`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID`・`HB_ADDR`）→ `distribute-from-mac.sh kit / binaries / artifact` → 各 host で `preflight` → `stage` | ユーザー | **【確認】**（リモートへの書き込み） |
 | 12 | **ユーザーの最終確認**: 公開 node の停止・置換の時間帯、告知の文面、DNS validator と faucet の資金 | ユーザー | **【確認】** |
-| 13 | **配備**: ibm → .113 → 5.104 の順に `install-<host>.sh switch`（公開 node を止めて置き換える） | ユーザー | **【確認】**（host ごと） |
+| 13 | **配備**: ibm → .113 → 5.104 の順に `install-<host>.sh switch`（公開 node を止めて置き換える）。host ごとの前提（PLAN §5）: **ibm** — §10 Q12 の旧モデル削除で disk を空ける、`DISABLE_T11_NODE0=1`（Q5）。**.113** — `systemctl stop misaka-validator misaka-validator-2`（Q7。switch は動いていれば拒否）。**5.104** — B0: 別 session の t12f/t12p/scan/daa-obs node の停止（switch は拒否）、t11 fixture node の RSS が RESERVE_MIB（4,096）に収まること（preflight が表示）。各 host で preflight が OK | ユーザー | **【確認】**（host ごと） |
 | 14 | **explorer**: `contrib/misakascan-t12/DEPLOY.md` §9 の 1 系統（推奨 `deploy.sh`）で nginx・filler・DB・app.js | ユーザー | **【確認】** |
 | 15 | **seeder**: 触らない（KEEP）。`seeders/40-verify.sh` と `60-join-check.sh` | ユーザー | **【確認】**（60 は 5.104 で使い捨て node） |
 | 16 | `check-fleet.sh`、`CHECK_REGISTRY=1 check-fleet.sh`（PLAN §5 の合格条件） | ユーザー | |
@@ -186,9 +197,41 @@ pin を動かす前に、何が動いたのかを 1 つずつ言えること（�
 6. **その他の digest**: `consensus/core/tests/palw_same_fingerprint_same_verdict.rs` の `CORPUS_VERDICT_DIGEST`（verdict が動いたときだけ）、
    `consensus/core/src/config/params.rs` の `PALW_T12_RCORE_CONSERVATIVE_CLASSES`（2M の class id。graph-v7 profile が動いたときだけ、
    `the_t12_c7_list_is_the_2m_row` が確認）、`consensus/core/tests/t12_regenesis.rs` の genesis 系 test、`kaspad/src/palw_drill.rs` の T53。
-7. **文書と kit**: `docs/testnet12-join-mining.md`・`docs/testnet-12-regenesis-2026-09-23.md`（genesis `a27f8f44…`、premine `5e0d5f1b…`）、
-   `contrib/t12-deploy-kit/PLAN.md` §4 の暫定値、`contrib/misakascan-t12/app.js` の `PANEL_BOND_TX`、この文書の §3。
-8. 再 pin の commit の後に step 8 の battery を 2 回。
+7. **genesis の class id・artifact root**（A-held や Activation Pool が genesis の行や graph-v7 profile を動かしたら動く）
+   - `consensus/core/src/config/class_manifest_const_v1.rs` の `the_committed_manifest_parses_to_what_it_says`（2M: inventory root
+     `f63af2c4…`、class id `74c67e63…`、artifact digest `b5baca63…`）と `the_committed_8k_manifest_parses_to_what_it_says`（8k: `88096dc1…`、
+     `ebf44d0a…`、`f4af38d9…`）。committed sidecar（`consensus/core/src/config/class-manifests/*.palwmanifest`）を差し替えたら、その sha256 を
+     kit の `MANIFEST_8K_SHA256` に。
+   - `consensus/core/tests/t12_regenesis.rs` の `the_held_rows_are_the_fleets_classes`（2M `74c67e63…`・8k `ebf44d0a…` の shape profile id と、
+     genesis に登録される model class が「8k、2M の順にこの 2 本だけ」）、`t12_genesis_reads_its_root_from_the_committed_manifest`・
+     `t12_genesis_roots_are_all_read_from_committed_manifests`（root は committed manifest から）、`t12_certifies_both_lanes_of_the_classes_it_registers`。
+   - `consensus/core/src/config/params.rs` の `PALW_T12_RCORE_CONSERVATIVE_CLASSES`（`the_t12_c7_list_is_the_2m_row`）。
+   - `t12_regenesis.rs` の `t12_shares_no_premine_outpoint_or_genesis_with_the_sentinel_chains` にある **superseded genesis の接頭辞リスト**
+     （`f6cc9576`・`a8cabac4`・`d73dbf44`）: genesis が a27f8f44 から動いたら `a27f8f44` を足す（`FORBIDDEN_GENESIS` と同時に）。
+8. **premine の index 配置**（Activation Pool の行や card の並べ替えで動き得る）
+   - `consensus/core/src/config/premine.rs`: `MAIN_PREMINE_INDEX = 40`、genesis bond の collateral は card が **宣言した** index
+     （`premine_index`）、fee float は `MAIN_PREMINE_INDEX + 1 + i`（i は `PALW_T12_GENESIS_BONDS` の **並び順**。`bonded_genesis_utxos_on`）。
+     kit は card N を bond `PREMINE_TXID:N`・fee float `PREMINE_TXID:(FEE_FLOAT_BASE + N)` と一つの番号で呼ぶので、両者が一致している必要がある。
+   - `t12_regenesis.rs` の `t12_bond_collateral_matches_the_card`・`the_fleets_premine_indices_are_unchanged_on_t12s_own_txid`・
+     `t12_genesis_mints_exactly_the_cap`。
+9. **kit と explorer の写し**（node は起動時にこれらを確かめない。`--check` は flag と sha だけ、switch の旧 gate は fp と genesis だけだった）
+   - `contrib/t12-deploy-kit/fleet.env.example`: `FEE_FLOAT_BASE`（41）、`CLASS_8K`、`ART_8K_BYTES`、`ART_8K_SHA256`、`MANIFEST_8K_SHA256`、
+     `FORBIDDEN_GENESIS`、`HB_ADDR`（card 0 の payout address）。
+   - `contrib/t12-deploy-kit/lib.sh`: `CLASS_2M_PREFIX`（74c67e63）。
+   - `contrib/misakascan-t12/app.js`: `LLM_CLASSES`（floor・8k・2M の id）、`PANEL_BOND_TX`。
+   - **pin**: `consensus/core/tests/t12_deploy_kit_constants.rs` がこれらをこの build の genesis と突き合わせる（上の 8 の配置、class id、
+     artifact bytes、explorer の表、`FORBIDDEN_GENESIS` に自分の genesis が無いこと）。`MANIFEST_8K_SHA256` は `probe-identity-local.sh --layout`
+     が committed sidecar の sha と比べる。
+     ```bash
+     cargo test --locked -p kaspa-consensus-core --test t12_deploy_kit_constants -- --nocapture   # LAYOUT card N … の表を印字
+     contrib/t12-deploy-kit/probe-identity-local.sh --build --layout                               # binary の genesis の class と bond も比べる（exit 0）
+     ```
+   - 公開時の gate: `install-<host>.sh switch` は node ごとに bond 8 本が `PREMINE_TXID:0..7`、`CLASS_8K` が登録済み、
+     `CLASS_2M_PREFIX` の class が登録済みであることを RPC で確かめ、違えばその node を止める（`lib.sh` `wait_genesis`、`t12check.py --expect-*`）。
+10. **文書と kit**: `docs/testnet12-join-mining.md`・`docs/testnet-12-regenesis-2026-09-23.md`（genesis `a27f8f44…`、premine `5e0d5f1b…`）、
+   `contrib/t12-deploy-kit/PLAN.md` §4 の暫定値と §2 の表（`kaspad/tests/t12_role_memory_figures.rs` の印字）、`contrib/misakascan-t12/app.js`
+   の `PANEL_BOND_TX`、この文書の §3。
+11. 再 pin の commit の後に step 8 の battery を 2 回（上の 2 本の test も含まれる: `-p kaspa-consensus-core --tests` と `-p kaspad`）。
 
 ---
 
@@ -204,7 +247,7 @@ pin を動かす前に、何が動いたのかを 1 つずつ言えること（�
 | O-4 | Final 後の有罪が maturity 前に行を burn | 行が burn、最初の committer に支払い |
 | O-5 | 最初の自然 maturity | latch → move → mint。mempool は mint+599 で拒否、mint+600 で使える。第 2 時計の深さを実測から調整。**これが通るまで t12 は価値を持たない** |
 | O-6 | FP だけが忙しい区間 | FP だけで止まった区間の数 |
-| O-7 | 試験 producer の withholding による DA default | 期限で S1 ＋ strike、最初の告発者に報酬（PLAN §2 R-2 の確認も兼ねる） |
+| O-7 | 試験 producer の withholding による DA default。あわせて **正直な producer の DA 応答が ledger で飢えていないか**（PLAN §2.5 R-2b） | 期限（`W_disclose` = `window_challenge` = 1,200 DAA。名目 120 s/DAA で 40 時間、実測 ~200 s/DAA で約 2.8 日）で S1 ＋ strike、最初の告発者に報酬。fleet の producer（ibm b0・b1、.113 b6）の自分の claim への `da-answer` が ledger に拒否され続けた時間が期限の半分（600 DAA）を超えない |
 | O-8 | heartbeat だけの区間で有罪が運ばれる | heartbeat block で fold |
 | O-9 | 行の maturity 中の market 負荷 | queue ≤ 1,032、maturity 中は 1 block ≥ 1 行、market に 2 枠 |
 | O-10 | retirement の引き出し完了 | B-3 の上限内 |
@@ -222,8 +265,13 @@ O-13 の計数。**X10（M6）**: `palw_rcore_attributed_charging` は M1〜M5 �
 
 ## 7. 運用者・監査に残っている判断
 
-- **運用者**: `HB_ADDR` の全桁（PLAN R3）／公開後の drill ホスト 4 台以上（PLAN R4）／5.104 b2 の 8k producer を残すか（PLAN §2 R-2、推奨は ibm b0 の 1 本に）／
-  ibm・.113 の share 引き上げ（PLAN §2）の承認／explorer の配線を `deploy.sh` と `explorer-apply` のどちらにするか（DEPLOY.md §9）／
-  公開 node の停止時間帯・告知・DNS validator と faucet の資金。
-- **監査**: 所在不明の test 番号（T02b、T06、T28、T31、T57、T62、T90、T54d〜T54g、T55）の所在か追加／4-quater と A-held の review と merge／
-  `fix/t12-live-seat0` が公開 line に要るか／t11 の休眠 parity の digest が動いた場合の確認／IA-14 9-3 の processor e2e の名前。
+- **運用者**: `HB_ADDR` の確認（card 0 の payout address を全桁で入れた。旧 kit の `qf6hf5v0…` と同じ。PLAN R3）／公開後の drill ホスト 4 台以上（PLAN R4）／
+  5.104 b2 を seat のみにしたこと（kit の既定。8k producer は ibm b0 の 1 本。PLAN §2.3）の了承／MemoryMax を crash guard として上げた値
+  （b0 20G・b1 16G・b6 17G・5.104 の seat 9G）で残すか、cache の蓄積で cgroup 項が share を下回ったら `-`（MemoryMax=infinity）にするか
+  （PLAN §2.3・§10 Q4 の再確認）／ibm・.113 の share 引き上げ（PLAN §2）の承認／explorer の配線を `deploy.sh` と `explorer-apply` のどちらにするか
+  （DEPLOY.md §9。両者は互いを拒否する）／公開 node の停止時間帯・告知・DNS validator と faucet の資金。
+- **実装（公開前に推奨）**: 自分の claim の DA duty が保留中は seat の 2 本目の replay を始めない、または DA 応答に ledger の予約枠を先取りさせる
+  （PLAN §2.5 R-2b。`kaspad/src/palw_panel.rs` の `PalwSeatReplaysV1::IN_FLIGHT = 2` と `reserve_replay_v1("da-answer")`）。入らなければ既知リスク
+  として公開し O-7 で監視する。
+- **監査**: 所在不明の test 番号（T02b、T06、T28、T31、T57、T62、T90、T54c〜T54g、T55）の所在か追加／4-quater と A-held の review と merge／
+  `fix/t12-live-seat0` が公開 line に要るか／t11 の休眠 parity の digest が動いた場合の確認。

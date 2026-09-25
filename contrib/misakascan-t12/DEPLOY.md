@@ -158,5 +158,8 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
   seed、app.js / index.html の stage と verify）。同じ unit と vhost を触るので **どちらか一方**にする。推奨は `deploy.sh` 一本
   （genesis から索引し、files と verify も持つ）で、`explorer-apply` は使わない。決まるまで §4 の `all` も `explorer-apply` も
   実行しない。どちらも **公開サイトを書き換えるので実行前にユーザーの確認**が要る。
+  両方を実行すると `zz-t12r.conf` が辞書順で `t12g.conf` に勝ち、filler/REST は cursor を seed していない `kaspa_t12r` を向く
+  （release-prep review）。そのため **互いに拒否する**: `deploy.sh` は `preflight` と `units` で `zz-t12r.conf` があれば止まり、
+  `install-113.sh explorer-apply` は `t12g.conf` があれば止まる。切り替えるときは先に相手の rollback を行う。
 - **R-core+ の表示が未対応**: vesting 行（`getPalwVesting`、op 199）、DA session、reporter の commit–reveal、stake 加重の panel 抽選は
   explorer に出ていない。公開後の観測 O-2 / O-5 は `misaka palw vesting` と analyzer で読む。explorer への追加は公開後の作業。

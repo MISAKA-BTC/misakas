@@ -4,8 +4,14 @@
 #   b0  misaka-t12-node0 (NEW unit)      0.0.0.0:26311  borsh 26313  json 26314   8k producer + 8k seat + HEARTBEAT
 #   b1  misaka-t12-node1 (drop-in)       0.0.0.0:26321  borsh 26323  json 26324   floor producer + 8k seat
 # Shares (R-core+, PLAN.md §2): b0 10,496 MiB = 8k attempt 3,456 + its own DA answer 3,456 + one 8k seat
-# duty 3,493 (+ 91 margin); b1 8,192 MiB = floor attempt 2,228 + its own floor DA answer 2,228 + one 8k
-# seat duty 3,493 (+ 243). Each with room for the duties it must not queue behind each other.
+# duty 3,500 (+ 84 margin); b1 8,192 MiB = floor attempt 2,229 + its own floor DA answer 2,229 + one 8k
+# seat duty 3,500 (+ 234) — the figures kaspad/tests/t12_role_memory_figures.rs prints. The own-DA room is NOT reserved: a second seat replay (IN_FLIGHT = 2) can take
+# it first, and the DA answer then waits (PLAN.md §2, risk R-2b; watched by O-7).
+# MemoryMax (b0 20G, b1 16G) is a per-node crash guard, NOT a division of the host: the ledger reads the
+# unit's memory.max − memory.current (page cache included) as a second live bound, so MemoryMax must
+# clear share + base + artifact page cache + the other running duties' working sets + 1 GiB + a cache
+# allowance or the ledger refuses duties the share admits (PLAN.md §2; the worksheet is
+# kaspad/tests/t12_role_memory_figures.rs). The host is guarded by the ledger's MemAvailable term.
 #
 # b0 takes the ports the host's other services already point at and that nothing serves today:
 #   misaka-dnsseeder-t12  --node-wrpc-borsh 127.0.0.1:26313   (dead since t11 node0 failed)
@@ -22,8 +28,8 @@ START_GAP=20
 BINARIES=(kaspad misaka palw-class)
 # id|unit|mode|listen|borsh|json|grpc|evm|share_mib|memmax_gib|produce|heartbeat|seat8k|peers
 NODES=(
-  "0|misaka-t12-node0|new|0.0.0.0:26311|26313|26314|-|-|10496|14|8k|1|1|127.0.0.1:26321,169.58.232.113:26311"
-  "1|misaka-t12-node1|dropin|0.0.0.0:26321|26323|26324|-|-|8192|11|floor|0|1|127.0.0.1:26311,169.58.232.113:26311"
+  "0|misaka-t12-node0|new|0.0.0.0:26311|26313|26314|-|-|10496|20|8k|1|1|127.0.0.1:26321,169.58.232.113:26311"
+  "1|misaka-t12-node1|dropin|0.0.0.0:26321|26323|26324|-|-|8192|16|floor|0|1|127.0.0.1:26311,169.58.232.113:26311"
 )
 # old chain data: .t12 = the old node0 appdir (1.6 GB, unused since t11 node0 failed), .t12b = node1's
 OLD_APPDIRS=(/root/.t12 /root/.t12b)

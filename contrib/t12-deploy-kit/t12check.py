@@ -10,8 +10,17 @@ and, with --registry, getPalwModelRegistry. Prints one block of lines and exits
 Nothing it sends changes node state.
 
 usage: t12check.py --port 26314 --expect-fp <64 hex> --expect-genesis <128 hex> [--registry] [--json]
+                   [--expect-premine <128 hex>] [--expect-class <class id>[:<registry artifactBytes>]] [--expect-class-prefix <hex>]
        t12check.py --port 26994 --probe      # a FRESH isolated node: print its fingerprint and genesis
        t12check.py --port 26994 --premine    # the txid the genesis bonds sit on (getPalwPanelSeats)
+       t12check.py --port 26994 --layout     # the genesis classes (id, artifact bytes, root) and bond outpoints
+
+--expect-premine / --expect-class / --expect-class-prefix check the deploy kit's copies of chain facts
+that no node checks at start (fleet.env PREMINE_TXID and CLASS_8K, lib.sh CLASS_2M_PREFIX): every genesis
+seat's bond is <txid>:<card> for cards 0..7, the class is registered, and a registered class carries the
+prefix. The registry's artifactBytes is the work derivation's figure (2,620,391,424 for both t12 dense rows),
+NOT the artifact file's size (ART_8K_BYTES), so the optional :<bytes> compares with the former only.
+--expect-class needs --registry (added when absent).
 """
 import argparse, base64, json, os, socket, struct, sys, time
 
@@ -121,6 +130,11 @@ def main():
                     help="fresh isolated node: print FP=… and GENESIS=… (its pruning point is the genesis)")
     ap.add_argument("--premine", action="store_true",
                     help="print PREMINE_TXID=… — the one txid every genesis seat's bond outpoint names (getPalwPanelSeats)")
+    ap.add_argument("--layout", action="store_true",
+                    help="print CLASS <id> bytes=… root=… base=… and BOND <outpoint> lines (getPalwModelRegistry, getPalwPanelSeats)")
+    ap.add_argument("--expect-premine", default="")
+    ap.add_argument("--expect-class", action="append", default=[], help="<class id>[:<registry artifactBytes>]")
+    ap.add_argument("--expect-class-prefix", action="append", default=[])
     ap.add_argument("--registry", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--timeout", type=float, default=20)
@@ -150,13 +164,30 @@ def main():
             return 0
         print("PREMINE_TXID=")  # none, or the genesis seats do not share one txid: the operator reads it by hand
         return 1
+    if a.layout:
+        try:
+            res = call_all(a.port, [("getPalwModelRegistry", {}), ("getPalwPanelSeats", {"classId": ""})], a.timeout)
+        except Exception as e:  # noqa: BLE001
+            print(f"UNREACHABLE {e}")
+            return 2
+        reg, seats = res.get("getPalwModelRegistry") or {}, res.get("getPalwPanelSeats") or {}
+        for c in pick(reg, "classes", default=[]) or []:
+            print(f"CLASS {pick(c, 'classId', default='?')} bytes={pick(c, 'artifactBytes', default='?')} "
+                  f"root={pick(c, 'artifactRoot', default='?')} base={pick(c, 'isBaseClass', default='?')} state={pick(c, 'state', default='?')}")
+        for o in sorted({str(pick(x, "bondOutpoint", default="")) for x in pick(seats, "seats", default=[]) or []}):
+            print(f"BOND {o}")
+        return 0
     if not (a.expect_fp and a.expect_genesis):
-        ap.error("--expect-fp and --expect-genesis are required unless --probe")
+        ap.error("--expect-fp and --expect-genesis are required unless --probe / --premine / --layout")
+    if a.expect_class or a.expect_class_prefix:
+        a.registry = True
 
     calls = [("getInfo", {}), ("getBlockDagInfo", {}), ("getPalwNodeStatus", {}), ("getConnectedPeerInfo", {}),
              ("getBlock", {"hash": a.expect_genesis, "includeTransactions": False})]
     if a.registry:
         calls.append(("getPalwModelRegistry", {}))
+    if a.expect_premine:
+        calls.append(("getPalwPanelSeats", {"classId": ""}))
     try:
         res = call_all(a.port, calls, a.timeout)
     except Exception as e:  # noqa: BLE001 — any transport failure is "did not answer"
@@ -200,15 +231,41 @@ def main():
               f"panel={pick(st, 'panelRunning', default='?')} submitter={pick(st, 'panelSubmitter', default='?')}")
         gib = 1 << 30
         share = pick(st, "memoryShareBytes", default=0) or 0
+        headroom = pick(st, "memoryHeadroomBytes", default=0) or 0
         print(f"  memory share {share / gib:.2f} GiB, reserved {(pick(st, 'memoryReservedBytes', default=0) or 0) / gib:.2f}, "
-              f"headroom {(pick(st, 'memoryHeadroomBytes', default=0) or 0) / gib:.2f}, bounded={pick(st, 'memoryBounded', default='?')}")
+              f"live {headroom / gib:.2f} (min(MemAvailable, cgroup max − current) − 1 GiB), "
+              f"available {(pick(st, 'memoryAvailableBytes', default=0) or 0) / gib:.2f}, bounded={pick(st, 'memoryBounded', default='?')}")
+        if share and headroom and headroom < share:
+            print("  WARNING: the ledger's live bound is below the share — duties the share admits are refused "
+                  "(host MemAvailable or the unit's MemoryMax minus its page cache; PLAN.md §2)")
         holders = pick(st, "memoryHolders", default="")
         if holders:
             print(f"  memory holders: {str(holders)[:200]}")
     else:
         print(f"  getPalwNodeStatus: {st.get('error') if isinstance(st, dict) else st}")
+    if a.expect_premine:
+        seats = pick(res.get("getPalwPanelSeats") or {}, "seats", default=[]) or []
+        outs = {str(pick(x, "bondOutpoint", default="")) for x in seats}
+        want = {f"{a.expect_premine}:{n}" for n in range(8)}
+        missing = sorted(want - outs)
+        print(f"  genesis bonds: {len(outs)} seats; {'all eight on ' + a.expect_premine[:16] + '…:0..7' if not missing else 'MISSING ' + ', '.join(m[-4:] for m in missing)}")
+        if missing:
+            bad.append("premine")
     if a.registry:
         reg = res.get("getPalwModelRegistry") or {}
+        rows = {str(pick(c, "classId", default="")): c for c in pick(reg, "classes", default=[]) or []}
+        for spec in a.expect_class:
+            cid, _, size = spec.partition(":")
+            row = rows.get(cid)
+            got = pick(row, "artifactBytes", default=None) if row else None
+            ok = row is not None and (not size or str(got) == size)
+            print(f"  class {cid[:16]}… {'registered (' + str(pick(row, 'state', default='?')) + ')' if ok else ('NOT REGISTERED' if row is None else 'registry artifactBytes ' + str(got) + ', expected ' + size)}")
+            if not ok:
+                bad.append("class " + cid[:8])
+        for prefix in a.expect_class_prefix:
+            if not any(k.startswith(prefix) for k in rows):
+                print(f"  class prefix {prefix}: NO registered class (the kit's refusal would match nothing)")
+                bad.append("class prefix " + prefix)
         for c in pick(reg, "classes", default=[]) or []:
             cid = str(pick(c, "classId", default="?"))
             print(f"  class {cid[:8]} state={pick(c, 'state', default='?')} ready={pick(c, 'readySeats', default='?')}"
