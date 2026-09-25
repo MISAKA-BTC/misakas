@@ -63,6 +63,26 @@ use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
+/// ADR-0152 v3.1 Phase 2, P2-8b + P2-8d: the replay filer — a child module, so it reads this
+/// service's own seams (the ledger, the backends, the court queue) without widening them.
+#[path = "palw_filer_replay.rs"]
+mod palw_filer_replay;
+
+/// **Take the host ledger's reservation for a replay of `role`** — the body of
+/// [`PalwPanelService::reserve_replay_v1`], free of the service so a blocking task that prices its
+/// own need (the replay filer's, which decodes its candidates off the loop) takes it through the
+/// same one rule. Held for the replay's life; `Err` is the hold's sentence.
+fn reserve_replay_on_host_v1(
+    role: &'static str,
+    need: &crate::palw_backends::PalwRoleMemoryNeedV1,
+    class_id: Hash64,
+    job: Hash64,
+) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
+    crate::palw_memory_ledger::host_ledger_v1()
+        .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, need.total_bytes())
+        .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
+}
+
 const PALW_PANEL: &str = "palw-panel";
 
 /// ADR-0152 §4-ter N3: a held dissection's moves, answered off the tick by the windowed builders.
@@ -3804,9 +3824,7 @@ impl PalwPanelService {
         class_id: Hash64,
         job: Hash64,
     ) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
-        crate::palw_memory_ledger::host_ledger_v1()
-            .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, need.total_bytes())
-            .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
+        reserve_replay_on_host_v1(role, need, class_id, job)
     }
 
     fn fee_state_path(&self) -> PathBuf {
@@ -5949,6 +5967,8 @@ impl PalwPanelService {
         let mut last_lane: Option<PalwCarrierLaneV1> = None;
         // P2-6: the claims this seat accuses of withholding, until the chain has the accusation.
         let mut accusations = PalwSeatAccusationsV1::default();
+        // P2-8b / P2-8d: the claims this seat's replay refuted, pursued to a proof (`palw_filer_replay`).
+        let mut replay_filer = palw_filer_replay::PalwReplayFilerV1::default();
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -9457,6 +9477,27 @@ impl PalwPanelService {
                 // review's note).
                 court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));
             }
+
+            // --- P2-8b / P2-8d: this seat's replay filer (`palw_filer_replay`) ---
+            //
+            // ADR-0152 SR-8, §3.9's garbage row, J-6, DA-3: a claim this seat's replay refuted, or on
+            // which a fault finder recorded a fault, is bisected off the loop against the claim's served
+            // capture; the first divergent step is filed as `ExecutorRefuted` (or demanded as a
+            // `StepLeaf` the served material cannot open) onto the court queue, which the priority
+            // lane carries below.
+            self.replay_filer_tick_v1(
+                &session,
+                &mut replay_filer,
+                current_daa,
+                network_domain,
+                bond_key,
+                &duties,
+                &replay_refuted,
+                &materials,
+                &mut court_pending,
+                &mut court_moved,
+            )
+            .await;
 
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {

@@ -338,6 +338,10 @@ pub mod palw_receipt;
 /// adjudication maths. Land-stage, consensus-inert.
 pub mod palw_reference;
 pub mod palw_registry;
+/// ADR-0152 v3.1 Phase 2, P2-8b / P2-8d: the replay-mismatch contradiction builder — a seat's own
+/// replay against the claim's served capture, bisected to the first divergent step and held to the
+/// fold's own predicates. Node policy's read-side builder; nothing here is read by the fold.
+pub mod palw_replay_refute_v1;
 /// ADR-0151 follow-up, item 1: what a ROLE needs to execute a class — the one working-set
 /// derivation the producer, the panel and the court read; node-local capacity, never a chain fact.
 pub mod palw_resource_profile_v1;
