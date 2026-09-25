@@ -72,7 +72,7 @@ window.MISAKA_CONFIG = {
   WRPC_URL: "",                 // "" = derive (wss|ws)://<this host>/kaspa from the page's origin
   EVM_RPC_URL: "/evm",          // same-origin path proxied to a node's eth JSON-RPC (port 8545)
   CHAIN_ID: "0x4D534B",         // the MISAKA EVM lane, frozen in ADR-0020
-  NETWORK_NAME: "testnet-11",
+  NETWORK_NAME: "testnet-12",
   CLASS_IDS: [],                // fallback class ids (128 hex) when the registry window is not armed
   EXPLORER_URL: "https://misakascan.com",
   POLL_MS: 10000,               // store page refresh cadence
@@ -91,13 +91,16 @@ The live deployment (misakaoptions.com, 2026-09-05) reads both endpoints off the
 `WRPC_URL: "wss://misakascan.com/kaspa"` and `EVM_RPC_URL: "https://misakascan.com/evm"`. The
 browser reaches them directly; the site's own host proxies neither.
 
-Known class ids on testnet-11 (from the tree, `tools/palw-jobs-export/src/main.rs`), usable as
-`CLASS_IDS` while the registry window is dormant:
+Known class ids on testnet-12 (its genesis classes, `docs/testnet-12-regenesis-2026-09-23.md`;
+`getPalwClasses` lists them live), usable as `CLASS_IDS` while the registry window is dormant:
 
 ```
-4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7  Qwen2.5 A16 (graph-v5, 512)
-5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e  Qwen3.6-35B-A3B (graph-v3)
+ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01  Qwen2.5-1.5B (graph-v7, 8192)
+74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a  Qwen2.5-1.5B (graph-v7, 2097152, held)
+f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8  PALW-BASE-0 (the floor)
 ```
+
+The testnet-11 ids were `4277d84f…` (Qwen2.5 A16 graph-v5) and `5bd9ae3d…` (Qwen3.6-35B-A3B).
 
 A class's founding line has the class id as its line id, so each of these is also a line id
 (`#/store/<id>`, `#/line/<id>`, `#/add/<id>`).

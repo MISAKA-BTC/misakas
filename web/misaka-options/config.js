@@ -8,7 +8,7 @@ window.MISAKA_CONFIG = {
   // directly (a WebSocket is not subject to CORS). Set "" to derive "/kaspa" on this origin.
   WRPC_URL: "wss://misakascan.com/kaspa",
 
-  // EVM JSON-RPC endpoint (standard eth_* over HTTP POST). The explorer host's testnet-11
+  // EVM JSON-RPC endpoint (standard eth_* over HTTP POST). The explorer host's testnet-12
   // node serves it at https://misakascan.com/evm (CORS-open, rate-limited); "/evm" would be a
   // same-origin path for a node on this host instead. This URL is also handed to the wallet by
   // wallet_addEthereumChain, so it must be https and reachable from the user's browser.
@@ -18,14 +18,15 @@ window.MISAKA_CONFIG = {
   CHAIN_ID: "0x4D534B",
 
   // Shown in the network pill and in copy.
-  NETWORK_NAME: "testnet-11",
+  NETWORK_NAME: "testnet-12",
 
   // Fallback class list (128-hex class ids) used to find lines when the EVM RPC is
   // not reachable or the market fence is dormant. The founding line of a class has
   // the class id as its line id. Known testnet-11 class ids are listed in README.md.
   CLASS_IDS: [
-    "4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7", // Qwen2.5 A16 (graph-v5)
-    "5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e", // Qwen3.6-35B-A3B (graph-v3)
+    "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01", // Qwen2.5-1.5B graph-v7 @8192
+    "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a", // Qwen2.5-1.5B graph-v7 @2097152
+    "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8", // PALW-BASE-0 (the floor)
   ],
 
   // **What each registered class actually IS, for a reader who sees an id.**
@@ -35,20 +36,28 @@ window.MISAKA_CONFIG = {
   // name comes back empty and a row reads as its own id twice. This catalogue is the fallback,
   // and the site LABELS it as one: a title from here is this site's word, never the chain's.
   // Keyed by class id (a class's founding line has the class's id) or by any line id.
+  // testnet-12's genesis classes (docs/testnet-12-regenesis-2026-09-23.md, and getPalwClasses).
   MODELS: {
-    "4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7": {
+    "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01": {
       title: "Qwen/Qwen2.5-1.5B-Instruct",
-      variant: "A16 dense · graph-v5 · n_ctx 512",
+      variant: "A16 · graph-v7 · n_ctx 8192",
       params: "1.5B",
       hf: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct",
-      artifact: ".palwart, 1.7 GiB — converted locally from the repository above",
+      artifact: "converted locally with qwen25-convert --a16 — inventory root 88096dc1…",
     },
-    "5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e": {
-      title: "Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
-      variant: "hybrid 35B (A3B) · graph-v3",
-      params: "35B",
-      hf: "https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime",
-      artifact: "qwen36.palwq36, 34 GiB — root f4aad4fd543928eb…",
+    "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a": {
+      title: "Qwen/Qwen2.5-1.5B-Instruct",
+      variant: "A16 · graph-v7 · n_ctx 2,097,152 (held context)",
+      params: "1.5B",
+      hf: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct",
+      artifact: "2.4 GiB, converted locally with qwen25-convert --a16 — inventory root f63af2c4…",
+    },
+    "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8": {
+      title: "PALW-BASE-0",
+      variant: "the floor class · deterministic integer model, pure Rust in the node",
+      params: "",
+      hf: "",
+      artifact: "none needed — built into kaspad",
     },
   },
 

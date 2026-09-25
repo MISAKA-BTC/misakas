@@ -2,7 +2,18 @@
 
 The code, current `main` CLI `--help` and ADR decisions are authoritative. This index separates live operator instructions from dated engineering evidence.
 
-## Current Testnet-11 operator documents
+## Current Testnet-12 documents
+
+- [Architecture overview](architecture/overview.md) — the protocol as it is now, topic by topic, with the ADRs that govern each part and where its code lives
+- [Mainnet readiness](mainnet-readiness.md) — what is done, partly done and not done before a mainnet genesis, with the evidence for each
+- [Release process](release-process.md) — how a release is cut, signed and verified
+- [testnet-12 launch note (2026-09-25)](t12-launch-2026-09-25.md) — the release, its known issues and when a payment is final
+- [Join testnet-12 as a PALW producer](testnet12-join-mining.md)
+- [testnet-12 regenesis record](testnet-12-regenesis-2026-09-23.md)
+
+## Testnet-11 documents (previous network; build `1f98d3bf4` to run it)
+
+- [testnet-11 history](history/testnet-11.md) — the flag days, fingerprints and rollout notes that used to head the README
 
 - [Join as a PALW producer](testnet11-join-mining.md)
 - [Run a full node](testnet11-node-operator.md)
@@ -26,14 +37,14 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 ## Historical evidence
 
-Files whose names contain a date, audit, launch record, old relaunch, testnet-10, testnet-12, testnet-21, shadow drill or transition are retained as engineering evidence. Their measured hashes, peers, DAA scores, class IDs and commands describe that historical run and are not current operator defaults.
+Files whose names contain a date, audit, launch record, old relaunch, testnet-10, testnet-21, shadow drill or transition are retained as engineering evidence. Their measured hashes, peers, DAA scores, class IDs and commands describe that historical run and are not current operator defaults.
 
 In particular, do not derive a current command from:
 
 - `testnet10-*.md`
 - `testnet11-relaunch2-*.md`, `relaunch5*.md` or old genesis cards
 - dated `palw-*-2026-*.md` audits and measurements
-- archived mainnet-readiness or drill reports
+- archived mainnet-readiness or drill reports (not [mainnet-readiness.md](mainnet-readiness.md), which is kept current)
 
 When a historical report conflicts with a current operator document, use the current operator document and verify against `--help` and chain RPC.
 

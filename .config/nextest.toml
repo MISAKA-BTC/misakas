@@ -1,0 +1,5 @@
+# The `ci` profile is the default profile plus a JUnit report, which the Test Suite job turns into
+# its job summary (scripts/misaka-ci-summary.py). CI selects it with NEXTEST_PROFILE=ci, so the
+# `cargo nextest run` command line stays byte-identical to scripts/ci-gates.sh's.
+[profile.ci.junit]
+path = "junit.xml"
