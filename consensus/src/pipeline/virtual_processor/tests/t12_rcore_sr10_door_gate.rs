@@ -199,17 +199,24 @@ impl Gate {
     /// facts, a signed envelope in the header's carriage, folded as the pipeline folds a block's own
     /// work. Its roots are fixed words — the gate and the door read none of them.
     fn open_claim(&mut self) -> Hash64 {
+        self.open_claim_as(|_| {})
+    }
+
+    /// [`Self::open_claim`] with the floor's facts for card 0 restated by `restate` first (a claim of
+    /// another class: its id, artifact root and pwu).
+    fn open_claim_as(&mut self, restate: impl FnOnce(&mut kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2)) -> Hash64 {
         use kaspa_consensus_core::hashing::header::pre_pow_hash_64;
         let template = self.ctx.build_block_template_keeping_time(0);
         let mut header: Header = template.block.header.clone();
         assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id), "the attempt lane");
         let bond = self.cards[EXECUTOR];
-        let facts = self
+        let mut facts = self
             .ctx
             .consensus
             .palw_producer_facts_v2(self.bundle.base_class_id, Some(bond.0))
             .expect("testnet-12 answers for its floor");
         facts.ready_to_produce(&card_pubkey(EXECUTOR)).expect("card 0 is ready to produce");
+        restate(&mut facts);
         let pre_pow = pre_pow_hash_64(&header);
         let trace_root = Hash64::from_u64_word(0x5210_7A);
         let attempt = PalwAttemptUnsignedV2 {
@@ -783,5 +790,322 @@ async fn t12_x22_three_v2_valids_license_v1_not_s2() {
         g.state.deadline_of(&claim),
         Some(licensed_daa + g.sp().window_challenge_at(licensed_daa)),
         "the plain licence row, off the gate"
+    );
+}
+
+// ---- Phase 2 P2-5: SR-6 at the V1 and coverage assemblers, X22's collector (T33, T45) ----------
+//
+// **The fixture is the 2M row, as the fold half's is** (`rcore_s3_one_ledger`'s
+// `t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees`). A seat is unbacked only where the
+// licence's lock tops its duty up, and on testnet-12 that is the 2M row alone among attempt claims:
+// with the vesting rows in, `lock_3` and `lock_2` sit within the duty the bind reserved on the floor
+// and on the 8k row (`n1_on_the_floor_and_the_8k_row_the_licence_needs_no_top_up_and_five_valids_license`),
+// so a seat there is backed whatever its room and the 8k row cannot hold the case. That 2M is closed
+// at testnet-12's launch does not move the assembler's rule, which asks the fold and names no class:
+// the fixture is only the one attempt class on which the fold's backed subset is a strict subset. (The
+// launch-reachable case is the free-prompt lane, whose lock is priced on `max(R, rr)` above its duty;
+// no processor fixture builds a free-prompt licence, and the path it would take is this one.) The row
+// is seeded as the fold half seeds it — made `Active` and every card proved ready through the carriage —
+// and the claim is the template block's own attempt, restated for the row.
+
+impl Gate {
+    /// `edit` applied to the walk's state through its carriage — the load path, as the core suites'
+    /// `edited` does it.
+    fn edit(&mut self, edit: impl FnOnce(&mut PalwStateCarriageV2)) {
+        let mut carriage = PalwStateCarriageV2::from_state(&self.state);
+        edit(&mut carriage);
+        self.state = carriage.into_state(self.sp(), None).expect("a consistent carriage");
+    }
+
+    /// testnet-12's 2M row — the genesis model class with the most work per inference — and its
+    /// target (the core suites' `model_classes(p).1`).
+    fn row_2m(&self) -> (Hash64, u128) {
+        use kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2;
+        self.bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                Obj::ClassRegistered { class_id, pwu_rule, initial_target, .. } if *class_id != self.bundle.base_class_id => {
+                    let leaves = match pwu_rule {
+                        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => *pwu_per_inference,
+                        PalwPwuRuleV2::MaxPerAttempt(max) => *max,
+                        #[allow(unreachable_patterns)]
+                        _ => 0,
+                    };
+                    Some((leaves, *class_id, *initial_target))
+                }
+                _ => None,
+            })
+            .max_by_key(|(leaves, _, _)| *leaves)
+            .map(|(_, class_id, target)| (class_id, target))
+            .expect("testnet-12 registers its model rows at genesis")
+    }
+
+    /// Every card proved ready for `class` at the walk's DAA (testnet-12's readiness span is one DAA).
+    fn ready(&mut self, class: Hash64) {
+        use kaspa_consensus_core::palw_model_registry_v1::PalwSeatReadinessRowV1;
+        let (cards, daa) = (self.cards.clone(), self.daa);
+        self.edit(|c| {
+            for card in cards {
+                c.seat_readiness.insert(
+                    (card, class),
+                    PalwSeatReadinessRowV1 { proved_daa: daa, proved_span: daa, leaf_index: 0, proof_version: 2, chunks: 8 },
+                );
+            }
+        });
+    }
+
+    /// **A claim of the 2M row by card 0**: the row made `Active` and every card ready (the fold
+    /// half's `model_chain`), then the template block's own attempt with the floor's facts restated
+    /// for the row — its id, its registered artifact root and its derived pwu.
+    fn open_2m_claim(&mut self) -> Hash64 {
+        use kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1;
+        let (class, target) = self.row_2m();
+        self.edit(|c| c.model_lifecycles.get_mut(&class).expect("the 2M row").state = PalwModelLifecycleV1::Active);
+        self.ready(class);
+        let artifact_root = self.state.class(&class).expect("the 2M class").artifact_root;
+        // testnet-12 prices every attempt from DAA 0 (the core suites' `class_pwu`).
+        let per_draw = self.state.palw_canonical_per_draw_v1(&class, self.daa + 1, Some(0)).expect("the row prices a draw");
+        let pwu = kaspa_consensus_core::palw_admission_v2::palw_attempt_derived_pwu_v1(target, per_draw);
+        let claim = self.open_claim_as(|facts| {
+            facts.class_id = class;
+            facts.artifact_root = artifact_root;
+            facts.pwu = pwu;
+        });
+        assert_eq!(self.state.claim(&claim).expect("the claim").class_id, class, "the claim is the 2M row's");
+        self.ready(class);
+        claim
+    }
+
+    /// `bond`'s ceiling set one sompi under what it already backs at the next block — its room gone
+    /// after the bind, the fold half's squeeze.
+    fn squeeze(&mut self, bond: PalwBondKeyV2) {
+        let at = self.daa + 1;
+        let committed =
+            kaspa_consensus_core::palw_state_v2::palw_bond_committed_v1(&self.state, &bond, at, None, self.sp().window_court());
+        let collateral = u64::try_from(2 * committed - 2).expect("a collateral");
+        self.edit(|c| c.bonds.get_mut(&bond).expect("the bond").collateral = collateral);
+    }
+
+    /// The fold's backed subset of `object` at `point` and whether it licenses — the two answers
+    /// the assemblers read, bound as the processor binds them on testnet-12.
+    fn fold_answers(&self, point: &PalwBlockContextV2, object: &Obj) -> (Option<Vec<PalwBondKeyV2>>, bool) {
+        self.vp().palw_v2_licence_fold_answers_for_tests(&self.state, self.sp(), point, object)
+    }
+}
+
+/// A 2M claim bound to cards 1–5 with one partial seat unbacked (its room gone after the bind):
+/// the claim, the assignment, the panel's cards in seat order and the unbacked seat's panel index.
+fn t33_claim(g: &mut Gate) -> (Hash64, PalwSegmentAssignmentV2, Vec<usize>, usize) {
+    let claim = g.open_2m_claim();
+    let assignment = g.bind(claim);
+    let panel = g.state.panel(&claim).expect("a bound panel").clone();
+    let cards: Vec<usize> = panel.seats.iter().map(|seat| g.card_of(&seat.bond)).collect();
+    let victim = (assignment.full_seat as usize + 1) % cards.len();
+    g.squeeze(panel.seats[victim].bond);
+    (claim, assignment, cards, victim)
+}
+
+/// **T33, the processor half (ADR-0152 SR-6, Phase 2 P2-5): the V1 and coverage assemblers return
+/// the backed subset.** Five whole-job V2 `Valid`s, one of an unbacked seat: the fold licenses the
+/// five on the four backed ones (the predicate the assemblers read says so), and the V1 assembler —
+/// which before P2-5 offered all five, the unbacked `Valid` carried for nothing — offers exactly the
+/// four. The gate admits it, the walk carries it and the fold licenses it at `basis_k` 3: the four
+/// locked and credited, the unbacked seat with no lock, no credit and no served bit, so the escrow is
+/// held. Three `Valid`s with the unbacked one among them back only two, short of the quorum: inert,
+/// and the V1 assembler offers nothing (before P2-5 it offered the inert three). The five seats' V3
+/// `Valid`s over their masks do not cover once the unbacked partial seat is taken out (every segment
+/// has one partial holder beside the full seat), so the coverage assembler offers nothing, as the fold
+/// says — a leg that holds with or without P2-5 (`palw_select_coverage_licence_v2` already asked the
+/// fold, and on this cut a coverage set's backed subset is the whole set or nothing), kept to pin that
+/// the helper leaves the coverage door's answer as it was; the V1 legs are the ones P2-5 turns green.
+#[tokio::test]
+async fn t12_t33_the_v1_and_coverage_assemblers_return_the_backed_subset() {
+    let mut g = gate(true);
+    let (claim, assignment, cards, victim) = t33_claim(&mut g);
+    let panel_params = g.bundle.panel;
+    let point = g.next();
+    let whole: Vec<PalwSeatReceiptV2> = cards.iter().map(|&card| g.full_receipt(card, claim, point.daa_score)).collect();
+    let backed: Vec<PalwSeatReceiptV2> = whole.iter().enumerate().filter(|(i, _)| *i != victim).map(|(_, r)| r.clone()).collect();
+
+    // The fold: the five license, on the four.
+    let five = Obj::ReceiptLicensed { claim, receipts: whole.clone() };
+    let (subset, licenses) = g.fold_answers(&point, &five);
+    assert!(licenses, "four backed Valids are a quorum: the five license");
+    assert_eq!(subset, Some(backed.iter().map(|r| r.seat_bond).collect()), "on the four backed seats");
+
+    // V1: the backed subset, whatever the pool's order.
+    let assemble = |pool: &[PalwSeatReceiptV2]| {
+        g.vp().palw_v2_receipt_quorum_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, pool)
+    };
+    assert_eq!(assemble(&whole), Some(Obj::ReceiptLicensed { claim, receipts: backed.clone() }), "exactly the four");
+    let mut reversed = whole.clone();
+    reversed.reverse();
+    let mut backed_reversed = backed.clone();
+    backed_reversed.reverse();
+    assert_eq!(assemble(&reversed), Some(Obj::ReceiptLicensed { claim, receipts: backed_reversed }));
+
+    // Three with the unbacked one: two backed, short of the quorum — inert, so nothing is offered.
+    let short: Vec<PalwSeatReceiptV2> = [victim, (victim + 1) % 5, (victim + 2) % 5].iter().map(|&i| whole[i].clone()).collect();
+    assert_eq!(g.fold_answers(&point, &Obj::ReceiptLicensed { claim, receipts: short.clone() }), (None, false), "inert");
+    assert_eq!(assemble(&short), None, "the V1 assembler offers no inert set");
+
+    // Coverage: the backed four do not cover testnet-12's cut, so there is nothing to offer.
+    let segmented: Vec<PalwSeatReceiptV3> = cards
+        .iter()
+        .enumerate()
+        .map(|(i, &card)| {
+            g.v3_receipt(card, claim, PalwReceiptVerdictV2::Valid, point.daa_score, assignment.mask_of(i as u16), Signed::AsV3)
+        })
+        .collect();
+    assert_eq!(
+        g.fold_answers(&point, &Obj::ReceiptLicensedV2 { claim, receipts: segmented.clone() }),
+        (None, false),
+        "the unbacked partial seat's segment has one replay: inert"
+    );
+    assert_eq!(
+        g.vp().palw_v2_receipt_coverage_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &segmented),
+        None,
+        "the coverage assembler offers no inert set"
+    );
+
+    // The four, through the gate, the walk and the fold.
+    let object = assemble(&whole).expect("the backed subset");
+    let (parent, delta) = g.carry(object);
+    let record = g.state.claim(&claim).unwrap().clone();
+    assert!(matches!(record.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the 2M claim licenses on the backed subset");
+    assert_eq!(record.rcore.basis_k, 3, "three whole-job replays or more: 3");
+    let victim_bond = g.cards[cards[victim]];
+    assert!(g.state.slashable_lock(victim_bond, claim).is_none(), "the unbacked seat takes no lock");
+    assert!(g.state.panel_duties_of(&claim).and_then(|row| row.get(&victim_bond)).is_some_and(|at| *at == 0), "…no credit");
+    assert_eq!(record.rcore.served_mask & (1 << victim), 0, "…and no served bit");
+    assert_eq!(record.rcore.served_mask.count_ones(), 4);
+    assert!(!record.rcore.escrow_released, "not every seat served: E held");
+    for receipt in &backed {
+        assert!(g.state.slashable_lock(receipt.seat_bond, claim).is_some(), "each backed signer locks");
+    }
+    assert_eq!(revert_delta_v2(&g.state, &delta, g.sp()).unwrap().state_root(), parent.state_root(), "the licence reverts");
+}
+
+/// **T45 at the processor (ADR-0152 X22 with SR-6): the collector prefers a backed V1 over S2, and
+/// never waits on an unbacked one.** The node's order past the fence (`palw_licence_offer_order_v1(true,
+/// …)`, what kaspad's licence collector calls) over the processor's own assemblers, on the 2M claim
+/// with one unbacked partial seat and an S2 set on hand (the full seat's V3 `Valid` and a backed
+/// rider's): with the five seats' whole-job V2 `Valid`s pooled it offers V1 — the backed four, at
+/// `basis_k` 3 — and never builds S2; coverage, asked first, has nothing (the backed four do not
+/// cover). With only the unbacked seat's and two others' V2 `Valid`s pooled, V1 is inert and offers
+/// nothing, so S2 is offered — before P2-5 the V1 door returned that inert set and, asked before S2,
+/// held the claim to its receipt window. The S2 licence folds; the inert V1 set would not have.
+///
+/// And through the collector's own V1 door past SEAT-R — `palw_v1_offer_v1`, the shortest prefix,
+/// rotated by the sets already sent (consensus-core's, the function kaspad calls) — over the real
+/// assembler, the unbacked seat first in the pool: every rotation offers three backed seats through
+/// V1, each carried `Valid` backed in the fold. Before P2-5 the rotations that put the unbacked seat
+/// in the three-seat prefix offered it — the acceptance check takes that set as `Licensed` — and the
+/// fold left it inert.
+#[tokio::test]
+async fn t12_t45_the_collector_prefers_a_backed_v1_over_s2_and_never_waits_on_an_unbacked_one() {
+    use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1 as Door;
+    let mut g = gate(true);
+    let (claim, assignment, cards, victim) = t33_claim(&mut g);
+    let panel_params = g.bundle.panel;
+    let point = g.next();
+    let full = assignment.full_seat as usize;
+    let rider = (0..cards.len()).find(|i| *i != full && *i != victim).expect("a backed partial seat");
+    let v3_pool: Vec<PalwSeatReceiptV3> = [full, rider]
+        .iter()
+        .map(|&i| {
+            g.v3_receipt(cards[i], claim, PalwReceiptVerdictV2::Valid, point.daa_score, assignment.mask_of(i as u16), Signed::AsV3)
+        })
+        .collect();
+    let whole: Vec<PalwSeatReceiptV2> = cards.iter().map(|&card| g.full_receipt(card, claim, point.daa_score)).collect();
+    let offer = |v2_pool: &[PalwSeatReceiptV2]| {
+        kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(
+            true,
+            || g.vp().palw_v2_receipt_coverage_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v3_pool),
+            || g.vp().palw_v2_receipt_quorum_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, v2_pool),
+            || g.vp().palw_v2_optimistic_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v3_pool),
+        )
+    };
+
+    // The backed V1 before S2.
+    let (object, door) = offer(&whole).expect("a licence on hand");
+    assert_eq!(door, Door::Quorum, "a backed V1 before S2");
+    let backed: Vec<PalwSeatReceiptV2> = whole.iter().enumerate().filter(|(i, _)| *i != victim).map(|(_, r)| r.clone()).collect();
+    assert_eq!(object, Obj::ReceiptLicensed { claim, receipts: backed }, "the backed subset");
+
+    // The collector's own V1 door past SEAT-R over the real assembler: the shortest prefix, every
+    // rotation, the unbacked seat first in the pool.
+    let mut pool = whole.clone();
+    pool.rotate_left(victim);
+    for sent in 0..pool.len() as u32 {
+        let (offered, door) = kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(
+            true,
+            || g.vp().palw_v2_receipt_coverage_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v3_pool),
+            || {
+                kaspa_consensus_core::palw_panel_v2::palw_v1_offer_v1(&pool, sent, |set| {
+                    g.vp().palw_v2_receipt_quorum_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &set)
+                })
+            },
+            || g.vp().palw_v2_optimistic_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v3_pool),
+        )
+        .expect("a licence on hand");
+        assert_eq!(door, Door::Quorum, "V1 before S2 (send {sent})");
+        let Obj::ReceiptLicensed { receipts, .. } = &offered else { panic!("a V1 set: {offered:?}") };
+        let seats: Vec<PalwBondKeyV2> = receipts.iter().map(|r| r.seat_bond).collect();
+        assert_eq!(seats.len(), 3, "the quorum and nothing past it (send {sent})");
+        assert!(!seats.contains(&whole[victim].seat_bond), "the unbacked seat is passed over (send {sent})");
+        assert_eq!(g.fold_answers(&point, &offered), (Some(seats), true), "every carried Valid backed (send {sent})");
+    }
+
+    // An unbacked V1 is not waited on: S2.
+    let short: Vec<PalwSeatReceiptV2> = [victim, (victim + 1) % 5, (victim + 2) % 5].iter().map(|&i| whole[i].clone()).collect();
+    let (s2, door) = offer(&short).expect("the fast path still licenses");
+    assert_eq!(door, Door::Optimistic, "an inert V1 set passes the claim to S2");
+    assert!(matches!(&s2, Obj::OptimisticLicensed { receipts, .. } if receipts.len() == 2));
+    let (s2_state, _) = g.fold(&point, &s2).expect("the S2 set folds");
+    assert!(matches!(s2_state.claim(&claim).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "and licenses");
+    let (inert, _) = g.fold(&point, &Obj::ReceiptLicensed { claim, receipts: short }).expect("the inert set folds");
+    assert!(
+        matches!(inert.claim(&claim).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
+        "the V1 set it passed over licenses nothing"
+    );
+
+    // The backed V1, carried: replay-backed at 3, off Q-5's gate.
+    g.carry(object);
+    let record = g.state.claim(&claim).unwrap().clone();
+    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = record.phase else { panic!("licensed: {:?}", record.phase) };
+    assert_eq!(record.rcore.basis_k, 3);
+    let (deadline, receipt_deadline) = g.deadlines(claim);
+    assert_ne!(
+        deadline,
+        Some((licensed_daa + g.sp().window_challenge_at(licensed_daa)).max(receipt_deadline + 1)),
+        "not on Q-5's gate"
+    );
+}
+
+/// **The fence-off twin: below `palw_rcore_plus` the V1 assembler is what it was.** On the floor with
+/// one seat unable to post its lock (the fence-off ledger reads locks at 100%, so a one-sompi bond),
+/// the set is the whole set's or nothing — inert — and the assembler, which does not ask the fold
+/// below the fence, offers the five as before P2-5; the fold's backed subset is not read there.
+#[tokio::test]
+async fn t12_t33_below_the_fence_the_v1_assembler_offers_the_whole_clean_set_as_before() {
+    let mut g = gate(false);
+    let claim = g.open_claim();
+    let assignment = g.bind(claim);
+    let panel = g.state.panel(&claim).expect("a bound panel").clone();
+    let cards: Vec<usize> = panel.seats.iter().map(|seat| g.card_of(&seat.bond)).collect();
+    let victim = (assignment.full_seat as usize + 1) % cards.len();
+    let victim_bond = panel.seats[victim].bond;
+    g.edit(|c| c.bonds.get_mut(&victim_bond).expect("the bond").collateral = 1);
+    let panel_params = g.bundle.panel;
+    let point = g.next();
+    let whole: Vec<PalwSeatReceiptV2> = cards.iter().map(|&card| g.full_receipt(card, claim, point.daa_score)).collect();
+    let five = Obj::ReceiptLicensed { claim, receipts: whole.clone() };
+    assert_eq!(g.fold_answers(&point, &five), (None, false), "all or nothing below the fence: inert, and no subset is read");
+    assert_eq!(
+        g.vp().palw_v2_receipt_quorum_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &whole),
+        Some(five),
+        "the whole clean set, as before"
     );
 }

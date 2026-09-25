@@ -1,5 +1,6 @@
 pub mod bps;
 pub mod constants;
+pub mod drill;
 pub mod genesis;
 pub mod class_manifest_const_v1;
 pub mod params;
@@ -159,6 +160,15 @@ pub struct Config {
     /// `checkpoint[pp]`. Node-local, consensus-neutral, idempotent (a present anchor short-circuits).
     /// `false` by default; drop the flag after the one successful run.
     pub evm_materialize_pp_anchor: bool,
+
+    /// **The drill genesis salt this node runs under, or `None` on every real network** (ADR-0152
+    /// §8.2, P2-12). Set only by kaspad's `--palw-drill-genesis-salt`, and only together with the
+    /// params it salts (`params::palw_t12_drill_params_v1`) — one assignment site, so the two cannot
+    /// disagree. The consensus factory reads it to build the genesis UTXO set it imports
+    /// (`drill::palw_t12_drill_genesis_utxos_v1`), and its start-up guard accepts a salted genesis
+    /// only when this is set and the public genesis only when it is not. Not a consensus input: the
+    /// salt reaches consensus through the genesis it moved.
+    pub palw_drill_genesis_salt: Option<drill::PalwDrillSaltV1>,
 }
 
 impl Config {
@@ -196,6 +206,7 @@ impl Config {
             evm_bridge_finality: crate::evm::EvmBridgeFinalityPolicy::Label,
             evm_prune_legacy_206: false,
             evm_materialize_pp_anchor: false,
+            palw_drill_genesis_salt: None,
         }
     }
 

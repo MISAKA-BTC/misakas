@@ -864,6 +864,73 @@ mod retirement_domain_tests {
         assert_ne!(PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT, PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT);
     }
 
+    /// **T53 (P2-12 review finding 1): a CLI-built object against a salted node is signed under
+    /// the DRILL's domain.** The CLI's params come from `--palw-drill-genesis-salt`
+    /// (`wallet::chain_params`), `network_domain` reads them, and a retirement the CLI builds for a
+    /// drill node verifies under the drill's domain and not under public testnet-12's. Without the
+    /// salt the node's status (version 4: the drill genesis and id) refuses the CLI before it signs.
+    #[test]
+    fn t53_a_cli_object_for_a_drill_node_is_signed_under_the_drill_domain() {
+        use kaspa_consensus_core::config::drill::{PalwDrillSaltV1, palw_drill_network_v1};
+        use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
+        let salt_hex = "5a".repeat(32);
+        let salt = PalwDrillSaltV1::from_hex(&salt_hex).unwrap();
+        let ctx = |salt: Option<&str>| crate::node::Ctx {
+            output: crate::OutputFormat::Human,
+            network: "testnet-12".to_string(),
+            rpc: None,
+            node_grpc: None,
+            evm_rpc: String::new(),
+            timeout_secs: 3,
+            quiet: true,
+            palw_drill_genesis_salt: salt.map(str::to_owned),
+        };
+        let t12 = palw_drill_network_v1();
+        let (drill, drill_salt) = crate::wallet::chain_params(&ctx(Some(&salt_hex)), t12).unwrap();
+        let (public, none) = crate::wallet::chain_params(&ctx(None), t12).unwrap();
+        assert_eq!(drill_salt, Some(salt));
+        assert!(none.is_none());
+        assert!(crate::wallet::chain_params(&ctx(Some("00")), t12).is_err(), "a malformed salt is refused");
+
+        // A view over a drill node, as `wallet::connect` builds it (no connection is opened).
+        let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some("ws://127.0.0.1:1"), None, None, None).unwrap();
+        let server = kaspa_rpc_core::GetServerInfoResponse {
+            rpc_api_version: 1,
+            rpc_api_revision: 0,
+            server_version: String::new(),
+            network_id: t12,
+            has_utxo_index: true,
+            is_synced: true,
+            virtual_daa_score: 0,
+        };
+        let nv = NodeView::from_parts(client, &server, drill.clone());
+        let drill_domain = palw_network_domain_v2_for(b"testnet-12", Some(drill.genesis.hash));
+        let public_domain = palw_network_domain_v2_for(b"testnet-12", Some(public.genesis.hash));
+        assert_eq!(network_domain(&nv), drill_domain, "the CLI signs under the drill's domain");
+        assert_ne!(network_domain(&nv), public_domain);
+
+        let key = ValidatorKey::from_seed([0x53; 32]);
+        let message = palw_bond_retirement_message_v2(network_domain(&nv), &bond());
+        let signature = key.sign_with_context(message.as_byte_slice(), PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT);
+        assert!(key.verify_with_context(message.as_byte_slice(), &signature, PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT));
+        let on_public = palw_bond_retirement_message_v2(public_domain, &bond());
+        assert!(
+            !key.verify_with_context(on_public.as_byte_slice(), &signature, PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT),
+            "a drill retirement verified on public testnet-12"
+        );
+
+        // What the drill node reports, and the verdict for a CLI with and without its salt.
+        let status = kaspa_rpc_core::GetPalwNodeStatusResponse {
+            genesis_hash: drill.genesis.hash.to_string(),
+            drill_salt_id: salt.id(),
+            ..Default::default()
+        };
+        assert!(crate::wallet::node_genesis_verdict(&drill, Some(&salt), &status).is_ok());
+        let refused = crate::wallet::node_genesis_verdict(&public, None, &status).unwrap_err();
+        assert_eq!(refused.code, exit::NETWORK_MISMATCH);
+        assert!(refused.msg.contains("--palw-drill-genesis-salt") && refused.msg.contains(&salt.id()), "{}", refused.msg);
+    }
+
     #[test]
     fn a_human_bond_status_does_not_dump_a_whole_mldsa_public_key() {
         assert_eq!(short_identity("abcd"), "abcd");

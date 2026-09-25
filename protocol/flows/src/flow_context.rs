@@ -277,6 +277,62 @@ mod tests {
         Transaction::new(TX_VERSION, vec![], vec![], 0, subnetwork_id, 0, vec![])
     }
 
+    /// **T53 (ADR-0152 §8.2): a testnet-12 drill and public testnet-12 refuse each other at the
+    /// handshake, and so do two drills.** All three answer to `testnet-12`; the drill salt moved each
+    /// drill's genesis, and the handshake's own comparison (`handshake_rules_verdict_v1`) refuses
+    /// on it — `WrongGenesis`, before any rule is compared. A peer that forges the public genesis
+    /// into its version message is still refused, on the fingerprint (it hashes the genesis and the
+    /// re-keyed registry), and its identity id disagrees too, so the M1-6 escape does not keep it.
+    /// Each chain accepts itself, so the refusals are the genesis and not the fixture.
+    #[test]
+    fn t53_the_handshake_refuses_a_drill_and_public_testnet_12_to_each_other() {
+        use kaspa_consensus_core::config::drill::PalwDrillSaltV1;
+        use kaspa_consensus_core::config::params::{Params, palw_t12_drill_params_v1};
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        let public = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let drill = palw_t12_drill_params_v1(&PalwDrillSaltV1::from_bytes([0x53; 32]).unwrap());
+        let other = palw_t12_drill_params_v1(&PalwDrillSaltV1::from_bytes([0x35; 32]).unwrap());
+        let version_of = |p: &Params| {
+            Version::new(
+                None,
+                kaspa_utils::networking::PeerId::from_slice(&[0x53; 16]).unwrap(),
+                p.network_name(),
+                None,
+                PROTOCOL_VERSION,
+                p.genesis.hash.as_bytes().to_vec(),
+                p.consensus_params_id().as_bytes().to_vec(),
+                p.consensus_identity_id().as_bytes().to_vec(),
+                p.consensus_schedule_id().as_bytes().to_vec(),
+                Vec::new(),
+                0,
+            )
+        };
+        assert_eq!(public.network_name(), drill.network_name(), "the premise: one network name");
+        let name = public.network_name();
+
+        for (what, local, peer) in
+            [("public ← drill", &public, &drill), ("drill ← public", &drill, &public), ("drill ← other drill", &drill, &other)]
+        {
+            let verdict = handshake_rules_verdict_v1(&name, local.genesis.hash, local, &version_of(peer));
+            assert!(matches!(verdict, Err(ProtocolError::WrongGenesis(..))), "{what}: refused on the genesis, got {verdict:?}");
+        }
+
+        // The genesis forged to public testnet-12's: the fingerprint still refuses it, and the
+        // identity id is no escape.
+        let mut forged = version_of(&drill);
+        forged.genesis_hash = public.genesis.hash.as_bytes().to_vec();
+        assert_ne!(forged.consensus_identity_id, public.consensus_identity_id().as_bytes().to_vec());
+        let verdict = handshake_rules_verdict_v1(&name, public.genesis.hash, &public, &forged);
+        assert!(matches!(verdict, Err(ProtocolError::WrongConsensusParams(..))), "refused on the fingerprint, got {verdict:?}");
+
+        for (what, p) in [("public", &public), ("drill", &drill)] {
+            assert!(
+                matches!(handshake_rules_verdict_v1(&name, p.genesis.hash, p, &version_of(p)), Ok(false)),
+                "{what} accepts itself"
+            );
+        }
+    }
+
     /// **A peer kept below the fence it lacks is dropped when this node reaches that fence, and
     /// not one score before** (ADR-0072 SA-2, 2026-09-10).
     ///
@@ -1854,6 +1910,17 @@ impl FlowContext {
         // Recover the class-1-admitted sender locally (same rule the stateful submit
         // below re-applies, so the two never disagree on admissibility).
         let sender = self.mining_manager().evm_recover_sender(&raw)?;
+        // **ADR-0152 §8.2 (P2-12 review finding 2): a testnet-12 drill signs with drill-only EVM
+        // accounts.** The EVM lane is the one the salt does not separate — one `EVM_CHAIN_ID` on
+        // every network and no genesis in the signature — so a transaction from an account that
+        // holds value on public testnet-12, admitted here, would be valid there at the same nonce
+        // and could be lifted out of a drill block by anyone who reaches the drill's P2P port. A
+        // public node (no salt) never enters this branch.
+        if let Some(why) =
+            kaspa_evm::tx::palw_drill_evm_sender_refusal_v1(self.config.palw_drill_genesis_salt.as_ref(), &sender.as_bytes())
+        {
+            return Err(EvmMempoolError::Inadmissible(why));
+        }
         // Read the sender's canonical (nonce, balance) at the EVM head via the consensus
         // session. PREFER the O(1) flat-head point-lookup (audit H-03 — avoids a
         // full-snapshot scan per submit); fall back to the authoritative single-sender
@@ -2028,54 +2095,11 @@ impl ConnectionInitializer for FlowContext {
             return Err(ProtocolError::WrongNetwork(network_name, peer_version.network));
         }
 
-        // Answering to the same network name does not mean running the same rules.
-        //
-        // testnet-22 forked because an older build computed different overlay commitments while
-        // presenting a handshake indistinguishable from a correct node's. The two peered, synced
-        // from each other, and disagreed about block validity — which no amount of candidate
-        // selection downstream can repair, because by then both sides believe they are right.
-        // Separate them here, before either can become an IBD source for the other.
-        //
-        // Peers predating these fields send them empty. Treated as a mismatch rather than waved
-        // through: an unknown rule set is exactly the case this check exists for, and the protocol
-        // version bump means anything that omits them is an older build.
-        let local_genesis = self.config.genesis.hash.as_bytes().to_vec();
-        if peer_version.genesis_hash != local_genesis {
-            return Err(ProtocolError::WrongGenesis(
-                network_name,
-                self.config.genesis.hash.to_string(),
-                describe_fingerprint(&peer_version.genesis_hash),
-            ));
-        }
-
-        // **Refuse on the rules; report on the schedule** (audit M1-6).
-        //
-        // The exact comparison below is what a peer predating the split expects, and it is still
-        // what runs against one. Between two builds that carry the identity id, the gate moves to
-        // the half whose difference actually invalidates history: a build that merely SCHEDULES a
-        // fence at a future height agrees with an un-upgraded peer about every block either can
-        // produce today, and refusing it there partitions the network for the whole rollout —
-        // which is what made "ship consensus changes as an activation, never a re-genesis"
-        // impossible to obey. They diverge at H, where fork choice is the right instrument.
-        //
-        // **"Scheduled" is not "already in force"** (re-audit R-1). `consensus_identity_id` keeps a
-        // fence that is active at GENESIS distinguishable, because two builds that disagree about
-        // one of those disagree about block 1 — they are not on the same chain, and letting them
-        // peer turns a handshake refusal into a silent fork. The residual, which this warning must
-        // not overstate: two builds that both arm a fence in the past at DIFFERENT non-zero heights
-        // still land here, and they can disagree about history between those heights.
-        let local_params_id = self.config.params.consensus_params_id();
-        if peer_version.consensus_params_id != local_params_id.as_bytes().to_vec() {
-            let local_identity = self.config.params.consensus_identity_id();
-            let identity_agrees =
-                !peer_version.consensus_identity_id.is_empty() && peer_version.consensus_identity_id == local_identity.as_bytes();
-            if !identity_agrees {
-                return Err(ProtocolError::WrongConsensusParams(
-                    network_name,
-                    local_params_id.to_string(),
-                    describe_fingerprint(&peer_version.consensus_params_id),
-                ));
-            }
+        // Answering to the same network name does not mean running the same rules: the genesis,
+        // then the rules (`handshake_rules_verdict_v1`, whose doc carries the reasons). `Ok(true)`
+        // is a peer that agrees on every rule in force now and schedules a future fence
+        // differently — kept, and reported here.
+        if handshake_rules_verdict_v1(&network_name, self.config.genesis.hash, &self.config.params, &peer_version)? {
             warn!(
                 "peer {} agrees on every rule in force now and schedules a FUTURE fence differently (local {}, \
                  peer {}); keeping the peer — the two builds agree on every block either can produce today and \
@@ -2237,6 +2261,71 @@ impl ConnectionInitializer for FlowContext {
 
         Ok(())
     }
+}
+
+/// **What the handshake refuses a peer's RULES on: the genesis, then the consensus fingerprint**
+/// (with the identity escape of audit M1-6). `Ok(false)` is a peer on the same rules; `Ok(true)` a
+/// peer that agrees on every rule in force now and schedules a future fence differently, which the
+/// caller keeps and reports.
+///
+/// **The genesis first.** Answering to the same network name does not mean running the same
+/// rules: testnet-22 forked because an older build computed different overlay commitments while
+/// presenting a handshake indistinguishable from a correct node's. The two peered, synced from each
+/// other, and disagreed about block validity — which no amount of candidate selection downstream
+/// can repair, because by then both sides believe they are right. So they are separated here,
+/// before either can become an IBD source for the other. It is also what refuses a testnet-12
+/// DRILL and public testnet-12 to each other (ADR-0152 §8.2, T53): both answer to `testnet-12`, and
+/// the drill salt moved the drill's genesis.
+///
+/// Peers predating these fields send them empty. Treated as a mismatch rather than waved through:
+/// an unknown rule set is exactly the case this check exists for, and the protocol version bump
+/// means anything that omits them is an older build.
+///
+/// **Refuse on the rules; report on the schedule** (audit M1-6). The exact comparison is what a
+/// peer predating the split expects, and it is still what runs against one. Between two builds that
+/// carry the identity id, the gate moves to the half whose difference actually invalidates history:
+/// a build that merely SCHEDULES a fence at a future height agrees with an un-upgraded peer about
+/// every block either can produce today, and refusing it there partitions the network for the whole
+/// rollout — which is what made "ship consensus changes as an activation, never a re-genesis"
+/// impossible to obey. They diverge at H, where fork choice is the right instrument.
+///
+/// **"Scheduled" is not "already in force"** (re-audit R-1). `consensus_identity_id` keeps a fence
+/// that is active at GENESIS distinguishable, because two builds that disagree about one of those
+/// disagree about block 1 — they are not on the same chain, and letting them peer turns a handshake
+/// refusal into a silent fork. The residual, which the caller's warning must not overstate: two
+/// builds that both arm a fence in the past at DIFFERENT non-zero heights still land on `Ok(true)`,
+/// and they can disagree about history between those heights.
+///
+/// A pure function of the local chain and the peer's version message, so the refusal is tested on
+/// the handshake's own comparison and not on a restatement of it.
+fn handshake_rules_verdict_v1(
+    network_name: &str,
+    local_genesis: BlockHash,
+    local_params: &kaspa_consensus_core::config::params::Params,
+    peer_version: &Version,
+) -> Result<bool, ProtocolError> {
+    if peer_version.genesis_hash != local_genesis.as_bytes().to_vec() {
+        return Err(ProtocolError::WrongGenesis(
+            network_name.to_owned(),
+            local_genesis.to_string(),
+            describe_fingerprint(&peer_version.genesis_hash),
+        ));
+    }
+    let local_params_id = local_params.consensus_params_id();
+    if peer_version.consensus_params_id == local_params_id.as_bytes().to_vec() {
+        return Ok(false);
+    }
+    let local_identity = local_params.consensus_identity_id();
+    let identity_agrees =
+        !peer_version.consensus_identity_id.is_empty() && peer_version.consensus_identity_id == local_identity.as_bytes();
+    if !identity_agrees {
+        return Err(ProtocolError::WrongConsensusParams(
+            network_name.to_owned(),
+            local_params_id.to_string(),
+            describe_fingerprint(&peer_version.consensus_params_id),
+        ));
+    }
+    Ok(true)
 }
 
 /// **The fork-id half of a peer's properties, as the handshake stores it**: what the peer

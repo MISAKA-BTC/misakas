@@ -25,6 +25,7 @@ use crate::operator::tty::{Flow, Halt, Step};
 use crate::operator::{catalog, host, status};
 use crate::{CliResult, exit};
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::config::drill::palw_node_genesis_check_applies_v1;
 use kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1;
 use kaspa_consensus_core::palw_state_v2::{
     PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2, PalwRegistrationTermsV2,
@@ -226,6 +227,7 @@ impl Walk<'_> {
             evm_rpc: self.ctx.evm_rpc.clone(),
             timeout_secs: self.ctx.timeout_secs,
             quiet: true,
+            palw_drill_genesis_salt: self.ctx.palw_drill_genesis_salt.clone(),
         }
     }
 
@@ -327,7 +329,10 @@ async fn walk(
         .network
         .parse::<kaspa_consensus_core::network::NetworkId>()
         .map_err(|e| Halt::Blocked(Finding::error("E-CONFIG-NETWORK", exit::CONFIG, format!("'{}': {e}", profile.network))))?;
-    let params = kaspa_consensus_core::config::params::Params::from(net);
+    // The chain the registration is signed for — a testnet-12 drill's with `--palw-drill-genesis-salt`
+    // (ADR-0152 §8.2); checked against the node's genesis once it answers, below.
+    let (params, drill_salt) = crate::wallet::chain_params(ctx, net)
+        .map_err(|e| Halt::Blocked(Finding::error("E-CONFIG-DRILL-SALT", exit::CONFIG, "The drill salt is refused").current(e.msg)))?;
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
         return Err(Halt::Blocked(Finding::error(
             "E-SETUP-NO-PALW",
@@ -408,6 +413,20 @@ async fn walk(
                 .fix("run a node built from this tree"),
         ));
     }
+    // Signed under the node's genesis or not at all (ADR-0152 §8.2): a testnet-12 drill and public
+    // testnet-12 share the network name, and a registration signed for the wrong one is refused by
+    // the node it is sent to and valid on the other.
+    let genesis_verdict = match (&node.node_status, palw_node_genesis_check_applies_v1(params.net, drill_salt.as_ref())) {
+        (_, false) => Ok(()),
+        (Some(status), true) => crate::wallet::node_genesis_verdict(&params, drill_salt.as_ref(), status).map_err(|e| e.msg),
+        (None, true) => Err("the node did not answer getPalwNodeStatus, so which genesis it runs is unknown".to_string()),
+    };
+    genesis_verdict.map_err(|why| {
+        Halt::Blocked(
+            Finding::error("E-NODE-GENESIS", exit::NETWORK_MISMATCH, "The node runs another genesis than this CLI signs for")
+                .current(why),
+        )
+    })?;
     let terms_resp = node.client().get_palw_registration_terms().await.map_err(|e| {
         Halt::Blocked(
             Finding::error("E-NODE-TOO-OLD", exit::COMPONENT_DOWN, "The node does not serve the registration terms")
