@@ -2212,7 +2212,7 @@ const MAX_INFLIGHT_CARRIERS: usize = 1;
 /// is re-planned many times over before its rung expires. A rung window is a genesis-time choice
 /// and is expected to be dozens of DAA; this is a small multiple of block time, so a lost carrier
 /// gets on the order of ten retries rather than one.
-const COURT_MOVE_REPLAN_DAA: u64 = 10;
+pub(crate) const COURT_MOVE_REPLAN_DAA: u64 = 10;
 
 /// **When a carrier of ours is LATE** — unconfirmed this many DAA after it was sent: M1's landing
 /// margin (`PALW_READINESS_ESCALATION_LANDING_DAA_V1`, a carrier included by the next block and
@@ -6500,6 +6500,10 @@ impl PalwPanelService {
         // panel's own logs showing receipts filed and licenses submitted for claims that never
         // reached `ReceiptLicensed`.
         let mut submitted: HashMap<Hash64, u64> = HashMap::new();
+        // **V04: this collector's own order among the claims bound at one DAA**
+        // (`palw_licence_order`): process-keyed, so collectors spread over a bind's claims instead of
+        // all carrying the same one, and no claimant can grind an id to the front of anyone's queue.
+        let licence_spread = std::collections::hash_map::RandomState::new();
         let mut submit_attempts: HashMap<Hash64, u32> = HashMap::new();
         // How many V1 sets this node has sent for a claim past SEAT-R — what `palw_v1_offer_v1`
         // rotates its candidates by, so a set the fold left inert is followed by another.
@@ -10708,7 +10712,36 @@ impl PalwPanelService {
                 // The claims the V2 pool holds anything for — heard V2 receipts, and every claim this
                 // node filed on (its V3 filings keep their inner half there) — as `receipts.keys()`
                 // named them before the pools were rebuilt.
-                let claims: Vec<Hash64> = receipt_pool_v2.claim_ids();
+                //
+                // **V04: the oldest bind first, then this collector's own key** (`palw_licence_order`,
+                // the pre-t12 drill of 2026-09-25). Walked in id order, every collector carried the
+                // same claim — the lowest id with a standing quorum — so the network licensed at one
+                // collector's rate, and whenever binds outran it the highest ids waited behind every
+                // later bind: `e824102e` sat 28 DAA with all five seats `Valid` while `i0`, one of
+                // them, carried 64 lower ids. Past `bound + window_receipt` such a claim redraws with
+                // the same id and its second timeout slashes an honest producer.
+                let claims: Vec<Hash64> =
+                    crate::palw_licence_order::palw_licence_claim_order_v1(receipt_pool_v2.claim_ids(), &receipt_facts, |claim| {
+                        std::hash::BuildHasher::hash_one(&licence_spread, claim)
+                    });
+                if let (queued, Some((oldest, bound_daa))) =
+                    crate::palw_licence_order::palw_licence_queue_head_v1(&claims, &receipt_facts)
+                    && current_daa.saturating_sub(bound_daa) > crate::palw_licence_order::PALW_LICENCE_BACKLOG_WARN_DAA
+                {
+                    crate::palw_backends::note_throttled_v1("licence-backlog", || {
+                        let (valid, seats) = crate::palw_licence_order::palw_licence_valid_seats_v1(
+                            &receipt_pool_v2.candidates(&oldest, &receipt_facts),
+                            &receipt_pool_v3.candidates(&oldest, &receipt_facts),
+                            receipt_facts.panel(&oldest),
+                        );
+                        format!(
+                            "[{PALW_PANEL}] licence queue: {queued} bound claim(s) pooled here; the oldest, {oldest}, bound {} DAA \
+                             ago (DAA {bound_daa}) with Valid receipts from {valid} of its {seats} seats pooled — offered first, \
+                             oldest bind first (V04)",
+                            current_daa.saturating_sub(bound_daa)
+                        )
+                    });
+                }
                 for claim in claims {
                     if !slots.offers(PalwCarrierSiteV1::Licences, inflight) || readiness_waiting {
                         break;
@@ -10760,7 +10793,14 @@ impl PalwPanelService {
                             let change = tx.outputs[0].clone();
                             match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
                                 Ok(()) => {
-                                    info!("[{PALW_PANEL}] submitted {} for claim {claim} in tx {txid}", object_name(&object));
+                                    info!(
+                                        "[{PALW_PANEL}] submitted {} for claim {claim} in tx {txid}{}",
+                                        object_name(&object),
+                                        receipt_facts
+                                            .panel(&claim)
+                                            .map(|panel| format!(" (bound {} DAA ago)", current_daa.saturating_sub(panel.bound_daa)))
+                                            .unwrap_or_default()
+                                    );
                                     let next = TransactionOutpoint::new(txid, 0);
                                     self.persist_fee_outpoint(next);
                                     funding = Some((
