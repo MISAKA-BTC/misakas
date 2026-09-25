@@ -1460,10 +1460,16 @@ pub struct Params {
     /// on claims that are no longer live (`Final`, voided or retired — the locks
     /// `persist_panel_liability` re-dates to `F + window_court`) are counted against the bond's WHOLE
     /// posted collateral and not against the `fp_max_exposure_ratio_permille` ceiling that gates new
-    /// work: the work gate's room is `min(ceiling − (committed − resolved), C − committed − accuser)`
-    /// ([`crate::palw_state_v2::palw_rcore_gate_room_split_of_v1`]). The lock itself, its clocks, its
-    /// liability row, its slash and the bond's exit gate are untouched, and `committed + accuser ≤ C`
-    /// holds at every gate as before; the accuser gate is unchanged.
+    /// work: the work gate's room is `max(launch, min(ceiling − (committed − resolved), C − R − committed
+    /// − accuser))` with `launch` the unsplit room and `R = 4 × min_collateral` the accuser reserve the
+    /// relief never spends (52,000 MSK on testnet-12; the V02 review's HIGH — without it binds spent
+    /// A-6's free half below one FinalRow DA session, court or held dissection)
+    /// ([`crate::palw_state_v2::palw_rcore_gate_room_split_of_v1`],
+    /// [`crate::palw_state_v2::palw_bond_accuser_reserve_v1`]). Past it the work readers outside the
+    /// fold (the draw's filter, admission item 8, the producer's facts) also read the fold's accuser
+    /// ledger, held dissections at their charge. The lock itself, its clocks, its liability row, its
+    /// slash and the bond's exit gate are untouched, and `committed + accuser ≤ C` holds at every gate
+    /// as before; the accuser gate is unchanged, and relief-admitted work leaves it at least `R`.
     ///
     /// Why: below it an honest `Valid` seat's post-`Final` lock (≈ 160–240 MSK per Final on a
     /// testnet-12 floor claim) sits in the 500‰ budget for `window_court` (3,000 DAA), so at 2–4 floor
