@@ -2,9 +2,15 @@
 #
 # Rules this file enforces (each one is a past incident):
 #  * a launch script is written NEXT TO the old one, names its binary by an absolute versioned path,
-#    checks that binary's sha256 and that the binary knows every flag it passes, and exits 78
-#    (RestartPreventExitStatus) instead of crash-looping — ibm's public node crash-looped 108x on a
-#    pre-edited script that named a flag its installed binary lacked (09-23);
+#    checks that binary's sha256, that the binary knows every flag it passes and that it runs every
+#    duty BY CONSTRUCTION (the duty check below), and exits 78 (RestartPreventExitStatus) instead of
+#    crash-looping — ibm's public node crash-looped 108x on a pre-edited script that named a flag its
+#    installed binary lacked (09-23);
+#  * (09-25) a node's protocol duties are not flags: the panel's seat duties, the execution lane's round
+#    blocks and (testnet-12) the chain-registered-class arm run on every node that holds a bond, and the
+#    kit no longer passes --palw-panel / --palw-round-lane / --palw-chain-classes. The launch script
+#    refuses a binary whose --help does not mark each of them ALWAYS-ON DUTY — an older binary, where
+#    each was "default off", would otherwise start with no panel and no lane;
 #  * nothing under /etc/systemd changes before `switch`, and `switch` installs the drop-in / unit in
 #    the same step that stops the old process and starts the new one;
 #  * old chain data is MOVED ASIDE (never deleted by switch); key files are never read, moved or
@@ -90,6 +96,10 @@ parse_node() {
     N_LAUNCH="$REL/launch/b${N_ID}.sh"
 }
 
+# The protocol duties the binary must run BY CONSTRUCTION (09-25). The kit passes none of these flags;
+# every launch script checks that the binary's --help marks each ALWAYS-ON DUTY (write_launch).
+DUTY_FLAGS="--palw-panel --palw-round-lane --palw-chain-classes"
+
 # The 2M genesis row (graph-v7@2097152, class 74c67e63…) is CLOSED at launch (ADR-0152 §8.3 item 7 as
 # amended by IA-12/U-D1, O-11): no fleet node holds its artifact or produces for it. The kit refuses to
 # stage a node that would.
@@ -104,15 +114,14 @@ build_args() { # fills ARGS from the parsed node
     local p
     IFS=',' read -r -a _peers <<<"$N_PEERS"
     for p in "${_peers[@]}"; do [ -n "$p" ] && ARGS+=("--addpeer=$p"); done
-    # Every bond is a panel seat with the round lane. Under R-core+ (ADR-0152) the seat's SEAT-R
-    # replays, the DA answers of P2-7 (a covering signer's and the producer's own), the automatic
-    # filers (P2-8, when merged) and the heartbeat carriers of P2-9 need no flag of their own: they
-    # run on every node that has --palw-panel and a fee outpoint to carry with, and each reserves its
-    # figure on the one memory ledger this node's --palw-host-memory-share bounds (PLAN.md §2).
-    # --palw-chain-classes is testnet-12's default since a5bef8cd; it stays explicit so the flag
-    # check below keeps proving the binary knows it.
-    ARGS+=(--palw-panel --palw-chain-classes --palw-round-lane
-           "--palw-producer-key=$N_KEY"
+    # Every bond is a panel seat with the round lane — BY CONSTRUCTION (09-25): the panel's seat duties
+    # (SEAT-R replays, readiness proofs, the DA answers of P2-7, the automatic filers of P2-8 and, with
+    # the fee outpoint, the carriers), the execution lane's round blocks and testnet-12's
+    # chain-registered-class arm run on every node that holds a bond key and a bond; no flag turns one
+    # on or off, so none is passed (DUTY_FLAGS: the launch script's duty check instead). Each duty
+    # reserves its figure on the one memory ledger this node's --palw-host-memory-share bounds
+    # (PLAN.md §2). What stays here is identity and resources — and whether the node PRODUCES.
+    ARGS+=("--palw-producer-key=$N_KEY"
            "--palw-producer-bond=$PREMINE_TXID:$N_ID"
            "--palw-fee-outpoint=$PREMINE_TXID:$((FEE_FLOAT_BASE + N_ID))"
            "--palw-host-memory-share=$((N_SHARE * 1048576))")
@@ -129,6 +138,8 @@ build_args() { # fills ARGS from the parsed node
     for a in "${ARGS[@]}"; do
         case "$a" in
             --palw-drill*) die "b$N_ID: $a is a DRILL flag — a public testnet-12 node never carries one (ADR-0152 §8.2)" ;;
+            --palw-panel|--palw-panel=*|--palw-round-lane|--palw-round-lane=*|--palw-chain-classes|--palw-chain-classes=*)
+                die "b$N_ID: $a — a duty is not a flag (09-25): the binary runs it by construction, and the launch script's duty check proves it" ;;
             --palw-producer-class=${CLASS_2M_PREFIX}*|--palw-class-artifact=*2m*|--palw-class-artifact=*2M*)
                 die "b$N_ID: $a — the 2M row is closed at launch (§8.3 item 7, O-11)" ;;
             --palw-producer-bond=*|--palw-fee-outpoint=*)
@@ -188,7 +199,14 @@ for a in "\${ARGS[@]}"; do
   f=\${a%%=*}
   case "\$f" in --*) grep -qE -- "(^|[[:space:],])\${f}([[:space:]=,<\\[]|\$)" <<<"\$HELP" || { echo "[launch b$N_ID] \$BIN does not know \$f — refusing (exit 78)"; exit 78; } ;; esac
 done
-if [ "\${1:-}" = "--check" ]; then echo "[launch b$N_ID] OK: sha \${got:0:16}…, \${#ARGS[@]} args, every flag known, no drill flag"; exit 0; fi
+# The duty check (09-25): this script passes no duty flag, so the binary must run each duty by
+# construction. Its --help marks each such flag ALWAYS-ON DUTY (on the flag's line or the next); a
+# binary that does not is one where the duty is "default off", and it would start as a seat that
+# answers nothing — refused.
+for d in $DUTY_FLAGS; do
+  grep -A1 -E -- "^[[:space:]]+\${d}([[:space:]=,<\\[]|\$)" <<<"\$HELP" | grep -q 'ALWAYS-ON DUTY' || { echo "[launch b$N_ID] \$BIN does not run \$d as an always-on duty (an older binary: the duty would be off) — refusing (exit 78)"; exit 78; }
+done
+if [ "\${1:-}" = "--check" ]; then echo "[launch b$N_ID] OK: sha \${got:0:16}…, \${#ARGS[@]} args, every flag known, every duty always on ($DUTY_FLAGS), no drill flag"; exit 0; fi
 exec "\$BIN" "\${ARGS[@]}"
 EOF
 }
@@ -424,7 +442,23 @@ wait_fingerprint() { # unit since-epoch
         systemctl stop "$u" || true
         return 1
     fi
-    if [ "$got" = "$EXPECT_FP" ]; then say "  $u fingerprint OK ${got:0:16}…"; return 0; fi
+    if [ "$got" = "$EXPECT_FP" ]; then
+        say "  $u fingerprint OK ${got:0:16}…"
+        # 09-25: the node prints ONE line naming its duties right after the fingerprint. Every fleet node
+        # holds a bond, so both duties must say ON; "idle" means the bond identity did not reach it.
+        local duties="" j
+        for j in $(seq 1 10); do
+            duties=$(journalctl -u "$u" --since "@$since" --no-pager -o cat 2>/dev/null | grep -oE 'PALW duties .*' | tail -1 || true)
+            [ -n "$duties" ] && break
+            sleep 1
+        done
+        case "$duties" in
+            *"panel seat duties ON"*"round blocks ON"*) say "  $u duties: panel ON, execution lane ON" ;;
+            "") warn "$u printed no 'PALW duties' line — is this the release binary? (the launch script's duty check should have refused an older one)" ;;
+            *) warn "$u: a duty is NOT running — ${duties:0:300}" ;;
+        esac
+        return 0
+    fi
     warn "$u fingerprint ${got:-<none>} != EXPECT_FP ${EXPECT_FP:0:16}… — stopping it"
     journalctl -u "$u" --since "@$since" --no-pager | tail -25 >&2
     systemctl stop "$u" || true
@@ -514,7 +548,7 @@ check_nodes() {
         python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" ${CHECK_REGISTRY:+--registry} || rc=1
         cgroup_memory "$N_UNIT"
         journalctl -u "$N_UNIT" --since "-15min" --no-pager -o cat 2>/dev/null \
-            | grep -E 'WrongGenesis|WrongConsensusParams|panicked|ERROR|class manifest|does not know|refusing \(exit 78\)|PALW DRILL|memory ledger cannot cover|does not configure the execution lane' \
+            | grep -E 'WrongGenesis|WrongConsensusParams|panicked|ERROR|class manifest|does not know|refusing \(exit 78\)|PALW DRILL|memory ledger cannot cover|panel idle|execution lane idle|deprecated and does nothing|round lane is not produced' \
             | sed -E 's/^[0-9-]+ [0-9:.+]+ //' | cut -c1-200 | sort | uniq -c | sort -rn | head -6 || true
     done
     return $rc

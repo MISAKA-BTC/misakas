@@ -11,6 +11,7 @@ pub mod palw_candidate_proof_timing;
 pub mod palw_class_context;
 pub mod palw_drill;
 pub mod palw_dump;
+pub mod palw_duties;
 pub mod palw_economics;
 /// ADR-0152 v3.1 N10 / §7.3 P2-8c: the automatic `PanelFalseValidV2` filer. See the module's own header.
 pub mod palw_filer_false_valid;

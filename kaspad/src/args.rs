@@ -216,8 +216,12 @@ pub struct Args {
     /// ADR-0060 Decision 1: run the bondless heartbeat miner, paying the lane's fees to this
     /// ML-DSA-87 address. One CPU thread, fee-only, only meaningful on a ConsensusV2 network.
     pub palw_heartbeat_miner_address: Option<String>,
-    /// ADR-0125: produce the execution lane's round blocks with the producer's bond.
-    pub palw_round_lane: bool,
+    /// **Deprecated, does nothing** (2026-09-25): ADR-0125's execution lane is a DUTY, run on every
+    /// node that holds a bond (`--palw-producer-key` + `--palw-producer-bond`) on a network whose params
+    /// configure `palw_execution_lane` — see [`crate::palw_duties`]. `Some` only records that the
+    /// operator named `--palw-round-lane` (command line, `KASPAD_PALW_ROUND_LANE` or a config file), so
+    /// the node can say once that it is ignored; nothing reads it to decide whether the lane runs.
+    pub palw_round_lane: Option<bool>,
     pub palw_producer_key: Option<String>,
     pub palw_producer_bond: Option<String>,
     /// **Artifact files for classes whose weights cannot be derived** (repeatable).
@@ -263,11 +267,11 @@ pub struct Args {
     pub palw_register_class: Option<String>,
     pub palw_register_bond: bool,
     pub palw_dump_classes: bool,
-    /// ADR-0067: arm the chain-registered-class arm (the fence's node half). `None` = the network's
-    /// default ([`palw_chain_classes_default`]: ON where the permissionless model registry is in force
-    /// from genesis — testnet-12 — OFF elsewhere, testnet-11 included); `Some` is what the operator
-    /// said, `--palw-chain-classes` / `--palw-chain-classes=true` or `--palw-chain-classes=false`.
-    /// Read it through [`Args::palw_chain_classes_for`].
+    /// ADR-0067: the chain-registered-class arm (the fence's node half). **A duty where the network's
+    /// params put the permissionless model registry in force from genesis** (testnet-12,
+    /// [`palw_chain_classes_default`]): there it is always armed and this value is ignored,
+    /// `--palw-chain-classes=false` included (2026-09-25). Elsewhere (testnet-11, mainnet: the fence)
+    /// `Some(true)` is still the operator's opt-in. Read it through [`Args::palw_chain_classes_for`].
     pub palw_chain_classes: Option<bool>,
     /// ADR-0151 follow-up: recompute every class manifest at startup and REFUSE TO START on any
     /// disagreement. Off by default because the recomputation is 135 s an artifact at a 2M context;
@@ -322,7 +326,11 @@ pub struct Args {
     /// DAA score between two canonical claims from this bond.
     pub palw_canonical_interval_daa: u64,
     pub palw_producer_pay_address: Option<String>,
-    pub palw_panel: bool,
+    /// **Deprecated, does nothing** (2026-09-25): the panel's seat duties run on every node of a
+    /// ConsensusV2 network that holds a seat identity — see [`crate::palw_duties`]. `Some` only records
+    /// that the operator named `--palw-panel` (command line, `KASPAD_PALW_PANEL` or a config file), so
+    /// the node can say once that it is ignored; nothing reads it to decide whether the panel runs.
+    pub palw_panel: Option<bool>,
     pub palw_fee_outpoint: Option<String>,
     /// kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's EVM coinbase (20-byte hex,
     /// optional 0x) — claims the priority fees of this node's own payload txs.
@@ -489,7 +497,7 @@ impl Default for Args {
             validator_key: None,
             palw_produce: false,
             palw_heartbeat_miner_address: None,
-            palw_round_lane: false,
+            palw_round_lane: None,
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
@@ -516,7 +524,7 @@ impl Default for Args {
             palw_canonical_class: None,
             palw_canonical_interval_daa: 600,
             palw_producer_pay_address: None,
-            palw_panel: false,
+            palw_panel: None,
             palw_fee_outpoint: None,
             evm_fee_recipient: None,
             stake_bond: None,
@@ -1075,10 +1083,13 @@ impl Args {
             .collect()
     }
 
-    /// **Whether this node arms the chain-registered-class arm** (`--palw-chain-classes`): what the
-    /// operator said, else the network's default ([`palw_chain_classes_default`]).
+    /// **Whether this node arms the chain-registered-class arm.** Where the network's params make it
+    /// a duty ([`palw_chain_classes_default`]: the permissionless registry in force from genesis —
+    /// testnet-12) it is armed whatever the operator said: `--palw-chain-classes=false` cannot turn a
+    /// duty off (2026-09-25). Elsewhere the fence holds unless the operator opts in with
+    /// `--palw-chain-classes`.
     pub fn palw_chain_classes_for(&self, params: &kaspa_consensus_core::config::params::Params) -> bool {
-        self.palw_chain_classes.unwrap_or_else(|| palw_chain_classes_default(params))
+        palw_chain_classes_default(params) || self.palw_chain_classes == Some(true)
     }
 
     pub fn network(&self) -> NetworkId {
@@ -1322,7 +1333,7 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_PRODUCER_BOND")
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
-                .help("PALW: <txid>:<index> of the REGISTERED bond this node signs attempts under. A genesis bond names it on the card; --palw-register-bond prints a newly registered outpoint. Verify any candidate with `misaka bond status --bond <txid>:<index> --class-id <id>` — an ordinary or reserved UTXO is not a bond."),
+                .help("PALW: <txid>:<index> of the REGISTERED bond this node signs attempts under. A genesis bond names it on the card; --palw-register-bond prints a newly registered outpoint. Verify any candidate with `misaka bond status --bond <txid>:<index> --class-id <id>` — an ordinary or reserved UTXO is not a bond. With --palw-producer-key this is the node's seat identity: the panel's seat duties and the execution lane then run by themselves (always on; no flag turns them on or off)."),
         )
         .arg(
             Arg::new("palw-drill-challenge-all")
@@ -1539,14 +1550,13 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(bool))
                 .value_name("true|false")
                 .help(
-                    "MISAKA PALW (ADR-0067): ARM the chain-registered-class arm — serve classes whose declaration \
-                     the chain carries even when this build's tables never heard of them, executing FROM the \
-                     registered profile. Default: ON on a network whose permissionless model registry is in \
-                     force from genesis (testnet-12, where a model arrives by registration), OFF elsewhere \
-                     (testnet-11: the fence). `--palw-chain-classes=false` turns it off anywhere. Arming \
-                     accepts interpreted execution for stranger classes this operator's artifacts can pair \
-                     with. Registration never obligates possession — a class is served only if its artifact is \
-                     loaded via --palw-class-artifact.",
+                    "ALWAYS-ON DUTY where the network's permissionless model registry is in force from genesis \
+                     (testnet-12, where a model arrives by registration): there the chain-registered-class arm \
+                     (ADR-0067: serve classes whose declaration the chain carries even when this build's tables \
+                     never heard of them, executing FROM the registered profile) is always armed and this flag is \
+                     deprecated and does nothing — `=false` included. Elsewhere (testnet-11, mainnet: the fence) \
+                     `--palw-chain-classes` still arms it as an operator opt-in. Registration never obligates \
+                     possession — a class is served only if its artifact is loaded via --palw-class-artifact.",
                 ),
         )
         .arg(
@@ -1630,12 +1640,33 @@ pub fn cli() -> Command {
                 .help("ADR-0060: run the bondless heartbeat miner (algo-3, one CPU thread, fee-only — the lane that keeps the chain's clock alive when every bonded lane is silent), paying its fees to this ML-DSA-87 P2PKH address. Only a ConsensusV2 network has the lane. Default off."),
         )
         .arg(
-            arg!(--"palw-round-lane" "ADR-0125: produce the execution lane — a fee-only round block in every one-second round the chain's schedule grants this node's bond a permit for. Uses --palw-producer-key and --palw-producer-bond; --palw-produce is NOT required. Only a network whose `palw_execution_lane` fence is set can use it. Default off.")
-                .env("KASPAD_PALW_ROUND_LANE"),
+            // Kept so existing units, kits and scripts still start (2026-09-25). `ALWAYS-ON DUTY` is the
+            // token the testnet-12 deploy kit's launch script looks for before it drops the flag.
+            Arg::new("palw-round-lane")
+                .long("palw-round-lane")
+                .env("KASPAD_PALW_ROUND_LANE")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "ALWAYS-ON DUTY — deprecated, does nothing. ADR-0125's execution lane (a fee-only round block in every \
+                     one-second round the chain's schedule grants this node's bond a permit for) runs on EVERY node that holds \
+                     --palw-producer-key and --palw-producer-bond, on a network whose params configure `palw_execution_lane`. \
+                     A node without a bond runs none and says so in one INFO line. Accepted so existing units keep starting; \
+                     no value turns the lane off.",
+                ),
         )
         .arg(
-            arg!(--"palw-panel" "PALW ADR-0042 Decision 7: run the in-process panel service — verify gossiped claim material against the claims this node's bond is seated on, sign and broadcast receipts, and (when --palw-fee-outpoint is set) submit the assembled quorum to the chain. Uses --palw-producer-key and --palw-producer-bond for the seat identity; --palw-produce is NOT required. Only a ConsensusV2 network can use it. Default off.")
-                .env("KASPAD_PALW_PANEL"),
+            Arg::new("palw-panel")
+                .long("palw-panel")
+                .env("KASPAD_PALW_PANEL")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "ALWAYS-ON DUTY — deprecated, does nothing. The panel's seat duties (ADR-0042 Decision 7: receipts, \
+                     replays, readiness proofs, data-availability answers, the automatic filers and — with \
+                     --palw-fee-outpoint — the carriers that take them to the chain) run on EVERY node of a ConsensusV2 \
+                     network that holds a seat identity: --palw-producer-key and --palw-producer-bond. A node without one \
+                     runs no panel and says so in one INFO line. Accepted so existing units keep starting; no value turns \
+                     the duty off.",
+                ),
         )
         .arg(
             Arg::new("palw-fee-outpoint")
@@ -2144,13 +2175,13 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
     cmd
 }
 
-/// **The network's default for `--palw-chain-classes`** (user decision, 2026-09-24): ON where the
-/// permissionless model registry (ADR-0135, `Params::palw_model_registry`) is in force from genesis —
-/// testnet-12, where every model after the genesis card arrives as a chain registration and a node
-/// that does not serve chain-registered classes cannot produce for them — and OFF elsewhere.
-/// testnet-11 arms the same registry, but at a flag day (6,001) on a chain whose classes are this
-/// build's tables, so it keeps the fence's default: off. A node's own choice
-/// (`--palw-chain-classes=true|false`) always wins.
+/// **Where serving chain-registered classes is a DUTY** (user decisions 2026-09-24 and 2026-09-25):
+/// where the permissionless model registry (ADR-0135, `Params::palw_model_registry`) is in force from
+/// genesis — testnet-12, where every model after the genesis card arrives as a chain registration and
+/// a node that does not serve chain-registered classes cannot produce or judge for them. There no flag
+/// turns it off. testnet-11 arms the same registry, but at a flag day (6,001) on a chain whose classes
+/// are this build's tables, so it keeps the fence: off unless the operator opts in with
+/// `--palw-chain-classes` ([`Args::palw_chain_classes_for`]).
 pub fn palw_chain_classes_default(params: &kaspa_consensus_core::config::params::Params) -> bool {
     params.palw_model_registry_at(0)
 }
@@ -2247,7 +2278,7 @@ impl Args {
             enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
             validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
             palw_produce: arg_match_unwrap_or::<bool>(&m, "palw-produce", defaults.palw_produce),
-            palw_panel: arg_match_unwrap_or::<bool>(&m, "palw-panel", defaults.palw_panel),
+            palw_panel: arg_match_named_flag(&m, "palw-panel").or(defaults.palw_panel),
             palw_fee_outpoint: m.get_one::<String>("palw-fee-outpoint").cloned().or(defaults.palw_fee_outpoint),
             palw_producer_key: m.get_one::<String>("palw-producer-key").cloned().or(defaults.palw_producer_key),
             palw_producer_bond: m.get_one::<String>("palw-producer-bond").cloned().or(defaults.palw_producer_bond),
@@ -2304,7 +2335,7 @@ impl Args {
                 .get_one::<String>("palw-heartbeat-miner-address")
                 .cloned()
                 .or(defaults.palw_heartbeat_miner_address),
-            palw_round_lane: arg_match_unwrap_or::<bool>(&m, "palw-round-lane", defaults.palw_round_lane),
+            palw_round_lane: arg_match_named_flag(&m, "palw-round-lane").or(defaults.palw_round_lane),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
             stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
             validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),
@@ -2546,6 +2577,14 @@ fn arg_match_unwrap_or<T: Clone + Send + Sync + 'static>(m: &clap::ArgMatches, a
     m.get_one::<T>(arg_id).cloned().filter(|_| m.value_source(arg_id) != Some(DefaultValue)).unwrap_or(default)
 }
 
+/// **A `SetTrue` flag the operator NAMED** — on the command line or through its environment twin —
+/// with the value it was given (`KASPAD_PALW_PANEL=false` is `Some(false)`); `None` when it was not
+/// named. For the deprecated duty flags, which are read only to say once that they are ignored.
+fn arg_match_named_flag(m: &clap::ArgMatches, arg_id: &str) -> Option<bool> {
+    matches!(m.value_source(arg_id), Some(clap::parser::ValueSource::CommandLine | clap::parser::ValueSource::EnvVariable))
+        .then(|| m.get_flag(arg_id))
+}
+
 fn arg_match_many_unwrap_or<T: Clone + Send + Sync + 'static>(m: &clap::ArgMatches, arg_id: &str, default: Vec<T>) -> Vec<T> {
     match m.get_many::<T>(arg_id) {
         Some(val_ref) => val_ref.cloned().collect(),
@@ -2701,17 +2740,18 @@ mod palw_chain_classes_tests {
         Args::parse(argv).expect("args parse")
     }
 
-    /// **`--palw-chain-classes` defaults ON where the permissionless registry is armed from genesis
-    /// (testnet-12) and OFF elsewhere (testnet-11), and the operator's word wins both ways.**
+    /// **`--palw-chain-classes` is a DUTY where the permissionless registry is in force from genesis
+    /// (testnet-12): armed whatever the operator says, `=false` included (2026-09-25). Elsewhere
+    /// (testnet-11, mainnet: the fence) it stays off unless the operator opts in.**
     #[test]
-    fn chain_classes_default_on_testnet_12_off_elsewhere_and_an_explicit_value_wins() {
+    fn chain_classes_are_a_duty_on_testnet_12_and_an_opt_in_elsewhere() {
         let t12 = parse(&["--testnet", "--netsuffix=12"]);
         let t11 = parse(&["--testnet", "--netsuffix=11"]);
         assert_eq!(t12.network(), NetworkId::with_suffix(NetworkType::Testnet, 12));
         assert_eq!(t11.network(), NetworkId::with_suffix(NetworkType::Testnet, 11));
         let (t12_params, t11_params): (Params, Params) = (t12.network().into(), t11.network().into());
         assert_eq!(t12.palw_chain_classes, None, "unstated");
-        assert!(t12.palw_chain_classes_for(&t12_params), "testnet-12: ON by default");
+        assert!(t12.palw_chain_classes_for(&t12_params), "testnet-12: ON");
         assert!(!t11.palw_chain_classes_for(&t11_params), "testnet-11: OFF by default");
         for (name, params) in [
             ("mainnet", Params::from(NetworkId::new(NetworkType::Mainnet))),
@@ -2721,19 +2761,44 @@ mod palw_chain_classes_tests {
             assert!(!palw_chain_classes_default(&params), "{name}: OFF by default");
         }
 
-        // Explicit values win on either network.
-        for (argv, want) in [
-            (vec!["--testnet", "--netsuffix=12", "--palw-chain-classes=false"], false),
-            (vec!["--testnet", "--netsuffix=12", "--palw-chain-classes"], true),
-            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes"], true),
-            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes=true"], true),
-            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes=false"], false),
+        // What the operator said is recorded (the node warns about it where it is a duty), but on
+        // testnet-12 nothing turns the arm off; on testnet-11 the opt-in still arms it.
+        for (argv, said, armed) in [
+            (vec!["--testnet", "--netsuffix=12", "--palw-chain-classes=false"], false, true),
+            (vec!["--testnet", "--netsuffix=12", "--palw-chain-classes"], true, true),
+            (vec!["--testnet", "--netsuffix=12", "--palw-chain-classes=true"], true, true),
+            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes"], true, true),
+            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes=true"], true, true),
+            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes=false"], false, false),
         ] {
             let args = parse(&argv);
             let params: Params = args.network().into();
-            assert_eq!(args.palw_chain_classes, Some(want), "{argv:?}");
-            assert_eq!(args.palw_chain_classes_for(&params), want, "{argv:?}");
+            assert_eq!(args.palw_chain_classes, Some(said), "{argv:?}");
+            assert_eq!(args.palw_chain_classes_for(&params), armed, "{argv:?}");
         }
+    }
+
+    /// **The deprecated duty flags still parse in every form an existing unit, kit or script uses** —
+    /// a node that refused to start on them would be worse than the flag — and they are recorded as
+    /// named, not as switches.
+    #[test]
+    fn the_deprecated_duty_flags_still_parse() {
+        let none = parse(&["--testnet", "--netsuffix=12"]);
+        assert_eq!((none.palw_panel, none.palw_round_lane), (None, None));
+        let named = parse(&["--testnet", "--netsuffix=12", "--palw-panel", "--palw-round-lane", "--palw-chain-classes"]);
+        assert_eq!((named.palw_panel, named.palw_round_lane, named.palw_chain_classes), (Some(true), Some(true), Some(true)));
+        // The deploy kit's and the drill kits' exact spelling.
+        let kit = parse(&[
+            "--testnet",
+            "--netsuffix=12",
+            "--palw-panel",
+            "--palw-chain-classes",
+            "--palw-round-lane",
+            "--palw-producer-key=/k",
+            "--palw-producer-bond=aa:0",
+            "--palw-fee-outpoint=aa:41",
+        ]);
+        assert_eq!(kit.palw_producer_bond.as_deref(), Some("aa:0"));
     }
 }
 

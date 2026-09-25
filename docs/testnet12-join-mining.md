@@ -231,15 +231,23 @@ Equivalent manual shape:
 ```bash
 kaspad --testnet --netsuffix=12 --appdir=~/.t12 \
   --listen=0.0.0.0:26311 --rpclisten-borsh=default --utxoindex \
-  --palw-produce --palw-round-lane --palw-panel \
+  --palw-produce \
   --palw-producer-key=~/.misaka/miner.seed \
   --palw-producer-bond=<registered-bond-txid>:<index> \
   --palw-fee-outpoint=<mature-non-bond-txid>:<index>
 ```
 
 For the floor, leave out `--palw-producer-class` and `--palw-class-artifact`. The floor is minted from
-a seed on every node. `--palw-round-lane` produces the execution-lane round blocks that the chain's
-permits grant this bond. `mining start` passes it for a miner.
+a seed on every node.
+
+**The seat duties and the execution lane need no flag** (since 2026-09-25). A node that holds
+`--palw-producer-key` and `--palw-producer-bond` always runs the panel's seat duties (receipts,
+replays, readiness proofs, data-availability answers, the automatic filers and, with
+`--palw-fee-outpoint`, the carriers) and the execution-lane round blocks that the chain's permits
+grant this bond. No flag turns them off. `--palw-produce` is the only choice: whether this node also
+opens attempt claims. The node prints one line at startup, `PALW duties (on by construction; …)`, that
+names each duty and, for one that is idle, why. `--palw-panel` and `--palw-round-lane` are still
+accepted. They do nothing and log one warning each.
 
 ### The 8k model row (`Qwen/Qwen2.5-1.5B/graph-v7@8192`, class `ebf44d0a…`)
 
@@ -270,10 +278,12 @@ permits grant this bond. `mining start` passes it for a miner.
    to start on a mismatch. That costs about 135 s per artifact at 2M, and less at 8k.
 4. **A class that is registered after your build.** The genesis rows are in this build's tables.
    Serving a class that was registered permissionlessly and that this build has never heard of needs
-   the chain-registered-class arm, **`--palw-chain-classes`**. On testnet-12 it is **on by default**
-   (the permissionless model registry is in force from genesis there); testnet-11 keeps it off. With
-   it the node executes from the registered profile, and the panel's readiness proofs resolve through
-   the chain's registration. Pass `--palw-chain-classes=false` to turn it off.
+   the chain-registered-class arm. On testnet-12 it is **always on** (the permissionless model registry
+   is in force from genesis there), so pass no flag for it. `--palw-chain-classes` is deprecated on
+   testnet-12, and `=false` no longer turns it off. testnet-11 keeps the arm off unless the operator
+   passes `--palw-chain-classes`. With the arm, the node executes from the registered profile, and the
+   panel's readiness proofs resolve through the chain's registration. A class is served only if its
+   artifact is loaded.
 
 **A producer refuses to start for a class it cannot produce.** For example, when no loaded artifact
 matches the registered root, the node prints `--palw-producer-class: … This node will not start as a

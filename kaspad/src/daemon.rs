@@ -785,14 +785,17 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // 2026-08-13. One line here makes "is this binary the release?" answerable without a peer,
     // which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
-    // `--palw-chain-classes`, resolved once: the operator's word, else the network's default (ON where
-    // the permissionless model registry is in force from genesis — testnet-12 — OFF elsewhere).
-    let palw_chain_classes = args.palw_chain_classes_for(&config.params);
-    info!(
-        "PALW chain-registered classes (--palw-chain-classes): {} ({})",
-        if palw_chain_classes { "armed" } else { "off" },
-        if args.palw_chain_classes.is_some() { "set by the operator" } else { "this network's default" }
-    );
+    // **The node's protocol duties, decided once from the params and the identity alone** (user
+    // decision 2026-09-25, `crate::palw_duties`): the panel's seat duties, the execution lane and — where
+    // the registry is in force from genesis — the chain-registered-class arm run on every node that can
+    // act as a bond; no flag turns one on or off. One INFO line says which run and why the others do
+    // not; each deprecated duty flag the operator still names gets one WARN line.
+    let palw_duty_plan = crate::palw_duties::palw_duty_plan_v1(args, &config.params);
+    for line in crate::palw_duties::palw_deprecated_duty_flag_warnings_v1(args, &config.params) {
+        warn!("{line}");
+    }
+    info!("{}", crate::palw_duties::palw_duty_summary_line_v1(&palw_duty_plan, &config.params));
+    let palw_chain_classes = palw_duty_plan.chain_classes;
     // **…and the heights, printed as heights.** The fingerprint above writes each scheduled fence's
     // height — the 1900 fences and the 2150 ladder each moved testnet-11's pin — but until
     // 2026-09-11 `consensus_params_id` left ADR-0095's `palw_model_benefits` out, so on 2026-09-09
@@ -1601,12 +1604,15 @@ Do you confirm? (y/n)";
         (None, _) => None,
     };
 
-    // ADR-0125: the execution lane's producer. Gated on the lane's fence for the heartbeat miner's
-    // reason — on a network without the lane every round block would be refused — and on the bond's
-    // credentials, which it shares with the attempt producer.
-    let palw_round_producer_service = if args.palw_round_lane {
-        match (config.params.palw_execution_lane_fence(), &args.palw_producer_key, &args.palw_producer_bond) {
-            (Some(_), Some(key_path), Some(bond)) => Some(Arc::new(crate::palw_round_producer::PalwRoundProducerService::new(
+    // ADR-0125: the execution lane's producer — a DUTY (`crate::palw_duties`): it runs on every node
+    // that holds a bond, where the network's params configure the lane. Gated on the lane's fence for the
+    // heartbeat miner's reason — on a network without the lane every round block would be refused — and
+    // on the bond's credentials, which it shares with the attempt producer. Before the fence fires the
+    // worker reads no round status and signs nothing; a node without a bond starts nothing (the summary
+    // line above said why).
+    let palw_round_producer_service = match &palw_duty_plan.round_lane {
+        Ok(crate::palw_duties::PalwBondIdentityV1 { key_path, bond }) => {
+            Some(Arc::new(crate::palw_round_producer::PalwRoundProducerService::new(
                 crate::palw_round_producer::PalwRoundProducerConfig {
                     key_path: key_path.clone(),
                     bond: bond.clone(),
@@ -1618,22 +1624,9 @@ Do you confirm? (y/n)";
                 consensus_manager.clone(),
                 mining_manager.clone(),
                 flow_context.clone(),
-            ))),
-            (None, _, _) => {
-                warn!(
-                    "--palw-round-lane was given but {} does not configure the execution lane (`palw_execution_lane`); the \
-                     round producer is not started rather than producing blocks every peer would refuse",
-                    config.params.net
-                );
-                None
-            }
-            _ => {
-                warn!("--palw-round-lane needs --palw-producer-key and --palw-producer-bond; the round producer is not started");
-                None
-            }
+            )))
         }
-    } else {
-        None
+        Err(_) => None,
     };
 
     // kaspa-pq Phase 11 (ADR-0010): expose the in-process validator service's status via
@@ -1743,9 +1736,11 @@ Do you confirm? (y/n)";
     // ADR-0042 Decision 7: the panel service — a bonded node's seat duties, and (funded) the
     // submitter that carries the assembled quorum to the chain. Deliberately independent of
     // --palw-produce: a validator that never mines still judges.
-    // `--palw-register-bond` needs this service too, and requiring `--palw-panel` alongside it
-    // would mean a newcomer who passed only the registration flag got silence: no service, no
-    // message, nothing to read. The registration dispatches to its own worker inside.
+    // **A DUTY, not a flag** (2026-09-25, `crate::palw_duties`): it runs on every node of a
+    // ConsensusV2 network that holds a seat identity. `--palw-panel` used to be required, and a seat
+    // whose unit forgot it held its bond, drew its duties and answered none of them.
+    // `--palw-register-bond` needs this service too — a newcomer has a key and no bond yet — and the
+    // registration dispatches to its own worker inside.
     //
     // **`--palw-register-class` has the identical shape and was missing from this condition**, so
     // it produced exactly the silence the paragraph above was written to prevent — one flag over.
@@ -1754,19 +1749,18 @@ Do you confirm? (y/n)";
     // registration, and never exited. Measured 2026-09-03, where it did that for two hours while
     // an acceptance drill waited on it. A flag that names an action and is then never read is
     // worse than an unimplemented one, because the node looks like it is working.
-    let palw_panel_service = if args.palw_panel || args.palw_register_bond || args.palw_register_class.is_some() {
+    let palw_panel_service = {
         // The court, from the SAME bundle the mode check reads — a seat resolving a duty's class
         // against a different court would look for a class the chain never registered.
         let panel_court = match &config_for_palw_panel.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => Some(b.court),
             _ => None,
         };
-        let v2 = panel_court.is_some();
         // **A node registering its first bond has no bond**, so requiring one here is what kept the
         // seam closed: the only way to obtain a bond was to already hold one. `--palw-register-bond`
-        // is therefore admitted on the key alone, and the service dispatches to the registration
-        // worker instead of the panel duties.
-        match (v2, &args.palw_producer_key, &args.palw_producer_bond) {
+        // is therefore admitted on the key alone (`palw_duty_plan_v1`), and the service dispatches to
+        // the registration worker instead of the panel duties.
+        match (&palw_duty_plan.panel, panel_court) {
             // **Class registration needs a bond, and admitting it without one started a node that
             // could never do the job.** This gate used to admit `--palw-register-class` on the key
             // alone, reasoning that ADR-0054's permissionless admission would otherwise be a closed
@@ -1783,7 +1777,7 @@ Do you confirm? (y/n)";
             // The cost of admitting it was a node that started, followed the chain, and registered
             // nothing — the failure a rehearsal spent a run discovering, and the same shape as the
             // producer gate that read `--palw-register-class` and built no panel at all.
-            (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond => {
+            (Ok(crate::palw_duties::PalwSeatIdentityV1 { key_path, bond }), Some(court)) => {
                 Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                     crate::palw_panel::PalwPanelConfig {
                         telemetry: palw_telemetry.clone(),
@@ -1801,7 +1795,7 @@ Do you confirm? (y/n)";
                         bond: bond.clone().unwrap_or_default(),
                         fee_outpoint: args.palw_fee_outpoint.clone(),
                         state_dir: palw_panel_state_dir(&app_dir, network),
-                        court: panel_court.expect("v2 is true exactly when this is Some"),
+                        court,
                         prompt_ids_form: config_for_palw_panel.params.palw_prompt_ids_form_v1(),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
@@ -1875,40 +1869,38 @@ Do you confirm? (y/n)";
                     config_for_palw_panel.clone(),
                 )))
             }
-            (false, _, _) => {
+            // Not reached: `palw_duty_plan_v1` admits the panel only where these same params declare
+            // ConsensusV2, which is exactly when the court is `Some`. Nothing to judge against: no panel.
+            (Ok(_), None) => None,
+            // **The duty with no identity is a clean no-op**: the summary line above already said
+            // why (no ConsensusV2 ruleset, no key, no bond). Only an ACTION the operator asked for —
+            // a registration — that cannot happen is worth a warning: the two arms below name what
+            // is missing.
+            (Err(_), _) if args.palw_register_class.is_none() && !args.palw_register_bond => None,
+            (Err(crate::palw_duties::PalwDutyIdleV1::NotOnThisNetwork(_)), _) => {
                 warn!(
-                    "--palw-panel was given but {} declares no ConsensusV2 ruleset — no panels exist here, service not started",
+                    "{} was given but {} declares no ConsensusV2 ruleset — nothing can be registered here",
+                    if args.palw_register_class.is_some() { "--palw-register-class" } else { "--palw-register-bond" },
                     config_for_palw_panel.params.net
                 );
                 None
             }
-            _ => {
-                // Name the flag the operator actually passed. Telling a `--palw-register-class`
-                // user that "--palw-panel needs ..." sends them to configure a service they did
-                // not ask for, and the flag they DID pass goes unmentioned.
-                let asked = if args.palw_register_class.is_some() {
-                    "--palw-register-class"
-                } else if args.palw_register_bond {
-                    "--palw-register-bond"
-                } else {
-                    "--palw-panel"
-                };
+            (Err(crate::palw_duties::PalwDutyIdleV1::NoIdentity(_)), _) => {
+                // Name the flag the operator actually passed.
+                let asked = if args.palw_register_class.is_some() { "--palw-register-class" } else { "--palw-register-bond" };
                 // What is missing depends on what was passed. `--palw-register-bond` obtains its own
                 // bond, so it needs only the key; everything else needs a bond as well — class
                 // registration included, because the chain reads `registrant_bond` from it.
                 let also = if args.palw_register_bond {
                     ""
-                } else if args.palw_register_class.is_some() {
-                    " and a bond to register the class under: --palw-producer-bond <txid>:<index>,                      or --palw-register-bond to obtain one in this same run"
                 } else {
-                    " and --palw-producer-bond"
+                    " and a bond to register the class under: --palw-producer-bond <txid>:<index>, \
+                     or --palw-register-bond to obtain one in this same run"
                 };
                 warn!("{asked} needs --palw-producer-key (the seat identity){also} — service not started, so nothing was registered");
                 None
             }
         }
-    } else {
-        None
     };
 
     if args.palw_dump_classes {
@@ -2156,6 +2148,27 @@ mod tests {
             call.contains("kaspa_mining::mempool::config::palw_h1_carrier_priority_for(&config.params)"),
             "the daemon passes the ruleset's H-1 carrier switch to the mining manager"
         );
+    }
+
+    /// **No duty is gated on its deprecated flag** (2026-09-25, `crate::palw_duties`): the panel and the
+    /// execution lane start from the duty plan — the params and the identity — and the daemon reads
+    /// none of `--palw-panel`, `--palw-round-lane` or `--palw-chain-classes` itself. A later edit that
+    /// brought a flag back as a gate would make a duty switchable again, silently; this fails it.
+    #[test]
+    fn no_duty_is_gated_on_its_deprecated_flag() {
+        let source = include_str!("daemon.rs");
+        let body = &source[..source.find("#[cfg(test)]\nmod tests").expect("the test module")];
+        for field in ["palw_panel", "palw_round_lane", "palw_chain_classes"] {
+            let read = format!("args.{field}");
+            let gated = body
+                .match_indices(&read)
+                .any(|(at, _)| !body[at + read.len()..].starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric()));
+            assert!(!gated, "the daemon reads `{read}` — a deprecated duty flag must not decide anything");
+        }
+        assert!(body.contains("crate::palw_duties::palw_duty_plan_v1(args, &config.params)"), "one plan, from the params");
+        assert!(body.contains("match &palw_duty_plan.round_lane {"), "the round producer starts from the plan");
+        assert!(body.contains("match (&palw_duty_plan.panel, panel_court) {"), "the panel starts from the plan");
+        assert!(body.contains("let palw_chain_classes = palw_duty_plan.chain_classes;"), "the arm is the plan's");
     }
 
     /// **The producer gate looks where the panel actually writes** (audit3 S-21).
