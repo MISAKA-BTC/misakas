@@ -177,8 +177,9 @@ pub enum RuleError {
 
     /// **The lead cap's construction half:** the template this node would build steps the clock at a
     /// stamp its own header stage refuses — `max(now, median + 1, slot)` past this node's clock plus
-    /// 132 s. The builder waits rather than hand out a block every peer refuses; it happens only
-    /// while the chain's past-median time or its slot stands more than 132 s ahead of this clock.
+    /// 132 s. The builder waits rather than hand out a block every peer refuses. Virtual does not
+    /// merge a beat whose step would be refused so (`palw_lead_cap_virtual_parents`), so what is left
+    /// to reach this is a sink that is itself such a beat, or this host's clock stepping back.
     #[error(
         "the template would step the heartbeat clock at {0}, past {1} — this node's clock plus the 132 s a clock-moving header \
          may lead it (palw_clock_lead_cap): waiting {2} ms for wall time instead of building a block peers refuse"

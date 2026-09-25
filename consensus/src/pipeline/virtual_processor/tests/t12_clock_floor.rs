@@ -501,6 +501,179 @@ async fn t12_a_median_pushed_ahead_stalls_the_clock_and_lapses_no_row() {
     assert_eq!(chain.daa_of(chain.sink()), daa, "the clock stalls: no DAA-denominated window moved, so no row lapsed");
 }
 
+/// The virtual's clock decision: does a block built on the virtual now step the clock?
+fn virtual_grants(chain: &super::t12_round_lane_e2e::T12Chain) -> bool {
+    let parents: Vec<BlockHash> = chain.ctx.consensus.get_virtual_parents().into_iter().collect();
+    chain.vp().palw_clock_step_for_parents(&parents).expect("a clock for the virtual").granted
+}
+
+/// A testnet-12 chain from genesis on honest beats, standing at a step: the next block steps nothing.
+async fn chain_at_a_step() -> super::t12_round_lane_e2e::T12Chain {
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let mut chain = super::t12_round_lane_e2e::t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+    for _ in 0..8 {
+        chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    for _ in 0..4 {
+        if !virtual_grants(&chain) {
+            break;
+        }
+        chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    assert!(!virtual_grants(&chain), "the tip is a step");
+    chain
+}
+
+/// **The cap reaches a clock step of ANY lane, not only a heartbeat's**: on testnet-12 the first
+/// block of any lane built after a granted beat carries the tick, so an attempt block over a beat
+/// that holds the slot is a step — and stamped 1.5 s past the cap it is refused
+/// `ClockLeadTooFarAhead`, not stored (above all not `StatusInvalid`), and the SAME block is admitted
+/// once the node's clock reaches its stamp less 132 s, and ticks. (Were the cap narrowed to
+/// heartbeats, this block — admitted at once — would be the whole burst's lever.)
+#[tokio::test]
+async fn t12_an_attempt_block_that_steps_the_clock_is_lead_capped_like_a_beat() {
+    use kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS as CAP;
+    kaspa_core::log::try_init_logger("warn");
+    let mut chain = chain_at_a_step().await;
+    let ttpb = chain.config.params.target_time_per_block();
+    // A beat that holds the slot: the next block of any lane steps.
+    let holder = chain.heartbeat(ttpb, Vec::new()).await;
+    assert!(virtual_grants(&chain), "a beat holds the slot, so the next block steps the clock");
+    let daa = chain.daa_of(holder.header.hash);
+    // The attempt block over it, stamped 1.5 s past the cap — far inside the 1,620 s tolerance, and
+    // (the chain's clock being weeks behind wall time) far past its slot and its median.
+    let ahead = kaspa_core::time::unix_now() + CAP + 1_500;
+    chain.ctx.simulated_time = ahead - 1;
+    let (built, _) = chain.build_attempt(0, 1, Vec::new(), &|_| true);
+    assert_eq!(built.header.timestamp, ahead);
+    assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(built.header.pow_algo_id), "an attempt-lane block");
+    let hash = built.header.hash;
+    match submit(&mut chain.ctx, built.clone()).await {
+        Err(RuleError::ClockLeadTooFarAhead(h, stamped, latest)) => {
+            assert_eq!((h, stamped), (hash, ahead), "refused for its own stamp");
+            assert!(latest < ahead && ahead - latest <= 1_500, "the bound is the node's clock plus 132 s");
+        }
+        other => panic!("an attempt-lane step 1.5 s past the cap answered {other:?}"),
+    }
+    assert_eq!(chain.ctx.consensus.get_block_status(hash), None, "not stored, and above all not StatusInvalid");
+    assert_eq!(chain.daa_of(chain.sink()), daa, "the clock did not tick");
+    // Wall time catches up; the SAME block is admitted and steps the clock.
+    let wait = (ahead - CAP).saturating_sub(kaspa_core::time::unix_now()) + 250;
+    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+    submit(&mut chain.ctx, built).await.expect("the same attempt block once the clock caught up");
+    assert_eq!(chain.ctx.consensus.block_status(hash), BlockStatus::StatusUTXOValid);
+    assert_eq!(chain.sink(), hash, "it is the sink");
+    assert_eq!(chain.daa_of(hash), daa + 1, "and it is the step: the attempt block ticks the clock");
+}
+
+/// **A beat granted below a pushed median is not merged until wall time catches up — and every lane
+/// keeps building meanwhile** (the lead-cap review's HIGH).
+///
+/// The attack: a beat built at its slot on the chain as it stands (its own median low, `2^24`
+/// hashes) is WITHHELD; blocks that move no clock — attempt blocks here, which keep the full
+/// tolerance — then push the past-median time past `now + 132 s`; then the beat is released. It is a
+/// valid block and a tip. Merged, it would grant, and every template of every lane would be a step
+/// stamped above the median — past the cap — so the builder would refuse them all
+/// (`ClockStepTemplateTooFarAhead`, asserted below on the virtual that merges it): the node would
+/// produce nothing, in any lane, until wall time caught up. Instead virtual leaves it out
+/// (`palw_lead_cap_virtual_parents`): the template steps nothing, an attempt block is built and
+/// admitted, and the DAA clock waits — exactly the stall a push costs with no beat at all
+/// (`t12_a_median_pushed_ahead_stalls_the_clock_and_lapses_no_row`). Once wall time reaches the
+/// pushed stamps less the cap, the next block's virtual merges the beat, and the step after it ticks.
+///
+/// The push here is `LEAD` past the cap at each block's minting — small, so the catch-up is waited
+/// for in real time rather than asserted in prose.
+#[tokio::test]
+async fn t12_a_granted_beat_released_under_a_pushed_median_waits_and_every_lane_keeps_building() {
+    use crate::model::stores::virtual_state::VirtualStateStoreReader;
+    use crate::processes::window::WindowManager;
+    use kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS as CAP;
+    use kaspa_core::time::unix_now;
+    const LEAD: u64 = 20_000;
+    kaspa_core::log::try_init_logger("warn");
+    let mut chain = chain_at_a_step().await;
+    let daa = chain.daa_of(chain.sink());
+
+    // The withheld beat: built on the virtual as it stands, stamped at its slot, held back.
+    chain.ctx.simulated_time += chain.config.params.target_time_per_block();
+    let (withheld, _) = beat(&chain.ctx, 7_000, chain.ctx.simulated_time);
+    let beat_hash = withheld.header.hash;
+    assert!(withheld.header.timestamp < unix_now(), "stamped at its slot, weeks behind wall time: inside the cap");
+
+    // The push: attempt blocks, each stamped LEAD past the cap at the moment it is minted.
+    let push_began = std::time::Instant::now();
+    let mut pushed = 0usize;
+    while chain.ctx.consensus.get_virtual_past_median_time() <= unix_now() + CAP {
+        assert!(pushed < 40, "the median did not move in {pushed} blocks");
+        chain.ctx.simulated_time = chain.ctx.simulated_time.max(unix_now() + CAP + LEAD - 1);
+        let (block, _) = chain.attempt(pushed % 8, 1, Vec::new(), &|_| true).await;
+        assert_eq!(chain.daa_of(block.header.hash), daa, "attempt {pushed}: admitted, and it moves no clock");
+        pushed += 1;
+    }
+    eprintln!("[t12-lead-cap] {pushed} attempt blocks pushed the past-median time past the cap in {:?}", push_began.elapsed());
+
+    // The beat is released: valid, a tip — and not merged.
+    submit(&mut chain.ctx, withheld).await.expect("the withheld beat is valid: its own stamp and median are low");
+    let median = chain.ctx.consensus.get_virtual_past_median_time();
+    assert!(median + 1 > unix_now() + CAP, "premise: the median still stands past the cap (the push outran the test's pace)");
+    assert_ne!(chain.ctx.consensus.block_status(beat_hash), BlockStatus::StatusInvalid, "the beat is not invalid");
+    assert!(chain.ctx.consensus.get_tips().contains(&beat_hash), "the beat is a tip");
+    let parents: Vec<BlockHash> = chain.ctx.consensus.get_virtual_parents().into_iter().collect();
+    assert!(!parents.contains(&beat_hash), "virtual does not merge it yet");
+    assert!(!virtual_grants(&chain), "so the virtual steps nothing");
+
+    // What merging it would do: every template on that virtual is a step past the cap, refused.
+    {
+        let vp = chain.vp();
+        let mut merged = parents.clone();
+        merged.push(beat_hash);
+        let ghostdag = vp.ghostdag_manager.ghostdag(&merged);
+        let window = vp.window_manager.block_daa_window(&ghostdag).unwrap();
+        assert!(window.clock.granted, "merged, the beat grants: every template on it steps the clock");
+        let (past_median_time, _) = vp.window_manager.calc_past_median_time(&ghostdag).unwrap();
+        let mut state = (*vp.virtual_stores.read().state.get().unwrap()).clone();
+        state.parents = merged;
+        state.ghostdag_data = ghostdag;
+        state.daa_score = window.daa_score;
+        state.past_median_time = past_median_time;
+        match vp.build_block_template_from_virtual_state(
+            std::sync::Arc::new(state),
+            Default::default(),
+            Default::default(),
+            new_miner_data(),
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+            Vec::new(),
+        ) {
+            Err(RuleError::ClockStepTemplateTooFarAhead(stamp, latest, wait)) => {
+                assert!(stamp > latest && wait == stamp - latest, "stamped above the median, past the cap: the builder waits");
+            }
+            Err(other) => panic!("a template on the virtual that merges the beat answered {other}"),
+            Ok(_) => panic!("a template on the virtual that merges the beat was built — a step every header stage refuses"),
+        }
+    }
+
+    // Every lane keeps building on the virtual that leaves it out: an attempt block, admitted, the
+    // clock unmoved — and virtual, resolved again, still leaves the beat out.
+    let (block, _) = chain.attempt(0, 1, Vec::new(), &|_| true).await;
+    assert_eq!(chain.daa_of(block.header.hash), daa, "a non-step block, built and admitted under the push");
+    assert!(!chain.ctx.consensus.get_virtual_parents().contains(&beat_hash), "still not merged while the median stands ahead");
+
+    // Wall time catches up with every pushed stamp less the cap; the next block's virtual merges the
+    // beat, and the block after it steps the clock.
+    let last_pushed = chain.ctx.simulated_time;
+    let wait = (last_pushed + 1_000).saturating_sub(unix_now() + CAP);
+    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+    let (block, _) = chain.attempt(1, 1, Vec::new(), &|_| true).await;
+    assert_eq!(chain.daa_of(block.header.hash), daa, "built on the virtual resolved before the catch-up: no step");
+    assert!(chain.ctx.consensus.get_virtual_parents().contains(&beat_hash), "once wall time caught up, virtual merges the beat");
+    assert!(virtual_grants(&chain), "and grants on it");
+    let (step, _) = chain.attempt(2, 1, Vec::new(), &|_| true).await;
+    assert_eq!(chain.daa_of(step.header.hash), daa + 1, "the clock resumes: the next block steps it");
+}
+
 /// The node's own beat, as the H1 miner builds it: the node's template — stamped by the builder from
 /// this host's clock, every commitment executed against that stamp — then the lane's adapter and a
 /// nonce. Nothing is re-stamped. Returns the block, the adapter's `earliest` and the header the
@@ -617,7 +790,8 @@ async fn t12_the_node_s_own_beats_tick_from_genesis_with_the_evm_lane_as_shipped
 /// in wall time: the ticks below are minted in well under a second, so one producer advances the DAA
 /// by up to `⌊T / I⌋ + 1` = 14 with no other block between (2 at 132 s), and every DAA-denominated
 /// window loses that much wall time (what that does to a readiness row:
-/// `t12_run_ahead_burst_vs_readiness`, the 2026-09-25 review's HIGH, open for the user). Measured
+/// `t12_run_ahead_burst_vs_readiness`, the 2026-09-25 review's HIGH — closed by the lead cap, which
+/// this test takes away to measure the tolerance alone). Measured
 /// against the node's real clock (the future bound reads `unix_now`, and the refusal reports it):
 /// at the refusal the last tick's stamp leads the node's clock by more than `T − I` and at most `T`
 /// — `(1,500 s, 1,620 s]`, 12.5–13.5 slots, at 1,620 s; `(12 s, 132 s]` at 132 s.
@@ -902,4 +1076,154 @@ async fn t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225()
             "level {level}: the staging node builds the proof it was sent"
         );
     }
+}
+
+/// **The review of the shipped node (2026-09-25), HIGH: a granted beat withheld through a
+/// past-median push and released after it no longer halts every lane's template** — the reviewer's
+/// probe (`review/shipped-0925` e966c1844, on the launch commit 0e8ec984e), kept as the regression.
+///
+/// On 0e8ec984e the probe passed as a HALT: a beat built at its slot on the chain as it stands (its
+/// own median low) is withheld; attempt blocks — which move no clock and keep the full 1,620 s
+/// tolerance — push the virtual's past-median time past `now + 132 s`; the beat is released. It is
+/// valid (stamped in the past, at its slot), and the shipped virtual merged it and granted on it, so
+/// every template was a step stamped `max(now, median + 1, slot)` > now + cap and
+/// `build_block_template` — the call the heartbeat miner, the attempt/receipt producer and the round
+/// producer all build through — refused it (`ClockStepTemplateTooFarAhead`) until wall time reached
+/// the pushed median less the cap (here `LEAD` ≈ 20 s; on the live chain up to the tolerance less the
+/// cap, ≈ 1,488 s per push, the pusher the only producer meanwhile). Under the lead cap's virtual
+/// policy (`palw_lead_cap_virtual_parents`) the released beat stays an unmerged tip, the SAME call
+/// builds a template (it steps nothing), and once wall time catches up virtual merges the beat and
+/// the step template is built — through the production API, as the probe asked it.
+#[tokio::test]
+async fn review_probe_withheld_granted_beat_under_a_pushed_median_no_longer_halts_every_template() {
+    use kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS as CAP;
+    use kaspa_core::time::unix_now;
+    const LEAD: u64 = 20_000;
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let mut chain = super::t12_round_lane_e2e::t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+    for _ in 0..8 {
+        chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    for _ in 0..4 {
+        if !virtual_grants(&chain) {
+            break;
+        }
+        chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    assert!(!virtual_grants(&chain), "premise: the tip is a step, the next block steps nothing");
+    let daa = chain.daa_of(chain.sink());
+    let template = |chain: &super::t12_round_lane_e2e::T12Chain| {
+        chain.ctx.consensus.build_block_template(
+            new_miner_data(),
+            Box::new(OnetimeTxSelector::new(Vec::new())),
+            TemplateBuildMode::Standard,
+        )
+    };
+
+    // The withheld beat: built at its slot on the virtual as it stands, held back.
+    chain.ctx.simulated_time += ttpb;
+    let (withheld, _) = beat(&chain.ctx, 7_000, chain.ctx.simulated_time);
+    let beat_hash = withheld.header.hash;
+    assert!(withheld.header.timestamp < unix_now(), "stamped at its slot, in the past: inside the cap");
+
+    // The push: attempt blocks, each stamped LEAD past the cap when it is minted — far inside 1,620 s.
+    let mut pushed = 0usize;
+    while chain.ctx.consensus.get_virtual_past_median_time() <= unix_now() + CAP {
+        assert!(pushed < 40, "the median did not move in {pushed} blocks");
+        chain.ctx.simulated_time = chain.ctx.simulated_time.max(unix_now() + CAP + LEAD - 1);
+        let (block, _) = chain.attempt(pushed % 8, 1, Vec::new(), &|_| true).await;
+        assert_eq!(chain.daa_of(block.header.hash), daa, "attempt {pushed}: admitted, and it moves no clock");
+        pushed += 1;
+    }
+    eprintln!("[review-probe] {pushed} attempt blocks pushed the past-median time past now + 132 s");
+    template(&chain).expect("before the release: a non-step template is built above the pushed median");
+
+    // The release: valid, a tip — and not merged, so nothing is granted.
+    submit(&mut chain.ctx, withheld).await.expect("the withheld beat is valid: its stamp and its own median are low");
+    assert_ne!(chain.ctx.consensus.block_status(beat_hash), BlockStatus::StatusInvalid);
+    assert!(chain.ctx.consensus.get_tips().contains(&beat_hash), "the beat is a tip");
+    let median = chain.ctx.consensus.get_virtual_past_median_time();
+    assert!(median + 1 > unix_now() + CAP, "premise: the median still stands past the cap");
+    assert!(!chain.ctx.consensus.get_virtual_parents().contains(&beat_hash), "virtual leaves the released beat unmerged");
+    assert!(!virtual_grants(&chain), "so no template of any lane is a step");
+
+    // NO HALT: the production call builds a template, stamped above the pushed median.
+    let t = template(&chain).unwrap_or_else(|e| panic!("the halt reproduced: every template refused ({e})"));
+    assert!(t.block.header.timestamp > median, "stamped above the pushed median, as any block under the push");
+    assert_eq!(chain.daa_of(chain.sink()), daa, "and the DAA clock stands, as the push holds it anyway");
+
+    // Wall time catches up: the next virtual merges the beat, and the step template is built.
+    let last_pushed = chain.ctx.simulated_time;
+    let wait = (last_pushed + 1_000).saturating_sub(unix_now() + CAP);
+    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+    let (block, _) = chain.attempt(1, 1, Vec::new(), &|_| true).await;
+    assert_eq!(chain.daa_of(block.header.hash), daa, "built on the virtual resolved before the catch-up: no step");
+    assert!(chain.ctx.consensus.get_virtual_parents().contains(&beat_hash), "once wall time caught up, virtual merges the beat");
+    assert!(virtual_grants(&chain), "and grants on it");
+    let t = template(&chain).expect("once wall time caught up, the step template is built");
+    assert!(t.block.header.timestamp <= unix_now() + CAP);
+    eprintln!("[review-probe] no halt; the beat was merged after {wait} ms of wall time");
+}
+
+/// **What the lead cap's virtual policy costs a `resolve_virtual`** (the review of the shipped node
+/// asked for the figure). Measured on a testnet-12 chain past a full DAA window (264) of honest
+/// beats. Two figures: the policy as `resolve_virtual` calls it on that chain (one parent — the
+/// fast path, a length check), and its only non-trivial read — what it pays whenever the virtual
+/// has two parents or more and a beat among them or as the sink: one DAA window and one past-median
+/// time on virtual's GHOSTDAG data, the same two computations `calculate_virtual_state` makes right
+/// after it. Against them, the whole insertion of a beat (header, body, virtual resolution with its
+/// UTXO walk), timed the same way. Not a gate — a debug build on a shared host — so `#[ignore]`d;
+/// the figures it prints are what the review's report cites.
+///
+/// Run: cargo test -p kaspa-consensus --lib t12_the_lead_cap_policy_cost -- --ignored --nocapture
+#[tokio::test]
+#[ignore]
+async fn t12_the_lead_cap_policy_cost_on_a_resolve_virtual() {
+    use crate::model::stores::virtual_state::VirtualStateStoreReader;
+    use crate::processes::window::WindowManager;
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let mut chain = super::t12_round_lane_e2e::t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+    let window = config.params.difficulty_window_size;
+    let mut inserts = Vec::new();
+    for i in 0..(window + 36) {
+        let started = std::time::Instant::now();
+        chain.heartbeat(ttpb, Vec::new()).await;
+        if i >= window {
+            inserts.push(started.elapsed());
+        }
+    }
+    let vp = chain.vp();
+    let ghostdag = vp.virtual_stores.read().state.get().unwrap().ghostdag_data.clone();
+    let parents: Vec<BlockHash> = chain.ctx.consensus.get_virtual_parents().into_iter().collect();
+    let pruning_point = chain.ctx.consensus.pruning_point();
+    const RUNS: u32 = 2_000;
+    // The policy as resolve_virtual calls it on this chain.
+    let started = std::time::Instant::now();
+    for _ in 0..RUNS {
+        let (kept, _) = vp.palw_lead_cap_virtual_parents(parents.clone(), ghostdag.clone(), pruning_point);
+        assert_eq!(kept.len(), parents.len(), "an honest chain: nothing left out");
+    }
+    let policy = started.elapsed() / RUNS;
+    // Its read whenever a beat is among two parents or more: the virtual's DAA window (with the
+    // clock) and its past-median time.
+    let window_len = vp.window_manager.block_daa_window(&ghostdag).expect("a window").window.len();
+    let started = std::time::Instant::now();
+    for _ in 0..RUNS {
+        let _ = vp.window_manager.block_daa_window(&ghostdag).expect("a window");
+        let _ = vp.window_manager.calc_past_median_time(&ghostdag).expect("a median");
+    }
+    let read = started.elapsed() / RUNS;
+    inserts.sort();
+    let median_insert = inserts[inserts.len() / 2];
+    eprintln!(
+        "[t12-lead-cap-cost] {} virtual parent(s), a {window_len}-block DAA window; the policy as called: {policy:?}; its \
+         window + median read: {read:?}; a beat's whole insertion (median of {}): {median_insert:?} — the read is {:.2}% of it",
+        parents.len(),
+        inserts.len(),
+        100.0 * read.as_secs_f64() / median_insert.as_secs_f64()
+    );
 }

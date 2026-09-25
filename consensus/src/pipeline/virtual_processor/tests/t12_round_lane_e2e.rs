@@ -326,8 +326,9 @@ impl T12Chain {
         (block, claim_id)
     }
 
-    /// [`Self::attempt`]'s block, built and not inserted — so two can be built on the same parents.
-    fn build_attempt(
+    /// [`Self::attempt`]'s block, built and not inserted — so two can be built on the same parents,
+    /// or one submitted that the node is expected to refuse.
+    pub(super) fn build_attempt(
         &mut self,
         card: usize,
         step_ms: u64,

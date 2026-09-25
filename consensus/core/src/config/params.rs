@@ -1404,12 +1404,17 @@ pub struct Params {
     /// is not cached as invalid and the header is admitted once wall time catches up. An attacker who
     /// holds the past-median time more than 132 s ahead stalls the DAA clock — steps must be stamped
     /// above the median — until wall time catches up; DAA-denominated windows do not shrink, so no
-    /// row lapses (`palw_clock_cursor_v1`'s cap and `t12_clock_floor`'s tests say how).
+    /// row lapses (`palw_clock_cursor_v1`'s cap and `t12_clock_floor`'s tests say how). A beat
+    /// granted below such a median (withheld through the push, or relayed late) would make every
+    /// template a step past the cap — no lane could build — so virtual does not merge it until wall
+    /// time catches up (`VirtualStateProcessor::palw_lead_cap_virtual_parents`, a local policy like
+    /// the merge-depth filter): every lane keeps building and only the clock waits.
     ///
     /// Armed from genesis wherever the tolerance is 1,620 s — testnet-12 and a mainnet card — and
     /// `None` elsewhere; hashed Some-only, so every other preset fingerprints byte-identically to a
-    /// build without it. Independent of the floor: on a network without the cursor nothing is ever
-    /// `granted` and the cap bounds heartbeats alone.
+    /// build without it. Independent of the floor: on a network without the anchor clock
+    /// (`palw_anchor_clock` — a mainnet card) nothing is ever `granted` and the cap bounds heartbeats
+    /// alone.
     pub palw_clock_lead_cap: Option<ForkActivation>,
     /// **ADR-0152 v2, stage F2: a false `Valid` is judged by one adjudicator bound to the claim's
     /// committed root.** Past it the V1 `PanelFalseValid` is refused by name — its
@@ -16611,9 +16616,11 @@ pub fn palw_t12_base_params() -> Params {
     // `⌊T / I⌋ + 1` = 14 with no other block in between (2 at 132 s) — every DAA-denominated window
     // is shortened by that much wall time, and a burst that outlasts a readiness row's remaining age
     // lapses the row with no proof able to land (the 2026-09-25 mainnet-values review, HIGH; measured
-    // on the lifecycle fold by `t12_a_run_ahead_burst_outlasts_a_readiness_row`). **Open, for the
-    // user's decision before launch** — cap the clock-stepping beat's stamp near the receiver's clock,
-    // re-prove far enough ahead of the horizon, or keep 132 s here.
+    // on the lifecycle fold by `t12_a_run_ahead_burst_outlasts_a_readiness_row`). **Closed by the lead
+    // cap** (the user's option (a), 2026-09-25): `palw_clock_lead_cap`, armed below, admits a header
+    // that moves the clock at most 132 s past the receiving node's clock, so a burst is 2 ticks
+    // again and every other block keeps this tolerance
+    // (`t12_the_lead_cap_bounds_a_run_ahead_burst_to_two_ticks`).
     params.timestamp_deviation_tolerance = palw_v2_timestamp_deviation_tolerance_v1(
         params.past_median_time_window_size,
         BlockrateParams::new_two_minute_bps().past_median_time_sample_rate,
