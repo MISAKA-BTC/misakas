@@ -371,8 +371,12 @@ impl PalwBisectLadderV1 {
         // The interval must still contain something to bisect. `anchor_index == space_size - 1`
         // leaves one index, which is a terminal, not a ladder — refused here rather than opened
         // into a machine whose first midpoint is its own endpoint.
-        if anchor_index + 1 >= space_size {
-            return Err(PalwBisectError::SpaceOutOfRange { got: space_size - anchor_index, max: PALW_BISECT_MAX_SPACE });
+        //
+        // `anchor_index` is the caller's word, so neither the add nor the subtraction below may
+        // assume it is in range (MSK-26A-PALW-19's class: an out-of-range index refused, never an
+        // overflow panic under the release profile's `overflow-checks`).
+        if anchor_index.checked_add(1).is_none_or(|next| next >= space_size) {
+            return Err(PalwBisectError::SpaceOutOfRange { got: space_size.saturating_sub(anchor_index), max: PALW_BISECT_MAX_SPACE });
         }
         // An anchor equal to the announced root is an interval whose ends agree — no divergence
         // inside it, so the dispute has disproved itself before a rung. The same rule
@@ -1685,6 +1689,16 @@ mod tests {
 
         // An anchor at the last index leaves nothing to bisect — a terminal, not a ladder.
         assert!(PalwBisectLadderV1::open_anchored(&ctx, &root, &ch, &re, space, size, size - 1, h64(0x55), 100, 200).is_err());
+        // An anchor past the space, or at u64::MAX, is the same refusal — never an overflow panic.
+        for anchor in [size, size + 7, u64::MAX] {
+            assert!(
+                matches!(
+                    PalwBisectLadderV1::open_anchored(&ctx, &root, &ch, &re, space, size, anchor, h64(0x55), 100, 200),
+                    Err(PalwBisectError::SpaceOutOfRange { got: 0, .. })
+                ),
+                "anchor {anchor}"
+            );
+        }
         // An anchor equal to the announced root is an interval whose ends agree: the dispute has
         // disproved itself before a rung, and seeding it is refused the same way a disclosure that
         // repeats an endpoint is.

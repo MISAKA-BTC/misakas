@@ -18,14 +18,16 @@ use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_legs::{
     PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE, PALW_LEGS_MAX_CHECKPOINTS,
     PALW_LEGS_OBJECT_VERSION_V1, PalwActivationTapProfileV1, PalwCheckpointProfileV1, PalwLegOpeningV1, PalwLegsBindingV1,
-    PalwLegsCommitmentBuilderV1, PalwLegsError, PalwLegsEvidenceV1, PalwLegsMaterial, PalwLegsRefutationV1,
-    check_legs_refutation_v1, leg_opening_v1,
+    PalwLegsCommitmentBuilderV1, PalwLegsError, PalwLegsEvidenceV1, PalwLegsMaterial, PalwLegsRefutationV1, check_legs_refutation_v1,
+    leg_opening_v1,
 };
 use kaspa_consensus_core::palw_offence_v1::{
-    PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwOffenceVerifyError, PalwPanelContradictionV1, PalwPanelFalseValidEvidenceV1,
-    palw_offence_evidence_digest_v1, palw_verify_objective_offence_v1,
+    PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwOffenceVerifyError, PalwPanelContradictionV1,
+    PalwPanelFalseValidEvidenceV1, palw_offence_evidence_digest_v1, palw_verify_objective_offence_v1,
 };
-use kaspa_consensus_core::palw_panel_v2::{PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2};
+use kaspa_consensus_core::palw_panel_v2::{
+    PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
+};
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, PalwLogitsDtypeV2, trace_scheme_id_v2};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
