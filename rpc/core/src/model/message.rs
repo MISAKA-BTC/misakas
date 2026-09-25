@@ -5588,6 +5588,11 @@ pub struct RpcPalwModelLifecycle {
     pub artifact_prefetch_spans: u32,
     pub max_inflight_claims: u32,
     pub required_ready_seats: u32,
+    /// **DEPRECATED — NOT A PRICE** (user decision 2026-09-25). The registry profile's derived
+    /// `bond_per_span × verification_window_spans` (2,799,000 MSK for the 2M class): never charged,
+    /// never reserved, refunded as 0 — a registration costs its 1 MSK burn and a carrier fee. Kept on
+    /// the wire, with its meaning unchanged, for readers built before `recommended_pool_sompi`;
+    /// present that field instead.
     pub registration_bond_sompi: u64,
     pub admission_claims_per_span_milli: u64,
     pub probes_passed: u32,
@@ -5618,11 +5623,18 @@ pub struct RpcPalwModelLifecycle {
     pub no_capable_panel_voids: u32,
     /// Why the row is where it is, from its last reading — a HELD by the rule reads as one.
     pub reason: String,
+    /// **The NON-BINDING recommended Activation Pool of the listing** (user decision 2026-09-25;
+    /// wire version 2): `16 · A_MAX / α` of the pool's terms in force
+    /// (`palw_activation_recommended_pool_sompi_v1`, 2,400 MSK at the terms of 2026-09-25) — what a
+    /// sponsor is told pays the class's preparers in full. Nothing enforces it; 0 where the pool is
+    /// not armed, for the floor (which takes no top-up), and from a node that serves version 1.
+    pub recommended_pool_sompi: u64,
 }
 
 impl Serializer for RpcPalwModelLifecycle {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        // Version 2 appends `recommended_pool_sompi` (the Activation Pool's P4, 2026-09-25).
+        store!(u16, &2, writer)?;
         store!(String, &self.class_id, writer)?;
         store!(String, &self.artifact_root, writer)?;
         store!(bool, &self.is_base_class, writer)?;
@@ -5659,13 +5671,14 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(u64, &self.panel_room, writer)?;
         store!(u16, &self.final_work_share_10_permille, writer)?;
         store!(u16, &self.final_work_share_100_permille, writer)?;
+        store!(u64, &self.recommended_pool_sompi, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for RpcPalwModelLifecycle {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         Ok(Self {
             class_id: load!(String, reader)?,
             artifact_root: load!(String, reader)?,
@@ -5703,6 +5716,8 @@ impl Deserializer for RpcPalwModelLifecycle {
             panel_room: load!(u64, reader)?,
             final_work_share_10_permille: load!(u16, reader)?,
             final_work_share_100_permille: load!(u16, reader)?,
+            // Version 1 (a node before the Activation Pool's P4) has no recommendation: 0.
+            recommended_pool_sompi: if version >= 2 { load!(u64, reader)? } else { 0 },
         })
     }
 }
@@ -11330,6 +11345,13 @@ pub struct GetPalwActivationPoolResponse {
     pub scheduled_sompi: u64,
     /// The class is the network's floor, which takes no top-up (F3).
     pub class_is_floor: bool,
+    /// **The NON-BINDING recommended pool** (user decision 2026-09-25): `16 · A_MAX / α` of the terms
+    /// in force (`palw_activation_recommended_pool_sompi_v1`) — what pays a listing's preparers in
+    /// full. Nothing enforces it; 0 where the pool is not armed or the class is the floor.
+    pub recommended_pool_sompi: u64,
+    /// `b_cap`: the most (b) pays one operator (the pool's P1) — the per-Final seat pay at the
+    /// heaviest class; 0 where the pool is not armed.
+    pub bonus_cap_sompi: u64,
 }
 
 impl Serializer for GetPalwActivationPoolResponse {
@@ -11371,6 +11393,8 @@ impl Serializer for GetPalwActivationPoolResponse {
         store!(u64, &self.total_available_sompi, writer)?;
         store!(u64, &self.scheduled_sompi, writer)?;
         store!(bool, &self.class_is_floor, writer)?;
+        store!(u64, &self.recommended_pool_sompi, writer)?;
+        store!(u64, &self.bonus_cap_sompi, writer)?;
         Ok(())
     }
 }
@@ -11415,6 +11439,8 @@ impl Deserializer for GetPalwActivationPoolResponse {
             total_available_sompi: load!(u64, reader)?,
             scheduled_sompi: load!(u64, reader)?,
             class_is_floor: load!(bool, reader)?,
+            recommended_pool_sompi: load!(u64, reader)?,
+            bonus_cap_sompi: load!(u64, reader)?,
         })
     }
 }
@@ -11469,6 +11495,31 @@ mod palw_model_market_wire_tests {
         let back = <GetPalwModelMarketResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
         assert!(back.class_lifecycle.is_empty() && back.market_refusal.is_empty());
         assert_eq!((back.burn_permille, back.leg_permille, back.leg_v2_activation_daa), (50, 50, 3_500));
+    }
+
+    /// **The Activation Pool's P4 on the registry's wire**: a class row is version 2 and carries the
+    /// non-binding `recommended_pool_sompi` after every version-1 field; a version-1 peer's row — the
+    /// same bytes without it — reads as no recommendation, and the deprecated
+    /// `registration_bond_sompi` keeps its bytes and its meaning.
+    #[test]
+    fn a_version_1_registry_row_reads_as_no_recommended_pool() {
+        let row = RpcPalwModelLifecycle {
+            class_id: "ab".repeat(64),
+            registration_bond_sompi: 279_900_000_000_000,
+            recommended_pool_sompi: 240_000_000_000,
+            reason: "candidate".to_string(),
+            ..Default::default()
+        };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&row, &mut bytes).unwrap();
+        assert_eq!(&bytes[..2], &2u16.to_le_bytes());
+        let back = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!((back.registration_bond_sompi, back.recommended_pool_sompi), (279_900_000_000_000, 240_000_000_000));
+        assert_eq!(&bytes[bytes.len() - 8..], &240_000_000_000u64.to_le_bytes());
+        bytes.truncate(bytes.len() - 8);
+        bytes[..2].copy_from_slice(&1u16.to_le_bytes());
+        let v1 = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(format!("{v1:?}"), format!("{:?}", RpcPalwModelLifecycle { recommended_pool_sompi: 0, ..row }));
     }
 }
 

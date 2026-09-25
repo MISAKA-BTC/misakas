@@ -2153,6 +2153,8 @@ message RpcPalwModelLifecycle {
   uint32 artifactPrefetchSpans = 11;
   uint32 maxInflightClaims = 12;
   uint32 requiredReadySeats = 13;
+  // DEPRECATED — NOT A PRICE (2026-09-25): the registry's derived bond, never charged (refund 0).
+  // Meaning unchanged for old readers; present recommendedPoolSompi (38) instead.
   uint64 registrationBondSompi = 14;
   uint64 admissionClaimsPerSpanMilli = 15;
   uint32 probesPassed = 16;
@@ -2180,6 +2182,9 @@ message RpcPalwModelLifecycle {
   uint32 finalWorkShare10Permille = 36;
   uint32 finalWorkShare100Permille = 37;
   string reason = 27;
+  // NON-BINDING recommended Activation Pool (2026-09-25): 16 · A_MAX / α of the terms in force; 0
+  // where the pool is not armed and for the floor.
+  uint64 recommendedPoolSompi = 38;
 }
 
 message RpcPalwSeatReadiness {
@@ -2807,5 +2812,9 @@ message GetPalwActivationPoolResponseMessage {
   uint64 totalAvailableSompi = 34;
   uint64 scheduledSompi = 35;
   bool classIsFloor = 36;
+  // NON-BINDING recommended pool (user decision 2026-09-25): 16 · A_MAX / α of the terms in force.
+  uint64 recommendedPoolSompi = 37;
+  // b_cap (P1): the most (b) pays one operator.
+  uint64 bonusCapSompi = 38;
   RPCError error = 1000;
 }

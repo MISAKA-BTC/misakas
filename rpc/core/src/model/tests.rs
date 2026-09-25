@@ -2425,6 +2425,8 @@ mod mockery {
                 total_available_sompi: mock(),
                 scheduled_sompi: mock(),
                 class_is_floor: mock(),
+                recommended_pool_sompi: mock(),
+                bonus_cap_sompi: mock(),
             }
         }
     }
@@ -2589,6 +2591,7 @@ mod mockery {
                 max_inflight_claims: mock(),
                 required_ready_seats: mock(),
                 registration_bond_sompi: mock(),
+                recommended_pool_sompi: mock(),
                 admission_claims_per_span_milli: mock(),
                 probes_passed: mock(),
                 probes_failed: mock(),

@@ -1430,6 +1430,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwActivationPoolResponse>, protowire
         total_available_sompi: item.total_available_sompi,
         scheduled_sompi: item.scheduled_sompi,
         class_is_floor: item.class_is_floor,
+        recommended_pool_sompi: item.recommended_pool_sompi,
+        bonus_cap_sompi: item.bonus_cap_sompi,
         error: None,
     }
 });
@@ -1565,6 +1567,7 @@ from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifec
         max_inflight_claims: item.max_inflight_claims,
         required_ready_seats: item.required_ready_seats,
         registration_bond_sompi: item.registration_bond_sompi,
+        recommended_pool_sompi: item.recommended_pool_sompi,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,
@@ -3397,6 +3400,8 @@ try_from!(item: &protowire::GetPalwActivationPoolResponseMessage, RpcResult<kasp
         total_available_sompi: item.total_available_sompi,
         scheduled_sompi: item.scheduled_sompi,
         class_is_floor: item.class_is_floor,
+        recommended_pool_sompi: item.recommended_pool_sompi,
+        bonus_cap_sompi: item.bonus_cap_sompi,
     }
 });
 try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {
@@ -3546,6 +3551,7 @@ try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelL
         max_inflight_claims: item.max_inflight_claims,
         required_ready_seats: item.required_ready_seats,
         registration_bond_sompi: item.registration_bond_sompi,
+        recommended_pool_sompi: item.recommended_pool_sompi,
         admission_claims_per_span_milli: item.admission_claims_per_span_milli,
         probes_passed: item.probes_passed,
         probes_failed: item.probes_failed,

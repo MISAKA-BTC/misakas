@@ -4,7 +4,7 @@
 //! A registration is a long-lived, asynchronous LISTING: nothing between a class's registration and
 //! its first panel may be a deadline, and whoever objectively proves they prepared the model is paid
 //! for it — never for the yes or no they then vote. `Params::palw_activation_pool` (`Some(0)` on
-//! testnet-12 alone, genesis-only) arms three rules at once:
+//! testnet-12 alone, genesis-only) arms these rules at once:
 //!
 //! * **R1 (the P1 fix):** silence reclamation (`apply_class_reclamation`) never reclaims a class
 //!   whose registry row exists and does not admit claims — a `Candidate`, `Registered`,
@@ -13,6 +13,10 @@
 //! * **R2 (the review's M2):** the registry's span step skips the rows of `Dormant` and `Frozen`
 //!   classes, and a `Candidate` row reads its ready seats and its jury only at its OWN staggered
 //!   audit span, so the per-span cost of a listing does not grow with the listings nobody audits;
+//! * **P2 (user decision 2026-09-25):** ADR-0147's admission jury is drawn from the bonds at the
+//!   PANEL floor (ten network floors, 130,000 MSK on testnet-12) — the bonds a panel can draw —
+//!   not the network floor: a bond below the readiness bar can never be ready, so drawing one was a
+//!   structural NO vote;
 //! * **the pool itself** (the later sections).
 //!
 //! Below the fence — every network but testnet-12 — nothing here is reached, and every fold is
@@ -48,19 +52,49 @@ pub struct PalwActivationPoolTermsV1 {
     pub bonus_payee_cap: u16,
     /// The least a top-up may add, in sompi.
     pub min_topup_sompi: u64,
+    /// **`b_cap`: the most (b) pays one operator**, in sompi (the pool's P1, user decision
+    /// 2026-09-25): `b = min(⌊bonus × β / n⌋, b_cap)`, and what the cap leaves stays in `bonus` for
+    /// later operators and a re-formation. [`palw_activation_bonus_cap_v1`] of the heaviest claim's
+    /// escrow — an activation pays an operator no more than one `Final` of the dearest class pays a
+    /// seat, so a sponsor's pool cannot make a probation run worth more than the work it verified.
+    pub bonus_cap_sompi: u64,
 }
 
-/// **The user's illustrative terms (2026-09-25)**: `A0 = 20 MSK`, `α = 400‰`, `β = 500‰`,
-/// `W = 5,040 DAA`, caps 64 and 32, a 1 MSK least top-up.
+/// **The pool's terms on testnet-12** — the user's illustrative scale of 2026-09-25 (`A0 = 20 MSK`,
+/// `α = 400‰`, `β = 500‰`, `W = 5,040 DAA`, a (a) payee cap of 64, a 1 MSK least top-up), with the
+/// P1 decision of the same day derived, not typed:
+///
+/// * **the (b) payee cap is 50** — `probation_claims × seat_count` (10 × 5), every operator one
+///   probation run can credit, so the cap never turns a credited operator away;
+/// * **`b_cap` is 128.03 MSK** — the per-`Final` seat pay at the heaviest class: `E × 200 ‰ / 5`,
+///   `E` the 3,200.85 MSK a genesis-era claim escrows (`PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI`).
 pub const PALW_ACTIVATION_POOL_TERMS_V1: PalwActivationPoolTermsV1 = PalwActivationPoolTermsV1 {
     prep_base_sompi: 20 * crate::constants::SOMPI_PER_KASPA,
     prep_share_permille: 400,
     bonus_share_permille: 500,
     ramp_daa: 5_040,
     prep_payee_cap: 64,
-    bonus_payee_cap: 32,
+    bonus_payee_cap: crate::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1.probation_claims as u16
+        * crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS,
     min_topup_sompi: crate::constants::SOMPI_PER_KASPA,
+    bonus_cap_sompi: palw_activation_bonus_cap_v1(
+        crate::config::params::PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI,
+        crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS,
+    ),
 };
+
+/// **`b_cap` from an escrow**: the per-`Final` seat pay of a claim escrowing `escrow` —
+/// `palw_panel_split_v1(escrow, seat_count, 0).per_seat`, the panel pool's
+/// `PALW_PANEL_POOL_PERMILLE_V1` (200 ‰) of it over the seats a panel is drawn with, in `const`
+/// form (pinned equal to the split by `the_default_terms_are_the_users_scale_and_run`). 0 for no
+/// seat.
+pub const fn palw_activation_bonus_cap_v1(escrow: u64, seat_count: u16) -> u64 {
+    if seat_count == 0 {
+        return 0;
+    }
+    let pool = (escrow as u128 * crate::palw_panel_economy_v1::PALW_PANEL_POOL_PERMILLE_V1 as u128 / 1_000) as u64;
+    pool / seat_count as u64
+}
 
 impl Default for PalwActivationPoolTermsV1 {
     fn default() -> Self {
@@ -95,6 +129,9 @@ impl PalwActivationPoolTermsV1 {
         }
         if self.prep_base_sompi == 0 {
             return Some("palw_activation_pool's prep_base_sompi (A0) is zero");
+        }
+        if self.bonus_cap_sompi == 0 {
+            return Some("palw_activation_pool's bonus_cap_sompi (b_cap) is zero: (b) could never pay");
         }
         None
     }
@@ -160,8 +197,10 @@ pub fn palw_admission_audit_due_staggered_v1(class_id: &Hash64, span_now: u64, p
 // * **(b) the activation bonus** — at `Probation → ActiveLimited`, never at `Prefetching →
 //   Probation` (review A1: that population is the registrant's to fill), to each operator the
 //   chain credited on the class's probe `Final`s while it was in `Probation` — the ADR-0147
-//   outsider seat included — except the registrant's operator: `b = ⌊bonus × β / n⌋`. A later
-//   `Held → … → ActiveLimited` pays only operators not paid before.
+//   outsider seat included — except the registrant's operator: `b = min(⌊bonus × β / n⌋, b_cap)`,
+//   `b_cap` the per-`Final` seat pay at the heaviest class (128.03 MSK on testnet-12; P1, user
+//   decision 2026-09-25) and what it leaves kept in `bonus`. A later `Held → … → ActiveLimited`
+//   pays only operators not paid before.
 //
 // **A payout is SCHEDULED where it is decided and FLUSHED where the queue has room** (the fix round's
 // F5). The span step moves the amount out of the budget into the row's `scheduled` and a side map
@@ -472,12 +511,38 @@ pub fn palw_activation_prep_reward_v1(terms: &PalwActivationPoolTermsV1, prep_so
     palw_activation_prep_cap_v1(terms, age_daa).min(prep_sompi / 10)
 }
 
-/// **(b)'s per-payee amount**: `⌊bonus × β / 1000 / n⌋` — zero for no payee.
+/// **`P_full`'s multiplier: sixteen full preparation rewards** (the user's figure, 2026-09-25). A
+/// preparation budget of `16·A_MAX` is paid at the full `A_MAX` by the first two juries of five
+/// under `a = min(A_MAX, ⌊prep/10⌋)` (`16 → 11 → 6` rewards left), and the tail keeps paying at the
+/// `⌊prep/10⌋` rate after them.
+pub const PALW_ACTIVATION_RECOMMENDED_PREP_REWARDS_V1: u64 = 16;
+
+/// **`P_full`, the NON-BINDING recommended pool of a listing**: `16 · A_MAX / α`, `A_MAX = 3·A0` the
+/// ramp's top ([`palw_activation_prep_cap_v1`] at `W`), rounded up so that `α` of it — the inflow
+/// split's `⌊amount × α / 1000⌋` — is at least `16·A_MAX` of preparation budget. 2,400 MSK at the
+/// terms of 2026-09-25 (`A0` 20 MSK, `α` 400 ‰). What a sponsor is told a listing needs to pay its
+/// preparers in full: nothing in the fold reads it, no top-up is refused or scaled by it, and it
+/// replaces the registry's derived `registration_bond_sompi` (1,000 MSK a window span, never
+/// charged) as the figure a reader is shown (user decision 2026-09-25). `0` where `α` is 0: no
+/// inflow reaches (a), so no pool pays a preparer.
+pub fn palw_activation_recommended_pool_sompi_v1(terms: &PalwActivationPoolTermsV1) -> u64 {
+    let alpha = u128::from(terms.prep_share_permille.min(1_000));
+    if alpha == 0 {
+        return 0;
+    }
+    let a_max = u128::from(palw_activation_prep_cap_v1(terms, terms.ramp_daa));
+    (u128::from(PALW_ACTIVATION_RECOMMENDED_PREP_REWARDS_V1) * a_max * 1_000).div_ceil(alpha).min(u128::from(u64::MAX)) as u64
+}
+
+/// **(b)'s per-payee amount**: `min(⌊bonus × β / 1000 / n⌋, b_cap)` — zero for no payee. The cap
+/// (P1) keeps a large sponsored pool from paying one activation more per operator than a `Final` of
+/// the heaviest class pays a seat; what it leaves stays in `bonus`.
 pub fn palw_activation_bonus_reward_v1(terms: &PalwActivationPoolTermsV1, bonus_sompi: u64, payees: usize) -> u64 {
     if payees == 0 {
         return 0;
     }
-    (u128::from(bonus_sompi) * u128::from(terms.bonus_share_permille.min(1_000)) / 1_000 / payees as u128) as u64
+    ((u128::from(bonus_sompi) * u128::from(terms.bonus_share_permille.min(1_000)) / 1_000 / payees as u128) as u64)
+        .min(terms.bonus_cap_sompi)
 }
 
 // ---- the payout rows ------------------------------------------------------------------------------
@@ -594,9 +659,31 @@ mod tests {
         assert_eq!(t.prep_base_sompi, 2_000_000_000, "A0 = 20 MSK");
         assert_eq!((t.prep_share_permille, t.bonus_share_permille), (400, 500), "α = 400 ‰, β = 500 ‰");
         assert_eq!(t.ramp_daa, 5_040, "W = 7 days of 120 s DAA");
-        assert_eq!((t.prep_payee_cap, t.bonus_payee_cap), (64, 32));
+        assert_eq!((t.prep_payee_cap, t.bonus_payee_cap), (64, 50), "(b)'s cap is P1's 50");
+        assert_eq!(
+            t.bonus_payee_cap as usize,
+            palw_activation_probe_credit_cap_v1(
+                crate::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1.probation_claims as usize,
+                crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS as usize
+            ),
+            "every operator one probation run can credit"
+        );
+        assert!(t.bonus_payee_cap as usize <= PALW_ACTIVATION_PAYEE_CAP_MAX_V1 && 50 <= PALW_ACTIVATION_PROBE_CREDITED_MAX_V1);
         assert_eq!(t.min_topup_sompi, 100_000_000, "1 MSK");
+        // P1: b_cap is the per-Final seat pay at the heaviest class, E × 200 ‰ / 5 — the split's own.
+        let e = crate::config::params::PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI;
+        assert_eq!(t.bonus_cap_sompi, crate::palw_panel_economy_v1::palw_panel_split_v1(e, 5, 0).per_seat);
+        assert_eq!(t.bonus_cap_sompi, 12_803_386_003, "128.03 MSK");
+        for (escrow, seats) in [(0u64, 5u16), (1, 1), (999, 3), (e, 1), (u64::MAX, 7)] {
+            assert_eq!(
+                palw_activation_bonus_cap_v1(escrow, seats),
+                crate::palw_panel_economy_v1::palw_panel_split_v1(escrow, seats as usize, 0).per_seat,
+                "the const form is the split at {escrow} over {seats}"
+            );
+        }
+        assert_eq!(palw_activation_bonus_cap_v1(e, 0), 0);
         assert_eq!(t.refusal(), None);
+        assert!(PalwActivationPoolTermsV1 { bonus_cap_sompi: 0, ..t }.refusal().is_some());
         assert!(PalwActivationPoolTermsV1 { bonus_share_permille: 0, ..t }.refusal().is_some());
         assert!(PalwActivationPoolTermsV1 { prep_share_permille: 1_001, ..t }.refusal().is_some());
         assert!(PalwActivationPoolTermsV1 { ramp_daa: 0, ..t }.refusal().is_some());
@@ -653,6 +740,12 @@ mod tests {
             "the design's example: 6 payees, 15 MSK each"
         );
         assert_eq!(palw_activation_bonus_reward_v1(&t, 1_000, 0), 0);
+        // P1: past the cap every payee is paid b_cap, however large the budget.
+        let huge = 1_000_000 * 100_000_000;
+        assert_eq!(palw_activation_bonus_reward_v1(&t, huge, 1), t.bonus_cap_sompi);
+        assert_eq!(palw_activation_bonus_reward_v1(&t, huge, 50), t.bonus_cap_sompi);
+        assert_eq!(palw_activation_bonus_reward_v1(&t, 2 * t.bonus_cap_sompi, 1), t.bonus_cap_sompi, "β of it is exactly b_cap");
+        assert!(palw_activation_bonus_reward_v1(&t, 2 * t.bonus_cap_sompi - 2, 1) < t.bonus_cap_sompi, "under it, the share");
         assert_eq!(palw_activation_probe_credit_cap_v1(10, 5), 50);
     }
 
@@ -679,6 +772,33 @@ mod tests {
             "script version 0 only"
         );
         assert_eq!(crate::mldsa87_primitives::p2pkh_mldsa87_payload(&spk), None, "an OP_RETURN is never a payee");
+    }
+
+    /// **P4 (user decision 2026-09-25): the recommended pool is `16·A_MAX/α`, derived** — 2,400 MSK
+    /// at the terms, and `α` of it is exactly sixteen full rewards, of which the first two juries of
+    /// five are paid in full.
+    #[test]
+    fn the_recommended_pool_is_sixteen_full_rewards_over_alpha() {
+        let t = PALW_ACTIVATION_POOL_TERMS_V1;
+        let msk = crate::constants::SOMPI_PER_KASPA;
+        let p_full = palw_activation_recommended_pool_sompi_v1(&t);
+        assert_eq!(p_full, 2_400 * msk, "16 × 60 MSK / 0.4");
+        let a_max = palw_activation_prep_cap_v1(&t, t.ramp_daa);
+        assert_eq!(a_max, 3 * t.prep_base_sompi, "A_MAX is the ramp's top");
+        let (mut prep, _) = palw_activation_inflow_split_v1(p_full, t.prep_share_permille, true);
+        assert_eq!(prep, 16 * a_max);
+        for jury in 0..2 {
+            let a = palw_activation_prep_reward_v1(&t, prep, t.ramp_daa);
+            assert_eq!(a, a_max, "jury {jury} is paid the full A_MAX");
+            prep -= 5 * a;
+        }
+        assert!(palw_activation_prep_reward_v1(&t, prep, t.ramp_daa) < a_max, "the third is not");
+        // Rounded up: α of the figure never falls short of sixteen rewards.
+        let odd = PalwActivationPoolTermsV1 { prep_share_permille: 333, ..t };
+        let p_odd = palw_activation_recommended_pool_sompi_v1(&odd);
+        assert!(palw_activation_inflow_split_v1(p_odd, 333, true).0 >= 16 * a_max);
+        assert!(palw_activation_inflow_split_v1(p_odd - 1, 333, true).0 < 16 * a_max);
+        assert_eq!(palw_activation_recommended_pool_sompi_v1(&PalwActivationPoolTermsV1 { prep_share_permille: 0, ..t }), 0);
     }
 
     /// The pool payout key sorts after the seats' `0xFE` rows and before the market's `0xFF`.

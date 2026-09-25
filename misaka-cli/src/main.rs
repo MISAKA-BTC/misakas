@@ -586,6 +586,8 @@ enum ModelCmd {
         #[arg(long)]
         no_wait: bool,
         #[command(flatten)]
+        sponsor: palw_activation_pool::ListingSponsorArgs,
+        #[command(flatten)]
         profile: ProfileArgs,
     },
     /// Local inspection of an artifact: class id, roots, graph, ctx, CanonicalWork, fit walls. No submit.
@@ -945,6 +947,9 @@ enum ExtensionCmd {
         yes: bool,
         #[arg(long)]
         json: bool,
+        /// A class registration's sponsor (the Activation Pool's P4).
+        #[command(flatten)]
+        sponsor: palw_activation_pool::ListingSponsorArgs,
     },
     /// One receipt: its canonical form, its id, its signature, and the ruleset it was made on
     /// against this build's (SA-3). With --manifest, it must be about that manifest.
@@ -2575,14 +2580,23 @@ async fn main() -> std::process::ExitCode {
             seat_ms_per_position,
             yes,
             no_wait,
+            sponsor,
             profile: args,
-        }) => match profile(&args) {
-            Ok(p) => {
-                let a =
-                    operator::model_add::ModelAddArgs { model, artifact, manifest, prompt_lane, seat_ms_per_position, yes, no_wait };
+        }) => match (profile(&args), sponsor.resolve()) {
+            (Ok(p), Ok(sponsor)) => {
+                let a = operator::model_add::ModelAddArgs {
+                    model,
+                    artifact,
+                    manifest,
+                    prompt_lane,
+                    seat_ms_per_position,
+                    yes,
+                    no_wait,
+                    sponsor,
+                };
                 operator::model_add::run(&ctx, p, a).await
             }
-            Err(e) => Err(e),
+            (Err(e), _) | (_, Err(e)) => Err(e),
         },
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
             Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
@@ -2668,9 +2682,10 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
             palw_extension::preflight(&ctx, &manifest, json).await
         }
-        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json })) => {
-            palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json).await
-        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => match sponsor.resolve() {
+            Ok(sponsor) => palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json, sponsor).await,
+            Err(e) => Err(e),
+        },
         Command::Palw(PalwCmd::Extension(ExtensionCmd::ReceiptVerify { receipt, manifest, json })) => {
             palw_extension::receipt_verify(&ctx, &receipt, manifest.as_deref(), json)
         }
