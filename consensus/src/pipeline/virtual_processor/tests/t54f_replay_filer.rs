@@ -209,6 +209,14 @@ async fn t54f_a_garbage_trace_is_bisected_to_its_step_and_its_executor_refuted_s
 /// is revealed. The replay's, asked of the chain after, reads its key consumed: the filer answers it
 /// `AlreadyConvicted` and it is never handed; a copy carried anyway is refused at the gate, dropped
 /// by the walk and folds as a no-op. The claim is charged once, and the one reward is the seat's.
+///
+/// **Consensus-side only**: this pins what the CHAIN does with two lanes' identical kind 4 (one key,
+/// the same bytes; the gate, the walk and the fold's no-op on the second), which the integration does
+/// not change. The node's dedup — one filing an offence key, the capture arm backing a replay's
+/// filing, no replay run or hand-off for an offence already filed — is kaspad's
+/// (`one_offence_found_by_the_capture_arm_and_a_replay_is_filed_once`,
+/// `the_capture_arm_files_kind_4_first_and_backs_a_replay_filing_it_finds`,
+/// `p2_8b_a_fault_already_filed_or_accused_costs_no_replay_and_no_second_route`).
 #[tokio::test]
 async fn t54f_one_offence_found_by_the_capture_arm_and_a_replay_is_filed_once() {
     let h = harness(true);

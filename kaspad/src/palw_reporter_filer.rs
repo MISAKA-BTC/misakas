@@ -59,13 +59,20 @@
 //! The filer is a step machine ([`palw_filer_step_v1`]): each tick reads the chain's rows and queues
 //! at most the ONE object the next step needs, so nothing it does rests on the queue carrying its
 //! items in the order they were queued — the evidence is queued only once the commitment is a row,
-//! the reveal only once the conviction is. A copy's resend interval runs from when the carrier lane
-//! CARRIED it (`court_moved`), so an item a deadline-ordered queue held back is not re-queued the
-//! moment it goes out. Each item it queues states the DAA it is due by
+//! the reveal only once the conviction is. Nor does it rest on WHEN the queue carries them: a copy
+//! still waiting in the queue (`in_queue`) is never sent again, never counted as having had its
+//! chance to land, and never the reason an object is given up — the send cap's last copy included,
+//! so a deadline-ordered queue that holds the evidence's third copy back does not end the filing
+//! `Stalled`, and one that holds the commitment's third copy back does not send the evidence beside
+//! it — and a copy's resend interval runs from when the carrier lane CARRIED it (`court_moved`), so
+//! an item held back is not re-queued the moment it goes out. (A copy the carrier lane DROPS — the
+//! mempool refused it — left the queue uncarried: its interval runs from its queuing, and it counts
+//! against the cap, which bounds attempts.) Each item it queues states the DAA it is due by
 //! ([`palw_filer_step_due_v1`]: the evidence its `file_by_daa` or court window, the commitment the
 //! commit depth before that, the reveal R-3's reveal window's end `reveal_until`; a fallback its
-//! filing's `file_by_daa`), readable by queue key through [`PalwReporterFilerV1::queued_due_v1`] —
-//! where an earliest-deadline-first priority lane's due-time function plugs in.
+//! filing's `file_by_daa`; never before the filing was made), readable by queue key through
+//! [`PalwReporterFilerV1::queued_due_v1`] — where an earliest-deadline-first priority lane's due-time
+//! function plugs in.
 //!
 //! ## What goes through it — and what does not
 //!
@@ -132,7 +139,8 @@
 //! ## Resources
 //!
 //! A tick reads the tip once per live filing (cached rows, map lookups) and asks the gate only
-//! before a send (and once on a hand-back). J1 auto's probe — two verifications of a held capture
+//! before a send — evidence it refused, at most once a [`PALW_FILER_GATE_RETRY_DAA_V1`] — and once
+//! on a hand-back. J1 auto's probe — two verifications of a held capture
 //! and one out-of-range event opening for its binding — runs at most [`PALW_J1_PROBES_PER_TICK_V1`]
 //! a tick, under the ledger's full-seat reservation and in a blocking task; each claim's captures
 //! are digested at most [`PALW_J1_DIGESTS_PER_CLAIM_WINDOW_V1`] times a [`PALW_J1_PROBE_WINDOW_DAA_V1`]
@@ -156,13 +164,21 @@ use std::path::Path;
 pub(crate) const PALW_FILER_RESEND_DAA_V1: u64 = COURT_MOVE_REPLAN_DAA;
 
 /// **How many copies of one object the filer sends** (the review of P2-8, F4). A copy is counted when
-/// it is queued, and the next goes out only once the last has had [`PALW_FILER_RESEND_DAA_V1`] to
-/// land and left the queue — so three is two losses forgiven. Past it: a commitment that never
-/// rooted is given up (the evidence goes out without one), evidence that never convicted ends the
-/// filing `Stalled` (and hands it back), a reveal that never led stops. Without it a commitment the
-/// chain never roots, or evidence the fold drops though the gate admits it, is paid for every ten
-/// DAA for a whole court window: up to 300 carriers a filing.
+/// it is queued, and the next goes out only once the last has LEFT the queue and had
+/// [`PALW_FILER_RESEND_DAA_V1`] to land since it was carried — so three is two losses forgiven. Past
+/// it: a commitment that never rooted is given up (the evidence goes out without one), evidence that
+/// never convicted ends the filing `Stalled` (and hands it back), a reveal that never led stops. A
+/// last copy still waiting in the queue is none of these: the cap is judged only once it went out
+/// (the integration's review, F1). Without the cap a commitment the chain never roots, or evidence
+/// the fold drops though the gate admits it, is paid for every ten DAA for a whole court window: up
+/// to 300 carriers a filing.
 pub(crate) const PALW_FILER_MAX_SENDS_V1: u8 = 3;
+
+/// **How soon evidence the gate refused is asked about again** (the integration's review, F6): a
+/// re-plan. The filer ticks every two seconds, and the gate is the processor's whole object gate on
+/// the evidence — so a filing the gate keeps refusing (a court open on the claim, say) costs one gate
+/// run a re-plan, never one a tick.
+pub(crate) const PALW_FILER_GATE_RETRY_DAA_V1: u64 = COURT_MOVE_REPLAN_DAA;
 
 /// **How deep a commitment's row must be before its evidence is sent.** The commitment must be
 /// rooted STRICTLY below the conviction's DAA; one that a reorg puts back into the evidence's merge
@@ -327,6 +343,32 @@ pub(crate) struct PalwFilerEntryV1 {
     pub reveal_sends: u8,
     /// The chain has shown this filing's reveal as the reward's best at least once.
     pub revealed_seen: bool,
+    // ---- Node memory, never written to the book: each mirrors something that is node memory
+    // ---- itself (the court queue, the seat's `accused` set), which a restart empties too.
+    /// Whether each object's last copy still WAITS in the court queue — set by the tick from
+    /// `court_pending` before every step, so the rule never re-sends a copy, counts it landed, or
+    /// gives its object up while it has not gone out ([`palw_filer_step_v1`]).
+    #[borsh(skip)]
+    pub in_queue: PalwFilerInQueueV1,
+    /// **The capture arm backs this filing** ([`PalwReporterFilerV1::back_by_capture_arm_v1`]): its
+    /// own, or another lane's it found already filed — so the claim sits in the seat's `accused` set
+    /// on this filing's account and leaves it at a hand-back that queues no fallback, fallback or
+    /// none (the integration's review, F2).
+    #[borsh(skip)]
+    pub capture_arm_backed: bool,
+    /// The DAA the gate last refused this filing's evidence at: asked again
+    /// [`PALW_FILER_GATE_RETRY_DAA_V1`] later, not every tick.
+    #[borsh(skip)]
+    pub gate_refused_at: Option<u64>,
+}
+
+/// **Which of a filing's objects still waits in the court queue** ([`PalwFilerEntryV1::in_queue`]):
+/// its last copy queued and neither carried nor dropped by the carrier lane yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PalwFilerInQueueV1 {
+    pub commit: bool,
+    pub evidence: bool,
+    pub reveal: bool,
 }
 
 /// How a filing ended — logged, and asserted by the tests.
@@ -363,16 +405,21 @@ pub(crate) enum PalwFilerStepV1 {
     Done(PalwFilerEndV1),
 }
 
-/// **The filer's rule, one filing at a time** — pure over the entry and the chain's read of it, so
-/// every branch (a reorg on either side of the conviction, a restart, the window's close, the send
-/// cap) is a table the tests can walk without a node. See the module doc for the order.
+/// **The filer's rule, one filing at a time** — pure over the entry (the queue's view of it,
+/// `in_queue`, included) and the chain's read of it, so every branch (a reorg on either side of the
+/// conviction, a restart, the window's close, the send cap, a copy the queue holds back) is a table
+/// the tests can walk without a node. See the module doc for the order.
 pub(crate) fn palw_filer_step_v1(entry: &PalwFilerEntryV1, read: &PalwReporterFilingReadV1) -> PalwFilerStepV1 {
     use PalwFilerEndV1 as End;
     use PalwFilerStepV1 as Step;
     let now = read.now_daa;
-    let due = |sent: Option<u64>| sent.is_none_or(|at| now >= at.saturating_add(PALW_FILER_RESEND_DAA_V1));
+    // The last copy LEFT the queue and has had its interval to land since (`sent` is moved to the
+    // DAA the carrier lane carried it at). A copy still waiting in the queue is never sent again,
+    // never counted landed and never given up: the queue's order is not the filer's (F1).
+    let landed = |sent: Option<u64>, queued: bool| !queued && sent.is_none_or(|at| now >= at.saturating_add(PALW_FILER_RESEND_DAA_V1));
     // The cap: every copy went out, and the last one has had its interval to land.
-    let spent = |sends: u8, sent: Option<u64>| sends >= PALW_FILER_MAX_SENDS_V1 && due(sent);
+    let spent = |sends: u8, sent: Option<u64>, queued: bool| sends >= PALW_FILER_MAX_SENDS_V1 && landed(sent, queued);
+    let queue = entry.in_queue;
     if let Some(record) = &read.consumed {
         // Convicted: the conviction stands whatever happens next; only R is at stake.
         if entry.commit_object.is_none() {
@@ -398,7 +445,7 @@ pub(crate) fn palw_filer_step_v1(entry: &PalwFilerEntryV1, read: &PalwReporterFi
                 committed_daa < record.accepted_daa
                     && pending.best.is_none_or(|best| (committed_daa, entry.commitment) < (best.committed_daa, best.commitment))
             });
-        let sendable = due(entry.reveal_sent) && entry.reveal_sends < PALW_FILER_MAX_SENDS_V1;
+        let sendable = landed(entry.reveal_sent, queue.reveal) && entry.reveal_sends < PALW_FILER_MAX_SENDS_V1;
         return if revealable && now <= pending.reveal_until && sendable { Step::Reveal } else { Step::Wait };
     }
     // Not convicted yet. A commitment is pruned `window_court` after it was rooted when nothing
@@ -406,10 +453,10 @@ pub(crate) fn palw_filer_step_v1(entry: &PalwFilerEntryV1, read: &PalwReporterFi
     if now > entry.registered_daa.saturating_add(read.window_court) {
         return Step::Done(End::Expired);
     }
-    if spent(entry.evidence_sends, entry.evidence_sent) {
+    if spent(entry.evidence_sends, entry.evidence_sent, queue.evidence) {
         return Step::Done(End::Stalled);
     }
-    let file = if due(entry.evidence_sent) { Step::File } else { Step::Wait };
+    let file = if landed(entry.evidence_sent, queue.evidence) { Step::File } else { Step::Wait };
     if entry.commit_object.is_none() || !read.rcore_plus {
         return file;
     }
@@ -417,14 +464,15 @@ pub(crate) fn palw_filer_step_v1(entry: &PalwFilerEntryV1, read: &PalwReporterFi
         Some(committed_daa) if now >= committed_daa.saturating_add(PALW_FILER_COMMIT_DEPTH_DAA_V1) => file,
         Some(_) => Step::Wait,
         // The conviction never waits on R: past the landing margin, with no room to commit, or with
-        // every copy of the commitment sent and none rooted.
+        // every copy of the commitment sent — the last one carried and given its interval — and
+        // none rooted.
         None if entry.file_by_daa.is_some_and(|by| now >= by)
             || !read.reporter_may_commit
-            || spent(entry.commit_sends, entry.commit_sent) =>
+            || spent(entry.commit_sends, entry.commit_sent, queue.commit) =>
         {
             file
         }
-        None if due(entry.commit_sent) => Step::Commit,
+        None if landed(entry.commit_sent, queue.commit) => Step::Commit,
         None => Step::Wait,
     }
 }
@@ -436,19 +484,36 @@ pub(crate) fn palw_filer_step_v1(entry: &PalwFilerEntryV1, read: &PalwReporterFi
 ///
 /// * **Evidence**: its `file_by_daa` — for a kind 4 the landing margin before the claim's receipt
 ///   deadline (the claim must still be live for S2; P2-6's accusation is due by the same margin) —
-///   else, for a filing with no shorter deadline (P2-8c's kind 3), the end of its court window,
-///   after which the filing expires unconvicted. Past it the evidence is overdue, and still sent.
+///   else, for a filing with no shorter deadline (P2-8c's kind 3, a kind 4 made past its claim's
+///   receipt deadline: [`palw_kind4_file_by_v1`]), the end of its court window, after which the
+///   filing expires unconvicted. Past it the evidence is overdue, and still sent.
 /// * **Commitment**: [`PALW_FILER_COMMIT_DEPTH_DAA_V1`] before the evidence's date — the last DAA at
 ///   which a rooted commitment still lets the evidence wait for it.
 /// * **Reveal**: R-3's reveal window's end, the pending reward's `reveal_until` (R-4: the
 ///   conviction's DAA plus `window_receipt`), after which the sweep pays whoever leads.
 ///
+/// **Never dated before the filing was made** (the integration's review, F4): a filing made inside
+/// its landing margin (its `file_by_daa` already past, so it goes out bare at once) is due at its
+/// `registered_daa` — overdue for what it races, not ahead of every item queued since its margin
+/// opened.
+///
+/// **An approximation, where the filing has no `file_by_daa`** (the review's F7): the court window's
+/// end is the FILING's horizon, not its target's. Past the claim's Final a kind 3's or a late kind
+/// 4's target is the claim's liability row, which expires at `final_daa + window_court`
+/// (`palw_panel_liability_expiry_v1`); a filing registered after Final is dated `registered_daa −
+/// final_daa` later than that. The chain's read of a filing (`PalwReporterFilingReadV1`) does not
+/// name the target's expiry, and this node-only stage adds no consensus read, so the due date of a
+/// late proof (a replay-sourced one, typically) may run past its target's: an earliest-deadline-first
+/// lane reading it carries such a filing no sooner than its court window says. The conviction is
+/// still filed at once (the date orders the queue; it never holds a filing back).
+///
 /// `None` for a step that queues nothing, and for a reveal the chain shows no pending reward for.
 pub(crate) fn palw_filer_step_due_v1(entry: &PalwFilerEntryV1, step: PalwFilerStepV1, read: &PalwReporterFilingReadV1) -> Option<u64> {
-    let evidence_due = entry.file_by_daa.unwrap_or_else(|| entry.registered_daa.saturating_add(read.window_court));
+    let born = entry.registered_daa;
+    let evidence_due = entry.file_by_daa.unwrap_or_else(|| born.saturating_add(read.window_court));
     match step {
-        PalwFilerStepV1::Commit => Some(evidence_due.saturating_sub(PALW_FILER_COMMIT_DEPTH_DAA_V1)),
-        PalwFilerStepV1::File => Some(evidence_due),
+        PalwFilerStepV1::Commit => Some(evidence_due.saturating_sub(PALW_FILER_COMMIT_DEPTH_DAA_V1).max(born)),
+        PalwFilerStepV1::File => Some(evidence_due.max(born)),
         PalwFilerStepV1::Reveal => read.pending.map(|pending| pending.reveal_until),
         PalwFilerStepV1::Wait | PalwFilerStepV1::Done(_) => None,
     }
@@ -581,9 +646,12 @@ impl PalwReporterFilerV1 {
     /// the reveal of a live filing under its round ([`palw_filer_step_due_v1`]), or a stalled
     /// filing's fallback — `None` for every other item (another lane's states its own) and for a
     /// fallback whose filing had no deadline. The hook an earliest-deadline-first priority lane plugs
-    /// this filer into: `(key, round, responder)` is the queue entry's own key. (Not called on this
-    /// line yet: the court queue is carried in its own order here; the A-held node line's
-    /// earliest-deadline-first lane is where it is read.)
+    /// this filer into: `(key, round, responder)` is the queue entry's own key. A filing with no
+    /// `file_by_daa` (P2-8c's kind 3, a kind 4 made past its receipt deadline) is dated by its court
+    /// window's end, which past the claim's Final can be later than its target's own expiry — the
+    /// approximation [`palw_filer_step_due_v1`] states. (Not called on this line yet: the court queue
+    /// is carried in its own order here; the A-held node line's earliest-deadline-first lane is where
+    /// it is read.)
     #[allow(dead_code)]
     pub(crate) fn queued_due_v1(&self, queue_key: &(Hash64, u32, bool)) -> Option<u64> {
         self.queued_due.get(queue_key).copied()
@@ -596,13 +664,17 @@ impl PalwReporterFilerV1 {
         self.queued_due.iter().map(|(key, due)| (*key, *due))
     }
 
-    /// **A second finder's fallback, adopted by the filing already in the book** (the integration of
-    /// P2-8 with P2-8b): when the capture arm proves a fault whose kind-4 key P2-8b's replay filer
-    /// already filed, its one-move court accusation becomes that filing's `fallback` (if it has none),
-    /// so a stall of the replay's filing still hands the proven fault to the court — F3's guarantee
-    /// whichever lane filed first. Returns whether it was adopted.
-    pub(crate) fn adopt_fallback_v1(&mut self, offence_key: &Hash64, fallback: Option<(Hash64, PalwConsensusObjectV2)>) -> bool {
+    /// **The capture arm backs the filing in the book under `offence_key`** (the integration of P2-8
+    /// with P2-8b): its own, or one P2-8b's replay filer made first under the claim's one kind-4 key.
+    /// The filing is marked [`PalwFilerEntryV1::capture_arm_backed`] — the claim now sits in the
+    /// seat's `accused` set on its account, and a hand-back that queues no fallback lets it go, even
+    /// when the capture arm had no accusation to give (the integration's review, F2) — and the
+    /// capture arm's one-move court accusation becomes its `fallback` if it has none, so a stall of
+    /// the replay's filing still hands the proven fault to the court (F3's guarantee whichever lane
+    /// filed first). Returns whether the fallback was adopted.
+    pub(crate) fn back_by_capture_arm_v1(&mut self, offence_key: &Hash64, fallback: Option<(Hash64, PalwConsensusObjectV2)>) -> bool {
         let Some(entry) = self.entries.get_mut(offence_key) else { return false };
+        entry.capture_arm_backed = true;
         if entry.fallback.is_some() || fallback.is_none() {
             return false;
         }
@@ -684,19 +756,24 @@ impl PalwReporterFilerV1 {
                 evidence_sends: 0,
                 reveal_sends: 0,
                 revealed_seen: false,
+                in_queue: PalwFilerInQueueV1::default(),
+                capture_arm_backed: false,
+                gate_refused_at: None,
             },
         );
         self.dirty = true;
         PalwFileOutcomeV1::Queued { committed }
     }
 
-    /// **One tick of the book.** For each filing: read the chain (`read(entry, None)`), take the
-    /// step, and — for a send not already queued — ask the gate (`read(entry, Some(object))`) on the
-    /// evidence, and before a commitment on the commitment too (one it refuses is given up: the
-    /// filing goes on without it), then queue the object on the court queue's priority lane and count
-    /// the copy. A finished filing leaves the book, its queued objects leave `court_pending`, its
-    /// debounce keys leave `court_moved` (nothing else prunes them), and a stalled or expired one is
-    /// handed back ([`Self::hand_back_v1`]). Returns how each finished filing ended.
+    /// **One tick of the book.** For each filing: note which of its objects still wait in the court
+    /// queue, read the chain (`read(entry, None)`), take the step, and — for a send — ask the gate
+    /// (`read(entry, Some(object))`) on the evidence (at most once a
+    /// [`PALW_FILER_GATE_RETRY_DAA_V1`] after it refused), and before a commitment on the commitment
+    /// too (one it refuses is given up: the filing goes on without it), then queue the object on the
+    /// court queue's priority lane and count the copy. A finished filing leaves the book, its queued
+    /// objects leave `court_pending`, its debounce keys leave `court_moved` (nothing else prunes
+    /// them), and a stalled or expired one is handed back ([`Self::hand_back_v1`]). Returns how each
+    /// finished filing ended.
     pub(crate) fn tick(
         &mut self,
         court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
@@ -708,10 +785,20 @@ impl PalwReporterFilerV1 {
         self.probes_left = PALW_J1_PROBES_PER_TICK_V1;
         let mut ended = Vec::new();
         for key in self.entries.keys().copied().collect::<Vec<_>>() {
-            // FIFO-free: a copy's interval runs from when it was CARRIED (`court_moved`, stamped by the
-            // carrier lane at submission), not from when it was queued — an item a deadline-ordered
-            // queue held behind earlier-due ones is not re-queued the moment it finally goes out.
+            // FIFO-free (the queue's order is not the filer's): a copy still waiting in the queue is
+            // neither re-sent nor counted landed (`in_queue`, read by the rule), and a copy's interval
+            // runs from when it was CARRIED (`court_moved`, stamped by the carrier lane at
+            // submission), not from when it was queued — an item a deadline-ordered queue held
+            // behind earlier-due ones is not re-queued, stalled or given up before it goes out.
+            let queued = |court_pending: &Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>, round: u32| {
+                court_pending.iter().any(|(k, r, responder, _)| (*k, *r, *responder) == (key, round, false))
+            };
             let live = self.entries.get_mut(&key).expect("a key just listed");
+            live.in_queue = PalwFilerInQueueV1 {
+                commit: queued(court_pending, PALW_FILER_ROUND_COMMIT_V1),
+                evidence: queued(court_pending, PALW_FILER_ROUND_EVIDENCE_V1),
+                reveal: queued(court_pending, PALW_FILER_ROUND_REVEAL_V1),
+            };
             for (round, sent) in [
                 (PALW_FILER_ROUND_COMMIT_V1, &mut live.commit_sent),
                 (PALW_FILER_ROUND_EVIDENCE_V1, &mut live.evidence_sent),
@@ -733,9 +820,7 @@ impl PalwReporterFilerV1 {
                 self.entries.get_mut(&key).expect("live").revealed_seen = true;
                 self.dirty = true;
             }
-            let queued = |court_pending: &Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>, round: u32| {
-                court_pending.iter().any(|(k, r, responder, _)| (*k, *r, *responder) == (key, round, false))
-            };
+            let now = chain.now_daa;
             let mut step = palw_filer_step_v1(self.entries.get(&key).expect("live"), &chain);
             match step {
                 Step::Wait => continue,
@@ -746,16 +831,17 @@ impl PalwReporterFilerV1 {
                     ended.push((entry, end));
                     continue;
                 }
-                Step::Commit if queued(court_pending, PALW_FILER_ROUND_COMMIT_V1) => continue,
-                Step::File if queued(court_pending, PALW_FILER_ROUND_EVIDENCE_V1) => continue,
-                Step::Reveal if queued(court_pending, PALW_FILER_ROUND_REVEAL_V1) => continue,
                 Step::Commit | Step::File | Step::Reveal => {}
             }
             // Nothing is spent on evidence the chain refuses: the commitment and the evidence each
-            // wait for the gate's word at the tip (a court opened on the claim meanwhile, say).
+            // wait for the gate's word at the tip (a court opened on the claim meanwhile, say) —
+            // asked again a re-plan after it refused, never on every tick (F6).
             if matches!(step, Step::Commit | Step::File) {
+                if entry.gate_refused_at.is_some_and(|at| now < at.saturating_add(PALW_FILER_GATE_RETRY_DAA_V1)) {
+                    continue;
+                }
                 match palw_filer_gate_v1(&mut read, &entry, &entry.object) {
-                    Some(Ok(())) => {}
+                    Some(Ok(())) => self.entries.get_mut(&key).expect("live").gate_refused_at = None,
                     Some(Err(why)) => {
                         crate::palw_backends::note_throttled_v1("panel-reporter-filer-gate", || {
                             format!(
@@ -763,6 +849,7 @@ impl PalwReporterFilerV1 {
                                 entry.claim_id
                             )
                         });
+                        self.entries.get_mut(&key).expect("live").gate_refused_at = Some(now);
                         continue;
                     }
                     None => continue,
@@ -783,8 +870,10 @@ impl PalwReporterFilerV1 {
                         let live = self.entries.get_mut(&key).expect("live");
                         live.commit_object = None;
                         self.dirty = true;
+                        // The evidence's own queue view is on `live` (`in_queue`): File only if
+                        // no copy of it waits in the queue.
                         step = palw_filer_step_v1(live, &chain);
-                        if step != Step::File || queued(court_pending, PALW_FILER_ROUND_EVIDENCE_V1) {
+                        if step != Step::File {
                             continue;
                         }
                     }
@@ -803,7 +892,6 @@ impl PalwReporterFilerV1 {
                 Step::Wait | Step::Done(_) => unreachable!("sends only"),
             };
             let live = self.entries.get_mut(&key).expect("live");
-            let now = chain.now_daa;
             match palw_filer_step_due_v1(live, step, &chain) {
                 Some(due) => self.queued_due.insert((key, round, false), due),
                 None => self.queued_due.remove(&(key, round, false)),
@@ -842,9 +930,11 @@ impl PalwReporterFilerV1 {
     /// carrier and the filer never reads them). `Expired` or `Stalled` (F3): a proven fault must not
     /// go unfiled because kind 4 did not land, so its `fallback` — the capture arm's one-move
     /// accusation — is queued if the gate admits it now; if there is none, or the gate refuses it,
-    /// the capture arm's claim leaves the seat's `accused` set so the named-leaf pursuit (ADR-0111
-    /// Decision 6) may still file. A J1 filing that expired releases its claim's probes (a stalled one
-    /// keeps them: the fold drops what the gate admits, and probing again would only file it again).
+    /// a claim the capture arm holds in the seat's `accused` set on this filing's account (its own
+    /// filing, or one it backed: [`PalwFilerEntryV1::capture_arm_backed`]) leaves it, so the
+    /// named-leaf pursuit (ADR-0111 Decision 6) may still file. A J1 filing that expired releases its
+    /// claim's probes (a stalled one keeps them: the fold drops what the gate admits, and probing
+    /// again would only file it again).
     /// P2-8b's and P2-8c's filings need nothing here: their lanes read the key's leaving as the end
     /// of the flight and ask the chain again ([`PALW_FILER_HAND_OFFS_PER_OFFENCE_V1`]).
     fn hand_back_v1(
@@ -889,9 +979,10 @@ impl PalwReporterFilerV1 {
                     false
                 }
             });
-        // The capture arm's own filing, or another lane's that adopted its accusation
-        // ([`Self::adopt_fallback_v1`]): the claim is the capture arm's to let go of.
-        if (entry.origin == PalwFilingOriginV1::CaptureArm || entry.fallback.is_some()) && !fallback_queued {
+        // The capture arm's own filing, or another lane's it backed ([`Self::back_by_capture_arm_v1`],
+        // with an accusation to adopt or without one — F2): the claim is the capture arm's to let
+        // go of.
+        if (entry.origin == PalwFilingOriginV1::CaptureArm || entry.capture_arm_backed) && !fallback_queued {
             accused.remove(&entry.claim_id);
         }
         if entry.origin == PalwFilingOriginV1::BorrowedRoot && end == PalwFilerEndV1::Expired {
@@ -977,11 +1068,23 @@ pub(crate) fn palw_filer_file_by_v1(receipt_deadline: u64) -> u64 {
     receipt_deadline.saturating_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)
 }
 
+/// **An automatic kind 4's `file_by_daa`, for a filing made at `now_daa`** (the integration's review,
+/// F4): the landing margin ([`palw_filer_file_by_v1`]) while the claim's receipt deadline is still
+/// ahead — the S2 race is live, so past the margin the evidence goes out at once, bare — and `None`
+/// once the deadline has passed. Kind 4 is still admissible there (the claim's liability or vesting
+/// row is its target), but the race it had is over: landing now or a commitment's two DAA later
+/// changes nothing, so the filing commits first and keeps R, as P2-8c's kind 3 does, and is dated by
+/// its court window ([`palw_filer_step_due_v1`]). A bisection that finished late gave R up for
+/// nothing before this.
+pub(crate) fn palw_kind4_file_by_v1(receipt_deadline: u64, now_daa: u64) -> Option<u64> {
+    (now_daa < receipt_deadline).then(|| palw_filer_file_by_v1(receipt_deadline))
+}
+
 /// **SR-8 / J-4 (P2-8): the capture arm's `ExecutorRefuted` over the fault it proved** — pure, so the
 /// one thing the capture arm builds is tested without a node (the review of P2-8, F2): kind 4 over
 /// `StepArithmetic { refutation, operand_openings }` with the sampler's prompt tile (already in the
 /// network's carriage: the sampler graded exactly this), naming the claim's executor, keyed on the
-/// per-claim ledger id, landing by [`palw_filer_file_by_v1`]. `None` below `Params::palw_rcore_plus`
+/// per-claim ledger id, landing by [`palw_kind4_file_by_v1`] as of `now_daa`. `None` below `Params::palw_rcore_plus`
 /// (`rcore_plus` is the node's reading of it at the tip: there the v1 court path is the whole path)
 /// and against this node's own bond (the fold refuses `reporter == accused`, and a seat never
 /// accuses its own claim).
@@ -992,6 +1095,7 @@ pub(crate) fn palw_capture_arm_filing_v1(
     executor: PalwBondKeyV2,
     claim_id: Hash64,
     receipt_deadline: u64,
+    now_daa: u64,
     refutation: &PalwExecutionStepRefutationV1,
     openings: &[PalwArtifactOpeningV1],
     prompt_opening: &Option<PalwPromptIdsOpeningV1>,
@@ -1005,7 +1109,77 @@ pub(crate) fn palw_capture_arm_filing_v1(
         PalwPanelContradictionV1::StepArithmetic { refutation: refutation.clone(), operand_openings: openings.to_vec() },
         prompt_opening.clone(),
     );
-    PalwConvictionFilingV1::of_offence(object, claim_id, Some(palw_filer_file_by_v1(receipt_deadline)), PalwFilingOriginV1::CaptureArm)
+    PalwConvictionFilingV1::of_offence(
+        object,
+        claim_id,
+        palw_kind4_file_by_v1(receipt_deadline, now_daa),
+        PalwFilingOriginV1::CaptureArm,
+    )
+}
+
+/// What the capture arm's decision made of a proven fault ([`palw_capture_arm_files_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalwCaptureArmFiledV1 {
+    /// The seat accused the claim already (once per claim): nothing was done.
+    AlreadyAccused,
+    /// Kind 4 is the reporter filer's — this filing (`Queued`), one another lane filed first under
+    /// the claim's one kind-4 key (`AlreadyFiled`: the capture arm backs it), or the chain's
+    /// conviction (`AlreadyConvicted`) — so the court is not also filed.
+    Kind4(PalwFileOutcomeV1),
+    /// The one-move court's accusation was queued instead.
+    Court,
+    /// Nothing to file: no kind 4 taken and no accusation to queue.
+    Nothing,
+}
+
+/// **SR-8 / J-4 (P2-8): what the capture arm files for a proven fault, once per claim** — pure over
+/// the book, the seat's `accused` set and the court queue, with `file` the node's door into the book
+/// (the panel's [`PalwPanelService::reporter_filer_file_v1`]; a test's stubbed chain), so the order
+/// is tested without a node (the integration's review, F3). Kind 4 (`refuted`, past
+/// `Params::palw_rcore_plus` only) through the reporter filer first, with the one-move court's
+/// accusation (`court`) as its fallback should it stall; the claim is then taken care of (`accused`)
+/// and the court is NOT also filed: both routes convict the claim once — the void is the marker — so
+/// the second only races the first for nothing, and the court's reward, named for whoever signs the
+/// accusation, is the one a mempool observer can take. Kind 4 already in the book under the claim's
+/// key — P2-8b's replay filed it first — is BACKED ([`PalwReporterFilerV1::back_by_capture_arm_v1`]):
+/// it takes the accusation as its fallback, and the claim leaves `accused` if it ends unconvicted with
+/// no fallback queued, accusation or none (F2). Otherwise — below the fence, against this node's own
+/// bond, the gate refusing kind 4 (a held class whose leaf needs a dissection, which only the court
+/// can open), a full book — the accusation, exactly as the seat filed it before P2-8.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn palw_capture_arm_files_v1(
+    filer: &mut PalwReporterFilerV1,
+    accused: &mut HashSet<Hash64>,
+    court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+    claim_id: Hash64,
+    leaf: u64,
+    refuted: Option<PalwConvictionFilingV1>,
+    court: Option<(Hash64, PalwConsensusObjectV2)>,
+    file: impl FnOnce(&mut PalwReporterFilerV1, PalwConvictionFilingV1) -> PalwFileOutcomeV1,
+) -> PalwCaptureArmFiledV1 {
+    if accused.contains(&claim_id) {
+        return PalwCaptureArmFiledV1::AlreadyAccused;
+    }
+    if let Some(filing) = refuted {
+        let key = filing.offence_key;
+        match file(filer, filing.with_fallback(court.clone())) {
+            outcome @ (PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled | PalwFileOutcomeV1::AlreadyConvicted) => {
+                // This filing, or P2-8b's replay's under the same key: backed by this accusation.
+                filer.back_by_capture_arm_v1(&key, court);
+                accused.insert(claim_id);
+                return PalwCaptureArmFiledV1::Kind4(outcome);
+            }
+            PalwFileOutcomeV1::NotAdmitted(_)
+            | PalwFileOutcomeV1::OwnBond
+            | PalwFileOutcomeV1::Full
+            | PalwFileOutcomeV1::Unreadable => {}
+        }
+    }
+    let Some((session_id, object)) = court else { return PalwCaptureArmFiledV1::Nothing };
+    info!("[{PALW_PANEL}] claim {claim_id}: accusing leaf {leaf} in the one-move court (session {session_id})");
+    accused.insert(claim_id);
+    court_pending.push((session_id, 0, false, object));
+    PalwCaptureArmFiledV1::Court
 }
 
 /// **The door the other lanes file through** (the integration of P2-8b and P2-8c with P2-8): the
@@ -1147,11 +1321,12 @@ pub(crate) fn palw_floor_step_refutation_v1()
     })
 }
 
-/// **The lanes' `file_by` for an `ExecutorRefuted`** — the capture arm's own ([`palw_filer_file_by_v1`]
-/// of the duty's receipt deadline, which is never later than the chain's per-claim one), so kind 4
-/// from a replay waits on its commitment no longer than kind 4 from a capture sample does.
-pub(crate) fn palw_executor_refuted_file_by_v1(duty: &PalwSeatDutyV2) -> Option<u64> {
-    Some(palw_filer_file_by_v1(duty.receipt_deadline))
+/// **The lanes' `file_by` for an `ExecutorRefuted` handed at `now_daa`** — the capture arm's own
+/// ([`palw_kind4_file_by_v1`] of the duty's receipt deadline, which is never later than the chain's
+/// per-claim one), so kind 4 from a replay waits on its commitment no longer than kind 4 from a
+/// capture sample does, and one made past the receipt deadline commits first (F4).
+pub(crate) fn palw_executor_refuted_file_by_v1(duty: &PalwSeatDutyV2, now_daa: u64) -> Option<u64> {
+    palw_kind4_file_by_v1(duty.receipt_deadline, now_daa)
 }
 
 impl PalwPanelService {
@@ -1252,21 +1427,16 @@ impl PalwPanelService {
             duty.executor_bond,
             duty.claim_id,
             receipt_deadline,
+            current_daa,
             refutation,
             openings,
             prompt_opening,
         )
     }
 
-    /// **SR-8 / J-4 (P2-8): what the capture arm files for a proven fault, once per claim.** Kind 4
-    /// (`refuted`, past `Params::palw_rcore_plus` only) through the reporter filer first, with the
-    /// one-move court's accusation (`court`) as its fallback should it stall; the claim is then taken
-    /// care of (`accused`) and the court is NOT also filed: both routes convict the claim once — the
-    /// void is the marker — so the second only races the first for nothing, and the court's reward,
-    /// named for whoever signs the accusation, is the one a mempool observer can take. Otherwise —
-    /// below the fence, against this node's own bond, the gate refusing kind 4 (a held class whose
-    /// leaf needs a dissection, which only the court can open), a full book — the accusation, exactly
-    /// as the seat filed it before P2-8.
+    /// **SR-8 / J-4 (P2-8): what the capture arm files for a proven fault, once per claim** — the
+    /// panel's half of [`palw_capture_arm_files_v1`]: the decision itself, over this node's door into
+    /// the book (a fresh salt, the gate on the evidence, the bond's signature).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn capture_arm_files_v1(
         &self,
@@ -1281,30 +1451,9 @@ impl PalwPanelService {
         refuted: Option<PalwConvictionFilingV1>,
         court: Option<(Hash64, PalwConsensusObjectV2)>,
     ) {
-        if accused.contains(&duty.claim_id) {
-            return;
-        }
-        if let Some(filing) = refuted {
-            let key = filing.offence_key;
-            match self.reporter_filer_file_v1(session, filer, filing.with_fallback(court.clone()), bond_key, network_domain) {
-                PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled | PalwFileOutcomeV1::AlreadyConvicted => {
-                    // Filed first by P2-8b's replay (one kind-4 key a claim): its filing keeps this
-                    // accusation as its fallback, so a stall still reaches the court.
-                    filer.adopt_fallback_v1(&key, court);
-                    accused.insert(duty.claim_id);
-                    return;
-                }
-                PalwFileOutcomeV1::NotAdmitted(_)
-                | PalwFileOutcomeV1::OwnBond
-                | PalwFileOutcomeV1::Full
-                | PalwFileOutcomeV1::Unreadable => {}
-            }
-        }
-        if let Some((session_id, object)) = court {
-            info!("[{PALW_PANEL}] claim {}: accusing leaf {leaf} in the one-move court (session {session_id})", duty.claim_id);
-            accused.insert(duty.claim_id);
-            court_pending.push((session_id, 0, false, object));
-        }
+        palw_capture_arm_files_v1(filer, accused, court_pending, duty.claim_id, leaf, refuted, court, |filer, filing| {
+            self.reporter_filer_file_v1(session, filer, filing, bond_key, network_domain)
+        });
     }
 
     /// **J1 auto (P2-8; ADR-0152 §3.9 "borrowed", J-6):** a held capture of `duty`'s claim that does not
@@ -1369,7 +1518,7 @@ impl PalwPanelService {
         let Some(filing) = PalwConvictionFilingV1::of_offence(
             object,
             duty.claim_id,
-            Some(palw_filer_file_by_v1(receipt_deadline)),
+            palw_kind4_file_by_v1(receipt_deadline, current_daa),
             PalwFilingOriginV1::BorrowedRoot,
         ) else {
             return;
@@ -1714,25 +1863,40 @@ mod tests {
     }
 
     /// **The tick asks the gate before every send**: a refused evidence is neither queued nor marked
-    /// sent (the next tick asks again); an admitted one is queued under the evidence round.
+    /// sent; an admitted one is queued under the evidence round. **And a refusal is asked about again
+    /// a re-plan later, not on every tick** (the integration's review, F6): the panel ticks every two
+    /// seconds, and each ask is the processor's whole gate on the evidence.
     #[test]
-    fn the_tick_asks_the_gate_before_it_spends() {
+    fn the_tick_asks_the_gate_before_it_spends_and_asks_a_refusal_again_a_replan_later() {
         let mut book = PalwReporterFilerV1::default();
         let entry = filed(&mut book, filing(11, None), &chain(100));
-        let rooted = PalwReporterFilingReadV1 { committed_daa: Some(101), object_gate: None, ..chain(103) };
+        let rooted = |now| PalwReporterFilingReadV1 { committed_daa: Some(101), object_gate: None, ..chain(now) };
         let mut queue = Vec::new();
-        tick_(&mut book, &mut queue, |_, gated| {
-            assert!(gated.is_none_or(|object| *object == entry.object), "only the evidence is asked about");
-            Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| Err("ClaimUnderSession".to_string())), ..rooted.clone() })
-        });
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let gate = |now: u64, admit: bool| {
+            let (asked, evidence, rooted) = (asked.clone(), entry.object.clone(), rooted(now));
+            move |_: &PalwFilerEntryV1, gated: Option<&PalwConsensusObjectV2>| {
+                assert!(gated.is_none_or(|object| *object == evidence), "only the evidence is asked about");
+                asked.set(asked.get() + usize::from(gated.is_some()));
+                let verdict = if admit { Ok(()) } else { Err("ClaimUnderSession".to_string()) };
+                Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| verdict.clone()), ..rooted.clone() })
+            }
+        };
+        tick_(&mut book, &mut queue, gate(103, false));
         assert!(queue.is_empty() && book.entry(&entry.offence_key).unwrap().evidence_sent.is_none(), "refused: nothing spent");
-        tick_(&mut book, &mut queue, |_, gated| {
-            Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| Ok(())), ..rooted.clone() })
-        });
+        assert_eq!((asked.get(), book.entry(&entry.offence_key).unwrap().gate_refused_at), (1, Some(103)));
+        // Every tick of the next re-plan: not asked again (the gate would admit it by now).
+        for now in [103, 104, 103 + PALW_FILER_GATE_RETRY_DAA_V1 - 1] {
+            tick_(&mut book, &mut queue, gate(now, true));
+        }
+        assert!(queue.is_empty() && asked.get() == 1, "one gate run a re-plan, not one a tick");
+        tick_(&mut book, &mut queue, gate(103 + PALW_FILER_GATE_RETRY_DAA_V1, true));
+        assert_eq!(asked.get(), 2);
         assert_eq!(queue.len(), 1);
         assert_eq!((queue[0].0, queue[0].1), (entry.offence_key, PALW_FILER_ROUND_EVIDENCE_V1));
         assert_eq!(queue[0].3, entry.object);
-        assert_eq!(book.entry(&entry.offence_key).unwrap().evidence_sent, Some(103));
+        let live = book.entry(&entry.offence_key).unwrap();
+        assert_eq!((live.evidence_sent, live.gate_refused_at), (Some(103 + PALW_FILER_GATE_RETRY_DAA_V1), None));
     }
 
     /// J1 auto takes one probe a tick and one per (claim, capture): a stranger's capture served first
@@ -1774,8 +1938,8 @@ mod tests {
                 book.file(capture_arm.clone(), bond(ME), &chain(100), &h(DOMAIN), [8; 32], signer),
                 PalwFileOutcomeV1::AlreadyFiled
             );
-            assert!(book.adopt_fallback_v1(&entry.offence_key, capture_arm.fallback.clone()));
-            assert!(!book.adopt_fallback_v1(&entry.offence_key, Some((h(1), accusation.clone()))), "never replaced");
+            assert!(book.back_by_capture_arm_v1(&entry.offence_key, capture_arm.fallback.clone()));
+            assert!(!book.back_by_capture_arm_v1(&entry.offence_key, Some((h(1), accusation.clone()))), "never replaced");
             assert_eq!(book.len(), 1);
             let live = book.entries.get_mut(&entry.offence_key).unwrap();
             (live.evidence_sent, live.evidence_sends) = (Some(150), PALW_FILER_MAX_SENDS_V1);
@@ -2110,6 +2274,188 @@ mod tests {
         assert_eq!(book.queued_due_v1(&(court_key, 0, false)), Some(640));
     }
 
+    /// One tick at `read`, the gate admitting everything it is asked about.
+    fn tick_admitting(
+        book: &mut PalwReporterFilerV1,
+        queue: &mut Queue,
+        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        accused: &mut HashSet<Hash64>,
+        read: PalwReporterFilingReadV1,
+    ) -> Vec<(PalwFilerEntryV1, PalwFilerEndV1)> {
+        book.tick(queue, court_moved, accused, |_, gated| {
+            Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| Ok(())), ..read.clone() })
+        })
+    }
+
+    fn rounds(queue: &Queue) -> Vec<u32> {
+        queue.iter().map(|(_, round, _, _)| *round).collect()
+    }
+
+    /// **A last copy the queue holds back is not the end of its object** (the integration's review,
+    /// F1: the cap counted a copy from its QUEUING, so a deadline-ordered queue that held the third
+    /// copy back one resend interval ended the filing `Stalled` and pruned the copy unsent, or gave the
+    /// commitment up and queued the evidence beside the unsent commitment — one block could then carry
+    /// both, and R was lost). The evidence's third copy, held back five intervals: the filing neither
+    /// stalls nor re-queues it, and ends `Stalled` only a full interval after the copy was CARRIED.
+    /// The commitment's third copy, held back as long: never given up, no evidence beside it, and
+    /// given up — the evidence alone — only a full interval after its carry.
+    #[test]
+    fn a_last_copy_the_queue_holds_back_neither_stalls_the_filing_nor_gives_its_commitment_up() {
+        let (max, resend) = (PALW_FILER_MAX_SENDS_V1, PALW_FILER_RESEND_DAA_V1);
+        let rooted = |now| PalwReporterFilingReadV1 { committed_daa: Some(101), ..chain(now) };
+        // The rule itself: a queued last copy waits, whatever the clock says.
+        let entry = filed(&mut PalwReporterFilerV1::default(), filing(40, None), &chain(100));
+        let held = |in_queue| PalwFilerEntryV1 { evidence_sent: Some(150), evidence_sends: max, in_queue, ..entry.clone() };
+        let evidence_queued = PalwFilerInQueueV1 { evidence: true, ..Default::default() };
+        assert_eq!(palw_filer_step_v1(&held(evidence_queued), &rooted(2_000)), PalwFilerStepV1::Wait);
+        assert_eq!(palw_filer_step_v1(&held(Default::default()), &rooted(2_000)), PalwFilerStepV1::Done(PalwFilerEndV1::Stalled));
+
+        // The evidence, on the tick.
+        let mut book = PalwReporterFilerV1::default();
+        let key = filed(&mut book, filing(40, None), &chain(100)).offence_key;
+        let live = book.entries.get_mut(&key).unwrap();
+        (live.evidence_sent, live.evidence_sends) = (Some(150), max - 1);
+        let (mut queue, mut moved, mut accused) = (Vec::new(), HashMap::new(), HashSet::new());
+        assert!(tick_admitting(&mut book, &mut queue, &mut moved, &mut accused, rooted(200)).is_empty());
+        assert_eq!((rounds(&queue), book.entry(&key).unwrap().evidence_sends), (vec![PALW_FILER_ROUND_EVIDENCE_V1], max));
+        for now in [200 + resend, 200 + 5 * resend] {
+            assert!(tick_admitting(&mut book, &mut queue, &mut moved, &mut accused, rooted(now)).is_empty(), "held at {now}");
+            assert_eq!((queue.len(), book.entry(&key).unwrap().evidence_sends), (1, max), "neither pruned nor queued twice");
+        }
+        let carried = 200 + 5 * resend + 1;
+        queue.clear();
+        moved.insert((key, PALW_FILER_ROUND_EVIDENCE_V1, false), carried);
+        assert!(tick_admitting(&mut book, &mut queue, &mut moved, &mut accused, rooted(carried + resend - 1)).is_empty());
+        assert_eq!(book.entry(&key).unwrap().evidence_sent, Some(carried), "its interval runs from the carry");
+        let ended = tick_admitting(&mut book, &mut queue, &mut moved, &mut accused, rooted(carried + resend));
+        assert_eq!(ended.iter().map(|(_, end)| *end).collect::<Vec<_>>(), vec![PalwFilerEndV1::Stalled]);
+
+        // The commitment, on the tick: never rooted.
+        let mut book = PalwReporterFilerV1::default();
+        let key = filed(&mut book, filing(41, None), &chain(100)).offence_key;
+        let live = book.entries.get_mut(&key).unwrap();
+        (live.commit_sent, live.commit_sends) = (Some(150), max - 1);
+        let (mut queue, mut moved) = (Vec::new(), HashMap::new());
+        tick_admitting(&mut book, &mut queue, &mut moved, &mut accused, chain(200));
+        assert_eq!((rounds(&queue), book.entry(&key).unwrap().commit_sends), (vec![PALW_FILER_ROUND_COMMIT_V1], max));
+        for now in [200 + resend, 200 + 5 * resend] {
+            tick_admitting(&mut book, &mut queue, &mut moved, &mut accused, chain(now));
+            assert_eq!(rounds(&queue), vec![PALW_FILER_ROUND_COMMIT_V1], "held at {now}: no evidence beside the commitment");
+            assert!(book.entry(&key).unwrap().commit_object.is_some(), "and the commitment is not given up");
+        }
+        let carried = 200 + 5 * resend + 1;
+        queue.clear();
+        moved.insert((key, PALW_FILER_ROUND_COMMIT_V1, false), carried);
+        tick_admitting(&mut book, &mut queue, &mut moved, &mut accused, chain(carried + resend - 1));
+        assert!(queue.is_empty(), "the last copy is still landing: the evidence waits for it");
+        tick_admitting(&mut book, &mut queue, &mut moved, &mut accused, chain(carried + resend));
+        assert_eq!(
+            rounds(&queue),
+            vec![PALW_FILER_ROUND_EVIDENCE_V1],
+            "never rooted: the evidence alone, an interval after the carry"
+        );
+    }
+
+    /// **The capture arm's decision, on a book** (the integration's review, F2 and F3:
+    /// [`palw_capture_arm_files_v1`] is what the panel runs, over its door). Replay first: the
+    /// capture arm's kind 4 is `AlreadyFiled`; it BACKS the replay's filing — its accusation adopted as
+    /// the fallback, the claim `accused`, no court beside it — so the filing's stall files the court;
+    /// and with no accusation to give (no court past the fence, a shape refused, a carrier it cannot
+    /// ride) the stall still lets the claim go for the named-leaf pursuit. The capture arm first: its
+    /// own filing, the accusation its fallback, and the replay's later hand-off `AlreadyFiled`. Kind 4
+    /// the gate refuses, or none: the accusation, as before P2-8; once per claim.
+    #[test]
+    fn the_capture_arm_files_kind_4_first_and_backs_a_replay_filing_it_finds() {
+        let court_key = h(0xC0_2D);
+        let accusation =
+            PalwConsensusObjectV2::DefaultAccused { claim: h(50), missing_event_index: 0, accuser: bond(ME), signature: vec![5] };
+        let door = |book: &mut PalwReporterFilerV1, filing: PalwConvictionFilingV1| {
+            book.file(filing, bond(ME), &chain(100), &h(DOMAIN), [9; 32], signer)
+        };
+        let replay = |claim| PalwConvictionFilingV1 { origin: PalwFilingOriginV1::Replay, ..filing(claim, None) };
+        let rooted = PalwReporterFilingReadV1 { committed_daa: Some(101), ..chain(160) };
+        for with_court in [true, false] {
+            let mut book = PalwReporterFilerV1::default();
+            let key = filed(&mut book, replay(50), &chain(100)).offence_key;
+            let (mut accused, mut queue) = (HashSet::new(), Vec::new());
+            let court = with_court.then(|| (court_key, accusation.clone()));
+            let made =
+                palw_capture_arm_files_v1(&mut book, &mut accused, &mut queue, h(50), 3, Some(filing(50, None)), court.clone(), door);
+            assert_eq!(made, PalwCaptureArmFiledV1::Kind4(PalwFileOutcomeV1::AlreadyFiled));
+            assert!(queue.is_empty() && accused.contains(&h(50)), "the replay's filing carries it: no court beside it");
+            let live = book.entry(&key).unwrap();
+            assert_eq!((live.origin, live.capture_arm_backed, live.fallback.clone()), (PalwFilingOriginV1::Replay, true, court));
+            let live = book.entries.get_mut(&key).unwrap();
+            (live.evidence_sent, live.evidence_sends) = (Some(150), PALW_FILER_MAX_SENDS_V1);
+            let ended = tick_admitting(&mut book, &mut queue, &mut HashMap::new(), &mut accused, rooted.clone());
+            assert_eq!(ended.iter().map(|(_, end)| *end).collect::<Vec<_>>(), vec![PalwFilerEndV1::Stalled]);
+            if with_court {
+                assert_eq!(queue, vec![(court_key, 0, false, accusation.clone())], "the court carries the fault");
+                assert!(accused.contains(&h(50)));
+            } else {
+                assert!(queue.is_empty() && !accused.contains(&h(50)), "nothing to queue: the claim is let go (F2)");
+            }
+        }
+        // The capture arm first.
+        let mut book = PalwReporterFilerV1::default();
+        let (mut accused, mut queue) = (HashSet::new(), Vec::new());
+        let court = Some((court_key, accusation.clone()));
+        let made =
+            palw_capture_arm_files_v1(&mut book, &mut accused, &mut queue, h(51), 3, Some(filing(51, None)), court.clone(), door);
+        assert_eq!(made, PalwCaptureArmFiledV1::Kind4(PalwFileOutcomeV1::Queued { committed: true }));
+        assert!(queue.is_empty() && accused.contains(&h(51)));
+        let key = filing(51, None).offence_key;
+        assert_eq!(
+            book.entry(&key).map(|live| (live.origin, live.fallback.clone())),
+            Some((PalwFilingOriginV1::CaptureArm, court.clone()))
+        );
+        assert_eq!(door(&mut book, replay(51)), PalwFileOutcomeV1::AlreadyFiled, "the replay's later hand-off");
+        let again =
+            palw_capture_arm_files_v1(&mut book, &mut accused, &mut queue, h(51), 3, Some(filing(51, None)), court.clone(), door);
+        assert_eq!((again, book.len(), queue.len()), (PalwCaptureArmFiledV1::AlreadyAccused, 1, 0), "once per claim");
+        // Kind 4 refused by the gate, or none (below the fence): the accusation.
+        let refusing = |book: &mut PalwReporterFilerV1, filing: PalwConvictionFilingV1| {
+            let read = PalwReporterFilingReadV1 { object_gate: Some(Err("DaUnitNeedsDissection".into())), ..chain(100) };
+            book.file(filing, bond(ME), &read, &h(DOMAIN), [9; 32], signer)
+        };
+        let mut book = PalwReporterFilerV1::default();
+        let (mut accused, mut queue) = (HashSet::new(), Vec::new());
+        let made =
+            palw_capture_arm_files_v1(&mut book, &mut accused, &mut queue, h(52), 3, Some(filing(52, None)), court.clone(), refusing);
+        assert_eq!((made, book.len()), (PalwCaptureArmFiledV1::Court, 0));
+        assert_eq!(queue, vec![(court_key, 0, false, accusation.clone())]);
+        assert!(accused.contains(&h(52)));
+        let made = palw_capture_arm_files_v1(&mut book, &mut accused, &mut Vec::new(), h(53), 3, None, court, door);
+        assert_eq!(made, PalwCaptureArmFiledV1::Court);
+        let made = palw_capture_arm_files_v1(&mut book, &mut accused, &mut Vec::new(), h(54), 3, None, None, door);
+        assert!(made == PalwCaptureArmFiledV1::Nothing && !accused.contains(&h(54)));
+    }
+
+    /// **A late kind 4 commits first, and nothing is dated before it was made** (the integration's
+    /// review, F4). `palw_kind4_file_by_v1`: the landing margin while the claim's receipt deadline is
+    /// ahead, none past it (the S2 race is over; kind 4 still convicts the claim's liability or
+    /// vesting row, and a commitment's two DAA change nothing). A filing made past its margin but
+    /// before the deadline goes out bare at once, dated at its making — not at a margin that passed
+    /// before it existed; one made past the deadline commits first, dated by its court window.
+    #[test]
+    fn a_late_kind_4_commits_first_and_nothing_is_dated_before_it_was_made() {
+        let deadline = 700;
+        assert_eq!(palw_kind4_file_by_v1(deadline, 600), Some(640));
+        assert_eq!(palw_kind4_file_by_v1(deadline, 650), Some(640), "inside the margin: the race is still live");
+        assert_eq!(palw_kind4_file_by_v1(deadline, deadline), None, "past the deadline: no margin to keep");
+        let mut book = PalwReporterFilerV1::default();
+        let inside = filed(&mut book, filing(60, palw_kind4_file_by_v1(deadline, 650)), &chain(650));
+        assert_eq!(palw_filer_step_v1(&inside, &chain(650)), PalwFilerStepV1::File, "bare, at once");
+        assert_eq!(palw_filer_step_due_v1(&inside, PalwFilerStepV1::File, &chain(650)), Some(650), "due at its making, not 640");
+        let late = filed(&mut book, filing(61, palw_kind4_file_by_v1(deadline, 800)), &chain(800));
+        assert_eq!(palw_filer_step_v1(&late, &chain(800)), PalwFilerStepV1::Commit, "commits first: R kept");
+        assert_eq!(
+            palw_filer_step_due_v1(&late, PalwFilerStepV1::Commit, &chain(800)),
+            Some(800 + 3_000 - PALW_FILER_COMMIT_DEPTH_DAA_V1)
+        );
+        assert_eq!(palw_filer_step_due_v1(&late, PalwFilerStepV1::File, &chain(800)), Some(800 + 3_000));
+    }
+
     /// **J1 auto's digests are bounded per claim and window** (the review of P2-8, F6): once a claim's
     /// captures were digested `PALW_J1_DIGESTS_PER_CLAIM_WINDOW_V1` times in a window, no capture of it
     /// is hashed again until the next — a pool of captures probed long ago is not re-hashed every tick,
@@ -2173,9 +2519,10 @@ mod tests {
         .expect("the prover's list is the job's");
         assert!(!openings.is_empty() && prompt_opening.is_some(), "leaf 0 reads rows and gathers the prompt: both ride");
         let (executor, claim, deadline) = (bond(EXECUTOR), h(0xC1), 1_000);
-        let build = |rcore_plus, own| {
-            palw_capture_arm_filing_v1(rcore_plus, own, executor, claim, deadline, &refutation, &openings, &prompt_opening)
+        let build_at = |rcore_plus, own, now| {
+            palw_capture_arm_filing_v1(rcore_plus, own, executor, claim, deadline, now, &refutation, &openings, &prompt_opening)
         };
+        let build = |rcore_plus, own| build_at(rcore_plus, own, deadline - 100);
         let filing = build(true, bond(ME)).expect("past the fence, against another bond");
         let contradiction =
             PalwPanelContradictionV1::StepArithmetic { refutation: refutation.clone(), operand_openings: openings.clone() };
@@ -2199,6 +2546,10 @@ mod tests {
         );
         assert_eq!(build(false, bond(ME)), None, "below the fence: the v1 court path, whole");
         assert_eq!(build(true, executor), None, "never against this node's own bond");
+        // F4: inside the landing margin it still lands by it (bare); past the receipt deadline it
+        // has no margin left to keep, and commits first.
+        assert_eq!(build_at(true, bond(ME), deadline - 1).map(|f| f.file_by_daa), Some(Some(deadline - 60)));
+        assert_eq!(build_at(true, bond(ME), deadline).map(|f| f.file_by_daa), Some(None));
     }
 
     /// **The panel's wiring, pinned where it lives** (the review of P2-8, F2): no test drives the
@@ -2235,14 +2586,15 @@ mod tests {
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
         assert!(!arm[order[2]..order[5]].contains("break 'verdict"), "no exit of the accusation's block skips kind 4");
         assert!(!arm.contains("court_pending.push(") && !arm.contains("accused.insert("), "the decision queues, not the arm");
+        // The decision is `palw_capture_arm_files_v1` (its order is tested on a book:
+        // `the_capture_arm_files_kind_4_first_and_backs_a_replay_filing_it_finds`); the panel runs it
+        // over its own door, and nothing else.
         let decide = body("pub(super) fn capture_arm_files_v1(");
-        let kind4 = decide
-            .find("self.reporter_filer_file_v1(session, filer, filing.with_fallback(court.clone()), bond_key, network_domain)")
-            .expect("kind 4 through the filer, the accusation its fallback");
-        let taken = decide.find("accused.insert(duty.claim_id);\n                    return;").expect("taken: no court");
-        let court = decide.find("court_pending.push((session_id, 0, false, object));").expect("else the court");
-        assert!(decide.find("if accused.contains(&duty.claim_id) {").is_some_and(|once| once < kind4), "once per claim");
-        assert!(kind4 < taken && taken < court);
+        assert!(decide.contains(
+            "palw_capture_arm_files_v1(filer, accused, court_pending, duty.claim_id, leaf, refuted, court, |filer, filing| {\n            \
+             self.reporter_filer_file_v1(session, filer, filing, bond_key, network_domain)\n        });"
+        ));
+        assert!(!decide.contains("court_pending.push(") && !decide.contains("accused.insert("), "the decision queues, not the panel");
         // (b)
         assert!(body("pub(super) fn capture_arm_filing_v1(").contains(
             "self.consensus_config.params.palw_rcore_plus_active_at(current_daa),\n            bond_key,\n            duty.executor_bond,"

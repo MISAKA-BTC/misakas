@@ -9080,6 +9080,7 @@ impl PalwPanelService {
                     &duties,
                     &replay_refuted,
                     &materials,
+                    &accused,
                     &mut court_pending,
                     &mut court_moved,
                 )
