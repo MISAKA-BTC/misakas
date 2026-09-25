@@ -462,6 +462,7 @@ async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_cla
     // Below the fence: the released rule, at the slot and at the last DAA before the fence.
     for below in [slot, fence - 1] {
         f.beat_to(below).await;
+        assert!(!f.facts(7).binder_due, "below the fence the node is told no binder is due (it would be disqualified)");
         let sink = f.chain.sink();
         let (block, _) = f.build_attempt(7);
         let daa = block.header.daa_score;
@@ -473,8 +474,11 @@ async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_cla
         println!("[f1] DAA {daa} (below the fence): card 7's attempt {status:?}; all {} claims Provisional", claims.len());
     }
 
-    // From the fence: the binder.
+    // From the fence: the binder. The node's own facts say so: the only hold is the ceiling, and a
+    // claim is due at the candidate — kaspad's producer mines on exactly this pair.
     f.beat_to(fence).await;
+    assert_eq!(f.ready(7), Err(PALW_NOT_READY_EXPOSURE_FULL_V2), "card 7 still holds on its ceiling");
+    assert!(f.facts(7).binder_due, "and past the fence a binder is due at the candidate");
     let parent = f.state();
     let (block, binder_attempt) = f.build_attempt(7);
     let daa = block.header.daa_score;
@@ -500,7 +504,8 @@ async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_cla
     println!("[f1] the binder's worker carve withheld: {:.4} MSK (carve {:.4})", withheld as f64 / MSK, carve as f64 / MSK);
     assert!(withheld > 0 && withheld == carve, "the binder's carve is withheld as a skipped own attempt's is");
 
-    // Nothing left to anchor at this DAA: a second binder is disqualified, as released.
+    // Nothing left to anchor at this DAA: the node is told so, and a second binder is disqualified.
+    assert!(!f.facts(7).binder_due, "every due claim is bound: no binder is due");
     let (block, _) = f.build_attempt(7);
     let (hash, status) = f.insert(block).await;
     assert_eq!(status, BlockStatus::StatusDisqualifiedFromChain, "a binder with nothing due ({hash}) is disqualified");

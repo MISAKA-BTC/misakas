@@ -185,6 +185,14 @@ pub struct PalwProducerFactsV2 {
     /// the tip does not hold this node's attempts still riding side blocks, so a producer that asked
     /// only the refusal started inferences its share could no longer admit.
     pub bond_class_share: Option<(u64, u32)>,
+    /// **Lane bind-deadlock (`Params::palw_anchor_at_ceiling`): the candidate block would be a binder.**
+    /// `true` where the fence and R-core+ are in force at the candidate's DAA and the tip holds a claim
+    /// `Provisional` with its anchor slot at or below it — so an attempt this producer mines now is that
+    /// claim's anchor, which the chain keeps even when the bond has no room for a claim of its own
+    /// (the attempt then carries none). A producer whose only hold is
+    /// [`PALW_NOT_READY_EXPOSURE_FULL_V2`] mines exactly then, so a fleet at its ceilings still binds.
+    /// Filled by the caller that holds the fences (`false` from [`palw_producer_facts_v4`]).
+    pub binder_due: bool,
 }
 
 impl PalwProducerFactsV2 {
@@ -493,6 +501,8 @@ pub fn palw_producer_facts_v4(
         // The caller that holds the block's fences asks the fold's class gate (route-matrix #7).
         class_admission_refusal: None,
         bond_class_share: None,
+        // Lane bind-deadlock: the caller that holds `Params::palw_anchor_at_ceiling` fills it.
+        binder_due: false,
         is_base_class: class_id == state_params.base_class_id(),
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
             || state.fp_lane_certification(&class_id).is_some(),

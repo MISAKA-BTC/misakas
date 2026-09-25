@@ -455,6 +455,16 @@ pub(crate) fn palw_producer_ready_v1(
     Ok(())
 }
 
+/// **Lane bind-deadlock (`Params::palw_anchor_at_ceiling`): does this hold give way to anchor duty?**
+/// Exactly when the only thing between the bond and an attempt is its exposure ceiling
+/// ([`PALW_NOT_READY_EXPOSURE_FULL_V2`], the last question `ready_to_produce_v3` asks, so every other
+/// one passed) and the chain would keep the attempt as a binder (`PalwProducerFactsV2::binder_due`:
+/// the fence in force at the candidate and a claim due at it). Every other hold holds.
+pub(crate) fn palw_producer_binds_at_ceiling_v1(facts: &PalwProducerFactsV2, hold: &PalwProducerHoldV1) -> bool {
+    use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2;
+    facts.binder_due && *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2)
+}
+
 /// **The `holding:` line's detail**, which is also the runtime's `producer_reason` — the sentence,
 /// then the numbers that tell one cause of it from another.
 ///
@@ -980,7 +990,21 @@ impl PalwProducerService {
             // `facts` were built for) — and below it `ready_to_produce` unchanged. See
             // `palw_producer_ready_v1`.
             let rcore_plus = palw_rcore_plus_reads_v1(&self.consensus_config.params, &session, facts.class_id, &bond, facts.daa_score);
-            if let Err(hold) = palw_producer_ready_v1(&facts, &self.verification_key(), rcore_plus) {
+            let ready = palw_producer_ready_v1(&facts, &self.verification_key(), rcore_plus);
+            // **Lane bind-deadlock (`palw_anchor_at_ceiling`): anchor duty at the ceiling.** A bond
+            // whose only hold is its exposure ceiling mines anyway when the block would be the anchor
+            // of a claim due at it: past the fence the chain keeps that attempt as a binder (it binds
+            // the due claims and carries no claim of its own), and without it nothing anchors while
+            // every producer stands at its ceiling.
+            if let Err(hold) = &ready
+                && palw_producer_binds_at_ceiling_v1(&facts, hold)
+            {
+                info!(
+                    "[{PALW_PRODUCER}] anchor duty: {hold}, and a claim is due at DAA {} — mining a binder (it binds the due \
+                     claims and carries no claim of its own; palw_anchor_at_ceiling)",
+                    facts.daa_score
+                );
+            } else if let Err(hold) = ready {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
                 // spent" is what a class that exhausted its cap says AND what a class that was
                 // never granted one says, and those are opposite problems: the first resolves at
@@ -2302,5 +2326,31 @@ mod p6_tests {
                 assert_eq!(palw_rcore_plus_producer_floor_v1(&p, daa), None, "{name} at DAA {daa} keeps the old pre-check");
             }
         }
+    }
+
+    /// **Lane bind-deadlock: anchor duty gives way on the ceiling hold alone, and only when a claim is
+    /// due** (`PalwProducerFactsV2::binder_due`, filled by the processor from
+    /// `Params::palw_anchor_at_ceiling`). A bond at its committed ceiling with no claim due holds as
+    /// before; with one due it mines (the chain keeps the attempt as a binder); a bond that holds for
+    /// any other reason — here a key that is not the bond's — holds whatever is due.
+    #[test]
+    fn anchor_duty_gives_way_only_on_the_ceiling_hold_with_a_claim_due() {
+        let binds = super::palw_producer_binds_at_ceiling_v1;
+        let p = params(1, true);
+        let state = state(AMPLE, 0, true);
+        let mut f = facts(&state, &p, 1);
+        assert!(!f.binder_due, "the builder leaves it to the processor, which holds the fence");
+        let bond = f.bond.as_mut().unwrap();
+        bond.committed = bond.exposure_ceiling - bond.claim_exposure + 1;
+        let hold = palw_producer_ready_v1(&f, &KEY, past(1, None)).unwrap_err();
+        assert_eq!(hold, PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2));
+        assert!(!binds(&f, &hold), "nothing due: the ceiling holds, as released");
+        f.binder_due = true;
+        assert!(binds(&f, &hold), "a claim due at the candidate: anchor duty, the producer mines a binder");
+        let other = palw_producer_ready_v1(&f, &KEY_2, past(1, None)).unwrap_err();
+        assert_ne!(other, hold);
+        assert!(!binds(&f, &other), "any other hold holds, due claim or not");
+        let floor = PalwProducerHoldV1::BelowProducerFloor { shortfall: 1, floor: 2 };
+        assert!(!binds(&f, &floor), "a bond under the producer floor never binds (the admission refuses it too)");
     }
 }

@@ -5406,6 +5406,23 @@ impl VirtualStateProcessor {
             .err()
             .map(|refusal| refusal.to_string());
         }
+        // **Lane bind-deadlock (`palw_anchor_at_ceiling`): would the candidate be a binder?** The
+        // walk's own conditions, read at the tip for the candidate's DAA: the fence and R-core+ in
+        // force there, and a claim `Provisional` with its slot at or below it (the attempt lane is the
+        // one the producer mines). Past the operator-anchor fence the walk also asks that the attempt
+        // be an operator's (`palw_block_may_anchor_a_panel_v1`); a non-operator's binder is
+        // disqualified there, so an integration that carries that fence adds the bond's operator
+        // question here.
+        facts.binder_due = self.palw_anchor_at_ceiling_at(candidate_daa)
+            && self.palw_rcore_plus_at(candidate_daa)
+            && self.palw_panel_params_v2.as_ref().is_some_and(|panel| {
+                !kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1(
+                    &state,
+                    candidate_daa,
+                    panel.anchor_delay(),
+                )
+                .is_empty()
+            });
         // The share and the tip's count beside the refusal — a read the producer adds its own
         // unmerged attempts to (node policy; the fold's question above is unchanged).
         facts.bond_class_share = bond.and_then(|outpoint| {
