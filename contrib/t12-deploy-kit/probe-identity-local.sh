@@ -23,15 +23,22 @@
 #                      Needs cargo (one test target of kaspa-consensus-core).
 #
 # Always: the probe node's genesis classes (id, artifact bytes, root) and genesis bond outpoints are
-# read over RPC and compared with fleet.env CLASS_8K / PREMINE_TXID and lib.sh CLASS_2M_PREFIX — the facts
-# `--check` and the fp/genesis gate do not see (exit 4 on a mismatch). The registry's `bytes=` is the work
-# derivation's artifact figure, not the file's size, so ART_8K_BYTES is checked by --layout (sidecar), not here.
+# read over RPC; the classes are compared with fleet.env CLASS_8K and lib.sh CLASS_2M_PREFIX, and the
+# bonds must sit at <the premine txid this binary's seats name>:0..7 (the kit's card N = bond N layout) —
+# the facts `--check` and the fp/genesis gate do not see (exit 4 on a mismatch). The registry's `bytes=` is
+# the work derivation's artifact figure, not the file's size, so ART_8K_BYTES is checked by --layout
+# (sidecar), not here. fleet.env's own EXPECT_FP / EXPECT_GENESIS / PREMINE_TXID, when filled, are compared
+# with what this binary announces and the result printed (a difference is a NOTE, not an exit code: before
+# the paste fleet.env holds the previous build's values; distribute-from-mac.sh binaries and install-*.sh
+# stage refuse a build whose IDENTITY differs from fleet.env).
 #
 # The probe node is isolated: 127.0.0.1 listeners only (P2P, wRPC JSON), --nogrpc, --nodnsseed,
 # --disable-upnp, --outpeers=0, no --addpeer/--connect, a fresh throwaway --appdir, HOME pointed at the
 # throwaway dir (kaspad writes ~/.misaka/<net>/endpoints.json on start: the operator's registry is never
 # touched), no PALW flag, and `env -i` so no KASPAD_* variable of the caller's shell reaches it. It is
 # stopped with SIGINT and its throwaway dir removed; its log is kept (PROBE_OUT, default ./probe-out).
+# PROBE_WAIT_S (default 180) bounds the wait for the identity over RPC; build-release-local.sh raises it
+# when the release binary runs under emulation in a linux/amd64 container.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -44,7 +51,7 @@ while [ $# -gt 0 ]; do
         --layout) LAYOUT=1 ;;
         --kaspad) KASPAD=${2:?--kaspad needs a path}; shift ;;
         --drill-salt) SALT=${2:?--drill-salt needs 64 hex}; shift ;;
-        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,41p' "$0"; exit 0 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
     shift
@@ -93,16 +100,25 @@ env -i PATH="$PATH" HOME="$WORK/home" "$KASPAD" --testnet --netsuffix=12 --appdi
 PID=$!
 
 FP=""; GEN=""; out=""
-for _ in $(seq 1 90); do
+WAIT_S=${PROBE_WAIT_S:-180}   # build-release-local.sh raises it for a container probe under emulation
+for _ in $(seq 1 $(( (WAIT_S + 1) / 2 ))); do
     sleep 2
     kill -0 "$PID" 2>/dev/null || { tail -30 "$LOG" >&2; die "the probe node exited — see $LOG"; }
     out=$(python3 "$KIT/t12check.py" --port "$JSON" --probe 2>/dev/null || true)
     FP=$(sed -n 's/^FP=//p' <<<"$out"); GEN=$(sed -n 's/^GENESIS=//p' <<<"$out")
     [ -n "$FP" ] && [ -n "$GEN" ] && break
 done
-[ -n "$FP" ] && [ -n "$GEN" ] || { tail -30 "$LOG" >&2; die "no identity over RPC within 180 s — see $LOG"; }
-PREMINE=$(python3 "$KIT/t12check.py" --port "$JSON" --premine 2>/dev/null | sed -n 's/^PREMINE_TXID=//p' || true)
-GLAYOUT=$(python3 "$KIT/t12check.py" --port "$JSON" --layout 2>/dev/null || true)
+[ -n "$FP" ] && [ -n "$GEN" ] || { tail -30 "$LOG" >&2; die "no identity over RPC within $WAIT_S s (PROBE_WAIT_S) — see $LOG"; }
+# The seats and the class registry can answer empty for a moment after the wRPC listener opens (seen
+# 2026-09-25 on the release kaspad under qemu: the identity was read in the listener's first second and
+# --layout came back empty, which reads as a kit mismatch). Ask again for up to 60 s before concluding.
+PREMINE=""; GLAYOUT=""
+for _ in $(seq 1 30); do
+    [ -n "$PREMINE" ] || PREMINE=$(python3 "$KIT/t12check.py" --port "$JSON" --premine 2>/dev/null | sed -n 's/^PREMINE_TXID=//p' || true)
+    GLAYOUT=$(python3 "$KIT/t12check.py" --port "$JSON" --layout 2>/dev/null || true)
+    [ -n "$PREMINE" ] && grep -q '^CLASS ' <<<"$GLAYOUT" && grep -q '^BOND ' <<<"$GLAYOUT" && break
+    sleep 2
+done
 kill -INT "$PID" 2>/dev/null || true
 for _ in $(seq 1 30); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
 PID_EXITED=1; kill -0 "$PID" 2>/dev/null && PID_EXITED=0
@@ -111,6 +127,8 @@ LOGFP=$(grep -oE 'Consensus params fingerprint: [0-9a-f]{64}' "$LOG" | head -1 |
 NETLINE=$(grep -oE 'Consensus params fingerprint: [0-9a-f]{64} \(network [^)]*\)' "$LOG" | head -1 | sed -E 's/.*\(network (.*)\)/\1/')
 SCHED=$(grep -oE 'Consensus fence schedule: .*\(schedule id [0-9a-f]+\)' "$LOG" | head -1 | sed -E 's/.*\(schedule id ([0-9a-f]+)\)/\1/')
 MANI=$(grep -oE 'Consensus rule manifest: .*\(digest [0-9a-f]+\)' "$LOG" | head -1 | sed -E 's/.*\(digest ([0-9a-f]+)\)/\1/')
+# the start-up court self-test's root over PALW's integer execution — equal across builds and CPUs, or PALW is not deterministic
+COURT=$(grep -oE 'court_e2e_root [0-9a-f]+' "$LOG" | head -1 | awk '{print $2}')
 [ "$FP" = "$LOGFP" ] || die "the RPC fingerprint ($FP) and the log line ($LOGFP) disagree — see $LOG"
 [ "$NETLINE" = testnet-12 ] || die "the probe announced network '$NETLINE', not testnet-12"
 if grep -q 'PALW DRILL' "$LOG"; then die "the probe announced a PALW DRILL chain — this binary or its environment carries a salt"; fi
@@ -135,8 +153,16 @@ row8k=$(grep -E "^CLASS ${CLASS_8K:-none} " <<<"$GLAYOUT" || true)
 [ -n "$row8k" ] || kitbad+=" CLASS_8K ${CLASS_8K:0:16}… is not a genesis class of this binary;"
 grep -qE "^CLASS ${CLASS_2M_PREFIX:-none}" <<<"$GLAYOUT" || kitbad+=" lib.sh CLASS_2M_PREFIX ${CLASS_2M_PREFIX:-?} names no genesis class;"
 if [ -n "$PREMINE" ]; then
-    for n in 0 1 2 3 4 5 6 7; do grep -qx "BOND $PREMINE:$n" <<<"$GLAYOUT" || kitbad+=" no genesis bond at PREMINE_TXID:$n;"; done
+    for n in 0 1 2 3 4 5 6 7; do grep -qx "BOND $PREMINE:$n" <<<"$GLAYOUT" || kitbad+=" no genesis bond at <this binary's premine txid>:$n;"; done
 fi
+# fleet.env's pins (when filled) against this binary — reported, not an exit code (header)
+ENVCMP=""; envstale=""
+for pair in "EXPECT_FP:$FP" "EXPECT_GENESIS:$GEN" "PREMINE_TXID:$PREMINE"; do
+    v=${pair%%:*}; got=${pair#*:}; want=${!v:-}
+    if ! [[ "$want" =~ ^[0-9a-f]{64}([0-9a-f]{64})?$ ]]; then ENVCMP+=" $v not filled;"
+    elif [ "$want" = "$got" ]; then ENVCMP+=" $v equal;"
+    else ENVCMP+=" $v DIFFERS;"; envstale+=" $v (fleet.env ${want:0:16}…, this binary ${got:0:16}…)"; fi
+done
 LAYOUT_OUT=""
 if [ "$LAYOUT" = 1 ]; then
     side="$REPO/consensus/core/src/config/class-manifests/qwen25-1.5b-a16-8k.palwmanifest"
@@ -155,7 +181,7 @@ cat <<EOF
 
 # ---- probe-identity-local.sh $(date -u +%FT%TZ) ----
 # binary   $KASPAD
-# sha256   $KSHA  (THIS machine's build; the fleet's KASPAD_SHA256 comes from build-release-5104.sh)
+# sha256   $KSHA  (the probed binary; the fleet's KASPAD_SHA256 is the release build's — build-release-local.sh, or build-release-5104.sh)
 # source   ${REVSRC:-unknown} (the tree this script sits in; the binary is whatever --kaspad named)
 # log      $LOG   (probe stopped: $([ "$PID_EXITED" = 1 ] && echo cleanly || echo 'SIGKILL'))
 EXPECT_FP=$FP
@@ -164,11 +190,14 @@ PREMINE_TXID=${PREMINE:-__FILL_ME__}
 # informational (compare between builds; not read by the kit):
 # EXPECT_SCHEDULE_ID=${SCHED:-?}
 # RULE_MANIFEST_DIGEST=${MANI:-?}
+# COURT_E2E_ROOT=${COURT:-?}
 EOF
 [ -n "$DRILL_GEN" ] && echo "DRILL_GENESES+=\" $DRILL_GEN\"   # drill salt id: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("salt_id","?"))' "$KR/manifest.json")"
-echo "# genesis classes (bytes = the registry's work figure, not the file) and bonds this binary registers (compared with CLASS_8K, CLASS_2M_PREFIX, PREMINE_TXID):"
+echo "# genesis classes (bytes = the registry's work figure, not the file) and bonds this binary registers (classes compared with CLASS_8K and CLASS_2M_PREFIX; bonds at this binary's premine txid :0..7):"
 sed 's/^/#   /' <<<"$GLAYOUT"
 [ -n "$LAYOUT_OUT" ] && { echo "# premine layout (t12_deploy_kit_constants: card N = bond N, fee float FEE_FLOAT_BASE+N = ${FEE_FLOAT_BASE:-?}+N):"; sed 's/^/#   /' <<<"$LAYOUT_OUT"; }
+echo "# $( [ -f "$KIT/fleet.env" ] && echo fleet.env || echo 'fleet.env.example (no fleet.env)'):${ENVCMP}"
+[ -z "$envstale" ] || say "NOTE: fleet.env's${envstale} — fleet.env is not this build's yet: paste the lines above (distribute-from-mac.sh binaries and install-*.sh stage refuse the difference)"
 [ -z "$kitbad" ] || say "KIT MISMATCH:$kitbad — fix fleet.env.example / lib.sh / app.js at the re-pin (checklist §5) before staging"
 if [ -n "$bad" ]; then say "WARNING: this build's genesis ${bad:0:16}… is FORBIDDEN (fleet.env FORBIDDEN_GENESIS / DRILL_GENESES) — install-*.sh will refuse it"; exit 3; fi
 [ -z "$kitbad" ] || exit 4
