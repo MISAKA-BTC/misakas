@@ -998,3 +998,65 @@ async fn hb_probe_fence_refuses_the_tied_reorg_the_shipped_rule_allows() {
         r.private_bw_max, r.public_bw, r.offered_at, r.flipped_at
     );
 }
+
+/// **Verdict 1, the exact claim: a block whose attempt did NOT win the lottery still earns 2^20
+/// blue work.** `hb_probe_a_*` measured that a winning attempt adds 2^20; this builds a shape-valid,
+/// correctly signed attempt header by a registered card whose class ticket LOSES its lottery
+/// (`class_ticket_v3 > class_target`) as a child of the sink, and inserts it. The lottery is
+/// chain-relative, so it cannot gate DAG entry: the header is admitted, while the virtual processor
+/// refuses it the SELECTED CHAIN (`palw_v2_check_attempt_admission` fails the lottery →
+/// `StatusDisqualifiedFromChain`). A block's own work is carried by the blocks that merge it
+/// (`blue_work = selected parent's + Σ work(mergeset blues)`), so its weight is read off the
+/// GHOSTDAG data this node's own manager computes for the children it could have:
+/// * a child whose only parent is the losing attempt adds exactly 2^20 over it;
+/// * the attack shape: an honest heartbeat sibling H of the losing attempt L (same parent), and a
+///   block merging {H, L}: L is coloured BLUE (ADR-0105 transparency: a heartbeat never reddens an
+///   attempt) and the merging block carries L's 2^20 on top of the sink's — when H is its selected
+///   parent, that is a VALID chain block (H → sink) weighing a lottery loss as a full attempt.
+#[tokio::test]
+async fn hb_probe_verdict1_a_losing_lottery_attempt_still_earns_2_20_blue_work() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut d = duel(None);
+    for _ in 0..2 {
+        honest_slot(&mut d.victim, Vec::new()).await;
+    }
+    let sink = d.victim.sink();
+    let sink_bw = bw(&d.victim, sink);
+    let vp = d.victim.vp();
+
+    // The LOSING attempt, a child of the sink.
+    let (lose_block, _) = d.victim.build_attempt_drawn(2, 1_000, Vec::new(), &|_| true, false);
+    let lose = lose_block.header.hash;
+    assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(lose_block.header.pow_algo_id), "on the attempt lane");
+    assert_eq!(lose_block.header.direct_parents().to_vec(), vec![sink], "a child of the sink");
+    let inserted = d.victim.ctx.consensus.validate_and_insert_block(lose_block.to_immutable()).virtual_state_task.await;
+    let lose_status = d.victim.ctx.consensus.block_status(lose);
+    assert!(inserted.is_ok(), "the header is admitted: the lottery cannot gate DAG entry ({inserted:?})");
+    assert_eq!(
+        lose_status,
+        kaspa_consensus_core::blockstatus::BlockStatus::StatusDisqualifiedFromChain,
+        "and the chain refuses it: it did not win"
+    );
+    assert_eq!(d.victim.sink(), sink, "so the sink does not move");
+
+    // (1) A child with the losing attempt as its only parent: the losing attempt's own work.
+    let only = vp.ghostdag_manager.ghostdag(&[lose]);
+    let lose_work = only.blue_work.as_u128() as i128 - bw(&d.victim, lose);
+    // (2) The attack shape: an honest heartbeat sibling H of L, then a block merging {H, L}.
+    let h = d.victim.heartbeat(1_000, Vec::new()).await;
+    assert_eq!(h.header.direct_parents().to_vec(), vec![sink], "H is L's sibling: the virtual does not merge a disqualified tip");
+    let both = vp.ghostdag_manager.ghostdag(&[h.header.hash, lose]);
+    let l_blue = both.selected_parent == lose || both.mergeset_blues.contains(&lose);
+    let added = both.blue_work.as_u128() as i128 - sink_bw;
+    let over_honest = both.blue_work.as_u128() as i128 - vp.ghostdag_manager.ghostdag(&[h.header.hash]).blue_work.as_u128() as i128;
+    eprintln!(
+        "[hb-probe verdict1] LOSING-lottery attempt {lose}: status {lose_status:?}, its own work (carried by a child) +{lose_work}; \
+         a block merging {{honest sibling H, L}}: L blue = {l_blue}, selected parent = {} ({}), blue work +{added} over the sink, \
+         +{over_honest} over the same block without L",
+        if both.selected_parent == h.header.hash { "H" } else { "L" },
+        if both.selected_parent == h.header.hash { "a valid chain H -> sink" } else { "chain through L: disqualified" },
+    );
+    assert_eq!(lose_work, 1 << 20, "a LOSING-lottery attempt carries the same 2^20 as a winning one — header work alone earns blue work");
+    assert!(l_blue, "merged beside an honest heartbeat, the losing attempt is coloured blue");
+    assert_eq!(over_honest, 1 << 20, "and the merging block weighs exactly 2^20 more for it");
+}

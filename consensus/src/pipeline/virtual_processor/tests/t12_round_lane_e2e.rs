@@ -334,6 +334,22 @@ impl T12Chain {
         txs: Vec<Transaction>,
         keep: &dyn Fn(Hash64) -> bool,
     ) -> (MutableBlock, Hash64) {
+        self.build_attempt_drawn(card, step_ms, txs, keep, true)
+    }
+
+    /// [`Self::build_attempt`] with the class-lottery outcome chosen: `win == true` is exactly
+    /// `build_attempt` (the first kept winning draw); `win == false` carries the first draw whose
+    /// class ticket LOSES (`class_ticket_v3 > class_target`) — a shape-valid, correctly signed
+    /// attempt header by a registered card that did not win its lottery (the fork-choice attack
+    /// review's verdict 1, lane rcore/f1-forkchoice-attacks). `keep` is not asked of a losing draw.
+    pub(super) fn build_attempt_drawn(
+        &mut self,
+        card: usize,
+        step_ms: u64,
+        txs: Vec<Transaction>,
+        keep: &dyn Fn(Hash64) -> bool,
+        win: bool,
+    ) -> (MutableBlock, Hash64) {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2,
             PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1, challenge_v2, class_ticket_v3, execution_anchor_v3,
@@ -390,12 +406,13 @@ impl T12Chain {
         for draw in 0u64..4_000_000 {
             attempt.trace_root = Hash64::from_u64_word((self.nonce << 32) ^ draw ^ 0x7A00_0000_0000_0000);
             attempt.trace_manifest_root = attempt_trace_manifest_root_v1(attempt.trace_root, attempt.trace_chunk_count);
-            if class_ticket_v3(&attempt, anchor) <= facts.class_target && keep(execution_commitment_v3(&attempt, anchor)) {
+            let wins = class_ticket_v3(&attempt, anchor) <= facts.class_target;
+            if wins == win && (!win || keep(execution_commitment_v3(&attempt, anchor))) {
                 won = true;
                 break;
             }
         }
-        assert!(won, "the floor's class lottery is winnable (with the draw kept)");
+        assert!(won, "the floor's class lottery is winnable (with the draw kept) — or losable, when a loss is asked for");
         let claim_id = attempt_id_v2(&attempt);
         let signature = libcrux_ml_dsa::ml_dsa_87::sign(
             &card_key(card).signing_key,
