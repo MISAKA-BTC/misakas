@@ -46,6 +46,10 @@ pub(crate) struct ConsensusMock {
     /// sweep does not judge a transaction that spends one — the processor's contract: the UTXO
     /// context before the gate, as the template asks it.
     spent: RwLock<std::collections::HashSet<TransactionOutpoint>>,
+    /// The V01 review's LOW 3: the market carriers the mock's tip market gate refuses, and why —
+    /// answered by the sweep (`palw_market_carrier_refusals_v1`) and by admission, as the processor's
+    /// one gate (`palw_mempool_market_refusal`) answers both.
+    palw_market_refused: RwLock<HashMap<TransactionId, String>>,
 }
 
 impl ConsensusMock {
@@ -58,7 +62,17 @@ impl ConsensusMock {
             palw_readiness_urgency: RwLock::new(Default::default()),
             palw_h1_refused: RwLock::new(Default::default()),
             spent: RwLock::new(Default::default()),
+            palw_market_refused: RwLock::new(Default::default()),
         }
+    }
+
+    /// The V01 review's LOW 3: whether the mock's tip market gate refuses the market carrier `id`.
+    #[allow(dead_code)]
+    pub(crate) fn set_palw_market_carrier_refusal(&self, id: TransactionId, refusal: Option<String>) {
+        match refusal {
+            Some(why) => self.palw_market_refused.write().insert(id, why),
+            None => self.palw_market_refused.write().remove(&id),
+        };
     }
 
     /// V01: whether the mock's tip fold refuses the carrier `id` (`Some(reason)`) or takes it.
@@ -192,6 +206,19 @@ impl ConsensusApi for ConsensusMock {
             .collect()
     }
 
+    fn palw_market_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        let refused = self.palw_market_refused.read();
+        let spent = self.spent.read();
+        txs.iter()
+            .map(|tx| {
+                if tx.inputs.iter().any(|input| spent.contains(&input.previous_outpoint)) {
+                    return None;
+                }
+                refused.get(&tx.id()).cloned()
+            })
+            .collect()
+    }
+
     fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, _: &TransactionValidationArgs) -> TxResult<()> {
         // If a predefined status was registered to simulate an error, return it right away
         if let Some(status) = self.statuses.read().get(&mutable_tx.id())
@@ -227,6 +254,9 @@ impl ConsensusApi for ConsensusMock {
         }
         if let Some(why) = self.palw_h1_refused.read().get(&mutable_tx.id()) {
             return Err(TxRuleError::PalwH1CarrierRefused(why.clone()));
+        }
+        if let Some(why) = self.palw_market_refused.read().get(&mutable_tx.id()) {
+            return Err(TxRuleError::PalwModelMarketNotEligible(why.clone()));
         }
         Ok(())
     }

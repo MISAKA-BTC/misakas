@@ -637,6 +637,82 @@ impl PalwCarrierIndexV1 {
     }
 }
 
+/// **The market carriers in the pool, in arrival order — for the per-block gate sweep only** (the
+/// V01 review's LOW 3, and the user's request of 2026-09-25).
+///
+/// A seed, a buy, a carrier sell or an Activation Pool top-up (`palw_model_carrier_payout_rows_v1`:
+/// exactly the transactions the processor's P-B3 / P-B1 market gate, `palw_mempool_market_refusal`,
+/// can refuse) is judged by that gate when it enters the pool and again at every template, and a
+/// template's `InvalidInBlockTemplate` was the only way one the tip stopped taking — its class
+/// regressed to `Held`, the payout queue filled — left a pool. A node that builds no template kept it,
+/// and the user's inputs with it, until the Low-priority expiry. This set is what the sweep at each
+/// new block walks (`MiningManager::evict_palw_refused_carriers`), exactly as it walks the H-1 index.
+///
+/// **It buys nothing else.** A market carrier is not an H-1 object: it takes no place in the carrier
+/// lane and none in the reserve (`PalwCarrierIndexV1`), and is selected on its feerate as before.
+/// Kept at the pool's one insertion site and its one removal site, like the H-1 index; written only
+/// where `Config::palw_h1_carrier_priority` is set (testnet-12).
+#[derive(Default)]
+pub(crate) struct PalwMarketCarrierSetV1 {
+    by_seq: std::collections::BTreeMap<u64, TransactionId>,
+    seq_of: HashMap<TransactionId, u64>,
+    next_seq: u64,
+    /// Where the next sweep starts, as an arrival `seq` ([`Self::next_sweep_window`]).
+    sweep_cursor: u64,
+}
+
+impl PalwMarketCarrierSetV1 {
+    /// Index a market carrier that just entered the pool.
+    pub(crate) fn insert(&mut self, id: TransactionId) {
+        self.remove(&id);
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.by_seq.insert(seq, id);
+        self.seq_of.insert(id, seq);
+    }
+
+    /// Forget a transaction that left the pool (a no-op for one that is not indexed).
+    pub(crate) fn remove(&mut self, id: &TransactionId) {
+        if let Some(seq) = self.seq_of.remove(id) {
+            self.by_seq.remove(&seq);
+        }
+    }
+
+    /// **The next `limit` market carriers for the gate sweep at a new block**, in arrival order from
+    /// where the last sweep stopped, wrapping round — [`PalwCarrierIndexV1::next_sweep_window`]'s
+    /// walk, over this set.
+    pub(crate) fn next_sweep_window(&mut self, limit: usize) -> Vec<TransactionId> {
+        if self.by_seq.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let window: Vec<(u64, TransactionId)> = self
+            .by_seq
+            .range(self.sweep_cursor..)
+            .chain(self.by_seq.range(..self.sweep_cursor))
+            .take(limit)
+            .map(|(seq, id)| (*seq, *id))
+            .collect();
+        self.sweep_cursor = window.last().map_or(0, |(seq, _)| seq + 1);
+        window.into_iter().map(|(_, id)| id).collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains(&self, id: &TransactionId) -> bool {
+        self.seq_of.contains_key(id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.seq_of.len()
+    }
+
+    /// Every indexed id, in arrival order.
+    #[cfg(test)]
+    pub(crate) fn ids(&self) -> Vec<TransactionId> {
+        self.by_seq.values().copied().collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,6 +770,29 @@ mod tests {
         assert_eq!(index.next_sweep_window(2), vec![id(2), id(3)], "the sweep wraps round, skipping what left");
         assert_eq!(index.next_sweep_window(10), vec![id(4), id(5), id(6), id(2), id(3)], "within the limit: every one, once");
         assert_eq!(index.next_sweep_window(10), vec![id(4), id(5), id(6), id(2), id(3)], "and again at the next block");
+    }
+
+    /// **The market carriers are swept the same way** (the V01 review's LOW 3): arrival order from
+    /// where the last sweep stopped, wrapping, skipping what left, every one once within the limit.
+    #[test]
+    fn the_market_sweep_walks_every_market_carrier_in_arrival_order_and_wraps() {
+        let mut set = PalwMarketCarrierSetV1::default();
+        assert!(set.next_sweep_window(4).is_empty(), "an empty set sweeps nothing");
+        for n in 1..=5 {
+            set.insert(id(n));
+        }
+        assert_eq!(set.next_sweep_window(2), vec![id(1), id(2)]);
+        assert_eq!(set.next_sweep_window(2), vec![id(3), id(4)]);
+        set.remove(&id(1));
+        set.remove(&id(9));
+        assert_eq!(set.next_sweep_window(2), vec![id(5), id(2)], "the sweep wraps round, skipping what left");
+        assert_eq!(set.next_sweep_window(10), vec![id(3), id(4), id(5), id(2)], "within the limit: every one, once");
+        set.insert(id(6));
+        assert_eq!(set.next_sweep_window(10), vec![id(3), id(4), id(5), id(6), id(2)], "a newcomer joins at its arrival");
+        for n in 2..=6 {
+            set.remove(&id(n));
+        }
+        assert!(set.len() == 0 && !set.contains(&id(2)) && set.next_sweep_window(4).is_empty());
     }
 
     /// The index follows the pool exactly: bytes and count come back to zero, and a lane key rides

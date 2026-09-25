@@ -1018,6 +1018,20 @@ pub trait ConsensusApi: Send + Sync {
         vec![None; txs.len()]
     }
 
+    /// **The market gate's answers on pooled market carriers, for the mempool's per-block sweep**
+    /// (the V01 review's LOW 3; the user's request of 2026-09-25): per transaction, in order,
+    /// `Some(reason)` for a seed, a buy, a carrier sell or an Activation Pool top-up the P-B3 / P-B1
+    /// gate refuses at the tip (`palw_mempool_market_refusal`, the predicate admission and every
+    /// template ask) — its class's lifecycle moved (Probation → Held), or the payout queue has no room
+    /// for its move or refund — and `None` for every other transaction. Judged exactly as
+    /// [`Self::palw_h1_carrier_refusals_v1`] judges: the UTXO context first (`None` for an input the
+    /// virtual does not hold) and one tip, the virtual's own. All `None` below
+    /// `palw_audit_2026_09_23` (the gate's fence), off `ConsensusV2` and with no tip state.
+    /// Node-local: never a block rule.
+    fn palw_market_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        vec![None; txs.len()]
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {

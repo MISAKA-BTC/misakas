@@ -1225,15 +1225,34 @@ impl VirtualStateProcessor {
     /// behind the fold's, in either direction. A carrier that slips through that step is refused by
     /// the fold like any other; past the audit fence that refusal is refunded (P-B1).
     fn palw_mempool_market_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
-        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
-            || !self.palw_audit_2026_09_23_at(virtual_daa_score)
-        {
+        if !self.palw_market_gated_at(tx, virtual_daa_score) {
             return None;
         }
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        self.palw_mempool_market_refusal_with(tx, virtual_daa_score, chain_point, &state)
+    }
+
+    /// Whether [`Self::palw_mempool_market_refusal`] asks anything of `tx` at `virtual_daa_score`: a
+    /// lifecycle carrier, at or past `palw_audit_2026_09_23` (the gate's fence) — asked before any tip
+    /// is loaded, by the gate and by the sweep alike.
+    fn palw_market_gated_at(&self, tx: &Transaction, virtual_daa_score: u64) -> bool {
+        tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE && self.palw_audit_2026_09_23_at(virtual_daa_score)
+    }
+
+    /// [`Self::palw_mempool_market_refusal`] on a given tip (`chain_point`, `state`): the class's
+    /// lifecycle (P-B3), then the payout queue's room for this one carrier (P-B1) — the sweep asks it
+    /// on the one snapshot it checked against the virtual (the V01 review's LOW 3).
+    fn palw_mempool_market_refusal_with(
+        &self,
+        tx: &Transaction,
+        virtual_daa_score: u64,
+        chain_point: kaspa_consensus_core::BlockHash,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> Option<String> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
         if let Some(refusal) =
-            kaspa_consensus_core::palw_state_v2::palw_model_market_carrier_refusal_v1(&state, state_params, tx, || {
+            kaspa_consensus_core::palw_state_v2::palw_model_market_carrier_refusal_v1(state, state_params, tx, || {
                 self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
                     block: chain_point,
                     daa_score: virtual_daa_score,
@@ -1249,7 +1268,7 @@ impl VirtualStateProcessor {
         // full — the fold would refuse it and have no row to pay it back from, and its MSK would stay
         // in the sink. A fresh budget: this one carrier against the room the next block leaves. The
         // template carries one budget across its carriers as well (`palw_template_market_budget`).
-        kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(&state).admit(tx).err().map(|full| {
+        kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(state).admit(tx).err().map(|full| {
             format!("{full}: its move or its refund would overflow the payout queue (P-B1: refunds count against the cap)")
         })
     }
@@ -1398,27 +1417,8 @@ impl VirtualStateProcessor {
     /// facts, and judges nothing unless it stands at the virtual's sink; every transaction is then
     /// put to the gate's own layers (`palw_mempool_h1_carrier_refusal_with`) on that one snapshot.
     pub fn palw_h1_carrier_refusals_v1_impl(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
-        let unjudged = || vec![None; txs.len()];
-        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
-            return unjudged();
-        };
-        let (virtual_daa, chain_point, state, spendable) = {
-            let virtual_read = self.virtual_stores.read();
-            let Ok(virtual_state) = virtual_read.state.get() else {
-                return unjudged();
-            };
-            let Some((chain_point, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
-                return unjudged();
-            };
-            if chain_point != virtual_state.ghostdag_data.selected_parent {
-                // Mid-resolve: the tip is not the virtual's yet. The next block's sweep asks again.
-                return unjudged();
-            }
-            let spendable: Vec<bool> = txs
-                .iter()
-                .map(|tx| tx.inputs.iter().all(|input| UtxoView::get(&virtual_read.utxo_set, &input.previous_outpoint).is_some()))
-                .collect();
-            (virtual_state.daa_score, chain_point, state, spendable)
+        let Some((virtual_daa, chain_point, state, spendable)) = self.palw_sweep_snapshot_v1(txs) else {
+            return vec![None; txs.len()];
         };
         txs.iter()
             .zip(spendable)
@@ -1430,6 +1430,54 @@ impl VirtualStateProcessor {
                 self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa, chain_point, &state)
             })
             .collect()
+    }
+
+    /// **The mempool sweep's market half** (the V01 review's LOW 3; the user's request of
+    /// 2026-09-25) — `ConsensusApi::palw_market_carrier_refusals_v1`. The P-B3 / P-B1 gate
+    /// (`palw_mempool_market_refusal`) was asked when a seed, a buy, a carrier sell or a top-up
+    /// entered the pool and at every template, so a node that builds no template kept one its class's
+    /// lifecycle or the payout queue stopped taking — and the user's inputs with it — until the
+    /// Low-priority expiry. Asked here in the H-1 sweep's order and on its snapshot
+    /// ([`Self::palw_sweep_snapshot_v1`]): what the virtual can still spend, on the virtual's own tip,
+    /// through the gate's own layers (`palw_mempool_market_refusal_with`). Node-local; all `None` with
+    /// no virtual state and below `palw_audit_2026_09_23` (the gate's own fence).
+    pub fn palw_market_carrier_refusals_v1_impl(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        let Some((virtual_daa, chain_point, state, spendable)) = self.palw_sweep_snapshot_v1(txs) else {
+            return vec![None; txs.len()];
+        };
+        txs.iter()
+            .zip(spendable)
+            .map(|(tx, spendable)| {
+                if !spendable || !self.palw_market_gated_at(tx, virtual_daa) {
+                    return None;
+                }
+                self.palw_mempool_market_refusal_with(tx, virtual_daa, chain_point, &state)
+            })
+            .collect()
+    }
+
+    /// **The one snapshot a mempool sweep judges on** (the V01 review, MEDIUM): under one virtual read,
+    /// the virtual's DAA, the PALW tip — only when it stands at the virtual's sink (the tip row is
+    /// written ahead of the virtual commit; mid-resolve the next block's sweep asks again) — and, per
+    /// transaction, whether the virtual UTXO set holds every input it spends (the template's order:
+    /// the UTXO context before the gate). `None` with no virtual state, off `ConsensusV2` or with no tip.
+    #[allow(clippy::type_complexity)]
+    fn palw_sweep_snapshot_v1(
+        &self,
+        txs: &[Arc<Transaction>],
+    ) -> Option<(u64, kaspa_consensus_core::BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>, Vec<bool>)> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state = virtual_read.state.get().ok()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        if chain_point != virtual_state.ghostdag_data.selected_parent {
+            return None;
+        }
+        let spendable: Vec<bool> = txs
+            .iter()
+            .map(|tx| tx.inputs.iter().all(|input| UtxoView::get(&virtual_read.utxo_set, &input.previous_outpoint).is_some()))
+            .collect();
+        Some((virtual_state.daa_score, chain_point, state, spendable))
     }
 
     /// **P-B1 at the template: one payout-queue budget across every market carrier the template
