@@ -155,3 +155,53 @@ async fn h1_the_gate_is_inert_below_rcore_plus() {
     };
     assert_eq!(g.tx_refusal(junk), None);
 }
+
+/// A possession proof naming card `bond` for `class_id` at `span`, with an 8-byte signature and an
+/// empty multiproof — kind-valid, and nothing the fold would take.
+fn junk_proof(bond: PalwBondKeyV2, class_id: Hash64, span: u64) -> Obj {
+    Obj::SeatReadinessProvedV2 {
+        bond,
+        class_id,
+        span,
+        proof: Box::new(kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1 {
+            leaf_count: 1,
+            opened: vec![(
+                0,
+                kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1 {
+                    tensor_name: String::new(),
+                    layer: None,
+                    row_start: 0,
+                    bytes: vec![1],
+                },
+            )],
+            siblings: vec![],
+        }),
+        signature: vec![1; 8],
+    }
+}
+
+/// **M1 (the 2026-09-25 model-registry review): every possession proof is put to the fold, and the
+/// tip read says which escalate.** A proof can now buy a reserved place and the head of the template
+/// lane once its row nears staleness, so the gate refuses a junk proof exactly as it refuses a junk
+/// accusation; and the escalation read (`palw_readiness_escalated_at`) answers from the tip's row:
+/// a seat with no row yet escalates this span's proof — nothing counts it ready — and the fence-off
+/// twin escalates nothing and gates nothing, so every network but testnet-12 is untouched.
+#[tokio::test]
+async fn m1_every_possession_proof_is_put_to_the_fold_and_the_tip_read_escalates() {
+    use kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1;
+    let g = gate(true);
+    let (bond, class_id) = (g.cards[1], Hash64::from_u64_word(0xC1A5));
+    let daa = g.ctx.consensus.get_virtual_daa_score();
+    assert!(g.tx_refusal(junk_proof(bond, class_id, daa)).is_some(), "a junk proof buys nothing: the gate refuses it");
+    let carrier = PalwReadinessCarrierV1 { bond, class_id, span: daa, proof_version: 2 };
+    assert!(g.state.seat_readiness(&bond, &class_id).is_none(), "no row at genesis");
+    assert!(g.ctx.consensus.virtual_processor().palw_readiness_escalated_at(carrier, daa), "no row: this span's proof escalates");
+    let v1 = PalwReadinessCarrierV1 { proof_version: 1, ..carrier };
+    assert!(!g.ctx.consensus.virtual_processor().palw_readiness_escalated_at(v1, daa), "a V1 proof renews nothing past V2");
+    assert!(g.ctx.consensus.palw_readiness_escalated_v1(carrier), "the API reads the same answer at the virtual's DAA");
+
+    let off = gate(false);
+    let daa = off.ctx.consensus.get_virtual_daa_score();
+    assert_eq!(off.tx_refusal(junk_proof(bond, class_id, daa)), None, "below R-core+ the gate asks nothing, as before");
+    assert!(!off.ctx.consensus.virtual_processor().palw_readiness_escalated_at(carrier, daa), "and nothing escalates");
+}

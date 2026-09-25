@@ -31,6 +31,8 @@ pub(crate) struct ConsensusMock {
     /// kaspa-pq audit v24 (H-1): a settable sink blue score so attestation-overlay tests can
     /// drive the latest-ready-epoch computation. Default `0` (no ready epoch) for legacy tests.
     sink_blue_score: RwLock<u64>,
+    /// M1: the `(bond, class)` rows whose possession proofs escalate at the mock's tip.
+    palw_readiness_escalated: RwLock<std::collections::HashSet<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, Hash64)>>,
 }
 
 impl ConsensusMock {
@@ -40,6 +42,22 @@ impl ConsensusMock {
             statuses: RwLock::new(HashMap::default()),
             utxos: RwLock::new(HashMap::default()),
             sink_blue_score: RwLock::new(0),
+            palw_readiness_escalated: RwLock::new(Default::default()),
+        }
+    }
+
+    /// M1: whether the row `(bond, class)` escalates at the mock's tip.
+    #[allow(dead_code)]
+    pub(crate) fn set_palw_readiness_escalated(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        class_id: Hash64,
+        escalated: bool,
+    ) {
+        if escalated {
+            self.palw_readiness_escalated.write().insert((bond, class_id));
+        } else {
+            self.palw_readiness_escalated.write().remove(&(bond, class_id));
         }
     }
 
@@ -126,6 +144,13 @@ impl ConsensusApi for ConsensusMock {
             vec![],
             vec![], // audit v24 H-5: no attestation-template drops in the mock
         )) // PR-9.5e: selected parent is a block hash (Hash64)
+    }
+
+    fn palw_readiness_escalated_v1(
+        &self,
+        carrier: kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1,
+    ) -> bool {
+        self.palw_readiness_escalated.read().contains(&(carrier.bond, carrier.class_id))
     }
 
     fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, _: &TransactionValidationArgs) -> TxResult<()> {

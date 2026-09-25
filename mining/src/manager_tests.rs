@@ -1380,6 +1380,88 @@ mod tests {
         }
     }
 
+    /// **M1 (the 2026-09-25 model-registry review) end to end: the tip read decides, when a
+    /// possession proof enters and at every new block.** Under a FULL mempool of transactions paying
+    /// a hundred times its feerate, a min-fee proof whose row is fresh is refused as any transaction
+    /// would be; once the tip says its row is about to lapse, the same seat's proof is admitted and
+    /// follows the coinbase in every template; and when the tip says the row was renewed, the next
+    /// block turns it back into an ordinary transaction that no longer leads.
+    #[test]
+    fn the_tip_read_keeps_and_templates_a_lapsing_proof_and_releases_it_when_renewed() {
+        use kaspa_consensus_core::{
+            palw_artifact::PalwArtifactMultiproofV1,
+            palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2},
+            palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
+            subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        };
+        const SMALL_BLOCK_MASS: u64 = 3_000;
+        const TRAFFIC: u64 = 50;
+        let traffic_size = create_transaction_with_utxo_entry(0, 0).mempool_estimated_bytes();
+        let consensus = Arc::new(ConsensusMock::new());
+        let mut config = Config::build_default(TARGET_TIME_PER_BLOCK, false, SMALL_BLOCK_MASS);
+        config.palw_h1_carrier_priority = true;
+        config.maximum_transaction_count = TRAFFIC as usize;
+        config.mempool_size_limit = TRAFFIC as usize * traffic_size;
+        let mining_manager = MiningManager::with_config(config, None, Arc::new(MiningCounters::default()), None);
+        for i in 0..TRAFFIC {
+            let mut tx = create_transaction_with_utxo_entry(i as u32, 0);
+            tx.calculated_fee = Some(100 * DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
+            validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), tx).unwrap();
+        }
+        let (bond, class_id) = (PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)), Hash64::from_u64_word(0xC1));
+        let proof = |salt: u32| {
+            let mut carrier = create_transaction_with_utxo_entry(salt, 0);
+            let object = PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                bond,
+                class_id,
+                span: 5,
+                proof: Box::new(PalwArtifactMultiproofV1 {
+                    leaf_count: 1,
+                    opened: vec![(
+                        0,
+                        kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1 {
+                            tensor_name: String::new(),
+                            layer: None,
+                            row_start: 0,
+                            bytes: vec![1],
+                        },
+                    )],
+                    siblings: vec![],
+                }),
+                signature: vec![1; 8],
+            };
+            let mut tx = carrier.tx.as_ref().clone();
+            tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
+            tx.payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+            carrier.tx = tx.into();
+            let mass = transaction_estimated_serialized_size(&carrier.tx);
+            carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+            carrier
+        };
+
+        let refused = validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), proof(1_000));
+        assert!(
+            matches!(refused, Err(MiningManagerError::MempoolError(RuleError::RejectMempoolIsFull))),
+            "a fresh row's proof is an ordinary transaction: {refused:?}"
+        );
+        consensus.set_palw_readiness_escalated(bond, class_id, true);
+        let lapsing = proof(1_001);
+        let lapsing_id = lapsing.id();
+        validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), lapsing).expect("the reserve admits it");
+        let miner_data = get_miner_data(Prefix::Testnet);
+        for _ in 0..10 {
+            mining_manager.clear_block_template();
+            let template = mining_manager.get_block_template(consensus.as_ref(), &miner_data).expect("a template");
+            assert_eq!(template.block.transactions.get(1).map(|tx| tx.id()), Some(lapsing_id), "the proof follows the coinbase");
+        }
+
+        consensus.set_palw_readiness_escalated(bond, class_id, false);
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 1, &build_block_transactions(std::iter::empty())).unwrap();
+        mining_manager.clear_block_template();
+        let template = mining_manager.get_block_template(consensus.as_ref(), &miner_data).expect("a template");
+        assert_ne!(template.block.transactions.get(1).map(|tx| tx.id()), Some(lapsing_id), "renewed: it no longer leads");
+    }
+
     /// **The daemon's switch reads the ruleset** (P2-9 review, finding 6): the lane and the reserve
     /// are on where `palw_rcore_plus` is armed — testnet-12 — and off on testnet-11, devnet and
     /// mainnet, which therefore select and evict exactly as before.

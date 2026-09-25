@@ -63,6 +63,8 @@ use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
+use crate::palw_readiness_escalation::PalwReadinessDutyV1;
+
 const PALW_PANEL: &str = "palw-panel";
 
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
@@ -2453,6 +2455,10 @@ pub(crate) enum PalwCarrierLaneV1 {
     /// This node's own carriers: its canonical claim, its class registration, its possession
     /// proofs, a supplementary receipt.
     Ordinary,
+    /// **An escalated possession proof** (the 2026-09-25 model-registry review, M1): one whose row
+    /// would lapse before an ordinary carrier could land it (`palw_readiness_proof_escalates_v1`),
+    /// carried ahead of the court queue. The slot after it is never another — it is the court's.
+    Readiness,
 }
 
 /// **P2-6: is this carrier slot the licences' turn?** — the slot right after a priority carrier. One
@@ -2472,6 +2478,11 @@ pub(crate) fn palw_carrier_licence_turn_v1(last: Option<PalwCarrierLaneV1>) -> b
 /// in [`Self::TICK_ORDER`] — a debug build asserts it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwCarrierSiteV1 {
+    /// **M1: a possession proof whose row is about to lapse, ahead of the court queue** — past
+    /// R-core+ only, at most one a tick, and never two slots running: after one, the next slot is
+    /// the priority lane's (`PalwCarrierLaneV1::Readiness`). A row not near staleness keeps the Own
+    /// site as before.
+    ReadinessEscalated,
     /// The priority lane ahead of every other carrier (`carry_priority_v1`) — except on the
     /// licences' turn.
     PriorityFirst,
@@ -2488,12 +2499,13 @@ pub(crate) enum PalwCarrierSiteV1 {
 
 impl PalwCarrierSiteV1 {
     /// The sites in the order the tick reaches them.
-    pub(crate) const TICK_ORDER: [Self; 5] =
-        [Self::PriorityFirst, Self::Own, Self::Licences, Self::PriorityAfterLicences, Self::OwnReceipts];
+    pub(crate) const TICK_ORDER: [Self; 6] =
+        [Self::ReadinessEscalated, Self::PriorityFirst, Self::Own, Self::Licences, Self::PriorityAfterLicences, Self::OwnReceipts];
 
     /// The lane a carrier sent from this site rode — what the next tick's turn reads.
     pub(crate) fn lane(self) -> PalwCarrierLaneV1 {
         match self {
+            Self::ReadinessEscalated => PalwCarrierLaneV1::Readiness,
             Self::PriorityFirst | Self::PriorityAfterLicences => PalwCarrierLaneV1::Priority,
             Self::Licences => PalwCarrierLaneV1::Licence,
             Self::Own | Self::OwnReceipts => PalwCarrierLaneV1::Ordinary,
@@ -2513,6 +2525,12 @@ impl PalwCarrierSiteV1 {
 /// * **The priority lane first, except on the licences' turn** ([`palw_carrier_licence_turn_v1`]):
 ///   on that turn it is offered after the collector instead, so a DA storm shares the slots with the
 ///   licences one for one and a slot the collector cannot fill still goes to the storm.
+///
+/// * **M1: an escalated possession proof ahead of both, never twice running** (the 2026-09-25
+///   model-registry review): the tick offers `ReadinessEscalated` first unless the last carrier was
+///   one, so a proof whose row is about to lapse is never held behind a DA storm and the storm still
+///   gets at least every other slot. What escalates is the one predicate the pool and the tip read ask
+///   (`palw_readiness_escalation_v1`); a tick that holds none offers the sites exactly as before.
 ///
 /// The tick marks each site as it reaches it ([`Self::at`]) and reads the lane back at the end
 /// ([`Self::finish`]); a site whose carrier went out (`inflight` moved past what it was when the
@@ -2556,6 +2574,7 @@ impl PalwCarrierSlotsV1 {
     pub(crate) fn offers(&self, site: PalwCarrierSiteV1, inflight: usize) -> bool {
         inflight < MAX_INFLIGHT_CARRIERS
             && match site {
+                PalwCarrierSiteV1::ReadinessEscalated => self.last != Some(PalwCarrierLaneV1::Readiness),
                 PalwCarrierSiteV1::PriorityFirst => !self.licence_turn,
                 PalwCarrierSiteV1::PriorityAfterLicences => self.licence_turn,
                 PalwCarrierSiteV1::Own | PalwCarrierSiteV1::Licences | PalwCarrierSiteV1::OwnReceipts => true,
@@ -3374,12 +3393,16 @@ impl PalwPanelService {
     /// against the class's registered artifact locally before it is signed, and is signed by the
     /// bond's key. **Fail-closed**: a class this node holds no artifact for, or holds under a
     /// different root, gets no proof and is named once in the log — the node is not a seat for it.
+    ///
+    /// **M1 (the 2026-09-25 model-registry review):** each proof comes with whether it escalates —
+    /// its row about to lapse, past R-core+ (`palw_readiness_duty_escalates_v1`) — which is what the
+    /// tick's `ReadinessEscalated` site reads.
     fn readiness_duties(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         current_daa: u64,
         synced: bool,
-    ) -> Vec<PalwConsensusObjectV2> {
+    ) -> Vec<PalwReadinessDutyV1> {
         use kaspa_consensus_core::palw_model_registry_v1::{
             PALW_READINESS_OPENING_MAX_BYTES_V1, PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT, palw_readiness_challenge_seed_v1,
             palw_readiness_window_v1, palw_seat_readiness_message_v1,
@@ -3459,6 +3482,19 @@ impl PalwPanelService {
             }
             let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
             let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
+            // M1: whether this span's proof escalates — the tip's row about to lapse, past R-core+.
+            let readiness_v2 = self.consensus_config.params.palw_readiness_v2_at(current_daa);
+            let escalates = crate::palw_readiness_escalation::palw_readiness_duty_escalates_v1(
+                self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                row.as_ref(),
+                span_now,
+                if readiness_v2 { 2 } else { 1 },
+                last,
+                current_daa,
+                read.span_daa,
+                &globals,
+                readiness_v2,
+            );
             if !kaspa_consensus_core::palw_model_registry_v1::palw_readiness_duty_due_v2(
                 row.as_ref(),
                 current_daa,
@@ -3599,12 +3635,15 @@ impl PalwPanelService {
                         proof.siblings.len()
                     ),
                 );
-                out.push(PalwConsensusObjectV2::SeatReadinessProvedV2 {
-                    bond: bond_key,
-                    class_id: class.class_id,
-                    span: span_now,
-                    proof: Box::new(proof),
-                    signature,
+                out.push(PalwReadinessDutyV1 {
+                    object: PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                        bond: bond_key,
+                        class_id: class.class_id,
+                        span: span_now,
+                        proof: Box::new(proof),
+                        signature,
+                    },
+                    escalates,
                 });
                 continue;
             }
@@ -3643,15 +3682,91 @@ impl PalwPanelService {
                     opening.operand.bytes.len()
                 ),
             );
-            out.push(PalwConsensusObjectV2::SeatReadinessProved {
-                bond: bond_key,
-                class_id: class.class_id,
-                span: span_now,
-                opening,
-                signature,
+            out.push(PalwReadinessDutyV1 {
+                object: PalwConsensusObjectV2::SeatReadinessProved {
+                    bond: bond_key,
+                    class_id: class.class_id,
+                    span: span_now,
+                    opening,
+                    signature,
+                },
+                escalates,
             });
         }
         out
+    }
+
+    /// **This tick's possession proofs** ([`Self::readiness_duties`]): a proof left waiting last tick
+    /// is asked for again at once (the thirty-second read throttle would otherwise hand the freed slot
+    /// to a receipt).
+    async fn readiness_duties_for_tick(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        current_daa: u64,
+        readiness_waiting: bool,
+    ) -> Vec<PalwReadinessDutyV1> {
+        let synced_for_proofs = self.flow_context.is_nearly_synced(session).await;
+        if readiness_waiting {
+            *self.readiness_read_at.lock().unwrap() = None;
+        }
+        self.readiness_duties(session, current_daa, synced_for_proofs)
+    }
+
+    /// **Carry one possession proof** on `funding`, chaining the change as every lane does — the Own
+    /// site's proofs and M1's escalated one alike. `true` when the mempool took it.
+    async fn carry_readiness_proof_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        duty: &PalwReadinessDutyV1,
+        current_daa: u64,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: &mut usize,
+    ) -> bool {
+        // ADR-0133 §11.2: the submitter builds V1 below the fence and V2 past it, and both ride the
+        // same carrier path — reading only the V1 shape here would drop every V2 proof on the floor.
+        let (class_id, span) = match &duty.object {
+            PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. }
+            | PalwConsensusObjectV2::SeatReadinessProvedV2 { class_id, span, .. } => (*class_id, *span),
+            _ => return false,
+        };
+        let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
+        match self.build_lifecycle_tx(&duty.object, funding_outpoint, &funding_entry) {
+            Ok(tx) => {
+                let txid = tx.id();
+                let change = tx.outputs[0].clone();
+                match self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await {
+                    Ok(()) => {
+                        info!(
+                            "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}{}",
+                            if duty.escalates { " — escalated: its row is about to lapse" } else { "" }
+                        );
+                        self.readiness_submitted.lock().unwrap().insert(class_id, span);
+                        let next = TransactionOutpoint::new(txid, 0);
+                        self.persist_fee_outpoint(next);
+                        *funding = Some((
+                            next,
+                            UtxoEntry {
+                                amount: change.value,
+                                script_public_key: change.script_public_key,
+                                block_daa_score: current_daa,
+                                is_coinbase: false,
+                            },
+                        ));
+                        *inflight += 1;
+                        true
+                    }
+                    Err(e) => {
+                        warn!("[{PALW_PANEL}] the mempool refused the readiness proof for class {class_id}: {e}");
+                        *funding = None;
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("[{PALW_PANEL}] cannot build the readiness proof carrier for class {class_id}: {e}");
+                false
+            }
+        }
     }
 
     /// The bytes a replay of a held class needs on this host: the holding that serves that class
@@ -9359,7 +9474,28 @@ impl PalwPanelService {
                 // priority object would otherwise take every slot while claims waiting on their
                 // licence void at their receipt deadline. Every site below asks the one gate
                 // (`PalwCarrierSlotsV1::offers`: the slot free, and its turn), in `TICK_ORDER`.
+                //
+                // **M1 (the 2026-09-25 model-registry review): past R-core+ the possession proofs are
+                // read before the court queue**, so one whose row is about to lapse takes the slot
+                // ahead of it (`ReadinessEscalated`: one a tick, never two slots running). Elsewhere
+                // they are read at the Own site, where they always were.
+                let mut readiness = if self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+                    Some(self.readiness_duties_for_tick(&session, current_daa, readiness_waiting).await)
+                } else {
+                    None
+                };
                 let mut slots = PalwCarrierSlotsV1::new(last_lane);
+                slots.at(PalwCarrierSiteV1::ReadinessEscalated, inflight);
+                if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, inflight)
+                    && funding.is_some()
+                    && let Some(duties) = readiness.as_mut()
+                    && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
+                {
+                    let duty = duties.remove(at);
+                    if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {
+                        readiness_waiting = false;
+                    }
+                }
                 slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);
                 if slots.offers(PalwCarrierSiteV1::PriorityFirst, inflight) {
                     self.carry_priority_v1(
@@ -9537,66 +9673,26 @@ impl PalwPanelService {
                         }
                     }
                 }
-                // ADR-0135: this seat's possession proofs, when the registry is in force and one is due.
-                // A proof left waiting last tick is asked for again at once (the thirty-second read
-                // throttle would otherwise hand the freed slot to a receipt).
-                let synced_for_proofs = self.flow_context.is_nearly_synced(&session).await;
-                if readiness_waiting {
-                    *self.readiness_read_at.lock().unwrap() = None;
-                }
-                for object in self.readiness_duties(&session, current_daa, synced_for_proofs) {
-                    // ADR-0133 §11.2: the submitter builds V1 below the fence and V2 past it, and
-                    // both ride the same carrier path — reading only the V1 shape here would drop
-                    // every V2 proof on the floor without a word.
-                    let (class_id, span) = match &object {
-                        PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. }
-                        | PalwConsensusObjectV2::SeatReadinessProvedV2 { class_id, span, .. } => (class_id, span),
-                        _ => continue,
-                    };
-                    let (class_id, span) = (*class_id, *span);
-                    let Some((funding_outpoint, funding_entry)) =
-                        funding.clone().filter(|_| slots.offers(PalwCarrierSiteV1::Own, inflight))
-                    else {
+                // ADR-0135: this seat's possession proofs, when the registry is in force and one is due
+                // — read here, or before the court queue past R-core+ (M1, above).
+                let duties = match readiness.take() {
+                    Some(duties) => duties,
+                    None => self.readiness_duties_for_tick(&session, current_daa, readiness_waiting).await,
+                };
+                for duty in duties {
+                    if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, inflight) {
                         readiness_waiting = true;
                         crate::palw_backends::note_throttled_v1("panel-proof-waits", || {
                             format!(
-                                "[{PALW_PANEL}] a possession proof for class {class_id} waits for a carrier slot ({inflight} of ours \
-                                 unconfirmed, cap {MAX_INFLIGHT_CARRIERS}); receipts yield until it lands"
+                                "[{PALW_PANEL}] a possession proof for class {} waits for a carrier slot ({inflight} of ours \
+                                 unconfirmed, cap {MAX_INFLIGHT_CARRIERS}); receipts yield until it lands",
+                                duty.class_id().unwrap_or_default()
                             )
                         });
                         break;
-                    };
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                                Ok(()) => {
-                                    info!(
-                                        "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}"
-                                    );
-                                    readiness_waiting = false;
-                                    self.readiness_submitted.lock().unwrap().insert(class_id, span);
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
-                                }
-                                Err(e) => {
-                                    warn!("[{PALW_PANEL}] the mempool refused the readiness proof for class {class_id}: {e}");
-                                    funding = None;
-                                }
-                            }
-                        }
-                        Err(e) => warn!("[{PALW_PANEL}] cannot build the readiness proof carrier for class {class_id}: {e}"),
+                    }
+                    if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {
+                        readiness_waiting = false;
                     }
                 }
                 slots.at(PalwCarrierSiteV1::Licences, inflight);
@@ -17727,8 +17823,9 @@ mod p2_6_da_accusation_policy {
     #[test]
     fn the_priority_lane_goes_first_and_licences_are_still_carried() {
         use super::PalwCarrierLaneV1::{Licence, Ordinary, Priority};
-        use super::PalwCarrierSiteV1::{Licences, Own, OwnReceipts, PriorityAfterLicences, PriorityFirst};
-        let all = |_: PalwCarrierSiteV1| true;
+        use super::PalwCarrierSiteV1::{Licences, Own, OwnReceipts, PriorityAfterLicences, PriorityFirst, ReadinessEscalated};
+        // Every site holds something but M1's: no possession proof is about to lapse.
+        let all = |site: PalwCarrierSiteV1| site != ReadinessEscalated;
         assert_eq!(carrier_tick(None, all), (vec![PriorityFirst], Some(Priority)), "priority first, and nothing after it");
         assert_eq!(carrier_tick(Some(Licence), all), (vec![PriorityFirst], Some(Priority)));
         assert_eq!(carrier_tick(Some(Ordinary), all), (vec![PriorityFirst], Some(Priority)));
@@ -17752,7 +17849,7 @@ mod p2_6_da_accusation_policy {
                 let (out, lane) = carrier_tick(last, |site| match site {
                     PriorityFirst | PriorityAfterLicences => true,
                     Licences => licence_waits(tick),
-                    Own | OwnReceipts => false,
+                    ReadinessEscalated | Own | OwnReceipts => false,
                 });
                 assert_eq!(out.len(), 1, "the storm always fills the slot, and only the slot");
                 sent.push(lane.expect("a lane"));
@@ -17788,6 +17885,7 @@ mod p2_6_da_accusation_policy {
             at = found;
         }
         let gate = |site: &str| sites.matches(&format!("slots.offers(PalwCarrierSiteV1::{site}, inflight)")).count();
+        assert_eq!(gate("ReadinessEscalated"), 1, "M1: the one escalated possession proof, ahead of the court queue");
         assert_eq!(gate("PriorityFirst"), 1);
         assert_eq!(gate("Own"), 3, "the canonical claim, the class registration, the possession proofs");
         assert_eq!(gate("Licences"), 3, "the collector's licences; the supplementary collector's entry and each offer (F4 part 2)");
