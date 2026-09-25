@@ -954,6 +954,21 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **The 2026-09-25 model-registry review, M1: how urgently do these possession proofs' rows need
+    /// them at the tip?** One answer per carrier, in order: `Some` when its row there exists and is
+    /// lapsing or lapsed and the proof renews it (`palw_readiness_escalation_v1::
+    /// palw_readiness_proof_urgency_v1`), at the virtual's DAA — the tip read the mempool's carrier
+    /// index asks when a proof enters and, for every proof it holds at once, at every new block (one
+    /// tip load, one registry fold), so the reserve and the template's head hold a proof exactly while
+    /// it escalates, in urgency order. All `None` below `palw_rcore_plus` (every network but
+    /// testnet-12), off `ConsensusV2`, and without a registry.
+    fn palw_readiness_urgency_v1(
+        &self,
+        carriers: &[crate::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<Option<crate::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        vec![None; carriers.len()]
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {

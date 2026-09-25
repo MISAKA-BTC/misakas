@@ -11,7 +11,10 @@ use crate::{
                 selectors::{PalwCarrierLaneSelector, SequenceSelectorTransaction},
             },
             map::MempoolTransactionCollection,
-            palw_carriers::{PALW_H1_CARRIER_LANE_MASS_DIVISOR, PALW_H1_CARRIER_LANE_SCAN, PalwCarrierIndexV1, PalwCarrierReserveV1},
+            palw_carriers::{
+                PALW_H1_CARRIER_LANE_MASS_DIVISOR, PALW_H1_CARRIER_LANE_SCAN, PalwCarrierIndexV1, PalwCarrierReserveV1,
+                PalwReadinessAdmissionV1,
+            },
             pool::{Pool, TransactionsEdges},
             tx::{DoubleSpend, MempoolTransaction},
             utxo_set::MempoolUtxoSet,
@@ -102,12 +105,20 @@ pub(crate) struct TransactionsPool {
     /// site, so a template build walks a sorted index instead of decoding or sorting anything. Empty
     /// and never written unless `Config::palw_h1_carrier_priority` is set.
     palw_carriers: PalwCarrierIndexV1,
+
+    /// **M1: whether the last block this pool saw carried a possession proof** — the turn the lane's
+    /// head reads ([`Self::build_palw_carrier_lane`]): after such a block, H-1 carriers that wait and
+    /// that the head would leave no room for lead the lane, and the head follows them if it still
+    /// fits. Set at every new block (`Mempool::handle_new_block_transactions`); always `false` off the
+    /// flag.
+    palw_last_block_carried_readiness: bool,
 }
 
 impl TransactionsPool {
     pub(crate) fn new(config: Arc<Config>) -> Self {
         let target_time_per_block = 1.0 / (config.network_blocks_per_second as f64);
         let palw_carrier_reserve = PalwCarrierReserveV1::of(&config);
+        let palw_lane_budget = config.maximum_mass_per_block / PALW_H1_CARRIER_LANE_MASS_DIVISOR;
         Self {
             config,
             all_transactions: MempoolTransactionCollection::default(),
@@ -120,11 +131,14 @@ impl TransactionsPool {
             estimated_size: 0,
             attestation_index: AttestationIndex::default(),
             attestation_quarantine: AttestationQuarantine::default(),
-            palw_carriers: PalwCarrierIndexV1::new(palw_carrier_reserve),
+            palw_carriers: PalwCarrierIndexV1::new(palw_carrier_reserve, palw_lane_budget),
+            palw_last_block_carried_readiness: false,
         }
     }
 
-    /// Add a mutable transaction to the pool
+    /// Add a mutable transaction to the pool (the tests' door; the mempool's one insertion site is
+    /// [`Self::add_transaction_with`]).
+    #[cfg(test)]
     pub(crate) fn add_transaction(
         &mut self,
         transaction: MutableTransaction,
@@ -132,14 +146,32 @@ impl TransactionsPool {
         priority: Priority,
         transaction_size: usize,
     ) -> RuleResult<&MempoolTransaction> {
+        self.add_transaction_with(transaction, virtual_daa_score, priority, transaction_size, None)
+    }
+
+    /// Add a mutable transaction to the pool, with what the tip read said of a possession proof as it
+    /// entered (M1; `Mempool::palw_readiness_admission`) — the pool's one insertion site passes it.
+    pub(crate) fn add_transaction_with(
+        &mut self,
+        transaction: MutableTransaction,
+        virtual_daa_score: u64,
+        priority: Priority,
+        transaction_size: usize,
+        palw_readiness: Option<PalwReadinessAdmissionV1>,
+    ) -> RuleResult<&MempoolTransaction> {
         let transaction = MempoolTransaction::new(transaction, priority, virtual_daa_score);
         let id = transaction.id();
-        self.add_mempool_transaction(transaction, transaction_size)?;
+        self.add_mempool_transaction(transaction, transaction_size, palw_readiness)?;
         Ok(self.get(&id).unwrap())
     }
 
     /// Add a mempool transaction to the pool
-    pub(crate) fn add_mempool_transaction(&mut self, transaction: MempoolTransaction, transaction_size: usize) -> RuleResult<()> {
+    pub(crate) fn add_mempool_transaction(
+        &mut self,
+        transaction: MempoolTransaction,
+        transaction_size: usize,
+        palw_readiness: Option<PalwReadinessAdmissionV1>,
+    ) -> RuleResult<()> {
         let id = transaction.id();
 
         assert!(!self.all_transactions.contains_key(&id), "transaction {id} to be added already exists in the transactions pool");
@@ -150,6 +182,7 @@ impl TransactionsPool {
         // The transactions chained to the added transaction cannot be stored
         // here yet since, by definition, they would have been orphans.
         let parents = self.get_parent_transaction_ids_in_pool(&transaction.mtx);
+        let ready = parents.is_empty();
         self.parent_transactions.insert(id, parents.clone());
         if parents.is_empty() {
             self.ready_transactions.insert((&transaction).into());
@@ -186,6 +219,14 @@ impl TransactionsPool {
             let key = FeerateTransactionKey::from(&transaction);
             let lane_key = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_lane_key_v1(&object);
             self.palw_carriers.insert(id, key.fee, key.mass, transaction_size, lane_key);
+        } else if self.config.palw_h1_carrier_priority
+            && let Some(admission) = palw_readiness
+        {
+            // M1: every possession proof is indexed — its row's one carrier while it is the row's best
+            // copy that escalates, is ready and fits the lane; an ordinary transaction otherwise; and
+            // re-judged at each new block (and when its parent leaves) without a decode.
+            let key = FeerateTransactionKey::from(&transaction);
+            self.palw_carriers.insert_readiness(id, key.fee, key.mass, transaction_size, admission.carrier, admission.urgency, ready);
         }
 
         self.all_transactions.insert(id, transaction);
@@ -210,6 +251,8 @@ impl TransactionsPool {
                     if parents.is_empty() {
                         let tx = self.all_transactions.get(chain).unwrap();
                         self.ready_transactions.insert(tx.into());
+                        // M1: a proof whose parent left can now be mined, so it may lead.
+                        self.palw_carriers.set_ready(chain);
                     }
                 }
             }
@@ -316,11 +359,52 @@ impl TransactionsPool {
     /// block serving it too only lands a conviction sooner, and one composition keeps the template
     /// cache honest for every caller. Empty where `Config::palw_h1_carrier_priority` is off. Walks at
     /// most [`PALW_H1_CARRIER_LANE_SCAN`] carriers, in order, and stops once the lane is full.
+    ///
+    /// **M1: the lane's head is the most urgent row's possession proof, one a template** (the
+    /// representatives, `PalwCarrierIndexV1::readiness_heads`: one per row, ready, within the lane, in
+    /// urgency then arrival order). Behind a DA storm's carriers a proof of tens of KB would never fit
+    /// what they leave, and on the fee market's half better-paying traffic takes it; so the head
+    /// leads and the H-1 carriers take what it leaves. But a p50-row A16 proof (207,968 of the
+    /// 250,000) leaves room for no ML-DSA-87 carrier (49,044) at all, and six rows re-proved in turn
+    /// escalate a proof every block — so a head every block could hold every conviction out of the
+    /// lane for as long as the proofs kept coming (the M1 review, HIGH 2). **So when the head would
+    /// leave room for none of the H-1 carriers that wait, and the last block already carried a
+    /// possession proof, the carriers lead this lane** and the head follows only if it still fits:
+    /// the lead alternates block by block, and no H-1 carrier is held out of the lane two blocks
+    /// running by proofs. When one fits beside the head (a typical A16 proof leaves 54,492: one) the
+    /// head leads every block — the seats' own court carriers wait behind their proofs
+    /// (`MAX_INFLIGHT_CARRIERS`), so halving proof throughput would cost them more than the lane
+    /// gives back (kaspad `palw_readiness_escalation`'s network model).
     pub(crate) fn build_palw_carrier_lane(&self) -> Vec<SequenceSelectorTransaction> {
         if !self.config.palw_h1_carrier_priority || self.palw_carriers.is_empty() {
             return Vec::new();
         }
         let budget = self.config.maximum_mass_per_block / PALW_H1_CARRIER_LANE_MASS_DIVISOR;
+        let head = self.palw_carriers.readiness_heads().take(PALW_H1_CARRIER_LANE_SCAN).find_map(|(id, mass)| {
+            let transaction = self.all_transactions.get(&id).filter(|_| self.is_ready_in_pool(&id) && mass <= budget)?;
+            Some(SequenceSelectorTransaction::new(transaction.mtx.tx.clone(), mass))
+        });
+        let Some(head) = head else { return self.build_palw_h1_lane(budget) };
+        let beside = self.build_palw_h1_lane(budget - head.mass);
+        if beside.is_empty() && self.palw_last_block_carried_readiness {
+            let mut lane = self.build_palw_h1_lane(budget);
+            if !lane.is_empty() {
+                // The carriers' turn: none fits beside the head, and the last block led with a proof.
+                let used: u64 = lane.iter().map(|carrier| carrier.mass).sum();
+                if used.saturating_add(head.mass) <= budget {
+                    lane.push(head);
+                }
+                return lane;
+            }
+        }
+        let mut lane = vec![head];
+        lane.extend(beside);
+        lane
+    }
+
+    /// P2-9's H-1 walk within `budget`: the ready carriers in lane order, the first of each key, each
+    /// while it fits.
+    fn build_palw_h1_lane(&self, budget: u64) -> Vec<SequenceSelectorTransaction> {
         let mut used = 0u64;
         let mut keys_taken = HashSet::new();
         let mut lane = Vec::new();
@@ -328,8 +412,7 @@ impl TransactionsPool {
             if used == budget {
                 break;
             }
-            let ready = self.parent_transactions.get(&id).is_some_and(|parents| parents.is_empty());
-            let Some(transaction) = self.all_transactions.get(&id).filter(|_| ready) else { continue };
+            let Some(transaction) = self.all_transactions.get(&id).filter(|_| self.is_ready_in_pool(&id)) else { continue };
             if lane_key.is_some_and(|key| keys_taken.contains(key)) || used.saturating_add(mass) > budget {
                 continue;
             }
@@ -340,6 +423,35 @@ impl TransactionsPool {
             lane.push(SequenceSelectorTransaction::new(transaction.mtx.tx.clone(), mass));
         }
         lane
+    }
+
+    /// No parent of `id` is still in the pool.
+    fn is_ready_in_pool(&self, id: &TransactionId) -> bool {
+        self.parent_transactions.get(id).is_some_and(|parents| parents.is_empty())
+    }
+
+    /// **M1: whether the block this pool just saw carried a possession proof** — the lane's turn for
+    /// the next templates ([`Self::build_palw_carrier_lane`]).
+    pub(crate) fn note_palw_block_carried_readiness(&mut self, carried: bool) {
+        self.palw_last_block_carried_readiness = carried;
+    }
+
+    /// **M1: the possession proofs the pool holds** — what the mempool asks the tip about at a new
+    /// block ([`Self::set_palw_readiness_escalated`]). Empty where the flag is off.
+    pub(crate) fn palw_readiness_entries(
+        &self,
+    ) -> Vec<(TransactionId, kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1)> {
+        self.palw_carriers.readiness_entries()
+    }
+
+    /// **M1: the tip read's new answer on a proof** — its row's representative, head order and place
+    /// follow (`PalwCarrierIndexV1::set_readiness_urgency`).
+    pub(crate) fn set_palw_readiness_urgency(
+        &mut self,
+        id: &TransactionId,
+        urgency: Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>,
+    ) {
+        self.palw_carriers.set_readiness_urgency(id, urgency);
     }
 
     /// The pre-H-1 composition within `block_mass` (what the carrier lane left; the whole block when
@@ -546,10 +658,16 @@ impl TransactionsPool {
     /// takes its room from the cheapest unreserved transactions whatever they pay, and no incoming
     /// transaction takes a reserved carrier's room — nor that of a transaction whose eviction would
     /// take a reserved carrier with it. Everywhere else this is upstream's rule, unchanged.
-    pub(crate) fn limit_transaction_count(
+    ///
+    /// **M1:** `palw_readiness` is what the tip read said of a possession proof as it entered: a
+    /// lapsing row's proof the reserve will hold (`PalwCarrierIndexV1::would_reserve_readiness_admission`:
+    /// ready, within the lane, its row not yet represented, inside the proofs' quarter) takes its room
+    /// exactly as an H-1 carrier does; any other proof is an ordinary transaction.
+    pub(crate) fn limit_transaction_count_with(
         &self,
         transaction: &MutableTransaction,
         transaction_size: usize,
+        palw_readiness: Option<PalwReadinessAdmissionV1>,
     ) -> RuleResult<Vec<TransactionId>> {
         // No eviction needed -- return
         if self.len() < self.config.maximum_transaction_count
@@ -561,13 +679,25 @@ impl TransactionsPool {
         // ADR-0152 H-1: does this admission take a reserved place? Decoded only for a full pool, and
         // asked through the index's own rule, so the carrier let evict for the reserve is the one
         // the insertion then reserves (the evictions below never touch a reserved carrier).
+        // M1: an escalating possession proof the reserve will hold takes its room the same way.
         let takes_reserve = self.config.palw_h1_carrier_priority
-            && kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(&transaction.tx).is_some_and(
+            && (kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(&transaction.tx).is_some_and(
                 |object| {
                     let lane_key = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_lane_key_v1(&object);
                     self.palw_carriers.would_reserve(transaction_size, lane_key.as_ref())
                 },
-            );
+            ) || palw_readiness.is_some_and(|admission| {
+                admission.urgency.is_some_and(|urgency| urgency.is_lapsing())
+                    && self.palw_carriers.would_reserve_readiness_admission(
+                        &admission,
+                        transaction_size,
+                        // The frontier's own weight (`FeerateTransactionKey`), which the lane compares.
+                        transaction
+                            .calculated_non_contextual_masses
+                            .map_or(0, |masses| kaspa_consensus_core::mass::ContextualMasses::new(transaction.tx.mass()).max(masses)),
+                        self.get_parent_transaction_ids_in_pool(transaction).is_empty(),
+                    )
+            }));
 
         // Returns a vector of transactions to be removed (the caller has to actually remove)
         let feerate_threshold = transaction.calculated_feerate().unwrap();
@@ -621,6 +751,17 @@ impl TransactionsPool {
             RuleError::RejectMempoolIsFull
         );
         Err(RuleError::RejectMempoolIsFull)
+    }
+
+    /// [`Self::limit_transaction_count_with`] for a transaction the tip read said nothing of (the
+    /// tests' door).
+    #[cfg(test)]
+    pub(crate) fn limit_transaction_count(
+        &self,
+        transaction: &MutableTransaction,
+        transaction_size: usize,
+    ) -> RuleResult<Vec<TransactionId>> {
+        self.limit_transaction_count_with(transaction, transaction_size, None)
     }
 
     pub(crate) fn get_estimated_size(&self) -> usize {
@@ -1410,5 +1551,289 @@ mod palw_carrier_lane_tests {
         assert_eq!(pool.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect::<Vec<_>>(), vec![chained]);
         pool.remove_transaction(&chained).unwrap();
         assert!(pool.palw_carriers.is_empty() && pool.build_palw_carrier_lane().is_empty(), "removal clears the index");
+    }
+
+    // ---- M1 (the 2026-09-25 model-registry review): a possession proof whose row is about to lapse ----
+
+    use kaspa_consensus_core::palw_readiness_escalation_v1::{PalwReadinessCarrierV1, PalwReadinessUrgencyV1};
+
+    const LAPSING: Option<PalwReadinessUrgencyV1> = Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 108 });
+
+    fn proof_object(bond: u64, class: u64, salt: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::SeatReadinessProvedV2 {
+            bond: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(bond), 0)),
+            class_id: Hash64::from_u64_word(class),
+            span: salt,
+            proof: Box::new(kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1 {
+                leaf_count: 1,
+                opened: vec![(
+                    0,
+                    kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1 {
+                        tensor_name: String::new(),
+                        layer: None,
+                        row_start: 0,
+                        bytes: vec![1],
+                    },
+                )],
+                siblings: vec![],
+            }),
+            signature: vec![1; 8],
+        }
+    }
+
+    /// A seat's possession proof for `(bond, class)`: `mass` and `fee` as the frontier weighs them.
+    fn proof(bond: u64, class: u64, salt: u64, mass: u64, fee: u64) -> MutableTransaction {
+        mtx(SUBNETWORK_ID_PALW_LIFECYCLE, payload(proof_object(bond, class, salt)), 90_000 + salt, mass, fee)
+    }
+
+    /// A copy of `(bond, class)`'s proof spending output `index` of `parent` — chained, so not ready
+    /// while the parent is in the pool.
+    fn chained_proof(bond: u64, class: u64, salt: u64, parent: TransactionId, index: u32, mass: u64, fee: u64) -> MutableTransaction {
+        let spk = ScriptPublicKey::from_vec(0, vec![0x51]);
+        let input = TransactionInput::new(TransactionOutpoint::new(parent, index), vec![], 0, 0);
+        let tx = Transaction::new(
+            TX_VERSION,
+            vec![input],
+            vec![TransactionOutput::new(salt, spk.clone())],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload(proof_object(bond, class, salt)),
+        );
+        let mut mtx = MutableTransaction::with_entries(Arc::new(tx), vec![UtxoEntry::new(1_000_000, spk, 0, false)]);
+        mtx.calculated_fee = Some(fee);
+        mtx.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+        mtx
+    }
+
+    /// What the tip read says of `mtx` as it enters: the mempool asks it once
+    /// (`Mempool::palw_readiness_admission`); here the test says it.
+    fn tip_says(mtx: &MutableTransaction, urgency: Option<PalwReadinessUrgencyV1>) -> Option<PalwReadinessAdmissionV1> {
+        PalwReadinessCarrierV1::of_tx(&mtx.tx).map(|carrier| PalwReadinessAdmissionV1 { carrier, urgency })
+    }
+
+    /// [`admit`], with the tip read's verdict on a possession proof.
+    fn admit_proof(
+        pool: &mut TransactionsPool,
+        mtx: MutableTransaction,
+        urgency: Option<PalwReadinessUrgencyV1>,
+    ) -> RuleResult<(TransactionId, Vec<TransactionId>)> {
+        let (size, id, verdict) = (mtx.mempool_estimated_bytes(), mtx.id(), tip_says(&mtx, urgency));
+        let evicted = pool.limit_transaction_count_with(&mtx, size, verdict)?;
+        for evicted in &evicted {
+            pool.remove_transaction(evicted).unwrap();
+        }
+        pool.add_transaction_with(mtx, 0, Priority::Low, size, verdict).unwrap();
+        Ok((id, evicted))
+    }
+
+    /// A full pool large enough for the proofs' quarter of its reserve to hold one proof's bytes.
+    const FULL: u64 = 160;
+
+    /// **M1 under a full mempool: a min-fee proof whose row is about to lapse is admitted into a pool
+    /// full of transactions paying a hundred times more, leads the template, and is not evicted by
+    /// the better-paying traffic that keeps coming.** A proof whose row is fresh gets no privilege —
+    /// the full pool refuses it as upstream always did — and without the flag (every network but
+    /// testnet-12) neither is even indexed.
+    #[test]
+    fn a_full_pool_admits_and_templates_a_proof_whose_row_is_about_to_lapse() {
+        let mut full = full_pool(true, FULL);
+        assert!(
+            matches!(admit_proof(&mut full, proof(1, 7, 1, 4_000, 4_000), None), Err(RuleError::RejectMempoolIsFull)),
+            "a fresh row's proof is an ordinary transaction: a full pool refuses it"
+        );
+        let (renewal, evicted) = admit_proof(&mut full, proof(1, 7, 2, 4_000, 4_000), LAPSING).expect("the reserve makes room");
+        assert!(!evicted.is_empty() && full.palw_carriers.is_reserved(&renewal), "room taken from the fee market, and held");
+        for _ in 0..10 {
+            let selected = full.build_selector(None).select_transactions();
+            assert_eq!(selected.first().map(|tx| tx.id()), Some(renewal), "the proof leads the template, every build");
+        }
+        for i in 0..(2 * FULL) {
+            let rich = mtx(SUBNETWORK_ID_NATIVE, vec![], 70_000 + i, 1_000, 1_000_000);
+            let (_, evicted) = admit(&mut full, rich).expect("a richer transaction still gets in");
+            assert!(!evicted.contains(&renewal), "the proof's room is not the fee market's");
+        }
+        // One place per row: a copy of the same (bond, class) proof is an ordinary transaction.
+        assert!(
+            matches!(admit_proof(&mut full, proof(1, 7, 3, 4_000, 4_000), LAPSING), Err(RuleError::RejectMempoolIsFull)),
+            "the row already holds its place"
+        );
+        // A lapsed row's proof recovers a row; it leads when nothing more urgent waits, but holds no place.
+        assert!(
+            matches!(
+                admit_proof(&mut full, proof(2, 7, 2, 4_000, 4_000), Some(PalwReadinessUrgencyV1::Lapsed)),
+                Err(RuleError::RejectMempoolIsFull)
+            ),
+            "no reserved place for a lapsed row"
+        );
+        // The twin: without the flag the escalated proof is refused and nothing is indexed.
+        let mut refusing = full_pool(false, FULL);
+        assert!(matches!(admit_proof(&mut refusing, proof(1, 7, 2, 4_000, 4_000), LAPSING), Err(RuleError::RejectMempoolIsFull)));
+        let mut idle = pool(false);
+        admit_proof(&mut idle, proof(1, 7, 2, 4_000, 4_000), LAPSING).unwrap();
+        assert!(idle.palw_carriers.is_empty() && idle.build_palw_carrier_lane().is_empty(), "no index, no lane off the flag");
+    }
+
+    /// **M1 under a DA storm: the lane's head is the proof, and the storm keeps the rest of the
+    /// lane.** Ten accusations of ten claims paying five times the proof's feerate, filed first, fill
+    /// the half-block lane on their own and would keep a 4,000-mass proof out of it for ever (it never
+    /// fits what they leave, and the fee market's half is better-paying traffic); escalated, the
+    /// proof leads the template, one head a template, and the storm rides behind it — every block,
+    /// since one accusation still fits beside it. Not escalated, a proof is not in the lane at all.
+    #[test]
+    fn a_da_storm_does_not_keep_a_lapsing_proof_out_of_the_template() {
+        let storm = |pool: &mut TransactionsPool| -> Vec<TransactionId> {
+            better_paying_traffic(pool);
+            (100..110).map(|claim| add(pool, carrier(claim, 1_000, 5_000))).collect()
+        };
+        let mut stormy = pool(true);
+        let accusations = storm(&mut stormy);
+        let (renewal, _) = admit_proof(&mut stormy, proof(1, 7, 2, 4_000, 4_000), LAPSING).unwrap();
+        let (second, _) = admit_proof(&mut stormy, proof(2, 7, 2, 4_000, 4_000), LAPSING).unwrap();
+        let lane: Vec<_> = stormy.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect();
+        assert_eq!(lane.first(), Some(&renewal), "the earlier lapsing proof leads");
+        assert_eq!(&lane[1..], &accusations[..1], "the storm keeps what the proof leaves of the lane");
+        assert!(!lane.contains(&second), "one head a template: the other proof waits its turn behind the storm");
+        let selected = stormy.build_selector(None).select_transactions();
+        assert_eq!(selected.first().map(|tx| tx.id()), Some(renewal));
+        // The head and one accusation are mined: the next block leads with the other proof, and the
+        // storm still keeps what it leaves.
+        stormy.remove_transaction(&renewal).unwrap();
+        stormy.remove_transaction(&accusations[0]).unwrap();
+        stormy.note_palw_block_carried_readiness(true);
+        let lane: Vec<_> = stormy.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect();
+        assert_eq!(lane, vec![second, accusations[1]], "one accusation fits beside the head: the head leads every block");
+
+        let mut today = pool(true);
+        let accusations = storm(&mut today);
+        let (ordinary, _) = admit_proof(&mut today, proof(1, 7, 2, 4_000, 4_000), None).unwrap();
+        let lane: Vec<_> = today.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect();
+        assert_eq!(lane, accusations[..5].to_vec(), "a fresh row's proof gets no lane: the storm fills it");
+        assert!(!lane.contains(&ordinary) && !today.palw_carriers.is_reserved(&ordinary));
+    }
+
+    /// **M1 (the M1 review, HIGH 1): copies of one row take neither the head nor the lane.** The
+    /// review's two probes: 1,025 escalating copies of one `(bond, class)` row paying a thousand a
+    /// gram — once over the lane's budget (they can never lead) and once chained on a parent still in
+    /// the pool (they cannot be mined first, so they cost their filer nothing) — used to fill both the
+    /// head's scan and the lane's, so the lane came out with no honest head and no conviction. Now a
+    /// row is one carrier and a copy that cannot lead is none: the honest lapsing proof leads, the
+    /// conviction rides behind it, and the flood's row holds no reserved place.
+    #[test]
+    fn a_flood_of_copies_of_one_row_takes_neither_the_head_nor_the_lane() {
+        const FLOOD: u64 = PALW_H1_CARRIER_LANE_SCAN as u64 + 1;
+        // Probe 1: over the lane's budget (6,000 of 5,000), a thousand a gram.
+        let mut pool1 = pool(true);
+        let conviction = add(&mut pool1, carrier(1, 1_000, 1_000));
+        let (honest, _) = admit_proof(&mut pool1, proof(1, 7, 1, 2_000, 2_000), LAPSING).unwrap();
+        for n in 0..FLOOD {
+            let urgent = Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 100 }); // even more urgent than the honest row
+            admit_proof(&mut pool1, proof(66, 7, 1_000 + n, 6_000, 6_000_000), urgent).unwrap();
+        }
+        let lane: Vec<_> = pool1.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect();
+        assert_eq!(lane, vec![honest, conviction], "the honest head, then the conviction");
+        assert_eq!(pool1.palw_carriers.reserved_readiness().0, 1, "the flood's row holds no place");
+
+        // Probe 2: within the budget, but chained on a parent in the pool.
+        let mut pool2 = pool(true);
+        let conviction = add(&mut pool2, carrier(1, 1_000, 1_000));
+        let (honest, _) = admit_proof(&mut pool2, proof(1, 7, 1, 2_000, 2_000), LAPSING).unwrap();
+        let outputs: Vec<_> =
+            (0..FLOOD).map(|n| TransactionOutput::new(1_000 + n, ScriptPublicKey::from_vec(0, vec![0x51]))).collect();
+        let parent = Transaction::new(TX_VERSION, vec![], outputs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+        let mut parent = MutableTransaction::from_tx(parent);
+        parent.calculated_fee = Some(1);
+        parent.calculated_non_contextual_masses = Some(NonContextualMasses::new(9_000, 9_000));
+        let parent = add(&mut pool2, parent);
+        let urgent = Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 100 });
+        let copies: Vec<_> = (0..FLOOD)
+            .map(|n| admit_proof(&mut pool2, chained_proof(66, 7, 1_000 + n, parent, n as u32, 2_000, 2_000_000), urgent).unwrap().0)
+            .collect();
+        let lane: Vec<_> = pool2.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect();
+        assert_eq!(lane, vec![honest, conviction], "the honest head, then the conviction");
+        assert!(copies.iter().all(|copy| !pool2.palw_carriers.is_representative(copy)), "a chained copy represents nothing");
+        // The parent is mined: now one copy — the row's one carrier — is ready, and it is more urgent.
+        pool2.remove_transaction(&parent).unwrap();
+        assert_eq!(copies.iter().filter(|copy| pool2.palw_carriers.is_representative(copy)).count(), 1);
+        let lane: Vec<_> = pool2.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect();
+        assert_eq!(lane, vec![copies[0], conviction], "one copy, as one carrier: the conviction still rides");
+    }
+
+    /// **M1 (the M1 review, HIGH 2): a conviction of realistic mass still lands while escalated
+    /// proofs keep coming.** On testnet-12 a p50-row A16 proof is 207,968 of the lane's 250,000
+    /// transient mass and an ML-DSA-87 accusation carrier 49,044: here, at the lane's scale, 4,160 and
+    /// 981 of 5,000. A head every block left 840 — no carrier at all, block after block, while a new
+    /// row's proof escalates every block. With the lead alternating, the carriers lead every other
+    /// block (five of them), the proofs every other block, and the conviction lands at the second
+    /// block. A typical proof (195,508: 3,910 here) leaves room for one: the head leads every block
+    /// and one carrier rides beside it every block.
+    #[test]
+    fn a_conviction_still_lands_while_escalated_proofs_keep_coming() {
+        let (p50, typical) = (lanes_under_a_proof_stream(4_160), lanes_under_a_proof_stream(3_910));
+        assert_eq!(p50, (Some(1), 5, 25), "p50: the conviction at the second block; proofs and carriers take turns");
+        assert_eq!(typical, (Some(0), 10, 10), "typical: the conviction at once; a proof and a carrier every block");
+    }
+
+    /// Ten blocks of a proof stream (a new row escalating every block, each proof `proof_mass`) over
+    /// forty waiting accusations of 981: `(the block the first accusation lands in, proofs mined,
+    /// carriers mined)`.
+    fn lanes_under_a_proof_stream(proof_mass: u64) -> (Option<u64>, usize, usize) {
+        let mut pool = pool(true);
+        let accusations: Vec<_> = (1..=40).map(|claim| add(&mut pool, carrier(claim, 981, 981))).collect();
+        let conviction = accusations[0];
+        let (mut proofs_mined, mut carriers_mined, mut landed_at) = (0, 0, None);
+        for block in 0..10u64 {
+            admit_proof(&mut pool, proof(block, 7, block, proof_mass, proof_mass), LAPSING).unwrap(); // a new row escalates every block
+            let lane = pool.build_palw_carrier_lane();
+            let mass: u64 = lane.iter().map(|c| c.mass).sum();
+            assert!(mass <= BLOCK_MASS / PALW_H1_CARRIER_LANE_MASS_DIVISOR);
+            let mut carried = false;
+            for c in &lane {
+                let id = c.tx.id();
+                if PalwReadinessCarrierV1::of_tx(&c.tx).is_some() {
+                    carried = true;
+                    proofs_mined += 1;
+                } else {
+                    carriers_mined += 1;
+                    if id == conviction {
+                        landed_at.get_or_insert(block);
+                    }
+                }
+                pool.remove_transaction(&id).unwrap();
+            }
+            assert!(!lane.is_empty(), "the lane is never idle");
+            pool.note_palw_block_carried_readiness(carried);
+        }
+        (landed_at, proofs_mined, carriers_mined)
+    }
+
+    /// **The tip read moves after admission**: a proof that entered on a fresh row is promoted when
+    /// its row nears staleness — a reserved place and the lane's head — and demoted when the row is
+    /// renewed (by it or a copy), giving its place to the best carrier that fits.
+    #[test]
+    fn a_proof_is_promoted_when_its_row_nears_staleness_and_demoted_when_it_is_renewed() {
+        let mut roomy = pool(true);
+        let mut full = full_pool(true, FULL);
+        let (early, _) = admit_proof(&mut roomy, proof(1, 7, 1, 4_000, 4_000), None).unwrap();
+        assert!(roomy.build_palw_carrier_lane().is_empty() && !roomy.palw_carriers.is_reserved(&early), "an ordinary transaction");
+        roomy.set_palw_readiness_urgency(&early, LAPSING);
+        assert!(roomy.palw_carriers.is_reserved(&early), "its row nears staleness: a place");
+        assert_eq!(roomy.build_palw_carrier_lane().first().map(|c| c.tx.id()), Some(early), "and the lane's head");
+        roomy.set_palw_readiness_urgency(&early, None);
+        assert!(roomy.build_palw_carrier_lane().is_empty() && !roomy.palw_carriers.is_reserved(&early), "renewed: ordinary again");
+        assert_eq!(roomy.palw_readiness_entries().len(), 1, "still indexed, so the next block can ask again");
+
+        // In a full pool a demoted proof's place passes on to a carrier that waited for one.
+        let (held, _) = admit_proof(&mut full, proof(1, 7, 2, 4_000, 4_000), LAPSING).unwrap();
+        assert!(full.palw_carriers.is_reserved(&held));
+        let mut claim = 1;
+        while full.palw_carriers.would_reserve(carrier(claim, 2_000, 2_000).mempool_estimated_bytes(), Some(&session(claim))) {
+            admit(&mut full, carrier(claim, 2_000, 2_000)).unwrap();
+            claim += 1;
+        }
+        let waiting = add(&mut full, carrier(claim, 2_000, 2_000_000)); // a rich carrier past the reserve
+        assert!(!full.palw_carriers.is_reserved(&waiting));
+        full.set_palw_readiness_urgency(&held, None);
+        assert!(full.palw_carriers.is_reserved(&waiting) && !full.palw_carriers.is_reserved(&held), "the place passed on");
     }
 }

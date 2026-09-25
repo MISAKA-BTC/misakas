@@ -209,6 +209,11 @@ pub enum PalwH1LaneKeyV1 {
     Reporter(PalwBondKeyV2),
     /// A bisection court's opening: one per claim.
     CourtOpening(Hash64),
+    /// **A possession proof whose row is about to lapse: one per `(bond, class)` row** (the
+    /// 2026-09-25 model-registry review, M1; `palw_readiness_escalation_v1`). Not an H-1 kind —
+    /// [`palw_h1_carrier_lane_key_v1`] never returns it and no heartbeat is spared for it — but it
+    /// takes a reserved place and the lane the same way while its row, at the tip, nears staleness.
+    Readiness(PalwBondKeyV2, Hash64),
 }
 
 /// The lane key of an H-1 carrier's object ([`PalwH1LaneKeyV1`]); `None` for a court move and for

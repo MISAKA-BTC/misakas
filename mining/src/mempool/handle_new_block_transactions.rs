@@ -42,6 +42,14 @@ impl Mempool {
             }
             unorphaned_transactions.extend(self.get_unorphaned_transactions_after_accepted_transaction(transaction));
         }
+        if self.config.palw_h1_carrier_priority {
+            // M1: the lane's turn — after a block that carried a possession proof, waiting H-1
+            // carriers lead the next templates (`TransactionsPool::build_palw_carrier_lane`).
+            let carried = block_transactions[1..].iter().any(|transaction| {
+                kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1::of_tx(transaction).is_some()
+            });
+            self.transaction_pool.note_palw_block_carried_readiness(carried);
+        }
         self.counters.block_tx_counts.fetch_add(block_transactions.len() as u64 - 1, Ordering::Relaxed);
         self.counters.tx_accepted_counts.fetch_add(tx_accepted_counts, Ordering::Relaxed);
         self.counters.input_counts.fetch_add(input_counts as u64, Ordering::Relaxed);

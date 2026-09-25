@@ -19,6 +19,8 @@ pub mod palw_lane_watch;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 pub mod palw_producer;
+/// The 2026-09-25 model-registry review, M1: the seat's escalated possession proof (node policy).
+pub mod palw_readiness_escalation;
 #[cfg(test)]
 mod palw_producer_t12_tests;
 pub mod palw_receipt_pool;

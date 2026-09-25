@@ -2257,6 +2257,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_step_leaf_demand_check_v1_impl(claim, accuser, leaf)
     }
 
+    fn palw_readiness_urgency_v1(
+        &self,
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        self.virtual_processor.palw_readiness_urgency_v1_impl(carriers)
+    }
+
     fn palw_claim_readers_v2(&self, claim: kaspa_consensus_core::Hash64) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
     }

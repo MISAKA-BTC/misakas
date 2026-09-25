@@ -31,6 +31,13 @@ pub(crate) struct ConsensusMock {
     /// kaspa-pq audit v24 (H-1): a settable sink blue score so attestation-overlay tests can
     /// drive the latest-ready-epoch computation. Default `0` (no ready epoch) for legacy tests.
     sink_blue_score: RwLock<u64>,
+    /// M1: the `(bond, class)` rows whose possession proofs escalate at the mock's tip, and how urgently.
+    palw_readiness_urgency: RwLock<
+        HashMap<
+            (kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, Hash64),
+            kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1,
+        >,
+    >,
 }
 
 impl ConsensusMock {
@@ -40,7 +47,22 @@ impl ConsensusMock {
             statuses: RwLock::new(HashMap::default()),
             utxos: RwLock::new(HashMap::default()),
             sink_blue_score: RwLock::new(0),
+            palw_readiness_urgency: RwLock::new(Default::default()),
         }
+    }
+
+    /// M1: how urgently the row `(bond, class)` needs its proof at the mock's tip (`None`: it does not).
+    #[allow(dead_code)]
+    pub(crate) fn set_palw_readiness_urgency(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        class_id: Hash64,
+        urgency: Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>,
+    ) {
+        match urgency {
+            Some(urgency) => self.palw_readiness_urgency.write().insert((bond, class_id), urgency),
+            None => self.palw_readiness_urgency.write().remove(&(bond, class_id)),
+        };
     }
 
     /// kaspa-pq audit v24 (H-1): set the mock sink blue score (for attestation-overlay tests).
@@ -126,6 +148,14 @@ impl ConsensusApi for ConsensusMock {
             vec![],
             vec![], // audit v24 H-5: no attestation-template drops in the mock
         )) // PR-9.5e: selected parent is a block hash (Hash64)
+    }
+
+    fn palw_readiness_urgency_v1(
+        &self,
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        let urgency = self.palw_readiness_urgency.read();
+        carriers.iter().map(|carrier| urgency.get(&(carrier.bond, carrier.class_id)).copied()).collect()
     }
 
     fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, _: &TransactionValidationArgs) -> TxResult<()> {
