@@ -3339,6 +3339,112 @@ mod tests {
     // (release-race guard) so a reporter is never minted without the matching
     // stake removal. The expected commitment is rebuilt independently from the
     // final UTXO set, proving the add/remove history nets to the right state.
+    // MSK-26A (Group A CRITICAL, reconstructed): "a slash applied on unchecked evidence".
+    //
+    // The bond-REGISTRY mutation path (`dns_bond_mutations_from_txs`) filters a block's accepted
+    // slashing evidence through `proved_slash_targets`, which re-verifies both attestation
+    // signatures against the accused bond's registered validator key — so evidence riding in a
+    // MERGE-blue block (which the own-body `check_slashing_evidence_genuine` rule never sees) can
+    // no longer flip a bond to `Slashed`. But the UTXO SIDE-EFFECT path
+    // (`apply_slashing_side_effects` -> `resolve_slashing_side_effects`) removes the bond's locked
+    // output-0 UTXO and mints the reporter reward WITHOUT that filter and without any signature
+    // check at all (`resolve_slashing_side_effects` takes no verifier). So a forged slashing
+    // evidence merged into a block burns an honest validator's staked UTXO and pays its author a
+    // reward, while the registry still reads the bond as `Active` — an honest bond slashed by
+    // forged evidence. This test pins the asymmetry at 0e8ec984e.
+    mod slash_on_unchecked_evidence_repro {
+        use super::super::proved_slash_targets;
+        use kaspa_consensus_core::{
+            BlockHash,
+            constants::TX_VERSION,
+            dns_finality::{
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                SlashingEvidencePayload, StakeAttestation, StakeBondRecord, resolve_slashing_side_effects,
+            },
+            subnets::SUBNETWORK_ID_SLASHING_EVIDENCE,
+            tx::{Transaction, TransactionOutpoint},
+        };
+        use kaspa_hashes::Hash64;
+
+        const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
+        const FRESH_DAA: u64 = 10_000;
+        const WINDOW: u64 = 200_000;
+        const REPORTER_BPS: u16 = 1_000; // 10%, the mainnet recommendation.
+
+        fn honest_bond(op: TransactionOutpoint) -> StakeBondRecord {
+            StakeBondRecord {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
+                // A real, honest validator: the attestations in the forged evidence carry this id
+                // (so the validator_id check is passed and only the SIGNATURE stands between the
+                // evidence and a slash), but the validator never signed either attestation.
+                validator_pubkey_hash: Hash64::from_bytes([0xa1; 64]),
+                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 100_000_000_000,
+                activation_daa_score: 0,
+                created_daa_score: 0,
+                unbonding_period_blocks: 100,
+                owner_reward_spk_payload: [0xdd; 64],
+                unbond_request_daa_score: None,
+                slashed_at_daa_score: None,
+                status: BondStatus::Active,
+            }
+        }
+
+        fn attestation(bond_outpoint: TransactionOutpoint, target: u8) -> StakeAttestation {
+            StakeAttestation {
+                version: DNS_PAYLOAD_VERSION_V1,
+                validator_id: Hash64::from_bytes([0xa1; 64]),
+                bond_outpoint,
+                epoch: 1,
+                target_hash: Hash64::from_bytes([target; 64]),
+                target_daa_score: FRESH_DAA,
+                validator_set_commitment: Hash64::default(),
+                // The attacker cannot sign as the honest validator, so the signature is garbage.
+                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            }
+        }
+
+        // Well-formed, incompatible (different anchors) evidence naming the honest bond — exactly
+        // what `validate_slashing_evidence_tx` (isolation) admits; only the signatures are forged.
+        fn forged_evidence_tx(op: TransactionOutpoint) -> Transaction {
+            let ev = SlashingEvidencePayload {
+                version: DNS_PAYLOAD_VERSION_V1,
+                bond_outpoint: op,
+                attestation_a: attestation(op, 0x55),
+                attestation_b: attestation(op, 0x99),
+                reporter_reward_spk_payload: [0xee; 64],
+            };
+            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_SLASHING_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
+        }
+
+        #[test]
+        fn forged_slashing_evidence_slashes_the_utxo_though_the_registry_refuses_it() {
+            let op = TransactionOutpoint::new(Hash64::from_bytes([0x11; 64]), 0);
+            let view = ActiveBondView::from_records([(op, honest_bond(op))]);
+            let txs = [forged_evidence_tx(op)];
+
+            // The registry path (bond status) correctly refuses the forgery: `proved_slash_targets`
+            // re-verifies the signatures, they are garbage, so no bond is proved slashable.
+            let proved = proved_slash_targets(&txs, &view, NET(), FRESH_DAA, WINDOW);
+            assert!(proved.is_empty(), "the registry path must not prove a forged slash");
+
+            // The UTXO side-effect path slashes anyway: it verifies no signature, so it removes the
+            // honest bond's whole staked output-0 and mints the attacker a reporter reward. THIS is
+            // the bug — an honest bond slashed by forged evidence.
+            let effects = resolve_slashing_side_effects(&txs, &view, FRESH_DAA, REPORTER_BPS, 0, 0);
+            assert_eq!(effects.len(), 1, "0e8ec984e slashes the honest bond's UTXO on unchecked evidence");
+            assert_eq!(effects[0].bond_outpoint, op);
+            assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000, "the whole stake leaves the supply");
+            assert_eq!(
+                effects[0].reporter_output.as_ref().map(|o| o.value),
+                Some(10_000_000_000),
+                "the forger is paid the reporter reward"
+            );
+        }
+    }
+
     mod slashing_side_effect_application {
         use super::super::apply_slashing_effects_to_state as apply;
         use kaspa_consensus_core::{
