@@ -508,7 +508,29 @@ async fn displace(
     assert_eq!(lane_answer(&run.chain, &p), None, "the displacer merges no operator attempt: it anchors nothing");
     let b = match merger {
         Merger::Heartbeat => run.chain.heartbeat(ttpb, Vec::new()).await,
-        Merger::NonOperator(card) | Merger::Operator(card) => run.chain.attempt(card, ttpb, Vec::new(), &|_| true).await.0,
+        Merger::NonOperator(card) => run.chain.attempt(card, ttpb, Vec::new(), &|_| true).await.0,
+        // The next operator attempt, built on P and merging O. Only heartbeats advance testnet-12's DAA
+        // clock, so it carries O's DAA score; its hash is drawn BELOW O's, so a `(DAA score, hash)`
+        // minimum would hand it the seed — the DAG order must not.
+        Merger::Operator(card) => {
+            let b = loop {
+                let (b, _) = run.chain.build_attempt(card, ttpb, Vec::new(), &|_| true);
+                let b = b.to_immutable();
+                if b.header.hash < o.header.hash {
+                    break b;
+                }
+            };
+            assert_eq!(b.header.daa_score, o.header.daa_score, "an attempt does not advance testnet-12's clock");
+            run.chain
+                .ctx
+                .consensus
+                .validate_and_insert_block(b.clone())
+                .virtual_state_task
+                .await
+                .expect("the operator's next attempt is valid");
+            assert_eq!(run.chain.sink(), b.header.hash, "the operator's next attempt extends P");
+            b
+        }
     };
     let merged = run.chain.vp().ghostdag_store.get_data(b.header.hash).expect("ghostdag data");
     assert_eq!(merged.selected_parent, p.header.hash, "the merging block builds on the displacer");

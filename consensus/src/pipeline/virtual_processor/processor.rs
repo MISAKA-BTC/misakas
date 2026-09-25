@@ -212,17 +212,9 @@ struct PalwChainAnchorV1 {
     /// attempt it is or merges, capped at its own DAA score.
     reach: u64,
     /// Past lane A, the operator attempts the block is or merges, `(DAA score, hash)`; `None` below it,
-    /// where the anchor block keys the seed itself.
+    /// where the anchor block keys the seed itself. The seed's source among them is
+    /// [`VirtualStateProcessor::palw_operator_seed_source_v1`]'s.
     operator_attempts: Option<Vec<(u64, BlockHash)>>,
-}
-
-impl PalwChainAnchorV1 {
-    /// The seed's source for a claim whose slot is `slot`: past lane A the earliest operator attempt at
-    /// or past it that the block is or merges — the minimal `(DAA score, hash)`, so among concurrent
-    /// attempts at one DAA their hashes decide — and `None` below it.
-    fn seed_source_for(&self, slot: u64) -> Option<(u64, BlockHash)> {
-        self.operator_attempts.as_ref()?.iter().filter(|(daa, _)| *daa >= slot).min().copied()
-    }
 }
 
 pub struct VirtualStateProcessor {
@@ -10613,8 +10605,8 @@ impl VirtualStateProcessor {
     /// **Lane A (`Params::palw_operator_anchor`)** decides which chain block that is and what keys its
     /// draw. Past it (at the chain block's own DAA score) a chain block anchors a claim iff it IS, or
     /// MERGES (blue or red), an operator's attempt at or past the claim's slot. The seed is read off
-    /// the earliest such attempt — the minimal `(DAA score, hash)` among the operator attempts at or
-    /// past the slot that the anchor is or merges — and the draw's DAA-keyed inputs (the draw policy,
+    /// the earliest such attempt ([`Self::palw_operator_seed_source_v1`]: the one no other of them is
+    /// in the DAG past of) — and the draw's DAA-keyed inputs (the draw policy,
     /// the readiness clock, the maturity floor, the capability bound, the shard plan) are resolved at
     /// that attempt's DAA score ([`Self::palw_v2_anchor_fact_with_seed_v1`]). Undisturbed, the anchor
     /// is the operator's attempt itself. When a non-operator displaces it from the selected chain (a
@@ -10642,7 +10634,9 @@ impl VirtualStateProcessor {
             let daa = header.daa_score;
             if daa >= slot {
                 match self.palw_chain_block_as_anchor_v1(block, &header)? {
-                    Some(anchor) if anchor.reach >= slot => candidate = Some((block, daa, anchor.seed_source_for(slot))),
+                    Some(anchor) if anchor.reach >= slot => {
+                        candidate = Some((block, daa, self.palw_operator_seed_source_v1(&anchor, slot)?));
+                    }
                     _ => {}
                 }
                 continue;
@@ -10721,6 +10715,39 @@ impl VirtualStateProcessor {
         Some(attempts)
     }
 
+    /// **Lane A: the seed's source for a claim whose slot is `slot`, at an anchor that is or merges
+    /// operator attempts** — `Some(None)` below lane A (the anchor keys the seed itself), `None` where
+    /// the reachability store cannot answer.
+    ///
+    /// The EARLIEST of the operator attempts at or past the slot that the anchor is or merges: one that
+    /// no other of them is in the DAG past of, and among several such (concurrent attempts, which only
+    /// operators make) the least `(DAA score, hash)`. The order is the DAG's, not the DAA score's:
+    /// testnet-12's clock is advanced only by heartbeats (ADR-0138), so an operator attempt produced
+    /// after a displaced one — and merging it — carries the same DAA score, and a `(DAA score, hash)`
+    /// minimum would hand the seed to whichever of the two hashes lower: a fresh draw on half of the
+    /// displacements an operator's next attempt follows. Reachability is chain data every node holds,
+    /// so reorg, IBD and a pruning-proof sync resolve it alike.
+    fn palw_operator_seed_source_v1(&self, anchor: &PalwChainAnchorV1, slot: u64) -> Option<Option<(u64, BlockHash)>> {
+        let Some(attempts) = anchor.operator_attempts.as_ref() else {
+            return Some(None);
+        };
+        let eligible: Vec<(u64, BlockHash)> = attempts.iter().filter(|(daa, _)| *daa >= slot).copied().collect();
+        let mut earliest: Option<(u64, BlockHash)> = None;
+        for &(daa, hash) in &eligible {
+            let mut has_an_earlier = false;
+            for &(_, other) in &eligible {
+                if other != hash && self.reachability_service.try_is_dag_ancestor_of(other, hash).ok()? {
+                    has_an_earlier = true;
+                    break;
+                }
+            }
+            if !has_an_earlier && earliest.is_none_or(|held| (daa, hash) < held) {
+                earliest = Some((daa, hash));
+            }
+        }
+        Some(earliest)
+    }
+
     /// **The highest claim slot chain block `block` anchors**, or `None` where it anchors none (or the
     /// store cannot serve what lane A reads): [`Self::palw_chain_block_as_anchor_v1`]'s answer, as step
     /// 4c and the one-state pre-check read it. Below lane A it is the block's own DAA score on every
@@ -10751,7 +10778,7 @@ impl VirtualStateProcessor {
     ///
     /// **Past lane A's fence at the anchor block's DAA** the seed is read off `seed_source` — the
     /// earliest operator attempt at or past the slot that the anchor is or merges
-    /// ([`Self::palw_v2_anchor_fact_of_candidate`]), the anchor itself unless an operator attempt was
+    /// ([`Self::palw_operator_seed_source_v1`]), the anchor itself unless an operator attempt was
     /// displaced from the chain — and the fact's `anchor_daa`, the DAA score every draw input is
     /// resolved at (the draw policy with its readiness clock, the maturity floor, the capability bound,
     /// the shard plan; by the chain's derivation and by the gate alike), is that attempt's: a

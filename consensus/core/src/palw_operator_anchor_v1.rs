@@ -47,8 +47,10 @@
 //! on the next operator attempt ON the chain, each such displacement would be a fresh draw — hundreds
 //! per 580-DAA bind window — and a bonded non-operator displacing every one would hold every claim off
 //! its anchor until the backstop voided it (verification, 2026-09-26). So the seed is read off the
-//! EARLIEST operator attempt at or past the slot that the anchor is or merges (minimal `(DAA score,
-//! hash)`), and the draw's DAA-keyed inputs are resolved at that attempt's DAA score. Undisturbed, the
+//! EARLIEST operator attempt at or past the slot that the anchor is or merges — earliest in the DAG (one
+//! no other of them is in the past of; among concurrent ones the least `(DAA score, hash)`), since
+//! testnet-12's DAA clock is advanced only by heartbeats and does not order attempts — and the draw's
+//! DAA-keyed inputs are resolved at that attempt's DAA score. Undisturbed, the
 //! anchor is the operator's attempt itself; displaced, the claim binds in the first chain block that
 //! merges it — the very next one, whoever produces it — on its seed and at its DAA. A displacement then
 //! moves the binding by one block and changes neither the seed nor the draw's clock; what it can still
