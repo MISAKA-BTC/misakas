@@ -2216,6 +2216,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_court_duties_v2_impl(&mine)
     }
 
+    fn palw_held_pursuit_seeds_v1(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwHeldPursuitSeedsV1 {
+        self.virtual_processor.palw_held_pursuit_seeds_v1_impl(&mine)
+    }
+
     fn palw_da_duties_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

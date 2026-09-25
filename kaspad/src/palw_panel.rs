@@ -2300,6 +2300,47 @@ pub(crate) fn palw_seat_tail_v1(
     PalwSeatTailV1::Waits { unserved: true }
 }
 
+/// **The due DAA of a seat's named-leaf pursuit** (ADR-0111 Decision 6) in the priority lane's EDF
+/// (`palw_court_queue_edf_v1`; the A-held node's second review, MEDIUM): its landing margin
+/// ([`PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1`], P2-6's) before whichever comes first, the duty's own
+/// deadline or the claim's earliest `Final` ([`palw_seat_claim_earliest_final_v1`]), and now once
+/// that has passed. An undated item waited behind every dated one, and a lie it would have convicted
+/// reached `Final`.
+///
+/// **The fourth review's MEDIUM: the duty's deadline alone is not early enough.** Past §4-quater the
+/// receipt deadline is `bound + max(W_r, D)`, but the licensed `Final` floor is
+/// `max(L + wc, bound + D + 1)`. For the 8k row (`D = 15`) a licence at `bound + 1` gives `Final` at
+/// `bound + 121`, while the duty's date was `bound + 540`. So the date is taken before both. A
+/// one-move accusation (`ShardCourtAccused`) is simply due now; see its site.
+pub(crate) fn palw_seat_court_filing_due_v1(duty_deadline: u64, earliest_final: Option<u64>, current_daa: u64) -> u64 {
+    earliest_final
+        .map_or(duty_deadline, |earliest| duty_deadline.min(earliest))
+        .saturating_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)
+        .max(current_daa)
+}
+
+/// **The earliest DAA a claim bound at `bound_daa` can reach `Final`**: a bound under DL-1's licensed
+/// floor (`palw_claim_final_floor_v1`: `max(L + wc(L), H)`) over every licence the claim can still
+/// take. A licence lands at `bound + 1` at the earliest; a seat-DA pause only moves `L` later; `H` and
+/// an S2 licence's replay gate only raise the floor. So `min over L > bound of L + wc(L)` is never
+/// after the claim's `Final`: the challenge window at `bound + 1`, or the short window from its fence,
+/// whichever ends first. It is read off the bundle's params, as the receipt deadline is. `None` off
+/// `ConsensusV2`.
+pub(crate) fn palw_seat_claim_earliest_final_v1(params: &kaspa_consensus_core::config::params::Params, bound_daa: u64) -> Option<u64> {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return None;
+    };
+    let state = &bundle.state;
+    let first = bound_daa.saturating_add(1);
+    let mut earliest = first.saturating_add(state.window_challenge_at(first));
+    if let Some(from) = state.short_challenge_window_from_daa()
+        && from > first
+    {
+        earliest = earliest.min(from.saturating_add(state.window_challenge_at(from)));
+    }
+    Some(earliest)
+}
+
 /// **The landing margin of an automatic accusation** (ADR-0152 §3.8, DA-6: a seat accuses "until
 /// `bound + window_receipt − 60`"), in DAA before the receipt deadline the loop reads for the duty.
 /// The accusation must fold while the claim is still `PanelBound`: a seat's session pauses the claim
@@ -6118,7 +6159,8 @@ impl PalwPanelService {
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
         // The DAA each queued item is due by, where one is computable — what the priority lane orders
         // by (`palw_court_queue_edf_v1`). Each queue site states its item's; an item without one is
-        // carried after every dated item, by age.
+        // carried after every dated item, by age. The reporter filer's items are dated by the filer
+        // (`queued_dues_v1`, read after each of its passes).
         let mut court_due: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
         // ADR-0152 R-3 (P2-8): every conviction this node files on its own evidence — commit, then the
         // evidence, then the reveal, through `court_pending` — persisted so a restart still reveals.
@@ -7566,6 +7608,24 @@ impl PalwPanelService {
             // ADR-0152 §4-ter N3: the held route — the chain reads it asks for, its moves (each with the
             // DAA its session says it is due by), and the builds the ledger admits, off the tick.
             {
+                // 4-ter.3 step 6: once a start, the pursuits this bond's held forfeits call for and the
+                // demands it holds open, rebuilt from the chain (they live in memory otherwise).
+                if !held_court.seeded_v1() {
+                    let mut seeds = session.clone().spawn_blocking(move |c| c.palw_held_pursuit_seeds_v1(vec![bond_key])).await;
+                    // A demand sent before the restart and not yet in a block is in the mempool: noted too.
+                    let (pooled, orphans) = self
+                        .flow_context
+                        .mining_manager()
+                        .clone()
+                        .get_all_transactions(kaspa_mining::model::tx_query::TransactionQuery::All)
+                        .await;
+                    seeds.open_demands.extend(held_court::palw_held_pooled_demands_v1(
+                        pooled.iter().chain(orphans.iter()).map(|pooled| pooled.tx.as_ref()),
+                        bond_key,
+                        current_daa,
+                    ));
+                    held_court.seed_v1(seeds);
+                }
                 // 4-ter.3 step 6's pursuits past their sessions: the pursued claims' rows, off the tick.
                 let pursued = held_court.pursued_claims_v1();
                 let open_claims = if pursued.is_empty() {
@@ -7579,7 +7639,13 @@ impl PalwPanelService {
                         .await
                         .map(|read| read.rows)
                         .unwrap_or_default();
-                    held_court::palw_held_open_claims_v1(&rows, &pursued)
+                    // A challenger that is no seat of the claim's panel: the claims it could still dispute.
+                    let disputable = if pursued.iter().all(|claim| rows.iter().any(|row| row.claim_id == *claim)) {
+                        Vec::new()
+                    } else {
+                        session.clone().spawn_blocking(move |c| c.palw_disputable_claims_v2(vec![bond_key])).await
+                    };
+                    held_court::palw_held_open_claims_v1(&rows, &disputable, &pursued)
                 };
                 let held_host = held_court::PalwPanelHeldHostV1 {
                     panel: self,
@@ -8215,6 +8281,13 @@ impl PalwPanelService {
                                     accused.insert(duty.claim_id);
                                 }
                                 if !court_pending.iter().any(|(sid, _, _, _)| *sid == key) {
+                                    // Dated (the second review's MEDIUM): an undated item waits behind
+                                    // every dated one, and a lie it would have convicted reaches `Final`.
+                                    // Before the claim's earliest `Final` too (the fourth review's MEDIUM).
+                                    let earliest_final =
+                                        palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
+                                    court_due
+                                        .insert((key, 0, false), palw_seat_court_filing_due_v1(deadline, earliest_final, current_daa));
                                     court_pending.push((key, 0, false, object));
                                 }
                             }
@@ -8851,6 +8924,7 @@ impl PalwPanelService {
                                         };
                                         // P2-8: kind 4 through the reporter filer first, the accusation
                                         // kept as its fallback; else the accusation, as below the fence.
+                                        let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));
                                         self.capture_arm_files_v1(
                                             &session,
                                             &mut reporter_filer,
@@ -8863,6 +8937,18 @@ impl PalwPanelService {
                                             refuted,
                                             court,
                                         );
+                                        // Dated (the second review's MEDIUM), and the one-move
+                                        // accusation due NOW (the fourth's): the held dissection it
+                                        // opens holds `Final` off only once it lands, and `Final` can
+                                        // come a challenge window after the bound (`bound + 121` on the
+                                        // 8k row), long before the duty's deadline. The filer's own
+                                        // items (a kind 4 filed first) carry the filer's dates, read
+                                        // after its pass.
+                                        if let Some(key) = court_key
+                                            && court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key)
+                                        {
+                                            court_due.entry(key).or_insert(current_daa);
+                                        }
                                         break 'verdict None;
                                     }
                                 }
@@ -9826,6 +9912,8 @@ impl PalwPanelService {
 
             // --- P2-8: the reporter's commit–reveal filer (ADR-0152 R-3; `reporter_filer`) ---
             self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending, &mut court_moved, &mut accused);
+            // The filer's queued items, dated by the filer, in the priority lane's order.
+            court_due.extend(reporter_filer.queued_dues_v1());
 
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {

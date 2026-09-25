@@ -1368,18 +1368,6 @@ pub struct PalwStateParamsV2 {
     /// Unread by the fold until S-2.
     #[borsh(skip)]
     rcore_conservative_classes: Vec<Hash64>,
-    /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
-    /// the genesis held rows whose `n_ctx` exceeds [`PALW_HELD_ANSWERABLE_N_CTX_V1`] (testnet-12: the
-    /// 2M row), written by `Params::sync_palw_held_answerability` where `palw_offence_attribution` is
-    /// armed and empty everywhere else. Derived, not hashed: the rows are inside the ruleset id
-    /// already, and `validate_palw_v2` refuses a bundle whose copy disagrees with the derivation, so a
-    /// missed sync is a startup refusal rather than a 2M class quietly read as answerable. Read only
-    /// past the fence: a fused accusation of such a class is refused rather than parked on a
-    /// dissection nobody can finish, and its responder keeps the mercy (C1). Not S's
-    /// `rcore_conservative_classes`, which means "charged to Final" — the same class on t12, a
-    /// different question.
-    #[borsh(skip)]
-    held_unanswerable_classes: Vec<Hash64>,
     /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
     /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
     /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
@@ -1392,6 +1380,18 @@ pub struct PalwStateParamsV2 {
     /// on testnet-12 at launch.
     #[borsh(skip)]
     class_verify_rows: Vec<crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1>,
+    /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
+    /// the genesis held rows whose `n_ctx` exceeds [`PALW_HELD_ANSWERABLE_N_CTX_V1`] (testnet-12: the
+    /// 2M row), written by `Params::sync_palw_held_answerability` where `palw_offence_attribution` is
+    /// armed and empty everywhere else. Derived, not hashed: the rows are inside the ruleset id
+    /// already, and `validate_palw_v2` refuses a bundle whose copy disagrees with the derivation, so a
+    /// missed sync is a startup refusal rather than a 2M class quietly read as answerable. Read only
+    /// past the fence: a fused accusation of such a class is refused rather than parked on a
+    /// dissection nobody can finish, and its responder keeps the mercy (C1). Not S's
+    /// `rcore_conservative_classes`, which means "charged to Final" — the same class on t12, a
+    /// different question.
+    #[borsh(skip)]
+    held_unanswerable_classes: Vec<Hash64>,
     /// **`Params::palw_readiness_v2_max_age_spans`'s horizon, in spans** (user decision 2026-09-25,
     /// readiness capacity option (a)), mirrored here by `Params::sync_palw_readiness_v2_max_age_spans`
     /// because the registry fold is built from the bundle
@@ -1560,9 +1560,9 @@ impl PalwStateParamsV2 {
             rcore_plus_from_daa: None,
             withdrawal_delay_daa: 0,
             rcore_conservative_classes: Vec::new(),
-            held_unanswerable_classes: Vec::new(),
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
+            held_unanswerable_classes: Vec::new(),
             readiness_v2_max_age_spans: None,
         })
     }
@@ -3588,7 +3588,9 @@ pub fn palw_claim_receipt_deadline_v1(
 /// pause; the anchors it shifts are written back when the last seat session closes, so every other
 /// row reads the shifted anchor); a terminal claim with ANY session open owes none (its retirement
 /// waits); and a terminal claim's retirement is `max(terminal + claim_retirement_daa,
-/// last_closed_daa + 1)`. A non-seat session changes nothing (V3S-08).
+/// last_closed_daa + 1)`. A non-seat session changes nothing (V3S-08) — except, past
+/// `palw_offence_attribution`, the first one a live held forfeit's challenger opens on its claim,
+/// which is counted as a seat's (ADR-0152 §4-ter.3 step 6; one per record).
 pub fn palw_rcore_deadline_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -4520,6 +4522,55 @@ impl PalwClaimGV1 {
     /// `G = g_res + escrowed_reward`, the action tiers' `G` (IMPL-15).
     pub fn g(&self) -> u128 {
         self.g_res.saturating_add(u128::from(self.escrowed_reward))
+    }
+}
+
+/// **ADR-0152 §4-ter.3 step 6 (the forger's race): what one held dissection's losing challenger
+/// forfeited at a PROVEN acquittal whose bottom read an anchor** — kept, by `(claim, session)`, while
+/// the claim can still be tried, so that a later conviction proving that anchor's chunk forged gives
+/// it back ([`TransitionBuilder::refund_held_forfeits_v1`]) — a checkpoint-court conviction on a chunk
+/// that bottom read, or a DA-7 default of the challenger's own step-6 demand of it (the forger that
+/// will not disclose the chunk its acquittal rested on).
+///
+/// A consistent forger's own node files its acquittal the block the bottom is reached: its bottom,
+/// read from its own forged anchor, acquits it, and the honest challenger is charged `max(reserved,
+/// G)` and the court time before its step-6 demand can be answered. The step-6 pursuit then convicts
+/// the claim through `CheckpointAccused` on the very chunk; this record is what lets that conviction
+/// make the seat whole. Written only past `palw_offence_attribution`, so every other network never
+/// holds one.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwHeldForfeitV1 {
+    /// The session's challenger — the bond the acquittal charged.
+    pub challenger: PalwBondKeyV2,
+    /// What left its collateral at the close: the verdict charge and the court time, as debited
+    /// (clamped to what the bond held), never the nominal tier. Non-zero.
+    pub amount: u64,
+    /// The checkpoint leaf the acquitting bottom's anchor opened (`opening.leaf_hash`, proven against
+    /// the claim's checkpoint leg by the close's adjudication).
+    pub anchor_leaf_hash: Hash64,
+    /// That anchor's checkpoint index — what a data-availability `StateChunk` unit names it by.
+    pub anchor_checkpoint: u32,
+    /// The leaf the session's ladder narrowed to (the held site's fused leaf) — what a restarted
+    /// challenger's node rebuilds its evidence at ([`crate::palw_producer_v2::palw_held_pursuit_seeds_v1`]).
+    pub narrowed_leaf: u64,
+    /// The anchor chunks that bottom opened — its K tile's and its V tile's (one or two; sorted,
+    /// unique).
+    pub chunks: Vec<u32>,
+    pub closed_daa: u64,
+    /// Whether the challenger's data-availability session on the claim has already paused it once
+    /// for this record (DL-1; one pause a record, [`TransitionBuilder::held_forfeit_pauses_v1`]).
+    pub paused: bool,
+}
+
+impl PalwHeldForfeitV1 {
+    /// **Is `unit` the step-6 demand of this record's anchor?** A `StateChunk` of the anchor's
+    /// checkpoint, at a chunk the acquitting bottom opened.
+    pub fn is_demanded_by_v1(&self, unit: &crate::palw_da_rcore_v1::PalwDaUnitV1) -> bool {
+        matches!(
+            unit,
+            crate::palw_da_rcore_v1::PalwDaUnitV1::Held(crate::palw_held_da_v1::PalwHeldMissingV1::StateChunk { checkpoint, chunk })
+                if *checkpoint == self.anchor_checkpoint && self.chunks.contains(chunk)
+        )
     }
 }
 
@@ -8583,6 +8634,14 @@ pub struct PalwChainStateV2 {
     /// `Candidate` with a pool. (a) pays only a proof that landed at `S − 2` or earlier. A class's
     /// entries leave with its `Candidate` state (seated, or frozen).
     activation_readiness_landed: BTreeMap<(Hash64, PalwBondKeyV2), u64>,
+    // ---- ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits ----
+    //
+    // Primary data in ONE Some-only root block (`held_forfeits/v1`) after R-core+'s and the
+    // Activation Pool's, and ONE carriage tail (`0xB6`), written only when a record exists — so a
+    // state holding none (every state of every network but testnet-12, where only an acquitting held
+    // close past `palw_offence_attribution` writes one) roots and carries exactly as before.
+    /// By `(claim, session)`: one proven acquittal's forfeit, while the claim can still be tried.
+    held_forfeits: BTreeMap<(Hash64, Hash64), PalwHeldForfeitV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -8729,6 +8788,7 @@ impl PalwChainStateV2 {
             activation_pool_counters: Default::default(),
             activation_pool_scheduled: BTreeMap::new(),
             activation_readiness_landed: BTreeMap::new(),
+            held_forfeits: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -10406,6 +10466,25 @@ impl PalwChainStateV2 {
             || !self.activation_readiness_landed.is_empty()
     }
 
+    /// **4-ter.3 step 6: every held forfeit**, by `(claim, session)`.
+    pub fn held_forfeits_iter(&self) -> impl Iterator<Item = (&(Hash64, Hash64), &PalwHeldForfeitV1)> + '_ {
+        self.held_forfeits.iter()
+    }
+
+    /// Row 14 (DA-2): every open data-availability session, by `(claim, accuser)`.
+    pub fn da_sessions_iter(&self) -> impl Iterator<Item = (&(Hash64, PalwBondKeyV2), &crate::palw_da_rcore_v1::PalwDaSessionV1)> + '_ {
+        self.da_sessions.iter()
+    }
+
+    /// **4-ter.3 step 6: the held forfeits kept for `claim_id`**, by session ([`PalwHeldForfeitV1`]).
+    pub fn held_forfeits_of_claim(&self, claim_id: &Hash64) -> impl Iterator<Item = (&Hash64, &PalwHeldForfeitV1)> + '_ {
+        let claim = *claim_id;
+        self.held_forfeits
+            .range((claim, ZERO_HASH64)..)
+            .take_while(move |((of, _), _)| *of == claim)
+            .map(|((_, session), r)| (session, r))
+    }
+
     /// The one deadline `claim_id` holds in the sweep queue, if any (DL-1: none while a seat session
     /// pauses it). A scan of the index — a read for tests and RPCs, never a consensus path.
     pub fn deadline_of(&self, claim_id: &Hash64) -> Option<u64> {
@@ -10663,6 +10742,13 @@ impl PalwChainStateV2 {
             state.update(&borsh::to_vec(&self.activation_pool_counters).expect("PalwActivationPoolCountersV1 is borsh-serializable"));
             state.update(collection_root(b"activation_pool_scheduled", &self.activation_pool_scheduled).as_byte_slice());
             state.update(collection_root(b"activation_readiness_landed", &self.activation_readiness_landed).as_byte_slice());
+        }
+        // **ADR-0152 §4-ter.3 step 6: the held forfeits, ONE Some-only block** (after the Activation
+        // Pool's `activation_pool/v1` where both branches meet) — hashed only when a record exists,
+        // so every state without one roots exactly as before.
+        if !self.held_forfeits.is_empty() {
+            state.update(b"held_forfeits/v1");
+            state.update(collection_root(b"held_forfeits", &self.held_forfeits).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -11160,6 +11246,7 @@ impl PalwChainStateV2 {
         self.assert_da_consistency_v1(params)?;
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
+        self.assert_held_forfeits_consistency_v1()?;
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
@@ -11346,6 +11433,32 @@ impl PalwChainStateV2 {
         }
         if !self.activation_pool_counters.is_balanced() {
             return bad("the activation pool counters are not balanced (I1)".into());
+        }
+        Ok(())
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6: a held forfeit lives exactly as long as its claim can still be
+    /// tried** — its claim held and not terminal (every terminal door drops it), a non-zero amount,
+    /// one or two chunks, sorted and unique. Empty on every network but testnet-12.
+    pub(crate) fn assert_held_forfeits_consistency_v1(&self) -> Result<(), PalwStateV2Error> {
+        for ((claim_id, session_id), record) in &self.held_forfeits {
+            let bad =
+                |why: &str| Err(PalwStateV2Error::CarriageInconsistent(format!("held forfeit ({claim_id}, {session_id}): {why}")));
+            if self.claims.get(claim_id).is_none_or(|claim| claim.phase.is_terminal()) {
+                return bad("its claim is gone or terminal");
+            }
+            // The forfeit went into the challenger's `slashed` and nothing takes it out but its refund.
+            if self.bonds.get(&record.challenger).is_none_or(|bond| record.amount > bond.slashed) {
+                return bad("its amount is more than its challenger's bond has ever lost");
+            }
+            // A record whose pause is unspent has no non-pausing session of its challenger open on the
+            // claim: the record's write converts one that predates it, and an opening under it pauses.
+            if !record.paused && self.da_sessions.get(&(*claim_id, record.challenger)).is_some_and(|session| !session.accuser_is_seat) {
+                return bad("its challenger's open demand does not pause the claim");
+            }
+            if record.amount == 0 || record.chunks.is_empty() || record.chunks.len() > 2 || !record.chunks.is_sorted_by(|a, b| a < b) {
+                return bad("a zero amount, or chunks that are not one or two, sorted and unique");
+            }
         }
         Ok(())
     }
@@ -12102,6 +12215,13 @@ pub enum PalwDeltaEntryV2 {
         key: (Hash64, PalwBondKeyV2),
         old: Option<u64>,
         new: Option<u64>,
+    },
+    /// A held forfeit was written at an acquitting close or dropped with its claim (80; ADR-0152
+    /// §4-ter.3 step 6, [`PalwHeldForfeitV1`]).
+    HeldForfeit {
+        key: (Hash64, Hash64),
+        old: Option<PalwHeldForfeitV1>,
+        new: Option<PalwHeldForfeitV1>,
     },
 }
 
@@ -14534,6 +14654,13 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.held_leaf_demands.contains_key(&key) && new.as_ref().is_none_or(|claim| claim.phase.is_terminal()) {
             self.write_held_leaf_demands(key, None);
         }
+        // 4-ter.3 step 6: so do the held forfeits — every door to a terminal phase drops them HERE.
+        if new.as_ref().is_none_or(|claim| claim.phase.is_terminal()) {
+            let sessions: Vec<Hash64> = self.state.held_forfeits_of_claim(&key).map(|(session, _)| *session).collect();
+            for session in sessions {
+                self.write_held_forfeit((key, session), None);
+            }
+        }
         // ADR-0124 Decision 3: the seats' duty — and the exposure it stands for — lives exactly as
         // long as the claim is live. Every door to a terminal phase passes here; the exposure is
         // released by the same doors (`release_seat_duties`), BEFORE this write drops the row it
@@ -15199,6 +15326,208 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::DaClaim { key, old, new });
     }
 
+    /// **4-ter.3 step 6: write or drop one held forfeit** — the rooted write and its delta entry (80).
+    fn write_held_forfeit(&mut self, key: (Hash64, Hash64), new: Option<PalwHeldForfeitV1>) {
+        let old = match &new {
+            Some(record) => self.state.held_forfeits.insert(key, record.clone()),
+            None => self.state.held_forfeits.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::HeldForfeit { key, old, new });
+        }
+    }
+
+    /// **4-ter.3 step 6 (the forger's race): the acquitting close's record** — past
+    /// `palw_offence_attribution`, a PROVEN `ChallengerDefeated` on a dissection whose bottom read an
+    /// anchor, on a claim that can still be tried, keeps what the close took from the challenger
+    /// (`before − after`, the debits themselves) and the anchor chunks the bottom opened. One per
+    /// session: the session is gone after its close, so it can never be written twice.
+    #[allow(clippy::too_many_arguments)]
+    fn record_held_forfeit_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
+        session_id: Hash64,
+        challenger: PalwBondKeyV2,
+        narrowed_leaf: Option<u64>,
+        before: u64,
+        proof: &crate::palw_court_v2::PalwCourtVerdictProofV2,
+    ) {
+        use crate::palw_attn_court_v1::PalwAttnTileEvidenceV1;
+        if !self.extras.offence_attribution_active {
+            return;
+        }
+        let crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { bottom, .. } = proof else { return };
+        let Some(anchor) = bottom.anchor.as_ref() else { return };
+        if self.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal()) {
+            return;
+        }
+        let after = self.state.bonds.get(&challenger).map(|record| record.collateral).unwrap_or(before);
+        let amount = before.saturating_sub(after);
+        let mut chunks: Vec<u32> = [&bottom.k, &bottom.v]
+            .into_iter()
+            .filter_map(|tile| match tile {
+                PalwAttnTileEvidenceV1::Checkpoint { chunk, .. } => Some(chunk.chunk_index),
+                PalwAttnTileEvidenceV1::CacheWrites { .. } => None,
+            })
+            .collect();
+        chunks.sort_unstable();
+        chunks.dedup();
+        let Some(narrowed_leaf) = narrowed_leaf else { return };
+        if amount == 0 || chunks.is_empty() {
+            return;
+        }
+        self.write_held_forfeit(
+            (claim_id, session_id),
+            Some(PalwHeldForfeitV1 {
+                challenger,
+                amount,
+                anchor_leaf_hash: anchor.opening.leaf_hash,
+                anchor_checkpoint: anchor.leaf.checkpoint_index,
+                narrowed_leaf,
+                chunks,
+                closed_daa: ctx.daa_score,
+                paused: false,
+            }),
+        );
+        // The challenger's demand may already be open (its node files it at the `Terminal` duty, and
+        // the forger's close can land after it): it becomes the record's one pause now.
+        self.pause_open_demand_of_held_forfeit_v1(ctx.daa_score, (claim_id, session_id));
+    }
+
+    /// **4-ter.3 step 6 (the third review's MEDIUM): a demand that PREDATES its record pauses too.** A
+    /// non-seat challenger's node files its step-6 demand at its `Terminal` duty, while the held
+    /// session is still open; a forger that closes its acquittal after that demand lands gets a record
+    /// whose challenger's session was admitted non-pausing ([`Self::held_forfeit_pauses_v1`] runs only
+    /// at a session's opening), and one session per accuser left no second demand to open —
+    /// `Final` (close + `window_challenge`) came long before the demand's deadline (+ `W_disclose`).
+    /// So the record's write CONVERTS that open session into the record's pause, exactly as an opening
+    /// under the record would have written it: counted with the seats' OPEN sessions (never in
+    /// `opened_by_seat`, a real seat's budget), the claim paused from now when it is the first
+    /// (`paused_since`, its deadline disarmed —
+    /// the close's re-arm just armed it; the pause is credited back at the session's close as every
+    /// seat pause is), and the record marked paused. A seat's session already pauses: nothing to do.
+    fn pause_open_demand_of_held_forfeit_v1(&mut self, now_daa: u64, key: (Hash64, Hash64)) {
+        let (claim_id, _) = key;
+        let Some(record) = self.state.held_forfeits.get(&key).cloned() else { return };
+        if record.paused || self.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal()) {
+            return;
+        }
+        let Some(session) = self.state.da_sessions.get(&(claim_id, record.challenger)).cloned() else { return };
+        if session.accuser_is_seat {
+            return;
+        }
+        self.write_da_session((claim_id, record.challenger), Some(crate::palw_da_rcore_v1::PalwDaSessionV1 { accuser_is_seat: true, ..session }));
+        let mut da = self.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
+        // Moved from the non-seat OPEN count to the seats' (DA-5, DL-1). DA-8's lifetime counts stay
+        // as its admission left them: `opened_non_seat_total` counted it then, and `opened_by_seat` —
+        // a real seat's budget, at most four — never counts a non-seat (the fourth review's HIGH).
+        da.open_other_sessions = da.open_other_sessions.saturating_sub(1);
+        da.open_seat_sessions = da.open_seat_sessions.saturating_add(1);
+        let first = da.open_seat_sessions == 1;
+        if first {
+            da.paused_since = Some(now_daa);
+        }
+        self.write_da_claim(claim_id, Some(da));
+        if first {
+            self.disarm_deadline(claim_id);
+        }
+        self.write_held_forfeit(key, Some(PalwHeldForfeitV1 { paused: true, ..record }));
+    }
+
+    /// **4-ter.3 step 6 (the forger's race): the held forfeits a checkpoint-court conviction proves
+    /// wrong** — every record of `claim_id` whose acquitting bottom opened the very anchor
+    /// (`anchor_leaf_hash`) and chunk the conviction's forged row is in. Read BEFORE the conviction,
+    /// whose void drops the claim's records.
+    fn held_forfeits_proven_wrong_v1(
+        &self,
+        claim_id: &Hash64,
+        accusation: &crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1,
+    ) -> Vec<PalwHeldForfeitV1> {
+        self.state
+            .held_forfeits_of_claim(claim_id)
+            .filter(|(_, record)| {
+                record.anchor_leaf_hash == accusation.anchor.opening.leaf_hash && record.chunks.contains(&accusation.chunk.chunk_index)
+            })
+            .map(|(_, record)| record.clone())
+            .collect()
+    }
+
+    /// **4-ter.3 step 6 (the forger's race), the withholding door: the held forfeits a DA-7 default
+    /// proves wrong** (the second review's HIGH) — every record of `claim_id` whose challenger is the
+    /// accuser of one of the claim's DEFAULTED sessions (past its deadline at `now_daa`) whose named
+    /// unit is the step-6 demand of that record's anchor ([`PalwHeldForfeitV1::is_demanded_by_v1`]).
+    /// A forger that acquitted itself on its forged anchor and then withholds the demanded chunk
+    /// (S1, cheaper than S2 at 8k) would otherwise keep the seat's forfeit burned. Read BEFORE the
+    /// default's void drops the records.
+    fn held_forfeits_withheld_v1(&self, claim_id: &Hash64, now_daa: u64) -> Vec<PalwHeldForfeitV1> {
+        let defaulted: Vec<(PalwBondKeyV2, crate::palw_da_rcore_v1::PalwDaUnitV1)> = self
+            .state
+            .da_sessions_of(claim_id)
+            .filter(|(_, session)| session.deadline_daa < now_daa)
+            .filter_map(|(accuser, session)| session.units.first().map(|named| (*accuser, *named)))
+            .collect();
+        self.state
+            .held_forfeits_of_claim(claim_id)
+            .filter(|(_, record)| {
+                defaulted.iter().any(|(accuser, named)| *accuser == record.challenger && record.is_demanded_by_v1(named))
+            })
+            .map(|(_, record)| record.clone())
+            .collect()
+    }
+
+    /// **4-ter.3 step 6 (the second review's MEDIUM): does `accuser`'s new data-availability session
+    /// on `claim_id` pause the claim as a seat's does (DL-1)?** Past `palw_offence_attribution`, when
+    /// `accuser` is the challenger of a live held-forfeit record on the claim that has not paused it
+    /// yet — marked here, so a record pauses once. A non-seat's session pauses nothing (DA-5), so the
+    /// claim reached `Final` at `L + W` while the challenger's step-6 demand, opened the block after
+    /// the acquittal moved `L`, ran to `L + 1 + W`: the forger answered after `Final`, where no
+    /// checkpoint accusation reaches it. Bounded: one pause per record, one record per session, and
+    /// each pause at most `W_disclose` (1,200 on testnet-12), credited back at the close as every
+    /// seat pause is. The session is still ADMITTED on the standing its accuser has (DA-8): a
+    /// non-seat's demand needs a free non-seat slot on the claim (three open, sixteen over its life),
+    /// and those slots can be filled by Sybil accusers ahead of it — an existing DA-8 property this
+    /// does not change, recorded as a residual.
+    fn held_forfeit_pauses_v1(&mut self, claim_id: Hash64, accuser: PalwBondKeyV2) -> bool {
+        if !self.extras.offence_attribution_active {
+            return false;
+        }
+        let Some((session, record)) = self
+            .state
+            .held_forfeits_of_claim(&claim_id)
+            .find(|(_, record)| record.challenger == accuser && !record.paused)
+            .map(|(session, record)| (*session, record.clone()))
+        else {
+            return false;
+        };
+        self.write_held_forfeit((claim_id, session), Some(PalwHeldForfeitV1 { paused: true, ..record }));
+        true
+    }
+
+    /// **4-ter.3 step 6 (the forger's race): make each wrongly charged challenger whole** — after the
+    /// conviction has closed (its `CourtConviction` record written last with the producer's
+    /// collected debit, which this never touches). The forfeit never left the challenger's bond: a
+    /// slash lowers `collateral` and raises `slashed`, the sompi its release must destroy. So the
+    /// refund is restored WHERE IT WENT — `slashed` down, `collateral` up by the same amount, clamped
+    /// to `slashed` — and it is the challenger's own money, neither minted nor taken from the
+    /// producer's debit: the producer's charge, the burn of it and the reporter share are exactly
+    /// the conviction's. A bond whose collateral already left through its release spend (its burn
+    /// already paid) gains only a record — collateral on a registry row whose outpoint is spent,
+    /// which nothing can spend again, so it is harmless: the money is gone, and nothing is minted in
+    /// its place. Called after a checkpoint conviction and after a DA-7 default.
+    fn refund_held_forfeits_v1(&mut self, forfeits: &[PalwHeldForfeitV1]) {
+        for record in forfeits {
+            let Some(mut bond) = self.state.bonds.get(&record.challenger).cloned() else { continue };
+            let refund = record.amount.min(bond.slashed);
+            if refund == 0 {
+                continue;
+            }
+            bond.slashed -= refund;
+            bond.collateral = bond.collateral.saturating_add(refund);
+            self.write_bond(record.challenger, Some(bond));
+        }
+    }
+
     /// The accusers `claim_id` contributes to the A-6 index: its open sessions' and its refuted
     /// entries' — the per-claim half of [`palw_da_indexes_of_v1`].
     fn da_accusers_of_claim(&self, claim_id: &Hash64) -> BTreeSet<PalwBondKeyV2> {
@@ -15513,8 +15842,15 @@ impl<'a> TransitionBuilder<'a> {
                 .collect()
         };
         let g = self.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
+        // ADR-0152 §4-ter.3 step 6 (the second review's HIGH): the acquittals this withholding proves
+        // wrong, read before the default's void drops them (a `FinalRow` default finds none: `Final`
+        // dropped them, and a pausing challenger's session keeps its claim from `Final`).
+        let withheld = self.held_forfeits_withheld_v1(&claim_id, now);
         let charge = PalwDaDefaultChargeV1 { claim_id, producer: claim.bond, stage, g, covering, winner };
-        self.da_default_charge_v1(ctx, &claim, &charge)
+        self.da_default_charge_v1(ctx, &claim, &charge)?;
+        // ...and, the conviction closed, each such challenger made whole.
+        self.refund_held_forfeits_v1(&withheld);
+        Ok(())
     }
 
     /// **ADR-0152 DA-7 (M3): THE hook every data-availability default is charged through** — S-4's
@@ -23197,20 +23533,37 @@ fn open_da_session_rcore_v1(
     let mut units = Vec::with_capacity(1 + drawn.len());
     units.push(named);
     units.extend(drawn);
+    // ADR-0152 §4-ter.3 step 6 (the second review's MEDIUM): the challenger of a live held forfeit on
+    // this claim pauses it as a seat does, once a record — counted with the seats' sessions (DL-1 and
+    // DA-5 read nothing else), after DA-8 admitted it on the budget its standing gives it.
+    let seat_like = admission.accuser_is_seat || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser));
     let session = PalwDaSessionV1 {
         opened_daa: ctx.daa_score,
         deadline_daa: admission.deadline_daa,
-        accuser_is_seat: admission.accuser_is_seat,
+        accuser_is_seat: seat_like,
         exposure: admission.exposure,
         units,
         stage: admission.stage,
     };
     builder.write_da_session((claim_id, accuser), Some(session));
     let mut record = builder.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
-    let pauses = if admission.accuser_is_seat {
+    let pauses = if seat_like {
         record.open_seat_sessions = record.open_seat_sessions.saturating_add(1);
-        let opened = record.opened_by_seat.entry(accuser).or_insert(0);
-        *opened = opened.saturating_add(1);
+        if admission.accuser_is_seat {
+            let opened = record.opened_by_seat.entry(accuser).or_insert(0);
+            *opened = opened.saturating_add(1);
+        } else {
+            // **The fourth review's HIGH: a record-holder's pause is not a seat's session.** It is
+            // counted with the seats' OPEN sessions (`open_seat_sessions`, `paused_since`: all DA-5 and
+            // DL-1 read), but DA-8's per-seat budget (`opened_by_seat`, at most four) is a seat's
+            // alone — admission asks it of a seat and never of anyone else, and the loader refuses a
+            // count past four. Counted there, a non-seat that lost five held dissections on one claim
+            // drove the fold to a tip its own loader refused on every node: a chain halt for five
+            // forfeits. The session was admitted on the non-seat budget, so it is counted on it —
+            // the lifetime total (`opened_non_seat_total`, sixteen), exactly as the conversion of a
+            // demand that predates its record leaves it (counted there at its admission).
+            record.opened_non_seat_total = record.opened_non_seat_total.saturating_add(1);
+        }
         record.open_seat_sessions == 1
     } else {
         record.open_other_sessions = record.open_other_sessions.saturating_add(1);
@@ -25961,8 +26314,13 @@ fn apply_object(
                 .map_err(|e| PalwStateV2Error::CheckpointCourt(e.to_string()))?;
             match verdict {
                 crate::palw_checkpoint_court_v1::PalwCheckpointCourtVerdictV1::ExecutorGuilty => {
+                    // ADR-0152 §4-ter.3 step 6 (the forger's race): the acquittals this proves wrong,
+                    // read before the conviction's void drops them.
+                    let wronged = builder.held_forfeits_proven_wrong_v1(&claim_id, accusation);
                     // A proven verdict (S-4): `CourtConviction` past `palw_rcore_plus`.
                     builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?;
+                    // ...and, the conviction closed, each wronged challenger made whole.
+                    builder.refund_held_forfeits_v1(&wronged);
                 }
                 crate::palw_checkpoint_court_v1::PalwCheckpointCourtVerdictV1::FalseAccusation => {
                     let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
@@ -27467,7 +27825,19 @@ fn apply_object(
                     }
                 }
                 PalwCourtVerdictV2::ChallengerDefeated => {
+                    let before = builder.state.bonds.get(&session.challenger_bond).map(|record| record.collateral).unwrap_or(0);
                     rearm_after_challenger_side_close(builder, ctx, claim_id, &claim, session.challenger_bond, session.opened_daa)?;
+                    // ADR-0152 §4-ter.3 step 6 (the forger's race): past `palw_offence_attribution`, what
+                    // a proven acquittal on an anchor took, kept for the conviction that proves it wrong.
+                    builder.record_held_forfeit_v1(
+                        ctx,
+                        claim_id,
+                        *session_id,
+                        session.challenger_bond,
+                        session.ladder.terminal_index(),
+                        before,
+                        proof,
+                    );
                 }
             }
         }
@@ -30936,6 +31306,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
             state.activation_pool_counters = *install;
         }
+        // 4-ter.3 step 6: the held forfeits, verify-then-install.
+        PalwDeltaEntryV2::HeldForfeit { key, old, new } => swap_write!(state.held_forfeits, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -31336,6 +31708,9 @@ pub struct PalwStateCarriageV2 {
     /// The fix round's F5 and F4, the same tail, after the counters.
     pub activation_pool_scheduled: BTreeMap<(Hash64, Hash64), u64>,
     pub activation_readiness_landed: BTreeMap<(Hash64, PalwBondKeyV2), u64>,
+    /// **ADR-0152 §4-ter.3 step 6: the held forfeits.** A tagged tail (`0xB6`, after the Activation
+    /// Pool's `0xB5`), encoded only when a record exists (the root block's own guard); rooted.
+    pub held_forfeits: BTreeMap<(Hash64, Hash64), PalwHeldForfeitV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -31437,6 +31812,10 @@ const PALW_CARRIAGE_RCORE_PLUS_TAIL_V1: u8 = 0xB4;
 /// carriage is byte-identical to one before this tail existed. `0xB0`/`0xB1` are skipped: never
 /// declared, but never reserved either (the review's M10).
 const PALW_CARRIAGE_ACTIVATION_POOL_TAIL_V1: u8 = 0xB5;
+/// ADR-0152 §4-ter.3 step 6: the held forfeits, once a record exists. Rooted. Absent on every chain
+/// without one, so its carriage is byte-identical to one before this tail existed. `0xB5` is the
+/// Activation Pool's (feat/t12-activation-pool).
+const PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1: u8 = 0xB6;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -31624,6 +32003,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.activation_pool_scheduled.serialize(writer)?;
             self.activation_readiness_landed.serialize(writer)?;
         }
+        if !self.held_forfeits.is_empty() {
+            PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1.serialize(writer)?;
+            self.held_forfeits.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -31734,6 +32117,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut activation_pool_scheduled = BTreeMap::new();
         let mut activation_readiness_landed = BTreeMap::new();
         let mut seen_activation_pool = false;
+        let mut held_forfeits = BTreeMap::new();
+        let mut seen_held_forfeits = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -31849,6 +32234,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     activation_pool_scheduled = BTreeMap::deserialize_reader(reader)?;
                     activation_readiness_landed = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1 if !seen_held_forfeits => {
+                    seen_held_forfeits = true;
+                    held_forfeits = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -31946,6 +32335,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             activation_pool_counters,
             activation_pool_scheduled,
             activation_readiness_landed,
+            held_forfeits,
         })
     }
 }
@@ -32021,6 +32411,7 @@ impl PalwStateCarriageV2 {
             activation_pool_counters: state.activation_pool_counters,
             activation_pool_scheduled: state.activation_pool_scheduled.clone(),
             activation_readiness_landed: state.activation_readiness_landed.clone(),
+            held_forfeits: state.held_forfeits.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -32164,6 +32555,7 @@ impl PalwStateCarriageV2 {
             activation_pool_counters: self.activation_pool_counters,
             activation_pool_scheduled: self.activation_pool_scheduled,
             activation_readiness_landed: self.activation_readiness_landed,
+            held_forfeits: self.held_forfeits,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -48225,6 +48617,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ActivationPoolCounters { .. } => "activation_pool_counters",
                     PalwDeltaEntryV2::ActivationPoolScheduled { .. } => "activation_pool_scheduled",
                     PalwDeltaEntryV2::ActivationReadinessLanded { .. } => "activation_readiness_landed",
+                    // ADR-0152 §4-ter.3 step 6: its round trip is the held-forfeit suite's.
+                    PalwDeltaEntryV2::HeldForfeit { .. } => "held_forfeit",
                 });
             }
         }
@@ -48332,6 +48726,8 @@ pub(crate) mod tests {
             // The pool's fix round: F5's scheduled payouts and F4's readiness landings.
             (78, PalwDeltaEntryV2::ActivationPoolScheduled { key: (key, key), old: None, new: None }),
             (79, PalwDeltaEntryV2::ActivationReadinessLanded { key: (key, bond_key(1)), old: None, new: None }),
+            // ADR-0152 §4-ter.3 step 6, after the pool's four.
+            (80, PalwDeltaEntryV2::HeldForfeit { key: (key, key), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -48937,6 +49333,9 @@ pub(crate) mod tests {
             activation_pool_counters: _,
             activation_pool_scheduled: _,
             activation_readiness_landed: _,
+            // ADR-0152 §4-ter.3 step 6: its own Some-only block, empty here (the held-forfeit suite
+            // pins its place and its separation).
+            held_forfeits: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -59828,6 +60227,142 @@ pub(crate) mod tests {
     mod vesting_fold_v1;
     // ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): R1 on the real cards.
     mod activation_pool_r1_v1;
+
+    /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
+    /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's
+    /// placeholders here), a record only while its claim can still be tried. What the fold does with
+    /// them — kept at a proven acquittal on an anchor, restored at the checkpoint conviction that
+    /// proves that anchor's chunk forged, dropped at every terminal door — is exercised end to end
+    /// through the node in kaspad's `held_court_e2e`.
+    mod held_forfeits_v1 {
+        use super::*;
+
+        fn record() -> PalwHeldForfeitV1 {
+            PalwHeldForfeitV1 {
+                challenger: bond_key(2),
+                amount: 7,
+                anchor_leaf_hash: h64(0xA7),
+                anchor_checkpoint: 11,
+                narrowed_leaf: 4_750,
+                chunks: vec![3, 9],
+                closed_daa: 50,
+                paused: false,
+            }
+        }
+
+        fn rebuilt(s: &PalwChainStateV2) -> PalwChainStateV2 {
+            apply_delta_v2(s, &PalwStateDeltaV2 { point: ctx(0x5B, 200, 200), entries: Vec::new() }, &params()).unwrap()
+        }
+
+        fn live_claim(s: &PalwChainStateV2) -> Hash64 {
+            *s.claims_iter().find(|(_, claim)| !claim.phase.is_terminal()).expect("a live claim in the fixture").0
+        }
+
+        /// A state with none roots and carries exactly as before (no block, no tail); one record
+        /// turns both on, round-trips byte for byte, reloads under its root, and removing it gives
+        /// the old root and bytes back.
+        #[test]
+        fn the_held_forfeits_block_is_some_only_and_carried() {
+            let base = rebuilt(&m02_populated_state());
+            assert!(base.held_forfeits.is_empty());
+            let base_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&base)).unwrap();
+            let claim = live_claim(&base);
+            let mut with = base.clone();
+            with.held_forfeits.insert((claim, h64(0x5E)), record());
+            assert_ne!(with.state_root(), base.state_root(), "a record turns the block on");
+            let carriage = PalwStateCarriageV2::from_state(&with);
+            let bytes = borsh::to_vec(&carriage).unwrap();
+            assert!(bytes.len() > base_bytes.len() && bytes.starts_with(&base_bytes), "the tail is appended after every other");
+            assert_eq!(bytes[base_bytes.len()], PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1, "the tail byte");
+            assert_eq!(PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1, 0xB6, "after the Activation Pool's 0xB5");
+            let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(decoded, carriage);
+            assert_eq!(borsh::to_vec(&decoded).unwrap(), bytes, "byte for byte");
+            // (Reloaded under its root every block of kaspad's `held_court_e2e` forger's-race play,
+            // whose fold writes, holds and drops one; this fixture's other collections do not reload.)
+            let mut doubled = bytes.clone();
+            doubled.extend_from_slice(&bytes[base_bytes.len()..]);
+            assert!(borsh::from_slice::<PalwStateCarriageV2>(&doubled).is_err(), "one held-forfeit tail at most");
+            let mut back = with.clone();
+            back.held_forfeits.clear();
+            assert_eq!(back.state_root(), base.state_root(), "none again: the root as before");
+            assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&back)).unwrap(), base_bytes, "and the bytes");
+        }
+
+        /// Entry 80 round-trips, applies, reverts and refuses a parent it was not computed from; 76–79
+        /// are the Activation Pool's four (the integration replaced this line's placeholders with
+        /// them; the discriminant table pins all five).
+        #[test]
+        fn the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused() {
+            let p = params();
+            let base = rebuilt(&m02_populated_state());
+            let key = (live_claim(&base), h64(0x5E));
+            let point = ctx(0x5C, 201, 201);
+            let delta =
+                PalwStateDeltaV2 { point, entries: vec![PalwDeltaEntryV2::HeldForfeit { key, old: None, new: Some(record()) }] };
+            let bytes = borsh::to_vec(&delta).unwrap();
+            assert_eq!(borsh::to_vec(&delta.entries[0]).unwrap()[0], 80, "entry 80");
+            assert_eq!(borsh::from_slice::<PalwStateDeltaV2>(&bytes).unwrap(), delta);
+            let child = apply_delta_v2(&base, &delta, &p).expect("applies");
+            assert_ne!(child.state_root(), base.state_root());
+            assert_eq!(child.held_forfeits_of_claim(&key.0).count(), 1);
+            let back = revert_delta_v2(&child, &delta, &p).expect("reverts");
+            assert_eq!(back, base);
+            assert!(matches!(apply_delta_v2(&child, &delta, &p), Err(PalwStateV2Error::DeltaMismatch(_))), "applied twice");
+            // 79, the entry just below it, is the pool's F4 readiness landing (not a placeholder any more).
+            let landed = PalwDeltaEntryV2::ActivationReadinessLanded { key: (key.0, bond_key(1)), old: None, new: None };
+            assert_eq!(borsh::to_vec(&landed).unwrap()[0], 79, "the Activation Pool's four end at 79");
+        }
+
+        /// **The block and tail orders where both lines meet** (the second review's LOW): in
+        /// `state_root` the held forfeits' Some-only block is hashed after R-core+'s and, where the
+        /// Activation Pool's `activation_pool/v1` block exists, after it; in the carriage the `0xB6`
+        /// tail is written after R-core+'s and after the pool's `0xB5`. Read off this file's own code,
+        /// so it holds on this line (no pool block yet) and after the integration merge (both).
+        #[test]
+        fn the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool() {
+            let source = include_str!("palw_state_v2.rs");
+            // Each needle is spliced at run time, so this test's own text never matches it.
+            let at = |needle: &str| source.find(&needle.replacen('~', "", 1));
+            let rcore = at("state.upd~ate(b\"rcore_plus/v1\");").expect("R-core+'s root block");
+            let held = at("state.upd~ate(b\"held_forfeits/v1\");").expect("the held forfeits' root block");
+            assert!(rcore < held, "after R-core+'s block");
+            if let Some(pool) = at("state.upd~ate(b\"activation_pool/v1\");") {
+                assert!(pool < held, "after the Activation Pool's block, where both are non-empty");
+            }
+            let rcore_tail = at("PALW_CARRIAGE_RCORE_PLUS_TAIL_V1.seri~alize(writer)?;").expect("R-core+'s tail");
+            let held_tail = at("PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1.seri~alize(writer)?;").expect("the held forfeits' tail");
+            assert!(rcore_tail < held_tail, "the tail after R-core+'s");
+            if let Some(pool_tail) = at("PALW_CARRIAGE_ACTIVATION_POOL_TAIL_V1.seri~alize(writer)?;") {
+                assert!(pool_tail < held_tail, "and after the Activation Pool's 0xB5");
+            }
+        }
+
+        /// A record whose claim is gone (or terminal), whose amount is zero or more than its challenger
+        /// ever lost, or whose chunks are not one or two sorted and unique, is a carriage no fold could
+        /// have written.
+        #[test]
+        fn a_held_forfeit_without_a_live_claim_is_inconsistent() {
+            let mut base = rebuilt(&m02_populated_state());
+            // The forfeit went into the challenger's `slashed`, as the close leaves it.
+            base.bonds.get_mut(&bond_key(2)).expect("the fixture's bond 2").slashed += record().amount;
+            let mut good = base.clone();
+            good.held_forfeits.insert((live_claim(&base), h64(0x5E)), record());
+            assert!(good.assert_held_forfeits_consistency_v1().is_ok());
+            let slashed = base.bonds[&bond_key(2)].slashed;
+            for bad in [
+                ((h64(0xDEAD), h64(0x5E)), record()),
+                ((live_claim(&base), h64(0x5E)), PalwHeldForfeitV1 { amount: 0, ..record() }),
+                ((live_claim(&base), h64(0x5E)), PalwHeldForfeitV1 { chunks: vec![9, 3], ..record() }),
+                ((live_claim(&base), h64(0x5E)), PalwHeldForfeitV1 { amount: slashed + 1, ..record() }),
+                ((live_claim(&base), h64(0x5E)), PalwHeldForfeitV1 { challenger: bond_key(0x7777), ..record() }),
+            ] {
+                let mut s = base.clone();
+                s.held_forfeits.insert(bad.0, bad.1.clone());
+                assert!(matches!(s.assert_held_forfeits_consistency_v1(), Err(PalwStateV2Error::CarriageInconsistent(_))), "{bad:?}");
+            }
+        }
+    }
 
     mod rcore_v22_skeleton {
         use super::*;

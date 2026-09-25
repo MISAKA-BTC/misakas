@@ -81,9 +81,10 @@ STATUS_FILE="$WORK_DIR/steps.status"
 ANALYZER="$REPO_ROOT/scripts/misaka-palw-t12-rcore-analyze.py"
 
 # Public testnet-12's own listeners (P2P shared with testnet-11 by the 2026-09-22 decision; testnet gRPC,
-# wRPC borsh, wRPC JSON; the EVM HTTP default). A drill never binds one, and a host where one listens runs
-# a public node, however it was started.
-PUBLIC_T12_PORTS="26311 26210 27210 28210 8545"
+# wRPC borsh, wRPC JSON; the EVM HTTP default), and the ports contrib/t12-deploy-kit gives the fleet's
+# public nodes (install-*.sh: gRPC 26312, wRPC 26313/26314 and the second..fifth node's 263x1/263x3/263x4).
+# A drill never binds one, and a host where one listens runs a public node, however it was started.
+PUBLIC_T12_PORTS="26311 26210 27210 28210 8545 26312 26313 26314 26321 26323 26324 26331 26333 26334 26341 26343 26344 26351 26353 26354"
 
 # Exit codes of a step (see SUBCOMMANDS).
 RC_FAIL=1
@@ -145,12 +146,16 @@ check_host() {
   if command -v systemctl >/dev/null 2>&1; then
     local unit file
     for unit in $(systemctl list-units --type=service --state=active --no-legend 2>/dev/null | awk '{print $1}' || true); do
-      case "$unit" in misaka-t12-node*) die "this host runs a public testnet-12 node ($unit) — never drill beside one" ;; esac
-      file="$(systemctl show -p FragmentPath --value "$unit" 2>/dev/null || true)"
-      [ -n "$file" ] && [ -r "$file" ] || continue
-      if grep -q -E -- '--netsuffix(=| )12|testnet-12|misaka-testnet-12' "$file" && ! grep -q -- '--palw-drill-genesis-salt' "$file"; then
-        die "this host runs a public testnet-12 node (unit $unit, $file) — never drill beside one"
-      fi
+      # the deploy kit's public units: misaka-t12-node*, misaka-t12-seat2..7 (drop-ins over older units),
+      # and the retired live chain's floor seats misaka-t12f-*
+      case "$unit" in misaka-t12-node*|misaka-t12-seat*|misaka-t12f-*) die "this host runs a public testnet-12 node ($unit) — never drill beside one" ;; esac
+      # the unit file AND its drop-ins: the deploy kit puts a public node's ExecStart in a drop-in
+      for file in $(systemctl show -p FragmentPath,DropInPaths --value "$unit" 2>/dev/null | tr ' ' '\n' || true); do
+        [ -n "$file" ] && [ -r "$file" ] || continue
+        if grep -q -E -- '--netsuffix(=| )12|testnet-12|misaka-testnet-12|/t12-rel/' "$file" && ! grep -q -- '--palw-drill-genesis-salt' "$file"; then
+          die "this host runs a public testnet-12 node (unit $unit, $file) — never drill beside one"
+        fi
+      done
     done
   fi
   local line

@@ -187,7 +187,16 @@ fn chain(rule: Rule, bystander_collateral: u64) -> (Chain, HeldRow, Vec<(PalwBon
 
 /// [`chain`] on the held row `which` picks.
 fn chain_on(rule: Rule, bystander_collateral: u64, which: fn(&Params) -> HeldRow) -> (Chain, HeldRow, Vec<(PalwBondKeyV2, Hash64)>) {
-    let p = t12();
+    chain_on_params(t12(), rule, bystander_collateral, which)
+}
+
+/// [`chain_on`] over `p` — testnet-12 as shipped, or past a flag day (`t12_2m_open`).
+fn chain_on_params(
+    p: Params,
+    rule: Rule,
+    bystander_collateral: u64,
+    which: fn(&Params) -> HeldRow,
+) -> (Chain, HeldRow, Vec<(PalwBondKeyV2, Hash64)>) {
     let b = bundle(&p);
     let sp = b.state.clone();
     assert!(!sp.held_unanswerable_classes().is_empty(), "the bundle carries the answerability mirror");
@@ -405,16 +414,35 @@ fn a_floor_bystander_holds_one_held_dissection_charge_not_two() {
 }
 
 /// **The 2M row opens no held dissection on testnet-12** (the shard-court addendum on the network's
-/// own ruleset): the one-move accusation the unbound verdict defers to a dissection is refused
-/// `ShardCourtHeldSiteUnanswerable` past `palw_offence_attribution` — no session, no reservation, the
-/// accuser's collateral untouched. Below the fence the same accusation opens the dissection it
-/// always did.
+/// own ruleset).
+///
+/// * **At launch the 2M row takes no claim at all** (re-pinned at the pre-merge of
+///   feat/t12-class-verify-deadline: ADR-0152 §4-quater V2 / U-D1 close every 2M claim on every lane,
+///   `ClassDeadlineUnmeasured`, until a flag day installs a measured row) — so no dissection can open
+///   on it, a stronger closure than the addendum's.
+/// * **Past that flag day** (`t12_2m_open`: a measured row, the only configuration in which a 2M
+///   claim exists) the addendum still holds: the one-move accusation the unbound verdict defers to a
+///   dissection is refused `ShardCourtHeldSiteUnanswerable` past `palw_offence_attribution` — no
+///   session, no reservation, the accuser's collateral untouched. Below the fence the same
+///   accusation opens the dissection it always did.
 #[test]
 fn the_2m_row_opens_no_held_dissection_on_testnet_12() {
     // A bystander that can back the 2M claim's reservation (≈ 59,743 MSK), so the twin below the
     // fence opens on it and the refusal above is the addendum's, not the ceiling's.
     let collateral = 100_000_000_000_000; // 1,000,000 MSK
-    let (mut c, row, seats) = chain_on(Rule::T12, collateral, two_m);
+    // At launch: the 2M attempt itself is refused, by name.
+    let (mut c, row, _) = chain_on(Rule::T12, collateral, two_m);
+    let pwu = palw_pwu_v1(row.target, row.leaves);
+    let (env, key, _) =
+        junk_attempt(row.id, bond_key(EXECUTOR), pubkey_of(EXECUTOR), &operator_pubkey_of(EXECUTOR), pwu, 1, 0x0A1E_0001);
+    let rule = c.rule;
+    let closed = c.step(&[], PalwBlockWorkV3::Attempt(&env), key, rule).expect_err("the 2M row takes no claim at launch");
+    assert!(
+        matches!(&closed, PalwStateV2Error::ClassDeadlineUnmeasured { class, .. } if *class == row.id),
+        "closed by name at launch: {closed:?}"
+    );
+    // Past the flag day that opens it.
+    let (mut c, row, seats) = chain_on_params(t12_2m_open(), Rule::T12, collateral, two_m);
     assert!(c.sp.held_class_is_unanswerable_v1(&row.id), "the bundle mirrors the 2M row as unanswerable");
     let claim_id = licensed(&mut c, &row, &seats, 1);
     let bystander_before = c.s.bond(&bond_key(BYSTANDER)).unwrap().clone();
@@ -429,7 +457,7 @@ fn the_2m_row_opens_no_held_dissection_on_testnet_12() {
     assert!(matches!(c.s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the claim stands");
 
     // Below the fence: the dissection opens, as it did before the addendum.
-    let (mut c, row, seats) = chain_on(Rule::Below, collateral, two_m);
+    let (mut c, row, seats) = chain_on_params(t12_2m_open(), Rule::Below, collateral, two_m);
     let claim_id = licensed(&mut c, &row, &seats, 1);
     open(&mut c, &row, claim_id).expect("below the fence the 2M row's dissection opens");
     assert_eq!(c.s.court_sessions_for_claim(&claim_id), 1);

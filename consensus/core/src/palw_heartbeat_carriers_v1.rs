@@ -45,14 +45,19 @@
 //!   older disclosures past R-core+, so they are not carriers here);
 //! * the reporter's commit–reveal — `ReporterCommitted`, `ReporterRevealed`;
 //! * the court — `CourtOpened` and the session's moves (close, its declaration and chunks, the
-//!   bisection rungs and the k-ary dissection's moves). Whether the phase allows a move is the fold's.
+//!   bisection rungs and the k-ary dissection's moves). Whether the phase allows a move is the fold's;
+//! * **the held dissection's opening and step 6's conviction** (ADR-0152 §4-ter; the A-held node's
+//!   second review) — `ShardCourtAccused`, the one-move accusation that opens a held dissection past
+//!   `palw_offence_attribution`, and `CheckpointAccused`, the checkpoint court's one-move verdict
+//!   step 6 files on a forged anchor chunk (the conviction that also restores a wrongly acquitted
+//!   seat's forfeit). A lie a seat can prove must not reach `Final` behind a halt any more than a
+//!   reporter's filing may.
 //!
 //! Everything else stays in the fee market, deliberately: licences and receipts compete there, and
 //! the lane taking at most half a block is what keeps a DA or disclosure storm from starving them
-//! (the Phase 2 plan's §5.7 warning). The one-move and checkpoint courts' accusations and the round
-//! lane's equivocation evidence are outside H-1's enumeration; adding one is one arm below. The
-//! match is exhaustive on purpose: whoever appends an object kind decides here whether a heartbeat
-//! must carry it.
+//! (the Phase 2 plan's §5.7 warning). The round lane's equivocation evidence is outside H-1's
+//! enumeration; adding one is one arm below. The match is exhaustive on purpose: whoever appends an
+//! object kind decides here whether a heartbeat must carry it.
 
 use crate::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2;
 use crate::palw_offence_v1::PalwOffenceKindV1;
@@ -89,6 +94,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::CourtAttnRootClaimedHeld { .. }
         | O::CourtAttnDissected { .. }
         | O::CourtAttnChildChosen { .. } => true,
+        // ADR-0152 §4-ter: the held dissection's opening and step 6's checkpoint conviction.
+        O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
@@ -117,11 +124,9 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ModelEvaluationPosted { .. }
         | O::ModelSeed { .. }
         | O::ModelLineBenefitsDeclared { .. }
-        | O::ShardCourtAccused { .. }
         | O::ClassShardPlanDeclared { .. }
         | O::BondShardsDeclared { .. }
         | O::ShardReceiptLicensed { .. }
-        | O::CheckpointAccused { .. }
         | O::MaterialDisclosedHeld { .. }
         | O::RoundPermitEquivocated { .. }
         | O::SeatReadinessProved { .. }
@@ -213,8 +218,10 @@ pub enum PalwH1LaneKeyV1 {
     Offence(PalwBondKeyV2, Hash64),
     /// A reporter's commitment or reveal: one per reporter bond.
     Reporter(PalwBondKeyV2),
-    /// A bisection court's opening: one per claim.
+    /// A bisection court's opening — or a held dissection's, by its one-move accusation: one per claim.
     CourtOpening(Hash64),
+    /// A checkpoint court's one-move conviction: one per claim (the first voids it).
+    CheckpointConviction(Hash64),
     /// **A possession proof whose row is about to lapse: one per `(bond, class)` row** (the
     /// 2026-09-25 model-registry review, M1; `palw_readiness_escalation_v1`). Not an H-1 kind —
     /// [`palw_h1_carrier_lane_key_v1`] never returns it and no heartbeat is spared for it — but it
@@ -238,6 +245,8 @@ pub fn palw_h1_carrier_lane_key_v1(object: &PalwConsensusObjectV2) -> Option<Pal
         O::ObjectiveOffence { accused, evidence_id, .. } => Some(PalwH1LaneKeyV1::Offence(*accused, *evidence_id)),
         O::ReporterCommitted { reporter, .. } | O::ReporterRevealed { reporter, .. } => Some(PalwH1LaneKeyV1::Reporter(*reporter)),
         O::CourtOpened { claim, .. } => Some(PalwH1LaneKeyV1::CourtOpening(*claim)),
+        O::ShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
+        O::CheckpointAccused { accusation } => Some(PalwH1LaneKeyV1::CheckpointConviction(accusation.claim)),
         _ => None,
     }
 }
@@ -410,6 +419,24 @@ mod tests {
         let licence = PalwConsensusObjectV2::ReceiptLicensed { claim: Hash64::from_u64_word(11), receipts: vec![] };
         assert!(key(&licence).is_none(), "a licence is no carrier at all");
         assert!(key(&offence(PalwOffenceKindV1::DaDefault)).is_none(), "nor a kind only the fold writes");
+    }
+
+    /// **The held dissection's opening and step 6's conviction ride the lane** (the A-held node's second
+    /// review): `ShardCourtAccused` keyed as a court opening of its claim, `CheckpointAccused` one
+    /// conviction a claim — both through the extraction walk, as every carrier.
+    #[test]
+    fn the_held_dissections_opening_and_step6s_conviction_ride() {
+        let shard = crate::palw_lifecycle_objects_v2::tests::shard_accusation();
+        let checkpoint = crate::palw_lifecycle_objects_v2::tests::checkpoint_accusation();
+        let (shard_claim, checkpoint_claim) = (shard.claim, checkpoint.claim);
+        let opened = PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(shard) };
+        let convicted = PalwConsensusObjectV2::CheckpointAccused { accusation: Box::new(checkpoint) };
+        for object in [&opened, &convicted] {
+            assert!(palw_h1_carrier_object_v1(object), "{object:?}");
+            assert!(palw_h1_carrier_tx_v1(&carrier(object.clone())), "through the extraction walk: {object:?}");
+        }
+        assert_eq!(palw_h1_carrier_lane_key_v1(&opened), Some(PalwH1LaneKeyV1::CourtOpening(shard_claim)));
+        assert_eq!(palw_h1_carrier_lane_key_v1(&convicted), Some(PalwH1LaneKeyV1::CheckpointConviction(checkpoint_claim)));
     }
 
     /// **The relay decodes at most eight lifecycle payloads of a beat it has not validated** (P2-9

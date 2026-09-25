@@ -787,7 +787,7 @@ pub fn validate_palw_lifecycle_tx(payload: &[u8], tolerate_undecodable: bool) ->
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     /// **…except no registrant can build one, and the test above did not notice.**
     ///
     /// `a_bond_registration_that_locks_its_collateral_rides` constructs the transaction with an
@@ -1479,7 +1479,7 @@ mod tests {
         assert_eq!(borsh::to_vec(&decoded).unwrap(), payload, "and it re-encodes to the chain's bytes");
     }
 
-    fn checkpoint_accusation() -> crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
+    pub(crate) fn checkpoint_accusation() -> crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
         crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
             version: 1,
             claim: h64(15),
@@ -1508,7 +1508,7 @@ mod tests {
         }
     }
 
-    fn shard_accusation() -> crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+    pub(crate) fn shard_accusation() -> crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
         let (binding, _, _, _) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
         crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
             version: 1,

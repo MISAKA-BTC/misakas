@@ -216,21 +216,25 @@ pub(crate) fn palw_held_object_digest_v1(object: &PalwConsensusObjectV2) -> Hash
 /// root claim the chain holds for the session, OLDEST first, each checked the way the fold checked
 /// it (`PalwAttnHeldFilingV1::from_object_checked_v1`: the binding the claim's execution, re-derived;
 /// the anchor the site's checkpoint; the sub-roots folding to the anchor's state; the tile opening
-/// at the narrowed leaf), less any this node's N2 already failed on (`rejected`). The chain walk
-/// returns objects on accepted carriers that the fold refused, so a decoy filed first — the genuine
-/// object with one sub-root swapped — is skipped, not cached. Returns the filing and its digest.
+/// at the narrowed leaf). The chain walk returns objects on accepted carriers that the fold refused,
+/// so a decoy filed first — the genuine object with one sub-root swapped — is skipped, not cached.
+/// Returns the filing and its digest.
+///
+/// **A filing that passes is never evicted** (the second review's HIGH). Every checked filing of a
+/// session carries the one commitment the fold admitted — the claim's binding, the site's
+/// checkpoint, sub-roots that root to it, the narrowed tile — so an N2 that fails on it failed for
+/// this node's own reason (a ledger that would not hold ~470 MB at 8k, a task that panicked, a
+/// replay that did not finish), and is retried a re-plan later from the same filing. Evicting the
+/// only valid tag 57 left this function `None` for good, the rung ran out, and C4 charged the honest
+/// challenger.
 pub(crate) fn palw_held_filing_of_duty_v1(
     candidates: &[PalwConsensusObjectV2],
     duty: &PalwCourtDutyV2,
     opening_cap: u64,
-    rejected: &HashSet<Hash64>,
 ) -> Option<(Hash64, PalwAttnHeldFilingV1)> {
     let narrowed = duty.terminal_index?;
     candidates.iter().find_map(|object| {
         let digest = palw_held_object_digest_v1(object);
-        if rejected.contains(&digest) {
-            return None;
-        }
         PalwAttnHeldFilingV1::from_object_checked_v1(
             object,
             &duty.session_id,
@@ -467,6 +471,42 @@ pub(crate) fn palw_held_step6_units_v1(
     Ok(units)
 }
 
+/// **Step 6's units, rebuilt from a held forfeit** (the A-held node's second review, MEDIUM: a
+/// pursuit restored from the chain after a restart has no phase to derive its bottom from) — the
+/// chunks the acquitting bottom opened, as the record keeps them, each whose slice's sub-root this
+/// node computes differently from the filing; kind and layer from the class's map. The record's
+/// anchor must be this evidence's.
+pub(crate) fn palw_held_step6_units_of_record_v1(
+    evidence: &PalwAttnHeldEvidenceV1,
+    anchored: &PalwAttnDisputeSiteV2,
+    record: &kaspa_consensus_core::palw_state_v2::PalwHeldForfeitV1,
+) -> Result<Vec<PalwHeldStep6UnitV1>, String> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    let anchor = evidence.evidence.anchor.as_ref().ok_or("a held site's evidence carries its anchor")?;
+    if anchor.anchor.leaf.checkpoint_index != record.anchor_checkpoint || anchor.anchor.opening.leaf_hash != record.anchor_leaf_hash {
+        return Err("the record's anchor is not this evidence's".to_string());
+    }
+    let layout = map::palw_state_layout_v4(&evidence.evidence.binding.shape_profile, anchored.site.anchor_positions)
+        .map_err(|e| format!("the anchor's held layout: {e:?}"))?;
+    let own =
+        map::palw_state_slice_sub_roots_v4(&layout, &anchor.chunk_hashes).map_err(|e| format!("the state's sub-roots: {e:?}"))?;
+    let mut units = Vec::new();
+    for chunk in &record.chunks {
+        let slice = layout.address(u64::from(*chunk)).ok_or("the chunk's address")?.slice as usize;
+        if own.get(slice) == evidence.slice_sub_roots.get(slice) {
+            continue;
+        }
+        let entry = map::integer_kv_state_chunk_entry_v1(&layout.attn, u64::from(*chunk)).ok_or("the chunk's entry")?;
+        units.push(PalwHeldStep6UnitV1 {
+            kind: entry.kind,
+            layer: entry.attn_layer,
+            checkpoint: record.anchor_checkpoint,
+            chunk_index: *chunk,
+        });
+    }
+    Ok(units)
+}
+
 /// **The demand of one chunk** (4-ter.3 step 6, F15): `DefaultAccusedHeld` naming
 /// `StateChunk { checkpoint, chunk }` of the accused's `binding`, signed by this node's bond over the
 /// network domain (`palw_held_da_accusation_message_v1`). The producer must put the chunk and its
@@ -558,6 +598,9 @@ pub(crate) enum PalwHeldStep6NextV1 {
     /// Every disclosed chunk holds this node's honest bytes: the bottom, each such chunk re-pathed
     /// through the producer's own disclosed path — which reaches the anchor the forger committed.
     Bottom(PalwAttnDissectBottomV1),
+    /// Every disclosed chunk holds this node's honest bytes, and there is no phase to bottom in (a
+    /// pursuit restored from the chain): nothing to accuse.
+    Clear,
     /// A disclosed row is not this node's honest row: the checkpoint court tries it against the
     /// row the accused's step tree committed at `position`.
     Accuse { unit: PalwHeldStep6UnitV1, position: u32, chunk: PalwAttnChunkOpeningV1 },
@@ -570,7 +613,7 @@ pub(crate) enum PalwHeldStep6NextV1 {
 pub(crate) fn palw_held_step6_next_v1(
     evidence: &PalwAttnHeldEvidenceV1,
     anchored: &PalwAttnDisputeSiteV2,
-    phase: &kaspa_consensus_core::palw_attn_court_v1::PalwAttnDissectPhaseV1,
+    phase: Option<&kaspa_consensus_core::palw_attn_court_v1::PalwAttnDissectPhaseV1>,
     units: &[PalwHeldStep6UnitV1],
     disclosed: &HashMap<PalwHeldStep6UnitV1, PalwAttnChunkOpeningV1>,
 ) -> Result<PalwHeldStep6NextV1, String> {
@@ -600,6 +643,7 @@ pub(crate) fn palw_held_step6_next_v1(
     if !all {
         return Ok(PalwHeldStep6NextV1::Pending);
     }
+    let Some(phase) = phase else { return Ok(PalwHeldStep6NextV1::Clear) };
     let mut bottom = evidence.bottom_v1(anchored, phase).map_err(|e| format!("the held bottom: {e}"))?;
     for tile in [&mut bottom.k, &mut bottom.v] {
         if let PalwAttnTileEvidenceV1::Checkpoint { chunk, .. } = tile
@@ -702,9 +746,39 @@ pub(crate) trait PalwHeldHostV1 {
     fn carried_prompt(&self, duty: &PalwCourtDutyV2, backend: &dyn PalwExecutionBackendV1) -> Result<Option<Vec<u32>>, String>;
     /// **Whether `claim_id` can still be convicted, and until when** — `Some(daa)`: the claim is not
     /// final or voided, and its current phase ends by itself at `daa` (the licence's window, a DA
-    /// session's backstop — the claim row's `deadline_daa`); `None`: it is final, voided, retired, or
-    /// not a claim this node's bond seats. What a step-6 pursuit reads once its session is gone.
+    /// session's backstop — the claim row's `deadline_daa`; `u64::MAX` where the claim is only known
+    /// disputable); `None`: it is final, voided, retired, or neither seated by this node's bond nor
+    /// disputable by it. What a step-6 pursuit reads once its session is gone.
     fn claim_open_until_v1(&self, claim_id: &Hash64) -> Option<u64>;
+}
+
+/// **A restart's step-6 demands still in the mempool** (the third review's LOW): every pooled
+/// `DefaultAccusedHeld` of `bond` naming a `StateChunk`, as an open demand from `now_daa` — sent before
+/// the restart and not yet in a block, so the rebuilt pursuit waits for it as for one on chain instead
+/// of filing it again (a carrier the fold then refuses, `DaSessionAlreadyOpen`).
+pub(crate) fn palw_held_pooled_demands_v1<'a>(
+    txs: impl IntoIterator<Item = &'a kaspa_consensus_core::tx::Transaction>,
+    bond: PalwBondKeyV2,
+    now_daa: u64,
+) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwHeldOpenDemandV1> {
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+    txs.into_iter()
+        .filter_map(kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1)
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::DefaultAccusedHeld { accusation }
+                if accusation.accuser == bond && matches!(accusation.missing, PalwHeldMissingV1::StateChunk { .. }) =>
+            {
+                Some(kaspa_consensus_core::palw_producer_v2::PalwHeldOpenDemandV1 {
+                    claim_id: accusation.claim,
+                    accuser: bond,
+                    opened_daa: now_daa,
+                    named: PalwDaUnitV1::Held(accusation.missing),
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// **The responder's material, as P2-7's loader takes it**: the claim's facts, the pool's copies,
@@ -769,6 +843,38 @@ struct PalwHeldEntryV1 {
     build: PalwHeldTaskV1<PalwHeldBuiltV1>,
     filing: Option<(Hash64, PalwAttnHeldFilingV1)>,
     named_daa: u64,
+    /// Builds of this evidence that failed in a row — the retry's backoff ([`palw_held_retry_after_v1`]).
+    failures: u32,
+}
+
+/// **How long a failed held build waits before it is tried again** (the third review's LOW): a
+/// re-plan (`COURT_MOVE_REPLAN_DAA`) after the first failure, doubling with each further failure in
+/// a row, to at most [`PALW_HELD_RETRY_CAP_DAA_V1`]. A filing is never evicted (every checked one is
+/// the fold's own commitment), so a build that fails for a lasting reason — a replay that never
+/// reaches the filed root, weights that are not the class's — would otherwise re-run a whole-context
+/// replay every re-plan until the session ends; a transient one (a full ledger, a panic) is still
+/// tried again within a re-plan or two.
+pub(crate) fn palw_held_retry_after_v1(failures: u32) -> u64 {
+    COURT_MOVE_REPLAN_DAA.saturating_mul(1u64 << failures.saturating_sub(1).min(16)).min(PALW_HELD_RETRY_CAP_DAA_V1)
+}
+
+/// The longest a failed held build waits: well inside a held session's life (`window_court`).
+pub(crate) const PALW_HELD_RETRY_CAP_DAA_V1: u64 = 320;
+
+/// **How long a failed held build of `duty`'s evidence waits, by the party it is for** (the fourth
+/// review's LOW–MEDIUM). The backoff ([`palw_held_retry_after_v1`]) is the CHALLENGER's: its N2 is
+/// what a lasting failure (weights that are not the class's) would re-run until the session ends. The
+/// RESPONDER's N1 answers a clocked rung, and its silence is a default. Backed off, three failures
+/// waited 10 + 20 + 40 = 70 DAA, past the 58-DAA root rung. So it is tried again every re-plan
+/// (`COURT_MOVE_REPLAN_DAA`), as before the backoff. Either party's wait is also capped at half the
+/// time left to the duty's rung deadline (at least one DAA), so a failure near the rung is retried
+/// before it. Past the rung nothing is left to save, and the wait is the role's own.
+pub(crate) fn palw_held_retry_wait_v1(duty: &PalwCourtDutyV2, failed_at_daa: u64, failures: u32) -> u64 {
+    let wait = if duty.i_am_responder { COURT_MOVE_REPLAN_DAA } else { palw_held_retry_after_v1(failures) };
+    match duty.rung_deadline_daa.checked_sub(failed_at_daa) {
+        Some(left) if left > 0 => wait.min((left / 2).max(1)),
+        _ => wait,
+    }
 }
 
 /// A checkpoint accusation's committed row, wanted (`task: None`) or being opened (step 6).
@@ -802,6 +908,9 @@ struct PalwHeldSessionV1 {
 struct PalwHeldPursuitV1 {
     duty: PalwCourtDutyV2,
     units: Vec<PalwHeldStep6UnitV1>,
+    /// Restored from the chain after a restart (the second review's MEDIUM): its held forfeit, from
+    /// which the units are rebuilt once the evidence is (the duty carries no phase).
+    record: Option<kaspa_consensus_core::palw_state_v2::PalwHeldForfeitV1>,
 }
 
 /// A chain read the route asks the node for: every lifecycle object accepted since the session's
@@ -833,11 +942,15 @@ pub(crate) struct PalwHeldTickV1 {
 pub(crate) struct PalwHeldCourtV1 {
     evidence: HashMap<PalwHeldEvidenceKeyV1, PalwHeldEntryV1>,
     sessions: HashMap<Hash64, PalwHeldSessionV1>,
-    /// Per claim: the held root claims this node's N2 failed on — never read again.
-    rejected: HashMap<Hash64, HashSet<Hash64>>,
     held_classes: HashMap<Hash64, bool>,
     /// Step 6's pursuits, by session — run from the claim's own facts once the session is gone.
     pursuits: HashMap<Hash64, PalwHeldPursuitV1>,
+    /// Whether the pursuits were rebuilt from the chain since the node started ([`Self::seed_v1`]).
+    seeded: bool,
+    /// This node's open data-availability sessions at start, by `(claim, checkpoint, chunk)` of a
+    /// `StateChunk` they named: the DAA each opened — a step-6 demand the fold already holds is not
+    /// filed again.
+    open_demands: HashMap<(Hash64, u32, u32), u64>,
     /// This tick's duties whose evidence is wanted, and the sessions whose accusation row is.
     wanted: Vec<PalwCourtDutyV2>,
     rows_wanted: Vec<PalwCourtDutyV2>,
@@ -878,8 +991,8 @@ impl PalwHeldCourtV1 {
     /// dropped the first tick a duty set comes back empty): every entry a duty names is marked, what
     /// no duty has named for [`PALW_HELD_EVIDENCE_GRACE_DAA_V1`] is dropped (a running task is
     /// detached — it still returns its reservations when it ends), every finished task collected —
-    /// a challenger build that failed evicts the filing it was built from — and last tick's wants
-    /// are cleared.
+    /// a build that failed is retried a re-plan later, from the same filing (never evicted: see
+    /// [`palw_held_filing_of_duty_v1`]) — and last tick's wants are cleared.
     pub(crate) async fn begin_tick_v1(&mut self, court_duties: &[PalwCourtDutyV2], current_daa: u64) {
         for duty in court_duties {
             if let Some(key) = palw_held_evidence_key_v1(duty)
@@ -894,8 +1007,6 @@ impl PalwHeldCourtV1 {
         let alive = |named: u64| named.saturating_add(PALW_HELD_EVIDENCE_GRACE_DAA_V1) >= current_daa;
         self.evidence.retain(|_, entry| alive(entry.named_daa));
         self.sessions.retain(|_, session| alive(session.named_daa));
-        let claims: HashSet<Hash64> = self.evidence.keys().map(|(claim, _, _)| *claim).collect();
-        self.rejected.retain(|claim, _| claims.contains(claim));
         self.wanted.clear();
         self.rows_wanted.clear();
         let finished: Vec<PalwHeldEvidenceKeyV1> =
@@ -915,13 +1026,17 @@ impl PalwHeldCourtV1 {
                 );
             }
             if let Some(why) = refused {
-                warn!("[{PALW_PANEL}] claim {}: the held evidence ({role}) at leaf {} does not build: {why}", key.0, key.1);
-                // The review's HIGH: N2 failed on this filing — never build from it again.
-                if !key.2
-                    && let Some((digest, _)) = entry.filing.take()
-                {
-                    self.rejected.entry(key.0).or_default().insert(digest);
-                }
+                entry.failures = entry.failures.saturating_add(1);
+                warn!(
+                    "[{PALW_PANEL}] claim {}: the held evidence ({role}) at leaf {} does not build ({} in a row): {why} — tried again \
+                     within {} DAA (sooner near its rung's deadline)",
+                    key.0,
+                    key.1,
+                    entry.failures,
+                    if key.2 { COURT_MOVE_REPLAN_DAA } else { palw_held_retry_after_v1(entry.failures) }
+                );
+            } else if matches!(collected, PalwHeldTaskV1::Ready(_)) {
+                entry.failures = 0;
             }
             entry.build = collected;
         }
@@ -940,7 +1055,7 @@ impl PalwHeldCourtV1 {
     }
 
     /// **The chain reads the route needs this tick**: for a challenger with its phase open, the
-    /// session's held root claims while no unrejected one stands; at step 6, the producer's
+    /// session's held root claims while none stands; at step 6, the producer's
     /// disclosures while a demanded chunk is not on chain — each at most every
     /// `HELD_CHAIN_RELOOK_DAA`.
     pub(crate) fn chain_reads_v1<H: PalwHeldHostV1>(
@@ -952,9 +1067,8 @@ impl PalwHeldCourtV1 {
         let mut reads = Vec::new();
         for duty in duties.iter().filter(|duty| !duty.i_am_responder && duty.dissection.is_some()) {
             let session = self.sessions.get(&duty.session_id);
-            let rejected = self.rejected.get(&duty.claim_id).cloned().unwrap_or_default();
             let objects = session.map(|s| s.objects.as_slice()).unwrap_or(&[]);
-            if palw_held_filing_of_duty_v1(objects, duty, host.opening_cap(&duty.class_id, current_daa), &rejected).is_none() {
+            if palw_held_filing_of_duty_v1(objects, duty, host.opening_cap(&duty.class_id, current_daa)).is_none() {
                 if session.and_then(|s| s.looked_daa).is_none_or(|at| current_daa >= at.saturating_add(HELD_CHAIN_RELOOK_DAA)) {
                     reads.push(PalwHeldChainReadV1 {
                         session_id: duty.session_id,
@@ -966,11 +1080,29 @@ impl PalwHeldCourtV1 {
             }
             reads.extend(self.disclosure_read_v1(duty.session_id, duty.claim_id, current_daa));
         }
-        // A pursuit whose session is gone reads its claim's disclosures the same way.
+        // A pursuit whose session is gone reads its claim's disclosures the same way — and one restored
+        // from the chain first reads the session's held root claims, from the session's longest life
+        // before its close, while none stands.
         for (session_id, pursuit) in &self.pursuits {
-            if !duties.iter().any(|duty| duty.session_id == *session_id) {
-                reads.extend(self.disclosure_read_v1(*session_id, pursuit.duty.claim_id, current_daa));
+            if duties.iter().any(|duty| duty.session_id == *session_id) {
+                continue;
             }
+            let session = self.sessions.get(session_id);
+            if let Some(record) = pursuit.record.as_ref() {
+                let objects = session.map(|s| s.objects.as_slice()).unwrap_or(&[]);
+                if palw_held_filing_of_duty_v1(objects, &pursuit.duty, host.opening_cap(&pursuit.duty.class_id, current_daa)).is_none()
+                {
+                    if session.and_then(|s| s.looked_daa).is_none_or(|at| current_daa >= at.saturating_add(HELD_CHAIN_RELOOK_DAA)) {
+                        reads.push(PalwHeldChainReadV1 {
+                            session_id: *session_id,
+                            claim_id: pursuit.duty.claim_id,
+                            not_before_daa: record.closed_daa.saturating_sub(host.window_court()),
+                        });
+                    }
+                    continue;
+                }
+            }
+            reads.extend(self.disclosure_read_v1(*session_id, pursuit.duty.claim_id, current_daa));
         }
         reads
     }
@@ -998,13 +1130,49 @@ impl PalwHeldCourtV1 {
     /// re-plan.
     fn want(&mut self, duty: &PalwCourtDutyV2, current_daa: u64) {
         let Some(key) = palw_held_evidence_key_v1(duty) else { return };
-        let fresh = match self.evidence.get(&key).map(|entry| &entry.build) {
+        let fresh = match self.evidence.get(&key) {
             None => true,
-            Some(PalwHeldTaskV1::Failed { at_daa }) => current_daa >= at_daa.saturating_add(COURT_MOVE_REPLAN_DAA),
+            Some(PalwHeldEntryV1 { build: PalwHeldTaskV1::Failed { at_daa }, failures, .. }) => {
+                current_daa >= at_daa.saturating_add(palw_held_retry_wait_v1(duty, *at_daa, *failures))
+            }
             Some(_) => false,
         };
         if fresh && palw_held_evidence_buildable_v1(duty) && !self.wanted.iter().any(|w| palw_held_evidence_key_v1(w) == Some(key)) {
             self.wanted.push(duty.clone());
+        }
+    }
+
+    /// Whether [`Self::seed_v1`] ran since the node started.
+    pub(crate) fn seeded_v1(&self) -> bool {
+        self.seeded
+    }
+
+    /// **Rebuild step 6's pursuits from the chain** (the A-held node's second review, MEDIUM: they
+    /// lived in memory only, so a restart after the forger's acquittal dropped the refund's door):
+    /// every held forfeit this node's bond holds becomes a pursuit of its own (the duty its session
+    /// showed at its bottom, the record to rebuild the units from), and every open data-availability
+    /// session of the bond that named a `StateChunk` is noted, so the demand is not filed again.
+    /// Once a start; a pursuit already held is kept as it is.
+    pub(crate) fn seed_v1(&mut self, seeds: kaspa_consensus_core::palw_producer_v2::PalwHeldPursuitSeedsV1) {
+        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+        use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+        self.seeded = true;
+        for seed in seeds.pursuits {
+            info!(
+                "[{PALW_PANEL}] claim {}: a held forfeit of this bond's (session {}, {} sompi) — step 6 is pursued from the chain \
+                 (ADR-0152 §4-ter.3)",
+                seed.duty.claim_id, seed.duty.session_id, seed.record.amount
+            );
+            self.pursuits.entry(seed.duty.session_id).or_insert(PalwHeldPursuitV1 {
+                duty: seed.duty,
+                units: Vec::new(),
+                record: Some(seed.record),
+            });
+        }
+        for demand in seeds.open_demands {
+            if let PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint, chunk }) = demand.named {
+                self.open_demands.insert((demand.claim_id, checkpoint, chunk), demand.opened_daa);
+            }
         }
     }
 
@@ -1017,6 +1185,23 @@ impl PalwHeldCourtV1 {
     #[cfg(test)]
     pub(crate) fn holds_built_evidence_v1(&self, key: &PalwHeldEvidenceKeyV1) -> bool {
         self.evidence.get(key).is_some_and(|entry| matches!(entry.build, PalwHeldTaskV1::Ready(_)))
+    }
+
+    /// [`Self::want`] for a pursuit restored from the chain, whose duty carries no phase (so the
+    /// buildable rule, which asks a challenger for one, does not apply): wanted when not building,
+    /// built, or failed inside a re-plan.
+    fn want_restored_v1(&mut self, duty: &PalwCourtDutyV2, current_daa: u64) {
+        let Some(key) = palw_held_evidence_key_v1(duty) else { return };
+        let fresh = match self.evidence.get(&key) {
+            None => true,
+            Some(PalwHeldEntryV1 { build: PalwHeldTaskV1::Failed { at_daa }, failures, .. }) => {
+                current_daa >= at_daa.saturating_add(palw_held_retry_wait_v1(duty, *at_daa, *failures))
+            }
+            Some(_) => false,
+        };
+        if fresh && !self.wanted.iter().any(|w| palw_held_evidence_key_v1(w) == Some(key)) {
+            self.wanted.push(duty.clone());
+        }
     }
 
     /// Whether any task of the route is running (tests settle on it).
@@ -1113,9 +1298,11 @@ pub(crate) fn palw_held_moves_v1<H: PalwHeldHostV1>(
                 .and_then(|anchored| palw_held_step6_units_v1(&evidence, &anchored, phase).map(|units| (anchored, units)))
             {
                 Ok((anchored, units)) if !units.is_empty() => {
-                    held.pursuits
-                        .entry(duty.session_id)
-                        .or_insert_with(|| PalwHeldPursuitV1 { duty: duty.clone(), units: units.clone() });
+                    held.pursuits.entry(duty.session_id).or_insert_with(|| PalwHeldPursuitV1 {
+                        duty: duty.clone(),
+                        units: units.clone(),
+                        record: None,
+                    });
                     let backstop = (true, duty.session_deadline_daa);
                     palw_held_step6_v1(
                         host,
@@ -1123,7 +1310,7 @@ pub(crate) fn palw_held_moves_v1<H: PalwHeldHostV1>(
                         duty,
                         &evidence,
                         &anchored,
-                        phase,
+                        Some(phase),
                         &units,
                         move_key,
                         backstop,
@@ -1177,7 +1364,7 @@ pub(crate) fn palw_held_moves_v1<H: PalwHeldHostV1>(
                                  node's — step 6 is pursued from here, session or not (ADR-0152 §4-ter.3)",
                                 duty.session_id
                             );
-                            held.pursuits.entry(duty.session_id).or_insert(PalwHeldPursuitV1 { duty: terminal, units });
+                            held.pursuits.entry(duty.session_id).or_insert(PalwHeldPursuitV1 { duty: terminal, units, record: None });
                         }
                         Ok(_) => {}
                         Err(why) => warn!("[{PALW_PANEL}] session {}: the bottom's chunks after the choice: {why}", duty.session_id),
@@ -1220,24 +1407,35 @@ fn palw_held_pursue_v1<H: PalwHeldHostV1>(
         };
         host.pin(duty.claim_id);
         held.session_mut(session_id, current_daa);
+        let restored = pursuit.record.is_some();
         let evidence = match palw_held_evidence_key_v1(duty).and_then(|key| held.evidence.get_mut(&key)) {
             Some(entry) => {
                 entry.named_daa = current_daa;
                 match &entry.build {
-                    PalwHeldTaskV1::Ready(built) => built.evidence.clone(),
-                    _ => {
+                    PalwHeldTaskV1::Ready(built) => Some(built.evidence.clone()),
+                    PalwHeldTaskV1::Running { .. } => {
+                        tick.stalls.push("step 6's pursuit: building the challenger's evidence (N2) off the tick");
+                        continue;
+                    }
+                    PalwHeldTaskV1::Failed { .. } if !restored => {
                         held.pursuits.remove(&session_id);
                         continue;
                     }
+                    PalwHeldTaskV1::Failed { .. } => None,
                 }
             }
+            None if restored => None,
             None => {
                 held.pursuits.remove(&session_id);
                 continue;
             }
         };
-        let Some(phase) = duty.dissection.as_ref() else {
-            held.pursuits.remove(&session_id);
+        // A pursuit restored from the chain rebuilds its evidence (N2 from the filing the session's
+        // held root claims hold, read back above) — wanted like any challenger's, a re-plan after a
+        // failure — and its units from its record once the evidence stands.
+        let Some(evidence) = evidence else {
+            held.want_restored_v1(duty, current_daa);
+            tick.stalls.push("step 6's pursuit: the evidence waits for its filing and a build");
             continue;
         };
         let anchored = match evidence.site_v1(duty.artifact_root, true, host.opening_cap(&duty.class_id, current_daa)) {
@@ -1248,6 +1446,31 @@ fn palw_held_pursue_v1<H: PalwHeldHostV1>(
                 continue;
             }
         };
+        let units = match (&pursuit.record, pursuit.units.is_empty()) {
+            (Some(record), true) => match palw_held_step6_units_of_record_v1(&evidence, &anchored, record) {
+                Ok(units) if !units.is_empty() => {
+                    if let Some(kept) = held.pursuits.get_mut(&session_id) {
+                        kept.units = units.clone();
+                    }
+                    units
+                }
+                Ok(_) => {
+                    info!(
+                        "[{PALW_PANEL}] claim {}: this node's own sub-roots of the acquittal's chunks are the filed ones — nothing for \
+                         step 6 to demand",
+                        duty.claim_id
+                    );
+                    held.pursuits.remove(&session_id);
+                    continue;
+                }
+                Err(why) => {
+                    warn!("[{PALW_PANEL}] session {session_id}: step 6's pursuit: the record's units: {why}");
+                    held.pursuits.remove(&session_id);
+                    continue;
+                }
+            },
+            _ => pursuit.units.clone(),
+        };
         let close_key = (session_id, super::court_move_round_v1(duty), false);
         let settled = palw_held_step6_v1(
             host,
@@ -1255,8 +1478,8 @@ fn palw_held_pursue_v1<H: PalwHeldHostV1>(
             duty,
             &evidence,
             &anchored,
-            phase,
-            &pursuit.units,
+            duty.dissection.as_ref(),
+            &units,
             close_key,
             (false, open_until),
             current_daa,
@@ -1284,7 +1507,7 @@ fn palw_held_step6_v1<H: PalwHeldHostV1>(
     duty: &PalwCourtDutyV2,
     evidence: &PalwAttnHeldEvidenceV1,
     anchored: &PalwAttnDisputeSiteV2,
-    phase: &kaspa_consensus_core::palw_attn_court_v1::PalwAttnDissectPhaseV1,
+    phase: Option<&kaspa_consensus_core::palw_attn_court_v1::PalwAttnDissectPhaseV1>,
     units: &[PalwHeldStep6UnitV1],
     close_key: PalwCourtQueueKeyV1,
     (open, backstop): (bool, u64),
@@ -1298,7 +1521,15 @@ fn palw_held_step6_v1<H: PalwHeldHostV1>(
         return false;
     };
     let window = host.disclose_window_daa();
+    // The demands this node's bond already holds open on chain (a restart forgot its own).
+    let already: Vec<(PalwHeldStep6UnitV1, u64)> = units
+        .iter()
+        .filter_map(|unit| held.open_demands.get(&(duty.claim_id, unit.checkpoint, unit.chunk_index)).map(|at| (*unit, *at)))
+        .collect();
     let session = held.session_mut(duty.session_id, current_daa);
+    for (unit, at) in already {
+        session.demanded.entry(unit).or_insert(at);
+    }
     let disclosed: HashMap<PalwHeldStep6UnitV1, PalwAttnChunkOpeningV1> = units
         .iter()
         .filter_map(|unit| {
@@ -1334,7 +1565,7 @@ fn palw_held_step6_v1<H: PalwHeldHostV1>(
     let mut want_rows = false;
     match palw_held_step6_next_v1(evidence, anchored, phase, units, &disclosed) {
         Ok(PalwHeldStep6NextV1::Pending) => {}
-        Ok(PalwHeldStep6NextV1::Bottom(_)) if !open => {
+        Ok(PalwHeldStep6NextV1::Bottom(_) | PalwHeldStep6NextV1::Clear) if !open => {
             info!(
                 "[{PALW_PANEL}] claim {}: every chunk its producer disclosed is this node's own — its session is closed, and step 6 \
                  has nothing to accuse (ADR-0152 §4-ter.3)",
@@ -1342,6 +1573,7 @@ fn palw_held_step6_v1<H: PalwHeldHostV1>(
             );
             return true;
         }
+        Ok(PalwHeldStep6NextV1::Clear) => {}
         Ok(PalwHeldStep6NextV1::Bottom(bottom)) => {
             if busy(&close_key) {
                 return false;
@@ -1452,9 +1684,15 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
                     r.task = Some(PalwHeldTaskV1::Failed { at_daa: current_daa });
                 }
             } else {
+                let failures = held.evidence.get(&key).map_or(0, |entry| entry.failures).saturating_add(1);
                 held.evidence.insert(
                     key,
-                    PalwHeldEntryV1 { build: PalwHeldTaskV1::Failed { at_daa: current_daa }, filing: None, named_daa: current_daa },
+                    PalwHeldEntryV1 {
+                        build: PalwHeldTaskV1::Failed { at_daa: current_daa },
+                        filing: None,
+                        named_daa: current_daa,
+                        failures,
+                    },
                 );
             }
         };
@@ -1465,8 +1703,7 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
             held.evidence.get(&key).and_then(|entry| entry.filing.clone())
         } else {
             let objects = held.sessions.get(&duty.session_id).map(|s| s.objects.clone()).unwrap_or_default();
-            let rejected = held.rejected.get(&duty.claim_id).cloned().unwrap_or_default();
-            palw_held_filing_of_duty_v1(&objects, &duty, host.opening_cap(&duty.class_id, current_daa), &rejected)
+            palw_held_filing_of_duty_v1(&objects, &duty, host.opening_cap(&duty.class_id, current_daa))
         };
         if !duty.i_am_responder && filing.is_none() {
             trace!("[{PALW_PANEL}] session {}: no standing held root claim of the accused's on chain yet", duty.session_id);
@@ -1565,9 +1802,15 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
             if duty.i_am_responder { "responder (N1)" } else { "challenger (N2)" },
             duty.rung_deadline_daa
         );
+        let failures = held.evidence.get(&key).map_or(0, |entry| entry.failures);
         held.evidence.insert(
             key,
-            PalwHeldEntryV1 { build: PalwHeldTaskV1::Running { task, since_daa: current_daa }, filing, named_daa: current_daa },
+            PalwHeldEntryV1 {
+                build: PalwHeldTaskV1::Running { task, since_daa: current_daa },
+                filing,
+                named_daa: current_daa,
+                failures,
+            },
         );
     }
 }
@@ -1758,18 +2001,27 @@ impl PalwHeldHostV1 for PalwPanelHeldHostV1<'_> {
     }
 }
 
-/// **The pursued claims still open, and until when** — out of the claim rows this bond seats
-/// (`palw_claim_rows_v1`, the panel loop's per-bond read, taken off the tick only while a step-6
-/// pursuit exists, which is rare): each non-terminal claim's current phase end. A challenger that
-/// is no seat of the claim's panel finds no row, and its pursuit ends with the session.
+/// **The pursued claims still open, and until when** — read off the tick only while a step-6
+/// pursuit exists, which is rare. First the claim rows this bond seats (`palw_claim_rows_v1`, the
+/// panel loop's per-bond read): each non-terminal claim's current phase end. Then, for a challenger
+/// that is no seat of the claim's panel, the claims it could still dispute
+/// (`palw_disputable_claims_v2`: licensed, not its own, no session of its own open) — open, with no
+/// date this read can give (`u64::MAX`, the priority lane's last dated place). Past R-core+ a DA
+/// session leaves the claim licensed, so the pursuit outlives its demand there too.
 pub(crate) fn palw_held_open_claims_v1(
     rows: &[kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1],
+    disputable: &[kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2],
     pursued: &HashSet<Hash64>,
 ) -> HashMap<Hash64, u64> {
-    rows.iter()
+    let mut open: HashMap<Hash64, u64> = rows
+        .iter()
         .filter(|row| pursued.contains(&row.claim_id) && !row.phase.is_terminal())
         .map(|row| (row.claim_id, row.deadline_daa.unwrap_or(u64::MAX)))
-        .collect()
+        .collect();
+    for claim in disputable.iter().filter(|claim| pursued.contains(&claim.claim_id)) {
+        open.entry(claim.claim_id).or_insert(u64::MAX);
+    }
+    open
 }
 
 #[cfg(test)]
