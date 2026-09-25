@@ -194,11 +194,15 @@ root、corpus の verdict digest）、committed class manifest を JSON とし�
    - `scripts/t12-repin.sh --selftest`（build 不要、直前の harvest log を 1 値ずつ書き換えて判定規則を確かめる。13 通り）。
 2. `scripts/t12-repin.sh --apply --reason "<何が動かしたか、1 行>"` — `MOVE` の pin を書き換え、各書き換え（表の行・tuple const・genesis
    field・`want` 配列ごと）の上に `re-pin <日付> @<commit>: <reason> (was <旧値>…)` の 1 行 comment を残す（Markdown の表と散文には残さない。
-   commit message が理由を持つ）。t12 の genesis が動いたら旧 genesis を `fleet.env.example` の `FORBIDDEN_GENESIS`（全桁と comment 行）と
+   commit message が理由を持つ）。**round で進む**: genesis 定数は pin であると同時に入力（params id が `genesis.hash` を hash する）なので、
+   genesis が動いたら 1 round 目はそれだけを書き換えて build し直し、読み直した値で 2 round 目に残りを書き換え、最後の round は drift 0 を
+   確かめる build（確認の dry run を兼ねる）。dry run が genesis の drift と一緒に出す fingerprint・twin・写しの値は古い genesis 定数の上で
+   計算したもので、`--apply` の 2 round 目で出る値が正しい（salt を変えた試験では fingerprint が 1 round 目 `fe4e0c92…`、2 round 目
+   `5633ba0d…` だった）。t12 の genesis が動いたら旧 genesis を `fleet.env.example` の `FORBIDDEN_GENESIS`（全桁と comment 行）と
    `t12_regenesis.rs` の superseded 接頭辞リストに足す。その後、書き換えた pin を持つ test（lib の genesis / params / class manifest /
    v22 golden、pin のある integration target 全体、`t12_deploy_kit_constants`・`t12_regenesis`・`t12_repin_values`）を走らせて結果を出す
    （exit 5 = どれかが落ちた）。`REFUSE`・`NOT COMPUTED`・`NOT FOUND` が 1 つでもあれば何も書かない（exit 3）。
-3. もう一度 `scripts/t12-repin.sh` → `DRY RUN: no drift`（exit 0）。`--apply` が「Other mentions of the old values」に出した行
+3. `--apply` の最後の round が drift 0 でなければ exit 3/4/5 で止まる。commit の前にもう一度 `scripts/t12-repin.sh` → `DRY RUN: no drift`（exit 0）。`--apply` が「Other mentions of the old values」に出した行
    （PLAN・misakascan DEPLOY・docs の散文、fleet.env.example の説明 comment など）を手で直す。`git diff` を読み、`re-pin` comment の reason を
    確かめ、record の encoding が動いたなら T41 の test の doc にどの field がなぜ動いたかを書いて commit。
 4. identity の照合: dry run の末尾の `computed from.testnet-12.params_id / genesis.testnet-12.hash / testnet-12.premine_txid /

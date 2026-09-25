@@ -11,6 +11,14 @@ prints, and the lines the pin tests themselves print before they assert), and se
     t12-repin.sh                               dry run: "pinned vs computed" for every pin, exit 1 on drift
     t12-repin.sh --apply --reason "<why>"      rewrite the drifted t12 / mainnet / layout pins in place,
                                                one reason comment each, then run the affected tests
+    t12-repin.sh --selftest                    the decision rules on the last harvest logs (no build)
+
+**--apply runs in rounds, inputs first.** A genesis constant is not only a pin, it is an INPUT: the params
+ids hash `genesis.hash`, so a fingerprint, a twin or a copy computed while the constant is stale is
+computed over the wrong genesis. So a round re-pins only the lowest stage that drifted (stage 0: the
+genesis constants), rebuilds, and harvests again; the next round re-pins the rest; the last round is a
+harvest with no drift (the confirming dry run). A value that moves every time it is re-pinned stops it
+after MAX_ROUNDS.
 
 **What it will not move.** A testnet-11, testnet-10, devnet or simnet pin that drifts is a build that
 changed a network it must not change: the tool refuses the whole --apply and names the test that would
@@ -41,13 +49,15 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 CORE = "kaspa-consensus-core"
 
+MAX_ROUNDS = 4
+
+# Scopes a drift may move; every other scope but `t11-layout` and `verdict` (their own rules, `decide`) refuses.
 MOVABLE = {"t12", "mainnet", "layout", "copy"}
-REFUSED = {"testnet-11", "testnet-10", "devnet", "simnet", "t11"}
 
 # ---------------------------------------------------------------------------------------------------
 # The harvest: which cargo runs print the computed values, and how each value is read from them.
@@ -156,6 +166,7 @@ class Pin:
     guards: tuple = ()       # t11-layout: pin keys that must all hold
     comment: str | None = "auto"  # comment syntax for the reason line; None = no comment (tables, prose)
     group: str | None = None # pins sharing a group share one reason comment (default: the line of the last anchor)
+    stage: int = 1           # 0 = an INPUT other computed values hash (a genesis constant): re-pinned, rebuilt, re-read first
     note: str = ""
 
 
@@ -189,7 +200,7 @@ def _triple(prefix, scope, file, const, value_prefix, tests, until=r"^\);"):
 def _genesis(const, net, scope):
     return [Pin(key=f"genesis.{net}.{field_}", scope=scope, file="consensus/core/src/config/genesis.rs",
                 anchors=[rf"^pub const {const}: GenesisBlock = GenesisBlock \{{", rf"\b{field_}: Hash64::from_bytes\("],
-                until=r"^\};", fmt="bytes", value=f"genesis.{net}.{field_}", group=f"genesis.{net}",
+                until=r"^\};", fmt="bytes", value=f"genesis.{net}.{field_}", group=f"genesis.{net}", stage=0,
                 tests=("lib::config::genesis::tests::test_genesis_hashes",
                        "lib::config::genesis::tests::every_genesis_commits_to_the_premine_this_build_mints"))
             for field_ in ["hash", "hash_merkle_root", "utxo_commitment"]]
@@ -645,9 +656,9 @@ def unregistered(rows: list[Row]) -> list[str]:
     return out
 
 
-def stale_mentions(rows: list[Row]) -> list[str]:
-    """Where an old value that moves is still written, outside the pins the tool rewrites (and outside
-    its own reason comments and the kit's forbidden-genesis list)."""
+def stale_mentions(moved: list[Row], rows: list[Row]) -> list[str]:
+    """Where an old value of a `moved` pin is still written, outside the pins themselves (as `rows`
+    locates them now), the tool's own reason comments and the kit's forbidden-genesis list."""
     own: set[tuple[str, int]] = set()
     texts: dict[str, str] = {}
     for r in rows:
@@ -655,19 +666,21 @@ def stale_mentions(rows: list[Row]) -> list[str]:
             text = texts.setdefault(r.pin.file, open(os.path.join(REPO, r.pin.file), encoding="utf-8").read())
             own.add((r.pin.file, line_no(text, r.span[0])))
     olds = {}
-    for r in rows:
-        if r.decision == "move" and r.pin.fmt in ("hex", "bytes", "token") and len(r.pinned) >= 16:
+    for r in moved:
+        if r.pin.fmt in ("hex", "bytes", "token") and len(r.pinned) >= 16:
             olds.setdefault(r.pinned[:8], r.pin.key)
-    out = []
+    out, seen = [], set()
     for prefix, key in sorted(olds.items()):
-        p = subprocess.run(["git", "grep", "-n", "-I", prefix, "--", "docs", "contrib", "consensus", "kaspad", "scripts"], cwd=REPO,
-                           capture_output=True, text=True)
+        p = subprocess.run(["git", "grep", "-n", "-I", prefix, "--", "docs", "contrib", "consensus", "kaspad", "scripts",
+                            ":!scripts/t12_repin.py"], cwd=REPO, capture_output=True, text=True)
         for line in p.stdout.splitlines():
             file, num, body = (line.split(":", 2) + ["", ""])[:3]
-            if "/legacy-" in file or (file, int(num or 0)) in own or "re-pin " in body or re.fullmatch(r"[0-9a-f]{128}", body.strip()):
+            if "/legacy-" in file or (file, int(num or 0)) in own or (file, num) in seen or "re-pin " in body \
+                    or "for superseded in" in body or re.fullmatch(r'(FORBIDDEN_GENESIS=)?"?[0-9a-f]{128}"?', body.strip()):
                 continue
+            seen.add((file, num))
             out.append(f"{file}:{num}: {body.strip()[:150]}   [old {key}]")
-    return out
+    return sorted(out)
 
 
 def reason_line(pin: Pin, file: str, body: str, inside_code_block: bool) -> str | None:
@@ -702,6 +715,9 @@ def apply(rows: list[Row], reason: str, head: str) -> list[str]:
             in_code = file.endswith(".md") and text.count("```", 0, line_at) % 2 == 1
             olds = ", ".join(r.pinned[:8] + "…" for r in sorted(grp, key=lambda r: r.span[0]))
             line = reason_line(grp[0].pin, file, f"re-pin {today} @{head}: {reason} (was {olds})", in_code)
+            above = text[text.rfind("\n", 0, max(line_at - 1, 0)) + 1:line_at]
+            if line and f"re-pin {today} @{head}: {reason}" in above:
+                line = None  # this run already explained this group (an earlier round)
             if line:
                 indent = re.match(r"[ \t]*", text[line_at:]).group(0)
                 edits.append((line_at, line_at, indent + line + "\n"))
@@ -880,20 +896,99 @@ def main() -> int:
         print("--reason is one line of plain text", file=sys.stderr)
         return 2
 
-    computed, notes = harvest(log_dir, args.from_log)
-    if "*" in notes:
-        print(f"\nHARVEST FAILED: {notes['*']}")
-        return 4
-    rows = compare(registry(), computed, notes)
-    decide(rows, args.allow_verdict)
+    if args.apply and args.from_log:
+        print("--apply rebuilds between rounds; it does not take --from-log", file=sys.stderr)
+        return 2
+    if not args.apply:
+        computed, notes = harvest(log_dir, args.from_log)
+        if "*" in notes:
+            print(f"\nHARVEST FAILED: {notes['*']}")
+            return 4
+        rows = compare(registry(), computed, notes)
+        decide(rows, args.allow_verdict)
+        drift, refused, moves, broken, problems, unreg = report(rows, computed, args.drift_only)
+        if drift:
+            print(f"\nDRY RUN: {len(drift)} pin(s) drifted — {len(moves)} movable, {len(refused)} refused.")
+            if any(r.pin.stage == 0 for r in moves):
+                print("NOTE: a genesis constant drifted. Every value that hashes the genesis (the params and identity ids, the twins, "
+                      "their copies) is computed above over the constant AS IT STANDS; --apply re-pins the genesis first, rebuilds, "
+                      "and recomputes them.")
+            stale = stale_mentions(moves, rows)
+            if stale:
+                print("Other mentions of the moving old values (not rewritten; review by hand):")
+                for line in stale:
+                    print("  " + line)
+            print("Nothing may be applied until the refused pins are explained." if refused else
+                  "Re-run with --apply --reason \"…\" to rewrite them.")
+            return 1
+        print("\nDRY RUN: no drift — every checked pin is this build's value." +
+              (" But see NOT CHECKED / CHECK above." if broken or problems or unreg else ""))
+        return 3 if broken or problems else 0
 
-    # ---- the report: pinned vs computed ----
+    # ---- --apply: in rounds, inputs first; each round is a fresh build and harvest ----
+    reason = args.reason.strip()
+    moved: dict[str, Row] = {}
+    written: set[str] = set()
+    rows: list[Row] = []
+    for round_ in range(1, MAX_ROUNDS + 1):
+        print(f"\n==== --apply round {round_} ====")
+        computed, notes = harvest(log_dir, None)
+        if "*" in notes:
+            print(f"\nHARVEST FAILED: {notes['*']}" + (f" (already rewritten: {sorted(written)})" if written else ""))
+            return 4
+        rows = compare(registry(), computed, notes)
+        decide(rows, args.allow_verdict)
+        drift, refused, moves, broken, problems, unreg = report(rows, computed, True)
+        if refused or broken:
+            print(f"\n--apply REFUSED in round {round_} (above)." +
+                  (f" Rewritten in earlier rounds (review or `git checkout -- <file>`): {sorted(written)}" if written else
+                   " Nothing was written."))
+            return 3
+        if not moves:
+            if round_ == 1:
+                print("\n--apply: nothing drifted; nothing written.")
+                return 0
+            print(f"\nround {round_}: no drift — the re-pin converged.")
+            break
+        stage = min(r.pin.stage for r in moves)
+        batch = [r for r in moves if r.pin.stage == stage]
+        for r in batch:
+            moved.setdefault(r.pin.key, r)
+        files = apply(batch, reason, head) + superseded_genesis(batch, reason, head)
+        written |= set(files)
+        wait = len(moves) - len(batch)
+        print(f"\nround {round_}: rewrote {len(batch)} pin(s) in {len(set(files))} file(s)" +
+              (f"; {wait} more are recomputed over them in the next round" if wait else "; confirming with one more build"))
+        for f in sorted(set(files)):
+            print("  " + f)
+    else:
+        print(f"\n--apply did not converge in {MAX_ROUNDS} rounds: a value moves every time it is re-pinned. Rewritten: {sorted(written)}")
+        return 5
+    print(f"\n--apply: {len(moved)} pin(s) re-pinned in {len(written)} file(s).")
+    stale = stale_mentions(list(moved.values()), rows)
+    if stale:
+        print("Other mentions of the old values (NOT rewritten; review by hand):")
+        for line in stale:
+            print("  " + line)
+    if args.no_verify:
+        print("(--no-verify: the affected tests were not run)")
+        return 0
+    rc, out = run_tests(list(moved.values()), {"t12_deploy_kit_constants", "t12_regenesis", "t12_repin_values"}, log_dir)
+    print("\naffected tests:")
+    for line in summarize_results(out):
+        print("  " + line)
+    print("\nThe last round was the confirming dry run. Review `git diff` and the `re-pin` comments, fix the prose above, commit.")
+    return 0 if rc == 0 else 5
+
+
+def report(rows: list[Row], computed: dict[str, str], drift_only: bool):
+    """Print the pinned-vs-computed table and what a rewrite cannot fix; return the row classes."""
     width = max(len(r.pin.key) for r in rows)
     label = {"drift": "DRIFT", "ok": "ok", "absent": "absent", "nocompute": "NOT COMPUTED", "locate-error": "NOT FOUND",
              "history": "history"}
     print(f"\n{'pin':{width}}  {'scope':10}  {'status':12}  {'pinned':18} {'computed':18}")
     for r in rows:
-        if args.drift_only and r.status in ("ok", "history", "absent"):
+        if drift_only and r.status in ("ok", "history", "absent"):
             continue
         tail = f"  -> {r.decision.upper()}" if r.status == "drift" else ""
         print(f"{r.pin.key:{width}}  {r.pin.scope:10}  {label[r.status]:12}  {short(r.pinned):18} {short(r.computed):18}{tail}")
@@ -907,7 +1002,6 @@ def main() -> int:
                 "rule_manifest.digest"]:
         print(f"  computed {key:30} {computed.get(key, '-')}")
 
-    # ---- what a rewrite cannot fix ----
     problems = []
     registered = computed.get("testnet-12.class.registered", "")
     if registered:
@@ -951,49 +1045,7 @@ def main() -> int:
             print(f"  {r.pin.key} [{r.pin.scope}] {short(r.pinned)} -> {short(r.computed)}: {r.detail}")
             for t in r.pin.tests:
                 print(f"      would fail: {t}")
-
-    if not args.apply:
-        if drift:
-            print(f"\nDRY RUN: {len(drift)} pin(s) drifted — {len(moves)} movable, {len(refused)} refused.")
-            stale = stale_mentions(rows)
-            if stale:
-                print("Other mentions of the moving old values (not rewritten; review by hand):")
-                for s in stale:
-                    print("  " + s)
-            print("Nothing may be applied until the refused pins are explained." if refused else
-                  "Re-run with --apply --reason \"…\" to rewrite them.")
-            return 1
-        print("\nDRY RUN: no drift — every checked pin is this build's value." +
-              (" But see NOT CHECKED / CHECK above." if broken or problems or unreg else ""))
-        return 3 if broken or problems else 0
-
-    # ---- --apply ----
-    if refused or broken:
-        print("\n--apply REFUSED (above). Nothing was written.")
-        return 3
-    if not moves:
-        print("\n--apply: nothing drifted; nothing written.")
-        return 0
-    stale = stale_mentions(rows)
-    written = apply(moves, args.reason.strip(), head)
-    written += superseded_genesis(moves, args.reason.strip(), head)
-    print(f"\n--apply: rewrote {len(moves)} pin(s) in {len(set(written))} file(s):")
-    for f in sorted(set(written)):
-        print("  " + f)
-    if stale:
-        print("Other mentions of the old values (NOT rewritten; review by hand):")
-        for s in stale:
-            print("  " + s)
-    if args.no_verify:
-        print("(--no-verify: the affected tests were not run)")
-        return 0
-    rc, out = run_tests(moves, {"t12_deploy_kit_constants", "t12_regenesis", "t12_repin_values"}, log_dir)
-    print("\naffected tests:")
-    for line in summarize_results(out):
-        print("  " + line)
-    print("\nNext: run the dry run again on the re-pinned tree (it must say: no drift), review `git diff`, commit.")
-    return 0 if rc == 0 else 5
-
+    return drift, refused, moves, broken, problems, unreg
 
 if __name__ == "__main__":
     sys.exit(main())
