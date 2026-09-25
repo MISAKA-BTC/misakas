@@ -16825,10 +16825,16 @@ pub fn palw_rc_shipped_params() -> Params {
 /// `palw_class_receipt_window` are all in force at DAA 0. Only the rows the operator put in the
 /// genesis are in the genesis BLOCK.
 pub fn palw_t12_shipped_params() -> Params {
+    palw_t12_public_params_over_v1(palw_t12_base_params())
+}
+
+/// [`palw_t12_shipped_params`]'s assembly over a given base — public testnet-12's genesis registry and
+/// premine on `base`. The preset passes [`palw_t12_base_params`] itself; a test passes it with a
+/// post-launch fence set after pass 2, to prove the assembly carries what was set there.
+fn palw_t12_public_params_over_v1(base: Params) -> Params {
     if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
-        return palw_t12_base_params();
+        return base;
     }
-    let base = palw_t12_base_params();
     // **Each card's bond is named on testnet-12's OWN premine txid** (`premine_outpoint_for`; user
     // decision 2026-09-24, replay separation): the same indices as testnet-11's cards, on a txid
     // no private chain that shared the sentinel ever minted.
@@ -16901,15 +16907,27 @@ impl std::fmt::Debug for PalwPostLaunchFenceV1 {
 
 /// **The fences testnet-12's post-launch release arms at one post-launch height** (DAA 500, the
 /// user's decision of 2026-09-26) — the ONE list of them. Each lane that puts a fix behind the
-/// release's fence adds its entry here and nowhere else (the operator-only anchor, seat maturity,
-/// V02's lock budget and the sink bind join as they merge):
+/// release's fence adds its entry here and nowhere else (V02's lock budget joins as it merges):
 ///
 /// * the drill's `--palw-drill-fence-at=<DAA>` moves exactly these to a low height on a salted drill
 ///   chain, so a drill crosses the release's flag day with the shipping binary
 ///   ([`crate::config::drill::palw_drill_post_launch_fences_at_v1`]; the memory rule "a flag day
 ///   needs a drill that crosses it");
-/// * the release arms exactly these at its height — AFTER pass 2 of [`palw_t12_base_params`], which
-///   zeroes every fence height it visits, and through `set` so every mirror follows.
+/// * the release arms exactly these at its height, through `set` so every mirror follows, on the
+///   ASSEMBLED ruleset — in [`palw_t12_params_with_registry_v1`] after the assembly and before its
+///   `validate_palw_v2`, the one body the public preset and every drill share. Never inside
+///   [`palw_t12_base_params`] before its pass 2 (which zeroes every fence height it visits: a genesis
+///   rule, a re-mint), and never at 1,000 (`palw_bond_maturity`'s height, which `validate_palw_v2`
+///   refuses for `palw_bond_maturity_early` and the fork id cannot see).
+///
+/// **Lane A's entry needs the assembled ruleset**: its operators are the bonds the genesis REGISTRY
+/// names, which a bundle-less base does not carry yet, so on one it panics rather than leave the
+/// CRITICAL's stopgap silently dormant. Every other entry is a bare height or mirrors itself, and
+/// the registry-resilience mirror is also re-made by the assembly
+/// ([`palw_v2_params_with_class_rows_v1`]), so those may be set after pass 2 as well. With every
+/// entry at one height, `validate_palw_v2`'s prerequisites among them hold (lane A over F1's seed at
+/// or below it; the rest over fences testnet-12 arms at 0) — `drill.rs` and the processor's combined
+/// crossing (`t12_post_launch_fences_combined`) test exactly that.
 ///
 /// Every entry is dormant (`None`) on every shipped preset until the release arms it.
 pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
@@ -16927,6 +16945,29 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PalwPostLaunchFenceV1 {
         name: "palw_heartbeat_transparent_same_chain",
         set: |params, at| params.palw_heartbeat_transparent_same_chain = at,
+    },
+    // Fork choice (HIGH): a deep reorg needs a strict economic win, a tie keeps the incumbent: a bare
+    // height.
+    PalwPostLaunchFenceV1 { name: "palw_reorg_strict_economic_win", set: |params, at| params.palw_reorg_strict_economic_win = at },
+    // Lane maturity (HIGH): ADR-0065 D1 before 1,000 for non-genesis bonds: a bare height, below
+    // `palw_bond_maturity`'s 1,000 (never at it).
+    PalwPostLaunchFenceV1 { name: "palw_bond_maturity_early", set: |params, at| params.palw_bond_maturity_early = at },
+    // Lane sink (Position #1): a model sink is block-valid only bound: a bare height.
+    PalwPostLaunchFenceV1 { name: "palw_model_sink_bound", set: |params, at| params.palw_model_sink_bound = at },
+    // Lane A, the operator-anchored panel (the panel-seed CRITICAL's stopgap): the height over every
+    // bond the genesis registers (testnet-12's eight operator cards), testnet-12's armed value. Needs an
+    // assembled ConsensusV2 ruleset (see the list's doc); requires F1's seed at or below it.
+    PalwPostLaunchFenceV1 {
+        name: "palw_operator_anchor",
+        set: |params, at| {
+            let rule = at.map(|at| {
+                params.palw_operator_anchor_of_genesis_bonds_v1(at).expect(
+                    "palw_operator_anchor is set on an ASSEMBLED ConsensusV2 ruleset: its operators are the genesis registry's \
+                     bonds (arm the post-launch list in palw_t12_params_with_registry_v1, after the assembly)",
+                )
+            });
+            params.palw_operator_anchor = rule;
+        },
     },
 ];
 
@@ -18144,6 +18185,11 @@ pub fn palw_v2_params_on_base(
     // The readiness-V2 horizon (user decision 2026-09-25), for the same reason and in the same place:
     // its spans, mirrored onto the bundle this function built.
     params.sync_palw_readiness_v2_max_age_spans();
+    // Lane F1's registry-resilience height (V03/V05), for the same reason and in the same place: a base
+    // that set the fence before it had a bundle (the post-launch release arming its list after
+    // `palw_t12_base_params`'s pass 2) had its mirror written into no bundle, and `validate_palw_v2`
+    // below refused the ruleset — the int-4 phase-1 audit's LOW. Re-mirrored here, it follows.
+    params.sync_palw_registry_resilience();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -26763,5 +26809,134 @@ mod adr0142_release_probe {
         }
         assert!(rows.iter().any(|(n, _)| *n == "palw_work_target"), "the work target keeps the day");
         assert!(rows.iter().any(|(n, _)| *n == "palw_model_registry"), "and so does the registry");
+    }
+}
+
+/// **testnet-12's post-launch release, armed the way it will be** (int-4 phase 2): every entry of
+/// [`PALW_T12_POST_LAUNCH_FENCES_V1`] at one height on the shipped ruleset, and each entry set where
+/// the release may set it.
+#[cfg(test)]
+mod post_launch_fence_arming_tests {
+    use super::*;
+
+    fn entry(name: &str) -> &'static PalwPostLaunchFenceV1 {
+        PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name} is listed"))
+    }
+
+    fn height(params: &Params, name: &str) -> Option<ForkActivation> {
+        params.palw_fences_v1().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is a fence")).1
+    }
+
+    /// **The phase-1 audit's LOW: an entry set after pass 2 of `palw_t12_base_params` — before the
+    /// bundle exists — reaches the assembled ruleset whole.** The registry-resilience entry used to
+    /// write its mirror into no bundle, so the assembly's `validate_palw_v2` refused (a startup
+    /// panic); the assembly now re-mirrors it. For every entry but lane A's, setting it on the base
+    /// and assembling is byte-identical (`Debug`) to assembling and setting it; lane A's needs the
+    /// genesis registry and refuses a bundle-less base loudly rather than leave the rule dormant.
+    #[test]
+    fn an_entry_set_after_pass_2_reaches_the_assembled_ruleset_whole() {
+        if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+            return;
+        }
+        let release = palw_t12_shipped_params();
+        let at = Some(ForkActivation::new(500));
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1.iter().filter(|f| f.name != "palw_operator_anchor") {
+            let mut base = palw_t12_base_params();
+            (fence.set)(&mut base, at);
+            let set_before = palw_t12_public_params_over_v1(base);
+            set_before.validate_palw_v2().unwrap_or_else(|e| panic!("{}: set after pass 2, assembled: {e}", fence.name));
+            let mut set_after = release.clone();
+            (fence.set)(&mut set_after, at);
+            assert_eq!(height(&set_before, fence.name), at, "{}: the assembly keeps the height", fence.name);
+            assert_eq!(
+                format!("{set_before:?}"),
+                format!("{set_after:?}"),
+                "{}: before or after the assembly, one ruleset",
+                fence.name
+            );
+        }
+        let mut base = palw_t12_base_params();
+        let registry = entry("palw_registry_resilience");
+        (registry.set)(&mut base, at);
+        let assembled = palw_t12_public_params_over_v1(base);
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &assembled.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(bundle.state.registry_resilience_from_daa(), Some(500), "the fold's mirror followed into the bundle");
+
+        let lane_a = entry("palw_operator_anchor");
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut base = palw_t12_base_params();
+            (lane_a.set)(&mut base, at);
+        }));
+        assert!(refused.is_err(), "lane A's entry refuses a bundle-less base (its operators are the genesis registry's)");
+        let mut base = palw_t12_base_params();
+        (lane_a.set)(&mut base, None);
+        assert_eq!(base.palw_operator_anchor, None, "setting it dormant needs no registry");
+    }
+
+    /// **Every post-launch fence at DAA 500 on the shipped ruleset** — the release's own arming: it
+    /// validates (every prerequisite among the fences holds at one height), each rule is live at 500
+    /// and not at 499, the identity is the launch release's (a scheduled fence is peer-compatible)
+    /// while the params id, the schedule and the fork id move, lane A trusts the eight genesis bonds,
+    /// and setting the list back gives the release byte for byte. At 1,000 — `palw_bond_maturity`'s
+    /// own height — it is refused by name.
+    #[test]
+    fn every_post_launch_fence_at_500_on_the_shipped_ruleset_validates_and_keeps_the_identity() {
+        if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+            return;
+        }
+        let release = palw_t12_shipped_params();
+        let mut armed = release.clone();
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+            assert_eq!(height(&release, fence.name), None, "{} ships dormant", fence.name);
+            (fence.set)(&mut armed, Some(ForkActivation::new(500)));
+        }
+        armed.validate_palw_v2().expect("the release's list at DAA 500 is a runnable testnet-12 ruleset");
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+            assert_eq!(height(&armed, fence.name), Some(ForkActivation::new(500)), "{} at 500", fence.name);
+        }
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(bundle.state.registry_resilience_from_daa(), Some(500), "registry resilience's mirror");
+        assert!(armed.palw_panel_seed_execution_active_at(500) && !armed.palw_panel_seed_execution_active_at(499));
+        assert!(armed.palw_operator_anchor_active_at(500) && !armed.palw_operator_anchor_active_at(499));
+        assert!(armed.palw_model_sink_bound_active_at(500) && !armed.palw_model_sink_bound_active_at(499));
+        assert_eq!(armed.palw_heartbeat_transparent_same_chain_fence(), Some(ForkActivation::new(500)));
+        assert_eq!(armed.palw_reorg_strict_economic_win, Some(ForkActivation::new(500)));
+        assert_eq!(
+            (armed.palw_bond_maturity_window_at(499), armed.palw_bond_maturity_window_at(500)),
+            (None, Some(PALW_T12_BOND_MATURITY_WINDOW_DAA)),
+            "D1's window from 500, not below"
+        );
+        let genesis_bonds: Vec<_> = bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+                _ => None,
+            })
+            .collect();
+        let mut operators = armed.palw_operator_anchor.as_ref().expect("lane A").operators.to_vec();
+        operators.sort();
+        let mut expected = genesis_bonds.clone();
+        expected.sort();
+        assert_eq!((operators.len(), &operators), (8, &expected), "lane A trusts every genesis bond");
+
+        assert_eq!(armed.consensus_identity_id(), release.consensus_identity_id(), "a scheduled fence keeps the identity");
+        assert_ne!(armed.consensus_params_id(), release.consensus_params_id(), "the params id names the heights");
+        assert_ne!(armed.consensus_schedule_id(), release.consensus_schedule_id(), "and so does the schedule");
+        assert!(crate::fork_id_v1::fork_id_gate_fences_v1(&armed).contains(&500), "the fork id gates on 500");
+        assert!(!crate::fork_id_v1::fork_id_gate_fences_v1(&release).contains(&500));
+
+        let mut back = armed.clone();
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+            (fence.set)(&mut back, None);
+        }
+        assert_eq!(format!("{back:?}"), format!("{release:?}"), "the list is the whole difference");
+
+        let mut at_maturity = release.clone();
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+            (fence.set)(&mut at_maturity, Some(ForkActivation::new(1_000)));
+        }
+        let why = at_maturity.validate_palw_v2().expect_err("never at 1,000");
+        assert!(format!("{why:?}").contains("palw_bond_maturity_early"), "{why:?}");
     }
 }

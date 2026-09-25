@@ -16418,6 +16418,9 @@ mod p2_mint_path;
 // is drawable below the fence, and past it only once its own window has run; the genesis seats carry
 // every claim across it.
 mod t12_seat_maturity_fence;
+// testnet-12's post-launch release (int-4): EVERY fence of PALW_T12_POST_LAUNCH_FENCES_V1 at one
+// height, crossed by one chain with the clock running — the combined crossing no lane ran alone.
+mod t12_post_launch_fences_combined;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;

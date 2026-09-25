@@ -601,9 +601,7 @@ pub fn palw_drill_post_launch_fences_at_v1(
     }
     let listed = |name: &str| PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|fence| fence.name == name);
     let before = params.palw_fences_v1();
-    if let Some((other, _)) =
-        before.iter().find(|(name, fence)| !listed(name) && fence.is_some_and(|fence| fence.daa_score() == at))
-    {
+    if let Some((other, _)) = before.iter().find(|(name, fence)| !listed(name) && fence.is_some_and(|fence| fence.daa_score() == at)) {
         return Err(format!(
             "--palw-drill-fence-at={at}: DAA {at} is already {other}'s height on this ruleset. The fork id names heights, not \
              fences, so a drill node started without the flag would peer across it and fork silently — pick a height no other \
@@ -998,18 +996,43 @@ mod tests {
         let fences = drill.palw_fences_v1();
         for m in &moves {
             let release = fences.iter().find(|(name, _)| *name == m.name).unwrap().1;
-            assert_eq!(m.was, release.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score()), "{}: the release's height", m.name);
+            assert_eq!(
+                m.was,
+                release.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score()),
+                "{}: the release's height",
+                m.name
+            );
             assert_eq!(m.at, 40);
             let line = m.to_string();
             assert!(line.contains(m.name) && line.contains("DAA 40"), "{line}");
-            assert!(if m.was.is_none() { line.contains("ARMED") } else { line.contains("MOVED") || line.contains("own height") }, "{line}");
+            assert!(
+                if m.was.is_none() { line.contains("ARMED") } else { line.contains("MOVED") || line.contains("own height") },
+                "{line}"
+            );
         }
         // Each rule is live from the height, and not below it — the fold's mirror included.
         assert_eq!(moved.palw_registry_resilience, Some(ForkActivation::new(40)));
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &moved.palw_consensus_mode else { panic!("V2") };
         assert_eq!(bundle.state.registry_resilience_from_daa(), Some(40), "the fold's mirror follows");
         assert!(moved.palw_panel_seed_execution_active_at(40) && !moved.palw_panel_seed_execution_active_at(39));
-        assert_eq!(moved.palw_heartbeat_transparent_same_chain_fence(), Some(ForkActivation::new(40)), "under a live transparency rule");
+        assert_eq!(
+            moved.palw_heartbeat_transparent_same_chain_fence(),
+            Some(ForkActivation::new(40)),
+            "under a live transparency rule"
+        );
+        assert_eq!(moved.palw_reorg_strict_economic_win, Some(ForkActivation::new(40)), "the strict-economic-win reorg rule");
+        assert_eq!(
+            (moved.palw_bond_maturity_window_at(39), moved.palw_bond_maturity_window_at(40)),
+            (None, Some(1_000)),
+            "D1 from 40"
+        );
+        assert!(moved.palw_model_sink_bound_active_at(40) && !moved.palw_model_sink_bound_active_at(39));
+        assert!(moved.palw_operator_anchor_active_at(40) && !moved.palw_operator_anchor_active_at(39));
+        assert_eq!(
+            moved.palw_operator_anchor.as_ref().map(|rule| rule.operators.len()),
+            Some(8),
+            "lane A over the drill's eight genesis bonds (its own registry, not public testnet-12's)"
+        );
         moved.validate_palw_v2().expect("the moved drill ruleset validates");
         // The drill chain's ids move with the heights; the genesis is the salt's, untouched.
         assert_eq!(moved.genesis.hash, drill.genesis.hash);
