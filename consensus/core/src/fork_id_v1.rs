@@ -682,6 +682,9 @@ mod tests {
             "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
             "palw_model_seed_v2" => params.palw_model_seed_v2 = Some(at),
             "palw_model_evm" => params.palw_model_evm = Some(at),
+            // Lane sink (the model sink binding, post-launch): refused without the market and the
+            // 2026-09-23 audit fence at or below it by `validate_palw_v2`, which the probe does not run.
+            "palw_model_sink_bound" => params.palw_model_sink_bound = Some(at),
             "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
             "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
             "palw_kary_court" => params.palw_kary_court = Some(at),
