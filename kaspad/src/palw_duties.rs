@@ -27,6 +27,15 @@
 //! **The old flags stay accepted** so existing units, kits and scripts keep starting, and each one
 //! the operator names logs one WARN line ([`palw_deprecated_duty_flag_warnings_v1`]). Nothing reads
 //! them to decide whether a duty runs.
+//!
+//! **One bond, one process.** Because a duty has no off switch, every process that holds a bond's key
+//! and outpoint runs that bond's duties — a second one (a standby, a registration run, a copy re-synced
+//! into a fresh app dir) signs the same round permit twice and is slashed. A bonded node says so at
+//! startup ([`palw_one_process_per_bond_line_v1`]; a WARN on a `--palw-register-class` run).
+//!
+//! **The plan and what started.** The summary line is printed before the services exist; a duty the
+//! plan put ON whose key or bond then fails to load gets one `PALW duties NOT as planned` WARN line
+//! ([`palw_duty_shortfall_lines_v1`]) once they do.
 
 use crate::args::{Args, palw_chain_classes_default};
 use kaspa_consensus_core::config::params::Params;
@@ -52,10 +61,15 @@ impl PalwDutyIdleV1 {
 
 /// The seat identity the panel acts as. `bond` is `None` only for a node registering its first bond
 /// (`--palw-register-bond`), which the panel service dispatches to its registration worker.
+///
+/// `fee_outpoint` is the owner's consent to spend (`--palw-fee-outpoint`), not a switch on the duty:
+/// without it the seat still signs its receipts, replays and proofs, and carries nothing on chain
+/// ("receipts only", the panel's own startup line) — the summary line says so.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwSeatIdentityV1 {
     pub key_path: String,
     pub bond: Option<String>,
+    pub fee_outpoint: Option<String>,
 }
 
 /// The bond the execution lane's round blocks are signed for.
@@ -84,8 +98,14 @@ pub fn palw_duty_plan_v1(args: &Args, params: &Params) -> PalwDutyPlanV1 {
             Err(PalwDutyIdleV1::NotOnThisNetwork("this network declares no ConsensusV2 ruleset, so no panels exist here"))
         }
         (true, None, _) => Err(PalwDutyIdleV1::NoIdentity("this node holds no seat identity (no --palw-producer-key)")),
-        (true, Some(key_path), Some(bond)) => Ok(PalwSeatIdentityV1 { key_path: key_path.clone(), bond: Some(bond.clone()) }),
-        (true, Some(key_path), None) if args.palw_register_bond => Ok(PalwSeatIdentityV1 { key_path: key_path.clone(), bond: None }),
+        (true, Some(key_path), Some(bond)) => Ok(PalwSeatIdentityV1 {
+            key_path: key_path.clone(),
+            bond: Some(bond.clone()),
+            fee_outpoint: args.palw_fee_outpoint.clone(),
+        }),
+        (true, Some(key_path), None) if args.palw_register_bond => {
+            Ok(PalwSeatIdentityV1 { key_path: key_path.clone(), bond: None, fee_outpoint: args.palw_fee_outpoint.clone() })
+        }
         (true, Some(_), None) => {
             Err(PalwDutyIdleV1::NoIdentity("this node holds a key but no bond (no --palw-producer-bond), so it holds no seat"))
         }
@@ -105,7 +125,13 @@ pub fn palw_duty_plan_v1(args: &Args, params: &Params) -> PalwDutyPlanV1 {
 /// **The one INFO line a node prints about its duties** — which run, and for each that does not, why.
 pub fn palw_duty_summary_line_v1(plan: &PalwDutyPlanV1, params: &Params) -> String {
     let panel = match &plan.panel {
-        Ok(PalwSeatIdentityV1 { bond: Some(bond), .. }) => format!("panel seat duties ON as bond {bond}"),
+        Ok(PalwSeatIdentityV1 { bond: Some(bond), fee_outpoint: Some(_), .. }) => format!("panel seat duties ON as bond {bond}"),
+        // The duty runs; only the SPENDING is off, by the owner's choice — said here, because this is
+        // the line an operator (and the kit's `switch`) reads to learn what the seat does.
+        Ok(PalwSeatIdentityV1 { bond: Some(bond), fee_outpoint: None, .. }) => format!(
+            "panel seat duties ON as bond {bond} (receipts only: no --palw-fee-outpoint, so this seat carries nothing on \
+             chain — no DA answer, filer or carrier)"
+        ),
         Ok(PalwSeatIdentityV1 { bond: None, .. }) => "panel ON to register this node's first bond (--palw-register-bond)".to_string(),
         Err(idle) => format!("panel idle — {}", idle.reason()),
     };
@@ -119,6 +145,65 @@ pub fn palw_duty_summary_line_v1(plan: &PalwDutyPlanV1, params: &Params) -> Stri
         (false, _) => "chain-registered classes off (this network's fence; --palw-chain-classes opts in)",
     };
     format!("PALW duties (on by construction; no flag turns one off): {panel} | {round_lane} | {chain_classes}")
+}
+
+/// **One bond, one process** — the line a node that acts as a bond prints next to the summary, and
+/// whether it is a WARN (`true`) rather than an INFO.
+///
+/// A duty with no off switch runs in EVERY process that holds the bond's key and outpoint. Two such
+/// processes at once sign the same execution-lane permit over two different templates, and consensus
+/// slashes the whole bond for it (`RoundPermitEquivocated`) — the round producer's restart record
+/// (`palw-round-last-signed`) lives in each process's own app dir, so neither can know the other
+/// signed. It is a WARN where the operator started this process to REGISTER something under a bond
+/// (`--palw-register-class`): that is the run the runbooks used to start beside the bond's live node.
+pub fn palw_one_process_per_bond_line_v1(plan: &PalwDutyPlanV1, args: &Args) -> Option<(bool, String)> {
+    let bond = match (&plan.round_lane, &plan.panel) {
+        (Ok(PalwBondIdentityV1 { bond, .. }), _) | (_, Ok(PalwSeatIdentityV1 { bond: Some(bond), .. })) => bond,
+        _ => return None,
+    };
+    let lane = plan.round_lane.is_ok();
+    let signs = if lane { "signs its execution-lane round permits and answers its seat duties" } else { "answers its seat duties" };
+    let slash = if lane {
+        "signs the same round permit twice and the chain slashes the bond (RoundPermitEquivocated)"
+    } else {
+        "answers the same duties twice and spends the same fee output"
+    };
+    let mut line = format!(
+        "PALW bond {bond}: run it in exactly ONE process, and keep that process's app dir. This process {signs}; a second \
+         process holding the same bond at the same time — a standby, a registration run, a copy on another host, or this node \
+         re-synced into a fresh app dir while the old one still runs — {slash}."
+    );
+    let warn = args.palw_register_class.is_some();
+    if warn {
+        line.push_str(
+            " --palw-register-class was given: this registration run IS a node for that bond and does not exit when the class \
+             lands. If another node runs this bond now, stop one of them — register through the running node instead \
+             (`misaka model add`, or restart THAT node with the flag and remove it once the class is on the chain).",
+        );
+    }
+    Some((warn, line))
+}
+
+/// **When a planned duty did not start** — its key file would not load or its bond would not parse. The
+/// summary line is the PLAN, printed before the services exist; this is the correction, one WARN line
+/// per duty, printed once they do. It starts `PALW duties` so a reader of the last such line (the
+/// deploy kit's `switch`) reads the correction and not the plan. A duty has no off switch, so a
+/// shortfall is always a broken identity to fix, never a choice.
+pub fn palw_duty_shortfall_lines_v1(plan: &PalwDutyPlanV1, panel_started: bool, round_lane_started: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let (Ok(PalwSeatIdentityV1 { bond: Some(bond), key_path, .. }), false) = (&plan.panel, panel_started) {
+        lines.push(format!(
+            "PALW duties NOT as planned: panel seat duties are NOT running although this node was given bond {bond} — its key \
+             ({key_path}) or bond did not load (the [palw-panel] warning above says which); the bond is still drawn for seats"
+        ));
+    }
+    if let (Ok(PalwBondIdentityV1 { bond, key_path }), false) = (&plan.round_lane, round_lane_started) {
+        lines.push(format!(
+            "PALW duties NOT as planned: execution-lane round blocks are NOT running although this node was given bond {bond} \
+             — its key ({key_path}) or bond did not load (the [palw-round-producer] warning above says which)"
+        ));
+    }
+    lines
 }
 
 /// **One WARN line for each deprecated duty flag the operator named** (command line, environment or
@@ -195,7 +280,10 @@ mod tests {
         let args = t12(&[KEY, BOND]);
         assert_eq!((args.palw_panel, args.palw_round_lane), (None, None), "no duty flag was given");
         let plan = palw_duty_plan_v1(&args, &params_of(&args));
-        assert_eq!(plan.panel, Ok(PalwSeatIdentityV1 { key_path: "/nonexistent/bond.key".into(), bond: Some("aa:0".into()) }));
+        assert_eq!(
+            plan.panel,
+            Ok(PalwSeatIdentityV1 { key_path: "/nonexistent/bond.key".into(), bond: Some("aa:0".into()), fee_outpoint: None })
+        );
         assert_eq!(plan.round_lane, Ok(PalwBondIdentityV1 { key_path: "/nonexistent/bond.key".into(), bond: "aa:0".into() }));
         assert!(plan.chain_classes);
         assert!(palw_deprecated_duty_flag_warnings_v1(&args, &params_of(&args)).is_empty(), "nothing named, nothing to warn");
@@ -299,8 +387,84 @@ mod tests {
     fn a_first_bond_registration_runs_the_panel_and_not_the_lane() {
         let args = t12(&[KEY, "--palw-register-bond"]);
         let plan = palw_duty_plan_v1(&args, &params_of(&args));
-        assert_eq!(plan.panel, Ok(PalwSeatIdentityV1 { key_path: "/nonexistent/bond.key".into(), bond: None }));
+        assert_eq!(plan.panel, Ok(PalwSeatIdentityV1 { key_path: "/nonexistent/bond.key".into(), bond: None, fee_outpoint: None }));
         assert!(matches!(plan.round_lane, Err(PalwDutyIdleV1::NoIdentity(_))));
+        assert_eq!(palw_one_process_per_bond_line_v1(&plan, &args), None, "no bond yet, nothing to run twice");
+    }
+
+    /// **`--palw-fee-outpoint` is the owner's consent to spend, not a switch on the duty**: without it
+    /// the seat's duties still run and the summary line says the seat carries nothing on chain — the
+    /// line the kit's `switch` reads.
+    #[test]
+    fn a_seat_without_a_fee_outpoint_is_on_and_says_receipts_only() {
+        const FEE: &str = "--palw-fee-outpoint=bb:1";
+        let bare = t12(&[KEY, BOND]);
+        let params = params_of(&bare);
+        let plan = palw_duty_plan_v1(&bare, &params);
+        assert!(plan.panel.is_ok(), "the duty runs without the fee outpoint");
+        let line = palw_duty_summary_line_v1(&plan, &params);
+        assert!(line.contains("panel seat duties ON as bond aa:0 (receipts only: no --palw-fee-outpoint"), "{line}");
+        let funded = t12(&[KEY, BOND, FEE]);
+        let plan = palw_duty_plan_v1(&funded, &params);
+        assert!(matches!(&plan.panel, Ok(PalwSeatIdentityV1 { fee_outpoint: Some(fee), .. }) if fee == "bb:1"), "{plan:?}");
+        let line = palw_duty_summary_line_v1(&plan, &params);
+        assert!(line.contains("panel seat duties ON as bond aa:0 |") && !line.contains("receipts only"), "{line}");
+        // The kit's `switch` pattern holds for both.
+        for args in [&bare, &funded] {
+            let line = palw_duty_summary_line_v1(&palw_duty_plan_v1(args, &params), &params);
+            let panel = line.find("panel seat duties ON").expect("panel ON");
+            assert!(line[panel..].contains("round blocks ON"), "{line}");
+        }
+    }
+
+    /// **One bond, one process** (the review of this change, 2026-09-25): a bonded node says it at
+    /// startup, and a `--palw-register-class` run — the one the runbooks used to start BESIDE the
+    /// bond's live node — says it as a WARN, naming the way to register through the running node.
+    #[test]
+    fn a_bonded_node_says_one_process_per_bond() {
+        let seat = t12(&[KEY, BOND]);
+        let (warn, line) = palw_one_process_per_bond_line_v1(&palw_duty_plan_v1(&seat, &params_of(&seat)), &seat).expect("bonded");
+        assert!(!warn, "an ordinary seat is told, not warned");
+        assert!(line.contains("aa:0") && line.contains("exactly ONE process") && line.contains("RoundPermitEquivocated"), "{line}");
+        assert!(!line.contains('\n'), "one line: {line}");
+        let reg = t12(&[KEY, BOND, "--palw-register-class=Qwen/Qwen2.5-1.5B/graph-v7@8192"]);
+        let (warn, line) = palw_one_process_per_bond_line_v1(&palw_duty_plan_v1(&reg, &params_of(&reg)), &reg).expect("bonded");
+        assert!(warn, "a registration run beside a live node is the slash the runbooks walked into");
+        assert!(line.contains("--palw-register-class") && line.contains("misaka model add"), "{line}");
+        for idle in [t12(&[]), t12(&[KEY])] {
+            assert_eq!(palw_one_process_per_bond_line_v1(&palw_duty_plan_v1(&idle, &params_of(&idle)), &idle), None);
+        }
+        // Where there is no lane, the reason is the duplicated seat work, not a permit.
+        let t11 = parse(&["--testnet", "--netsuffix=11", KEY, BOND]);
+        let t11_params = params_of(&t11);
+        if t11_params.palw_execution_lane_fence().is_none() {
+            let (_, line) = palw_one_process_per_bond_line_v1(&palw_duty_plan_v1(&t11, &t11_params), &t11).expect("bonded");
+            assert!(!line.contains("RoundPermitEquivocated"), "{line}");
+        }
+    }
+
+    /// **The plan is corrected when a planned duty did not start** (the review of this change): one
+    /// `PALW duties NOT as planned` WARN per duty whose key or bond failed to load, none when both
+    /// started, none for a duty the plan never put ON — and each starts `PALW duties`, so the kit's
+    /// `switch`, which reads the LAST such line, reads the correction.
+    #[test]
+    fn a_planned_duty_that_did_not_start_is_one_warn_line() {
+        let seat = t12(&[KEY, BOND]);
+        let plan = palw_duty_plan_v1(&seat, &params_of(&seat));
+        assert!(palw_duty_shortfall_lines_v1(&plan, true, true).is_empty());
+        let both = palw_duty_shortfall_lines_v1(&plan, false, false);
+        assert_eq!(both.len(), 2, "{both:?}");
+        assert!(both.iter().all(|l| l.starts_with("PALW duties NOT as planned") && !l.contains('\n')), "{both:?}");
+        assert!(both[0].contains("panel seat duties are NOT running") && both[1].contains("round blocks are NOT running"));
+        assert!(both.iter().all(|l| !l.contains("round blocks ON")), "never the kit's ON pattern: {both:?}");
+        assert_eq!(palw_duty_shortfall_lines_v1(&plan, true, false).len(), 1);
+        let idle = t12(&[]);
+        assert!(palw_duty_shortfall_lines_v1(&palw_duty_plan_v1(&idle, &params_of(&idle)), false, false).is_empty());
+        let first_bond = t12(&[KEY, "--palw-register-bond"]);
+        assert!(
+            palw_duty_shortfall_lines_v1(&palw_duty_plan_v1(&first_bond, &params_of(&first_bond)), false, false).is_empty(),
+            "a first registration has no seat duties to fall short of"
+        );
     }
 
     /// **The params decide, not a list of networks.** A network whose params configure no ConsensusV2
@@ -340,6 +504,11 @@ mod tests {
         assert!(palw_deprecated_duty_flag_warnings_v1(&t11, &params).is_empty(), "not deprecated where it is not a duty");
         let t11_off = parse(&["--testnet", "--netsuffix=11"]);
         assert!(!palw_duty_plan_v1(&t11_off, &params).chain_classes);
+        // The open question this leaves (a NODE-side choice — no Params field, no fingerprint): the arm
+        // reads the registry at GENESIS, and testnet-11's registry fence has already fired, so reading
+        // it at the current DAA instead would make it a duty there too.
+        assert!(params.palw_model_registry_at(u64::MAX), "testnet-11's registry fence has a height");
+        assert!(!palw_chain_classes_default(&Params::from(NetworkId::new(NetworkType::Mainnet))), "mainnet: not from genesis");
     }
 
     /// **The kit's duty check reads this token** (`contrib/t12-deploy-kit/lib.sh`): the launch script

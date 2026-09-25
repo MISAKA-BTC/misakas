@@ -532,8 +532,25 @@ colima.yaml の `rosetta` が true になる = 設定の変更。Rosetta はこ�
   release ごとに binary の sha を固定し、launch script が新しい **duty 検査** で「`--help` が `--palw-panel`・`--palw-round-lane`・
   `--palw-chain-classes` を `ALWAYS-ON DUTY` と表示する binary」以外を exit 78 で拒否するので、flag を落としても duty が消える組み合わせ
   （新 script × 旧 binary）は起動しない。rolling の途中でも、旧 script は旧 binary、新 script は新 binary を名指しする（各 script は自分の
-  release の `bin/kaspad` を sha 付きで指す）。`switch` は起動直後の `PALW duties` 行で panel と round lane が ON であることを確かめ、`check` は
-  `panel idle`・`execution lane idle`・`deprecated and does nothing`・`round lane is not produced` を拾う。
+  release の `bin/kaspad` を sha 付きで指す）。`switch` は RPC が答えた後（＝全 service が組まれた後）に最後の `PALW duties` 行を読み、
+  panel と round lane が ON であることを確かめ、さらに `getPalwNodeStatus.panelRunning` が true になるのを待つ（`t12check.py --expect-panel`、
+  警告のみで止めない）。`check` も `--expect-panel` を渡し、`panel idle`・`execution lane idle`・`deprecated and does nothing`・
+  `round lane is not produced`・`panel service disabled`・`NOT as planned`・`receipts only` を拾う。
+- **計画と実際（review 後の修正）**: 起動時の `PALW duties` 行は service を組む前の**計画**。鍵ファイルが読めない・bond が parse できないなどで
+  計画上 ON の duty が起動しなかったときは、service を組んだ直後に `PALW duties NOT as planned: …` の WARN を duty ごとに 1 行出す。kit は
+  最後の `PALW duties` 行を読むので、この訂正を拾う。gossip inbox の取り合いのように worker 起動時にしか分からない失敗は `panelRunning` で拾う。
+- **fee outpoint**: `--palw-fee-outpoint` は支払いへの持ち主の同意なので flag のまま（未確定として報告）。無い seat も duty は動くが chain に
+  何も運ばない（DA 応答・filer・carrier なし）。起動時の行は `panel seat duties ON as bond … (receipts only: …)` になり、`switch` は警告する。
+  kit の node は全て fee outpoint を持つ。
+- **1 つの bond は同時に 1 つの process だけ（review の high）**: duty に off が無いので、bond の鍵と outpoint を渡した process はすべてその bond の
+  seat 業務と round block を担う。同じ bond の process が 2 つ同時にあると同じ round permit に別の block で署名し、chain は bond ごと slash する
+  （`RoundPermitEquivocated`）。standby・`--palw-register-class` の登録用 process・別 host の複製・appdir を消して再同期した node（旧 process が
+  まだ動いている場合）はすべて「2 つ目」にあたる。round の署名記録（`palw-round-last-signed`）は appdir にあるので、appdir は消さずに移す。
+  node は起動時に `PALW bond …: run it in exactly ONE process …` を出す（通常は INFO、`--palw-register-class` のときは WARN）。登録は
+  `misaka model add`（稼働中の node の RPC に送るだけ）か、稼働中の node 自身に flag を足して再起動する形にする
+  （`docs/palw-add-a-model-runbook.md` §5・`docs/palw-certify-a-new-model.md`・`docs/model-requests.md` を直した）。kit は 1 bond 1 node。
+- **drill**（`scripts/misaka-palw-t12-rcore-drill.sh`）: seat の起動から `--palw-panel` を外し、header に「round lane も常に動く・1 bond 1 process」、
+  d6（heartbeat だけの区間）に「permit が切れるまで待つか bond 鍵なしで再起動」、d7 の fresh node に「bond 鍵を持たない relay で」と書いた。
 - ローカルで確認: 生成した launch script の `--check` が新 binary で OK、`ALWAYS-ON DUTY` を持たない binary（旧 binary の模擬）で
   `does not run --palw-panel as an always-on duty … refusing (exit 78)`。
 - **pre-t12**（`MISAKA-wt-b/pret12/lib.sh`）はまだ 3 つの flag を渡している。新 binary でも起動する（名指しした flag ごとに WARN が 1 行出るだけで、duty は flag によらず動く）。

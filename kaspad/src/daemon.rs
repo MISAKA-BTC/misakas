@@ -795,6 +795,13 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         warn!("{line}");
     }
     info!("{}", crate::palw_duties::palw_duty_summary_line_v1(&palw_duty_plan, &config.params));
+    // One bond, one process: a duty with no off switch runs in every process that holds the bond, and two
+    // at once double-sign its round permits (a WARN on a `--palw-register-class` run).
+    match crate::palw_duties::palw_one_process_per_bond_line_v1(&palw_duty_plan, args) {
+        Some((true, line)) => warn!("{line}"),
+        Some((false, line)) => info!("{line}"),
+        None => {}
+    }
     let palw_chain_classes = palw_duty_plan.chain_classes;
     // **…and the heights, printed as heights.** The fingerprint above writes each scheduled fence's
     // height — the 1900 fences and the 2150 ladder each moved testnet-11's pin — but until
@@ -1777,7 +1784,7 @@ Do you confirm? (y/n)";
             // The cost of admitting it was a node that started, followed the chain, and registered
             // nothing — the failure a rehearsal spent a run discovering, and the same shape as the
             // producer gate that read `--palw-register-class` and built no panel at all.
-            (Ok(crate::palw_duties::PalwSeatIdentityV1 { key_path, bond }), Some(court)) => {
+            (Ok(crate::palw_duties::PalwSeatIdentityV1 { key_path, bond, fee_outpoint }), Some(court)) => {
                 Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                     crate::palw_panel::PalwPanelConfig {
                         telemetry: palw_telemetry.clone(),
@@ -1793,7 +1800,7 @@ Do you confirm? (y/n)";
                         producer_class: palw_configured_producer_class(args, &config_for_palw_panel),
                         key_path: key_path.clone(),
                         bond: bond.clone().unwrap_or_default(),
-                        fee_outpoint: args.palw_fee_outpoint.clone(),
+                        fee_outpoint: fee_outpoint.clone(),
                         state_dir: palw_panel_state_dir(&app_dir, network),
                         court,
                         prompt_ids_form: config_for_palw_panel.params.palw_prompt_ids_form_v1(),
@@ -1902,6 +1909,16 @@ Do you confirm? (y/n)";
             }
         }
     };
+    // **The plan, corrected by what started** (`crate::palw_duties`): the summary line above is the plan,
+    // printed before the services existed. A duty the plan put ON whose key file or bond then failed to
+    // load is one WARN line here — never silence, because a bond whose duties do not run is still drawn.
+    for line in crate::palw_duties::palw_duty_shortfall_lines_v1(
+        &palw_duty_plan,
+        palw_panel_service.as_ref().is_some_and(|service| service.seat_identity_loaded()),
+        palw_round_producer_service.as_ref().is_some_and(|service| service.bond_identity_loaded()),
+    ) {
+        warn!("{line}");
+    }
 
     if args.palw_dump_classes {
         async_runtime.register(Arc::new(crate::palw_dump::PalwDumpService::new(
@@ -2169,6 +2186,14 @@ mod tests {
         assert!(body.contains("match &palw_duty_plan.round_lane {"), "the round producer starts from the plan");
         assert!(body.contains("match (&palw_duty_plan.panel, panel_court) {"), "the panel starts from the plan");
         assert!(body.contains("let palw_chain_classes = palw_duty_plan.chain_classes;"), "the arm is the plan's");
+        // The review of this change: a bonded node says "one bond, one process", and a planned duty
+        // whose identity then failed to load is corrected — AFTER both services exist.
+        assert!(body.contains("crate::palw_duties::palw_one_process_per_bond_line_v1(&palw_duty_plan, args)"));
+        let shortfall = body.find("crate::palw_duties::palw_duty_shortfall_lines_v1(").expect("the plan is corrected by what started");
+        for built in ["let palw_panel_service = {", "let palw_round_producer_service = match"] {
+            assert!(body.find(built).expect(built) < shortfall, "the correction reads `{built}` after it is built");
+        }
+        assert!(body.contains("service.seat_identity_loaded()") && body.contains("service.bond_identity_loaded()"));
     }
 
     /// **The producer gate looks where the panel actually writes** (audit3 S-21).

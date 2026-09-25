@@ -175,8 +175,31 @@ misaka --network testnet-12 model status "Qwen3.6-35B-A3B/graph-v7@2097152"   # 
 
 ### 低レベル（自動化・開発者向け）: `kaspad` の登録 flag
 
+> **同じ bond で 2 つ目の `kaspad` を起動しない（2026-09-25 から slash される）。** node の duty は
+> 起動 option によらず常に動く（`kaspad/src/palw_duties.rs`）。そのため、bond の鍵と outpoint を
+> 渡した process は、登録用に起動したものでも、その bond の seat の仕事と execution lane の
+> round block を担う。稼働中の node の横で同じ bond の登録用 process を動かすと、両方が同じ
+> round permit に別々の block で署名し、chain は bond ごと slash する（`RoundPermitEquivocated`）。
+> 登録用 process は class が chain に載っても終了しない。appdir が別なら、round の署名記録
+> （`palw-round-last-signed`）も共有されない。
+
+通常は上の `misaka model add` を使う。稼働中の node の RPC に登録を送るだけなので、2 つ目の process は
+起動せず、seat の仕事も止まらない。低レベルの flag を使うときは、登録用の `kaspad` を
+**その bond を動かす唯一の process** として起動する。次のどちらかにする。
+
+1. **稼働中の node 自身に flag を足して再起動する**（同じ unit・同じ appdir）。
+   * `--palw-register-class` がある間、panel は登録が chain に載るまで、各 tick で gossip を
+     受け取るだけで seat の仕事（receipt・replay など）をしない（既存の挙動）。その間、この bond は
+     座席に引かれても応答しないので、登録は短く済ませる。
+   * ログに `[palw-panel] the class registration in tx … is on the chain` が出たら、**flag を
+     外して再起動する**。flag を残したまま次に再起動すると、候補が `AllRegistered` で作れず、
+     毎 tick 登録を試みて seat の仕事を飛ばし続ける（既存の挙動）。
+2. **まだどの process も動かしていない bond で起動する。** その process が、その後もずっと
+   その bond の node になる。登録後に止めると、その bond は座席に引かれたまま応答しない seat になる。
+
 ```bash
-kaspad --testnet --netsuffix=12 --utxoindex \
+# 1 の例: 稼働中の node の unit に 1 行足して再起動する（別の process は起動しない）
+kaspad --testnet --netsuffix=12 --utxoindex --appdir=<稼働中の node の appdir> \
   --palw-class-artifact=/root/palw-class/qwen36-35b-a3b-2m.palwart \
   --palw-register-class="Qwen3.6-35B-A3B/graph-v7@2097152" \
   --palw-producer-key=/etc/misaka/t12/bond.key --palw-producer-bond=<txid>:<index> \
@@ -186,6 +209,7 @@ kaspad --testnet --netsuffix=12 --utxoindex \
 ノードは artifact を読み、`--palw-register-class` の行と pair し、live terms で
 `ClassRegistered` を 1 回だけ組んで fee 出力から carrier を出す（ログ `[palw-panel] class
 registration carrier …`）。artifact の形状が複数の行に合うときは model id を必ず与える。
+起動時には `PALW bond …: run it in exactly ONE process …` が WARN で出る。
 
 ### 認証を手でやる場合（`misaka model add` がやっていること）
 
@@ -236,11 +260,13 @@ Registered ──(登録者以外の operator の seat が ready)──> Prefetc
   seat は **operator が別**でなければ数えられない。
 * seat 側の起動（`misaka verifier setup` → `verifier start`、または直接）:
   ```bash
-  kaspad --testnet --netsuffix=12 --palw-panel --palw-class-artifact=/path/to/same.palwart \
+  kaspad --testnet --netsuffix=12 --palw-class-artifact=/path/to/same.palwart \
          --palw-producer-key=<seed> --palw-producer-bond=<txid>:<index> --palw-fee-outpoint=<txid>:<index> \
          --palw-host-memory-budget=<bytes> --palw-host-node-count=<n>     # または --palw-host-memory-share=<bytes>
   misaka --network testnet-12 palw panel join --class <class-id|QWEN36> --artifact /path/to/same.palwart --bond <txid>:<index> --yes
   ```
+  seat の仕事は鍵と bond があれば常に動く（`--palw-panel` は 2026-09-25 から不要。渡しても何もせず WARN が 1 行出る）。
+  この seat の bond は、この 1 つの process だけで動かす（上の「低レベル」節の注意）。
   possession proof（readiness）は seat が**自動で** span ごとに出す。ただし **replay 予算が無い seat は
   proof を出さない**（ADR-0136: 予算は host の share から導かれる）。1 host に複数 node を置くなら
   `--palw-host-memory-budget` ÷ `--palw-host-node-count`、役割が違う node が同居するなら

@@ -136,6 +136,8 @@ def main():
     ap.add_argument("--expect-class", action="append", default=[], help="<class id>[:<registry artifactBytes>]")
     ap.add_argument("--expect-class-prefix", action="append", default=[])
     ap.add_argument("--registry", action="store_true")
+    ap.add_argument("--expect-panel", action="store_true",
+                    help="the node holds a bond: its panel must be RUNNING (getPalwNodeStatus.panelRunning), not just planned")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--timeout", type=float, default=20)
     a = ap.parse_args()
@@ -241,8 +243,20 @@ def main():
         holders = pick(st, "memoryHolders", default="")
         if holders:
             print(f"  memory holders: {str(holders)[:200]}")
+        # 09-25: the seat duties are always on for a bonded node — the startup 'PALW duties' line is the
+        # PLAN; this is whether the panel worker actually started (its key and bond loaded, the gossip
+        # inbox was free).
+        if a.expect_panel:
+            if pick(st, "panelRunning", default=None) is not True:
+                print("  PANEL NOT RUNNING — this node holds a bond, so its seat duties must run (journal: "
+                      "'panel service disabled' / 'PALW duties NOT as planned' say why)")
+                bad.append("panel")
+            elif pick(st, "panelSubmitter", default=None) is not True:
+                print("  WARNING: the panel runs receipts only (no --palw-fee-outpoint): it carries nothing on chain")
     else:
         print(f"  getPalwNodeStatus: {st.get('error') if isinstance(st, dict) else st}")
+        if a.expect_panel:
+            bad.append("panel")
     if a.expect_premine:
         seats = pick(res.get("getPalwPanelSeats") or {}, "seats", default=[]) or []
         outs = {str(pick(x, "bondOutpoint", default="")) for x in seats}

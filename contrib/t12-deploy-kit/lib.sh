@@ -444,19 +444,6 @@ wait_fingerprint() { # unit since-epoch
     fi
     if [ "$got" = "$EXPECT_FP" ]; then
         say "  $u fingerprint OK ${got:0:16}…"
-        # 09-25: the node prints ONE line naming its duties right after the fingerprint. Every fleet node
-        # holds a bond, so both duties must say ON; "idle" means the bond identity did not reach it.
-        local duties="" j
-        for j in $(seq 1 10); do
-            duties=$(journalctl -u "$u" --since "@$since" --no-pager -o cat 2>/dev/null | grep -oE 'PALW duties .*' | tail -1 || true)
-            [ -n "$duties" ] && break
-            sleep 1
-        done
-        case "$duties" in
-            *"panel seat duties ON"*"round blocks ON"*) say "  $u duties: panel ON, execution lane ON" ;;
-            "") warn "$u printed no 'PALW duties' line — is this the release binary? (the launch script's duty check should have refused an older one)" ;;
-            *) warn "$u: a duty is NOT running — ${duties:0:300}" ;;
-        esac
         return 0
     fi
     warn "$u fingerprint ${got:-<none>} != EXPECT_FP ${EXPECT_FP:0:16}… — stopping it"
@@ -483,7 +470,34 @@ start_node() { # parsed node
     systemctl reset-failed "$N_UNIT" 2>/dev/null || true   # 5.104's seats sit in 'failed' since 09-23 00:30
     systemctl start "$N_UNIT"
     wait_fingerprint "$N_UNIT" "$since" || return 1
-    wait_genesis "$N_UNIT"
+    wait_genesis "$N_UNIT" || return 1
+    wait_duties "$N_UNIT" "$since"
+}
+
+# wait_duties <unit> <since-epoch> — 09-25: every fleet node holds a bond, so its duties must RUN. Read after
+# wait_genesis: once the RPC answers, every service has been built, so the journal already holds both the
+# node's PLAN ('PALW duties (on by construction; …)') and, where a key or bond failed to load, its
+# correction ('PALW duties NOT as planned: …') — the LAST 'PALW duties' line is the one read. The panel's
+# own word (getPalwNodeStatus.panelRunning, set when its worker starts) is asked too. Warns; never stops.
+wait_duties() {
+    local u=$1 since=$2 duties j
+    duties=$(journalctl -u "$u" --since "@$since" --no-pager -o cat 2>/dev/null | grep -oE 'PALW duties .*' | tail -1 || true)
+    case "$duties" in
+        *"panel seat duties ON"*"receipts only"*) warn "$u: the panel runs RECEIPTS ONLY (no --palw-fee-outpoint reached it) — ${duties:0:300}" ;;
+        *"panel seat duties ON"*"round blocks ON"*) say "  $u duties (plan): panel ON, execution lane ON" ;;
+        "") warn "$u printed no 'PALW duties' line — is this the release binary? (the launch script's duty check should have refused an older one)" ;;
+        *) warn "$u: a duty is NOT running — ${duties:0:300}" ;;
+    esac
+    t12check_expect
+    for j in $(seq 1 10); do
+        if python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" --expect-panel >/dev/null 2>&1; then
+            say "  $u duties (running): panel worker started (getPalwNodeStatus.panelRunning)"; return 0
+        fi
+        sleep 3
+    done
+    warn "$u: getPalwNodeStatus says the panel is NOT running although the node holds bond $N_ID — see 'panel service disabled' in its journal"
+    python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" --expect-panel >&2 || true
+    return 0
 }
 
 # the checker's expectations: the release identity AND the kit's copies of chain facts a node never checks
@@ -545,10 +559,10 @@ check_nodes() {
     for spec in "${NODES[@]}"; do
         parse_node "$spec"
         say "== b$N_ID $N_UNIT: $(systemctl show -p ActiveState,SubState,NRestarts --value "$N_UNIT" | tr '\n' ' ')"
-        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" ${CHECK_REGISTRY:+--registry} || rc=1
+        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" --expect-panel ${CHECK_REGISTRY:+--registry} || rc=1
         cgroup_memory "$N_UNIT"
         journalctl -u "$N_UNIT" --since "-15min" --no-pager -o cat 2>/dev/null \
-            | grep -E 'WrongGenesis|WrongConsensusParams|panicked|ERROR|class manifest|does not know|refusing \(exit 78\)|PALW DRILL|memory ledger cannot cover|panel idle|execution lane idle|deprecated and does nothing|round lane is not produced' \
+            | grep -E 'WrongGenesis|WrongConsensusParams|panicked|ERROR|class manifest|does not know|refusing \(exit 78\)|PALW DRILL|memory ledger cannot cover|panel idle|execution lane idle|deprecated and does nothing|round lane is not produced|panel service disabled|NOT as planned|receipts only' \
             | sed -E 's/^[0-9-]+ [0-9:.+]+ //' | cut -c1-200 | sort | uniq -c | sort -rn | head -6 || true
     done
     return $rc

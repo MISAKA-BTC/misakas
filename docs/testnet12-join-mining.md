@@ -249,6 +249,31 @@ opens attempt claims. The node prints one line at startup, `PALW duties (on by c
 names each duty and, for one that is idle, why. `--palw-panel` and `--palw-round-lane` are still
 accepted. They do nothing and log one warning each.
 
+Without `--palw-fee-outpoint` the seat duties still run, but the seat carries nothing on chain: no
+data-availability answers, no filers, no carriers. The startup line then reads `panel seat duties ON
+as bond … (receipts only: …)`. The fee outpoint is your consent to spend, so it stays a flag.
+
+If the key file does not load or the bond does not parse, the node logs a second line after the
+services start: `PALW duties NOT as planned: …`. That line names the duty that is not running.
+`getPalwNodeStatus.panelRunning` also tells you whether the panel actually started.
+
+**Run each bond in exactly one process at a time, and keep that process's app dir.** Because the
+duties have no off switch, every `kaspad` started with a bond's key and outpoint runs that bond's
+duties. This includes the execution lane's round blocks. Two such processes at the same moment sign
+the same round permit over two different blocks, and the chain slashes the whole bond
+(`RoundPermitEquivocated`). The following all count as a second process:
+
+* a standby node or a copy of the node on another host;
+* a `kaspad --palw-register-class …` run started next to the running node. It does not exit once
+  the class lands. Register through the running node instead: use `misaka model add`, or restart
+  that node with the flag (see `docs/palw-add-a-model-runbook.md` §5);
+* the same node started again in a fresh app dir while the old one still runs.
+
+The app dir also holds the record of the last round this bond signed (`palw-round-last-signed`).
+If you wipe it and re-sync, the node can sign an unmerged permit a second time. Move or restore the
+app dir instead of deleting it. The node prints this rule at startup (`PALW bond …: run it in exactly
+ONE process …`). It prints it as a warning on a `--palw-register-class` run.
+
 ### The 8k model row (`Qwen/Qwen2.5-1.5B/graph-v7@8192`, class `ebf44d0a…`)
 
 1. **Get the artifact.** Convert it from `Qwen/Qwen2.5-1.5B-Instruct` (`model.safetensors` SHA-256

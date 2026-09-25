@@ -55,6 +55,16 @@
 #   the floor), STALL_WAIT (s, 3600: the chain's DAA did not move), STEP_WAIT (s, 172800), PROBE_WAIT (s, 300:
 #   a D-1 probe's wall-clock limit — a probe is not on the drill's chain, so its wait is not on its clock).
 #
+# DUTIES HAVE NO OFF SWITCH (2026-09-25, kaspad/src/palw_duties.rs). A seat started with its bond key and bond
+# runs the panel's seat duties AND the execution lane's round blocks whatever flags it carries: every seat
+# whose bond holds a round permit produces round blocks and uses the permit, so the drill's evidence and its
+# clock see round blocks next to heartbeats and attempt blocks. To take a seat's round blocks out of a stretch
+# (D-6): stop its attempt production and wait until the permits run out — the schedule grants permits only
+# from attempt claims that went Final two spans earlier, so about two schedule spans plus the lead after the
+# last one — or restart it WITHOUT its bond key (which also stops its seat duties). ONE PROCESS PER BOND: a
+# second process with a seat's bond (a "fresh node" for IBD, a standby, a registration run) signs the same
+# round permit twice and the chain slashes that bond (RoundPermitEquivocated) — fresh nodes are relays.
+#
 # The short drill needs about a day at 200 s/DAA (ADR-0152 §8.3, an estimate): the first Final comes some
 # 147 DAA after acceptance. A DA default (1,200 DAA ≈ 2.8 d) and a row's maturity (≈ 7.3 d) are O-7 and O-5 of
 # the post-launch observation program (§8.4); the `maturity` step runs them when the drill is left that long.
@@ -311,7 +321,7 @@ cmd_node() {
               --nodnsseed --disable-upnp --nogrpc --listen="0.0.0.0:$P2P_PORT" --rpclisten-borsh="127.0.0.1:$RPC_PORT"
               --evm-rpc-listen="127.0.0.1:$EVM_RPC_PORT"
               --utxoindex --enable-unsynced-mining --yes
-              --palw-produce --palw-panel
+              --palw-produce
               --palw-producer-key="$KEYRING/$(manifest "m['seats'][$seat]['seed_file']")"
               --palw-producer-bond="$(manifest "m['seats'][$seat]['bond_outpoint']")"
               --palw-fee-outpoint="$(manifest "m['seats'][$seat]['fee_float_outpoint']")"
@@ -432,13 +442,13 @@ step_d5() {
 }
 
 step_d6() {
-  manual "stop every drill producer (--palw-produce off; heartbeats only), then file a conviction and a reveal from a seat (the CLI with --palw-drill-genesis-salt)."
+  manual "stop every drill producer (--palw-produce off), then wait until no round block lands: the round lane has no off switch and a seat's round blocks run on until its permits run out (about two schedule spans plus the lead after the last attempt claim went Final; getPalwNodeStatus laneMix reads 'merged round blocks=0' over its window) — or restart the seats without their bond keys, which stops their seat duties too. Heartbeats only; then file a conviction and a reveal from a seat (the CLI with --palw-drill-genesis-salt)."
   local from; from="$(cursor)"
   evidence wait_after "$from" "heartbeat #[0-9]+ [0-9a-f]+ carries [1-9][0-9]* lifecycle carrier" "a heartbeat carrying the conviction (H-1)"
 }
 
 step_d7() {
-  manual "restart one node mid-session (SIGINT, same app dir); partition two hosts to force a reorg across a Final; start a fresh node (no app dir) for IBD."
+  manual "restart one node mid-session (SIGINT, same app dir); partition two hosts to force a reorg across a Final; start a fresh node (no app dir) for IBD — a RELAY, with no seat's bond key: a second process with a live seat's bond signs its round permits twice and that bond is slashed."
   manual "evidence: the restarted node's state root and the fresh node's equal an archival node's at the same sink (misaka node dag-info)."
 }
 

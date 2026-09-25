@@ -70,7 +70,10 @@ No SDK code changes. The class is data:
    live terms, applies the known-weights rule and sibling filters, and reruns admission preflight
    before anything is signed or funded. Developers automating the primitive directly may still
    use `kaspad --palw-class-artifact <file> --palw-register-class <model-id>` with that Bond key;
-   the primitive is not the recommended first-time workflow.
+   the primitive is not the recommended first-time workflow. That `kaspad` must be the ONLY
+   process running the bond: since 2026-09-25 it runs the bond's duties, round blocks included,
+   and a second process beside a live node double-signs its round permits and is slashed
+   (`docs/palw-add-a-model-runbook.md` §5).
 
 ## Adding a new model family (a new lineage)
 
