@@ -17,6 +17,9 @@
 //!   beside exactly two sybils — the newcomer's vote is the third, and Kimi leaves `Candidate` — the
 //!   matured jury is drawn without it, holds fewer than three, and Kimi stays; recomputed from outside
 //!   the fold both ways.
+//! * [`an_immature_bond_takes_no_jury_seat_from_a_mature_one`]: the population filter the readiness
+//!   clause alone does not give — a newcomer that holds nothing is a structural NO on the released
+//!   jury; the matured jury seats the next mature operator in its place.
 
 use super::*;
 use crate::palw_model_registry_v1::{PalwBondMaturityFoldV1, palw_admission_jury_seed_v1, palw_model_registry_ready_seats_v1};
@@ -45,11 +48,24 @@ fn to_audit_with_newcomer(
     holders: &[u64],
     seed_block: u64,
 ) -> (PalwChainStateV2, PalwChainStateV2) {
+    to_audit_with(root, operands, f, holders, seed_block, true)
+}
+
+/// [`to_audit_with_newcomer`], the newcomer proving possession only when `newcomer_proves`.
+fn to_audit_with(
+    root: Hash64,
+    operands: &[crate::palw_artifact::PalwArtifactOperandV1],
+    f: &PalwModelRegistryFoldV1,
+    holders: &[u64],
+    seed_block: u64,
+    newcomer_proves: bool,
+) -> (PalwChainStateV2, PalwChainStateV2) {
     let p = params();
     let (s1, _) = fold_step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &contested_network(root, false), None, &armed(None))
         .unwrap();
     let mut objects = vec![serving(NEWCOMER, h64(0x9A00 + NEWCOMER), true)];
-    objects.extend(holders.iter().chain([NEWCOMER].iter()).map(|n| proof(operands, bond_key(*n), 98)));
+    let provers: Vec<u64> = holders.iter().copied().chain(newcomer_proves.then_some(NEWCOMER)).collect();
+    objects.extend(provers.iter().map(|n| proof(operands, bond_key(*n), 98)));
     let (s2, _) = fold_step(&s1, &p, &ctx(2, NEWCOMER_DAA, 2), &objects, None, &armed(Some(f.clone()))).unwrap();
     assert_eq!(s2.bond(&bond_key(NEWCOMER)).expect("registered").registered_daa, NEWCOMER_DAA);
     let s3 = seeding_attempt(&s2, &ctx(seed_block, 995, 3), &armed(Some(f.clone())));
@@ -173,4 +189,45 @@ fn a_newcomer_that_decides_the_released_jury_is_not_on_the_matured_one() {
         "seed {seed_block}: drawn without the newcomer the jury holds {ready_matured} of five — Kimi stays a Candidate"
     );
     assert_eq!(row.ready_seats, sybils.len() as u32, "the seven sybils are ready; the newcomer is not counted");
+}
+
+/// **An immature bond takes no jury seat from a mature one** — the population filter, which the
+/// readiness clause alone does not give: a bond registered minutes ago that never proves possession
+/// is a structural NO wherever it is drawn, so a flood of fresh registrations would hold every
+/// Candidate out. The newcomer here holds nothing. On a seed where the released jury seats it beside
+/// two sybils (two of five hold Kimi: Candidate), the matured jury is drawn without it and seats the
+/// next operator in ticket order — a third sybil — and Kimi leaves `Candidate`, as the network's
+/// mature operators decide.
+#[test]
+fn an_immature_bond_takes_no_jury_seat_from_a_mature_one() {
+    let (operands, root) = inventory();
+    let f = fold(kimi_work());
+    let fm = matured(&f, WINDOW);
+    let sybils: Vec<u64> = SYBILS.collect();
+    let mut found = None;
+    for seed_block in 40..2_000 {
+        let (before, released) = to_audit_with(root, &operands, &f, &sybils, seed_block, false);
+        let newcomer_op = operator_of(&before, NEWCOMER);
+        let ops: Vec<Hash64> = sybils.iter().map(|n| operator_of(&before, *n)).collect();
+        let jury = jury_from_outside(&before, None);
+        let jury_m = jury_from_outside(&before, Some(WINDOW));
+        let ready_released = jury.iter().filter(|o| ops.contains(o)).count();
+        let ready_matured = jury_m.iter().filter(|o| ops.contains(o)).count();
+        let state = released.model_lifecycle(&kimi_id()).expect("a row").state;
+        let expect = if ready_released >= 3 { PalwModelLifecycleV1::Prefetching } else { PalwModelLifecycleV1::Candidate };
+        assert_eq!(state, expect, "seed {seed_block}: {ready_released} of five hold Kimi on the released jury");
+        if jury.contains(&newcomer_op) && ready_released == 2 && ready_matured == 3 {
+            found = Some(seed_block);
+            break;
+        }
+    }
+    let seed_block = found.expect("a seed where the newcomer's seat is the one a third sybil would take");
+    let (_, released) = to_audit_with(root, &operands, &f, &sybils, seed_block, false);
+    assert_eq!(released.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Candidate, "the release: 2 of 5");
+    let (_, matured_state) = to_audit_with(root, &operands, &fm, &sybils, seed_block, false);
+    assert_eq!(
+        matured_state.model_lifecycle(&kimi_id()).unwrap().state,
+        PalwModelLifecycleV1::Prefetching,
+        "seed {seed_block}: drawn from mature bonds the jury holds 3 of 5 — the newcomer's seat was not its to take"
+    );
 }
