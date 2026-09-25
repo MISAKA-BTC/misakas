@@ -57,37 +57,58 @@ async fn br1_v1_foreign_payload_or_stray_evm_fields_leave_the_block_retryable() 
     let victim_handles = victim.init();
     let mut bad_txs = honest.clone();
     bad_txs.transactions[0].version += 1;
-    assert_match!(victim.validate_and_insert_block(bad_txs.to_immutable()).virtual_state_task.await, Err(RuleError::BadMerkleRoot(_, _)));
+    assert_match!(
+        victim.validate_and_insert_block(bad_txs.to_immutable()).virtual_state_task.await,
+        Err(RuleError::BadMerkleRoot(_, _))
+    );
     assert_eq!(victim.block_status(1.into()), BlockStatus::StatusHeaderOnly, "BadMerkleRoot leaves the block retryable");
 
     // Attack 1: a relayer attaches a payload. Same header ⇒ same block id.
     let mut forged = honest.clone();
     forged.evm_payload = EvmExecutionPayload { extra_data: vec![1], ..Default::default() };
     assert_eq!(forged.header.hash, honest.header.hash);
-    assert_eq!(kaspa_consensus_core::hashing::header::hash(&forged.header), kaspa_consensus_core::hashing::header::hash(&honest.header));
+    assert_eq!(
+        kaspa_consensus_core::hashing::header::hash(&forged.header),
+        kaspa_consensus_core::hashing::header::hash(&honest.header)
+    );
     assert!(!evm_payload_matches_header(&forged.header, &forged.evm_payload), "the ingress check names the forgery");
     assert_match!(
         victim.validate_and_insert_block(forged.to_immutable()).virtual_state_task.await,
         Err(RuleError::NonEmptyEvmPayloadBeforeActivation)
     );
     // FIXED (BR-1; was StatusInvalid): the delivery is refused, the block id is not condemned.
-    assert_eq!(victim.block_status(1.into()), BlockStatus::StatusHeaderOnly, "BR-1: a relay-chosen payload leaves the block retryable");
+    assert_eq!(
+        victim.block_status(1.into()),
+        BlockStatus::StatusHeaderOnly,
+        "BR-1: a relay-chosen payload leaves the block retryable"
+    );
 
     // Attack 2: a relayer sets the v1 header's hash-invisible EVM fields. The id does not move, and
     // since the header is already held, the delivered copy reaches the body rule directly.
     let mut stray = honest.clone();
     stray.header.evm_commitment_root = Hash64::from_bytes([0x5A; 64]);
-    assert_eq!(kaspa_consensus_core::hashing::header::hash(&stray.header), kaspa_consensus_core::hashing::header::hash(&honest.header));
+    assert_eq!(
+        kaspa_consensus_core::hashing::header::hash(&stray.header),
+        kaspa_consensus_core::hashing::header::hash(&honest.header)
+    );
     assert!(!evm_payload_matches_header(&stray.header, &stray.evm_payload), "the ingress check names the forgery");
     assert_match!(
         victim.validate_and_insert_block(stray.to_immutable()).virtual_state_task.await,
         Err(RuleError::NonZeroEvmHeaderFieldsBeforeActivation)
     );
-    assert_eq!(victim.block_status(1.into()), BlockStatus::StatusHeaderOnly, "BR-1: relay-chosen EVM header fields leave the block retryable");
+    assert_eq!(
+        victim.block_status(1.into()),
+        BlockStatus::StatusHeaderOnly,
+        "BR-1: relay-chosen EVM header fields leave the block retryable"
+    );
 
     // The honest body is accepted afterwards (was KnownInvalid) …
     assert!(evm_payload_matches_header(&honest.header, &honest.evm_payload));
-    victim.validate_and_insert_block(honest.clone().to_immutable()).virtual_state_task.await.expect("BR-1: the honest body is accepted");
+    victim
+        .validate_and_insert_block(honest.clone().to_immutable())
+        .virtual_state_task
+        .await
+        .expect("BR-1: the honest body is accepted");
     assert_eq!(victim.block_status(1.into()), BlockStatus::StatusUTXOValid);
     // … and so is a descendant (was InvalidParent), exactly as on the control node.
     producer.validate_and_insert_block(honest.clone().to_immutable()).virtual_state_task.await.expect("producer: b1 is valid");
@@ -185,8 +206,16 @@ mod evm {
             Err(RuleError::EvmPayloadHashMismatch)
         );
         // FIXED (BR-1; was StatusInvalid → KnownInvalid → InvalidParent).
-        assert_eq!(victim.block_status(1.into()), BlockStatus::StatusHeaderOnly, "BR-1: a relay-chosen payload leaves the block retryable");
-        victim.validate_and_insert_block(honest.clone().to_immutable()).virtual_state_task.await.expect("BR-1: the honest body is accepted");
+        assert_eq!(
+            victim.block_status(1.into()),
+            BlockStatus::StatusHeaderOnly,
+            "BR-1: a relay-chosen payload leaves the block retryable"
+        );
+        victim
+            .validate_and_insert_block(honest.clone().to_immutable())
+            .virtual_state_task
+            .await
+            .expect("BR-1: the honest body is accepted");
         assert_eq!(victim.block_status(1.into()), BlockStatus::StatusUTXOValid);
         victim.validate_and_insert_block(child.to_immutable()).virtual_state_task.await.expect("BR-1: the child is valid");
         assert_eq!(victim.block_status(2.into()), BlockStatus::StatusUTXOValid);
@@ -202,8 +231,16 @@ mod evm {
             victim2.validate_and_insert_block(forged_big.to_immutable()).virtual_state_task.await,
             Err(RuleError::EvmPayloadHashMismatch)
         );
-        assert_eq!(victim2.block_status(1.into()), BlockStatus::StatusHeaderOnly, "BR-1: an over-cap FORGED payload is a delivery fault");
-        victim2.validate_and_insert_block(honest.clone().to_immutable()).virtual_state_task.await.expect("BR-1: the honest body is accepted");
+        assert_eq!(
+            victim2.block_status(1.into()),
+            BlockStatus::StatusHeaderOnly,
+            "BR-1: an over-cap FORGED payload is a delivery fault"
+        );
+        victim2
+            .validate_and_insert_block(honest.clone().to_immutable())
+            .virtual_state_task
+            .await
+            .expect("BR-1: the honest body is accepted");
 
         // Unchanged verdict: a block whose id COMMITS to an over-cap payload is itself invalid, and
         // stays condemned — the exemption covers only payloads the id does not commit to.
@@ -216,7 +253,11 @@ mod evm {
             victim2.validate_and_insert_block(committed_big.clone().to_immutable()).virtual_state_task.await,
             Err(RuleError::EvmPayloadTooLarge(_, _))
         );
-        assert_eq!(victim2.block_status(3.into()), BlockStatus::StatusInvalid, "a committed over-cap payload condemns its block, as before");
+        assert_eq!(
+            victim2.block_status(3.into()),
+            BlockStatus::StatusInvalid,
+            "a committed over-cap payload condemns its block, as before"
+        );
         assert_match!(
             victim2.validate_and_insert_block(committed_big.to_immutable()).virtual_state_task.await,
             Err(RuleError::KnownInvalid)
