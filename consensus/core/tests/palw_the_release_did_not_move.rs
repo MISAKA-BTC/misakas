@@ -57,7 +57,9 @@ const T11_CONSENSUS_IDENTITY_ID: &str = "44cb8fd729e9575a6e3b1e72c466b8abce4b9ec
 /// This id is explicitly NOT a gate — it exists so a mismatch can be reported precisely — which is
 /// why a new dormant fence may move it and why re-pinning is the whole remedy.
 const T11_CONSENSUS_SCHEDULE_ID: &str = "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64";
-const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";
+/// **Re-pinned 2026-09-25: mainnet's DNS set moved to testnet-12's numbers** (6 validators x 20M MSK,
+/// 120M MSK active stake, the 600-DAA coinbase long maturity; user decision). Previous: `badaa8e9…`.
+const MAINNET_CONSENSUS_PARAMS_ID: &str = "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5";
 
 #[test]
 fn the_shipped_release_fingerprint_did_not_move() {
@@ -68,7 +70,7 @@ fn the_shipped_release_fingerprint_did_not_move() {
     assert_eq!(
         MAINNET_PARAMS.consensus_params_id().to_string(),
         MAINNET_CONSENSUS_PARAMS_ID,
-        "and mainnet, which this work must not have touched at all"
+        "and mainnet, which this work must not have touched (it moved only by the 2026-09-25 DNS values)"
     );
 }
 

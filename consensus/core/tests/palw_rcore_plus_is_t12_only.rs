@@ -40,10 +40,13 @@ const AT_V21: &[(&str, &str, &str, &str)] = &[
         "9acd42be5357a25ee08c1c7037d1610ef00107e8bd47eb59e6c6a6f91c31f502",
         "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
     ),
+    // Re-pinned 2026-09-25: mainnet's DNS set moved to testnet-12's numbers (6 validators x 20M MSK,
+    // 120M MSK active stake, the 600-DAA coinbase long maturity; user decision). The schedule id did not
+    // move. Previous: params `badaa8e9…`, identity `00d98599…`.
     (
         "mainnet",
-        "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1",
-        "00d98599bd45867f4a7b3bef1043431ccb8ef0d41cedbc552a87926b5e3b8af5",
+        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
+        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
         "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
     ),
 ];
@@ -63,10 +66,13 @@ const AT_V22: &[(&str, &str, &str, &str)] = &[
         "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
         "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
     ),
+    // Re-pinned 2026-09-25: mainnet's DNS set moved to testnet-12's numbers (6 validators x 20M MSK,
+    // 120M MSK active stake, the 600-DAA coinbase long maturity; user decision). The schedule id did not
+    // move. Previous: params `badaa8e9…`, identity `00d98599…`.
     (
         "mainnet",
-        "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1",
-        "00d98599bd45867f4a7b3bef1043431ccb8ef0d41cedbc552a87926b5e3b8af5",
+        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
+        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
         "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
     ),
 ];

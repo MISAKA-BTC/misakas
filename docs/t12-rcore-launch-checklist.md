@@ -180,9 +180,11 @@ pin を動かす前に、何が動いたのかを 1 つずつ言えること（�
    - `consensus/core/tests/palw_offence_attribution_is_t12_only.rs` — `T12_BEFORE_THE_ATTRIBUTION`（fence を外した t12 の params / identity /
      schedule id）。t12 の他の params が動くと動く。
    - `consensus/core/tests/evm_bridge_ledger_is_t12_only.rs` — `T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION`（ledger と attribution を外した t12）。
+   - `consensus/core/tests/t12_mainnet_values_moved_only_these.rs` — 2026-09-25 の mainnet 値（λ 5、tolerance 1,620 s、max_block_level 225）を
+     戻すと `8270cf03` の t12 に一致すること（`PARENT_WITHOUT_THE_ATTRIBUTION`）。
    - これらは「その fence だけが t12 を動かした」ことの pin。新しい merge が t12 を動かしたら、何が動かしたかを書いて値を更新する。
 3. **t11 / devnet / mainnet が動いていないことの pin**（動いたら出荷しない。動かすべき理由があるときだけ更新）
-   - `consensus/core/src/config/params.rs` の `shipped_presets_have_pinned_fingerprints`（mainnet `badaa8e9…`、testnet、testnet-11 `bd633ce9…`、
+   - `consensus/core/src/config/params.rs` の `shipped_presets_have_pinned_fingerprints`（mainnet `eb866c61…`（2026-09-25 に mainnet の DNS 値を t12 と同じにして `badaa8e9…` から移動）、testnet、testnet-11 `bd633ce9…`、
      simnet、devnet `7a27f341…`）と `the_pinned_testnet_fingerprint_is_the_one_a_node_announces`。
    - `consensus/core/tests/palw_rcore_plus_is_t12_only.rs`（`AT_V21`・`AT_V22`）、`palw_clock_floor_is_t12_only.rs`、
      `palw_offence_attribution_is_t12_only.rs`（t11 / devnet / mainnet の 3 つ組）、`palw_the_release_did_not_move.rs`（`T11_CONSENSUS_*`、

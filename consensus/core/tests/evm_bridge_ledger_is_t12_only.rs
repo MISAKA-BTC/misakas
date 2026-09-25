@@ -28,10 +28,14 @@ fn ids(p: &Params) -> (String, String, String) {
 
 /// testnet-12 at the parent (`8e1ce34a`) with its offence-attribution fence taken away — the value
 /// `palw_offence_attribution_is_t12_only` pinned there as `T12_BEFORE_THE_ATTRIBUTION`.
+///
+/// **Re-pinned 2026-09-25 for testnet-12's mainnet values** (λ 2,000 -> 5,000 ‰, the future-time
+/// tolerance 132 -> 1,620 s, `max_block_level` 250 -> 225; `t12_mainnet_values_moved_only_these`
+/// pins that they are the only thing that moved). Previous: `f5eee474…` / `75666d42…` / `75282ad2…`.
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "f5eee4746137d0e40a58fd5e99bfdc47738800550ad313811be7b1eed185821b",
-    "75666d42d34312c76691de9d1f876465e58502e48d38bde1aa3d7cce0906e7c9",
-    "75282ad229d5f8617aa5b3f5b818ddab9defdc893f1276c6a079c080af7debff",
+    "58c047566f871c33e6e5c7e9a40a2325405832ba8711bd16bafe9fdeb8ef54a7",
+    "6388b87b757e442bdb87200e1e4b32c29f1eb67e976dd6f57e70f4c71f0a77c3",
+    "2c2f7c0e1fd79b56e93b3886cc1d366881f0652c3650ac741b4e067376c3ad40",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

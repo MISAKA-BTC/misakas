@@ -32,10 +32,13 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
         "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
         "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
     ),
+    // Re-pinned 2026-09-25: mainnet's DNS set moved to testnet-12's numbers (6 validators x 20M MSK,
+    // 120M MSK active stake, the 600-DAA coinbase long maturity; user decision). The schedule id did not
+    // move. Previous: params `badaa8e9…`, identity `00d98599…`.
     (
         "mainnet",
-        "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1",
-        "00d98599bd45867f4a7b3bef1043431ccb8ef0d41cedbc552a87926b5e3b8af5",
+        "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5",
+        "7819e5ed2b3df50b3303df3df2f0fec7677ddcb37ed55f1d43455a37ecd9c9a8",
         "a1ed7ff07231b84c51d9dc1013a8047ea3efb012bfc9daa36d5dd623709807e4",
     ),
 ];
@@ -72,10 +75,15 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// (74,920, was 12,002), and the depth is hashed into the params and identity ids; the schedule does
 /// not move (no height moved). (At `2c4b6516`, before the bridge ledger: `afdce629…` / `c070a0e4…` /
 /// `7d9a75c4…`.)
+///
+/// **Re-pinned 2026-09-25 for testnet-12's mainnet values** (λ 2,000 -> 5,000 ‰, the future-time
+/// tolerance 132 -> 1,620 s, `max_block_level` 250 -> 225; all three hashed, λ also beside its height
+/// in the schedule id). `t12_mainnet_values_moved_only_these` pins that setting the three back returns
+/// exactly the previous value: `f5b564f3…` / `8eaabe3e…` / `b758ee80…`.
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "f5b564f3267e3a0a5c19dafaf5901069481132c05f4bfa464773848a3e44f1d0",
-    "8eaabe3eea0f6feb11e6a211f893bc590dc2e2427771e73c8f0629cf6dbe830c",
-    "b758ee801d47058306f97dcc7d558009f27c8162439990259bbee756c2a90478",
+    "05173205b4f4761de42b61264e385612549b804b7d41f7fd6a84c9111b8d0227",
+    "df02039d413517c70103c93186e4422e23dd6cf86bae4c235bbf55f1a2fb9fd8",
+    "beeaa0a807f25c9f69d049bc2f1b7205313e132c47008de27b5e0d7e6e4515e1",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -83,10 +91,14 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 /// [`T12_BEFORE_THE_ATTRIBUTION`] (`rcore/int-3` at `8b35c0c2`), unchanged: the class-verify-deadline
 /// fence (with its P-1 depth) moved nothing else. (Before the bridge ledger it was the M3 value,
 /// `f5eee474…` / `75666d42…` / `75282ad2…`.)
+///
+/// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for testnet-12's mainnet values** (λ
+/// 5,000 ‰, the 1,620 s tolerance, `max_block_level` 225). Previous: `ea2e5a18…` / `ad43854c…` /
+/// `9ebe1dcc…`.
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "ea2e5a18e28949bec3b605de7f6764be9edd4f432ced6d8632c3d64df891135a",
-    "ad43854c76b2fbec6377e29ed1b8b937168075f6bd6b1f58537ec4590e82454e",
-    "9ebe1dcc0c6c0e2913aeac199e7fd61fc36a412d682481dcd448a4632becc936",
+    "2343195d60d6f58151acd6af788d40430d211d3c5d4e0f461a73e4cb7910dd10",
+    "1e06025def2ec66693f126eb074de2e0b953dc01c8f3ce7f3dbc04067d9d026c",
+    "b08b25bd39a04cd6ea43543c7b5878bbcda1b39b8acfea79226b2ca2f2bad406",
 );
 
 fn shipped(name: &str) -> Params {

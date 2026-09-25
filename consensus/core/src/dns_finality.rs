@@ -6885,13 +6885,23 @@ mod tests {
         }
     }
 
-    /// Settlement posture: testnet soaks the policy layer first; mainnet and the dev/sim fixture
-    /// presets ship it off. The testnet value must clear the dispute-resolution horizon —
-    /// `gate_horizon + veto TTL` — or the fallback goes liquid while a fork can still flip.
+    /// Settlement posture: testnet soaked the policy layer first and mainnet now takes it (the user's
+    /// Mainnet Decision A, made mainnet's on 2026-09-25); the dev/sim fixture presets ship it off.
+    /// The value must clear the dispute-resolution horizon — `gate_horizon + veto TTL` — or the
+    /// fallback goes liquid while a fork can still flip: on testnet, and on mainnet at the carded
+    /// cadence it launches at (on the bundle-free 10 bps preset 600 sits under the 1,000-block base
+    /// maturity, which `coinbase_spend_settled` never undercuts, so the knob is inert there).
     #[test]
     fn presets_declare_the_coinbase_settlement_posture() {
-        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
-        assert_eq!(PRODUCTION_DNS_PARAMS.coinbase_settlement_long_maturity_daa, 0, "mainnet waits for the testnet soak");
+        use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, MAINNET_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
+        let m = PRODUCTION_DNS_PARAMS.coinbase_settlement_long_maturity_daa;
+        assert_eq!(m, 600, "mainnet: Decision A's DAA fallback, testnet's soaked value");
+        let carded = PRODUCTION_DNS_PARAMS.at_two_minute_cadence();
+        assert!(
+            m > carded.gate_horizon_blocks() + carded.dns_veto_ttl_daa_score,
+            "a carded mainnet's fallback outlasts its dispute horizon"
+        );
+        assert!(m <= MAINNET_PARAMS.coinbase_maturity(), "…and the bundle-free 10 bps preset's base maturity already covers it");
         assert_eq!(GENESIS_ACTIVE_DNS_PARAMS.coinbase_settlement_long_maturity_daa, 0, "dev/sim fixtures keep their semantics");
         let t = TESTNET_DNS_PARAMS.coinbase_settlement_long_maturity_daa;
         assert!(t > 0, "testnet soaks the settlement policy");
@@ -7557,24 +7567,22 @@ mod tests {
             );
             // The bond requirement is untouched by the VLT work — VLT changes what a bond BUYS
             // (weight capped at `lambda x collateral`), never what it costs to hold one. The
-            // amounts are 10,000 MSK per validator over a floor of 12, whose product is the
-            // active-stake gate: ONE floor for what a bond costs on this network, the same figure
-            // a PALW genesis seat posts (ADR-0061). Their derivation, and what the reduction from
-            // 50M costs, live in `the_active_stake_gate_is_the_product_of_the_two_floors` and on
+            // amounts are 20,000,000 MSK per validator over a floor of 6, whose product is the
+            // active-stake gate (the user's 2026-09-25 decision, the 2026-09-24 mainnet assumption).
+            // From 2026-08-30 to then the bond was 10,000 MSK over 12, tied to the figure a PALW
+            // genesis seat posted (ADR-0061); the decision separated the two floors again — a DNS
+            // vote can reverse a confirmed anchor, a PALW seat backs its own claims — so the tie to
+            // `GENESIS_BOND_COLLATERAL_SOMPI` is gone. The derivation lives in
+            // `the_active_stake_gate_is_the_product_of_the_two_floors` and on
             // `PRODUCTION_DNS_PARAMS.min_bond_amount_sompi`.
             if name != "genesis-active" && name != "testnet" {
-                // **Tied to the PALW constant, not repeated as a literal.** The comment above has
-                // claimed these are "the same figure" since ADR-0061 while the assertion compared
-                // against a hand-written number, so either side could have moved and left the
-                // claim standing — the announce-don't-verify shape this file keeps finding. One
-                // of them is the definition and the other must equal it.
-                assert_eq!(
+                assert_ne!(
                     p.min_bond_amount_sompi,
                     crate::config::premine::GENESIS_BOND_COLLATERAL_SOMPI,
-                    "{name}: a validator bond and a PALW genesis seat post the same collateral"
+                    "{name}: a validator bond is its own floor again, not the PALW genesis seat's"
                 );
-                assert_eq!(p.min_bond_amount_sompi, 10_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
-                assert_eq!(p.min_active_validators, 12, "{name}");
+                assert_eq!(p.min_bond_amount_sompi, 20_000_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
+                assert_eq!(p.min_active_validators, 6, "{name}");
                 assert_eq!(
                     p.min_active_stake_sompi,
                     p.min_active_validators as u64 * p.min_bond_amount_sompi,

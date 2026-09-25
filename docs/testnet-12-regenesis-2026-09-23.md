@@ -110,14 +110,24 @@ bond と float の対応は `premine_outpoint(i)` ↔ `41 + i` のまま（card 
 | panel seat floor | **130,000 MSK**（producer floor の 10 倍、`palw_panel_collateral_floor_v1`） | |
 | readiness に要る空き担保 | 39,000 MSK（floor × 3） | genesis card 939,063.21 MSK はすべての floor を満たす |
 | option A での floor claim 1 本の予約 | **3,200.95 MSK**（escrow 3,200.85 + weight 0.11） | 13,000 MSK の bond（上限 500 ‰ = 6,500 MSK）には **2 本**入り、3 本は入らない。依頼時の想定は「ちょうど 1 本」だったが、実測では 2 本（ちょうど 1 本にするには floor を 6,401.91〜12,803.82 MSK 未満にする必要がある）。`t12_mainnet_assumed_bonds.rs` が実測値を固定 |
-| DNS validator bond | **20,000,000 MSK 以上** | `PALW_T12_DNS_PARAMS`（`PRODUCTION_DNS_PARAMS` から導出。production 自体は不変） |
-| DNS finality の起動条件 | **validator 6 以上、active stake 120,000,000 MSK 以上** | production は 12 validator。validator 数 × bond の関係は production と同じ |
+| DNS validator bond | **20,000,000 MSK 以上** | `PALW_T12_DNS_PARAMS`（`PRODUCTION_DNS_PARAMS` から導出）。2026-09-25 から production（mainnet）も同じ値 |
+| DNS finality の起動条件 | **validator 6 以上、active stake 120,000,000 MSK 以上** | 2026-09-25 から production も 6 validator（12 から変更）。validator 数 × bond の関係は同じ |
 | unbonding period | 10,083 block = **約 14 日 6 分**（120 s cadence） | `at_two_minute_cadence` で変換。10 bps の 14 日ではない |
 | coinbase の long maturity | 600 DAA（約 20 時間） | Decision A（coinbase は DAA だけで成熟）のため testnet-11 の値を維持 |
 
-DNS set は production から次の点だけ変えている。validator 数・bond・stake の 3 値、120 s cadence への
-窓の変換、coinbase long maturity（600）、それに `required_work_depth`（testnet-11 の値。production の
-値は 10 bps の kHeavyHash 用で、PALW chain では何年も届かず DNS 確認が永久に起きないため）。
+DNS set は production から次の点だけ変えている。120 s cadence への窓の変換と `required_work_depth`
+（testnet-11 の値。production の値は 10 bps の kHeavyHash 用で、PALW chain では何年も届かず DNS 確認が
+永久に起きないため）。validator 数・bond・stake の 3 値と coinbase long maturity（600）は、2026-09-25 に
+production（mainnet）側がこの値に移ったので、上書きではなく production から継承している（t12 の値は不変）。
+
+### mainnet の値へ（2026-09-25、ユーザー決定「t12 は bond・validator stake など全て mainnet 想定の数値で」）
+
+| | 変更前 | testnet-12 | 備考 |
+|---|---|---|---|
+| panel exposure floor λ（ADR-0130） | 2（2,000 ‰） | **5（5,000 ‰）** | ADR-0130 D1 の mainnet 候補 5–10 から 5。R-core+ の seat duty（λ 項）: floor・8k とも 640.17 MSK/claim（λ = 2 では 256.07 / 459.12）、2M は上限 12,588.76 のまま |
+| timestamp_deviation_tolerance | 132 s | **1,620 s** | card と同じ導出（27 sample × 120 s / 2）。producer は DAA clock を実時間より最大 1,620 s（約 13 slot）先行させられる（132 s では約 1 slot）。一度きりの先行で、速度は変わらない（clock floor が tick 間隔を 1 interval 以上に保つ） |
+| max_block_level | 250 | **225** | mainnet の値。t12 は全 block が level 0（single lottery）なので header は不変。pruning proof の header 予算が 502,000 → 452,000 |
+| mainnet card の overlay carve | なし（validator 30 %、escrow 620 ‰） | — | mainnet card が validator 20 %・escrow 720 ‰ を genesis から宣言（t12 と同じ） |
 それ以外（`required_stake_depth`、`min_anchor_attesters` = 2、報酬、stake preference 無効、VLT inert）は
 production のまま。testnet-11・mainnet・devnet の fingerprint は動かない（`palw_the_release_did_not_move` と
 preset の fingerprint pin で確認）。

@@ -75,7 +75,10 @@ static MAINNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Networ
     coinbase_transaction_stasis_period_daa: 500,
     user_transaction_maturity_period_daa: AtomicU64::new(100),
     additional_compound_transaction_mass: 100,
-    coinbase_settlement_long_maturity_daa: 0,
+    // MIRRORS `PRODUCTION_DNS_PARAMS.coinbase_settlement_long_maturity_daa`: 600 since the user made
+    // Decision A mainnet's (2026-09-25). Below this ladder's 1,000-DAA coinbase maturity, so on the
+    // bundle-free 10 bps preset a coinbase is never held past it; a carded mainnet runs it as t12 does.
+    coinbase_settlement_long_maturity_daa: 600,
     dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 

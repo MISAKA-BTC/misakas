@@ -174,7 +174,8 @@ async fn t12_a_beat_before_its_slot_is_refused_and_was_admitted_without_the_floo
 /// The rule's margin below the slot is zero, and that is safe because of who stamps: the adapter
 /// stamps `max(the miner's clock, the slot)`, and the slot is a function of the beat's own parents,
 /// so no honest node ever builds a beat below it whatever its clock says. A slow clock stamps the
-/// slot itself — its own future, by its skew, which peers accept up to the 132 s drift tolerance —
+/// slot itself — its own future, by its skew, which peers accept up to the drift tolerance (1,620 s,
+/// mainnet's, since the user's 2026-09-25 decision; 132 s before) —
 /// and a fast one stamps its own reading. Here thirty slots are mined by miners whose clocks read
 /// from a minute behind to a minute ahead, and every slot ticks exactly once, one interval or more
 /// after the last.
@@ -216,9 +217,9 @@ async fn t12_a_slow_clock_still_beats_and_the_chain_keeps_ticking_under_skew() {
 /// **H5, acceleration: a step stamped before the slot it consumed is refused — and without the floor
 /// it was admitted and opened the next slot two seconds after the last.**
 ///
-/// The drift tolerance (132 s) is longer than the interval (120 s), so a beat stamped for the slot is
-/// admissible the moment the reference exists; the block that merges it, stamped "now", became the
-/// next reference. Nothing floored the spacing between two ticks.
+/// The drift tolerance (1,620 s; 132 s before 2026-09-25) is longer than the interval (120 s), so a
+/// beat stamped for the slot is admissible the moment the reference exists; the block that merges it,
+/// stamped "now", became the next reference. Nothing floored the spacing between two ticks.
 #[tokio::test]
 async fn t12_a_step_cannot_open_the_next_slot_early_and_could_without_the_floor() {
     kaspa_core::log::try_init_logger("info");
@@ -333,7 +334,7 @@ fn own_beat(ctx: &TestContext, nonce: u64) -> (MutableBlock, u64, Header) {
 /// first slot the adapter had to stamp ahead of the node's clock:
 ///
 /// * **the beat that claims a slot opening two minutes from now is stamped AT the slot by the
-///   adapter** — its own future, inside the 132 s drift tolerance — and must still be a valid block.
+///   adapter** — its own future, inside the drift tolerance — and must still be a valid block.
 ///   With the EVM lane active that stamp moves `evm_commitment_root` (the lane executes against the
 ///   header's timestamp, in whole seconds), and the adapter used to move the stamp without the
 ///   commitment: the node's own beat was disqualified from the chain. Found while diagnosing the
@@ -406,4 +407,123 @@ async fn t12_the_node_s_own_beats_tick_from_genesis_with_the_evm_lane_as_shipped
     let step = ctx.consensus.get_sink();
     let step_ts = ctx.consensus.virtual_processor().headers_store.get_timestamp(step).unwrap();
     assert_eq!(taken_until(&ctx, step_ts + 1), Some(step_ts + I), "and the next slot is one interval after the last step");
+}
+
+/// **The drift budget at mainnet's tolerance: a producer runs the DAA clock up to `T` ahead of wall
+/// time — about 13 slots at testnet-12's 1,620 s, about 1 at the 132 s it ran before** (user decision
+/// 2026-09-25: testnet-12 runs mainnet's numbers).
+///
+/// The clock is paced by header stamps, and a stamp is bounded above only by
+/// `unix_now() + timestamp_deviation_tolerance`. So a miner whose clock claims every slot the moment
+/// it opens — the holder and the step both stamped AT the slot, which the floor admits — ticks one DAA
+/// per slot until the next slot opens past that bound, and there it stops: the header is refused
+/// `TimeTooFarIntoTheFuture` and the chain waits for wall time. The lead is a one-time offset, not a
+/// rate: every tick is still exactly one interval after the last (the floor's spacing). Measured
+/// against the node's real clock (the future bound reads `unix_now`, and the refusal reports it):
+/// at the refusal the last tick's stamp leads the node's clock by more than `T − I` and at most `T`
+/// — `(1,500 s, 1,620 s]`, 12.5–13.5 slots, at 1,620 s; `(12 s, 132 s]` at 132 s.
+#[tokio::test]
+async fn t12_a_producer_runs_the_clock_at_most_the_drift_budget_ahead() {
+    kaspa_core::log::try_init_logger("info");
+    let (shipped, _bundle, premine, _floats) = t12_with_harness_cards();
+    assert_eq!(shipped.params.timestamp_deviation_tolerance, 1_620, "testnet-12 runs mainnet's tolerance: 27 samples x 120 s / 2");
+    for tolerance in [1_620u64, 132] {
+        let config = if tolerance == shipped.params.timestamp_deviation_tolerance {
+            shipped.clone()
+        } else {
+            let mut params = shipped.params.clone();
+            params.timestamp_deviation_tolerance = tolerance;
+            ConfigBuilder::new(params).skip_proof_of_work().build()
+        };
+        let budget_ms = tolerance * 1_000;
+        let mut ctx = t12_at_genesis(&config, &premine);
+        // Genesis is three weeks behind the wall clock: an honest slot mined from "now" brings the
+        // reference to about wall time (`honest_slot` waits for a taken slot on the simulated clock,
+        // so the reference may already sit up to one interval ahead — the lead below is measured
+        // against the node's clock, not against it).
+        ctx.simulated_time = kaspa_core::time::unix_now();
+        let mut step = honest_slot(&mut ctx, 1).await;
+        let at_wall_time = daa_of(&ctx, step.header.hash);
+        let mut ticks = 0u64;
+        let mut nonce = 2_000u64;
+        let node_clock_at_refusal = loop {
+            assert!(ticks * I <= budget_ms + I, "T = {tolerance} s: the clock ran {ticks} slots ahead, past the budget");
+            let slot = step.header.timestamp + I;
+            // A miner whose clock reads the slot the moment it opens: the holder...
+            let (built, _) = beat(&ctx, nonce, slot);
+            assert_eq!(built.header.timestamp, slot, "stamped at the slot");
+            match submit(&mut ctx, built).await {
+                Ok(_) => {}
+                Err(RuleError::TimeTooFarIntoTheFuture(stamped, bound)) => {
+                    assert!(stamped > bound && stamped == slot, "T = {tolerance} s: refused for the future bound alone");
+                    break bound - budget_ms;
+                }
+                Err(e) => panic!("T = {tolerance} s: the run-ahead holder after {ticks} ticks was refused for {e}"),
+            }
+            // ...and the step over it, which the adapter stamps at the slot it consumes.
+            let (built, _) = beat(&ctx, nonce + 1, slot);
+            nonce += 2;
+            let next = accepted(&mut ctx, built, "a run-ahead step").await;
+            assert_eq!(next.header.timestamp, slot, "the step is stamped at its slot");
+            assert_eq!(daa_of(&ctx, next.header.hash), daa_of(&ctx, step.header.hash) + 1, "one tick a slot");
+            step = next;
+            ticks += 1;
+        };
+        let lead_ms = step.header.timestamp.saturating_sub(node_clock_at_refusal);
+        eprintln!(
+            "[t12-drift-budget] T = {tolerance} s: the last tick leads the node's clock by {:.1} s = {:.2} slots ({ticks} run-ahead \
+             ticks, DAA {at_wall_time} -> {})",
+            lead_ms as f64 / 1_000.0,
+            lead_ms as f64 / I as f64,
+            daa_of(&ctx, step.header.hash)
+        );
+        assert!(lead_ms <= budget_ms, "T = {tolerance} s: no tick is ever stamped past the future bound");
+        assert!(lead_ms + I > budget_ms, "T = {tolerance} s: and a producer gets within one interval of it");
+    }
+    // The two tolerances' budgets in whole slots: 13 at mainnet's, 1 at the hash lineage's.
+    assert_eq!((1_620 * 1_000 / I, 132 * 1_000 / I), (13, 1));
+}
+
+/// **Mainnet's block-level ceiling on testnet-12 (225, user decision 2026-09-25): every block is level
+/// 0, a header lists parents at level 0 alone, and the pruning proof is `225 + 1` levels.**
+///
+/// On a hash lineage the ceiling places blocks in the pruning proof's hierarchy (`calc_level_from_pow`
+/// = ceiling − bits(pow)). Here no block buys a level: a heartbeat derives none, a receipt none, and
+/// an attempt header none past the single lottery, which testnet-12 arms from genesis. So the ceiling
+/// sets only the genesis level, the proof's level count and with it the proof's header budget — the
+/// chain's headers are the same at 225 as at 250. Checked on the pipeline's own stores, over the
+/// honest heartbeat slots `to_a_taken_slot` mines, and on the proof the node would serve.
+#[tokio::test]
+async fn t12_blocks_are_level_zero_under_mainnet_s_ceiling() {
+    kaspa_core::log::try_init_logger("info");
+    let (mut ctx, config) = t12_clock(true);
+    assert_eq!(config.params.max_block_level, 225, "testnet-12 runs mainnet's ceiling");
+    assert!(config.params.palw_single_lottery_at(0), "an attempt header derives no level from genesis");
+    let genesis = config.params.genesis.hash;
+    let headers = ctx.consensus.virtual_processor().headers_store.clone();
+    assert_eq!(headers.get_header_with_block_level(genesis).unwrap().block_level, 225, "genesis sits at the ceiling");
+    let mut checked = 0;
+    for n in 0..6u64 {
+        let step = honest_slot(&mut ctx, 100 + 10 * n).await;
+        for hash in std::iter::once(step.header.hash).chain(step.header.direct_parents().iter().copied()) {
+            if hash == genesis {
+                continue;
+            }
+            let h = headers.get_header_with_block_level(hash).unwrap();
+            assert_eq!(h.block_level, 0, "block {hash}: a heartbeat buys no level");
+            assert_eq!(
+                h.header.parents_by_level.expanded_len(),
+                1,
+                "block {hash}: parents at level 0 only — above it every level is genesis"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 12, "both beats of every slot were checked ({checked})");
+    let proof = ctx.consensus.get_pruning_point_proof();
+    assert_eq!(proof.len(), 225 + 1, "one proof level per block level, the ceiling included");
+    assert!(
+        proof.iter().all(|level| level.len() == 1 && level[0].hash == genesis),
+        "at genesis's pruning point every level is genesis"
+    );
 }
