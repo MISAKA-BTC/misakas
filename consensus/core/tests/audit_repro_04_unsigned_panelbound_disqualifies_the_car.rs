@@ -180,6 +180,8 @@ fn t12_extras(lane_open: bool) -> PalwTransitionExtrasV1 {
         economic_safety: Some(PalwEconomicSafetyFoldV1 {
             target_time_per_block_ms: T12_CADENCE_MS,
             permit_value_sompi: T12_PERMIT_FEE_CEILING_SOMPI,
+            // testnet-12's maturity (user decision 2026-09-25): the short challenge window it applies.
+            maturity_daa: kaspa_consensus_core::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1,
         }),
         round_lane: lane_open
             .then(|| PalwExecLaneFoldV1 { schedule_span_daa: 1, execution_quantum: PALW_EXECUTION_QUANTUM_V1, span_open_round: 0 }),

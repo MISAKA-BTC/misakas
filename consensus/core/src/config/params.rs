@@ -2511,6 +2511,25 @@ pub struct Params {
     /// possession, so a shorter period gives a registrant more draws, never an easier one. Hashed
     /// Some-only; a zero collapses to `None`.
     pub palw_admission_audit_period_daa: Option<u64>,
+    /// **ADR-0151's execution-quantum maturity, in DAA, where a network STATES it** (user decision
+    /// 2026-09-25: testnet-12's is the challenge window it applies, 120, not the lattice's 1,200).
+    ///
+    /// `None` is [`crate::palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1`]'s rule — the
+    /// lattice challenge window, byte for byte. testnet-12 licenses every claim under ADR-0132 §7.6's
+    /// short window from genesis, so the unshortened 1,200 put its first round permit ~1,342 DAA (~45 h)
+    /// after launch; stated at [`crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`], a Final's
+    /// rights wait 120 DAA. Read through [`Self::palw_exec_quantum_maturity_v1`] into
+    /// `PalwEconomicSafetyFoldV1::maturity_daa`, the one value the snapshot delay and the lock's price
+    /// both read — so the residual the shorter maturity leaves (2,880 DAA of gap instead of 1,800) is
+    /// priced, never free: on testnet-12's capped mint it prices the same 65,537 quanta either way.
+    ///
+    /// A value, not a fence: it rides `palw_economic_safety`'s height and means nothing without it,
+    /// so `validate_palw_v2` refuses it without that fence, past `window_court`, and at the lattice
+    /// window (the `None` rule spelled a second way would fingerprint apart from itself); and
+    /// `consensus_identity_id` drops it with a scheduled fence. Hashed Some-only, so every preset
+    /// that leaves it `None` — all but testnet-12 — fingerprints byte-identically to a build without
+    /// the field.
+    pub palw_exec_quantum_maturity_daa: Option<u64>,
 
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
@@ -3916,7 +3935,10 @@ impl Params {
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
-            return self.validate_palw_rcore_plus_v1();
+            // ADR-0151's stated maturity after it (user decision 2026-09-25): a value riding a fence
+            // the prerequisites name first.
+            self.validate_palw_rcore_plus_v1()?;
+            return self.validate_palw_exec_quantum_maturity_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -4752,7 +4774,11 @@ impl Params {
         // ADR-0152 R-core+ (see the non-V2 return above), and then — after every fence's own
         // refusal, so a missing prerequisite names itself first — the §4-ter answerability mirror.
         self.validate_palw_rcore_plus_v1()?;
-        self.validate_palw_held_answerability_v1()
+        self.validate_palw_held_answerability_v1()?;
+        // ADR-0151's stated maturity (user decision 2026-09-25), after every fence's own refusal: it
+        // rides `palw_economic_safety`, so a missing bundle is named by the rules that need it first.
+        // Over its bundle's fence, inside the liability horizon, and never the `None` rule twice.
+        self.validate_palw_exec_quantum_maturity_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -5184,6 +5210,12 @@ impl Params {
         // The same collapse for the admission audit period: zero is "ADR-0147's own period".
         if self.palw_admission_audit_period_daa == Some(0) {
             self.palw_admission_audit_period_daa = None;
+        }
+        // ADR-0151's stated maturity is a value its bundle's fence drags with it (audit3 H1): below
+        // `palw_economic_safety` nothing reads it, so a scheduled — not yet active — fence takes it
+        // out of the identity too, and the schedule id reports it.
+        if !self.palw_economic_safety.is_some_and(|f| f.is_active(0)) {
+            self.palw_exec_quantum_maturity_daa = None;
         }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
@@ -5934,6 +5966,74 @@ impl Params {
             return Err(Invalid(
                 "palw_readiness_v2_max_age_spans disagrees with the V2 bundle's mirror: mirror it with \
                  Params::sync_palw_readiness_v2_max_age_spans after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+
+    /// **The maturity ADR-0151's fold serves and prices, in DAA** — `PalwEconomicSafetyFoldV1::
+    /// maturity_daa`, filled by the processor from this and nothing else.
+    ///
+    /// The stated [`Self::palw_exec_quantum_maturity_daa`] where there is one (testnet-12: 120, the
+    /// challenge window it applies — user decision 2026-09-25); else the `None` rule,
+    /// [`crate::palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1`] over the bundle's lattice
+    /// windows (1,200 on the RC windows); `0` on a network with no V2 bundle, where no fold reads it.
+    /// Only read where `palw_economic_safety` is in force.
+    pub fn palw_exec_quantum_maturity_v1(&self) -> u64 {
+        if let Some(maturity) = self.palw_exec_quantum_maturity_daa {
+            return maturity;
+        }
+        match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                crate::palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1(
+                    bundle.state.window_challenge(),
+                    bundle.state.window_court(),
+                )
+            }
+            _ => 0,
+        }
+    }
+
+    /// **What `palw_exec_quantum_maturity_daa` refuses** (user decision 2026-09-25). Called by
+    /// `validate_palw_v2`, and public so a test can name each refusal alone. `None` is always valid.
+    ///
+    /// * **Without `palw_economic_safety`** — a maturity nothing reads (the value rides that fence's
+    ///   height; it is not a fence of its own).
+    /// * **On a network with no V2 bundle** — there is no liability horizon to measure it against.
+    /// * **Past `window_court`** — the gap it leaves is already zero at the horizon, and a longer
+    ///   maturity only freezes an honest Final's rights after nothing can convict it any more.
+    /// * **At the lattice challenge window** — that is the `None` rule; stated a second way it would
+    ///   fingerprint apart from itself and split two builds that run one rule.
+    ///
+    /// Zero is a maturity, not absence: every right spendable the span after next, and the whole
+    /// mint priced (ADR-0151: any maturity is safe because the residual is priced).
+    pub fn validate_palw_exec_quantum_maturity_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(maturity) = self.palw_exec_quantum_maturity_daa else {
+            return Ok(());
+        };
+        if self.palw_economic_safety.is_none_or(|f| f == ForkActivation::never()) {
+            return Err(Invalid(
+                "palw_exec_quantum_maturity_daa is stated without palw_economic_safety: the maturity is that bundle's, \
+                 and below its fence nothing reads it",
+            ));
+        }
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
+            return Err(Invalid(
+                "palw_exec_quantum_maturity_daa is stated on a network that is not ConsensusV2: there is no liability \
+                 horizon to measure it against",
+            ));
+        };
+        if maturity > bundle.state.window_court() {
+            return Err(Invalid(
+                "palw_exec_quantum_maturity_daa is past window_court: a right that matures after its liability expires \
+                 is frozen for nothing — at window_court the priced gap is already zero",
+            ));
+        }
+        if maturity == bundle.state.window_challenge() {
+            return Err(Invalid(
+                "palw_exec_quantum_maturity_daa states the lattice challenge window, which is the None rule: leave it \
+                 None, or the one rule fingerprints two ways",
             ));
         }
         Ok(())
@@ -6798,6 +6898,9 @@ impl Params {
             palw_settled_anchor_depth: _,
             // A period in DAA beside the fences, not a height — the visitor has nothing to rewrite.
             palw_admission_audit_period_daa: _,
+            // A maturity in DAA beside the fences (it rides `palw_economic_safety`'s height), not a
+            // height — the visitor has nothing to rewrite.
+            palw_exec_quantum_maturity_daa: _,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -7192,6 +7295,12 @@ impl Params {
             h.write(b"palw_admission_audit_period_daa");
             h.write(period.to_le_bytes());
         }
+        // ADR-0151's stated maturity (user decision 2026-09-25), Some-only: reported here even where
+        // `consensus_identity_id` drops it with a scheduled fence.
+        if let Some(maturity) = self.palw_exec_quantum_maturity_daa {
+            h.write(b"palw_exec_quantum_maturity_daa");
+            h.write(maturity.to_le_bytes());
+        }
         // The clock floor (H3/H5), NAMED: it changes which heartbeat headers and which clock steps
         // are valid, so an operator reading the schedule must see it. Some-only.
         if let Some(activation) = self.palw_clock_floor {
@@ -7482,6 +7591,9 @@ impl Params {
             palw_settled_anchor_depth: _,
             // A period in DAA beside the fences, not a height — the visitor has nothing to rewrite.
             palw_admission_audit_period_daa: _,
+            // A maturity in DAA beside the fences (it rides `palw_economic_safety`'s height), not a
+            // height — the visitor has nothing to rewrite.
+            palw_exec_quantum_maturity_daa: _,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -8403,6 +8515,7 @@ impl Params {
             palw_audit_2026_09_23,
             palw_settled_anchor_depth,
             palw_admission_audit_period_daa,
+            palw_exec_quantum_maturity_daa,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -9003,6 +9116,14 @@ impl Params {
             h.write(b"palw_admission_audit_period_daa");
             h.write(period.to_le_bytes());
         }
+        // ADR-0151's stated maturity (user decision 2026-09-25), Some-only: it decides when a Final's
+        // execution rights become spendable and what the seat lock prices, so a node that states it
+        // and one that does not are different rules — and every preset that leaves it `None`
+        // fingerprints byte-identically to a build without the field.
+        if let Some(maturity) = palw_exec_quantum_maturity_daa {
+            h.write(b"palw_exec_quantum_maturity_daa");
+            h.write(maturity.to_le_bytes());
+        }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
         // header past the fence must carry, so it belongs in the fingerprint — and every shipped
         // preset leaves it `None` and fingerprints byte-identically to a build without the field.
@@ -9526,6 +9647,9 @@ impl Params {
             palw_audit_2026_09_23: self.palw_audit_2026_09_23,
             palw_settled_anchor_depth: self.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: self.palw_admission_audit_period_daa,
+            // Rides with `palw_economic_safety`, which an override drops below: stated without it,
+            // `validate_palw_v2` would refuse the result.
+            palw_exec_quantum_maturity_daa: None,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -10551,6 +10675,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_audit_2026_09_23: None,
     palw_settled_anchor_depth: None,
     palw_admission_audit_period_daa: None,
+    palw_exec_quantum_maturity_daa: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10775,6 +10900,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_audit_2026_09_23: None,
     palw_settled_anchor_depth: None,
     palw_admission_audit_period_daa: None,
+    palw_exec_quantum_maturity_daa: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10981,6 +11107,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_audit_2026_09_23: None,
     palw_settled_anchor_depth: None,
     palw_admission_audit_period_daa: None,
+    palw_exec_quantum_maturity_daa: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -16715,6 +16842,13 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // **ADR-0147's admission jury every 100 DAA** (`Params::palw_admission_audit_period_daa`), the
     // standard the user set on 2026-09-23, instead of once per 1,000-DAA epoch.
     params.palw_admission_audit_period_daa = Some(PALW_ADMISSION_AUDIT_PERIOD_DAA_STANDARD);
+    // **ADR-0151's maturity is the challenge window this network APPLIES** (user decision
+    // 2026-09-25, `Params::palw_exec_quantum_maturity_daa`): every licence here gets ADR-0132 §7.6's
+    // short window from genesis (testnet-11's flag day, moved to 0 by pass 2's walk), so a Final's
+    // execution rights wait those 120 DAA — not the unshortened 1,200 that put the first round permit
+    // ~45 h after launch. The longer convictable gap it leaves is priced (on this network's capped
+    // mint, at the same 65,537 quanta as before), so no collateral moves.
+    params.palw_exec_quantum_maturity_daa = Some(crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1);
     // **The clock floor** (`Params::palw_clock_floor`, the 2026-09-24 heartbeat audit's H3 and H5):
     // a heartbeat stamped before its slot is invalid, a heartbeat chain is paced by its own stamps,
     // a step is stamped at or past the cursor, and the reference is the earliest tied step. The
@@ -17375,6 +17509,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_audit_2026_09_23: None,
     palw_settled_anchor_depth: None,
     palw_admission_audit_period_daa: None,
+    palw_exec_quantum_maturity_daa: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,

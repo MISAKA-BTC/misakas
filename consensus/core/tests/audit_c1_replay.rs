@@ -90,7 +90,10 @@ fn audit_c1_t12_lane_constants() {
 
     let lane = p.palw_execution_lane.expect("the execution lane is armed on t12");
     let span_daa = lane.schedule_span_daa;
-    let maturity_daa = palw_exec_quantum_maturity_daa_v1(st.window_challenge(), st.window_court());
+    // testnet-12's maturity is the challenge window it APPLIES (user decision 2026-09-25): 120, not
+    // the lattice `None` rule's 1,200.
+    assert_eq!(palw_exec_quantum_maturity_daa_v1(st.window_challenge(), st.window_court()), 1_200, "the None rule");
+    let maturity_daa = p.palw_exec_quantum_maturity_v1();
     let rpd = palw_rounds_per_daa_v1(p.target_time_per_block);
     let maturity_rounds = maturity_daa * rpd;
 
@@ -110,7 +113,7 @@ fn audit_c1_t12_lane_constants() {
     }
     assert_eq!(rpd, 120);
     assert_eq!(span_daa, 1, "a t12 span is ONE DAA tick");
-    assert_eq!(maturity_rounds, 144_000);
+    assert_eq!(maturity_rounds, 14_400, "120 DAA x 120 rounds (144,000 at the unshortened 1,200)");
 }
 
 /// **The dedup key the mint enforces is per-CALL, not per-chain.**
@@ -176,17 +179,16 @@ fn audit_c1_duplicate_execution_roots_double_the_snapshot_credits() {
 }
 
 /// **On t12 no execution quantum can ever be spent**: every ticket is scheduled at least
-/// `maturity_rounds` (144,000 rounds = 40 h) past the round its span opened in, while the schedule
+/// `maturity_rounds` (14,400 rounds = 4 h at testnet-12's 120-DAA maturity; 144,000 = 40 h at the
+/// 1,200 this was measured at) past the round its span opened in, while the schedule
 /// that holds it is dropped by `rotate_round_lane` once the chain is two spans (two DAA ticks,
 /// ~240 rounds) further on.
 #[test]
 fn audit_c1_t12_quanta_outlive_the_schedule_that_holds_them() {
     let p = t12();
-    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("t12 is ConsensusV2") };
-    let st = &bundle.state;
     let lane = p.palw_execution_lane.expect("armed");
     let rpd = palw_rounds_per_daa_v1(p.target_time_per_block);
-    let maturity_rounds = palw_exec_quantum_maturity_daa_v1(st.window_challenge(), st.window_court()) * rpd;
+    let maturity_rounds = p.palw_exec_quantum_maturity_v1() * rpd;
 
     // A dense-row Final: credit is the RAW derived MAC-eq per draw (record_round_final takes the
     // unclamped exposure when execution_quantum > 0). Counted, never materialised — the real count

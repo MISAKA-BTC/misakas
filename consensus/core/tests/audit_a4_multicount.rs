@@ -276,7 +276,9 @@ fn q1_every_primitive_one_accepted_inference_mints() {
     };
     println!("  network draws Q32 at bits=0  {} (= {:.4} draws)", palw_network_draws_q32_from_bits_v1(0), palw_network_draws_q32_from_bits_v1(0) as f64 / PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as f64);
 
-    let maturity = palw_exec_quantum_maturity_daa_v1(bundle_state(&params).window_challenge(), bundle_state(&params).window_court());
+    // testnet-12's stated maturity (user decision 2026-09-25): 120, the challenge window it applies.
+    let maturity = params.palw_exec_quantum_maturity_v1();
+    assert_eq!(palw_exec_quantum_maturity_daa_v1(bundle_state(&params).window_challenge(), bundle_state(&params).window_court()), 1_200);
     let rounds_per_daa = palw_rounds_per_daa_v1(params.target_time_per_block_history().after());
     let gap = bundle_state(&params).window_court().saturating_sub(maturity);
     println!("\n=== the permit window ===");
@@ -305,7 +307,7 @@ fn q1_every_primitive_one_accepted_inference_mints() {
         let quanta = palw_execution_quantum_count_v1(u128::from(u2), u128::from(PALW_EXECUTION_QUANTUM_V1), Hash64::default(), Hash64::default());
         let realizable = palw_realizable_before_maturity_v1(
             quanta.saturating_add(1),
-            bundle_state(&params).window_challenge(),
+            maturity,
             bundle_state(&params).window_court(),
             params.target_time_per_block_history().after(),
             palw_permit_value_sompi_v1(PALW_T12_PERMIT_FEE_CEILING_SOMPI),
@@ -369,7 +371,9 @@ fn q2_per_draw_versus_per_claim_and_the_two_attempted_spellings() {
     println!("  and divides it by a per-CLAIM-calibrated quantum. Both readings live in one build.");
 
     println!("\n=== fee x rounds x permits ===");
-    let maturity = palw_exec_quantum_maturity_daa_v1(bundle_state(&params).window_challenge(), bundle_state(&params).window_court());
+    // testnet-12's stated maturity (user decision 2026-09-25): 120, the challenge window it applies.
+    let maturity = params.palw_exec_quantum_maturity_v1();
+    assert_eq!(palw_exec_quantum_maturity_daa_v1(bundle_state(&params).window_challenge(), bundle_state(&params).window_court()), 1_200);
     let gap = bundle_state(&params).window_court().saturating_sub(maturity);
     let rpd = palw_rounds_per_daa_v1(params.target_time_per_block_history().after());
     println!("  rounds in the conviction gap = {gap} DAA x {rpd} rounds/DAA = {}", gap * rpd);
@@ -378,7 +382,7 @@ fn q2_per_draw_versus_per_claim_and_the_two_attempted_spellings() {
     for q in [216u32, 1_585_741, u32::MAX] {
         let v = palw_realizable_before_maturity_v1(
             q,
-            bundle_state(&params).window_challenge(),
+            maturity,
             bundle_state(&params).window_court(),
             params.target_time_per_block_history().after(),
             PALW_T12_PERMIT_FEE_CEILING_SOMPI,

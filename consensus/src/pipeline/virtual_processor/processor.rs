@@ -579,6 +579,10 @@ pub struct VirtualStateProcessor {
     pub(super) palw_settled_anchor_depth: Option<u64>,
     /// `Params::palw_admission_audit_period_daa` — how often a `Candidate` meets its ADR-0147 jury.
     pub(super) palw_admission_audit_period_daa: Option<u64>,
+    /// `Params::palw_exec_quantum_maturity_v1` — the maturity ADR-0151's fold serves and prices
+    /// (testnet-12: 120 DAA, the challenge window it applies), handed to it as
+    /// `PalwEconomicSafetyFoldV1::maturity_daa` wherever `palw_economic_safety` is in force.
+    pub(super) palw_exec_quantum_maturity_daa: u64,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -1076,6 +1080,7 @@ impl VirtualStateProcessor {
             palw_rcore_plus: params.palw_rcore_plus_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
+            palw_exec_quantum_maturity_daa: params.palw_exec_quantum_maturity_v1(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -11065,14 +11070,16 @@ impl VirtualStateProcessor {
                         .unwrap_or(0),
                 }
             }),
-            // **ADR-0151's economic-safety fold.** The two values the pricing needs that the
+            // **ADR-0151's economic-safety fold.** The three values the pricing needs that the
             // transition cannot see: the cadence (a `Params` quantity — the transition holds only
-            // `PalwStateParamsV2`) and the declared worth of one stolen round. `None` where the
+            // `PalwStateParamsV2`), the declared worth of one stolen round, and the maturity the
+            // network serves (testnet-12: 120 DAA, user decision 2026-09-25). `None` where the
             // fence is dormant, and then every path it touches is byte-identical.
             economic_safety: self.palw_economic_safety_at(daa_score).then(|| {
                 kaspa_consensus_core::palw_state_v2::PalwEconomicSafetyFoldV1 {
                     target_time_per_block_ms: self.palw_target_time_per_block_ms,
                     permit_value_sompi: kaspa_consensus_core::palw_economic_safety_v1::PALW_T12_PERMIT_FEE_CEILING_SOMPI,
+                    maturity_daa: self.palw_exec_quantum_maturity_daa,
                 }
             }),
             round_permit_uses: Vec::new(),

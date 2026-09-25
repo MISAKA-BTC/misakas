@@ -180,6 +180,9 @@ fn the_fence_moves_testnet12s_fingerprint_and_nothing_else_did() {
     // what it moves.
     without.palw_readiness_v2_max_age_spans = None;
     without.sync_palw_readiness_v2_max_age_spans();
+    // ADR-0151's stated execution-quantum maturity (user decision 2026-09-25) landed after it too;
+    // taken away as well, and `palw_exec_maturity_is_t12_only` pins what it moves.
+    without.palw_exec_quantum_maturity_daa = None;
     let before = ids(&without);
     println!("testnet-12 without the fence: params {} identity {} schedule {}", before.0, before.1, before.2);
     println!("testnet-12 with the fence:    params {} identity {} schedule {}", ids(&t12).0, ids(&t12).1, ids(&t12).2);

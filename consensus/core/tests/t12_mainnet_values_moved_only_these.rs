@@ -75,6 +75,9 @@ fn the_three_mainnet_values_are_the_only_thing_that_moved_testnet12() {
     assert_ne!(now.2, before.2, "λ is reported beside its height in the schedule id");
     let mut parent_without = parent;
     parent_without.palw_offence_attribution = None;
+    // ADR-0151's stated execution-quantum maturity (user decision 2026-09-25) landed after this pin
+    // was taken; taken away as well, and `palw_exec_maturity_is_t12_only` pins what it moves.
+    parent_without.palw_exec_quantum_maturity_daa = None;
     let got = ids(&parent_without);
     assert_eq!(
         (got.0.as_str(), got.1.as_str(), got.2.as_str()),

@@ -54,7 +54,11 @@ fn the_colluding_quorum_outvalues_the_lie_for_every_class() {
     let p = t12();
     let escrow = p.pre_deflationary_phase_base_subsidy / 1_000 * u64::from(p.palw_overlay_carve.expect("armed").worker_carve_permille);
     let cadence = p.target_time_per_block();
-    let window_challenge = 1_200u64;
+    // testnet-12's maturity is the challenge window it applies, 120 DAA (user decision 2026-09-25),
+    // which leaves a 2,880-DAA gap to the liability horizon: on the uncapped mint below that prices
+    // every quantum of every class (345,600 rounds > 270,030), where 1,200 priced 216,000 of them.
+    let maturity = p.palw_exec_quantum_maturity_v1();
+    assert_eq!(maturity, 120, "testnet-12 matures at its short challenge window");
     let window_court = 3_000u64;
     let classes = registered_classes(&p);
     assert_eq!(classes.len(), 3, "the floor and the two held rows");
@@ -64,11 +68,12 @@ fn the_colluding_quorum_outvalues_the_lie_for_every_class() {
         let quanta = u32::try_from(pwu_per_inference / PALW_EXECUTION_QUANTUM_V1).unwrap_or(u32::MAX).saturating_add(1);
         let residual = palw_realizable_before_maturity_v1(
             quanta,
-            window_challenge,
+            maturity,
             window_court,
             cadence,
             palw_permit_value_sompi_v1(PALW_T12_PERMIT_FEE_CEILING_SOMPI),
         );
+        assert_eq!(residual, u128::from(quanta) * u128::from(PALW_T12_PERMIT_FEE_CEILING_SOMPI), "the whole mint is priced");
         let facts = PalwClaimFraudFactsV1 {
             reserved: 0,
             escrowed_reward: escrow,
@@ -156,10 +161,13 @@ fn a_copy_of_a_convicted_execution_is_also_forfeit() {
 #[test]
 fn no_ticket_is_scheduled_before_its_maturity() {
     let p = t12();
-    let maturity_daa = palw_exec_quantum_maturity_daa_v1(1_200, 3_000);
-    assert_eq!(maturity_daa, 1_200, "testnet-12 matures at the challenge window");
+    // The `None` rule is the lattice window; testnet-12 states the challenge window it APPLIES
+    // (user decision 2026-09-25), ADR-0132 §7.6's 120.
+    assert_eq!(palw_exec_quantum_maturity_daa_v1(1_200, 3_000), 1_200, "the None rule: the lattice challenge window");
+    let maturity_daa = p.palw_exec_quantum_maturity_v1();
+    assert_eq!(maturity_daa, 120, "testnet-12 matures at the challenge window it applies");
     let maturity_rounds = maturity_daa * palw_rounds_per_daa_v1(p.target_time_per_block());
-    assert_eq!(maturity_rounds, 144_000);
+    assert_eq!(maturity_rounds, 14_400);
     let open_round = 1_000u64;
     let minted = palw_execution_mint_quanta_matured_v1(
         &[a_final(Hash64::from_u64_word(0x44), 1_000_000)],

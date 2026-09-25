@@ -57,7 +57,9 @@ fn audit_c_quantum_maturity_versus_schedule_retention() {
     let lane = p.palw_execution_lane.expect("t12 opens the lane");
     let span_daa = lane.schedule_span_daa;
 
-    let maturity_daa = palw_exec_quantum_maturity_daa_v1(s.window_challenge(), s.window_court());
+    // testnet-12's stated maturity (user decision 2026-09-25), not the lattice `None` rule's.
+    assert_eq!(palw_exec_quantum_maturity_daa_v1(s.window_challenge(), s.window_court()), s.window_challenge());
+    let maturity_daa = p.palw_exec_quantum_maturity_v1();
     let rounds_per_daa = palw_rounds_per_daa_v1(p.target_time_per_block);
     let maturity_rounds = maturity_daa * rounds_per_daa;
     println!("maturity_daa        = {maturity_daa}");
@@ -129,7 +131,7 @@ fn audit_c_realizable_residual() {
     for (name, quanta) in [("BASE-0", 216u32), ("Qwen3.6@512", 1_585_741u32), ("Qwen2.5@2M", u32::MAX)] {
         let r = palw_realizable_before_maturity_v1(
             quanta,
-            s.window_challenge(),
+            p.palw_exec_quantum_maturity_v1(),
             s.window_court(),
             p.target_time_per_block,
             PALW_T12_PERMIT_FEE_CEILING_SOMPI,
@@ -231,7 +233,7 @@ fn audit_c_colluding_quorum_inequality_from_the_card() {
         .saturating_add(1);
         let extra = palw_realizable_before_maturity_v1(
             quanta,
-            s.window_challenge(),
+            p.palw_exec_quantum_maturity_v1(),
             s.window_court(),
             p.target_time_per_block,
             PALW_T12_PERMIT_FEE_CEILING_SOMPI,
