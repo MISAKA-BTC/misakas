@@ -273,6 +273,9 @@ pub mod palw_held_da_v1;
 /// ADR-0152 v3.1 §3.11 (DA-1…DA-9, M3) — the data-availability court past `Params::palw_rcore_plus`:
 /// sessions in side maps, drawn units, any locked signer answers, seat-only pause credit.
 pub mod palw_da_rcore_v1;
+/// Lane B of the panel-seed stopgap (2026-09-26): what an operator's non-seat data-availability
+/// filer reads of the tip — node policy's read, never a rule.
+pub mod palw_operator_da_v1;
 pub mod palw_job_identity;
 pub mod palw_job_ledger;
 pub mod palw_job_panel;

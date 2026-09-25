@@ -4460,6 +4460,22 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// **Lane B of the panel-seed stopgap (2026-09-26): the claims an operator's non-seat filer may
+    /// accuse**, at the tip, for the DAA the virtual's next block folds at
+    /// (`palw_operator_da_v1::palw_operator_da_candidates_v1`). Empty with no tip state. A read: node
+    /// policy, never a block rule.
+    pub fn palw_operator_da_candidates_v1_impl(
+        &self,
+        operators: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Vec<kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaCandidateV1> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return Vec::new() };
+        let Some(candidate_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
+            return Vec::new();
+        };
+        kaspa_consensus_core::palw_operator_da_v1::palw_operator_da_candidates_v1(&state, state_params, operators, candidate_daa)
+    }
+
     /// **ADR-0152 Phase 2, P2-8e review (MED): each asked claim's one deadline in the sweep queue**,
     /// at the tip ([`Self::palw_claim_deadlines_v1_on`]). Empty with no tip state. A read: node policy
     /// dates a seat's court filing by it.

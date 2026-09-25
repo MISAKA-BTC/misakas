@@ -74,6 +74,11 @@ pub(crate) mod reporter_filer;
 #[path = "palw_filer_replay.rs"]
 mod palw_filer_replay;
 
+/// Lane B of the panel-seed stopgap (2026-09-26): an operator node that is not a seat on a claim's
+/// panel accuses it of withholding — a child module, so it reads the court queue's seams.
+#[path = "palw_operator_da.rs"]
+mod palw_operator_da;
+
 /// **Take the host ledger's reservation for a replay of `role`** — the body of
 /// [`PalwPanelService::reserve_replay_v1`], free of the service so a blocking task that prices its
 /// own need (the replay filer's, which decodes its candidates off the loop) takes it through the
@@ -6588,6 +6593,9 @@ impl PalwPanelService {
         let mut false_valid = crate::palw_filer_false_valid::PalwFalseValidFilerV1::for_params(&self.consensus_config.params);
         // P2-8b / P2-8d: the claims this seat's replay refuted, pursued to a proof (`palw_filer_replay`).
         let mut replay_filer = palw_filer_replay::PalwReplayFilerV1::default();
+        // Lane B (panel-seed stopgap (B)): the operator's non-seat accusations; armed by identity alone.
+        let mut operator_da =
+            palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_bonds_v1(&self.consensus_config.params));
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -10302,6 +10310,25 @@ impl PalwPanelService {
             self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending, &mut court_moved, &mut accused);
             // The filer's queued items, dated by the filer, in the priority lane's order.
             court_due.extend(reporter_filer.queued_dues_v1());
+
+            // --- lane B: the operator's non-seat accusations (`palw_operator_da`) ---
+            //
+            // The panel-seed stopgap (B), 2026-09-26: a node holding one of the operator's bonds (the
+            // genesis registrations) accuses every claim licensed by a `Valid` signer outside the
+            // operator's set — as a non-seat, exactly one node a claim by the claim's rank turns — so
+            // a junk claim meets an honest accuser even behind a captured panel. At most one item on
+            // the court queue, dated after every seat's filing. Identity arms it; no flag does.
+            self.operator_da_tick_v1(
+                &session,
+                &mut operator_da,
+                current_daa,
+                network_domain,
+                bond_key,
+                &mut court_pending,
+                &mut court_due,
+                &mut court_moved,
+            )
+            .await;
 
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
