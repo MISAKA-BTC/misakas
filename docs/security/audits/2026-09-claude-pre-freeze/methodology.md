@@ -55,10 +55,14 @@ to stop one agent's *conclusion* from becoming another agent's *premise*:
    only the **titles** of its findings. It looked at the repository and proposed up to three
    unreviewed high-risk areas. Those were reviewed by fresh agents in the same way as the other units.
 4. **Verification is done by agents that did not do discovery.** Each candidate finding was handed
-   to new agents as a **claim** only: title, affected code, the invariant, the preconditions, the
-   attack sequence, and the expected and actual behaviour. They did **not** receive the finder's
-   evidence, proof of concept, severity, confidence or status. They had to reproduce the finding
-   from the code themselves, or refute it.
+   to new agents as a **claim** only: a file holding the title, affected code, the invariant, the
+   preconditions, the attack sequence, the expected and actual behaviour, the claimed impact and
+   the claimed reachability. They did **not** receive the finder's evidence, proof of concept,
+   severity, confidence or status, and were told not to read any other review material on the
+   machine. They had to reproduce the finding from the code themselves, or refute it.
+   Verification of a group started as soon as that group's discovery ended. Each later group's
+   candidates were de-duplicated against the clusters already formed, so a root cause found in two
+   groups was verified once.
 5. **Retest (phase 8) is a different session.** See [retest.md](retest.md).
 
 ## 4. Evidence rules
@@ -144,8 +148,9 @@ inverted into the regression test.
 ## 9. Finding IDs
 
 `MSK-26A-<DOMAIN>-<NN>`: `26A` is this review (2026, first). `<DOMAIN>` is `CONS`, `PALW`, `CRYP`,
-`NET`, `REL` or `ARCH`. IDs are assigned after de-duplication and are never reused. A FALSE POSITIVE
-keeps its ID, so a later review can see that the claim was already examined.
+`NET`, `REL` or `ARCH`. IDs are assigned in the order that de-duplication produced the clusters.
+The number says nothing about severity. IDs are never reused. A FALSE POSITIVE keeps its ID, so a
+later review can see that the claim was already examined.
 
 ## 10. GitHub code scanning (SARIF)
 
