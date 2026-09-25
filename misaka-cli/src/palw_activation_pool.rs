@@ -372,6 +372,45 @@ pub(crate) async fn sponsor_listing(
     outcome
 }
 
+/// **Does the tip already hold `class`?** Op 200's `class_found`, on a connection of its own. `Err`
+/// where the node cannot say (no V2 state, or a node that predates op 200).
+pub(crate) async fn class_held_at_tip(ctx: &Ctx, class: &kaspa_consensus_core::Hash64) -> Result<bool, String> {
+    let nv = connect(ctx).await.map_err(|e| e.msg)?;
+    let r = read(&nv, class).await;
+    let _ = nv.client.disconnect().await;
+    let r = r.map_err(|e| e.msg)?;
+    if !r.available {
+        return Err("the node answers from no V2 state".to_string());
+    }
+    Ok(r.class_found)
+}
+
+/// **The guard of a sponsor filed behind a registration that does not confirm its own acceptance**
+/// (`palw extension submit`; review of P4, 2026-09-25). `sponsor_listing` waits for the tip to hold
+/// the class — which a class that ALREADY existed satisfies at once, while its registration is
+/// refused `DuplicateClass`: the sponsor would fund someone else's listing. So the class must be
+/// absent from the tip before the registration is submitted (`held_before`), or no sponsor is filed.
+/// Returns the sponsor to file and, when it is dropped, why.
+pub(crate) fn sponsor_for_a_new_class(
+    class: &kaspa_consensus_core::Hash64,
+    sponsor: Option<u64>,
+    held_before: Result<bool, String>,
+) -> (Option<u64>, Option<String>) {
+    let Some(amount) = sponsor else { return (None, None) };
+    match held_before {
+        Ok(false) => (Some(amount), None),
+        Ok(true) => (
+            None,
+            Some(format!(
+                "class {class} is already on this chain, so this registration is refused DuplicateClass and no sponsor is filed \
+                 (to fund the existing listing: misaka palw model-sponsor {class} {})",
+                msk_arg(amount)
+            )),
+        ),
+        Err(why) => (None, Some(format!("could not confirm class {class} is new ({why}), so no sponsor is filed"))),
+    }
+}
+
 /// The command that files a sponsor by hand, for a registration whose own sponsor was not filed.
 pub(crate) fn sponsor_retry_hint(class: &kaspa_consensus_core::Hash64, amount: u64) -> String {
     format!("misaka palw model-sponsor {class} {} --key <seed> --yes", msk_arg(amount))
@@ -470,5 +509,21 @@ mod tests {
                 .is_some_and(|w| w.contains("re-registration"))
         );
         assert_eq!(sponsor_warning(&GetPalwActivationPoolResponse { class_is_floor: true, lifecycle: "Active".into(), ..live }), None);
+    }
+
+    /// The review of P4: `extension submit` sponsors only a class the tip did not hold before its
+    /// registration — never an existing listing its refused `DuplicateClass` registration names.
+    #[test]
+    fn an_extension_registration_sponsors_only_a_class_that_was_not_already_there() {
+        let class = kaspa_consensus_core::Hash64::from_u64_word(0xC1A5);
+        let amount = Some(PALW_REGISTRATION_SPONSOR_DEFAULT_SOMPI);
+        assert_eq!(sponsor_for_a_new_class(&class, amount, Ok(false)), (amount, None), "a new class: sponsored");
+        let (kept, why) = sponsor_for_a_new_class(&class, amount, Ok(true));
+        assert_eq!(kept, None);
+        assert!(why.is_some_and(|w| w.contains("DuplicateClass") && w.contains("model-sponsor")));
+        let (kept, why) = sponsor_for_a_new_class(&class, amount, Err("op 200 unknown".into()));
+        assert_eq!(kept, None, "unconfirmed: no sponsor");
+        assert!(why.is_some_and(|w| w.contains("op 200 unknown")));
+        assert_eq!(sponsor_for_a_new_class(&class, None, Ok(true)), (None, None), "no sponsor asked: nothing to say");
     }
 }

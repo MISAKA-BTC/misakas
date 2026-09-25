@@ -634,7 +634,17 @@ pub async fn submit(
             // The pool's P4 (user decision 2026-09-25): the listing's sponsor, a follow-up carrier
             // filed once the registration folds — where the chain arms a pool.
             let class_id = *class_id;
-            let sponsor = sponsor.filter(|_| params.palw_activation_pool_at(daa).is_some());
+            let mut sponsor = sponsor.filter(|_| params.palw_activation_pool_at(daa).is_some());
+            // Only a class the tip does not hold yet: a registration of an existing class is refused
+            // DuplicateClass, and its sponsor would fund someone else's listing (review of P4).
+            if sponsor.is_some() && yes {
+                let held = crate::palw_activation_pool::class_held_at_tip(ctx, &class_id).await;
+                let (kept, why) = crate::palw_activation_pool::sponsor_for_a_new_class(&class_id, sponsor, held);
+                if let Some(why) = why {
+                    eprintln!("warning: {why}");
+                }
+                sponsor = kept;
+            }
             if let Some(amount) = sponsor
                 && !json_mode(ctx, json)
             {
