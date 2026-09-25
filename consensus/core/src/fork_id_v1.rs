@@ -712,6 +712,10 @@ mod tests {
             "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
             "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
             "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): refines the
+            // fence above; `validate_palw_v2` wants that one at or below it, which the probe does not
+            // run — it asks only the hashers and the schedule.
+            "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
             "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
             "palw_panel_economy" => params.palw_panel_economy = Some(at),
             "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),

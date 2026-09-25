@@ -82,16 +82,30 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
 /// below the window is red, i.e. no block this rule turns blue is deeper than a red the
 /// bounded-merge rule already admits. That also bounds the walk itself, which would otherwise run
 /// back through every heartbeat to the candidate's parent.
+///
+/// **F1 (ADR-0105 §11, a post-launch flag day): `same_chain`** rides here for the same reason — it
+/// narrows this rule and nothing else, so it travels with it to every site that colors (the header
+/// path, the virtual, and the pruning proof's build, validate and apply), and cannot be forgotten at
+/// one of them. `None` on every shipped preset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeartbeatTransparency {
     pub fence: kaspa_consensus_core::config::params::ForkActivation,
     pub merge_depth: u64,
+    /// `Params::palw_heartbeat_transparent_same_chain_fence`: past it (at the candidate's own DAA
+    /// score) a non-heartbeat candidate is `Weighted` only if it hangs from the merging block's own
+    /// selected chain (`GhostdagManager::hangs_from_the_merging_chain`).
+    pub same_chain: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl HeartbeatTransparency {
-    /// The fence from `params`, with the mode and the lane folded in, and the merge depth beside it.
+    /// The fence from `params`, with the mode and the lane folded in, and the merge depth and the
+    /// same-chain restriction beside it.
     pub fn from_params(params: &kaspa_consensus_core::config::params::Params) -> Option<Self> {
-        params.palw_heartbeat_transparent_fence().map(|fence| Self { fence, merge_depth: params.merge_depth() })
+        params.palw_heartbeat_transparent_fence().map(|fence| Self {
+            fence,
+            merge_depth: params.merge_depth(),
+            same_chain: params.palw_heartbeat_transparent_same_chain_fence(),
+        })
     }
 }
 
@@ -115,6 +129,20 @@ enum LaneColoring {
     /// anticone, their counts not consulted, and it does not enlarge theirs. Among non-heartbeat
     /// blocks it is the classic k-cluster rule, bounded by the merge-depth window
     /// ([`HeartbeatTransparency`]).
+    ///
+    /// **F1 — past `HeartbeatTransparency::same_chain` (ADR-0105 §11, a post-launch flag day), only
+    /// a candidate that hangs from the merging block's own selected chain is `Weighted`.** ADR-0105
+    /// was written for a draw that lands late on the chain it was built on: the heartbeats in its
+    /// anticone were minted on top of its own selected parent while it computed. Below that fence a
+    /// non-heartbeat block is invisible-to-heartbeats in EVERY block that merges it, including one
+    /// whose selected chain is another branch — so a bondless heartbeat miner's private branch
+    /// merges the public chain's attempts BLUE (its own beats do not count against them), carries
+    /// every public 2²⁰ plus its own ε and out-weighs the public chain by ε: a double spend with no
+    /// bond (measured, `hb_fork_choice_probe::hb_regression_*`). Past it, a non-heartbeat block that
+    /// does not hang from the merging chain is [`LaneColoring::Classic`]: every heartbeat of the other
+    /// branch counts against it, as GHOSTDAG always did. A branch can then take the weight only of
+    /// attempts drawn on its own chain — at or below its fork point, which the other branch holds on
+    /// its chain as well, so that weight decides nothing.
     Weighted,
 }
 
@@ -308,7 +336,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
                 new_block_data.add_red(blue_candidate);
                 continue;
             }
-            let lane = self.lane_coloring(blue_candidate);
+            let lane = self.lane_coloring(blue_candidate, selected_parent);
             // ADR-0105: the lowest blue score a `Weighted` candidate's coloring walk may reach once it
             // has passed over a heartbeat. The new block's blue score is the selected parent's plus
             // its final mergeset blues, which are at most the blues already added (the selected
@@ -372,11 +400,14 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         self.is_heartbeat_header(&self.headers_store.get_header(hash).unwrap())
     }
 
-    /// **ADR-0105: which rule colors `candidate`.** Keyed on the candidate's OWN DAA score, which is
-    /// fixed before any block that merges it is colored — so the answer never depends on the new
-    /// block's GHOSTDAG output, and a block below the fence is colored identically by every build.
-    /// No header is read where the fence is not configured.
-    fn lane_coloring(&self, candidate: BlockHash) -> LaneColoring {
+    /// **ADR-0105: which rule colors `candidate` in the block whose selected parent is
+    /// `merging_selected_parent`.** Keyed on the candidate's OWN DAA score, which is fixed before any
+    /// block that merges it is colored — so the answer never depends on the new block's GHOSTDAG
+    /// output, and a block below a fence is colored identically by every build. No header is read
+    /// where the transparency fence is not configured, and the chain walk below runs only for a
+    /// non-heartbeat candidate at or past the same-chain fence: below it this is the shipped rule,
+    /// byte for byte, and reads exactly what the shipped rule reads.
+    fn lane_coloring(&self, candidate: BlockHash, merging_selected_parent: BlockHash) -> LaneColoring {
         let Some(transparency) = self.heartbeat_transparent else {
             return LaneColoring::Classic;
         };
@@ -385,8 +416,69 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             LaneColoring::Classic
         } else if self.is_heartbeat_header(&header) {
             LaneColoring::Heartbeat
+        } else if transparency.same_chain.is_some_and(|fence| fence.is_active(header.daa_score))
+            && !self.hangs_from_the_merging_chain(candidate, merging_selected_parent, transparency.merge_depth)
+        {
+            // F1 (ADR-0105 §11): an attempt of another branch is colored against that branch's
+            // heartbeats — classic GHOSTDAG.
+            LaneColoring::Classic
         } else {
             LaneColoring::Weighted
+        }
+    }
+
+    /// **F1 (ADR-0105 §11): does `candidate` hang from the merging block's own selected chain?** Is
+    /// its selected parent `merging_selected_parent`, or one of that block's selected-chain
+    /// ancestors no more than `window` (the merge depth) blue score below it?
+    ///
+    /// **Walked on the GHOSTDAG store, not asked of the reachability tree.** The two agree on the
+    /// header path and in the pruning proof's build and validate, which all make the GHOSTDAG
+    /// selected parent the tree parent. They need not agree on a node that applied a pruning proof:
+    /// `apply_proof` fills the tree below the pruning point from the heaviest parent by the header's
+    /// blue work, which does not know the round lane (ADR-0125: a round block is never a selected
+    /// parent) — a round block tied with a chain block on blue work and winning the hash tie would be
+    /// that node's tree parent and not its selected parent, and a verdict read off the tree would then
+    /// differ from the network's in a block right above its pruning point. The selected parent a
+    /// block's GHOSTDAG data records is the one every path computes (`find_selected_parent`), or the
+    /// syncer's own for a trusted block, so the walk is a pure function of the DAG on every path.
+    ///
+    /// **Bounded**: blue score strictly falls along a selected chain, so the walk visits at most
+    /// `window + 1` blocks, and a candidate whose selected parent sits deeper than the window is
+    /// answered without walking (`false`) — a block cannot make this node walk its whole chain by
+    /// merging an old block. Such a candidate is red under the transparent rule too wherever its
+    /// coloring walk passes a heartbeat on the way down — the merge-depth floor
+    /// ([`HeartbeatTransparency`]) comes before its own ancestor — and where it passes none the two
+    /// rules count the same blues.
+    /// A read that fails (the walk ran off a proof's truncated root) answers `false`, the classic
+    /// rule, identically on every node that holds the same level of the same DAG.
+    fn hangs_from_the_merging_chain(&self, candidate: BlockHash, merging_selected_parent: BlockHash, window: u64) -> bool {
+        let target = self.ghostdag_store.get_selected_parent(candidate).expect("a mergeset candidate has GHOSTDAG data");
+        // A candidate that hangs from ORIGIN (a proof level's truncated root) hangs from no chain.
+        if target.is_origin() {
+            return false;
+        }
+        let Ok(target_score) = self.ghostdag_store.get_blue_score(target) else {
+            return false;
+        };
+        let mut current = merging_selected_parent;
+        loop {
+            if current == target {
+                return true;
+            }
+            if current.is_origin() {
+                return false;
+            }
+            let Ok(score) = self.ghostdag_store.get_blue_score(current) else {
+                return false;
+            };
+            // Past the target's height without meeting it, or out of the window: not on this chain.
+            if score <= target_score || score - target_score > window {
+                return false;
+            }
+            let Ok(parent) = self.ghostdag_store.get_selected_parent(current) else {
+                return false;
+            };
+            current = parent;
         }
     }
 
