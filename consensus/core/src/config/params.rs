@@ -1142,6 +1142,26 @@ pub struct Params {
     /// coordinate.
     pub palw_frontier_provenance: Option<ForkActivation>,
 
+    // ─── lane: rcore/f1-forkchoice-attacks — the deep-reorg strict-economic-win fence ───
+    /// **A deep reorg must be earned on ECONOMICS, or the incumbent is kept.** `None` on every
+    /// shipped preset — dormant on testnet-12, armed only in this lane's tests.
+    ///
+    /// Below the fence `dns_reorg_outcome` allows a deep reorg when
+    /// `compare_palw_candidates_v1(challenger, incumbent)` is `Greater`, and that comparator's LAST
+    /// key is the candidate hash — so a private branch that ties the incumbent on all three
+    /// economic keys (safe-frontier blue score, safe weight, live total) wins the reorg on hash
+    /// alone. The fork-choice attack probes on this branch measure exactly that: with no `Final`
+    /// or immature claim on either side both candidates read `{frontier 0, safe 0, live 0}` and
+    /// `decide_deep_reorg_v2` Allows, so a heartbeat / junk-attempt private branch double-spends
+    /// inside the finality depth by grinding a higher-hash tip. Past the fence a deep reorg is
+    /// allowed only on a STRICT economic win (`palw_deep_reorg_strict_economic_v1`); an
+    /// all-economic tie keeps the incumbent — the confirmed history — which is strictly more
+    /// conservative, reads no clock and touches no live-weight rule (so it is independent of the
+    /// two unconfirmed synthesis choices), and it fires only on actual reorgs, so forward progress
+    /// on GHOSTDAG blue work is byte-identical below and above it. A **bare fence with no companion
+    /// value**, the [`Self::palw_frontier_provenance`] rule for its reason.
+    pub palw_reorg_strict_economic_win: Option<ForkActivation>,
+
     /// **ADR-0066 Decision 1 — the heartbeat lane.** `None` on every shipped preset.
     ///
     /// Replaces `palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED`, a `const bool` that changed block
@@ -4936,6 +4956,13 @@ impl Params {
         if self.palw_frontier_provenance == Some(ForkActivation::never()) {
             self.palw_frontier_provenance = None;
         }
+        // lane: rcore/f1-forkchoice-attacks, a bare fence: same collapse, same reason. Without this
+        // a scheduled `never()` writes "palw_reorg_strict_economic_win" + u64::MAX into
+        // consensus_params_id while a build that never armed it writes nothing, and the two
+        // identities split — the Some-only fingerprint above is only safe with this collapse.
+        if self.palw_reorg_strict_economic_win == Some(ForkActivation::never()) {
+            self.palw_reorg_strict_economic_win = None;
+        }
         // ADR-0066 Decisions 1 and 4. Both carry a value beside the fence, so both take the whole
         // option — the D1 rule, for the D1 reason. The value does not vanish: ADR-0066 SA-4 folds
         // it into [`Self::consensus_schedule_id`], which is reported and not gated, so the
@@ -6815,6 +6842,7 @@ impl Params {
             palw_unavailable_abstains,
             palw_bond_maturity,
             palw_frontier_provenance,
+            palw_reorg_strict_economic_win,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -6925,6 +6953,8 @@ impl Params {
             ("palw_unavailable_abstains", *palw_unavailable_abstains),
             ("palw_bond_maturity", palw_bond_maturity.map(|f| f.activation)),
             ("palw_frontier_provenance", *palw_frontier_provenance),
+            // lane: rcore/f1-forkchoice-attacks — feeds fork_id_gate_fences_v1 automatically.
+            ("palw_reorg_strict_economic_win", *palw_reorg_strict_economic_win),
             ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
             ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
             ("palw_attempt_activation", *palw_attempt_activation),
@@ -7518,6 +7548,7 @@ impl Params {
             palw_unavailable_abstains,
             palw_bond_maturity,
             palw_frontier_provenance,
+            palw_reorg_strict_economic_win,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -7693,6 +7724,14 @@ impl Params {
         }
         // ADR-0065 D2. A pure fence with no payload, so visiting it is safe.
         match palw_frontier_provenance.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // lane: rcore/f1-forkchoice-attacks. A bare fence with no payload, same as D2 above.
+        match palw_reorg_strict_economic_win.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -8445,6 +8484,7 @@ impl Params {
             palw_unavailable_abstains,
             palw_bond_maturity,
             palw_frontier_provenance,
+            palw_reorg_strict_economic_win,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -8672,6 +8712,12 @@ impl Params {
         // ADR-0065 D2, Some-only like its siblings.
         if let Some(activation) = palw_frontier_provenance {
             h.write(b"palw_frontier_provenance");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // lane: rcore/f1-forkchoice-attacks. Some-only, so a build that never arms it writes
+        // nothing and the normalize collapse below keeps a scheduled `never()` from writing either.
+        if let Some(activation) = palw_reorg_strict_economic_win {
+            h.write(b"palw_reorg_strict_economic_win");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0071 SA-1..SA-4, Some-only for the ADR-0065 D4 reason: an unset fence writes
@@ -9558,6 +9604,7 @@ impl Params {
             palw_unavailable_abstains: self.palw_unavailable_abstains,
             palw_bond_maturity: self.palw_bond_maturity,
             palw_frontier_provenance: self.palw_frontier_provenance,
+            palw_reorg_strict_economic_win: self.palw_reorg_strict_economic_win, // lane: rcore/f1-forkchoice-attacks
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_attempt_activation: self.palw_attempt_activation,
@@ -10599,6 +10646,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
+    palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -10824,6 +10872,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
+    palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -11031,6 +11080,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
+    palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -17383,6 +17433,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
+    palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
     // **ADR-0068 Phase 1, armed on the drill network and nowhere else.** Devnet is the network
     // these fences exist to be drilled on: the heartbeat lane (fixed 2^24-hash price, width-bounded
     // mergesets) and the attempt lane's constant blue work, both live from genesis. Every other

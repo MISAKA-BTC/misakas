@@ -98,6 +98,28 @@ pub fn decide_deep_reorg_v2(incumbent: &PalwCandidateOrderV1, challenger: &PalwC
     }
 }
 
+/// **lane: rcore/f1-forkchoice-attacks — a deep reorg earned on ECONOMICS, not on a hash tie.**
+///
+/// [`decide_deep_reorg_v2`] allows a challenger that is `Greater` under
+/// [`compare_palw_candidates_v1`], whose LAST tie-break key is the candidate hash — so a branch
+/// that ties the incumbent on all three economic keys (safe-frontier blue score, safe weight,
+/// live total) wins the reorg on hash alone. The fork-choice attack probes measure exactly that:
+/// with no `Final` or immature claim on either side both candidates read `{frontier 0, safe 0,
+/// live 0}` and the deep-reorg gate Allows, so a heartbeat / junk-attempt private branch
+/// double-spends inside the finality depth by grinding a higher-hash tip.
+///
+/// This variant refuses unless the challenger STRICTLY exceeds the incumbent on some economic key;
+/// an all-economic tie keeps the incumbent (the confirmed history). Reads no clock and no
+/// live-weight rule, so it is independent of the two unconfirmed synthesis choices; and it only
+/// ever *refuses* reorgs `decide_deep_reorg_v2` would allow, so it can never adopt a chain the
+/// unfenced rule would not — strictly the more conservative of the two. Used only where
+/// `Params::palw_reorg_strict_economic_win` is armed (dormant on every shipped preset).
+pub fn palw_deep_reorg_strict_economic_v1(incumbent: &PalwCandidateOrderV1, challenger: &PalwCandidateOrderV1) -> PalwDeepReorgV2 {
+    // The economic prefix of the order — everything before the candidate-hash tie-break.
+    let economic = |o: &PalwCandidateOrderV1| (o.safe_frontier_blue_score, o.safe_weight, o.live_total);
+    if economic(challenger) > economic(incumbent) { PalwDeepReorgV2::Allow } else { PalwDeepReorgV2::Refuse }
+}
+
 /// Convenience for sites that hold `(block, order)` pairs: the selected block hash.
 pub fn select_palw_tip_hash_v2(candidates: impl IntoIterator<Item = (BlockHash, PalwCandidateOrderV1)>) -> Option<BlockHash> {
     candidates.into_iter().max_by(|a, b| compare_palw_candidates_v1(&a.1, &b.1)).map(|(hash, _)| hash)
@@ -159,6 +181,41 @@ mod tests {
         // reorgs, it is the same authority applied at depth.
         assert_eq!(decide_deep_reorg_v2(&incumbent, &order(101, 10, 0, 2)), PalwDeepReorgV2::Allow);
         assert_eq!(decide_deep_reorg_v2(&incumbent, &incumbent.clone()), PalwDeepReorgV2::Refuse, "equal is not a reorg reason");
+    }
+
+    /// **lane: rcore/f1-forkchoice-attacks — the strict-economic reorg refuses a hash-only win the
+    /// unfenced gate allows, and allows every genuine economic win.**
+    #[test]
+    fn strict_economic_reorg_keeps_the_incumbent_on_an_all_economic_tie() {
+        // The attack shape the probes measure: both sides `{frontier 0, safe 0, live 0}`, the
+        // challenger's hash higher. The unfenced gate ALLOWS (its last key is the hash); the
+        // strict-economic gate REFUSES.
+        let incumbent = order(0, 0, 0, 1);
+        let higher_hash = order(0, 0, 0, 9);
+        assert_eq!(decide_deep_reorg_v2(&incumbent, &higher_hash), PalwDeepReorgV2::Allow, "unfenced: the hash decides the reorg");
+        assert_eq!(
+            palw_deep_reorg_strict_economic_v1(&incumbent, &higher_hash),
+            PalwDeepReorgV2::Refuse,
+            "fenced: an all-economic tie keeps the incumbent, whatever the hash"
+        );
+        // And it must not become a veto on legitimate reorgs: a strict win on ANY economic key —
+        // frontier, then safe weight, then live total — is still allowed, even with a LOWER hash.
+        assert_eq!(palw_deep_reorg_strict_economic_v1(&incumbent, &order(1, 0, 0, 0)), PalwDeepReorgV2::Allow, "deeper frontier wins");
+        assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0)), PalwDeepReorgV2::Allow, "more safe weight wins");
+        assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0)), PalwDeepReorgV2::Allow, "more live total wins");
+        // A challenger economically WORSE is refused by both.
+        assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 3, 2, 1), &order(5, 3, 1, 9)), PalwDeepReorgV2::Refuse);
+        // The fenced rule never adopts a chain the unfenced rule would not: it only ever converts
+        // an Allow into a Refuse (the hash-only tie), never the reverse.
+        for (fi, si, li) in [(0u64, 0u128, 0u128), (5, 3, 2)] {
+            for (fc, sc, lc) in [(0u64, 0u128, 0u128), (5, 3, 2), (6, 0, 0), (5, 4, 0)] {
+                let inc = order(fi, si, li, 1);
+                let chal = order(fc, sc, lc, 9);
+                if palw_deep_reorg_strict_economic_v1(&inc, &chal) == PalwDeepReorgV2::Allow {
+                    assert_eq!(decide_deep_reorg_v2(&inc, &chal), PalwDeepReorgV2::Allow, "fenced Allow implies unfenced Allow");
+                }
+            }
+        }
     }
 
     #[test]
