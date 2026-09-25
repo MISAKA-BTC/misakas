@@ -2,41 +2,47 @@
 //!
 //! The held graph-v7 row at context 8,192 (`held_fixture(8_192)`: the answerable held class, the
 //! genesis 8k row's rules at the fixture's small geometry). The producer's free-prompt run lies in
-//! ONE committed fused-attention tile (`PalwFreePromptDrillFaultV1::AttnOutput`, `follow: false`: the
-//! output row moved, every other leaf the honest execution's) and retains the FOLD a held class
-//! serves, which every seat verifies against the claim's roots — the attempt lane's dense drill is
-//! refused by every seat on a held class (its honest attempt folds), so it could never reach a
-//! replay filer. The claim rides the fixture fold's attempt lane (the fold reads its roots); the seat
-//! is served it as a free-prompt payload (`FPC1`), so the node's free-prompt lane replays it from the
-//! carried ids. **A fresh seat instance cannot read a lying fold below its retained level** (every
-//! such verb re-derives the fold honestly, which does not reproduce a lying root), so the seat here
-//! reads the SERVED capture through the liar's own instance — the drill's rule: the instance that
-//! ran a lie re-derives it — and everything that is its own (its replay, its N2) on its honest
-//! instance ([`ServedView`]); `t54g_gap_a_fresh_seat_cannot_bisect_a_lying_held_fold` pins what a
-//! fresh instance does today. The seat's node runs the replay filer's own run body
-//! (`palw_replay_filer_run_v1`: its dense replay of the anchor's job, the bisection, and P2-8e's
-//! opening off the served capture), its book (`on_run_v1`), and P2-8e's loop half
-//! ([`palw_held_dissections_step_v1`]) against a fixture host whose fold is the real transition — so
-//! "the fold accepts" is `apply_palw_transition_v2_with_extras` on every block (the delta re-applied,
-//! reverted and reloaded), and the fold's rehearsal is `palw_v2_apply_one_object_v1` on the tip.
+//! ONE committed fused-attention tile (`PalwFreePromptDrillFaultV1::Leaf`: the tile's first lane
+//! moved, every other leaf the honest execution's) and retains the FOLD a held class serves, which
+//! every seat verifies against the claim's roots — the attempt lane's dense drill is refused by every
+//! seat on a held class (its honest attempt folds), so it could never reach a replay filer. The claim
+//! rides the fixture fold's attempt lane (the fold reads its roots); the seat is served it as a
+//! free-prompt payload (`FPC1`), so the node's free-prompt lane replays it from the carried ids.
 //!
-//! * **T54g** — the bisection lands on the fused leaf; the node opens the held dissection there with
-//!   the right evidence (the leaf, the claim's roots and binding, both bonds, the bound verdict's
-//!   `NeedsDissection`), due by the claim's `Final` less the landing margin; the fold opens the
-//!   session, the producer's root claim due at the class's compute turn (F5, read off the session);
-//!   the liar's least lie and the seat's held route play it to a bottom the seat files, and the claim
-//!   voids `CourtHeldVerdict` (reason 8, F3 (B)) — the producer charged, the seat not.
+//! **What is a stand-in, and what is not (the review's HIGH).** A FRESH seat instance can neither
+//! bisect a lying fold nor build its opening: the bisection's prefix state, the one move's evidence at
+//! the fused leaf and N1 all read the served fold below its retained level, which base0 does only by
+//! an honest re-execution the lie's roots refuse — and the fold keeps no tile for any other reading.
+//! So everything that reads the SERVED capture here goes through the liar's own instance
+//! ([`ServedView`]: the drill's rule, the instance that ran a lie re-derives it — what a retention
+//! readable at the lie would serve): the bisection's served rungs, the leaf's evidence and N1. What
+//! is the seat's own — its replay of the job, its N2, the artifact rows — runs on its honest instance;
+//! the book, the loop half, the fold and the held route are the real ones. The gaps are pinned as
+//! they stand today: `t54g_gap_a_a_canonical_8k_attempt_is_past_the_whole_capture_cap`,
+//! `t54g_gap_b_a_fresh_seat_cannot_bisect_a_lying_held_fold` and
+//! `t54g_gap_c_a_fresh_seat_cannot_build_the_opening_of_a_lying_held_fold`. **P2-8e does not open
+//! a held dissection on testnet-12's 8k row today.**
+//!
+//! * **T54g** (on the stand-in) — the bisection lands on the fused leaf; the node opens the held
+//!   dissection there with the right evidence (the leaf, the claim's roots and binding, both bonds,
+//!   the bound verdict's `NeedsDissection`), due by the fold's `Final` less the landing margin; the fold
+//!   opens the session, the producer's root claim due at the move turn off the session; the liar's
+//!   least lie and the seat's held route play it to a bottom the seat files, and the claim voids
+//!   `CourtHeldVerdict` (reason 8, F3 (B)) — the producer charged, the seat not.
 //! * **Liveness** — an honest 8k claim yields no dissection (the seat's replay reproduces it), and a
 //!   seat whose replay parts from an honest claim AT a fused leaf opens nothing: the court's kernels
 //!   reproduce the committed tile from the accused's own filing.
 //! * **Missing material** — a served capture whose leaf the seat cannot open falls back to P2-8d's
 //!   `StepLeaf` demand of that leaf (the case's one step: never both), which the builder's stateless
-//!   half refuses for a fused leaf (DA-3) before anything is signed.
-//! * **Dedup and restart** — one queue entry per accusation whoever built it; the chain's open
-//!   session is read by a restarted node's first tick, which then notes, opens and files nothing more
-//!   for the claim.
+//!   half refuses for a fused leaf (DA-3) before anything is signed; an opening the fold's verdict
+//!   refuses is not "missing" and settles.
+//! * **Dated** — by the fold's `Final` (on testnet-12's windows too), MED-4's one helper.
+//! * **Dedup and restart** — one queue entry per accusation whoever built it; in the tick's own order
+//!   the chain's session is read before a trigger is noted, a waiting case ends before its run, the
+//!   run in flight files nothing on return, and a restart seeds the openings still in the pool.
 //! * **Fence-off twin** — with no held route (below `palw_offence_attribution`) the same run builds
 //!   no opening and the case settles with nothing queued; below `palw_rcore_plus` the filer is dormant.
+//! * **The acceptance layer's gates** on testnet-12's court: signature, domain, ladder, bytes, verdict.
 use super::*;
 use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1};
 use crate::palw_panel::held_court::{
@@ -262,8 +268,16 @@ fn canonical(artifact: &Arc<Base0ArtifactV1>, profile: &PalwShapeProfileV3) -> P
 
 // ---- the fold ------------------------------------------------------------------------------------
 
+thread_local! {
+    /// **testnet-12's challenge windows** (the review's MED-2): `window_challenge` 1,200 with the
+    /// short window (120) in force from genesis — the claim rows read the first, the fold's `Final`
+    /// the second. Off: the fixture's own 20.
+    static T12_WINDOWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn params() -> PalwStateParamsV2 {
-    PalwStateParamsV2::new(100, 10, 10, 20, 600, 1000, h64(1), 4, 1000, 10_000, 1000, 0)
+    let t12 = T12_WINDOWS.with(|on| on.get());
+    PalwStateParamsV2::new(100, 10, 10, if t12 { 1_200 } else { 20 }, 600, 1000, h64(1), 4, 1000, 10_000, 1000, 0)
         .unwrap()
         .with_fp_quanta(8, 64)
         .unwrap()
@@ -271,6 +285,7 @@ fn params() -> PalwStateParamsV2 {
         .unwrap()
         .with_worker_carve_permille(300)
         .unwrap()
+        .with_short_challenge_window_from_daa(t12.then_some(0))
 }
 
 /// testnet-12's launch line as far as this fold reads it — `palw_offence_attribution` in force.
@@ -472,7 +487,14 @@ fn seat_run(
         held,
     };
     let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, None, || None);
-    palw_replay_filer_run_v1(seat, input, |capture| Ok::<u64, String>(capture.len() as u64), |_| Ok::<(), String>(()), &ledger)
+    palw_replay_filer_run_v1(
+        seat,
+        input,
+        |capture| Ok::<u64, String>(capture.len() as u64),
+        |_| Ok::<(), String>(()),
+        || Ok::<(), String>(()),
+        &ledger,
+    )
 }
 
 /// The seat's duty on the bound claim (what its SEAT-R replay refuted), noted in a fresh book.
@@ -482,6 +504,22 @@ fn noted(s: &PalwChainStateV2, claim: Hash64) -> (PalwReplayFilerV1, PalwSeatDut
     let mut filer = PalwReplayFilerV1::default();
     assert!(filer.note_v1(&duty, PalwReplayMismatchSiteV1::Replay, 102, &bond_key(SEAT)), "noted");
     (filer, duty)
+}
+
+/// A lifecycle carrier of `object`, as the mempool holds it.
+fn lifecycle_carrier_of(object: PalwConsensusObjectV2) -> kaspa_consensus_core::tx::Transaction {
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+        .expect("a lifecycle payload serializes");
+    kaspa_consensus_core::tx::Transaction::new(
+        0,
+        vec![],
+        vec![kaspa_consensus_core::tx::TransactionOutput::new(1, kaspa_consensus_core::tx::ScriptPublicKey::from_vec(0, vec![0x51]))],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    )
 }
 
 /// **The node's P2-8e host over the fixture fold**: the tip `state` at `daa` (the next block's).
@@ -509,18 +547,25 @@ impl PalwHeldFilerHostV1 for FilerHost {
             },
         )
     }
-    /// This bond's seat rows, as the panel reads them (`palw_claim_rows_v1`).
-    fn phase_end(&self, claim: &Hash64) -> Option<u64> {
-        let (rows, _) = kaspa_consensus_core::palw_producer_v2::palw_claim_rows_v1(
-            &self.state,
-            &params(),
-            &bond_key(SEAT),
-            kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat,
-            false,
-            4_096,
-        );
-        rows.into_iter().find(|row| row.claim_id == *claim).map(|row| row.deadline_daa.unwrap_or(u64::MAX))
+    /// The fold's own deadline for the claim, as `palw_claim_deadlines_v1` reads it at the tip.
+    fn claim_deadline(&self, claim: &Hash64) -> Option<u64> {
+        self.state.deadline_of(claim)
     }
+}
+
+/// **What the panel's claim rows say the claim's phase ends at** (`palw_claim_rows_v1`, the RPC's
+/// read) — the date P2-8e used to be due by, which reads `window_challenge` where the fold reads
+/// `window_challenge_at` (the review's MED-2).
+fn row_deadline(state: &PalwChainStateV2, claim: &Hash64) -> Option<u64> {
+    let (rows, _) = kaspa_consensus_core::palw_producer_v2::palw_claim_rows_v1(
+        state,
+        &params(),
+        &bond_key(SEAT),
+        kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat,
+        false,
+        4_096,
+    );
+    rows.into_iter().find(|row| row.claim_id == *claim).and_then(|row| row.deadline_daa)
 }
 
 /// The court queue and its schedule, as the panel keeps them.
@@ -532,11 +577,35 @@ struct Queue {
 }
 
 impl Queue {
-    /// P2-8e's loop half at `daa` on the tip `state`.
-    fn held_step(&mut self, filer: &mut PalwReplayFilerV1, state: &PalwChainStateV2, daa: u64) -> usize {
-        let host = FilerHost { state: state.clone(), daa };
+    /// **The replay filer's tick at `daa` on the tip `state`, in `replay_filer_tick_v1`'s own order**
+    /// (the review's MED-4): the chain's held dissections read first (`observe_held_v1`), then this
+    /// tick's triggers noted (`notes`), then the run in flight polled (`run`), then P2-8e's openings
+    /// (`palw_held_dissections_step_v1`). Returns the openings queued.
+    fn tick(
+        &mut self,
+        filer: &mut PalwReplayFilerV1,
+        state: &PalwChainStateV2,
+        daa: u64,
+        notes: &[PalwSeatDutyV2],
+        run: Option<(Hash64, PalwReplayRunV1)>,
+    ) -> usize {
         let duties = palw_court_duties_v2(state, &[bond_key(SEAT)]);
-        palw_held_dissections_step_v1(&host, filer, daa, bond_key(SEAT), &duties, &mut self.pending, &mut self.due, &self.moved)
+        let _ = filer.observe_held_v1(&duties, &bond_key(SEAT), daa, &mut self.pending);
+        for duty in notes {
+            let _ = filer.note_v1(duty, PalwReplayMismatchSiteV1::Replay, daa, &bond_key(SEAT));
+        }
+        if let Some((claim, run)) = run {
+            // The task returned: the tick takes its handle, then files what it found.
+            filer.running = None;
+            let _ = filer.on_run_v1(claim, run, daa, &bond_key(SEAT), &mut self.pending, &mut self.due, &self.moved);
+        }
+        let host = FilerHost { state: state.clone(), daa };
+        palw_held_dissections_step_v1(&host, filer, daa, bond_key(SEAT), &mut self.pending, &mut self.due, &self.moved)
+    }
+
+    /// A tick with no trigger and no run returning.
+    fn held_step(&mut self, filer: &mut PalwReplayFilerV1, state: &PalwChainStateV2, daa: u64) -> usize {
+        self.tick(filer, state, daa, &[], None)
     }
 
     /// The priority lane's one carrier: the soonest due first (`palw_court_queue_edf_v1`).
@@ -717,6 +786,7 @@ impl Fixture {
             ctx: &self.d.ctx,
             committed_leaves: &self.d.committed_leaves,
             withhold,
+            probe: None,
         }
     }
 
@@ -750,7 +820,7 @@ fn opened_by_the_node(f: &Fixture) -> (PalwChainStateV2, Hash64, Hash64, PalwRep
     let seat = f.seat();
     let run = f.run(&f.view(&seat, false), &s102, claim, true);
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
     let s103 = licence(&s102, claim);
     assert_eq!(queue.held_step(&mut filer, &s103, 104), 1, "the opening is queued");
     let carried = queue.carry(104).expect("the lane carries it");
@@ -796,16 +866,20 @@ async fn t54g_a_garbage_fused_leaf_is_dissected_by_the_seats_node_and_its_produc
     );
     // 2. The book: the case's one step is the held dissection's opening.
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
     assert!(matches!(&filer.case(&claim).expect("the case").step, PalwReplayCaseStepV1::Dissect(d) if d.leaf == liar.leaf));
     assert!(queue.pending.is_empty(), "nothing is queued off the loop");
     // 3. The loop half on the licensed claim: built, asked of the fold, queued with its due date.
     let s103 = licence(&s102, claim);
     assert!(matches!(phase_of(&s103, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed");
-    let final_daa = FilerHost { state: s103.clone(), daa: 104 }.phase_end(&claim).expect("the seat's row");
+    let final_daa = s103.deadline_of(&claim).expect("the licence's Final, in the fold's sweep queue");
     assert_eq!(queue.held_step(&mut filer, &s103, 104), 1);
     let (a, b, c, object) = queue.pending[0].clone();
-    assert_eq!(queue.due.get(&(a, b, c)), Some(&palw_court_accusation_due_v1(final_daa)), "due by Final less the landing margin");
+    assert_eq!(
+        queue.due.get(&(a, b, c)),
+        Some(&palw_seat_court_filing_due_v1(final_daa, 104)),
+        "due by the fold's Final less the landing margin: MED-4's one helper"
+    );
     let PalwConsensusObjectV2::ShardCourtAccused { accusation } = &object else { panic!("a ShardCourtAccused: {object:?}") };
     assert_eq!(
         (accusation.claim, accusation.leaf_index, accusation.executor_bond, accusation.accuser_bond),
@@ -828,7 +902,15 @@ async fn t54g_a_garbage_fused_leaf_is_dissected_by_the_seats_node_and_its_produc
     assert_eq!(palw_held_move_of_duty_v1(&producer), Some(PalwHeldMoveV1::Root), "the producer owes the held root claim");
     assert_eq!(producer.terminal_index, Some(liar.leaf), "narrowed at the named leaf");
     let turn = kaspa_consensus_core::palw_class_admission_v2::palw_held_move_turn_daa_v1(&f.profile, TURN);
-    assert_eq!(producer.rung_deadline_daa, (104 + turn).min(producer.session_deadline_daa), "the compute turn, off the session");
+    assert_eq!(producer.rung_deadline_daa, (104 + turn).min(producer.session_deadline_daa), "the move turn, off the session");
+    // Not discriminating on this fixture (the review's LOW): its compute turn is at or below the
+    // court's TURN, so `palw_held_move_turn_daa_v1` is TURN whether or not the fold stamps F5's compute
+    // turn. The discriminating cases — a row whose compute turn exceeds the court's — are the A-held
+    // line's own: held_court_e2e's
+    // `f5_the_producers_node_files_inside_the_compute_turn_where_the_courts_turn_is_shorter` (the
+    // node) and the fold's `f5_the_held_compute_moves_get_the_classs_compute_turn`. P2-8e reads no turn.
+    let compute = kaspa_consensus_core::palw_class_admission_v2::palw_held_compute_turn_daa_v1(&f.profile).expect("a held row");
+    assert!(compute <= TURN && turn == TURN, "pinned: F5 is not what this fixture tells apart ({compute} ≤ {TURN})");
     assert!(duty_of(&s104, SEAT, sid).is_some_and(|d| !d.i_am_responder), "the seat is its challenger");
     // 5. The next tick reads the session off the chain and stands aside: the held route's from here.
     assert_eq!(queue.held_step(&mut filer, &s104, 105), 0);
@@ -922,7 +1004,7 @@ async fn t54g_an_honest_8k_claim_produces_no_dissection() {
         "{run:?}"
     );
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
     assert!(filer.settled_v1(&claim));
     assert_eq!(queue.held_step(&mut filer, &licence(&s102, claim), 104), 0);
     assert!(queue.pending.is_empty(), "nothing filed against an honest producer");
@@ -964,7 +1046,7 @@ async fn t54g_an_honest_8k_claim_produces_no_dissection() {
 /// can read at the lie. Today a FRESH instance cannot: a held class retains a fold, and every verb
 /// that reads below its retained level (`bisect_prefix_state`, the leaf provers, the windowed
 /// responder) re-derives it by an honest re-execution, which does not reproduce a lying fold's roots
-/// — the gap [`t54g_gap_a_fresh_seat_cannot_bisect_a_lying_held_fold`] pins. The stand-in reads the
+/// — the gap [`t54g_gap_b_a_fresh_seat_cannot_bisect_a_lying_held_fold`] pins. The stand-in reads the
 /// SERVED capture at its committed leaves: its prefix states from the leaf vector the producer
 /// committed (re-derived and proven to root to the fold's step root in [`produce`]), its leaf
 /// evidence and its held filing (N1) through the liar's own instance (the drill's rule: the
@@ -982,6 +1064,8 @@ struct ServedView<'a> {
     ctx: &'a PalwJobContextV2,
     committed_leaves: &'a [Hash64],
     withhold: bool,
+    /// A ledger whose reserved bytes are recorded at every windowed build (N1 and N2).
+    probe: Option<(Arc<PalwMemoryLedgerV1>, std::sync::Mutex<Vec<u64>>)>,
 }
 
 impl ServedView<'_> {
@@ -1068,6 +1152,9 @@ impl PalwExecutionBackendV1 for ServedView<'_> {
         carried_prompt: Option<&[u32]>,
         filing: Option<&kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1>,
     ) -> Result<PalwAttnHeldEvidenceV1, String> {
+        if let Some((ledger, seen)) = &self.probe {
+            seen.lock().unwrap().push(ledger.reserved_bytes());
+        }
         // N1 reads the served capture; N2 (no material, the filing) is the seat's own replay.
         self.of(material).attn_site_evidence_held_v1(material, narrowed, carried_prompt, filing)
     }
@@ -1090,7 +1177,7 @@ async fn t54g_missing_material_falls_back_to_the_step_leaf_demand_never_both() {
     assert_eq!(*leaf, f.d.leaf);
     assert!(why.contains("does not open"), "{why}");
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
     let PalwReplayCaseStepV1::Demand { leaf: demanded, binding, sends, .. } = &filer.case(&claim).expect("the case").step else {
         panic!("P2-8d's demand: {:?}", filer.case(&claim).map(|c| &c.step))
     };
@@ -1131,7 +1218,7 @@ async fn t54g_one_dissection_per_claim_and_leaf_and_a_restart_rebuilds_it_from_t
     let mut queue = Queue::default();
     queue.pending.push((key.0, key.1, key.2, object));
     let run = f.run(&f.view(&f.seat(), false), &s102, claim, true);
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
     let s103 = licence(&s102, claim);
     assert_eq!(queue.held_step(&mut filer, &s103, 104), 0, "already queued by the other filer");
     assert_eq!(queue.pending.len(), 1, "one entry");
@@ -1144,17 +1231,25 @@ async fn t54g_one_dissection_per_claim_and_leaf_and_a_restart_rebuilds_it_from_t
     let mut q2 = Queue::default();
     assert_eq!(q2.held_step(&mut opener, &s104, 105), 0);
     assert!(opener.settled_v1(&claim) && opener.held.dissected_v1(&claim, f.d.leaf));
-    // A restarted node: a fresh book reads the chain's session on its first tick.
+    // A restarted node, in the tick's own order (the review's MED-4): its first tick reads the chain's
+    // session BEFORE the standing trigger is noted — so the trigger notes nothing, nothing runs.
     let mut restarted = PalwReplayFilerV1::default();
     let mut q3 = Queue::default();
-    assert_eq!(q3.held_step(&mut restarted, &s104, 106), 0);
+    assert_eq!(q3.tick(&mut restarted, &s104, 106, std::slice::from_ref(&duty), None), 0);
     assert!(restarted.held.dissected_v1(&claim, f.d.leaf), "rebuilt from the chain's court duties");
-    assert!(
-        !restarted.note_v1(&duty, PalwReplayMismatchSiteV1::Replay, 106, &bond_key(SEAT)),
-        "no replay case for a claim this bond is dissecting"
-    );
-    // A second `Open` for the same leaf (a case noted before the restart's read, say) settles.
-    restarted.cases.insert(
+    assert!(restarted.case(&claim).is_none() && restarted.due_v1(106).is_none(), "the trigger noted nothing; nothing runs");
+    // A node whose case was noted before the chain showed the session (it restarted while the
+    // opening's carrier was in flight): the next tick's read ends the waiting case before its run.
+    let mut early = PalwReplayFilerV1::default();
+    let mut q4 = Queue::default();
+    assert_eq!(q4.tick(&mut early, &s103, 104, std::slice::from_ref(&duty), None), 0);
+    assert_eq!(early.due_v1(104), Some(claim), "noted, due to run");
+    assert_eq!(q4.tick(&mut early, &s104, 105, std::slice::from_ref(&duty), None), 0);
+    assert!(early.case(&claim).is_none() && early.due_v1(105).is_none(), "ended at the tick's top, its run never paid for");
+    // The run in flight when the session appeared (the one case the read leaves, its task holding the
+    // ledger): it settles on return, filing nothing.
+    early.running = Some((claim, tokio::task::spawn_blocking(|| PalwReplayRunV1::HostFailed("in flight".into()))));
+    early.cases.insert(
         claim,
         PalwReplayCaseV1 {
             duty: duty.clone(),
@@ -1166,10 +1261,18 @@ async fn t54g_one_dissection_per_claim_and_leaf_and_a_restart_rebuilds_it_from_t
         },
     );
     let again = f.run(&f.view(&f.seat(), false), &s102, claim, true);
-    restarted.on_run_v1(claim, again, 106, &bond_key(SEAT), &mut q3.pending, &q3.moved);
-    assert!(restarted.case(&claim).is_none(), "settled: the chain holds this dissection");
-    assert_eq!(q3.held_step(&mut restarted, &s104, 107), 0);
-    assert!(q3.pending.is_empty(), "nothing filed a second time");
+    assert_eq!(q4.tick(&mut early, &s104, 106, &[], Some((claim, again))), 0);
+    assert!(early.case(&claim).is_none() && q4.pending.is_empty(), "settled: the chain holds this dissection; nothing filed");
+    // A restart while the opening is still in the mempool (not yet in a block): seeded once a start,
+    // so the standing trigger does not run the case again while the carrier may land.
+    let carrier = lifecycle_carrier_of(f.opening(&s102, claim, &duty).1);
+    assert_eq!(palw_held_pooled_openings_v1([&carrier], bond_key(SEAT)), vec![(claim, f.d.leaf)]);
+    assert!(palw_held_pooled_openings_v1([&carrier], bond_key(COLLUDER)).is_empty(), "another bond's opening is not this one's");
+    let mut pooled = PalwReplayFilerV1::default();
+    pooled.seed_held_v1(palw_held_pooled_openings_v1([&carrier], bond_key(SEAT)), 103);
+    let mut q5 = Queue::default();
+    assert_eq!(q5.tick(&mut pooled, &s103, 103, std::slice::from_ref(&duty), None), 0);
+    assert!(pooled.case(&claim).is_none() && pooled.seeded_v1(), "seeded: not noted, not run");
     // The fold agrees: a second opening by this seat on the claim is refused while its session is open.
     let (_, second) = f.opening(&s102, claim, &duty);
     let answer = FilerHost { state: s104.clone(), daa: 107 }.rehearse(&second).expect("a tip");
@@ -1193,7 +1296,7 @@ async fn t54g_twin_without_the_held_route_nothing_is_opened() {
     };
     assert_eq!(*leaf, f.d.leaf, "the same leaf is found");
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
     assert!(filer.settled_v1(&claim), "settled through the hook");
     assert_eq!(queue.held_step(&mut filer, &licence(&s102, claim), 104), 0);
     assert!(queue.pending.is_empty(), "nothing opened");
@@ -1209,7 +1312,7 @@ async fn t54g_twin_without_the_held_route_nothing_is_opened() {
 /// `StepRange` disclosure of the divergent block, and a disclosure of the fused tile the opening
 /// carries (ADR-0152 DA-9's "UNVERIFIED on 8k and 2M").
 #[tokio::test(flavor = "multi_thread")]
-async fn t54g_gap_a_fresh_seat_cannot_bisect_a_lying_held_fold() {
+async fn t54g_gap_b_a_fresh_seat_cannot_bisect_a_lying_held_fold() {
     use kaspa_consensus_core::palw_replay_refute_v1::{PalwReplayBisectStopV1, PalwReplaySideV1};
     let f = Fixture::new(true);
     let (s102, claim) = f.bound();
@@ -1228,8 +1331,278 @@ async fn t54g_gap_a_fresh_seat_cannot_bisect_a_lying_held_fold() {
         "{run:?}"
     );
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
     assert!(filer.settled_v1(&claim), "settled: nothing located");
     assert_eq!(queue.held_step(&mut filer, &licence(&s102, claim), 104), 0);
     assert!(queue.pending.is_empty());
+}
+
+/// **The gap, (c) (the review's HIGH): a FRESH seat cannot build the opening of a lying held fold.**
+/// Even handed the leaf (as if (b) were closed), a fresh instance reads the served fold only by an
+/// honest re-execution, which the lie's roots refuse: the one move's evidence at the leaf does not
+/// open (`fp_leaf_refutation_v1`), N1 — the windowed responder on the served capture — does not
+/// build, and the opening is `Missing`, whose P2-8d fallback DA-3 refuses before it is signed
+/// (`t54g_missing_material_falls_back_to_the_step_leaf_demand_never_both`). The fold keeps no tile
+/// and no DA unit discloses one, so this is not a matter of the seat trying harder. Through the liar's
+/// own instance (what a retention readable at the lie would serve) the same call opens — which is all
+/// the other T54g cases stand on.
+#[tokio::test(flavor = "multi_thread")]
+async fn t54g_gap_c_a_fresh_seat_cannot_build_the_opening_of_a_lying_held_fold() {
+    let f = Fixture::new(true);
+    let (s102, claim) = f.bound();
+    let target = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_target_v1(&s102, &claim).expect("the claim");
+    let seat = f.seat();
+    let n = seat.capture_shape(&f.d.material).expect("the fold's shape reads off its binding").step_leaf_count;
+    let served = PalwHeldServedV1 { capture: f.d.material.clone(), roots: f.d.roots(), carried: Some(f.d.ids.clone()) };
+    let fresh = palw_held_opening_v1(&seat, &served, &target, f.d.leaf, n, seat.prompt_ids_form(), &opening_ctx(f.root));
+    let PalwHeldOpeningV1::Missing(why) = &fresh else { panic!("a fresh seat's opening: {fresh:?}") };
+    assert!(why.contains("does not open"), "{why}");
+    let roots = PalwClaimRootsV1 { output_root: None, ..f.d.roots() };
+    assert!(seat.fp_leaf_refutation_v1(&f.d.material, &f.d.ids, roots, n, f.d.leaf).is_err(), "the one move's evidence");
+    assert!(seat.attn_site_evidence_held_v1(&f.d.material, f.d.leaf, Some(&f.d.ids), None).is_err(), "N1");
+    let view = f.view(&seat, false);
+    let opened = palw_held_opening_v1(&view, &served, &target, f.d.leaf, n, seat.prompt_ids_form(), &opening_ctx(f.root));
+    assert!(matches!(opened, PalwHeldOpeningV1::Open { .. }), "through the liar's own instance: {opened:?}");
+}
+
+/// **The gap, (a) (the review's HIGH): a canonical 8k attempt is past the whole-capture cap.** On
+/// testnet-12's 8k genesis row the canonical job is ≈ 105.5M step leaves, past the host's 2^26: the
+/// node's need (`whole_capture_memory_need_v1`, whose first step is `palw_whole_capture_admits_v1`)
+/// refuses it, and the run is `Never` — nothing replayed, bisected or opened — whatever is served, and
+/// the case settles. (Every other run here prices the fixture's small capture instead: `seat_run`.)
+#[tokio::test(flavor = "multi_thread")]
+async fn t54g_gap_a_a_canonical_8k_attempt_is_past_the_whole_capture_cap() {
+    use kaspa_consensus_core::palw_resource_profile_v1::PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1;
+    use kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1;
+    let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else {
+        panic!("testnet-12 is ConsensusV2")
+    };
+    let (profile, job) = bundle
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered { admission: Some(c), .. } if c.profile.n_ctx == N_CTX_8K => {
+                Some((c.profile.clone(), c.canonical.clone()))
+            }
+            _ => None,
+        })
+        .expect("testnet-12's 8k row");
+    let ladder = palw_class_step_ladder_v1(PALW_HELD_STEP_LADDER_V1, &profile);
+    let leaves = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &job, ladder).expect("the canonical job");
+    assert!(leaves > PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1, "{leaves} leaves");
+    let refused = crate::palw_backends::palw_whole_capture_admits_v1(PALW_HELD_STEP_LADDER_V1, ladder, &profile, leaves)
+        .expect_err("past the cap");
+    // The run priced as the node prices that capture: `Never`, nothing reserved or replayed.
+    let f = Fixture::new(true);
+    let (s102, claim) = f.bound();
+    let (mut filer, _) = noted(&s102, claim);
+    let target = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_target_v1(&s102, &claim).expect("the claim");
+    let input = PalwReplayRunInputV1 {
+        retained: None,
+        payloads: vec![f.d.served()],
+        lane: PalwReplayLaneV1::FreePrompt {
+            class_id: target.class_id,
+            executor: bond_key(PRODUCER),
+            roots: PalwClaimRootsV1 { anchor: Hash64::default(), ..f.d.roots() },
+        },
+        target,
+        ladder: PALW_HELD_STEP_LADDER_V1,
+        form: f.d.backend.prompt_ids_form(),
+        held: Some(opening_ctx(f.root)),
+    };
+    let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, None, || None);
+    let run = palw_replay_filer_run_v1(
+        &f.view(&f.seat(), false),
+        input,
+        |_| Err::<u64, String>(refused.clone()),
+        |_| -> Result<(), String> { panic!("never reserved") },
+        || -> Result<(), String> { panic!("never reserved") },
+        &ledger,
+    );
+    let PalwReplayRunV1::Never(why) = &run else { panic!("Never: {run:?}") };
+    assert!(why.contains("materialization cap"), "{why}");
+    let mut queue = Queue::default();
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    assert!(filer.settled_v1(&claim) && queue.pending.is_empty(), "the case settles; nothing is filed");
+}
+
+/// **The review's MED-2: the opening is due by the FOLD's `Final`, never the claim rows' date.** On
+/// testnet-12's windows (`window_challenge` 1,200, the short window of 120 in force), a claim licensed
+/// at 103 goes `Final` at 223 in the fold, while the claim rows (the RPC's read, which P2-8e used to
+/// be dated by) say 1,303 — ≈ 1,020 DAA past `Final`, so the EDF lane carried every item due before
+/// `Final` first and the opening could meet `WrongPhase`. The node's date is MED-4's helper over the
+/// fold's deadline, `Final` − 60 = 163, and the lane carries it before an item due in between.
+#[tokio::test(flavor = "multi_thread")]
+async fn t54g_the_opening_is_due_by_the_folds_final_on_testnet_12s_windows() {
+    T12_WINDOWS.with(|on| on.set(true));
+    let f = Fixture::new(true);
+    let (s102, claim) = f.bound();
+    let (mut filer, _) = noted(&s102, claim);
+    let run = f.run(&f.view(&f.seat(), false), &s102, claim, true);
+    let mut queue = Queue::default();
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    let s103 = licence(&s102, claim);
+    let final_daa = s103.deadline_of(&claim).expect("the licence's Final");
+    let short = kaspa_consensus_core::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1;
+    assert_eq!(final_daa, 103 + short, "the fold: window_challenge_at");
+    assert_eq!(row_deadline(&s103, &claim), Some(103 + 1_200), "the claim rows: window_challenge");
+    assert_eq!(queue.held_step(&mut filer, &s103, 104), 1);
+    let key = (queue.pending[0].0, queue.pending[0].1, queue.pending[0].2);
+    let margin = PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1;
+    assert_eq!(queue.due[&key], final_daa - margin, "Final less the landing margin");
+    assert!(queue.due[&key] < row_deadline(&s103, &claim).unwrap() - margin, "never the claim rows' date");
+    // The lane: an item due between the two dates goes after the opening.
+    let between = (h64(0xBE7), 0u32, false);
+    queue.pending.insert(0, (between.0, between.1, between.2, queue.pending[0].3.clone()));
+    queue.due.insert(between, final_daa + 500);
+    palw_court_queue_edf_v1(&mut queue.pending, &queue.due);
+    assert_eq!((queue.pending[0].0, queue.pending[0].1, queue.pending[0].2), key, "the opening first");
+    T12_WINDOWS.with(|on| on.set(false));
+}
+
+/// **The review's LOW: an opening the fold's own verdict refuses is not "missing material".** With the
+/// node's accusation ladder at the leaf (a ladder that is not the chain's), the one move built at the
+/// lie's leaf does not adjudicate: the run says `NotAdjudicable` (said at `error`), and the case
+/// settles with nothing queued — never P2-8d's fallback, which would have hidden the misconfiguration.
+#[tokio::test(flavor = "multi_thread")]
+async fn t54g_an_opening_the_folds_verdict_refuses_is_not_missing_material() {
+    let f = Fixture::new(true);
+    let (s102, claim) = f.bound();
+    let (mut filer, _) = noted(&s102, claim);
+    let ctx = PalwHeldOpeningCtxV1 { ladder: f.d.leaf, ..opening_ctx(f.root) };
+    let run = seat_run(&f.view(&f.seat(), false), &f.d, &s102, claim, f.d.served(), Some(ctx));
+    let PalwReplayRunV1::FusedLeaf { opening: PalwHeldOpeningV1::NotAdjudicable(why), .. } = &run else {
+        panic!("not adjudicable: {run:?}")
+    };
+    assert!(why.contains(&format!("ladder {}", f.d.leaf)), "{why}");
+    let mut queue = Queue::default();
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    assert!(filer.settled_v1(&claim) && filer.case(&claim).is_none(), "settled, not a demand");
+    assert!(queue.pending.is_empty() && filer.demands_due_v1(104, &queue.pending, &queue.moved).is_empty());
+}
+
+/// **The review's LOW: the opening P2-8e builds meets the acceptance layer's gates, on testnet-12's
+/// own court.** The `ShardCourtAccused` arm of `palw_v2_validate_objects`, step by step over the
+/// fixture's state: the accuser's ML-DSA-87 over the session id — at the network domain the processor
+/// derives (`palw_network_domain_v2_for(net, genesis)`) — under the accusation context verifies with
+/// the bond's key; the shape and the bytes at the ladder the processor derives (the claim's class
+/// ladder over the network cap, `palw_refutation_leaf_cap_v2`) and its `max_close_bytes`; the bound
+/// verdict `NeedsDissection`. And the node's accusation ladder for a held class (`seat_refutation_ladder_v1`
+/// over `palw_class_step_ladder_v1`) is that same ladder. (A processor-level rehearsal of a held
+/// opening needs the 8k held fixture inside the processor's harness; the fold's own arm is T54g's.)
+#[tokio::test(flavor = "multi_thread")]
+async fn t54g_the_opening_meets_the_acceptance_layers_gates_on_testnet_12s_court() {
+    use kaspa_consensus_core::config::params::Params;
+    use kaspa_consensus_core::network::{NetworkId, NetworkType};
+    use kaspa_consensus_core::palw_shard_court_v1::{
+        PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, PalwOneMoveClaimV2, PalwShardCourtVerdictV1, palw_shard_court_accusation_bytes_v1,
+        palw_shard_court_session_id_v1, palw_shard_court_verdict_at_v2,
+    };
+    let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else {
+        panic!("testnet-12 is ConsensusV2")
+    };
+    let f = Fixture::new(true);
+    let (s102, claim) = f.bound();
+    let (_, duty) = noted(&s102, claim);
+    let PalwReplayRunV1::FusedLeaf { opening: PalwHeldOpeningV1::Open { evidence, .. }, .. } =
+        f.run(&f.view(&f.seat(), false), &s102, claim, true)
+    else {
+        panic!("an opening")
+    };
+    // The processor's ladder for the claim: its class's recorded ladder over the network cap.
+    let network_cap = kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+        &bundle.court,
+        t12.palw_court_ladder.is_some_and(|fence| fence.is_active(104)),
+    );
+    let chain_ladder = s102.class_step_ladder_v1(&duty.class_id, network_cap);
+    assert_eq!(chain_ladder, PALW_HELD_STEP_LADDER_V1, "a held class's recorded ladder");
+    let node_class =
+        kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(bundle.court.max_step_leaf_count(), &f.profile);
+    let node_ladder = if node_class > bundle.court.max_step_leaf_count() { node_class.max(network_cap) } else { network_cap };
+    assert_eq!(node_ladder, chain_ladder, "the node's accusation ladder is the chain's");
+    // Built and signed with a real ML-DSA-87 key, at the processor's domain.
+    let domain =
+        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(t12.net.to_string().as_bytes(), Some(t12.genesis.hash));
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x5E; 32]);
+    let (key, object) = palw_held_opening_object_v1(&evidence, &duty, bond_key(SEAT), &domain, node_ladder, |message, context| {
+        PalwPanelService::sign_hedged(&kp.signing_key, message, context)
+    })
+    .expect("built");
+    let PalwConsensusObjectV2::ShardCourtAccused { accusation } = &object else { panic!("a ShardCourtAccused") };
+    let session_id = palw_shard_court_session_id_v1(domain.as_byte_slice(), accusation);
+    assert_eq!(key, (session_id, PALW_HELD_OPENING_QUEUE_ROUND_V1, false));
+    assert!(
+        kaspa_txscript::verify_mldsa87_with_context(
+            kp.verification_key.as_ref(),
+            session_id.as_byte_slice(),
+            &accusation.signature,
+            PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT
+        )
+        .unwrap_or(false),
+        "signed by the bond it names, over the id the processor derives"
+    );
+    accusation.validate_shape(chain_ladder).expect("the shape at the chain's ladder");
+    assert!(palw_shard_court_accusation_bytes_v1(accusation) <= bundle.court.max_close_bytes(), "inside the close ceiling");
+    let claim_record = s102.claim(&claim).expect("the claim");
+    assert_eq!(
+        (claim_record.bond, claim_record.execution_root, claim_record.trace_root),
+        (accusation.executor_bond, accusation.execution_root, accusation.trace_root),
+        "the executor and the roots are the claim's"
+    );
+    let bound_to =
+        PalwOneMoveClaimV2 { execution_root: claim_record.execution_root, class_id: claim_record.class_id, artifact_root: f.root };
+    assert_eq!(
+        palw_shard_court_verdict_at_v2(accusation, &bound_to, chain_ladder, t12.palw_audit_2026_09_23_active_at(104)),
+        Ok(PalwShardCourtVerdictV1::NeedsDissection),
+        "the bound verdict defers to the held dissection"
+    );
+}
+
+/// **The review's LOW: the opening's builds run under the held builds' own figure, not the dense
+/// replay's.** The run reserves the dense capture's need for the replay (here 1,000,000 bytes); once a
+/// fused finding is to be opened it takes the held route's figure for a build (here 10,000) FIRST and,
+/// granted, releases the dense one — N1 and N2 are built with 10,000 reserved. Where the ledger cannot
+/// also hold the held figure, the dense reservation (which covers it) is kept and the builds run under
+/// it, as they always did. Everything is released with the run.
+#[tokio::test(flavor = "multi_thread")]
+async fn t54g_the_openings_builds_run_under_the_held_figure_not_the_dense_one() {
+    use crate::palw_memory_ledger::PalwMemoryReservationKeyV1;
+    let f = Fixture::new(true);
+    let (s102, claim) = f.bound();
+    let seat = f.seat();
+    for (share, during) in [(1_010_000u64, 10_000u64), (1_005_000, 1_000_000)] {
+        let host = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(share), || None);
+        let mut view = f.view(&seat, false);
+        view.probe = Some((host.clone(), Default::default()));
+        let key = |role| PalwMemoryReservationKeyV1 { role, class_id: h64(1), job: claim };
+        let target = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_target_v1(&s102, &claim).expect("the claim");
+        let input = PalwReplayRunInputV1 {
+            retained: None,
+            payloads: vec![f.d.served()],
+            lane: PalwReplayLaneV1::FreePrompt {
+                class_id: target.class_id,
+                executor: bond_key(PRODUCER),
+                roots: PalwClaimRootsV1 { anchor: Hash64::default(), ..f.d.roots() },
+            },
+            target,
+            ladder: PALW_HELD_STEP_LADDER_V1,
+            form: f.d.backend.prompt_ids_form(),
+            held: Some(opening_ctx(f.root)),
+        };
+        let rungs = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, None, || None);
+        let run = palw_replay_filer_run_v1(
+            &view,
+            input,
+            |_| Ok::<u64, String>(1_000_000),
+            |need| host.reserve(key("replay-filer"), *need).map_err(|e| e.to_string()),
+            || host.reserve(key("held-dissection"), 10_000).map_err(|e| e.to_string()),
+            &rungs,
+        );
+        assert!(matches!(run, PalwReplayRunV1::FusedLeaf { opening: PalwHeldOpeningV1::Open { .. }, .. }), "{run:?}");
+        let seen = view.probe.as_ref().expect("probed").1.lock().unwrap().clone();
+        assert!(seen.len() >= 2 && seen.iter().all(|bytes| *bytes == during), "share {share}: reserved during N1/N2 {seen:?}");
+        assert_eq!(host.reserved_bytes(), 0, "released with the run");
+    }
 }

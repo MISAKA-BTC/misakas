@@ -264,6 +264,13 @@ impl ConsensusSessionOwned {
         self.consensus.palw_object_rehearsal_v1(object)
     }
 
+    pub fn palw_claim_deadlines_v1(
+        &self,
+        claims: Vec<kaspa_consensus_core::Hash64>,
+    ) -> Vec<(kaspa_consensus_core::Hash64, Option<u64>)> {
+        self.consensus.palw_claim_deadlines_v1(claims)
+    }
+
     pub fn palw_claim_readers_v2(
         &self,
         claim: kaspa_consensus_core::Hash64,

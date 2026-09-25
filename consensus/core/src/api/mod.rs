@@ -958,6 +958,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0152 Phase 2, P2-8e review (MED): each asked claim's one deadline in the sweep queue at
+    /// the tip** (`PalwChainStateV2::deadline_of`, DL-1's row: the receipt deadline of a bound panel,
+    /// `Final` of a licence at `window_challenge_at` and every floor the fold adds, a DA session's
+    /// disclose deadline; `None` while a court or a seat's DA session pauses it, or for a claim the
+    /// tip does not hold). What node policy dates a seat's court filing by, so the date is the fold's
+    /// own and never a second spelling of it. A read, never a block rule; empty off `ConsensusV2` or
+    /// with no tip state.
+    fn palw_claim_deadlines_v1(&self, _claims: Vec<crate::Hash64>) -> Vec<(crate::Hash64, Option<u64>)> {
+        Vec::new()
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {

@@ -4328,6 +4328,28 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// **ADR-0152 Phase 2, P2-8e review (MED): each asked claim's one deadline in the sweep queue**,
+    /// at the tip ([`Self::palw_claim_deadlines_v1_on`]). Empty with no tip state. A read: node policy
+    /// dates a seat's court filing by it.
+    pub fn palw_claim_deadlines_v1_impl(
+        &self,
+        claims: &[kaspa_consensus_core::Hash64],
+    ) -> Vec<(kaspa_consensus_core::Hash64, Option<u64>)> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return Vec::new() };
+        Self::palw_claim_deadlines_v1_on(&state, claims)
+    }
+
+    /// [`Self::palw_claim_deadlines_v1_impl`] on a given state: the index the sweep reads
+    /// (`PalwChainStateV2::deadline_of`), one scan a claim — asked only for the few claims a seat has
+    /// a court filing queued on.
+    pub(crate) fn palw_claim_deadlines_v1_on(
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        claims: &[kaspa_consensus_core::Hash64],
+    ) -> Vec<(kaspa_consensus_core::Hash64, Option<u64>)> {
+        claims.iter().map(|claim| (*claim, state.deadline_of(claim))).collect()
+    }
+
     /// **Who may be served a claim's private material**, at the tip (ADR-0077 Decision 16's
     /// transport half) — see `PalwChainStateV2::claim_readers_v2`.
     pub fn palw_claim_readers_v2_impl(

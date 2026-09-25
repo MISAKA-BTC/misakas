@@ -52,3 +52,34 @@ async fn t54g_the_object_rehearsal_is_the_folds_own_answer() {
         assert!(matches!(again, Rehearsal::Refused(_) | Rehearsal::NotAccepted(_)), "rcore {rcore}: convicted once: {again:?}");
     }
 }
+
+/// **The P2-8e review, MED-2: the deadline node policy dates a seat's court filing by is the fold's.**
+/// `palw_claim_deadlines_v1` reads each asked claim's one deadline in the sweep queue: on a real
+/// testnet-12 licence that is `Final` at `window_challenge_at` (the short window, in force from
+/// genesis) — DL-1's row, exactly — and NOT the `window_challenge` the claim rows (the RPC's read)
+/// add, which dated the held opening ≈ 1,020 DAA past `Final`. A claim the tip does not hold has none.
+#[tokio::test]
+async fn t54g_the_claim_deadline_read_is_the_folds_final() {
+    use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+    let h = harness(true);
+    let (walk, claim, _licence) = h.licensed(Fault::Step);
+    let id = claim.claim_id;
+    let record = walk.state.claim(&id).expect("the claim").clone();
+    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = record.phase else { panic!("licensed: {:?}", record.phase) };
+    let read = VirtualStateProcessor::palw_claim_deadlines_v1_on(&walk.state, &[id, Hash64::from_u64_word(0x0DD)]);
+    let dl1 = kaspa_consensus_core::palw_state_v2::palw_rcore_deadline_v1(
+        &walk.state,
+        h.sp(),
+        &id,
+        &record,
+        walk.state.last_point().map(|point| point.daa_score),
+    )
+    .expect("DL-1");
+    assert_eq!(read, vec![(id, dl1), (Hash64::from_u64_word(0x0DD), None)], "the sweep queue's own entry");
+    let floor = licensed_daa + h.sp().window_challenge_at(licensed_daa);
+    assert!(read[0].1.is_some_and(|at| at >= floor), "Final at window_challenge_at, with every floor the fold adds");
+    assert!(
+        h.sp().window_challenge_at(licensed_daa) < h.sp().window_challenge(),
+        "testnet-12's short window is in force: the claim rows' window_challenge is later"
+    );
+}
