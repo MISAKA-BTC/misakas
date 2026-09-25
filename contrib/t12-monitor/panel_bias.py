@@ -1116,8 +1116,8 @@ def main(argv=None):
         rpc = WsRpc(cfg.url, cfg.timeout)
         try:
             run = collect(rpc, st, cfg, now)
-        except RpcError as e:
-            fatal = str(e)
+        except Exception as e:                      # noqa: BLE001 - an unreadable node is DEGRADED, never a crash
+            fatal = f"{type(e).__name__}: {e}"[:300]
             run = {"errors": [fatal], "degraded": [], "calls": rpc.calls}
         finally:
             rpc.close()
@@ -1179,4 +1179,11 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as exc:  # noqa: BLE001 - Python's own crash exit (1) would read as ALERT to cron
+        import traceback
+        traceback.print_exc()
+        print("PANEL_BIAS " + json.dumps({"status": "DEGRADED", "time": int(time.time()), "alerts": [],
+                                          "degraded": [f"monitor crashed: {type(exc).__name__}: {exc}"[:300]]}))
+        sys.exit(2)
