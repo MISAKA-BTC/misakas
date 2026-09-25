@@ -49,6 +49,9 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_bootstrap_activation" => params.palw_bootstrap_activation = Some(at),
         "palw_unavailable_abstains" => params.palw_unavailable_abstains = Some(at),
         "palw_bond_maturity" => companion(&mut params.palw_bond_maturity, name, "window_daa", at, |f, at| f.activation = at)?,
+        // Lane maturity (post-launch, 2026-09-26): a bare height; `validate_palw_v2` refuses it without
+        // `palw_bond_maturity` scheduled above it.
+        "palw_bond_maturity_early" => params.palw_bond_maturity_early = Some(at),
         "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
         "palw_heartbeat" => {
             companion(&mut params.palw_heartbeat, name, "work_log2 and the mergeset bound", at, |f, at| f.activation = at)?

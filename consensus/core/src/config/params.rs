@@ -368,6 +368,28 @@ pub struct PalwBondMaturityV1 {
     pub window_daa: u64,
 }
 
+// ---- lane maturity (post-launch, 2026-09-26): ADR-0065 D1 from the post-launch fence -------------
+/// **ADR-0065 D1's DAA window in force at `anchor_daa`, on both of its fences** — `maturity`'s window
+/// where `maturity`'s own activation OR lane maturity's `early` fence ([`Params::palw_bond_maturity_early`])
+/// is active at the anchor, else `None`.
+///
+/// One OR over ONE window: from `maturity`'s own height the answer is `maturity`'s alone whether or
+/// not `early` is armed (no double counting, no gap at the hand-over), and below `early` it is
+/// `None`, byte for byte the released rule. `early` without `maturity` answers nothing —
+/// `validate_palw_v2` refuses that pairing, and the resolver does not invent a window for it.
+/// The processor's `palw_bond_maturity_at` is this function over its copies of the two fields, so
+/// the validator, the assembler and the registry warning resolve one window.
+pub fn palw_bond_maturity_window_in_force_v1(
+    maturity: Option<PalwBondMaturityV1>,
+    early: Option<ForkActivation>,
+    anchor_daa: u64,
+) -> Option<u64> {
+    let maturity = maturity?;
+    let in_force = maturity.activation.is_active(anchor_daa) || early.is_some_and(|fence| fence.is_active(anchor_daa));
+    in_force.then_some(maturity.window_daa)
+}
+// ---- end lane maturity ---------------------------------------------------------------------------
+
 /// **ADR-0066 Decision 1's parameter: the heartbeat lane, and the fixed price it is held to.**
 ///
 /// The price is a network CONSTANT and never `header.bits`. That is the whole decision: the first
@@ -2531,6 +2553,46 @@ pub struct Params {
     /// the field.
     pub palw_exec_quantum_maturity_daa: Option<u64>,
 
+    // ---- lane maturity (post-launch, 2026-09-26): ADR-0065 D1 from the post-launch fence ---------
+    /// **Lane maturity — ADR-0065 D1's seat maturity, brought forward to a post-launch fence**
+    /// (2026-09-26, the lifecycle audit's correction to the panel-seed note: "a seat bond registered
+    /// before DAA 1,000 is drawn onto floor panels within minutes — registered at DAA 13, on a panel
+    /// at bind DAA 21").
+    ///
+    /// testnet-12 arms [`Self::palw_bond_maturity`] at its own window (1,000 DAA), because
+    /// `validate_palw_v2` refuses it any earlier. So for its first 1,000 DAA no window applies at
+    /// all, and a bond registered after launch is drawable the moment its registration is
+    /// accepted. For a claim whose ANCHOR block's DAA score is at or past this fence, the draw
+    /// applies D1 exactly as `palw_bond_maturity` would — `palw_bond_maturity`'s own window, both
+    /// clocks (`palw_bond_maturity_window_v2`), one subtraction (`palw_seat_maturity_floor_v1`) — so:
+    ///
+    /// * a NON-genesis bond is drawable only once `anchor_daa ≥ registered_daa + window`. A bond
+    ///   registered BEFORE the fence gets no grandfathering: its window counts from its own
+    ///   registration DAA, as it would under `palw_bond_maturity` itself, so it leaves the draw at
+    ///   the fence and returns at `registered_daa + window` (a bond registered at DAA 13 returns at
+    ///   anchor 1,013). Counting from the fence instead would make the answer depend on when the
+    ///   fence was armed and would disagree with `palw_bond_maturity` past its own height — a
+    ///   second rule, where this is the first rule starting earlier;
+    /// * the genesis bonds (`registered_daa = genesis.daa_score = 0`) stay drawable at every
+    ///   anchor: the floor is `anchor_daa - window` saturating at 0, and `0 > 0` is false. That is
+    ///   why this fence may sit inside the window `palw_bond_maturity`'s own guard refuses — the
+    ///   guard's "every genesis bond would be immature" holds only for a genesis above DAA 0, and
+    ///   [`Self::validate_palw_bond_maturity_early_v1`] refuses exactly that case;
+    /// * from `palw_bond_maturity`'s own height on, the two answer the same window for the same
+    ///   anchor ([`palw_bond_maturity_window_in_force_v1`] is one OR over one window), so there is
+    ///   no double counting and no gap at 1,000: past it the draw is byte-for-byte the released rule.
+    ///
+    /// Keyed on the ANCHOR's DAA like `palw_bond_maturity` (the panel is a pure function of the
+    /// claim, so the validator, the assembler and the registry warning resolve one window). A
+    /// claim anchored below the fence keeps the released draw even if it binds past it; a panel
+    /// already bound keeps its seats. Refused by `validate_palw_v2` without `palw_bond_maturity`
+    /// scheduled (its window is the only window). Dormant (`None`) on every shipped preset,
+    /// testnet-12 included, until an operator arms it at the one post-launch height (after
+    /// `palw_t12_arm_every_rule_from_genesis`'s pass 2, which would zero it); hashed Some-only and
+    /// collapsed from `Some(never())`, so a build that carries the field fingerprints and peers
+    /// exactly as one that does not until the fence is armed.
+    pub palw_bond_maturity_early: Option<ForkActivation>,
+    // ---- end lane maturity -------------------------------------------------------------------
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -3932,6 +3994,8 @@ impl Params {
         // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis
         // only, over the registry and readiness V2 at genesis, inside [8, 30] spans, mirrored.
         self.validate_palw_readiness_v2_max_age_v1()?;
+        // Lane maturity (post-launch, 2026-09-26): ADR-0065 D1 brought forward, on both paths.
+        self.validate_palw_bond_maturity_early_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -4931,6 +4995,12 @@ impl Params {
         // unset build never writes, which is the partition the top-level placement exists to avoid.
         if self.palw_bond_maturity.is_some_and(|m| m.activation == ForkActivation::never()) {
             self.palw_bond_maturity = None;
+        }
+        // Lane maturity (post-launch, 2026-09-26): D1 brought forward is a bare fence hashed
+        // Some-only, so the same collapse — without it a build that schedules the fence and one that
+        // does not would refuse each other on deploy day over a height neither has reached.
+        if self.palw_bond_maturity_early == Some(ForkActivation::never()) {
+            self.palw_bond_maturity_early = None;
         }
         // ADR-0065 D2, a bare fence: same collapse, same reason.
         if self.palw_frontier_provenance == Some(ForkActivation::never()) {
@@ -6039,6 +6109,71 @@ impl Params {
         Ok(())
     }
 
+    // ---- lane maturity (post-launch, 2026-09-26): ADR-0065 D1 from the post-launch fence ---------
+
+    /// **Lane maturity's fence** ([`Self::palw_bond_maturity_early`]), resolved off a ConsensusV2
+    /// ruleset; `never()` is dormant.
+    pub fn palw_bond_maturity_early_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_bond_maturity_early) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) if f != ForkActivation::never() => Some(f),
+            _ => None,
+        }
+    }
+
+    /// **ADR-0065 D1's window in force for a claim anchored at `anchor_daa`** — the DAA window alone,
+    /// before the processor widens it by the second clock (`palw_bond_maturity_window_v2`). `None`
+    /// where neither `palw_bond_maturity` nor lane maturity's fence is active at the anchor. What the
+    /// processor's `palw_bond_maturity_at` answers, through the same free function.
+    pub fn palw_bond_maturity_window_at(&self, anchor_daa: u64) -> Option<u64> {
+        palw_bond_maturity_window_in_force_v1(self.palw_bond_maturity, self.palw_bond_maturity_early_fence(), anchor_daa)
+    }
+
+    /// **What lane maturity's fence refuses.** Called by `validate_palw_v2` on both paths, and public
+    /// so a test can name each refusal alone. Dormant (`None` or `never()`) is always valid.
+    ///
+    /// * **On a network that is not ConsensusV2** — there is no V2 panel to draw.
+    /// * **Without `palw_bond_maturity` scheduled** — the window is `palw_bond_maturity`'s and the
+    ///   fence has none of its own: one window, so the two can never disagree about a bond.
+    /// * **At or past `palw_bond_maturity`'s own height** — it would bring nothing forward, and at the
+    ///   SAME height (testnet-12's 1,000) a second fence is invisible to the fork id.
+    /// * **Inside the window on a genesis above DAA 0** — the one case in which D1 armed early starves
+    ///   the draw: genesis bonds register at `genesis.daa_score`, and `anchor_daa - window` saturating
+    ///   at 0 stays below it until `genesis.daa_score + window`. At a DAA-0 genesis (testnet-12, and
+    ///   every shipped genesis) the floor never falls below a genesis bond, which is the whole reason
+    ///   this fence may sit where `palw_bond_maturity`'s own guard would refuse.
+    pub fn validate_palw_bond_maturity_early_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_bond_maturity_early.filter(|f| *f != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid(
+                "palw_bond_maturity_early is armed on a network that is not ConsensusV2: there is no V2 panel to draw",
+            ));
+        }
+        let Some(maturity) = self.palw_bond_maturity.filter(|m| m.activation != ForkActivation::never()) else {
+            return Err(Invalid(
+                "palw_bond_maturity_early is armed without palw_bond_maturity scheduled: the window it brings forward \
+                 is palw_bond_maturity's, and it has none of its own",
+            ));
+        };
+        if fence.daa_score() >= maturity.activation.daa_score() {
+            return Err(Invalid(
+                "palw_bond_maturity_early is armed at or past palw_bond_maturity's own height: it brings nothing \
+                 forward, and at the same height a second fence is invisible to the fork id",
+            ));
+        }
+        let genesis = self.genesis.daa_score;
+        if genesis != 0 && fence.daa_score() < genesis.saturating_add(maturity.window_daa) {
+            return Err(Invalid(
+                "palw_bond_maturity_early is armed inside its window on a genesis above DAA 0: the genesis bonds \
+                 register at the genesis DAA, the saturating floor stays below it, and no panel could be drawn",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane maturity -------------------------------------------------------------------
+
     pub fn set_palw_short_challenge_window(&mut self, at: Option<ForkActivation>) {
         self.palw_short_challenge_window = at;
         let from_daa = at.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
@@ -6814,6 +6949,8 @@ impl Params {
             palw_bootstrap_activation,
             palw_unavailable_abstains,
             palw_bond_maturity,
+            // Lane maturity (post-launch, 2026-09-26).
+            palw_bond_maturity_early,
             palw_frontier_provenance,
             palw_heartbeat,
             palw_attempt_work,
@@ -6924,6 +7061,9 @@ impl Params {
             ("palw_bootstrap_activation", *palw_bootstrap_activation),
             ("palw_unavailable_abstains", *palw_unavailable_abstains),
             ("palw_bond_maturity", palw_bond_maturity.map(|f| f.activation)),
+            // Lane maturity (post-launch, 2026-09-26): a top-level fence an un-upgraded peer does not
+            // implement, so it is on the schedule and gates the fork id like every other.
+            ("palw_bond_maturity_early", *palw_bond_maturity_early),
             ("palw_frontier_provenance", *palw_frontier_provenance),
             ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
             ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
@@ -7101,6 +7241,12 @@ impl Params {
         if let Some(maturity) = self.palw_bond_maturity {
             h.write(b"palw_bond_maturity_window");
             h.write(maturity.window_daa.to_le_bytes());
+        }
+        // Lane maturity (post-launch, 2026-09-26), NAMED and Some-only: it changes which bonds a claim
+        // anchored past it may seat, so an operator reading the schedule must see which fence it is.
+        if let Some(activation) = self.palw_bond_maturity_early {
+            h.write(b"palw_bond_maturity_early");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // **ADR-0073 SA-1's width rides with its fence here, and only here** — same rule, same
         // reason as D1's window directly above. `k` must never reach `for_each_fence` (a visited
@@ -7517,6 +7663,8 @@ impl Params {
             palw_bootstrap_activation,
             palw_unavailable_abstains,
             palw_bond_maturity,
+            // Lane maturity (post-launch, 2026-09-26).
+            palw_bond_maturity_early,
             palw_frontier_provenance,
             palw_heartbeat,
             palw_attempt_work,
@@ -7690,6 +7838,12 @@ impl Params {
                 absent = u64::MAX;
                 visit(&mut absent);
             }
+        }
+        // Lane maturity (post-launch, 2026-09-26): SOME-ONLY — an absent fence visits nothing, so a
+        // build carrying the field fingerprints as one without it; its `Some(never())` collapses in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_bond_maturity_early.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0065 D2. A pure fence with no payload, so visiting it is safe.
         match palw_frontier_provenance.as_mut() {
@@ -8444,6 +8598,8 @@ impl Params {
             palw_bootstrap_activation,
             palw_unavailable_abstains,
             palw_bond_maturity,
+            // Lane maturity (post-launch, 2026-09-26).
+            palw_bond_maturity_early,
             palw_frontier_provenance,
             palw_heartbeat,
             palw_attempt_work,
@@ -8668,6 +8824,13 @@ impl Params {
             h.write(b"palw_bond_maturity");
             h.write(maturity.activation.daa_score().to_le_bytes());
             h.write(maturity.window_daa.to_le_bytes());
+        }
+        // Lane maturity (post-launch, 2026-09-26), Some-only (and collapsed from `Some(never())` for
+        // the identity), so a build that leaves it dormant fingerprints byte-identically to one
+        // without the field. No companion value: the window is `palw_bond_maturity`'s, written above.
+        if let Some(activation) = palw_bond_maturity_early {
+            h.write(b"palw_bond_maturity_early");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0065 D2, Some-only like its siblings.
         if let Some(activation) = palw_frontier_provenance {
@@ -9557,6 +9720,9 @@ impl Params {
             palw_bootstrap_activation: self.palw_bootstrap_activation,
             palw_unavailable_abstains: self.palw_unavailable_abstains,
             palw_bond_maturity: self.palw_bond_maturity,
+            // Lane maturity (post-launch, 2026-09-26): CARRIED beside `palw_bond_maturity`, whose window
+            // it reads — an override that dropped the prerequisite then fails `validate_palw_v2` by name.
+            palw_bond_maturity_early: self.palw_bond_maturity_early,
             palw_frontier_provenance: self.palw_frontier_provenance,
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
@@ -10598,6 +10764,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_bond_maturity_early: None,
     palw_frontier_provenance: None,
     palw_heartbeat: None,
     palw_attempt_work: None,
@@ -10823,6 +10990,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_bond_maturity_early: None,
     palw_frontier_provenance: None,
     palw_heartbeat: None,
     palw_attempt_work: None,
@@ -11030,6 +11198,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_bond_maturity_early: None,
     palw_frontier_provenance: None,
     palw_heartbeat: None,
     palw_attempt_work: None,
@@ -17382,6 +17551,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_bond_maturity_early: None,
     palw_frontier_provenance: None,
     // **ADR-0068 Phase 1, armed on the drill network and nowhere else.** Devnet is the network
     // these fences exist to be drilled on: the heartbeat lane (fixed 2^24-hash price, width-bounded
