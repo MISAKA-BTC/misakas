@@ -445,6 +445,8 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::NotReplayBacked => "not_replay_backed",
                 // ADR-0152 F2 residual: a court default, past `palw_offence_attribution`.
                 R::CourtDefault => "court_default",
+                // ADR-0152 §4-ter (F3, decision (B)): a held dissection's verdict, past `palw_offence_attribution`.
+                R::CourtHeldVerdict => "court_held_verdict",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }

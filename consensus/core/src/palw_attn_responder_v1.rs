@@ -395,3 +395,306 @@ impl PalwAttnSiteEvidenceV1 {
         })
     }
 }
+
+// =================================================================================================
+// ADR-0152 §4-ter (A-held) — the held site's evidence and the anchor's slice sub-roots
+// =================================================================================================
+
+/// **What the accused's held root claim put on the chain** (`CourtAttnRootClaimedHeld`, tag 57):
+/// the binding, the committed output tile at the narrowed leaf, the anchor checkpoint the site's
+/// bottom reads, and every slice sub-root of the anchor's state — the fold refused the object
+/// unless those root to the anchor, so each is the accused's own. What a challenger opens a bottom
+/// against when the accused's execution followed its lie (4-ter F9).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwAttnHeldFilingV1 {
+    pub binding: crate::palw_step_leg::PalwStepBindingV2,
+    pub out_tile: PalwAttnRowOpeningV1,
+    pub anchor: PalwAttnCheckpointAnchorV1,
+    pub slice_sub_roots: Vec<Hash64>,
+}
+
+impl PalwAttnHeldFilingV1 {
+    /// The filing a held root claim carries, and the session it was filed in; `None` for any other
+    /// object.
+    pub fn from_object_v1(object: &crate::palw_state_v2::PalwConsensusObjectV2) -> Option<(Hash64, Self)> {
+        match object {
+            crate::palw_state_v2::PalwConsensusObjectV2::CourtAttnRootClaimedHeld {
+                session_id,
+                binding,
+                out_tile,
+                anchor,
+                slice_sub_roots,
+                ..
+            } => Some((
+                *session_id,
+                Self {
+                    binding: (**binding).clone(),
+                    out_tile: out_tile.clone(),
+                    anchor: (**anchor).clone(),
+                    slice_sub_roots: slice_sub_roots.clone(),
+                },
+            )),
+            _ => None,
+        }
+    }
+
+    /// **The held filing `object` carries for `session_id`, checked the way the fold checked it —
+    /// for a PARTY reading root claims back off the chain** (the feat/t12-aheld-node review, HIGH).
+    ///
+    /// A walk of the accepted lifecycle objects returns every object an accepted carrier held,
+    /// including the ones the fold REFUSED: a liar can put a held root claim with one sub-root
+    /// swapped on the chain before its real one — the fold drops it (`HeldSubRootsDoNotRoot`), its
+    /// carrier stays accepted — and a challenger that took the first object naming the session
+    /// would build its bottom against a top path no anchor has. So the reader applies the fold's own
+    /// checks of the held arm, in its order, with nothing but chain facts the party already holds —
+    /// the claim's execution root and class, the class's artifact root, the narrowed leaf and the
+    /// court's opening cap — and keeps only a filing that passes all of them:
+    ///
+    /// 1. the object is a held root claim for `session_id`;
+    /// 2. its binding is the claim's (the registered class's profile, the claim's execution root),
+    ///    registers the held map, and counts its leaves canonically (C-01);
+    /// 3. its output tile is the narrowed leaf;
+    /// 4. its operand openings prove against `artifact_root`, and the site derives from them — which
+    ///    re-derives the execution root from the binding's parts (`verify_binding_v1`);
+    /// 5. the anchor is the site's own checkpoint, opened against the claim's checkpoint leg
+    ///    (`palw_attn_anchor_is_the_sites_v1`);
+    /// 6. the sub-roots are the anchor's: their count is the held layout's slice count, and they fold
+    ///    through the top tree to the anchor's committed state root (H2/H3,
+    ///    `palw_state_top_root_from_sub_roots_v4`);
+    /// 7. the output tile opens against the binding's step root.
+    ///
+    /// `Err` names the first check that refused. Any filing that passes is the accused's own
+    /// commitments (each field is pinned to a root the claim committed), so which passing object a
+    /// party reads does not matter; the fold remains the only judge of which one opened the phase.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_object_checked_v1(
+        object: &crate::palw_state_v2::PalwConsensusObjectV2,
+        session_id: &Hash64,
+        claim_execution_root: Hash64,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        narrowed: u64,
+        opening_cap: u64,
+    ) -> Result<Self, String> {
+        let crate::palw_state_v2::PalwConsensusObjectV2::CourtAttnRootClaimedHeld {
+            session_id: filed,
+            binding,
+            out_tile,
+            anchor,
+            slice_sub_roots,
+            operand_openings,
+            ..
+        } = object
+        else {
+            return Err("not a held root claim".to_string());
+        };
+        if filed != session_id {
+            return Err("a held root claim for another session".to_string());
+        }
+        if binding.shape_profile.shape_profile_id() != class_id {
+            return Err("the binding's profile is not the claim's class".to_string());
+        }
+        if binding.committed_execution_root != claim_execution_root {
+            return Err("the binding is not the claim's execution".to_string());
+        }
+        if !crate::palw_state_chunk_map::palw_map_is_held_v4(&binding.shape_profile.state_chunk_map_id) {
+            return Err("the binding does not register the held map".to_string());
+        }
+        match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count) {
+            Ok(count) if count == binding.step_leaf_count => {}
+            _ => return Err("the binding's step_leaf_count is not canonical (C-01)".to_string()),
+        }
+        if out_tile.opening.leaf_index != narrowed {
+            return Err("the output tile is not the narrowed leaf".to_string());
+        }
+        let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, artifact_root)
+            .map_err(|e| format!("the operand openings: {e}"))?;
+        let site = crate::palw_court_v2::palw_attn_dispute_site_unpinned_v3(binding, &operands, narrowed, Some(anchor), opening_cap)
+            .map_err(|e| format!("the site: {e}"))?;
+        crate::palw_attn_court_v1::palw_attn_anchor_is_the_sites_v1(anchor, &site.binding, &site.site)
+            .map_err(|e| format!("the anchor is not the site's: {e}"))?;
+        let layout = crate::palw_state_chunk_map::palw_state_layout_v4(&binding.shape_profile, site.site.anchor_positions)
+            .map_err(|e| format!("the anchor's held layout: {e:?}"))?;
+        if slice_sub_roots.len() != layout.slice_count() as usize {
+            return Err(format!("{} sub-roots for {} slices (H2)", slice_sub_roots.len(), layout.slice_count()));
+        }
+        let rooted = crate::palw_state_chunk_map::palw_state_top_root_from_sub_roots_v4(&layout, slice_sub_roots)
+            .map_err(|e| format!("the sub-roots' top tree: {e:?}"))?;
+        if rooted != anchor.leaf.state_chunks_root {
+            return Err("the filed sub-roots do not root to the anchor's committed state (H3, HeldSubRootsDoNotRoot)".to_string());
+        }
+        crate::palw_attn_court_v1::palw_attn_opened_lanes_v1(out_tile, &site.binding, site.head_lanes.2 as usize)
+            .map_err(|e| format!("the output tile does not open: {e}"))?;
+        Ok(Self {
+            binding: (**binding).clone(),
+            out_tile: out_tile.clone(),
+            anchor: (**anchor).clone(),
+            slice_sub_roots: slice_sub_roots.clone(),
+        })
+    }
+}
+
+/// **A held site's evidence, built by a windowed builder** (ADR-0152 §4-ter N1/N2): the court
+/// kernels' evidence ([`PalwAttnSiteEvidenceV1`] — the site's inputs, the opened out tile and query
+/// row, the operand openings, and the anchor with every chunk of the state THIS party holds at it),
+/// beside the anchor's slice sub-roots the bottom's top path is built from.
+///
+/// For the RESPONDER both are its own: its committed state, and the sub-roots its held root claim
+/// files. For a CHALLENGER the chunks are its own honest state — slice `(K|V, ℓ)` is before the lie
+/// in any execution, so its bytes are the accused's — while the anchor, the out tile and the
+/// sub-roots are the accused's filing: the block path of a chunk is the challenger's, the top path
+/// the accused's, and only together do they reach the anchor a downstream-consistent forger
+/// committed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwAttnHeldEvidenceV1 {
+    pub evidence: PalwAttnSiteEvidenceV1,
+    pub slice_sub_roots: Vec<Hash64>,
+}
+
+/// **Where a held bottom cannot be built from the filing** (4-ter.3 step 6): the challenger's own
+/// sub-root of slice `slice` — layer `layer`'s K or V — differs from the one the accused filed, so
+/// the accused's checkpoint disagrees with rows that precede its lie. The route there is the
+/// held-DA `StateChunk` demand and then `CheckpointAccused` (or a bottom on the disclosed bytes),
+/// never this bottom.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwAttnHeldFallbackV1 {
+    pub slice: u32,
+    pub kind: PalwStateChunkKindV1,
+    pub layer: u16,
+    pub own: Hash64,
+    pub filed: Hash64,
+}
+
+impl PalwAttnHeldEvidenceV1 {
+    /// **The site, as the court derives it from this evidence, its rows opened under
+    /// `opening_cap`** — the claim's own ladder under the held regime
+    /// ([`crate::palw_court_v2::palw_attn_opening_cap_v1`]); a held job is past the structural
+    /// `2^22` [`PalwAttnSiteEvidenceV1::site_v1`] opens under. With the anchor for the bottom, without
+    /// it for the claims.
+    pub fn site_v1(
+        &self,
+        artifact_root: Hash64,
+        with_anchor: bool,
+        opening_cap: u64,
+    ) -> Result<PalwAttnDisputeSiteV2, PalwAttnResponderError> {
+        let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&self.evidence.operand_openings, artifact_root)
+            .map_err(|e| PalwAttnResponderError::Site(e.to_string()))?;
+        let anchor = if with_anchor { self.evidence.anchor.as_ref().map(|a| &a.anchor) } else { None };
+        crate::palw_court_v2::palw_attn_dispute_site_unpinned_v3(
+            &self.evidence.binding,
+            &operands,
+            self.evidence.narrowed,
+            anchor,
+            opening_cap,
+        )
+        .map_err(|e| PalwAttnResponderError::Site(e.to_string()))
+    }
+
+    fn anchor_evidence(&self) -> Result<&PalwAttnAnchorEvidenceV1, PalwAttnResponderError> {
+        self.evidence.anchor.as_ref().ok_or(PalwAttnResponderError::EvidenceMissing("checkpoint anchor"))
+    }
+
+    fn layout(&self, site: &PalwAttnDisputeSiteV2) -> Result<crate::palw_state_chunk_map::PalwStateLayoutV4, PalwAttnResponderError> {
+        crate::palw_state_chunk_map::palw_state_layout_v4(&self.evidence.binding.shape_profile, site.site.anchor_positions)
+            .map_err(|_| PalwAttnResponderError::EvidenceMissing("the anchor's held layout"))
+    }
+
+    /// **The held root claim this evidence files** (`CourtAttnRootClaimedHeld`, unsigned — the
+    /// responder signs `palw_attn_root_claim_message_v1` over its root as for the other two forms).
+    /// `site` is [`Self::site_v1`]'s, with or without the anchor (the root does not read it).
+    pub fn root_claim_held_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        session_id: Hash64,
+        arity: u8,
+    ) -> Result<crate::palw_state_v2::PalwConsensusObjectV2, PalwAttnResponderError> {
+        let root = self.evidence.root_claim_v1(site)?;
+        Ok(crate::palw_state_v2::PalwConsensusObjectV2::CourtAttnRootClaimedHeld {
+            session_id,
+            root,
+            arity,
+            binding: Box::new(self.evidence.binding.clone()),
+            out_tile: self.evidence.out_tile.clone(),
+            anchor: Box::new(self.anchor_evidence()?.anchor.clone()),
+            slice_sub_roots: self.slice_sub_roots.clone(),
+            operand_openings: self.evidence.operand_openings.clone(),
+            signature: Vec::new(),
+        })
+    }
+
+    pub fn round_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        phase: &PalwAttnDissectPhaseV1,
+    ) -> Result<PalwAttnDissectRoundV1, PalwAttnResponderError> {
+        self.evidence.round_v1(site, phase)
+    }
+
+    pub fn divergent_child_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        phase: &PalwAttnDissectPhaseV1,
+    ) -> Result<Option<u8>, PalwAttnResponderError> {
+        self.evidence.divergent_child_v1(site, phase)
+    }
+
+    /// **The 4-ter.3 step 6 case, named**: a slice of layer `site`'s own layer whose sub-root this
+    /// party computes differently from the one it opens against. `None` when the bottom can be built.
+    /// `site` must be derived with the anchor (`site_v1(root, true)`).
+    pub fn fallback_v1(&self, site: &PalwAttnDisputeSiteV2) -> Result<Option<PalwAttnHeldFallbackV1>, PalwAttnResponderError> {
+        let layout = self.layout(site)?;
+        let own = crate::palw_state_chunk_map::palw_state_slice_sub_roots_v4(&layout, &self.anchor_evidence()?.chunk_hashes)
+            .map_err(|_| PalwAttnResponderError::EvidenceMissing("the anchor's own sub-roots"))?;
+        if own.len() != self.slice_sub_roots.len() {
+            return Err(PalwAttnResponderError::EvidenceMissing("a sub-root per slice"));
+        }
+        for kind in [PalwStateChunkKindV1::Key, PalwStateChunkKindV1::Value] {
+            let (flat, _) = integer_kv_state_locate_v1(&layout.attn, kind, site.site.attn_layer, 0)
+                .ok_or(PalwAttnResponderError::EvidenceMissing("the layer's slice in the anchor's layout"))?;
+            let slice = layout.address(flat).ok_or(PalwAttnResponderError::EvidenceMissing("an address"))?.slice;
+            if own[slice as usize] != self.slice_sub_roots[slice as usize] {
+                return Ok(Some(PalwAttnHeldFallbackV1 {
+                    slice,
+                    kind,
+                    layer: site.site.attn_layer,
+                    own: own[slice as usize],
+                    filed: self.slice_sub_roots[slice as usize],
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// **The bottom of a narrowed held dissection**: [`PalwAttnSiteEvidenceV1::bottom_v1`] with each
+    /// chunk's path cut at its slice — the block path from this party's own leaves, the top path
+    /// from `slice_sub_roots`. For the responder the two halves are one tree; for a challenger the
+    /// top half is the accused's, which is what reaches the anchor a consistent forger committed.
+    pub fn bottom_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        phase: &PalwAttnDissectPhaseV1,
+    ) -> Result<PalwAttnDissectBottomV1, PalwAttnResponderError> {
+        let mut bottom = self.evidence.bottom_v1(site, phase)?;
+        let layout = self.layout(site)?;
+        let leaves = &self.anchor_evidence()?.chunk_hashes;
+        for tile in [&mut bottom.k, &mut bottom.v] {
+            if let PalwAttnTileEvidenceV1::Checkpoint { chunk, .. } = tile {
+                let address = layout
+                    .address(u64::from(chunk.chunk_index))
+                    .ok_or(PalwAttnResponderError::EvidenceMissing("the chunk's address"))?;
+                let block_hashes: Vec<Hash64> = (0..address.block_count)
+                    .map(|b| layout.flat_index(address.slice, b).and_then(|flat| leaves.get(flat as usize).copied()))
+                    .collect::<Option<_>>()
+                    .ok_or(PalwAttnResponderError::EvidenceMissing("the slice's own leaves"))?;
+                let mut siblings = crate::palw_step_leg::state_slice_path_v4(&block_hashes, address.block as usize)
+                    .map_err(|_| PalwAttnResponderError::EvidenceMissing("the chunk's block path"))?;
+                siblings.extend(
+                    crate::palw_state_chunk_map::palw_state_top_path_from_sub_roots_v4(&layout, &self.slice_sub_roots, address.slice)
+                        .map_err(|_| PalwAttnResponderError::EvidenceMissing("the filed top path"))?,
+                );
+                chunk.siblings = siblings;
+            }
+        }
+        Ok(bottom)
+    }
+}

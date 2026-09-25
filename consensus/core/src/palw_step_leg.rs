@@ -528,6 +528,206 @@ impl PalwStepPrefixTreeV1 {
     }
 }
 
+/// **ADR-0152 §4-ter N2: the accused's openings of leaves before `i`, from a STREAM of the prefix.**
+///
+/// [`PalwStepPrefixTreeV1`] builds these by holding every node of the prefix `[0, i]` — at an 8k
+/// held job's fused leaf that is ~10^8 leaves, 6.7 GB. This builds the same openings, and the same
+/// root, holding one frontier node per level and the few nodes a wanted path needs: the leaves
+/// `0..i` are pushed in order, each complete node at or before the prefix is formed exactly once,
+/// and only the nodes some wanted leaf's path — or the left half of `i`'s own path, checked against
+/// the accused's filed siblings — reads are kept. What is right of the prefix is `i`'s own filed
+/// path, as in the tree it replaces.
+///
+/// Every node a stream forms is a complete aligned node of the committed tree: a promoted (odd
+/// tail) node contains the tree's LAST leaf, which is never before `i`. [`Self::finish`] returns
+/// the root the prefix and the accused's path imply — the caller compares it with the committed
+/// one — and each wanted opening, exactly as [`step_opening_v1`] over the accused's whole leaf
+/// vector would build it.
+#[derive(Clone, Debug)]
+pub struct PalwStepPrefixStreamV1 {
+    leaf_count: u64,
+    last: PalwStepOpeningV1,
+    wanted: Vec<u64>,
+    /// `frontier[ℓ]`: the complete node at level `ℓ` still waiting for its right partner.
+    frontier: Vec<Option<Hash64>>,
+    /// The `(level, index)` nodes some path reads, and the ones formed so far.
+    need: std::collections::BTreeSet<(u32, u64)>,
+    kept: std::collections::BTreeMap<(u32, u64), Hash64>,
+    /// The wanted leaves' own hashes.
+    leaves: std::collections::BTreeMap<u64, Hash64>,
+    next: u64,
+}
+
+impl PalwStepPrefixStreamV1 {
+    /// A stream over the prefix before `last.leaf_index` of a tree of `leaf_count` leaves, that will
+    /// open every leaf of `wanted` (each before `last.leaf_index`).
+    pub fn new_capped_v1(
+        leaf_count: u64,
+        last: &PalwStepOpeningV1,
+        wanted: &[u64],
+        max_step_leaf_count: u64,
+    ) -> Result<Self, PalwStepLegError> {
+        if leaf_count == 0 || leaf_count > max_step_leaf_count {
+            return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+        }
+        let i = last.leaf_index;
+        if i >= leaf_count {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index: i, count: leaf_count });
+        }
+        let cap = step_leg_max_opening_siblings_v1(max_step_leaf_count);
+        if last.siblings.len() > cap {
+            return Err(PalwStepLegError::OpeningTooDeep { got: last.siblings.len(), max: cap });
+        }
+        let mut need = std::collections::BTreeSet::new();
+        // The left half of `i`'s path: every left sibling the accused filed is checked against the
+        // prefix's own node.
+        let (mut at, mut width, mut level) = (i, leaf_count, 0u32);
+        while width > 1 {
+            let promoted = !width.is_multiple_of(2) && at == width - 1;
+            if !promoted && !at.is_multiple_of(2) {
+                need.insert((level, at - 1));
+            }
+            at /= 2;
+            width = width.div_ceil(2);
+            level += 1;
+        }
+        for &q in wanted {
+            if q >= i {
+                return Err(PalwStepLegError::LeafIndexOutOfRange { index: q, count: i });
+            }
+            let (mut at, mut width, mut level) = (q, leaf_count, 0u32);
+            while width > 1 {
+                let promoted = !width.is_multiple_of(2) && at == width - 1;
+                if !promoted {
+                    let partner = at ^ 1;
+                    // A partner whose leaves all precede `i` is formed by the stream; one that holds
+                    // `i` or lies past it is `i`'s ancestor or `i`'s filed right sibling.
+                    if partner.saturating_add(1).saturating_mul(1u64 << level) <= i {
+                        need.insert((level, partner));
+                    }
+                }
+                at /= 2;
+                width = width.div_ceil(2);
+                level += 1;
+            }
+        }
+        Ok(Self {
+            leaf_count,
+            last: last.clone(),
+            wanted: wanted.to_vec(),
+            frontier: Vec::new(),
+            need,
+            kept: std::collections::BTreeMap::new(),
+            leaves: std::collections::BTreeMap::new(),
+            next: 0,
+        })
+    }
+
+    /// **What the stream holds**, in hashes: the frontier, the kept nodes and the wanted leaves —
+    /// `O(depth × (wanted + 1))`, never the prefix's length.
+    pub fn held_hashes_v1(&self) -> usize {
+        self.frontier.len() + self.kept.len() + self.leaves.len()
+    }
+
+    /// Push the next leaf's hash (leaves `0, 1, …` in order, up to but not including `i`).
+    pub fn push(&mut self, leaf_hash: Hash64) -> Result<(), PalwStepLegError> {
+        let index = self.next;
+        if index >= self.last.leaf_index {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index, count: self.last.leaf_index });
+        }
+        if self.wanted.contains(&index) {
+            self.leaves.insert(index, leaf_hash);
+        }
+        self.next += 1;
+        let (mut node, mut at, mut level) = (step_merkle_leaf(index, &leaf_hash), index, 0u32);
+        loop {
+            if self.need.contains(&(level, at)) {
+                self.kept.insert((level, at), node);
+            }
+            if self.frontier.len() <= level as usize {
+                self.frontier.resize(level as usize + 1, None);
+            }
+            if at.is_multiple_of(2) {
+                self.frontier[level as usize] = Some(node);
+                return Ok(());
+            }
+            let left = self.frontier[level as usize].take().ok_or(PalwStepLegError::OpeningPathTooShort)?;
+            node = keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), node.as_byte_slice()]);
+            at /= 2;
+            level += 1;
+        }
+    }
+
+    /// **The root the prefix and the accused's path imply, and the wanted openings.** Refused when
+    /// the prefix is not exactly `0..i`, when a left sibling the accused filed is not the prefix's
+    /// own node, or when the path is not the tree's shape.
+    pub fn finish(self) -> Result<(Hash64, Vec<PalwStepOpeningV1>), PalwStepLegError> {
+        let i = self.last.leaf_index;
+        if self.next != i {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index: self.next, count: i });
+        }
+        // `i`'s ancestors, bottom-up, and the accused's right siblings along the way.
+        let mut ancestors = Vec::new();
+        let mut outside: Vec<Option<Hash64>> = Vec::new();
+        let mut node = step_merkle_leaf(i, &self.last.leaf_hash);
+        let (mut at, mut width, mut level) = (i, self.leaf_count, 0u32);
+        let mut path = self.last.siblings.iter();
+        while width > 1 {
+            ancestors.push(node);
+            let promoted = !width.is_multiple_of(2) && at == width - 1;
+            let mut right = None;
+            if !promoted {
+                let sibling = *path.next().ok_or(PalwStepLegError::OpeningPathTooShort)?;
+                if at.is_multiple_of(2) {
+                    right = Some(sibling);
+                    node = keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[node.as_byte_slice(), sibling.as_byte_slice()]);
+                } else {
+                    if self.kept.get(&(level, at - 1)) != Some(&sibling) {
+                        return Err(PalwStepLegError::PrefixIsNotTheCommittedOne { level });
+                    }
+                    node = keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[sibling.as_byte_slice(), node.as_byte_slice()]);
+                }
+            }
+            outside.push(right);
+            at /= 2;
+            width = width.div_ceil(2);
+            level += 1;
+        }
+        if path.next().is_some() {
+            return Err(PalwStepLegError::OpeningPathTooLong { extra: 1 });
+        }
+        let root = node;
+        let mut openings = Vec::with_capacity(self.wanted.len());
+        for &q in &self.wanted {
+            let leaf_hash = *self.leaves.get(&q).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: q, count: i })?;
+            let mut siblings = Vec::new();
+            let (mut at, mut width, mut level) = (q, self.leaf_count, 0u32);
+            while width > 1 {
+                let promoted = !width.is_multiple_of(2) && at == width - 1;
+                if !promoted {
+                    let partner = at ^ 1;
+                    let i_at = i >> level;
+                    let sibling = if let Some(kept) = self.kept.get(&(level, partner)) {
+                        *kept
+                    } else if partner == i_at {
+                        ancestors[level as usize]
+                    } else if at == i_at {
+                        outside[level as usize].ok_or(PalwStepLegError::OpeningPathTooShort)?
+                    } else {
+                        return Err(PalwStepLegError::OpeningPathTooShort);
+                    };
+                    siblings.push(sibling);
+                }
+                at /= 2;
+                width = width.div_ceil(2);
+                level += 1;
+            }
+            openings.push(PalwStepOpeningV1 { leaf_index: q, leaf_hash, siblings });
+        }
+        Ok((root, openings))
+    }
+}
+
 /// **A contiguous RANGE of leaves, opened as one subtree** — the carrier form that makes a court
 /// evidence row cost one path instead of one path per leaf.
 ///
@@ -3637,6 +3837,82 @@ mod prefix_tree_tests {
                         ),
                     }
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod prefix_stream_tests {
+    use super::*;
+
+    fn leaf(tag: u64, j: u64) -> Hash64 {
+        Hash64::from_u64_word(tag.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ j)
+    }
+
+    /// **ADR-0152 §4-ter N2: the stream is the prefix tree, holding a frontier.** Every leaf count to
+    /// 48, every `i`, wanted sets of every leaf before `i` one at a time and all at once: the root is
+    /// the accused's, every opening is the whole tree's, and what the stream held never grew with
+    /// the prefix.
+    #[test]
+    fn the_prefix_stream_roots_and_opens_exactly_as_the_prefix_tree() {
+        for n in 1..=48u64 {
+            for i in 0..n {
+                let accused: Vec<Hash64> = (0..n).map(|j| if j <= i { leaf(1, j) } else { leaf(2, j) }).collect();
+                let root = step_merkle_root_v1(&accused).expect("a tree");
+                let last = step_opening_v1(&accused, i).expect("the accused's opening of i");
+                let depth = 64 - (n - 1).leading_zeros() as usize;
+                let everything: Vec<u64> = (0..i).collect();
+                let mut sets: Vec<Vec<u64>> = (0..i).map(|j| vec![j]).collect();
+                sets.push(everything);
+                sets.push(Vec::new());
+                for wanted in sets {
+                    let mut stream = PalwStepPrefixStreamV1::new_capped_v1(n, &last, &wanted, PALW_STEP_LEG_MAX_LEAVES)
+                        .unwrap_or_else(|e| panic!("n {n}, i {i}: {e}"));
+                    let mut most = 0;
+                    for j in 0..i {
+                        stream.push(accused[j as usize]).expect("pushes");
+                        most = most.max(stream.held_hashes_v1());
+                    }
+                    assert!(most <= (depth + 1) * (wanted.len() + 2) + depth + 1, "n {n}, i {i}: held {most}");
+                    let (streamed_root, openings) = stream.finish().unwrap_or_else(|e| panic!("n {n}, i {i}: {e}"));
+                    assert_eq!(streamed_root, root, "n {n}, i {i}");
+                    for (q, opening) in wanted.iter().zip(&openings) {
+                        assert_eq!(opening, &step_opening_v1(&accused, *q).expect("the whole tree's"), "n {n}, i {i}, q {q}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// **A stream of a prefix that is not the accused's never yields the accused's root**, and one
+    /// pushed short, long, or asked for a leaf at or past `i` is refused.
+    #[test]
+    fn a_prefix_stream_that_is_not_the_committed_prefix_is_refused_or_roots_elsewhere() {
+        for n in 2..=24u64 {
+            for i in 1..n {
+                let accused: Vec<Hash64> = (0..n).map(|j| leaf(3, j)).collect();
+                let root = step_merkle_root_v1(&accused).expect("a tree");
+                let last = step_opening_v1(&accused, i).expect("the accused's opening of i");
+                for m in 0..i {
+                    let mut stream = PalwStepPrefixStreamV1::new_capped_v1(n, &last, &[], PALW_STEP_LEG_MAX_LEAVES).expect("opens");
+                    for j in 0..i {
+                        stream.push(if j == m { leaf(4, m) } else { accused[j as usize] }).expect("pushes");
+                    }
+                    match stream.finish() {
+                        Err(PalwStepLegError::PrefixIsNotTheCommittedOne { .. }) => {}
+                        Err(other) => panic!("n {n}, i {i}, m {m}: refused for the wrong reason: {other}"),
+                        Ok((other, _)) => assert_ne!(other, root, "n {n}, i {i}, m {m}"),
+                    }
+                }
+                let short = PalwStepPrefixStreamV1::new_capped_v1(n, &last, &[], PALW_STEP_LEG_MAX_LEAVES).expect("opens");
+                assert!(short.finish().is_err(), "n {n}, i {i}: a prefix pushed short is refused");
+                let mut long = PalwStepPrefixStreamV1::new_capped_v1(n, &last, &[], PALW_STEP_LEG_MAX_LEAVES).expect("opens");
+                for j in 0..i {
+                    long.push(accused[j as usize]).expect("pushes");
+                }
+                assert!(long.push(accused[i as usize]).is_err(), "n {n}, i {i}: the disputed leaf is the accused's, never pushed");
+                assert!(PalwStepPrefixStreamV1::new_capped_v1(n, &last, &[i], PALW_STEP_LEG_MAX_LEAVES).is_err(), "i is not before i");
             }
         }
     }

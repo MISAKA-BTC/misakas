@@ -132,6 +132,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // have one.
         PalwConsensusObjectV2::CourtAttnRootClaimed { signature, .. }
         | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { signature, .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { signature, .. }
         | PalwConsensusObjectV2::CourtAttnDissected { signature, .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { signature, .. }
             if !signature.is_empty() =>
@@ -140,6 +141,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         }
         PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
         | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. }
         | PalwConsensusObjectV2::CourtAttnDissected { .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { .. } => Err(
             "a fused-attention dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves",
@@ -753,7 +755,7 @@ pub fn validate_palw_lifecycle_tx(payload: &[u8], tolerate_undecodable: bool) ->
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     /// **…except no registrant can build one, and the test above did not notice.**
     ///
     /// `a_bond_registration_that_locks_its_collateral_rides` constructs the transaction with an
@@ -1445,7 +1447,7 @@ mod tests {
         assert_eq!(borsh::to_vec(&decoded).unwrap(), payload, "and it re-encodes to the chain's bytes");
     }
 
-    fn checkpoint_accusation() -> crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
+    pub(crate) fn checkpoint_accusation() -> crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
         crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
             version: 1,
             claim: h64(15),
@@ -1474,7 +1476,7 @@ mod tests {
         }
     }
 
-    fn shard_accusation() -> crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+    pub(crate) fn shard_accusation() -> crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
         let (binding, _, _, _) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
         crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
             version: 1,
@@ -1690,6 +1692,9 @@ mod tests {
                 },
             ),
             (56, PalwConsensusObjectV2::PanelUnavailableQuorum { claim: h64(22), receipts: Vec::new() }),
+            // 57 is ADR-0152 §4-ter's `CourtAttnRootClaimedHeld`, pinned beside the held drill that
+            // builds one in palw_state_v2's tests (`t_a2_the_held_root_claim_opens_the_phase_…`), as
+            // 42 is beside its own.
         ]);
         for (discriminant, object) in pinned {
             assert_eq!(borsh::to_vec(&object).unwrap()[0], discriminant, "{object:?}");

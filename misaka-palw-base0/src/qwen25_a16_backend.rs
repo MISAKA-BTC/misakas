@@ -248,7 +248,18 @@ pub fn a16_execute_in_storage_v1(
     drill_fault_leaf: Option<u64>,
     kv_storage: crate::engine_a16::KvStorageProfileV1,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
-    a16_execute_streaming_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, capture_kind, on_token, drill_fault_leaf, kv_storage)
+    a16_execute_streaming_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        max_step_leaf_count,
+        capture_kind,
+        on_token,
+        drill_fault_leaf.map(A16DrillLieV1::tile_v1),
+        kv_storage,
+    )
 }
 
 /// **The same run, FOLDED** (ADR-0082 Decision 7) — the free-prompt lane's capture.
@@ -308,13 +319,116 @@ pub fn a16_execute_free_prompt_streaming_with_drill_fault_v1(
         max_step_leaf_count,
         crate::legs::Base0CaptureKindV1::Fold,
         on_token,
-        Some(leaf),
+        Some(A16DrillLieV1::tile_v1(leaf)),
         crate::engine_a16::KV_STORAGE_SHIPPED_V1,
     )
 }
 
+/// **DRILL ONLY: the lie as a run and every replay of its job apply it** (ADR-0152 §4-ter N5): a
+/// committed tile moved — at the row lane `lane` (`None`: the tile's first) by `delta`, the
+/// execution honest — or the engine's fused attention output moved and FOLLOWED
+/// ([`crate::engine_a16::A16DrillAttnLieV1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum A16DrillLieV1 {
+    Tile { leaf: u64, lane: Option<usize>, delta: i32 },
+    Attn(crate::engine_a16::A16DrillAttnLieV1),
+}
+
+impl A16DrillLieV1 {
+    /// The shipped drill's lie: the tile at `leaf`, its first lane, by one.
+    fn tile_v1(leaf: u64) -> Self {
+        Self::Tile { leaf, lane: None, delta: 1 }
+    }
+
+    /// The trait's named fault under `ctx`: where its tile lies, or where its engine does.
+    fn of_fault_v1(
+        fault: &kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1,
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+    ) -> Result<Self, String> {
+        use kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1;
+        use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepTableV1};
+        match *fault {
+            PalwFreePromptDrillFaultV1::Leaf { leaf } => Ok(Self::tile_v1(leaf)),
+            PalwFreePromptDrillFaultV1::AttnOutput { call, layer, position, head, lane, delta, follow } => {
+                let fused = profile
+                    .attn_nodes
+                    .iter()
+                    .position(|n| n.op_kind == PalwStepOpKindV1::AttnFused)
+                    .ok_or("the class has no fused attention site")?;
+                let slot = profile
+                    .global_node_slot(PalwStepTableV1::Attn, layer, fused)
+                    .ok_or_else(|| format!("layer {layer} has no fused site"))?;
+                let (node, _) = profile.resolve_node_slot(slot).ok_or("the fused slot resolves to no node")?;
+                if head >= profile.attn_heads || u32::from(lane) >= profile.attn_head_dim {
+                    return Err(format!("head {head} lane {lane} is outside the fused row"));
+                }
+                let row_lane = usize::from(head) * profile.attn_head_dim as usize + usize::from(lane);
+                if follow {
+                    let absolute =
+                        if call == 0 { position as usize } else { ctx.declared_prefill_tokens as usize + call as usize - 1 };
+                    return Ok(Self::Attn(crate::engine_a16::A16DrillAttnLieV1 {
+                        layer: usize::from(layer),
+                        position: absolute,
+                        lane: row_lane,
+                        delta,
+                        cache: None,
+                    }));
+                }
+                let tile_len = node.tile_len.max(1) as usize;
+                let coord =
+                    PalwStepCoordinateV1 { call_index: call, node_slot: slot, position, tile_index: (row_lane / tile_len) as u32 };
+                let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(profile, ctx, &coord)
+                    .ok_or("the fused site's coordinate is not in this job")?;
+                Ok(Self::Tile { leaf, lane: Some(row_lane), delta })
+            }
+            // ADR-0152 §4-ter.3 step 6's forger: the cache holds the row moved, the step row honest; the
+            // engine follows it, so every replay and recompute of the job does too.
+            PalwFreePromptDrillFaultV1::CacheRow { call, layer, position, kind, lane, delta } => {
+                if kind > 1 {
+                    return Err(format!("cache kind {kind} is neither K (0) nor V (1)"));
+                }
+                if usize::from(layer) >= profile.layer_count as usize {
+                    return Err(format!("layer {layer} is outside the class"));
+                }
+                if u32::from(lane) >= u32::from(profile.attn_kv_heads) * profile.attn_head_dim {
+                    return Err(format!("lane {lane} is outside the cache row"));
+                }
+                let absolute = if call == 0 { position as usize } else { ctx.declared_prefill_tokens as usize + call as usize - 1 };
+                Ok(Self::Attn(crate::engine_a16::A16DrillAttnLieV1 {
+                    layer: usize::from(layer),
+                    position: absolute,
+                    lane: usize::from(lane),
+                    delta,
+                    cache: Some(kind),
+                }))
+            }
+        }
+    }
+
+    fn attn(&self) -> Option<crate::engine_a16::A16DrillAttnLieV1> {
+        match self {
+            Self::Attn(lie) => Some(*lie),
+            Self::Tile { .. } => None,
+        }
+    }
+}
+
+/// **A drill's moved code.** The shipped tile drill moves its lane by one, wrapping (`in_range =
+/// false`, byte for byte what it always did); a fused output's lie (ADR-0152 §4-ter N5) stays an A16
+/// code — the other way when `delta` would leave the range — so the forger it commits is one whose
+/// tile a root claim can finalize to, the dispute the drill exists to reach.
+fn a16_drill_moved_v1(value: i32, delta: i32, in_range: bool) -> i32 {
+    if !in_range {
+        return value.wrapping_add(delta);
+    }
+    let up = value.saturating_add(delta);
+    if (-32_767..=32_767).contains(&up) { up } else { value.saturating_sub(delta) }
+}
+
 /// Where a drill's lie at `leaf` lands: the call and position its tile is committed at, the row
-/// (table, layer, index within the table) it is cut from, and the lane that starts the tile.
+/// (table, layer, index within the table) it is cut from, the lane it moves, by how much, and whether
+/// the moved code stays an A16 code ([`a16_drill_moved_v1`]).
 struct A16DrillFaultSiteV1 {
     call: u32,
     position: u32,
@@ -322,6 +436,8 @@ struct A16DrillFaultSiteV1 {
     layer: u16,
     index: usize,
     lane: usize,
+    delta: i32,
+    in_range: bool,
 }
 
 impl A16DrillFaultSiteV1 {
@@ -354,7 +470,7 @@ impl A16DrillFaultSiteV1 {
             }
         };
         let lane = coord.tile_index as usize * node.tile_len.max(1) as usize;
-        Ok(Self { call: coord.call_index, position: coord.position, table, layer, index, lane })
+        Ok(Self { call: coord.call_index, position: coord.position, table, layer, index, lane, delta: 1, in_range: false })
     }
 
     /// Move the committed row the site names, when these are its call's rows.
@@ -367,7 +483,7 @@ impl A16DrillFaultSiteV1 {
             .find(|r| r.table == self.table && r.layer == self.layer && r.index == self.index)
             .ok_or_else(|| "the drill's fault lands on no committed row".to_string())?;
         let value = row.row.get_mut(self.lane).ok_or_else(|| "the drill's fault lands past its row".to_string())?;
-        *value = value.wrapping_add(1);
+        *value = a16_drill_moved_v1(*value, self.delta, self.in_range);
         Ok(())
     }
 }
@@ -384,7 +500,7 @@ fn a16_execute_streaming_v1(
     max_step_leaf_count: u64,
     capture_kind: crate::legs::Base0CaptureKindV1,
     on_token: &mut dyn FnMut(u32),
-    drill_fault_leaf: Option<u64>,
+    drill: Option<A16DrillLieV1>,
     kv_storage: crate::engine_a16::KvStorageProfileV1,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
@@ -402,7 +518,10 @@ fn a16_execute_streaming_v1(
         return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
     }
 
-    let engine = A16Engine::new(artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+    // DRILL ONLY (ADR-0152 §4-ter N5): an attention lie the run follows is the engine's own.
+    let engine = A16Engine::new(artifact)
+        .map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?
+        .with_drill_attn_lie_v1(drill.and_then(|lie| lie.attn()));
     // **ADR-0049 Decision F's obligation, before the first committed leaf.** Under a
     // registered-profile plan the correspondence is structural — the declaration IS the program —
     // and the probe would burn a forward pass re-proving a constructor invariant. Without one, the
@@ -439,10 +558,15 @@ fn a16_execute_streaming_v1(
 
     let leaf_count =
         kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
-    let fault = match drill_fault_leaf {
-        Some(leaf) if leaf < leaf_count => Some(A16DrillFaultSiteV1::of_leaf(profile, ctx, leaf)?),
-        Some(leaf) => return Err(format!("the drill's leaf {leaf} is outside the job's {leaf_count} leaves")),
-        None => None,
+    let fault = match drill {
+        Some(A16DrillLieV1::Tile { leaf, lane, delta }) if leaf < leaf_count => {
+            let site = A16DrillFaultSiteV1::of_leaf(profile, ctx, leaf)?;
+            Some(A16DrillFaultSiteV1 { lane: lane.unwrap_or(site.lane), delta, in_range: lane.is_some(), ..site })
+        }
+        Some(A16DrillLieV1::Tile { leaf, .. }) => {
+            return Err(format!("the drill's leaf {leaf} is outside the job's {leaf_count} leaves"));
+        }
+        Some(A16DrillLieV1::Attn(_)) | None => None,
     };
     let mut capture = crate::legs::Base0CaptureSinkV1::for_kind(capture_kind, profile, ctx, leaf_count, max_step_leaf_count)
         .map_err(|e| format!("{e:?}"))?;
@@ -753,7 +877,13 @@ pub struct Qwen25A16Backend {
     /// instance runs for that job's context, so the liar's openings, blocks and evidence are its lie
     /// (a fold keeps no tiles: what it serves it replays). Keyed by the job's context hash, so the
     /// same instance judges every other job honestly. `None` everywhere but a drill.
-    drill_fault: std::sync::Mutex<Option<(Hash64, u64)>>,
+    drill_fault: std::sync::Mutex<Option<(Hash64, A16DrillLieV1)>>,
+    /// **ADR-0152 §4-ter N4's selector** ([`Self::with_held_answerability_v1`]): whether the chain this
+    /// backend serves arms `palw_offence_attribution`. Past it
+    /// [`PalwExecutionBackendV1::supports_dissection`] asks the consensus predicate
+    /// (`palw_held_class_unanswerable_v1`, a pure function of the profile); `false` (every network
+    /// without the fence) keeps it byte for byte what it was.
+    held_answerability: bool,
     /// **The representation the cache is held in** (ADR-0151 follow-up): a node-local, named
     /// choice the resource profile prices and the telemetry reports. The same canonical execution
     /// commits the same rows and roots under every value — that is what makes it a runtime profile
@@ -850,6 +980,7 @@ impl Qwen25A16Backend {
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             drill_fault: std::sync::Mutex::new(None),
+            held_answerability: false,
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
@@ -959,9 +1090,24 @@ impl Qwen25A16Backend {
         crate::fp_interval::base0_materialize_cap_v1(self.network_ladder, Some(&self.profile))
     }
 
-    /// DRILL ONLY: the `(job context, leaf)` this instance's drill run lied at, if it ran one.
-    fn drill_fault_v1(&self) -> Option<(Hash64, u64)> {
+    /// DRILL ONLY: the job context this instance's drill run lied in, and the lie, if it ran one.
+    fn drill_fault_v1(&self) -> Option<(Hash64, A16DrillLieV1)> {
         *self.drill_fault.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// DRILL ONLY: the attention lie this instance's run of `ctx` followed, if it ran one — what
+    /// every recompute of that job's state must follow too, or its own checkpoints would not root.
+    fn drill_attn_for_v1(&self, ctx: &PalwJobContextV2) -> Option<crate::engine_a16::A16DrillAttnLieV1> {
+        self.drill_fault_v1().filter(|(context, _)| *context == ctx.context_hash()).and_then(|(_, lie)| lie.attn())
+    }
+
+    /// **ADR-0152 §4-ter N4: whether the chain this backend serves is past `palw_offence_attribution`**
+    /// — the node's `palw_offence_attribution_fence().is_some()`. Past it a held class answers a
+    /// dissection only where an honest party can ([`PalwExecutionBackendV1::supports_dissection`], the
+    /// predicate C1 and C5 read: the context bound, a recurrent layer, a compute turn past the cap).
+    pub fn with_held_answerability_v1(mut self, armed: bool) -> Self {
+        self.held_answerability = armed;
+        self
     }
 
     /// **A dense class's artifact must SAY which tokenizer its ids belong to, or this constructor
@@ -1082,6 +1228,7 @@ impl Qwen25A16Backend {
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             drill_fault: std::sync::Mutex::new(None),
+            held_answerability: false,
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
@@ -1135,15 +1282,15 @@ impl Qwen25A16Backend {
 }
 
 impl Qwen25A16Backend {
-    /// The free-prompt run behind both of the trait's verbs: the honest one (`drill_fault_leaf =
-    /// None`) and the drill's, whose committed tile at the leaf is a lie
-    /// ([`a16_execute_free_prompt_streaming_with_drill_fault_v1`]).
+    /// The free-prompt run behind the trait's verbs: the honest one (`drill_fault = None`) and the
+    /// drills', whose committed tile is a lie ([`a16_execute_free_prompt_streaming_with_drill_fault_v1`])
+    /// or whose engine lies in a fused attention output (ADR-0152 §4-ter N5).
     fn execute_free_prompt_v1(
         &self,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
-        drill_fault_leaf: Option<u64>,
+        drill_fault: Option<kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1>,
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{
             PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
@@ -1190,11 +1337,12 @@ impl Qwen25A16Backend {
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
 
         let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        let drill = drill_fault.map(|fault| A16DrillLieV1::of_fault_v1(&fault, &self.profile, &ctx)).transpose()?;
         // **The one capture path this family has** (ADR-0049 Decision F's probe, the checkpoint
         // serializer at the class's declared width, and the selecting-rows retention all live in
         // it). The free-prompt lane differs from the attempt lane only in where its context and
         // its tokens come from, so the run itself must not be a second implementation.
-        let run = a16_execute_in_storage_v1(
+        let run = a16_execute_streaming_v1(
             &self.artifact,
             &self.profile,
             self.plan.as_ref(),
@@ -1203,12 +1351,12 @@ impl Qwen25A16Backend {
             self.step_ladder_cap(),
             crate::legs::Base0CaptureKindV1::Fold,
             on_token,
-            drill_fault_leaf,
+            drill,
             self.runtime_profile,
         )?;
-        if let Some(leaf) = drill_fault_leaf {
+        if let Some(lie) = drill {
             // What this instance serves for the job from now on replays the lie it committed.
-            *self.drill_fault.lock().unwrap_or_else(|e| e.into_inner()) = Some((ctx.context_hash(), leaf));
+            *self.drill_fault.lock().unwrap_or_else(|e| e.into_inner()) = Some((ctx.context_hash(), lie));
         }
 
         // The four legs, measured — the derived roots the execution root is built from, which is
@@ -1411,6 +1559,23 @@ impl Qwen25A16Backend {
         prompt_token_ids: &[u32],
         covered: u32,
     ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
+        // DRILL ONLY (ADR-0152 §4-ter N5): a run that followed its attention lie committed the state
+        // the lie fed, so its own anchors are recomputed through the same lie — never memoized
+        // beside an honest walk of the same job.
+        if let Some(lie) = self.drill_attn_for_v1(&material.binding.job_context) {
+            let mut kernels =
+                crate::fp_recompute::A16RecomputeKernelsV1::new(&self.artifact, self.plan.as_ref()).ok()?.with_drill_attn_lie_v1(lie);
+            return crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+                &material.binding.shape_profile,
+                &material.binding.job_context,
+                prompt_token_ids,
+                &material.generated_token_ids,
+                covered,
+                &mut kernels,
+                self.prompt_ids_form,
+            )
+            .ok();
+        }
         // The walk is kept between questions about one job (ADR-0110 §9.5): an executor answering
         // several openings, a leaf's evidence and the held units of one claim walks it once.
         crate::fp_recompute::base0_fp_a16_seat_state_v1(
@@ -1425,6 +1590,332 @@ impl Qwen25A16Backend {
             self.prompt_ids_form,
         )
         .ok()
+    }
+
+    /// **ADR-0152 §4-ter N1: the windowed RESPONDER** — the accused executor's evidence at a held
+    /// fused site, out of its own retention without laying the job out.
+    ///
+    /// (a) the state at the anchor (`covered = p + 1`) recomputed by a plain forward, memoized per
+    /// job ([`Self::fold_anchor_state_v1`]) and required to root to (b) the anchor, the fold's own
+    /// retained checkpoint leaf opened in its leg; (c) the slice sub-roots from (a); (d) the out
+    /// tile and the query row opened out of the fold (a block replayed from the interval's anchor,
+    /// every completed block folded against the retained digest, the path from the retained
+    /// nodes); (e) the inputs, layer ℓ's K and V out of (a). What it holds is the state (the walk's
+    /// cache and the anchor's chunks with their leaf hashes — ≈ 1.5–2 GB at the peak at 8,192
+    /// positions of the 1.5B row, the review's F8; see the trait verb's note) and a few blocks of leaf
+    /// hashes, never a leaf vector. The state walk is the seat memo's, which serialises forwards. A
+    /// DENSE retention (a job small enough to have kept its tiles) answers through the dense builder,
+    /// with the sub-roots of the anchor it reads.
+    fn attn_held_responder_v1(
+        &self,
+        material: &[u8],
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+    ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
+        use kaspa_consensus_core::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnRowOpeningV1};
+        use kaspa_consensus_core::palw_step_leg::{PalwStepOpeningV1, step_merkle_path_capped_v1, step_merkle_root_capped_v1};
+        let retention =
+            crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let fold = match &retention {
+            crate::produce::Base0RetentionV1::Folded(fold) => fold,
+            crate::produce::Base0RetentionV1::Dense(_) => {
+                let evidence = self.attn_site_evidence(material, narrowed, carried_prompt, None)?;
+                let anchor = evidence.anchor.as_ref().ok_or("a held site's evidence carries its anchor")?;
+                let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
+                    &evidence.binding.shape_profile,
+                    &evidence.binding.job_context,
+                    anchor.anchor.leaf.covered_decode_call,
+                );
+                let layout =
+                    kaspa_consensus_core::palw_state_chunk_map::palw_state_layout_v4(&evidence.binding.shape_profile, positions)
+                        .map_err(|e| format!("the anchor's held layout: {e:?}"))?;
+                let slice_sub_roots =
+                    kaspa_consensus_core::palw_state_chunk_map::palw_state_slice_sub_roots_v4(&layout, &anchor.chunk_hashes)
+                        .map_err(|e| format!("the state's sub-roots: {e:?}"))?;
+                return Ok(kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1 { evidence, slice_sub_roots });
+            }
+        };
+        let binding = &fold.binding;
+        if binding.shape_profile.shape_profile_id() != self.class_profile_id {
+            return Err("the capture is not this class's".to_string());
+        }
+        let prompt_ids = self.attn_prompt_ids_v1(binding, carried_prompt)?;
+        let cap = self.step_ladder_cap();
+        let inventory = crate::inventory::a16_inventory_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
+        let (site, _) =
+            crate::attn_held::base0_attn_held_site_v1(binding, narrowed, inventory.operands(), inventory.root(), None, cap)?;
+        let covered = site.site.anchor_covered_decode_call.ok_or("the held class's site derives no anchor")?;
+        // (b) The anchor: the fold's own retained leaf, opened in the leg it committed.
+        let leg = crate::legs::base0_checkpoint_leg_of_retention_v1(binding, &fold.checkpoint_chunks, &fold.checkpoint_leaves)
+            .map_err(|e| format!("the fold's checkpoint leg does not rebuild: {e:?}"))?;
+        if step_merkle_root_capped_v1(&leg.leaf_hashes, cap).ok() != Some(binding.checkpoint_merkle_root) {
+            return Err("the fold's checkpoint leaves do not root to its own binding".to_string());
+        }
+        let i = leg
+            .leaves
+            .iter()
+            .position(|leaf| leaf.covered_decode_call == covered)
+            .ok_or_else(|| format!("the fold commits no checkpoint at counter {covered}"))?;
+        let siblings = step_merkle_path_capped_v1(&leg.leaf_hashes, i, cap).map_err(|e| format!("{e:?}"))?;
+        let anchor = PalwAttnCheckpointAnchorV1 {
+            leaf: leg.leaves[i].clone(),
+            opening: PalwStepOpeningV1 { leaf_index: i as u64, leaf_hash: leg.leaf_hashes[i], siblings },
+        };
+        let (site, operand_openings) =
+            crate::attn_held::base0_attn_held_site_v1(binding, narrowed, inventory.operands(), inventory.root(), Some(&anchor), cap)?;
+        // (a) The state at the anchor, as this executor's run committed it.
+        let state = self
+            .fold_anchor_state_v1(fold, &prompt_ids, covered)
+            .ok_or_else(|| format!("the state at counter {covered} does not recompute"))?;
+        // (d) The two committed leaves, out of the fold.
+        let query_leaf = crate::attn_held::base0_attn_held_query_leaf_v1(binding, &site)?;
+        let kernels = A16IntervalKernels {
+            artifact: &self.artifact,
+            plan: self.plan.as_ref(),
+            fault: self.drill_fault_v1(),
+            storage: self.runtime_profile,
+        };
+        let mut opened = crate::fp_interval::base0_fp_leaf_openings_from_fold_v1(
+            fold,
+            &[narrowed, query_leaf],
+            &prompt_ids,
+            self.checkpoint_interval(),
+            cap,
+            &kernels,
+            &|c| self.fold_anchor_state_v1(fold, &prompt_ids, c),
+            self.prompt_ids_form,
+        )
+        .map_err(|e| format!("the fold's own leaves: {e}"))?
+        .into_iter();
+        let mut row = || opened.next().map(|(leaf, opening)| PalwAttnRowOpeningV1 { leaf, opening }).ok_or("an opening per leaf");
+        let (out_tile, query) = (row()?, row()?);
+        crate::attn_held::base0_attn_held_evidence_v1(
+            binding,
+            narrowed,
+            &site,
+            operand_openings,
+            out_tile,
+            query,
+            anchor,
+            state.chunks,
+            None,
+        )
+    }
+
+    /// **ADR-0152 §4-ter N2: the windowed CHALLENGER** — a held fused site's evidence from the
+    /// accused's filing (its held root claim) and ONE honest replay of this node's own.
+    ///
+    /// The replay runs from genesis through the site's step, streaming every leaf before the
+    /// narrowed one into [`kaspa_consensus_core::palw_step_leg::PalwStepPrefixStreamV1`] with the
+    /// accused's filed path of the narrowed leaf — the query row's opening against the accused's step
+    /// root, refused unless the stream roots to it (the first divergence is not this leaf) — keeping
+    /// the query tile, and leaving its cache at exactly the anchor's positions: the state this node
+    /// reads layer ℓ's K and V from and builds its block paths over. Nothing the size of the job is
+    /// held. The anchor, the out tile and the sub-roots are the accused's, checked against the site
+    /// before a leaf is replayed.
+    fn attn_held_challenger_v1(
+        &self,
+        filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+    ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
+        use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
+        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_v1};
+        let binding = &filing.binding;
+        if binding.shape_profile.shape_profile_id() != self.class_profile_id {
+            return Err("the filing is not this class's".to_string());
+        }
+        let (profile, ctx) = (&binding.shape_profile, &binding.job_context);
+        let prompt_ids = self.attn_prompt_ids_v1(binding, carried_prompt)?;
+        let cap = self.step_ladder_cap();
+        let step_leaf_count = crate::fp_interval::base0_fp_binding_step_space_v1(binding, cap).map_err(|e| e.to_string())?;
+        let inventory = crate::inventory::a16_inventory_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
+        let (site, operand_openings) = crate::attn_held::base0_attn_held_site_v1(
+            binding,
+            narrowed,
+            inventory.operands(),
+            inventory.root(),
+            Some(&filing.anchor),
+            cap,
+        )?;
+        crate::attn_held::base0_attn_held_filing_is_the_sites_v1(filing, &site, narrowed)?;
+        let query_leaf = crate::attn_held::base0_attn_held_query_leaf_v1(binding, &site)?;
+        let step = crate::attn_held::base0_attn_held_site_step_v1(binding, &site);
+        if u64::from(site.site.anchor_positions) != step {
+            return Err(format!("the anchor covers {} positions and the site's step is {step}", site.site.anchor_positions));
+        }
+        let mut stream = PalwStepPrefixStreamV1::new_capped_v1(step_leaf_count, &filing.out_tile.opening, &[query_leaf], cap)
+            .map_err(|e| format!("the accused's path of the disputed leaf: {e}"))?;
+        // ONE honest replay, genesis through the site's step; its cache is this node's state at the
+        // anchor when it returns.
+        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
+        let mut cache = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+        cache.reserve_positions(step as usize, row_elements);
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let mut replay = A16ReplayEngineV1 { engine, cache, plan: self.plan.as_ref(), vocab: self.artifact.shape.vocab };
+        let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+        let mut query_tile = None;
+        let mut pushed: Result<(), String> = Ok(());
+        crate::fp_interval::base0_fp_replay_interval_with_v1(
+            profile,
+            ctx,
+            &crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt },
+            crate::fp_interval::Base0FpWindowV1 { first_step: 1, last_step: step },
+            step_leaf_count,
+            &mut replay,
+            &mut |index, tile| {
+                if index < narrowed && pushed.is_ok() {
+                    pushed = stream.push(step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    if index == query_leaf {
+                        query_tile = Some(tile);
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        pushed?;
+        let (root, mut openings) = stream.finish().map_err(|e| format!("the honest rows before the disputed leaf: {e}"))?;
+        if root != binding.step_merkle_root {
+            return Err(
+                "the honest rows before the disputed leaf and the accused's opened tile do not root to the accused's binding — \
+                 the first divergence is not this leaf"
+                    .to_string(),
+            );
+        }
+        let query = PalwAttnRowOpeningV1 {
+            leaf: query_tile.ok_or("the replay produced no query row")?,
+            opening: openings.pop().ok_or("the stream opened no query row")?,
+        };
+        // The state at the anchor, out of the replay's own cache, under the class's map.
+        let geometry =
+            crate::legs::base0_state_chunk_geometry_v1(profile, site.site.anchor_positions).map_err(|e| format!("{e:?}"))?;
+        let chunks = (0..geometry.chunk_count())
+            .map(|index| {
+                kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
+                    .and_then(|entry| replay.cache.state_chunk_bytes_v1(&entry))
+                    .ok_or_else(|| format!("the replay's cache holds no chunk {index} of the anchor's state"))
+            })
+            .collect::<Result<Vec<Vec<u8>>, String>>()?;
+        crate::attn_held::base0_attn_held_evidence_v1(
+            binding,
+            narrowed,
+            &site,
+            operand_openings,
+            filing.out_tile.clone(),
+            query,
+            filing.anchor.clone(),
+            chunks,
+            Some(filing.slice_sub_roots.clone()),
+        )
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6** — the trait verb's body: the cache-write node of `kind` at layer
+    /// `attn_layer`, every tile of it at history position `history_position` (a prefill position `p`
+    /// is `(call 0, p)`, a decode position the head of its call), each leaf before the narrowed one,
+    /// streamed from ONE honest replay to the site's step with the accused's filed path of the
+    /// narrowed leaf — refused unless the stream roots to the accused's step root (the rows are then
+    /// its committed ones).
+    fn attn_held_cache_write_rows_of_v1(
+        &self,
+        filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+        kind: kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1,
+        attn_layer: u16,
+        history_position: u32,
+    ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
+        use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
+        use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepOutLenV1, PalwStepTableV1};
+        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_v1};
+        if !self.court_capable {
+            return Err("the v1 class carries no capture to read a cache row out of".to_string());
+        }
+        let binding = &filing.binding;
+        if binding.shape_profile.shape_profile_id() != self.class_profile_id {
+            return Err("the filing is not this class's".to_string());
+        }
+        let (profile, ctx) = (&binding.shape_profile, &binding.job_context);
+        let prompt_ids = self.attn_prompt_ids_v1(binding, carried_prompt)?;
+        let cap = self.step_ladder_cap();
+        let step_leaf_count = crate::fp_interval::base0_fp_binding_step_space_v1(binding, cap).map_err(|e| e.to_string())?;
+        let inventory = crate::inventory::a16_inventory_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
+        let (site, _) = crate::attn_held::base0_attn_held_site_v1(
+            binding,
+            narrowed,
+            inventory.operands(),
+            inventory.root(),
+            Some(&filing.anchor),
+            cap,
+        )?;
+        crate::attn_held::base0_attn_held_filing_is_the_sites_v1(filing, &site, narrowed)?;
+        let role = match kind {
+            kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1::Key => PalwStepNodeRoleV1::KCacheWrite,
+            kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1::Value => PalwStepNodeRoleV1::VCacheWrite,
+        };
+        let index = profile.attn_nodes.iter().position(|n| n.role == role).ok_or("the class declares no such cache write")?;
+        let node = &profile.attn_nodes[index];
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else {
+            return Err("a cache write's row is not a fixed width".to_string());
+        };
+        let tiles = elements.div_ceil(node.tile_len.max(1));
+        let slot = profile.global_node_slot(PalwStepTableV1::Attn, attn_layer, index).ok_or("the layer has no such cache write")?;
+        let prefill = ctx.declared_prefill_tokens;
+        let (call_index, position) =
+            if history_position < prefill { (0, history_position) } else { (history_position - prefill + 1, 0) };
+        let wanted: Vec<u64> = (0..tiles)
+            .map(|tile_index| {
+                kaspa_consensus_core::palw_step::canonical_step_leaf_index(
+                    profile,
+                    ctx,
+                    &PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index },
+                )
+                .ok_or_else(|| format!("history position {history_position} has no cache-write leaf in this job"))
+            })
+            .collect::<Result<_, _>>()?;
+        if wanted.iter().any(|leaf| *leaf >= narrowed) {
+            return Err(format!("the cache-write row at {history_position} is not before the narrowed leaf {narrowed}"));
+        }
+        let step = crate::attn_held::base0_attn_held_site_step_v1(binding, &site);
+        let mut stream = PalwStepPrefixStreamV1::new_capped_v1(step_leaf_count, &filing.out_tile.opening, &wanted, cap)
+            .map_err(|e| format!("the accused's path of the disputed leaf: {e}"))?;
+        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
+        let mut cache = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+        cache.reserve_positions(step as usize, row_elements);
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let mut replay = A16ReplayEngineV1 { engine, cache, plan: self.plan.as_ref(), vocab: self.artifact.shape.vocab };
+        let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+        let mut kept: Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)> = Vec::new();
+        let mut pushed: Result<(), String> = Ok(());
+        crate::fp_interval::base0_fp_replay_interval_with_v1(
+            profile,
+            ctx,
+            &crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt },
+            crate::fp_interval::Base0FpWindowV1 { first_step: 1, last_step: step },
+            step_leaf_count,
+            &mut replay,
+            &mut |index, tile| {
+                if index < narrowed && pushed.is_ok() {
+                    pushed = stream.push(step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    if wanted.contains(&index) {
+                        kept.push((index, tile));
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        pushed?;
+        let (root, openings) = stream.finish().map_err(|e| format!("the honest rows before the disputed leaf: {e}"))?;
+        if root != binding.step_merkle_root {
+            return Err("the honest rows before the disputed leaf do not root to the accused's binding".to_string());
+        }
+        kept.sort_by_key(|(index, _)| *index);
+        if kept.len() != wanted.len() || openings.len() != wanted.len() {
+            return Err("the replay did not produce every tile of the cache-write row".to_string());
+        }
+        // `wanted` is in tile order, which is leaf order; the stream answers in the order it was asked.
+        Ok(kept.into_iter().zip(openings).map(|((_, leaf), opening)| PalwAttnRowOpeningV1 { leaf, opening }).collect())
     }
 
     fn tiles_from_material_v1(&self, retention: &crate::produce::Base0RetentionV1) -> Result<crate::legs::Base0StepTilesV1, String> {
@@ -1633,9 +2124,10 @@ pub(crate) fn a16_interval_kernels_for_tests_v1<'a>(
 struct A16IntervalKernels<'a> {
     artifact: &'a Base0ArtifactV1,
     plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
-    /// DRILL ONLY: the `(job context, leaf)` whose committed tile this replay makes the lie the
-    /// drill's capture committed (`Qwen25A16Backend::drill_fault`); `None` everywhere but a drill.
-    fault: Option<(Hash64, u64)>,
+    /// DRILL ONLY: the job context and the lie this replay makes where the drill's capture made it
+    /// (`Qwen25A16Backend::drill_fault`) — a committed tile moved, or the engine's attention output
+    /// moved and followed; `None` everywhere but a drill.
+    fault: Option<(Hash64, A16DrillLieV1)>,
     /// The representation the replay's cache is held in — the seat's own choice, whatever the
     /// producer's was: the chunks it decodes are the map's `i32` rows either way.
     storage: crate::engine_a16::KvStorageProfileV1,
@@ -1651,23 +2143,34 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         step_leaf_count: u64,
         sink: &mut dyn FnMut(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1) -> Result<(), String>,
     ) -> Result<(), String> {
-        if let Some((context, leaf)) = self.fault
-            && context == ctx.context_hash()
-        {
-            // The drill's lie, replayed where the capture made it: the tile's first lane moved by
-            // one, as `A16DrillFaultSiteV1::apply` moved the committed row's.
-            let honest = Self { fault: None, ..*self };
-            return honest.replay_interval_into(profile, ctx, start, window, step_leaf_count, &mut |at, mut tile| {
-                if at == leaf
-                    && let Some(lane) = tile.values_le.get_mut(0..4)
-                {
-                    let moved = i32::from_le_bytes([lane[0], lane[1], lane[2], lane[3]]).wrapping_add(1);
-                    lane.copy_from_slice(&moved.to_le_bytes());
-                }
-                sink(at, tile)
-            });
-        }
-        let engine = A16Engine::new(self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let attn = match self.fault {
+            Some((context, A16DrillLieV1::Tile { leaf, lane, delta })) if context == ctx.context_hash() => {
+                // The drill's lie, replayed where the capture made it: the tile's lane moved, as
+                // `A16DrillFaultSiteV1::apply` moved the committed row's.
+                let honest = Self { fault: None, ..*self };
+                return honest.replay_interval_into(profile, ctx, start, window, step_leaf_count, &mut |at, mut tile| {
+                    if at == leaf {
+                        let tile_len = profile
+                            .resolve_node_slot(tile.coord.node_slot)
+                            .map(|(node, _)| node.tile_len.max(1) as usize)
+                            .unwrap_or(1);
+                        let offset = lane.map(|l| l.saturating_sub(tile.coord.tile_index as usize * tile_len)).unwrap_or(0);
+                        if let Some(bytes) = tile.values_le.get_mut(4 * offset..4 * offset + 4) {
+                            let value = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                            let moved = a16_drill_moved_v1(value, delta, lane.is_some());
+                            bytes.copy_from_slice(&moved.to_le_bytes());
+                        }
+                    }
+                    sink(at, tile)
+                });
+            }
+            // ADR-0152 §4-ter N5 (`follow = true`): the engine lies and follows, as the run's did.
+            Some((context, A16DrillLieV1::Attn(lie))) if context == ctx.context_hash() => Some(lie),
+            _ => None,
+        };
+        let engine = A16Engine::new(self.artifact)
+            .map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?
+            .with_drill_attn_lie_v1(attn);
         let layers = self.artifact.shape.n_layers;
         let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
         let mut cache = match start {
@@ -1774,6 +2277,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
 
     fn attempt_rules_v1(&self) -> kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1 {
         self.attempt_rules
+    }
+
+    /// ADR-0152 §4-ter N4: the setter form of [`Self::with_held_answerability_v1`] — what a node's
+    /// registry applies to every backend it resolves (`Params::palw_held_answerability_v1()`).
+    fn set_held_answerability_v1(&mut self, armed: bool) {
+        self.held_answerability = armed;
     }
 
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
@@ -2080,7 +2589,23 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_tokens: &[usize],
         leaf_index: u64,
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        self.execute_free_prompt_v1(job, prompt_tokens, &mut |_| {}, Some(leaf_index))
+        self.execute_free_prompt_v1(
+            job,
+            prompt_tokens,
+            &mut |_| {},
+            Some(kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1::Leaf { leaf: leaf_index }),
+        )
+    }
+
+    /// DRILL ONLY (ADR-0152 §4-ter N5): the free-prompt run with the named lie — a tile, or a fused
+    /// attention output followed downstream or not.
+    fn execute_free_prompt_with_drill_fault_v2(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        fault: kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        self.execute_free_prompt_v1(job, prompt_tokens, &mut |_| {}, Some(fault))
     }
 
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
@@ -2961,8 +3486,54 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         .map_err(|e| crate::attn_responder::base0_attn_name_the_missing_anchor_v1(e, filing))
     }
 
+    /// **ADR-0152 §4-ter N4: held-answerability aware past `palw_offence_attribution`**
+    /// ([`Qwen25A16Backend::with_held_answerability_v1`]). A held class's dissection is answered by
+    /// the windowed builder ([`Self::attn_site_evidence_held_v1`] — this family has both halves, N1
+    /// and N2) and only where an honest party can answer inside the chain's turn — the consensus
+    /// predicate `palw_held_class_unanswerable_v1` (the context bound; the review's F5, a
+    /// whole-context reference replay past the turn). A held class it refuses (the 2M row) says
+    /// `false`, so the producer's guard refuses to underwrite a claim it could never defend. Below
+    /// the fence, byte for byte what it was.
     fn supports_dissection(&self) -> bool {
-        self.court_capable && kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1(&self.profile)
+        self.court_capable
+            && kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1(&self.profile)
+            && !(self.held_answerability
+                && kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&self.profile).is_some())
+    }
+
+    /// **ADR-0152 §4-ter N1/N2: a held fused site's evidence, windowed** — see
+    /// [`kaspa_consensus_core::palw_backend::PalwExecutionBackendV1::attn_site_evidence_held_v1`].
+    fn attn_site_evidence_held_v1(
+        &self,
+        material: &[u8],
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+        filing: Option<&kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1>,
+    ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
+        if !self.court_capable {
+            return Err("the v1 class carries no capture to read a fused site out of".to_string());
+        }
+        if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&self.profile) {
+            return Err("the windowed builder answers a held class's fused site; this class is not held".to_string());
+        }
+        match filing {
+            None => self.attn_held_responder_v1(material, narrowed, carried_prompt),
+            Some(filing) => self.attn_held_challenger_v1(filing, narrowed, carried_prompt),
+        }
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6: the accused's committed cache-write row, opened against its step
+    /// root** — see [`kaspa_consensus_core::palw_backend::PalwExecutionBackendV1::attn_held_cache_write_rows_v1`].
+    fn attn_held_cache_write_rows_v1(
+        &self,
+        filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+        kind: kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1,
+        attn_layer: u16,
+        history_position: u32,
+    ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
+        self.attn_held_cache_write_rows_of_v1(filing, narrowed, carried_prompt, kind, attn_layer, history_position)
     }
 
     fn has_fused_site(&self) -> bool {
@@ -6044,6 +6615,220 @@ mod held_real_row_probe {
         drill("held-fixture", &artifact, &profile, 64, 8, FIXTURE_NETWORK, &|| fixture_backend(&artifact, &profile));
     }
 
+    /// **t12's bound one-move verdict on the executor's own evidence** (`palw_audit_2026_09_23`).
+    /// At a FUSED leaf of a held class the builder's object carries the site's history, which the
+    /// bound verdict refuses; the filer's strip makes it the object the chain takes
+    /// (`NeedsDissection`), smaller than the builder's. Below the fence both read v1's
+    /// `NeedsDissection`. At a non-fused leaf the bound verdict is v1's.
+    #[test]
+    fn the_executors_own_fused_evidence_stripped_is_what_the_bound_verdict_takes() {
+        use kaspa_consensus_core::palw_shard_court_v1::{
+            PalwOneMoveClaimV2, PalwShardCourtError, PalwShardCourtVerdictV1, palw_leaf_evidence_bytes_v1,
+        };
+        let (artifact, profile) = fixture();
+        let backend = fixture_backend(&artifact, &profile);
+        let form = backend.prompt_ids_form();
+        let vocab = artifact.shape.vocab;
+        let positions = 24u32;
+        let prompt: Vec<usize> = (0..positions as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: prompt_token_ids_commitment_v1(form, &ids).expect("the ids commit"),
+            prompt_tokens: positions,
+            decode_token_limit: 4,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the held producer runs");
+        let leaves = run.facts.step_leaf_count;
+        let capture = run.outcome.material.clone();
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
+            // SEAT-S2's field, `None` as SEAT-S2 wrote base0's fixtures: leaf evidence never reads the answer.
+            output_root: None,
+            job_pin: None,
+        };
+        let binding = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes").binding().clone();
+        let fused_at = |leaf: u64| {
+            kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &binding.job_context, leaf).map(|c| {
+                (c.position, profile.resolve_node_slot(c.node_slot).is_some_and(|(n, _)| n.op_kind == PalwStepOpKindV1::AttnFused))
+            })
+        };
+        let fused_leaf = (0..leaves).find(|l| fused_at(*l).is_some_and(|(p, f)| f && p >= 12)).expect("a fused leaf past position 12");
+        let plain_leaf =
+            (0..fused_leaf).rev().find(|l| fused_at(*l).is_some_and(|(_, f)| !f)).expect("a leaf before it that is not fused");
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let bound_to =
+            PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: profile.shape_profile_id(), artifact_root: root };
+        let ladder = PALW_HELD_STEP_LADDER_V1;
+        let build = |leaf: u64| {
+            kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+                &backend, &capture, &ids, claim, leaves, leaf, form,
+            )
+            .expect("the executor builds its leaf's evidence")
+        };
+
+        let fused = build(fused_leaf);
+        assert!(!fused.refutation.inputs.is_empty(), "the builder carries the site's canonical rows");
+        assert_eq!(fused.verdict_v1(bound_to.class_id, root, ladder), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+        assert_eq!(fused.verdict_at_v2(&bound_to, ladder, false), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+        assert!(
+            matches!(fused.verdict_at_v2(&bound_to, ladder, true), Err(PalwShardCourtError::FusedLeafCarriesTheHistory { .. })),
+            "{:?}",
+            fused.verdict_at_v2(&bound_to, ladder, true)
+        );
+        let stripped = fused.clone().for_the_one_move_v2();
+        assert_eq!(stripped.verdict_at_v2(&bound_to, ladder, true), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+        let (full, lean) = (palw_leaf_evidence_bytes_v1(&fused), palw_leaf_evidence_bytes_v1(&stripped));
+        eprintln!("fused leaf {fused_leaf}: builder {full} B, stripped {lean} B");
+        assert!(lean < full && lean <= kaspa_consensus_core::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES);
+
+        // The non-fused leaves before it, whatever each reads: the bound verdict is v1's, exactly.
+        let mut cleared = 0;
+        for leaf in (0..plain_leaf + 1).rev().filter(|l| fused_at(*l).is_some_and(|(_, f)| !f)).take(48) {
+            let plain = build(leaf);
+            assert_eq!(plain.clone().for_the_one_move_v2(), plain, "leaf {leaf}: a non-fused leaf's evidence is untouched");
+            let v1 = plain.verdict_v1(bound_to.class_id, root, ladder);
+            assert_eq!(plain.verdict_at_v2(&bound_to, ladder, true), v1, "leaf {leaf}: the non-fused verdict is v1's");
+            cleared += usize::from(v1 == Ok(PalwShardCourtVerdictV1::FalseAccusation));
+        }
+        assert!(cleared > 0, "some honest non-fused leaf clears, so the parity is not only over refusals");
+    }
+
+    /// **The fused-leaf sweep** (the shard-court addendum to 8be0f661; ADR-0152 §4-ter): the bound
+    /// verdict on the executor's own evidence at EVERY fused leaf of a held job — both layers, every
+    /// prefill position (the first, whose history is one row, included), every decode call, every
+    /// output tile — not one sampled leaf. At each: the builder's object is refused only for the
+    /// history it carries; stripped (what a seat files) it is `NeedsDissection`, never a conviction
+    /// and never a refusal of an honest executor's own tile; below the fence v1 reads
+    /// `NeedsDissection` on both; and the stripped object is under the close ceiling. A fused leaf
+    /// the sweep found convicting, or refusing, honest evidence would be one where a seat's
+    /// accusation of an 8k claim convicts the honest producer in one move or never reaches its
+    /// dissection.
+    #[test]
+    fn every_fused_leaf_of_a_held_job_defers_to_its_dissection_on_honest_evidence() {
+        use kaspa_consensus_core::palw_shard_court_v1::{
+            PalwOneMoveClaimV2, PalwShardCourtError, PalwShardCourtVerdictV1, palw_leaf_evidence_bytes_v1,
+        };
+        let (artifact, profile) = fixture();
+        let backend = fixture_backend(&artifact, &profile);
+        let form = backend.prompt_ids_form();
+        let vocab = artifact.shape.vocab;
+        let positions = 12u32;
+        let decode = 3u32;
+        let prompt: Vec<usize> = (0..positions as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5B; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: prompt_token_ids_commitment_v1(form, &ids).expect("the ids commit"),
+            prompt_tokens: positions,
+            decode_token_limit: decode,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the held producer runs");
+        let leaves = run.facts.step_leaf_count;
+        let capture = run.outcome.material.clone();
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
+            // SEAT-S2's field, `None` as SEAT-S2 wrote base0's fixtures: leaf evidence never reads the answer.
+            output_root: None,
+            job_pin: None,
+        };
+        let binding = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes").binding().clone();
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let bound_to =
+            PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: profile.shape_profile_id(), artifact_root: root };
+        let ladder = PALW_HELD_STEP_LADDER_V1;
+        let fused: Vec<(u64, PalwStepCoordinateV1)> = (0..leaves)
+            .filter_map(|leaf| {
+                kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &binding.job_context, leaf).map(|c| (leaf, c))
+            })
+            .filter(|(_, c)| profile.resolve_node_slot(c.node_slot).is_some_and(|(n, _)| n.op_kind == PalwStepOpKindV1::AttnFused))
+            .collect();
+        let (mut layers, mut prefill_positions, mut decode_calls, mut tiles) = (
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+        );
+        let mut largest = 0u64;
+        for (leaf, coord) in &fused {
+            let evidence = kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+                &backend, &capture, &ids, claim, leaves, *leaf, form,
+            )
+            .unwrap_or_else(|e| panic!("leaf {leaf} {coord:?}: the executor builds its own evidence: {e}"));
+            assert_eq!(evidence.verdict_at_v2(&bound_to, ladder, false), Ok(PalwShardCourtVerdictV1::NeedsDissection), "leaf {leaf}");
+            assert_eq!(evidence.verdict_v1(bound_to.class_id, root, ladder), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+            let carried = !evidence.refutation.inputs.is_empty() || evidence.refutation.kv_checkpoint.is_some();
+            match evidence.verdict_at_v2(&bound_to, ladder, true) {
+                Err(PalwShardCourtError::FusedLeafCarriesTheHistory { .. }) => assert!(carried, "leaf {leaf}"),
+                Ok(PalwShardCourtVerdictV1::NeedsDissection) => assert!(!carried, "leaf {leaf}"),
+                other => panic!("leaf {leaf} {coord:?}: the builder's own object reads {other:?}"),
+            }
+            let stripped = evidence.for_the_one_move_v2();
+            assert_eq!(
+                stripped.verdict_at_v2(&bound_to, ladder, true),
+                Ok(PalwShardCourtVerdictV1::NeedsDissection),
+                "leaf {leaf} {coord:?}: the seat's object defers to the dissection"
+            );
+            let bytes = palw_leaf_evidence_bytes_v1(&stripped);
+            assert!(bytes <= kaspa_consensus_core::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES, "leaf {leaf}: {bytes} B");
+            largest = largest.max(bytes);
+            let (_, layer) = profile.resolve_node_slot(coord.node_slot).expect("the node");
+            layers.insert(layer);
+            if coord.call_index == 0 {
+                prefill_positions.insert(coord.position);
+            } else {
+                decode_calls.insert(coord.call_index);
+            }
+            tiles.insert(coord.tile_index);
+        }
+        eprintln!(
+            "{} fused leaves swept of {leaves}: layers {layers:?}, {} prefill positions, decode calls {decode_calls:?}, tiles {tiles:?}, \
+             largest stripped object {largest} B",
+            fused.len(),
+            prefill_positions.len()
+        );
+        assert_eq!(layers.len(), profile.layer_count as usize, "every layer's fused site");
+        assert_eq!(prefill_positions.len(), positions as usize, "every prefill position, the first included");
+        let calls = binding.job_context.exact_decode_tokens.saturating_sub(1) as usize;
+        assert!(calls >= 1, "the job decodes past its first token, so decode positions are swept too");
+        assert_eq!(decode_calls.len(), calls, "every decode call");
+        assert!(tiles.len() > 1, "every output tile of the site, not the first alone");
+    }
+
     /// **ADR-0121 §7: a lie in a block that straddles an interval's edge is named from the edges.**
     /// Such a block is whole in neither interval, so no opening digests it and the block naming
     /// refuses it; the edges are served as their leaves and checked by the range's root walk. The
@@ -6214,5 +6999,1285 @@ mod held_real_row_probe {
             .with_prompt_ids_form(PalwPromptIdsFormV1::Flat)
         };
         drill("held-real", &artifact, &profile, positions, decode, network, &backend);
+    }
+}
+
+/// **ADR-0152 §4-ter N1/N2/N4 at fixture scale** — the windowed builder of a held fused site, both
+/// parties, on a held graph-v7 row (the held map, per-position checkpoints, a class ladder of `2^40`)
+/// small enough to also run densely.
+#[cfg(test)]
+mod aheld_windowed_builder {
+    use super::*;
+    use kaspa_consensus_core::palw_attn_court_v1::{
+        PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnCourtVerdictV1, PalwAttnDissectChoiceV1, PalwAttnDissectPhaseV1,
+        check_attn_dissect_bottom_v1, palw_attn_opened_lanes_v1,
+    };
+    use kaspa_consensus_core::palw_attn_responder_v1::{PalwAttnHeldEvidenceV1, PalwAttnHeldFilingV1};
+    use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3,
+    };
+    use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+    use kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1;
+    use kaspa_consensus_core::palw_state_chunk_map::{PALW_HELD_STEP_LADDER_V1, palw_profile_is_held_v4};
+    use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, canonical_step_coordinates};
+    use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    /// The held graph-v7 row the sweep and the drill use — at one head per tile — at `layers` layers
+    /// and context `n_ctx`.
+    pub(super) fn held_fixture(layers: u16, n_ctx: u32) -> (std::sync::Arc<Base0ArtifactV1>, PalwShapeProfileV3) {
+        use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: layers,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 128,
+            n_ctx,
+            n_threads: 1,
+            rms_eps_q: 1,
+            // One head per tile: the fused site's output tile and the query slice are one head's,
+            // which is what makes a fused site dissectable (`palw_fused_sites_are_dissectable_v1`).
+            tile_len: 8,
+        };
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a held graph-v7 profile");
+        let shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = std::sync::Arc::new(
+            Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+                .expect("a valid shape")
+                .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+                .expect("the derived store is sorted and unique"),
+        );
+        (artifact, profile)
+    }
+
+    /// One instance of the class at the network's ladder `network`: `2^22` runs the fixture's job
+    /// densely too; `2^11` puts it past the materialization cap, where only the windowed builder runs.
+    pub(super) fn backend(artifact: &std::sync::Arc<Base0ArtifactV1>, profile: &PalwShapeProfileV3, network: u64) -> Qwen25A16Backend {
+        Qwen25A16Backend::new(artifact.clone(), b"misaka-palw-rc".to_vec(), profile.clone(), (64, 8))
+            .expect("the fixture's declaration is this engine's program")
+            .with_step_ladder_cap(network)
+            .with_prompt_ids_form(PalwPromptIdsFormV1::Flat)
+    }
+
+    pub(super) const DENSE_NETWORK: u64 = 1 << 22;
+    pub(super) const PAST_THE_CAP: u64 = 1 << 11;
+
+    /// A free-prompt job of `positions` prompt tokens and `decode` decode tokens, its prompt and ids.
+    pub(super) fn job_for(
+        backend: &Qwen25A16Backend,
+        profile: &PalwShapeProfileV3,
+        positions: u32,
+        decode: u32,
+    ) -> (PalwFreePromptJobV3, Vec<usize>, Vec<u32>) {
+        let vocab = backend.artifact.shape.vocab;
+        let prompt: Vec<usize> = (0..positions as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5B; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: prompt_token_ids_commitment_v1(backend.prompt_ids_form(), &ids).expect("the ids commit"),
+            prompt_tokens: positions,
+            decode_token_limit: decode,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+        (job, prompt, ids)
+    }
+
+    pub(super) fn binding_of(material: &[u8]) -> PalwStepBindingV2 {
+        crate::produce::base0_material_decode_any_v1(material).expect("decodes").binding().clone()
+    }
+
+    /// Every fused output leaf of the binding's job, with its coordinate.
+    pub(super) fn fused_leaves(profile: &PalwShapeProfileV3, binding: &PalwStepBindingV2) -> Vec<(u64, PalwStepCoordinateV1)> {
+        (0..binding.step_leaf_count)
+            .filter_map(|leaf| canonical_step_coordinates(profile, &binding.job_context, leaf).map(|c| (leaf, c)))
+            .filter(|(_, c)| profile.resolve_node_slot(c.node_slot).is_some_and(|(n, _)| n.op_kind == PalwStepOpKindV1::AttnFused))
+            .collect()
+    }
+
+    /// The filing a held root claim built from `evidence` carries.
+    pub(super) fn filing_of(evidence: &PalwAttnHeldEvidenceV1) -> PalwAttnHeldFilingV1 {
+        PalwAttnHeldFilingV1 {
+            binding: evidence.evidence.binding.clone(),
+            out_tile: evidence.evidence.out_tile.clone(),
+            anchor: evidence.evidence.anchor.as_ref().expect("a held site anchors").anchor.clone(),
+            slice_sub_roots: evidence.slice_sub_roots.clone(),
+        }
+    }
+
+    pub(super) fn session() -> Hash64 {
+        Hash64::from_u64_word(0xA5E1)
+    }
+
+    pub(super) fn choose(phase: &mut PalwAttnDissectPhaseV1, child: u8, daa: u64) {
+        let choice =
+            PalwAttnDissectChoiceV1 { version: PALW_ATTN_COURT_OBJECT_VERSION_V1, session_id: session(), round: phase.round(), child };
+        phase.apply_choice(&choice, daa, 10).expect("a legal choice");
+    }
+
+    /// **An honest responder's dissection, played to tile `target`**, the rounds from `responder`, the
+    /// bottom from `bottom_from` (either party's evidence) — the court's verdict at the bottom.
+    pub(super) fn honest_bottom(
+        responder: &PalwAttnHeldEvidenceV1,
+        bottom_from: &PalwAttnHeldEvidenceV1,
+        artifact_root: Hash64,
+        target: u64,
+    ) -> Result<PalwAttnCourtVerdictV1, kaspa_consensus_core::palw_attn_court_v1::PalwAttnCourtError> {
+        let site = responder.site_v1(artifact_root, false, PALW_HELD_STEP_LADDER_V1).expect("the site derives");
+        let anchored = bottom_from.site_v1(artifact_root, true, PALW_HELD_STEP_LADDER_V1).expect("and with its anchor");
+        assert!(anchored.site.every_position_is_checkpointed, "the held map checkpoints every position");
+        let root = responder.evidence.root_claim_v1(&site).expect("the root computes");
+        let committed =
+            palw_attn_opened_lanes_v1(&responder.evidence.out_tile, &anchored.binding, site.head_lanes.2 as usize).expect("opens");
+        let mut phase = PalwAttnDissectPhaseV1::open_with_arity(
+            session(),
+            &root,
+            site.head_lanes,
+            site.history_positions,
+            &committed,
+            site.site.params.values,
+            2,
+            site.tile_positions,
+            0,
+            10,
+            true,
+        )
+        .expect("the honest root finalizes to the committed tile");
+        let mut daa = 1;
+        while phase.turn() != PalwBisectTurnV1::Terminal {
+            let round = responder.round_v1(&site, &phase).expect("a round computes");
+            phase.apply_round(&round, daa, 10).expect("an honest round folds");
+            assert_eq!(bottom_from.divergent_child_v1(&site, &phase).expect("recomputes"), None, "nothing to name");
+            let child = phase.child_ranges().iter().position(|&(f, c)| target >= f && target < f + c).expect("covered") as u8;
+            choose(&mut phase, child, daa + 1);
+            daa += 2;
+        }
+        let bottom = bottom_from.bottom_v1(&anchored, &phase).expect("the bottom builds");
+        check_attn_dissect_bottom_v1(&phase, &bottom, &anchored.binding, &anchored.site, true)
+    }
+
+    /// **T-A4: the windowed evidence IS the dense evidence where both run, and builds where only it
+    /// can.** On an honest held run, at fused leaves of both layers, the first and last prefill
+    /// positions, a middle one and both decode calls, the first and last tiles of the row:
+    ///
+    /// * the responder's windowed evidence (its own fold, no dense re-execution) equals the dense
+    ///   builder's byte for byte, and its sub-roots are the anchor's own;
+    /// * past the materialization cap the dense builder refuses by name and the windowed one builds
+    ///   the same evidence;
+    /// * a challenger holding only the filing a held root claim carries — the out tile, the anchor,
+    ///   the sub-roots — rebuilds the same evidence from its own honest replay, past the cap too, and
+    ///   the root claim object carries exactly that filing back (`from_object_v1`).
+    #[test]
+    fn the_windowed_evidence_is_the_dense_evidence_where_both_run_and_builds_past_the_cap() {
+        let (artifact, profile) = held_fixture(2, 128);
+        assert!(palw_profile_is_held_v4(&profile));
+        let wide = backend(&artifact, &profile, DENSE_NETWORK);
+        let narrow = backend(&artifact, &profile, PAST_THE_CAP);
+        let (job, prompt, ids) = job_for(&wide, &profile, 12, 3);
+        let run = wide.execute_free_prompt(&job, &prompt).expect("the held producer runs");
+        let material = run.outcome.material.clone();
+        let binding = binding_of(&material);
+        assert!(binding.step_leaf_count > PAST_THE_CAP, "the job is past the narrow instance's cap");
+        assert!(binding.step_leaf_count <= wide.materialize_cap(), "and inside the wide one's");
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let fused = fused_leaves(&profile, &binding);
+        let last_tile = fused.iter().map(|(_, c)| c.tile_index).max().expect("a fused leaf");
+        let sample: Vec<u64> = fused
+            .iter()
+            .filter(|(_, c)| {
+                (c.call_index == 0 && [0, 5, 11].contains(&c.position) || c.call_index > 0) && [0, last_tile].contains(&c.tile_index)
+            })
+            .map(|(leaf, _)| *leaf)
+            .collect();
+        assert_eq!(sample.len(), 2 * 5 * 2, "two layers, five positions, two tiles");
+        for &leaf in &sample {
+            let dense = wide.attn_site_evidence(&material, leaf, Some(&ids), None).expect("the dense builder runs here");
+            let windowed = wide.attn_site_evidence_held_v1(&material, leaf, Some(&ids), None).expect("the windowed responder builds");
+            assert_eq!(windowed.evidence, dense, "leaf {leaf}: the windowed evidence is the dense evidence, byte for byte");
+            let anchor = dense.anchor.as_ref().expect("anchored");
+            let positions = windowed.site_v1(root, true, PALW_HELD_STEP_LADDER_V1).expect("site").site.anchor_positions;
+            let layout = kaspa_consensus_core::palw_state_chunk_map::palw_state_layout_v4(&profile, positions).expect("layout");
+            assert_eq!(
+                kaspa_consensus_core::palw_state_chunk_map::palw_state_top_root_from_sub_roots_v4(&layout, &windowed.slice_sub_roots),
+                Ok(anchor.anchor.leaf.state_chunks_root),
+                "leaf {leaf}: the sub-roots are the anchor's own"
+            );
+
+            let refused = narrow.attn_site_evidence(&material, leaf, Some(&ids), None).expect_err("past the cap");
+            assert!(
+                refused.contains("TooManyLeaves") || refused.contains("materialization cap"),
+                "leaf {leaf}: the dense re-execution is refused at the cap: {refused}"
+            );
+            let past = narrow.attn_site_evidence_held_v1(&material, leaf, Some(&ids), None).expect("the windowed one builds");
+            assert_eq!(past, windowed, "leaf {leaf}: the same evidence past the cap");
+
+            let filing = filing_of(&windowed);
+            let challenger = narrow
+                .attn_site_evidence_held_v1(&[], leaf, Some(&ids), Some(&filing))
+                .expect("the challenger builds from the filing");
+            assert_eq!(challenger, windowed, "leaf {leaf}: an honest challenger's evidence is the responder's");
+            let site = windowed.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+            let object = windowed.root_claim_held_v1(&site, session(), 2).expect("the held root claim");
+            assert_eq!(
+                PalwAttnHeldFilingV1::from_object_v1(&object),
+                Some((session(), filing)),
+                "leaf {leaf}: the object carries the filing a challenger reads"
+            );
+            assert_eq!(challenger.fallback_v1(&windowed.site_v1(root, true, PALW_HELD_STEP_LADDER_V1).expect("site")), Ok(None));
+        }
+    }
+
+    /// **An honest held responder is acquitted at every tile, whichever party files the bottom** —
+    /// the responder's own (its block paths and its sub-roots) or a challenger's built from the
+    /// filing (its own block paths, the filed top path). At the job's last fused leaf of each layer
+    /// (the longest history), past the materialization cap.
+    #[test]
+    fn an_honest_held_responder_is_acquitted_at_every_tile_whichever_party_bottoms() {
+        let (artifact, profile) = held_fixture(2, 128);
+        let narrow = backend(&artifact, &profile, PAST_THE_CAP);
+        let (job, prompt, ids) = job_for(&narrow, &profile, 30, 3);
+        let run = narrow.execute_free_prompt(&job, &prompt).expect("the held producer runs");
+        let binding = binding_of(&run.outcome.material);
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let fused = fused_leaves(&profile, &binding);
+        let last_call = fused.iter().map(|(_, c)| c.call_index).max().expect("a call");
+        for layer in 0..2u16 {
+            let leaf = fused
+                .iter()
+                .rfind(|(_, c)| {
+                    c.call_index == last_call && profile.resolve_node_slot(c.node_slot).and_then(|(_, l)| l) == Some(layer)
+                })
+                .map(|(leaf, _)| *leaf)
+                .expect("a fused leaf of the layer at the last call");
+            let responder = narrow.attn_site_evidence_held_v1(&run.outcome.material, leaf, Some(&ids), None).expect("responder");
+            let challenger =
+                narrow.attn_site_evidence_held_v1(&[], leaf, Some(&ids), Some(&filing_of(&responder))).expect("challenger");
+            let site = responder.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+            let tiles = u64::from(site.history_positions).div_ceil(u64::from(site.tile_positions));
+            assert!(tiles >= 2, "the last position's history is more than one court tile");
+            for target in 0..tiles {
+                for (who, bottom_from) in [("responder", &responder), ("challenger", &challenger)] {
+                    assert_eq!(
+                        honest_bottom(&responder, bottom_from, root, target),
+                        Ok(PalwAttnCourtVerdictV1::ChallengerDefeated),
+                        "layer {layer}, tile {target}, the {who}'s bottom"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **N4: past `palw_offence_attribution` a held class the consensus predicate refuses declines the
+    /// dissection (`palw_held_class_unanswerable_v1`: past the answerable context, or — the review's
+    /// F5 — a whole-context replay past the turn); below the fence, and for an answerable one, nothing
+    /// changed.**
+    #[test]
+    fn past_the_attribution_fence_a_held_class_past_the_answerable_context_declines_the_dissection() {
+        let answerable = kaspa_consensus_core::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1;
+        for (n_ctx, past) in [(128u32, false), (answerable, false), (2 * answerable, true)] {
+            let (artifact, profile) = held_fixture(2, n_ctx);
+            assert!(palw_profile_is_held_v4(&profile));
+            let below = backend(&artifact, &profile, PAST_THE_CAP);
+            assert!(below.supports_dissection(), "n_ctx {n_ctx}: below the fence the answer is what it was");
+            let fenced = backend(&artifact, &profile, PAST_THE_CAP).with_held_answerability_v1(true);
+            assert_eq!(fenced.supports_dissection(), !past, "n_ctx {n_ctx}: past the fence");
+            // N4 is the consensus predicate C1 and C5 read (the review's F5 bound included — the
+            // fixture's replay is milliseconds, so the context bound is what refuses it here).
+            assert_eq!(
+                fenced.supports_dissection(),
+                kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&profile).is_none(),
+                "n_ctx {n_ctx}: the backend's answer is the predicate's"
+            );
+        }
+    }
+}
+
+/// **ADR-0152 §4-ter T-A3 and the held happy path, end to end at fixture scale** — the node's
+/// windowed builder (both parties) against the court's kernels and against the FOLD: a held
+/// graph-v7 row past the materialization cap (a network ladder of `2^11`, the class's `2^40`), its
+/// real executions (honest, or lying in a fused attention output and following it or not, through
+/// the N5 drill), the one-move accusation the executor's own fold evidence makes, the held root
+/// claim the responder builds (tag 57), the rounds and choices, and the bottom — every block through
+/// `apply_palw_transition_v2_with_extras` with its delta re-applied and reverted and its carriage
+/// reloaded, past `palw_offence_attribution` and below it.
+#[cfg(test)]
+mod aheld_end_to_end {
+    use super::aheld_windowed_builder::{PAST_THE_CAP, backend, binding_of, held_fixture, job_for};
+    use super::*;
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2,
+    };
+    use kaspa_consensus_core::palw_attn_court_v1::{
+        PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnCourtError, PalwAttnCourtVerdictV1, PalwAttnDissectChoiceV1,
+        PalwAttnDissectPhaseV1, check_attn_dissect_bottom_v1, palw_attn_opened_lanes_v1,
+    };
+    use kaspa_consensus_core::palw_attn_dissect::PalwAttnRootClaimV1;
+    use kaspa_consensus_core::palw_attn_responder_v1::{PalwAttnAccusedFilingV1, PalwAttnHeldEvidenceV1, PalwAttnHeldFilingV1};
+    use kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1;
+    use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
+    use kaspa_consensus_core::palw_court_v2::{PalwCourtV2Error, PalwCourtVerdictProofV2};
+    use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
+    use kaspa_consensus_core::palw_state_chunk_map::{PALW_HELD_STEP_LADDER_V1, palw_state_layout_v4, palw_state_slice_sub_roots_v4};
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClassAdmissionCarriageV2, PalwConsensusObjectV2,
+        PalwCourtVerdictV2, PalwPanelSeatV2, PalwPwuRuleV2, PalwStateCarriageV2, PalwStateParamsV2, PalwStateV2Error,
+        PalwTransitionExtrasV1, PalwVoidReasonV2, apply_delta_v2, apply_palw_transition_v2_with_extras, palw_operator_id_v2,
+        revert_delta_v2,
+    };
+    use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepTableV1, canonical_step_leaf_index};
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    const PRODUCER: u64 = 1;
+    const SEAT: u64 = 2;
+    /// The producer's own Sybil: bonded, on no panel of the claim — the decoy's challenger.
+    const BYSTANDER: u64 = 3;
+    const COLLUDER: u64 = 4;
+    const PREFILL: u32 = 40;
+    const DECODE: u32 = 3;
+    /// The followed lie's sizes, smallest first: at this fixture's widths a fused output moved by
+    /// `2^10` or less is absorbed by the output projection's requant and reaches no later row
+    /// (measured at layer 0: the checkpoint root moves from `2^13`), and a lie nothing downstream
+    /// reads is `follow = false` by another name — so the consistent forger takes the first size
+    /// whose execution commits a different anchor ([`following`]). The unfollowed lie moves the
+    /// committed code by 64, inside the A16 range.
+    const FOLLOW_DELTAS: [i32; 4] = [8_192, 16_384, 30_000, -30_000];
+    const TILE_DELTA: i32 = 64;
+
+    fn h64(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    fn bond_key(v: u64) -> PalwBondKeyV2 {
+        PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(v), index: 0 })
+    }
+
+    fn op_key(v: u64) -> Vec<u8> {
+        vec![v as u8; 8]
+    }
+
+    // ---- the court's kernels ---------------------------------------------------------------
+
+    /// **The dispute as the court plays it**: the accused's root (its evidence's own, or — when that
+    /// does not finalize to the tile it committed — the least lie that does, as a forger must file),
+    /// its rounds (the lie pushed into the child that holds tile 0, the only place the fold admits
+    /// it), and the challenger's choice (the child its own recompute names, else the one covering
+    /// `target`). Returns the narrowed phase and whether the accused had to lie.
+    struct Played {
+        phase: PalwAttnDissectPhaseV1,
+        /// `(lane, delta)` of the accused's lie in `v_acc`, when it lied.
+        lie: Option<(usize, i64)>,
+    }
+
+    fn session() -> Hash64 {
+        h64(0xE2E0)
+    }
+
+    /// The least lie in one lane of `V*` that finalizes to `committed`, or `None` when the honest root
+    /// already does.
+    fn least_lie(
+        honest: &PalwAttnRootClaimV1,
+        committed: &[i32],
+        values: kaspa_consensus_core::palw_base0_a16::A16QuantParams,
+    ) -> Option<(PalwAttnRootClaimV1, usize, i64)> {
+        let finalize = |v: &[i64]| kaspa_consensus_core::palw_base0_a16::a16_attn_finalize_v1(v, values);
+        let lane = (0..committed.len()).find(|l| finalize(&honest.claim.v_acc)[*l] != committed[*l])?;
+        let at = |delta: i64| {
+            let mut v = honest.claim.v_acc.clone();
+            v[lane] += delta;
+            finalize(&v)[lane]
+        };
+        let (mut lo, mut hi) = (-(1i64 << 44), 1i64 << 44);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if at(mid) < committed[lane] { lo = mid + 1 } else { hi = mid }
+        }
+        let mut lying = honest.clone();
+        lying.claim.v_acc[lane] += lo;
+        assert_eq!(finalize(&lying.claim.v_acc), committed, "the least lie finalizes to the committed tile");
+        Some((lying, lane, lo))
+    }
+
+    fn play(accused: &PalwAttnHeldEvidenceV1, challenger: &PalwAttnHeldEvidenceV1, artifact_root: Hash64, target: u64) -> Played {
+        let site = accused.site_v1(artifact_root, false, PALW_HELD_STEP_LADDER_V1).expect("the site derives");
+        let values = site.site.params.values;
+        let committed =
+            palw_attn_opened_lanes_v1(&accused.evidence.out_tile, &site.binding, site.head_lanes.2 as usize).expect("the tile opens");
+        let honest = accused.evidence.root_claim_v1(&site).expect("the root computes");
+        let (root, lie) = match least_lie(&honest, &committed, values) {
+            None => (honest, None),
+            Some((lying, lane, delta)) => (lying, Some((lane, delta))),
+        };
+        let mut phase = PalwAttnDissectPhaseV1::open_with_arity(
+            session(),
+            &root,
+            site.head_lanes,
+            site.history_positions,
+            &committed,
+            values,
+            2,
+            site.tile_positions,
+            0,
+            10,
+            true,
+        )
+        .expect("the root finalizes to the committed tile");
+        let mut daa = 1;
+        while phase.turn() != PalwBisectTurnV1::Terminal {
+            let mut round = accused.round_v1(&site, &phase).expect("a round computes");
+            if let Some((lane, delta)) = lie {
+                let first = phase.child_ranges().iter().position(|&(f, _)| f == 0).expect("a child holds tile 0");
+                round.children[first].v_acc[lane] += delta;
+            }
+            phase.apply_round(&round, daa, 10).expect("the accused's disclosure folds to its own root");
+            let named = challenger.divergent_child_v1(&site, &phase).expect("the challenger recomputes");
+            assert_eq!(named.is_some(), lie.is_some(), "the challenger names a child exactly when the accused lied");
+            let child = named.unwrap_or_else(|| {
+                phase.child_ranges().iter().position(|&(f, c)| target >= f && target < f + c).expect("covered") as u8
+            });
+            let choice = PalwAttnDissectChoiceV1 {
+                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id: session(),
+                round: phase.round(),
+                child,
+            };
+            phase.apply_choice(&choice, daa + 1, 10).expect("a legal choice");
+            daa += 2;
+        }
+        Played { phase, lie }
+    }
+
+    /// The challenger's evidence with its OWN sub-roots in place of the filed ones — the bottom it
+    /// could build without the held root claim (the anchored form's).
+    fn with_own_top(challenger: &PalwAttnHeldEvidenceV1, artifact_root: Hash64) -> PalwAttnHeldEvidenceV1 {
+        let site = challenger.site_v1(artifact_root, true, PALW_HELD_STEP_LADDER_V1).expect("site");
+        let layout = palw_state_layout_v4(&challenger.evidence.binding.shape_profile, site.site.anchor_positions).expect("layout");
+        let anchor = challenger.evidence.anchor.as_ref().expect("anchored");
+        let own = palw_state_slice_sub_roots_v4(&layout, &anchor.chunk_hashes).expect("sub-roots");
+        PalwAttnHeldEvidenceV1 { evidence: challenger.evidence.clone(), slice_sub_roots: own }
+    }
+
+    fn bottom_verdict(
+        challenger: &PalwAttnHeldEvidenceV1,
+        played: &Played,
+        artifact_root: Hash64,
+    ) -> Result<PalwAttnCourtVerdictV1, PalwAttnCourtError> {
+        let anchored = challenger.site_v1(artifact_root, true, PALW_HELD_STEP_LADDER_V1).expect("the anchored site");
+        let bottom = challenger.bottom_v1(&anchored, &played.phase).expect("the bottom builds");
+        check_attn_dissect_bottom_v1(&played.phase, &bottom, &anchored.binding, &anchored.site, true)
+    }
+
+    /// A drilled run of the fixture's job, its material, and the fused leaf of `layer` at `call`,
+    /// head 0 — the site of the drill's lie, `lane` 1 of the head moved by `delta`.
+    struct Drilled {
+        backend: Qwen25A16Backend,
+        run: kaspa_consensus_core::palw_backend::PalwFpRunV1,
+        leaf: u64,
+    }
+
+    fn drilled(
+        artifact: &std::sync::Arc<Base0ArtifactV1>,
+        profile: &PalwShapeProfileV3,
+        layer: u16,
+        call: u32,
+        lie: Option<(i32, bool)>,
+    ) -> Drilled {
+        drilled_at(artifact, profile, layer, call, (0, 1), lie)
+    }
+
+    /// [`drilled`] at head `site.0`, lane `site.1` of it.
+    fn drilled_at(
+        artifact: &std::sync::Arc<Base0ArtifactV1>,
+        profile: &PalwShapeProfileV3,
+        layer: u16,
+        call: u32,
+        site: (u16, u16),
+        lie: Option<(i32, bool)>,
+    ) -> Drilled {
+        let producer = backend(artifact, profile, PAST_THE_CAP);
+        let (job, prompt, _) = job_for(&producer, profile, PREFILL, DECODE);
+        let run = match lie {
+            None => producer.execute_free_prompt(&job, &prompt).expect("the honest run"),
+            Some((delta, follow)) => producer
+                .execute_free_prompt_with_drill_fault_v2(
+                    &job,
+                    &prompt,
+                    PalwFreePromptDrillFaultV1::AttnOutput { call, layer, position: 0, head: site.0, lane: site.1, delta, follow },
+                )
+                .expect("the drilled run commits"),
+        };
+        let binding = binding_of(&run.outcome.material);
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(PalwStepTableV1::Attn, layer, fused).expect("the slot");
+        // One head per tile at this geometry: head `h`'s output is tile `h`.
+        let coord = PalwStepCoordinateV1 { call_index: call, node_slot: slot, position: 0, tile_index: u32::from(site.0) };
+        let leaf = canonical_step_leaf_index(profile, &binding.job_context, &coord).expect("the site's leaf");
+        Drilled { backend: producer, run, leaf }
+    }
+
+    /// **The consistent forger at `layer`**: the first of [`FOLLOW_DELTAS`] whose followed lie reaches
+    /// the checkpoint leg — its execution's checkpoint root is not the honest one.
+    fn following(
+        artifact: &std::sync::Arc<Base0ArtifactV1>,
+        profile: &PalwShapeProfileV3,
+        layer: u16,
+        call: u32,
+        honest: &Drilled,
+    ) -> Drilled {
+        let honest_root = binding_of(&honest.run.outcome.material).checkpoint_merkle_root;
+        let mut tried = 0;
+        for head in 0..profile.attn_heads {
+            for lane in 0..profile.attn_head_dim as u16 {
+                for delta in FOLLOW_DELTAS {
+                    tried += 1;
+                    let liar = drilled_at(artifact, profile, layer, call, (head, lane), Some((delta, true)));
+                    if binding_of(&liar.run.outcome.material).checkpoint_merkle_root != honest_root {
+                        eprintln!("layer {layer}: head {head} lane {lane} delta {delta} reaches the anchor (try {tried})");
+                        return liar;
+                    }
+                }
+            }
+        }
+        panic!("layer {layer}: no followed lie of one lane reaches the anchor ({tried} tried)")
+    }
+
+    /// **T-A3: the consistent forger at layers {0, mid, L−2}.** On a five-layer held row, at the
+    /// last decode call:
+    /// * `follow = true` — the anchor's slices after layer ℓ hold rows the lie fed, (K|V, ℓ) does not;
+    ///   the dense filing route (the anchored form's) refuses to build a bottom; the windowed
+    ///   challenger's bottom with its OWN top path does not reach the anchor (`ChunkNotInCheckpoint`:
+    ///   the acquittal-by-construction F9 named); with the FILED sub-roots it convicts;
+    /// * `follow = false` — the anchor is honest, and the challenger's bottom convicts on either top;
+    /// * the honest responder is acquitted at every tile.
+    #[test]
+    fn t_a3_the_consistent_forger_is_convicted_only_through_the_filed_sub_roots_at_every_depth() {
+        let (artifact, profile) = held_fixture(5, 128);
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let challenger = backend(&artifact, &profile, PAST_THE_CAP);
+        let wide = backend(&artifact, &profile, super::aheld_windowed_builder::DENSE_NETWORK);
+        let (_, _, ids) = job_for(&challenger, &profile, PREFILL, DECODE);
+        let call = DECODE - 1;
+        for layer in [0u16, 2, 3] {
+            let honest = drilled(&artifact, &profile, layer, call, None);
+            let responder =
+                honest.backend.attn_site_evidence_held_v1(&honest.run.outcome.material, honest.leaf, Some(&ids), None).expect("r");
+            let site = responder.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+            let tiles = u64::from(site.history_positions).div_ceil(u64::from(site.tile_positions));
+            assert!(tiles >= 3, "layer {layer}: the history plays rounds");
+            let filing = PalwAttnHeldFilingV1 {
+                binding: responder.evidence.binding.clone(),
+                out_tile: responder.evidence.out_tile.clone(),
+                anchor: responder.evidence.anchor.as_ref().expect("anchored").anchor.clone(),
+                slice_sub_roots: responder.slice_sub_roots.clone(),
+            };
+            let own = challenger.attn_site_evidence_held_v1(&[], honest.leaf, Some(&ids), Some(&filing)).expect("challenger");
+            for target in 0..tiles {
+                let played = play(&responder, &own, root, target);
+                assert!(played.lie.is_none());
+                assert_eq!(
+                    bottom_verdict(&own, &played, root),
+                    Ok(PalwAttnCourtVerdictV1::ChallengerDefeated),
+                    "layer {layer} tile {target}"
+                );
+            }
+
+            for follow in [true, false] {
+                let liar = if follow {
+                    following(&artifact, &profile, layer, call, &honest)
+                } else {
+                    drilled(&artifact, &profile, layer, call, Some((TILE_DELTA, false)))
+                };
+                assert_eq!(liar.leaf, honest.leaf);
+                let accused = liar
+                    .backend
+                    .attn_site_evidence_held_v1(&liar.run.outcome.material, liar.leaf, Some(&ids), None)
+                    .expect("the liar's own");
+                let filing = PalwAttnHeldFilingV1 {
+                    binding: accused.evidence.binding.clone(),
+                    out_tile: accused.evidence.out_tile.clone(),
+                    anchor: accused.evidence.anchor.as_ref().expect("anchored").anchor.clone(),
+                    slice_sub_roots: accused.slice_sub_roots.clone(),
+                };
+                let ch = challenger
+                    .attn_site_evidence_held_v1(&[], liar.leaf, Some(&ids), Some(&filing))
+                    .expect("the honest challenger builds from the liar's filing");
+                let anchored = ch.site_v1(root, true, PALW_HELD_STEP_LADDER_V1).expect("site");
+                assert_eq!(ch.fallback_v1(&anchored), Ok(None), "layer {layer}: slice (K|V, ℓ) precedes the lie");
+                let own_top = with_own_top(&ch, root);
+                let differs: Vec<bool> = own_top.slice_sub_roots.iter().zip(&filing.slice_sub_roots).map(|(a, b)| a != b).collect();
+                assert_eq!(differs.iter().any(|d| *d), follow, "layer {layer} follow {follow}: the anchor follows the lie or not");
+                let played = play(&accused, &ch, root, 0);
+                assert!(played.lie.is_some(), "layer {layer}: the forger must lie in its root");
+                assert_eq!(
+                    bottom_verdict(&ch, &played, root),
+                    Ok(PalwAttnCourtVerdictV1::ExecutorGuilty),
+                    "layer {layer} follow {follow}: through the filed sub-roots the forger is convicted"
+                );
+                let without = bottom_verdict(&own_top, &played, root);
+                if follow {
+                    assert!(
+                        matches!(without, Err(PalwAttnCourtError::ChunkNotInCheckpoint { .. })),
+                        "layer {layer}: without the filed sub-roots the challenger's path does not reach the anchor: {without:?}"
+                    );
+                    let dense = wide
+                        .attn_site_evidence_from_filing(
+                            &PalwAttnAccusedFilingV1 {
+                                binding: filing.binding.clone(),
+                                out_tile: filing.out_tile.clone(),
+                                anchor: Some(filing.anchor.clone()),
+                            },
+                            liar.leaf,
+                            Some(&ids),
+                        )
+                        .expect_err("the anchored form's filing route cannot build this bottom");
+                    assert!(dense.contains("does not root to the filed checkpoint"), "layer {layer}: {dense}");
+                } else {
+                    assert_eq!(without, Ok(PalwAttnCourtVerdictV1::ExecutorGuilty), "layer {layer}: an unfollowed lie either way");
+                }
+            }
+        }
+    }
+
+    // ---- the fold ----------------------------------------------------------------------------
+
+    fn params() -> PalwStateParamsV2 {
+        PalwStateParamsV2::new(100, 10, 10, 20, 600, 1000, h64(1), 4, 1000, 10_000, 1000, 0)
+            .unwrap()
+            .with_fp_quanta(8, 64)
+            .unwrap()
+            .with_turn_deadline_daa(20)
+            .unwrap()
+            .with_worker_carve_permille(300)
+            .unwrap()
+    }
+
+    /// testnet-12's launch line as far as the fold reads it.
+    fn launch() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 {
+            shard_court_ladder: Some(1 << 26),
+            held_context_ladder: Some(1 << 26),
+            audit_2026_09_23_active: true,
+            audit_2026_09_11_deep_active: true,
+            attn_anchored_root_active: true,
+            court_responder_coverage_active: true,
+            offence_attribution_active: true,
+            ..Default::default()
+        }
+    }
+
+    fn below() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 { offence_attribution_active: false, ..launch() }
+    }
+
+    /// One block through the real transition, checked: consistency, the delta re-applies and reverts,
+    /// and the carriage reloads under its root.
+    fn step(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        daa: u64,
+        objects: &[PalwConsensusObjectV2],
+        att: Option<&PalwAttemptEnvelopeV2>,
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+        let c =
+            PalwBlockContextV2 { block: Hash64::from_u64_word(0xE2E_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 10_000 };
+        let (child, delta) = apply_palw_transition_v2_with_extras(parent, p, &c, objects, att, false, false, false, true, extras)?;
+        child.assert_internal_consistency(p).expect("internal consistency");
+        child.assert_deadline_consistency(p).expect("deadline consistency");
+        assert_eq!(apply_delta_v2(parent, &delta, p).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
+        assert_eq!(revert_delta_v2(&child, &delta, p).expect("reverts"), *parent, "DAA {daa}: the delta reverts");
+        let reloaded = PalwStateCarriageV2::from_state(&child).into_state(p, Some(child.state_root())).expect("reloads");
+        assert_eq!(reloaded, child, "DAA {daa}: reload is the state");
+        Ok(child)
+    }
+
+    /// The drilled run's claim on the chain, licensed by both seats, and a held dissection opened by
+    /// `SEAT` at the drill's leaf with the one-move accusation the executor's fold evidence makes.
+    fn opened(
+        d: &Drilled,
+        profile: &PalwShapeProfileV3,
+        artifact_root: Hash64,
+        ids: &[u32],
+        extras: &PalwTransitionExtrasV1,
+    ) -> (PalwChainStateV2, Hash64, Hash64) {
+        let (s, claim_id) = licensed(d, profile, artifact_root, extras);
+        accuse(&s, d, claim_id, SEAT, d.leaf, ids, 104, extras).map(|(s, sid)| (s, claim_id, sid)).expect("the held dissection opens")
+    }
+
+    /// The drilled run's claim, licensed at DAA 103: the floor and the held class (through the
+    /// carriage), the bonds, the attempt committing the run's roots, the panel of two seats and both
+    /// seats' `Valid`.
+    fn licensed(
+        d: &Drilled,
+        profile: &PalwShapeProfileV3,
+        artifact_root: Hash64,
+        extras: &PalwTransitionExtrasV1,
+    ) -> (PalwChainStateV2, Hash64) {
+        let p = params();
+        let class_id = profile.shape_profile_id();
+        let binding = binding_of(&d.run.outcome.material);
+        let bond = |n: u64| PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(n),
+            pubkey: vec![n as u8; 4],
+            operator_pubkey: op_key(20 + n),
+            collateral: 1_000_000_000,
+            payout_payload: Hash64::from_u64_word(0x9A00 + n),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        };
+        let register = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            bond(PRODUCER),
+            bond(SEAT),
+            bond(BYSTANDER),
+            bond(COLLUDER),
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id,
+                artifact_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 100,
+                activation_daa: 0,
+                admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+                    profile: profile.clone(),
+                    canonical: binding.job_context.clone(),
+                    registrant_bond: bond_key(PRODUCER),
+                    signature: Vec::new(),
+                })),
+            },
+        ];
+        let s = step(&PalwChainStateV2::genesis(), &p, 100, &register, None, extras).expect("the registry");
+        assert!(s.class_is_held_v1(&class_id), "the held class records its ladder");
+        let network_domain = h64(999);
+        let executor_bond = bond_key(PRODUCER).0;
+        let env = PalwAttemptEnvelopeV2 {
+            attempt: PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain,
+                challenge: challenge_v2(network_domain, h64(5), 1_700, 1, h64(1), &executor_bond),
+                class_id,
+                executor_bond,
+                executor_pubkey: vec![7; 4],
+                operator_id: palw_operator_id_v2(&op_key(21)),
+                artifact_root,
+                trace_root: d.run.outcome.trace_root,
+                output_root: h64(32),
+                pwu: 40,
+                trace_manifest_root: h64(33),
+                trace_chunk_count: 4,
+                trace_retention_daa: 999_999,
+                execution_root: d.run.outcome.execution_root,
+            },
+            signature: vec![0; 8],
+        };
+        let claim_id = attempt_id_v2(&env.attempt);
+        let s = step(&s, &p, 101, &[], Some(&env), extras).expect("the claim");
+        let seats = vec![
+            PalwPanelSeatV2 { bond: bond_key(SEAT), operator_id: palw_operator_id_v2(&op_key(20 + SEAT)) },
+            PalwPanelSeatV2 { bond: bond_key(COLLUDER), operator_id: palw_operator_id_v2(&op_key(20 + COLLUDER)) },
+        ];
+        let s = step(&s, &p, 102, &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None, extras)
+            .expect("the panel");
+        let valid = |seat: u64| PalwSeatReceiptV2 {
+            claim: Hash64::default(),
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: bond_key(seat),
+            signed_daa: 0,
+            signature: Vec::new(),
+        };
+        let s = step(
+            &s,
+            &p,
+            103,
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: vec![valid(SEAT), valid(COLLUDER)] }],
+            None,
+            extras,
+        )
+        .expect("the licence");
+        (s, claim_id)
+    }
+
+    /// `accuser`'s one-move accusation at the fused `leaf` folded at `daa`: the executor's fold
+    /// evidence, stripped of its history — the object the bound verdict defers to the dissection.
+    /// The session it opened, or the fold's refusal.
+    #[allow(clippy::too_many_arguments)]
+    fn accuse(
+        s: &PalwChainStateV2,
+        d: &Drilled,
+        claim_id: Hash64,
+        accuser: u64,
+        leaf: u64,
+        ids: &[u32],
+        daa: u64,
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<(PalwChainStateV2, Hash64), PalwStateV2Error> {
+        let p = params();
+        let binding = binding_of(&d.run.outcome.material);
+        let roots = PalwClaimRootsV1 {
+            execution_root: d.run.outcome.execution_root,
+            trace_root: d.run.outcome.trace_root,
+            anchor: binding.job_context.job_id,
+            attempt_draw: None,
+            output_root: None,
+            job_pin: None,
+        };
+        let evidence = kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+            &d.backend,
+            &d.run.outcome.material,
+            ids,
+            roots,
+            binding.step_leaf_count,
+            leaf,
+            d.backend.prompt_ids_form(),
+        )
+        .expect("the executor's own evidence at the leaf")
+        .for_the_one_move_v2();
+        let mut accusation =
+            evidence.into_accusation_v1(claim_id, roots.execution_root, roots.trace_root, bond_key(PRODUCER), bond_key(accuser));
+        accusation.signature = vec![9; 8];
+        let s = step(s, &p, daa, &[PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(accusation) }], None, extras)?;
+        let sid = s
+            .court_sessions_iter()
+            .find(|(_, x)| x.claim == claim_id && x.challenger_bond == bond_key(accuser))
+            .map(|(k, _)| *k)
+            .expect("a session on the claim");
+        Ok((s, sid))
+    }
+
+    /// The responder's move 1: the held form past the fence (the builder's object), the anchored form
+    /// below it (the same fields, no sub-roots) — `root` in place of the evidence's own when it lied.
+    fn move_one(
+        responder: &PalwAttnHeldEvidenceV1,
+        artifact_root: Hash64,
+        sid: Hash64,
+        root: &PalwAttnRootClaimV1,
+        held: bool,
+    ) -> PalwConsensusObjectV2 {
+        let site = responder.site_v1(artifact_root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+        let PalwConsensusObjectV2::CourtAttnRootClaimedHeld { binding, out_tile, anchor, slice_sub_roots, operand_openings, .. } =
+            responder.root_claim_held_v1(&site, sid, 2).expect("the held root claim")
+        else {
+            unreachable!("the builder files the held form")
+        };
+        let (session_id, root, arity, signature) = (sid, root.clone(), 2, vec![0xAA; 8]);
+        if held {
+            PalwConsensusObjectV2::CourtAttnRootClaimedHeld {
+                session_id,
+                root,
+                arity,
+                binding,
+                out_tile,
+                anchor,
+                slice_sub_roots,
+                operand_openings,
+                signature,
+            }
+        } else {
+            PalwConsensusObjectV2::CourtAttnRootClaimedAnchored {
+                session_id,
+                root,
+                arity,
+                binding,
+                out_tile,
+                anchor,
+                operand_openings,
+                signature,
+            }
+        }
+    }
+
+    fn adjudicate(
+        state: &PalwChainStateV2,
+        sid: Hash64,
+        proof: &PalwCourtVerdictProofV2,
+    ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(1 << 26, 20, 2).unwrap();
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(
+            state,
+            &sid,
+            proof,
+            &court,
+            1 << 26,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            true,
+            // ADR-0152 v3.1 §4-bis.9's decode-close door (`palw_offence_attribution`): read by a
+            // decode-token close only, never by an attention bottom.
+            true,
+        )
+    }
+
+    fn collateral(s: &PalwChainStateV2, n: u64) -> u64 {
+        s.bond(&bond_key(n)).expect("the bond").collateral
+    }
+
+    fn phase_of(s: &PalwChainStateV2, sid: &Hash64) -> PalwAttnDissectPhaseV1 {
+        s.court_session(sid).and_then(|x| x.dissection.clone()).expect("the phase is open")
+    }
+
+    /// The rounds and choices through the fold, as [`play`] plays them against the kernels: the
+    /// accused discloses (its lie pushed into tile 0's child), the challenger names the divergent
+    /// child or takes the one covering `target`. Returns the state at `Terminal` and the next DAA.
+    #[allow(clippy::too_many_arguments)]
+    fn rounds_through_the_fold(
+        mut state: PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+        sid: Hash64,
+        accused: &PalwAttnHeldEvidenceV1,
+        challenger: &PalwAttnHeldEvidenceV1,
+        artifact_root: Hash64,
+        lie: Option<(usize, i64)>,
+        target: u64,
+        mut daa: u64,
+    ) -> (PalwChainStateV2, u64) {
+        let site = accused.site_v1(artifact_root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+        let mut guard = 0;
+        while phase_of(&state, &sid).turn() != PalwBisectTurnV1::Terminal {
+            let phase = phase_of(&state, &sid);
+            let mut round = accused.round_v1(&site, &phase).expect("a round computes");
+            if let Some((lane, delta)) = lie {
+                let first = phase.child_ranges().iter().position(|&(f, _)| f == 0).expect("a child holds tile 0");
+                round.children[first].v_acc[lane] += delta;
+            }
+            state = step(
+                &state,
+                p,
+                daa,
+                &[PalwConsensusObjectV2::CourtAttnDissected { session_id: sid, round, signature: vec![0xAA; 8] }],
+                None,
+                extras,
+            )
+            .expect("the round folds");
+            let phase = phase_of(&state, &sid);
+            let named = challenger.divergent_child_v1(&site, &phase).expect("the challenger recomputes");
+            assert_eq!(named.is_some(), lie.is_some(), "a child is named exactly when the accused lied");
+            let child = named.unwrap_or_else(|| {
+                phase.child_ranges().iter().position(|&(f, c)| target >= f && target < f + c).expect("covered") as u8
+            });
+            let choice =
+                PalwAttnDissectChoiceV1 { version: PALW_ATTN_COURT_OBJECT_VERSION_V1, session_id: sid, round: phase.round(), child };
+            state = step(
+                &state,
+                p,
+                daa + 1,
+                &[PalwConsensusObjectV2::CourtAttnChildChosen { session_id: sid, choice, signature: vec![0xBB; 8] }],
+                None,
+                extras,
+            )
+            .expect("the choice folds");
+            daa += 2;
+            guard += 1;
+            assert!(guard < 32, "the dissection did not narrow");
+        }
+        (state, daa)
+    }
+
+    fn proof_of(
+        challenger: &PalwAttnHeldEvidenceV1,
+        state: &PalwChainStateV2,
+        sid: Hash64,
+        artifact_root: Hash64,
+    ) -> PalwCourtVerdictProofV2 {
+        let anchored = challenger.site_v1(artifact_root, true, PALW_HELD_STEP_LADDER_V1).expect("the anchored site");
+        let bottom = challenger.bottom_v1(&anchored, &phase_of(state, &sid)).expect("the bottom builds");
+        PalwCourtVerdictProofV2::AttnDissection {
+            binding: Box::new(challenger.evidence.binding.clone()),
+            bottom: Box::new(bottom),
+            operand_openings: challenger.evidence.operand_openings.clone(),
+        }
+    }
+
+    /// **The held happy path, end to end, on a held fixture row**: an honest executor's claim,
+    /// licensed; a seat's one-move accusation at a fused leaf (the executor's own fold evidence,
+    /// stripped) opens the held dissection; the executor files the held root claim its windowed
+    /// builder makes; the challenger reads the filing off that object, builds its own evidence from
+    /// one replay, and plays every round against the executor's disclosures, naming nothing; its
+    /// bottom acquits; the `ChallengerDefeated` close charges the challenger and the claim stands and
+    /// goes on to `Final`. Every block re-applied, reverted and reloaded. The fence-off twin: below
+    /// `palw_offence_attribution` the held form is refused and the anchored form plays the same
+    /// dispute to the same acquittal; past it the anchored form is refused.
+    #[test]
+    fn the_held_happy_path_end_to_end_through_the_fold() {
+        let (artifact, profile) = held_fixture(2, 128);
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let challenger = backend(&artifact, &profile, PAST_THE_CAP);
+        let (_, _, ids) = job_for(&challenger, &profile, PREFILL, DECODE);
+        let honest = drilled(&artifact, &profile, 0, DECODE - 1, None);
+        let p = params();
+        for (extras, held) in [(launch(), true), (below(), false)] {
+            let (s, claim, sid) = opened(&honest, &profile, root, &ids, &extras);
+            let responder = honest
+                .backend
+                .attn_site_evidence_held_v1(&honest.run.outcome.material, honest.leaf, Some(&ids), None)
+                .expect("the executor's windowed evidence");
+            let site = responder.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+            let own_root = responder.evidence.root_claim_v1(&site).expect("the root");
+            let refused =
+                step(&s, &p, 105, &[move_one(&responder, root, sid, &own_root, !held)], None, &extras).expect_err("the other form");
+            assert!(matches!(refused, PalwStateV2Error::HeldRootClaimRefused { .. }), "held {held}: {refused:?}");
+            let object = move_one(&responder, root, sid, &own_root, held);
+            let s = step(&s, &p, 105, std::slice::from_ref(&object), None, &extras).expect("move 1 folds");
+            let filing = match PalwAttnHeldFilingV1::from_object_v1(&object) {
+                Some((at, filing)) => {
+                    assert_eq!(at, sid);
+                    filing
+                }
+                // Below the fence the chain carries no sub-roots: the challenger's own stand in.
+                None => PalwAttnHeldFilingV1 {
+                    binding: responder.evidence.binding.clone(),
+                    out_tile: responder.evidence.out_tile.clone(),
+                    anchor: responder.evidence.anchor.as_ref().expect("anchored").anchor.clone(),
+                    slice_sub_roots: responder.slice_sub_roots.clone(),
+                },
+            };
+            let ch = challenger.attn_site_evidence_held_v1(&[], honest.leaf, Some(&ids), Some(&filing)).expect("the challenger");
+            assert_eq!(with_own_top(&ch, root), ch, "an honest execution's sub-roots are the challenger's own");
+            let tiles = u64::from(site.history_positions).div_ceil(u64::from(site.tile_positions));
+            let (s, daa) = rounds_through_the_fold(s, &p, &extras, sid, &responder, &ch, root, None, tiles - 1, 106);
+            let proof = proof_of(&ch, &s, sid, root);
+            assert_eq!(adjudicate(&s, sid, &proof), Ok(PalwCourtVerdictV2::ChallengerDefeated), "held {held}: acquitted");
+            let end = step(
+                &s,
+                &p,
+                daa,
+                &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ChallengerDefeated, proof }],
+                None,
+                &extras,
+            )
+            .expect("the close folds");
+            assert!(collateral(&end, SEAT) < collateral(&s, SEAT), "held {held}: the losing challenger pays");
+            assert_eq!(collateral(&end, PRODUCER), collateral(&s, PRODUCER), "held {held}: the honest executor pays nothing");
+            assert!(matches!(end.claim(&claim).expect("claim").phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+            let mut state = end;
+            for at in daa + 1..daa + 1_000 {
+                state = step(&state, &p, at, &[], None, &extras).unwrap_or_else(|e| panic!("DAA {at}: {e}"));
+                if matches!(state.claim(&claim).expect("claim").phase, PalwClaimPhaseV2::Final { .. }) {
+                    break;
+                }
+            }
+            assert!(
+                matches!(state.claim(&claim).expect("claim").phase, PalwClaimPhaseV2::Final { .. }),
+                "held {held}: the acquitted claim goes on to Final"
+            );
+        }
+    }
+
+    /// **F9 end to end through the fold**: the consistent forger (the N5 drill, `follow = true`, at
+    /// layer 0 of the last decode call) files the held root claim its own fold builds, with the least
+    /// lie in its root; the honest challenger reads the filing off the object, names the lie's child
+    /// at every round, and bottoms — with the FILED sub-roots the close convicts and the claim is
+    /// voided `CourtHeldVerdict` (the review's F3, decision (B): the producer charged as a fraud, no
+    /// kind-3 basis); with its own top path the close does not adjudicate. The fence-off twin:
+    /// below `palw_offence_attribution` the forger files the anchored form and the challenger's only
+    /// bottom does not reach its anchor — the escape C2 closes.
+    #[test]
+    fn the_consistent_forger_end_to_end_is_voided_court_fraud_only_through_the_filed_sub_roots() {
+        let (artifact, profile) = held_fixture(2, 128);
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let challenger = backend(&artifact, &profile, PAST_THE_CAP);
+        let (_, _, ids) = job_for(&challenger, &profile, PREFILL, DECODE);
+        let honest = drilled(&artifact, &profile, 0, DECODE - 1, None);
+        let liar = following(&artifact, &profile, 0, DECODE - 1, &honest);
+        let p = params();
+        let accused = liar
+            .backend
+            .attn_site_evidence_held_v1(&liar.run.outcome.material, liar.leaf, Some(&ids), None)
+            .expect("the forger's own windowed evidence");
+        let site = accused.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+        let committed =
+            palw_attn_opened_lanes_v1(&accused.evidence.out_tile, &site.binding, site.head_lanes.2 as usize).expect("tile");
+        let honest_root = accused.evidence.root_claim_v1(&site).expect("root");
+        let (lying_root, lane, delta) = least_lie(&honest_root, &committed, site.site.params.values).expect("the forger must lie");
+
+        for (extras, held) in [(launch(), true), (below(), false)] {
+            let (s, claim, sid) = opened(&liar, &profile, root, &ids, &extras);
+            let object = move_one(&accused, root, sid, &lying_root, held);
+            let s = step(&s, &p, 105, std::slice::from_ref(&object), None, &extras).expect("the lying root claim opens the phase");
+            let filing = PalwAttnHeldFilingV1::from_object_v1(&object).map(|(_, f)| f).unwrap_or_else(|| PalwAttnHeldFilingV1 {
+                binding: accused.evidence.binding.clone(),
+                out_tile: accused.evidence.out_tile.clone(),
+                anchor: accused.evidence.anchor.as_ref().expect("anchored").anchor.clone(),
+                slice_sub_roots: accused.slice_sub_roots.clone(),
+            });
+            let ch = challenger.attn_site_evidence_held_v1(&[], liar.leaf, Some(&ids), Some(&filing)).expect("the challenger");
+            let own_top = with_own_top(&ch, root);
+            assert_ne!(own_top.slice_sub_roots, filing.slice_sub_roots, "the anchor follows the lie");
+            let (s, daa) = rounds_through_the_fold(s, &p, &extras, sid, &accused, &ch, root, Some((lane, delta)), 0, 106);
+            let without = adjudicate(&s, sid, &proof_of(&own_top, &s, sid, root));
+            assert!(
+                matches!(without, Err(PalwCourtV2Error::AttnCourt(PalwAttnCourtError::ChunkNotInCheckpoint { .. }))),
+                "held {held}: the challenger's own top path does not reach the forger's anchor: {without:?}"
+            );
+            if !held {
+                // Below the fence the chain holds no sub-roots: the forger's anchor is out of reach.
+                continue;
+            }
+            let proof = proof_of(&ch, &s, sid, root);
+            assert_eq!(adjudicate(&s, sid, &proof), Ok(PalwCourtVerdictV2::ExecutorGuilty), "through the filed sub-roots");
+            let end = step(
+                &s,
+                &p,
+                daa,
+                &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof }],
+                None,
+                &extras,
+            )
+            .expect("the close folds");
+            assert!(
+                matches!(
+                    end.claim(&claim).expect("claim").phase,
+                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtHeldVerdict, .. }
+                ),
+                "a held dissection's verdict, recorded as one (decision (B)): {:?}",
+                end.claim(&claim).expect("claim").phase
+            );
+            assert!(collateral(&end, PRODUCER) < collateral(&s, PRODUCER), "the forger is charged");
+            assert_eq!(collateral(&end, SEAT), collateral(&s, SEAT), "the winning challenger pays nothing");
+        }
+    }
+
+    /// **C3 and C4 end to end: a decoy shields no consistent forger.** The forger's own Sybil (a
+    /// bonded bystander on no panel) opens a held dissection at a fused leaf the forger can defend —
+    /// head 1's tile, beside the lie in head 0's — and the forger answers it honestly with the held
+    /// root claim its builder makes. While that session is open:
+    /// * below `palw_offence_attribution` the seat's accusation at the lie meets one court at a time
+    ///   (the shield the decoy was for);
+    /// * past it the seat's dissection opens beside the decoy's;
+    /// * the decoy plays its dispute to the bottom it asked for and loses — `ChallengerDefeated`
+    ///   charges the Sybil (C4) and the claim stands;
+    /// * the forger must then answer the seat: its lying root, the rounds, and the seat's bottom through
+    ///   the filed sub-roots convict — voided `CourtHeldVerdict` (decision (B)), no session left, the
+    ///   seat not charged.
+    #[test]
+    fn a_decoy_shields_no_consistent_forger_end_to_end() {
+        let (artifact, profile) = held_fixture(2, 128);
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let challenger = backend(&artifact, &profile, PAST_THE_CAP);
+        let (_, _, ids) = job_for(&challenger, &profile, PREFILL, DECODE);
+        let honest = drilled(&artifact, &profile, 0, DECODE - 1, None);
+        let liar = following(&artifact, &profile, 0, DECODE - 1, &honest);
+        let decoy_leaf = drilled_at(&artifact, &profile, 0, DECODE - 1, (1, 0), None).leaf;
+        assert_ne!(decoy_leaf, liar.leaf);
+        let p = params();
+        let x = launch();
+        let (s, claim) = licensed(&liar, &profile, root, &x);
+        let (s, decoy) =
+            accuse(&s, &liar, claim, BYSTANDER, decoy_leaf, &ids, 104, &x).expect("the decoy opens at the defensible leaf");
+
+        // The forger answers the decoy, honestly: head 1's tile is not its lie.
+        let defended = liar
+            .backend
+            .attn_site_evidence_held_v1(&liar.run.outcome.material, decoy_leaf, Some(&ids), None)
+            .expect("the forger's evidence at the decoy's leaf");
+        let defended_site = defended.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+        let defended_root = defended.evidence.root_claim_v1(&defended_site).expect("root");
+        let committed =
+            palw_attn_opened_lanes_v1(&defended.evidence.out_tile, &defended_site.binding, defended_site.head_lanes.2 as usize)
+                .expect("tile");
+        assert!(least_lie(&defended_root, &committed, defended_site.site.params.values).is_none(), "an honest tile");
+        let object = move_one(&defended, root, decoy, &defended_root, true);
+        let s = step(&s, &p, 105, std::slice::from_ref(&object), None, &x).expect("the decoy's move 1");
+        // The Sybil holds the forger's capture: its evidence is the forger's own (head 1's tile comes
+        // after the lie in leaf order, so an honest replay's prefix is not the committed one there).
+        let sybil = defended.clone();
+        let tiles = u64::from(defended_site.history_positions).div_ceil(u64::from(defended_site.tile_positions));
+        let (s, daa) = rounds_through_the_fold(s, &p, &x, decoy, &defended, &sybil, root, None, tiles - 1, 106);
+
+        // Below the fence the decoy is a shield; past it the seat opens beside it.
+        assert!(
+            matches!(
+                accuse(&s, &liar, claim, SEAT, liar.leaf, &ids, daa, &below()).expect_err("one court at a time"),
+                PalwStateV2Error::ShardCourtClaimUnderSession { .. }
+            ),
+            "below the fence the seat waits behind the decoy"
+        );
+        let (s, sid) =
+            accuse(&s, &liar, claim, SEAT, liar.leaf, &ids, daa, &x).expect("the seat's dissection opens beside the decoy's");
+        assert_eq!(s.court_sessions_for_claim(&claim), 2);
+
+        // The decoy bottoms the dispute it asked for, and loses.
+        let proof = proof_of(&sybil, &s, decoy, root);
+        assert_eq!(adjudicate(&s, decoy, &proof), Ok(PalwCourtVerdictV2::ChallengerDefeated));
+        let s2 = step(
+            &s,
+            &p,
+            daa + 1,
+            &[PalwConsensusObjectV2::CourtClosed { session_id: decoy, verdict: PalwCourtVerdictV2::ChallengerDefeated, proof }],
+            None,
+            &x,
+        )
+        .expect("the decoy's close folds");
+        assert!(collateral(&s2, BYSTANDER) < collateral(&s, BYSTANDER), "the Sybil pays for the court it lost");
+        assert!(matches!(s2.claim(&claim).expect("claim").phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        assert_eq!(s2.court_sessions_for_claim(&claim), 1);
+
+        // And the forger answers the seat.
+        let accused = liar
+            .backend
+            .attn_site_evidence_held_v1(&liar.run.outcome.material, liar.leaf, Some(&ids), None)
+            .expect("the forger's own evidence at the lie");
+        let site = accused.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+        let committed =
+            palw_attn_opened_lanes_v1(&accused.evidence.out_tile, &site.binding, site.head_lanes.2 as usize).expect("tile");
+        let honest_root = accused.evidence.root_claim_v1(&site).expect("root");
+        let (lying_root, lane, delta) = least_lie(&honest_root, &committed, site.site.params.values).expect("the forger must lie");
+        let object = move_one(&accused, root, sid, &lying_root, true);
+        let s3 = step(&s2, &p, daa + 2, std::slice::from_ref(&object), None, &x).expect("the seat's move 1");
+        let filing = PalwAttnHeldFilingV1::from_object_v1(&object).expect("a held filing").1;
+        let seat = challenger.attn_site_evidence_held_v1(&[], liar.leaf, Some(&ids), Some(&filing)).expect("the seat's evidence");
+        let (s4, at) = rounds_through_the_fold(s3, &p, &x, sid, &accused, &seat, root, Some((lane, delta)), 0, daa + 3);
+        let proof = proof_of(&seat, &s4, sid, root);
+        assert_eq!(adjudicate(&s4, sid, &proof), Ok(PalwCourtVerdictV2::ExecutorGuilty));
+        let end = step(
+            &s4,
+            &p,
+            at,
+            &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof }],
+            None,
+            &x,
+        )
+        .expect("the conviction folds");
+        assert!(matches!(
+            end.claim(&claim).expect("claim").phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtHeldVerdict, .. }
+        ));
+        assert_eq!(end.court_sessions_for_claim(&claim), 0);
+        assert_eq!(collateral(&end, SEAT), collateral(&s4, SEAT), "the winning seat pays nothing");
+        assert!(collateral(&end, PRODUCER) < collateral(&s4, PRODUCER), "the forger is charged");
     }
 }

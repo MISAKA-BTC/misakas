@@ -14620,6 +14620,78 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
     assert!(source.contains("palw_fp_objects_from_accepted_txs_by_class_v1("), "the walk bounds each commitment by its class");
 }
 
+/// **t12 (`palw_audit_2026_09_23`): the acceptance layer derives the one-move verdict BOUND to the
+/// claim, at the fence the fold reads** — the claim's execution root, class and artifact root, and
+/// the fence at the block's DAA. An arm that called the unfenced v1 would admit a fused accusation
+/// the fold then refuses (or the reverse below the fence): the two layers disagreeing about one
+/// object.
+#[test]
+fn the_one_move_acceptance_arm_derives_the_bound_verdict_at_the_fence() {
+    let source = include_str!("processor.rs");
+    let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
+    let end = at + source[at..].find("\n                Obj::").expect("the next arm");
+    let arm = &source[at..end];
+    assert!(arm.contains("palw_shard_court_verdict_at_v2("), "the fenced verdict");
+    assert!(arm.contains("self.palw_audit_2026_09_23_at(point.daa_score)"), "at the block's own fence");
+    assert!(arm.contains("execution_root: claim.execution_root"), "bound to the claim's committed root");
+    assert!(!arm.contains("palw_shard_court_verdict_v1("), "never the unfenced verdict directly");
+}
+
+/// **ADR-0152 §4-ter (the shard-court addendum): the acceptance layer refuses a held class's
+/// `NeedsDissection` where the fold does** — past `palw_offence_attribution` at the block's own DAA,
+/// for a class the bundle's answerability mirror lists (the 2M row), and only there: the arm reads
+/// the same mirror and the same fence the fold refuses `ShardCourtHeldSiteUnanswerable` under, so
+/// the gate and the fold cannot disagree about which fused accusation opens a session.
+#[test]
+fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold_does() {
+    let source = include_str!("processor.rs");
+    let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
+    let end = at + source[at..].find("\n                Obj::").expect("the next arm");
+    let arm = &source[at..end];
+    let refusal = arm.find("state_params.held_class_is_unanswerable_v1(&claim.class_id)").expect("the mirror is read");
+    let guard = &arm[refusal.saturating_sub(160)..refusal];
+    assert!(
+        guard.contains("if self.palw_offence_attribution_at(point.daa_score)") && guard.contains("NeedsDissection)"),
+        "at the fence"
+    );
+    assert!(arm[refusal..].contains("return Err("), "and refused");
+    let fold = include_str!("../../../core/src/palw_state_v2.rs");
+    let fold_at = fold.find("PalwConsensusObjectV2::ShardCourtAccused { accusation } => {").expect("the fold's arm");
+    let fold_arm =
+        &fold[fold_at..fold_at + fold[fold_at..].find("PalwConsensusObjectV2::CheckpointAccused { accusation } => {").unwrap()];
+    assert!(
+        fold_arm
+            .contains("builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id)"),
+        "the fold refuses under the same fence and mirror"
+    );
+}
+
+/// **ADR-0152 §4-ter: the acceptance layer's half of C2 and C5.** The held root claim (tag 57) is
+/// admitted by the same arm as the other two forms of move 1 — the k-ary fence, the declared arity,
+/// the responder's signature over the root claim — and exists only past `palw_offence_attribution`
+/// at the block's own DAA (the fold refuses it below, `HeldRootClaimRefused`); and a class
+/// registration past the fence is asked `palw_held_class_is_attributable_v1` beside the admission
+/// gate, at the block's own DAA.
+#[test]
+fn the_acceptance_layer_takes_the_held_root_claim_past_the_fence_and_refuses_an_unattributable_class() {
+    let source = include_str!("processor.rs");
+    let at = source.find("Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. }").expect("the move-1 arm");
+    let end = at + source[at..].find("\n                Obj::CourtAttnDissected").expect("the next arm");
+    let arm = &source[at..end];
+    assert!(arm.contains("| Obj::CourtAttnRootClaimedHeld { session_id, root, arity, signature, .. } =>"), "one arm, three forms");
+    let fence =
+        arm.find("matches!(object, Obj::CourtAttnRootClaimedHeld { .. }) && !self.palw_offence_attribution_at(point.daa_score)");
+    assert!(fence.is_some(), "the held form's fence, at the block's DAA");
+    for check in ["palw_attn_move_is_admissible_v2(", "derived.dissection_arity()", "check_court_attn_root_claim_acceptance_v2("] {
+        assert!(arm.contains(check), "the held form takes `{check}` like the others");
+    }
+    let registration = source.find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(").expect("the gate");
+    let after = &source[registration..registration + 6_000];
+    let c5 = after.find("palw_held_class_is_attributable_v1(").expect("C5 beside the gate");
+    assert!(after[c5..c5 + 200].contains("self.palw_offence_attribution_at(point.daa_score)"), "at the block's fence");
+    assert!(source.contains("O::CourtAttnRootClaimedHeld { .. } => \"CourtAttnRootClaimedHeld\","), "and it has a name");
+}
+
 // ---- ADR-0125: the execution lane through the real pipeline ----------------------------------
 
 /// A network with the round lane open from genesis, two permits a round, and one schedule span far

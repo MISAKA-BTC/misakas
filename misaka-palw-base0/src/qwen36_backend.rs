@@ -158,6 +158,10 @@ pub struct Qwen36Backend {
     /// (`Legacy`) or the chain's `CoreV1` — the job an anchor implies and the rendered rule of every
     /// output root. Set by the node from its params (`set_attempt_rules_v1`); `Legacy` by default.
     attempt_rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1,
+    /// **ADR-0152 §4-ter N4's selector**, as the dense tier's
+    /// (`Qwen25A16Backend::with_held_answerability_v1`): past `palw_offence_attribution` no held class
+    /// this family serves answers a dissection — it has no windowed builder (the review's F4).
+    held_answerability: bool,
 }
 
 impl Qwen36Backend {
@@ -251,6 +255,7 @@ impl Qwen36Backend {
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
+            held_answerability: false,
         }
     }
 
@@ -259,6 +264,13 @@ impl Qwen36Backend {
     /// which is what every shipped preset froze.
     pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
         self.network_ladder = max_step_leaf_count;
+        self
+    }
+
+    /// **ADR-0152 §4-ter N4: whether the chain this backend serves is past `palw_offence_attribution`**
+    /// (the dense tier's `with_held_answerability_v1`).
+    pub fn with_held_answerability_v1(mut self, armed: bool) -> Self {
+        self.held_answerability = armed;
         self
     }
 
@@ -344,6 +356,7 @@ impl Qwen36Backend {
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
+            held_answerability: false,
         }
     }
 
@@ -388,6 +401,7 @@ impl Qwen36Backend {
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
+            held_answerability: false,
         })
     }
 
@@ -1374,6 +1388,12 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
 
     fn attempt_rules_v1(&self) -> kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1 {
         self.attempt_rules
+    }
+
+    /// ADR-0152 §4-ter N4: the setter form of [`Self::with_held_answerability_v1`] — what a node's
+    /// registry applies to every backend it resolves (`Params::palw_held_answerability_v1()`).
+    fn set_held_answerability_v1(&mut self, armed: bool) {
+        self.held_answerability = armed;
     }
 
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
@@ -2697,9 +2717,17 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         .map_err(|e| crate::attn_responder::base0_attn_name_the_missing_anchor_v1(e, filing))
     }
 
+    /// **ADR-0152 §4-ter N4 (the review's F4):** past `palw_offence_attribution` EVERY held class this
+    /// family serves says `false` — it has no windowed builder (`attn_site_evidence_held_v1` is the
+    /// trait's `Err`), and its dense builder answers a held job only under the materialization cap.
+    /// The consensus predicate agrees: a recurrent held class is unanswerable
+    /// (`PalwHeldUnanswerableV1::Recurrent`), so C1 lists it and C5 refuses to register it. Below the
+    /// fence, byte for byte what it was.
     fn supports_dissection(&self) -> bool {
         self.plan.is_some()
             && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1)
+            && !(self.held_answerability
+                && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4))
     }
 
     fn has_fused_site(&self) -> bool {
@@ -3978,5 +4006,33 @@ mod tests {
         let dense_profile = dense_backend.resource_profile_v1(Some(&job2), PalwResourceRoleV1::Producer).expect("derives");
         assert!(matches!(dense_profile.capture, PalwCaptureRetentionV1::DenseTiles { .. }), "{:?}", dense_profile.capture);
         assert!(dense_profile.capture_retained_bytes >= dense_profile.leaves * (64 + 56));
+    }
+
+    /// **ADR-0152 §4-ter N4 (the review's F4): past `palw_offence_attribution` no held hybrid class
+    /// takes a dissection's turn** — this family has no windowed builder, so its held (graph-v7) row
+    /// says `false` there, while it says `true` below the fence and its non-held (graph-v6) row is
+    /// unchanged on either side. The consensus predicate agrees (the class is `Recurrent`).
+    #[test]
+    fn past_the_attribution_fence_no_held_hybrid_class_takes_the_dissections_turn() {
+        let (artifact, v5) = crate::fuzz_qwen36::tiny_class_v5_for_tests();
+        let geometry = kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+            n_ctx: v5.n_ctx,
+            ..crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4)
+        };
+        let v6 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v6(geometry).expect("the v6 projection");
+        let v7 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(geometry).expect("the v7 projection");
+        let artifact = std::sync::Arc::new(artifact);
+        let build = |profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, armed: bool| {
+            Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (3, 4))
+                .expect("servable")
+                .with_held_answerability_v1(armed)
+        };
+        assert!(build(&v7, false).supports_dissection(), "below the fence the held hybrid answered as before");
+        assert!(!build(&v7, true).supports_dissection(), "past it no held hybrid class takes the turn");
+        assert!(build(&v6, false).supports_dissection() && build(&v6, true).supports_dissection(), "a non-held row is unchanged");
+        assert!(matches!(
+            kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&v7),
+            Some(kaspa_consensus_core::palw_class_admission_v2::PalwHeldUnanswerableV1::Recurrent { .. })
+        ));
     }
 }

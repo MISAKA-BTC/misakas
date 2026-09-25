@@ -1380,6 +1380,18 @@ pub struct PalwStateParamsV2 {
     /// on testnet-12 at launch.
     #[borsh(skip)]
     class_verify_rows: Vec<crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1>,
+    /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
+    /// the genesis held rows whose `n_ctx` exceeds [`PALW_HELD_ANSWERABLE_N_CTX_V1`] (testnet-12: the
+    /// 2M row), written by `Params::sync_palw_held_answerability` where `palw_offence_attribution` is
+    /// armed and empty everywhere else. Derived, not hashed: the rows are inside the ruleset id
+    /// already, and `validate_palw_v2` refuses a bundle whose copy disagrees with the derivation, so a
+    /// missed sync is a startup refusal rather than a 2M class quietly read as answerable. Read only
+    /// past the fence: a fused accusation of such a class is refused rather than parked on a
+    /// dissection nobody can finish, and its responder keeps the mercy (C1). Not S's
+    /// `rcore_conservative_classes`, which means "charged to Final" — the same class on t12, a
+    /// different question.
+    #[borsh(skip)]
+    held_unanswerable_classes: Vec<Hash64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1396,6 +1408,40 @@ pub struct PalwClassReceiptWindowV1 {
 /// ADR-0132 §7.6: the challenge window, in DAA, for a claim licensed past
 /// `Params::palw_short_challenge_window` (`6fdf6ba7`'s 120, as a fence).
 pub const PALW_SHORT_CHALLENGE_WINDOW_DAA_V1: u64 = 120;
+
+/// **ADR-0152 §4-ter (A-held): the widest held context an honest party can dissect inside a turn.**
+///
+/// A held class at or below it is ANSWERABLE: its responder rebuilds the fused site's evidence from
+/// one plain forward to the site (≈ 8,192 positions; ADR-0121's measured 91 s at 1,024 puts the
+/// whole replay inside a 42-DAA turn) and files the root claim and every round, and a challenger
+/// recomputes the same triples — so past `palw_offence_attribution` its dissection is played and a
+/// silence at it is a default. Above it (testnet-12's 2M row, 2^21 positions) neither party can
+/// compute an honest move inside a turn — a reference replay is days — so the class keeps the mercy,
+/// a fused accusation of it is refused, and a registration of such a class is refused (C5).
+pub const PALW_HELD_ANSWERABLE_N_CTX_V1: u32 = 8_192;
+
+/// **The held classes a bundle's genesis registers that no honest party can dissect** — the one
+/// derivation `Params::sync_palw_held_answerability` writes into the mirror and `validate_palw_v2`
+/// checks it against: every genesis `ClassRegistered` whose published held profile
+/// [`crate::palw_class_admission_v2::palw_held_class_unanswerable_v1`] refuses (past
+/// [`PALW_HELD_ANSWERABLE_N_CTX_V1`], a recurrent layer, or a compute turn past the cap), by class id,
+/// ascending. The same predicate C5 refuses a registration by and N4 declines a dissection by.
+pub fn palw_held_unanswerable_classes_of_v1(genesis_objects: &[PalwConsensusObjectV2]) -> Vec<Hash64> {
+    let mut classes: Vec<Hash64> = genesis_objects
+        .iter()
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. }
+                if crate::palw_class_admission_v2::palw_held_class_unanswerable_v1(&carriage.profile).is_some() =>
+            {
+                Some(*class_id)
+            }
+            _ => None,
+        })
+        .collect();
+    classes.sort();
+    classes.dedup();
+    classes
+}
 
 impl PalwStateParamsV2 {
     /// The challenge window for a claim licensed at `daa_score`: `window_challenge`, or
@@ -1506,6 +1552,7 @@ impl PalwStateParamsV2 {
             rcore_conservative_classes: Vec::new(),
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
+            held_unanswerable_classes: Vec::new(),
         })
     }
 
@@ -1988,6 +2035,29 @@ impl PalwStateParamsV2 {
         self.rcore_plus_from_daa = from_daa;
         self.withdrawal_delay_daa = withdrawal_delay_daa;
         self.rcore_conservative_classes = conservative_classes;
+        self
+    }
+
+    /// ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn (the
+    /// mirror; empty where `palw_offence_attribution` is not armed).
+    pub fn held_unanswerable_classes(&self) -> &[Hash64] {
+        &self.held_unanswerable_classes
+    }
+
+    /// ADR-0152 §4-ter (A-held): is `class_id` one no honest party can dissect inside a turn? Asked
+    /// only past `palw_offence_attribution` — below it every held class keeps the mercy and the
+    /// one-move court's `NeedsDissection` is what it was.
+    pub fn held_class_is_unanswerable_v1(&self, class_id: &Hash64) -> bool {
+        self.held_unanswerable_classes.binary_search(class_id).is_ok()
+    }
+
+    /// ADR-0152 §4-ter (A-held): the mirror's setter, written by
+    /// `Params::sync_palw_held_answerability` and by nothing else. Sorted here, so the lookup above
+    /// is a search whatever order the caller derived the list in.
+    pub fn with_held_unanswerable_classes(mut self, mut classes: Vec<Hash64>) -> Self {
+        classes.sort();
+        classes.dedup();
+        self.held_unanswerable_classes = classes;
         self
     }
 
@@ -3485,7 +3555,9 @@ pub fn palw_claim_receipt_deadline_v1(
 /// pause; the anchors it shifts are written back when the last seat session closes, so every other
 /// row reads the shifted anchor); a terminal claim with ANY session open owes none (its retirement
 /// waits); and a terminal claim's retirement is `max(terminal + claim_retirement_daa,
-/// last_closed_daa + 1)`. A non-seat session changes nothing (V3S-08).
+/// last_closed_daa + 1)`. A non-seat session changes nothing (V3S-08) — except, past
+/// `palw_offence_attribution`, the first one a live held forfeit's challenger opens on its claim,
+/// which is counted as a seat's (ADR-0152 §4-ter.3 step 6; one per record).
 pub fn palw_rcore_deadline_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -4124,6 +4196,24 @@ pub enum PalwVoidReasonV2 {
     /// honest full seats. Past the fence the defaults write this reason instead and kind 3 refuses
     /// it by name; below the fence they write `CourtFraud`, byte for byte as before.
     CourtDefault,
+    /// **A held dissection's verdict against the executor** (ADR-0152 §4-ter; the review's F3, the
+    /// user's decision (B)). Borsh discriminant 8, appended. Past `Params::palw_offence_attribution`
+    /// only.
+    ///
+    /// A dissection's bottom recomputes ONE history tile against the root's `(m*, S*)` and compares
+    /// it with the responder's own narrowed claim; the fold adds the children's claims, so a
+    /// responder may split a lie across siblings and still fold to an HONEST root, then ride it
+    /// down to an `ExecutorGuilty` bottom on an execution every full seat replayed honestly (the
+    /// review's split-δ probe). The verdict therefore proves the producer's own FILINGS false — its
+    /// disclosure — not the committed execution. It is charged exactly as `CourtFraud` (the forfeit,
+    /// S-4's producer tier, the `CourtConviction` record, the challenger's reporter reward), but kind
+    /// 3 refuses a `CourtFraud` contradiction naming it, live or through the liability row: a `Valid`
+    /// signer is convicted only by a proof of the committed execution. `CourtFraud` stays the reason
+    /// of every verdict proven against committed data — a one-move `ExecutorGuilty` at a committed
+    /// leaf, the checkpoint court, a non-dissection close. The split-δ play needs no held map, so the
+    /// reason covers EVERY dissection's verdict past the fence, held class or not (the name is the
+    /// decision's history, not a scope).
+    CourtHeldVerdict,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -4399,6 +4489,55 @@ impl PalwClaimGV1 {
     /// `G = g_res + escrowed_reward`, the action tiers' `G` (IMPL-15).
     pub fn g(&self) -> u128 {
         self.g_res.saturating_add(u128::from(self.escrowed_reward))
+    }
+}
+
+/// **ADR-0152 §4-ter.3 step 6 (the forger's race): what one held dissection's losing challenger
+/// forfeited at a PROVEN acquittal whose bottom read an anchor** — kept, by `(claim, session)`, while
+/// the claim can still be tried, so that a later conviction proving that anchor's chunk forged gives
+/// it back ([`TransitionBuilder::refund_held_forfeits_v1`]) — a checkpoint-court conviction on a chunk
+/// that bottom read, or a DA-7 default of the challenger's own step-6 demand of it (the forger that
+/// will not disclose the chunk its acquittal rested on).
+///
+/// A consistent forger's own node files its acquittal the block the bottom is reached: its bottom,
+/// read from its own forged anchor, acquits it, and the honest challenger is charged `max(reserved,
+/// G)` and the court time before its step-6 demand can be answered. The step-6 pursuit then convicts
+/// the claim through `CheckpointAccused` on the very chunk; this record is what lets that conviction
+/// make the seat whole. Written only past `palw_offence_attribution`, so every other network never
+/// holds one.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwHeldForfeitV1 {
+    /// The session's challenger — the bond the acquittal charged.
+    pub challenger: PalwBondKeyV2,
+    /// What left its collateral at the close: the verdict charge and the court time, as debited
+    /// (clamped to what the bond held), never the nominal tier. Non-zero.
+    pub amount: u64,
+    /// The checkpoint leaf the acquitting bottom's anchor opened (`opening.leaf_hash`, proven against
+    /// the claim's checkpoint leg by the close's adjudication).
+    pub anchor_leaf_hash: Hash64,
+    /// That anchor's checkpoint index — what a data-availability `StateChunk` unit names it by.
+    pub anchor_checkpoint: u32,
+    /// The leaf the session's ladder narrowed to (the held site's fused leaf) — what a restarted
+    /// challenger's node rebuilds its evidence at ([`crate::palw_producer_v2::palw_held_pursuit_seeds_v1`]).
+    pub narrowed_leaf: u64,
+    /// The anchor chunks that bottom opened — its K tile's and its V tile's (one or two; sorted,
+    /// unique).
+    pub chunks: Vec<u32>,
+    pub closed_daa: u64,
+    /// Whether the challenger's data-availability session on the claim has already paused it once
+    /// for this record (DL-1; one pause a record, [`TransitionBuilder::held_forfeit_pauses_v1`]).
+    pub paused: bool,
+}
+
+impl PalwHeldForfeitV1 {
+    /// **Is `unit` the step-6 demand of this record's anchor?** A `StateChunk` of the anchor's
+    /// checkpoint, at a chunk the acquitting bottom opened.
+    pub fn is_demanded_by_v1(&self, unit: &crate::palw_da_rcore_v1::PalwDaUnitV1) -> bool {
+        matches!(
+            unit,
+            crate::palw_da_rcore_v1::PalwDaUnitV1::Held(crate::palw_held_da_v1::PalwHeldMissingV1::StateChunk { checkpoint, chunk })
+                if *checkpoint == self.anchor_checkpoint && self.chunks.contains(chunk)
+        )
     }
 }
 
@@ -6015,6 +6154,42 @@ pub enum PalwConsensusObjectV2 {
         claim: Hash64,
         receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
     },
+    // ---- ADR-0152 §4-ter (A-held): tag 57, the next free after S's 53–56 (agreed with the peer). ----
+    /// **C2: a held class's root claim, with its anchor's slice sub-roots** (tag 57).
+    ///
+    /// Move 1 of a held dissection exactly as `CourtAttnRootClaimedAnchored` — the same root claim,
+    /// arity, binding, opened output tile, anchor, operand openings and responder's signature over
+    /// the root claim (`palw_attn_root_claim_message_v1`) — plus `slice_sub_roots`: every slice
+    /// sub-root of the anchor checkpoint's state under the held map, in slice order. The fold folds
+    /// them through `state_top_leaf_v4` into the top root and refuses the object unless that is the
+    /// anchor's committed `state_chunks_root`, so each sub-root is the ACCUSED's own.
+    ///
+    /// Why the chain needs them (4-ter F9): a per-position class anchors AFTER the disputed step
+    /// (`covered = p + 1`), so the anchor's state holds the accused's rows at later layers and
+    /// position `p` — rows that follow its lie. An honest challenger recomputes slice `(K|V, ℓ)`
+    /// exactly (every row it holds precedes the lie) but cannot rebuild the anchor's top path, and
+    /// without it the bottom could never open the tile it has to recompute: a downstream-consistent
+    /// forger was acquitted and its honest challenger charged. With the filed sub-roots the
+    /// challenger opens the chunk as its own block path plus the accused's top path.
+    ///
+    /// No new signing context: every carried byte is checked against a root the claim committed
+    /// (ADR-0093 D8's argument for the anchor). Past `palw_offence_attribution`, for a held class
+    /// that is answerable (`n_ctx ≤ PALW_HELD_ANSWERABLE_N_CTX_V1`) at a site whose bottom reads a
+    /// checkpoint, this is the ONLY legal move 1 — the plain and anchored forms are refused — so the
+    /// responder files it or its silence is a default (C1). Refused everywhere else. The phase it
+    /// opens is the anchored form's, byte for byte: nothing new is stored.
+    CourtAttnRootClaimedHeld {
+        session_id: Hash64,
+        root: crate::palw_attn_dissect::PalwAttnRootClaimV1,
+        arity: u8,
+        binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
+        out_tile: crate::palw_attn_court_v1::PalwAttnRowOpeningV1,
+        anchor: Box<crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
+        /// `palw_state_layout_v4(profile, anchor positions).slice_count()` entries, slice order.
+        slice_sub_roots: Vec<Hash64>,
+        operand_openings: Vec<crate::palw_artifact::PalwArtifactOpeningV1>,
+        signature: Vec<u8>,
+    },
 }
 
 /// **The name of a v22-skeleton object (ADR-0152 v3.1 §6 row 24, tags 53–56)**, or `None` for
@@ -6823,6 +6998,40 @@ fn forfeit_close_deposit_v1(
     builder.slash_bond(declarer, deposit as u128).map(|_| ())
 }
 
+/// **ADR-0152 §4-ter: is `class_id` a held class whose dissection an honest party can play inside a
+/// turn, on a chain past `palw_offence_attribution`?** The one predicate behind C1 (its opening
+/// silence is a default), C2 (the held root claim is its only move 1) and C4 (a losing challenger
+/// is charged `max(reserved, G)`): held (it recorded the regime's ladder), under the held regime,
+/// and not in the bundle's unanswerable list (the 2M row). `false` below the fence — every arm
+/// that reads it is then byte for byte what it was.
+pub(crate) fn palw_held_class_is_answerable_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    class_id: &Hash64,
+) -> bool {
+    extras.offence_attribution_active
+        && extras.held_context_ladder.is_some()
+        && state.class_is_held_v1(class_id)
+        && !params.held_class_is_unanswerable_v1(class_id)
+}
+
+/// **ADR-0152 §4-ter (the review's F3, the user's decision (B)): the reason a court's PROVEN verdict
+/// voids a claim with** — [`PalwVoidReasonV2::CourtHeldVerdict`] for EVERY dissection's bottom (an
+/// `AttnDissection` close) past `palw_offence_attribution`, [`PalwVoidReasonV2::CourtFraud`] for every
+/// other verdict and everywhere below the fence.
+///
+/// A dissection's bottom proves the producer's own disclosure false, never the execution a seat
+/// replayed — the split-δ play (a lie split across one round's siblings over an honest root) rides to
+/// an `ExecutorGuilty` bottom on an honest execution whatever the class, held or not. So the
+/// decision is "a dissection's verdict is the producer's", not "a held one's": the name
+/// `CourtHeldVerdict` stays (Borsh discriminant 8), and it covers every dissection verdict. Below the
+/// fence, and on every network that does not arm it (testnet-11, devnet, mainnet), `CourtFraud` as it
+/// always was.
+pub fn palw_court_verdict_void_reason_v1(offence_attribution_active: bool, dissection: bool) -> PalwVoidReasonV2 {
+    if offence_attribution_active && dissection { PalwVoidReasonV2::CourtHeldVerdict } else { PalwVoidReasonV2::CourtFraud }
+}
+
 /// **The reason a court's DEFAULT against the executor is recorded under** (ADR-0152 F2 residual).
 ///
 /// A court can end against the executor two ways: a verdict on the arithmetic (a close, a one-move
@@ -6941,6 +7150,7 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
     let session_id = match object {
         PalwConsensusObjectV2::CourtAttnRootClaimed { session_id, .. }
         | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { session_id, .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { session_id, .. }
         | PalwConsensusObjectV2::CourtAttnDissected { session_id, .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { session_id, .. } => session_id,
         _ => return false,
@@ -6953,7 +7163,8 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // narrowed to the leaf a dissection is about — `DissectionAlreadyOpen` and
         // `LadderNotTerminal`, the fold's own first two refusals.
         PalwConsensusObjectV2::CourtAttnRootClaimed { root, .. }
-        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { root, .. } => {
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { root, .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { root, .. } => {
             session.dissection.is_none()
                 && session.ladder.terminal_index().is_some()
                 && root.version == crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1
@@ -7657,7 +7868,10 @@ pub enum PalwStateV2Error {
     ShardCourtAccuserIsTheProducer(PalwBondKeyV2),
     #[error("claim {claim} is under court session {session}; one court at a time")]
     ShardCourtClaimUnderSession { claim: Hash64, session: Hash64 },
-    #[error("leaf {leaf} of claim {claim} is a fused site: its terminal is the dissection, not one move")]
+    #[error(
+        "leaf {leaf} of claim {claim} is a fused-attention site, which one move cannot try, and this network opens no held \
+         dissection at a named leaf: refused (only a bisection's own dissection reaches it)"
+    )]
     ShardCourtNeedsDissection { claim: Hash64, leaf: u64 },
     #[error("the accusation does not adjudicate: {0}")]
     ShardCourt(String),
@@ -7837,8 +8051,8 @@ pub enum PalwStateV2Error {
     #[error("bond {accuser:?} cannot open another data-availability session on claim {claim}: {why} (DA-8)")]
     DaSessionBudgetExhausted { claim: Hash64, accuser: PalwBondKeyV2, why: &'static str },
     #[error(
-        "leaf {leaf} of claim {claim} is a fused-attention site: its terminal is a held dissection, never a \
-         data-availability unit (DA-3)"
+        "leaf {leaf} of claim {claim} is a fused-attention site: never a data-availability unit (DA-3) — it is tried by a \
+         held dissection where its class is answerable, and not at all where it is not (ADR-0152 §4-ter)"
     )]
     DaUnitNeedsDissection { claim: Hash64, leaf: u64 },
     #[error(
@@ -7865,6 +8079,24 @@ pub enum PalwStateV2Error {
     /// state (the sync walk folds without the acceptance layer).
     #[error("claim {claim}'s V3 supplementary receipts are refused: {why}")]
     SupplementaryV3Refused { claim: Hash64, why: String },
+    // ---- ADR-0152 §4-ter (A-held): attention attribution for held classes ----
+    #[error(
+        "leaf {leaf} of claim {claim} is a fused-attention site of held class {class}, whose dissection no honest party can \
+         play inside a turn (n_ctx past PALW_HELD_ANSWERABLE_N_CTX_V1): refused, not opened — the class is held to Final \
+         and capped instead (ADR-0152 §4-ter)"
+    )]
+    ShardCourtHeldSiteUnanswerable { claim: Hash64, leaf: u64, class: Hash64 },
+    #[error("session {session}'s held root claim is refused: {why} (ADR-0152 §4-ter C2)")]
+    HeldRootClaimRefused { session: Hash64, why: &'static str },
+    #[error("session {session}'s held root claim carries {got} slice sub-roots; the anchor's held layout has {want} (H2)")]
+    HeldSubRootCount { session: Hash64, got: usize, want: usize },
+    #[error(
+        "session {session}'s slice sub-roots fold to {folded}, and the anchor commits {committed}: they are not the anchor's \
+         (HeldSubRootsDoNotRoot, H3)"
+    )]
+    HeldSubRootsDoNotRoot { session: Hash64, folded: Hash64, committed: Hash64 },
+    #[error("claim {claim} is under a court session and this accusation may not open another: {why} (ADR-0152 §4-ter C3)")]
+    HeldDissectionFurtherSessionRefused { claim: Hash64, why: &'static str },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -8317,6 +8549,14 @@ pub struct PalwChainStateV2 {
     /// Row 15 (DA-2, M3): each accused claim's court record, from its first session until the claim
     /// record retires.
     da_claims: BTreeMap<Hash64, crate::palw_da_rcore_v1::PalwDaClaimV1>,
+    // ---- ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits ----
+    //
+    // Primary data in ONE Some-only root block (`held_forfeits/v1`) after R-core+'s and the
+    // Activation Pool's, and ONE carriage tail (`0xB6`), written only when a record exists — so a
+    // state holding none (every state of every network but testnet-12, where only an acquitting held
+    // close past `palw_offence_attribution` writes one) roots and carries exactly as before.
+    /// By `(claim, session)`: one proven acquittal's forfeit, while the claim can still be tried.
+    held_forfeits: BTreeMap<(Hash64, Hash64), PalwHeldForfeitV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -8459,6 +8699,7 @@ impl PalwChainStateV2 {
             vesting_counters: crate::palw_vesting_v1::PalwVestingCountersV1::default(),
             da_sessions: BTreeMap::new(),
             da_claims: BTreeMap::new(),
+            held_forfeits: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -8529,6 +8770,22 @@ impl PalwChainStateV2 {
     /// structurally complete and a later flag day that can build the evidence edits one body.
     pub(crate) fn court_root_evidence_is_buildable_v1(&self, class_id: &Hash64) -> bool {
         !self.class_is_held_v1(class_id)
+    }
+
+    /// **ADR-0152 §4-ter C1: the mercy, per class.** [`Self::court_root_evidence_is_buildable_v1`]
+    /// past `palw_offence_attribution` for a held class an honest responder CAN answer: the windowed
+    /// builder (the responder's `attn_site_evidence_held_v1`) rebuilds the site's evidence from one
+    /// plain forward to the anchor, so at `n_ctx ≤ PALW_HELD_ANSWERABLE_N_CTX_V1` the root claim is a
+    /// move the responder can make, and withholding it is a default like any other. A held class the
+    /// bundle lists as unanswerable (the 2M row) keeps the mercy, and below the fence this is v1.
+    pub(crate) fn court_root_evidence_is_buildable_v2(
+        &self,
+        class_id: &Hash64,
+        offence_attribution_active: bool,
+        params: &PalwStateParamsV2,
+    ) -> bool {
+        self.court_root_evidence_is_buildable_v1(class_id)
+            || (offence_attribution_active && !params.held_class_is_unanswerable_v1(class_id))
     }
 
     /// ADR-0071 SA-3: the production fact recorded under `key`, if the chain holds one.
@@ -10084,6 +10341,25 @@ impl PalwChainStateV2 {
         self.da_claims.get(claim_id)
     }
 
+    /// **4-ter.3 step 6: every held forfeit**, by `(claim, session)`.
+    pub fn held_forfeits_iter(&self) -> impl Iterator<Item = (&(Hash64, Hash64), &PalwHeldForfeitV1)> + '_ {
+        self.held_forfeits.iter()
+    }
+
+    /// Row 14 (DA-2): every open data-availability session, by `(claim, accuser)`.
+    pub fn da_sessions_iter(&self) -> impl Iterator<Item = (&(Hash64, PalwBondKeyV2), &crate::palw_da_rcore_v1::PalwDaSessionV1)> + '_ {
+        self.da_sessions.iter()
+    }
+
+    /// **4-ter.3 step 6: the held forfeits kept for `claim_id`**, by session ([`PalwHeldForfeitV1`]).
+    pub fn held_forfeits_of_claim(&self, claim_id: &Hash64) -> impl Iterator<Item = (&Hash64, &PalwHeldForfeitV1)> + '_ {
+        let claim = *claim_id;
+        self.held_forfeits
+            .range((claim, ZERO_HASH64)..)
+            .take_while(move |((of, _), _)| *of == claim)
+            .map(|((_, session), r)| (session, r))
+    }
+
     /// The one deadline `claim_id` holds in the sweep queue, if any (DL-1: none while a seat session
     /// pauses it). A scan of the index — a read for tests and RPCs, never a consensus path.
     pub fn deadline_of(&self, claim_id: &Hash64) -> Option<u64> {
@@ -10331,6 +10607,13 @@ impl PalwChainStateV2 {
             // M3 (DA-2, §6 rows 14–15), appended in landing order.
             state.update(collection_root(b"da_sessions", &self.da_sessions).as_byte_slice());
             state.update(collection_root(b"da_claims", &self.da_claims).as_byte_slice());
+        }
+        // **ADR-0152 §4-ter.3 step 6: the held forfeits, ONE Some-only block** (after the Activation
+        // Pool's `activation_pool/v1` where both branches meet) — hashed only when a record exists,
+        // so every state without one roots exactly as before.
+        if !self.held_forfeits.is_empty() {
+            state.update(b"held_forfeits/v1");
+            state.update(collection_root(b"held_forfeits", &self.held_forfeits).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -10826,6 +11109,7 @@ impl PalwChainStateV2 {
             return Err(PalwStateV2Error::CarriageInconsistent("DA indexes differ from the DA sessions and records".into()));
         }
         self.assert_da_consistency_v1(params)?;
+        self.assert_held_forfeits_consistency_v1()?;
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
@@ -10950,6 +11234,32 @@ impl PalwChainStateV2 {
                 )));
             }
             let _ = side;
+        }
+        Ok(())
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6: a held forfeit lives exactly as long as its claim can still be
+    /// tried** — its claim held and not terminal (every terminal door drops it), a non-zero amount,
+    /// one or two chunks, sorted and unique. Empty on every network but testnet-12.
+    pub(crate) fn assert_held_forfeits_consistency_v1(&self) -> Result<(), PalwStateV2Error> {
+        for ((claim_id, session_id), record) in &self.held_forfeits {
+            let bad =
+                |why: &str| Err(PalwStateV2Error::CarriageInconsistent(format!("held forfeit ({claim_id}, {session_id}): {why}")));
+            if self.claims.get(claim_id).is_none_or(|claim| claim.phase.is_terminal()) {
+                return bad("its claim is gone or terminal");
+            }
+            // The forfeit went into the challenger's `slashed` and nothing takes it out but its refund.
+            if self.bonds.get(&record.challenger).is_none_or(|bond| record.amount > bond.slashed) {
+                return bad("its amount is more than its challenger's bond has ever lost");
+            }
+            // A record whose pause is unspent has no non-pausing session of its challenger open on the
+            // claim: the record's write converts one that predates it, and an opening under it pauses.
+            if !record.paused && self.da_sessions.get(&(*claim_id, record.challenger)).is_some_and(|session| !session.accuser_is_seat) {
+                return bad("its challenger's open demand does not pause the claim");
+            }
+            if record.amount == 0 || record.chunks.is_empty() || record.chunks.len() > 2 || !record.chunks.is_sorted_by(|a, b| a < b) {
+                return bad("a zero amount, or chunks that are not one or two, sorted and unique");
+            }
         }
         Ok(())
     }
@@ -11682,6 +11992,25 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_da_rcore_v1::PalwDaClaimV1>,
         new: Option<crate::palw_da_rcore_v1::PalwDaClaimV1>,
     },
+    // ---- 76–79 are the Activation Pool's (`ActivationPool`, `ActivationPoolCounters`, the scheduled
+    // payout and the readiness landing, on feat/t12-activation-pool). Held here as placeholders so
+    // this line's own entry has its final discriminant; the integration replaces them with the
+    // pool's four. Nothing writes them, and a delta carrying one is refused. ----
+    /// Placeholder for the Activation Pool's entry 76.
+    ReservedActivationPool76,
+    /// Placeholder for the Activation Pool's entry 77.
+    ReservedActivationPool77,
+    /// Placeholder for the Activation Pool's entry 78.
+    ReservedActivationPool78,
+    /// Placeholder for the Activation Pool's entry 79.
+    ReservedActivationPool79,
+    /// A held forfeit was written at an acquitting close or dropped with its claim (80; ADR-0152
+    /// §4-ter.3 step 6, [`PalwHeldForfeitV1`]).
+    HeldForfeit {
+        key: (Hash64, Hash64),
+        old: Option<PalwHeldForfeitV1>,
+        new: Option<PalwHeldForfeitV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -11768,6 +12097,61 @@ impl<'a> PalwFoldReadV1<'a> {
 }
 
 impl PalwFoldReadV1<'_> {
+    /// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms for the action tiers, FROZEN** (the
+    /// S-4 review) — [`palw_claim_g_v1`]: the liability row's copy, else the claim record's
+    /// licence-time `G_res`, else (unlicensed) its acceptance records' `w + R`. `G = g_res +
+    /// escrowed_reward`. The builder's `claim_g_v1` is this read; read here so the accuser gates
+    /// outside the builder price a held session with the same `G` (ADR-0152 §4-ter, the review's F7).
+    fn claim_g_v1(&self, claim_id: &Hash64) -> Option<PalwClaimGV1> {
+        palw_claim_g_v1(self.state, claim_id)
+    }
+
+    /// **ADR-0152 §4-ter C4: what a held dissection's losing challenger is charged, before the
+    /// floor's cap** — `max(claim.reserved, G)`, `G = g_res + escrowed_reward` ([`Self::claim_g_v1`]).
+    /// The one spelling for the charge (`rearm_after_challenger_side_close`), the reservation that
+    /// makes it certain (`open_held_dissection_v1`) and every gate that counts a held session
+    /// ([`Self::held_accuser_surplus_v1`]).
+    fn held_dissection_charge_v1(&self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> u128 {
+        let g = self.claim_g_v1(claim_id).map(|gains| gains.g()).unwrap_or(0);
+        claim.reserved.max(g)
+    }
+
+    /// **Is a session over `class_id` a held dissection charged at `max(reserved, G)`?** Past
+    /// `palw_offence_attribution` on a held network, over a held class — exactly where
+    /// `rearm_after_challenger_side_close` charges it so.
+    fn held_charge_applies_v1(&self, class_id: &Hash64) -> bool {
+        self.extras.offence_attribution_active && self.extras.held_context_ladder.is_some() && self.state.class_is_held_v1(class_id)
+    }
+
+    /// **ADR-0152 §4-ter C4 (the review's F7): what `bond`'s open held dissections hold beyond the
+    /// court index's count.** [`palw_accuser_exposure_v1`] counts every session its bond challenges
+    /// at the claim's `reserved` (what `write_court` releases); a held one costs its losing
+    /// challenger `min(max(reserved, G), floor)` (C4) — on an 8k claim ≈ 3,250 MSK more. Past
+    /// `palw_rcore_plus` every accuser gate adds this surplus to the accuser ledger, so no DA
+    /// accusation, court opening, work gate or declaration spends room a held session's charge
+    /// already needs. Zero below either fence.
+    fn held_accuser_surplus_v1(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        if !self.params.rcore_plus_active_at(now_daa) {
+            return 0;
+        }
+        let floor = u128::from(self.params.min_collateral_sompi());
+        self.state
+            .courts_by_challenger
+            .range((*bond, ZERO_HASH64)..)
+            .take_while(|(challenger, _)| challenger == bond)
+            .filter_map(|(_, session)| self.state.court_sessions.get(session))
+            .filter_map(|session| self.state.claims.get(&session.claim).map(|claim| (session.claim, claim)))
+            .filter(|(_, claim)| self.held_charge_applies_v1(&claim.class_id))
+            .map(|(claim_id, claim)| self.held_dissection_charge_v1(&claim_id, claim).min(floor).saturating_sub(claim.reserved))
+            .fold(0u128, u128::saturating_add)
+    }
+
+    /// **The accuser ledger every gate reads past `palw_rcore_plus`** — [`palw_accuser_exposure_v1`]
+    /// with each open held dissection counted at its charge ([`Self::held_accuser_surplus_v1`]).
+    fn accuser_ledger_v1(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        palw_accuser_exposure_v1(self.state, bond).saturating_add(self.held_accuser_surplus_v1(bond, now_daa))
+    }
+
     /// **ADR-0152 DA-1 / DA-6 / DA-8 (M3): may `accuser` open a session on `claim_id` at `now_daa`,
     /// and at what stage and price?** The one gate [`palw_da_accusation_admissible_v2`] exports and the
     /// fold's opening reads, so the filer's fee-safe de-duplication and the fold cannot disagree.
@@ -11866,7 +12250,7 @@ impl PalwFoldReadV1<'_> {
             record.collateral,
             self.params.fp_max_exposure_ratio_permille,
             committed,
-            palw_accuser_exposure_v1(state, accuser),
+            self.accuser_ledger_v1(accuser, now_daa),
             PalwRcoreGateV1::Accuser,
         );
         if exposure > room {
@@ -14033,6 +14417,13 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.held_leaf_demands.contains_key(&key) && new.as_ref().is_none_or(|claim| claim.phase.is_terminal()) {
             self.write_held_leaf_demands(key, None);
         }
+        // 4-ter.3 step 6: so do the held forfeits — every door to a terminal phase drops them HERE.
+        if new.as_ref().is_none_or(|claim| claim.phase.is_terminal()) {
+            let sessions: Vec<Hash64> = self.state.held_forfeits_of_claim(&key).map(|(session, _)| *session).collect();
+            for session in sessions {
+                self.write_held_forfeit((key, session), None);
+            }
+        }
         // ADR-0124 Decision 3: the seats' duty — and the exposure it stands for — lives exactly as
         // long as the claim is live. Every door to a terminal phase passes here; the exposure is
         // released by the same doors (`release_seat_duties`), BEFORE this write drops the row it
@@ -14620,6 +15011,208 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::DaClaim { key, old, new });
     }
 
+    /// **4-ter.3 step 6: write or drop one held forfeit** — the rooted write and its delta entry (80).
+    fn write_held_forfeit(&mut self, key: (Hash64, Hash64), new: Option<PalwHeldForfeitV1>) {
+        let old = match &new {
+            Some(record) => self.state.held_forfeits.insert(key, record.clone()),
+            None => self.state.held_forfeits.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::HeldForfeit { key, old, new });
+        }
+    }
+
+    /// **4-ter.3 step 6 (the forger's race): the acquitting close's record** — past
+    /// `palw_offence_attribution`, a PROVEN `ChallengerDefeated` on a dissection whose bottom read an
+    /// anchor, on a claim that can still be tried, keeps what the close took from the challenger
+    /// (`before − after`, the debits themselves) and the anchor chunks the bottom opened. One per
+    /// session: the session is gone after its close, so it can never be written twice.
+    #[allow(clippy::too_many_arguments)]
+    fn record_held_forfeit_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
+        session_id: Hash64,
+        challenger: PalwBondKeyV2,
+        narrowed_leaf: Option<u64>,
+        before: u64,
+        proof: &crate::palw_court_v2::PalwCourtVerdictProofV2,
+    ) {
+        use crate::palw_attn_court_v1::PalwAttnTileEvidenceV1;
+        if !self.extras.offence_attribution_active {
+            return;
+        }
+        let crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { bottom, .. } = proof else { return };
+        let Some(anchor) = bottom.anchor.as_ref() else { return };
+        if self.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal()) {
+            return;
+        }
+        let after = self.state.bonds.get(&challenger).map(|record| record.collateral).unwrap_or(before);
+        let amount = before.saturating_sub(after);
+        let mut chunks: Vec<u32> = [&bottom.k, &bottom.v]
+            .into_iter()
+            .filter_map(|tile| match tile {
+                PalwAttnTileEvidenceV1::Checkpoint { chunk, .. } => Some(chunk.chunk_index),
+                PalwAttnTileEvidenceV1::CacheWrites { .. } => None,
+            })
+            .collect();
+        chunks.sort_unstable();
+        chunks.dedup();
+        let Some(narrowed_leaf) = narrowed_leaf else { return };
+        if amount == 0 || chunks.is_empty() {
+            return;
+        }
+        self.write_held_forfeit(
+            (claim_id, session_id),
+            Some(PalwHeldForfeitV1 {
+                challenger,
+                amount,
+                anchor_leaf_hash: anchor.opening.leaf_hash,
+                anchor_checkpoint: anchor.leaf.checkpoint_index,
+                narrowed_leaf,
+                chunks,
+                closed_daa: ctx.daa_score,
+                paused: false,
+            }),
+        );
+        // The challenger's demand may already be open (its node files it at the `Terminal` duty, and
+        // the forger's close can land after it): it becomes the record's one pause now.
+        self.pause_open_demand_of_held_forfeit_v1(ctx.daa_score, (claim_id, session_id));
+    }
+
+    /// **4-ter.3 step 6 (the third review's MEDIUM): a demand that PREDATES its record pauses too.** A
+    /// non-seat challenger's node files its step-6 demand at its `Terminal` duty, while the held
+    /// session is still open; a forger that closes its acquittal after that demand lands gets a record
+    /// whose challenger's session was admitted non-pausing ([`Self::held_forfeit_pauses_v1`] runs only
+    /// at a session's opening), and one session per accuser left no second demand to open —
+    /// `Final` (close + `window_challenge`) came long before the demand's deadline (+ `W_disclose`).
+    /// So the record's write CONVERTS that open session into the record's pause, exactly as an opening
+    /// under the record would have written it: counted with the seats' OPEN sessions (never in
+    /// `opened_by_seat`, a real seat's budget), the claim paused from now when it is the first
+    /// (`paused_since`, its deadline disarmed —
+    /// the close's re-arm just armed it; the pause is credited back at the session's close as every
+    /// seat pause is), and the record marked paused. A seat's session already pauses: nothing to do.
+    fn pause_open_demand_of_held_forfeit_v1(&mut self, now_daa: u64, key: (Hash64, Hash64)) {
+        let (claim_id, _) = key;
+        let Some(record) = self.state.held_forfeits.get(&key).cloned() else { return };
+        if record.paused || self.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal()) {
+            return;
+        }
+        let Some(session) = self.state.da_sessions.get(&(claim_id, record.challenger)).cloned() else { return };
+        if session.accuser_is_seat {
+            return;
+        }
+        self.write_da_session((claim_id, record.challenger), Some(crate::palw_da_rcore_v1::PalwDaSessionV1 { accuser_is_seat: true, ..session }));
+        let mut da = self.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
+        // Moved from the non-seat OPEN count to the seats' (DA-5, DL-1). DA-8's lifetime counts stay
+        // as its admission left them: `opened_non_seat_total` counted it then, and `opened_by_seat` —
+        // a real seat's budget, at most four — never counts a non-seat (the fourth review's HIGH).
+        da.open_other_sessions = da.open_other_sessions.saturating_sub(1);
+        da.open_seat_sessions = da.open_seat_sessions.saturating_add(1);
+        let first = da.open_seat_sessions == 1;
+        if first {
+            da.paused_since = Some(now_daa);
+        }
+        self.write_da_claim(claim_id, Some(da));
+        if first {
+            self.disarm_deadline(claim_id);
+        }
+        self.write_held_forfeit(key, Some(PalwHeldForfeitV1 { paused: true, ..record }));
+    }
+
+    /// **4-ter.3 step 6 (the forger's race): the held forfeits a checkpoint-court conviction proves
+    /// wrong** — every record of `claim_id` whose acquitting bottom opened the very anchor
+    /// (`anchor_leaf_hash`) and chunk the conviction's forged row is in. Read BEFORE the conviction,
+    /// whose void drops the claim's records.
+    fn held_forfeits_proven_wrong_v1(
+        &self,
+        claim_id: &Hash64,
+        accusation: &crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1,
+    ) -> Vec<PalwHeldForfeitV1> {
+        self.state
+            .held_forfeits_of_claim(claim_id)
+            .filter(|(_, record)| {
+                record.anchor_leaf_hash == accusation.anchor.opening.leaf_hash && record.chunks.contains(&accusation.chunk.chunk_index)
+            })
+            .map(|(_, record)| record.clone())
+            .collect()
+    }
+
+    /// **4-ter.3 step 6 (the forger's race), the withholding door: the held forfeits a DA-7 default
+    /// proves wrong** (the second review's HIGH) — every record of `claim_id` whose challenger is the
+    /// accuser of one of the claim's DEFAULTED sessions (past its deadline at `now_daa`) whose named
+    /// unit is the step-6 demand of that record's anchor ([`PalwHeldForfeitV1::is_demanded_by_v1`]).
+    /// A forger that acquitted itself on its forged anchor and then withholds the demanded chunk
+    /// (S1, cheaper than S2 at 8k) would otherwise keep the seat's forfeit burned. Read BEFORE the
+    /// default's void drops the records.
+    fn held_forfeits_withheld_v1(&self, claim_id: &Hash64, now_daa: u64) -> Vec<PalwHeldForfeitV1> {
+        let defaulted: Vec<(PalwBondKeyV2, crate::palw_da_rcore_v1::PalwDaUnitV1)> = self
+            .state
+            .da_sessions_of(claim_id)
+            .filter(|(_, session)| session.deadline_daa < now_daa)
+            .filter_map(|(accuser, session)| session.units.first().map(|named| (*accuser, *named)))
+            .collect();
+        self.state
+            .held_forfeits_of_claim(claim_id)
+            .filter(|(_, record)| {
+                defaulted.iter().any(|(accuser, named)| *accuser == record.challenger && record.is_demanded_by_v1(named))
+            })
+            .map(|(_, record)| record.clone())
+            .collect()
+    }
+
+    /// **4-ter.3 step 6 (the second review's MEDIUM): does `accuser`'s new data-availability session
+    /// on `claim_id` pause the claim as a seat's does (DL-1)?** Past `palw_offence_attribution`, when
+    /// `accuser` is the challenger of a live held-forfeit record on the claim that has not paused it
+    /// yet — marked here, so a record pauses once. A non-seat's session pauses nothing (DA-5), so the
+    /// claim reached `Final` at `L + W` while the challenger's step-6 demand, opened the block after
+    /// the acquittal moved `L`, ran to `L + 1 + W`: the forger answered after `Final`, where no
+    /// checkpoint accusation reaches it. Bounded: one pause per record, one record per session, and
+    /// each pause at most `W_disclose` (1,200 on testnet-12), credited back at the close as every
+    /// seat pause is. The session is still ADMITTED on the standing its accuser has (DA-8): a
+    /// non-seat's demand needs a free non-seat slot on the claim (three open, sixteen over its life),
+    /// and those slots can be filled by Sybil accusers ahead of it — an existing DA-8 property this
+    /// does not change, recorded as a residual.
+    fn held_forfeit_pauses_v1(&mut self, claim_id: Hash64, accuser: PalwBondKeyV2) -> bool {
+        if !self.extras.offence_attribution_active {
+            return false;
+        }
+        let Some((session, record)) = self
+            .state
+            .held_forfeits_of_claim(&claim_id)
+            .find(|(_, record)| record.challenger == accuser && !record.paused)
+            .map(|(session, record)| (*session, record.clone()))
+        else {
+            return false;
+        };
+        self.write_held_forfeit((claim_id, session), Some(PalwHeldForfeitV1 { paused: true, ..record }));
+        true
+    }
+
+    /// **4-ter.3 step 6 (the forger's race): make each wrongly charged challenger whole** — after the
+    /// conviction has closed (its `CourtConviction` record written last with the producer's
+    /// collected debit, which this never touches). The forfeit never left the challenger's bond: a
+    /// slash lowers `collateral` and raises `slashed`, the sompi its release must destroy. So the
+    /// refund is restored WHERE IT WENT — `slashed` down, `collateral` up by the same amount, clamped
+    /// to `slashed` — and it is the challenger's own money, neither minted nor taken from the
+    /// producer's debit: the producer's charge, the burn of it and the reporter share are exactly
+    /// the conviction's. A bond whose collateral already left through its release spend (its burn
+    /// already paid) gains only a record — collateral on a registry row whose outpoint is spent,
+    /// which nothing can spend again, so it is harmless: the money is gone, and nothing is minted in
+    /// its place. Called after a checkpoint conviction and after a DA-7 default.
+    fn refund_held_forfeits_v1(&mut self, forfeits: &[PalwHeldForfeitV1]) {
+        for record in forfeits {
+            let Some(mut bond) = self.state.bonds.get(&record.challenger).cloned() else { continue };
+            let refund = record.amount.min(bond.slashed);
+            if refund == 0 {
+                continue;
+            }
+            bond.slashed -= refund;
+            bond.collateral = bond.collateral.saturating_add(refund);
+            self.write_bond(record.challenger, Some(bond));
+        }
+    }
+
     /// The accusers `claim_id` contributes to the A-6 index: its open sessions' and its refuted
     /// entries' — the per-claim half of [`palw_da_indexes_of_v1`].
     fn da_accusers_of_claim(&self, claim_id: &Hash64) -> BTreeSet<PalwBondKeyV2> {
@@ -14934,8 +15527,15 @@ impl<'a> TransitionBuilder<'a> {
                 .collect()
         };
         let g = self.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
+        // ADR-0152 §4-ter.3 step 6 (the second review's HIGH): the acquittals this withholding proves
+        // wrong, read before the default's void drops them (a `FinalRow` default finds none: `Final`
+        // dropped them, and a pausing challenger's session keeps its claim from `Final`).
+        let withheld = self.held_forfeits_withheld_v1(&claim_id, now);
         let charge = PalwDaDefaultChargeV1 { claim_id, producer: claim.bond, stage, g, covering, winner };
-        self.da_default_charge_v1(ctx, &claim, &charge)
+        self.da_default_charge_v1(ctx, &claim, &charge)?;
+        // ...and, the conviction closed, each such challenger made whole.
+        self.refund_held_forfeits_v1(&withheld);
+        Ok(())
     }
 
     /// **ADR-0152 DA-7 (M3): THE hook every data-availability default is charged through** — S-4's
@@ -15201,9 +15801,27 @@ impl<'a> TransitionBuilder<'a> {
         challenger: PalwBondKeyV2,
         court_opened_daa: Option<u64>,
     ) -> Result<(), PalwStateV2Error> {
+        self.convict_by_court_verdict_as_v1(ctx, claim_id, claim, challenger, court_opened_daa, PalwVoidReasonV2::CourtFraud)
+    }
+
+    /// [`Self::convict_by_court_verdict_v1`] recording `reason` on the claim (and, past `Final`, the
+    /// liability row): `CourtFraud` for a verdict proven against committed data,
+    /// [`PalwVoidReasonV2::CourtHeldVerdict`] for a dissection's bottom past
+    /// `palw_offence_attribution` ([`palw_court_verdict_void_reason_v1`]). Everything else — the
+    /// charge, the court time, S-4's tiers, the `CourtConviction` record and the challenger's reward —
+    /// is the funnel's, the same for both.
+    fn convict_by_court_verdict_as_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        challenger: PalwBondKeyV2,
+        court_opened_daa: Option<u64>,
+        reason: PalwVoidReasonV2,
+    ) -> Result<(), PalwStateV2Error> {
         let now = ctx.daa_score;
         if !self.params.rcore_plus_active_at(now) {
-            self.void_and_slash(claim_id, claim, now, PalwVoidReasonV2::CourtFraud)?;
+            self.void_and_slash(claim_id, claim, now, reason)?;
             if let Some(opened) = court_opened_daa {
                 self.charge_court_time_v1(claim.bond, claim.reserved, opened, now)?;
             }
@@ -15215,7 +15833,7 @@ impl<'a> TransitionBuilder<'a> {
         let live = self.claim_is_live_before_final_v1(&claim_id);
         let fp_first = self.post_final_fp_g_v1(&claim_id);
         let key = palw_court_conviction_offence_id_v1(&producer.0, &claim_id);
-        let mut nominal = self.act_on_convicted_claim_v1(ctx, claim_id, Some(&conv))?;
+        let mut nominal = self.act_on_convicted_claim_as_v1(ctx, claim_id, Some(&conv), reason)?;
         if live {
             if let Some(opened) = court_opened_daa {
                 nominal = nominal.saturating_add(self.charge_court_time_v1(producer, claim.reserved, opened, now)?);
@@ -15296,9 +15914,20 @@ impl<'a> TransitionBuilder<'a> {
             record.collateral,
             self.params.fp_max_exposure_ratio_permille,
             self.committed_at(bond, now_daa),
-            palw_accuser_exposure_v1(&self.state, bond),
+            // ADR-0152 §4-ter C4 (the review's F7): a held session at its charge, not its `reserved`.
+            self.read().accuser_ledger_v1(bond, now_daa),
             gate,
         )
+    }
+
+    /// **ADR-0152 §4-ter C4: what a held dissection's losing challenger is charged, before the
+    /// floor's cap** — `max(claim.reserved, G)`, `G = g_res + escrowed_reward` from
+    /// [`Self::claim_g_v1`] (S's gain terms, `w + E + R + s`). One spelling for the charge
+    /// (`rearm_after_challenger_side_close`) and the reservation that makes it certain
+    /// (`open_held_dissection_v1`). The rule is the read's ([`PalwFoldReadV1::held_dissection_charge_v1`]),
+    /// so the accuser gates price a held session with it too.
+    fn held_dissection_charge_v1(&self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> u128 {
+        self.read().held_dissection_charge_v1(claim_id, claim)
     }
 
     /// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms for the action tiers, FROZEN** (the
@@ -15307,7 +15936,9 @@ impl<'a> TransitionBuilder<'a> {
     /// records' `w + R`. Never the live `rcore_g_res`: an action tier, R-1's `X` and DA-6's base are
     /// priced on the gain the licence rested on. `G = g_res + escrowed_reward`.
     fn claim_g_v1(&self, claim_id: &Hash64) -> Option<PalwClaimGV1> {
-        palw_claim_g_v1(&self.state, claim_id)
+        // The rule lives on the read ([`PalwFoldReadV1::claim_g_v1`]) so the accuser gates outside
+        // the builder price a held session with the same `G` (ADR-0152 §4-ter, the review's F7).
+        self.read().claim_g_v1(claim_id)
     }
 
     /// **ADR-0152 SR-6 + Q-3 + L-1: the backed subset of a licence set and the lock it posts**
@@ -16499,6 +17130,19 @@ impl<'a> TransitionBuilder<'a> {
         claim_id: Hash64,
         conv: Option<&PalwConvictionV1>,
     ) -> Result<u128, PalwStateV2Error> {
+        self.act_on_convicted_claim_as_v1(ctx, claim_id, conv, PalwVoidReasonV2::CourtFraud)
+    }
+
+    /// [`Self::act_on_convicted_claim_v1`] recording `reason` — `CourtFraud` for a proof of the
+    /// execution, [`PalwVoidReasonV2::CourtHeldVerdict`] for a dissection's verdict (charged the
+    /// same; no kind-3 basis).
+    fn act_on_convicted_claim_as_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
+        conv: Option<&PalwConvictionV1>,
+        reason: PalwVoidReasonV2,
+    ) -> Result<u128, PalwStateV2Error> {
         // ADR-0152 N13 / DA-6 (M3): a conviction closes every open DA session on the claim (exposure
         // returned) and refunds its refuted exposure — for a live claim through the `CourtFraud` void
         // below (`void_claim`), for a `Final`, voided or retired one here.
@@ -16513,15 +17157,15 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwClaimPhaseV2::PanelBound { .. }
                 | PalwClaimPhaseV2::ReceiptLicensed { .. }
                 | PalwClaimPhaseV2::DefaultDisputed { .. } => {
-                    return self.void_and_slash_at(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud, conv);
+                    return self.void_and_slash_at(claim_id, &claim, ctx.daa_score, reason, conv);
                 }
                 PalwClaimPhaseV2::Final { .. } => {
-                    self.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::CourtFraud)?;
-                    self.mark_liability_convicted(claim_id, ctx.daa_score, PalwVoidReasonV2::CourtFraud);
+                    self.reverse_convicted_final(ctx, claim_id, reason)?;
+                    self.mark_liability_convicted(claim_id, ctx.daa_score, reason);
                 }
-                PalwClaimPhaseV2::Voided { .. } => self.mark_liability_convicted(claim_id, ctx.daa_score, PalwVoidReasonV2::CourtFraud),
+                PalwClaimPhaseV2::Voided { .. } => self.mark_liability_convicted(claim_id, ctx.daa_score, reason),
             },
-            None => self.mark_liability_convicted(claim_id, ctx.daa_score, PalwVoidReasonV2::CourtFraud),
+            None => self.mark_liability_convicted(claim_id, ctx.daa_score, reason),
         }
         Ok(0)
     }
@@ -19463,7 +20107,7 @@ impl<'a> TransitionBuilder<'a> {
         let escrow_forfeit = match reason {
             // A court default is charged exactly as a proven fraud (ADR-0152 F2 residual): only the
             // reason it is recorded under differs, so kind 3 cannot read it as a proof.
-            PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault => true,
+            PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict => true,
             PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::ReceiptTimeout => self.extras.audit_2026_09_23_active,
             // ADR-0152 v3.1 S0′ (v22 skeleton): both are a second failed panel and are charged as the
             // second `ReceiptTimeout` is. M4's Q-5 gate writes 6 (`sweep_deadlines`); S-5 writes 5
@@ -19488,8 +20132,12 @@ impl<'a> TransitionBuilder<'a> {
                 // cheaply than one that plays and loses, so its default is charged exactly the losing
                 // charge — forfeit, `min(10% · C₀, 3 G)` and the court time — while it still writes no
                 // `CourtConviction` record and opens no reporter reward (a default proves nothing a
-                // challenger could be paid for, and nothing a seat can be convicted by).
-                PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault => palw_rcore_s1s2_action_v1(c0, g),
+                // challenger could be paid for, and nothing a seat can be convicted by). A held
+                // dissection's verdict (ADR-0152 §4-ter F3 (B), `CourtHeldVerdict`) is the producer's
+                // and is charged as `CourtFraud` is.
+                PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict => {
+                    palw_rcore_s1s2_action_v1(c0, g)
+                }
                 PalwVoidReasonV2::ProducerWithholding => {
                     let strike = palw_rcore_strike_v1(self.state.withholding_strikes(&claim.bond).unwrap_or(&[]), voided_daa);
                     if let Some(written) = strike.written {
@@ -19957,6 +20605,19 @@ impl<'a> TransitionBuilder<'a> {
         voided_daa: u64,
         reason: PalwVoidReasonV2,
     ) -> Result<(), PalwStateV2Error> {
+        // **ADR-0152 §4-ter C3: a void by any route closes every court session on the claim
+        // NEUTRALLY**, past `palw_offence_attribution`: the session is removed (its challenger's
+        // reservation released by `write_court`), nobody is slashed and no court time is charged —
+        // the dispute it held is moot, and neither the decoy nor a seat's second session is the
+        // loser of a court that never ended on its merits. The last session to close would have
+        // re-armed the claim's `Final`; a voided claim has none to re-arm. Below the fence a void
+        // leaves them to their own sweep, as it always did.
+        if self.extras.offence_attribution_active {
+            let open: Vec<Hash64> = self.state.court_sessions.iter().filter(|(_, s)| s.claim == id).map(|(k, _)| *k).collect();
+            for session in open {
+                self.write_court(session, None)?;
+            }
+        }
         // **ADR-0152 DA-6 (M3): a void ends every open DA session on the claim, exposure returned**;
         // a void the PRODUCER is charged for as a fraud refunds the refuted exposure held too:
         // `CourtFraud` (a proven fraud), `ProducerWithholding` (past `palw_rcore_plus` only a DA default
@@ -19969,13 +20630,22 @@ impl<'a> TransitionBuilder<'a> {
         if self.params.rcore_plus_active_at(voided_daa) {
             let convicted = matches!(
                 reason,
-                PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::CourtDefault
+                PalwVoidReasonV2::CourtFraud
+                    | PalwVoidReasonV2::ProducerWithholding
+                    | PalwVoidReasonV2::CourtDefault
+                    | PalwVoidReasonV2::CourtHeldVerdict
             );
             self.da_release_all_v1(id, convicted, voided_daa)?;
         }
         let mut voided = claim.clone();
         voided.phase = PalwClaimPhaseV2::Voided { voided_daa, reason };
-        if matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::ProducerWithholding) {
+        if matches!(
+            reason,
+            PalwVoidReasonV2::CourtFraud
+                | PalwVoidReasonV2::CourtDefault
+                | PalwVoidReasonV2::ProducerWithholding
+                | PalwVoidReasonV2::CourtHeldVerdict
+        ) {
             self.note_model_probe(claim, false);
         }
         // ADR-0132 Upgrade C: a voided claim is paid nothing, so its snapshot leaves with it.
@@ -21636,10 +22306,47 @@ fn rearm_after_challenger_side_close(
     // `pwu_per_inference x slash_value_per_pwu`, both picked by whoever registered the CLASS. Left uncapped, a
     // registrant could make challenging its own class ruinous and buy itself immunity from the
     // court. The floor is the registry's own.
-    builder.slash_seat(challenger_bond, claim.reserved, builder.params.min_collateral_sompi())?;
+    //
+    // **ADR-0152 §4-ter C4: a held dissection's losing challenger pays `max(reserved, G)`.** Opening
+    // one freezes the claim for a whole dissection and takes one of the network's few court
+    // sessions, and `reserved` alone (the claim's weight — a few hundred MSK on an 8k claim) made a
+    // Sybil decoy that shields a lie of `G` cheap. Past `palw_offence_attribution` on a held
+    // network, a session over a held class charges the claim's whole gain terms, `G = w + E + R + s`
+    // (S's `claim_g_v1`), capped at the floor as every seat charge is; the opening reserved exactly
+    // this (`open_held_dissection_v1`), so the charge is certain.
+    let charge = if builder.extras.offence_attribution_active
+        && builder.extras.held_context_ladder.is_some()
+        && builder.state.class_is_held_v1(&claim.class_id)
+    {
+        builder.held_dissection_charge_v1(&claim_id, claim)
+    } else {
+        claim.reserved
+    };
+    builder.slash_seat(challenger_bond, charge, builder.params.min_collateral_sompi())?;
     // C-03 (deep fence): and it pays for the time it kept the session open — a losing challenger
     // that stalled to its backstop pays more than one that concedes fast. No-op below the fence.
     builder.charge_court_time_v1(challenger_bond, claim.reserved, session_opened_daa, ctx.daa_score)?;
+    // **ADR-0152 §4-ter C3 (the review's F2): a held session lost on the challenger side leaves the
+    // seats a whole challenge window.** Re-arming at `max(floor, now)` let a Sybil decoy opened late
+    // in the window, and conceded, carry the claim straight to `Final` with no seat able to answer
+    // it. Past `palw_offence_attribution`, over a held class, the licence's anchor moves to the
+    // close — `licensed_daa := max(licensed_daa, now)` — so `Final` is no earlier than `now +
+    // window_challenge_at(now)`. The anchor is the claim's clock (DL-1 derives the deadline from it,
+    // as M3's DA pause credit moves it), so the re-armed deadline stays derivable from rooted data.
+    let claim = &match claim.phase {
+        PalwClaimPhaseV2::ReceiptLicensed { licensed_daa }
+            if builder.extras.offence_attribution_active
+                && builder.extras.held_context_ladder.is_some()
+                && builder.state.class_is_held_v1(&claim.class_id)
+                && licensed_daa < ctx.daa_score =>
+        {
+            let mut moved = claim.clone();
+            moved.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: ctx.daa_score };
+            builder.write_claim(claim_id, Some(moved.clone()));
+            moved
+        }
+        _ => claim.clone(),
+    };
     rearm_claim_after_court_close(builder, ctx, claim_id, claim)
 }
 
@@ -22075,20 +22782,37 @@ fn open_da_session_rcore_v1(
     let mut units = Vec::with_capacity(1 + drawn.len());
     units.push(named);
     units.extend(drawn);
+    // ADR-0152 §4-ter.3 step 6 (the second review's MEDIUM): the challenger of a live held forfeit on
+    // this claim pauses it as a seat does, once a record — counted with the seats' sessions (DL-1 and
+    // DA-5 read nothing else), after DA-8 admitted it on the budget its standing gives it.
+    let seat_like = admission.accuser_is_seat || (!claim.phase.is_terminal() && builder.held_forfeit_pauses_v1(claim_id, accuser));
     let session = PalwDaSessionV1 {
         opened_daa: ctx.daa_score,
         deadline_daa: admission.deadline_daa,
-        accuser_is_seat: admission.accuser_is_seat,
+        accuser_is_seat: seat_like,
         exposure: admission.exposure,
         units,
         stage: admission.stage,
     };
     builder.write_da_session((claim_id, accuser), Some(session));
     let mut record = builder.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
-    let pauses = if admission.accuser_is_seat {
+    let pauses = if seat_like {
         record.open_seat_sessions = record.open_seat_sessions.saturating_add(1);
-        let opened = record.opened_by_seat.entry(accuser).or_insert(0);
-        *opened = opened.saturating_add(1);
+        if admission.accuser_is_seat {
+            let opened = record.opened_by_seat.entry(accuser).or_insert(0);
+            *opened = opened.saturating_add(1);
+        } else {
+            // **The fourth review's HIGH: a record-holder's pause is not a seat's session.** It is
+            // counted with the seats' OPEN sessions (`open_seat_sessions`, `paused_since`: all DA-5 and
+            // DL-1 read), but DA-8's per-seat budget (`opened_by_seat`, at most four) is a seat's
+            // alone — admission asks it of a seat and never of anyone else, and the loader refuses a
+            // count past four. Counted there, a non-seat that lost five held dissections on one claim
+            // drove the fold to a tip its own loader refused on every node: a chain halt for five
+            // forfeits. The session was admitted on the non-seat budget, so it is counted on it —
+            // the lifetime total (`opened_non_seat_total`, sixteen), exactly as the conversion of a
+            // demand that predates its record leaves it (counted there at its admission).
+            record.opened_non_seat_total = record.opened_non_seat_total.saturating_add(1);
+        }
         record.open_seat_sessions == 1
     } else {
         record.open_other_sessions = record.open_other_sessions.saturating_add(1);
@@ -22191,9 +22915,16 @@ fn apply_da_answer_v1(
             if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure {
                 let artifact_root =
                     builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
-                match evidence.verdict_v1(claim.class_id, artifact_root, ladder).map_err(|e| PalwStateV2Error::HeldDaRefused {
-                    claim: claim_id,
-                    why: format!("the evidence does not adjudicate: {e}"),
+                // t12 (`palw_audit_2026_09_23`): the verdict `MaterialDisclosedHeld` asks, at the same
+                // fence — this arm is its successor past `palw_rcore_plus`, and the bound verdict
+                // (8be0f661) must not be skipped by the answer route that is live on t12.
+                let bound_to = crate::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                    execution_root: claim.execution_root,
+                    class_id: claim.class_id,
+                    artifact_root,
+                };
+                match evidence.verdict_at_v2(&bound_to, ladder, builder.extras.audit_2026_09_23_active).map_err(|e| {
+                    PalwStateV2Error::HeldDaRefused { claim: claim_id, why: format!("the evidence does not adjudicate: {e}") }
                 })? {
                     crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
                         // The executor convicted itself by answering — the one-move verdict, a PROVEN
@@ -22268,11 +22999,22 @@ fn open_held_dissection_v1(
     let challenger_collateral =
         builder.state.bonds.get(&challenger_bond).ok_or(PalwStateV2Error::MissingBond(challenger_bond))?.collateral;
     let deadline_daa = ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
-    let first_deadline_daa = ctx
-        .daa_score
-        .checked_add(builder.params.turn_deadline_daa())
-        .ok_or(PalwStateV2Error::Overflow("court opening rung deadline"))?
-        .min(deadline_daa);
+    // **ADR-0152 §4-ter (the review's F5, decision): the root claim is a COMPUTE move.** For an
+    // answerable held class past the fence the responder re-executes to the site before it can file
+    // (N1), so its rung is the class's compute turn — `palw_held_move_turn_daa_v1` of the profile the
+    // accusation's binding carries, authenticated to the claim's class by the bound verdict. Every
+    // other opening keeps the court's turn.
+    let opening_turn = match &accusation.refutation.binding.shape_profile {
+        profile
+            if palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id)
+                && profile.shape_profile_id() == claim.class_id =>
+        {
+            crate::palw_class_admission_v2::palw_held_move_turn_daa_v1(profile, builder.params.turn_deadline_daa())
+        }
+        _ => builder.params.turn_deadline_daa(),
+    };
+    let first_deadline_daa =
+        ctx.daa_score.checked_add(opening_turn).ok_or(PalwStateV2Error::Overflow("court opening rung deadline"))?.min(deadline_daa);
     // The space a bisection would have declared: the ruleset's own leaf cap — the ladder the
     // one-move court adjudicated the accusation at — never a count the accuser chose.
     let space_size = ladder;
@@ -22292,7 +23034,30 @@ fn open_held_dissection_v1(
     if builder.state.court_sessions.contains_key(&session_id) {
         return Err(PalwStateV2Error::DuplicateSession(session_id));
     }
-    builder.reserve_challenger_v1(challenger_bond, challenger_collateral, claim.reserved, "held dissection", ctx.daa_score)?;
+    // **ADR-0152 §4-ter C4: the reservation that makes the charge certain.** Past
+    // `palw_offence_attribution` with R-core+'s one ledger in force, the opening asks S's one accuser
+    // gate (`gate_room(.., Accuser)`, [`palw_rcore_gate_room_of_v1`]: `max(committed, 500‰·C) +
+    // accuser + new ≤ C`) for the charge a losing challenger will pay, `min(max(reserved, G),
+    // floor)`; the gate's accuser ledger already counts this bond's other open held dissections at
+    // their own charge ([`PalwFoldReadV1::accuser_ledger_v1`], the review's F7). Below either fence
+    // the reservation is the one it always was.
+    if builder.extras.offence_attribution_active && builder.params.rcore_plus_active_at(ctx.daa_score) {
+        let floor = u128::from(builder.params.min_collateral_sompi());
+        let charge = builder.held_dissection_charge_v1(&claim_id, claim).min(floor);
+        let room = builder.gate_room(&challenger_bond, ctx.daa_score, PalwRcoreGateV1::Accuser);
+        if charge > room {
+            let ceiling = u128::from(challenger_collateral);
+            return Err(PalwStateV2Error::AccusationExposureCeiling {
+                bond: challenger_bond,
+                edge: "held dissection",
+                backed: ceiling.saturating_sub(room),
+                accusation: charge,
+                ceiling,
+            });
+        }
+    } else {
+        builder.reserve_challenger_v1(challenger_bond, challenger_collateral, claim.reserved, "held dissection", ctx.daa_score)?;
+    }
     let mut opened = PalwCourtSessionStateV2 {
         claim: claim_id,
         challenger_bond,
@@ -22696,16 +23461,28 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     // that guarantee.** The unfenced `round() == 0 && weightless` clause is untouched:
                     // it is the opening-rung / weightless-family mercy (M2-5), a different question
                     // that the cap raise does not bear on.
+                    // **ADR-0152 §4-ter C1: an answerable held class's opening silence is a default,
+                    // past `palw_offence_attribution`, whichever mercy it would otherwise have read.**
+                    // Both mercies below doubt that the responder CAN move; for such a class the move
+                    // is the held root claim, which its windowed builder makes (and which a producer
+                    // that cannot make it does not underwrite — `supports_dissection` is held-aware).
                     crate::palw_bisect::PalwBisectPartyV1::Responder
-                        if (session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight)
-                            || (builder.extras.court_responder_coverage_active
-                                && owes_the_dissection_opening
-                                // The deep fence lifts the fused-terminal mercy — but ONLY where an
-                                // honest responder could build the root-claim evidence. A held class
-                                // cannot (ADR-0121 §7), so its mercy is kept even past the fence; see
-                                // `court_root_evidence_is_buildable_v1` (`!class_is_held_v1`).
-                                && !(builder.extras.audit_2026_09_11_deep_active
-                                    && builder.state.court_root_evidence_is_buildable_v1(&claim.class_id))) =>
+                        if !(owes_the_dissection_opening
+                            && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id))
+                            && ((session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight)
+                                || (builder.extras.court_responder_coverage_active
+                                    && owes_the_dissection_opening
+                                    // The deep fence lifts the fused-terminal mercy — but ONLY where an
+                                    // honest responder could build the root-claim evidence. Below
+                                    // `palw_offence_attribution` a held class cannot (ADR-0121 §7), so its
+                                    // mercy is kept even past the deep fence; past it, an answerable held
+                                    // class can (C1, `court_root_evidence_is_buildable_v2`).
+                                    && !(builder.extras.audit_2026_09_11_deep_active
+                                        && builder.state.court_root_evidence_is_buildable_v2(
+                                            &claim.class_id,
+                                            builder.extras.offence_attribution_active,
+                                            builder.params,
+                                        )))) =>
                     {
                         // Ends the session, convicts nobody, and FINES nobody — see
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
@@ -24566,9 +25343,11 @@ fn apply_object(
         // not privileged); then one court at a time on a claim; then the verdict, derived HERE at
         // the ladder the block's extras carry, and applied: a fault voids the claim and slashes
         // `claim.reserved` (Decision 8's `CourtFraud`, never the whole bond), a refutation that
-        // proves none charges the accuser what it staked. A fused site convicts nobody and is
-        // refused; the acceptance layer already refused the object, so this arm is the second
-        // lock on that door.
+        // proves none charges the accuser what it staked. A fused site is never tried in one move:
+        // under the held regime it opens a held dissection at the named leaf (ADR-0103 Decision 5);
+        // below it, and past `palw_offence_attribution` for a held class no honest party can dissect
+        // inside a turn (ADR-0152 §4-ter), it is refused — the acceptance layer refuses it first,
+        // and this arm is the second lock on that door.
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
                 return Err(PalwStateV2Error::ShardCourtDormant);
@@ -24590,8 +25369,16 @@ fn apply_object(
             if accuser == claim.bond {
                 return Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(accuser));
             }
-            if let Some((session, _)) = builder.state.court_sessions.iter().find(|(_, s)| s.claim == claim_id) {
-                return Err(PalwStateV2Error::ShardCourtClaimUnderSession { claim: claim_id, session: *session });
+            // **ADR-0152 §4-ter C3: one court at a time is no shield past the fence.** Below it any
+            // open session refuses the accusation. Past `palw_offence_attribution` a one-move
+            // verdict (guilty or false) lands whatever is open — a guilty one voids the claim and
+            // every session on it closes neutrally (`void_claim`) — and only a further DISSECTION is
+            // gated, once the verdict says the leaf needs one (below).
+            let open_session = builder.state.court_sessions.iter().find(|(_, s)| s.claim == claim_id).map(|(id, _)| *id);
+            if let Some(session) = open_session
+                && !builder.extras.offence_attribution_active
+            {
+                return Err(PalwStateV2Error::ShardCourtClaimUnderSession { claim: claim_id, session });
             }
             let accuser_record = builder.state.bonds.get(&accuser).ok_or(PalwStateV2Error::MissingBond(accuser))?.clone();
             if !matches!(accuser_record.status, PalwBondStatusV2::Active) {
@@ -24603,8 +25390,23 @@ fn apply_object(
             }
             let artifact_root =
                 builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
-            let verdict = crate::palw_shard_court_v1::palw_shard_court_verdict_v1(accusation, claim.class_id, artifact_root, ladder)
-                .map_err(|e| PalwStateV2Error::ShardCourt(e.to_string()))?;
+            // t12 (`palw_audit_2026_09_23`): the verdict is BOUND to the claim before a fused site is
+            // deferred — the binding recomputes to the claim's root, the named tile opens under it,
+            // the rows prove against the class — so a court opens only on evidence of THIS claim.
+            // Every refusal is a refusal (the object is not folded); nothing here charges the
+            // accuser, whose signature does not cover the refutation's bytes.
+            let bound_to = crate::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                execution_root: claim.execution_root,
+                class_id: claim.class_id,
+                artifact_root,
+            };
+            let verdict = crate::palw_shard_court_v1::palw_shard_court_verdict_at_v2(
+                accusation,
+                &bound_to,
+                ladder,
+                builder.extras.audit_2026_09_23_active,
+            )
+            .map_err(|e| PalwStateV2Error::ShardCourt(e.to_string()))?;
             match verdict {
                 crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
                     // A proven verdict (S-4): `CourtConviction` past `palw_rcore_plus`, the accuser its
@@ -24623,6 +25425,43 @@ fn apply_object(
                     // with every rule of it unchanged. Dormant, it is the refusal it always was.
                     if builder.extras.held_context_ladder.is_none() {
                         return Err(PalwStateV2Error::ShardCourtNeedsDissection { claim: claim_id, leaf: accusation.leaf_index });
+                    }
+                    // **ADR-0152 §4-ter (A-held): a dissection nobody can play is not opened.** Past
+                    // `palw_offence_attribution` a held class above `PALW_HELD_ANSWERABLE_N_CTX_V1`
+                    // (testnet-12's 2M row) has no honest move inside a turn on either side, so its
+                    // session could only freeze the claim's `Final` for a window and end in the
+                    // mercy: the accusation is refused, and the class's residual is (C)'s bound (held
+                    // to Final, `c_2M = 1`, RT#2). The answerable held class (8k) opens as before.
+                    if builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id) {
+                        return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable {
+                            claim: claim_id,
+                            leaf: accusation.leaf_index,
+                            class: claim.class_id,
+                        });
+                    }
+                    // **ADR-0152 §4-ter C3: a session already open admits one more dissection only
+                    // from a seat of the claim's panel** — one per seat, at most `1 + seat_count` on
+                    // the claim, AT ANY LEAF: a decoy the producer's own Sybil opened — at an honest
+                    // leaf, or at the lie's own leaf to hold that leaf — holds off no seat (the
+                    // review's F2: a same-leaf refusal let one decoy at the lie lock out the whole
+                    // panel). Two sessions at one leaf do not collide: the session id binds the
+                    // challenger (`open_at_named_leaf`). A non-seat's dissection waits, as one court
+                    // at a time always made it.
+                    if open_session.is_some() {
+                        let refused = |why| PalwStateV2Error::HeldDissectionFurtherSessionRefused { claim: claim_id, why };
+                        let seats = builder.state.panels.get(&claim_id).map(|panel| panel.seats.clone()).unwrap_or_default();
+                        if !seats.iter().any(|seat| seat.bond == accuser) {
+                            return Err(refused("only a seat of the claim's panel opens a further dissection while one is open"));
+                        }
+                        let on_claim: Vec<&PalwCourtSessionStateV2> =
+                            builder.state.court_sessions.values().filter(|s| s.claim == claim_id).collect();
+                        if on_claim.iter().any(|s| s.challenger_bond == accuser) {
+                            return Err(refused("this seat already holds a session on the claim"));
+                        }
+                        // `1 + seat_count` sessions at most: the first, and one per seat.
+                        if on_claim.len() > seats.len() {
+                            return Err(refused("the claim already holds one session and one per seat"));
+                        }
                     }
                     open_held_dissection_v1(builder, ctx, claim_id, &claim, accusation, ladder)?;
                 }
@@ -24654,7 +25493,11 @@ fn apply_object(
             if accuser == claim.bond {
                 return Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(accuser));
             }
-            if let Some((session, _)) = builder.state.court_sessions.iter().find(|(_, s)| s.claim == claim_id) {
+            // ADR-0152 §4-ter C3: past the fence a one-move checkpoint verdict lands whatever court
+            // is open on the claim (a guilty one voids it, and its sessions close neutrally).
+            if let Some((session, _)) = builder.state.court_sessions.iter().find(|(_, s)| s.claim == claim_id)
+                && !builder.extras.offence_attribution_active
+            {
                 return Err(PalwStateV2Error::ShardCourtClaimUnderSession { claim: claim_id, session: *session });
             }
             let accuser_record = builder.state.bonds.get(&accuser).ok_or(PalwStateV2Error::MissingBond(accuser))?.clone();
@@ -24669,8 +25512,13 @@ fn apply_object(
                 .map_err(|e| PalwStateV2Error::CheckpointCourt(e.to_string()))?;
             match verdict {
                 crate::palw_checkpoint_court_v1::PalwCheckpointCourtVerdictV1::ExecutorGuilty => {
+                    // ADR-0152 §4-ter.3 step 6 (the forger's race): the acquittals this proves wrong,
+                    // read before the conviction's void drops them.
+                    let wronged = builder.held_forfeits_proven_wrong_v1(&claim_id, accusation);
                     // A proven verdict (S-4): `CourtConviction` past `palw_rcore_plus`.
                     builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, accuser, None)?;
+                    // ...and, the conviction closed, each wronged challenger made whole.
+                    builder.refund_held_forfeits_v1(&wronged);
                 }
                 crate::palw_checkpoint_court_v1::PalwCheckpointCourtVerdictV1::FalseAccusation => {
                     let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
@@ -24802,9 +25650,13 @@ fn apply_object(
             if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &disclosure.disclosure {
                 let artifact_root =
                     builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
-                match evidence.verdict_v1(claim.class_id, artifact_root, ladder).map_err(|e| PalwStateV2Error::HeldDaRefused {
-                    claim: claim_id,
-                    why: format!("the evidence does not adjudicate: {e}"),
+                let bound_to = crate::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                    execution_root: claim.execution_root,
+                    class_id: claim.class_id,
+                    artifact_root,
+                };
+                match evidence.verdict_at_v2(&bound_to, ladder, builder.extras.audit_2026_09_23_active).map_err(|e| {
+                    PalwStateV2Error::HeldDaRefused { claim: claim_id, why: format!("the evidence does not adjudicate: {e}") }
                 })? {
                     crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
                         // A proven verdict (S-4) — refused past `palw_rcore_plus` above
@@ -25071,7 +25923,7 @@ fn apply_object(
                 // declaration's 100% check extends to (capability exposure is non-slashable
                 // standing, priced against the whole collateral as before).
                 let already = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                    builder.committed_at(bond, ctx.daa_score).saturating_add(palw_accuser_exposure_v1(&builder.state, bond))
+                    builder.committed_at(bond, ctx.daa_score).saturating_add(builder.read().accuser_ledger_v1(bond, ctx.daa_score))
                 } else {
                     builder
                         .state
@@ -25271,7 +26123,7 @@ fn apply_object(
                     let backing = if builder.params.rcore_plus_active_at(ctx.daa_score) {
                         builder
                             .committed_at(&carriage_bond, ctx.daa_score)
-                            .saturating_add(palw_accuser_exposure_v1(&builder.state, &carriage_bond))
+                            .saturating_add(builder.read().accuser_ledger_v1(&carriage_bond, ctx.daa_score))
                     } else {
                         builder
                             .state
@@ -26102,7 +26954,7 @@ fn apply_object(
                 builder.disarm_deadline(*claim_id);
             }
         }
-        PalwConsensusObjectV2::CourtClosed { session_id, verdict, proof: _ } => {
+        PalwConsensusObjectV2::CourtClosed { session_id, verdict, proof } => {
             let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
             builder.write_court(*session_id, None)?;
             let claim_id = session.claim;
@@ -26119,11 +26971,39 @@ fn apply_object(
                         // convicted responder pays for the time it kept the court open. S-4: past
                         // `palw_rcore_plus` with S2's action and the `CourtConviction` record, the
                         // challenger the reward's winner.
-                        builder.convict_by_court_verdict_v1(ctx, claim_id, &claim, session.challenger_bond, Some(session.opened_daa))?;
+                        //
+                        // ADR-0152 §4-ter (the review's F3, decision (B)): a dissection's bottom proves
+                        // the producer's own disclosure false, not the execution the seats replayed —
+                        // whatever the class — recorded `CourtHeldVerdict`, charged the same, no
+                        // kind-3 basis.
+                        let reason = palw_court_verdict_void_reason_v1(
+                            builder.extras.offence_attribution_active,
+                            matches!(proof, crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. }),
+                        );
+                        builder.convict_by_court_verdict_as_v1(
+                            ctx,
+                            claim_id,
+                            &claim,
+                            session.challenger_bond,
+                            Some(session.opened_daa),
+                            reason,
+                        )?;
                     }
                 }
                 PalwCourtVerdictV2::ChallengerDefeated => {
+                    let before = builder.state.bonds.get(&session.challenger_bond).map(|record| record.collateral).unwrap_or(0);
                     rearm_after_challenger_side_close(builder, ctx, claim_id, &claim, session.challenger_bond, session.opened_daa)?;
+                    // ADR-0152 §4-ter.3 step 6 (the forger's race): past `palw_offence_attribution`, what
+                    // a proven acquittal on an anchor took, kept for the conviction that proves it wrong.
+                    builder.record_held_forfeit_v1(
+                        ctx,
+                        claim_id,
+                        *session_id,
+                        session.challenger_bond,
+                        session.ladder.terminal_index(),
+                        before,
+                        proof,
+                    );
                 }
             }
         }
@@ -26507,15 +27387,22 @@ fn apply_object(
         // uses. What the fold enforces on its own is the arity: an illegal one is refused here,
         // and whether the legal one is the ruleset's derived value is checked where the bundle is.
         // -------------------------------------------------------------------------------------
-        PalwConsensusObjectV2::CourtAttnRootClaimed { .. } | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. } => {
+        PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. } => {
             // **ADR-0093 Decision 8: move 1 has two forms, and past its fence the one without the
             // anchor is refused wherever the bottom will read a checkpoint.** Both open the same
             // phase; the anchored form's anchor is checked against the site the class derives and
             // then left on the chain for the bottom to read — the phase keeps nothing new.
-            let (session_id, root, arity, binding, out_tile, operand_openings, filed_anchor) = match object {
+            //
+            // **ADR-0152 §4-ter C2: and a third, the held form (tag 57)** — the anchored form plus
+            // the anchor's slice sub-roots, checked against the anchor's committed state root
+            // (H2/H3 below). Past `palw_offence_attribution` it is the only form an answerable held
+            // class may file where the bottom reads a checkpoint; it too opens the same phase.
+            let (session_id, root, arity, binding, out_tile, operand_openings, filed_anchor, held_sub_roots) = match object {
                 PalwConsensusObjectV2::CourtAttnRootClaimed {
                     session_id, root, arity, binding, out_tile, operand_openings, ..
-                } => (session_id, root, arity, binding, out_tile, operand_openings, None),
+                } => (session_id, root, arity, binding, out_tile, operand_openings, None, None),
                 PalwConsensusObjectV2::CourtAttnRootClaimedAnchored {
                     session_id,
                     root,
@@ -26525,10 +27412,36 @@ fn apply_object(
                     anchor,
                     operand_openings,
                     ..
-                } => (session_id, root, arity, binding, out_tile, operand_openings, Some(anchor.as_ref())),
-                _ => unreachable!("the arm matched one of the two"),
+                } => (session_id, root, arity, binding, out_tile, operand_openings, Some(anchor.as_ref()), None),
+                PalwConsensusObjectV2::CourtAttnRootClaimedHeld {
+                    session_id,
+                    root,
+                    arity,
+                    binding,
+                    out_tile,
+                    anchor,
+                    slice_sub_roots,
+                    operand_openings,
+                    ..
+                } => (
+                    session_id,
+                    root,
+                    arity,
+                    binding,
+                    out_tile,
+                    operand_openings,
+                    Some(anchor.as_ref()),
+                    Some(slice_sub_roots.as_slice()),
+                ),
+                _ => unreachable!("the arm matched one of the three"),
             };
-            if filed_anchor.is_some() && !builder.extras.attn_anchored_root_active {
+            if held_sub_roots.is_some() && !builder.extras.offence_attribution_active {
+                return Err(PalwStateV2Error::HeldRootClaimRefused {
+                    session: *session_id,
+                    why: "a held root claim before palw_offence_attribution is armed (ADR-0152 §4-ter)",
+                });
+            }
+            if filed_anchor.is_some() && held_sub_roots.is_none() && !builder.extras.attn_anchored_root_active {
                 return Err(PalwStateV2Error::DissectionRefused(
                     *session_id,
                     "an anchored root claim before palw_attn_anchored_root is armed (ADR-0093 Decision 8)".to_string(),
@@ -26545,6 +27458,24 @@ fn apply_object(
             let narrowed = session.ladder.terminal_index().ok_or(PalwStateV2Error::LadderNotTerminal(*session_id))?;
             let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
             let class = builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.clone();
+            // **ADR-0152 §4-ter H0/H1: the held form is an answerable held class's, past the fence,
+            // over a held map.** `held_answerable` is also what makes the held form REQUIRED below.
+            let held_answerable = palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim.class_id);
+            if held_sub_roots.is_some() {
+                if !held_answerable {
+                    return Err(PalwStateV2Error::HeldRootClaimRefused {
+                        session: *session_id,
+                        why: "the held root claim is an answerable held class's: this class is not held, or no honest party can \
+                              dissect it inside a turn",
+                    });
+                }
+                if !crate::palw_state_chunk_map::palw_map_is_held_v4(&binding.shape_profile.state_chunk_map_id) {
+                    return Err(PalwStateV2Error::HeldRootClaimRefused {
+                        session: *session_id,
+                        why: "the held root claim's binding does not register the held map",
+                    });
+                }
+            }
             // ADR-0088 Decision 3: the openings prove against the root the claim was admitted
             // against, when the fold recorded one — a line's version, not the class's founding root.
             let proven_root = builder.state.claim_roots.get(&session.claim).copied().unwrap_or(class.artifact_root);
@@ -26597,6 +27528,17 @@ fn apply_object(
             // The anchor the bottom will need: carried and exactly the site's own, or — past the
             // fence, at a site whose bottom reads a checkpoint — required.
             let needs_anchor = derived.site.every_position_is_checkpointed && derived.site.anchor_covered_decode_call.is_some();
+            // **ADR-0152 §4-ter: past the fence an answerable held class files the held form or
+            // nothing** — the plain and anchored forms are refused where the bottom reads a
+            // checkpoint, so the choice left to the responder is to file the sub-roots or to be
+            // convicted by its silence (C1).
+            if held_answerable && needs_anchor && held_sub_roots.is_none() {
+                return Err(PalwStateV2Error::HeldRootClaimRefused {
+                    session: *session_id,
+                    why: "past palw_offence_attribution an answerable held class's root claim must carry its anchor's slice \
+                          sub-roots (CourtAttnRootClaimedHeld, ADR-0152 §4-ter C2)",
+                });
+            }
             match filed_anchor {
                 Some(anchor) => crate::palw_attn_court_v1::palw_attn_anchor_is_the_sites_v1(anchor, &derived.binding, &derived.site)
                     .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?,
@@ -26609,6 +27551,36 @@ fn apply_object(
                     ));
                 }
                 None => {}
+            }
+            // **H2/H3: the sub-roots are the anchor's own.** Counted against the held layout the
+            // site derives at the anchor, folded through the held map's top tree, compared with the
+            // anchor's committed `state_chunks_root` — so every sub-root a bottom's top path is
+            // rebuilt from is the accused's.
+            if let Some(sub_roots) = held_sub_roots {
+                let Some(anchor) = filed_anchor.filter(|_| needs_anchor) else {
+                    return Err(PalwStateV2Error::HeldRootClaimRefused {
+                        session: *session_id,
+                        why: "the held root claim is for a site whose bottom reads a checkpoint",
+                    });
+                };
+                let layout = crate::palw_state_chunk_map::palw_state_layout_v4(&binding.shape_profile, derived.site.anchor_positions)
+                    .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+                if sub_roots.len() != layout.slice_count() as usize {
+                    return Err(PalwStateV2Error::HeldSubRootCount {
+                        session: *session_id,
+                        got: sub_roots.len(),
+                        want: layout.slice_count() as usize,
+                    });
+                }
+                let rooted = crate::palw_state_chunk_map::palw_state_top_root_from_sub_roots_v4(&layout, sub_roots)
+                    .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+                if rooted != anchor.leaf.state_chunks_root {
+                    return Err(PalwStateV2Error::HeldSubRootsDoNotRoot {
+                        session: *session_id,
+                        folded: rooted,
+                        committed: anchor.leaf.state_chunks_root,
+                    });
+                }
             }
             // **The committed row, opened.** This is the pin that makes the whole protocol be
             // about THIS execution: without it a responder whose committed output was forged
@@ -26623,6 +27595,16 @@ fn apply_object(
             let committed =
                 crate::palw_attn_court_v1::palw_attn_opened_lanes_v1(out_tile, &derived.binding, derived.head_lanes.2 as usize)
                     .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            // **ADR-0152 §4-ter (the review's F5, decision): the challenger's first choice is a
+            // COMPUTE move** — it re-executes to the site (N2) once the filing is on the chain. The
+            // phase opens with the class's compute turn for a held root claim (the profile is the
+            // filing's own binding, the class's), and the first disclosure carries that window over
+            // to the choice (`CourtAttnDissected` below). Every other phase keeps the court's turn.
+            let first_window = if held_sub_roots.is_some() {
+                crate::palw_class_admission_v2::palw_held_move_turn_daa_v1(&binding.shape_profile, builder.params.turn_deadline_daa())
+            } else {
+                builder.params.turn_deadline_daa()
+            };
             let phase = crate::palw_attn_court_v1::PalwAttnDissectPhaseV1::open_with_arity(
                 *session_id,
                 root,
@@ -26633,7 +27615,7 @@ fn apply_object(
                 *arity,
                 derived.tile_positions,
                 ctx.daa_score,
-                builder.params.turn_deadline_daa(),
+                first_window,
                 true,
             )
             .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
@@ -26644,9 +27626,24 @@ fn apply_object(
         PalwConsensusObjectV2::CourtAttnDissected { session_id, round, signature: _ } => {
             let mut session =
                 builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
+            let claim_of_session =
+                builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
             let phase = session.dissection.as_mut().ok_or(PalwStateV2Error::NoDissection(*session_id))?;
+            // **ADR-0152 §4-ter (the review's F5, decision): the challenger's first choice keeps the
+            // compute window move 1 opened.** For an answerable held class past the fence, the first
+            // disclosure's deadline was the root claim's DAA plus the class's compute turn; the choice
+            // after it is due no earlier than that deadline, and never less than a turn after the
+            // disclosure. Every later move is a response and takes the court's turn.
+            let base = builder.params.turn_deadline_daa();
+            let window = if phase.round() == 0
+                && palw_held_class_is_answerable_v1(&builder.state, builder.params, builder.extras, &claim_of_session.class_id)
+            {
+                base.max(phase.last_deadline_daa().saturating_sub(ctx.daa_score))
+            } else {
+                base
+            };
             phase
-                .apply_round(round, ctx.daa_score, builder.params.turn_deadline_daa())
+                .apply_round(round, ctx.daa_score, window)
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session))?;
@@ -29385,6 +30382,15 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         // M3 (DA-2): the two DA maps, verify-then-install; their indexes are rebuilt after the delta.
         PalwDeltaEntryV2::DaSession { key, old, new } => swap_write!(state.da_sessions, key, old, new),
         PalwDeltaEntryV2::DaClaim { key, old, new } => swap_write!(state.da_claims, key, old, new),
+        // 76–79 are the Activation Pool's; this line holds placeholders nothing writes.
+        PalwDeltaEntryV2::ReservedActivationPool76
+        | PalwDeltaEntryV2::ReservedActivationPool77
+        | PalwDeltaEntryV2::ReservedActivationPool78
+        | PalwDeltaEntryV2::ReservedActivationPool79 => {
+            return Err(PalwStateV2Error::DeltaMismatch("a reserved delta entry (the Activation Pool's 76–79) is not this line's"));
+        }
+        // 4-ter.3 step 6: the held forfeits, verify-then-install.
+        PalwDeltaEntryV2::HeldForfeit { key, old, new } => swap_write!(state.held_forfeits, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -29778,6 +30784,9 @@ pub struct PalwStateCarriageV2 {
     /// M3 (DA-2, rows 14–15), the same tail, after the vesting items.
     pub da_sessions: BTreeMap<(Hash64, PalwBondKeyV2), crate::palw_da_rcore_v1::PalwDaSessionV1>,
     pub da_claims: BTreeMap<Hash64, crate::palw_da_rcore_v1::PalwDaClaimV1>,
+    /// **ADR-0152 §4-ter.3 step 6: the held forfeits.** A tagged tail (`0xB6`, after the Activation
+    /// Pool's `0xB5`), encoded only when a record exists (the root block's own guard); rooted.
+    pub held_forfeits: BTreeMap<(Hash64, Hash64), PalwHeldForfeitV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -29874,6 +30883,10 @@ const PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1: u8 = 0xB3;
 /// counters, once any is non-empty or non-zero. Rooted. Absent on every chain until the writers
 /// land, so a carriage without R-core+ data is byte-identical to one before this tail existed.
 const PALW_CARRIAGE_RCORE_PLUS_TAIL_V1: u8 = 0xB4;
+/// ADR-0152 §4-ter.3 step 6: the held forfeits, once a record exists. Rooted. Absent on every chain
+/// without one, so its carriage is byte-identical to one before this tail existed. `0xB5` is the
+/// Activation Pool's (feat/t12-activation-pool).
+const PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1: u8 = 0xB6;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -30050,6 +31063,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.da_sessions.serialize(writer)?;
             self.da_claims.serialize(writer)?;
         }
+        if !self.held_forfeits.is_empty() {
+            PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1.serialize(writer)?;
+            self.held_forfeits.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -30155,6 +31172,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut da_sessions = BTreeMap::new();
         let mut da_claims = BTreeMap::new();
         let mut seen_rcore_plus = false;
+        let mut held_forfeits = BTreeMap::new();
+        let mut seen_held_forfeits = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -30262,6 +31281,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     da_sessions = BTreeMap::deserialize_reader(reader)?;
                     da_claims = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1 if !seen_held_forfeits => {
+                    seen_held_forfeits = true;
+                    held_forfeits = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -30355,6 +31378,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             vesting_counters,
             da_sessions,
             da_claims,
+            held_forfeits,
         })
     }
 }
@@ -30426,6 +31450,7 @@ impl PalwStateCarriageV2 {
             vesting_counters: state.vesting_counters,
             da_sessions: state.da_sessions.clone(),
             da_claims: state.da_claims.clone(),
+            held_forfeits: state.held_forfeits.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -30565,6 +31590,7 @@ impl PalwStateCarriageV2 {
             vesting_counters: self.vesting_counters,
             da_sessions: self.da_sessions,
             da_claims: self.da_claims,
+            held_forfeits: self.held_forfeits,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -46537,6 +47563,13 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::VestingCounters { .. } => "vesting_counters",
                     PalwDeltaEntryV2::DaSession { .. } => "da_session",
                     PalwDeltaEntryV2::DaClaim { .. } => "da_claim",
+                    // The Activation Pool's four, placeholders on this line (never written).
+                    PalwDeltaEntryV2::ReservedActivationPool76 => "reserved_activation_pool_76",
+                    PalwDeltaEntryV2::ReservedActivationPool77 => "reserved_activation_pool_77",
+                    PalwDeltaEntryV2::ReservedActivationPool78 => "reserved_activation_pool_78",
+                    PalwDeltaEntryV2::ReservedActivationPool79 => "reserved_activation_pool_79",
+                    // ADR-0152 §4-ter.3 step 6: its round trip is the held-forfeit suite's.
+                    PalwDeltaEntryV2::HeldForfeit { .. } => "held_forfeit",
                 });
             }
         }
@@ -46632,6 +47665,12 @@ pub(crate) mod tests {
             ),
             (74, PalwDeltaEntryV2::DaSession { key: (key, bond_key(1)), old: None, new: None }),
             (75, PalwDeltaEntryV2::DaClaim { key, old: None, new: None }),
+            // 76–79: the Activation Pool's (placeholders on this line), then the held forfeit.
+            (76, PalwDeltaEntryV2::ReservedActivationPool76),
+            (77, PalwDeltaEntryV2::ReservedActivationPool77),
+            (78, PalwDeltaEntryV2::ReservedActivationPool78),
+            (79, PalwDeltaEntryV2::ReservedActivationPool79),
+            (80, PalwDeltaEntryV2::HeldForfeit { key: (key, key), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -47232,6 +48271,9 @@ pub(crate) mod tests {
             vesting_counters: _,
             da_sessions: _,
             da_claims: _,
+            // ADR-0152 §4-ter.3 step 6: its own Some-only block, empty here (the held-forfeit suite
+            // pins its place and its separation).
+            held_forfeits: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -48394,6 +49436,438 @@ pub(crate) mod tests {
             held_apply(&s4, &p, &ctx(5, 111, 5), &[accuse], None, &held_extras()).expect_err("one session a claim"),
             PalwStateV2Error::ShardCourtClaimUnderSession { .. }
         ));
+    }
+
+    /// **t12 (`palw_audit_2026_09_23`): a fused accusation opens a court only if it is THIS claim's.**
+    /// The grief object of `an_accusation_at_a_fused_leaf_opens_the_dissection_at_that_leaf` — the
+    /// claim's binding, a tile and a path that are nothing — is refused and opens no court; a binding
+    /// that echoes the claim's root and commits to nothing is refused; the honest object (the
+    /// committed tile, its path, the prompt tile) still opens the dissection at the leaf, exactly as
+    /// before; and below the fence the grief object opens it as it always did.
+    #[test]
+    fn under_the_bound_verdict_only_the_claims_own_fused_evidence_opens_the_dissection() {
+        use crate::palw_shard_court_v1::PalwShardCourtAccusationV1;
+        use crate::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_leaf_index};
+        use crate::palw_step_leg::PalwStepTileLeafV1;
+        use crate::palw_step_refute::PalwExecutionStepRefutationV1;
+        let base = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None);
+        let profile = base.binding.shape_profile.clone();
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, 1, fused).expect("a slot");
+        let (node, _) = profile.resolve_node_slot(slot).expect("the node");
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else { panic!("a fused site commits a fixed row") };
+        let width = elements.min(node.tile_len);
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 12, tile_index: 0 };
+        let fx = base.with_committed_tile(coord, width, vec![0; 4 * width as usize]);
+        let leaf = canonical_step_leaf_index(&profile, &fx.binding.job_context, &coord).expect("a leaf");
+        let (p, s3, claim_id) = held_setup(&fx);
+        let object = |refutation: PalwExecutionStepRefutationV1, prompt: bool| PalwConsensusObjectV2::ShardCourtAccused {
+            accusation: Box::new(PalwShardCourtAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                execution_root: fx.binding.committed_execution_root,
+                trace_root: h64(HELD_TRACE_ROOT),
+                executor_bond: bond_key(1),
+                accuser_bond: bond_key(2),
+                leaf_index: leaf,
+                refutation,
+                artifact_openings: vec![],
+                prompt_ids_opening: prompt.then(|| {
+                    crate::palw_prompt_ids_v1::prompt_ids_opening_v1(
+                        &crate::palw_checkpoint_court_v1::tests::fixture_prompt_ids(20),
+                        12,
+                    )
+                    .expect("the tile")
+                }),
+                signature: vec![9; 8],
+            }),
+        };
+        let honest_refutation = PalwExecutionStepRefutationV1 {
+            binding: fx.binding.clone(),
+            output_opening: fx.opening(leaf),
+            output_preimage: fx.preimages[&leaf].clone(),
+            inputs: vec![],
+            prompt_token_ids: vec![],
+            decode_tokens: None,
+            kv_checkpoint: None,
+        };
+        let mut garbage_refutation = honest_refutation.clone();
+        garbage_refutation.output_opening.siblings.clear();
+        garbage_refutation.output_preimage = PalwStepTileLeafV1 { version: 1, coord, value_count: 0, values_le: vec![] };
+        let mut unbound_refutation = honest_refutation.clone();
+        unbound_refutation.binding.step_merkle_root = h64(0xDEAD);
+
+        let bound = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..held_extras() };
+        let no_court = |s: &PalwChainStateV2| assert!(s.court_sessions.values().all(|x| x.claim != claim_id), "no court on the claim");
+        for (name, refutation, why) in [
+            ("garbage tile", garbage_refutation.clone(), "does not open under the claim's committed step root"),
+            ("unbound binding", unbound_refutation, "does not recompute its committed execution root"),
+        ] {
+            match held_apply(&s3, &p, &ctx(4, 110, 4), &[object(refutation, false)], None, &bound) {
+                Err(PalwStateV2Error::ShardCourt(msg)) => assert!(msg.contains(why), "{name}: {msg}"),
+                other => panic!("{name}: must be refused, got {other:?}"),
+            }
+        }
+        no_court(&s3);
+
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[object(honest_refutation, true)], None, &bound)
+            .expect("the claim's own evidence opens the dissection");
+        let (_, session) = s4.court_sessions.iter().find(|(_, s)| s.claim == claim_id).expect("a session on the claim");
+        assert_eq!(session.ladder.terminal_index(), Some(leaf), "the ladder is terminal on the named leaf");
+        assert!(session.dissection.is_none(), "the responder's root claim is the first move");
+        assert_eq!(session.challenger_bond, bond_key(2));
+
+        // Dormant parity: below the fence the grief object opens the dissection exactly as it did.
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[object(garbage_refutation, false)], None, &held_extras())
+            .expect("pre-fence: the dissection opens");
+        assert!(s4.court_sessions.values().any(|x| x.claim == claim_id));
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // ADR-0152 §4-ter (A-held) — attention attribution for held classes
+    // ---------------------------------------------------------------------------------------------
+
+    /// **A held fixture claim with a canonical tile committed at `layer`'s fused site, prefill
+    /// `position`** — `held_setup`'s claim on that execution, and the fused leaf's index.
+    fn held_fused_claim(
+        layer: u16,
+        position: u32,
+    ) -> (crate::palw_checkpoint_court_v1::tests::HeldFixture, PalwStateParamsV2, PalwChainStateV2, Hash64, u64) {
+        use crate::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_leaf_index};
+        let base = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None);
+        let profile = base.binding.shape_profile.clone();
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, layer, fused).expect("a slot");
+        let (node, _) = profile.resolve_node_slot(slot).expect("the node");
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else { panic!("a fused site commits a fixed row") };
+        let width = elements.min(node.tile_len);
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: 0 };
+        let fx = base.with_committed_tile(coord, width, vec![0; 4 * width as usize]);
+        let leaf = canonical_step_leaf_index(&profile, &fx.binding.job_context, &coord).expect("a leaf");
+        let (p, s3, claim_id) = held_setup(&fx);
+        (fx, p, s3, claim_id, leaf)
+    }
+
+    /// **The honest one-move accusation of a committed fused leaf** (the claim's binding, the tile and
+    /// its path, the prompt tile, no history), from `accuser`.
+    fn honest_fused_accusation(
+        fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture,
+        claim_id: Hash64,
+        leaf: u64,
+        accuser: PalwBondKeyV2,
+    ) -> PalwConsensusObjectV2 {
+        let preimage = fx.preimages[&leaf].clone();
+        let position = preimage.coord.position;
+        PalwConsensusObjectV2::ShardCourtAccused {
+            accusation: Box::new(crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                execution_root: fx.binding.committed_execution_root,
+                trace_root: h64(HELD_TRACE_ROOT),
+                executor_bond: bond_key(1),
+                accuser_bond: accuser,
+                leaf_index: leaf,
+                refutation: crate::palw_step_refute::PalwExecutionStepRefutationV1 {
+                    binding: fx.binding.clone(),
+                    output_opening: fx.opening(leaf),
+                    output_preimage: preimage,
+                    inputs: vec![],
+                    prompt_token_ids: vec![],
+                    decode_tokens: None,
+                    kv_checkpoint: None,
+                },
+                artifact_openings: vec![],
+                prompt_ids_opening: Some(
+                    crate::palw_prompt_ids_v1::prompt_ids_opening_v1(
+                        &crate::palw_checkpoint_court_v1::tests::fixture_prompt_ids(20),
+                        position,
+                    )
+                    .expect("the tile"),
+                ),
+                signature: vec![9; 8],
+            }),
+        }
+    }
+
+    /// The launch line's extras: the held regime, the 2026-09-23 audit fence and F2's
+    /// `palw_offence_attribution` — the fence every A-held rule rides.
+    fn attribution_extras() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 { audit_2026_09_23_active: true, offence_attribution_active: true, ..held_extras() }
+    }
+
+    /// **The shard-court addendum (ADR-0152 §4-ter): past `palw_offence_attribution` a fused
+    /// accusation of a held class no honest party can dissect inside a turn is refused, not opened**
+    /// — by name, with no session, no reservation and no disarmed deadline — while the answerable
+    /// held class opens its dissection exactly as before, and below the fence a class the mirror
+    /// lists opens as it always did (the live chain's rule, byte for byte).
+    #[test]
+    fn past_the_attribution_fence_an_unanswerable_held_class_opens_no_dissection() {
+        let (fx, p, s3, claim_id, leaf) = held_fused_claim(1, 12);
+        let accuse = honest_fused_accusation(&fx, claim_id, leaf, bond_key(2));
+        let unanswerable = p.clone().with_held_unanswerable_classes(vec![fx.class_id()]);
+        assert!(unanswerable.held_class_is_unanswerable_v1(&fx.class_id()) && !p.held_class_is_unanswerable_v1(&fx.class_id()));
+        let refused = held_apply(&s3, &unanswerable, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &attribution_extras())
+            .expect_err("an unanswerable held class opens no dissection");
+        assert_eq!(refused, PalwStateV2Error::ShardCourtHeldSiteUnanswerable { claim: claim_id, leaf, class: fx.class_id() });
+        let text = refused.to_string();
+        assert!(text.contains("no honest party can") && !text.contains("its terminal is"), "the refusal says why: {text}");
+        assert!(s3.court_sessions.values().all(|x| x.claim != claim_id), "no court on the claim");
+
+        // The answerable held class (the 8k row's case): the dissection opens at the leaf.
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &attribution_extras())
+            .expect("the answerable held class opens its dissection");
+        let (_, session) = s4.court_sessions.iter().find(|(_, x)| x.claim == claim_id).expect("a session on the claim");
+        assert_eq!(session.ladder.terminal_index(), Some(leaf));
+
+        // Below the fence: the mirror is never read, and the class opens as it always did.
+        let below = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..held_extras() };
+        let (s4_below, _) = held_apply(&s3, &unanswerable, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &below)
+            .expect("below the fence the unanswerable class opens as before");
+        let (s4_plain, _) =
+            held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &below).expect("and so does any");
+        assert_eq!(s4_below.state_root(), s4_plain.state_root(), "below the fence the mirror moves nothing");
+    }
+
+    /// **T-A6 (C3), the checkpoint court's half: a forged checkpoint convicts in one move while a
+    /// decoy dissection is open**, and the conviction's void closes the decoy's session neutrally —
+    /// its challenger uncharged, its reservation back. Below the fence the checkpoint accusation meets
+    /// one court at a time, as it always did.
+    #[test]
+    fn t_a6_a_checkpoint_conviction_lands_under_an_open_decoy() {
+        use crate::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_leaf_index};
+        let forged = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, Some((1, 0, 4)));
+        let profile = forged.binding.shape_profile.clone();
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, 1, fused).expect("a slot");
+        let (node, _) = profile.resolve_node_slot(slot).expect("the node");
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else { panic!("a fixed row") };
+        let width = elements.min(node.tile_len);
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 12, tile_index: 0 };
+        let fx = forged.with_committed_tile(coord, width, vec![0; 4 * width as usize]);
+        let leaf = canonical_step_leaf_index(&profile, &fx.binding.job_context, &coord).expect("a leaf");
+        let (p, s3, claim_id) = held_setup(&fx);
+        let decoy = honest_fused_accusation(&fx, claim_id, leaf, bond_key(2));
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[decoy], None, &attribution_extras()).expect("the decoy opens");
+        assert_eq!(s4.court_sessions_for_claim(&claim_id), 1);
+        let reserved = s4.reserved_exposure(&bond_key(2));
+        assert!(reserved > s3.reserved_exposure(&bond_key(2)), "the decoy reserved its stake");
+        let accuse = held_checkpoint_accusation(&fx, claim_id, 11, 1, 0, 4);
+        assert!(matches!(
+            held_apply(&s4, &p, &ctx(5, 111, 5), std::slice::from_ref(&accuse), None, &held_extras()).expect_err("below the fence"),
+            PalwStateV2Error::ShardCourtClaimUnderSession { .. }
+        ));
+        let (s5, _) = held_apply(&s4, &p, &ctx(5, 111, 5), &[accuse], None, &attribution_extras()).expect("the one move lands");
+        assert!(matches!(
+            s5.claim(&claim_id).expect("claim").phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+        ));
+        assert_eq!(s5.court_sessions_for_claim(&claim_id), 0, "the void closed the decoy");
+        assert_eq!(
+            s5.bond(&bond_key(2)).expect("bond").collateral,
+            s4.bond(&bond_key(2)).expect("bond").collateral,
+            "the decoy's challenger is not charged for a court the void ended"
+        );
+        assert_eq!(s5.reserved_exposure(&bond_key(2)), s3.reserved_exposure(&bond_key(2)), "its reservation is back");
+    }
+
+    /// **T-A11 (ADR-0152 §4-ter.3 step 6; the review's F6): the `StateChunk` fallback, both branches,
+    /// on R-core+'s data-availability court, under an open held dissection.** The producer's checkpoints
+    /// hold a forged row in slice (V, 0) — the case where an honest challenger's own sub-root of that
+    /// slice disagrees with the one the producer files, so the dissection's bottom cannot be built
+    /// from the filing (`PalwAttnHeldEvidenceV1::fallback_v1`). A seat of the licensing panel opens its
+    /// held dissection at a fused leaf and then demands the forged chunk through the DA court
+    /// (`DefaultAccusedHeld`, unit `StateChunk { checkpoint, chunk }`):
+    /// * **disclosure** — the producer answers every unit of the session (`MaterialDisclosedV2`), and
+    ///   the seat files `CheckpointAccused` on the very bytes disclosed: the claim is voided `CourtFraud`
+    ///   through S-4's funnel (its `CourtConviction` record written), the dissection closes with the
+    ///   void, and the seat is not charged;
+    /// * **silence** — the disclose window runs out: DA-7 voids the claim `ProducerWithholding` (S1) and
+    ///   charges the producer, the licensing `Valid` signers are not charged (N9 dormant: seats'
+    ///   answering has not landed, `seat_da_answer_landed` false), nor is the seat, and the void closes
+    ///   the dissection neutrally.
+    #[test]
+    fn t_a11_the_state_chunk_fallback_convicts_on_disclosure_and_withholds_on_silence() {
+        use crate::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1};
+        use crate::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+        use crate::palw_held_da_v1::{PalwHeldDisclosureCarriageV1, PalwHeldDisclosureV1, PalwHeldMissingV1};
+        use crate::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_leaf_index};
+        use crate::palw_step_leg::{PalwStepOpeningV1, step_merkle_path_v1};
+        // The forged execution: (V, layer 0, position 4) moved in every checkpoint that holds it, the
+        // committed cache-write rows honest; a real tile committed at layer 1's fused site, position 12.
+        let forged = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, Some((1, 0, 4)));
+        let profile = forged.binding.shape_profile.clone();
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, 1, fused).expect("a slot");
+        let (node, _) = profile.resolve_node_slot(slot).expect("the node");
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else { panic!("a fixed row") };
+        let width = elements.min(node.tile_len);
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 12, tile_index: 0 };
+        let fx = forged.with_committed_tile(coord, width, vec![0; 4 * width as usize]);
+        let leaf = canonical_step_leaf_index(&profile, &fx.binding.job_context, &coord).expect("a leaf");
+        let class_id = fx.class_id();
+
+        // R-core+ at genesis through the mirror; the held regime and its courts; F2's fence; a turn
+        // longer than the disclose window, so the DA court decides before the dissection's clock.
+        // testnet-12's 500‰ exposure ceiling: an accuser stakes against the free half of its bond.
+        let p = held_params(class_id)
+            .with_turn_deadline_daa(200)
+            .expect("a turn")
+            .with_fp_exposure_ceiling(500)
+            .expect("a ceiling")
+            .with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+        let x = PalwTransitionExtrasV1 {
+            panel_economy_active: true,
+            shard_court_ladder: Some(1 << 26),
+            held_context_ladder: Some(1 << 26),
+            offence_attribution_active: true,
+            ..door_extras(true)
+        };
+        let step = |parent: &PalwChainStateV2, daa: u64, objects: &[PalwConsensusObjectV2], att: Option<&PalwAttemptEnvelopeV2>| {
+            aheld_held_dissection::step(parent, &p, daa, objects, att, &x)
+        };
+        let mut objects = register_class_and_bond();
+        if let PalwConsensusObjectV2::ClassRegistered { class_id: registered, .. } = &mut objects[0] {
+            *registered = class_id;
+        }
+        // The producer and the seats post what the R-core+ door fixtures' seats post: under the 500‰
+        // ceiling the producer's claim and every accuser's stake fit.
+        if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = &mut objects[1] {
+            *collateral = 1_000_000_000;
+        }
+        objects.extend((2..=6).map(|n| seat_bond_reg(n, 1_000_000_000)));
+        let s0 = step(&PalwChainStateV2::genesis(), 100, &objects, None).expect("the registry");
+        let mut env = attempt_for_class(160, 1, class_id, bond_key(1), vec![7; 4], op_id(21), h64(11));
+        env.attempt.trace_root = h64(HELD_TRACE_ROOT);
+        env.attempt.execution_root = fx.binding.committed_execution_root;
+        env.attempt.trace_chunk_count = 1;
+        env.attempt.trace_retention_daa = 999_999;
+        let claim_id = attempt_id_v2(&env.attempt);
+        let s1 = step(&s0, 101, &[], Some(&env)).expect("the claim");
+        let s2 = step(&s1, 102, &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: sybil_seats() }], None)
+            .expect("the panel binds");
+        let (full, auditor) = full_seat_and_auditor(claim_id);
+        let s3 = step(&s2, 103, &[optimistic_object(claim_id, &[full, auditor])], None).expect("S2 licenses");
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        let seat = sybil_seats().iter().map(|seat| seat.bond).find(|bond| *bond != full && *bond != auditor).expect("a third seat");
+
+        // The seat's held dissection at the fused leaf, then its DA demand of the forged chunk.
+        let s4 = step(&s3, 104, &[honest_fused_accusation(&fx, claim_id, leaf, seat)], None).expect("the held dissection opens");
+        assert_eq!(s4.court_sessions_for_claim(&claim_id), 1);
+        let mut checkpoint_accusation = fx.accusation(11, 1, 0, 4);
+        let named = PalwHeldMissingV1::StateChunk { checkpoint: 11, chunk: checkpoint_accusation.chunk.chunk_index };
+        let demand = PalwConsensusObjectV2::DefaultAccusedHeld {
+            accusation: Box::new(crate::palw_held_da_v1::PalwHeldAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                missing: named,
+                accuser: seat,
+                binding: fx.binding.clone(),
+                signature: vec![9; 8],
+            }),
+        };
+        let s5 = step(&s4, 105, &[demand], None).expect("the DA court demands the chunk");
+        let session = s5.da_session(&claim_id, &seat).expect("the DA session").clone();
+        assert_eq!(session.units.first(), Some(&PalwDaUnitV1::Held(named)), "the named unit leads the session's units");
+        assert_eq!(s5.court_sessions_for_claim(&claim_id), 1, "the held dissection is still open");
+
+        // **Disclosure**: the producer answers every unit; the seat convicts on the disclosed bytes.
+        let answer = |unit: &PalwDaUnitV1| -> PalwConsensusObjectV2 {
+            let PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint, chunk }) = *unit else {
+                panic!("a StateChunk session draws StateChunk units: {unit:?}")
+            };
+            let positions = checkpoint + 1;
+            let chunks = &fx.chunks[checkpoint as usize];
+            let siblings = crate::palw_state_chunk_map::palw_state_chunk_path_for_map_v1(&profile, positions, chunks, chunk)
+                .expect("the chunk's held path");
+            PalwConsensusObjectV2::MaterialDisclosedV2 {
+                claim: claim_id,
+                unit: *unit,
+                answer: PalwDaAnswerV1::Held(Box::new(PalwHeldDisclosureCarriageV1 {
+                    version: 1,
+                    claim: claim_id,
+                    missing: PalwHeldMissingV1::StateChunk { checkpoint, chunk },
+                    binding: fx.binding.clone(),
+                    disclosure: PalwHeldDisclosureV1::StateChunk {
+                        anchor: PalwAttnCheckpointAnchorV1 {
+                            leaf: fx.checkpoint_leaves[checkpoint as usize].clone(),
+                            opening: PalwStepOpeningV1 {
+                                leaf_index: u64::from(checkpoint),
+                                leaf_hash: fx.checkpoint_hashes[checkpoint as usize],
+                                siblings: step_merkle_path_v1(&fx.checkpoint_hashes, checkpoint as usize).expect("a leg path"),
+                            },
+                        },
+                        chunk: PalwAttnChunkOpeningV1 { chunk_index: chunk, chunk_bytes: chunks[chunk as usize].clone(), siblings },
+                    },
+                    // DA-4: the carriage's own slot stays empty; the discloser signs the whole answer.
+                    signature: Vec::new(),
+                })),
+                discloser: bond_key(1),
+                signature: vec![9; 8],
+            }
+        };
+        let answers: Vec<PalwConsensusObjectV2> = session.units.iter().map(answer).collect();
+        let disclosed = match &answers[0] {
+            PalwConsensusObjectV2::MaterialDisclosedV2 { answer: PalwDaAnswerV1::Held(carriage), .. } => match &carriage.disclosure {
+                PalwHeldDisclosureV1::StateChunk { chunk, .. } => chunk.chunk_bytes.clone(),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        };
+        let s6 = step(&s5, 106, &answers, None).expect("the producer discloses every unit");
+        assert!(s6.da_session(&claim_id, &seat).is_none(), "every unit answered: the session closes refuted");
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "an answer is no verdict");
+        // The seat's accusation is built from the disclosed chunk: the forged row, against the honest
+        // committed cache-write row.
+        assert_eq!(checkpoint_accusation.chunk.chunk_bytes, disclosed, "the accusation reads the bytes the producer disclosed");
+        checkpoint_accusation.claim = claim_id;
+        checkpoint_accusation.trace_root = h64(HELD_TRACE_ROOT);
+        checkpoint_accusation.executor_bond = bond_key(1);
+        checkpoint_accusation.accuser_bond = seat;
+        let s7 = step(&s6, 107, &[PalwConsensusObjectV2::CheckpointAccused { accusation: Box::new(checkpoint_accusation) }], None)
+            .expect("the checkpoint court convicts on the disclosed chunk");
+        assert!(
+            matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "{:?}",
+            s7.claim(&claim_id).unwrap().phase
+        );
+        assert!(
+            s7.consumed_offence(&palw_court_conviction_offence_id_v1(&bond_key(1).0, &claim_id)).is_some(),
+            "S-4's CourtConviction record"
+        );
+        assert_eq!(s7.court_sessions_for_claim(&claim_id), 0, "the void closed the dissection");
+        assert_eq!(
+            s7.bond(&seat).expect("the seat").collateral,
+            s3.bond(&seat).expect("the seat").collateral,
+            "the seat pays nothing: its dissection closed neutrally and its DA exposure came back at the conviction"
+        );
+        assert!(s7.bond(&bond_key(1)).unwrap().collateral < s3.bond(&bond_key(1)).unwrap().collateral, "the producer is charged");
+
+        // **Silence**: the disclose window runs out.
+        let mut s = s5.clone();
+        let mut at = 106;
+        while !s.claim(&claim_id).unwrap().phase.is_terminal() {
+            s = step(&s, at, &[], None).unwrap_or_else(|e| panic!("DAA {at}: {e}"));
+            at += 1;
+            assert!(at < 400, "the DA court decides inside its window");
+        }
+        assert!(
+            matches!(
+                s.claim(&claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+            ),
+            "{:?}",
+            s.claim(&claim_id).unwrap().phase
+        );
+        assert!(s.bond(&bond_key(1)).unwrap().collateral < s3.bond(&bond_key(1)).unwrap().collateral, "S1: the producer is charged");
+        for signer in [full, auditor] {
+            assert_eq!(
+                s.bond(&signer).expect("a signer").collateral,
+                s3.bond(&signer).expect("a signer").collateral,
+                "N9 dormant: the Valid signer {signer:?} is not charged for the producer's withholding"
+            );
+        }
+        assert_eq!(s.bond(&seat).expect("the seat").collateral, s3.bond(&seat).expect("the seat").collateral, "nor is the seat");
+        assert_eq!(s.court_sessions_for_claim(&claim_id), 0, "the withholding void closed the dissection neutrally");
     }
 
     fn held_da_accusation(
@@ -50495,6 +51969,110 @@ pub(crate) mod tests {
             );
         }
 
+        /// **ADR-0152 §4-ter F3, decision (B), for EVERY dissection (the feat/t12-aheld-node review):
+        /// a NON-held fused class's dissection verdict is the producer's too.** The drill's class is a
+        /// graph-v5 row under the tiled map — no held ladder recorded (`class_is_held_v1` false). Its
+        /// forged execution is narrowed to the bottom through the chain, and the `ExecutorGuilty`
+        /// close carries the real `AttnDissection` proof:
+        /// * past `palw_offence_attribution` the claim voids `CourtHeldVerdict` (reason 8) — the
+        ///   split-δ play needs no held map, so the rule is "a dissection's verdict", not "a held
+        ///   one's" — and kind 3's `CourtFraud` naming that void is refused against the licensing
+        ///   seat's `Valid` by name;
+        /// * the same close with the fence off voids `CourtFraud` and kind 3 is admitted, as it
+        ///   always was; and on every shipped network that does not arm the fence (testnet-11 either
+        ///   side of its held regime, devnet, mainnet) the reason is `CourtFraud` at every height.
+        #[test]
+        fn f3b_a_non_held_dissections_verdict_is_the_producers_past_the_fence() {
+            use crate::palw_offence_attribution_v1::{
+                PALW_PANEL_FALSE_VALID_VERSION_V2, PalwFalseValidReceiptV1, PalwIdentityRulesV1, PalwPanelFalseValidEvidenceV2,
+                palw_check_panel_false_valid_v2,
+            };
+            use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1};
+            let p = params_with_ladder();
+            let forged = Drill::new(true);
+            let (state, claim_id, sid, tile, daa) = narrow_to_the_terminal(&p, &forged);
+            assert!(!state.class_is_held_v1(&forged.profile.shape_profile_id()), "the premise: a non-held fused class");
+            let proof = dissection_close(&forged, forged.bottom_anchored(sid, tile));
+            for past in [true, false] {
+                let extras = PalwTransitionExtrasV1 { offence_attribution_active: past, ..Default::default() };
+                let close = PalwConsensusObjectV2::CourtClosed {
+                    session_id: sid,
+                    verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                    proof: proof.clone(),
+                };
+                let (end, _) = apply_palw_transition_v2_with_extras(
+                    &state,
+                    &p,
+                    &ctx(daa, daa, daa),
+                    std::slice::from_ref(&close),
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &extras,
+                )
+                .expect("the close folds");
+                end.assert_internal_consistency(&p).expect("internal consistency");
+                let want = if past { PalwVoidReasonV2::CourtHeldVerdict } else { PalwVoidReasonV2::CourtFraud };
+                assert_eq!(
+                    end.claim(&claim_id).expect("the claim").phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: daa, reason: want },
+                    "past {past}: a non-held class's dissection verdict"
+                );
+                let payload = PalwPanelFalseValidEvidenceV2 {
+                    version: PALW_PANEL_FALSE_VALID_VERSION_V2,
+                    claim_id,
+                    accused_seat: bond_key(1).0,
+                    receipt: PalwFalseValidReceiptV1::Full(crate::palw_panel_v2::PalwSeatReceiptV2 {
+                        claim: claim_id,
+                        verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                        seat_bond: bond_key(1),
+                        signed_daa: 103,
+                        signature: Vec::new(),
+                    }),
+                    contradiction: PalwPanelContradictionV1::CourtFraud { voided_daa: daa },
+                    prompt_ids_opening: None,
+                    reporter_reveal: vec![],
+                };
+                let rules = PalwIdentityRulesV1 {
+                    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    base_class_id: p.base_class_id(),
+                    da_signer_liability: false,
+                };
+                let kind3 =
+                    palw_check_panel_false_valid_v2(&end, &bond_key(1), &borsh::to_vec(&payload).unwrap(), false, false, rules, None);
+                if past {
+                    assert!(
+                        matches!(&kind3, Err(PalwOffenceVerifyError::ContradictionNotAdmitted(why)) if why.contains("HELD DISSECTION")),
+                        "a dissection's verdict convicts no signer: {kind3:?}"
+                    );
+                } else {
+                    assert!(
+                        !matches!(&kind3, Err(PalwOffenceVerifyError::ContradictionNotAdmitted(_))),
+                        "below the fence the CourtFraud void is kind 3's contradiction, as it was: {kind3:?}"
+                    );
+                }
+            }
+            // The shipped networks without the fence: `CourtFraud` for every verdict at every height.
+            use crate::network::{NetworkId, NetworkType};
+            for (name, net) in [
+                ("testnet-11", crate::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11))),
+                ("devnet", crate::config::params::Params::from(NetworkId::new(NetworkType::Devnet))),
+                ("mainnet", crate::config::params::Params::from(NetworkId::new(NetworkType::Mainnet))),
+            ] {
+                for at in [0u64, 7_099, 7_100, 10_000, u64::MAX] {
+                    for dissection in [true, false] {
+                        assert_eq!(
+                            palw_court_verdict_void_reason_v1(net.palw_offence_attribution_active_at(at), dissection),
+                            PalwVoidReasonV2::CourtFraud,
+                            "{name} at {at}: a verdict is CourtFraud (dissection {dissection})"
+                        );
+                    }
+                }
+            }
+        }
+
         /// **C-01 (mainnet audit 2026-09-11): a non-canonical `step_leaf_count` cannot open a fused
         /// dissection past the audit fence.** The bottom classifies the terminal leaf under the
         /// CANONICAL count `step_leaf_count(profile, context)` (`canonical_step_coordinates`) but
@@ -51438,6 +53016,1624 @@ pub(crate) mod tests {
                 let (lo, hi) = ladder.interval();
                 lo + (hi - lo) / 2
             })
+        }
+    }
+
+    // ---- ADR-0152 §4-ter (A-held) — a held class's dissection, at fixture scale, through the fold ----
+    //
+    // The ADR-0082 drill above is a graph-v5 row under the v3 map with a per-decode-call leg. The
+    // held regime's court is different in exactly the places §4-ter is about: the class is a graph-v7
+    // row under the HELD (v4) map, it checkpoints every position, the dissection opens at an
+    // accusation's named leaf (ADR-0103 Decision 5), and its anchor is AFTER the disputed step
+    // (`covered = p + 1`), so the anchor's state holds rows the step's own output fed (4-ter F9). This
+    // drill builds such an execution whole — the step tree, the leg of per-position checkpoints, the
+    // fused site's registered narrowings — honest, lying at one fused output tile, or lying and
+    // following the lie downstream (the consistent forger).
+    #[cfg(test)]
+    pub(crate) mod aheld_held_dissection {
+        use super::*;
+        use crate::palw_artifact::{
+            PalwArtifactOpeningV1, PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1,
+        };
+        use crate::palw_attn_court_v1::{
+            PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1, PalwAttnDissectBottomV1,
+            PalwAttnDissectChoiceV1, PalwAttnRowOpeningV1, PalwAttnTileEvidenceV1,
+        };
+        use crate::palw_attn_dissect::{
+            PALW_ATTN_DISSECT_OBJECT_VERSION_V1, PalwAttnDissectRoundV1, PalwAttnRangeClaimV1, PalwAttnRootClaimV1,
+        };
+        use crate::palw_base0_a16::{A16AttnFusedParamsV1, A16QuantParams, a16_attn_finalize_v1, a16_attn_root_claim_v1};
+        use crate::palw_bisect::PalwBisectTurnV1;
+        use crate::palw_court_v2::PalwCourtVerdictProofV2;
+        use crate::palw_state_chunk_map::{
+            PalwStateChunkKindV1, integer_kv_state_chunk_entry_v1, integer_kv_state_locate_v1, palw_state_chunk_leaves_for_map_v1,
+            palw_state_layout_v4, palw_state_slice_sub_roots_v4, palw_state_top_path_from_sub_roots_v4,
+        };
+        use crate::palw_step::{
+            PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepOpKindV1, PalwStepTableV1,
+            canonical_step_leaf_index, step_leaf_count_capped_v1,
+        };
+        use crate::palw_step_leg::{
+            PalwCheckpointLeafV2, PalwStepBindingV2, PalwStepOpeningV1, PalwStepTileLeafV1, checkpoint_genesis_prev_v2,
+            checkpoint_leaf_hash_v2, checkpoint_leg_root_v2, execution_commitment_root_v2, state_slice_path_v4, step_leg_root_v1,
+            step_merkle_path_v1, step_merkle_root_v1, step_tile_leaf_hash_v1,
+        };
+        use crate::palw_v2::PalwJobContextV2;
+
+        /// 40 prefill positions; the disputed fused leaf is layer 0's head 0 at position 35, whose
+        /// history is 36 positions — three history tiles of 16, the last ragged — so a binary
+        /// dissection plays rounds before it bottoms.
+        pub(crate) const PREFILL: u32 = 40;
+        pub(crate) const POSITION: u32 = 35;
+        pub(crate) const LAYER: u16 = 0;
+        const LIE_LANE: usize = 3;
+        const HISTORY_TILE: usize = 16;
+        pub(crate) const TRACE_ROOT: u64 = 0xAAA;
+        /// The producer; two seats of its panel (2 honest, 4 colluding); a bonded bystander (3).
+        pub(crate) const PRODUCER: u64 = 1;
+        pub(crate) const SEAT: u64 = 2;
+        pub(crate) const BYSTANDER: u64 = 3;
+        pub(crate) const COLLUDER: u64 = 4;
+        /// A bonded bond on no panel of the claim — another accuser, not a seat.
+        pub(crate) const OUTSIDER: u64 = 5;
+
+        fn codes(n: usize, seed: u64) -> Vec<i32> {
+            let mut state = seed | 1;
+            (0..n)
+                .map(|_| {
+                    state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                    ((state >> 33) % 65_535) as i32 - 32_767
+                })
+                .collect()
+        }
+
+        fn quant() -> A16AttnFusedParamsV1 {
+            A16AttnFusedParamsV1 {
+                scores: A16QuantParams { multiplier: 1 << 10, shift: 30, zero: 3 },
+                probs: A16QuantParams { multiplier: 1 << 15, shift: 24, zero: 0 },
+                values: A16QuantParams { multiplier: 1, shift: 22, zero: -5 },
+                up_bits: 2,
+            }
+        }
+
+        fn le(values: &[i32]) -> Vec<u8> {
+            values.iter().flat_map(|v| v.to_le_bytes()).collect()
+        }
+
+        /// What the executor did at the disputed fused site.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(crate) enum Forger {
+            /// Every row is the honest execution's.
+            Honest,
+            /// The fused output tile is a lie; everything downstream is the honest execution's.
+            Lies,
+            /// The lie, and every row downstream of it recomputed from it — the consistent forger
+            /// (4-ter F9): layer ℓ' > ℓ at position `p`, and every layer past `p`.
+            LiesAndFollows,
+        }
+
+        /// Whether a cache row at `(layer, position)` is downstream of the lie.
+        fn downstream(forger: Forger, layer: u16, position: u32) -> bool {
+            forger == Forger::LiesAndFollows && ((layer > LAYER && position >= POSITION) || position > POSITION)
+        }
+
+        /// The cache row the executor committed at `(kind, layer, position)`: the honest one, or —
+        /// downstream of a followed lie — a different one.
+        fn cache_row(kind: u8, layer: u16, position: u32, kv_dim: usize, follow: bool) -> Vec<i32> {
+            let mut row = codes(kv_dim, 0x51A0_0000 ^ (u64::from(kind) << 40) ^ (u64::from(layer) << 32) ^ u64::from(position));
+            if follow {
+                row[0] = if row[0] > 0 { row[0] - 1_000 } else { row[0] + 1_000 };
+            }
+            row
+        }
+
+        /// One execution of the drill's job, as the claim committed it.
+        pub(crate) struct HeldDrill {
+            pub profile: PalwShapeProfileV3,
+            pub context: PalwJobContextV2,
+            pub binding: PalwStepBindingV2,
+            pub leaves: Vec<Hash64>,
+            pub preimages: std::collections::BTreeMap<u64, PalwStepTileLeafV1>,
+            /// The fused output tile the dissection disputes.
+            pub narrowed: u64,
+            pub kv_dim: usize,
+            pub d_head: usize,
+            pub q: Vec<i32>,
+            /// Layer ℓ's K and V rows over the history `0..=p` — before the lie, so the same in the
+            /// honest execution and the committed one.
+            pub k: Vec<i32>,
+            pub v: Vec<i32>,
+            pub delta: i64,
+            /// The responder's root claim: the honest one, or the lie that finalizes to its tile.
+            pub root_claim: PalwAttnRootClaimV1,
+            pub artifact_root: Hash64,
+            pub operands: Vec<PalwArtifactOperandV1>,
+            pub checkpoint_leaves: Vec<PalwCheckpointLeafV2>,
+            pub checkpoint_hashes: Vec<Hash64>,
+            /// Every checkpoint's chunks as committed, and as the honest execution holds them.
+            pub chunks: Vec<Vec<Vec<u8>>>,
+            pub honest_chunks: Vec<Vec<Vec<u8>>>,
+            query_index: u64,
+        }
+
+        impl HeldDrill {
+            pub(crate) fn new(forger: Forger) -> Self {
+                Self::with_geometry(forger, crate::palw_checkpoint_court_v1::tests::tiny_dense_geometry(64))
+            }
+
+            /// The drill over `geometry` (one KV head, one head a tile — the drill's site reads head 0).
+            pub(crate) fn with_geometry(forger: Forger, geometry: crate::palw_qwen25_profile::PalwQwen25GeometryV1) -> Self {
+                let profile = crate::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("the held v7 row builds");
+                assert!(crate::palw_state_chunk_map::palw_profile_is_held_v4(&profile), "a held row");
+                let prompt = crate::palw_checkpoint_court_v1::tests::fixture_prompt_ids(PREFILL);
+                let context = PalwJobContextV2 {
+                    version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+                    network_id: b"aheld-drill".to_vec(),
+                    job_id: h64(0xA1),
+                    job_nullifier: h64(0xA2),
+                    assignment_id: h64(0xA3),
+                    execution_seed: [0x5A; 32],
+                    model_profile_id: h64(4),
+                    runtime_manifest_hash: h64(5),
+                    runtime_class_id: h64(6),
+                    shape_profile_id: profile.shape_profile_id(),
+                    trace_scheme_id: crate::palw_step_refute::tiled_logits_scheme_id_v1(),
+                    cu_ruleset_id: h64(9),
+                    tokenizer_id: h64(10),
+                    prompt_token_ids_hash: crate::palw_prompt_ids_v1::prompt_token_ids_root_v1(&prompt).expect("a tiled prompt root"),
+                    declared_prefill_tokens: PREFILL,
+                    exact_decode_tokens: 1,
+                    max_context_tokens: 64,
+                };
+                let (context_hash, profile_hash) = (context.context_hash(), profile.shape_profile_id());
+                let d_head = profile.attn_head_dim as usize;
+                let kv_dim = profile.attn_kv_heads as usize * d_head;
+
+                // The class's own slots for the site, the query it reads and the two cache writers.
+                let fused_index =
+                    profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+                let slot = |layer: u16, index: usize| profile.global_node_slot(PalwStepTableV1::Attn, layer, index).expect("a slot");
+                let role = |role: PalwStepNodeRoleV1| profile.attn_nodes.iter().position(|n| n.role == role).expect("a cache writer");
+                let (k_index_in_table, v_index_in_table) =
+                    (role(PalwStepNodeRoleV1::KCacheWrite), role(PalwStepNodeRoleV1::VCacheWrite));
+                let q_index_in_table = profile.attn_nodes[fused_index].input_refs[0] as usize;
+                let fused_slot = slot(LAYER, fused_index);
+                let q_slot = slot(LAYER, q_index_in_table);
+                let q_node = &profile.attn_nodes[q_index_in_table];
+                let crate::palw_step::PalwStepOutLenV1::Fixed { elements: q_len } = q_node.out_len else {
+                    panic!("a fixed query row")
+                };
+                assert_eq!(q_node.tile_len as usize, d_head, "one query tile is one head at this geometry");
+
+                // The fused site's inputs over the history, and the output it commits.
+                let history = POSITION as usize + 1;
+                let q_row = codes(q_len as usize, 0x0051_0051);
+                let q = q_row[..d_head].to_vec();
+                let mut k = Vec::with_capacity(history * kv_dim);
+                let mut v = Vec::with_capacity(history * kv_dim);
+                for j in 0..history as u32 {
+                    k.extend(cache_row(0, LAYER, j, kv_dim, false));
+                    v.extend(cache_row(1, LAYER, j, kv_dim, false));
+                }
+                let honest_root =
+                    a16_attn_root_claim_v1(&q, &k, &v, kv_dim, 0, (0, d_head), quant(), HISTORY_TILE).expect("an honest root claim");
+                let honest_tile = a16_attn_finalize_v1(&honest_root.v_acc, quant().values);
+                let (root, out_tile, delta) = if forger == Forger::Honest {
+                    (honest_root, honest_tile, 0)
+                } else {
+                    let mut delta = 1i64 << 22;
+                    loop {
+                        let mut lying = honest_root.clone();
+                        lying.v_acc[LIE_LANE] += delta;
+                        let tile = a16_attn_finalize_v1(&lying.v_acc, quant().values);
+                        if tile != honest_tile {
+                            break (lying, tile, delta);
+                        }
+                        delta *= 2;
+                        assert!(delta < 1 << 40, "no perturbation of one lane moves the committed row");
+                    }
+                };
+
+                // The step tree: every leaf synthetic but the rows the court opens.
+                let count = step_leaf_count_capped_v1(&profile, &context, u64::MAX).expect("the job's leaves");
+                let mut leaves: Vec<Hash64> = (0..count).map(|i| h64(0xE000_0000 + i)).collect();
+                let mut preimages = std::collections::BTreeMap::new();
+                let mut place = |slot: u32, position: u32, tile: u32, values: &[i32]| -> u64 {
+                    let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: tile };
+                    let leaf = PalwStepTileLeafV1 { version: 1, coord, value_count: values.len() as u32, values_le: le(values) };
+                    let index = canonical_step_leaf_index(&profile, &context, &coord).expect("a committed coordinate");
+                    leaves[index as usize] = step_tile_leaf_hash_v1(&context_hash, &profile_hash, &leaf);
+                    preimages.insert(index, leaf);
+                    index
+                };
+                for layer in 0..profile.layer_count {
+                    for position in 0..PREFILL {
+                        let follow = downstream(forger, layer, position);
+                        place(slot(layer, k_index_in_table), position, 0, &cache_row(0, layer, position, kv_dim, follow));
+                        place(slot(layer, v_index_in_table), position, 0, &cache_row(1, layer, position, kv_dim, follow));
+                    }
+                }
+                let query_index = place(q_slot, POSITION, 0, &q_row[..d_head]);
+                for (t, lanes) in q_row.chunks(d_head).enumerate().skip(1) {
+                    place(q_slot, POSITION, t as u32, lanes);
+                }
+                let narrowed = place(fused_slot, POSITION, 0, &out_tile);
+                let step_root = step_merkle_root_v1(&leaves).expect("a step root");
+
+                // A checkpoint after every position, its chunks the cache under the held map.
+                let checkpoint_profile = crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                    crate::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+                );
+                let checkpoint_profile_hash = checkpoint_profile.profile_hash();
+                let map_id = profile.state_chunk_map_id;
+                let checkpoint_count =
+                    crate::palw_context_ladder::palw_checkpoint_count_v1(&profile, &context, checkpoint_profile.checkpoint_interval);
+                assert_eq!(checkpoint_count, PREFILL, "a per-position class checkpoints every position");
+                let chunks_at = |positions: u32, executed: bool| -> Vec<Vec<u8>> {
+                    let geometry = palw_state_layout_v4(&profile, positions).expect("a held layout").attn;
+                    (0..geometry.chunk_count())
+                        .map(|i| {
+                            let entry = integer_kv_state_chunk_entry_v1(&geometry, i).expect("an entry");
+                            let kind = match entry.kind {
+                                PalwStateChunkKindV1::Key => 0u8,
+                                PalwStateChunkKindV1::Value => 1u8,
+                            };
+                            (entry.position_start..entry.position_start + entry.position_count)
+                                .flat_map(|p| {
+                                    le(&cache_row(
+                                        kind,
+                                        entry.attn_layer,
+                                        p,
+                                        kv_dim,
+                                        executed && downstream(forger, entry.attn_layer, p),
+                                    ))
+                                })
+                                .collect()
+                        })
+                        .collect()
+                };
+                let mut checkpoint_leaves = Vec::new();
+                let mut checkpoint_hashes = Vec::new();
+                let mut chunks = Vec::new();
+                let mut honest_chunks = Vec::new();
+                let mut prev = checkpoint_genesis_prev_v2(&context_hash);
+                for c in 0..checkpoint_count {
+                    let positions = c + 1;
+                    let committed = chunks_at(positions, true);
+                    let root = crate::palw_state_chunk_map::palw_state_chunks_root_for_map_v1(&profile, positions, &committed)
+                        .expect("a state root");
+                    let leaf = PalwCheckpointLeafV2 {
+                        version: 1,
+                        checkpoint_index: c,
+                        covered_decode_call: positions,
+                        prev_checkpoint_leaf_hash: prev,
+                        state_chunk_count: committed.len() as u32,
+                        state_chunks_root: root,
+                    };
+                    let hash = checkpoint_leaf_hash_v2(&context_hash, &checkpoint_profile_hash, &map_id, &leaf);
+                    prev = hash;
+                    checkpoint_leaves.push(leaf);
+                    checkpoint_hashes.push(hash);
+                    chunks.push(committed);
+                    honest_chunks.push(chunks_at(positions, false));
+                }
+                let checkpoint_root = step_merkle_root_v1(&checkpoint_hashes).expect("a checkpoint root");
+                let logits = h64(TRACE_ROOT);
+                let activation = h64(0xBBB);
+                let committed_execution_root = execution_commitment_root_v2(
+                    &context_hash,
+                    &logits,
+                    &activation,
+                    &checkpoint_leg_root_v2(&context_hash, &checkpoint_profile_hash, &map_id, 0, checkpoint_count, &checkpoint_root),
+                    &step_leg_root_v1(&context_hash, &profile_hash, count, &step_root),
+                );
+                let binding = PalwStepBindingV2 {
+                    version: 1,
+                    job_context: context.clone(),
+                    shape_profile: profile.clone(),
+                    checkpoint_profile,
+                    state_chunk_map_id: map_id,
+                    full_logits_trace_root: logits,
+                    activation_leg_root: activation,
+                    step_leaf_count: count,
+                    step_merkle_root: step_root,
+                    checkpoint_count,
+                    checkpoint_merkle_root: checkpoint_root,
+                    committed_execution_root,
+                };
+                crate::palw_step_leg::verify_binding_v1(&binding).expect("the drill's binding authenticates");
+
+                // The class's registered narrowings for the site, as an artifact.
+                let node = profile.resolve_node_slot(fused_slot).expect("the fused slot resolves").0;
+                let tensors =
+                    crate::palw_step_refute::palw_attn_fused_tensors_v1(node.weight_name.as_str()).expect("the operand names");
+                let triple = |name: &str, p: A16QuantParams| PalwArtifactOperandV1 {
+                    tensor_name: name.to_string(),
+                    layer: Some(LAYER),
+                    row_start: 0,
+                    bytes: p.to_wire().to_vec(),
+                };
+                let operands = vec![
+                    PalwArtifactOperandV1 {
+                        tensor_name: tensors.softmax_up.clone(),
+                        layer: Some(LAYER),
+                        row_start: 0,
+                        bytes: vec![quant().up_bits],
+                    },
+                    triple(tensors.scores.as_str(), quant().scores),
+                    triple(tensors.probs.as_str(), quant().probs),
+                    triple(tensors.values.as_str(), quant().values),
+                ];
+                let artifact_root = artifact_root_v1(&operands.iter().map(artifact_leaf_v1).collect::<Vec<_>>())
+                    .expect("an artifact of four operands");
+                Self {
+                    profile,
+                    context,
+                    binding,
+                    leaves,
+                    preimages,
+                    narrowed,
+                    kv_dim,
+                    d_head,
+                    q,
+                    k,
+                    v,
+                    delta,
+                    root_claim: PalwAttnRootClaimV1 {
+                        version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1,
+                        head: 0,
+                        lane_first: 0,
+                        lane_count: d_head as u16,
+                        history_positions: history as u32,
+                        claim: root,
+                    },
+                    artifact_root,
+                    operands,
+                    checkpoint_leaves,
+                    checkpoint_hashes,
+                    chunks,
+                    honest_chunks,
+                    query_index,
+                }
+            }
+
+            pub(crate) fn class_id(&self) -> Hash64 {
+                self.profile.shape_profile_id()
+            }
+
+            pub(crate) fn openings(&self) -> Vec<PalwArtifactOpeningV1> {
+                (0..self.operands.len() as u32).map(|i| open_artifact_leaf_v1(&self.operands, i).expect("an opening")).collect()
+            }
+
+            pub(crate) fn row(&self, index: u64) -> PalwAttnRowOpeningV1 {
+                PalwAttnRowOpeningV1 {
+                    leaf: self.preimages[&index].clone(),
+                    opening: PalwStepOpeningV1 {
+                        leaf_index: index,
+                        leaf_hash: self.leaves[index as usize],
+                        siblings: step_merkle_path_v1(&self.leaves, index as usize).expect("a path"),
+                    },
+                }
+            }
+
+            pub(crate) fn out_tile_opening(&self) -> PalwAttnRowOpeningV1 {
+                self.row(self.narrowed)
+            }
+
+            /// The anchor the site's bottom reads: the checkpoint after the disputed position.
+            pub(crate) fn anchor_positions(&self) -> u32 {
+                POSITION + 1
+            }
+
+            pub(crate) fn anchor(&self) -> PalwAttnCheckpointAnchorV1 {
+                let i = POSITION as usize;
+                PalwAttnCheckpointAnchorV1 {
+                    leaf: self.checkpoint_leaves[i].clone(),
+                    opening: PalwStepOpeningV1 {
+                        leaf_index: i as u64,
+                        leaf_hash: self.checkpoint_hashes[i],
+                        siblings: step_merkle_path_v1(&self.checkpoint_hashes, i).expect("a leg path"),
+                    },
+                }
+            }
+
+            fn anchor_leaves(&self, executed: bool) -> Vec<Hash64> {
+                let chunks = if executed { &self.chunks } else { &self.honest_chunks };
+                palw_state_chunk_leaves_for_map_v1(&self.profile, self.anchor_positions(), &chunks[POSITION as usize])
+                    .expect("the anchor's leaves")
+            }
+
+            /// The anchor's slice sub-roots as the claim committed them — what the held root claim files.
+            pub(crate) fn sub_roots(&self) -> Vec<Hash64> {
+                let layout = palw_state_layout_v4(&self.profile, self.anchor_positions()).expect("the held layout");
+                palw_state_slice_sub_roots_v4(&layout, &self.anchor_leaves(true)).expect("the sub-roots")
+            }
+
+            /// The held root claim, filing `sub_roots`.
+            pub(crate) fn root_claimed_held(&self, session_id: Hash64, arity: u8, sub_roots: Vec<Hash64>) -> PalwConsensusObjectV2 {
+                PalwConsensusObjectV2::CourtAttnRootClaimedHeld {
+                    session_id,
+                    root: self.root_claim.clone(),
+                    arity,
+                    binding: Box::new(self.binding.clone()),
+                    out_tile: self.out_tile_opening(),
+                    anchor: Box::new(self.anchor()),
+                    slice_sub_roots: sub_roots,
+                    operand_openings: self.openings(),
+                    signature: vec![0xAA; 8],
+                }
+            }
+
+            pub(crate) fn root_claimed_anchored(&self, session_id: Hash64, arity: u8) -> PalwConsensusObjectV2 {
+                PalwConsensusObjectV2::CourtAttnRootClaimedAnchored {
+                    session_id,
+                    root: self.root_claim.clone(),
+                    arity,
+                    binding: Box::new(self.binding.clone()),
+                    out_tile: self.out_tile_opening(),
+                    anchor: Box::new(self.anchor()),
+                    operand_openings: self.openings(),
+                    signature: vec![0xAA; 8],
+                }
+            }
+
+            pub(crate) fn root_claimed_plain(&self, session_id: Hash64, arity: u8) -> PalwConsensusObjectV2 {
+                PalwConsensusObjectV2::CourtAttnRootClaimed {
+                    session_id,
+                    root: self.root_claim.clone(),
+                    arity,
+                    binding: Box::new(self.binding.clone()),
+                    out_tile: self.out_tile_opening(),
+                    operand_openings: self.openings(),
+                    signature: vec![0xAA; 8],
+                }
+            }
+
+            /// **The one-move accusation that opens the held dissection at the fused leaf**: the
+            /// claim's binding, the committed tile and its path, the prompt tile, no history.
+            pub(crate) fn accusation(&self, claim_id: Hash64, accuser: PalwBondKeyV2, leaf: u64) -> PalwConsensusObjectV2 {
+                let preimage = self.preimages[&leaf].clone();
+                let position = preimage.coord.position;
+                PalwConsensusObjectV2::ShardCourtAccused {
+                    accusation: Box::new(crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+                        version: 1,
+                        claim: claim_id,
+                        execution_root: self.binding.committed_execution_root,
+                        trace_root: h64(TRACE_ROOT),
+                        executor_bond: bond_key(PRODUCER),
+                        accuser_bond: accuser,
+                        leaf_index: leaf,
+                        refutation: crate::palw_step_refute::PalwExecutionStepRefutationV1 {
+                            binding: self.binding.clone(),
+                            output_opening: self.row(leaf).opening,
+                            output_preimage: preimage,
+                            inputs: vec![],
+                            prompt_token_ids: vec![],
+                            decode_tokens: None,
+                            kv_checkpoint: None,
+                        },
+                        artifact_openings: vec![],
+                        prompt_ids_opening: Some(
+                            crate::palw_prompt_ids_v1::prompt_ids_opening_v1(
+                                &crate::palw_checkpoint_court_v1::tests::fixture_prompt_ids(PREFILL),
+                                position,
+                            )
+                            .expect("the prompt tile"),
+                        ),
+                        signature: vec![9; 8],
+                    }),
+                }
+            }
+
+            /// A committed fused leaf at the same position and layer other than the disputed one —
+            /// head 1's output tile — for a second accusation on the claim (C3): `lanes` wide, the
+            /// canonical `d_head` for 0, and malformed (a structural fault one move convicts) else.
+            pub(crate) fn with_second_fused_tile(mut self, lanes: usize) -> (Self, u64) {
+                let fused_index =
+                    self.profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+                let slot = self.profile.global_node_slot(PalwStepTableV1::Attn, LAYER, fused_index).expect("a slot");
+                let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: POSITION, tile_index: 1 };
+                let values = codes(if lanes == 0 { self.d_head } else { lanes }, 0x0071_1E01);
+                let leaf = PalwStepTileLeafV1 { version: 1, coord, value_count: values.len() as u32, values_le: le(&values) };
+                let index = canonical_step_leaf_index(&self.profile, &self.context, &coord).expect("head 1's tile");
+                let (context_hash, profile_hash) = (self.context.context_hash(), self.profile.shape_profile_id());
+                self.leaves[index as usize] = step_tile_leaf_hash_v1(&context_hash, &profile_hash, &leaf);
+                self.preimages.insert(index, leaf);
+                let b = &mut self.binding;
+                b.step_merkle_root = step_merkle_root_v1(&self.leaves).expect("a step root");
+                b.committed_execution_root = execution_commitment_root_v2(
+                    &context_hash,
+                    &b.full_logits_trace_root,
+                    &b.activation_leg_root,
+                    &checkpoint_leg_root_v2(
+                        &context_hash,
+                        &b.checkpoint_profile.profile_hash(),
+                        &b.state_chunk_map_id,
+                        0,
+                        b.checkpoint_count,
+                        &b.checkpoint_merkle_root,
+                    ),
+                    &step_leg_root_v1(&context_hash, &profile_hash, b.step_leaf_count, &b.step_merkle_root),
+                );
+                crate::palw_step_leg::verify_binding_v1(b).expect("re-derived");
+                (self, index)
+            }
+
+            /// **The honest claim over tiles `[first, first + count)`** against the ROOT's
+            /// `(m*, S*)`, folded as the rounds fold it — what an honest party computes. The forger
+            /// pushes its surplus into the range holding tile 0 at every round (the only strategy
+            /// the fold admits), so its disclosures are these plus the lie there.
+            pub(crate) fn honest_range_claim(&self, first: u64, count: u64) -> PalwAttnRangeClaimV1 {
+                let (m, s) = (self.root_claim.claim.max, self.root_claim.claim.exp_sum);
+                let history = POSITION as usize + 1;
+                let mut level: Vec<_> = (first..first + count)
+                    .map(|t| {
+                        let lo = t as usize * HISTORY_TILE;
+                        let hi = (lo + HISTORY_TILE).min(history);
+                        crate::palw_base0_a16::a16_attn_tile_triple_v1(
+                            &self.q,
+                            &self.k[lo * self.kv_dim..hi * self.kv_dim],
+                            &self.v[lo * self.kv_dim..hi * self.kv_dim],
+                            self.kv_dim,
+                            0,
+                            (0, self.d_head),
+                            quant(),
+                            m,
+                            s,
+                        )
+                        .expect("a tile recomputes")
+                    })
+                    .collect();
+                while level.len() > 1 {
+                    let mut next = Vec::new();
+                    for group in level.chunks(crate::palw_attn_dissect::PALW_ATTN_DISSECT_MAX_CHILDREN) {
+                        next.push(crate::palw_attn_dissect::palw_attn_fold_v1(group).expect("a fold"));
+                    }
+                    level = next;
+                }
+                level.pop().expect("a non-empty range")
+            }
+
+            pub(crate) fn responder_range_claim(&self, first: u64, count: u64) -> PalwAttnRangeClaimV1 {
+                let mut claim = self.honest_range_claim(first, count);
+                if self.delta != 0 && first == 0 {
+                    claim.v_acc[LIE_LANE] += self.delta;
+                }
+                claim
+            }
+
+            /// **The challenger's bottom at `tile`**, opened from its OWN (honest) execution: the query
+            /// and the out tile against the claim's step tree (both precede or are the disputed
+            /// leaf), and one chunk per kind of slice `(K|V, ℓ)` at the anchor — its block path from
+            /// the challenger's own slice, its top path from `top` (the filed sub-roots, or `None`
+            /// for the challenger's own).
+            pub(crate) fn bottom(&self, session_id: Hash64, tile: u64, top: Option<&[Hash64]>) -> PalwAttnDissectBottomV1 {
+                let positions = self.anchor_positions();
+                let layout = palw_state_layout_v4(&self.profile, positions).expect("the held layout");
+                let honest_leaves = self.anchor_leaves(false);
+                let honest_sub_roots = palw_state_slice_sub_roots_v4(&layout, &honest_leaves).expect("sub-roots");
+                let first = tile as usize * HISTORY_TILE;
+                let chunk = |kind: PalwStateChunkKindV1| {
+                    let (flat, _) = integer_kv_state_locate_v1(&layout.attn, kind, LAYER, first as u32).expect("in the map");
+                    let address = layout.address(flat).expect("an address");
+                    let block_hashes: Vec<Hash64> = (0..address.block_count)
+                        .map(|b| honest_leaves[layout.flat_index(address.slice, b).expect("in range") as usize])
+                        .collect();
+                    let mut siblings = state_slice_path_v4(&block_hashes, address.block as usize).expect("a block path");
+                    siblings.extend(
+                        palw_state_top_path_from_sub_roots_v4(&layout, top.unwrap_or(&honest_sub_roots), address.slice)
+                            .expect("a top path"),
+                    );
+                    PalwAttnTileEvidenceV1::Checkpoint {
+                        chunk: PalwAttnChunkOpeningV1 {
+                            chunk_index: flat as u32,
+                            chunk_bytes: self.honest_chunks[POSITION as usize][flat as usize].clone(),
+                            siblings,
+                        },
+                        rows_after: vec![],
+                    }
+                };
+                PalwAttnDissectBottomV1 {
+                    version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                    session_id,
+                    tile,
+                    query: self.row(self.query_index),
+                    anchor: Some(self.anchor()),
+                    k: chunk(PalwStateChunkKindV1::Key),
+                    v: chunk(PalwStateChunkKindV1::Value),
+                    out_tile: self.out_tile_opening(),
+                }
+            }
+
+            pub(crate) fn close(&self, bottom: PalwAttnDissectBottomV1) -> PalwCourtVerdictProofV2 {
+                PalwCourtVerdictProofV2::AttnDissection {
+                    binding: Box::new(self.binding.clone()),
+                    bottom: Box::new(bottom),
+                    operand_openings: self.openings(),
+                }
+            }
+        }
+
+        pub(crate) fn dissected(session_id: Hash64, children: Vec<PalwAttnRangeClaimV1>) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::CourtAttnDissected {
+                session_id,
+                round: PalwAttnDissectRoundV1 { version: PALW_ATTN_DISSECT_OBJECT_VERSION_V1, children },
+                signature: vec![0xAA; 8],
+            }
+        }
+
+        pub(crate) fn child_chosen(session_id: Hash64, round: u32, child: u8) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::CourtAttnChildChosen {
+                session_id,
+                choice: PalwAttnDissectChoiceV1 { version: PALW_ATTN_COURT_OBJECT_VERSION_V1, session_id, round, child },
+                signature: vec![0xBB; 8],
+            }
+        }
+
+        /// The launch line's extras (testnet-12 at genesis, as far as this fold reads them): the held
+        /// regime and its courts, the deep and 2026-09-23 audit fences, the anchored root claim, the
+        /// responder-coverage mercy the deep fence lifts, and F2's `palw_offence_attribution`.
+        pub(crate) fn launch_extras() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 {
+                shard_court_ladder: Some(1 << 26),
+                held_context_ladder: Some(1 << 26),
+                audit_2026_09_23_active: true,
+                audit_2026_09_11_deep_active: true,
+                attn_anchored_root_active: true,
+                court_responder_coverage_active: true,
+                offence_attribution_active: true,
+                ..Default::default()
+            }
+        }
+
+        /// The same chain with `palw_offence_attribution` alone off — the fence-off twin.
+        pub(crate) fn below_the_fence() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { offence_attribution_active: false, ..launch_extras() }
+        }
+
+        /// Turn deadline 20, court window 600, a 10,000-sompi floor (so a charge is never the floor's
+        /// cap unless it should be), a 30% worker carve (so a claim escrows and `G > reserved`).
+        pub(crate) fn drill_params() -> PalwStateParamsV2 {
+            PalwStateParamsV2::new(100, 10, 10, 20, 600, 1000, h64(1), 4, 1000, 10_000, 1000, 0)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_turn_deadline_daa(20)
+                .unwrap()
+                .with_worker_carve_permille(300)
+                .unwrap()
+        }
+
+        /// One block through the real transition, checked: internal and deadline consistency, the
+        /// delta re-applies and reverts, and the carriage reloads under its root.
+        pub(crate) fn step(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            daa: u64,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+            extras: &PalwTransitionExtrasV1,
+        ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+            let c = PalwBlockContextV2 { block: block(0xD00_0000 + daa), daa_score: daa, blue_score: daa, subsidy: 10_000 };
+            let (child, delta) = apply_palw_transition_v2_with_extras(parent, p, &c, objects, att, false, false, false, true, extras)?;
+            child.assert_internal_consistency(p).expect("internal consistency");
+            child.assert_deadline_consistency(p).expect("deadline consistency");
+            assert_eq!(apply_delta_v2(parent, &delta, p).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
+            assert_eq!(revert_delta_v2(&child, &delta, p).expect("reverts"), *parent, "DAA {daa}: the delta reverts");
+            let reloaded =
+                PalwStateCarriageV2::from_state(&child).into_state(p, Some(child.state_root())).expect("the carriage reloads");
+            assert_eq!(reloaded, child, "DAA {daa}: reload is the state");
+            Ok(child)
+        }
+
+        /// Empty blocks from `from` while `until` is false, to at most `limit` of them.
+        pub(crate) fn run_until(
+            s: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            from: u64,
+            limit: u64,
+            extras: &PalwTransitionExtrasV1,
+            until: impl Fn(&PalwChainStateV2) -> bool,
+        ) -> (PalwChainStateV2, u64) {
+            let mut s = s.clone();
+            for daa in from..from + limit {
+                s = step(&s, p, daa, &[], None, extras).unwrap_or_else(|e| panic!("DAA {daa}: {e}"));
+                if until(&s) {
+                    return (s, daa);
+                }
+            }
+            panic!("the condition did not hold within {limit} blocks of {from}")
+        }
+
+        /// **The drill's claim, licensed**: the floor and the held class (through the carriage — the
+        /// one door that records a held class's ladder), four bonds, the attempt committing the
+        /// drill's execution (escrowing), a panel of the two seats, and both seats' `Valid`.
+        pub(crate) fn licensed(
+            drill: &HeldDrill,
+            p: &PalwStateParamsV2,
+            extras: &PalwTransitionExtrasV1,
+        ) -> (PalwChainStateV2, Hash64) {
+            let class_id = drill.class_id();
+            let bond = |n: u64| PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(n),
+                pubkey: vec![n as u8; 4],
+                operator_pubkey: super::tests::op_key(20 + n),
+                // Past the 2026-09-23 fence a registration burns 1 MSK from its registrant.
+                collateral: 1_000_000_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A00 + n),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            };
+            let register = vec![
+                PalwConsensusObjectV2::ClassRegistered {
+                    class_id: h64(1),
+                    artifact_root: h64(11),
+                    slash_value_per_pwu: 5,
+                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                    initial_target: u128::MAX / 2,
+                    share_permille: 1000,
+                    activation_daa: 0,
+                    admission: None,
+                },
+                bond(PRODUCER),
+                bond(SEAT),
+                bond(BYSTANDER),
+                bond(COLLUDER),
+                bond(OUTSIDER),
+                PalwConsensusObjectV2::ClassRegistered {
+                    class_id,
+                    artifact_root: drill.artifact_root,
+                    slash_value_per_pwu: 5,
+                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                    initial_target: u128::MAX / 2,
+                    share_permille: 100,
+                    activation_daa: 0,
+                    admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+                        profile: drill.profile.clone(),
+                        canonical: drill.context.clone(),
+                        registrant_bond: bond_key(PRODUCER),
+                        signature: Vec::new(),
+                    })),
+                },
+            ];
+            let s1 = step(&PalwChainStateV2::genesis(), p, 100, &register, None, extras).expect("the registry");
+            assert!(s1.class_is_held_v1(&class_id), "the held class recorded its ladder through the carriage");
+            let mut env = super::tests::attempt(40, 1);
+            env.attempt.class_id = class_id;
+            env.attempt.trace_root = h64(TRACE_ROOT);
+            env.attempt.execution_root = drill.binding.committed_execution_root;
+            env.attempt.trace_retention_daa = 999_999;
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = step(&s1, p, 101, &[], Some(&env), extras).expect("the claim");
+            let seats = vec![
+                PalwPanelSeatV2 { bond: bond_key(SEAT), operator_id: super::tests::op_id(20 + SEAT) },
+                PalwPanelSeatV2 { bond: bond_key(COLLUDER), operator_id: super::tests::op_id(20 + COLLUDER) },
+            ];
+            let s3 = step(&s2, p, 102, &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None, extras)
+                .expect("the panel");
+            let valid = |seat: u64| crate::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: Hash64::default(),
+                verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                seat_bond: bond_key(seat),
+                signed_daa: 0,
+                signature: Vec::new(),
+            };
+            let s4 = step(
+                &s3,
+                p,
+                103,
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: vec![valid(SEAT), valid(COLLUDER)] }],
+                None,
+                extras,
+            )
+            .expect("the licence");
+            assert!(matches!(s4.claim(&claim_id).expect("claim").phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+            (s4, claim_id)
+        }
+
+        /// The drill's claim licensed, and a held dissection opened on it at the disputed leaf by
+        /// `accuser` at DAA 104: `(state, claim, session)`.
+        pub(crate) fn opened(
+            drill: &HeldDrill,
+            p: &PalwStateParamsV2,
+            extras: &PalwTransitionExtrasV1,
+            accuser: u64,
+        ) -> (PalwChainStateV2, Hash64, Hash64) {
+            let (s, claim_id) = licensed(drill, p, extras);
+            let s = step(&s, p, 104, &[drill.accusation(claim_id, bond_key(accuser), drill.narrowed)], None, extras)
+                .expect("the accusation opens the held dissection");
+            let (sid, session) = s
+                .court_sessions
+                .iter()
+                .find(|(_, x)| x.claim == claim_id && x.challenger_bond == bond_key(accuser))
+                .map(|(k, x)| (*k, x.clone()))
+                .expect("a session on the claim");
+            assert_eq!(session.ladder.terminal_index(), Some(drill.narrowed), "terminal on the disputed leaf");
+            (s, claim_id, sid)
+        }
+
+        /// Play the phase from the root claim to its terminal tile: the responder discloses its
+        /// children at every round, the challenger names the first its own recompute does not
+        /// reproduce (child 0 when every child is honest). Returns the state and the next DAA.
+        pub(crate) fn play_to_the_bottom(
+            drill: &HeldDrill,
+            p: &PalwStateParamsV2,
+            extras: &PalwTransitionExtrasV1,
+            state: &PalwChainStateV2,
+            sid: Hash64,
+            mut daa: u64,
+        ) -> (PalwChainStateV2, u64) {
+            let mut state = state.clone();
+            let mut guard = 0;
+            while state.court_session(&sid).unwrap().dissection.as_ref().unwrap().turn() != PalwBisectTurnV1::Terminal {
+                let phase = state.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                let ranges = phase.child_ranges();
+                let children: Vec<_> = ranges.iter().map(|&(f, c)| drill.responder_range_claim(f, c)).collect();
+                let next = step(&state, p, daa, &[dissected(sid, children.clone())], None, extras).expect("the round folds");
+                daa += 1;
+                let child = ranges.iter().zip(&children).position(|(&(f, c), claimed)| *claimed != drill.honest_range_claim(f, c));
+                let round = next.court_session(&sid).unwrap().dissection.as_ref().unwrap().round();
+                let next = step(&next, p, daa, &[child_chosen(sid, round, child.unwrap_or(0) as u8)], None, extras)
+                    .expect("the choice folds");
+                daa += 1;
+                state = next;
+                guard += 1;
+                assert!(guard < 32, "the dissection did not narrow");
+            }
+            (state, daa)
+        }
+
+        /// The bottom's verdict, as the acceptance layer derives it (`adjudicate_court_close_v3` at
+        /// the held regime), for the fold's `CourtClosed` to act on.
+        pub(crate) fn adjudicate(
+            state: &PalwChainStateV2,
+            sid: Hash64,
+            proof: &PalwCourtVerdictProofV2,
+        ) -> Result<PalwCourtVerdictV2, crate::palw_court_v2::PalwCourtV2Error> {
+            let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 26, 20, 2).unwrap();
+            crate::palw_court_v2::adjudicate_court_close_v3(
+                state,
+                &sid,
+                proof,
+                &court,
+                1 << 26,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+                true,
+                // ADR-0152 v3.1 §4-bis.9's decode-close door (`palw_offence_attribution`): read by a
+                // decode-token close only, never by an attention bottom.
+                true,
+            )
+        }
+
+        fn collateral(s: &PalwChainStateV2, n: u64) -> u64 {
+            s.bond(&bond_key(n)).expect("the bond").collateral
+        }
+
+        fn phase_of(s: &PalwChainStateV2, claim: &Hash64) -> PalwClaimPhaseV2 {
+            s.claim(claim).expect("the claim").phase.clone()
+        }
+
+        /// **T-A2 (C2): the held root claim opens the phase, and only with the anchor's own sub-roots.**
+        ///
+        /// Past the fence the held form opens exactly the phase the anchored form opens below it (the
+        /// phase stores nothing new); a sub-root vector one short, one long, or with one sub-root not
+        /// the anchor's is refused by name; the plain and anchored forms are refused for this
+        /// answerable held class at a site whose bottom reads a checkpoint (the only legal move 1 is
+        /// the held form); below the fence the held form is refused and the anchored one stands.
+        #[test]
+        fn t_a2_the_held_root_claim_opens_the_phase_only_with_the_anchors_own_sub_roots() {
+            let p = drill_params();
+            let drill = HeldDrill::new(Forger::Honest);
+            let (s, _claim, sid) = opened(&drill, &p, &launch_extras(), SEAT);
+            let file = |object: PalwConsensusObjectV2, extras: &PalwTransitionExtrasV1| step(&s, &p, 105, &[object], None, extras);
+            let sub_roots = drill.sub_roots();
+            let layout = palw_state_layout_v4(&drill.profile, drill.anchor_positions()).expect("layout");
+            assert_eq!(sub_roots.len(), layout.slice_count() as usize, "one per slice: K and V of each layer");
+            assert_eq!(layout.slice_count(), 2 * u32::from(drill.profile.layer_count));
+
+            let opened_held = file(drill.root_claimed_held(sid, 2, sub_roots.clone()), &launch_extras()).expect("the held form opens");
+            let phase = opened_held.court_session(&sid).and_then(|x| x.dissection.clone()).expect("the phase is open");
+            let opened_anchored =
+                file(drill.root_claimed_anchored(sid, 2), &below_the_fence()).expect("below the fence the anchored form opens");
+            assert_eq!(
+                opened_anchored.court_session(&sid).and_then(|x| x.dissection.clone()),
+                Some(phase),
+                "the held form opens the anchored form's phase — it stores nothing new"
+            );
+
+            let short = sub_roots[..sub_roots.len() - 1].to_vec();
+            let mut long = sub_roots.clone();
+            long.push(h64(0x10A6));
+            for (name, vector, want) in [("short", short, sub_roots.len() - 1), ("long", long, sub_roots.len() + 1)] {
+                assert_eq!(
+                    file(drill.root_claimed_held(sid, 2, vector), &launch_extras()).expect_err(name),
+                    PalwStateV2Error::HeldSubRootCount { session: sid, got: want, want: sub_roots.len() },
+                    "{name}"
+                );
+            }
+            for slice in [0usize, sub_roots.len() - 1] {
+                let mut wrong = sub_roots.clone();
+                wrong[slice] = h64(0xBAD0 + slice as u64);
+                assert!(
+                    matches!(
+                        file(drill.root_claimed_held(sid, 2, wrong), &launch_extras()),
+                        Err(PalwStateV2Error::HeldSubRootsDoNotRoot { session, committed, .. })
+                            if session == sid && committed == drill.anchor().leaf.state_chunks_root
+                    ),
+                    "slice {slice}: a sub-root that is not the anchor's is refused"
+                );
+            }
+            for (name, object) in [("plain", drill.root_claimed_plain(sid, 2)), ("anchored", drill.root_claimed_anchored(sid, 2))] {
+                assert!(
+                    matches!(
+                        file(object, &launch_extras()),
+                        Err(PalwStateV2Error::HeldRootClaimRefused { session, why }) if session == sid && why.contains("slice sub-roots")
+                    ),
+                    "{name}: past the fence the only legal move 1 is the held form"
+                );
+            }
+            assert!(
+                matches!(
+                    file(drill.root_claimed_held(sid, 2, sub_roots.clone()), &below_the_fence()),
+                    Err(PalwStateV2Error::HeldRootClaimRefused { why, .. }) if why.contains("before palw_offence_attribution")
+                ),
+                "below the fence the held form does not exist"
+            );
+            // And the object: tag 57, a round trip, a signature it must carry, a dissection move.
+            let object = drill.root_claimed_held(sid, 2, sub_roots);
+            let bytes = borsh::to_vec(&object).expect("borsh");
+            assert_eq!(bytes[0], 57, "tag 57, after S's 53–56");
+            assert_eq!(borsh::from_slice::<PalwConsensusObjectV2>(&bytes).expect("decodes"), object);
+            assert!(crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).is_ok());
+            let mut unsigned = object.clone();
+            if let PalwConsensusObjectV2::CourtAttnRootClaimedHeld { signature, .. } = &mut unsigned {
+                signature.clear();
+            }
+            assert!(crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&unsigned).is_err(), "unsigned, refused");
+            assert!(crate::palw_court_v2::palw_attn_move_is_admissible_v2(&object, false).is_err(), "a k-ary court move");
+            assert!(palw_court_move_spends_the_slot_v1(&s, &object), "move 1 of an open session spends the court slot");
+        }
+
+        /// **T-A1 (C1): an answerable held class's silent responder DEFAULTS; the unanswerable one
+        /// keeps its mercy; below the fence nothing changed.** The opening rung runs out with no root
+        /// claim filed:
+        /// * past the fence the claim is voided `CourtDefault` (charged exactly as a fraud — the
+        ///   producer's reservation and the court's time — never a proof a signer is convicted by), and
+        ///   the challenger pays nothing;
+        /// * below it the mercy stands: the session ends, nobody pays, the claim goes on to `Final`;
+        /// * for a class the bundle lists as unanswerable (the 2M row's case), a session opened below
+        ///   the fence and swept past it ends in the mercy too.
+        #[test]
+        fn t_a1_an_answerable_held_silence_is_a_default_and_the_unanswerable_class_keeps_its_mercy() {
+            let drill = HeldDrill::new(Forger::Lies);
+            let run = |p: &PalwStateParamsV2, open_with: &PalwTransitionExtrasV1, sweep_with: &PalwTransitionExtrasV1| {
+                let (s, claim, _sid) = opened(&drill, p, open_with, SEAT);
+                let (end, daa) = run_until(&s, p, 105, 200, sweep_with, |x| x.court_sessions_for_claim(&claim) == 0);
+                (s, end, claim, daa)
+            };
+            let p = drill_params();
+            let (before, end, claim, closed_at) = run(&p, &launch_extras(), &launch_extras());
+            let reserved = before.claim(&claim).expect("claim").reserved;
+            assert_eq!(
+                phase_of(&end, &claim),
+                PalwClaimPhaseV2::Voided { voided_daa: closed_at, reason: PalwVoidReasonV2::CourtDefault },
+                "past the fence the withheld held root claim is a default"
+            );
+            assert!(end.palw_void_binds_claim_v1(&claim, PalwVoidReasonV2::CourtDefault, closed_at));
+            assert!(!end.palw_void_binds_claim_v1(&claim, PalwVoidReasonV2::CourtFraud, closed_at), "never recorded as a proof");
+            let taken = u128::from(collateral(&before, PRODUCER) - collateral(&end, PRODUCER));
+            assert!(taken > reserved, "the reservation and the court's time: {taken} against {reserved}");
+            assert_eq!(collateral(&before, SEAT), collateral(&end, SEAT), "the challenger pays nothing for the accused's silence");
+
+            // Below the fence: the mercy, byte for byte what the live chain does.
+            let (before, end, claim, _) = run(&p, &below_the_fence(), &below_the_fence());
+            assert!(matches!(phase_of(&end, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "no conviction below the fence");
+            for n in [PRODUCER, SEAT] {
+                assert_eq!(collateral(&before, n), collateral(&end, n), "bond {n}: nobody pays for a mercy");
+            }
+            let (finalized, _) = run_until(&end, &p, end.last_point.expect("a point").daa_score + 1, 200, &below_the_fence(), |x| {
+                matches!(phase_of(x, &claim), PalwClaimPhaseV2::Final { .. })
+            });
+            assert!(matches!(phase_of(&finalized, &claim), PalwClaimPhaseV2::Final { .. }), "and the claim goes on to Final");
+
+            // The unanswerable class (the 2M row's case): opened below the fence, swept past it.
+            let unanswerable = drill_params().with_held_unanswerable_classes(vec![drill.class_id()]);
+            let (before, end, claim, _) = run(&unanswerable, &below_the_fence(), &launch_extras());
+            assert!(matches!(phase_of(&end, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "the 2M row keeps its mercy");
+            assert_eq!(collateral(&before, PRODUCER), collateral(&end, PRODUCER), "and its producer is not charged");
+        }
+
+        /// **The default and the verdict are recorded apart at every held-dissection ending.** A
+        /// responder that files its root claim and then goes silent at a round DEFAULTS
+        /// (`CourtDefault`); a lie the bottom proves is the held dissection's VERDICT
+        /// (`CourtHeldVerdict` — the review's F3, decision (B): it proves the producer's disclosure
+        /// false, charged as a fraud, no kind-3 basis — through the acceptance layer's own
+        /// adjudication of the challenger's close); an honest responder the bottom acquits is not
+        /// voided at all, and the losing challenger pays (C4, below).
+        #[test]
+        fn a_held_dissections_default_and_its_verdict_are_recorded_apart() {
+            let p = drill_params();
+            // A round's silence.
+            let drill = HeldDrill::new(Forger::Lies);
+            let (s, claim, sid) = opened(&drill, &p, &launch_extras(), SEAT);
+            let s = step(&s, &p, 105, &[drill.root_claimed_held(sid, 2, drill.sub_roots())], None, &launch_extras()).expect("move 1");
+            let (end, at) = run_until(&s, &p, 106, 200, &launch_extras(), |x| x.court_sessions_for_claim(&claim) == 0);
+            assert_eq!(
+                phase_of(&end, &claim),
+                PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::CourtDefault },
+                "a round withheld is a default, not a proof"
+            );
+
+            // The proof: the lie played to its bottom and convicted by the recompute.
+            let (s, claim, sid) = opened(&drill, &p, &launch_extras(), SEAT);
+            let s = step(&s, &p, 105, &[drill.root_claimed_held(sid, 2, drill.sub_roots())], None, &launch_extras()).expect("move 1");
+            let (s, daa) = play_to_the_bottom(&drill, &p, &launch_extras(), &s, sid, 106);
+            let tile = s.court_session(&sid).unwrap().dissection.as_ref().unwrap().terminal_tile().expect("narrowed");
+            assert_eq!(tile, 0, "the forger's surplus rides the range holding tile 0, and the challenger follows it there");
+            let proof = drill.close(drill.bottom(sid, tile, None));
+            assert_eq!(adjudicate(&s, sid, &proof), Ok(PalwCourtVerdictV2::ExecutorGuilty), "the recompute contradicts the claim");
+            let convicted = step(
+                &s,
+                &p,
+                daa,
+                &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof }],
+                None,
+                &launch_extras(),
+            )
+            .expect("the close folds");
+            assert_eq!(
+                phase_of(&convicted, &claim),
+                PalwClaimPhaseV2::Voided { voided_daa: daa, reason: PalwVoidReasonV2::CourtHeldVerdict },
+                "a lie the bottom proves is the held dissection's verdict (decision (B))"
+            );
+
+            // An honest responder, the same bottom: acquitted, not voided.
+            let honest = HeldDrill::new(Forger::Honest);
+            let (s, claim, sid) = opened(&honest, &p, &launch_extras(), SEAT);
+            let s =
+                step(&s, &p, 105, &[honest.root_claimed_held(sid, 2, honest.sub_roots())], None, &launch_extras()).expect("move 1");
+            let (s, _) = play_to_the_bottom(&honest, &p, &launch_extras(), &s, sid, 106);
+            for tile in 0..3 {
+                if s.court_session(&sid).unwrap().dissection.as_ref().unwrap().terminal_tile() == Some(tile) {
+                    let proof = honest.close(honest.bottom(sid, tile, None));
+                    assert_eq!(adjudicate(&s, sid, &proof), Ok(PalwCourtVerdictV2::ChallengerDefeated), "an honest tile acquits");
+                }
+            }
+            assert!(!phase_of(&s, &claim).is_terminal());
+        }
+
+        /// **F9, pinned and closed at the fold's scale (4-ter §4-ter.3 step 5).** The consistent
+        /// forger lies at layer 0's fused tile AND recomputes everything downstream from the lie, so
+        /// the anchor (`covered = p + 1`) holds its layer-1 rows at position `p` — rows an honest
+        /// challenger's execution does not have. Slice `(K|V, 0)` is still honest in both, but the
+        /// challenger's OWN top path does not reach the anchor's committed root: without the filed
+        /// sub-roots the bottom cannot open the tile it must recompute (the acquittal-by-construction
+        /// F9 named). With the sub-roots the held root claim filed, the same bottom convicts. The
+        /// non-following liar is convicted either way, and an honest responder is acquitted at every
+        /// tile on either path.
+        #[test]
+        fn f9_the_consistent_forger_is_convicted_only_through_the_filed_sub_roots() {
+            let p = drill_params();
+            let forger = HeldDrill::new(Forger::LiesAndFollows);
+            let honest_view = HeldDrill::new(Forger::Honest);
+            assert_ne!(forger.sub_roots(), honest_view.sub_roots(), "the anchor's other slices follow the lie");
+            let slices_equal: Vec<bool> = forger.sub_roots().iter().zip(honest_view.sub_roots()).map(|(a, b)| *a == b).collect();
+            let (k0, v0) = (0usize, usize::from(forger.profile.layer_count));
+            assert!(slices_equal[k0] && slices_equal[v0], "slice (K,0) and (V,0) precede the lie: {slices_equal:?}");
+            let (s, _claim, sid) = opened(&forger, &p, &launch_extras(), SEAT);
+            let filed = forger.sub_roots();
+            let s = step(&s, &p, 105, &[forger.root_claimed_held(sid, 2, filed.clone())], None, &launch_extras()).expect("move 1");
+            let (s, _) = play_to_the_bottom(&forger, &p, &launch_extras(), &s, sid, 106);
+            let tile = s.court_session(&sid).unwrap().dissection.as_ref().unwrap().terminal_tile().expect("narrowed");
+            let own = adjudicate(&s, sid, &forger.close(forger.bottom(sid, tile, None)));
+            assert!(
+                matches!(
+                    own,
+                    Err(crate::palw_court_v2::PalwCourtV2Error::AttnCourt(
+                        crate::palw_attn_court_v1::PalwAttnCourtError::ChunkNotInCheckpoint { .. }
+                    ))
+                ),
+                "without the filed sub-roots the challenger's path does not reach the anchor: {own:?}"
+            );
+            assert_eq!(
+                adjudicate(&s, sid, &forger.close(forger.bottom(sid, tile, Some(&filed)))),
+                Ok(PalwCourtVerdictV2::ExecutorGuilty),
+                "with them, the consistent forger is convicted"
+            );
+            for forger in [Forger::Lies, Forger::Honest] {
+                let drill = HeldDrill::new(forger);
+                let (s, _, sid) = opened(&drill, &p, &launch_extras(), SEAT);
+                let s = step(&s, &p, 105, &[drill.root_claimed_held(sid, 2, drill.sub_roots())], None, &launch_extras()).expect("1");
+                let (s, _) = play_to_the_bottom(&drill, &p, &launch_extras(), &s, sid, 106);
+                let tile = s.court_session(&sid).unwrap().dissection.as_ref().unwrap().terminal_tile().expect("narrowed");
+                let want =
+                    if forger == Forger::Honest { PalwCourtVerdictV2::ChallengerDefeated } else { PalwCourtVerdictV2::ExecutorGuilty };
+                for top in [None, Some(drill.sub_roots())] {
+                    assert_eq!(adjudicate(&s, sid, &drill.close(drill.bottom(sid, tile, top.as_deref()))), Ok(want), "{forger:?}");
+                }
+            }
+        }
+
+        /// **The review's F3, the user's decision (B): a held dissection's verdict convicts the
+        /// producer and no signer.** On R-core+'s ledger (the mirror armed at genesis, testnet-12's
+        /// 500‰ ceiling, an S2 licence by the full-replay seat and an auditor), a third seat opens a
+        /// held dissection and the responder files the held root claim. Three plays reach an
+        /// `ExecutorGuilty` bottom:
+        /// * **the reviewer's probe** — an HONEST execution whose responder files `V* + 1` (it finalizes
+        ///   to the same committed tile) and rides the `+1` down child 0;
+        /// * **the split-δ probe** — an HONEST execution, its HONEST root, the responder's first round
+        ///   splitting `+δ / −δ` across its two children (the fold adds them) and riding `+δ` after;
+        /// * **a real liar** — the committed tile is a lie and the root the least one that finalizes to it.
+        ///
+        /// Past `palw_offence_attribution` each voids `CourtHeldVerdict`: the producer is charged as a
+        /// fraud (S-4's tier, the escrow), S-4's `CourtConviction` record is written, the challenger's
+        /// reporter reward is opened (it named the lie); the Valid signers' bonds are untouched, and
+        /// kind 3's `CourtFraud` naming the void is refused by name against the full-mask signer — the
+        /// red twin (the same void recorded `CourtFraud`) is admitted, so the refusal is the reason.
+        /// Below the fence the same bottom voids `CourtFraud`, as it always did.
+        #[test]
+        fn f3b_a_held_dissections_verdict_convicts_the_producer_and_no_signer() {
+            use crate::palw_offence_attribution_v1::{
+                PALW_PANEL_FALSE_VALID_VERSION_V2, PalwFalseValidReceiptV1, PalwIdentityRulesV1, PalwPanelFalseValidEvidenceV2,
+                palw_check_panel_false_valid_v2,
+            };
+            use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1};
+            let p = drill_params().with_fp_exposure_ceiling(500).expect("a ceiling").with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+            let door = PalwTransitionExtrasV1 {
+                objective_offence_daa: Some(0),
+                verification_v2_active: true,
+                verification_s2_active: true,
+                panel_economy_active: true,
+                ..launch_extras()
+            };
+            let below = PalwTransitionExtrasV1 { offence_attribution_active: false, ..door.clone() };
+            // The claim licensed through S2's door: the floor and the held class, bonds 1..=6, the
+            // attempt committing the drill's execution, the five-seat panel, the full seat and an auditor.
+            let licensed = |drill: &HeldDrill, x: &PalwTransitionExtrasV1| {
+                let mut objects = register_class_and_bond();
+                if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = &mut objects[1] {
+                    *collateral = 1_000_000_000;
+                }
+                objects.extend((2..=6).map(|n| seat_bond_reg(n, 1_000_000_000)));
+                objects.push(PalwConsensusObjectV2::ClassRegistered {
+                    class_id: drill.class_id(),
+                    artifact_root: drill.artifact_root,
+                    slash_value_per_pwu: 5,
+                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                    initial_target: u128::MAX / 2,
+                    share_permille: 100,
+                    activation_daa: 0,
+                    admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+                        profile: drill.profile.clone(),
+                        canonical: drill.context.clone(),
+                        registrant_bond: bond_key(PRODUCER),
+                        signature: Vec::new(),
+                    })),
+                });
+                let s = step(&PalwChainStateV2::genesis(), &p, 100, &objects, None, x).expect("the registry");
+                let mut env = super::tests::attempt(160, 1);
+                env.attempt.class_id = drill.class_id();
+                env.attempt.trace_root = h64(TRACE_ROOT);
+                env.attempt.execution_root = drill.binding.committed_execution_root;
+                env.attempt.trace_retention_daa = 999_999;
+                let claim_id = attempt_id_v2(&env.attempt);
+                let s = step(&s, &p, 101, &[], Some(&env), x).expect("the claim");
+                let s = step(
+                    &s,
+                    &p,
+                    102,
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: sybil_seats() }],
+                    None,
+                    x,
+                )
+                .expect("the panel binds");
+                let (full, auditor) = full_seat_and_auditor(claim_id);
+                let s = step(&s, &p, 103, &[optimistic_object(claim_id, &[full, auditor])], None, x).expect("S2 licenses");
+                let challenger =
+                    sybil_seats().iter().map(|seat| seat.bond).find(|b| *b != full && *b != auditor).expect("a third seat");
+                (s, claim_id, full, auditor, challenger)
+            };
+            // One play to the bottom: `split` pushes +δ into child 0 and −δ into child 1 at round 1
+            // (the root honest), then rides +δ in child 0; otherwise the drill's responder plays.
+            let play = |drill: &HeldDrill, x: &PalwTransitionExtrasV1, split: bool| {
+                let (s, claim_id, full, auditor, challenger) = licensed(drill, x);
+                let s = step(&s, &p, 104, &[drill.accusation(claim_id, challenger, drill.narrowed)], None, x)
+                    .expect("the held dissection opens");
+                let sid = s.court_sessions_iter().find(|(_, x)| x.claim == claim_id).map(|(k, _)| *k).expect("the session");
+                let move_1 = if x.offence_attribution_active {
+                    drill.root_claimed_held(sid, 2, drill.sub_roots())
+                } else {
+                    drill.root_claimed_anchored(sid, 2)
+                };
+                let mut s = step(&s, &p, 105, &[move_1], None, x).expect("move 1");
+                let (mut daa, mut first) = (106, true);
+                while s.court_session(&sid).unwrap().dissection.as_ref().unwrap().turn() != PalwBisectTurnV1::Terminal {
+                    let phase = s.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                    let ranges = phase.child_ranges();
+                    let mut children: Vec<_> = if split {
+                        ranges.iter().map(|&(f, c)| drill.honest_range_claim(f, c)).collect()
+                    } else {
+                        ranges.iter().map(|&(f, c)| drill.responder_range_claim(f, c)).collect()
+                    };
+                    if split {
+                        children[0].v_acc[LIE_LANE] += 1_000;
+                        if first {
+                            children[1].v_acc[LIE_LANE] -= 1_000;
+                        }
+                    }
+                    first = false;
+                    s = step(&s, &p, daa, &[dissected(sid, children.clone())], None, x).expect("the round folds");
+                    let named = ranges
+                        .iter()
+                        .zip(&children)
+                        .position(|(&(f, c), claimed)| *claimed != drill.honest_range_claim(f, c))
+                        .expect("a lie");
+                    let round = s.court_session(&sid).unwrap().dissection.as_ref().unwrap().round();
+                    s = step(&s, &p, daa + 1, &[child_chosen(sid, round, named as u8)], None, x).expect("the choice");
+                    daa += 2;
+                }
+                let tile = s.court_session(&sid).unwrap().dissection.as_ref().unwrap().terminal_tile().expect("narrowed");
+                let proof = drill.close(drill.bottom(sid, tile, Some(&drill.sub_roots())));
+                assert_eq!(adjudicate(&s, sid, &proof), Ok(PalwCourtVerdictV2::ExecutorGuilty), "the bottom reads the lie");
+                let end = step(
+                    &s,
+                    &p,
+                    daa,
+                    &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof }],
+                    None,
+                    x,
+                )
+                .expect("the close folds");
+                (s, end, claim_id, full, auditor, challenger, daa)
+            };
+            let honest = HeldDrill::new(Forger::Honest);
+            let mut root_lie = HeldDrill::new(Forger::Honest);
+            root_lie.root_claim.claim.v_acc[LIE_LANE] += 1;
+            root_lie.delta = 1;
+            let liar = HeldDrill::new(Forger::Lies);
+            for (name, drill, split) in
+                [("the reviewer's V*+1", &root_lie, false), ("split δ", &honest, true), ("a real liar", &liar, false)]
+            {
+                let (before, end, claim_id, full, auditor, challenger, at) = play(drill, &door, split);
+                assert_eq!(
+                    phase_of(&end, &claim_id),
+                    PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::CourtHeldVerdict },
+                    "{name}: the held dissection's verdict"
+                );
+                assert!(collateral(&end, PRODUCER) < collateral(&before, PRODUCER), "{name}: the producer is charged");
+                let key = palw_court_conviction_offence_id_v1(&bond_key(PRODUCER).0, &claim_id);
+                assert!(end.consumed_offence(&key).is_some(), "{name}: S-4's CourtConviction record");
+                assert!(
+                    end.reward_pending(&key)
+                        .and_then(|reward| reward.best.as_ref())
+                        .is_some_and(|winner| winner.reporter == challenger),
+                    "{name}: the challenger's reporter reward is opened"
+                );
+                for signer in [full, auditor] {
+                    assert_eq!(end.bond(&signer).unwrap().collateral, before.bond(&signer).unwrap().collateral, "{name}: {signer:?}");
+                }
+                // Kind 3 naming the void, against the full-mask Valid signer: refused by name.
+                let rules = PalwIdentityRulesV1 {
+                    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+                    base_class_id: p.base_class_id(),
+                    da_signer_liability: false,
+                };
+                let kind3 = |state: &PalwChainStateV2| {
+                    let payload = PalwPanelFalseValidEvidenceV2 {
+                        version: PALW_PANEL_FALSE_VALID_VERSION_V2,
+                        claim_id,
+                        accused_seat: full.0,
+                        receipt: PalwFalseValidReceiptV1::Full(crate::palw_panel_v2::PalwSeatReceiptV2 {
+                            claim: claim_id,
+                            verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                            seat_bond: full,
+                            signed_daa: 103,
+                            signature: Vec::new(),
+                        }),
+                        contradiction: PalwPanelContradictionV1::CourtFraud { voided_daa: at },
+                        prompt_ids_opening: None,
+                        reporter_reveal: vec![],
+                    };
+                    palw_check_panel_false_valid_v2(state, &full, &borsh::to_vec(&payload).unwrap(), false, false, rules, None)
+                };
+                let refused = kind3(&end).expect_err("a held verdict convicts no signer");
+                assert!(
+                    matches!(&refused, PalwOffenceVerifyError::ContradictionNotAdmitted(why) if why.contains("HELD DISSECTION")),
+                    "{name}: {refused:?}"
+                );
+                let mut carriage = PalwStateCarriageV2::from_state(&end);
+                carriage.claims.get_mut(&claim_id).unwrap().phase =
+                    PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::CourtFraud };
+                if let Some(row) = carriage.panel_liabilities.get_mut(&claim_id) {
+                    row.void_reason = Some(PalwVoidReasonV2::CourtFraud);
+                }
+                let red = carriage.into_state(&p, None).expect("the red twin rebuilds");
+                let red_verdict = kind3(&red);
+                assert!(red_verdict.is_ok(), "{name}: recorded as CourtFraud, the same void convicts the signer: {red_verdict:?}");
+            }
+            // Below the fence the same bottom is the fraud it always was.
+            let (_, end, claim_id, _, _, _, at) = play(&liar, &below, false);
+            assert_eq!(phase_of(&end, &claim_id), PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::CourtFraud });
+        }
+
+        /// **The review's F5, the user's decision: a held dissection's COMPUTE moves get the class's
+        /// compute turn; every response keeps the court's.** A held row whose profile prices a
+        /// whole-context replay at a compute turn between the court's turn and the cap (sixteen
+        /// layers, sixteen 32-wide heads, one head a tile, `n_ctx` 8,192: 192.6 s at the reference
+        /// rate, a 4-DAA compute turn — the job itself is the drill's 40 positions), under a 2-DAA
+        /// court turn:
+        /// * the opening rung — the responder's held root claim, a re-execution — is due at the
+        ///   opening plus the compute turn, not the court's turn: a root claim filed past the court's
+        ///   turn still lands, and silence defaults only past the compute turn;
+        /// * move 1 opens the phase with that window, and the challenger's first choice keeps it: due
+        ///   no earlier than the root claim plus the compute turn, however early the disclosure;
+        /// * every later disclosure and choice is due a court's turn after the move before it;
+        /// * below the fence every rung is the court's turn, as it was.
+        #[test]
+        fn f5_the_held_compute_moves_get_the_classs_compute_turn() {
+            let geometry = crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+                layer_count: 16,
+                hidden_dim: 512,
+                ffn_dim: 512,
+                attn_heads: 16,
+                attn_kv_heads: 1,
+                attn_head_dim: 32,
+                vocab_size: 64,
+                n_ctx: 8_192,
+                n_threads: 1,
+                rms_eps_q: 1,
+                tile_len: 32,
+            };
+            let drill = HeldDrill::with_geometry(Forger::Lies, geometry);
+            let fused = drill.profile.attn_nodes.iter().find(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+            assert_eq!(fused.tile_len as usize, drill.d_head, "one head a tile: the drill's site");
+            let compute = crate::palw_class_admission_v2::palw_held_compute_turn_daa_v1(&drill.profile).expect("a held row is priced");
+            assert_eq!(compute, 4, "192,574 ms at the reference rate, twice, over 120 s");
+            let p = drill_params().with_turn_deadline_daa(2).expect("a 2-DAA court turn");
+            let base = p.turn_deadline_daa();
+            // Room between the two: a move filed a DAA past the court's turn is still inside the compute turn.
+            assert!(compute >= base + 2 && compute <= crate::palw_class_admission_v2::PALW_HELD_COMPUTE_TURN_CAP_DAA_V1, "{compute}");
+            assert_eq!(crate::palw_class_admission_v2::palw_held_move_turn_daa_v1(&drill.profile, base), compute);
+            assert_eq!(crate::palw_class_admission_v2::palw_held_class_unanswerable_v1(&drill.profile), None, "answerable");
+
+            for x in [launch_extras(), below_the_fence()] {
+                let past = x.offence_attribution_active;
+                let expect_open = if past { compute } else { base };
+                let (s, claim, sid) = opened(&drill, &p, &x, SEAT);
+                // The opening rung: the responder's silence defaults only past it.
+                let (end, at) = run_until(&s, &p, 105, 400, &x, |y| y.court_sessions_for_claim(&claim) == 0);
+                assert!(at > 104 + expect_open, "past {past}: the opening rung ran {} DAA, not less than {expect_open}", at - 104);
+                assert!(at <= 104 + expect_open + 1, "past {past}: and it ran out right after ({at})");
+                let _ = end;
+                // Move 1 filed after the court's turn, before the compute turn: it lands past the fence.
+                let late = 104 + base + 1;
+                let (s_late, _) = run_until(&s, &p, 105, 400, &x, |y| y.last_point.expect("a point").daa_score + 1 >= late);
+                let move_1 =
+                    if past { drill.root_claimed_held(sid, 2, drill.sub_roots()) } else { drill.root_claimed_anchored(sid, 2) };
+                let landed = step(&s_late, &p, late, std::slice::from_ref(&move_1), None, &x);
+                assert_eq!(landed.is_ok(), past, "past {past}: a root claim after the court's turn: {landed:?}");
+
+                // Move 1 on time; the first disclosure at once; the challenger's first choice keeps the window.
+                let s1 = step(&s, &p, 105, &[move_1], None, &x).expect("move 1");
+                let phase = s1.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                assert_eq!(phase.last_deadline_daa(), 105 + expect_open, "past {past}: the phase opens with the compute window");
+                let children: Vec<_> = phase.child_ranges().iter().map(|&(f, c)| drill.responder_range_claim(f, c)).collect();
+                let s2 = step(&s1, &p, 106, &[dissected(sid, children.clone())], None, &x).expect("the first disclosure");
+                let phase = s2.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                let first_choice = if past { (105 + compute).max(106 + base) } else { 106 + base };
+                assert_eq!(phase.last_deadline_daa(), first_choice, "past {past}: the challenger's first choice");
+                // A response-only move: the responder's next disclosure is due a court's turn later.
+                let named = phase
+                    .child_ranges()
+                    .iter()
+                    .zip(&children)
+                    .position(|(&(f, c), claimed)| *claimed != drill.honest_range_claim(f, c));
+                let s3 =
+                    step(&s2, &p, 107, &[child_chosen(sid, phase.round(), named.unwrap_or(0) as u8)], None, &x).expect("the choice");
+                let phase = s3.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                assert_ne!(phase.turn(), PalwBisectTurnV1::Terminal, "past {past}: the history takes a second round");
+                assert_eq!(phase.last_deadline_daa(), 107 + base, "past {past}: a response keeps the court's turn");
+                let children: Vec<_> = phase.child_ranges().iter().map(|&(f, c)| drill.responder_range_claim(f, c)).collect();
+                let s4 = step(&s3, &p, 108, &[dissected(sid, children)], None, &x).expect("the second disclosure");
+                assert_eq!(
+                    s4.court_session(&sid).unwrap().dissection.as_ref().unwrap().last_deadline_daa(),
+                    108 + base,
+                    "past {past}: a later choice keeps the court's turn"
+                );
+            }
+        }
+
+        /// **T-A7 (C4): a held dissection's losing challenger pays `max(reserved, G)`.** An honest
+        /// responder plays the held dissection through; the challenger's bottom acquits it; the
+        /// `ChallengerDefeated` close charges the challenger. Past the fence the charge is the claim's
+        /// whole gain terms `G = w + E + R + s` — here `G > reserved`, the claim escrowed — and below it
+        /// `reserved`, as it always was; the court's time is the same on both sides, so the two debits
+        /// differ by exactly `G − reserved`.
+        #[test]
+        fn t_a7_a_held_dissections_losing_challenger_pays_the_claims_gain_past_the_fence() {
+            let p = drill_params();
+            let drill = HeldDrill::new(Forger::Honest);
+            let lose = |extras: &PalwTransitionExtrasV1| {
+                let (s, claim, sid) = opened(&drill, &p, extras, BYSTANDER);
+                let move_1 = if extras.offence_attribution_active {
+                    drill.root_claimed_held(sid, 2, drill.sub_roots())
+                } else {
+                    drill.root_claimed_anchored(sid, 2)
+                };
+                let s1 = step(&s, &p, 105, &[move_1], None, extras).expect("move 1");
+                let (s2, daa) = play_to_the_bottom(&drill, &p, extras, &s1, sid, 106);
+                let tile = s2.court_session(&sid).unwrap().dissection.as_ref().unwrap().terminal_tile().expect("narrowed");
+                let proof = drill.close(drill.bottom(sid, tile, None));
+                assert_eq!(adjudicate(&s2, sid, &proof), Ok(PalwCourtVerdictV2::ChallengerDefeated));
+                let end = step(
+                    &s2,
+                    &p,
+                    daa,
+                    &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ChallengerDefeated, proof }],
+                    None,
+                    extras,
+                )
+                .expect("the close folds");
+                assert!(matches!(phase_of(&end, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "the honest claim stands");
+                let claim_record = s.claim(&claim).expect("claim").clone();
+                (u128::from(collateral(&s, BYSTANDER) - collateral(&end, BYSTANDER)), claim_record)
+            };
+            let (past, claim) = lose(&launch_extras());
+            let (below, _) = lose(&below_the_fence());
+            let slash = 5;
+            let g = crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(
+                &claim, slash,
+            ));
+            assert!(claim.escrowed_reward > 0 && g > claim.reserved, "the claim escrowed, so G = {g} > reserved = {}", claim.reserved);
+            assert!(g < u128::from(p.min_collateral_sompi()), "under the floor's cap");
+            assert_eq!(past - below, g - claim.reserved, "past the fence the losing challenger pays G, below it reserved");
+        }
+
+        /// **T-A6 (C3): a decoy dissection shields nothing past the fence.** The producer's own
+        /// Sybil (a bonded bystander) opens a held dissection at a leaf the producer can defend, so
+        /// that one court at a time would hold off everyone else:
+        /// * an outsider's further dissection still waits (a non-seat is not a seat);
+        /// * the claim's seat opens its own dissection — at the lie's leaf, or at the decoy's own
+        ///   leaf (the review's F2: no leaf is held by a session on it) — and not twice;
+        /// * the silent responder defaults on the seat's session, the claim voids, and the decoy's
+        ///   session closes NEUTRALLY: its challenger is not charged, its reservation comes back, and
+        ///   every index agrees (the step's consistency, revert and reload checks);
+        /// * below the fence every one of those accusations is refused by the one-court rule.
+        #[test]
+        fn t_a6_a_decoy_dissection_shields_nothing_past_the_fence() {
+            let p = drill_params();
+            let (drill, decoy_leaf) = HeldDrill::new(Forger::Lies).with_second_fused_tile(0);
+            let (s, claim) = licensed(&drill, &p, &launch_extras());
+            let s = step(&s, &p, 104, &[drill.accusation(claim, bond_key(BYSTANDER), decoy_leaf)], None, &launch_extras())
+                .expect("the decoy opens a dissection at the defensible leaf");
+            assert_eq!(s.court_sessions_for_claim(&claim), 1);
+            let reserved_before = s.reserved_exposure(&bond_key(BYSTANDER));
+            let refused = |who: u64, leaf: u64, extras: &PalwTransitionExtrasV1| {
+                step(&s, &p, 105, &[drill.accusation(claim, bond_key(who), leaf)], None, extras).expect_err("refused")
+            };
+            assert!(
+                matches!(refused(OUTSIDER, drill.narrowed, &launch_extras()), PalwStateV2Error::HeldDissectionFurtherSessionRefused { why, .. } if why.contains("seat")),
+                "an outsider's dissection waits"
+            );
+            let beside = step(&s, &p, 105, &[drill.accusation(claim, bond_key(SEAT), decoy_leaf)], None, &launch_extras())
+                .expect("a seat opens at the decoy's own leaf: a session at a leaf holds it for nobody");
+            assert_eq!(beside.court_sessions_for_claim(&claim), 2, "two sessions at one leaf, one per challenger");
+            for who in [OUTSIDER, SEAT] {
+                assert!(
+                    matches!(refused(who, drill.narrowed, &below_the_fence()), PalwStateV2Error::ShardCourtClaimUnderSession { .. }),
+                    "below the fence bond {who}'s accusation meets one court at a time"
+                );
+            }
+            let s2 = step(&s, &p, 105, &[drill.accusation(claim, bond_key(SEAT), drill.narrowed)], None, &launch_extras())
+                .expect("the seat's dissection opens beside the decoy's");
+            assert_eq!(s2.court_sessions_for_claim(&claim), 2);
+            assert!(
+                matches!(
+                    step(&s2, &p, 106, &[drill.accusation(claim, bond_key(SEAT), decoy_leaf)], None, &launch_extras()).expect_err("once"),
+                    PalwStateV2Error::HeldDissectionFurtherSessionRefused { why, .. } if why.contains("already holds")
+                ),
+                "one session per seat"
+            );
+            // The responder answers neither (the decoy's is its own Sybil's; the seat's is a lie it
+            // cannot stand behind): its rung runs out on both, the claim voids, and the sessions end.
+            let (end, at) = run_until(&s2, &p, 106, 200, &launch_extras(), |x| x.court_sessions_for_claim(&claim) == 0);
+            assert!(
+                matches!(phase_of(&end, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtDefault, voided_daa } if voided_daa == at)
+            );
+            for n in [BYSTANDER, SEAT] {
+                assert_eq!(collateral(&s2, n), collateral(&end, n), "bond {n}: a session the void ended charges nobody");
+            }
+            assert!(end.reserved_exposure(&bond_key(BYSTANDER)) < reserved_before, "the decoy's reservation came back");
+            assert_eq!(end.court_sessions_for_claim(&claim), 0);
+        }
+
+        /// **The review's F2, the clock half: a held session lost on the challenger side leaves the
+        /// seats a whole challenge window.** The producer's Sybil opens a decoy dissection at the
+        /// lie's own leaf at the last DAA of the licence's challenge window, the producer files its
+        /// (lying) held root claim and one round, and the Sybil concedes by silence. Past the fence the
+        /// challenger-side close moves the licence's anchor to the close, so `Final` is no earlier
+        /// than the close plus `window_challenge` — and a seat opens its own dissection inside that
+        /// window, at the same leaf. Below the fence the claim re-arms at `max(floor, now)` and goes
+        /// `Final` at the next sweep, the seats never having had a turn.
+        #[test]
+        fn a_conceded_held_decoy_leaves_the_seats_a_whole_challenge_window() {
+            let p = drill_params();
+            let drill = HeldDrill::new(Forger::Lies);
+            let window = p.window_challenge_at(0);
+            let run = |extras: &PalwTransitionExtrasV1| {
+                let (s, claim) = licensed(&drill, &p, extras);
+                let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = phase_of(&s, &claim) else { panic!("licensed") };
+                let late = licensed_daa + window - 1;
+                let (s, _) = run_until(&s, &p, 104, 100, extras, |x| x.last_point.expect("a point").daa_score + 1 >= late);
+                let s = step(&s, &p, late, &[drill.accusation(claim, bond_key(BYSTANDER), drill.narrowed)], None, extras)
+                    .expect("the decoy opens at the lie's own leaf, at the window's last DAA");
+                let sid = s
+                    .court_sessions_iter()
+                    .find(|(_, x)| x.challenger_bond == bond_key(BYSTANDER))
+                    .map(|(k, _)| *k)
+                    .expect("the decoy's session");
+                let move_1 = if extras.offence_attribution_active {
+                    drill.root_claimed_held(sid, 2, drill.sub_roots())
+                } else {
+                    drill.root_claimed_anchored(sid, 2)
+                };
+                let s = step(&s, &p, late + 1, &[move_1], None, extras).expect("move 1");
+                let phase = s.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                let children: Vec<_> = phase.child_ranges().iter().map(|&(f, c)| drill.responder_range_claim(f, c)).collect();
+                let s = step(&s, &p, late + 2, &[dissected(sid, children)], None, extras).expect("the round");
+                // The Sybil never chooses: its rung runs out and the session closes on its side.
+                let (closed, at) = run_until(&s, &p, late + 3, 200, extras, |x| x.court_sessions_for_claim(&claim) == 0);
+                assert!(matches!(phase_of(&closed, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "conceded: the claim stands");
+                (s, closed, claim, licensed_daa, at)
+            };
+
+            let (_, closed, claim, licensed_daa, at) = run(&launch_extras());
+            assert_eq!(
+                phase_of(&closed, &claim),
+                PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: at },
+                "past the fence the licence's anchor moves to the close"
+            );
+            assert!(at > licensed_daa + window, "the close came after the licence's own window had run out");
+            // A seat opens inside the fresh window, at the lie's own leaf.
+            let seat = step(&closed, &p, at + 1, &[drill.accusation(claim, bond_key(SEAT), drill.narrowed)], None, &launch_extras())
+                .expect("the seat's dissection opens in the fresh window");
+            assert_eq!(seat.court_sessions_for_claim(&claim), 1);
+            // Left alone, the claim is not Final before the close plus the window.
+            let (finalized, final_at) = run_until(&closed, &p, at + 1, 200, &launch_extras(), |x| {
+                matches!(phase_of(x, &claim), PalwClaimPhaseV2::Final { .. })
+            });
+            assert!(final_at >= at + window, "Final at {final_at}, no earlier than the close {at} + {window}");
+            assert!(matches!(phase_of(&finalized, &claim), PalwClaimPhaseV2::Final { .. }));
+
+            // Below the fence: re-armed at max(floor, now), Final at the next sweep.
+            let (_, closed, claim, licensed_daa, at) = run(&below_the_fence());
+            assert_eq!(phase_of(&closed, &claim), PalwClaimPhaseV2::ReceiptLicensed { licensed_daa }, "the anchor never moves");
+            let (_, final_at) = run_until(&closed, &p, at + 1, 200, &below_the_fence(), |x| {
+                matches!(phase_of(x, &claim), PalwClaimPhaseV2::Final { .. })
+            });
+            assert!(final_at <= at + 1, "below the fence Final follows the close at once ({final_at} after {at})");
+        }
+
+        /// **T-A6 (C3), the one-move half: a malformed tile the claim committed convicts in one move
+        /// while a decoy dissection is open** — and the conviction's void closes the decoy neutrally.
+        /// Below the fence the same accusation meets one court at a time.
+        #[test]
+        fn t_a6_a_one_move_conviction_lands_under_an_open_decoy() {
+            let p = drill_params();
+            let (drill, malformed) = HeldDrill::new(Forger::Honest).with_second_fused_tile(1);
+            let (s, claim) = licensed(&drill, &p, &launch_extras());
+            let s = step(&s, &p, 104, &[drill.accusation(claim, bond_key(BYSTANDER), drill.narrowed)], None, &launch_extras())
+                .expect("the decoy opens at the honest leaf");
+            let one_move = drill.accusation(claim, bond_key(OUTSIDER), malformed);
+            assert!(matches!(
+                step(&s, &p, 105, std::slice::from_ref(&one_move), None, &below_the_fence()).expect_err("below the fence"),
+                PalwStateV2Error::ShardCourtClaimUnderSession { .. }
+            ));
+            let end = step(&s, &p, 105, &[one_move], None, &launch_extras()).expect("the one move lands");
+            assert!(matches!(phase_of(&end, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+            assert_eq!(end.court_sessions_for_claim(&claim), 0, "the void closed the decoy");
+            assert_eq!(collateral(&s, BYSTANDER), collateral(&end, BYSTANDER), "neutrally: the decoy's challenger is not charged");
+            assert_eq!(end.reserved_exposure(&bond_key(BYSTANDER)), 0, "and its reservation is back");
         }
     }
 
@@ -55966,6 +59162,148 @@ pub(crate) mod tests {
     // ADR-0152 V-1…V-8 (the vesting work): the rows through the fold, in their own file.
     mod vesting_fold_v1;
 
+    /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
+    /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's
+    /// placeholders here), a record only while its claim can still be tried. What the fold does with
+    /// them — kept at a proven acquittal on an anchor, restored at the checkpoint conviction that
+    /// proves that anchor's chunk forged, dropped at every terminal door — is exercised end to end
+    /// through the node in kaspad's `held_court_e2e`.
+    mod held_forfeits_v1 {
+        use super::*;
+
+        fn record() -> PalwHeldForfeitV1 {
+            PalwHeldForfeitV1 {
+                challenger: bond_key(2),
+                amount: 7,
+                anchor_leaf_hash: h64(0xA7),
+                anchor_checkpoint: 11,
+                narrowed_leaf: 4_750,
+                chunks: vec![3, 9],
+                closed_daa: 50,
+                paused: false,
+            }
+        }
+
+        fn rebuilt(s: &PalwChainStateV2) -> PalwChainStateV2 {
+            apply_delta_v2(s, &PalwStateDeltaV2 { point: ctx(0x5B, 200, 200), entries: Vec::new() }, &params()).unwrap()
+        }
+
+        fn live_claim(s: &PalwChainStateV2) -> Hash64 {
+            *s.claims_iter().find(|(_, claim)| !claim.phase.is_terminal()).expect("a live claim in the fixture").0
+        }
+
+        /// A state with none roots and carries exactly as before (no block, no tail); one record
+        /// turns both on, round-trips byte for byte, reloads under its root, and removing it gives
+        /// the old root and bytes back.
+        #[test]
+        fn the_held_forfeits_block_is_some_only_and_carried() {
+            let base = rebuilt(&m02_populated_state());
+            assert!(base.held_forfeits.is_empty());
+            let base_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&base)).unwrap();
+            let claim = live_claim(&base);
+            let mut with = base.clone();
+            with.held_forfeits.insert((claim, h64(0x5E)), record());
+            assert_ne!(with.state_root(), base.state_root(), "a record turns the block on");
+            let carriage = PalwStateCarriageV2::from_state(&with);
+            let bytes = borsh::to_vec(&carriage).unwrap();
+            assert!(bytes.len() > base_bytes.len() && bytes.starts_with(&base_bytes), "the tail is appended after every other");
+            assert_eq!(bytes[base_bytes.len()], PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1, "the tail byte");
+            assert_eq!(PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1, 0xB6, "after the Activation Pool's 0xB5");
+            let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(decoded, carriage);
+            assert_eq!(borsh::to_vec(&decoded).unwrap(), bytes, "byte for byte");
+            // (Reloaded under its root every block of kaspad's `held_court_e2e` forger's-race play,
+            // whose fold writes, holds and drops one; this fixture's other collections do not reload.)
+            let mut doubled = bytes.clone();
+            doubled.extend_from_slice(&bytes[base_bytes.len()..]);
+            assert!(borsh::from_slice::<PalwStateCarriageV2>(&doubled).is_err(), "one held-forfeit tail at most");
+            let mut back = with.clone();
+            back.held_forfeits.clear();
+            assert_eq!(back.state_root(), base.state_root(), "none again: the root as before");
+            assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&back)).unwrap(), base_bytes, "and the bytes");
+        }
+
+        /// Entry 80 round-trips, applies, reverts and refuses a parent it was not computed from; the
+        /// Activation Pool's four placeholders sit at 76–79 and are refused by any apply.
+        #[test]
+        fn the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused() {
+            let p = params();
+            let base = rebuilt(&m02_populated_state());
+            let key = (live_claim(&base), h64(0x5E));
+            let point = ctx(0x5C, 201, 201);
+            let delta =
+                PalwStateDeltaV2 { point, entries: vec![PalwDeltaEntryV2::HeldForfeit { key, old: None, new: Some(record()) }] };
+            let bytes = borsh::to_vec(&delta).unwrap();
+            assert_eq!(borsh::to_vec(&delta.entries[0]).unwrap()[0], 80, "entry 80");
+            assert_eq!(borsh::from_slice::<PalwStateDeltaV2>(&bytes).unwrap(), delta);
+            let child = apply_delta_v2(&base, &delta, &p).expect("applies");
+            assert_ne!(child.state_root(), base.state_root());
+            assert_eq!(child.held_forfeits_of_claim(&key.0).count(), 1);
+            let back = revert_delta_v2(&child, &delta, &p).expect("reverts");
+            assert_eq!(back, base);
+            assert!(matches!(apply_delta_v2(&child, &delta, &p), Err(PalwStateV2Error::DeltaMismatch(_))), "applied twice");
+            for (discriminant, reserved) in [
+                (76u8, PalwDeltaEntryV2::ReservedActivationPool76),
+                (77, PalwDeltaEntryV2::ReservedActivationPool77),
+                (78, PalwDeltaEntryV2::ReservedActivationPool78),
+                (79, PalwDeltaEntryV2::ReservedActivationPool79),
+            ] {
+                assert_eq!(borsh::to_vec(&reserved).unwrap(), vec![discriminant]);
+                let delta = PalwStateDeltaV2 { point, entries: vec![reserved] };
+                assert!(matches!(apply_delta_v2(&base, &delta, &p), Err(PalwStateV2Error::DeltaMismatch(_))), "{discriminant}");
+            }
+        }
+
+        /// **The block and tail orders where both lines meet** (the second review's LOW): in
+        /// `state_root` the held forfeits' Some-only block is hashed after R-core+'s and, where the
+        /// Activation Pool's `activation_pool/v1` block exists, after it; in the carriage the `0xB6`
+        /// tail is written after R-core+'s and after the pool's `0xB5`. Read off this file's own code,
+        /// so it holds on this line (no pool block yet) and after the integration merge (both).
+        #[test]
+        fn the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool() {
+            let source = include_str!("palw_state_v2.rs");
+            // Each needle is spliced at run time, so this test's own text never matches it.
+            let at = |needle: &str| source.find(&needle.replacen('~', "", 1));
+            let rcore = at("state.upd~ate(b\"rcore_plus/v1\");").expect("R-core+'s root block");
+            let held = at("state.upd~ate(b\"held_forfeits/v1\");").expect("the held forfeits' root block");
+            assert!(rcore < held, "after R-core+'s block");
+            if let Some(pool) = at("state.upd~ate(b\"activation_pool/v1\");") {
+                assert!(pool < held, "after the Activation Pool's block, where both are non-empty");
+            }
+            let rcore_tail = at("PALW_CARRIAGE_RCORE_PLUS_TAIL_V1.seri~alize(writer)?;").expect("R-core+'s tail");
+            let held_tail = at("PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1.seri~alize(writer)?;").expect("the held forfeits' tail");
+            assert!(rcore_tail < held_tail, "the tail after R-core+'s");
+            if let Some(pool_tail) = at("PALW_CARRIAGE_ACTIVATION_POOL_TAIL_V1.seri~alize(writer)?;") {
+                assert!(pool_tail < held_tail, "and after the Activation Pool's 0xB5");
+            }
+        }
+
+        /// A record whose claim is gone (or terminal), whose amount is zero or more than its challenger
+        /// ever lost, or whose chunks are not one or two sorted and unique, is a carriage no fold could
+        /// have written.
+        #[test]
+        fn a_held_forfeit_without_a_live_claim_is_inconsistent() {
+            let mut base = rebuilt(&m02_populated_state());
+            // The forfeit went into the challenger's `slashed`, as the close leaves it.
+            base.bonds.get_mut(&bond_key(2)).expect("the fixture's bond 2").slashed += record().amount;
+            let mut good = base.clone();
+            good.held_forfeits.insert((live_claim(&base), h64(0x5E)), record());
+            assert!(good.assert_held_forfeits_consistency_v1().is_ok());
+            let slashed = base.bonds[&bond_key(2)].slashed;
+            for bad in [
+                ((h64(0xDEAD), h64(0x5E)), record()),
+                ((live_claim(&base), h64(0x5E)), PalwHeldForfeitV1 { amount: 0, ..record() }),
+                ((live_claim(&base), h64(0x5E)), PalwHeldForfeitV1 { chunks: vec![9, 3], ..record() }),
+                ((live_claim(&base), h64(0x5E)), PalwHeldForfeitV1 { amount: slashed + 1, ..record() }),
+                ((live_claim(&base), h64(0x5E)), PalwHeldForfeitV1 { challenger: bond_key(0x7777), ..record() }),
+            ] {
+                let mut s = base.clone();
+                s.held_forfeits.insert(bad.0, bad.1.clone());
+                assert!(matches!(s.assert_held_forfeits_consistency_v1(), Err(PalwStateV2Error::CarriageInconsistent(_))), "{bad:?}");
+            }
+        }
+    }
+
     mod rcore_v22_skeleton {
         use super::*;
         use crate::palw_vesting_v1::{PalwVestingCountersV1, PalwVestingNoteV1, PalwVestingRowV1, PalwVestingSourceV1};
@@ -56093,14 +59431,23 @@ pub(crate) mod tests {
             assert_eq!(&bytes[head - 16..head], &claim.rights_reserved.to_le_bytes(), "`rights_reserved` stays right before them");
         }
 
-        /// **The enum slots sit at their frozen indices** (S-SPEC 1c): void reasons 5 and 6, and the
-        /// F2 residual's `CourtDefault` appended after them at 7.
+        /// **The enum slots sit at their frozen indices** (S-SPEC 1c): void reasons 5 and 6, the F2
+        /// residual's `CourtDefault` appended after them at 7, and A-held's `CourtHeldVerdict` (the
+        /// review's F3, decision (B)) at 8.
         #[test]
         fn the_v22_void_reasons_are_pinned() {
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::UnavailableQuorum).unwrap(), vec![5]);
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::NotReplayBacked).unwrap(), vec![6]);
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtDefault).unwrap(), vec![7]);
-            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[8]).is_err(), "no ninth reason");
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtHeldVerdict).unwrap(), vec![8]);
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[9]).is_err(), "no tenth reason");
+            assert_eq!(
+                crate::palw_economics_ledger_v1::palw_void_reason_name_v1(&PalwVoidReasonV2::CourtHeldVerdict),
+                "court_held_verdict"
+            );
+            assert_eq!(palw_court_verdict_void_reason_v1(true, true), PalwVoidReasonV2::CourtHeldVerdict, "every dissection verdict");
+            assert_eq!(palw_court_verdict_void_reason_v1(true, false), PalwVoidReasonV2::CourtFraud, "a verdict on committed data");
+            assert_eq!(palw_court_verdict_void_reason_v1(false, true), PalwVoidReasonV2::CourtFraud, "below the fence, as it was");
         }
 
         /// **Every new delta entry (66–73) round-trips through borsh, applies onto its parent and

@@ -525,6 +525,8 @@ pub(crate) fn who_paid(void_reason: &str) -> &'static str {
         "bind_timeout" => "no panel could be seated; nothing was slashed",
         "receipt_timeout" => "the seats filed no quorum in time; nothing was slashed",
         "court_fraud" => "a court proved the run wrong; the claim's collateral was slashed",
+        "court_held_verdict" => "a held dissection proved the run's own disclosure wrong; the claim's collateral was slashed",
+        "court_default" => "a court session went unanswered on the executor's side; the claim's collateral was slashed",
         "producer_withholding" => "an accusation went unanswered; the claim's collateral was slashed",
         _ => "a reason this build cannot name",
     }
@@ -670,7 +672,7 @@ pub(crate) fn timeline(lane: Lane, state: WorkState, void_reason: Option<&str>) 
         Dropped => Some(Submitted),
         Voided => Some(match void_reason {
             Some("bind_timeout") => OnChain,
-            Some("court_fraud") => QuorumReached,
+            Some("court_fraud" | "court_held_verdict" | "court_default") => QuorumReached,
             _ => WaitingReceipts,
         }),
         _ => None,
