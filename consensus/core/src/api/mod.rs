@@ -1009,7 +1009,26 @@ pub trait ConsensusApi: Send + Sync {
     /// fold stopped taking leaves the pool of a node that never builds a template (a seat-only node,
     /// a relay) exactly as it leaves a miner's. All `None` below `palw_rcore_plus` (every network but
     /// testnet-12), off `ConsensusV2` and with no tip state. Node-local: never a block rule.
+    ///
+    /// In the template's order (the V01 review): `None` for a transaction with an input the virtual
+    /// UTXO set does not hold — mined (the tip would refuse it as a duplicate), double-spent, or
+    /// chained on a pooled parent — and all `None` while the PALW tip row does not stand at the
+    /// virtual's sink (mid-resolve); every judged transaction is judged on that one tip.
     fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        vec![None; txs.len()]
+    }
+
+    /// **The market gate's answers on pooled market carriers, for the mempool's per-block sweep**
+    /// (the V01 review's LOW 3; the user's request of 2026-09-25): per transaction, in order,
+    /// `Some(reason)` for a seed, a buy, a carrier sell or an Activation Pool top-up the P-B3 / P-B1
+    /// gate refuses at the tip (`palw_mempool_market_refusal`, the predicate admission and every
+    /// template ask) — its class's lifecycle moved (Probation → Held), or the payout queue has no room
+    /// for its move or refund — and `None` for every other transaction. Judged exactly as
+    /// [`Self::palw_h1_carrier_refusals_v1`] judges: the UTXO context first (`None` for an input the
+    /// virtual does not hold) and one tip, the virtual's own. All `None` below
+    /// `palw_audit_2026_09_23` (the gate's fence), off `ConsensusV2` and with no tip state.
+    /// Node-local: never a block rule.
+    fn palw_market_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
         vec![None; txs.len()]
     }
 

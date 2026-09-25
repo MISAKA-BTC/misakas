@@ -1604,6 +1604,197 @@ mod tests {
         assert_eq!(evicted(), 1);
     }
 
+    /// **The V01 review's LOW 3 (the user's request of 2026-09-25): a market carrier the tip's market
+    /// gate stops taking leaves the pool of a node that builds no template, at the next block.** A buy
+    /// admitted while its class served (or while the payout queue had room) regresses to refused;
+    /// the sweep evicts it with its redeemer and counts it apart from the H-1 carriers; an honest
+    /// buy, an H-1 carrier and an ordinary transaction stay; a re-relay meets the admission gate; and
+    /// a buy the virtual already folded is not the sweep's to judge. Off the flag nothing is indexed.
+    #[test]
+    fn a_non_template_node_evicts_a_market_carrier_the_market_gate_refuses_at_the_next_block() {
+        use kaspa_consensus_core::{
+            palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2},
+            palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
+            subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        };
+        let lifecycle = |salt: u32, object: PalwConsensusObjectV2| {
+            let mut carrier = create_transaction_with_utxo_entry(salt, 0);
+            let mut tx = carrier.tx.as_ref().clone();
+            tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
+            tx.payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+            carrier.tx = tx.into();
+            let mass = transaction_estimated_serialized_size(&carrier.tx);
+            carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+            carrier
+        };
+        let buy = |salt: u32, line: u64| {
+            lifecycle(
+                salt,
+                PalwConsensusObjectV2::ModelBuy {
+                    line_id: Hash64::from_u64_word(line),
+                    holder: Hash64::from_u64_word(0xB0B),
+                    msk_in: 1_000_000,
+                    min_units_out: 0,
+                    sink_index: 1,
+                },
+            )
+        };
+        let accusation = lifecycle(
+            2_003,
+            PalwConsensusObjectV2::DefaultAccused {
+                claim: Hash64::from_u64_word(0xC1C1),
+                missing_event_index: 0,
+                accuser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+                signature: vec![1; 8],
+            },
+        );
+
+        // Off the flag (every network but testnet-12): nothing is indexed, nothing is swept.
+        let idle = MiningManager::with_config(
+            Config::build_default(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS),
+            None,
+            Arc::new(MiningCounters::default()),
+            None,
+        );
+        let idle_consensus = ConsensusMock::new();
+        let idle_buy = buy(2_010, 0x11);
+        let idle_id = idle_buy.id();
+        validate_and_insert_mutable_transaction(&idle, &idle_consensus, idle_buy).expect("admitted");
+        assert!(idle.palw_market_carriers_indexed().is_empty(), "no index off the flag");
+        idle_consensus.set_palw_market_carrier_refusal(idle_id, Some("Held".to_string()));
+        idle.handle_new_block_transactions(&idle_consensus, 1, &build_block_transactions(std::iter::empty())).unwrap();
+        assert!(idle.has_transaction(&idle_id, TransactionQuery::TransactionsOnly), "off the flag the pool is untouched");
+
+        let consensus = Arc::new(ConsensusMock::new());
+        let mut config = Config::build_default(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS);
+        config.palw_h1_carrier_priority = true;
+        let counters = Arc::new(MiningCounters::default());
+        let mining_manager = MiningManager::with_config(config, None, counters.clone(), None);
+        let refused = buy(2_000, 0x11);
+        let refused_tx = refused.tx.as_ref().clone();
+        let relayed_again = refused.clone();
+        let refused_id = refused.id();
+        let honest = buy(2_001, 0x12);
+        let honest_id = honest.id();
+        let folded = buy(2_002, 0x13);
+        let folded_tx = folded.tx.as_ref().clone();
+        let folded_id = folded.id();
+        let accusation_id = accusation.id();
+        let ordinary = create_transaction_with_utxo_entry(2_004, 0);
+        let ordinary_id = ordinary.id();
+        for tx in [refused, honest, folded, accusation, ordinary] {
+            validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), tx).expect("the tip takes all five");
+        }
+        assert_eq!(
+            mining_manager.palw_market_carriers_indexed(),
+            vec![refused_id, honest_id, folded_id],
+            "the three buys are indexed for the sweep, in arrival order, and nothing else"
+        );
+        let redeemer = create_transaction(&refused_tx, DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
+        let redeemer_id = redeemer.id();
+        mining_manager
+            .validate_and_insert_transaction(consensus.as_ref(), redeemer, Priority::Low, Orphan::Allowed, RbfPolicy::Forbidden)
+            .expect("a child spending the buy's change");
+        let pooled = |id: TransactionId| mining_manager.has_transaction(&id, TransactionQuery::TransactionsOnly);
+        let market_evicted = || counters.palw_market_carrier_refused_evicted_counts.load(std::sync::atomic::Ordering::Relaxed);
+        let h1_evicted = || counters.palw_carrier_refused_evicted_counts.load(std::sync::atomic::Ordering::Relaxed);
+
+        // A block with nothing refused: nothing moves.
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 1, &build_block_transactions(std::iter::empty())).unwrap();
+        assert!([refused_id, redeemer_id, honest_id, folded_id, accusation_id, ordinary_id].into_iter().all(pooled));
+        assert_eq!((market_evicted(), h1_evicted()), (0, 0));
+
+        // The first buy's class regresses to Held; the third was already folded by the virtual (a
+        // later block of the batch) and the gate would refuse it as well.
+        consensus.set_palw_market_carrier_refusal(refused_id, Some("the class is Held".to_string()));
+        consensus.add_transaction(folded_tx, 2);
+        consensus.set_palw_market_carrier_refusal(folded_id, Some("already folded".to_string()));
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 2, &build_block_transactions(std::iter::empty())).unwrap();
+        assert!(!pooled(refused_id), "the refused buy leaves a pool no template was ever built from");
+        assert!(!pooled(redeemer_id), "with its redeemer");
+        assert!(pooled(honest_id), "the honest buy stays");
+        assert!(pooled(folded_id), "a buy the virtual already folded is left to the block that mined it");
+        assert!(pooled(accusation_id) && pooled(ordinary_id), "an H-1 carrier and an ordinary transaction stay");
+        assert_eq!(market_evicted(), 1, "one market eviction counted (redeemers are not)");
+        assert_eq!(h1_evicted(), 0, "and none counted as an H-1 refusal");
+        assert_eq!(counters.snapshot().palw_market_carrier_refused_evicted_counts, 1, "exposed in the counters' snapshot");
+        assert!(!mining_manager.palw_market_carriers_indexed().contains(&refused_id), "the index follows");
+
+        // A peer relays the evicted buy back: admission asks the same gate.
+        let again = validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), relayed_again);
+        assert!(
+            matches!(
+                again,
+                Err(MiningManagerError::MempoolError(RuleError::RejectTxRule(TxRuleError::PalwModelMarketNotEligible(_))))
+            ),
+            "a re-relayed refused buy is refused at admission: {again:?}"
+        );
+        for daa in 3..6 {
+            mining_manager
+                .handle_new_block_transactions(consensus.as_ref(), daa, &build_block_transactions(std::iter::empty()))
+                .unwrap();
+        }
+        assert!(pooled(honest_id) && pooled(accusation_id) && pooled(ordinary_id));
+        assert_eq!(market_evicted(), 1);
+    }
+
+    /// **The V01 review, MEDIUM: a carrier the virtual already folded is not "refused".** The pool
+    /// hears of a block after the virtual may have folded it (an ancestor batch, IBD), and on that tip
+    /// the fold refuses the carrier as a duplicate. The sweep does not judge a carrier whose inputs
+    /// the virtual has spent, so neither it nor the redeemer spending its change is evicted and
+    /// nothing is counted; when the pool hears of the block that mined it, the block handler takes
+    /// the carrier out as mined and the redeemer stays.
+    #[test]
+    fn a_carrier_the_virtual_already_folded_is_left_to_the_block_that_mined_it() {
+        use kaspa_consensus_core::{
+            palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2},
+            palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
+            subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        };
+        let consensus = Arc::new(ConsensusMock::new());
+        let mut config = Config::build_default(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS);
+        config.palw_h1_carrier_priority = true;
+        let counters = Arc::new(MiningCounters::default());
+        let mining_manager = MiningManager::with_config(config, None, counters.clone(), None);
+        let mut carrier = create_transaction_with_utxo_entry(1_010, 0);
+        let object = PalwConsensusObjectV2::DefaultAccused {
+            claim: Hash64::from_u64_word(0xC1B1),
+            missing_event_index: 0,
+            accuser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+            signature: vec![1; 8],
+        };
+        let mut tx = carrier.tx.as_ref().clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
+        tx.payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+        carrier.tx = tx.into();
+        let mass = transaction_estimated_serialized_size(&carrier.tx);
+        carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+        let carrier_tx = carrier.tx.as_ref().clone();
+        let carrier_id = carrier.id();
+        validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), carrier).expect("the tip takes it");
+        let redeemer = create_transaction(&carrier_tx, DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
+        let redeemer_id = redeemer.id();
+        mining_manager
+            .validate_and_insert_transaction(consensus.as_ref(), redeemer, Priority::Low, Orphan::Allowed, RbfPolicy::Forbidden)
+            .expect("a child spending the carrier's change");
+        let pooled = |id: TransactionId| mining_manager.has_transaction(&id, TransactionQuery::TransactionsOnly);
+        let evicted = || counters.palw_carrier_refused_evicted_counts.load(std::sync::atomic::Ordering::Relaxed);
+
+        // The virtual folds the carrier (a later block of the batch), and on that tip the fold
+        // refuses it again as a duplicate; the pool hears of an earlier block first.
+        consensus.add_transaction(carrier_tx.clone(), 2);
+        consensus.set_palw_h1_carrier_refusal(carrier_id, Some("already folded: a duplicate".to_string()));
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 1, &build_block_transactions(std::iter::empty())).unwrap();
+        assert!(pooled(carrier_id) && pooled(redeemer_id), "a folded carrier is not the sweep's to judge");
+        assert_eq!(evicted(), 0, "and nothing is counted as refused");
+
+        // The block that mined it: out as mined, the redeemer stays.
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 2, &build_block_transactions([carrier_tx].iter())).unwrap();
+        assert!(!pooled(carrier_id), "the block handler takes the mined carrier out");
+        assert!(pooled(redeemer_id), "its redeemer stays");
+        assert_eq!(evicted(), 0);
+    }
+
     /// **The daemon's switch reads the ruleset** (P2-9 review, finding 6): the lane and the reserve
     /// are on where `palw_rcore_plus` is armed — testnet-12 — and off on testnet-11, devnet and
     /// mainnet, which therefore select and evict exactly as before.

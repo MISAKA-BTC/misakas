@@ -12452,6 +12452,10 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
                 ctx.consensus.validate_mempool_transaction(&mut mutable, &Default::default())
             };
             mempool(&second).expect("with room, the carrier is admitted");
+            // **The V01 review's LOW 3: every node's per-block sweep asks the same gate** — nothing
+            // while the queue has room, and a spent input is never the sweep's to judge.
+            let pooled = std::sync::Arc::new(second.clone());
+            assert_eq!(ctx.consensus.palw_market_carrier_refusals_v1(&[pooled.clone()]), vec![None], "room: the sweep keeps it");
             vp.palw_state_v2_store.write().set_tip_for_tests(sink, &full).expect("the full queue becomes the tip");
             match mempool(&second) {
                 Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(why)) => {
@@ -12459,6 +12463,26 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
                 }
                 other => panic!("a full queue must refuse the carrier at the mempool, got {other:?}"),
             }
+            match ctx.consensus.palw_market_carrier_refusals_v1(&[pooled.clone()]).as_slice() {
+                [Some(why)] => assert!(why.contains("payout queue"), "the sweep refuses it as admission does: {why}"),
+                other => panic!("a full queue must refuse the pooled carrier at the sweep, got {other:?}"),
+            }
+            let unfunded = {
+                let mut tx = second.clone();
+                tx.inputs[0].previous_outpoint = TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0x51E), 0);
+                tx.finalize();
+                std::sync::Arc::new(tx)
+            };
+            assert_eq!(
+                ctx.consensus.palw_market_carrier_refusals_v1(&[unfunded]),
+                vec![None],
+                "an input the virtual does not hold (mined, double-spent, chained): not judged"
+            );
+            assert_eq!(
+                ctx.consensus.palw_h1_carrier_refusals_v1(&[pooled.clone()]),
+                vec![None],
+                "a market carrier is not the H-1 gate's to judge"
+            );
             let template = ctx.consensus.build_block_template(
                 new_miner_data(),
                 Box::new(OnetimeTxSelector::new(vec![second.clone()])),
@@ -13484,9 +13508,17 @@ fn p_b3_the_template_asks_the_market_gate_the_mempool_asks() {
         );
     }
     assert!(
-        body_of("palw_mempool_market_refusal").contains("palw_model_market_carrier_refusal_v1("),
+        body_of("palw_mempool_market_refusal_with").contains("palw_model_market_carrier_refusal_v1("),
         "the gate is the core predicate the fold's refusal is tested against"
     );
+    // The V01 review's LOW 3: and every node's mempool sweep at each new block — the gate's own
+    // fence and layers, on the one snapshot the H-1 sweep takes.
+    let gate = body_of("palw_mempool_market_refusal");
+    assert!(gate.contains("self.palw_market_gated_at(") && gate.contains("self.palw_mempool_market_refusal_with("));
+    let sweep = body_of("palw_market_carrier_refusals_v1_impl");
+    assert!(sweep.contains("self.palw_sweep_snapshot_v1(txs)"), "the H-1 sweep's snapshot");
+    assert!(sweep.contains("self.palw_market_gated_at(") && sweep.contains("self.palw_mempool_market_refusal_with("));
+    assert!(body_of("palw_h1_carrier_refusals_v1_impl").contains("self.palw_sweep_snapshot_v1(txs)"));
 }
 
 /// **ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the template asks the H-1 gate the mempool asks,
@@ -13502,14 +13534,21 @@ fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
         let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
         rest[..end].to_string()
     };
-    // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block.
-    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction", "palw_h1_carrier_refusals_v1_impl"] {
+    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
         assert!(
             body_of(caller).contains("self.palw_mempool_h1_carrier_refusal("),
             "{caller} must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"
         );
     }
-    assert!(body_of("palw_mempool_h1_carrier_refusal").contains("self.palw_h1_carrier_refusal_on("));
+    // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block — the gate's own
+    // two steps (its object, then its layers on a tip), on the one snapshot the sweep checked
+    // against the virtual (the V01 review, MEDIUM).
+    for asker in ["palw_mempool_h1_carrier_refusal", "palw_h1_carrier_refusals_v1_impl"] {
+        let body = body_of(asker);
+        assert!(body.contains("self.palw_h1_gated_object_at("), "{asker} takes the gate's object");
+        assert!(body.contains("self.palw_mempool_h1_carrier_refusal_with("), "{asker} asks the gate's layers");
+    }
+    assert!(body_of("palw_mempool_h1_carrier_refusal_with").contains("self.palw_h1_carrier_refusal_on("));
     let on = body_of("palw_h1_carrier_refusal_on");
     assert!(on.contains("self.palw_v2_validate_objects("), "the acceptance layer");
     assert!(on.contains("palw_v2_apply_one_object_v1("), "and the fold's own arm");

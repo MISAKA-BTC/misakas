@@ -82,6 +82,22 @@ pub(crate) fn bond_lookup_class_of(params: &kaspa_consensus_core::config::params
     }
 }
 
+/// **A with-bond facts read the node did not answer is not "no bond"** (the V09 review, LOW): the
+/// node answers `available: false` for a class it does not know, and the prechecks that read the
+/// bond under [`bond_lookup_class`] must say so rather than fall through to "the chain knows no
+/// bond" — the V09 symptom itself. `bond status` draws the same line.
+pub(crate) fn bond_facts_answered(available: bool, class: &str, bond: impl std::fmt::Display) -> Result<(), CliError> {
+    if available {
+        return Ok(());
+    }
+    Err(CliError::new(
+        exit::GENERIC,
+        format!(
+            "this node did not answer for class {class}; no conclusion was drawn about bond {bond}. Confirm --network/--rpc point at a ConsensusV2 chain that registered it."
+        ),
+    ))
+}
+
 /// **`misaka bond status`** (D3) — what the chain says about a key's collateral or one
 /// exact outpoint.
 ///
@@ -829,7 +845,15 @@ mod bond_lookup_class_tests {
         ] {
             assert!(!source.contains("get_palw_producer_facts(String::new()"), "{file} reads a bond under an empty class");
             assert!(source.contains("bond_lookup_class("), "{file} names the base class");
+            // The V09 review, LOW: an unanswered read is told apart from an unknown bond, first.
+            let answered = source.find("bond_facts_answered(facts.available").unwrap_or_else(|| panic!("{file} asks bond_facts_answered"));
+            let unknown = source.find("if !facts.bond_known").unwrap_or_else(|| panic!("{file} checks bond_known"));
+            assert!(answered < unknown, "{file} asks whether the node answered before concluding no bond");
         }
+        assert!(bond_facts_answered(true, &class, "aa:0").is_ok());
+        let unanswered = bond_facts_answered(false, &class, "aa:0").expect_err("an unanswered read is an error");
+        let text = format!("{unanswered:?}");
+        assert!(text.contains("did not answer") && !text.contains("knows no bond"), "{text}");
     }
 }
 

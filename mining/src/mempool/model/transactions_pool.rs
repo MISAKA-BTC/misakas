@@ -13,7 +13,7 @@ use crate::{
             map::MempoolTransactionCollection,
             palw_carriers::{
                 PALW_H1_CARRIER_LANE_MASS_DIVISOR, PALW_H1_CARRIER_LANE_SCAN, PalwCarrierIndexV1, PalwCarrierReserveV1,
-                PalwReadinessAdmissionV1,
+                PalwMarketCarrierSetV1, PalwReadinessAdmissionV1,
             },
             pool::{Pool, TransactionsEdges},
             tx::{DoubleSpend, MempoolTransaction},
@@ -106,6 +106,12 @@ pub(crate) struct TransactionsPool {
     /// and never written unless `Config::palw_h1_carrier_priority` is set.
     palw_carriers: PalwCarrierIndexV1,
 
+    /// **The market carriers in the pool** (seeds, buys, carrier sells, Activation Pool top-ups), in
+    /// arrival order, for the per-block gate sweep alone (`palw_carriers::PalwMarketCarrierSetV1`: the
+    /// V01 review's LOW 3). Kept at the same two sites as `palw_carriers`, and only where
+    /// `Config::palw_h1_carrier_priority` is set.
+    palw_market_carriers: PalwMarketCarrierSetV1,
+
     /// **M1: whether the last block this pool saw carried a possession proof** — the turn the lane's
     /// head reads ([`Self::build_palw_carrier_lane`]): after such a block, H-1 carriers that wait and
     /// that the head would leave no room for lead the lane, and the head follows them if it still
@@ -132,6 +138,7 @@ impl TransactionsPool {
             attestation_index: AttestationIndex::default(),
             attestation_quarantine: AttestationQuarantine::default(),
             palw_carriers: PalwCarrierIndexV1::new(palw_carrier_reserve, palw_lane_budget),
+            palw_market_carriers: PalwMarketCarrierSetV1::default(),
             palw_last_block_carried_readiness: false,
         }
     }
@@ -227,6 +234,12 @@ impl TransactionsPool {
             // re-judged at each new block (and when its parent leaves) without a decode.
             let key = FeerateTransactionKey::from(&transaction);
             self.palw_carriers.insert_readiness(id, key.fee, key.mass, transaction_size, admission.carrier, admission.urgency, ready);
+        } else if self.config.palw_h1_carrier_priority
+            && kaspa_consensus_core::palw_state_v2::palw_model_carrier_payout_rows_v1(&transaction.mtx.tx).is_some()
+        {
+            // The V01 review, LOW 3: a market carrier is swept at every new block as the H-1 carriers
+            // are — and gets nothing else (no lane, no reserve).
+            self.palw_market_carriers.insert(id);
         }
 
         self.all_transactions.insert(id, transaction);
@@ -276,6 +289,7 @@ impl TransactionsPool {
         }
         // ADR-0152 H-1: the carrier index follows the pool through the same single removal site.
         self.palw_carriers.remove(transaction_id);
+        self.palw_market_carriers.remove(transaction_id);
 
         // TODO: consider using `self.parent_transactions.get(transaction_id)`
         // The tradeoff to consider is whether it might be possible that a parent tx exists in the pool
@@ -466,6 +480,25 @@ impl TransactionsPool {
             .into_iter()
             .filter_map(|id| self.all_transactions.get(&id).map(|tx| (id, tx.mtx.tx.clone())))
             .collect()
+    }
+
+    /// **The next market carriers the gate sweep puts to the tip's market gate** (the V01 review's
+    /// LOW 3) — `PalwMarketCarrierSetV1::next_sweep_window`, with each transaction. Empty where
+    /// `Config::palw_h1_carrier_priority` is off: nothing is indexed there.
+    pub(crate) fn next_palw_market_sweep(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(TransactionId, Arc<kaspa_consensus_core::tx::Transaction>)> {
+        self.palw_market_carriers
+            .next_sweep_window(limit)
+            .into_iter()
+            .filter_map(|id| self.all_transactions.get(&id).map(|tx| (id, tx.mtx.tx.clone())))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn palw_market_carriers(&self) -> &PalwMarketCarrierSetV1 {
+        &self.palw_market_carriers
     }
 
     /// The pre-H-1 composition within `block_mass` (what the carrier lane left; the whole block when

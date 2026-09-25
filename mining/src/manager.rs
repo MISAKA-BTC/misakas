@@ -61,6 +61,15 @@ const EVM_TX_ADMISSION_CHANNEL_CAP: usize = 4096;
 /// rehearsals however many carriers a flood left admitted.
 pub(crate) const PALW_CARRIER_SWEEP_PER_BLOCK: usize = 256;
 
+/// **One new block's gate sweep** (`MiningManager::evict_palw_refused_carriers`): the H-1 carriers
+/// and possession proofs it puts to the H-1 gate (V01), and the market carriers it puts to the market
+/// gate (the V01 review's LOW 3) — each window at most [`PALW_CARRIER_SWEEP_PER_BLOCK`].
+#[derive(Default)]
+pub(crate) struct PalwCarrierSweepV1 {
+    pub h1: Vec<(TransactionId, Arc<Transaction>)>,
+    pub market: Vec<(TransactionId, Arc<Transaction>)>,
+}
+
 pub struct MiningManager {
     config: Arc<Config>,
     block_template_cache: BlockTemplateCache,
@@ -1169,8 +1178,12 @@ impl MiningManager {
             let unorphaned = mempool.handle_new_block_transactions(block_daa_score, block_transactions)?;
             // M1: the DAA moved and rows renewed — re-ask the tip which possession proofs escalate.
             mempool.refresh_palw_readiness(consensus);
-            // V01: the carriers this block's sweep puts to the H-1 gate (empty off testnet-12).
-            let sweep = mempool.next_palw_carrier_sweep(PALW_CARRIER_SWEEP_PER_BLOCK);
+            // V01: the carriers this block's sweep puts to the H-1 gate, and (the V01 review's LOW 3)
+            // the market carriers it puts to the market gate — both empty off testnet-12.
+            let sweep = PalwCarrierSweepV1 {
+                h1: mempool.next_palw_carrier_sweep(PALW_CARRIER_SWEEP_PER_BLOCK),
+                market: mempool.next_palw_market_sweep(PALW_CARRIER_SWEEP_PER_BLOCK),
+            };
             (unorphaned, sweep)
         };
 
@@ -1198,43 +1211,75 @@ impl MiningManager {
     /// most [`PALW_CARRIER_SWEEP_PER_BLOCK`], in arrival order, wrapping). Each is asked the fold's
     /// own question with no mempool lock held; a refused one still in the pool is removed with its
     /// redeemers (`TxRemovalReason::PalwCarrierRefused`), one log line each, and counted in
-    /// `MiningCounters::palw_carrier_refused_evicted_counts`. An honest carrier is never touched: the
-    /// predicate is the one that let it in. A peer that re-relays an evicted carrier meets the same
-    /// gate at admission (`validate_mempool_transaction_impl`) and is refused. Returns how many
-    /// carriers were evicted.
-    pub(crate) fn evict_palw_refused_carriers(
-        &self,
-        consensus: &dyn ConsensusApi,
-        sweep: Vec<(TransactionId, Arc<Transaction>)>,
-    ) -> usize {
-        if sweep.is_empty() {
-            return 0;
-        }
-        let txs: Vec<Arc<Transaction>> = sweep.iter().map(|(_, tx)| tx.clone()).collect();
-        let refusals = consensus.palw_h1_carrier_refusals_v1(&txs);
-        let refused: Vec<(TransactionId, String)> =
-            sweep.iter().zip(refusals).filter_map(|((id, _), refusal)| refusal.map(|why| (*id, why))).collect();
-        if refused.is_empty() {
-            return 0;
-        }
-        let mut evicted = 0usize;
-        let mut mempool = self.mempool.write();
-        for (id, why) in refused {
-            // Mined, replaced or evicted since the window was taken: nothing to do.
-            if !mempool.has_transaction(&id, TransactionQuery::TransactionsOnly) {
-                continue;
+    /// `MiningCounters::palw_carrier_refused_evicted_counts` (logged by the mining monitor). An
+    /// honest carrier is never touched: the predicate is the one that let it in, asked in the
+    /// template's order — a carrier whose inputs the virtual already spent (folded in a block this
+    /// pool has not heard of yet, where the tip would refuse it as a duplicate) is not judged, and is
+    /// left to the block handler (the V01 review). A peer that re-relays an evicted carrier meets the same
+    /// gate at admission (`validate_mempool_transaction_impl`) and is refused.
+    ///
+    /// **The market carriers too** (the V01 review's LOW 3; the user's request of 2026-09-25): the
+    /// same sweep puts the window of seeds, buys, carrier sells and Activation Pool top-ups
+    /// (`PalwMarketCarrierSetV1`) to the P-B3 / P-B1 market gate
+    /// (`ConsensusApi::palw_market_carrier_refusals_v1` — `palw_mempool_market_refusal`, the
+    /// predicate admission and the template ask, in the template's order), and evicts a refused one
+    /// with its redeemers (`TxRemovalReason::PalwMarketCarrierRefused`), counted in
+    /// `MiningCounters::palw_market_carrier_refused_evicted_counts`. A node that builds no template
+    /// no longer keeps one — and the user's inputs with it — for the 720-DAA Low-priority expiry.
+    ///
+    /// Returns how many carriers were evicted, H-1 and market together.
+    /// The market carriers the pool's sweep index holds, in arrival order (tests).
+    #[cfg(test)]
+    pub(crate) fn palw_market_carriers_indexed(&self) -> Vec<TransactionId> {
+        self.mempool.read().palw_market_carriers_indexed()
+    }
+
+    pub(crate) fn evict_palw_refused_carriers(&self, consensus: &dyn ConsensusApi, sweep: PalwCarrierSweepV1) -> usize {
+        let PalwCarrierSweepV1 { h1, market } = sweep;
+        let judged = |window: &[(TransactionId, Arc<Transaction>)], ask: &dyn Fn(&[Arc<Transaction>]) -> Vec<Option<String>>| {
+            if window.is_empty() {
+                return Vec::new();
             }
-            info!("Evicting PALW carrier {id} and its redeemers: the tip's fold refuses it ({why})");
-            match mempool.remove_transaction(&id, true, TxRemovalReason::PalwCarrierRefused, "") {
-                Ok(()) => evicted += 1,
-                Err(err) => warn!("Failed to evict refused PALW carrier {id} from the mempool: {err}"),
+            let txs: Vec<Arc<Transaction>> = window.iter().map(|(_, tx)| tx.clone()).collect();
+            window.iter().zip(ask(&txs)).filter_map(|((id, _), refusal)| refusal.map(|why| (*id, why))).collect::<Vec<_>>()
+        };
+        let h1_refused = judged(&h1, &|txs| consensus.palw_h1_carrier_refusals_v1(txs));
+        let market_refused = judged(&market, &|txs| consensus.palw_market_carrier_refusals_v1(txs));
+        if h1_refused.is_empty() && market_refused.is_empty() {
+            return 0;
+        }
+        let (mut h1_evicted, mut market_evicted) = (0usize, 0usize);
+        let mut mempool = self.mempool.write();
+        for (market, refused) in [(false, h1_refused), (true, market_refused)] {
+            for (id, why) in refused {
+                // Mined, replaced or evicted since the window was taken: nothing to do.
+                if !mempool.has_transaction(&id, TransactionQuery::TransactionsOnly) {
+                    continue;
+                }
+                let reason = if market {
+                    info!("Evicting PALW market carrier {id} and its redeemers: the tip's market gate refuses it ({why})");
+                    TxRemovalReason::PalwMarketCarrierRefused
+                } else {
+                    info!("Evicting PALW carrier {id} and its redeemers: the tip's fold refuses it ({why})");
+                    TxRemovalReason::PalwCarrierRefused
+                };
+                match mempool.remove_transaction(&id, true, reason, "") {
+                    Ok(()) if market => market_evicted += 1,
+                    Ok(()) => h1_evicted += 1,
+                    Err(err) => warn!("Failed to evict refused PALW carrier {id} from the mempool: {err}"),
+                }
             }
         }
         drop(mempool);
-        if evicted > 0 {
-            self.counters.palw_carrier_refused_evicted_counts.fetch_add(evicted as u64, std::sync::atomic::Ordering::Relaxed);
+        if h1_evicted > 0 {
+            self.counters.palw_carrier_refused_evicted_counts.fetch_add(h1_evicted as u64, std::sync::atomic::Ordering::Relaxed);
         }
-        evicted
+        if market_evicted > 0 {
+            self.counters
+                .palw_market_carrier_refused_evicted_counts
+                .fetch_add(market_evicted as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        h1_evicted + market_evicted
     }
 
     pub fn expire_low_priority_transactions(&self, consensus: &dyn ConsensusApi) {
