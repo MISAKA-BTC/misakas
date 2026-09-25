@@ -861,6 +861,22 @@ pub(crate) fn palw_held_retry_after_v1(failures: u32) -> u64 {
 /// The longest a failed held build waits: well inside a held session's life (`window_court`).
 pub(crate) const PALW_HELD_RETRY_CAP_DAA_V1: u64 = 320;
 
+/// **How long a failed held build of `duty`'s evidence waits, by the party it is for** (the fourth
+/// review's LOW–MEDIUM). The backoff ([`palw_held_retry_after_v1`]) is the CHALLENGER's: its N2 is
+/// what a lasting failure (weights that are not the class's) would re-run until the session ends. The
+/// RESPONDER's N1 answers a clocked rung, and its silence is a default. Backed off, three failures
+/// waited 10 + 20 + 40 = 70 DAA, past the 58-DAA root rung. So it is tried again every re-plan
+/// (`COURT_MOVE_REPLAN_DAA`), as before the backoff. Either party's wait is also capped at half the
+/// time left to the duty's rung deadline (at least one DAA), so a failure near the rung is retried
+/// before it. Past the rung nothing is left to save, and the wait is the role's own.
+pub(crate) fn palw_held_retry_wait_v1(duty: &PalwCourtDutyV2, failed_at_daa: u64, failures: u32) -> u64 {
+    let wait = if duty.i_am_responder { COURT_MOVE_REPLAN_DAA } else { palw_held_retry_after_v1(failures) };
+    match duty.rung_deadline_daa.checked_sub(failed_at_daa) {
+        Some(left) if left > 0 => wait.min((left / 2).max(1)),
+        _ => wait,
+    }
+}
+
 /// A checkpoint accusation's committed row, wanted (`task: None`) or being opened (step 6).
 struct PalwHeldRowsV1 {
     unit: PalwHeldStep6UnitV1,
@@ -1013,11 +1029,11 @@ impl PalwHeldCourtV1 {
                 entry.failures = entry.failures.saturating_add(1);
                 warn!(
                     "[{PALW_PANEL}] claim {}: the held evidence ({role}) at leaf {} does not build ({} in a row): {why} — tried again \
-                     {} DAA later",
+                     within {} DAA (sooner near its rung's deadline)",
                     key.0,
                     key.1,
                     entry.failures,
-                    palw_held_retry_after_v1(entry.failures)
+                    if key.2 { COURT_MOVE_REPLAN_DAA } else { palw_held_retry_after_v1(entry.failures) }
                 );
             } else if matches!(collected, PalwHeldTaskV1::Ready(_)) {
                 entry.failures = 0;
@@ -1117,7 +1133,7 @@ impl PalwHeldCourtV1 {
         let fresh = match self.evidence.get(&key) {
             None => true,
             Some(PalwHeldEntryV1 { build: PalwHeldTaskV1::Failed { at_daa }, failures, .. }) => {
-                current_daa >= at_daa.saturating_add(palw_held_retry_after_v1(*failures))
+                current_daa >= at_daa.saturating_add(palw_held_retry_wait_v1(duty, *at_daa, *failures))
             }
             Some(_) => false,
         };
@@ -1179,7 +1195,7 @@ impl PalwHeldCourtV1 {
         let fresh = match self.evidence.get(&key) {
             None => true,
             Some(PalwHeldEntryV1 { build: PalwHeldTaskV1::Failed { at_daa }, failures, .. }) => {
-                current_daa >= at_daa.saturating_add(palw_held_retry_after_v1(*failures))
+                current_daa >= at_daa.saturating_add(palw_held_retry_wait_v1(duty, *at_daa, *failures))
             }
             Some(_) => false,
         };

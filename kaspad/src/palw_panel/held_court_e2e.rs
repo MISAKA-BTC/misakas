@@ -1568,6 +1568,10 @@ struct Step6Played {
     paused_at: Option<u64>,
     /// How many demands the challenger's node carried.
     demands_sent: u32,
+    /// The claim's DA record when it first paused: `(opened_non_seat_total, open_seat_sessions,
+    /// opened_by_seat[challenger])` — a non-seat's pause is counted with the seats' OPEN sessions and on
+    /// the non-seat lifetime budget, never on a seat's (the fourth review's HIGH).
+    counted_at_pause: Option<(u16, u8, Option<u8>)>,
 }
 
 /// The forger's R-core+ answer to one unit of the seat's DA session: P2-7's builders
@@ -1671,6 +1675,9 @@ async fn play_step6_as(
             && s.court_session(&sid).is_none()
         {
             played.paused_at = Some(daa);
+            played.counted_at_pause = s.da_claim(&claim).map(|record| {
+                (record.opened_non_seat_total, record.open_seat_sessions, record.opened_by_seat.get(&challenger).copied())
+            });
         }
         let mut objects = Vec::new();
         // The forger's moves.
@@ -2196,6 +2203,11 @@ async fn step6_a_non_seat_challengers_demand_holds_final_off_until_the_late_disc
     assert!(played.forger_closed.is_some() && played.forfeit.is_some(), "the acquittal, and the stranger's forfeit kept");
     let (demanded, _) = played.demand.expect("the stranger's node demands the chunk");
     assert!(played.paused_at.is_some(), "the demand pauses the claim");
+    assert_eq!(
+        played.counted_at_pause,
+        Some((1, 1, None)),
+        "the pause is a seat-side OPEN session on the non-seat budget, never on a seat's (the fourth review's HIGH)"
+    );
     let disclosed = played.disclosed.expect("the forger answers at the demand's deadline");
     assert!(disclosed >= demanded + window, "late: at the session's deadline ({disclosed} ≥ {demanded} + {window})");
     let (accused_at, _) = played.accused.expect("and the stranger's node convicts on it");
@@ -2209,20 +2221,54 @@ async fn step6_a_non_seat_challengers_demand_holds_final_off_until_the_late_disc
     RCORE.with(|rcore| rcore.set(false));
 }
 
-/// **The seat's own court filings are dated** (the second review's MEDIUM): a one-move accusation that
-/// opens a held dissection and a named leaf's pursuit are due at their landing margin before the duty's
-/// deadline, never undated behind every dated item — and both sites insert the date beside the push.
+/// **The seat's own court filings are dated, and never after the claim's earliest `Final`** (the
+/// second review's MEDIUM, then the fourth's). A named leaf's pursuit is due at its landing margin
+/// before whichever comes first, the duty's deadline or the claim's earliest `Final`. A one-move
+/// accusation (which opens a held dissection) is due now. Neither waits undated behind every dated
+/// item, and both sites insert the date beside the push. On testnet-12's own params, an 8k claim
+/// (`W_r = 600`, `D = 15`) licensed at `bound + 1` reaches `Final` at `bound + 121`. The duty's
+/// deadline alone dated the pursuit at `bound + 540`; it is now due at `bound + 61`.
 #[test]
 fn the_seats_court_filings_are_dated_in_the_priority_lane() {
-    use super::{PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1, palw_seat_court_filing_due_v1};
-    assert_eq!(palw_seat_court_filing_due_v1(1_000, 900), 1_000 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1);
-    assert_eq!(palw_seat_court_filing_due_v1(1_000, 990), 990, "past its margin: due now");
-    let source = include_str!("../palw_panel.rs");
-    for push in ["court_pending.push((session_id, 0, false, object));", "court_pending.push((key, 0, false, object));"] {
-        let at = source.find(push).unwrap_or_else(|| panic!("{push}"));
-        let before = &source[at.saturating_sub(700)..at];
-        assert!(before.contains("court_due.insert(") && before.contains("palw_seat_court_filing_due_v1("), "dated: {push}");
+    use super::{PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1, palw_seat_claim_earliest_final_v1, palw_seat_court_filing_due_v1};
+    let margin = PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1;
+    assert_eq!(palw_seat_court_filing_due_v1(1_000, None, 900), 1_000 - margin, "the duty's deadline, where no Final is read");
+    assert_eq!(palw_seat_court_filing_due_v1(1_000, Some(700), 500), 700 - margin, "the earliest Final, when it comes first");
+    assert_eq!(palw_seat_court_filing_due_v1(1_000, Some(1_200), 500), 1_000 - margin, "the duty's deadline, when it does");
+    assert_eq!(palw_seat_court_filing_due_v1(1_000, Some(700), 690), 690, "past its margin: due now");
+
+    let t12 = kaspa_consensus_core::config::params::Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(
+        kaspa_consensus_core::network::NetworkType::Testnet,
+        12,
+    ));
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else {
+        panic!("testnet-12 is ConsensusV2")
+    };
+    let bound = 1_000u64;
+    let earliest = palw_seat_claim_earliest_final_v1(&t12, bound).expect("testnet-12 reads it");
+    assert_eq!(earliest, bound + 1 + bundle.state.window_challenge_at(bound + 1), "a licence at bound + 1, then the challenge window");
+    // Every licence the claim can still take ends its challenge window no earlier.
+    for licensed in bound + 1..bound + 2_000 {
+        assert!(licensed + bundle.state.window_challenge_at(licensed) >= earliest, "L = {licensed}");
     }
+    let receipt_deadline = bound + 600;
+    let due = palw_seat_court_filing_due_v1(receipt_deadline, Some(earliest), bound);
+    assert_eq!(due, earliest - margin, "the 8k row: due {due}, a margin before the earliest Final {earliest}");
+    assert!(due < receipt_deadline - margin, "earlier than the duty's deadline alone dated it");
+
+    let source = include_str!("../palw_panel.rs");
+    let before = |push: &str| {
+        let at = source.find(push).unwrap_or_else(|| panic!("{push}"));
+        &source[at.saturating_sub(700)..at]
+    };
+    let named = before("court_pending.push((key, 0, false, object));");
+    assert!(
+        named.contains("palw_seat_claim_earliest_final_v1(")
+            && named.contains("palw_seat_court_filing_due_v1(deadline, earliest_final,"),
+        "the named leaf's pursuit is dated before the earliest Final"
+    );
+    let accusation = before("court_pending.push((session_id, 0, false, object));");
+    assert!(accusation.contains("court_due.insert((session_id, 0, false), current_daa);"), "the one-move accusation is due now");
 }
 
 /// **The third review's MEDIUM, through the node and the fold: a non-seat's demand that PREDATES the
@@ -2266,6 +2312,11 @@ async fn step6_a_non_seats_demand_that_predates_the_acquittal_is_the_records_pau
         let forfeit = played.forfeit.unwrap_or_else(|| panic!("{label}: the forfeit kept"));
         assert!(forfeit.paused, "{label}: the record's write made the open demand its pause");
         assert!(played.paused_at.is_some(), "{label}: the claim paused");
+        assert_eq!(
+            played.counted_at_pause,
+            Some((1, 1, None)),
+            "{label}: the converted demand stays on the non-seat budget it was admitted on, never on a seat's"
+        );
         let disclosed = played.disclosed.unwrap_or_else(|| panic!("{label}: the forger answers at the deadline"));
         assert!(disclosed >= demanded + window, "{label}: late ({disclosed} ≥ {demanded} + {window})");
         assert!(played.accused.is_some_and(|(at, _)| at > disclosed), "{label}: the stranger convicts on it");
@@ -2279,11 +2330,33 @@ async fn step6_a_non_seats_demand_that_predates_the_acquittal_is_the_records_pau
     RCORE.with(|rcore| rcore.set(false));
 }
 
-/// **The third review's LOWs, on the node.** (1) A restart that finds its own step-6 demand still in
-/// the mempool (sent, not yet mined) waits for it as for one on chain, and never files it again. (2) A
-/// checked filing whose N2 fails for a lasting reason (the seat's weights are not the class's) is
-/// retried with a backoff — a re-plan, then twice, four times that — never a whole-context replay
-/// every re-plan until the session ends.
+/// The DAAs at which `node` started a build while ticking over `daas` on the fixed `state`.
+async fn build_daas(
+    node: &mut Node,
+    state: &PalwChainStateV2,
+    chain: &[PalwConsensusObjectV2],
+    daas: std::ops::Range<u64>,
+) -> Vec<u64> {
+    let mut at = Vec::new();
+    for daa in daas {
+        let before = node.host.asked.lock().unwrap().len();
+        let _ = node.tick(state, chain, daa).await;
+        if node.host.asked.lock().unwrap().len() > before {
+            at.push(daa);
+        }
+    }
+    at
+}
+
+/// **The third review's LOWs, on the node, with the fourth's role rule.**
+///
+/// 1. A restart that finds its own step-6 demand still in the mempool (sent, not yet mined) waits for
+///    it as for one on chain, and never files it again.
+/// 2. A checked filing whose N2 fails for a lasting reason (the seat's weights are not the class's)
+///    is retried with a backoff: a re-plan, then twice that, then four times. It is never a
+///    whole-context replay every re-plan until the session ends. Each wait is capped at half the
+///    time left to the rung, so near the rung the build is still tried before it.
+/// 3. The responder's N1 is never backed off, because its silence is a default.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pooled_demand_is_not_resent_after_a_restart_and_a_failing_build_backs_off() {
     use super::held_court::{PALW_HELD_RETRY_CAP_DAA_V1, palw_held_retry_after_v1};
@@ -2323,7 +2396,7 @@ async fn a_pooled_demand_is_not_resent_after_a_restart_and_a_failing_build_backs
     );
     assert!(collateral(&end, SEAT) >= before);
 
-    // A seat whose weights are not the class's: its N2 fails on every build — backed off.
+    // A node whose weights are not the class's: every build fails, for a lasting reason.
     let other = {
         use misaka_palw_base0::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
         let shape = Base0ShapeV1 {
@@ -2344,20 +2417,55 @@ async fn a_pooled_demand_is_not_resent_after_a_restart_and_a_failing_build_backs
                 .expect("sorted"),
         )
     };
+    let wrong = |bond: u64| {
+        let (o, p) = (other.clone(), profile.clone());
+        Node::new(FixtureHost::new(bond, move || backend(&o, &p)))
+    };
     let site = accused.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
     let mut filed = accused.root_claim_held_v1(&site, sid, 2).expect("the held root claim");
     if let PalwConsensusObjectV2::CourtAttnRootClaimedHeld { signature, .. } = &mut filed {
         *signature = vec![0xAA; 8];
     }
-    let s1 = step(&s, 105, std::slice::from_ref(&filed)).expect("the root claim opens the phase");
-    let p = profile.clone();
-    let mut wrong = Node::new(FixtureHost::new(SEAT, move || backend(&other, &p)));
-    let filings = vec![filed];
-    for daa in 106..106 + 75 {
-        let _ = wrong.tick(&s1, &filings, daa).await;
-    }
-    let builds = wrong.host.asked.lock().unwrap().len();
-    // Failures at 106, then retries at +10, +20, +40 after each: four builds in 75 DAA, not eight.
-    assert_eq!(builds, 4, "backed off: {builds} builds in 75 DAA");
+    let filings = vec![filed.clone()];
+
+    // (1) The challenger's N2, far from its rung (a 600-DAA turn): backed off. Failures at 106, then
+    // retries at +10, +20, +40 after each: four builds in 75 DAA, not eight.
+    TURN.with(|turn| turn.set(600));
+    let far = step(&s, 105, std::slice::from_ref(&filed)).expect("the root claim opens the phase");
+    let rung = duty_of(&far, SEAT, sid).expect("the challenger's duty").rung_deadline_daa;
+    let builds = build_daas(&mut wrong(SEAT), &far, &filings, 106..106 + 75).await;
+    assert_eq!(builds.len(), 4, "backed off far from the rung ({rung}): builds at {builds:?}");
+
+    // (2) The same challenger near its rung (the default 20-DAA turn): each wait is capped at half the
+    // time left, so a failing build is tried again right up to the rung, never waited past it.
+    TURN.with(|turn| turn.set(20));
+    let near = step(&s, 105, std::slice::from_ref(&filed)).expect("the root claim opens the phase");
+    let rung = duty_of(&near, SEAT, sid).expect("the challenger's duty").rung_deadline_daa;
+    let builds = build_daas(&mut wrong(SEAT), &near, &filings, 106..106 + 75).await;
+    let before_rung: Vec<u64> = builds.iter().copied().filter(|daa| *daa <= rung).collect();
+    assert!(
+        before_rung.windows(2).all(|w| w[1] - w[0] <= (rung - w[0]).div_ceil(2).max(1) + 1),
+        "no wait past half the time left to the rung ({rung}): {builds:?}"
+    );
+    assert!(before_rung.last().is_some_and(|last| *last + 2 >= rung), "tried again right up to the rung ({rung}): {builds:?}");
+
+    // (3) The responder's N1 (the producer's, before its root claim) is never backed off: its silence
+    // is a default. Three backed-off failures waited 10 + 20 + 40 = 70 DAA, past a 58-DAA root rung.
+    // Far from its rung it is tried again every re-plan, counted from the tick its failure is collected
+    // in: seven builds in 75 DAA, where the challenger's backed off to four.
+    TURN.with(|turn| turn.set(600));
+    let (licensed, claims) = licensed_many_under(&[&forger], &canonical, &profile, root);
+    let opened = step(&licensed, 104, std::slice::from_ref(&accusation_of(&forger, claims[0]))).expect("the held dissection opens");
+    let responder_sid = session_of(&opened, claims[0]);
+    let rung = duty_of(&opened, PRODUCER, responder_sid).expect("the responder's duty").rung_deadline_daa;
+    let mut producer = wrong(PRODUCER);
+    producer.host.material.insert(claims[0], attempt_facts(&forger, claims[0]));
+    let builds = build_daas(&mut producer, &opened, &[accusation_of(&forger, claims[0])], 105..105 + 75).await;
+    assert!(producer.host.asked.lock().unwrap().iter().all(|(_, responder)| *responder), "the responder's builds");
+    assert!(
+        builds.len() == 7 && builds.windows(2).all(|w| w[1] - w[0] == super::COURT_MOVE_REPLAN_DAA + 1),
+        "every re-plan, never backed off (rung {rung}): builds at {builds:?}"
+    );
+    TURN.with(|turn| turn.set(20));
     RCORE.with(|rcore| rcore.set(false));
 }

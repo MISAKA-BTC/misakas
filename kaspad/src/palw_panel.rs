@@ -2272,16 +2272,45 @@ pub(crate) fn palw_seat_tail_v1(
     PalwSeatTailV1::Waits { unserved: true }
 }
 
-/// **The due DAA of a seat's own court filing** — a one-move accusation (`ShardCourtAccused`, which
-/// opens a held dissection past `palw_offence_attribution`) or a named leaf's pursuit (ADR-0111
-/// Decision 6) — in the priority lane's EDF (`palw_court_queue_edf_v1`; the A-held node's second
-/// review, MEDIUM): its landing margin before the duty's own deadline
-/// ([`PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1`], P2-6's), and now once that has passed. The duty's
-/// deadline is the receipt window's end, never later than the claim's earliest `Final` (a licence
-/// lands inside it and `Final` is a challenge window after), so the date is early, never late: an
-/// undated item waited behind every dated one, and a lie it would have convicted reached `Final`.
-pub(crate) fn palw_seat_court_filing_due_v1(duty_deadline: u64, current_daa: u64) -> u64 {
-    duty_deadline.saturating_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1).max(current_daa)
+/// **The due DAA of a seat's named-leaf pursuit** (ADR-0111 Decision 6) in the priority lane's EDF
+/// (`palw_court_queue_edf_v1`; the A-held node's second review, MEDIUM): its landing margin
+/// ([`PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1`], P2-6's) before whichever comes first, the duty's own
+/// deadline or the claim's earliest `Final` ([`palw_seat_claim_earliest_final_v1`]), and now once
+/// that has passed. An undated item waited behind every dated one, and a lie it would have convicted
+/// reached `Final`.
+///
+/// **The fourth review's MEDIUM: the duty's deadline alone is not early enough.** Past §4-quater the
+/// receipt deadline is `bound + max(W_r, D)`, but the licensed `Final` floor is
+/// `max(L + wc, bound + D + 1)`. For the 8k row (`D = 15`) a licence at `bound + 1` gives `Final` at
+/// `bound + 121`, while the duty's date was `bound + 540`. So the date is taken before both. A
+/// one-move accusation (`ShardCourtAccused`) is simply due now; see its site.
+pub(crate) fn palw_seat_court_filing_due_v1(duty_deadline: u64, earliest_final: Option<u64>, current_daa: u64) -> u64 {
+    earliest_final
+        .map_or(duty_deadline, |earliest| duty_deadline.min(earliest))
+        .saturating_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)
+        .max(current_daa)
+}
+
+/// **The earliest DAA a claim bound at `bound_daa` can reach `Final`**: a bound under DL-1's licensed
+/// floor (`palw_claim_final_floor_v1`: `max(L + wc(L), H)`) over every licence the claim can still
+/// take. A licence lands at `bound + 1` at the earliest; a seat-DA pause only moves `L` later; `H` and
+/// an S2 licence's replay gate only raise the floor. So `min over L > bound of L + wc(L)` is never
+/// after the claim's `Final`: the challenge window at `bound + 1`, or the short window from its fence,
+/// whichever ends first. It is read off the bundle's params, as the receipt deadline is. `None` off
+/// `ConsensusV2`.
+pub(crate) fn palw_seat_claim_earliest_final_v1(params: &kaspa_consensus_core::config::params::Params, bound_daa: u64) -> Option<u64> {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return None;
+    };
+    let state = &bundle.state;
+    let first = bound_daa.saturating_add(1);
+    let mut earliest = first.saturating_add(state.window_challenge_at(first));
+    if let Some(from) = state.short_challenge_window_from_daa()
+        && from > first
+    {
+        earliest = earliest.min(from.saturating_add(state.window_challenge_at(from)));
+    }
+    Some(earliest)
 }
 
 /// **The landing margin of an automatic accusation** (ADR-0152 §3.8, DA-6: a seat accuses "until
@@ -8067,7 +8096,11 @@ impl PalwPanelService {
                                 if !court_pending.iter().any(|(sid, _, _, _)| *sid == key) {
                                     // Dated (the second review's MEDIUM): an undated item waits behind
                                     // every dated one, and a lie it would have convicted reaches `Final`.
-                                    court_due.insert((key, 0, false), palw_seat_court_filing_due_v1(deadline, current_daa));
+                                    // Before the claim's earliest `Final` too (the fourth review's MEDIUM).
+                                    let earliest_final =
+                                        palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
+                                    court_due
+                                        .insert((key, 0, false), palw_seat_court_filing_due_v1(deadline, earliest_final, current_daa));
                                     court_pending.push((key, 0, false, object));
                                 }
                             }
@@ -8647,13 +8680,13 @@ impl PalwPanelService {
                                                                     duty.claim_id
                                                                 );
                                                                 accused.insert(duty.claim_id);
-                                                                // Dated (the second review's MEDIUM): the
-                                                                // held dissection this opens must not wait
-                                                                // behind every dated item past `Final`.
-                                                                court_due.insert(
-                                                                    (session_id, 0, false),
-                                                                    palw_seat_court_filing_due_v1(deadline, current_daa),
-                                                                );
+                                                                // Dated (the second review's MEDIUM), and due
+                                                                // NOW (the fourth's): the held dissection it
+                                                                // opens holds `Final` off only once it lands,
+                                                                // and `Final` can come a challenge window after
+                                                                // the bound (`bound + 121` on the 8k row), long
+                                                                // before the duty's deadline.
+                                                                court_due.insert((session_id, 0, false), current_daa);
                                                                 court_pending.push((session_id, 0, false, object));
                                                             }
                                                             Err(why) => warn!(

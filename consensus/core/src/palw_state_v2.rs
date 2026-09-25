@@ -15000,8 +15000,9 @@ impl<'a> TransitionBuilder<'a> {
     /// at a session's opening), and one session per accuser left no second demand to open —
     /// `Final` (close + `window_challenge`) came long before the demand's deadline (+ `W_disclose`).
     /// So the record's write CONVERTS that open session into the record's pause, exactly as an opening
-    /// under the record would have written it: counted with the seats' sessions (`opened_by_seat`
-    /// too), the claim paused from now when it is the first (`paused_since`, its deadline disarmed —
+    /// under the record would have written it: counted with the seats' OPEN sessions (never in
+    /// `opened_by_seat`, a real seat's budget), the claim paused from now when it is the first
+    /// (`paused_since`, its deadline disarmed —
     /// the close's re-arm just armed it; the pause is credited back at the session's close as every
     /// seat pause is), and the record marked paused. A seat's session already pauses: nothing to do.
     fn pause_open_demand_of_held_forfeit_v1(&mut self, now_daa: u64, key: (Hash64, Hash64)) {
@@ -15016,10 +15017,11 @@ impl<'a> TransitionBuilder<'a> {
         }
         self.write_da_session((claim_id, record.challenger), Some(crate::palw_da_rcore_v1::PalwDaSessionV1 { accuser_is_seat: true, ..session }));
         let mut da = self.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
+        // Moved from the non-seat OPEN count to the seats' (DA-5, DL-1). DA-8's lifetime counts stay
+        // as its admission left them: `opened_non_seat_total` counted it then, and `opened_by_seat` —
+        // a real seat's budget, at most four — never counts a non-seat (the fourth review's HIGH).
         da.open_other_sessions = da.open_other_sessions.saturating_sub(1);
         da.open_seat_sessions = da.open_seat_sessions.saturating_add(1);
-        let opened = da.opened_by_seat.entry(record.challenger).or_insert(0);
-        *opened = opened.saturating_add(1);
         let first = da.open_seat_sessions == 1;
         if first {
             da.paused_since = Some(now_daa);
@@ -22709,8 +22711,21 @@ fn open_da_session_rcore_v1(
     let mut record = builder.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
     let pauses = if seat_like {
         record.open_seat_sessions = record.open_seat_sessions.saturating_add(1);
-        let opened = record.opened_by_seat.entry(accuser).or_insert(0);
-        *opened = opened.saturating_add(1);
+        if admission.accuser_is_seat {
+            let opened = record.opened_by_seat.entry(accuser).or_insert(0);
+            *opened = opened.saturating_add(1);
+        } else {
+            // **The fourth review's HIGH: a record-holder's pause is not a seat's session.** It is
+            // counted with the seats' OPEN sessions (`open_seat_sessions`, `paused_since`: all DA-5 and
+            // DL-1 read), but DA-8's per-seat budget (`opened_by_seat`, at most four) is a seat's
+            // alone — admission asks it of a seat and never of anyone else, and the loader refuses a
+            // count past four. Counted there, a non-seat that lost five held dissections on one claim
+            // drove the fold to a tip its own loader refused on every node: a chain halt for five
+            // forfeits. The session was admitted on the non-seat budget, so it is counted on it —
+            // the lifetime total (`opened_non_seat_total`, sixteen), exactly as the conversion of a
+            // demand that predates its record leaves it (counted there at its admission).
+            record.opened_non_seat_total = record.opened_non_seat_total.saturating_add(1);
+        }
         record.open_seat_sessions == 1
     } else {
         record.open_other_sessions = record.open_other_sessions.saturating_add(1);
