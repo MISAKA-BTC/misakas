@@ -132,7 +132,10 @@ PREMINE_TXID=5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099
 # rule manifest digest 9def81a1c56c02d5d1f9d24c5ddbe78d6f7598b31928ab6f388a2a074f14b4d4d4cf8c2245666bc13b9c91688c106efe428e8643075b68b40c4820adb4201d8d
 ```
 
-fingerprint `8a481023…` は EVM bridge ledger（fad522c6、int-3 への merge dee8b595）の時点でメモリに記録された t12 の値と同じ（その後の merge は t12 の params を動かしていない）。genesis は c8652a97 の候補
+fingerprint `8a481023…` は EVM bridge ledger（fad522c6、int-3 への merge dee8b595）の時点でメモリに記録された t12 の値と同じ（a0af3c92 までの merge は t12 の params を動かしていない）。
+**2026-09-25 の mainnet 値の commit（`rcore/mainnet-values` befb59dfe: λ 5・tolerance 1,620 s・max_block_level 225）が t12 を動かした**:
+params id `99eae89d…` → `1870bc1f…`、identity `195a98c3…` → `6e193d30…`、schedule `5f53b691…` → `79563f51…`（8270cf03 からの測定）。
+上の `EXPECT_FP` はそれより前の値なので、出荷 commit の probe で取り直す。genesis は c8652a97 の候補
 `a27f8f44…` のまま（R-core+ の genesis 行はまだ動いていない）。drill salt `5353…53`（例示用）の drill genesis は
 `1678f353…70349`（`--drill-salt` の出力。実際の drill の salt ではない）。
 
@@ -267,6 +270,13 @@ O-13 の計数。**X10（M6）**: `palw_rcore_attributed_charging` は M1〜M5 �
 
 ## 7. 運用者・監査に残っている判断
 
+- **ユーザー（公開前）: 1,620 s の tolerance による DAA の burst**（2026-09-25 の mainnet 値 review の HIGH）。1 producer が他の block を
+  挟まずに DAA を 14 進められ（132 s では 2）、readiness row が失効して model class が HELD → Probation{0} に戻る。int-3 の horizon 24 でも
+  閉じない（`consensus/core/tests/t12_run_ahead_burst_vs_readiness.rs` が fold 上で測定）。案: (a) clock を進める beat の stamp だけを受信側
+  時計 + 1 interval で上限にする consensus 規則、(b) node の再証明を row の年齢 > horizon − 16 に早める（24 なら 9 DAA ごと、proof 約 1.4 倍）、
+  (c) t12 だけ 132 s に戻す。詳細は `docs/testnet-12-regenesis-2026-09-23.md` の「open」。
+- **ユーザー（公開前）: λ = 5 の DoS の強さ**。junk floor claim 1,200 本の flood で honest 担保の上限の 99.70 % が拘束され、公開時に開いている
+  floor lane が 6 DAA、2M lane が 970 / 3,650 DAA 止まる（λ = 2 ではどちらも 0）。攻撃者は拘束額以上を没収される（`dos_l5_6_composite`）。
 - **運用者**: `HB_ADDR` の確認（card 0 の payout address を全桁で入れた。旧 kit の `qf6hf5v0…` と同じ。PLAN R3）／公開後の drill ホスト 4 台以上（PLAN R4）／
   5.104 b2 を seat のみにしたこと（kit の既定。8k producer は ibm b0 の 1 本。PLAN §2.3）の了承／MemoryMax を crash guard として上げた値
   （b0 20G・b1 16G・b6 17G・5.104 の seat 9G）で残すか、cache の蓄積で cgroup 項が share を下回ったら `-`（MemoryMax=infinity）にするか
@@ -275,5 +285,9 @@ O-13 の計数。**X10（M6）**: `palw_rcore_attributed_charging` は M1〜M5 �
 - **実装（公開前に推奨）**: 自分の claim の DA duty が保留中は seat の 2 本目の replay を始めない、または DA 応答に ledger の予約枠を先取りさせる
   （PLAN §2.5 R-2b。`kaspad/src/palw_panel.rs` の `PalwSeatReplaysV1::IN_FLIGHT = 2` と `reserve_replay_v1("da-answer")`）。入らなければ既知リスク
   として公開し O-7 で監視する。
+- **実装（別作業として記録）**: pruning proof の apply（`consensus/src/processes/pruning_proof/apply.rs` の `batched_block_levels`）と
+  pruning point の import（`mod.rs` の `import_pruning_points`）は single lottery を渡さずに `calc_block_level_layer0` で level を出し、
+  validate（`validate.rs`、`palw_single_lottery_at` を渡す）と食い違う。apply 側で attempt header が level ≥ 1 になる確率は 225 で約 2⁻³²、250 なら 1/128 なので、
+  225 はこのずれを見えにくくする方向に働く（直してはいない）。heartbeat・receipt・round は両方とも level 0。
 - **監査**: 所在不明の test 番号（T02b、T06、T28、T31、T57、T62、T90、T54c〜T54g、T55）の所在か追加／4-quater と A-held の review と merge／
   `fix/t12-live-seat0` が公開 line に要るか／t11 の休眠 parity の digest が動いた場合の確認。

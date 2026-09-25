@@ -16006,8 +16006,15 @@ pub fn palw_t12_base_params() -> Params {
     // keep. **The effect, stated:** testnet-12's heartbeat clock is paced by header stamps, and a
     // stamp is bounded above only by this tolerance, so a producer that stamps every beat at its
     // slot can run the DAA clock up to 1,620 s — about 13 slots — ahead of wall time (about 1 slot at
-    // 132 s): a one-time lead, not a rate change, since the clock floor still spaces two ticks at
-    // least one interval apart (`t12_a_producer_runs_the_clock_at_most_the_drift_budget_ahead`).
+    // 132 s). The lead is a one-time offset in STAMPS (the clock floor still spaces two stamps at
+    // least one interval apart, `t12_a_producer_runs_the_clock_at_most_the_drift_budget_ahead`), but
+    // not in wall time: those ticks can be minted at once, so one producer can advance the DAA by
+    // `⌊T / I⌋ + 1` = 14 with no other block in between (2 at 132 s) — every DAA-denominated window
+    // is shortened by that much wall time, and a burst that outlasts a readiness row's remaining age
+    // lapses the row with no proof able to land (the 2026-09-25 mainnet-values review, HIGH; measured
+    // on the lifecycle fold by `t12_a_run_ahead_burst_outlasts_a_readiness_row`). **Open, for the
+    // user's decision before launch** — cap the clock-stepping beat's stamp near the receiver's clock,
+    // re-prove far enough ahead of the horizon, or keep 132 s here.
     params.timestamp_deviation_tolerance = palw_v2_timestamp_deviation_tolerance_v1(
         params.past_median_time_window_size,
         BlockrateParams::new_two_minute_bps().past_median_time_sample_rate,
@@ -16020,7 +16027,12 @@ pub fn palw_t12_base_params() -> Params {
     // header budget, `(225 + 1) x 2 x m` = 452,000 slots (502,000 at 250). Headers are unchanged: a
     // header lists parents only up to the first genesis-only level. **Owed at either ceiling, not
     // caused by this one:** with every block at level 0 the level-0 proof is the whole history below
-    // the pruning point, so that budget, not the level pyramid, is what eventually bounds a proof.
+    // the pruning point, so that budget, not the level pyramid, is what eventually bounds a proof —
+    // about 314 days of two-block heartbeat slots below the pruning point at 225 (348 at 250). And
+    // the pruning point itself does not leave genesis until the first claim is `Final` (the PALW
+    // safe frontier caps it). Both measured at 225 on a moved pruning point — built, validated by a
+    // node at genesis, applied by a staging node — by
+    // `t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225`.
     params.max_block_level = MAINNET_PARAMS.max_block_level;
     palw_t12_arm_every_rule_from_genesis(&mut params);
     params
@@ -22120,6 +22132,49 @@ mod consensus_params_id_tests {
             utxos,
         )
         .expect("a mainnet card assembles")
+    }
+
+    /// **The mainnet card states testnet-12's carve, and a card that states another fails here**
+    /// (user decision 2026-09-25, ADR-0126). The 2026-09-25 mainnet-values review (LOW) found that
+    /// nothing read the card's carve: `worker_carve_permille` 720 → 620 left every consensus-core
+    /// test green. Validators 20 %, the worker base the lowered split leaves 72 %, and a claim's
+    /// escrow 720‰ of a 120 s block — 3,200.85 MSK, the G every ADR-0152 tier and the genesis-seat
+    /// sizing are built on — each exactly testnet-12's.
+    #[test]
+    fn the_mainnet_card_states_testnet_12_s_carve_and_escrows_3_200_85_msk_a_claim() {
+        let card = mainnet_card_fixture_v1(false);
+        let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let carve = card.palw_overlay_carve;
+        assert_eq!(
+            carve,
+            Some(PalwOverlayCarveV1 {
+                activation: ForkActivation::always(),
+                subsidy_validator_bps: 2_000,
+                worker_carve_permille: 720
+            }),
+            "the card states the carve from genesis: validators 20 %, escrow 720‰"
+        );
+        assert_eq!(carve, t12.palw_overlay_carve, "testnet-12's carve, field for field");
+        let carve = carve.unwrap();
+        let dns = card.dns_params.as_ref().expect("a card runs the overlay");
+        let lowered =
+            palw_overlay_fee_split_at_v1(dns, Some(carve), dns.full_reward_split_daa_score).expect("the full split is staged");
+        assert_eq!(
+            (lowered.subsidy_validator_bps, lowered.subsidy_worker_base_bps),
+            (2_000, 7_200),
+            "the validator pool's subsidy share is 20 % and the worker base the lowered split leaves is 72 %"
+        );
+        let subsidy = palw_genesis_block_subsidy_sompi(&card);
+        assert_eq!(subsidy, PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI, "a card's 120 s block pays what testnet-12's first block pays");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &card.palw_consensus_mode else {
+            panic!("a mainnet card is ConsensusV2")
+        };
+        assert_eq!(bundle.state.worker_carve_at(subsidy, carve.escrow_carve()), 320_084_650_080, "3,200.85 MSK a claim");
+        assert_eq!(
+            bundle.state.worker_carve_at(subsidy, None),
+            275_628_448_680,
+            "without the card's carve the bundle would escrow its own 620‰: 2,756.28 MSK"
+        );
     }
 
     /// **Every ConsensusV2 ruleset this tree can assemble is minted at its own ambient target.**

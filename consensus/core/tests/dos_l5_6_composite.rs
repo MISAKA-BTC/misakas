@@ -323,7 +323,27 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
         // peak's 3.74M MSK over eight bonds plus a 179,228.83 MSK 2M seat, under the 500‰ ceiling)
         // — a re-sizing option A's rule, which prices the claims a seat PRODUCES, does not make,
         // and one a larger flood would outgrow again: the defence is the price, not the seat.
-        println!("λ = 5: the floor duty is ≈ (w + E) / 5 per seat; the 2M lane unbindable {daa_2m_dead} DAA");
+        //
+        // **The floor lane — open at launch — is touched too, and the flood fills the honest
+        // ceiling** (the 2026-09-25 mainnet-values review, MEDIUM). At the peak the junk duty pins
+        // 3,744,990.41 of the eight genesis bonds' 3,756,252.84 MSK ceiling (`collateral x 500‰`),
+        // 99.70 %, and for 6 DAA fewer than `seat_count + 1` honest bonds have room for even a floor
+        // seat (1,088 junk claims found no panel at all). At λ = 2 the same flood pinned
+        // 1,535,125.98 MSK and stopped neither lane. **Both bounds below hold for THIS flood, not
+        // for every flood:** they are measured at `FLOOD_DAA = 1,200`; the review's probe at 1,500
+        // closed the 2M lane for 1,275 of 3,950 DAA (32 %, past the 30 % assert) and the floor lane
+        // for 18 DAA. What does not depend on the size is the price — the attacker forfeits at
+        // least the honest collateral it pins (asserted below) — and that the pin is capped by the
+        // honest ceiling itself.
+        let honest_ceiling: u128 =
+            honest.iter().map(|(_, _, c)| u128::from(*c) * u128::from(economy.max_exposure_ratio_permille) / 1_000).sum();
+        println!(
+            "λ = 5: the floor duty is ≈ (w + E) / 5 per seat; the 2M lane unbindable {daa_2m_dead} DAA, the floor lane {daa_floor_dead} DAA; \
+             honest pinned {:.2} of a {:.2} MSK ceiling ({:.2} %)",
+            msk(max_honest_reserved),
+            msk(honest_ceiling),
+            100.0 * max_honest_reserved as f64 / honest_ceiling as f64
+        );
         assert_eq!(
             seat_floor_honest,
             kaspa_consensus_core::palw_panel_economy_v1::palw_panel_seat_reward_floor_v1(
@@ -335,8 +355,20 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
         );
         assert!(
             daa_2m_dead * 10 <= 3 * (end - start),
-            "the 2M lane is unbindable for at most 30% of the window: {daa_2m_dead} of {}",
+            "the 2M lane is unbindable for at most 30% of the window at FLOOD_DAA = {FLOOD_DAA}: {daa_2m_dead} of {}",
             end - start
+        );
+        assert!(
+            daa_floor_dead <= 6,
+            "the floor lane is unbindable for at most the 6 DAA measured at FLOOD_DAA = {FLOOD_DAA}: {daa_floor_dead} of {}",
+            end - start
+        );
+        assert!(max_honest_reserved <= honest_ceiling, "no duty is pinned past the honest bonds' own ceiling");
+        assert!(
+            max_honest_reserved * 1_000 >= honest_ceiling * 995,
+            "at λ = 5 this flood fills the honest ceiling (99.70 % measured): {:.2} of {:.2} MSK",
+            msk(max_honest_reserved),
+            msk(honest_ceiling)
         );
     } else {
         // **While no vesting row exists (the S review's H1) every lock is priced on the whole gain**,
