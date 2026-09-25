@@ -5215,11 +5215,6 @@ async fn t18n_a_convicted_representatives_unspent_tickets_pass_to_the_lender() {
 #[path = "t47_model_class_attribution.rs"]
 mod t47_model_class_attribution;
 
-/// **ADR-0152 v3.1 Phase 2, P2-8b / P2-8d (T54f's processor half)** — the replay filer's ONE builder on
-/// this suite's real claims, every object it leads to through this suite's doors; a child, like T47.
-#[path = "t54f_replay_filer.rs"]
-mod t54f_replay_filer;
-
 /// **ADR-0152 v3.1 Phase 2, P2-8e (T54g's processor half)** — the fold's rehearsal of one object, the
 /// read kaspad's held-dissection filer asks before it queues an opening; a child, like T54f.
 #[path = "t54g_object_rehearsal.rs"]
@@ -5230,3 +5225,18 @@ mod t54g_object_rehearsal;
 /// before step 3d. A child of this suite for the reason `t47_model_class_attribution` is.
 #[path = "p2_t29_conviction_and_maturity.rs"]
 mod p2_t29_conviction_and_maturity;
+
+/// **Phase 2, P2-8: the reporter's commit–reveal filer on real claims** (ADR-0152 v3.1 R-3/R-4,
+/// SR-8, J-6) — a child of this suite, so the filer's pieces run on this harness's claims and doors.
+#[path = "t46_p2_8_reporter_filer.rs"]
+mod t46_p2_8_reporter_filer;
+
+/// **ADR-0152 v3.1 N10 / §7.3 P2-8c, T54d: the automatic `PanelFalseValidV2` filer's path on real
+/// claims** — a child of this suite, so it runs on this harness, these doors and these assertions.
+#[path = "t54d_false_valid_filer.rs"]
+mod t54d_false_valid_filer;
+
+/// **ADR-0152 v3.1 Phase 2, P2-8b / P2-8d (T54f's processor half)** — the replay filer's ONE builder on
+/// this suite's real claims, every object it leads to through this suite's doors; a child, like T47.
+#[path = "t54f_replay_filer.rs"]
+mod t54f_replay_filer;

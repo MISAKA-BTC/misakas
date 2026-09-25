@@ -3723,6 +3723,31 @@ pub fn palw_reporter_commit_message_v1(network_domain: &Hash64, commitment: &Has
     message
 }
 
+/// **R-3 (P2-8): the node's one builder of a signed `ReporterCommitted` (tag 53)** — the commitment
+/// [`palw_reporter_commitment_v1`]`(offence_key, evidence_id, reporter, salt)`, signed through `sign`
+/// over [`palw_reporter_commit_message_v1`]`(network_domain, commitment, reporter)` under
+/// [`PALW_REPORTER_COMMIT_MLDSA87_CONTEXT`] — what the processor's gate verifies against the reporter
+/// bond's registered key. Returns the commitment beside the object (the filer keeps it, with the
+/// salt, to find its row and to reveal). `None` when `sign` signs nothing (no bond key), or the
+/// object cannot ride a carrier. Pure: whether the fold roots it is the fold's
+/// (`apply_reporter_committed`).
+pub fn palw_reporter_commit_object_v1(
+    network_domain: &Hash64,
+    offence_key: &Hash64,
+    evidence_id: &Hash64,
+    reporter: PalwBondKeyV2,
+    salt: &[u8; 32],
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Option<(Hash64, PalwConsensusObjectV2)> {
+    let commitment = palw_reporter_commitment_v1(offence_key, evidence_id, &reporter, salt);
+    let signature =
+        sign(&palw_reporter_commit_message_v1(network_domain, &commitment, &reporter), PALW_REPORTER_COMMIT_MLDSA87_CONTEXT)
+            .filter(|signature| !signature.is_empty())?;
+    let object = PalwConsensusObjectV2::ReporterCommitted { commitment, reporter, signature };
+    crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).ok()?;
+    Some((commitment, object))
+}
+
 /// **U2 / B-4: how far a bond's posted collateral is below the producer floor** (S-SPEC §10a;
 /// post-edit 11). `None` = it meets `min_collateral_sompi`, or the fence is dormant at `now_daa`;
 /// `Some(floor)` for a bond the state does not hold; otherwise `Some(floor − posted)`. "Posted" is
@@ -8135,6 +8160,68 @@ impl PalwReporterCountersV1 {
     /// Both zero: the dormant value, which the R-core+ root block does not hash.
     pub fn is_zero(&self) -> bool {
         self.awarded_sompi == 0 && self.forgone_sompi == 0
+    }
+}
+
+/// **R-3/R-4 (P2-8): what a reporter's filer reads of ONE filing at the tip** — the rows the fold
+/// keeps for it, at the DAA the next block folds at, so the node commits, files, reveals and lets go
+/// by what the chain holds NOW rather than by what it sent: a commitment or a conviction a reorg took
+/// back reads as absent here, and the filer's next step is recomputed from that (re-send, or let the
+/// reward go). Built by [`palw_reporter_filing_read_v1`]; `object_gate` is the processor's (the
+/// object gate's verdict at that DAA on the one object the filer asked about — the filing's
+/// evidence, its signed commitment, or the court accusation it falls back to — asked only when the
+/// filer is about to spend a carrier on it). Node policy's read: nothing here decides what a block
+/// accepts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwReporterFilingReadV1 {
+    /// The DAA the virtual's next block folds at.
+    pub now_daa: u64,
+    /// `Params::palw_rcore_plus` is active at `now_daa`: objects 53/54 fold. Below it the fold
+    /// refuses both by name, and a filing goes straight to its evidence.
+    pub rcore_plus: bool,
+    /// `window_court`: how long a commitment no open reward guards stays rooted (the V3S-11 prune,
+    /// `sweep_reporter_commitments`) — the longest a filer may wait on its evidence before its
+    /// commitment is gone.
+    pub window_court: u64,
+    /// The reporter may root a new commitment: a bond `Active` at or above the floor
+    /// (`palw_bond_may_take_work_v2`, the rule `apply_reporter_committed` applies) holding fewer
+    /// than [`PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1`] open.
+    pub reporter_may_commit: bool,
+    /// The DAA the reporter's slot of the commitment was rooted at ([`PalwChainStateV2::reporter_commitment_of`]).
+    pub committed_daa: Option<u64>,
+    /// The conviction under the offence key, once consumed (`accepted_daa` is what the commitment
+    /// must precede, strictly; `kind` and `accused` say whose it is).
+    pub consumed: Option<crate::palw_offence_v1::PalwConsumedOffenceV1>,
+    /// The reward waiting out its reveal window under the key (R-4).
+    pub pending: Option<PalwPendingRewardV1>,
+    /// The award the sweep wrote under the key, until step 3d moves it (R-4).
+    pub awarded: Option<PalwPayoutV2>,
+    /// The processor's object gate at `now_daa` on the object asked about, when one was.
+    pub object_gate: Option<Result<(), String>>,
+}
+
+/// **[`PalwReporterFilingReadV1`] on a state** — every row read through the state's own accessors,
+/// the reporter's room through the rule the fold's `apply_reporter_committed` applies. Pure.
+pub fn palw_reporter_filing_read_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now_daa: u64,
+    offence_key: &Hash64,
+    commitment: &Hash64,
+    reporter: &PalwBondKeyV2,
+) -> PalwReporterFilingReadV1 {
+    let reporter_may_commit = state.bond(reporter).is_some_and(|bond| palw_bond_may_take_work_v2(bond, params.min_collateral_sompi()))
+        && state.reporter_open_commitments(reporter) < PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1;
+    PalwReporterFilingReadV1 {
+        now_daa,
+        rcore_plus: params.rcore_plus_active_at(now_daa),
+        window_court: params.window_court(),
+        reporter_may_commit,
+        committed_daa: state.reporter_commitment_of(commitment, reporter).map(|row| row.committed_daa),
+        consumed: state.consumed_offence(offence_key).cloned(),
+        pending: state.reward_pending(offence_key).copied(),
+        awarded: state.reporter_reward(offence_key).copied(),
+        object_gate: None,
     }
 }
 
@@ -15000,8 +15087,9 @@ impl<'a> TransitionBuilder<'a> {
     /// at a session's opening), and one session per accuser left no second demand to open —
     /// `Final` (close + `window_challenge`) came long before the demand's deadline (+ `W_disclose`).
     /// So the record's write CONVERTS that open session into the record's pause, exactly as an opening
-    /// under the record would have written it: counted with the seats' sessions (`opened_by_seat`
-    /// too), the claim paused from now when it is the first (`paused_since`, its deadline disarmed —
+    /// under the record would have written it: counted with the seats' OPEN sessions (never in
+    /// `opened_by_seat`, a real seat's budget), the claim paused from now when it is the first
+    /// (`paused_since`, its deadline disarmed —
     /// the close's re-arm just armed it; the pause is credited back at the session's close as every
     /// seat pause is), and the record marked paused. A seat's session already pauses: nothing to do.
     fn pause_open_demand_of_held_forfeit_v1(&mut self, now_daa: u64, key: (Hash64, Hash64)) {
@@ -15016,10 +15104,11 @@ impl<'a> TransitionBuilder<'a> {
         }
         self.write_da_session((claim_id, record.challenger), Some(crate::palw_da_rcore_v1::PalwDaSessionV1 { accuser_is_seat: true, ..session }));
         let mut da = self.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
+        // Moved from the non-seat OPEN count to the seats' (DA-5, DL-1). DA-8's lifetime counts stay
+        // as its admission left them: `opened_non_seat_total` counted it then, and `opened_by_seat` —
+        // a real seat's budget, at most four — never counts a non-seat (the fourth review's HIGH).
         da.open_other_sessions = da.open_other_sessions.saturating_sub(1);
         da.open_seat_sessions = da.open_seat_sessions.saturating_add(1);
-        let opened = da.opened_by_seat.entry(record.challenger).or_insert(0);
-        *opened = opened.saturating_add(1);
         let first = da.open_seat_sessions == 1;
         if first {
             da.paused_since = Some(now_daa);
@@ -22709,8 +22798,21 @@ fn open_da_session_rcore_v1(
     let mut record = builder.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
     let pauses = if seat_like {
         record.open_seat_sessions = record.open_seat_sessions.saturating_add(1);
-        let opened = record.opened_by_seat.entry(accuser).or_insert(0);
-        *opened = opened.saturating_add(1);
+        if admission.accuser_is_seat {
+            let opened = record.opened_by_seat.entry(accuser).or_insert(0);
+            *opened = opened.saturating_add(1);
+        } else {
+            // **The fourth review's HIGH: a record-holder's pause is not a seat's session.** It is
+            // counted with the seats' OPEN sessions (`open_seat_sessions`, `paused_since`: all DA-5 and
+            // DL-1 read), but DA-8's per-seat budget (`opened_by_seat`, at most four) is a seat's
+            // alone — admission asks it of a seat and never of anyone else, and the loader refuses a
+            // count past four. Counted there, a non-seat that lost five held dissections on one claim
+            // drove the fold to a tip its own loader refused on every node: a chain halt for five
+            // forfeits. The session was admitted on the non-seat budget, so it is counted on it —
+            // the lifetime total (`opened_non_seat_total`, sixteen), exactly as the conversion of a
+            // demand that predates its record leaves it (counted there at its admission).
+            record.opened_non_seat_total = record.opened_non_seat_total.saturating_add(1);
+        }
         record.open_seat_sessions == 1
     } else {
         record.open_other_sessions = record.open_other_sessions.saturating_add(1);

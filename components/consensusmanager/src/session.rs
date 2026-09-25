@@ -248,6 +248,17 @@ impl ConsensusSessionOwned {
         self.consensus.palw_da_accusation_check_v1(claim, accuser)
     }
 
+    /// ADR-0152 R-3/R-4 (P2-8): the reporter filer's read of one filing, and the gate on one object.
+    pub fn palw_reporter_filing_read_v1(
+        &self,
+        offence_key: kaspa_consensus_core::Hash64,
+        commitment: kaspa_consensus_core::Hash64,
+        reporter: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        gated: Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwReporterFilingReadV1> {
+        self.consensus.palw_reporter_filing_read_v1(offence_key, commitment, reporter, gated)
+    }
+
     pub fn palw_da_step_leaf_demand_check_v1(
         &self,
         claim: kaspa_consensus_core::Hash64,
@@ -276,6 +287,14 @@ impl ConsensusSessionOwned {
         claim: kaspa_consensus_core::Hash64,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.consensus.palw_claim_readers_v2(claim)
+    }
+
+    /// ADR-0152 v3.1 N10 (P2-8c): what filing this `PanelFalseValidV2` object comes to at the tip.
+    pub fn palw_false_valid_filing_check_v1(
+        &self,
+        object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        self.consensus.palw_false_valid_filing_check_v1(object)
     }
 
     /// What a node's receipt pool reads off the tip: the bound panels of `claims`, the registered

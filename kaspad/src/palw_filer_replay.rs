@@ -15,7 +15,9 @@
 //!   reason to stop), and tried in turn against this seat's own dense replay of the claim's job
 //!   ([`palw_replay_contradiction_v1`], the ONE builder the real-claim suite also runs): the first
 //!   divergent step becomes `StepArithmetic` → `ExecutorRefuted` (kind 4), or — step trees that agree
-//!   — `LogitsNotStepOutput` (12, F1c). Filed through [`replay_file_seam_v1`].
+//!   — `LogitsNotStepOutput` (12, F1c). Handed to P2-8's reporter filer through the panel's
+//!   `PalwConvictionDoorV1` ([`PalwReplayFilerV1::hand_offs_v1`]): committed over this node's bond and
+//!   the claim's kind-4 key, then filed, then revealed (R-3).
 //! * **P2-8d**: a divergent leaf located on the claim's own capture that the served material cannot
 //!   open is DEMANDED: a `DefaultAccusedHeld` naming `StepLeaf { leaf }` (DA-3: free past
 //!   `palw_rcore_plus`, from a seat or not, keyed by the session), asked of the chain through the
@@ -35,10 +37,12 @@
 //!   fold nor any DA unit gives a seat the committed fused tile the opening carries.
 //!
 //! **Every court filing is dated** (the P2-8e review, MED-3): the priority lane is earliest-deadline
-//! first and puts an undated item behind every dated one. Kind 4 by P2-8's rule
-//! ([`palw_replay_kind4_due_v1`], until the reporter filer joins this lane); the `StepLeaf` demand and
-//! the held opening by the A-held node's one rule for a seat's court filing over the fold's own
-//! deadline for the claim ([`palw_replay_filer_court_due_v1`]).
+//! first and puts an undated item behind every dated one. Kind 4 is the reporter filer's, dated by it
+//! (`queued_dues_v1`); the `StepLeaf` demand by the A-held node's ONE rule for a seat's court filing,
+//! `palw_seat_court_filing_due_v1`, over the duty's receipt deadline and the claim's earliest `Final`
+//! — the bundle's lower bound, and the fold's own deadline for the claim where it is read
+//! ([`palw_replay_filer_court_due_v1`]); the held opening, a one-move accusation (`ShardCourtAccused`),
+//! due now, as the A-held node dates the capture arm's ([`palw_replay_filer_opening_due_v1`]).
 //!
 //! **Resources.** The loop does nothing per case but cheap reads: whether anything is served at all
 //! (the pool's entry, the retained file's existence), the class, the claim's job. Everything that
@@ -55,11 +59,16 @@
 //! mid-run is this host's failure and spends the run, so the claim's second run redoes it.
 //!
 //! **Filing is deduplicated.** One case a claim (the first trigger wins; a settled claim is
-//! remembered for a case's window, so a standing trigger never reopens it), one kind-4 offence a
-//! claim (its ledger key is the court queue's key, and the seam refuses it while it is queued or a
-//! carrier of it is in flight), one demand a claim; a filing whose carrier was lost — refused by the
-//! mempool or the builder, or sent and not landed while the duty stands — is queued once more, never
-//! a third time; nothing is filed against this node's own bond.
+//! remembered for a case's window, so a standing trigger never reopens it); no case at all — and no
+//! run for a case noted before — for a claim whose kind-4 offence the reporter filer already holds
+//! (the capture arm's `FaultAt` filed it: replaying the claim would only find it again) or which this
+//! seat accused in the one-move court (`accused`: kind 4 would only race the court for the same
+//! fault, which is also why a filing is never handed for such a claim); one kind-4 offence a claim,
+//! keyed as the ledger keys it — the reporter filer holds one filing an offence key, whichever lane
+//! found it, and this lane hands nothing while it does; a filing that left the filer unconvicted is
+//! handed once more while the duty stands, never a third time (`PALW_FILER_HAND_OFFS_PER_OFFENCE_V1`;
+//! lost carriers are the filer's own re-sends); one demand a claim, whose lost carrier is queued once
+//! more; nothing is filed against this node's own bond.
 //!
 //! **Liveness.** An honest producer is never accused: kind 4 is filed only when the fold's own
 //! predicate convicts the proof (the builder's rule), and a demand only for a leaf located on the
@@ -89,6 +98,11 @@ use kaspa_consensus_core::palw_replay_refute_v1::{
 };
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
 
+use super::reporter_filer::{
+    PALW_FILER_HAND_OFFS_PER_OFFENCE_V1, PalwConvictionDoorV1, PalwConvictionFilingV1, PalwFileOutcomeV1, PalwFilingOriginV1,
+    PalwReporterFilerV1, palw_executor_refuted_file_by_v1,
+};
+
 /// ADR-0152 v3.1 Phase 2, P2-8e: held dissections of fused-attention leaves — a child, so it reads
 /// this book's cases and the panel's seams without widening them.
 #[path = "palw_filer_held.rs"]
@@ -115,11 +129,14 @@ pub(super) const PALW_REPLAY_FILER_TOMBSTONES_MAX_V1: usize = 4_096;
 /// longest a kind 4 or a demand can still act on the claim's stage (DA-8's post-Final window). A
 /// settled claim is remembered as long, from its settling.
 pub(super) const PALW_REPLAY_FILER_CASE_DAA_V1: u64 = 3_000;
-/// Carriers one filing may take: the first, and one more when the first was lost while the claim's
-/// duty still stands (a conviction ends the duty; a claim licensed by others is the court's).
+/// Carriers one P2-8d demand may take: the first, and one more when the first was lost while the
+/// claim's duty still stands (a conviction ends the duty; a claim licensed by others is the court's).
+/// A kind-4 filing's copies are the reporter filer's (`PALW_FILER_MAX_SENDS_V1` an object,
+/// `PALW_FILER_HAND_OFFS_PER_OFFENCE_V1` filings).
 pub(super) const PALW_REPLAY_FILER_SENDS_V1: u8 = 2;
-/// When a sent filing counts as lost: six re-plans with the duty still standing — and, until then,
-/// in flight (the seam refuses a second copy of it).
+/// When a sent held opening (P2-8e's `ShardCourtAccused`) counts as lost: six re-plans with its case
+/// still standing — and, until then, in flight (no second copy of it is queued). A kind-4 filing's
+/// re-sends are the reporter filer's own.
 pub(super) const PALW_REPLAY_FILER_REFILE_DAA_V1: u64 = 6 * COURT_MOVE_REPLAN_DAA;
 /// Served captures one run considers: this seat's retained copy and the pool's
 /// (`MATERIALS_PER_CLAIM`) — every one the node holds for the claim.
@@ -130,12 +147,26 @@ pub(super) const PALW_REPLAY_FILER_LOCAL_RUNS_V1: usize = 2;
 /// How long a case whose served bytes held nothing of the claim's waits before it is sorted again
 /// (a re-plan): the claim's own capture may arrive, and junk that is already held says nothing new.
 pub(super) const PALW_REPLAY_FILER_UNSERVED_RETRY_DAA_V1: u64 = COURT_MOVE_REPLAN_DAA;
-/// The court queue's round of a kind-4 filing — keyed by its offence key
-/// ([`palw_replay_refuted_queue_key_v1`]), a round no court move, DA accusation (`u32::MAX`) or answer
-/// (a folded unit digest) is keyed by.
-pub(super) const PALW_REPLAY_REFUTED_QUEUE_ROUND_V1: u32 = u32::MAX - 1;
-/// The court queue's round of a P2-8d `StepLeaf` demand ([`palw_replay_demand_queue_key_v1`]).
-pub(super) const PALW_REPLAY_DEMAND_QUEUE_ROUND_V1: u32 = u32::MAX - 2;
+/// **The longest a refused hand-off waits before it is asked again**, in re-plans (`COURT_MOVE_REPLAN_DAA`):
+/// a filing the reporter filer refuses (the gate at its read — a court open on the claim, say — a
+/// full book, no tip) is asked again a re-plan later, then two, four, … up to this many (the
+/// integration's review, F6). Each ask runs the processor's whole gate on the evidence on the panel
+/// loop, so a case the gate refuses for its whole window (3,000 DAA) asks about ten times, not 300.
+pub(super) const PALW_REPLAY_FILER_HAND_OFF_RETRY_MAX_REPLANS_V1: u64 = 64;
+
+/// How long after its `refusals`-th refusal in a row a hand-off is asked again
+/// ([`PALW_REPLAY_FILER_HAND_OFF_RETRY_MAX_REPLANS_V1`]): a re-plan, doubled with each refusal
+/// after the first.
+pub(super) fn palw_replay_hand_off_retry_daa_v1(refusals: u8) -> u64 {
+    let replans = 1u64.checked_shl(u32::from(refusals.saturating_sub(1))).unwrap_or(u64::MAX);
+    COURT_MOVE_REPLAN_DAA.saturating_mul(replans.min(PALW_REPLAY_FILER_HAND_OFF_RETRY_MAX_REPLANS_V1))
+}
+
+/// The court queue's round of a P2-8d `StepLeaf` demand ([`palw_replay_demand_queue_key_v1`]) — a
+/// round no court move, DA accusation (`u32::MAX`), reporter-filer object (`u32::MAX - 3 ..=
+/// u32::MAX - 1`) or answer (a folded unit digest) is keyed by. (The demand is named: it opens a
+/// session, whose reward is its accuser's by name, so it never takes the reporter filer.)
+pub(super) const PALW_REPLAY_DEMAND_QUEUE_ROUND_V1: u32 = u32::MAX - 6;
 
 /// **Is the filer armed?** Past `palw_rcore_plus` (testnet-12 from genesis), on a node that carries
 /// (`--palw-fee-outpoint`). Below the fence nothing is noted, run or filed — the fence-off twin.
@@ -153,22 +184,10 @@ pub(super) enum PalwReplayMismatchSiteV1 {
     FaultFinder,
 }
 
-/// **What a filing hands the reporter filer** (P2-8's commit–reveal, at integration): the claim, the
-/// offence's ledger key (one kind 4 a claim), the evidence id R-3's commitment binds (N12), the
-/// accused (the claim's executor, never this node's bond), and the object.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct PalwReplayFilingV1 {
-    pub claim_id: Hash64,
-    pub offence_key: Hash64,
-    pub evidence_id: Hash64,
-    pub accused: PalwBondKeyV2,
-    pub object: PalwConsensusObjectV2,
-}
-
-/// The court queue's key of a kind-4 filing: its offence key — so a second filer of the same offence
-/// (the capture arm's P2-8) queues under the same key and the queue holds one.
-pub(super) fn palw_replay_refuted_queue_key_v1(offence_key: Hash64) -> (Hash64, u32, bool) {
-    (offence_key, PALW_REPLAY_REFUTED_QUEUE_ROUND_V1, false)
+/// **The claim's kind-4 key** — what the reporter filer holds a filing of `duty`'s claim under
+/// (`palw_executor_refuted_offence_id_v1`: one `ExecutorRefuted` a claim, whichever lane found it).
+pub(super) fn palw_replay_offence_key_v1(duty: &PalwSeatDutyV2) -> Hash64 {
+    kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(&duty.executor_bond.0, &duty.claim_id)
 }
 
 /// The court queue's key of this seat's P2-8d demand on `claim` — one a claim.
@@ -181,30 +200,32 @@ fn queued_v1(court_pending: &[(Hash64, u32, bool, PalwConsensusObjectV2)], key: 
     court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key)
 }
 
-/// **The DAA this seat's own court filing on a claim is due by** — P2-8d's `StepLeaf` demand and
-/// P2-8e's held opening (the P2-8e review, MED-2 and MED-3: both were undated, or dated off a
-/// deadline the fold does not keep). The ONE rule the A-held node's capture arm and named-leaf
-/// pursuit date the same kind of filing by — [`palw_seat_court_filing_due_v1`] (MED-4: the landing
-/// margin before the deadline, or now once that has passed) — over the claim's deadline as the FOLD
-/// holds it (`palw_claim_deadlines_v1`: the receipt deadline while its panel is bound, `Final` once
-/// licensed — at `window_challenge_at` with every floor the fold adds, 120 DAA on testnet-12 where
-/// the claim rows' `window_challenge` says 1,200 — a DA session's disclose deadline). A claim whose
-/// deadline is paused (a court on its licence, a seat's DA session) or was not read falls back to the
-/// duty's own receipt deadline: early, never late.
-pub(super) fn palw_replay_filer_court_due_v1(claim_deadline: Option<u64>, receipt_deadline: u64, current_daa: u64) -> u64 {
-    palw_seat_court_filing_due_v1(claim_deadline.unwrap_or(receipt_deadline), current_daa)
+/// **The DAA this seat's P2-8d `StepLeaf` demand on a claim is due by** (the P2-8e review, MED-2 and
+/// MED-3: it rode the priority lane undated). The A-held node's ONE rule for a seat's court filing —
+/// [`palw_seat_court_filing_due_v1`], called here, never restated: the landing margin before whichever
+/// comes first, the duty's receipt deadline or the claim's earliest `Final`, and now once that has
+/// passed — over the earliest `Final` this seat can know: the bundle's lower bound for the claim's
+/// bind (`earliest_final`, [`palw_seat_claim_earliest_final_v1`]) and the claim's deadline as the FOLD
+/// holds it where it was read (`claim_deadline`, `palw_claim_deadlines_v1`: `Final` once licensed,
+/// the receipt deadline while bound, a DA session's disclose deadline; `None` while paused). Early,
+/// never late.
+pub(super) fn palw_replay_filer_court_due_v1(
+    claim_deadline: Option<u64>,
+    receipt_deadline: u64,
+    earliest_final: Option<u64>,
+    current_daa: u64,
+) -> u64 {
+    let earliest = claim_deadline.into_iter().chain(earliest_final).min();
+    palw_seat_court_filing_due_v1(receipt_deadline, earliest, current_daa)
 }
 
-/// **The DAA P2-8b's kind-4 filing is due by** (the P2-8e review, MED-3: it rode the priority lane
-/// undated, behind every dated item). P2-8's rule for the same object, stated here until the reporter
-/// filer joins this lane (`rcore/p2-file`'s `palw_filer_step_due_v1` at its `File` step over
-/// `palw_executor_refuted_file_by_v1`, which then replaces this): the landing margin before the
-/// duty's receipt deadline while that is ahead of the filing (S2 needs the claim live), else the end
-/// of its court window from the filing ([`PALW_REPLAY_FILER_CASE_DAA_V1`], testnet-12's
-/// `window_court`) — and never before the filing was made. A re-filed copy keeps its first date.
-pub(super) fn palw_replay_kind4_due_v1(receipt_deadline: u64, filed_daa: u64) -> u64 {
-    let file_by = (filed_daa < receipt_deadline).then(|| receipt_deadline.saturating_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));
-    file_by.unwrap_or_else(|| filed_daa.saturating_add(PALW_REPLAY_FILER_CASE_DAA_V1)).max(filed_daa)
+/// **The DAA a held dissection's opening is due by: now.** The opening is a one-move accusation
+/// (`ShardCourtAccused`), dated as the A-held node dates the capture arm's (its fourth review): the
+/// held dissection it opens holds `Final` off only once it lands, and `Final` can come a challenge
+/// window after the bound (`bound + 121` on the 8k row), long before the duty's deadline. A queued
+/// copy keeps its first date ([`date_v1`] keeps the earlier).
+pub(super) fn palw_replay_filer_opening_due_v1(current_daa: u64) -> u64 {
+    current_daa
 }
 
 /// **Date a queued court filing** — `due`, or the date it already has when that is earlier (the
@@ -212,41 +233,6 @@ pub(super) fn palw_replay_kind4_due_v1(receipt_deadline: u64, filed_daa: u64) ->
 /// `Final` forward, never back).
 fn date_v1(court_due: &mut HashMap<(Hash64, u32, bool), u64>, key: (Hash64, u32, bool), due: u64) {
     court_due.entry(key).and_modify(|at| *at = (*at).min(due)).or_insert(due);
-}
-
-/// **The one seam P2-8b's `ExecutorRefuted` leaves through** — onto the panel's court queue, drained
-/// by `carry_priority_v1` on the priority lane of P2-6's one scheduler (`PalwCarrierSlotsV1`), under
-/// the offence's own key; `false` (nothing queued) when that key is queued already, or a carrier of
-/// it went out less than [`PALW_REPLAY_FILER_REFILE_DAA_V1`] ago and may still land (`court_moved`,
-/// the priority lane's own record of a send — whichever filer sent it: the review's finding 8).
-///
-/// P2-8 seam: routed through the reporter filer (PalwConvictionFilingV1) at integration.
-///
-/// Until then the object rides bare, reporter slot empty — a conviction without a commitment pays no
-/// reporter (R-3), which P2-8's filer adds by committing over `(offence_key, evidence_id, reporter)`,
-/// waiting for acceptance, then filing and revealing. What it needs is on the filing: the offence
-/// key, the evidence id and the accused. At integration, a fault finder's trigger whose fault the
-/// capture arm already refuted (P2-8's filer holds that refutation) is P2-8's to file, not a reason
-/// for this filer to replay the claim.
-///
-/// Dated (the P2-8e review, MED-3): `due` ([`palw_replay_kind4_due_v1`]) goes into `court_due` with
-/// the object, so the priority lane's EDF never holds it behind every dated item.
-pub(super) fn replay_file_seam_v1(
-    court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-    court_due: &mut HashMap<(Hash64, u32, bool), u64>,
-    court_moved: &HashMap<(Hash64, u32, bool), u64>,
-    current_daa: u64,
-    filing: &PalwReplayFilingV1,
-    due: u64,
-) -> bool {
-    let key = palw_replay_refuted_queue_key_v1(filing.offence_key);
-    let in_flight = court_moved.get(&key).is_some_and(|sent| current_daa < sent.saturating_add(PALW_REPLAY_FILER_REFILE_DAA_V1));
-    if queued_v1(court_pending, key) || in_flight {
-        return false;
-    }
-    date_v1(court_due, key, due);
-    court_pending.push((key.0, key.1, key.2, filing.object.clone()));
-    true
 }
 
 /// **A divergent fused-attention leaf no held opening was built for** (§3.9, DA-3:
@@ -644,9 +630,10 @@ pub(super) enum PalwReplayCaseStepV1 {
     Waiting,
     /// The one run in flight.
     Running,
-    /// Kind 4 handed to the seam, `sends` times, last at `queued_at`, due by `due`
-    /// ([`palw_replay_kind4_due_v1`] as of its first queuing; a re-filed copy keeps it).
-    Filed { filing: Box<PalwReplayFilingV1>, sends: u8, queued_at: u64, due: u64 },
+    /// Kind 4, handed to the reporter filer `handed` times; `asked_at` the DAA the filer last refused
+    /// to take it (a full book, the gate at its read, no tip), `refusals` how many times in a row it
+    /// did — asked again a re-plan later, then twice that, … ([`palw_replay_hand_off_retry_daa_v1`]).
+    Filed { filing: Box<PalwConvictionFilingV1>, handed: u8, asked_at: Option<u64>, refusals: u8 },
     /// P2-8d: the `StepLeaf` demand, asked of the chain until it lands or settles. `sends` carriers
     /// queued; `refused_at` the DAA the chain last asked it to wait.
     Demand { leaf: u64, binding: Box<PalwStepBindingV2>, sends: u8, refused_at: Option<u64> },
@@ -695,17 +682,21 @@ enum PalwReplayNextV1 {
 
 impl PalwReplayFilerV1 {
     /// **Note a mismatch on `duty`'s claim.** `false` when nothing was noted: the claim is this
-    /// node's own (never filed against its own bond), a case for it exists (the first trigger wins),
-    /// it settled within a case's window (its tombstone: a standing trigger does not reopen it), or
-    /// the book is full (the trigger is noted on a later tick; nothing is evicted).
+    /// node's own (never filed against its own bond), the reporter filer already holds its kind-4
+    /// offence (`door`: the capture arm's `FaultAt` filed the refutation it holds — a replay would
+    /// only find the same offence, at a whole dense run's cost), a case for it exists (the first
+    /// trigger wins), it settled within a case's window (its tombstone: a standing trigger does not
+    /// reopen it), or the book is full (the trigger is noted on a later tick; nothing is evicted).
     pub(super) fn note_v1(
         &mut self,
         duty: &PalwSeatDutyV2,
         site: PalwReplayMismatchSiteV1,
         current_daa: u64,
         own_bond: &PalwBondKeyV2,
+        door: &impl PalwConvictionDoorV1,
     ) -> bool {
         if duty.executor_bond == *own_bond
+            || door.holds(&palw_replay_offence_key_v1(duty))
             || self.cases.contains_key(&duty.claim_id)
             || self.settled.contains_key(&duty.claim_id)
             // P2-8e: a claim this bond is dissecting, or dissected within a case's window, as the
@@ -738,9 +729,10 @@ impl PalwReplayFilerV1 {
     /// and then every case on a claim it holds or held within a case's window leaves the book — a
     /// waiting one before its run is paid for, an opening (its queued copy leaves the queue: the fold
     /// would refuse a second), a demand (its queued copy too) — except a filed kind 4 (its own
-    /// conviction route, which the dissection does not replace) and the run in flight (its task holds
-    /// the ledger until it returns; [`Self::on_run_v1`] settles it then). Returns the sessions seen
-    /// for the first time: `(claim, leaf, session, the DAA the producer's root claim is due by)`.
+    /// conviction route through the reporter filer, which the dissection does not replace) and the run
+    /// in flight (its task holds the ledger until it returns; [`Self::on_run_v1`] settles it then).
+    /// Returns the sessions seen for the first time: `(claim, leaf, session, the DAA the producer's
+    /// root claim is due by)`.
     pub(super) fn observe_held_v1(
         &mut self,
         court_duties: &[kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2],
@@ -790,12 +782,10 @@ impl PalwReplayFilerV1 {
         self.seeded
     }
 
-    /// The court-queue keys a case may have been debounced under: its demand's, and its filing's.
+    /// The court-queue keys a case may have queued under: its demand's, and its held opening's (a
+    /// kind-4 filing's keys are the reporter filer's, which prunes its own).
     fn keys_of(claim: &Hash64, case: &PalwReplayCaseV1) -> Vec<(Hash64, u32, bool)> {
         let mut keys = vec![palw_replay_demand_queue_key_v1(*claim)];
-        if let PalwReplayCaseStepV1::Filed { filing, .. } = &case.step {
-            keys.push(palw_replay_refuted_queue_key_v1(filing.offence_key));
-        }
         if let PalwReplayCaseStepV1::Dissect(dissect) = &case.step
             && let Some((key, _)) = &dissect.filed
         {
@@ -805,7 +795,8 @@ impl PalwReplayFilerV1 {
     }
 
     /// **The case leaves the book for its tombstone** — remembered from `current_daa` for a case's
-    /// window (bounded: the oldest tombstone goes first), its queue keys released.
+    /// window (bounded: the oldest tombstone goes first), its demand's and its held opening's queue
+    /// keys released (a kind-4 filing's keys are the reporter filer's, which prunes its own).
     fn settle_at(&mut self, claim: &Hash64, current_daa: u64) {
         let Some(case) = self.cases.remove(claim) else { return };
         self.released.extend(Self::keys_of(claim, &case));
@@ -886,22 +877,20 @@ impl PalwReplayFilerV1 {
     }
 
     /// **What a finished run makes of its case** — the pure half of [`PalwPanelService::replay_filer_tick_v1`]'s
-    /// poll. `Refutes` becomes a filing through the seam (kind 4 built by
-    /// `palw_replay_executor_refuted_object_v1`, the gate's own encoding); `DemandLeaf` a P2-8d demand;
+    /// poll. `Refutes` becomes a kind-4 filing for the reporter filer (built by
+    /// `palw_replay_executor_refuted_object_v1`, the gate's own encoding, keyed by the filer's own
+    /// reading of it, landing by the capture arm's margin: `palw_executor_refuted_file_by_v1`), which
+    /// [`Self::hand_offs_v1`] hands over in the same tick; `DemandLeaf` a P2-8d demand;
     /// `NeedsDissection` P2-8e's hook; `Nothing` about the claim settles; a run that only waited gives
     /// its run back; a host failure waits for the claim's next run (or settles when none is left).
-    /// Returns the filing queued now, if any.
-    #[allow(clippy::too_many_arguments)]
+    /// Returns the filing made now, if any.
     pub(super) fn on_run_v1(
         &mut self,
         claim: Hash64,
         run: PalwReplayRunV1,
         current_daa: u64,
         own_bond: &PalwBondKeyV2,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
-        court_moved: &HashMap<(Hash64, u32, bool), u64>,
-    ) -> Option<PalwReplayFilingV1> {
+    ) -> Option<PalwConvictionFilingV1> {
         // P2-8e: the chain holds (or held) this bond's held dissection on the claim — read at the top
         // of this tick — so whatever the run found is the held route's (the review's MED-4: the run
         // in flight is the one case `observe_held_v1` leaves, and it settles here, filing nothing).
@@ -928,31 +917,33 @@ impl PalwReplayFilerV1 {
                 if executor == *own_bond {
                     PalwReplayNextV1::Settle
                 } else {
-                    match palw_replay_executor_refuted_object_v1(claim, executor, contradiction, prompt_ids_opening) {
-                        Ok(built) => {
-                            let filing = PalwReplayFilingV1 {
-                                claim_id: claim,
-                                offence_key: built.offence_id,
-                                evidence_id: built.evidence_id,
-                                accused: executor,
-                                object: built.object,
-                            };
+                    let built = palw_replay_executor_refuted_object_v1(claim, executor, contradiction, prompt_ids_opening)
+                        .map_err(|why| why.to_string())
+                        .and_then(|built| {
+                            PalwConvictionFilingV1::of_offence(
+                                built.object,
+                                claim,
+                                palw_executor_refuted_file_by_v1(&case.duty, current_daa),
+                                PalwFilingOriginV1::Replay,
+                            )
+                            .filter(|filing| (filing.offence_key, filing.evidence_id) == (built.offence_id, built.evidence_id))
+                            .ok_or_else(|| "the reporter filer does not key it as the chain does".to_string())
+                        });
+                    match built {
+                        Ok(filing) => {
                             info!(
                                 "[{PALW_PANEL}] claim {claim}: this seat's replay refutes its executor at {site:?} ({rungs} bisection \
-                                 rungs, found by its {:?} check) — filing ExecutorRefuted (offence {}, evidence {}; ADR-0152 J-4, \
-                                 SR-8, P2-8b)",
+                                 rungs, found by its {:?} check) — filing ExecutorRefuted through the reporter filer (offence {}, \
+                                 evidence {}; ADR-0152 J-4, SR-8, R-3, P2-8b)",
                                 case.site, filing.offence_key, filing.evidence_id
                             );
-                            let due = palw_replay_kind4_due_v1(case.duty.receipt_deadline, current_daa);
-                            let queued = replay_file_seam_v1(court_pending, court_due, court_moved, current_daa, &filing, due);
-                            let step = PalwReplayCaseStepV1::Filed {
-                                filing: Box::new(filing.clone()),
-                                sends: u8::from(queued),
-                                queued_at: current_daa,
-                                due,
-                            };
-                            filed = queued.then_some(filing);
-                            PalwReplayNextV1::Step(step)
+                            filed = Some(filing.clone());
+                            PalwReplayNextV1::Step(PalwReplayCaseStepV1::Filed {
+                                filing: Box::new(filing),
+                                handed: 0,
+                                asked_at: None,
+                                refusals: 0,
+                            })
                         }
                         Err(why) => {
                             warn!("[{PALW_PANEL}] claim {claim}: the refutation at {site:?} cannot be filed: {why}");
@@ -1020,40 +1011,94 @@ impl PalwReplayFilerV1 {
         filed
     }
 
-    /// **Filings whose carrier was lost** (the review's finding 4), queued once more through the seam
-    /// while the claim's duty stands and a send is left — never while the filing is still queued:
-    ///
-    /// * **sent and not landed**: a carrier went out (`court_moved` holds its send) at least
-    ///   [`PALW_REPLAY_FILER_REFILE_DAA_V1`] ago;
-    /// * **never sent**: it left the queue without a send on record, a re-plan or more after it was
-    ///   queued — the priority lane drops an object the mempool or the carrier builder refused, and
-    ///   writes `court_moved` only for a submit that succeeded.
-    pub(super) fn refile_lost_v1(
+    /// **The kind-4 filings handed to the reporter filer now** (through `door`), each once the filer
+    /// no longer holds its offence key — never while it does (in flight: the filer commits, sends and
+    /// re-sends it) — and at most [`PALW_FILER_HAND_OFFS_PER_OFFENCE_V1`] times: the first as soon as
+    /// the run found it, a later one only while the claim's duty stands (a conviction ends the duty;
+    /// a filing that left the filer while the duty stands ended unconvicted, `Stalled` or `Expired`).
+    /// Never for a claim this seat has accused (`accused`: the one-move court carries it — the
+    /// capture arm's fallback queued at a stall, or the court filed outright — and kind 4 would only
+    /// race it for the same fault; the integration's review, F5). Each is handed with its `file_by`
+    /// as of now ([`palw_executor_refuted_file_by_v1`]: past the receipt deadline it commits first,
+    /// F4). A filing the filer does not take now (a full book, the gate at its read, no tip) costs no
+    /// hand-off and is asked again a re-plan later, then twice that, …
+    /// ([`palw_replay_hand_off_retry_daa_v1`], F6); one the chain already convicted settles its case.
+    /// Returns how many were handed.
+    pub(super) fn hand_offs_v1(
         &mut self,
         current_daa: u64,
         live_duty: impl Fn(&Hash64) -> bool,
-        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
-        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
-        court_moved: &HashMap<(Hash64, u32, bool), u64>,
+        accused: &HashSet<Hash64>,
+        door: &mut impl PalwConvictionDoorV1,
     ) -> usize {
-        let mut refiled = 0;
+        let mut handed_now = 0;
+        let mut settle = Vec::new();
         for (claim, case) in self.cases.iter_mut() {
-            let PalwReplayCaseStepV1::Filed { filing, sends, queued_at, due } = &mut case.step else { continue };
-            let key = palw_replay_refuted_queue_key_v1(filing.offence_key);
-            if *sends >= PALW_REPLAY_FILER_SENDS_V1 || queued_v1(court_pending, key) || !live_duty(claim) {
+            let PalwReplayCaseStepV1::Filed { filing, handed, asked_at, refusals } = &mut case.step else { continue };
+            let refused_lately =
+                asked_at.is_some_and(|at| current_daa < at.saturating_add(palw_replay_hand_off_retry_daa_v1(*refusals)));
+            if *handed >= PALW_FILER_HAND_OFFS_PER_OFFENCE_V1
+                || door.holds(&filing.offence_key)
+                || refused_lately
+                || accused.contains(claim)
+                || (*handed > 0 && !live_duty(claim))
+            {
                 continue;
             }
-            let lost = match court_moved.get(&key) {
-                Some(sent) => current_daa >= sent.saturating_add(PALW_REPLAY_FILER_REFILE_DAA_V1),
-                None => current_daa >= queued_at.saturating_add(COURT_MOVE_REPLAN_DAA),
+            let now = PalwConvictionFilingV1 {
+                file_by_daa: palw_executor_refuted_file_by_v1(&case.duty, current_daa),
+                ..(**filing).clone()
             };
-            if lost && replay_file_seam_v1(court_pending, court_due, court_moved, current_daa, filing, *due) {
-                *sends += 1;
-                *queued_at = current_daa;
-                refiled += 1;
+            match door.file(now) {
+                PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled => {
+                    *handed += 1;
+                    (*asked_at, *refusals) = (None, 0);
+                    handed_now += 1;
+                }
+                PalwFileOutcomeV1::AlreadyConvicted | PalwFileOutcomeV1::OwnBond => settle.push(*claim),
+                refused @ (PalwFileOutcomeV1::NotAdmitted(_) | PalwFileOutcomeV1::Full | PalwFileOutcomeV1::Unreadable) => {
+                    crate::palw_backends::note_throttled_v1("panel-replay-filer-hand-off", || {
+                        format!("[{PALW_PANEL}] claim {claim}: the reporter filer does not take its ExecutorRefuted now — {refused:?}")
+                    });
+                    (*asked_at, *refusals) = (Some(current_daa), refusals.saturating_add(1));
+                }
             }
         }
-        refiled
+        for claim in settle {
+            self.settle_at(&claim, current_daa);
+        }
+        handed_now
+    }
+
+    /// **Cases no dense replay is spent on** (the integration's review, F5): every case not run yet
+    /// (or whose run was given back: `Waiting`) on a claim whose kind-4 key the reporter filer holds
+    /// — the capture arm's `FaultAt` filed it after the case was noted: a replay would only find the
+    /// same offence — or which this seat has accused (`accused`: the one-move court carries it)
+    /// settles, before the tick starts its next run. A run in flight is never cancelled; its filing
+    /// is held back by [`Self::hand_offs_v1`] instead. Returns how many settled.
+    pub(super) fn settle_pursued_v1(
+        &mut self,
+        current_daa: u64,
+        door: &impl PalwConvictionDoorV1,
+        accused: &HashSet<Hash64>,
+    ) -> usize {
+        let pursued: Vec<Hash64> = self
+            .cases
+            .iter()
+            .filter(|(claim, case)| {
+                case.step == PalwReplayCaseStepV1::Waiting
+                    && (door.holds(&palw_replay_offence_key_v1(&case.duty)) || accused.contains(*claim))
+            })
+            .map(|(claim, _)| *claim)
+            .collect();
+        for claim in &pursued {
+            info!(
+                "[{PALW_PANEL}] claim {claim}: the replay filer runs nothing — its kind 4 is already filed, or this seat accused \
+                 the claim (P2-8b)"
+            );
+            self.settle_at(claim, current_daa);
+        }
+        pursued.len()
     }
 
     /// The P2-8d demands the chain is asked about now, with their leaves: not queued, not sent or
@@ -1118,21 +1163,34 @@ impl PalwReplayFilerV1 {
         }
     }
 
-    /// The claims whose court filing this filer dates by the fold's deadline: a demand's and an
-    /// opening's (the tick reads `palw_claim_deadlines_v1` for these, and only while one exists).
+    /// The claims whose P2-8d demand this filer dates by the fold's deadline (the tick reads
+    /// `palw_claim_deadlines_v1` for these, and only while one exists). A held opening is due now
+    /// ([`palw_replay_filer_opening_due_v1`]) and reads none.
     pub(super) fn dated_claims_v1(&self) -> Vec<Hash64> {
         self.cases
             .iter()
-            .filter(|(_, case)| matches!(case.step, PalwReplayCaseStepV1::Demand { .. } | PalwReplayCaseStepV1::Dissect(_)))
+            .filter(|(_, case)| matches!(case.step, PalwReplayCaseStepV1::Demand { .. }))
             .map(|(claim, _)| *claim)
             .collect()
     }
 
-    /// **The due DAA of this filer's court filing on `claim`** — [`palw_replay_filer_court_due_v1`]
-    /// over the fold's deadline read this tick (`deadlines`), else the case's duty's receipt deadline.
-    pub(super) fn court_due_of_v1(&self, claim: &Hash64, deadlines: &HashMap<Hash64, Option<u64>>, current_daa: u64) -> u64 {
-        let receipt = self.cases.get(claim).map_or(current_daa, |case| case.duty.receipt_deadline);
-        palw_replay_filer_court_due_v1(deadlines.get(claim).copied().flatten(), receipt, current_daa)
+    /// **The due DAA of this filer's `StepLeaf` demand on `claim`** — [`palw_replay_filer_court_due_v1`]
+    /// over the case's duty (its receipt deadline; `earliest_final` of its bind DAA, the panel's
+    /// [`palw_seat_claim_earliest_final_v1`]) and the fold's deadline read this tick (`deadlines`).
+    pub(super) fn court_due_of_v1(
+        &self,
+        claim: &Hash64,
+        deadlines: &HashMap<Hash64, Option<u64>>,
+        earliest_final: impl Fn(u64) -> Option<u64>,
+        current_daa: u64,
+    ) -> u64 {
+        let Some(case) = self.cases.get(claim) else { return current_daa };
+        palw_replay_filer_court_due_v1(
+            deadlines.get(claim).copied().flatten(),
+            case.duty.receipt_deadline,
+            earliest_final(case.duty.bound_daa),
+            current_daa,
+        )
     }
 
     /// **Every queued P2-8d demand dated again** — the earlier of its date and this tick's (a claim
@@ -1143,11 +1201,12 @@ impl PalwReplayFilerV1 {
         court_pending: &[(Hash64, u32, bool, PalwConsensusObjectV2)],
         court_due: &mut HashMap<(Hash64, u32, bool), u64>,
         deadlines: &HashMap<Hash64, Option<u64>>,
+        earliest_final: impl Fn(u64) -> Option<u64>,
     ) {
         for (claim, case) in &self.cases {
             let key = palw_replay_demand_queue_key_v1(*claim);
             if matches!(case.step, PalwReplayCaseStepV1::Demand { .. }) && queued_v1(court_pending, key) {
-                date_v1(court_due, key, self.court_due_of_v1(claim, deadlines, current_daa));
+                date_v1(court_due, key, self.court_due_of_v1(claim, deadlines, &earliest_final, current_daa));
             }
         }
     }
@@ -1162,38 +1221,44 @@ impl PalwPanelService {
     ///    chain's court duties and every case on a claim it holds or held leaves the book before
     ///    anything is noted or run ([`PalwReplayFilerV1::observe_held_v1`]).
     /// 1. Notes this tick's triggers on live duties: a SEAT-R replay that refuted (`replay_refuted`)
-    ///    and a fault a fault finder recorded (`seat_found_fault_v1`).
-    /// 2. Polls the run in flight and files what it found ([`PalwReplayFilerV1::on_run_v1`]);
-    ///    queues once more a filing whose carrier was lost. Kind 4 is dated
-    ///    ([`palw_replay_kind4_due_v1`]).
-    /// 3. Reads the fold's deadline of every claim with a demand or an opening to date
-    ///    (`palw_claim_deadlines_v1`, off the tick; only while one exists), then asks the chain about
-    ///    each P2-8d demand — queued ones again, due ones before they are built
+    ///    and a fault a fault finder recorded (`seat_found_fault_v1`) — none whose kind-4 offence the
+    ///    reporter filer already holds, none on a claim this seat accused (`accused`).
+    /// 2. Polls the run in flight and makes its filing ([`PalwReplayFilerV1::on_run_v1`]); hands
+    ///    every filing due to the reporter filer through the panel's door
+    ///    ([`PalwReplayFilerV1::hand_offs_v1`]), which commits it in this tick's filer step.
+    /// 3. Reads the fold's deadline of every claim with a demand to date (`palw_claim_deadlines_v1`,
+    ///    off the tick; only while one exists), then asks the chain about each P2-8d demand — queued
+    ///    ones again (and dated again), due ones before they are built
     ///    (`palw_da_step_leaf_demand_check_v1`, the fold's own gates for the named leaf) — and queues
-    ///    the ones it would open, dated ([`palw_replay_filer_court_due_v1`]).
-    /// 3b. P2-8e: asks the fold about each held dissection's opening — queued with its due date, the
-    ///    same rule ([`palw_filer_held::palw_held_dissections_step_v1`]).
-    /// 4. Starts at most [`PALW_REPLAY_FILER_STARTS_PER_TICK_V1`] run, off the loop.
+    ///    the ones it would open, dated ([`palw_replay_filer_court_due_v1`]: the A-held node's
+    ///    `palw_seat_court_filing_due_v1`).
+    /// 3b. P2-8e: asks the fold about each held dissection's opening — a `ShardCourtAccused`, queued
+    ///    due now ([`palw_filer_held::palw_held_dissections_step_v1`]).
+    /// 4. Settles the cases a run would only duplicate ([`PalwReplayFilerV1::settle_pursued_v1`]), then
+    ///    starts at most [`PALW_REPLAY_FILER_STARTS_PER_TICK_V1`] run, off the loop.
     /// 5. Drops the `court_moved` debounce of every case that left the book.
     ///
-    /// Below `palw_rcore_plus`, or on a node that carries nothing, the book is emptied and nothing
-    /// runs ([`palw_replay_filer_armed_v1`]).
+    /// Returns the kind-4 filing a run made this tick, with its claim's bind DAA — the proof P2-8c
+    /// notes against the claim's liable `Valid` signers too (N10). Below `palw_rcore_plus`, or on a
+    /// node that carries nothing, the book is emptied and nothing runs ([`palw_replay_filer_armed_v1`]).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn replay_filer_tick_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         filer: &mut PalwReplayFilerV1,
+        reporter_filer: &mut PalwReporterFilerV1,
         current_daa: u64,
         network_domain: Hash64,
         bond_key: PalwBondKeyV2,
         duties: &[PalwSeatDutyV2],
         replay_refuted: &HashSet<Hash64>,
         materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        accused: &HashSet<Hash64>,
         court_duties: &[kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2],
         court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
         court_due: &mut HashMap<(Hash64, u32, bool), u64>,
         court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
-    ) {
+    ) -> Option<(PalwConvictionFilingV1, u64)> {
         if !palw_replay_filer_armed_v1(
             self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
             self.config.fee_outpoint.is_some(),
@@ -1201,7 +1266,7 @@ impl PalwPanelService {
             // A run in flight keeps its reservation until its task returns; the handle is dropped
             // (the task runs to its end detached) and its finding is not filed.
             *filer = PalwReplayFilerV1::default();
-            return;
+            return None;
         }
         // 0. P2-8e, before anything is noted: what the chain (and, once a start, the mempool) says
         // this bond is dissecting or dissected.
@@ -1227,8 +1292,12 @@ impl PalwPanelService {
                  (ADR-0152 §4-ter, F5, P2-8e)"
             );
         }
-        // 1. This tick's triggers.
+        let mut door = self.conviction_door_v1(session, reporter_filer, bond_key, network_domain);
+        // 1. This tick's triggers — none on a claim this seat accused (the court carries it).
         for duty in duties {
+            if accused.contains(&duty.claim_id) {
+                continue;
+            }
             let site = if replay_refuted.contains(&duty.claim_id) {
                 PalwReplayMismatchSiteV1::Replay
             } else if self.seat_found_fault_v1(&duty.claim_id) {
@@ -1236,7 +1305,7 @@ impl PalwPanelService {
             } else {
                 continue;
             };
-            if filer.note_v1(duty, site, current_daa, &bond_key) {
+            if filer.note_v1(duty, site, current_daa, &bond_key, &door) {
                 info!(
                     "[{PALW_PANEL}] claim {}: this seat's {site:?} check does not reproduce the claim — its replay filer will \
                      bisect the served capture against its own replay (ADR-0152 SR-8, P2-8b)",
@@ -1246,51 +1315,44 @@ impl PalwPanelService {
         }
         filer.expire_v1(current_daa);
         // 2. The run in flight.
+        let mut made = None;
         if filer.running.as_ref().is_some_and(|(_, handle)| handle.is_finished()) {
             let (claim, handle) = filer.running.take().expect("checked above");
             let run =
                 handle.await.unwrap_or_else(|e| PalwReplayRunV1::HostFailed(format!("the replay filer's task did not finish: {e}")));
-            filer.on_run_v1(claim, run, current_daa, &bond_key, court_pending, court_due, court_moved);
+            let bound_daa = filer.case(&claim).map(|case| case.duty.bound_daa);
+            made = filer.on_run_v1(claim, run, current_daa, &bond_key).zip(bound_daa);
         }
         let live: HashSet<Hash64> = duties.iter().map(|duty| duty.claim_id).collect();
-        let refiled = filer.refile_lost_v1(current_daa, |claim| live.contains(claim), court_pending, court_due, court_moved);
-        if refiled > 0 {
-            info!(
-                "[{PALW_PANEL}] queued {refiled} ExecutorRefuted filing(s) again: the carrier was lost while the duty stands (P2-8b)"
-            );
+        let handed = filer.hand_offs_v1(current_daa, |claim| live.contains(claim), accused, &mut door);
+        if handed > 0 {
+            info!("[{PALW_PANEL}] handed {handed} ExecutorRefuted filing(s) to the reporter filer (P2-8b, R-3)");
         }
-        // 3. The fold's deadlines of the claims a court filing of this filer is dated by — only while
-        // one exists (rare), off the tick.
+        // 3. The fold's deadlines of the claims a demand of this filer is dated by — only while one
+        // exists (rare), off the tick — and the bundle's earliest `Final` of a claim's bind.
         let dated = filer.dated_claims_v1();
         let deadlines: HashMap<Hash64, Option<u64>> = if dated.is_empty() {
             HashMap::new()
         } else {
             session.clone().spawn_blocking(move |c| c.palw_claim_deadlines_v1(dated)).await.into_iter().collect()
         };
+        let earliest_final = |bound_daa: u64| palw_seat_claim_earliest_final_v1(&self.consensus_config.params, bound_daa);
         // P2-8d's demands: the queued ones asked again (and dated again — a licence brings `Final`
         // forward), then the due ones.
         filer.recheck_queued_demands_v1(current_daa, court_pending, |claim, leaf| {
             session.palw_da_step_leaf_demand_check_v1(claim, bond_key, leaf).map(|check| palw_replay_demand_step_v1(&check))
         });
-        filer.date_queued_demands_v1(current_daa, court_pending, court_due, &deadlines);
+        filer.date_queued_demands_v1(current_daa, court_pending, court_due, &deadlines, earliest_final);
         for (claim, leaf) in filer.demands_due_v1(current_daa, court_pending, court_moved) {
-            let due = filer.court_due_of_v1(&claim, &deadlines, current_daa);
+            let due = filer.court_due_of_v1(&claim, &deadlines, earliest_final, current_daa);
             self.replay_demand_v1(session, filer, claim, leaf, current_daa, network_domain, bond_key, court_pending, court_due, due);
         }
-        // 3b. P2-8e's held openings, dated by the same rule.
-        self.held_dissections_tick_v1(
-            session,
-            filer,
-            current_daa,
-            network_domain,
-            bond_key,
-            &deadlines,
-            court_pending,
-            court_due,
-            court_moved,
-        );
-        // 4. The next run: at most one start, over at most a few tries, so a case that waits (no
-        // served capture yet, the claim's block not held) never holds the ones behind it.
+        // 3b. P2-8e's held openings, due now.
+        self.held_dissections_tick_v1(session, filer, current_daa, network_domain, bond_key, court_pending, court_due, court_moved);
+        // 4. The next run: none on an offence already filed or a claim already accused; then at most
+        // one start, over at most a few tries, so a case that waits (no served capture yet, the
+        // claim's block not held) never holds the ones behind it.
+        filer.settle_pursued_v1(current_daa, &door, accused);
         let mut started = 0;
         for _ in 0..PALW_REPLAY_FILER_TRIES_PER_TICK_V1 {
             if started >= PALW_REPLAY_FILER_STARTS_PER_TICK_V1 {
@@ -1321,6 +1383,7 @@ impl PalwPanelService {
         for key in filer.take_released_v1() {
             court_moved.remove(&key);
         }
+        made
     }
 
     /// **One P2-8d demand, asked of the chain and queued** — the fold's own gates for the named leaf
@@ -1506,11 +1569,17 @@ pub(super) enum PalwReplayStartV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palw_panel::reporter_filer::{PalwBookDoorV1, palw_capture_arm_filing_v1, palw_floor_step_refutation_v1};
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_offence_attribution_v1::PALW_FALSE_VALID_NETWORK_LADDER_V1;
     use kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1;
     use kaspa_consensus_core::palw_replay_refute_v1::PalwReplaySiteV1;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    /// A reporter filer that holds nothing — for the book's own rules, which never file.
+    fn nodoor() -> PalwBookDoorV1 {
+        PalwBookDoorV1::new(bond(1), 0)
+    }
 
     fn h(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)
@@ -1712,8 +1781,9 @@ mod tests {
     /// capture to the injected leaf, in at most `1 + ⌈log₂ n⌉` rungs each reserved on the ledger
     /// (the O(log n) bound on a real trace) and released with its rung, and the proof it builds is
     /// kind 4's `StepArithmetic` that the fold's own predicate convicts; the object encodes it as the
-    /// gate decodes it, under the per-claim ledger key, and the seam queues it once under that key —
-    /// and not again while a carrier of it may still land (finding 8).
+    /// gate decodes it, under the per-claim ledger key, and the book hands it to the reporter filer
+    /// once under that key — never again while the filer holds it, and once more at most after it
+    /// left the filer unconvicted while the duty stands (finding 8, now the filer's book).
     #[test]
     fn p2_8b_a_real_lie_is_bisected_to_its_leaf_in_log_rungs_and_filed_once() {
         let (backend, class_id, artifact_root) = floor();
@@ -1745,28 +1815,22 @@ mod tests {
             PALW_FALSE_VALID_NETWORK_LADDER_V1,
         )
         .expect("the fold's own predicate convicts it");
-        // The node's book: noted once, filed once through the seam, under the offence's own key.
+        // The node's book: noted once, handed once to the reporter filer, under the offence's own key.
         let d = PalwSeatDutyV2 { claim_id: c.target.claim_id, executor_bond: c.target.executor_bond, ..duty(0x42, 7) };
         let mut filer = PalwReplayFilerV1::default();
-        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 1_000, &bond(1)));
-        assert!(!filer.note_v1(&d, PalwReplayMismatchSiteV1::FaultFinder, 1_001, &bond(1)), "one case a claim");
-        let mut court_pending = Vec::new();
-        let mut court_due = HashMap::new();
-        let mut moved = HashMap::new();
+        let mut door = PalwBookDoorV1::new(bond(1), 1_000);
+        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 1_000, &bond(1), &door));
+        assert!(!filer.note_v1(&d, PalwReplayMismatchSiteV1::FaultFinder, 1_001, &bond(1), &door), "one case a claim");
         let found = PalwReplayFindingV1::Refutes { contradiction, prompt_ids_opening, site, rungs };
-        let filing = filer
-            .on_run_v1(d.claim_id, PalwReplayRunV1::Found(found), 1_000, &bond(1), &mut court_pending, &mut court_due, &moved)
-            .expect("filed");
+        let filing = filer.on_run_v1(d.claim_id, PalwReplayRunV1::Found(found), 1_000, &bond(1)).expect("filed");
         let offence =
             kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(&d.executor_bond.0, &d.claim_id);
-        assert_eq!((filing.offence_key, filing.accused), (offence, d.executor_bond));
-        assert_eq!(court_pending.len(), 1);
-        let key = palw_replay_refuted_queue_key_v1(offence);
-        assert_eq!((court_pending[0].0, court_pending[0].1, court_pending[0].2), key);
-        // Dated (the P2-8e review, MED-3): filed past the duty's receipt deadline (700), by its court window.
-        assert_eq!(court_due.get(&key), Some(&palw_replay_kind4_due_v1(d.receipt_deadline, 1_000)));
-        assert_eq!(court_due[&key], 1_000 + PALW_REPLAY_FILER_CASE_DAA_V1);
-        let PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence } = &court_pending[0].3 else {
+        assert_eq!(
+            (filing.offence_key, filing.accused, filing.claim_id, filing.origin, filing.file_by_daa),
+            (offence, d.executor_bond, d.claim_id, PalwFilingOriginV1::Replay, None),
+            "kind 4's per-claim key; made past the duty's receipt deadline (700), it has no landing margin to keep (F4)"
+        );
+        let PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence } = &filing.object else {
             panic!("an ObjectiveOffence")
         };
         assert_eq!(
@@ -1777,91 +1841,230 @@ mod tests {
         let decoded: kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 =
             borsh::from_slice(evidence).expect("the gate decodes it");
         assert!(decoded.reporter_reveal.is_empty() && decoded.claim_id == d.claim_id, "the reporter slot stays empty (R-3)");
-        assert!(
-            !replay_file_seam_v1(&mut court_pending, &mut court_due, &moved, 1_000, &filing, 4_000),
-            "the seam queues one filing an offence"
-        );
-        // Finding 8: sent (by this filer or P2-8's, under the same key) — no second copy while it may land.
-        court_pending.clear();
-        moved.insert(key, 2_000);
-        assert!(
-            !replay_file_seam_v1(
-                &mut court_pending,
-                &mut court_due,
-                &moved,
-                2_000 + PALW_REPLAY_FILER_REFILE_DAA_V1 - 1,
-                &filing,
-                4_000
-            ),
-            "in flight"
-        );
-        assert!(court_pending.is_empty());
-        // The lost carrier is queued once more while the duty stands, never a third time.
-        assert_eq!(
-            filer.refile_lost_v1(2_000 + PALW_REPLAY_FILER_REFILE_DAA_V1 - 1, |_| true, &mut court_pending, &mut court_due, &moved),
-            0,
-            "not yet"
-        );
-        assert_eq!(
-            filer.refile_lost_v1(2_000 + PALW_REPLAY_FILER_REFILE_DAA_V1, |_| false, &mut court_pending, &mut court_due, &moved),
-            0,
-            "duty ended"
-        );
-        court_due.clear();
-        assert_eq!(
-            filer.refile_lost_v1(2_000 + PALW_REPLAY_FILER_REFILE_DAA_V1, |_| true, &mut court_pending, &mut court_due, &moved),
-            1
-        );
-        assert_eq!(court_due.get(&key), Some(&(1_000 + PALW_REPLAY_FILER_CASE_DAA_V1)), "a re-filed copy keeps its first date");
-        court_pending.clear();
-        assert_eq!(filer.refile_lost_v1(9_000, |_| true, &mut court_pending, &mut court_due, &moved), 0, "two sends at most");
+        // Handed to the reporter filer in the same tick (its own tick commits first), with this node's
+        // bond as the reporter; never again while the filer holds it.
+        assert_eq!(filer.hand_offs_v1(1_000, |_| true, &HashSet::new(), &mut door), 1);
+        assert_eq!(door.queued(), vec![offence]);
+        assert_eq!(door.book.entry(&offence).expect("in the book").reporter, bond(1));
+        assert_eq!(filer.hand_offs_v1(1_001, |_| true, &HashSet::new(), &mut door), 0, "in flight");
+        // It left the filer unconvicted: handed once more while the duty stands, never a third time.
+        assert_eq!(door.expire_all(), 1);
+        assert_eq!(filer.hand_offs_v1(4_100, |_| false, &HashSet::new(), &mut door), 0, "duty ended");
+        assert_eq!(filer.hand_offs_v1(4_100, |_| true, &HashSet::new(), &mut door), 1);
+        door.expire_all();
+        assert_eq!(filer.hand_offs_v1(9_000, |_| true, &HashSet::new(), &mut door), 0, "two filings at most");
+        assert_eq!(door.queued(), vec![offence, offence]);
     }
 
-    /// **Finding 4: a filing the mempool or the carrier builder refused is re-filed.** The priority
-    /// lane drops such an object without a `court_moved` entry; once a re-plan has passed with the
-    /// key neither queued nor sent, it is queued once more (sends 1 → 2), and never a third time.
+    /// **A filing the reporter filer does not take now costs no hand-off** (the gate at its read — a
+    /// court opened on the claim, say — a full book, no tip state): it is asked again a re-plan later
+    /// and taken then. A case whose offence the chain has already convicted settles.
     #[test]
-    fn p2_8b_a_filing_the_mempool_refused_is_queued_once_more() {
+    fn p2_8b_a_filing_the_reporter_filer_refuses_is_asked_again_a_replan_later() {
         let own = bond(1);
         let mut filer = PalwReplayFilerV1::default();
         let d = duty(0x42, 7);
-        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 100, &own));
-        let offence = h(0x0FFE);
-        let filing = PalwReplayFilingV1 {
-            claim_id: d.claim_id,
-            offence_key: offence,
-            evidence_id: h(0xE1D),
-            accused: d.executor_bond,
-            object: PalwConsensusObjectV2::ObjectiveOffence {
-                kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted,
-                accused: d.executor_bond,
-                evidence_id: h(0xE1D),
-                evidence: vec![1],
-            },
-        };
+        let mut door = PalwBookDoorV1::new(own, 100);
+        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 100, &own, &door));
+        let (refutation, openings, prompt) = palw_floor_step_refutation_v1();
+        let filing =
+            palw_capture_arm_filing_v1(true, own, d.executor_bond, d.claim_id, d.receipt_deadline, 100, refutation, openings, prompt)
+                .map(|filing| PalwConvictionFilingV1 { origin: PalwFilingOriginV1::Replay, ..filing })
+                .expect("kind 4");
+        let key = filing.offence_key;
         filer.cases.get_mut(&d.claim_id).unwrap().step =
-            PalwReplayCaseStepV1::Filed { filing: Box::new(filing), sends: 1, queued_at: 100, due: 640 };
-        let moved = HashMap::new();
-        let mut court_pending = Vec::new();
-        let mut court_due = HashMap::new();
-        // The carrier lane took it off the queue and the mempool refused it: nothing queued, nothing sent.
+            PalwReplayCaseStepV1::Filed { filing: Box::new(filing), handed: 0, asked_at: None, refusals: 0 };
+        door.read.object_gate = Some(Err("a court is open on the claim".into()));
+        assert_eq!(filer.hand_offs_v1(100, |_| true, &HashSet::new(), &mut door), 0, "refused at the filer's read");
+        door.read.object_gate = Some(Ok(()));
+        assert_eq!(filer.hand_offs_v1(100 + COURT_MOVE_REPLAN_DAA - 1, |_| true, &HashSet::new(), &mut door), 0, "a re-plan first");
+        assert_eq!(filer.hand_offs_v1(100 + COURT_MOVE_REPLAN_DAA, |_| true, &HashSet::new(), &mut door), 1, "taken now");
+        let PalwReplayCaseStepV1::Filed { handed, asked_at, .. } = &filer.case(&d.claim_id).unwrap().step else { panic!() };
+        assert_eq!((*handed, *asked_at), (1, None));
+        assert_eq!(door.queued(), vec![key]);
+        // It left the book; the chain has convicted the offence meanwhile: the case settles.
+        door.expire_all();
+        door.read.consumed = Some(kaspa_consensus_core::palw_offence_v1::PalwConsumedOffenceV1 {
+            kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted,
+            accused: d.executor_bond.0,
+            amount: 100,
+            accepted_daa: 400,
+            execution_root: Hash64::default(),
+            collected: 100,
+            claim_id: d.claim_id,
+        });
+        assert_eq!(filer.hand_offs_v1(500, |_| true, &HashSet::new(), &mut door), 0);
+        assert!(filer.settled_v1(&d.claim_id), "the chain has it");
+    }
+
+    /// A kind 4 on `d`'s claim over the floor's real refutation, made at `now` with the replay's origin.
+    fn replay_kind4(d: &PalwSeatDutyV2, own: PalwBondKeyV2, now: u64) -> PalwConvictionFilingV1 {
+        let (refutation, openings, prompt) = palw_floor_step_refutation_v1();
+        palw_capture_arm_filing_v1(true, own, d.executor_bond, d.claim_id, d.receipt_deadline, now, refutation, openings, prompt)
+            .map(|filing| PalwConvictionFilingV1 { origin: PalwFilingOriginV1::Replay, ..filing })
+            .expect("kind 4")
+    }
+
+    fn filed_step(filing: PalwConvictionFilingV1) -> PalwReplayCaseStepV1 {
+        PalwReplayCaseStepV1::Filed { filing: Box::new(filing), handed: 0, asked_at: None, refusals: 0 }
+    }
+
+    /// **A refused hand-off backs off** (the integration's review, F6). Each ask runs the processor's
+    /// whole gate on the evidence on the panel loop, so a filing the gate refuses for its case's whole
+    /// window is asked a re-plan later, then two, four, … up to 64 re-plans: ten asks in 3,000 DAA, not
+    /// 300. A hand-off the filer takes clears the count.
+    #[test]
+    fn p2_8b_a_refused_hand_off_backs_off() {
         assert_eq!(
-            filer.refile_lost_v1(100 + COURT_MOVE_REPLAN_DAA - 1, |_| true, &mut court_pending, &mut court_due, &moved),
-            0,
-            "a re-plan first"
+            (1..=9).map(palw_replay_hand_off_retry_daa_v1).collect::<Vec<_>>(),
+            [1, 2, 4, 8, 16, 32, 64, 64, 64].map(|replans| replans * COURT_MOVE_REPLAN_DAA)
         );
-        assert_eq!(
-            filer.refile_lost_v1(100 + COURT_MOVE_REPLAN_DAA, |_| true, &mut court_pending, &mut court_due, &moved),
-            1,
-            "lost: queued again"
+        let own = bond(1);
+        let d = duty(0x43, 7);
+        let mut filer = PalwReplayFilerV1::default();
+        let mut door = PalwBookDoorV1::new(own, 100);
+        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 100, &own, &door));
+        filer.cases.get_mut(&d.claim_id).unwrap().step = filed_step(replay_kind4(&d, own, 100));
+        door.read.object_gate = Some(Err("a court is open on the claim".into()));
+        let mut asks = Vec::new();
+        for now in 100..100 + PALW_REPLAY_FILER_CASE_DAA_V1 {
+            let before = door.handed.len();
+            filer.hand_offs_v1(now, |_| true, &HashSet::new(), &mut door);
+            if door.handed.len() > before {
+                asks.push(now);
+            }
+        }
+        assert_eq!(asks, vec![100, 110, 130, 170, 250, 410, 730, 1_370, 2_010, 2_650], "backed off, never every re-plan");
+        door.read.object_gate = Some(Ok(()));
+        assert_eq!(filer.hand_offs_v1(2_650 + 64 * COURT_MOVE_REPLAN_DAA, |_| true, &HashSet::new(), &mut door), 1, "taken");
+        let PalwReplayCaseStepV1::Filed { handed, asked_at, refusals, .. } = &filer.case(&d.claim_id).unwrap().step else { panic!() };
+        assert_eq!((*handed, *asked_at, *refusals), (1, None, 0));
+    }
+
+    /// **No dense replay, and no second route, for a fault already being filed** (the integration's
+    /// review, F5). (a) A case noted BEFORE the capture arm filed the claim's kind 4 settles before its
+    /// run would start — as does one on a claim this seat has accused in the one-move court; the case
+    /// nothing files still runs. (b) A replay filing is never handed for a claim in `accused` — the
+    /// court fallback the capture arm's stalled filing queued carries it, and kind 4 would only race
+    /// the court for the same fault — until the claim leaves the set (a stall with nothing to queue).
+    #[test]
+    fn p2_8b_a_fault_already_filed_or_accused_costs_no_replay_and_no_second_route() {
+        let own = bond(1);
+        let mut door = PalwBookDoorV1::new(own, 100);
+        let mut filer = PalwReplayFilerV1::default();
+        let (filed_elsewhere, accused_claim, other) = (duty(0x51, 7), duty(0x52, 7), duty(0x53, 7));
+        for d in [&filed_elsewhere, &accused_claim, &other] {
+            assert!(filer.note_v1(d, PalwReplayMismatchSiteV1::Replay, 100, &own, &door));
+        }
+        let mut capture_arm = replay_kind4(&filed_elsewhere, own, 100);
+        capture_arm.origin = PalwFilingOriginV1::CaptureArm;
+        assert_eq!(door.file(capture_arm), PalwFileOutcomeV1::Queued { committed: true }, "the capture arm, after the note");
+        let accused = HashSet::from([accused_claim.claim_id]);
+        assert_eq!(filer.settle_pursued_v1(101, &door, &accused), 2);
+        assert!(filer.settled_v1(&filed_elsewhere.claim_id) && filer.settled_v1(&accused_claim.claim_id));
+        assert_eq!(filer.due_v1(101), Some(other.claim_id), "only the case nothing files runs");
+        // (b)
+        filer.cases.get_mut(&other.claim_id).unwrap().step = filed_step(replay_kind4(&other, own, 101));
+        let accused = HashSet::from([other.claim_id]);
+        assert_eq!(filer.settle_pursued_v1(101, &door, &accused), 0, "a case past its run is not settled");
+        assert_eq!(filer.hand_offs_v1(101, |_| true, &accused, &mut door), 0, "the court carries it: no kind 4 beside it");
+        assert_eq!(filer.hand_offs_v1(101, |_| true, &HashSet::new(), &mut door), 1, "let go: kind 4 is the route left");
+    }
+
+    /// **A kind 4 handed past its claim's receipt deadline commits first** (the integration's review,
+    /// F4). Handed before the deadline (700), it lands by the capture arm's margin; handed after it —
+    /// a bisection that finished late, or the second hand-off of one that expired — the S2 race it had
+    /// is over, so it waits for its commitment and keeps R instead of going out bare.
+    #[test]
+    fn p2_8b_a_kind_4_handed_past_its_receipt_deadline_commits_first() {
+        use crate::palw_panel::reporter_filer::{PalwFilerStepV1, palw_filer_step_v1};
+        let own = bond(1);
+        let d = duty(0x44, 7);
+        let mut filer = PalwReplayFilerV1::default();
+        let mut door = PalwBookDoorV1::new(own, 600);
+        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 600, &own, &door));
+        let filing = replay_kind4(&d, own, 600);
+        let key = filing.offence_key;
+        filer.cases.get_mut(&d.claim_id).unwrap().step = filed_step(filing);
+        assert_eq!(filer.hand_offs_v1(600, |_| true, &HashSet::new(), &mut door), 1);
+        assert_eq!(door.book.entry(&key).unwrap().file_by_daa, Some(d.receipt_deadline - 60), "before the deadline: its margin");
+        assert_eq!(door.expire_all(), 1);
+        door.read.now_daa = 800;
+        assert_eq!(filer.hand_offs_v1(800, |_| true, &HashSet::new(), &mut door), 1);
+        let entry = door.book.entry(&key).unwrap().clone();
+        assert_eq!(entry.file_by_daa, None, "past it: no margin to keep");
+        assert_eq!(palw_filer_step_v1(&entry, &door.read), PalwFilerStepV1::Commit, "it commits first: R kept");
+    }
+
+    /// **One offence, two lanes, ONE filing** (the integration of P2-8 with P2-8b). A real floor lie:
+    /// a replay case is noted on the claim; the capture arm then samples the faulted leaf and files
+    /// kind 4 through the reporter filer (P2-8). A later trigger on the claim is not even noted (the
+    /// filer holds its kind-4 key: no dense replay is spent on a filed offence). The replay that did
+    /// run bisects to the same leaf and makes its own kind 4 — under the SAME key, since one claim has
+    /// one `ExecutorRefuted` — and hands nothing while the filer holds it; handed anyway, the book
+    /// answers `AlreadyFiled`. The book holds one filing, and its ticks queue one commitment and then
+    /// one evidence: the capture arm's. Either order is one filing (the capture arm reads the replay's
+    /// filing as `AlreadyFiled`, which `capture_arm_files_v1` takes as "filed": no court).
+    #[test]
+    fn one_offence_found_by_the_capture_arm_and_a_replay_is_filed_once() {
+        use kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1;
+        let (backend, class_id, artifact_root) = floor();
+        let c = claim(&backend, class_id, artifact_root, true);
+        let leaf = c.leaf.unwrap();
+        let d = PalwSeatDutyV2 { claim_id: c.target.claim_id, executor_bond: c.target.executor_bond, ..duty(0x42, 7) };
+        let own = bond(1);
+        // Inside the receipt window (the duty's deadline is 700): the filer waits for its commitment.
+        let mut door = PalwBookDoorV1::new(own, 100);
+        let mut filer = PalwReplayFilerV1::default();
+        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 100, &own, &door), "noted before the sampler's fault");
+        // The capture arm's FaultAt at the lie's leaf, as the sampler builds it, through the filer.
+        let refutation = backend.refutation_for_index(&c.capture, leaf).expect("the leaf opens");
+        let openings = backend.operand_openings_for(&refutation).expect("its rows");
+        let (refutation, prompt_opening) = palw_refutation_prompt_carriage_v1(MERKLE, refutation).expect("the job's list");
+        let capture_arm = palw_capture_arm_filing_v1(
+            true,
+            own,
+            d.executor_bond,
+            d.claim_id,
+            d.receipt_deadline,
+            100,
+            &refutation,
+            &openings,
+            &prompt_opening,
+        )
+        .expect("kind 4");
+        assert_eq!(door.file(capture_arm.clone()), PalwFileOutcomeV1::Queued { committed: true });
+        let mut later = PalwReplayFilerV1::default();
+        assert!(!later.note_v1(&d, PalwReplayMismatchSiteV1::FaultFinder, 101, &own, &door), "no replay for a filed offence");
+        // The replay that did run: the same leaf, the same key.
+        let finding = palw_replay_filer_job_v1(
+            &backend,
+            vec![c.served(c.capture.clone())],
+            &c.target,
+            PALW_FALSE_VALID_NETWORK_LADDER_V1,
+            MERKLE,
+            &ledger(),
+        )
+        .expect("the local replay runs");
+        assert!(matches!(finding, PalwReplayFindingV1::Refutes { site: PalwReplaySiteV1::StepLeaf(at), .. } if at == leaf));
+        let replayed = filer.on_run_v1(d.claim_id, PalwReplayRunV1::Found(finding), 101, &own).expect("filed");
+        assert_eq!(replayed.offence_key, capture_arm.offence_key, "one kind-4 key a claim");
+        assert_eq!(filer.hand_offs_v1(101, |_| true, &HashSet::new(), &mut door), 0, "the filer holds it: nothing handed");
+        assert_eq!(door.file(replayed), PalwFileOutcomeV1::AlreadyFiled, "handed anyway: never twice");
+        assert_eq!((door.book.len(), door.queued()), (1, vec![capture_arm.offence_key]));
+        // The book's ticks: one commitment, then — rooted two DAA deep — one evidence, the capture arm's.
+        let mut queue = Vec::new();
+        let mut read = door.read.clone();
+        door.book.tick(&mut queue, &mut HashMap::new(), &mut HashSet::new(), |_, _| Some(read.clone()));
+        assert!(
+            matches!(queue.as_slice(), [(key, _, false, PalwConsensusObjectV2::ReporterCommitted { .. })] if *key == capture_arm.offence_key)
         );
-        assert_eq!(court_pending.len(), 1);
-        assert_eq!(court_due.get(&palw_replay_refuted_queue_key_v1(offence)), Some(&640), "dated as first filed");
-        assert_eq!(filer.refile_lost_v1(500, |_| true, &mut court_pending, &mut court_due, &moved), 0, "not while it is queued");
-        court_pending.clear();
-        assert_eq!(filer.refile_lost_v1(500, |_| true, &mut court_pending, &mut court_due, &moved), 0, "two sends at most");
-        let PalwReplayCaseStepV1::Filed { sends, queued_at, .. } = &filer.case(&d.claim_id).unwrap().step else { panic!() };
-        assert_eq!((*sends, *queued_at), (2, 100 + COURT_MOVE_REPLAN_DAA));
+        queue.clear();
+        (read.now_daa, read.committed_daa) = (103, Some(101));
+        door.book.tick(&mut queue, &mut HashMap::new(), &mut HashSet::new(), |_, _| Some(read.clone()));
+        let evidence: Vec<&PalwConsensusObjectV2> =
+            queue.iter().filter(|(_, _, _, o)| matches!(o, PalwConsensusObjectV2::ObjectiveOffence { .. })).map(|(.., o)| o).collect();
+        assert_eq!(evidence, vec![&capture_arm.object], "one evidence, filed once");
     }
 
     /// **An honest claim produces no filing**: its capture reproduces the roots and so does this
@@ -1896,22 +2099,9 @@ mod tests {
         assert_eq!(finding, PalwReplayFindingV1::Nothing { why: PalwReplayNothingV1::ServedNotTheClaims, rungs: 0 });
         let mut filer = PalwReplayFilerV1::default();
         let d = duty(0x42, 7);
-        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 1_000, &bond(1)));
-        let mut court_pending = Vec::new();
-        assert!(
-            filer
-                .on_run_v1(
-                    d.claim_id,
-                    PalwReplayRunV1::Found(finding),
-                    1_000,
-                    &bond(1),
-                    &mut court_pending,
-                    &mut HashMap::new(),
-                    &HashMap::new()
-                )
-                .is_none()
-        );
-        assert!(court_pending.is_empty() && filer.settled_v1(&d.claim_id) && filer.case(&d.claim_id).is_none());
+        assert!(filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 1_000, &bond(1), &nodoor()));
+        assert!(filer.on_run_v1(d.claim_id, PalwReplayRunV1::Found(finding), 1_000, &bond(1)).is_none(), "nothing filed");
+        assert!(filer.settled_v1(&d.claim_id) && filer.case(&d.claim_id).is_none());
         assert_eq!(filer.due_v1(1_000), None, "a settled case is not run again");
     }
 
@@ -1974,10 +2164,10 @@ mod tests {
         let own = bond(1);
         let mut filer = PalwReplayFilerV1::default();
         let d = duty(0x42, 7);
-        filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 10, &own);
+        filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 10, &own, &nodoor());
         filer.cases.get_mut(&d.claim_id).unwrap().runs = 1;
         let wait = PalwReplayRunV1::Wait { why: "nothing yet".into(), retry_after: PALW_REPLAY_FILER_UNSERVED_RETRY_DAA_V1 };
-        filer.on_run_v1(d.claim_id, wait, 10, &own, &mut Vec::new(), &mut HashMap::new(), &HashMap::new());
+        filer.on_run_v1(d.claim_id, wait, 10, &own);
         let case = filer.case(&d.claim_id).unwrap();
         assert_eq!(
             (case.runs, &case.step, case.retry_at),
@@ -2193,30 +2383,22 @@ mod tests {
         let own = bond(1);
         let mut filer = PalwReplayFilerV1::default();
         let d = duty(0x42, 7);
-        filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 10, &own);
+        filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 10, &own, &nodoor());
         filer.cases.get_mut(&d.claim_id).unwrap().runs = 1;
-        filer.on_run_v1(
-            d.claim_id,
-            PalwReplayRunV1::HostFailed(why.clone()),
-            10,
-            &own,
-            &mut Vec::new(),
-            &mut HashMap::new(),
-            &HashMap::new(),
-        );
+        filer.on_run_v1(d.claim_id, PalwReplayRunV1::HostFailed(why.clone()), 10, &own);
         assert_eq!(filer.case(&d.claim_id).unwrap().step, PalwReplayCaseStepV1::Waiting, "the second run");
         assert_eq!(filer.due_v1(11), Some(d.claim_id), "due at the next DAA");
-        assert!(!filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 11, &own), "still the one case");
+        assert!(!filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 11, &own, &nodoor()), "still the one case");
         filer.cases.get_mut(&d.claim_id).unwrap().runs = 2;
-        filer.on_run_v1(d.claim_id, PalwReplayRunV1::HostFailed(why), 12, &own, &mut Vec::new(), &mut HashMap::new(), &HashMap::new());
+        filer.on_run_v1(d.claim_id, PalwReplayRunV1::HostFailed(why), 12, &own);
         assert!(filer.settled_v1(&d.claim_id), "two runs a claim");
         // A host stop that reached the book as a finding is read the same way.
         let mut filer = PalwReplayFilerV1::default();
-        filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 10, &own);
+        filer.note_v1(&d, PalwReplayMismatchSiteV1::Replay, 10, &own, &nodoor());
         filer.cases.get_mut(&d.claim_id).unwrap().runs = 1;
         let stop = kaspa_consensus_core::palw_replay_refute_v1::PalwReplayBisectStopV1::RungRefused { rung: 3, why: "full".into() };
         let found = PalwReplayFindingV1::Nothing { why: PalwReplayNothingV1::Bisect(stop), rungs: 3 };
-        filer.on_run_v1(d.claim_id, PalwReplayRunV1::Found(found), 10, &own, &mut Vec::new(), &mut HashMap::new(), &HashMap::new());
+        filer.on_run_v1(d.claim_id, PalwReplayRunV1::Found(found), 10, &own);
         assert_eq!(filer.case(&d.claim_id).unwrap().step, PalwReplayCaseStepV1::Waiting);
     }
 
@@ -2227,9 +2409,12 @@ mod tests {
     fn p2_8b_the_book_is_bounded_and_deduplicated() {
         let own = bond(1);
         let mut filer = PalwReplayFilerV1::default();
-        assert!(!filer.note_v1(&duty(1, 1), PalwReplayMismatchSiteV1::Replay, 10, &own), "never against this node's own bond");
-        assert!(filer.note_v1(&duty(2, 7), PalwReplayMismatchSiteV1::Replay, 10, &own));
-        assert!(filer.note_v1(&duty(3, 7), PalwReplayMismatchSiteV1::FaultFinder, 11, &own));
+        assert!(
+            !filer.note_v1(&duty(1, 1), PalwReplayMismatchSiteV1::Replay, 10, &own, &nodoor()),
+            "never against this node's own bond"
+        );
+        assert!(filer.note_v1(&duty(2, 7), PalwReplayMismatchSiteV1::Replay, 10, &own, &nodoor()));
+        assert!(filer.note_v1(&duty(3, 7), PalwReplayMismatchSiteV1::FaultFinder, 11, &own, &nodoor()));
         assert_eq!(filer.due_v1(11), Some(h(2)), "the oldest first");
         // A start that waits is tried again later, and the case behind it is tried meanwhile.
         filer.wait(&h(2), 12);
@@ -2239,50 +2424,35 @@ mod tests {
         // A host failure keeps the case for its second run, then settles it.
         for (run, settled) in [(1u8, false), (2, true)] {
             filer.cases.get_mut(&h(2)).unwrap().runs = run;
-            filer.on_run_v1(
-                h(2),
-                PalwReplayRunV1::HostFailed("the task did not finish".into()),
-                12,
-                &own,
-                &mut Vec::new(),
-                &mut HashMap::new(),
-                &HashMap::new(),
-            );
+            filer.on_run_v1(h(2), PalwReplayRunV1::HostFailed("the task did not finish".into()), 12, &own);
             assert_eq!(filer.settled_v1(&h(2)), settled, "after run {run}");
         }
         assert_eq!(filer.due_v1(12), Some(h(3)));
-        assert!(!filer.note_v1(&duty(2, 7), PalwReplayMismatchSiteV1::Replay, 13, &own), "a settled claim is not reopened");
+        assert!(!filer.note_v1(&duty(2, 7), PalwReplayMismatchSiteV1::Replay, 13, &own, &nodoor()), "a settled claim is not reopened");
         assert_eq!(filer.take_released_v1(), vec![palw_replay_demand_queue_key_v1(h(2))], "its debounce is released");
         // Expiry sends a case to its tombstone; the tombstone outlives it by a window.
         filer.expire_v1(12 + PALW_REPLAY_FILER_CASE_DAA_V1);
         assert!(filer.case(&h(3)).is_none() && filer.settled_v1(&h(3)));
         assert_eq!(filer.take_released_v1(), vec![palw_replay_demand_queue_key_v1(h(3))]);
-        assert!(!filer.note_v1(&duty(3, 7), PalwReplayMismatchSiteV1::Replay, 13 + PALW_REPLAY_FILER_CASE_DAA_V1, &own));
+        assert!(!filer.note_v1(&duty(3, 7), PalwReplayMismatchSiteV1::Replay, 13 + PALW_REPLAY_FILER_CASE_DAA_V1, &own, &nodoor()));
         filer.expire_v1(13 + 2 * PALW_REPLAY_FILER_CASE_DAA_V1);
         assert!(!filer.settled_v1(&h(2)) && !filer.settled_v1(&h(3)), "tombstones expire");
         // Finding 7: a full book notes nothing more and evicts nothing; settled cases stay settled
         // however many triggers stand (the reviewer's probe re-opened 147 in 20 ticks).
         let mut filer = PalwReplayFilerV1::default();
         for n in 0..PALW_REPLAY_FILER_CASES_MAX_V1 as u64 {
-            assert!(filer.note_v1(&duty(1_000 + n, 7), PalwReplayMismatchSiteV1::Replay, 20, &own));
+            assert!(filer.note_v1(&duty(1_000 + n, 7), PalwReplayMismatchSiteV1::Replay, 20, &own, &nodoor()));
         }
-        assert!(!filer.note_v1(&duty(9_999, 7), PalwReplayMismatchSiteV1::Replay, 20, &own), "full: not noted");
+        assert!(!filer.note_v1(&duty(9_999, 7), PalwReplayMismatchSiteV1::Replay, 20, &own, &nodoor()), "full: not noted");
         for n in 0..PALW_REPLAY_FILER_CASES_MAX_V1 as u64 {
             let nothing = PalwReplayFindingV1::Nothing { why: PalwReplayNothingV1::LocalReproduces, rungs: 0 };
-            filer.on_run_v1(
-                h(1_000 + n),
-                PalwReplayRunV1::Found(nothing),
-                21,
-                &own,
-                &mut Vec::new(),
-                &mut HashMap::new(),
-                &HashMap::new(),
-            );
+            filer.on_run_v1(h(1_000 + n), PalwReplayRunV1::Found(nothing), 21, &own);
         }
         let mut reopened = 0;
         for tick in 0..20u64 {
             for n in 0..=PALW_REPLAY_FILER_CASES_MAX_V1 as u64 {
-                reopened += usize::from(filer.note_v1(&duty(1_000 + n, 7), PalwReplayMismatchSiteV1::Replay, 22 + tick, &own));
+                reopened +=
+                    usize::from(filer.note_v1(&duty(1_000 + n, 7), PalwReplayMismatchSiteV1::Replay, 22 + tick, &own, &nodoor()));
             }
         }
         assert_eq!(reopened, 1, "only the trigger that was never noted is noted; no settled case reopens");
@@ -2293,9 +2463,9 @@ mod tests {
         };
         let mut filer = PalwReplayFilerV1::default();
         let binding = Box::new(floor_binding.clone());
-        filer.note_v1(&duty(4, 7), PalwReplayMismatchSiteV1::Replay, 20, &own);
+        filer.note_v1(&duty(4, 7), PalwReplayMismatchSiteV1::Replay, 20, &own, &nodoor());
         let demand = PalwReplayFindingV1::DemandLeaf { leaf: 3, binding: binding.clone(), why: "test".into(), rungs: 5 };
-        filer.on_run_v1(h(4), PalwReplayRunV1::Found(demand), 20, &own, &mut Vec::new(), &mut HashMap::new(), &HashMap::new());
+        filer.on_run_v1(h(4), PalwReplayRunV1::Found(demand), 20, &own);
         let moved = HashMap::new();
         assert_eq!(filer.demands_due_v1(30, &[], &moved), vec![(h(4), 3)]);
         let key = palw_replay_demand_queue_key_v1(h(4));
@@ -2311,15 +2481,19 @@ mod tests {
         };
         let mut queued = vec![(key.0, key.1, key.2, object)];
         assert!(filer.demands_due_v1(30, &queued, &moved).is_empty(), "not while queued");
-        // Dated (the P2-8e review, MED-3) by the one rule over the fold's deadline, again every tick:
-        // the duty's receipt deadline (700) while the fold's is not read, `Final` once it is.
+        // Dated (the P2-8e review, MED-3) by the A-held node's one rule over the earliest `Final` this
+        // seat knows, again every tick: the duty's receipt deadline (700) while nothing earlier is read,
+        // the bundle's earliest `Final` of the bind, the fold's `Final` once it is read.
         assert_eq!(filer.dated_claims_v1(), vec![h(4)]);
         let mut due = HashMap::new();
-        filer.date_queued_demands_v1(30, &queued, &mut due, &HashMap::new());
+        filer.date_queued_demands_v1(30, &queued, &mut due, &HashMap::new(), |_| None);
         assert_eq!(due.get(&key), Some(&(700 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)));
-        filer.date_queued_demands_v1(31, &queued, &mut due, &HashMap::from([(h(4), Some(223))]));
+        filer.date_queued_demands_v1(30, &queued, &mut due, &HashMap::new(), |_| Some(400));
+        assert_eq!(due.get(&key), Some(&(400 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)), "the bundle's earliest Final, earlier");
+        filer.date_queued_demands_v1(31, &queued, &mut due, &HashMap::from([(h(4), Some(223))]), |_| Some(400));
         assert_eq!(due.get(&key), Some(&(223 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)), "licensed since: its Final, earlier");
-        filer.date_queued_demands_v1(32, &queued, &mut due, &HashMap::new());
+        assert_eq!(due[&key], palw_seat_court_filing_due_v1(700, Some(223), 31), "the A-held node's helper, called, never restated");
+        filer.date_queued_demands_v1(32, &queued, &mut due, &HashMap::new(), |_| None);
         assert_eq!(due.get(&key), Some(&(223 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)), "never later again");
         let mut sent = HashMap::new();
         sent.insert(key, 30);
@@ -2341,11 +2515,10 @@ mod tests {
         }
         assert!(filer.demands_due_v1(100, &[], &sent).is_empty(), "two sends at most");
         // P2-8e's hook settles a fused leaf; nothing is queued.
-        filer.note_v1(&duty(5, 7), PalwReplayMismatchSiteV1::Replay, 20, &own);
-        let mut court_pending = Vec::new();
+        filer.note_v1(&duty(5, 7), PalwReplayMismatchSiteV1::Replay, 20, &own, &nodoor());
         let dissection = PalwReplayFindingV1::NeedsDissection { leaf: 9, binding: Box::new(floor_binding), rungs: 4 };
-        filer.on_run_v1(h(5), PalwReplayRunV1::Found(dissection), 20, &own, &mut court_pending, &mut HashMap::new(), &HashMap::new());
-        assert!(filer.settled_v1(&h(5)) && court_pending.is_empty());
+        assert!(filer.on_run_v1(h(5), PalwReplayRunV1::Found(dissection), 20, &own).is_none(), "nothing filed");
+        assert!(filer.settled_v1(&h(5)));
         // The fence-off twin: dormant below `palw_rcore_plus`, and on a node that carries nothing.
         assert!(palw_replay_filer_armed_v1(true, true));
         assert!(!palw_replay_filer_armed_v1(false, true), "below palw_rcore_plus nothing runs");
@@ -2392,10 +2565,14 @@ mod tests {
     fn the_tick_runs_the_filer_before_the_carriers_and_the_start_looks_before_it_derives() {
         let panel = include_str!("palw_panel.rs");
         let accusations = panel.find("// --- P2-6: this seat's accusations of withholding ---").expect("P2-6's step");
-        let tick = panel.find("self.replay_filer_tick_v1(").expect("the filer's call");
+        let tick = panel.find(".replay_filer_tick_v1(").expect("the filer's call");
         let carriers = panel.find("// --- the collector + submitter's half ---").expect("the carriers");
         assert!(accusations < tick && tick < carriers, "after P2-6, before the priority lane carries the court queue");
-        assert_eq!(panel.matches("self.replay_filer_tick_v1(").count(), 1, "one call a tick");
+        assert_eq!(panel.matches(".replay_filer_tick_v1(").count(), 1, "one call a tick");
+        let call = &panel[tick..tick + panel[tick..].find(".await;").expect("awaited")];
+        assert!(call.contains("&mut reporter_filer,"), "with the reporter filer's book");
+        let filer_tick = panel.find("self.reporter_filer_tick_v1(").expect("the reporter filer's tick");
+        assert!(tick < filer_tick && filer_tick < carriers, "handed before the reporter filer ticks");
         let whole = include_str!("palw_filer_replay.rs");
         let source = &whole[..whole.find("#[cfg(test)]\nmod tests").expect("the production half")];
         let demand = &source[source.find("fn replay_demand_v1(").expect("the demand")..];
@@ -2403,6 +2580,20 @@ mod tests {
         assert!(demand.contains("session.palw_da_step_leaf_demand_check_v1(claim, bond_key, leaf)"));
         assert!(demand.contains("palw_replay_demand_step_v1(&check)"));
         assert!(!source.contains("session.palw_da_accusation_check_v1("), "never P2-6's row-0 read");
+        // Every kind 4 goes through the reporter filer's door; the court queue takes the demand only.
+        let tick_body = &source[source.find("pub(super) async fn replay_filer_tick_v1(").expect("the tick")..];
+        let tick_body = &tick_body[..tick_body.find("\n    }\n").expect("its body")];
+        assert!(tick_body.contains("let mut door = self.conviction_door_v1(session, reporter_filer, bond_key, network_domain);"));
+        assert!(tick_body.contains("filer.note_v1(duty, site, current_daa, &bond_key, &door)"), "no replay for a filed offence");
+        assert!(tick_body.contains("filer.hand_offs_v1(current_daa, |claim| live.contains(claim), accused, &mut door)"));
+        // F5: no case on a claim this seat accused, and no run on an offence already filed.
+        let accused_first =
+            tick_body.find("if accused.contains(&duty.claim_id) {\n                continue;\n            }").expect("F5");
+        assert!(accused_first < tick_body.find("filer.note_v1(duty, site, current_daa, &bond_key, &door)").unwrap());
+        let settled = tick_body.find("filer.settle_pursued_v1(current_daa, &door, accused);").expect("F5's settle");
+        assert!(settled < tick_body.find("filer.due_v1(current_daa)").expect("the start"), "settled before any start");
+        assert_eq!(source.matches("court_pending.push(").count(), 1, "the demand's, and nothing else");
+        assert!(demand.contains("court_pending.push((key.0, key.1, key.2, object));"));
         let start = &source[source.find("fn replay_filer_start_v1(").expect("the start")..];
         let start = &start[..start.find("\n    }\n").expect("its body")];
         let looked = start.find("palw_replay_served_held_v1(").expect("looks first");
@@ -2419,20 +2610,24 @@ mod tests {
         // The P2-8e review, MED-4: the chain's held dissections are read at the TOP of the tick — seeded
         // once a start from the chain's records and the pool — before a trigger is noted, the run in
         // flight is polled or a run starts; and every court filing is queued dated.
-        let tick = &source[source.find("async fn replay_filer_tick_v1(").expect("the tick")..];
-        let tick = &tick[..tick.find("\n    }\n").expect("its body")];
-        let observed = tick.find("filer.observe_held_v1(").expect("the chain's dissections are read");
-        let seeded = tick.find("if !filer.seeded_v1()").expect("seeded once a start");
-        assert!(seeded < observed && tick.contains("c.palw_held_pursuit_seeds_v1(vec![bond_key])"));
+        let observed = tick_body.find("filer.observe_held_v1(").expect("the chain's dissections are read");
+        let seeded = tick_body.find("if !filer.seeded_v1()").expect("seeded once a start");
+        assert!(seeded < observed && tick_body.contains("c.palw_held_pursuit_seeds_v1(vec![bond_key])"));
         for later in ["filer.note_v1(", "filer.on_run_v1(", "filer.due_v1(", "self.held_dissections_tick_v1("] {
-            assert!(observed < tick.find(later).expect(later), "{later} comes after the read");
+            assert!(observed < tick_body.find(later).expect(later), "{later} comes after the read");
         }
-        assert_eq!(tick.matches("filer.observe_held_v1(").count(), 1, "read once a tick");
-        assert!(tick.contains("c.palw_claim_deadlines_v1(dated)"), "the fold's deadlines date the filings");
-        let demand = &source[source.find("fn replay_demand_v1(").expect("the demand")..];
-        let demand = &demand[..demand.find("\n    }\n").expect("its body")];
+        assert_eq!(tick_body.matches("filer.observe_held_v1(").count(), 1, "read once a tick");
+        assert!(tick_body.contains("c.palw_claim_deadlines_v1(dated)"), "the fold's deadlines date the demands");
+        assert!(
+            tick_body.contains("palw_seat_claim_earliest_final_v1(&self.consensus_config.params, bound_daa)"),
+            "and the bundle's earliest Final, as the A-held node reads it"
+        );
         let dated = demand.find("date_v1(court_due, key, due);").expect("the demand is dated");
         assert!(dated < demand.find("court_pending.push(").expect("queued"), "dated as it is queued");
+        // The one rule is called, never restated.
+        let rule = &source[source.find("pub(super) fn palw_replay_filer_court_due_v1(").expect("the rule")..];
+        let rule = &rule[..rule.find("\n}\n").expect("its body")];
+        assert!(rule.contains("palw_seat_court_filing_due_v1(") && !rule.contains("PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1"));
     }
 
     /// **One tick starts at most one run, and a case at a time runs** — the per-tick budget.
@@ -2440,8 +2635,8 @@ mod tests {
     async fn p2_8b_one_run_in_flight() {
         let own = bond(1);
         let mut filer = PalwReplayFilerV1::default();
-        filer.note_v1(&duty(2, 7), PalwReplayMismatchSiteV1::Replay, 10, &own);
-        filer.note_v1(&duty(3, 7), PalwReplayMismatchSiteV1::Replay, 10, &own);
+        filer.note_v1(&duty(2, 7), PalwReplayMismatchSiteV1::Replay, 10, &own, &nodoor());
+        filer.note_v1(&duty(3, 7), PalwReplayMismatchSiteV1::Replay, 10, &own, &nodoor());
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         let handle = tokio::task::spawn_blocking(move || {
             let _ = rx.recv();
@@ -2454,8 +2649,7 @@ mod tests {
         assert!(filer.case(&h(2)).is_some() && filer.case(&h(3)).is_none(), "the run in flight is never forgotten");
         tx.send(()).unwrap();
         let (claim, handle) = filer.running.take().unwrap();
-        let mut court_pending = Vec::new();
-        filer.on_run_v1(claim, handle.await.unwrap(), 10_000, &own, &mut court_pending, &mut HashMap::new(), &HashMap::new());
-        assert!(court_pending.is_empty() && filer.settled_v1(&h(2)));
+        assert!(filer.on_run_v1(claim, handle.await.unwrap(), 10_000, &own).is_none(), "nothing filed");
+        assert!(filer.settled_v1(&h(2)));
     }
 }

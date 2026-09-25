@@ -25,7 +25,8 @@
 //!
 //! * **T54g** (on the stand-in) — the bisection lands on the fused leaf; the node opens the held
 //!   dissection there with the right evidence (the leaf, the claim's roots and binding, both bonds,
-//!   the bound verdict's `NeedsDissection`), due by the fold's `Final` less the landing margin; the fold
+//!   the bound verdict's `NeedsDissection`), due now (a one-move accusation, as the A-held node dates the
+//!   capture arm's) — before the fold's `Final` less the landing margin; the fold
 //!   opens the session, the producer's root claim due at the move turn off the session; the liar's
 //!   least lie and the seat's held route play it to a bottom the seat files, and the claim voids
 //!   `CourtHeldVerdict` (reason 8, F3 (B)) — the producer charged, the seat not.
@@ -36,7 +37,8 @@
 //!   `StepLeaf` demand of that leaf (the case's one step: never both), which the builder's stateless
 //!   half refuses for a fused leaf (DA-3) before anything is signed; an opening the fold's verdict
 //!   refuses is not "missing" and settles.
-//! * **Dated** — by the fold's `Final` (on testnet-12's windows too), MED-4's one helper.
+//! * **Dated** — due now, before the fold's `Final` (on testnet-12's windows too), as the A-held node
+//!   dates a one-move accusation.
 //! * **Dedup and restart** — one queue entry per accusation whoever built it; in the tick's own order
 //!   the chain's session is read before a trigger is noted, a waiting case ends before its run, the
 //!   run in flight files nothing on return, and a restart seeds the openings still in the pool.
@@ -497,12 +499,17 @@ fn seat_run(
     )
 }
 
+/// A reporter filer's door that holds nothing (the replay filer asks it whether a kind 4 is filed).
+fn nodoor() -> crate::palw_panel::reporter_filer::PalwBookDoorV1 {
+    crate::palw_panel::reporter_filer::PalwBookDoorV1::new(bond_key(SEAT), 0)
+}
+
 /// The seat's duty on the bound claim (what its SEAT-R replay refuted), noted in a fresh book.
 fn noted(s: &PalwChainStateV2, claim: Hash64) -> (PalwReplayFilerV1, PalwSeatDutyV2) {
     let duty =
         palw_seat_duties_v2(s, &params(), &[bond_key(SEAT)]).into_iter().find(|d| d.claim_id == claim).expect("the seat's duty");
     let mut filer = PalwReplayFilerV1::default();
-    assert!(filer.note_v1(&duty, PalwReplayMismatchSiteV1::Replay, 102, &bond_key(SEAT)), "noted");
+    assert!(filer.note_v1(&duty, PalwReplayMismatchSiteV1::Replay, 102, &bond_key(SEAT), &nodoor()), "noted");
     (filer, duty)
 }
 
@@ -547,10 +554,6 @@ impl PalwHeldFilerHostV1 for FilerHost {
             },
         )
     }
-    /// The fold's own deadline for the claim, as `palw_claim_deadlines_v1` reads it at the tip.
-    fn claim_deadline(&self, claim: &Hash64) -> Option<u64> {
-        self.state.deadline_of(claim)
-    }
 }
 
 /// **What the panel's claim rows say the claim's phase ends at** (`palw_claim_rows_v1`, the RPC's
@@ -592,12 +595,12 @@ impl Queue {
         let duties = palw_court_duties_v2(state, &[bond_key(SEAT)]);
         let _ = filer.observe_held_v1(&duties, &bond_key(SEAT), daa, &mut self.pending);
         for duty in notes {
-            let _ = filer.note_v1(duty, PalwReplayMismatchSiteV1::Replay, daa, &bond_key(SEAT));
+            let _ = filer.note_v1(duty, PalwReplayMismatchSiteV1::Replay, daa, &bond_key(SEAT), &nodoor());
         }
         if let Some((claim, run)) = run {
             // The task returned: the tick takes its handle, then files what it found.
             filer.running = None;
-            let _ = filer.on_run_v1(claim, run, daa, &bond_key(SEAT), &mut self.pending, &mut self.due, &self.moved);
+            let _ = filer.on_run_v1(claim, run, daa, &bond_key(SEAT));
         }
         let host = FilerHost { state: state.clone(), daa };
         palw_held_dissections_step_v1(&host, filer, daa, bond_key(SEAT), &mut self.pending, &mut self.due, &self.moved)
@@ -820,7 +823,7 @@ fn opened_by_the_node(f: &Fixture) -> (PalwChainStateV2, Hash64, Hash64, PalwRep
     let seat = f.seat();
     let run = f.run(&f.view(&seat, false), &s102, claim, true);
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     let s103 = licence(&s102, claim);
     assert_eq!(queue.held_step(&mut filer, &s103, 104), 1, "the opening is queued");
     let carried = queue.carry(104).expect("the lane carries it");
@@ -866,7 +869,7 @@ async fn t54g_a_garbage_fused_leaf_is_dissected_by_the_seats_node_and_its_produc
     );
     // 2. The book: the case's one step is the held dissection's opening.
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     assert!(matches!(&filer.case(&claim).expect("the case").step, PalwReplayCaseStepV1::Dissect(d) if d.leaf == liar.leaf));
     assert!(queue.pending.is_empty(), "nothing is queued off the loop");
     // 3. The loop half on the licensed claim: built, asked of the fold, queued with its due date.
@@ -875,11 +878,8 @@ async fn t54g_a_garbage_fused_leaf_is_dissected_by_the_seats_node_and_its_produc
     let final_daa = s103.deadline_of(&claim).expect("the licence's Final, in the fold's sweep queue");
     assert_eq!(queue.held_step(&mut filer, &s103, 104), 1);
     let (a, b, c, object) = queue.pending[0].clone();
-    assert_eq!(
-        queue.due.get(&(a, b, c)),
-        Some(&palw_seat_court_filing_due_v1(final_daa, 104)),
-        "due by the fold's Final less the landing margin: MED-4's one helper"
-    );
+    assert_eq!(queue.due.get(&(a, b, c)), Some(&104), "a one-move accusation: due now, as the A-held node dates it");
+    assert!(104 < final_daa, "before the fold's Final");
     let PalwConsensusObjectV2::ShardCourtAccused { accusation } = &object else { panic!("a ShardCourtAccused: {object:?}") };
     assert_eq!(
         (accusation.claim, accusation.leaf_index, accusation.executor_bond, accusation.accuser_bond),
@@ -1004,7 +1004,7 @@ async fn t54g_an_honest_8k_claim_produces_no_dissection() {
         "{run:?}"
     );
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     assert!(filer.settled_v1(&claim));
     assert_eq!(queue.held_step(&mut filer, &licence(&s102, claim), 104), 0);
     assert!(queue.pending.is_empty(), "nothing filed against an honest producer");
@@ -1177,7 +1177,7 @@ async fn t54g_missing_material_falls_back_to_the_step_leaf_demand_never_both() {
     assert_eq!(*leaf, f.d.leaf);
     assert!(why.contains("does not open"), "{why}");
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     let PalwReplayCaseStepV1::Demand { leaf: demanded, binding, sends, .. } = &filer.case(&claim).expect("the case").step else {
         panic!("P2-8d's demand: {:?}", filer.case(&claim).map(|c| &c.step))
     };
@@ -1218,11 +1218,11 @@ async fn t54g_one_dissection_per_claim_and_leaf_and_a_restart_rebuilds_it_from_t
     let mut queue = Queue::default();
     queue.pending.push((key.0, key.1, key.2, object));
     let run = f.run(&f.view(&f.seat(), false), &s102, claim, true);
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     let s103 = licence(&s102, claim);
     assert_eq!(queue.held_step(&mut filer, &s103, 104), 0, "already queued by the other filer");
     assert_eq!(queue.pending.len(), 1, "one entry");
-    assert!(queue.due.contains_key(&key), "dated by the one helper all the same");
+    assert_eq!(queue.due.get(&key), Some(&104), "dated all the same: due now");
     assert_eq!(queue.held_step(&mut filer, &s103, 105), 0);
     assert_eq!(queue.pending.len(), 1);
     // The session opens; the opener's next tick settles its case.
@@ -1296,7 +1296,7 @@ async fn t54g_twin_without_the_held_route_nothing_is_opened() {
     };
     assert_eq!(*leaf, f.d.leaf, "the same leaf is found");
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     assert!(filer.settled_v1(&claim), "settled through the hook");
     assert_eq!(queue.held_step(&mut filer, &licence(&s102, claim), 104), 0);
     assert!(queue.pending.is_empty(), "nothing opened");
@@ -1331,7 +1331,7 @@ async fn t54g_gap_b_a_fresh_seat_cannot_bisect_a_lying_held_fold() {
         "{run:?}"
     );
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     assert!(filer.settled_v1(&claim), "settled: nothing located");
     assert_eq!(queue.held_step(&mut filer, &licence(&s102, claim), 104), 0);
     assert!(queue.pending.is_empty());
@@ -1422,8 +1422,8 @@ async fn t54g_gap_a_a_canonical_8k_attempt_is_past_the_whole_capture_cap() {
     );
     let PalwReplayRunV1::Never(why) = &run else { panic!("Never: {run:?}") };
     assert!(why.contains("materialization cap"), "{why}");
-    let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    let queue = Queue::default();
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     assert!(filer.settled_v1(&claim) && queue.pending.is_empty(), "the case settles; nothing is filed");
 }
 
@@ -1431,8 +1431,9 @@ async fn t54g_gap_a_a_canonical_8k_attempt_is_past_the_whole_capture_cap() {
 /// testnet-12's windows (`window_challenge` 1,200, the short window of 120 in force), a claim licensed
 /// at 103 goes `Final` at 223 in the fold, while the claim rows (the RPC's read, which P2-8e used to
 /// be dated by) say 1,303 — ≈ 1,020 DAA past `Final`, so the EDF lane carried every item due before
-/// `Final` first and the opening could meet `WrongPhase`. The node's date is MED-4's helper over the
-/// fold's deadline, `Final` − 60 = 163, and the lane carries it before an item due in between.
+/// `Final` first and the opening could meet `WrongPhase`. The node dates it as the A-held node dates a
+/// one-move accusation: due now (104), before `Final` − 60 = 163, and the lane carries it before an
+/// item due in between.
 #[tokio::test(flavor = "multi_thread")]
 async fn t54g_the_opening_is_due_by_the_folds_final_on_testnet_12s_windows() {
     T12_WINDOWS.with(|on| on.set(true));
@@ -1441,7 +1442,7 @@ async fn t54g_the_opening_is_due_by_the_folds_final_on_testnet_12s_windows() {
     let (mut filer, _) = noted(&s102, claim);
     let run = f.run(&f.view(&f.seat(), false), &s102, claim, true);
     let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     let s103 = licence(&s102, claim);
     let final_daa = s103.deadline_of(&claim).expect("the licence's Final");
     let short = kaspa_consensus_core::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1;
@@ -1450,7 +1451,8 @@ async fn t54g_the_opening_is_due_by_the_folds_final_on_testnet_12s_windows() {
     assert_eq!(queue.held_step(&mut filer, &s103, 104), 1);
     let key = (queue.pending[0].0, queue.pending[0].1, queue.pending[0].2);
     let margin = PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1;
-    assert_eq!(queue.due[&key], final_daa - margin, "Final less the landing margin");
+    assert_eq!(queue.due[&key], 104, "due now");
+    assert!(queue.due[&key] <= final_daa - margin, "before Final less the landing margin");
     assert!(queue.due[&key] < row_deadline(&s103, &claim).unwrap() - margin, "never the claim rows' date");
     // The lane: an item due between the two dates goes after the opening.
     let between = (h64(0xBE7), 0u32, false);
@@ -1476,8 +1478,8 @@ async fn t54g_an_opening_the_folds_verdict_refuses_is_not_missing_material() {
         panic!("not adjudicable: {run:?}")
     };
     assert!(why.contains(&format!("ladder {}", f.d.leaf)), "{why}");
-    let mut queue = Queue::default();
-    filer.on_run_v1(claim, run, 102, &bond_key(SEAT), &mut queue.pending, &mut queue.due, &queue.moved);
+    let queue = Queue::default();
+    filer.on_run_v1(claim, run, 102, &bond_key(SEAT));
     assert!(filer.settled_v1(&claim) && filer.case(&claim).is_none(), "settled, not a demand");
     assert!(queue.pending.is_empty() && filer.demands_due_v1(104, &queue.pending, &queue.moved).is_empty());
 }

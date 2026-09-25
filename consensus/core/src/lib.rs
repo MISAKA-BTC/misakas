@@ -241,6 +241,8 @@ pub mod palw_execution_lane_v1;
 pub mod palw_execution_quanta_v1;
 pub mod palw_exposure;
 pub mod palw_facts;
+/// ADR-0152 v3.1 N10 / §7.3 P2-8c: the node's half of `PanelFalseValidV2` (node policy, never validity).
+pub mod palw_false_valid_filing_v1;
 pub mod palw_fork_authority_v2;
 pub mod palw_fork_choice;
 pub mod palw_fp_admission_v3;
@@ -255,6 +257,10 @@ pub mod palw_heartbeat_v1;
 /// ADR-0152 v3.1 H-1 — the lifecycle objects a heartbeat must be able to carry: the one list the
 /// miner's carrier lane and the relay's exemption read (P2-9). Node policy; no rule reads it.
 pub mod palw_heartbeat_carriers_v1;
+/// The 2026-09-25 model-registry review, M1 — a possession proof whose row is about to lapse outranks
+/// the court queue at the seat and holds a carrier's place in the pool and the template. Node
+/// policy past R-core+; no rule reads it.
+pub mod palw_readiness_escalation_v1;
 /// ADR-0103 — the context is held off the chain: the seat's interval of positions, its route, its
 /// width and its fetch, as pure functions. Consensus-inert.
 pub mod palw_held_context_v1;

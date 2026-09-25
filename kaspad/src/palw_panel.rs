@@ -63,6 +63,12 @@ use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
+/// **ADR-0152 R-3 (P2-8): the reporter's commit–reveal filer**, and the capture arm's
+/// `ExecutorRefuted` and J1 auto that feed it — a child of this module, so each call site below is
+/// one line (see its own header).
+#[path = "palw_reporter_filer.rs"]
+pub(crate) mod reporter_filer;
+
 /// ADR-0152 v3.1 Phase 2, P2-8b + P2-8d: the replay filer — a child module, so it reads this
 /// service's own seams (the ledger, the backends, the court queue) without widening them.
 #[path = "palw_filer_replay.rs"]
@@ -82,6 +88,8 @@ fn reserve_replay_on_host_v1(
         .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, need.total_bytes())
         .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
 }
+
+use crate::palw_readiness_escalation::PalwReadinessDutyV1;
 
 const PALW_PANEL: &str = "palw-panel";
 
@@ -2292,16 +2300,45 @@ pub(crate) fn palw_seat_tail_v1(
     PalwSeatTailV1::Waits { unserved: true }
 }
 
-/// **The due DAA of a seat's own court filing** — a one-move accusation (`ShardCourtAccused`, which
-/// opens a held dissection past `palw_offence_attribution`) or a named leaf's pursuit (ADR-0111
-/// Decision 6) — in the priority lane's EDF (`palw_court_queue_edf_v1`; the A-held node's second
-/// review, MEDIUM): its landing margin before the duty's own deadline
-/// ([`PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1`], P2-6's), and now once that has passed. The duty's
-/// deadline is the receipt window's end, never later than the claim's earliest `Final` (a licence
-/// lands inside it and `Final` is a challenge window after), so the date is early, never late: an
-/// undated item waited behind every dated one, and a lie it would have convicted reached `Final`.
-pub(crate) fn palw_seat_court_filing_due_v1(duty_deadline: u64, current_daa: u64) -> u64 {
-    duty_deadline.saturating_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1).max(current_daa)
+/// **The due DAA of a seat's named-leaf pursuit** (ADR-0111 Decision 6) in the priority lane's EDF
+/// (`palw_court_queue_edf_v1`; the A-held node's second review, MEDIUM): its landing margin
+/// ([`PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1`], P2-6's) before whichever comes first, the duty's own
+/// deadline or the claim's earliest `Final` ([`palw_seat_claim_earliest_final_v1`]), and now once
+/// that has passed. An undated item waited behind every dated one, and a lie it would have convicted
+/// reached `Final`.
+///
+/// **The fourth review's MEDIUM: the duty's deadline alone is not early enough.** Past §4-quater the
+/// receipt deadline is `bound + max(W_r, D)`, but the licensed `Final` floor is
+/// `max(L + wc, bound + D + 1)`. For the 8k row (`D = 15`) a licence at `bound + 1` gives `Final` at
+/// `bound + 121`, while the duty's date was `bound + 540`. So the date is taken before both. A
+/// one-move accusation (`ShardCourtAccused`) is simply due now; see its site.
+pub(crate) fn palw_seat_court_filing_due_v1(duty_deadline: u64, earliest_final: Option<u64>, current_daa: u64) -> u64 {
+    earliest_final
+        .map_or(duty_deadline, |earliest| duty_deadline.min(earliest))
+        .saturating_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)
+        .max(current_daa)
+}
+
+/// **The earliest DAA a claim bound at `bound_daa` can reach `Final`**: a bound under DL-1's licensed
+/// floor (`palw_claim_final_floor_v1`: `max(L + wc(L), H)`) over every licence the claim can still
+/// take. A licence lands at `bound + 1` at the earliest; a seat-DA pause only moves `L` later; `H` and
+/// an S2 licence's replay gate only raise the floor. So `min over L > bound of L + wc(L)` is never
+/// after the claim's `Final`: the challenge window at `bound + 1`, or the short window from its fence,
+/// whichever ends first. It is read off the bundle's params, as the receipt deadline is. `None` off
+/// `ConsensusV2`.
+pub(crate) fn palw_seat_claim_earliest_final_v1(params: &kaspa_consensus_core::config::params::Params, bound_daa: u64) -> Option<u64> {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return None;
+    };
+    let state = &bundle.state;
+    let first = bound_daa.saturating_add(1);
+    let mut earliest = first.saturating_add(state.window_challenge_at(first));
+    if let Some(from) = state.short_challenge_window_from_daa()
+        && from > first
+    {
+        earliest = earliest.min(from.saturating_add(state.window_challenge_at(from)));
+    }
+    Some(earliest)
 }
 
 /// **The landing margin of an automatic accusation** (ADR-0152 §3.8, DA-6: a seat accuses "until
@@ -2539,6 +2576,12 @@ pub(crate) enum PalwCarrierLaneV1 {
     /// This node's own carriers: its canonical claim, its class registration, its possession
     /// proofs, a supplementary receipt.
     Ordinary,
+    /// **An escalated possession proof** (the 2026-09-25 model-registry review, M1): one whose row
+    /// would lapse before an ordinary carrier could land it (`palw_readiness_proof_escalates_v1`),
+    /// carried ahead of the court queue. The slot after it is never another. It is transparent to
+    /// P2-6's turn (the M1 review, MEDIUM 3): `licence_turn` is the turn the slot it took had, and
+    /// the next slot has it again — so a storm reads P, R, L, never P, R, P.
+    Readiness { licence_turn: bool },
 }
 
 /// **P2-6: is this carrier slot the licences' turn?** — the slot right after a priority carrier. One
@@ -2549,8 +2592,12 @@ pub(crate) enum PalwCarrierLaneV1 {
 /// quorums before the priority lane, which takes the slot in the same tick if no quorum stands. So
 /// the priority lane is never two carriers in a row ahead of a waiting licence, a licence never
 /// delays the priority lane by more than one carrier, and a slot nobody else wants is never idle.
+///
+/// **M1:** an escalated possession proof passes the turn on unchanged
+/// (`PalwCarrierLaneV1::Readiness { licence_turn }`): the slot after it is the licences' exactly when
+/// the slot it took was.
 pub(crate) fn palw_carrier_licence_turn_v1(last: Option<PalwCarrierLaneV1>) -> bool {
-    last == Some(PalwCarrierLaneV1::Priority)
+    matches!(last, Some(PalwCarrierLaneV1::Priority) | Some(PalwCarrierLaneV1::Readiness { licence_turn: true }))
 }
 
 /// **Where the tick offers its carrier slot, in the order it reaches them** (P2-6, the P2-6 review's
@@ -2558,6 +2605,11 @@ pub(crate) fn palw_carrier_licence_turn_v1(last: Option<PalwCarrierLaneV1>) -> b
 /// in [`Self::TICK_ORDER`] — a debug build asserts it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwCarrierSiteV1 {
+    /// **M1: a possession proof whose row is about to lapse, ahead of the court queue** — past
+    /// R-core+ only, at most one a tick, and never two slots running (`PalwCarrierLaneV1::Readiness`);
+    /// the slot after it keeps the turn the slot it took had. A row not near staleness keeps the Own
+    /// site as before.
+    ReadinessEscalated,
     /// The priority lane ahead of every other carrier (`carry_priority_v1`) — except on the
     /// licences' turn.
     PriorityFirst,
@@ -2574,12 +2626,14 @@ pub(crate) enum PalwCarrierSiteV1 {
 
 impl PalwCarrierSiteV1 {
     /// The sites in the order the tick reaches them.
-    pub(crate) const TICK_ORDER: [Self; 5] =
-        [Self::PriorityFirst, Self::Own, Self::Licences, Self::PriorityAfterLicences, Self::OwnReceipts];
+    pub(crate) const TICK_ORDER: [Self; 6] =
+        [Self::ReadinessEscalated, Self::PriorityFirst, Self::Own, Self::Licences, Self::PriorityAfterLicences, Self::OwnReceipts];
 
-    /// The lane a carrier sent from this site rode — what the next tick's turn reads.
-    pub(crate) fn lane(self) -> PalwCarrierLaneV1 {
+    /// The lane a carrier sent from this site rode, on a slot whose turn was `licence_turn` — what
+    /// the next tick's turn reads.
+    pub(crate) fn lane(self, licence_turn: bool) -> PalwCarrierLaneV1 {
         match self {
+            Self::ReadinessEscalated => PalwCarrierLaneV1::Readiness { licence_turn },
             Self::PriorityFirst | Self::PriorityAfterLicences => PalwCarrierLaneV1::Priority,
             Self::Licences => PalwCarrierLaneV1::Licence,
             Self::Own | Self::OwnReceipts => PalwCarrierLaneV1::Ordinary,
@@ -2599,6 +2653,19 @@ impl PalwCarrierSiteV1 {
 /// * **The priority lane first, except on the licences' turn** ([`palw_carrier_licence_turn_v1`]):
 ///   on that turn it is offered after the collector instead, so a DA storm shares the slots with the
 ///   licences one for one and a slot the collector cannot fill still goes to the storm.
+///
+/// * **M1: an escalated possession proof ahead of both, never twice running, and transparent to the
+///   turn** (the 2026-09-25 model-registry review; its review, MEDIUM 3 and LOW 2): the tick offers
+///   `ReadinessEscalated` first unless the last carrier was one, so a proof whose row is about to
+///   lapse is never held behind a DA storm and the storm still gets at least every other slot. The
+///   slot after it has the turn the slot it took had — P, R, L, not P, R, P — so it never takes the
+///   licences' turn; it can precede the court after a licence or an own carrier. What escalates is
+///   the one predicate the pool and the tip read ask (`palw_readiness_escalation_v1`); a tick that
+///   holds none offers the sites exactly as before. P2-6's "never two priority slots while a licence
+///   waits" still holds only while the seat has no OWN carrier due: the Own site comes before the
+///   collector on the licences' turn (P2-6's own order) and resets the turn to the court, so a seat
+///   with three classes due in staggered DAA can starve its licences under a storm, with or without
+///   M1.
 ///
 /// The tick marks each site as it reaches it ([`Self::at`]) and reads the lane back at the end
 /// ([`Self::finish`]); a site whose carrier went out (`inflight` moved past what it was when the
@@ -2634,7 +2701,7 @@ impl PalwCarrierSlotsV1 {
         if let Some((site, from)) = self.at
             && inflight > from
         {
-            self.last = Some(site.lane());
+            self.last = Some(site.lane(self.licence_turn));
         }
     }
 
@@ -2642,6 +2709,7 @@ impl PalwCarrierSlotsV1 {
     pub(crate) fn offers(&self, site: PalwCarrierSiteV1, inflight: usize) -> bool {
         inflight < MAX_INFLIGHT_CARRIERS
             && match site {
+                PalwCarrierSiteV1::ReadinessEscalated => !matches!(self.last, Some(PalwCarrierLaneV1::Readiness { .. })),
                 PalwCarrierSiteV1::PriorityFirst => !self.licence_turn,
                 PalwCarrierSiteV1::PriorityAfterLicences => self.licence_turn,
                 PalwCarrierSiteV1::Own | PalwCarrierSiteV1::Licences | PalwCarrierSiteV1::OwnReceipts => true,
@@ -3534,12 +3602,16 @@ impl PalwPanelService {
     /// against the class's registered artifact locally before it is signed, and is signed by the
     /// bond's key. **Fail-closed**: a class this node holds no artifact for, or holds under a
     /// different root, gets no proof and is named once in the log — the node is not a seat for it.
+    ///
+    /// **M1 (the 2026-09-25 model-registry review):** each proof comes with how urgently it escalates
+    /// — its row lapsing or lapsed, past R-core+ (`palw_readiness_duty_urgency_v1`) — which is what
+    /// the tick's `ReadinessEscalated` site reads.
     fn readiness_duties(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         current_daa: u64,
         synced: bool,
-    ) -> Vec<PalwConsensusObjectV2> {
+    ) -> Vec<PalwReadinessDutyV1> {
         use kaspa_consensus_core::palw_model_registry_v1::{
             PALW_READINESS_OPENING_MAX_BYTES_V1, PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT, palw_readiness_challenge_seed_v1,
             palw_readiness_window_v1, palw_seat_readiness_message_v1,
@@ -3619,6 +3691,19 @@ impl PalwPanelService {
             }
             let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
             let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
+            // M1: how urgently this span's proof escalates — the tip's row lapsing, past R-core+.
+            let readiness_v2 = self.consensus_config.params.palw_readiness_v2_at(current_daa);
+            let urgency = crate::palw_readiness_escalation::palw_readiness_duty_urgency_v1(
+                self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                row.as_ref(),
+                span_now,
+                if readiness_v2 { 2 } else { 1 },
+                last,
+                current_daa,
+                read.span_daa,
+                &globals,
+                readiness_v2,
+            );
             if !kaspa_consensus_core::palw_model_registry_v1::palw_readiness_duty_due_v2(
                 row.as_ref(),
                 current_daa,
@@ -3627,6 +3712,11 @@ impl PalwPanelService {
                 read.span_daa,
                 &globals,
                 self.consensus_config.params.palw_readiness_v2_at(current_daa),
+            ) || crate::palw_readiness_escalation::palw_readiness_duty_waits_v1(
+                self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                last,
+                current_daa,
+                read.span_daa,
             ) {
                 continue;
             }
@@ -3759,12 +3849,15 @@ impl PalwPanelService {
                         proof.siblings.len()
                     ),
                 );
-                out.push(PalwConsensusObjectV2::SeatReadinessProvedV2 {
-                    bond: bond_key,
-                    class_id: class.class_id,
-                    span: span_now,
-                    proof: Box::new(proof),
-                    signature,
+                out.push(PalwReadinessDutyV1 {
+                    object: PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                        bond: bond_key,
+                        class_id: class.class_id,
+                        span: span_now,
+                        proof: Box::new(proof),
+                        signature,
+                    },
+                    urgency,
                 });
                 continue;
             }
@@ -3803,15 +3896,91 @@ impl PalwPanelService {
                     opening.operand.bytes.len()
                 ),
             );
-            out.push(PalwConsensusObjectV2::SeatReadinessProved {
-                bond: bond_key,
-                class_id: class.class_id,
-                span: span_now,
-                opening,
-                signature,
+            out.push(PalwReadinessDutyV1 {
+                object: PalwConsensusObjectV2::SeatReadinessProved {
+                    bond: bond_key,
+                    class_id: class.class_id,
+                    span: span_now,
+                    opening,
+                    signature,
+                },
+                urgency,
             });
         }
         out
+    }
+
+    /// **This tick's possession proofs** ([`Self::readiness_duties`]): a proof left waiting last tick
+    /// is asked for again at once (the thirty-second read throttle would otherwise hand the freed slot
+    /// to a receipt).
+    async fn readiness_duties_for_tick(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        current_daa: u64,
+        readiness_waiting: bool,
+    ) -> Vec<PalwReadinessDutyV1> {
+        let synced_for_proofs = self.flow_context.is_nearly_synced(session).await;
+        if readiness_waiting {
+            *self.readiness_read_at.lock().unwrap() = None;
+        }
+        self.readiness_duties(session, current_daa, synced_for_proofs)
+    }
+
+    /// **Carry one possession proof** on `funding`, chaining the change as every lane does — the Own
+    /// site's proofs and M1's escalated one alike. `true` when the mempool took it.
+    async fn carry_readiness_proof_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        duty: &PalwReadinessDutyV1,
+        current_daa: u64,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: &mut usize,
+    ) -> bool {
+        // ADR-0133 §11.2: the submitter builds V1 below the fence and V2 past it, and both ride the
+        // same carrier path — reading only the V1 shape here would drop every V2 proof on the floor.
+        let (class_id, span) = match &duty.object {
+            PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. }
+            | PalwConsensusObjectV2::SeatReadinessProvedV2 { class_id, span, .. } => (*class_id, *span),
+            _ => return false,
+        };
+        let Some((funding_outpoint, funding_entry)) = funding.clone() else { return false };
+        match self.build_lifecycle_tx(&duty.object, funding_outpoint, &funding_entry) {
+            Ok(tx) => {
+                let txid = tx.id();
+                let change = tx.outputs[0].clone();
+                match self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await {
+                    Ok(()) => {
+                        info!(
+                            "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}{}",
+                            if duty.escalates() { " — escalated: its row is lapsing or lapsed" } else { "" }
+                        );
+                        self.readiness_submitted.lock().unwrap().insert(class_id, span);
+                        let next = TransactionOutpoint::new(txid, 0);
+                        self.persist_fee_outpoint(next);
+                        *funding = Some((
+                            next,
+                            UtxoEntry {
+                                amount: change.value,
+                                script_public_key: change.script_public_key,
+                                block_daa_score: current_daa,
+                                is_coinbase: false,
+                            },
+                        ));
+                        *inflight += 1;
+                        true
+                    }
+                    Err(e) => {
+                        warn!("[{PALW_PANEL}] the mempool refused the readiness proof for class {class_id}: {e}");
+                        *funding = None;
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("[{PALW_PANEL}] cannot build the readiness proof carrier for class {class_id}: {e}");
+                false
+            }
+        }
     }
 
     /// The bytes a replay of a held class needs on this host: the holding that serves that class
@@ -4511,6 +4680,11 @@ impl PalwPanelService {
                         Ok(()) => {
                             if palw_da_accusation_queued_v1(round, mine_is_responder, &object) {
                                 info!("[{PALW_PANEL}] submitted this seat's DefaultAccused of claim {session_id} in tx {txid} (P2-6)");
+                            } else if reporter_filer::palw_filer_queued_v1(round, mine_is_responder, &object) {
+                                info!(
+                                    "[{PALW_PANEL}] submitted {} for offence {session_id} in tx {txid} (the reporter filer, R-3)",
+                                    object_name(&object)
+                                );
                             } else {
                                 info!(
                                     "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
@@ -5985,8 +6159,12 @@ impl PalwPanelService {
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
         // The DAA each queued item is due by, where one is computable — what the priority lane orders
         // by (`palw_court_queue_edf_v1`). Each queue site states its item's; an item without one is
-        // carried after every dated item, by age.
+        // carried after every dated item, by age. The reporter filer's items are dated by the filer
+        // (`queued_dues_v1`, read after each of its passes).
         let mut court_due: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
+        // ADR-0152 R-3 (P2-8): every conviction this node files on its own evidence — commit, then the
+        // evidence, then the reveal, through `court_pending` — persisted so a restart still reveals.
+        let mut reporter_filer = reporter_filer::PalwReporterFilerV1::load(&self.config.state_dir);
         // ADR-0100: the claims this seat has accused in the one-move court, so a fault that
         // recurs on every tick (the duty stands until the claim ends) is filed once.
         let mut accused: HashSet<Hash64> = HashSet::new();
@@ -6019,6 +6197,9 @@ impl PalwPanelService {
         let mut last_lane: Option<PalwCarrierLaneV1> = None;
         // P2-6: the claims this seat accuses of withholding, until the chain has the accusation.
         let mut accusations = PalwSeatAccusationsV1::default();
+        // P2-8c: the claims this node holds a proof against, and the false-Valid filings it made. In
+        // memory, like the accusations above: a restart forgets it (the module's "What a restart loses").
+        let mut false_valid = crate::palw_filer_false_valid::PalwFalseValidFilerV1::for_params(&self.consensus_config.params);
         // P2-8b / P2-8d: the claims this seat's replay refuted, pursued to a proof (`palw_filer_replay`).
         let mut replay_filer = palw_filer_replay::PalwReplayFilerV1::default();
         let mut held_before = false;
@@ -7396,6 +7577,21 @@ impl PalwPanelService {
                             continue;
                         };
                         info!("[{PALW_PANEL}] session {} closes as {verdict:?} on step {index}", duty.session_id);
+                        // P2-8c (ADR-0152 N10): a close this node's replay built that proves the executor
+                        // guilty proves every `Valid` signer the audit's rule reaches false too.
+                        if verdict == kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty && !duty.i_am_responder {
+                            false_valid.note_court_close_v1(
+                                crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                    &self.consensus_config.params,
+                                    self.config.fee_outpoint.is_some(),
+                                    current_daa,
+                                ),
+                                duty.claim_id,
+                                &proof,
+                                index,
+                                current_daa,
+                            );
+                        }
                         Some(PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof })
                     }
                     // Not our move: the other party owes this rung. Counted, because "waiting" and
@@ -8087,7 +8283,11 @@ impl PalwPanelService {
                                 if !court_pending.iter().any(|(sid, _, _, _)| *sid == key) {
                                     // Dated (the second review's MEDIUM): an undated item waits behind
                                     // every dated one, and a lie it would have convicted reaches `Final`.
-                                    court_due.insert((key, 0, false), palw_seat_court_filing_due_v1(deadline, current_daa));
+                                    // Before the claim's earliest `Final` too (the fourth review's MEDIUM).
+                                    let earliest_final =
+                                        palw_seat_claim_earliest_final_v1(&self.consensus_config.params, duty.bound_daa);
+                                    court_due
+                                        .insert((key, 0, false), palw_seat_court_filing_due_v1(deadline, earliest_final, current_daa));
                                     court_pending.push((key, 0, false, object));
                                 }
                             }
@@ -8457,6 +8657,19 @@ impl PalwPanelService {
                                     job_pin: duty.fp_job_pin_v1(),
                                 };
                                 if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
+                                    // P2-8, J1 auto: the claim's committed execution under another job?
+                                    self.j1_auto_probe_v1(
+                                        &session,
+                                        &mut reporter_filer,
+                                        duty,
+                                        deadline,
+                                        current_daa,
+                                        bond_key,
+                                        &network_domain,
+                                        &payload.capture,
+                                        roots,
+                                    )
+                                    .await;
                                     continue;
                                 }
                                 let Some(shape) = backend.capture_shape(&payload.capture) else { continue };
@@ -8588,15 +8801,48 @@ impl PalwPanelService {
                                     // this seat found, and it is recorded rather than dropped.
                                     CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {
                                         self.note_seat_fault_v1(duty.claim_id, leaf, 1);
+                                        // P2-8c (ADR-0152 N10): the same refutation is a proof against every
+                                        // `Valid` signer of the claim, filed once a licence names them.
+                                        false_valid.note_step_refutation_v1(
+                                            crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                                &self.consensus_config.params,
+                                                self.config.fee_outpoint.is_some(),
+                                                current_daa,
+                                            ),
+                                            duty.claim_id,
+                                            &refutation,
+                                            &openings,
+                                            prompt_opening.as_ref(),
+                                            crate::palw_filer_false_valid::PalwFalseValidSourceV1::CaptureSample { leaf },
+                                            Some(duty.bound_daa),
+                                            current_daa,
+                                        );
+                                        // **P2-8 (SR-8): past `palw_rcore_plus`, `ExecutorRefuted` over
+                                        // the refutation in hand** — built before the accusation below
+                                        // takes the refutation by value; `None` below the fence.
+                                        let refuted = self.capture_arm_filing_v1(
+                                            duty,
+                                            deadline,
+                                            current_daa,
+                                            bond_key,
+                                            &refutation,
+                                            &openings,
+                                            &prompt_opening,
+                                        );
                                         // **The one thing a seat that found a lie files** (ADR-0098
                                         // Decision 2, ADR-0099 Decision 5): on a network whose
                                         // acceptance layer takes it, the accusation — the leaf, the
                                         // refutation it just ran, the openings it just proved —
                                         // signed under this seat's bond key and queued on the same
                                         // carrier path every court move rides. Once per claim.
-                                        if crate::palw_producer::palw_shard_court_in_force_v1(&self.consensus_config, current_daa)
-                                            && !accused.contains(&duty.claim_id)
-                                        {
+                                        let court = 'court: {
+                                            if !(crate::palw_producer::palw_shard_court_in_force_v1(
+                                                &self.consensus_config,
+                                                current_daa,
+                                            ) && !accused.contains(&duty.claim_id))
+                                            {
+                                                break 'court None;
+                                            }
                                             use kaspa_consensus_core::palw_shard_court_v1::{
                                                 PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, PALW_SHARD_COURT_VERSION_V1,
                                                 PalwShardCourtAccusationV1, palw_shard_court_session_id_v1,
@@ -8620,7 +8866,7 @@ impl PalwPanelService {
                                                     "[{PALW_PANEL}] claim {}: {} leaves is above the refutation ladder the chain tries this class at ({ladder}); the fault is recorded, not accused",
                                                     duty.claim_id, refutation.binding.step_leaf_count
                                                 );
-                                                break 'verdict None;
+                                                break 'court None;
                                             }
                                             let mut accusation = PalwShardCourtAccusationV1 {
                                                 version: PALW_SHARD_COURT_VERSION_V1,
@@ -8661,21 +8907,7 @@ impl PalwPanelService {
                                                             accusation: Box::new(accusation),
                                                         };
                                                         match kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
-                                                            Ok(()) => {
-                                                                info!(
-                                                                    "[{PALW_PANEL}] claim {}: accusing leaf {leaf} in the one-move court (session {session_id})",
-                                                                    duty.claim_id
-                                                                );
-                                                                accused.insert(duty.claim_id);
-                                                                // Dated (the second review's MEDIUM): the
-                                                                // held dissection this opens must not wait
-                                                                // behind every dated item past `Final`.
-                                                                court_due.insert(
-                                                                    (session_id, 0, false),
-                                                                    palw_seat_court_filing_due_v1(deadline, current_daa),
-                                                                );
-                                                                court_pending.push((session_id, 0, false, object));
-                                                            }
+                                                            Ok(()) => break 'court Some((session_id, object)),
                                                             Err(why) => warn!(
                                                                 "[{PALW_PANEL}] claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed",
                                                                 duty.claim_id
@@ -8688,6 +8920,34 @@ impl PalwPanelService {
                                                     duty.claim_id
                                                 ),
                                             }
+                                            None
+                                        };
+                                        // P2-8: kind 4 through the reporter filer first, the accusation
+                                        // kept as its fallback; else the accusation, as below the fence.
+                                        let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));
+                                        self.capture_arm_files_v1(
+                                            &session,
+                                            &mut reporter_filer,
+                                            &mut accused,
+                                            &mut court_pending,
+                                            duty,
+                                            leaf,
+                                            bond_key,
+                                            &network_domain,
+                                            refuted,
+                                            court,
+                                        );
+                                        // Dated (the second review's MEDIUM), and the one-move
+                                        // accusation due NOW (the fourth's): the held dissection it
+                                        // opens holds `Final` off only once it lands, and `Final` can
+                                        // come a challenge window after the bound (`bound + 121` on the
+                                        // 8k row), long before the duty's deadline. The filer's own
+                                        // items (a kind 4 filed first) carry the filer's dates, read
+                                        // after its pass.
+                                        if let Some(key) = court_key
+                                            && court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key)
+                                        {
+                                            court_due.entry(key).or_insert(current_daa);
                                         }
                                         break 'verdict None;
                                     }
@@ -8833,20 +9093,31 @@ impl PalwPanelService {
                             ) else {
                                 break 'verdict None;
                             };
-                            let arm = palw_attempt_material_arm_v1(
-                                seat_r,
-                                PalwSeatArmV1::AttemptMaterial,
-                                backend.as_ref(),
-                                bytes,
-                                PalwClaimRootsV1 {
-                                    execution_root: duty.execution_root,
-                                    trace_root: duty.trace_root,
-                                    anchor,
-                                    attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
-                                    output_root: Some(duty.output_root),
-                                    job_pin: duty.fp_job_pin_v1(),
-                                },
-                            );
+                            let roots = PalwClaimRootsV1 {
+                                execution_root: duty.execution_root,
+                                trace_root: duty.trace_root,
+                                anchor,
+                                attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                                output_root: Some(duty.output_root),
+                                job_pin: duty.fp_job_pin_v1(),
+                            };
+                            let arm =
+                                palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, backend.as_ref(), bytes, roots);
+                            if arm == PalwMaterialArmV1::Nothing {
+                                // P2-8, J1 auto: the claim's committed execution under another job?
+                                self.j1_auto_probe_v1(
+                                    &session,
+                                    &mut reporter_filer,
+                                    duty,
+                                    deadline,
+                                    current_daa,
+                                    bond_key,
+                                    &network_domain,
+                                    bytes,
+                                    roots,
+                                )
+                                .await;
+                            }
                             if arm != PalwMaterialArmV1::Nothing {
                                 // **Retained here, and only here**: the chain carries this claim, this
                                 // seat is on its panel, and these exact bytes reproduce its committed
@@ -9582,24 +9853,69 @@ impl PalwPanelService {
             //
             // ADR-0152 SR-8, §3.9's garbage row, J-6, DA-3: a claim this seat's replay refuted, or on
             // which a fault finder recorded a fault, is bisected off the loop against the claim's served
-            // capture; the first divergent step is filed as `ExecutorRefuted` (or demanded as a
-            // `StepLeaf` the served material cannot open) onto the court queue, which the priority
-            // lane carries below.
-            self.replay_filer_tick_v1(
-                &session,
-                &mut replay_filer,
+            // capture; the first divergent step is handed to the reporter filer as `ExecutorRefuted`
+            // (or demanded as a `StepLeaf` the served material cannot open, onto the court queue the
+            // priority lane carries below).
+            let replay_made = self
+                .replay_filer_tick_v1(
+                    &session,
+                    &mut replay_filer,
+                    &mut reporter_filer,
+                    current_daa,
+                    network_domain,
+                    bond_key,
+                    &duties,
+                    &replay_refuted,
+                    &materials,
+                    &accused,
+                    &court_duties,
+                    &mut court_pending,
+                    &mut court_due,
+                    &mut court_moved,
+                )
+                .await;
+            // P2-8c (N10): the replay's contradiction proves the claim's liable `Valid` signers false too.
+            if let Some((refuted, bound_daa)) = &replay_made {
+                false_valid.note_executor_refuted_v1(
+                    crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                        &self.consensus_config.params,
+                        self.config.fee_outpoint.is_some(),
+                        current_daa,
+                    ),
+                    &refuted.object,
+                    Some(*bound_daa),
+                    current_daa,
+                );
+            }
+
+            // --- P2-8c: this node's automatic PanelFalseValidV2 filings ---
+            //
+            // ADR-0152 v3.1 N10: a proof the capture arm or a court close noted above is filed against
+            // every `Valid` signer of the claim the audit's liability rule reaches, once a licence
+            // names them — off the tick, one claim a tick, each filing asked of the chain first and
+            // handed to the reporter filer below through the panel's door (`palw_filer_false_valid.rs`).
+            // Below `palw_rcore_plus`, and on a node that carries nothing, the book is emptied.
+            if crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                &self.consensus_config.params,
+                self.config.fee_outpoint.is_some(),
                 current_daa,
-                network_domain,
-                bond_key,
-                &duties,
-                &replay_refuted,
-                &materials,
-                &court_duties,
-                &mut court_pending,
-                &mut court_due,
-                &mut court_moved,
-            )
-            .await;
+            ) {
+                crate::palw_filer_false_valid::palw_false_valid_tick_v1(
+                    &mut false_valid,
+                    &session,
+                    bond_key,
+                    current_daa,
+                    &mut self.conviction_door_v1(&session, &mut reporter_filer, bond_key, network_domain),
+                )
+                .await;
+            } else {
+                false_valid.clear();
+            }
+
+            // --- P2-8: the reporter's commit–reveal filer (ADR-0152 R-3; `reporter_filer`) ---
+            self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending, &mut court_moved, &mut accused);
+            // The filer's queued items, dated by the filer, in the priority lane's order.
+            court_due.extend(reporter_filer.queued_dues_v1());
 
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
@@ -9713,7 +10029,28 @@ impl PalwPanelService {
                 // priority object would otherwise take every slot while claims waiting on their
                 // licence void at their receipt deadline. Every site below asks the one gate
                 // (`PalwCarrierSlotsV1::offers`: the slot free, and its turn), in `TICK_ORDER`.
+                //
+                // **M1 (the 2026-09-25 model-registry review): past R-core+ the possession proofs are
+                // read before the court queue**, so one whose row is about to lapse takes the slot
+                // ahead of it (`ReadinessEscalated`: one a tick, never two slots running). Elsewhere
+                // they are read at the Own site, where they always were.
+                let mut readiness = if self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+                    Some(self.readiness_duties_for_tick(&session, current_daa, readiness_waiting).await)
+                } else {
+                    None
+                };
                 let mut slots = PalwCarrierSlotsV1::new(last_lane);
+                slots.at(PalwCarrierSiteV1::ReadinessEscalated, inflight);
+                if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, inflight)
+                    && funding.is_some()
+                    && let Some(duties) = readiness.as_mut()
+                    && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
+                {
+                    let duty = duties.remove(at);
+                    if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {
+                        readiness_waiting = false;
+                    }
+                }
                 slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);
                 if slots.offers(PalwCarrierSiteV1::PriorityFirst, inflight) {
                     self.carry_priority_v1(
@@ -9892,66 +10229,26 @@ impl PalwPanelService {
                         }
                     }
                 }
-                // ADR-0135: this seat's possession proofs, when the registry is in force and one is due.
-                // A proof left waiting last tick is asked for again at once (the thirty-second read
-                // throttle would otherwise hand the freed slot to a receipt).
-                let synced_for_proofs = self.flow_context.is_nearly_synced(&session).await;
-                if readiness_waiting {
-                    *self.readiness_read_at.lock().unwrap() = None;
-                }
-                for object in self.readiness_duties(&session, current_daa, synced_for_proofs) {
-                    // ADR-0133 §11.2: the submitter builds V1 below the fence and V2 past it, and
-                    // both ride the same carrier path — reading only the V1 shape here would drop
-                    // every V2 proof on the floor without a word.
-                    let (class_id, span) = match &object {
-                        PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. }
-                        | PalwConsensusObjectV2::SeatReadinessProvedV2 { class_id, span, .. } => (class_id, span),
-                        _ => continue,
-                    };
-                    let (class_id, span) = (*class_id, *span);
-                    let Some((funding_outpoint, funding_entry)) =
-                        funding.clone().filter(|_| slots.offers(PalwCarrierSiteV1::Own, inflight))
-                    else {
+                // ADR-0135: this seat's possession proofs, when the registry is in force and one is due
+                // — read here, or before the court queue past R-core+ (M1, above).
+                let duties = match readiness.take() {
+                    Some(duties) => duties,
+                    None => self.readiness_duties_for_tick(&session, current_daa, readiness_waiting).await,
+                };
+                for duty in duties {
+                    if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, inflight) {
                         readiness_waiting = true;
                         crate::palw_backends::note_throttled_v1("panel-proof-waits", || {
                             format!(
-                                "[{PALW_PANEL}] a possession proof for class {class_id} waits for a carrier slot ({inflight} of ours \
-                                 unconfirmed, cap {MAX_INFLIGHT_CARRIERS}); receipts yield until it lands"
+                                "[{PALW_PANEL}] a possession proof for class {} waits for a carrier slot ({inflight} of ours \
+                                 unconfirmed, cap {MAX_INFLIGHT_CARRIERS}); receipts yield until it lands",
+                                duty.class_id().unwrap_or_default()
                             )
                         });
                         break;
-                    };
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                                Ok(()) => {
-                                    info!(
-                                        "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}"
-                                    );
-                                    readiness_waiting = false;
-                                    self.readiness_submitted.lock().unwrap().insert(class_id, span);
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
-                                }
-                                Err(e) => {
-                                    warn!("[{PALW_PANEL}] the mempool refused the readiness proof for class {class_id}: {e}");
-                                    funding = None;
-                                }
-                            }
-                        }
-                        Err(e) => warn!("[{PALW_PANEL}] cannot build the readiness proof carrier for class {class_id}: {e}"),
+                    }
+                    if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {
+                        readiness_waiting = false;
                     }
                 }
                 slots.at(PalwCarrierSiteV1::Licences, inflight);
@@ -10806,7 +11103,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
 /// acceptance data (the merged blocks' transactions it accepted, in reverse), stopping below the
 /// height or after `max_chain_blocks` chain blocks. A transaction the chain did not accept, or on
 /// another subnetwork, or whose payload does not decode, is never visited.
-fn walk_accepted_lifecycle_objects_v1(
+pub(crate) fn walk_accepted_lifecycle_objects_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     not_before_daa: u64,
     max_chain_blocks: usize,
@@ -18237,8 +18534,9 @@ mod p2_6_da_accusation_policy {
     #[test]
     fn the_priority_lane_goes_first_and_licences_are_still_carried() {
         use super::PalwCarrierLaneV1::{Licence, Ordinary, Priority};
-        use super::PalwCarrierSiteV1::{Licences, Own, OwnReceipts, PriorityAfterLicences, PriorityFirst};
-        let all = |_: PalwCarrierSiteV1| true;
+        use super::PalwCarrierSiteV1::{Licences, Own, OwnReceipts, PriorityAfterLicences, PriorityFirst, ReadinessEscalated};
+        // Every site holds something but M1's: no possession proof is about to lapse.
+        let all = |site: PalwCarrierSiteV1| site != ReadinessEscalated;
         assert_eq!(carrier_tick(None, all), (vec![PriorityFirst], Some(Priority)), "priority first, and nothing after it");
         assert_eq!(carrier_tick(Some(Licence), all), (vec![PriorityFirst], Some(Priority)));
         assert_eq!(carrier_tick(Some(Ordinary), all), (vec![PriorityFirst], Some(Priority)));
@@ -18262,7 +18560,7 @@ mod p2_6_da_accusation_policy {
                 let (out, lane) = carrier_tick(last, |site| match site {
                     PriorityFirst | PriorityAfterLicences => true,
                     Licences => licence_waits(tick),
-                    Own | OwnReceipts => false,
+                    ReadinessEscalated | Own | OwnReceipts => false,
                 });
                 assert_eq!(out.len(), 1, "the storm always fills the slot, and only the slot");
                 sent.push(lane.expect("a lane"));
@@ -18298,6 +18596,7 @@ mod p2_6_da_accusation_policy {
             at = found;
         }
         let gate = |site: &str| sites.matches(&format!("slots.offers(PalwCarrierSiteV1::{site}, inflight)")).count();
+        assert_eq!(gate("ReadinessEscalated"), 1, "M1: the one escalated possession proof, ahead of the court queue");
         assert_eq!(gate("PriorityFirst"), 1);
         assert_eq!(gate("Own"), 3, "the canonical claim, the class registration, the possession proofs");
         assert_eq!(gate("Licences"), 3, "the collector's licences; the supplementary collector's entry and each offer (F4 part 2)");
