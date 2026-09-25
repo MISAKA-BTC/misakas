@@ -524,8 +524,11 @@ pub fn palw_model_sink_class_v1(spk: &ScriptPublicKey) -> Option<Hash64> {
 pub fn palw_model_sink_binding_refusal_v1(tx: &crate::tx::Transaction) -> Option<(usize, &'static str)> {
     use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     use crate::palw_state_v2::PalwConsensusObjectV2;
-    let mut sinks =
-        tx.outputs.iter().enumerate().filter_map(|(i, output)| palw_model_sink_class_v1(&output.script_public_key).map(|line| (i, line)));
+    let mut sinks = tx
+        .outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, output)| palw_model_sink_class_v1(&output.script_public_key).map(|line| (i, line)));
     let first = sinks.next()?;
     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return Some((first.0, "a model sink rides only a lifecycle carrier"));

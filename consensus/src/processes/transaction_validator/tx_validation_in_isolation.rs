@@ -1138,6 +1138,135 @@ mod pq_output_class_enforcement_tests {
         assert!(declared.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
     }
 
+    /// **Lane sink (the 2026-09-25 Position review's #1, post-launch): a model sink is valid only
+    /// bound, from the fence's height on — and exactly as before below it.**
+    ///
+    /// testnet-12's shape (the market from genesis), with the binding armed at 60 and at 500 (the
+    /// common post-launch height) against the released door (`None`). Every burn route the review
+    /// listed — a sink-only transfer, a carrier with no object, a value mismatch (buy and seed), a
+    /// line mismatch, an out-of-range and a wrong `sink_index`, an extra sink, a sink on another
+    /// object's carrier (a sell), a carrier with no refund payee — is admitted by the header context
+    /// below the height on both doors, and refused by name from the height on the armed door only;
+    /// the honest buy and seed (change at output 0, the sink at 1, as `misaka palw model-buy` /
+    /// `model-seed` build them) pass everywhere. Isolation stays permissive on both (the height is
+    /// the header context's), and a `never()` fence is no fence.
+    #[test]
+    fn a_model_sink_is_valid_only_bound_from_the_sink_fence() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(0x11E);
+        let other_line = kaspa_consensus_core::Hash64::from_u64_word(0x22E);
+        const PAID: u64 = 700_000_000;
+        // Output 0 the change (a P2PKH-ML-DSA-87 payee) when `change`, then `rest`.
+        let carrier = |object: Option<PalwConsensusObjectV2>, subnet, change: bool, rest: Vec<TransactionOutput>| {
+            let mut outputs =
+                if change { vec![TransactionOutput { value: 5_000, script_public_key: pq_p2pkh_spk() }] } else { vec![] };
+            outputs.extend(rest);
+            let payload = object
+                .map(|object| borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap())
+                .unwrap_or_default();
+            Transaction::new(0, vec![], outputs, 0, subnet, 0, payload)
+        };
+        let sink = |value, line| TransactionOutput { value, script_public_key: palw_model_sink_spk_v1(&line) };
+        let buy = |msk_in, sink_index, line_id| {
+            Some(PalwConsensusObjectV2::ModelBuy {
+                line_id,
+                holder: kaspa_consensus_core::Hash64::from_u64_word(0xB0),
+                msk_in,
+                min_units_out: 0,
+                sink_index,
+            })
+        };
+        let seed = |msk_seed, sink_index| {
+            Some(PalwConsensusObjectV2::ModelSeed {
+                line_id: line,
+                seeder: kaspa_consensus_core::Hash64::from_u64_word(0x5E),
+                msk_seed,
+                sink_index,
+            })
+        };
+        let sell = Some(PalwConsensusObjectV2::ModelSell {
+            line_id: line,
+            holder: kaspa_consensus_core::Hash64::from_u64_word(0xB0),
+            units_in: 1,
+            min_msk_out: 0,
+            held_units: 1,
+            not_after_daa: 1_000,
+            pubkey: vec![1],
+            signature: vec![1],
+        });
+        // testnet-12's door: the market declared from genesis; the binding as given.
+        let door = |fence: Option<ForkActivation>| {
+            let mut tv = validator(PqEnforcementMode::Consensus);
+            tv.palw_model_market_fence = Some(ForkActivation::always());
+            tv.model_sink_outputs_allowed = true;
+            tv.with_model_sink_bound_fence(fence)
+        };
+        let honest = [
+            carrier(buy(PAID, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]),
+            carrier(seed(PAID, 1), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]),
+            // A carrier that pays no sink is untouched (a mis-named object only fails to ride).
+            carrier(buy(PAID, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![]),
+            // An ordinary transfer is untouched.
+            tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE),
+        ];
+        let unbound = [
+            (carrier(None, SUBNETWORK_ID_NATIVE, true, vec![sink(PAID, line)]), 1, "rides only a lifecycle carrier"),
+            (tx_with_output(palw_model_sink_spk_v1(&line), SUBNETWORK_ID_NATIVE), 0, "rides only a lifecycle carrier"),
+            (carrier(None, SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "carries no ModelBuy or ModelSeed"),
+            (carrier(buy(PAID + 1, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "another amount"),
+            (carrier(seed(PAID - 1, 1), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "another amount"),
+            (carrier(buy(PAID, 1, other_line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "another line"),
+            (carrier(buy(PAID, 9, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "is not the output"),
+            (carrier(buy(PAID, 0, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "is not the output"),
+            (
+                carrier(buy(PAID, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line), sink(PAID, line)]),
+                2,
+                "is not the output",
+            ),
+            (carrier(sell.clone(), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "carries no ModelBuy or ModelSeed"),
+            (
+                carrier(buy(PAID, 0, line), SUBNETWORK_ID_PALW_LIFECYCLE, false, vec![sink(PAID, line)]),
+                0,
+                "pays no P2PKH-ML-DSA-87 output",
+            ),
+        ];
+        let released = door(None);
+        let never = door(Some(ForkActivation::never()));
+        for height in [60u64, 500] {
+            let armed = door(Some(ForkActivation::new(height)));
+            for daa in [0, height - 1, height, height + 1, u64::MAX] {
+                for tx in &honest {
+                    assert_eq!(armed.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa), Ok(()), "honest, {height}@{daa}");
+                    assert_eq!(released.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa), Ok(()));
+                }
+                for (tx, index, why) in &unbound {
+                    // Isolation is height-free and stays permissive: the class rule admits the sink.
+                    assert_eq!(armed.check_transaction_pq_output_classes(tx), Ok(()), "{why}");
+                    // The released door (testnet-12 as launched) and a never() fence admit it everywhere.
+                    assert_eq!(released.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa), Ok(()), "{why}");
+                    assert_eq!(never.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa), Ok(()), "{why}");
+                    let verdict = armed.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa);
+                    if daa < height {
+                        assert_eq!(verdict, Ok(()), "{why}: below the fence ({height}) at {daa} the released rule, byte for byte");
+                    } else {
+                        match verdict {
+                            Err(TxRuleError::ModelSinkUnbound(i, reason)) => {
+                                assert_eq!(i, *index, "{why}");
+                                assert!(reason.contains(why), "{why}: {reason}");
+                            }
+                            other => panic!("{why}: from the fence ({height}) at {daa} an unbound sink is refused, got {other:?}"),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// **ADR-0087 Decision 6: a build that SCHEDULES the market must accept, below the activation,
     /// exactly what a build that does not carry the market accepts** (mainnet audit 2026-09-06,
     /// M-9).

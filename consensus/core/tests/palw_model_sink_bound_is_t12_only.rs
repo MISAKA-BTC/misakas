@@ -141,7 +141,10 @@ fn an_armed_build_below_the_binding_handshakes_with_the_shipped_build() {
             let (a, s) = (fork_id_v1(&armed, daa), fork_id_v1(&shipped, daa));
             let armed_sees = evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next);
             let shipped_sees = evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next);
-            assert!(!armed_sees.refuses(), "armed at {height}, both at DAA {daa}: the armed node keeps the shipped one ({armed_sees:?})");
+            assert!(
+                !armed_sees.refuses(),
+                "armed at {height}, both at DAA {daa}: the armed node keeps the shipped one ({armed_sees:?})"
+            );
             assert!(
                 !shipped_sees.refuses(),
                 "armed at {height}, both at DAA {daa}: the shipped node keeps the armed one ({shipped_sees:?})"
@@ -211,20 +214,53 @@ fn the_rule_names_every_unbound_sink() {
     let seed = |msk_seed, sink_index| {
         Some(PalwConsensusObjectV2::ModelSeed { line_id: line, seeder: Hash64::from_u64_word(2), msk_seed, sink_index })
     };
-    assert_eq!(palw_model_sink_binding_refusal_v1(&carrier(buy(paid, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line)])), None);
-    assert_eq!(palw_model_sink_binding_refusal_v1(&carrier(seed(paid, 1), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line)])), None);
+    assert_eq!(
+        palw_model_sink_binding_refusal_v1(&carrier(
+            buy(paid, 1, line),
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            vec![change.clone(), sink(paid, line)]
+        )),
+        None
+    );
+    assert_eq!(
+        palw_model_sink_binding_refusal_v1(&carrier(
+            seed(paid, 1),
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            vec![change.clone(), sink(paid, line)]
+        )),
+        None
+    );
     // The refund payee may sit anywhere in the carrier (P-B1 pays the first one).
-    assert_eq!(palw_model_sink_binding_refusal_v1(&carrier(buy(paid, 0, line), SUBNETWORK_ID_PALW_LIFECYCLE, vec![sink(paid, line), change.clone()])), None);
-    assert_eq!(palw_model_sink_binding_refusal_v1(&carrier(None, SUBNETWORK_ID_NATIVE, vec![change.clone()])), None, "no sink, no question");
+    assert_eq!(
+        palw_model_sink_binding_refusal_v1(&carrier(
+            buy(paid, 0, line),
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            vec![sink(paid, line), change.clone()]
+        )),
+        None
+    );
+    assert_eq!(
+        palw_model_sink_binding_refusal_v1(&carrier(None, SUBNETWORK_ID_NATIVE, vec![change.clone()])),
+        None,
+        "no sink, no question"
+    );
     for (tx, index, why) in [
         (carrier(None, SUBNETWORK_ID_NATIVE, vec![sink(paid, line)]), 0, "rides only a lifecycle carrier"),
         (carrier(None, SUBNETWORK_ID_NATIVE, vec![change.clone(), sink(paid, line)]), 1, "rides only a lifecycle carrier"),
         (carrier(None, SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line)]), 1, "carries no ModelBuy or ModelSeed"),
         (carrier(buy(paid, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid - 1, line)]), 1, "another amount"),
         (carrier(seed(paid + 1, 1), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line)]), 1, "another amount"),
-        (carrier(buy(paid, 1, Hash64::from_u64_word(9)), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line)]), 1, "another line"),
+        (
+            carrier(buy(paid, 1, Hash64::from_u64_word(9)), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line)]),
+            1,
+            "another line",
+        ),
         (carrier(buy(paid, 7, line), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line)]), 1, "is not the output"),
-        (carrier(buy(paid, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line), sink(1, line)]), 2, "is not the output"),
+        (
+            carrier(buy(paid, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, vec![change.clone(), sink(paid, line), sink(1, line)]),
+            2,
+            "is not the output",
+        ),
         (carrier(buy(paid, 0, line), SUBNETWORK_ID_PALW_LIFECYCLE, vec![sink(paid, line)]), 0, "pays no P2PKH-ML-DSA-87 output"),
     ] {
         let (i, reason) = palw_model_sink_binding_refusal_v1(&tx).unwrap_or_else(|| panic!("{why}: expected a refusal"));

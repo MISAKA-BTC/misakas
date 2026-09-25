@@ -6380,7 +6380,9 @@ impl Params {
             ));
         }
         if !self.palw_model_market.is_some_and(|market| market != ForkActivation::never()) {
-            return Err(Invalid("palw_model_sink_bound is armed without palw_model_market declared: there is no model sink form to bind"));
+            return Err(Invalid(
+                "palw_model_sink_bound is armed without palw_model_market declared: there is no model sink form to bind",
+            ));
         }
         if !self.palw_audit_2026_09_23.is_some_and(|audit| audit != ForkActivation::never() && audit.daa_score() <= fence.daa_score())
         {

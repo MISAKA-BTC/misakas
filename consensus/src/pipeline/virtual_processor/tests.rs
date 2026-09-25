@@ -16335,6 +16335,10 @@ mod t12_offence_attribution_gate;
 mod t12_rcore_skeleton_gate;
 // ADR-0152 v3.1 S-6: the per-bond share in the producer's own pre-check and the free-prompt price.
 mod t12_rcore_s6_producer_share;
+// Lane sink (post-launch): a testnet-12 chain crossing the model sink binding — an unbound sink valid
+// in the block below the fence, refused from it; a bound buy valid on both sides; the released rule
+// and the armed one agreeing on every block below it.
+mod t12_model_sink_bound_fence;
 // ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
 // and the fold past `palw_rcore_plus`, with real card signatures.
 mod t12_rcore_s7_reporter_gate;
