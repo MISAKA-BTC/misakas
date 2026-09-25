@@ -1560,6 +1560,27 @@ pub fn palw_da_accusation_check_v1(
     }
 }
 
+/// **ADR-0152 Phase 2, P2-8e: what the fold makes of ONE object in the virtual's next block** — node
+/// policy's "never build what the fold refuses" for an object no H-1 gate rehearses. The acceptance
+/// layer first (`palw_v2_validate_objects`: the bond named exists and signed it, the evidence
+/// adjudicates), then the object's own arm (`palw_state_v2::palw_v2_apply_one_object_v1`), on the tip
+/// at the virtual's DAA — the P-B3 pattern H-1's carriers are held to at the mempool
+/// (`palw_mempool_h1_carrier_refusal`). The held dissection's opening (`ShardCourtAccused` at a
+/// fused-attention leaf, DA-3) buys no lane, so it is not in H-1's list and nothing rehearses it
+/// before a carrier is paid for; the replay filer asks this before it queues one (C3's seat rule,
+/// C4's reservation, the court's capacity, a claim gone terminal — every one the fold's own answer).
+/// Read at the tip without the next block's pre-object sweeps, so it can be one fold step behind in
+/// either direction; what slips through is the fold's, as it always was. A read, never a block rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwObjectRehearsalV1 {
+    /// Both layers take it.
+    Accepted,
+    /// The acceptance layer refuses it, with its reason.
+    NotAccepted(String),
+    /// The object's own arm refuses it, with the fold's reason.
+    Refused(crate::palw_state_v2::PalwStateV2Error),
+}
+
 /// **P2-8d: what a `StepLeaf` demand of a claim by `accuser` comes to** — node policy's read of the
 /// fold's own opening for a `DefaultAccusedHeld` naming one divergent leaf (DA-3, J-6).
 #[derive(Clone, Debug, PartialEq, Eq)]

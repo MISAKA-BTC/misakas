@@ -23,8 +23,13 @@
 //!   whose once-per-accuser rule would drop the J-6 garbage path's second session) and queued on the
 //!   court queue under its own key. The producer discloses the leaf's evidence (which the fold
 //!   adjudicates: a guilty one convicts, `CourtFraud`) or defaults (S1).
-//! * **P2-8e** (held dissections of fused-attention leaves) is ONE hook,
-//!   [`palw_replay_held_dissection_hook_v1`]: it waits for the audit's A-held line.
+//! * **P2-8e** (held dissections of fused-attention leaves) is its own child module,
+//!   [`palw_filer_held`]: a fused leaf's run builds the held dissection's opening (the one move's
+//!   evidence, and the challenger's evidence against the accused's filing, which the court's kernels
+//!   must find a lie in), the case files `ShardCourtAccused` through the fold's rehearsal, and the
+//!   held route plays the session. Where no opening is built (below `palw_offence_attribution`, a class
+//!   the chain does not record as held) the fused finding settles through
+//!   [`palw_replay_held_dissection_hook_v1`], as before.
 //!
 //! **Resources.** The loop does nothing per case but cheap reads: whether anything is served at all
 //! (the pool's entry, the retained file's existence), the class, the claim's job. Everything that
@@ -74,6 +79,11 @@ use kaspa_consensus_core::palw_replay_refute_v1::{
     palw_replay_contradiction_v1, palw_replay_executor_refuted_object_v1, palw_replay_served_standing_v1,
 };
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
+
+/// ADR-0152 v3.1 Phase 2, P2-8e: held dissections of fused-attention leaves — a child, so it reads
+/// this book's cases and the panel's seams without widening them.
+#[path = "palw_filer_held.rs"]
+mod palw_filer_held;
 
 /// Runs a tick starts: one. A run is a whole dense replay of a claim's job, so the filer never
 /// competes with the seat's own SEAT-R replays for more than one of the ledger's grants at a time.
@@ -191,15 +201,17 @@ pub(super) fn replay_file_seam_v1(
     true
 }
 
-/// **P2-8e's one hook: a divergent fused-attention leaf** (§3.9, DA-3: `DaUnitNeedsDissection`). Its
-/// terminal is a HELD dissection — the audit's A-held line (C1–C5, `CourtAttnRootClaimedHeld`, tag
-/// 57) — which is not built here: the case settles, said once, and files nothing (a named fused leaf
-/// is refused as a DA unit, and no one-step proof opens it). When A-held lands, this is where the
-/// held dissection's opening move is queued.
+/// **A divergent fused-attention leaf no held opening was built for** (§3.9, DA-3:
+/// `DaUnitNeedsDissection`). Its terminal is a held dissection; P2-8e builds its opening in the run
+/// ([`palw_filer_held`]) wherever the held route stands — past `palw_offence_attribution`, on a class
+/// the chain records as held and answerable. Anywhere else (the fence-off twin, a non-held fused class,
+/// C5's unanswerable row) the case settles here, said once, and files nothing: a named fused leaf is
+/// refused as a DA unit, and no one-step proof opens it.
 pub(super) fn palw_replay_held_dissection_hook_v1(claim: &Hash64, leaf: u64, _binding: &PalwStepBindingV2) {
     warn!(
-        "[{PALW_PANEL}] claim {claim}: the first divergent step is fused-attention leaf {leaf} — a held dissection's (P2-8e, \
-         waiting for the audit's A-held line); nothing filed from the replay"
+        "[{PALW_PANEL}] claim {claim}: the first divergent step is fused-attention leaf {leaf} — a held dissection's, and no held \
+         route stands for it here (below palw_offence_attribution, or a class the chain does not record as held and \
+         answerable); nothing filed from the replay (P2-8e)"
     );
 }
 
@@ -323,6 +335,7 @@ pub(super) fn palw_replay_candidates_v1(
 /// host's condition (`PalwReplayNothingV1::is_this_hosts`: a rung the ledger refused, the local
 /// prefix unreadable — the review's finding 3), so the case keeps its second run. Every finding
 /// about the claim is `Ok`.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn palw_replay_filer_job_v1(
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
@@ -332,6 +345,20 @@ pub(super) fn palw_replay_filer_job_v1(
     form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ledger: &Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>,
 ) -> Result<PalwReplayFindingV1, String> {
+    palw_replay_filer_job_served_v1(backend, candidates, target, ladder, form, ledger).map(|(finding, _)| finding)
+}
+
+/// [`palw_replay_filer_job_v1`], handing out the served capture a fused finding was made on (P2-8e:
+/// the held opening is built off it once the job has dropped its local capture).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn palw_replay_filer_job_served_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    candidates: Vec<PalwReplayServedV1>,
+    target: &PalwOffenceTargetV1,
+    ladder: u64,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ledger: &Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>,
+) -> Result<(PalwReplayFindingV1, Option<palw_filer_held::PalwHeldServedV1>), String> {
     let mut ordered: Vec<(bool, PalwReplayServedV1)> = candidates
         .into_iter()
         .take(PALW_REPLAY_FILER_CANDIDATES_MAX_V1)
@@ -379,10 +406,14 @@ pub(super) fn palw_replay_filer_job_v1(
                 return Err(format!("the bisection stopped on this host's condition after {rungs} rungs: {why:?}"));
             }
             PalwReplayFindingV1::Nothing { .. } if !verified => last = finding,
-            _ => return Ok(finding),
+            PalwReplayFindingV1::NeedsDissection { .. } => {
+                let served = palw_filer_held::PalwHeldServedV1 { capture, roots, carried: prompt_token_ids };
+                return Ok((finding, Some(served)));
+            }
+            _ => return Ok((finding, None)),
         }
     }
-    Ok(last)
+    Ok((last, None))
 }
 
 /// **What the loop hands a run** — nothing borrowed from it: the served bytes (the retained file is
@@ -394,6 +425,9 @@ pub(super) struct PalwReplayRunInputV1 {
     pub target: PalwOffenceTargetV1,
     pub ladder: u64,
     pub form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// P2-8e: what a fused finding's held opening is built under — `None` where no held route stands
+    /// (`PalwPanelService::held_opening_ctx_v1`), and the fused finding settles as before.
+    pub held: Option<palw_filer_held::PalwHeldOpeningCtxV1>,
 }
 
 /// **What one run came to**, as the book reads it ([`PalwReplayFilerV1::on_run_v1`]).
@@ -401,6 +435,9 @@ pub(super) struct PalwReplayRunInputV1 {
 pub(super) enum PalwReplayRunV1 {
     /// The builder ran and concluded.
     Found(PalwReplayFindingV1),
+    /// P2-8e: the builder located a fused-attention leaf on a verified served capture, and the run
+    /// built what a held dissection's opening needs off that capture ([`palw_filer_held::palw_held_opening_v1`]).
+    FusedLeaf { leaf: u64, binding: Box<PalwStepBindingV2>, rungs: u32, opening: palw_filer_held::PalwHeldOpeningV1 },
     /// Nothing ran that costs the claim a run: nothing served is the claim's yet, or the ledger
     /// refused the run. The run is given back and the case waits `retry_after` DAA.
     Wait { why: String, retry_after: u64 },
@@ -446,7 +483,7 @@ pub(super) fn palw_replay_filer_run_v1<N: PalwReplayNeedV1, G>(
     reserve: impl FnOnce(&N) -> Result<G, String>,
     ledger: &Arc<crate::palw_memory_ledger::PalwMemoryLedgerV1>,
 ) -> PalwReplayRunV1 {
-    let PalwReplayRunInputV1 { retained, payloads, lane, target, ladder, form } = input;
+    let PalwReplayRunInputV1 { retained, payloads, lane, target, ladder, form, held: held_ctx } = input;
     let held: Vec<Vec<u8>> = retained.and_then(|path| std::fs::read(path).ok()).into_iter().chain(payloads).collect();
     let sorted = palw_replay_candidates_v1(backend, held, &lane, form, &target.execution_root);
     if sorted.usable.is_empty() {
@@ -481,8 +518,15 @@ pub(super) fn palw_replay_filer_run_v1<N: PalwReplayNeedV1, G>(
         Ok(guard) => guard,
         Err(why) => return PalwReplayRunV1::Wait { why, retry_after: 1 },
     };
-    match palw_replay_filer_job_v1(backend, sorted.usable, &target, ladder, form, ledger) {
-        Ok(finding) => PalwReplayRunV1::Found(finding),
+    match palw_replay_filer_job_served_v1(backend, sorted.usable, &target, ladder, form, ledger) {
+        // P2-8e: a fused leaf on a verified served capture, where a held route stands — its opening,
+        // built under the run's own reservation (the job's local capture is gone by now).
+        Ok((PalwReplayFindingV1::NeedsDissection { leaf, binding, rungs }, Some(served))) if held_ctx.is_some() => {
+            let ctx = held_ctx.as_ref().expect("guarded");
+            let opening = palw_filer_held::palw_held_opening_v1(backend, &served, &target, leaf, binding.step_leaf_count, form, ctx);
+            PalwReplayRunV1::FusedLeaf { leaf, binding, rungs, opening }
+        }
+        Ok((finding, _)) => PalwReplayRunV1::Found(finding),
         Err(why) => PalwReplayRunV1::HostFailed(why),
     }
 }
@@ -547,6 +591,10 @@ pub(super) enum PalwReplayCaseStepV1 {
     /// P2-8d: the `StepLeaf` demand, asked of the chain until it lands or settles. `sends` carriers
     /// queued; `refused_at` the DAA the chain last asked it to wait.
     Demand { leaf: u64, binding: Box<PalwStepBindingV2>, sends: u8, refused_at: Option<u64> },
+    /// P2-8e: the held dissection's opening at a fused-attention leaf, asked of the fold until the
+    /// chain opens the session (the held route's from there) or refuses it for good
+    /// ([`palw_filer_held::palw_held_dissections_step_v1`]).
+    Dissect(Box<palw_filer_held::PalwHeldDissectV1>),
 }
 
 /// One claim this seat pursues.
@@ -572,6 +620,8 @@ pub(super) struct PalwReplayFilerV1 {
     /// Court-queue keys of cases that left the book since the last drain, for `court_moved` to drop.
     released: Vec<(Hash64, u32, bool)>,
     running: Option<(Hash64, tokio::task::JoinHandle<PalwReplayRunV1>)>,
+    /// P2-8e: the held dissections this bond challenges, rebuilt off the chain every tick.
+    held: palw_filer_held::PalwHeldDissectionsV1,
 }
 
 /// What a finished run does to its case ([`PalwReplayFilerV1::on_run_v1`]).
@@ -596,6 +646,9 @@ impl PalwReplayFilerV1 {
         if duty.executor_bond == *own_bond
             || self.cases.contains_key(&duty.claim_id)
             || self.settled.contains_key(&duty.claim_id)
+            // P2-8e: a claim this bond is dissecting, or dissected within a case's window, as the
+            // chain shows it — so a restarted node never replays (or opens) it again.
+            || self.held.claim_v1(&duty.claim_id)
             || self.cases.len() >= PALW_REPLAY_FILER_CASES_MAX_V1
         {
             return false;
@@ -619,6 +672,11 @@ impl PalwReplayFilerV1 {
         let mut keys = vec![palw_replay_demand_queue_key_v1(*claim)];
         if let PalwReplayCaseStepV1::Filed { filing, .. } = &case.step {
             keys.push(palw_replay_refuted_queue_key_v1(filing.offence_key));
+        }
+        if let PalwReplayCaseStepV1::Dissect(dissect) = &case.step
+            && let Some((key, _)) = &dissect.filed
+        {
+            keys.push(*key);
         }
         keys
     }
@@ -776,6 +834,15 @@ impl PalwReplayFilerV1 {
                 palw_replay_held_dissection_hook_v1(&claim, leaf, &binding);
                 PalwReplayNextV1::Settle
             }
+            // P2-8e: the held opening the run built — a dissection to open, P2-8d's fallback, or nothing.
+            PalwReplayRunV1::FusedLeaf { leaf, binding, rungs, opening } => {
+                if case.duty.executor_bond == *own_bond {
+                    PalwReplayNextV1::Settle
+                } else {
+                    let on_host_failure = host_failed(case);
+                    palw_filer_held::palw_held_next_of_opening_v1(&self.held, claim, leaf, binding, rungs, opening, on_host_failure)
+                }
+            }
             // A host's condition that reached the book as a finding (the job maps it to `Err`; kept
             // here so no path settles a claim on it).
             PalwReplayRunV1::Found(PalwReplayFindingV1::Nothing { why, rungs }) if why.is_this_hosts() => {
@@ -923,6 +990,9 @@ impl PalwPanelService {
     /// 3. Asks the chain about each P2-8d demand — queued ones again, due ones before they are built
     ///    (`palw_da_step_leaf_demand_check_v1`, the fold's own gates for the named leaf) — and queues
     ///    the ones it would open.
+    /// 3b. P2-8e: reads this bond's held dissections off the chain's court duties, and asks the fold
+    ///    about each held dissection's opening — queued with its due date
+    ///    ([`palw_filer_held::palw_held_dissections_step_v1`]).
     /// 4. Starts at most [`PALW_REPLAY_FILER_STARTS_PER_TICK_V1`] run, off the loop.
     /// 5. Drops the `court_moved` debounce of every case that left the book.
     ///
@@ -939,7 +1009,9 @@ impl PalwPanelService {
         duties: &[PalwSeatDutyV2],
         replay_refuted: &HashSet<Hash64>,
         materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        court_duties: &[kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2],
         court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
         court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
     ) {
         if !palw_replay_filer_armed_v1(
@@ -990,6 +1062,19 @@ impl PalwPanelService {
         for (claim, leaf) in filer.demands_due_v1(current_daa, court_pending, court_moved) {
             self.replay_demand_v1(session, filer, claim, leaf, current_daa, network_domain, bond_key, court_pending);
         }
+        // 3b. P2-8e's held dissections: the chain's, then each opening this book holds.
+        self.held_dissections_tick_v1(
+            session,
+            filer,
+            current_daa,
+            network_domain,
+            bond_key,
+            court_duties,
+            court_pending,
+            court_due,
+            court_moved,
+        )
+        .await;
         // 4. The next run: at most one start, over at most a few tries, so a case that waits (no
         // served capture yet, the claim's block not held) never holds the ones behind it.
         let mut started = 0;
@@ -999,7 +1084,7 @@ impl PalwPanelService {
             }
             let Some(claim) = filer.due_v1(current_daa) else { break };
             let duty = filer.case(&claim).expect("a due case").duty.clone();
-            match self.replay_filer_start_v1(session, &duty, network_domain, materials) {
+            match self.replay_filer_start_v1(session, &duty, network_domain, materials, current_daa) {
                 Ok(handle) => {
                     filer.started(claim, handle);
                     started += 1;
@@ -1099,6 +1184,7 @@ impl PalwPanelService {
         duty: &PalwSeatDutyV2,
         network_domain: Hash64,
         materials: &HashMap<Hash64, Vec<Vec<u8>>>,
+        current_daa: u64,
     ) -> Result<tokio::task::JoinHandle<PalwReplayRunV1>, PalwReplayStartV1> {
         let retained = self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id));
         let pool = materials.get(&duty.claim_id).map(Vec::as_slice).unwrap_or_default();
@@ -1153,6 +1239,7 @@ impl PalwPanelService {
             target: palw_replay_target_of_duty_v1(duty),
             ladder,
             form,
+            held: self.held_opening_ctx_v1(session, duty.class_id, duty.artifact_root, current_daa),
         };
         let (class_id, artifact_root, claim_id) = (duty.class_id, duty.artifact_root, duty.claim_id);
         // A start whose served bytes turn out to hold nothing of the claim's waits in its task, so
@@ -1276,6 +1363,7 @@ mod tests {
                 target: self.target.clone(),
                 ladder: PALW_FALSE_VALID_NETWORK_LADDER_V1,
                 form: MERKLE,
+                held: None,
             }
         }
     }

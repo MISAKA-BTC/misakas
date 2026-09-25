@@ -9494,7 +9494,9 @@ impl PalwPanelService {
                 &duties,
                 &replay_refuted,
                 &materials,
+                &court_duties,
                 &mut court_pending,
+                &mut court_due,
                 &mut court_moved,
             )
             .await;

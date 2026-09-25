@@ -4218,6 +4218,58 @@ impl VirtualStateProcessor {
         )
     }
 
+    /// **ADR-0152 Phase 2, P2-8e: what the fold makes of `object` in the virtual's next block** — at
+    /// the tip, for the virtual's DAA, the acceptance layer and then the object's own arm
+    /// ([`Self::palw_object_rehearsal_v1_on`]). `None` with no tip state. A read: node policy asks it
+    /// before it queues an object no H-1 gate rehearses (the held dissection's opening).
+    pub fn palw_object_rehearsal_v1_impl(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score,
+            // The next block's: past the tip's, as the H-1 gate reads it.
+            blue_score: state.last_point().map_or(0, |last| last.blue_score.saturating_add(1)),
+            subsidy: 0,
+        };
+        Some(self.palw_object_rehearsal_v1_on(&state, state_params, &point, object))
+    }
+
+    /// [`Self::palw_object_rehearsal_v1_impl`] on a given state and point — the H-1 gate's two
+    /// layers ([`Self::palw_h1_carrier_refusal_on`]) with the fold's reason kept typed. The acceptance
+    /// layer first (cheap refusals before any state is cloned), then `palw_v2_apply_one_object_v1`
+    /// under the point's own flags and extras.
+    pub(crate) fn palw_object_rehearsal_v1_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1 {
+        use kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1;
+        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+            return PalwObjectRehearsalV1::NotAccepted(why);
+        }
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        ) {
+            Ok(_) => PalwObjectRehearsalV1::Accepted,
+            Err(why) => PalwObjectRehearsalV1::Refused(why),
+        }
+    }
+
     /// **Who may be served a claim's private material**, at the tip (ADR-0077 Decision 16's
     /// transport half) — see `PalwChainStateV2::claim_readers_v2`.
     pub fn palw_claim_readers_v2_impl(

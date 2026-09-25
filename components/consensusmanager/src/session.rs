@@ -257,6 +257,13 @@ impl ConsensusSessionOwned {
         self.consensus.palw_da_step_leaf_demand_check_v1(claim, accuser, leaf)
     }
 
+    pub fn palw_object_rehearsal_v1(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwObjectRehearsalV1> {
+        self.consensus.palw_object_rehearsal_v1(object)
+    }
+
     pub fn palw_claim_readers_v2(
         &self,
         claim: kaspa_consensus_core::Hash64,

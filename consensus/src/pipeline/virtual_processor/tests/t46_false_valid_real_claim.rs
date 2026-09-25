@@ -5219,3 +5219,8 @@ mod t47_model_class_attribution;
 /// this suite's real claims, every object it leads to through this suite's doors; a child, like T47.
 #[path = "t54f_replay_filer.rs"]
 mod t54f_replay_filer;
+
+/// **ADR-0152 v3.1 Phase 2, P2-8e (T54g's processor half)** — the fold's rehearsal of one object, the
+/// read kaspad's held-dissection filer asks before it queues an opening; a child, like T54f.
+#[path = "t54g_object_rehearsal.rs"]
+mod t54g_object_rehearsal;

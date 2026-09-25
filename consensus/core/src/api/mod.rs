@@ -937,6 +937,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0152 Phase 2, P2-8e: what the fold makes of `object` in the virtual's next block** — the
+    /// acceptance layer, then the object's own arm, on the tip at the virtual's DAA
+    /// (`palw_producer_v2::PalwObjectRehearsalV1`). A read for node policy, never a block rule. `None`
+    /// off `ConsensusV2` or with no tip state.
+    fn palw_object_rehearsal_v1(
+        &self,
+        _object: &crate::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<crate::palw_producer_v2::PalwObjectRehearsalV1> {
+        None
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {
