@@ -16325,6 +16325,9 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
 // Test-only: the scenario lives in `tests/t12_round_lane_e2e.rs` beside this file, as a child of
 // this module so it reuses `TestContext` and the harness identities.
 mod t12_clock_floor;
+// 2026-09-25 question: can a heartbeat miner's private fork carry a double spend? Two nodes, one
+// released private branch, the victim's sink and blue work measured (a probe; no rule changes).
+mod hb_fork_choice_probe;
 // ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the node's H-1 gate asks the fold about a carrier
 // before this node admits, relays, spares or mines it.
 mod t12_h1_carrier_gate;
