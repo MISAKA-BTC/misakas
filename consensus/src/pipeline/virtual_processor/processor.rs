@@ -1287,13 +1287,24 @@ impl VirtualStateProcessor {
     /// (`palw_readiness_gate_daa_v1`): a seat names its own virtual's span, and a node the newest
     /// block has not reached yet must not turn the honest proof away where no gate asked before.
     pub(super) fn palw_mempool_h1_carrier_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
-        if !self.palw_rcore_plus_at(virtual_daa_score) {
-            return None;
-        }
-        let object = kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(tx)?;
+        let object = self.palw_h1_gated_object_at(tx, virtual_daa_score)?;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa_score, chain_point, &state)
+    }
+
+    /// The object [`Self::palw_mempool_h1_carrier_refusal`] puts to the fold: `None` below
+    /// `palw_rcore_plus` (the gate's fence) and for a transaction that carries no gated object —
+    /// asked before any tip is loaded, by the gate and by the sweep alike.
+    fn palw_h1_gated_object_at(
+        &self,
+        tx: &Transaction,
+        virtual_daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        if !self.palw_rcore_plus_at(virtual_daa_score) {
+            return None;
+        }
+        kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(tx)
     }
 
     /// [`Self::palw_mempool_h1_carrier_refusal`] on a given tip (`chain_point`, `state`) for the
@@ -1370,11 +1381,55 @@ impl VirtualStateProcessor {
     /// never builds a template (a seat-only node, a relay) kept it — and a seat's one carrier slot
     /// with it — until the Low-priority expiry, 720 DAA later. Node-local; all `None` with no
     /// virtual state, and below `palw_rcore_plus` (the gate's own fence).
+    ///
+    /// **In the template's order: the UTXO context before the gate** (the V01 review, MEDIUM). The
+    /// mempool hears of a block after the virtual may already have folded it — `on_new_block` walks
+    /// an ancestor batch one block at a time while the virtual resolves the batch at once, and an
+    /// IBD block the same — so the tip can already hold a carrier the pool still holds, and the fold
+    /// refuses a duplicate: the honest carrier would be evicted as "refused", its redeemers with
+    /// it. The template never asks such a carrier (its inputs are gone, `MissingTxOutpoints` first),
+    /// and neither does the sweep: a transaction with an input the virtual UTXO set does not hold is
+    /// not judged (`None`) — mined, the block handler removes it; double-spent, the double-spend
+    /// sweep does; chained on a pooled parent, it is judged at the block after the parent's.
+    ///
+    /// **One tip, the virtual's own.** The tip row is written before the virtual commits (the sink
+    /// search writes it at every candidate), so the gate's usual read can stand a block ahead of the
+    /// UTXO set just read. The sweep loads the tip once, under the same virtual read as the UTXO
+    /// facts, and judges nothing unless it stands at the virtual's sink; every transaction is then
+    /// put to the gate's own layers (`palw_mempool_h1_carrier_refusal_with`) on that one snapshot.
     pub fn palw_h1_carrier_refusals_v1_impl(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
-        let Some(virtual_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
-            return vec![None; txs.len()];
+        let unjudged = || vec![None; txs.len()];
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return unjudged();
         };
-        txs.iter().map(|tx| self.palw_mempool_h1_carrier_refusal(tx, virtual_daa)).collect()
+        let (virtual_daa, chain_point, state, spendable) = {
+            let virtual_read = self.virtual_stores.read();
+            let Ok(virtual_state) = virtual_read.state.get() else {
+                return unjudged();
+            };
+            let Some((chain_point, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
+                return unjudged();
+            };
+            if chain_point != virtual_state.ghostdag_data.selected_parent {
+                // Mid-resolve: the tip is not the virtual's yet. The next block's sweep asks again.
+                return unjudged();
+            }
+            let spendable: Vec<bool> = txs
+                .iter()
+                .map(|tx| tx.inputs.iter().all(|input| UtxoView::get(&virtual_read.utxo_set, &input.previous_outpoint).is_some()))
+                .collect();
+            (virtual_state.daa_score, chain_point, state, spendable)
+        };
+        txs.iter()
+            .zip(spendable)
+            .map(|(tx, spendable)| {
+                if !spendable {
+                    return None;
+                }
+                let object = self.palw_h1_gated_object_at(tx, virtual_daa)?;
+                self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa, chain_point, &state)
+            })
+            .collect()
     }
 
     /// **P-B1 at the template: one payout-queue budget across every market carrier the template

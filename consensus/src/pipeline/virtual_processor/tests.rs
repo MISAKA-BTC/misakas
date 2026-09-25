@@ -13502,14 +13502,21 @@ fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
         let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
         rest[..end].to_string()
     };
-    // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block.
-    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction", "palw_h1_carrier_refusals_v1_impl"] {
+    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
         assert!(
             body_of(caller).contains("self.palw_mempool_h1_carrier_refusal("),
             "{caller} must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"
         );
     }
-    assert!(body_of("palw_mempool_h1_carrier_refusal").contains("self.palw_h1_carrier_refusal_on("));
+    // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block — the gate's own
+    // two steps (its object, then its layers on a tip), on the one snapshot the sweep checked
+    // against the virtual (the V01 review, MEDIUM).
+    for asker in ["palw_mempool_h1_carrier_refusal", "palw_h1_carrier_refusals_v1_impl"] {
+        let body = body_of(asker);
+        assert!(body.contains("self.palw_h1_gated_object_at("), "{asker} takes the gate's object");
+        assert!(body.contains("self.palw_mempool_h1_carrier_refusal_with("), "{asker} asks the gate's layers");
+    }
+    assert!(body_of("palw_mempool_h1_carrier_refusal_with").contains("self.palw_h1_carrier_refusal_on("));
     let on = body_of("palw_h1_carrier_refusal_on");
     assert!(on.contains("self.palw_v2_validate_objects("), "the acceptance layer");
     assert!(on.contains("palw_v2_apply_one_object_v1("), "and the fold's own arm");

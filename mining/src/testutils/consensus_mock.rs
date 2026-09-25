@@ -42,6 +42,10 @@ pub(crate) struct ConsensusMock {
     /// askers alike, the sweep (`palw_h1_carrier_refusals_v1`) and admission
     /// (`validate_mempool_transaction`, after the UTXO context as the processor asks it).
     palw_h1_refused: RwLock<HashMap<TransactionId, String>>,
+    /// V01 review (MEDIUM): the outpoints the mock's virtual has spent (`add_transaction`). The
+    /// sweep does not judge a transaction that spends one — the processor's contract: the UTXO
+    /// context before the gate, as the template asks it.
+    spent: RwLock<std::collections::HashSet<TransactionOutpoint>>,
 }
 
 impl ConsensusMock {
@@ -53,6 +57,7 @@ impl ConsensusMock {
             sink_blue_score: RwLock::new(0),
             palw_readiness_urgency: RwLock::new(Default::default()),
             palw_h1_refused: RwLock::new(Default::default()),
+            spent: RwLock::new(Default::default()),
         }
     }
 
@@ -95,8 +100,10 @@ impl ConsensusMock {
         let mut utxos = self.utxos.write();
 
         // Remove the spent UTXOs
+        let mut spent = self.spent.write();
         transaction.tx.inputs.iter().for_each(|x| {
             utxos.remove(&x.previous_outpoint);
+            spent.insert(x.previous_outpoint);
         });
         // Create the new UTXOs
         transaction.tx.outputs.iter().enumerate().for_each(|(i, x)| {
@@ -174,7 +181,15 @@ impl ConsensusApi for ConsensusMock {
 
     fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
         let refused = self.palw_h1_refused.read();
-        txs.iter().map(|tx| refused.get(&tx.id()).cloned()).collect()
+        let spent = self.spent.read();
+        txs.iter()
+            .map(|tx| {
+                if tx.inputs.iter().any(|input| spent.contains(&input.previous_outpoint)) {
+                    return None;
+                }
+                refused.get(&tx.id()).cloned()
+            })
+            .collect()
     }
 
     fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, _: &TransactionValidationArgs) -> TxResult<()> {

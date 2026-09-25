@@ -1198,8 +1198,11 @@ impl MiningManager {
     /// most [`PALW_CARRIER_SWEEP_PER_BLOCK`], in arrival order, wrapping). Each is asked the fold's
     /// own question with no mempool lock held; a refused one still in the pool is removed with its
     /// redeemers (`TxRemovalReason::PalwCarrierRefused`), one log line each, and counted in
-    /// `MiningCounters::palw_carrier_refused_evicted_counts`. An honest carrier is never touched: the
-    /// predicate is the one that let it in. A peer that re-relays an evicted carrier meets the same
+    /// `MiningCounters::palw_carrier_refused_evicted_counts` (logged by the mining monitor). An
+    /// honest carrier is never touched: the predicate is the one that let it in, asked in the
+    /// template's order — a carrier whose inputs the virtual already spent (folded in a block this
+    /// pool has not heard of yet, where the tip would refuse it as a duplicate) is not judged, and is
+    /// left to the block handler (the V01 review). A peer that re-relays an evicted carrier meets the same
     /// gate at admission (`validate_mempool_transaction_impl`) and is refused. Returns how many
     /// carriers were evicted.
     pub(crate) fn evict_palw_refused_carriers(

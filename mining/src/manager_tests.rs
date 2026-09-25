@@ -1604,6 +1604,63 @@ mod tests {
         assert_eq!(evicted(), 1);
     }
 
+    /// **The V01 review, MEDIUM: a carrier the virtual already folded is not "refused".** The pool
+    /// hears of a block after the virtual may have folded it (an ancestor batch, IBD), and on that tip
+    /// the fold refuses the carrier as a duplicate. The sweep does not judge a carrier whose inputs
+    /// the virtual has spent, so neither it nor the redeemer spending its change is evicted and
+    /// nothing is counted; when the pool hears of the block that mined it, the block handler takes
+    /// the carrier out as mined and the redeemer stays.
+    #[test]
+    fn a_carrier_the_virtual_already_folded_is_left_to_the_block_that_mined_it() {
+        use kaspa_consensus_core::{
+            palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2},
+            palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
+            subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        };
+        let consensus = Arc::new(ConsensusMock::new());
+        let mut config = Config::build_default(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS);
+        config.palw_h1_carrier_priority = true;
+        let counters = Arc::new(MiningCounters::default());
+        let mining_manager = MiningManager::with_config(config, None, counters.clone(), None);
+        let mut carrier = create_transaction_with_utxo_entry(1_010, 0);
+        let object = PalwConsensusObjectV2::DefaultAccused {
+            claim: Hash64::from_u64_word(0xC1B1),
+            missing_event_index: 0,
+            accuser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+            signature: vec![1; 8],
+        };
+        let mut tx = carrier.tx.as_ref().clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
+        tx.payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+        carrier.tx = tx.into();
+        let mass = transaction_estimated_serialized_size(&carrier.tx);
+        carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+        let carrier_tx = carrier.tx.as_ref().clone();
+        let carrier_id = carrier.id();
+        validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), carrier).expect("the tip takes it");
+        let redeemer = create_transaction(&carrier_tx, DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
+        let redeemer_id = redeemer.id();
+        mining_manager
+            .validate_and_insert_transaction(consensus.as_ref(), redeemer, Priority::Low, Orphan::Allowed, RbfPolicy::Forbidden)
+            .expect("a child spending the carrier's change");
+        let pooled = |id: TransactionId| mining_manager.has_transaction(&id, TransactionQuery::TransactionsOnly);
+        let evicted = || counters.palw_carrier_refused_evicted_counts.load(std::sync::atomic::Ordering::Relaxed);
+
+        // The virtual folds the carrier (a later block of the batch), and on that tip the fold
+        // refuses it again as a duplicate; the pool hears of an earlier block first.
+        consensus.add_transaction(carrier_tx.clone(), 2);
+        consensus.set_palw_h1_carrier_refusal(carrier_id, Some("already folded: a duplicate".to_string()));
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 1, &build_block_transactions(std::iter::empty())).unwrap();
+        assert!(pooled(carrier_id) && pooled(redeemer_id), "a folded carrier is not the sweep's to judge");
+        assert_eq!(evicted(), 0, "and nothing is counted as refused");
+
+        // The block that mined it: out as mined, the redeemer stays.
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 2, &build_block_transactions([carrier_tx].iter())).unwrap();
+        assert!(!pooled(carrier_id), "the block handler takes the mined carrier out");
+        assert!(pooled(redeemer_id), "its redeemer stays");
+        assert_eq!(evicted(), 0);
+    }
+
     /// **The daemon's switch reads the ruleset** (P2-9 review, finding 6): the lane and the reserve
     /// are on where `palw_rcore_plus` is armed — testnet-12 — and off on testnet-11, devnet and
     /// mainnet, which therefore select and evict exactly as before.

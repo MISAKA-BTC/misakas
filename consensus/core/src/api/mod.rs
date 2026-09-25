@@ -1009,6 +1009,11 @@ pub trait ConsensusApi: Send + Sync {
     /// fold stopped taking leaves the pool of a node that never builds a template (a seat-only node,
     /// a relay) exactly as it leaves a miner's. All `None` below `palw_rcore_plus` (every network but
     /// testnet-12), off `ConsensusV2` and with no tip state. Node-local: never a block rule.
+    ///
+    /// In the template's order (the V01 review): `None` for a transaction with an input the virtual
+    /// UTXO set does not hold — mined (the tip would refuse it as a duplicate), double-spent, or
+    /// chained on a pooled parent — and all `None` while the PALW tip row does not stand at the
+    /// virtual's sink (mid-resolve); every judged transaction is judged on that one tip.
     fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
         vec![None; txs.len()]
     }
