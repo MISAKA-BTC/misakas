@@ -17,6 +17,21 @@
 //!   `palw_admission_jury_v1` and reads no `stake` policy, no `palw_panel_draw_policy_at` and no
 //!   `palw_rcore_plus` activation, so the jury testnet-12 seats with `palw_rcore_plus` armed is the
 //!   jury its fence-off twin seats on the same state (the function's signature takes no policy).
+//!   This half is a source check, not a fold twin: no integration-level fixture reaches a
+//!   `Candidate`'s audit span (the only one is `palw_state_v2.rs`'s private `to_first_audit`), so the
+//!   check reads the fold's function and the pure helpers it calls (seed, quorum, audit period and
+//!   due), and the population filter's one collateral read is a threshold (`palw_bond_may_take_work_v2`
+//!   at the floor it is given), never a weight.
+//!
+//! **The Activation Pool (`feat/t12-activation-pool`, not on this line) renames the fold's function to
+//! `admission_jury_v1`** (it returns the drawn jury) and, past its genesis-only fence
+//! `palw_activation_pool`, draws the population at the panel floor
+//! (`palw_panel_collateral_floor_v1`, 130,000 MSK) with `palw_admission_jury_seed_v2`. The jury stays
+//! unweighted — the same `palw_admission_jury_v1` over a thresholded population — but past that
+//! fence it is no longer ADR-0147's population or seed. The source check reads whichever of the two
+//! names the tree has, so the merge does not break it; the twin the merge owes is the pool fence's
+//! (the jury on and off `palw_activation_pool`), and the ADR's "the jury stays ADR-0147's" becomes
+//! "unweighted, and past the pool's fence drawn at the panel floor".
 //!
 //! **The kept residual (documented, not asserted as a rate — SW-A4):** an unweighted jury is bought
 //! with operator count, not stake. The audit measured that 40 registrant Sybils of 13,000 MSK each
@@ -194,11 +209,15 @@ fn t90_the_admission_jury_is_the_operator_ticket_order_whatever_the_stake() {
 
 /// The body of `fn name(` in `source`, to its closing brace at the same indentation.
 fn body_of<'a>(source: &'a str, signature: &str) -> &'a str {
-    let start = source.find(signature).unwrap_or_else(|| panic!("`{signature}` is in the source"));
+    try_body_of(source, signature).unwrap_or_else(|| panic!("`{signature}` is in the source"))
+}
+
+fn try_body_of<'a>(source: &'a str, signature: &str) -> Option<&'a str> {
+    let start = source.find(signature)?;
     let indent = source[..start].rsplit('\n').next().unwrap_or("").len();
     let close = format!("\n{}}}\n", " ".repeat(indent));
     let end = source[start..].find(&close).unwrap_or_else(|| panic!("`{signature}` closes")) + start;
-    &source[start..end]
+    Some(&source[start..end])
 }
 
 /// **T90, the fold's half: `admission_jury_seated` draws ADR-0147's jury and reads no stake and no
@@ -209,10 +228,29 @@ fn body_of<'a>(source: &'a str, signature: &str) -> &'a str {
 #[test]
 fn t90_the_folds_jury_reads_neither_the_stake_nor_the_fence() {
     let state = include_str!("../src/palw_state_v2.rs");
-    let seated = body_of(state, "fn admission_jury_seated(");
-    assert!(seated.contains("palw_admission_jury_v1("), "the fold seats ADR-0147's jury");
+    // This line's name, or the Activation Pool's (which returns the drawn jury): exactly one exists.
+    let (name, seated) = match (try_body_of(state, "fn admission_jury_seated("), try_body_of(state, "fn admission_jury_v1(")) {
+        (Some(body), None) => ("admission_jury_seated", body),
+        (None, Some(body)) => ("admission_jury_v1", body),
+        (a, b) => panic!("exactly one fold jury function: admission_jury_seated {}, admission_jury_v1 {}", a.is_some(), b.is_some()),
+    };
+    assert!(seated.contains("palw_admission_jury_v1("), "{name}: the fold draws with the one jury function");
     for forbidden in ["stake", "palw_panel_draw_policy_at", "rcore_plus", "PalwPanelStakeDrawV1", "weight"] {
-        assert!(!seated.contains(forbidden), "admission_jury_seated reads `{forbidden}`: the jury must stay unweighted (SW-A4)");
+        assert!(!seated.contains(forbidden), "{name} reads `{forbidden}`: the jury must stay unweighted (SW-A4)");
+    }
+    // The population's one collateral read is a threshold at the floor the body names, not a weight.
+    assert!(seated.contains("palw_bond_may_take_work_v2(bond, floor)"), "{name}: the population is thresholded at `floor`");
+    let registry = include_str!("../src/palw_model_registry_v1.rs");
+    for helper in [
+        "pub fn palw_admission_jury_seed_v1(",
+        "pub fn palw_admission_jury_quorum_v1(",
+        "pub fn palw_admission_audit_due_v1(",
+        "pub fn palw_admission_audit_period_spans_v2(",
+    ] {
+        let body = body_of(registry, helper);
+        for forbidden in ["collateral", "stake", "weight", "rcore_plus"] {
+            assert!(!body.contains(forbidden), "`{helper}` reads `{forbidden}`: the jury's helpers must not weigh it");
+        }
     }
     let panel = include_str!("../src/palw_panel_v2.rs");
     let jury = body_of(panel, "pub fn palw_admission_jury_v1(");

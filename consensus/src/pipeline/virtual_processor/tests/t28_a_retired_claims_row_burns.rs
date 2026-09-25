@@ -10,7 +10,15 @@
 //! (and the locks that follow it, L-1) outlives the claim record by up to 6,000 DAA. A conviction in
 //! that window must still find the row and burn it (S3 through the funnel's burn hook), with the
 //! claim record gone: every term the funnel needs — `G` and `basis_k` — comes from the rows the claim
-//! left (`palw_claim_g_v1` reads the liability record; the vesting row carries its copies, N8).
+//! left.
+//!
+//! **Which copy of `basis_k` the funnel reads: the liability record's.** The ADR's T28 says "`basis_k`
+//! is read from the row"; the code (`palw_claim_g_v1`) reads the liability record, else the claim
+//! record, and never the vesting row — and X29 keeps the liability record for the row's whole life
+//! (T44), so while a row can be burned a liability record is there to read. The vesting row carries
+//! its own copy (N8), which agrees. This test asserts the agreement, and a probe tells the two apart:
+//! with the row's copy rebuilt to `basis_k = 1` through the carriage, the same conviction pays the
+//! same reward — the liability record's `basis_k = 2`.
 //!
 //! The edges are elsewhere: a row maturing at the bound under a trickle is T43 (`vesting_fold_v1`'s
 //! `t43_the_trickle_regime_matures_at_the_bound`), a halt that holds rows past it is T37, and a
@@ -27,7 +35,9 @@ use super::*;
 ///   `min(25% · C₀, 3 G)`, `G` the liability record's `g_res + escrowed_reward`;
 /// * the seat pays S4 on the lock that followed the row;
 /// * the kind-3 record carries both legs, and the reporter reward is opened on `collected − X` with
-///   `X = min(lock, g_res / basis_k)` at the ROW's `basis_k` (the claim record being gone);
+///   `X = min(lock, g_res / basis_k)` at the liability record's `basis_k` (the claim record being
+///   gone), which the vesting row's copy equals — and a probe with the row's copy diverged shows the
+///   funnel reads the liability record's;
 /// * the block reverts to its parent exactly, and the state reloads.
 #[tokio::test]
 async fn t28_a_conviction_after_retirement_under_a_held_second_clock_burns_the_row() {
@@ -86,11 +96,19 @@ async fn t28_a_conviction_after_retirement_under_a_held_second_clock_burns_the_r
     let executor = h.cards[EXECUTOR];
     let lock = *walk.state.slashable_lock(seat, id).expect("the full seat's lock follows the row");
     let before = walk.state.clone();
+    // The probe: the vesting row's copy of `basis_k` diverged to 1 through the carriage. The same
+    // conviction on that state pays the same reward, so the funnel prices X from the liability record.
+    let key = palw_false_valid_offence_id_v2(&seat.0, &id);
+    let object = h.v2(full, id, licence.segmented(full), c.clone());
+    let diverged = h.rebuilt(&before, |carriage| carriage.vesting.get_mut(&id).expect("the held row").basis_k = 1);
+    assert_eq!(diverged.vesting_row(&id).unwrap().basis_k, 1, "the probe's row copy is diverged");
+    let probed = h.fold(&diverged, &walk.next(), std::slice::from_ref(&object)).expect("the conviction folds on the probe");
+    let probed_reward = probed.reward_pending(&key).expect("the probe's conviction opens a reward").amount;
     let (seat_nominal, seat_debit) = s4_charge(&h, &before, seat, lock.amount, g, conviction_daa);
     let c0 = before.bond(&executor).unwrap().collateral;
     let s3 = palw_rcore_s3s4_action_v1(c0, g);
     assert!(s3 > 0, "S3 has something to charge");
-    let (parent, delta) = h.carry(&mut walk, vec![h.v2(full, id, licence.segmented(full), c)]);
+    let (parent, delta) = h.carry(&mut walk, vec![object]);
     assert_eq!(walk.daa, conviction_daa);
     let s = &walk.state;
     assert!(s.vesting_row(&id).is_none(), "the conviction burned the row");
@@ -106,7 +124,6 @@ async fn t28_a_conviction_after_retirement_under_a_held_second_clock_burns_the_r
         "S4 on the seat's live lock"
     );
     assert!(s.slashable_lock(seat, id).is_none(), "the lock is taken");
-    let key = palw_false_valid_offence_id_v2(&seat.0, &id);
     let record = s.consumed_offence(&key).expect("one kind-3 record");
     assert_eq!(
         (record.kind, u128::from(record.amount), u128::from(record.collected), record.claim_id),
@@ -117,7 +134,13 @@ async fn t28_a_conviction_after_retirement_under_a_held_second_clock_burns_the_r
     let extracted = palw_reporter_reward_extracted_v1(lock.amount, liability.g_res_sompi, liability.basis_k);
     let at_k1 = palw_reporter_reward_extracted_v1(lock.amount, liability.g_res_sompi, 1);
     let reward = s.reward_pending(&key).expect("a proven conviction opens a reward");
-    assert_eq!(reward.amount, palw_reporter_reward_amount_v1(record.collected, extracted), "X at the row's basis_k");
+    assert_eq!(reward.amount, palw_reporter_reward_amount_v1(record.collected, extracted), "X at the liability record's basis_k");
+    assert_eq!(probed_reward, reward.amount, "the row's diverged copy moves nothing: the funnel reads the liability record");
+    assert_ne!(
+        palw_reporter_reward_amount_v1(record.collected, at_k1),
+        reward.amount,
+        "the probe could tell them apart: at basis_k 1 the reward would differ"
+    );
     println!(
         "[t28] F {final_daa}; retired {}; convicted {conviction_daa}; row {} sompi (basis_k {}); S3 {s3}; S4 {seat_debit}; \
          X {extracted} (at basis_k 1: {at_k1}); reward {}",

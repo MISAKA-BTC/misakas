@@ -5240,3 +5240,9 @@ mod t54f_replay_filer;
 /// row, `basis_k` read from the row** — on this suite's real claim and real conviction; a child, like T47.
 #[path = "t28_a_retired_claims_row_burns.rs"]
 mod t28_a_retired_claims_row_burns;
+
+/// **ADR-0152 v3.1 T62 (§8.1, A [M2/S]): the unique path (J-6) as a property** — every conviction kind
+/// this suite produces resolves claim → root → job → index → signer → fault → target through the claim
+/// record, the liability record and the vesting row's copies (N8), a retired claim included; a child, like T47.
+#[path = "t62_the_unique_path.rs"]
+mod t62_the_unique_path;
