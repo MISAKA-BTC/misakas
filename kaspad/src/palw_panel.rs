@@ -2261,6 +2261,60 @@ pub(crate) fn palw_stuck_carrier_opens_slot_v1(unconfirmed_daa: u64) -> bool {
     unconfirmed_daa >= PALW_CARRIER_STUCK_DAA_V1
 }
 
+/// **V07 (the pre-t12 sweep of 2026-09-25): the readiness lane — possession proofs get a carrier slot
+/// of their own.** One carrier is in flight per panel on one funding chain (`MAX_INFLIGHT_CARRIERS`),
+/// and a possession proof had no slot but that one: behind a DA storm it took every other slot at
+/// best, behind a carrier the stuck opening may not replace (a class registration, a claim's
+/// commitment) none at all, and the drill measured proofs 365 s from submit to block. So a seat that
+/// holds a second spendable output under its own script runs a second chain on it, for possession
+/// proofs alone: a proof the main slot cannot take this tick ([`palw_readiness_lane_takes_v1`]) rides
+/// it, one in flight, spending a CONFIRMED output — never a child of the main chain's carrier, which
+/// relay drops (why the main cap is one) — and the main slot is left to every other duty. A seat
+/// with one output runs as before; the lane scans for a second at most once a DAA.
+pub(crate) const PALW_READINESS_LANE_INFLIGHT_V1: usize = 1;
+
+/// **Does a due possession proof ride the readiness lane?** (V07) Exactly when the main slot cannot
+/// take it this tick (held, not its site's turn, or no funding) and the lane has no proof in flight.
+/// A proof the main slot can take goes there as it always did, so a seat's carriers are what they
+/// were whenever its chain is free.
+pub(crate) fn palw_readiness_lane_takes_v1(main_takes: bool, lane_inflight: usize) -> bool {
+    !main_takes && lane_inflight < PALW_READINESS_LANE_INFLIGHT_V1
+}
+
+/// **The readiness lane's funding chain** (V07), carried across ticks like the main chain's: a
+/// confirmed output it resolved, or the change of its proof in flight.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PalwReadinessLaneV1 {
+    pub(crate) funding: Option<(TransactionOutpoint, UtxoEntry)>,
+    pub(crate) inflight: usize,
+    /// The DAA the lane last scanned for an output and found none: one scan a DAA at most.
+    pub(crate) unfunded_at: Option<u64>,
+}
+
+impl PalwReadinessLaneV1 {
+    /// **What the chain and this node's pool now say of the lane's funding** (V07), as the main chain
+    /// reads its tip: `confirmed` — the output is in the virtual UTXO set (the lane's proof, if one was
+    /// in flight, was mined); `spent_in_pool` — some carrier of this node spends it (the main chain
+    /// resolved it: the main chain comes first, and the lane lets it go); `kept` — the lane's own
+    /// proof is still in this node's pool. A proof neither mined nor kept is gone, and the lane
+    /// resolves afresh.
+    pub(crate) fn settle(&mut self, confirmed: bool, spent_in_pool: bool, kept: bool) {
+        if self.funding.is_none() {
+            self.inflight = 0;
+            return;
+        }
+        if confirmed {
+            self.inflight = 0;
+            if spent_in_pool {
+                self.funding = None;
+            }
+        } else if !kept {
+            self.funding = None;
+            self.inflight = 0;
+        }
+    }
+}
+
 /// **One tick's opening of our own STUCK tip carrier's slot** ([`palw_stuck_carrier_opens_slot_v1`];
 /// `PalwPanelService::open_stuck_carrier_v1`): the stuck carrier's own confirmed input, which the
 /// tick hands its sites as their funding, and the feerate its replacement must beat. The shared
@@ -4220,6 +4274,103 @@ impl PalwPanelService {
         funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
         inflight: &mut usize,
     ) -> bool {
+        self.carry_readiness_proof_on_v1(session, duty, current_daa, funding, inflight, false).await
+    }
+
+    /// **V07: carry one possession proof on the readiness lane** (`PalwReadinessLaneV1`) — a proof the
+    /// main slot cannot take this tick ([`palw_readiness_lane_takes_v1`]). The lane's funding is its
+    /// own chain's change or, with none, the largest usable output under this node's script that no
+    /// carrier of ours spends and the main chain does not hold (`main`), scanned at most once a DAA;
+    /// a seat with no second output waits for the main slot as before. `true` when the pool took it.
+    async fn carry_on_readiness_lane_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        duty: &PalwReadinessDutyV1,
+        current_daa: u64,
+        lane: &mut PalwReadinessLaneV1,
+        main: &[TransactionOutpoint],
+    ) -> bool {
+        if !palw_readiness_lane_takes_v1(false, lane.inflight) {
+            return false;
+        }
+        if lane.funding.as_ref().is_some_and(|(outpoint, _)| main.contains(outpoint)) {
+            lane.funding = None;
+        }
+        if lane.funding.is_none() {
+            if lane.unfunded_at == Some(current_daa) {
+                return false;
+            }
+            lane.funding = self.resolve_readiness_lane_funding_v1(session, main).await;
+            if lane.funding.is_none() {
+                lane.unfunded_at = Some(current_daa);
+                crate::palw_backends::note_throttled_v1("panel-readiness-lane-unfunded", || {
+                    format!(
+                        "[{PALW_PANEL}] possession proofs share the one carrier slot: this node holds no second spendable output \
+                         under its own script for the readiness lane (V07) — send a second output to the pay address to give \
+                         them a slot of their own"
+                    )
+                });
+                return false;
+            }
+        }
+        let mut inflight = lane.inflight;
+        let carried = self.carry_readiness_proof_on_v1(session, duty, current_daa, &mut lane.funding, &mut inflight, true).await;
+        lane.inflight = inflight;
+        carried
+    }
+
+    /// The readiness lane's funding (V07): the largest usable output under this node's script that pays
+    /// a carrier, that no carrier of ours spends, and that the main chain does not hold (`main`) —
+    /// [`PalwFeeFundingScanV1`]'s choice over the same rule the main chain's recovery scan reads
+    /// (`palw_fee_funding_usable_v1`: never the bond's own output, nothing B-3 holds, a coinbase only
+    /// past its spend maturity). Nothing is remembered or persisted: the main chain's memory is the
+    /// main chain's.
+    async fn resolve_readiness_lane_funding_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        main: &[TransactionOutpoint],
+    ) -> Option<(TransactionOutpoint, UtxoEntry)> {
+        if self.config.fee_outpoint.is_none() {
+            return None;
+        }
+        let script = self.fee_script(session)?;
+        let pov_daa = session.get_virtual_daa_score();
+        let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();
+        let locked: HashSet<TransactionOutpoint> = session.palw_locked_bond_outpoints_v2().into_iter().collect();
+        let usable = |outpoint: &TransactionOutpoint, entry: &UtxoEntry| {
+            palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)
+        };
+        let is_free =
+            |o: &TransactionOutpoint| !main.contains(o) && !self.flow_context.mining_manager().outpoint_is_spent_in_mempool(o);
+        let mut cursor: Option<TransactionOutpoint> = None;
+        let mut scan = PalwFeeFundingScanV1::default();
+        loop {
+            let chunk = session.async_get_virtual_utxos(cursor, 1024, cursor.is_some()).await;
+            if chunk.is_empty() {
+                break;
+            }
+            cursor = chunk.last().map(|(o, _)| *o);
+            for (outpoint, entry) in chunk {
+                if entry.script_public_key == script {
+                    scan.offer(outpoint, entry, &usable, &is_free);
+                }
+            }
+        }
+        scan.found
+    }
+
+    /// [`Self::carry_readiness_proof_v1`] on either chain: the main one (`lane: false`, whose change is
+    /// persisted as the panel's remembered funding) or the readiness lane (V07, `lane: true`, whose is
+    /// not — the main chain's memory is the main chain's).
+    async fn carry_readiness_proof_on_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        duty: &PalwReadinessDutyV1,
+        current_daa: u64,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: &mut usize,
+        lane: bool,
+    ) -> bool {
         // ADR-0133 §11.2: the submitter builds V1 below the fence and V2 past it, and both ride the
         // same carrier path — reading only the V1 shape here would drop every V2 proof on the floor.
         let (class_id, span) = match &duty.object {
@@ -4235,12 +4386,15 @@ impl PalwPanelService {
                 match self.submit_carrier_v1(session, tx).await {
                     Ok(()) => {
                         info!(
-                            "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}{}",
-                            if duty.escalates() { " — escalated: its row is lapsing or lapsed" } else { "" }
+                            "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}{}{}",
+                            if duty.escalates() { " — escalated: its row is lapsing or lapsed" } else { "" },
+                            if lane { " — on the readiness lane (V07)" } else { "" }
                         );
                         self.readiness_submitted.lock().unwrap().insert(class_id, span);
                         let next = TransactionOutpoint::new(txid, 0);
-                        self.persist_fee_outpoint(next);
+                        if !lane {
+                            self.persist_fee_outpoint(next);
+                        }
                         *funding = Some((
                             next,
                             UtxoEntry {
@@ -6719,6 +6873,8 @@ impl PalwPanelService {
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
+        // V07: the readiness lane's own funding chain — possession proofs the main slot cannot take.
+        let mut readiness_lane = PalwReadinessLaneV1::default();
         // ADR-0135: a possession proof that found no carrier slot waits for the next one, and the
         // receipts yield until it lands — a seat whose proofs starve behind its own receipt traffic
         // counts as no seat at all (measured on the devnet: receipts filled the eight-carrier chain
@@ -10515,6 +10671,19 @@ impl PalwPanelService {
                         inflight = 0;
                     }
                 }
+                // V07: the readiness lane's funding, read as the main chain's tip is (`settle`).
+                if let Some((lane_tip, _)) = readiness_lane.funding.clone() {
+                    let pool = self.flow_context.mining_manager().clone();
+                    let confirmed = session.get_virtual_utxo_entry(lane_tip).is_some();
+                    let spent_in_pool = confirmed && pool.outpoint_is_spent_in_mempool(&lane_tip);
+                    let kept = confirmed
+                        || pool
+                            .has_transaction(lane_tip.transaction_id, kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly)
+                            .await;
+                    readiness_lane.settle(confirmed, spent_in_pool, kept);
+                } else {
+                    readiness_lane.settle(false, false, false);
+                }
                 let mut held = inflight >= MAX_INFLIGHT_CARRIERS;
                 // **Our own tip carrier, unconfirmed since it was sent, and for how long** (the pre-t12
                 // drill of 2026-09-25). Held means the checks above found it neither mined nor gone:
@@ -10652,6 +10821,17 @@ impl PalwPanelService {
                 {
                     let duty = duties.remove(at);
                     if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {
+                        readiness_waiting = false;
+                    }
+                } else if replacing.is_none()
+                    && let Some(duties) = readiness.as_mut()
+                    && let Some(at) = crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)
+                {
+                    // V07: the main slot cannot take the escalated proof this tick — the lane can.
+                    let main: Vec<TransactionOutpoint> =
+                        funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                    if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {
+                        duties.remove(at);
                         readiness_waiting = false;
                     }
                 }
@@ -10863,6 +11043,15 @@ impl PalwPanelService {
                         }
                     }
                     if funding.is_none() || !slots.offers(PalwCarrierSiteV1::Own, inflight) {
+                        // V07: the main slot cannot take it this tick — the readiness lane can, past R-core+.
+                        let main: Vec<TransactionOutpoint> =
+                            funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                        if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)
+                            && self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await
+                        {
+                            readiness_waiting = false;
+                            continue;
+                        }
                         readiness_waiting = true;
                         crate::palw_backends::note_throttled_v1("panel-proof-waits", || {
                             format!(
@@ -20179,6 +20368,100 @@ mod readiness_memory_and_stuck_carrier_tests {
         assert!(palw_carrier_replaceable_v1(&on_input));
     }
 
+    /// **V07 (the pre-t12 sweep of 2026-09-25): a possession proof the main slot cannot take rides the
+    /// readiness lane.** The rule: the lane takes a proof exactly when the main slot cannot, one in
+    /// flight. Its funding reads as the main chain's tip does, and yields to the main chain. And the
+    /// drill's worst case — the main slot held for good by a carrier the stuck opening may not replace
+    /// (a class registration), an escalated proof due every few DAA: the old tick never sends one; a
+    /// seat with a second output sends each at once, one in flight at a time.
+    #[test]
+    fn a_proof_the_main_slot_cannot_take_rides_the_readiness_lane() {
+        assert!(palw_readiness_lane_takes_v1(false, 0), "the main slot cannot take it: the lane does");
+        assert!(!palw_readiness_lane_takes_v1(true, 0), "a proof the main slot takes goes there, as it always did");
+        assert!(!palw_readiness_lane_takes_v1(false, PALW_READINESS_LANE_INFLIGHT_V1), "one proof in flight on the lane");
+        let entry = UtxoEntry {
+            amount: 100_000_000,
+            script_public_key: kaspa_consensus_core::tx::ScriptPublicKey::default(),
+            block_daa_score: 0,
+            is_coinbase: false,
+        };
+        let at = TransactionOutpoint::new(Hash64::from_u64_word(0x1A), 0);
+        let funded = |inflight: usize| PalwReadinessLaneV1 { funding: Some((at, entry.clone())), inflight, unfunded_at: None };
+        let settled = |mut lane: PalwReadinessLaneV1, confirmed: bool, spent: bool, kept: bool| {
+            lane.settle(confirmed, spent, kept);
+            (lane.funding.map(|(outpoint, _)| outpoint), lane.inflight)
+        };
+        assert_eq!(settled(funded(1), true, false, true), (Some(at), 0), "its proof was mined: the lane is whole again");
+        assert_eq!(settled(funded(1), false, false, true), (Some(at), 1), "in flight and kept: it waits");
+        assert_eq!(settled(funded(1), false, false, false), (None, 0), "neither mined nor kept: resolved afresh");
+        assert_eq!(settled(funded(0), true, true, true), (None, 0), "the main chain spent it: the main chain comes first");
+        assert_eq!(settled(PalwReadinessLaneV1 { inflight: 1, ..Default::default() }, false, false, false), (None, 0));
+
+        // The worst case, per DAA: an escalated proof due at 0, 3, 6, …; the main slot never takes one;
+        // a lane proof lands two DAA after it is sent (M1's landing margin).
+        let run = |second_output: bool| -> Vec<u64> {
+            let (mut lane_inflight_until, mut waiting, mut sent) = (None::<u64>, false, Vec::new());
+            for daa in 0..30u64 {
+                if lane_inflight_until.is_some_and(|until| daa >= until) {
+                    lane_inflight_until = None;
+                }
+                waiting |= daa % 3 == 0;
+                let lane_inflight = usize::from(lane_inflight_until.is_some());
+                if waiting && second_output && palw_readiness_lane_takes_v1(false, lane_inflight) {
+                    sent.push(daa);
+                    waiting = false;
+                    lane_inflight_until = Some(daa + PALW_READINESS_ESCALATION_LANDING_DAA_V1);
+                }
+            }
+            sent
+        };
+        assert!(run(false).is_empty(), "one output: the proofs wait behind the held slot, as before");
+        let sent = run(true);
+        assert_eq!(sent, (0..30).step_by(3).collect::<Vec<u64>>(), "a second output: every proof goes out when it is due");
+        assert!(sent.windows(2).all(|w| w[1] - w[0] >= PALW_READINESS_ESCALATION_LANDING_DAA_V1), "one in flight at a time");
+    }
+
+    /// **The tick is wired as the test above reads it** (V07): the lane's funding is settled with the
+    /// main chain before the sites; the escalated site offers it a proof the main slot cannot take; the
+    /// Own site offers it one before the proof waits, past R-core+ only; its funding excludes whatever
+    /// the main chain holds and whatever our pool spends, by the main chain's own usability rule; and
+    /// its change is never remembered as the main chain's.
+    #[test]
+    fn the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof() {
+        let source = production();
+        let body = |signature: &str| -> &'static str {
+            let start = source.find(signature).unwrap_or_else(|| panic!("{signature}"));
+            let rest = &source[start..];
+            &rest[..rest.find("\n    }\n").expect("its end")]
+        };
+        let settle = source.find("readiness_lane.settle(confirmed, spent_in_pool, kept);").expect("the lane is settled");
+        let held = source.find("let mut held = inflight >= MAX_INFLIGHT_CARRIERS;").expect("the held tick");
+        assert!(settle < held && held - settle < 1_500, "settled with the main chain, before the sites");
+        let tick = &source[held..];
+        let main_escalated =
+            tick.find("if self.carry_readiness_proof_v1(&session, &duty, current_daa, &mut funding, &mut inflight).await {").unwrap();
+        let lane_escalated = tick
+            .find("if self.carry_on_readiness_lane_v1(&session, &duties[at], current_daa, &mut readiness_lane, &main).await {")
+            .expect("the escalated site's lane");
+        let priority = tick.find("slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);").unwrap();
+        assert!(main_escalated < lane_escalated && lane_escalated < priority, "after the main slot's offer, before the court");
+        let lane_own = tick
+            .find("&& self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await")
+            .expect("the Own site's lane");
+        let waits = tick.find("a possession proof for class {} waits for a carrier slot").unwrap();
+        assert!(priority < lane_own && lane_own < waits, "before the proof waits");
+        let gate = tick[..lane_own].rfind("self.consensus_config.params.palw_rcore_plus_active_at(current_daa)").expect("the gate");
+        assert!(lane_own - gate < 200, "past R-core+ only");
+        let funder = body("    async fn resolve_readiness_lane_funding_v1(");
+        assert!(funder.contains("!main.contains(o) && !self.flow_context.mining_manager().outpoint_is_spent_in_mempool(o)"));
+        assert!(funder.contains("palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)"));
+        assert!(funder.contains("scan.offer(outpoint, entry, &usable, &is_free);"), "the largest output that pays");
+        assert!(!funder.contains("persist_fee_outpoint"), "nothing remembered");
+        let carry = body("    async fn carry_readiness_proof_on_v1(");
+        assert!(carry.contains("if !lane {\n                            self.persist_fee_outpoint(next);"), "the main chain's memory is its own");
+        assert!(body("    async fn carry_on_readiness_lane_v1(").contains("lane.unfunded_at == Some(current_daa)"), "one scan a DAA");
+    }
+
     /// **The tick is wired as the test above reads it** (V01's panel side): the stuck tip is measured
     /// while held, and the slot is opened on its input before the escalated site (which then defers to
     /// the opening); every carrier site of the tick sends through the one door, which submits the
@@ -20213,7 +20496,7 @@ mod readiness_memory_and_stuck_carrier_tests {
         assert_eq!(priority.matches("self.submit_carrier_v1(session, tx)").count(), 2, "court moves and evidence");
         assert!(!priority.contains("flow_context.submit_rpc_transaction("));
         assert!(priority.contains("Some((funding_outpoint, _)) if self.stuck_carrier_open_on_v1(&funding_outpoint) =>"), "evidence waits");
-        assert!(body("    async fn carry_readiness_proof_v1(").contains("self.submit_carrier_v1(session, tx)"));
+        assert!(body("    async fn carry_readiness_proof_on_v1(").contains("self.submit_carrier_v1(session, tx)"));
         let door = body("    async fn submit_carrier_v1(");
         assert!(door.contains("opening.is_replaced_by(&tx)") && door.contains("submit_rpc_transaction_replacement(session, tx)"));
         assert!(door.contains("open.replaced_by = Some(txid);"));
