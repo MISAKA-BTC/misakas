@@ -13,6 +13,13 @@
 //!   * test 2: the processor's stateless V1 gate refuses it (`PanelFalseValidNeedsContradiction`),
 //!     no panic;
 //!   * test 3: unchanged -- where the V1 gate is live on the shipped parameter sets.
+//!
+//! The sibling on the SAME gate (verification of the fix, 2026-09-26): a `StepStructural`
+//! contradiction whose binding claims `step_leaf_count = u64::MAX`. The structural checker's shape
+//! pass counts the job at the binding's own claim as the cap, before any opening is verified; a
+//! main enumeration that clamps to `u64::MAX` clears that cap, and `step_leaf_count_capped_v1`
+//! then added the KV aux series with a plain `+` -- "attempt to add with overflow" at
+//! palw_step.rs:1471 on 0e8ec984e. Tests 4 and 5 pin that it now answers instead of panicking.
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_legs::{
@@ -267,4 +274,132 @@ fn msk_26a_palw_19_reachability_on_shipped_params() {
     assert!(probe.iter().all(|d| !v1_route_live(&t12, *d)), "testnet-12: V1 PanelFalseValid superseded from genesis");
     assert!(probe.iter().all(|d| !main.palw_objective_offence_at(*d)), "mainnet preset: objective offences not armed");
     assert!(v1_route_live(&rc, 8_500) && !v1_route_live(&rc, 8_499), "testnet-11/RC: V1 gate live from DAA 8,500");
+}
+
+// ---- the sibling: a StepStructural contradiction whose job saturates the leaf count --------------
+
+/// A self-consistent step binding claiming `u64::MAX` leaves for a job whose main enumeration
+/// clamps there, on a profile WITH a KV aux series (the add that overflowed). Built by hand from the
+/// RC BASE-0 profile: the honest builder refuses such a job, the attacker does not use it.
+fn saturating_step_refutation() -> kaspa_consensus_core::palw_step_leg::PalwStepRefutationV1 {
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+    use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, PalwStepOutLenV1, kv_aux_leaf_count, step_leaf_count_capped_v1};
+    use kaspa_consensus_core::palw_step_leg::{
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, PalwStepEvidenceV1, PalwStepRefutationV1, binding_commitment_root_v1,
+        checkpoint_empty_root_v2,
+    };
+
+    let mut profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the RC BASE-0 profile");
+    profile.n_ctx = 1 << 21; // 4 layers x 2^21 = 2^23, under the 2^24 enumeration ceiling
+    profile.n_batch = profile.n_ctx;
+    profile.n_ubatch = profile.n_ctx;
+    profile.kv_chunk_calls = 1; // a non-empty aux series: the add the clamp used to overflow
+    for node in profile.attn_nodes.iter_mut().filter(|n| n.op_kind != PalwStepOpKindV1::AttnFused) {
+        node.out_len = PalwStepOutLenV1::KvScaled { multiplier: u32::MAX };
+    }
+    profile.validate_shape().expect("the attacker's profile is inside every declared ceiling");
+
+    let mut context = attacker_context();
+    context.shape_profile_id = profile.shape_profile_id();
+    context.declared_prefill_tokens = 1 << 20;
+    context.exact_decode_tokens = 2;
+    context.max_context_tokens = (1 << 20) + 2;
+    assert!(kv_aux_leaf_count(&profile, &context) > 0);
+    let mut without_aux = profile.clone();
+    without_aux.kv_chunk_calls = 0;
+    assert_eq!(step_leaf_count_capped_v1(&without_aux, &context, u64::MAX), Ok(u64::MAX), "the main enumeration clamps");
+
+    let checkpoint_profile = PalwCheckpointProfileV1 {
+        version: PALW_LEGS_OBJECT_VERSION_V1,
+        checkpoint_interval: 1,
+        state_layout_id: kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+    };
+    let checkpoint_count = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(
+        &profile,
+        &context,
+        checkpoint_profile.checkpoint_interval,
+    );
+    let checkpoint_merkle_root = if checkpoint_count == 0 { checkpoint_empty_root_v2(&context.context_hash()) } else { h64(0x81) };
+    let mut binding = PalwStepBindingV2 {
+        version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+        job_context: context,
+        state_chunk_map_id: profile.state_chunk_map_id,
+        shape_profile: profile,
+        checkpoint_profile,
+        full_logits_trace_root: h64(0x82),
+        activation_leg_root: h64(0x83),
+        step_leaf_count: u64::MAX, // attacker-chosen: it is also the cap the shape pass counts at
+        step_merkle_root: h64(0x84),
+        checkpoint_count,
+        checkpoint_merkle_root,
+        committed_execution_root: Hash64::default(),
+    };
+    binding.committed_execution_root = binding_commitment_root_v1(&binding);
+    PalwStepRefutationV1 { binding, evidence: PalwStepEvidenceV1::Shape }
+}
+
+#[test]
+fn msk_26a_palw_19_sibling_saturating_step_leaf_count_is_answered_not_a_panic() {
+    use kaspa_consensus_core::palw_step_leg::{PalwStepLegError, check_step_refutation_capped_v1};
+    let refutation = saturating_step_refutation();
+    // At the RC court's ladder, exactly as the V1 gate passes it (the cap only bounds openings).
+    let outcome = catch_unwind(AssertUnwindSafe(|| check_step_refutation_capped_v1(&refutation, 1 << 22)));
+    match outcome {
+        Err(p) => panic!("check_step_refutation_capped_v1 panicked on a saturating job with an aux series: {:?}", panic_message(p)),
+        // The clamped count equals the claim, as it already did on the shipped binary for a job with
+        // no aux series; nothing else in the binding is at fault, so Shape evidence finds nothing.
+        Ok(r) => assert_eq!(r, Err(PalwStepLegError::NoFaultFound)),
+    }
+}
+
+#[test]
+fn msk_26a_palw_19_sibling_v1_gate_refuses_a_saturating_step_structural_without_panicking() {
+    use libcrux_ml_dsa::ml_dsa_87::generate_key_pair;
+    let domain = Hash64::from_u64_word(0x7E57_0011);
+    let claim = Hash64::from_u64_word(0xC1A1_0000_0000_0042);
+    let seat = TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0x5EA7), index: 0 };
+    let seat_kp = generate_key_pair([3u8; 32]);
+    let seat_pk: Vec<u8> = seat_kp.verification_key.as_ref().to_vec();
+    let msg = palw_receipt_message_v2(domain, claim, PalwReceiptVerdictV2::Valid, 0);
+    let receipt = PalwSeatReceiptV2 {
+        claim,
+        verdict: PalwReceiptVerdictV2::Valid,
+        seat_bond: PalwBondKeyV2(seat),
+        signed_daa: 0,
+        signature: sign(&seat_kp, msg.as_byte_slice(), PALW_RECEIPT_V2_MLDSA87_CONTEXT),
+    };
+    assert!(verify(&seat_pk, msg.as_byte_slice(), &receipt.signature, PALW_RECEIPT_V2_MLDSA87_CONTEXT), "genuine receipt");
+
+    let refutation = saturating_step_refutation();
+    assert_ne!(refutation.binding.job_context.job_id, claim, "the binding belongs to no real claim");
+    let payload = PalwPanelFalseValidEvidenceV1 {
+        version: PALW_PANEL_FALSE_VALID_VERSION_V1,
+        claim_id: claim,
+        network_domain: domain,
+        accused_seat: seat,
+        valid_receipt: receipt,
+        executor_pubkey: vec![0u8; 4],
+        contradiction: PalwPanelContradictionV1::StepStructural(refutation),
+    };
+    let evidence = borsh::to_vec(&payload).expect("serializes");
+    let evidence_id = palw_offence_evidence_digest_v1(&evidence);
+    println!("V1 PanelFalseValid/StepStructural evidence: {} bytes", evidence.len());
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        palw_verify_objective_offence_v1(
+            PalwOffenceKindV1::PanelFalseValid,
+            &seat,
+            &evidence_id,
+            &evidence,
+            &seat_pk,
+            true,
+            domain.as_byte_slice(),
+            1 << 22,
+            verify,
+        )
+    }));
+    match outcome {
+        Err(p) => panic!("palw_verify_objective_offence_v1 panicked on a saturating StepStructural: {:?}", panic_message(p)),
+        Ok(r) => assert_eq!(r, Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)),
+    }
 }
