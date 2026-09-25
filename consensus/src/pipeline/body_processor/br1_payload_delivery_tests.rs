@@ -89,8 +89,11 @@ async fn br1_v1_foreign_payload_or_stray_evm_fields_leave_the_block_retryable() 
     assert!(evm_payload_matches_header(&honest.header, &honest.evm_payload));
     victim.validate_and_insert_block(honest.clone().to_immutable()).virtual_state_task.await.expect("BR-1: the honest body is accepted");
     assert_eq!(victim.block_status(1.into()), BlockStatus::StatusUTXOValid);
-    // … and so is a descendant (was InvalidParent).
-    let child = victim.build_block_with_parents_and_transactions(2.into(), vec![1.into()], vec![]);
+    // … and so is a descendant (was InvalidParent), exactly as on the control node.
+    producer.validate_and_insert_block(honest.clone().to_immutable()).virtual_state_task.await.expect("producer: b1 is valid");
+    let child = producer.build_utxo_valid_block_with_parents(2.into(), vec![1.into()], miner(), vec![]);
+    control.validate_and_insert_block(child.clone().to_immutable()).virtual_state_task.await.expect("control: the child is valid");
+    assert_eq!(control.block_status(2.into()), BlockStatus::StatusUTXOValid);
     victim.validate_and_insert_block(child.to_immutable()).virtual_state_task.await.expect("BR-1: the child is valid");
     assert_eq!(victim.block_status(2.into()), BlockStatus::StatusUTXOValid);
 
