@@ -220,6 +220,15 @@ pub struct PalwRcoreSeatFilterV1 {
     /// `true` a bond's locks on resolved claims (`palw_bond_resolved_locks_v1`) leave the ceiling and
     /// stay in the 100% term — the bind's own `gate_room`; `false` below the fence and everywhere else.
     pub resolved_locks_off_ceiling: bool,
+    /// **Lane V02 (review HIGH): the accuser reserve the relief never spends** —
+    /// `palw_bond_accuser_reserve_v1` at the binding block (`0` below the fence), as the bind's
+    /// `gate_room` reads it.
+    pub accuser_reserve: u128,
+    /// **Lane V02 (review MEDIUM): the held-charge floor of the accuser ledger** —
+    /// `palw_v02_held_charge_floor_v1` at the binding block: `Some(min_collateral)` past the fence where
+    /// the block folds held dissections at their charge (the fold's `accuser_ledger_v1`), `None` below
+    /// it (the shipped count, `palw_accuser_exposure_v1`).
+    pub held_charge_floor: Option<u64>,
 }
 
 impl PalwPanelValidLockV1 {
@@ -253,7 +262,9 @@ impl PalwPanelValidLockV1 {
                 filter.ceiling_permille,
                 committed,
                 off_ceiling,
-                crate::palw_state_v2::palw_accuser_exposure_v1(state, bond),
+                filter.accuser_reserve,
+                // Lane V02: past the fence the fold's accuser ledger (held dissections at their charge).
+                crate::palw_state_v2::palw_accuser_ledger_v1(state, bond, filter.held_charge_floor),
                 crate::palw_state_v2::PalwRcoreGateV1::Work,
             );
             return filter.eligibility <= room;
@@ -7549,6 +7560,8 @@ mod tests {
                     eligibility: 50_000 * MSK as u128,
                     ceiling_permille: 500,
                     resolved_locks_off_ceiling: false,
+                    accuser_reserve: 0,
+                    held_charge_floor: None,
                 }),
             };
             let policy = PalwPanelDrawPolicyV1 { valid_lock: Some(filter), ..sw_policy() };

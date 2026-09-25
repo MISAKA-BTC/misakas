@@ -5330,6 +5330,16 @@ impl VirtualStateProcessor {
             // `committed` reads live locks at the escaped depth exactly as admission and the fold do.
             self.palw_settled_anchor_depth_at(candidate_daa),
         )?;
+        // Lane V02 (post-launch, review MEDIUM): past `palw_final_lock_full_collateral` the facts'
+        // accuser ledger counts an open held dissection at its charge, as the fold and item 8 do.
+        kaspa_consensus_core::palw_producer_v2::palw_producer_facts_apply_held_ledger_v1(
+            &mut facts,
+            &state,
+            state_params,
+            bond.map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2).as_ref(),
+            candidate_daa,
+            budget_fences.held_accuser_charge_active,
+        );
         // The producer reads the same parent snapshot as admission. At a crossing block the
         // snapshot still carries the closed epoch's table, so the boundary fence must derive the
         // candidate epoch's budget here too; otherwise the producer would hold a non-floor block
@@ -10924,6 +10934,15 @@ impl VirtualStateProcessor {
                 ceiling_permille: state_params.fp_max_exposure_ratio_permille(),
                 // Lane V02 (post-launch): the bind's own split room, at the binding block's DAA.
                 resolved_locks_off_ceiling: state_params.final_lock_full_collateral_active_at(now_daa),
+                // Lane V02 (review HIGH): the accuser reserve the bind's `gate_room` keeps (0 below).
+                accuser_reserve: kaspa_consensus_core::palw_state_v2::palw_bond_accuser_reserve_v1(state_params, now_daa),
+                // Lane V02 (review MEDIUM): the fold's accuser ledger past the fence — held dissections
+                // at their charge, from the very extras the bind folds with; `None` below it.
+                held_charge_floor: kaspa_consensus_core::palw_state_v2::palw_v02_held_charge_floor_v1(
+                    state_params,
+                    now_daa,
+                    extras.offence_attribution_active && extras.held_context_ladder.is_some(),
+                ),
             }),
         })
     }
@@ -11296,7 +11315,18 @@ impl VirtualStateProcessor {
             // ADR-0152 SR-7: the RAW second-clock depth, so item 8 reads the one committed ledger at
             // the escaped depth exactly as the fold's ceiling does (read only past `palw_rcore_plus`).
             settled_anchor_depth: self.palw_settled_anchor_depth_at(daa_score),
+            // Lane V02 (post-launch): the extras pair the fold's held charge reads, so item 8 counts a
+            // held dissection at its charge past `palw_final_lock_full_collateral` as `gate_room` does.
+            held_accuser_charge_active: self.palw_held_accuser_charge_at(daa_score),
         }
+    }
+
+    /// **Lane V02: whether a block at `daa_score` folds held dissections at their charge** — exactly
+    /// `extras.offence_attribution_active && extras.held_context_ladder.is_some()` of
+    /// [`Self::palw_transition_extras_at`] (the ladder is `Some` iff the held fence is active and the
+    /// court params exist), the pair the fold's `held_charge_block_active_v1` reads.
+    pub(super) fn palw_held_accuser_charge_at(&self, daa_score: u64) -> bool {
+        self.palw_offence_attribution_at(daa_score) && self.palw_held_context_at(daa_score) && self.palw_court_params_v2.is_some()
     }
 
     /// **ADR-0149 §5: the floor class's derived draw as the registry will write it** — its entry in

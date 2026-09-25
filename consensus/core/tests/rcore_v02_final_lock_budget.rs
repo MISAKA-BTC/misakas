@@ -29,9 +29,10 @@ use kaspa_consensus_core::palw_panel_v2::{PalwPanelValidLockV1, PalwRcoreSeatFil
 use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
 use kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v4;
 use kaspa_consensus_core::palw_state_v2::{
-    PalwRcoreGateV1, PalwStateV2Error, palw_accuser_exposure_v1, palw_bond_committed_raw_v1, palw_bond_off_ceiling_raw_v1,
-    palw_bond_resolved_locks_v1, palw_rcore_bind_prices_v1, palw_rcore_gate_room_of_v1, palw_rcore_gate_room_split_of_v1,
-    palw_rcore_gate_room_v1, palw_second_clock_depth_v1,
+    PalwRcoreGateV1, PalwStateV2Error, palw_accuser_exposure_v1, palw_bond_accuser_reserve_v1, palw_bond_committed_raw_v1,
+    palw_bond_off_ceiling_raw_v1, palw_bond_resolved_locks_v1, palw_claim_bond_reservation_v1, palw_fp_bond_room_v2,
+    palw_rcore_bind_prices_v1, palw_rcore_gate_room_of_v1, palw_rcore_gate_room_split_of_v1, palw_rcore_gate_room_v1,
+    palw_second_clock_depth_v1, palw_v02_held_charge_floor_v1,
 };
 use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
 
@@ -198,42 +199,60 @@ fn false_valid(p: &Params, claim_id: Hash64, accused: PalwBondKeyV2) -> PalwCons
     }
 }
 
-/// **The split room, as arithmetic** — for every `(committed, off_ceiling ≤ committed, accuser)` on a
-/// grid: the work room never lets `committed + accuser` pass the collateral, is never less than the
-/// unsplit room, equals it at `off_ceiling = 0`, and bounds the work in flight (`committed −
-/// off_ceiling`) by the ceiling; the accuser room is the unsplit one.
+/// **The split room, as arithmetic** — for every `(committed, off_ceiling ≤ committed, accuser,
+/// reserve)` on a grid: the work room never lets `committed + accuser` pass the collateral, is never
+/// less than the unsplit room, equals it at `off_ceiling = 0`, and bounds the work in flight
+/// (`committed − off_ceiling`) by the ceiling; whatever it admits beyond the unsplit room leaves the
+/// accuser reserve free (the review's HIGH); the accuser room is the unsplit one.
 #[test]
 fn v02_the_split_room_keeps_the_one_invariant_and_only_widens_work() {
     use PalwRcoreGateV1::{Accuser, Work};
     let c = 1_000u64;
-    for committed in (0..=1_100u128).step_by(25) {
-        for off in (0..=committed).step_by(25) {
-            for accuser in (0..=600u128).step_by(50) {
-                let split = palw_rcore_gate_room_split_of_v1(c, 500, committed, off, accuser, Work);
-                let plain = palw_rcore_gate_room_of_v1(c, 500, committed, accuser, Work);
-                assert!(split >= plain, "({committed}, {off}, {accuser}): the split never narrows work");
-                if split > 0 {
-                    assert!(committed + accuser + split <= c as u128, "({committed}, {off}, {accuser}): the invariant");
-                    assert!(committed - off + split <= 500, "({committed}, {off}, {accuser}): the ceiling bounds work in flight");
+    for reserve in [0u128, 60, 200, 700] {
+        for committed in (0..=1_100u128).step_by(25) {
+            for off in (0..=committed).step_by(25) {
+                for accuser in (0..=600u128).step_by(50) {
+                    let split = palw_rcore_gate_room_split_of_v1(c, 500, committed, off, reserve, accuser, Work);
+                    let plain = palw_rcore_gate_room_of_v1(c, 500, committed, accuser, Work);
+                    let at = format!("({committed}, {off}, {accuser}, reserve {reserve})");
+                    assert!(split >= plain, "{at}: the split never narrows work");
+                    if split > 0 {
+                        assert!(committed + accuser + split <= c as u128, "{at}: the invariant");
+                        assert!(committed - off + split <= 500, "{at}: the ceiling bounds work in flight");
+                    }
+                    if split > plain {
+                        assert!(
+                            committed + accuser + reserve + split <= c as u128,
+                            "{at}: the relief never spends the accuser reserve"
+                        );
+                        assert!(
+                            palw_rcore_gate_room_split_of_v1(c, 500, committed + split, off, reserve, accuser, Accuser) >= reserve,
+                            "{at}: after the relief's admission the accuser gate keeps the reserve"
+                        );
+                    }
+                    assert_eq!(
+                        palw_rcore_gate_room_split_of_v1(c, 500, committed, off, reserve, accuser, Accuser),
+                        palw_rcore_gate_room_of_v1(c, 500, committed, accuser, Accuser),
+                        "the accuser gate does not move"
+                    );
+                    assert_eq!(
+                        palw_rcore_gate_room_split_of_v1(c, 500, committed, 0, reserve, accuser, Work),
+                        plain,
+                        "off = 0 is the shipped room"
+                    );
                 }
-                assert_eq!(
-                    palw_rcore_gate_room_split_of_v1(c, 500, committed, off, accuser, Accuser),
-                    palw_rcore_gate_room_of_v1(c, 500, committed, accuser, Accuser),
-                    "the accuser gate does not move"
-                );
-                assert_eq!(
-                    palw_rcore_gate_room_split_of_v1(c, 500, committed, 0, accuser, Work),
-                    plain,
-                    "off = 0 is the shipped room"
-                );
             }
         }
     }
     // The V02 shape: locks alone past the ceiling, nothing in flight.
     assert_eq!(palw_rcore_gate_room_of_v1(1_000, 500, 600, 0, Work), 0, "below the fence: closed");
-    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 600, 600, 0, Work), 400, "past it: the collateral's remainder");
-    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 600, 500, 0, Work), 400, "…never more than C − committed");
-    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 1_000, 900, 0, Work), 0, "a bond full of locks takes no work");
+    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 600, 600, 0, 0, Work), 400, "past it: the collateral's remainder");
+    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 600, 600, 100, 0, Work), 300, "…less the accuser reserve");
+    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 600, 500, 0, 0, Work), 400, "…never more than C − committed");
+    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 1_000, 900, 0, 0, Work), 0, "a bond full of locks takes no work");
+    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 900, 900, 100, 0, Work), 0, "…nor one whose locks reach the reserve");
+    // A bond whose free half is below the reserve keeps its unsplit room (never less).
+    assert_eq!(palw_rcore_gate_room_split_of_v1(1_000, 500, 100, 100, 700, 0, Work), 400, "the unsplit room stands");
 }
 
 /// **The partition on a real Final, and its fence**: before `Final` a `Valid` seat's lock rides a live
@@ -486,6 +505,11 @@ fn v02_the_producer_seat_admission_the_fold_the_facts_and_the_draw_agree_on_each
                 eligibility: 640 * MSK,
                 ceiling_permille: chain.sp.fp_max_exposure_ratio_permille(),
                 resolved_locks_off_ceiling: chain.sp.final_lock_full_collateral_active_at(t),
+                accuser_reserve: kaspa_consensus_core::palw_state_v2::palw_bond_accuser_reserve_v1(&chain.sp, t),
+                held_charge_floor: kaspa_consensus_core::palw_state_v2::palw_v02_held_charge_floor_v1(&chain.sp, t, {
+                    let e = chain.extras_at(t);
+                    e.offence_attribution_active && e.held_context_ladder.is_some()
+                }),
             }),
         };
         if open {
@@ -502,4 +526,197 @@ fn v02_the_producer_seat_admission_the_fold_the_facts_and_the_draw_agree_on_each
             assert!(!filter.admits(&chain.s, &producer), "{label}: the draw leaves it out");
         }
     }
+}
+
+/// **The draw's seat filter at `daa` on `c`, as the processor resolves it at the binding block**
+/// (`palw_panel_valid_lock_of_v1`: the escaped depth, the fence's split, the accuser reserve and the
+/// held-charge floor from the block's extras).
+fn draw_filter(c: &Chain, daa: u64, eligibility: u128) -> PalwPanelValidLockV1 {
+    let e = c.extras_at(daa);
+    PalwPanelValidLockV1 {
+        required: u128::MAX,
+        now_daa: daa,
+        settled_anchor_depth: palw_second_clock_depth_v1(raw_depth(c, daa), c.s.recent_anchor_daas(), daa, c.sp.window_court()),
+        window_court: c.sp.window_court(),
+        rcore: Some(PalwRcoreSeatFilterV1 {
+            eligibility,
+            ceiling_permille: c.sp.fp_max_exposure_ratio_permille(),
+            resolved_locks_off_ceiling: c.sp.final_lock_full_collateral_active_at(daa),
+            accuser_reserve: palw_bond_accuser_reserve_v1(&c.sp, daa),
+            held_charge_floor: palw_v02_held_charge_floor_v1(
+                &c.sp,
+                daa,
+                e.offence_attribution_active && e.held_context_ladder.is_some(),
+            ),
+        }),
+    }
+}
+
+/// **The review's HIGH (the verifier's probe 1, fixed): past the fence a bind never spends the accuser
+/// reserve.** Floor seat X carries post-`Final` locks of retired claims past its 500‰ ceiling; claim A
+/// is bound (X on its panel) and claim B waits for its panel.
+///
+/// * **The verifier's shape** — X's locks leave it `eligibility + 100 MSK` short of `C − accuser`: the
+///   lane's first cut bound B there and X could no longer file the DA accusation on A it filed before.
+///   Now the work room is short of the bind (it would spend the reserve), the fold leaves B's panel
+///   inert, the draw's filter leaves X out, and X still accuses.
+/// * **At the reserve's edge** — X's locks leave it `reserve + eligibility + 100 MSK` short: B binds
+///   past the fence (the launch build refuses it), and afterwards X's accuser room is at least the
+///   reserve, which covers four of the largest DA sessions or held dissections (each capped at the
+///   producer floor) and A's court stake — and X files the accusation.
+#[test]
+fn v02_a_bind_past_the_fence_never_spends_the_accuser_reserve() {
+    let fence = 1_001u64;
+    let p = armed(fence);
+    let mut c = Chain::new(p.clone());
+    let x = c.floor_seats()[0].0;
+    let a = c.floor_claim(0x0A01);
+    c.bind(a, &c.floor_seats());
+    let b = c.floor_claim(0x0A02);
+    let now = c.daa;
+    assert!(now >= fence, "the premise: past the fence");
+    let e = eligibility(&c, &b, now + 1);
+    let floor = u128::from(c.sp.min_collateral_sompi());
+    let reserve = palw_bond_accuser_reserve_v1(&c.sp, now + 1);
+    assert_eq!(reserve, 4 * floor, "four producer floors (52,000 MSK on testnet-12)");
+    assert_eq!(palw_bond_accuser_reserve_v1(&c.sp, fence - 1), 0, "none below the fence");
+    let da_price = palw_claim_bond_reservation_v1(&c.sp, &c.claim(&a))
+        .expect("A's reservation")
+        .saturating_mul(1_000)
+        .div_ceil(10_000)
+        .min(floor);
+    let court_price = c.claim(&a).reserved;
+    // A DA session's exposure and a held dissection's charge are each capped at the producer floor.
+    assert!(da_price <= floor && reserve >= 4 * da_price, "the reserve covers four DA sessions at any stage");
+    assert!(reserve >= court_price, "…and a court on A");
+    let accuser = palw_accuser_exposure_v1(&c.s, &x);
+    let ceiling_x = ceiling(&c, &x);
+
+    // The verifier's shape: the relief would spend the reserve, so there is no room for B.
+    let tight = collateral(&c, &x) - accuser - e - 100 * MSK;
+    let fill = tight - committed(&c, &x, now);
+    let tight = chain_on(p.clone(), with_retired_locks(&c.sp, &c.s, h(0x0E_A0A0), &[(x, fill)], now + c.sp.window_court()), c.daa);
+    assert!(committed(&tight, &x, now + 1) > ceiling_x, "the premise: post-Final locks alone stand past the 500‰ ceiling");
+    assert!(work_room(&tight, &x, now + 1) < e, "the relief stops at the reserve");
+    assert!(!binds(&tight, now + 1, b), "the fold leaves B's panel inert");
+    assert!(!draw_filter(&tight, now + 1, e).admits(&tight.s, &x), "the draw leaves X out, as the bind would");
+    probe(&tight, now + 1, &[da_accuse(a, x, 0)]).expect("X accuses A: its accuser room is untouched");
+
+    // At the reserve's edge: B binds, and the reserve is still there afterwards.
+    let edge = collateral(&c, &x) - reserve - accuser - e - 100 * MSK;
+    let fill = edge - committed(&c, &x, now);
+    c.s = with_retired_locks(&c.sp, &c.s, h(0x0E_A0A1), &[(x, fill)], now + c.sp.window_court());
+    assert!(committed(&c, &x, now + 1) > ceiling_x, "the premise: past the 500‰ ceiling");
+    let twin = chain_on(t12(), c.s.clone(), c.daa);
+    assert!(!binds(&twin, now + 1, b), "the launch build refuses B's bind");
+    assert!(draw_filter(&c, now + 1, e).admits(&c.s, &x), "the draw seats X");
+    assert!(binds(&c, now + 1, b), "the armed build binds B");
+    c.bind(b, &c.floor_seats());
+    let after = c.daa + 1;
+    let room = accuser_room(&c, &x, after);
+    assert!(room >= reserve, "after the bind X keeps the reserve ({} ≥ {})", msk(room), msk(reserve));
+    assert!(committed(&c, &x, after) + palw_accuser_exposure_v1(&c.s, &x) <= collateral(&c, &x), "the one invariant");
+    println!(
+        "[v02] reserve {:.2} MSK; X: C {:.2}, committed after B {:.2} ({:.1}‰), accuser room {:.2}; DA session on A {:.2}, court stake {:.2}",
+        msk(reserve),
+        msk(collateral(&c, &x)),
+        msk(committed(&c, &x, after)),
+        committed(&c, &x, after) as f64 * 1000.0 / collateral(&c, &x) as f64,
+        msk(room),
+        msk(da_price),
+        msk(court_price),
+    );
+    c.step_at(after, &[da_accuse(a, x, 0)], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(c.s.da_session(&a, &x).is_some(), "X files the accusation after the bind");
+}
+
+/// **The review's HIGH (the verifier's probe 2, fixed): the post-`Final` DA accusation (X2's route)
+/// survives a bind past the fence.** Claim A is licensed and `Final`; Y (genesis bond 6, not one of A's
+/// signers) carries post-`Final` locks past its ceiling. Where the bind would spend the reserve Y is
+/// not bound onto B; at the reserve's edge B binds with Y seated and Y's `FinalRow` accusation of A is
+/// still admitted.
+#[test]
+fn v02_the_post_final_da_accusation_survives_a_bind_past_the_fence() {
+    let fence = 1_001u64;
+    let p = armed(fence);
+    let mut c = Chain::new(p.clone());
+    let genesis = genesis_bonds(&c.p);
+    let y = genesis[6].0;
+    let a = c.floor_claim(0x0B01);
+    let bound = c.bind(a, &c.floor_seats());
+    licence_and_finalize(&mut c, a, bound);
+    let b = c.floor_claim(0x0B02);
+    let now = c.daa;
+    let e = eligibility(&c, &b, now + 1);
+    let reserve = palw_bond_accuser_reserve_v1(&c.sp, now + 1);
+    let accuser = palw_accuser_exposure_v1(&c.s, &y);
+    let mut seats: Vec<(PalwBondKeyV2, Hash64)> = genesis[2..6].iter().map(|(k, o, _)| (*k, *o)).collect();
+    seats.push((genesis[6].0, genesis[6].1));
+    let bind_b = |c: &Chain| PalwConsensusObjectV2::PanelBound { claim: b, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&seats) };
+    let bound_on = |c: &Chain| {
+        let folded = probe(c, now + 1, &[bind_b(c)]).expect("inert, not an error");
+        matches!(folded.claim(&b).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. })
+    };
+
+    // The verifier's shape (`e + 700 MSK` short of `C − accuser`): the bind is refused, Y still accuses.
+    let tight = collateral(&c, &y) - accuser - e - 700 * MSK;
+    let fill = tight - committed(&c, &y, now);
+    let tight = chain_on(p.clone(), with_retired_locks(&c.sp, &c.s, h(0x0E_B0B0), &[(y, fill)], now + c.sp.window_court()), c.daa);
+    assert!(!bound_on(&tight), "the relief stops at the reserve: B is not bound with Y seated");
+    assert!(!draw_filter(&tight, now + 1, e).admits(&tight.s, &y), "the draw leaves Y out");
+    probe(&tight, now + 1, &[da_accuse(a, y, 0)]).expect("Y accuses A at FinalRow");
+
+    // At the reserve's edge: B binds with Y seated, and Y's FinalRow accusation is still admitted.
+    let edge = collateral(&c, &y) - reserve - accuser - e - 700 * MSK;
+    let fill = edge - committed(&c, &y, now);
+    c.s = with_retired_locks(&c.sp, &c.s, h(0x0E_B0B1), &[(y, fill)], now + c.sp.window_court());
+    let twin = chain_on(t12(), c.s.clone(), c.daa);
+    assert!(!bound_on(&twin), "the launch build refuses the bind");
+    assert!(draw_filter(&c, now + 1, e).admits(&c.s, &y), "the draw seats Y");
+    let bind = bind_b(&c);
+    c.step(&[bind]);
+    assert!(matches!(c.claim(&b).phase, PalwClaimPhaseV2::PanelBound { .. }), "past the fence B binds with Y seated");
+    let after = c.daa + 1;
+    let room = accuser_room(&c, &y, after);
+    assert!(room >= reserve, "Y keeps the reserve ({} ≥ {})", msk(room), msk(reserve));
+    c.step_at(after, &[da_accuse(a, y, 0)], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let session = c.s.da_session(&a, &y).expect("Y's FinalRow session is open");
+    println!(
+        "[v02] FinalRow: Y accuser room after B's bind {:.2} MSK (reserve {:.2}); the session's exposure {:.2}",
+        msk(room),
+        msk(reserve),
+        msk(session.exposure)
+    );
+}
+
+/// **The verifier's probe 3, fixed: past the fence the FP lane's room view is the fold's room.**
+/// `palw_fp_bond_room_v2` (the node's price answer, `bond_room`) read `ceiling − (committed −
+/// resolved)` and overstated the fold's FP ceiling (`own + gate_room(Work)`) once resolved locks
+/// passed `C/2 − accuser`; past the fence it is now the work gate's room less the declared term, and
+/// below it (the launch build) it is what it shipped as.
+#[test]
+fn v02_the_fp_room_view_is_the_folds_room_past_the_fence() {
+    let fence = 1_001u64;
+    let mut c = Chain::new(armed(fence));
+    c.step(&[]);
+    c.step(&[]);
+    let x = c.floor_seats()[0].0;
+    let now = c.daa;
+    let target = collateral(&c, &x) * 9 / 10;
+    let fill = target - committed(&c, &x, now);
+    c.s = with_retired_locks(&c.sp, &c.s, h(0x0E_A0A2), &[(x, fill)], now + c.sp.window_court());
+    let fold_room = work_room(&c, &x, now);
+    let view = palw_fp_bond_room_v2(&c.s, &c.sp, &x, false, now, raw_depth(&c, now)).expect("a bond");
+    assert_eq!(view, fold_room, "the view is the fold's room");
+    assert_eq!(
+        fold_room,
+        collateral(&c, &x) - palw_bond_accuser_reserve_v1(&c.sp, now) - target - palw_accuser_exposure_v1(&c.s, &x),
+        "the 100% term less the reserve binds at 900‰"
+    );
+    let twin = chain_on(t12(), c.s.clone(), c.daa);
+    assert_eq!(
+        palw_fp_bond_room_v2(&twin.s, &twin.sp, &x, false, now, raw_depth(&twin, now)).expect("a bond"),
+        0,
+        "the launch build: ceiling − committed, saturated"
+    );
 }

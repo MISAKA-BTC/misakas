@@ -2857,7 +2857,7 @@ pub fn palw_rcore_gate_room_of_v1(
     accuser: u128,
     gate: PalwRcoreGateV1,
 ) -> u128 {
-    palw_rcore_gate_room_split_of_v1(collateral, ratio_permille, committed, 0, accuser, gate)
+    palw_rcore_gate_room_split_of_v1(collateral, ratio_permille, committed, 0, 0, accuser, gate)
 }
 
 // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock is carried by the whole collateral ----
@@ -2867,32 +2867,120 @@ pub fn palw_rcore_gate_room_of_v1(
 
 /// **Lane V02: the gate room with the resolved locks off the work ceiling** — [`palw_rcore_gate_room_of_v1`]
 /// with `off_ceiling ≤ committed` the part of `committed` the `ratio‰` ceiling does not carry
-/// ([`palw_bond_off_ceiling_v1`]):
+/// ([`palw_bond_off_ceiling_v1`]) and `accuser_reserve` the part of the collateral that relief never
+/// spends ([`palw_bond_accuser_reserve_v1`]):
 ///
-/// * [`PalwRcoreGateV1::Work`]: `min(ceiling − (committed − off_ceiling), C − committed − accuser)` —
-///   the ceiling bounds the work in flight, and the whole ledger (resolved locks included) still never
-///   passes the collateral;
+/// * [`PalwRcoreGateV1::Work`]: `max(launch, split)`, where `launch` is the unsplit room
+///   `min(ceiling − committed, C − committed − accuser)` and `split` is
+///   `min(ceiling − (committed − off_ceiling), C − accuser_reserve − committed − accuser)` — the ceiling
+///   bounds the work in flight, the whole ledger (resolved locks included) never passes the collateral,
+///   and work the relief admits past the unsplit room always leaves `accuser_reserve` for accusations
+///   (the V02 review's HIGH: past the fence binds would otherwise spend A-6's free half down to less than
+///   one FinalRow DA session, court or held dissection);
 /// * [`PalwRcoreGateV1::Accuser`]: unchanged, `C − max(committed, ceiling) − accuser`.
 ///
-/// So `committed + accuser ≤ C` holds at both gates for every `off_ceiling`, the work room is never
-/// less than [`palw_rcore_gate_room_of_v1`]'s (`off_ceiling = 0`) and the accuser room is the same.
-/// Saturating; pure.
+/// So `committed + accuser ≤ C` holds at both gates for every input; the work room is never less than
+/// [`palw_rcore_gate_room_of_v1`]'s and equals it at `off_ceiling = 0`; the accuser room is the same
+/// function of the state; and a work admission past the unsplit room leaves the accuser gate at least
+/// `accuser_reserve` of room. Saturating; pure.
 pub fn palw_rcore_gate_room_split_of_v1(
     collateral: u64,
     ratio_permille: u32,
     committed: u128,
     off_ceiling: u128,
+    accuser_reserve: u128,
     accuser: u128,
     gate: PalwRcoreGateV1,
 ) -> u128 {
     let posted = collateral as u128;
     let ceiling = posted.saturating_mul(ratio_permille as u128) / 1000;
     match gate {
-        PalwRcoreGateV1::Work => ceiling
-            .saturating_sub(committed.saturating_sub(off_ceiling))
-            .min(posted.saturating_sub(committed).saturating_sub(accuser)),
+        PalwRcoreGateV1::Work => {
+            palw_rcore_work_room_of_ceiling_v1(posted, ceiling, committed, off_ceiling, accuser_reserve, accuser)
+        }
         PalwRcoreGateV1::Accuser => posted.saturating_sub(committed.max(ceiling)).saturating_sub(accuser),
     }
+}
+
+/// [`palw_rcore_gate_room_split_of_v1`]'s work room with the ceiling already in sompi (the producer's
+/// facts carry `exposure_ceiling`, not the ratio). `off_ceiling = 0` is the unsplit room byte for byte.
+pub fn palw_rcore_work_room_of_ceiling_v1(
+    posted: u128,
+    ceiling: u128,
+    committed: u128,
+    off_ceiling: u128,
+    accuser_reserve: u128,
+    accuser: u128,
+) -> u128 {
+    let launch = ceiling.saturating_sub(committed).min(posted.saturating_sub(committed).saturating_sub(accuser));
+    if off_ceiling == 0 {
+        return launch;
+    }
+    let split = ceiling
+        .saturating_sub(committed.saturating_sub(off_ceiling))
+        .min(posted.saturating_sub(accuser_reserve).saturating_sub(committed).saturating_sub(accuser));
+    launch.max(split)
+}
+
+/// **Lane V02: how many of the largest accusation stakes the relief keeps free** — a DA session's
+/// exposure is capped at the producer floor (`palw_da_session_exposure_v1`) and so is a held
+/// dissection's charge (`min(max(reserved, G), floor)`); four is what one seat may open on one claim
+/// (`PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1`).
+pub const PALW_V02_ACCUSER_RESERVE_FLOORS_V1: u128 = 4;
+
+/// **Lane V02: the accuser reserve the work gate's relief never spends** — `4 × min_collateral`
+/// (52,000 MSK on testnet-12, 5.5% of a genesis seat) where `palw_final_lock_full_collateral` is in
+/// force at `now_daa`, `0` below it. A bond whose free half is smaller than this gets no relief (its
+/// work room stays the unsplit one), never less.
+pub fn palw_bond_accuser_reserve_v1(params: &PalwStateParamsV2, now_daa: u64) -> u128 {
+    if !params.final_lock_full_collateral_active_at(now_daa) {
+        return 0;
+    }
+    PALW_V02_ACCUSER_RESERVE_FLOORS_V1.saturating_mul(u128::from(params.min_collateral_sompi()))
+}
+
+/// **ADR-0152 §4-ter C4 (the review's F7), for a reader outside the fold: what `bond`'s open held
+/// dissections hold beyond [`palw_accuser_exposure_v1`]'s count** — each session it challenges on a
+/// held class at `min(max(reserved, G), floor) − reserved`, `G` the claim's frozen gains
+/// ([`palw_claim_g_v1`]). The fold's `held_accuser_surplus_v1` is this with `floor =
+/// min_collateral` where `palw_rcore_plus`, `palw_offence_attribution` and the held ladder are all in
+/// force, and 0 elsewhere — one expression.
+pub fn palw_held_accuser_surplus_of_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, floor: u64) -> u128 {
+    let floor = u128::from(floor);
+    state
+        .courts_by_challenger
+        .range((*bond, ZERO_HASH64)..)
+        .take_while(|(challenger, _)| challenger == bond)
+        .filter_map(|(_, session)| state.court_sessions.get(session))
+        .filter_map(|session| state.claims.get(&session.claim).map(|claim| (session.claim, claim)))
+        .filter(|(_, claim)| state.class_is_held_v1(&claim.class_id))
+        .map(|(claim_id, claim)| {
+            let g = palw_claim_g_v1(state, &claim_id).map(|gains| gains.g()).unwrap_or(0);
+            claim.reserved.max(g).min(floor).saturating_sub(claim.reserved)
+        })
+        .fold(0u128, u128::saturating_add)
+}
+
+/// **Lane V02: the accuser ledger a work-gate reader outside the fold reads past the fence** —
+/// [`palw_accuser_exposure_v1`] plus, where `held_charge_floor` is `Some(floor)`, the held surplus
+/// ([`palw_held_accuser_surplus_of_v1`]): the fold's `accuser_ledger_v1`. `None` is the count alone.
+pub fn palw_accuser_ledger_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, held_charge_floor: Option<u64>) -> u128 {
+    let count = palw_accuser_exposure_v1(state, bond);
+    match held_charge_floor {
+        Some(floor) => count.saturating_add(palw_held_accuser_surplus_of_v1(state, bond, floor)),
+        None => count,
+    }
+}
+
+/// **Lane V02: the held-charge floor a work-gate reader outside the fold passes to
+/// [`palw_accuser_ledger_v1`]** — `Some(min_collateral)` where `palw_final_lock_full_collateral` and
+/// `palw_rcore_plus` are in force at `now_daa` and `held_charge_active` (the block's
+/// `offence_attribution_active && held_context_ladder.is_some()`, the extras pair the fold's
+/// `held_charge_block_active_v1` reads); `None` elsewhere, so every reader below the fence reads what it
+/// shipped with.
+pub fn palw_v02_held_charge_floor_v1(params: &PalwStateParamsV2, now_daa: u64, held_charge_active: bool) -> Option<u64> {
+    (held_charge_active && params.final_lock_full_collateral_active_at(now_daa) && params.rcore_plus_active_at(now_daa))
+        .then(|| params.min_collateral_sompi())
 }
 
 /// **Lane V02: the part of [`palw_bond_committed_v1`] that stands behind claims no longer live** — Σ
@@ -2974,6 +3062,7 @@ pub fn palw_rcore_gate_room_v1(
         params.fp_max_exposure_ratio_permille,
         palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth),
         palw_bond_off_ceiling_raw_v1(state, params, bond, now_daa, raw_depth),
+        palw_bond_accuser_reserve_v1(params, now_daa),
         palw_accuser_exposure_v1(state, bond),
         gate,
     )
@@ -12469,11 +12558,13 @@ impl PalwFoldReadV1<'_> {
         claim.reserved.max(g)
     }
 
-    /// **Is a session over `class_id` a held dissection charged at `max(reserved, G)`?** Past
-    /// `palw_offence_attribution` on a held network, over a held class — exactly where
-    /// `rearm_after_challenger_side_close` charges it so.
-    fn held_charge_applies_v1(&self, class_id: &Hash64) -> bool {
-        self.extras.offence_attribution_active && self.extras.held_context_ladder.is_some() && self.state.class_is_held_v1(class_id)
+    /// **Does this block charge a held class's session at `max(reserved, G)`?** Past
+    /// `palw_offence_attribution` on a held network — with the session's claim on a held class
+    /// (`class_is_held_v1`, read per session by [`palw_held_accuser_surplus_of_v1`]), exactly where
+    /// `rearm_after_challenger_side_close` charges it so. Lane V02: the processor resolves the same
+    /// pair for the readers outside the fold (`palw_held_accuser_charge_at`).
+    fn held_charge_block_active_v1(&self) -> bool {
+        self.extras.offence_attribution_active && self.extras.held_context_ladder.is_some()
     }
 
     /// **ADR-0152 §4-ter C4 (the review's F7): what `bond`'s open held dissections hold beyond the
@@ -12487,16 +12578,13 @@ impl PalwFoldReadV1<'_> {
         if !self.params.rcore_plus_active_at(now_daa) {
             return 0;
         }
-        let floor = u128::from(self.params.min_collateral_sompi());
-        self.state
-            .courts_by_challenger
-            .range((*bond, ZERO_HASH64)..)
-            .take_while(|(challenger, _)| challenger == bond)
-            .filter_map(|(_, session)| self.state.court_sessions.get(session))
-            .filter_map(|session| self.state.claims.get(&session.claim).map(|claim| (session.claim, claim)))
-            .filter(|(_, claim)| self.held_charge_applies_v1(&claim.class_id))
-            .map(|(claim_id, claim)| self.held_dissection_charge_v1(&claim_id, claim).min(floor).saturating_sub(claim.reserved))
-            .fold(0u128, u128::saturating_add)
+        // Lane V02: the block's half here, the claim's half (`class_is_held_v1`) in the one pure
+        // expression the readers outside the fold (the draw's filter, admission item 8, the
+        // producer's facts) call too.
+        if !self.held_charge_block_active_v1() {
+            return 0;
+        }
+        palw_held_accuser_surplus_of_v1(self.state, bond, self.params.min_collateral_sompi())
     }
 
     /// **The accuser ledger every gate reads past `palw_rcore_plus`** — [`palw_accuser_exposure_v1`]
@@ -16368,6 +16456,8 @@ impl<'a> TransitionBuilder<'a> {
             // Lane V02: past `palw_final_lock_full_collateral` (at this gate's DAA) the resolved locks
             // leave the work ceiling and stay in the 100% term; 0 below it.
             palw_bond_off_ceiling_v1(&self.state, self.params, bond, now_daa, self.second_clock_depth(now_daa)),
+            // Lane V02 (review HIGH): the relief never spends the accuser reserve (0 below the fence).
+            palw_bond_accuser_reserve_v1(self.params, now_daa),
             // ADR-0152 §4-ter C4 (the review's F7): a held session at its charge, not its `reserved`.
             self.read().accuser_ledger_v1(bond, now_daa),
             gate,
@@ -23011,6 +23101,10 @@ pub fn apply_palw_transition_v7(
                             audit_2026_09_23_active: builder.extras.audit_2026_09_23_active,
                             // ADR-0152 SR-7: the raw second-clock depth the fold's own ceiling reads.
                             settled_anchor_depth: builder.read().settled_anchor_depth(),
+                            // Lane V02: the pair `held_charge_block_active_v1` reads, so item 8 counts a held
+                            // session at its charge past the fence as `gate_room` does.
+                            held_accuser_charge_active: builder.extras.offence_attribution_active
+                                && builder.extras.held_context_ladder.is_some(),
                             ..Default::default()
                         },
                     ) {
@@ -29221,10 +29315,13 @@ pub fn palw_fp_bond_room_v2(
     }
     let record = state.bonds.get(bond)?;
     let declared = if capability_bound { palw_bond_capability_exposure_v1(record) } else { 0 };
-    // Lane V02: past `palw_final_lock_full_collateral` the resolved locks leave the ceiling (0 below).
-    let backed = palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth)
-        .saturating_sub(palw_bond_off_ceiling_raw_v1(state, params, bond, now_daa, raw_depth))
-        .saturating_add(declared);
+    // Lane V02: past `palw_final_lock_full_collateral` the fold's FP ceiling is `own + gate_room(Work)`,
+    // so the room is the work gate's (resolved locks off the ceiling, the 100% term and the accuser
+    // reserve) less the declared term. Below the fence this view is what it shipped as.
+    if params.final_lock_full_collateral_active_at(now_daa) {
+        return Some(palw_rcore_gate_room_v1(state, params, bond, now_daa, raw_depth, PalwRcoreGateV1::Work).saturating_sub(declared));
+    }
+    let backed = palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth).saturating_add(declared);
     let ceiling = (record.collateral as u128).saturating_mul(params.fp_max_exposure_ratio_permille as u128) / 1000;
     Some(ceiling.saturating_sub(backed))
 }
