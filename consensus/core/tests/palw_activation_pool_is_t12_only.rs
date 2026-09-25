@@ -149,6 +149,11 @@ fn the_pool_is_genesis_only_and_needs_the_registry_the_jury_and_the_audit() {
     late_jury.palw_canonical_work = Some(ForkActivation::new(5));
     late_jury.palw_admission_independence = Some(ForkActivation::new(5));
     late_jury.palw_fp_derived_work = Some(ForkActivation::new(5));
+    // ADR-0152 §4-quater's `palw_class_verify_deadline` (merged from rcore/int-3) needs
+    // `palw_fp_derived_work` at or below it and is asked before the pool, so it is taken away here
+    // (the fence cleared, its mirror synced) — the refusal under test is the pool's.
+    late_jury.palw_class_verify_deadline = None;
+    late_jury.sync_palw_class_verify_deadline();
     let why = late_jury.validate_palw_v2().expect_err("the pool with ADR-0147's jury past genesis");
     assert!(format!("{why:?}").contains("palw_activation_pool is armed without"), "{why:?}");
     // And the same fence off validates: the pool is optional, never required.
