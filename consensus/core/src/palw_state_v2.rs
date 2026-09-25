@@ -10856,6 +10856,11 @@ impl PalwChainStateV2 {
             if self.bonds.get(&record.challenger).is_none_or(|bond| record.amount > bond.slashed) {
                 return bad("its amount is more than its challenger's bond has ever lost");
             }
+            // A record whose pause is unspent has no non-pausing session of its challenger open on the
+            // claim: the record's write converts one that predates it, and an opening under it pauses.
+            if !record.paused && self.da_sessions.get(&(*claim_id, record.challenger)).is_some_and(|session| !session.accuser_is_seat) {
+                return bad("its challenger's open demand does not pause the claim");
+            }
             if record.amount == 0 || record.chunks.is_empty() || record.chunks.len() > 2 || !record.chunks.is_sorted_by(|a, b| a < b) {
                 return bad("a zero amount, or chunks that are not one or two, sorted and unique");
             }
@@ -14550,6 +14555,47 @@ impl<'a> TransitionBuilder<'a> {
                 paused: false,
             }),
         );
+        // The challenger's demand may already be open (its node files it at the `Terminal` duty, and
+        // the forger's close can land after it): it becomes the record's one pause now.
+        self.pause_open_demand_of_held_forfeit_v1(ctx.daa_score, (claim_id, session_id));
+    }
+
+    /// **4-ter.3 step 6 (the third review's MEDIUM): a demand that PREDATES its record pauses too.** A
+    /// non-seat challenger's node files its step-6 demand at its `Terminal` duty, while the held
+    /// session is still open; a forger that closes its acquittal after that demand lands gets a record
+    /// whose challenger's session was admitted non-pausing ([`Self::held_forfeit_pauses_v1`] runs only
+    /// at a session's opening), and one session per accuser left no second demand to open —
+    /// `Final` (close + `window_challenge`) came long before the demand's deadline (+ `W_disclose`).
+    /// So the record's write CONVERTS that open session into the record's pause, exactly as an opening
+    /// under the record would have written it: counted with the seats' sessions (`opened_by_seat`
+    /// too), the claim paused from now when it is the first (`paused_since`, its deadline disarmed —
+    /// the close's re-arm just armed it; the pause is credited back at the session's close as every
+    /// seat pause is), and the record marked paused. A seat's session already pauses: nothing to do.
+    fn pause_open_demand_of_held_forfeit_v1(&mut self, now_daa: u64, key: (Hash64, Hash64)) {
+        let (claim_id, _) = key;
+        let Some(record) = self.state.held_forfeits.get(&key).cloned() else { return };
+        if record.paused || self.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal()) {
+            return;
+        }
+        let Some(session) = self.state.da_sessions.get(&(claim_id, record.challenger)).cloned() else { return };
+        if session.accuser_is_seat {
+            return;
+        }
+        self.write_da_session((claim_id, record.challenger), Some(crate::palw_da_rcore_v1::PalwDaSessionV1 { accuser_is_seat: true, ..session }));
+        let mut da = self.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
+        da.open_other_sessions = da.open_other_sessions.saturating_sub(1);
+        da.open_seat_sessions = da.open_seat_sessions.saturating_add(1);
+        let opened = da.opened_by_seat.entry(record.challenger).or_insert(0);
+        *opened = opened.saturating_add(1);
+        let first = da.open_seat_sessions == 1;
+        if first {
+            da.paused_since = Some(now_daa);
+        }
+        self.write_da_claim(claim_id, Some(da));
+        if first {
+            self.disarm_deadline(claim_id);
+        }
+        self.write_held_forfeit(key, Some(PalwHeldForfeitV1 { paused: true, ..record }));
     }
 
     /// **4-ter.3 step 6 (the forger's race): the held forfeits a checkpoint-court conviction proves

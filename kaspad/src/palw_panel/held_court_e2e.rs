@@ -1011,6 +1011,8 @@ struct FixtureHost {
     carried: Option<Vec<u32>>,
     fenced: bool,
     asked: std::sync::Mutex<Vec<(Hash64, bool)>>,
+    /// The node's mempool as its restart reads it: carriers sent and not yet in a block.
+    pooled: Vec<kaspa_consensus_core::tx::Transaction>,
 }
 
 impl FixtureHost {
@@ -1025,6 +1027,7 @@ impl FixtureHost {
             carried: None,
             fenced: true,
             asked: std::sync::Mutex::new(Vec::new()),
+            pooled: Vec::new(),
         }
     }
 }
@@ -1173,7 +1176,9 @@ impl Node {
         self.held.begin_tick_v1(&duties, daa).await;
         // Once a start: the pursuits rebuilt from the chain, as the panel's tick asks consensus.
         if !self.held.seeded_v1() {
-            self.held.seed_v1(kaspa_consensus_core::palw_producer_v2::palw_held_pursuit_seeds_v1(state, &[self.host.bond]));
+            let mut seeds = kaspa_consensus_core::palw_producer_v2::palw_held_pursuit_seeds_v1(state, &[self.host.bond]);
+            seeds.open_demands.extend(super::held_court::palw_held_pooled_demands_v1(&self.host.pooled, self.host.bond, daa));
+            self.held.seed_v1(seeds);
         }
         let held_duties: Vec<PalwCourtDutyV2> = duties.into_iter().filter(|d| self.held.routes_v1(&self.host, d, daa)).collect();
         for read in self.held.chain_reads_v1(&self.host, &held_duties, daa) {
@@ -1532,6 +1537,22 @@ fn disclosure_of(
     }
 }
 
+/// A lifecycle carrier of `object`, as the mempool holds it.
+fn lifecycle_carrier_of(object: PalwConsensusObjectV2) -> kaspa_consensus_core::tx::Transaction {
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+        .expect("a lifecycle payload serializes");
+    kaspa_consensus_core::tx::Transaction::new(
+        0,
+        vec![],
+        vec![kaspa_consensus_core::tx::TransactionOutput::new(1, kaspa_consensus_core::tx::ScriptPublicKey::from_vec(0, vec![0x51]))],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    )
+}
+
 /// What a step-6 play recorded: the end state and the DAA each landmark landed at, and the held
 /// forfeit the claim last held.
 #[derive(Default)]
@@ -1545,6 +1566,8 @@ struct Step6Played {
     restarted: Option<u64>,
     /// The first DAA the claim had no deadline (a pause), and the claim's phase at the end.
     paused_at: Option<u64>,
+    /// How many demands the challenger's node carried.
+    demands_sent: u32,
 }
 
 /// The forger's R-core+ answer to one unit of the seat's DA session: P2-7's builders
@@ -1604,6 +1627,13 @@ struct ForgerPlay {
     late: bool,
     /// The seat's node restarts (its memory gone: the held route, its queue) the block after the close.
     restart_after_close: bool,
+    /// With `race`: close this many blocks after the bottom is reached (0: the block it is).
+    close_delay: u64,
+    /// In a block that carries both, the challenger's object is ordered before the forger's.
+    challenger_first: bool,
+    /// The challenger's demand is sent but sits in the mempool across a restart of its node (the
+    /// block after it is sent), and is mined the block after that.
+    demand_pooled_across_restart: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1623,9 +1653,13 @@ async fn play_step6_as(
     let mut played = Step6Played::default();
     let positions = accused.site_v1(artifact_root, true, PALW_HELD_STEP_LADDER_V1).expect("the anchored site").site.anchor_positions;
     let mut owed: Option<(u32, u32)> = None;
+    let mut terminal_since: Option<u64> = None;
     for daa in 105..until {
         if matches!(phase_of(&s, &claim), PalwClaimPhaseV2::Voided { .. }) {
             break;
+        }
+        if terminal_since.is_none() && duty_of(&s, PRODUCER, sid).is_some_and(|duty| duty.turn == PalwBisectTurnV1::Terminal) {
+            terminal_since = Some(daa);
         }
         if let Some((_, record)) = s.held_forfeits_of_claim(&claim).next() {
             played.forfeit = Some(record.clone());
@@ -1640,8 +1674,9 @@ async fn play_step6_as(
         }
         let mut objects = Vec::new();
         // The forger's moves.
+        let close_now = race && terminal_since.is_some_and(|since| daa >= since + how.close_delay);
         if let Some(duty) = duty_of(&s, PRODUCER, sid)
-            && (race || palw_held_move_of_duty_v1(&duty) != Some(PalwHeldMoveV1::Close))
+            && (close_now || palw_held_move_of_duty_v1(&duty) != Some(PalwHeldMoveV1::Close))
             && let Some((mv, _, object)) = node_move(&s, PRODUCER, sid, accused, artifact_root, daa)
         {
             if mv == PalwHeldMoveV1::Close {
@@ -1649,9 +1684,11 @@ async fn play_step6_as(
             }
             objects.push(object);
         }
+        let open = s.da_session(&claim, &challenger);
         let answer_now = owed.is_some()
             && !how.withhold
-            && (!how.late || s.da_session(&claim, &challenger).is_some_and(|session| session.deadline_daa == daa));
+            && (RCORE.with(|rcore| !rcore.get()) || open.is_some())
+            && (!how.late || open.is_some_and(|session| session.deadline_daa == daa));
         if answer_now && let Some((checkpoint, chunk)) = owed.take() {
             if RCORE.with(|rcore| rcore.get()) {
                 // Past R-core+ the session draws more units beside the named one, and the producer
@@ -1669,6 +1706,21 @@ async fn play_step6_as(
             seat.restart_v1();
             played.restarted = Some(daa);
         }
+        // A demand still in the mempool: the node restarts the block after sending it (its restart
+        // reads the pool), and the block after that mines it.
+        if how.demand_pooled_across_restart
+            && let Some((sent, _)) = played.demand
+        {
+            if daa == sent + 1 {
+                seat.restart_v1();
+                played.restarted = Some(daa);
+            } else if daa == sent + 2 {
+                let tx = seat.host.pooled.pop().expect("the pooled demand");
+                let object = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(&tx)
+                    .expect("a carrier's object");
+                objects.push(object);
+            }
+        }
         // The seat's node.
         if let Some(object) = seat.tick(&s, chain, daa).await {
             let due = seat.carried.last().and_then(|(_, _, due)| *due).expect("every step-6 item is dated");
@@ -1681,12 +1733,26 @@ async fn play_step6_as(
                         panic!("step 6 demands a StateChunk: {:?}", accusation.missing)
                     };
                     owed = Some((checkpoint, chunk));
-                    played.demand = Some((daa, due));
+                    if played.demand.is_some() {
+                        played.demands_sent += 1;
+                    }
+                    played.demand.get_or_insert((daa, due));
+                    played.demands_sent += u32::from(played.demands_sent == 0);
                 }
                 PalwConsensusObjectV2::CheckpointAccused { .. } => played.accused = Some((daa, due)),
                 _ => {}
             }
-            objects.push(object);
+            let pooled = how.demand_pooled_across_restart
+                && played.demands_sent == 1
+                && played.demand.is_some_and(|(sent, _)| sent == daa)
+                && matches!(object, PalwConsensusObjectV2::DefaultAccusedHeld { .. });
+            if pooled {
+                seat.host.pooled.push(lifecycle_carrier_of(object.clone()));
+            } else if how.challenger_first {
+                objects.insert(0, object);
+            } else {
+                objects.push(object);
+            }
         }
         s = step(&s, daa, &objects).unwrap_or_else(|e| panic!("DAA {daa}: {e}"));
         chain.extend(objects);
@@ -2157,4 +2223,141 @@ fn the_seats_court_filings_are_dated_in_the_priority_lane() {
         let before = &source[at.saturating_sub(700)..at];
         assert!(before.contains("court_due.insert(") && before.contains("palw_seat_court_filing_due_v1("), "dated: {push}");
     }
+}
+
+/// **The third review's MEDIUM, through the node and the fold: a non-seat's demand that PREDATES the
+/// acquittal pauses the claim too.** The non-seat's node files its step-6 demand at its `Terminal`
+/// duty, and the forger closes its acquittal only after that demand lands — a block later, or in the
+/// same block ordered after it. The demand was admitted a non-seat's, non-pausing (no record existed);
+/// the record's write converts it into the record's pause, so the forger's answer at the demand's very
+/// deadline still lands before `Final`, and the non-seat convicts and is made whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn step6_a_non_seats_demand_that_predates_the_acquittal_is_the_records_pause() {
+    RCORE.with(|rcore| rcore.set(true));
+    let (artifact, profile) = held_fixture(128);
+    let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+    let canonical = binding_of(&produce(&artifact, &profile, false).material).job_context;
+    let forger = [(0u8, 20_000), (0, -20_000), (1, 20_000), (1, -20_000)]
+        .into_iter()
+        .find_map(|(kind, delta)| forge_cache_row(&artifact, &profile, 20, kind, delta))
+        .expect("a cache-row lie that reaches a committed fused tile");
+    let window = kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&params());
+    for (label, how) in [
+        ("the close a block after the demand", ForgerPlay { race: true, late: true, close_delay: 1, ..Default::default() }),
+        ("the same block, the demand first", ForgerPlay { race: true, late: true, challenger_first: true, ..Default::default() }),
+    ] {
+        let (s, claims) = licensed_many_under(&[&forger], &canonical, &profile, root);
+        let claim = claims[0];
+        let accusation = accusation_by(&forger, claim, STRANGER);
+        let s = step(&s, 104, std::slice::from_ref(&accusation)).expect("a non-seat opens the held dissection");
+        let sid = session_by(&s, claim, STRANGER);
+        let accused = forger.backend.attn_site_evidence_held_v1(&forger.material, forger.leaf, Some(&forger.ids()), None).expect("N1");
+        let before = collateral(&s, STRANGER);
+        let (a, p) = (artifact.clone(), profile.clone());
+        let mut host = FixtureHost::new(STRANGER, move || backend(&a, &p));
+        host.carried = Some(forger.ids());
+        let mut stranger = Node::new(host);
+        let mut chain = vec![accusation];
+        let (end, played) =
+            play_step6_as(s, &forger, (claim, sid), root, &accused, &mut stranger, &mut chain, how, 300 + window).await;
+        let closed = played.forger_closed.unwrap_or_else(|| panic!("{label}: the forger closes"));
+        let (demanded, _) = played.demand.unwrap_or_else(|| panic!("{label}: the stranger demands"));
+        assert!(demanded <= closed, "{label}: the demand predates the close ({demanded} ≤ {closed})");
+        let forfeit = played.forfeit.unwrap_or_else(|| panic!("{label}: the forfeit kept"));
+        assert!(forfeit.paused, "{label}: the record's write made the open demand its pause");
+        assert!(played.paused_at.is_some(), "{label}: the claim paused");
+        let disclosed = played.disclosed.unwrap_or_else(|| panic!("{label}: the forger answers at the deadline"));
+        assert!(disclosed >= demanded + window, "{label}: late ({disclosed} ≥ {demanded} + {window})");
+        assert!(played.accused.is_some_and(|(at, _)| at > disclosed), "{label}: the stranger convicts on it");
+        assert!(
+            matches!(phase_of(&end, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "{label}: convicted before Final: {:?}",
+            phase_of(&end, &claim)
+        );
+        assert!(collateral(&end, STRANGER) >= before, "{label}: the stranger made whole");
+    }
+    RCORE.with(|rcore| rcore.set(false));
+}
+
+/// **The third review's LOWs, on the node.** (1) A restart that finds its own step-6 demand still in
+/// the mempool (sent, not yet mined) waits for it as for one on chain, and never files it again. (2) A
+/// checked filing whose N2 fails for a lasting reason (the seat's weights are not the class's) is
+/// retried with a backoff — a re-plan, then twice, four times that — never a whole-context replay
+/// every re-plan until the session ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pooled_demand_is_not_resent_after_a_restart_and_a_failing_build_backs_off() {
+    use super::held_court::{PALW_HELD_RETRY_CAP_DAA_V1, palw_held_retry_after_v1};
+    assert_eq!(
+        (1..=7).map(palw_held_retry_after_v1).collect::<Vec<_>>(),
+        vec![10, 20, 40, 80, 160, 320, PALW_HELD_RETRY_CAP_DAA_V1],
+        "a re-plan, doubling, capped"
+    );
+    RCORE.with(|rcore| rcore.set(true));
+    let (artifact, profile) = held_fixture(128);
+    let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+    let canonical = binding_of(&produce(&artifact, &profile, false).material).job_context;
+    let forger = [(0u8, 20_000), (0, -20_000), (1, 20_000), (1, -20_000)]
+        .into_iter()
+        .find_map(|(kind, delta)| forge_cache_row(&artifact, &profile, 20, kind, delta))
+        .expect("a cache-row lie that reaches a committed fused tile");
+    let (s, claims) = licensed_many_under(&[&forger], &canonical, &profile, root);
+    let claim = claims[0];
+    let accusation = accusation_of(&forger, claim);
+    let s = step(&s, 104, std::slice::from_ref(&accusation)).expect("the held dissection opens");
+    let sid = session_of(&s, claim);
+    let accused = forger.backend.attn_site_evidence_held_v1(&forger.material, forger.leaf, Some(&forger.ids()), None).expect("N1");
+    let before = collateral(&s, SEAT);
+    let (a, p) = (artifact.clone(), profile.clone());
+    let mut host = FixtureHost::new(SEAT, move || backend(&a, &p));
+    host.carried = Some(forger.ids());
+    let mut seat = Node::new(host);
+    let mut chain = vec![accusation.clone()];
+    let how = ForgerPlay { race: true, demand_pooled_across_restart: true, ..Default::default() };
+    let (end, played) = play_step6_as(s.clone(), &forger, (claim, sid), root, &accused, &mut seat, &mut chain, how, 600).await;
+    assert!(played.restarted.is_some(), "the node restarted with its demand in the pool");
+    assert_eq!(played.demands_sent, 1, "and never sent it again");
+    assert!(
+        matches!(phase_of(&end, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "the pooled demand, once mined, carries the pursuit through: {:?}",
+        phase_of(&end, &claim)
+    );
+    assert!(collateral(&end, SEAT) >= before);
+
+    // A seat whose weights are not the class's: its N2 fails on every build — backed off.
+    let other = {
+        use misaka_palw_base0::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
+        let shape = Base0ShapeV1 {
+            n_layers: 2,
+            n_heads: 4,
+            n_kv_heads: 2,
+            d_head: 8,
+            d_ff: 64,
+            vocab: 128,
+            max_position: 128,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        Arc::new(
+            Base0ArtifactV1::derive_deterministic(shape, 0x0BAD)
+                .expect("a valid shape")
+                .with_a16_params(misaka_palw_base0::engine_a16::derived_a16_store(&shape))
+                .expect("sorted"),
+        )
+    };
+    let site = accused.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
+    let mut filed = accused.root_claim_held_v1(&site, sid, 2).expect("the held root claim");
+    if let PalwConsensusObjectV2::CourtAttnRootClaimedHeld { signature, .. } = &mut filed {
+        *signature = vec![0xAA; 8];
+    }
+    let s1 = step(&s, 105, std::slice::from_ref(&filed)).expect("the root claim opens the phase");
+    let p = profile.clone();
+    let mut wrong = Node::new(FixtureHost::new(SEAT, move || backend(&other, &p)));
+    let filings = vec![filed];
+    for daa in 106..106 + 75 {
+        let _ = wrong.tick(&s1, &filings, daa).await;
+    }
+    let builds = wrong.host.asked.lock().unwrap().len();
+    // Failures at 106, then retries at +10, +20, +40 after each: four builds in 75 DAA, not eight.
+    assert_eq!(builds, 4, "backed off: {builds} builds in 75 DAA");
+    RCORE.with(|rcore| rcore.set(false));
 }

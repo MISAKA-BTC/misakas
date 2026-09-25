@@ -7330,7 +7330,19 @@ impl PalwPanelService {
                 // 4-ter.3 step 6: once a start, the pursuits this bond's held forfeits call for and the
                 // demands it holds open, rebuilt from the chain (they live in memory otherwise).
                 if !held_court.seeded_v1() {
-                    let seeds = session.clone().spawn_blocking(move |c| c.palw_held_pursuit_seeds_v1(vec![bond_key])).await;
+                    let mut seeds = session.clone().spawn_blocking(move |c| c.palw_held_pursuit_seeds_v1(vec![bond_key])).await;
+                    // A demand sent before the restart and not yet in a block is in the mempool: noted too.
+                    let (pooled, orphans) = self
+                        .flow_context
+                        .mining_manager()
+                        .clone()
+                        .get_all_transactions(kaspa_mining::model::tx_query::TransactionQuery::All)
+                        .await;
+                    seeds.open_demands.extend(held_court::palw_held_pooled_demands_v1(
+                        pooled.iter().chain(orphans.iter()).map(|pooled| pooled.tx.as_ref()),
+                        bond_key,
+                        current_daa,
+                    ));
                     held_court.seed_v1(seeds);
                 }
                 // 4-ter.3 step 6's pursuits past their sessions: the pursued claims' rows, off the tick.

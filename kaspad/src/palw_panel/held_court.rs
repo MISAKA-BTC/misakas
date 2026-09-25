@@ -752,6 +752,35 @@ pub(crate) trait PalwHeldHostV1 {
     fn claim_open_until_v1(&self, claim_id: &Hash64) -> Option<u64>;
 }
 
+/// **A restart's step-6 demands still in the mempool** (the third review's LOW): every pooled
+/// `DefaultAccusedHeld` of `bond` naming a `StateChunk`, as an open demand from `now_daa` — sent before
+/// the restart and not yet in a block, so the rebuilt pursuit waits for it as for one on chain instead
+/// of filing it again (a carrier the fold then refuses, `DaSessionAlreadyOpen`).
+pub(crate) fn palw_held_pooled_demands_v1<'a>(
+    txs: impl IntoIterator<Item = &'a kaspa_consensus_core::tx::Transaction>,
+    bond: PalwBondKeyV2,
+    now_daa: u64,
+) -> Vec<kaspa_consensus_core::palw_producer_v2::PalwHeldOpenDemandV1> {
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+    txs.into_iter()
+        .filter_map(kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1)
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::DefaultAccusedHeld { accusation }
+                if accusation.accuser == bond && matches!(accusation.missing, PalwHeldMissingV1::StateChunk { .. }) =>
+            {
+                Some(kaspa_consensus_core::palw_producer_v2::PalwHeldOpenDemandV1 {
+                    claim_id: accusation.claim,
+                    accuser: bond,
+                    opened_daa: now_daa,
+                    named: PalwDaUnitV1::Held(accusation.missing),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// **The responder's material, as P2-7's loader takes it**: the claim's facts, the pool's copies,
 /// the retained files (read in the build task, off the tick) and where a re-made capture is kept.
 pub(crate) struct PalwHeldMaterialV1 {
@@ -814,7 +843,23 @@ struct PalwHeldEntryV1 {
     build: PalwHeldTaskV1<PalwHeldBuiltV1>,
     filing: Option<(Hash64, PalwAttnHeldFilingV1)>,
     named_daa: u64,
+    /// Builds of this evidence that failed in a row — the retry's backoff ([`palw_held_retry_after_v1`]).
+    failures: u32,
 }
+
+/// **How long a failed held build waits before it is tried again** (the third review's LOW): a
+/// re-plan (`COURT_MOVE_REPLAN_DAA`) after the first failure, doubling with each further failure in
+/// a row, to at most [`PALW_HELD_RETRY_CAP_DAA_V1`]. A filing is never evicted (every checked one is
+/// the fold's own commitment), so a build that fails for a lasting reason — a replay that never
+/// reaches the filed root, weights that are not the class's — would otherwise re-run a whole-context
+/// replay every re-plan until the session ends; a transient one (a full ledger, a panic) is still
+/// tried again within a re-plan or two.
+pub(crate) fn palw_held_retry_after_v1(failures: u32) -> u64 {
+    COURT_MOVE_REPLAN_DAA.saturating_mul(1u64 << failures.saturating_sub(1).min(16)).min(PALW_HELD_RETRY_CAP_DAA_V1)
+}
+
+/// The longest a failed held build waits: well inside a held session's life (`window_court`).
+pub(crate) const PALW_HELD_RETRY_CAP_DAA_V1: u64 = 320;
 
 /// A checkpoint accusation's committed row, wanted (`task: None`) or being opened (step 6).
 struct PalwHeldRowsV1 {
@@ -965,11 +1010,17 @@ impl PalwHeldCourtV1 {
                 );
             }
             if let Some(why) = refused {
+                entry.failures = entry.failures.saturating_add(1);
                 warn!(
-                    "[{PALW_PANEL}] claim {}: the held evidence ({role}) at leaf {} does not build: {why} — tried again a re-plan \
-                     later",
-                    key.0, key.1
+                    "[{PALW_PANEL}] claim {}: the held evidence ({role}) at leaf {} does not build ({} in a row): {why} — tried again \
+                     {} DAA later",
+                    key.0,
+                    key.1,
+                    entry.failures,
+                    palw_held_retry_after_v1(entry.failures)
                 );
+            } else if matches!(collected, PalwHeldTaskV1::Ready(_)) {
+                entry.failures = 0;
             }
             entry.build = collected;
         }
@@ -1063,9 +1114,11 @@ impl PalwHeldCourtV1 {
     /// re-plan.
     fn want(&mut self, duty: &PalwCourtDutyV2, current_daa: u64) {
         let Some(key) = palw_held_evidence_key_v1(duty) else { return };
-        let fresh = match self.evidence.get(&key).map(|entry| &entry.build) {
+        let fresh = match self.evidence.get(&key) {
             None => true,
-            Some(PalwHeldTaskV1::Failed { at_daa }) => current_daa >= at_daa.saturating_add(COURT_MOVE_REPLAN_DAA),
+            Some(PalwHeldEntryV1 { build: PalwHeldTaskV1::Failed { at_daa }, failures, .. }) => {
+                current_daa >= at_daa.saturating_add(palw_held_retry_after_v1(*failures))
+            }
             Some(_) => false,
         };
         if fresh && palw_held_evidence_buildable_v1(duty) && !self.wanted.iter().any(|w| palw_held_evidence_key_v1(w) == Some(key)) {
@@ -1123,9 +1176,11 @@ impl PalwHeldCourtV1 {
     /// built, or failed inside a re-plan.
     fn want_restored_v1(&mut self, duty: &PalwCourtDutyV2, current_daa: u64) {
         let Some(key) = palw_held_evidence_key_v1(duty) else { return };
-        let fresh = match self.evidence.get(&key).map(|entry| &entry.build) {
+        let fresh = match self.evidence.get(&key) {
             None => true,
-            Some(PalwHeldTaskV1::Failed { at_daa }) => current_daa >= at_daa.saturating_add(COURT_MOVE_REPLAN_DAA),
+            Some(PalwHeldEntryV1 { build: PalwHeldTaskV1::Failed { at_daa }, failures, .. }) => {
+                current_daa >= at_daa.saturating_add(palw_held_retry_after_v1(*failures))
+            }
             Some(_) => false,
         };
         if fresh && !self.wanted.iter().any(|w| palw_held_evidence_key_v1(w) == Some(key)) {
@@ -1613,9 +1668,15 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
                     r.task = Some(PalwHeldTaskV1::Failed { at_daa: current_daa });
                 }
             } else {
+                let failures = held.evidence.get(&key).map_or(0, |entry| entry.failures).saturating_add(1);
                 held.evidence.insert(
                     key,
-                    PalwHeldEntryV1 { build: PalwHeldTaskV1::Failed { at_daa: current_daa }, filing: None, named_daa: current_daa },
+                    PalwHeldEntryV1 {
+                        build: PalwHeldTaskV1::Failed { at_daa: current_daa },
+                        filing: None,
+                        named_daa: current_daa,
+                        failures,
+                    },
                 );
             }
         };
@@ -1725,9 +1786,15 @@ pub(crate) fn palw_held_start_builds_v1<H: PalwHeldHostV1>(host: &H, held: &mut 
             if duty.i_am_responder { "responder (N1)" } else { "challenger (N2)" },
             duty.rung_deadline_daa
         );
+        let failures = held.evidence.get(&key).map_or(0, |entry| entry.failures);
         held.evidence.insert(
             key,
-            PalwHeldEntryV1 { build: PalwHeldTaskV1::Running { task, since_daa: current_daa }, filing, named_daa: current_daa },
+            PalwHeldEntryV1 {
+                build: PalwHeldTaskV1::Running { task, since_daa: current_daa },
+                filing,
+                named_daa: current_daa,
+                failures,
+            },
         );
     }
 }
