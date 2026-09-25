@@ -1496,6 +1496,30 @@ pub struct Params {
     /// [`PalwReadinessV2MaxAgeParamsV1`]. `Some` at genesis on testnet-12 only (24 spans); hashed
     /// Some-only. The bundle's mirror is made by `sync_palw_readiness_v2_max_age_spans`.
     pub palw_readiness_v2_max_age_spans: Option<PalwReadinessV2MaxAgeParamsV1>,
+    // ---- lane F1: registry resilience (the 2026-09-25 pre-launch sweep's V03 and V05) ----
+    /// **The registry-resilience fence** (the 2026-09-25 sweep's V03 and V05, the user's decisions of
+    /// that evening): testnet-12's post-launch consensus change for the rules that AMPLIFY a readiness
+    /// dip into burned escrow and a lost probation. Past it:
+    ///
+    /// * **V03(1): a no-capable-panel at the anchor slot re-anchors instead of voiding.** A claim its
+    ///   anchor block did not bind, whose class's ready seats could not fill a panel on the state the
+    ///   draw read (the anchor block's pre-object base, fixed before anything the anchor producer
+    ///   chooses to carry), is re-based on that block and retried at its next anchor slot; only the
+    ///   bind window's backstop, `accepted_daa + window_bind`, voids it `NoCapablePanel`. Keyed on the
+    ///   anchor block's own DAA. ([`crate::palw_state_v2::palw_ncp_retry_is_due_v1`].)
+    /// * **V03(2): a class held for readiness keeps its probation progress** and returns to it.
+    /// * **V05: a probation resets only on failed probes of two distinct producer bonds.**
+    ///   V03(2) and V05 are keyed on the FIRST DAA of the execution span a probe is counted in, which
+    ///   is the span a step judges, so no span is judged by one rule with probes noted under the other
+    ///   ([`crate::palw_state_v2::PalwStateParamsV2::registry_resilience_governs_span_v1`]).
+    ///
+    /// Below it every rule is the shipped one, byte for byte. `None` on every preset — testnet-12
+    /// included, until the operator arms the common post-launch height (a height no other fence uses,
+    /// so the fork id names it) — and hashed Some-only in every writer, so every shipped id is
+    /// byte-identical to a build without the field; `Some(never())` collapses to `None` in the
+    /// identity. `validate_palw_v2` refuses it off ConsensusV2, below `palw_rcore_plus` or
+    /// `palw_model_registry`, or with the bundle's mirror (`sync_palw_registry_resilience`) unsynced.
+    pub palw_registry_resilience: Option<ForkActivation>,
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -3937,6 +3961,8 @@ impl Params {
         // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis
         // only, over the registry and readiness V2 at genesis, inside [8, 30] spans, mirrored.
         self.validate_palw_readiness_v2_max_age_v1()?;
+        // Lane F1 (registry resilience, V03/V05): over R-core+ and the registry, mirrored.
+        self.validate_palw_registry_resilience_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -5049,6 +5075,11 @@ impl Params {
         if self.palw_readiness_v2_max_age_spans.is_some_and(|horizon| horizon.activation == ForkActivation::never()) {
             self.palw_readiness_v2_max_age_spans = None;
         }
+        // Lane F1 (registry resilience, V03/V05): Some-only hashed, so the same collapse — a build that
+        // schedules it and one that does not must share an identity until the height.
+        if self.palw_registry_resilience == Some(ForkActivation::never()) {
+            self.palw_registry_resilience = None;
+        }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
         }
@@ -5976,6 +6007,64 @@ impl Params {
         Ok(())
     }
 
+    // ---- lane F1: registry resilience (V03/V05) — the mirror and what the fence refuses ----
+
+    /// **The registry-resilience fence's mirror** (lane F1): the `#[borsh(skip)]` copy on
+    /// `PalwStateParamsV2` the fold reads (`registry_resilience_active_at`) — the fold's load-time
+    /// re-derivations (a retried claim's bind deadline) have no transition extras, only the params
+    /// they are handed. Written here and nowhere else; `None` where the fence is not armed. Call it
+    /// wherever the fence is set on an assembled ruleset; `validate_palw_v2` refuses a ruleset whose
+    /// copy disagrees, so a missed call is a startup refusal rather than a fold on the old rules.
+    pub fn sync_palw_registry_resilience(&mut self) {
+        let from_daa = self.palw_registry_resilience.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_registry_resilience_from_daa(from_daa);
+        }
+    }
+
+    /// **What `palw_registry_resilience` refuses** (lane F1). Called by `validate_palw_v2`, public so a
+    /// test can name each refusal. Below the fence it checks only that the bundle's mirror is `None`.
+    /// Past it: ConsensusV2 only; `palw_rcore_plus` (SW-8's anchor-block void, which V03(1) narrows)
+    /// and `palw_model_registry` (the lifecycle V03(2) and V05 step) armed at or below its height; the
+    /// mirror equal to the height. Any height is admissible, genesis included — the rules are written
+    /// to be crossed on a live chain.
+    pub fn validate_palw_registry_resilience_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.registry_resilience_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_registry_resilience.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a registry-resilience height without palw_registry_resilience armed: mirror the \
+                     fence with Params::sync_palw_registry_resilience after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_registry_resilience is armed on a network that is not ConsensusV2: the rules it changes are the V2 \
+                 registry's and SW-8's",
+            ));
+        };
+        let at_or_below = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score());
+        if !(at_or_below(self.palw_rcore_plus) && at_or_below(self.palw_model_registry)) {
+            return Err(Invalid(
+                "palw_registry_resilience is armed without palw_rcore_plus and palw_model_registry both armed at or below \
+                 it: the re-anchor narrows SW-8's anchor-block void, and the probation rules step the registry's lifecycle",
+            ));
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_registry_resilience disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_registry_resilience after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+
     /// **The maturity ADR-0151's fold serves and prices, in DAA** — `PalwEconomicSafetyFoldV1::
     /// maturity_daa`, filled by the processor from this and nothing else.
     ///
@@ -6848,6 +6937,7 @@ impl Params {
             palw_class_verify_rows: _,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
+            palw_registry_resilience,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6956,6 +7046,8 @@ impl Params {
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
             ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
             ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
+            // Lane F1 (registry resilience, V03/V05).
+            ("palw_registry_resilience", *palw_registry_resilience),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -7352,6 +7444,12 @@ impl Params {
             h.write(horizon.activation.daa_score().to_le_bytes());
             h.write(horizon.max_age_spans.to_le_bytes());
         }
+        // Lane F1 (registry resilience, V03/V05), NAMED and Some-only: it changes which claims void at
+        // their anchor slot and how a probation is judged, so an operator reading the schedule must see it.
+        if let Some(activation) = self.palw_registry_resilience {
+            h.write(b"palw_registry_resilience");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -7551,6 +7649,7 @@ impl Params {
             palw_class_verify_rows: _,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
+            palw_registry_resilience,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7888,6 +7987,10 @@ impl Params {
         // above and for its reason — the spans are a value beside it (the D1 rule).
         if let Some(horizon) = palw_readiness_v2_max_age_spans.as_mut() {
             fork(&mut horizon.activation, visit);
+        }
+        // Lane F1 (registry resilience, V03/V05): SOME-ONLY, as the horizon above and for its reason.
+        if let Some(activation) = palw_registry_resilience.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
         match palw_artifact_root_ownership.as_mut() {
@@ -8478,6 +8581,7 @@ impl Params {
             palw_class_verify_rows,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
+            palw_registry_resilience,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -8816,6 +8920,12 @@ impl Params {
             h.write(b"palw_readiness_v2_max_age_spans");
             h.write(horizon.activation.daa_score().to_le_bytes());
             h.write(horizon.max_age_spans.to_le_bytes());
+        }
+        // Lane F1 (registry resilience, V03/V05): the height only, Some-only, so every preset that leaves
+        // it unset — all of them as shipped — fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_registry_resilience {
+            h.write(b"palw_registry_resilience");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
         if let Some(activation) = palw_artifact_root_ownership {
@@ -9610,6 +9720,8 @@ impl Params {
             // `validate_palw_v2` on a prerequisite the override dropped rather than silently
             // counting them by eight spans.
             palw_readiness_v2_max_age_spans: self.palw_readiness_v2_max_age_spans,
+            // Lane F1: CARRIED with the bundle whose mirror it matches.
+            palw_registry_resilience: self.palw_registry_resilience,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -10635,6 +10747,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
+    palw_registry_resilience: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10860,6 +10973,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
+    palw_registry_resilience: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -11067,6 +11181,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
+    palw_registry_resilience: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -17434,6 +17549,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
+    palw_registry_resilience: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,

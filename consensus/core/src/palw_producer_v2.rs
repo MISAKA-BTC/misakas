@@ -1957,7 +1957,9 @@ pub fn palw_claim_phase_deadline_v1(
 ) -> Option<u64> {
     use crate::palw_state_v2::PalwClaimPhaseV2 as P;
     match &claim.phase {
-        P::Provisional => Some(claim.rebound_daa.unwrap_or(claim.accepted_daa).saturating_add(state_params.window_bind())),
+        // The fold's own bind deadline: `bind_base + window_bind`, or — for a claim lane F1 re-anchored
+        // after a no-capable-panel — the backstop its acceptance set (`accepted + window_bind`).
+        P::Provisional => crate::palw_state_v2::palw_provisional_bind_deadline_v1(state, state_params, claim_id, claim).ok(),
         P::PanelBound { bound_daa } => Some(bound_daa.saturating_add(state_params.window_receipt())),
         P::ReceiptLicensed { licensed_daa } => court_backstop.or_else(|| {
             crate::palw_state_v2::palw_claim_final_floor_v1(state, state_params, claim_id, claim, *licensed_daa)

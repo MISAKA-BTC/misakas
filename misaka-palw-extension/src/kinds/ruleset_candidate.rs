@@ -159,6 +159,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
                 Some(kaspa_consensus_core::config::params::PalwReadinessV2MaxAgeParamsV1 { activation: at, max_age_spans });
             params.sync_palw_readiness_v2_max_age_spans();
         }
+        // Lane F1 (registry resilience, V03/V05): the V2 bundle mirrors the height the fold reads, and
+        // `validate_palw_v2` refuses the two apart — set together.
+        "palw_registry_resilience" => {
+            params.palw_registry_resilience = Some(at);
+            params.sync_palw_registry_resilience();
+        }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
         "palw_objective_offence" => params.palw_objective_offence = Some(at),

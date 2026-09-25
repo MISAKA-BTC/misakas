@@ -647,6 +647,10 @@ mod tests {
                     max_age_spans: crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1,
                 })
             }
+            // Lane F1 (registry resilience, V03/V05): a post-launch fence, refused below R-core+ and the
+            // registry by `validate_palw_v2`, which the probe does not run — it asks only the hashers
+            // and the schedule.
+            "palw_registry_resilience" => params.palw_registry_resilience = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),

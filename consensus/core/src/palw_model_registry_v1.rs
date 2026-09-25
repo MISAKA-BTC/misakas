@@ -619,6 +619,146 @@ pub fn palw_lifecycle_step_v1(
     }
 }
 
+/// **V05: how many DISTINCT producer bonds a probation's failed probes must name before it resets.**
+///
+/// A failed probe is a void the producer is charged for (`CourtFraud`, `CourtDefault`,
+/// `ProducerWithholding`, `CourtHeldVerdict`). One bond's own failures say something about that
+/// producer, not about the class: counted alone they let any holder of a claimable bond reset a
+/// class's probation (seven to eight hours on testnet-12) with one fraud or one unanswered DA
+/// request, and an honest producer that lost its capture reset it by crashing. Two distinct bonds
+/// are the smallest evidence that is about the class. (Two bonds of one operator are two bonds: the
+/// bond is what the claim names and what the chain can attribute; an operator splitting its
+/// collateral pays a second bond's floor and a second claim's escrow for the second failure.)
+pub const PALW_PROBATION_RESET_DISTINCT_BONDS_V1: usize = 2;
+
+/// **V03(2) / V05: what a class's probation remembers across a span step** — rooted, one row per
+/// class, present only while non-empty (`registry_probation/v1`, a Some-only root block). Written
+/// only on spans lane F1's fence governs (`Params::palw_registry_resilience`,
+/// `PalwStateParamsV2::registry_resilience_governs_span_v1`), so a chain below it never holds one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwProbationMemoryV1 {
+    /// **V03(2): the probation progress a readiness hold keeps** — `Some(p)` only while the class is
+    /// `Held` after leaving `Probation { probes_passed: p }` (this span's passes included) because its
+    /// ready seats could not fill a panel; its return is `Probation { probes_passed: p }`. A failed
+    /// probation (V05) zeroes it; nothing else does.
+    pub held_probes_passed: Option<u32>,
+    /// **V05: the producer bonds a failed probe of this class was attributed to during the current
+    /// probation** (`Probation`, or the readiness hold that keeps it) — sorted, unique, at most
+    /// [`PALW_PROBATION_RESET_DISTINCT_BONDS_V1`] (a second distinct bond is already the reset; a third
+    /// adds nothing). Cleared by the reset it causes and whenever the class leaves the probation.
+    pub failed_bonds: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+}
+
+impl PalwProbationMemoryV1 {
+    /// Nothing remembered: the row is absent.
+    pub fn is_empty(&self) -> bool {
+        self.held_probes_passed.is_none() && self.failed_bonds.is_empty()
+    }
+
+    /// V05: note a failed probe of `bond` (sorted insert, unique, capped at the reset's count).
+    pub fn note_failed_bond(&mut self, bond: crate::palw_state_v2::PalwBondKeyV2) -> bool {
+        if self.failed_bonds.len() >= PALW_PROBATION_RESET_DISTINCT_BONDS_V1 {
+            return false;
+        }
+        match self.failed_bonds.binary_search(&bond) {
+            Ok(_) => false,
+            Err(at) => {
+                self.failed_bonds.insert(at, bond);
+                true
+            }
+        }
+    }
+
+    /// V05: have failed probes of enough distinct producer bonds been seen to reset the probation?
+    pub fn probation_failed(&self) -> bool {
+        self.failed_bonds.len() >= PALW_PROBATION_RESET_DISTINCT_BONDS_V1
+    }
+
+    /// Is the class in the probation this memory belongs to — `Probation`, or `Held` with the
+    /// readiness hold's kept progress? Only then does a failed probe name its bond here.
+    pub fn in_probation(&self, state: PalwModelLifecycleV1) -> bool {
+        matches!(state, PalwModelLifecycleV1::Probation { .. })
+            || (matches!(state, PalwModelLifecycleV1::Held) && self.held_probes_passed.is_some())
+    }
+}
+
+/// **One lifecycle step on a span lane F1's fence governs** (the 2026-09-25 pre-launch sweep's
+/// V03(2) and V05) — [`palw_lifecycle_step_v1`] with the class's [`PalwProbationMemoryV1`], returning
+/// the next state and the memory to keep. The exact rule, and only where it differs from v1:
+///
+/// * **A probation fails** when `memory.probation_failed()` — failed probes attributed to at least
+///   [`PALW_PROBATION_RESET_DISTINCT_BONDS_V1`] distinct producer bonds since the probation began
+///   (V05) — never on `obs.probes_failed_this_span` alone. A failed probation returns
+///   `Probation { 0 }` (as v1's failure did) and forgets its bonds.
+/// * **`Probation { p }` → `Held` for readiness** (ready seats below the panel, not overloaded)
+///   keeps `p + probes_passed_this_span` — or 0 if the probation failed — as `held_probes_passed`, and
+///   keeps its failed bonds (V03(2)). Held because overloaded (`utilization`, or a window that does
+///   not fit the receipt deadline) keeps nothing, as v1.
+/// * **`Held` with kept progress `k`** returns, when ready enough and not overloaded, to
+///   `Probation { k }` (0 if the probation failed meanwhile) with its failed bonds; otherwise it stays
+///   `Held` with `k` (0 if failed). Passes while `Held` are not added: the kept progress is the one
+///   the class had.
+/// * **`Probation { p }`, drawable and not failed**, counts its passes exactly as v1 (a single bond's
+///   failures no longer stop it), keeping its failed bonds; graduating to `ActiveLimited` forgets
+///   them.
+/// * **Every other state** steps as v1 and remembers nothing: a probation entered from `Prefetching`
+///   or from a `Held` without kept progress (an `Active` class's hold) starts at 0 with no failed
+///   bond.
+pub fn palw_lifecycle_step_resilient_v1(
+    state: PalwModelLifecycleV1,
+    obs: &PalwLifecycleObservationV1,
+    profile: &PalwDerivedProfileV1,
+    g: &PalwRegistryGlobalsV1,
+    memory: &PalwProbationMemoryV1,
+) -> (PalwModelLifecycleV1, PalwProbationMemoryV1) {
+    use PalwModelLifecycleV1::*;
+    let panel_drawable = obs.ready_seats >= g.seat_count as u32;
+    let ready_enough = obs.ready_seats >= profile.required_ready_seats && obs.collateral_ok;
+    let overloaded = obs.utilization_permille >= 1_000 || !obs.window_fits_receipt;
+    let failed = memory.probation_failed();
+    // The failed bonds survive a step only inside the probation, and never the reset they caused.
+    let keep_bonds = |next: PalwModelLifecycleV1, held: Option<u32>| PalwProbationMemoryV1 {
+        held_probes_passed: held,
+        failed_bonds: if failed { Vec::new() } else { memory.failed_bonds.clone() },
+    }
+    .with_state(next);
+    match state {
+        Probation { probes_passed } => {
+            if overloaded {
+                (Held, PalwProbationMemoryV1::default())
+            } else if !panel_drawable {
+                let kept = if failed { 0 } else { probes_passed.saturating_add(obs.probes_passed_this_span) };
+                keep_bonds(Held, Some(kept))
+            } else if failed {
+                (Probation { probes_passed: 0 }, PalwProbationMemoryV1::default())
+            } else {
+                let passed = probes_passed.saturating_add(obs.probes_passed_this_span);
+                if passed >= g.probation_claims && ready_enough {
+                    (ActiveLimited { stable_epochs: 0 }, PalwProbationMemoryV1::default())
+                } else {
+                    keep_bonds(Probation { probes_passed: passed }, None)
+                }
+            }
+        }
+        Held if memory.held_probes_passed.is_some() => {
+            let kept = if failed { 0 } else { memory.held_probes_passed.unwrap_or(0) };
+            if ready_enough && !overloaded {
+                keep_bonds(Probation { probes_passed: kept }, None)
+            } else {
+                keep_bonds(Held, Some(kept))
+            }
+        }
+        other => (palw_lifecycle_step_v1(other, obs, profile, g), PalwProbationMemoryV1::default()),
+    }
+}
+
+impl PalwProbationMemoryV1 {
+    /// Pair a memory with the state it was kept for (a helper of [`palw_lifecycle_step_resilient_v1`]).
+    fn with_state(self, state: PalwModelLifecycleV1) -> (PalwModelLifecycleV1, PalwProbationMemoryV1) {
+        (state, self)
+    }
+}
+
 // ---- Protocol Upgrade A: what the fold stores and reads ---------------------------------------
 
 /// **The work of a registered class, read off the carriage its registration rode** (ADR-0067: a
@@ -2268,6 +2408,96 @@ mod tests {
             palw_lifecycle_step_v1(Active, &PalwLifecycleObservationV1 { utilization_permille: 1_000, ..calm(9) }, &k, &G),
             Held
         );
+    }
+
+    /// **The 2026-09-25 pre-launch sweep's V03(2) and V05, the rule stated as a table**
+    /// ([`palw_lifecycle_step_resilient_v1`]): a readiness hold keeps the probation's progress and
+    /// returns to it; a hold for load keeps nothing; one bond's failed probes never reset a
+    /// probation, two distinct bonds' do (in `Probation` and in the readiness hold alike); an
+    /// `Active` class's hold returns to `Probation { 0 }` as before; and the memory never outlives
+    /// the probation it belongs to.
+    #[test]
+    fn v03_v05_a_readiness_hold_keeps_the_probation_and_only_two_bonds_reset_it() {
+        use PalwModelLifecycleV1::*;
+        let k = palw_derive_profile_v1(&kimi(), &G, false);
+        assert_eq!((G.seat_count, k.required_ready_seats), (5, 7), "the premise: a panel of five, seven to return");
+        let calm = |ready: u32, passed: u32, failed: u32| PalwLifecycleObservationV1 {
+            manifest: PalwManifestVerdictV1Flag::Valid,
+            ready_seats: ready,
+            probes_passed_this_span: passed,
+            probes_failed_this_span: failed,
+            utilization_permille: 300,
+            collateral_ok: true,
+            cap_ok: true,
+            window_fits_receipt: true,
+            span_stable: failed == 0,
+            admission_jury_seated: false,
+        };
+        let bond = |n: u64| PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(n), 0));
+        let none = PalwProbationMemoryV1::default();
+        let step = |s, o: &PalwLifecycleObservationV1, m: &PalwProbationMemoryV1| palw_lifecycle_step_resilient_v1(s, o, &k, &G, m);
+
+        // V03(2): Probation{4} with two passes this span, then the seats fall below the panel → Held
+        // keeping 6; still short → still Held with 6; seven ready again → Probation{6}, not {0}.
+        let (held, m1) = step(Probation { probes_passed: 4 }, &calm(4, 2, 0), &none);
+        assert_eq!((held, m1.held_probes_passed), (Held, Some(6)), "the readiness hold keeps the progress, this span's passes in");
+        let (still, m2) = step(Held, &calm(6, 3, 0), &m1);
+        assert_eq!((still, m2.held_probes_passed), (Held, Some(6)), "passes while held are not added; the kept count stays");
+        let (back, m3) = step(Held, &calm(7, 0, 0), &m2);
+        assert_eq!(back, Probation { probes_passed: 6 }, "the return is the probation as it was");
+        assert!(m3.is_empty(), "nothing left to remember once back in probation with no failures");
+        // v1 on the same walk restarts at 0 — the amplification V03 names.
+        assert_eq!(palw_lifecycle_step_v1(Held, &calm(7, 0, 0), &k, &G), Probation { probes_passed: 0 });
+        // A hold for load keeps nothing: overloaded → Held → Probation{0}.
+        let overloaded = PalwLifecycleObservationV1 { window_fits_receipt: false, ..calm(4, 2, 0) };
+        let (held, m) = step(Probation { probes_passed: 4 }, &overloaded, &none);
+        assert_eq!((held, m.is_empty()), (Held, true), "a hold for load keeps no progress");
+        assert_eq!(step(Held, &calm(7, 0, 0), &m).0, Probation { probes_passed: 0 });
+        // An Active class's readiness hold returns to Probation{0}, as before.
+        let (held, m) = step(Active, &calm(4, 0, 0), &none);
+        assert_eq!((held, m.is_empty()), (Held, true));
+        assert_eq!(step(Held, &calm(7, 0, 0), &m).0, Probation { probes_passed: 0 });
+
+        // V05: one bond's failures — however many — do not reset; the passes still count.
+        let mut one = PalwProbationMemoryV1::default();
+        assert!(one.note_failed_bond(bond(3)));
+        assert!(!one.note_failed_bond(bond(3)), "the same bond twice is one bond");
+        assert!(!one.probation_failed());
+        let (p, m) = step(Probation { probes_passed: 4 }, &calm(7, 2, 5), &one);
+        assert_eq!(p, Probation { probes_passed: 6 }, "one bond's failures do not reset the probation");
+        assert_eq!(m.failed_bonds, vec![bond(3)], "and are remembered for the rest of the probation");
+        // v1 on the same span resets.
+        assert_eq!(palw_lifecycle_step_v1(Probation { probes_passed: 4 }, &calm(7, 2, 5), &k, &G), Probation { probes_passed: 0 });
+        // A second distinct bond resets it, and the reset forgets both.
+        let mut two = m.clone();
+        assert!(two.note_failed_bond(bond(1)));
+        let mut sorted = vec![bond(3), bond(1)];
+        sorted.sort();
+        assert_eq!(two.failed_bonds, sorted, "sorted");
+        assert!(!two.note_failed_bond(bond(9)), "capped at the reset's two");
+        assert!(two.probation_failed());
+        let (p, m) = step(Probation { probes_passed: 6 }, &calm(7, 1, 1), &two);
+        assert_eq!((p, m.is_empty()), (Probation { probes_passed: 0 }, true), "two distinct bonds reset the probation");
+        // The same inside the readiness hold: one bond keeps the progress, two zero it.
+        let held_one = PalwProbationMemoryV1 { held_probes_passed: Some(6), failed_bonds: vec![bond(3)] };
+        let (h, m) = step(Held, &calm(4, 0, 1), &held_one);
+        assert_eq!((h, m.held_probes_passed), (Held, Some(6)));
+        assert_eq!(step(Held, &calm(7, 0, 0), &m).0, Probation { probes_passed: 6 });
+        let held_two = PalwProbationMemoryV1 { held_probes_passed: Some(6), failed_bonds: sorted.clone() };
+        let (h, m) = step(Held, &calm(4, 0, 0), &held_two);
+        assert_eq!((h, m.held_probes_passed, m.failed_bonds.len()), (Held, Some(0), 0), "a failed probation zeroes the kept count");
+        assert_eq!(step(Held, &calm(7, 0, 0), &m).0, Probation { probes_passed: 0 });
+        // Probation → Held with one failed bond carries the bond into the hold.
+        let (h, m) = step(Probation { probes_passed: 4 }, &calm(4, 0, 0), &one);
+        assert_eq!((h, m.held_probes_passed, m.failed_bonds.clone()), (Held, Some(4), vec![bond(3)]));
+        // Graduation forgets the probation's failed bonds.
+        let (a, m) = step(Probation { probes_passed: 9 }, &calm(7, 1, 0), &one);
+        assert_eq!((a, m.is_empty()), (ActiveLimited { stable_epochs: 0 }, true));
+        // The memory belongs to the probation only.
+        assert!(none.in_probation(Probation { probes_passed: 0 }));
+        assert!(!none.in_probation(Held), "a hold without kept progress is not a probation");
+        assert!(held_one.in_probation(Held));
+        assert!(!held_one.in_probation(Active));
     }
 
     /// **No share is set by anyone.** The single lottery's targets follow admission: the dense
