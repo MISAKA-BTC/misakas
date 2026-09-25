@@ -14,12 +14,20 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test reorg_strict_win_fence -- --nocapture
 
-use kaspa_consensus_core::config::params::{ForkActivation, Params};
+use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 
 fn t12() -> Params {
-    Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))
+    palw_t12_shipped_params()
 }
+
+/// The launch release's own ids (rcore/int-3 `0e8ec984e`, re-pin `9c717c16d`): `(params, identity,
+/// schedule)` — the same pins `palw_clock_lead_cap_is_t12_only::T12_WITH_THE_CAP` holds.
+const T12_LAUNCH_RELEASE: (&str, &str, &str) = (
+    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
+    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+);
 
 /// A height that is NOT already on testnet-12's schedule, so arming there registers a NEW fence in
 /// the fork-id gate (the `a-fence-at-a-scheduled-height-is-invisible-to-the-fork-id` rule: an
@@ -30,6 +38,21 @@ const ARM_AT: u64 = 9_100_001;
 fn shipped_testnet_12_leaves_the_fence_dormant() {
     let t12 = t12();
     assert_eq!(t12.palw_reorg_strict_economic_win, None, "the fence ships dormant on testnet-12");
+    // A node update carrying the dormant fence IS the launch release in every id it announces —
+    // params fingerprint, identity and schedule (the fence is hashed and visited SOME-ONLY) — so it
+    // needs no re-pin and prints exactly what the release prints.
+    let ids = (
+        t12.consensus_params_id().to_string(),
+        t12.consensus_identity_id().to_string(),
+        t12.consensus_schedule_id().to_string(),
+    );
+    assert_eq!((ids.0.as_str(), ids.1.as_str(), ids.2.as_str()), T12_LAUNCH_RELEASE, "the dormant build is the launch release, to the id");
+    // And through the network-id path a node takes.
+    assert_eq!(
+        Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)).consensus_params_id(),
+        t12.consensus_params_id(),
+        "Params::from(testnet-12) is the shipped testnet-12"
+    );
     // And it is listed by palw_fences_v1 (which is what feeds the fork-id gate).
     assert!(
         t12.palw_fences_v1().iter().any(|(name, _)| *name == "palw_reorg_strict_economic_win"),
@@ -97,11 +120,14 @@ fn a_scheduled_never_collapses_to_the_dormant_identity() {
         never.consensus_identity_id(),
         "the never()-collapse holds: Some(never()) has the dormant identity"
     );
-    // The schedule id is a report, not a gate; the bare fence has no companion value, so an armed
-    // never() (u64::MAX) is written by `for_each_fence` exactly as the absent case's u64::MAX —
-    // equal. (The raw params_id fingerprint of an un-normalised Some(never()) does differ, which is
-    // harmless: the identity above is what the handshake compares, and it collapses.)
-    assert_eq!(dormant.consensus_schedule_id(), never.consensus_schedule_id(), "Some(never()) schedule id == dormant");
+    // A height not yet reached is absence in the identity too (the same loop as
+    // `palw_clock_lead_cap_is_t12_only`). The raw params fingerprint and the schedule id of an
+    // un-normalised `Some(never())` do name it — both are reports; the identity is the gate.
+    for scheduled in [ForkActivation::never(), ForkActivation::new(1_000_000)] {
+        let mut p = t12();
+        p.palw_reorg_strict_economic_win = Some(scheduled);
+        assert_eq!(p.consensus_identity_id(), dormant.consensus_identity_id(), "{scheduled:?} is absence in the identity");
+    }
 }
 
 #[test]

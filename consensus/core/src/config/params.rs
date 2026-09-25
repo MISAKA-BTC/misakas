@@ -7730,13 +7730,13 @@ impl Params {
                 visit(&mut absent);
             }
         }
-        // lane: rcore/f1-forkchoice-attacks. A bare fence with no payload, same as D2 above.
-        match palw_reorg_strict_economic_win.as_mut() {
-            Some(activation) => fork(activation, visit),
-            None => {
-                absent = u64::MAX;
-                visit(&mut absent);
-            }
+        // lane: rcore/f1-forkchoice-attacks. A bare fence with no payload, visited SOME-ONLY — the
+        // clock floor's rule and its reason: a `None` visited as a sentinel would put a new value
+        // into every preset's schedule id (testnet-12's launch release included, schedule 93da24cc),
+        // so a node update carrying this fence dormant would print a schedule the release does not.
+        // Some-only, a dormant build is the release in every id: params, schedule, identity, fork id.
+        if let Some(activation) = palw_reorg_strict_economic_win.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0066 Decisions 1 and 4. **Only the activation is visited.** `work_log2` and
         // `t_leak_daa` are a price and a duration; normalising either to `0`/`u64::MAX` would make
