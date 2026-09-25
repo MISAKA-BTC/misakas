@@ -91,7 +91,7 @@
 //! rule, an id or a fingerprint.
 
 use super::*;
-use kaspa_core::error;
+use kaspa_core::{debug, error};
 use kaspa_consensus_core::palw_da_rcore_v1::{PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1, PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1};
 use kaspa_consensus_core::palw_operator_da_v1::{PalwOperatorDaCandidateV1, PalwOperatorDaJobV1, PalwOperatorDaStandingV1};
 use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1;
@@ -233,8 +233,8 @@ pub(crate) enum PalwOperatorDaSkipV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwOperatorDaPlanV1 {
     /// This node's turn to JUDGE the claim: replay it, and accuse only if the replay refutes it.
-    /// `rank` of `of` judges; `due` the turn's end.
-    Judge { rank: usize, of: usize, due: u64 },
+    /// `rank` of `of` judges.
+    Judge { rank: usize, of: usize },
     /// This node's turn to accuse BLIND (no operator can judge the claim by replay), within the blind
     /// budget, landing by `due` (the turn's end). `rank` of `of` eligible.
     File { rank: usize, of: usize, due: u64 },
@@ -283,10 +283,10 @@ pub(crate) fn palw_operator_da_plan_v1(
     if mine_next != turn {
         return P::Wait { from_daa: claim.stage_daa.saturating_add(mine_next.saturating_mul(PALW_OPERATOR_DA_TURN_DAA_V1)) };
     }
-    let due = claim.stage_daa.saturating_add((turn + 1).saturating_mul(PALW_OPERATOR_DA_TURN_DAA_V1)).min(claim.accuse_until_daa);
     if judging {
-        return P::Judge { rank, of: pool.len(), due };
+        return P::Judge { rank, of: pool.len() };
     }
+    let due = claim.stage_daa.saturating_add((turn + 1).saturating_mul(PALW_OPERATOR_DA_TURN_DAA_V1)).min(claim.accuse_until_daa);
     if claim.open_non_seat >= PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1 {
         return P::Wait { from_daa: now_daa + 1 };
     }
@@ -363,8 +363,8 @@ pub(crate) fn palw_operator_da_budget_v1(
 /// **What the book offers this node next** ([`PalwOperatorDaBookV1::next`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwOperatorDaActionV1 {
-    /// Start this node's replay of the claim (its judge's turn, no verdict yet).
-    Replay,
+    /// Start this node's replay of the claim (its judge's turn, no verdict yet) — `rank` of `of` judges.
+    Replay { rank: usize, of: usize },
     /// Accuse a claim this node's replay refuted, landing by `due`.
     FileRefuted { due: u64 },
     /// Accuse blind (no operator judges the claim), landing by `due` — `rank` of `of` eligible.
@@ -543,9 +543,9 @@ impl PalwOperatorDaBookV1 {
                     },
                 )),
                 (Some(_), _) => None,
-                (None, PalwOperatorDaPlanV1::Judge { .. }) => {
-                    (may_replay && self.replaying.is_none_or(|(claim, _)| claim != id)).then_some((id, PalwOperatorDaActionV1::Replay))
-                }
+                (None, PalwOperatorDaPlanV1::Judge { rank, of }) => (may_replay
+                    && self.replaying.is_none_or(|(claim, _)| claim != id))
+                .then_some((id, PalwOperatorDaActionV1::Replay { rank, of })),
                 (None, PalwOperatorDaPlanV1::File { rank, of, due }) => {
                     may_file.then_some((id, PalwOperatorDaActionV1::FileBlind { rank, of, due }))
                 }
@@ -753,11 +753,18 @@ impl PalwPanelService {
         };
         let Some(candidate) = book.candidate(&claim).cloned() else { return };
         let due = match action {
-            PalwOperatorDaActionV1::Replay => {
-                self.operator_da_start_replay_v1(session, book, &candidate, current_daa, network_domain);
+            PalwOperatorDaActionV1::Replay { rank, of } => {
+                self.operator_da_start_replay_v1(session, book, &candidate, (rank, of), current_daa, network_domain);
                 return;
             }
-            PalwOperatorDaActionV1::FileRefuted { due } | PalwOperatorDaActionV1::FileBlind { due, .. } => due,
+            PalwOperatorDaActionV1::FileRefuted { due } => due,
+            PalwOperatorDaActionV1::FileBlind { rank, of, due } => {
+                debug!(
+                    "[{PALW_PANEL}] claim {claim}: no operator judges it by replay — this node's blind turn, rank {rank} of {of} \
+                     eligible (lane B)"
+                );
+                due
+            }
         };
         let Some(check) = session.palw_da_accusation_check_v1(claim, bond_key) else { return };
         match (palw_operator_da_step_v1(&check), &check) {
@@ -852,6 +859,7 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         book: &mut PalwOperatorDaBookV1,
         candidate: &PalwOperatorDaCandidateV1,
+        (rank, of): (usize, usize),
         current_daa: u64,
         network_domain: Hash64,
     ) {
@@ -897,7 +905,7 @@ impl PalwPanelService {
         };
         info!(
             "[{PALW_PANEL}] claim {claim}: judging the claim by replaying the anchor's job off the loop before any accusation \
-             (lane B's replay gate; producer {:?}, {} outside Valid signer(s))",
+             (lane B's replay gate, judge {rank} of {of}; producer {:?}, {} outside Valid signer(s))",
             candidate.producer.0,
             candidate.outside_signers.len()
         );
@@ -1127,7 +1135,7 @@ mod tests {
                 assert_eq!(owner, pool[rank], "turn {turn} is rank {rank}'s");
                 let due = 1_500 + (turn + 1) * PALW_OPERATOR_DA_TURN_DAA_V1;
                 let expected = if judging {
-                    PalwOperatorDaPlanV1::Judge { rank, of: n, due }
+                    PalwOperatorDaPlanV1::Judge { rank, of: n }
                 } else {
                     PalwOperatorDaPlanV1::File { rank, of: n, due }
                 };
@@ -1384,10 +1392,10 @@ mod tests {
         let mut book = PalwOperatorDaBookV1::new(registrations());
         book.refresh(vec![honest.clone(), lie.clone()], Some(fresh()), 1_500);
         assert_eq!(book.next(&judge, 1_500, false, false), None, "no replay may start: nothing");
-        assert_eq!(book.next(&judge, 1_500, false, true), Some((honest.claim_id, PalwOperatorDaActionV1::Replay)));
+        assert_eq!(book.next(&judge, 1_500, false, true), Some((honest.claim_id, PalwOperatorDaActionV1::Replay { rank: 0, of: 3 })));
         book.judge(honest.claim_id, PalwOperatorDaVerdictV1::Reproduces);
         assert!(book.is_settled(&honest.claim_id), "honest: settled, never filed");
-        assert_eq!(book.next(&judge, 1_501, false, true), Some((lie.claim_id, PalwOperatorDaActionV1::Replay)));
+        assert_eq!(book.next(&judge, 1_501, false, true), Some((lie.claim_id, PalwOperatorDaActionV1::Replay { rank: 0, of: 3 })));
         book.judge(lie.claim_id, PalwOperatorDaVerdictV1::Refuted);
         // Past the judge's turn (1_530 is the next judge's), a refuted claim is still filed.
         let late = 1_500 + PALW_OPERATOR_DA_TURN_DAA_V1 + 5;
@@ -1505,7 +1513,7 @@ mod tests {
                             continue;
                         }
                         match action {
-                            PalwOperatorDaActionV1::Replay => {
+                            PalwOperatorDaActionV1::Replay { .. } => {
                                 *replays.entry(claim).or_default() += 1;
                                 let verdict = match kind[&claim] {
                                     Kind::Honest => PalwOperatorDaVerdictV1::Reproduces,
