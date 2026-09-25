@@ -785,6 +785,11 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // 2026-08-13. One line here makes "is this binary the release?" answerable without a peer,
     // which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
+    // A drill crossing the post-launch release's flag day (`--palw-drill-fence-at`) says which fences
+    // it set, beside the fingerprint they moved.
+    for line in crate::palw_drill::palw_drill_fence_lines_v1(&config) {
+        warn!("{line}");
+    }
     // **The node's protocol duties, decided once from the params and the identity alone** (user
     // decision 2026-09-25, `crate::palw_duties`): the panel's seat duties, the execution lane and — where
     // the registry is in force from genesis — the chain-registered-class arm run on every node that can

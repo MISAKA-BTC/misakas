@@ -301,6 +301,14 @@ pub struct Args {
     /// into this directory and exit. What the drill script reads, so it never re-derives a key.
     #[serde(skip)]
     pub palw_drill_write_keyring: Option<String>,
+    /// **DRILL ONLY: cross the post-launch release's flag day at this DAA** — with the salt, every
+    /// fence of `PALW_T12_POST_LAUNCH_FENCES_V1` (the fences testnet-12's post-launch release arms at
+    /// DAA 500) is armed, or moved, to this height on the drill chain, and nothing else is touched
+    /// (`config::drill::palw_drill_post_launch_fences_at_v1`). The one exception to "a drill runs
+    /// the shipping rules unedited"; `--override-params-file` stays refused on a drill. Command line
+    /// only, like the salt.
+    #[serde(skip)]
+    pub palw_drill_fence_at: Option<u64>,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
@@ -515,6 +523,7 @@ impl Default for Args {
             palw_challenge: false,
             palw_drill_genesis_salt: None,
             palw_drill_write_keyring: None,
+            palw_drill_fence_at: None,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
@@ -651,6 +660,15 @@ impl Args {
             config.params = kaspa_consensus_core::config::drill::palw_chain_params_v1(self.network(), Some(&salt))
                 .unwrap_or_else(|e| panic!("--palw-drill-genesis-salt: {e} (validate_args refuses this first)"));
             config.palw_drill_genesis_salt = Some(salt);
+        }
+        // **A drill crosses the post-launch release's flag day** (`--palw-drill-fence-at`): on the
+        // drill params just installed, and nowhere else — the move refuses public testnet-12's genesis
+        // itself, and `validate_args` has refused the flag without a salt. The moves ride on the config
+        // beside the params they changed, so the node prints what it runs.
+        if let Some(at) = self.palw_drill_fence_at {
+            config.palw_drill_fence_moves =
+                kaspa_consensus_core::config::drill::palw_drill_post_launch_fences_at_v1(&mut config.params, at)
+                    .unwrap_or_else(|e| panic!("--palw-drill-fence-at: {e} (validate_args refuses this first)"));
         }
 
         // The floor-only devnet ruleset: the shipped devnet carries testnet-11's class set, so its
@@ -1406,6 +1424,18 @@ pub fn cli() -> Command {
                     "With --palw-drill-genesis-salt: write the drill's keyring — seed files (0600) and manifest.json with the drill \
                      genesis, every seat's bond and fee-float outpoint, and the drill-only heartbeat, payout, validator and EVM keys \
                      — into this directory, and exit.",
+                ),
+        )
+        .arg(
+            // No `.env(...)` on purpose, like the salt: a flag day is moved on a drill's command line only.
+            Arg::new("palw-drill-fence-at")
+                .long("palw-drill-fence-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm (or move) every fence testnet-12's post-launch release arms at DAA 500 \
+                     at this DAA on the drill chain, so a drill crosses the release's flag day with the shipping binary. Nothing else \
+                     moves; the node prints each fence it set. Refused without the salt, at 0, and at a height another fence uses.",
                 ),
         )
         .arg(
@@ -2310,6 +2340,7 @@ impl Args {
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
             palw_drill_genesis_salt: m.get_one::<String>("palw-drill-genesis-salt").cloned(),
             palw_drill_write_keyring: m.get_one::<String>("palw-drill-write-keyring").cloned(),
+            palw_drill_fence_at: m.get_one::<u64>("palw-drill-fence-at").copied(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m

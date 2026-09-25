@@ -169,6 +169,12 @@ pub struct Config {
     /// only when this is set and the public genesis only when it is not. Not a consensus input: the
     /// salt reaches consensus through the genesis it moved.
     pub palw_drill_genesis_salt: Option<drill::PalwDrillSaltV1>,
+
+    /// **The post-launch fences this drill moved, or empty on every real network** (a salted
+    /// testnet-12 drill's `--palw-drill-fence-at`, `drill::palw_drill_post_launch_fences_at_v1`).
+    /// Written by kaspad in the same place as the move itself, so the node prints what its params
+    /// carry. Not a consensus input: the move reaches consensus through the params.
+    pub palw_drill_fence_moves: Vec<drill::PalwDrillFenceMoveV1>,
 }
 
 impl Config {
@@ -207,6 +213,7 @@ impl Config {
             evm_prune_legacy_206: false,
             evm_materialize_pp_anchor: false,
             palw_drill_genesis_salt: None,
+            palw_drill_fence_moves: Vec::new(),
         }
     }
 

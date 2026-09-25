@@ -16393,6 +16393,59 @@ pub fn palw_t12_drill_params_v1(salt: &crate::config::drill::PalwDrillSaltV1) ->
     with_registered_models(palw_t12_params_with_registry_v1(base, bonds, genesis_utxos))
 }
 
+/// **One post-launch fence of testnet-12's post-launch release** (the user's decision of 2026-09-26:
+/// one fence height, DAA 500, carrying every CRITICAL/HIGH fix found after launch). An entry of
+/// [`PALW_T12_POST_LAUNCH_FENCES_V1`].
+#[derive(Clone, Copy)]
+pub struct PalwPostLaunchFenceV1 {
+    /// The fence's name, exactly as [`Params::palw_fences_v1`] spells it (a test holds every entry to
+    /// that list, so a misspelt or non-fence name fails the build).
+    pub name: &'static str,
+    /// **Sets the fence on an ASSEMBLED ruleset** — the field and every mirror of it the fold reads
+    /// (a V2 bundle copy, say), and nothing else: `Some(at)` arms or moves it, `None` leaves it
+    /// dormant. The drill's move ([`crate::config::drill::palw_drill_post_launch_fences_at_v1`]) and
+    /// its tests call this and nothing else, so a lane that adds a fence to the release writes how to
+    /// set it once, here.
+    pub set: fn(&mut Params, Option<ForkActivation>),
+}
+
+impl std::fmt::Debug for PalwPostLaunchFenceV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
+/// **The fences testnet-12's post-launch release arms at one post-launch height** (DAA 500, the
+/// user's decision of 2026-09-26) — the ONE list of them. Each lane that puts a fix behind the
+/// release's fence adds its entry here and nowhere else (the operator-only anchor, seat maturity,
+/// V02's lock budget and the sink bind join as they merge):
+///
+/// * the drill's `--palw-drill-fence-at=<DAA>` moves exactly these to a low height on a salted drill
+///   chain, so a drill crosses the release's flag day with the shipping binary
+///   ([`crate::config::drill::palw_drill_post_launch_fences_at_v1`]; the memory rule "a flag day
+///   needs a drill that crosses it");
+/// * the release arms exactly these at its height — AFTER pass 2 of [`palw_t12_base_params`], which
+///   zeroes every fence height it visits, and through `set` so every mirror follows.
+///
+/// Every entry is dormant (`None`) on every shipped preset until the release arms it.
+pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    // Lane F1, registry resilience (V03/V05): the field and the V2 bundle's mirror the fold reads.
+    PalwPostLaunchFenceV1 {
+        name: "palw_registry_resilience",
+        set: |params, at| {
+            params.palw_registry_resilience = at;
+            params.sync_palw_registry_resilience();
+        },
+    },
+    // Lane F1, the panel seed is the anchor attempt's execution commitment (CRITICAL): a bare height.
+    PalwPostLaunchFenceV1 { name: "palw_panel_seed_execution", set: |params, at| params.palw_panel_seed_execution = at },
+    // F1, heartbeat transparency stops at the merging block's own chain (CRITICAL): a bare height.
+    PalwPostLaunchFenceV1 {
+        name: "palw_heartbeat_transparent_same_chain",
+        set: |params, at| params.palw_heartbeat_transparent_same_chain = at,
+    },
+];
+
 /// **testnet-12's assembly over a given genesis registry** — the one body [`palw_t12_shipped_params`]
 /// and [`palw_t12_drill_params_v1`] share, so a drill cannot run a ruleset the network does not.
 fn palw_t12_params_with_registry_v1(

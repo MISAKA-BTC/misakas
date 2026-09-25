@@ -529,6 +529,129 @@ pub fn palw_node_genesis_verdict_v1(
     })
 }
 
+/// **One post-launch fence a drill's `--palw-drill-fence-at` set** — see
+/// [`palw_drill_post_launch_fences_at_v1`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwDrillFenceMoveV1 {
+    /// The fence, as [`crate::config::params::Params::palw_fences_v1`] names it.
+    pub name: &'static str,
+    /// Its height on the shipping ruleset the drill started from — `None` while the release leaves
+    /// it dormant (the flag ARMS it), `Some` once the release arms it (the flag MOVES it).
+    pub was: Option<u64>,
+    /// Its height on the drill chain.
+    pub at: u64,
+}
+
+impl std::fmt::Display for PalwDrillFenceMoveV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.was {
+            None => write!(f, "{} ARMED at DAA {} (dormant in the shipping release)", self.name, self.at),
+            Some(was) if was == self.at => write!(f, "{} at DAA {} (the shipping release's own height)", self.name, self.at),
+            Some(was) => write!(f, "{} MOVED from DAA {was} (the shipping release) to DAA {}", self.name, self.at),
+        }
+    }
+}
+
+/// **A drill crosses the post-launch release's flag day at a low height** — the one narrow
+/// exception to "a drill runs the shipping rules unedited" (`--override-params-file` stays refused on
+/// a drill, `kaspad/src/palw_drill.rs`). Sets every fence of
+/// [`crate::config::params::PALW_T12_POST_LAUNCH_FENCES_V1`] to `at` on `params`: ARMS the ones the
+/// release still leaves dormant and MOVES the ones it arms, each through its entry's own `set`, so
+/// every mirror follows. Nothing else is touched — no other fence, no window, no value — and the
+/// function checks that on the ruleset it returns rather than trusting the entries.
+///
+/// Refused (`Err`, nothing to apply) on:
+///
+/// * any network but testnet-12, and on public testnet-12's own genesis: the flag moves fences on a
+///   salted drill chain only, whose genesis already makes it a different network;
+/// * `at` 0 or `never()`: a drill CROSSES the fence, so a block must be validated below it and one
+///   above it (a fence at genesis is the identity's business, not the schedule's);
+/// * `at` equal to another fence's height on the ruleset: the fork id names heights and not fences,
+///   so a drill node started without the flag would peer across the height and fork silently (the
+///   memory rule "a fence at a scheduled height is invisible to the fork id"); on its own height the
+///   fork id refuses it at the handshake;
+/// * a move that moves nothing (every fence already at `at`): the flag would leave the drill chain's
+///   params id the release's;
+/// * a result `validate_palw_v2` refuses.
+///
+/// The drill chain's `consensus_params_id` and schedule id move with the heights (every post-launch
+/// fence is hashed Some-only), on top of the genesis the salt already moved.
+pub fn palw_drill_post_launch_fences_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    use crate::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1};
+    if params.net != palw_drill_network_v1() {
+        return Err(format!(
+            "the post-launch fences are testnet-12's release, and this ruleset is {}: --palw-drill-fence-at runs on a salted \
+             testnet-12 drill only",
+            params.net
+        ));
+    }
+    if params.genesis.hash == PALW_T12_GENESIS.hash {
+        return Err("this ruleset runs PUBLIC testnet-12's genesis: the post-launch fences move on a salted drill chain only \
+                    (--palw-drill-genesis-salt) — public testnet-12's are the release's, and every node must agree on them"
+            .to_owned());
+    }
+    if at == 0 || at == u64::MAX {
+        return Err(format!(
+            "--palw-drill-fence-at={at}: a drill CROSSES the release's flag day, so the fences need a height with blocks below and \
+             above it — not genesis (0) and not never"
+        ));
+    }
+    let listed = |name: &str| PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|fence| fence.name == name);
+    let before = params.palw_fences_v1();
+    if let Some((other, _)) =
+        before.iter().find(|(name, fence)| !listed(name) && fence.is_some_and(|fence| fence.daa_score() == at))
+    {
+        return Err(format!(
+            "--palw-drill-fence-at={at}: DAA {at} is already {other}'s height on this ruleset. The fork id names heights, not \
+             fences, so a drill node started without the flag would peer across it and fork silently — pick a height no other \
+             fence uses"
+        ));
+    }
+    // Set on a copy, installed only once every check below has passed: a refusal leaves `params`
+    // exactly as it came.
+    let mut moved = params.clone();
+    let mut moves = Vec::with_capacity(PALW_T12_POST_LAUNCH_FENCES_V1.len());
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+        let Some((_, was)) = before.iter().find(|(name, _)| *name == fence.name) else {
+            return Err(format!("{} is not a fence of this ruleset (Params::palw_fences_v1 does not name it)", fence.name));
+        };
+        (fence.set)(&mut moved, Some(ForkActivation::new(at)));
+        moves.push(PalwDrillFenceMoveV1 {
+            name: fence.name,
+            was: was.filter(|was| *was != ForkActivation::never()).map(|was| was.daa_score()),
+            at,
+        });
+    }
+    // The entries' own promise, checked on the ruleset itself: each listed fence at `at`, every
+    // other fence exactly where it was.
+    for ((name, was), (_, now)) in before.iter().zip(moved.palw_fences_v1().iter()) {
+        if listed(name) {
+            if *now != Some(ForkActivation::new(at)) {
+                return Err(format!("{name}'s entry did not set it to DAA {at} (it reads {now:?})"));
+            }
+        } else if was != now {
+            return Err(format!(
+                "setting the post-launch fences moved {name} too ({was:?} -> {now:?}): the drill moves the release's fences and \
+                 nothing else"
+            ));
+        }
+    }
+    if moves.iter().all(|m| m.was == Some(at)) {
+        return Err(format!(
+            "--palw-drill-fence-at={at}: every post-launch fence is already at DAA {at} on the shipping release — the flag would \
+             move nothing; drop it"
+        ));
+    }
+    moved
+        .validate_palw_v2()
+        .map_err(|e| format!("the drill ruleset with the post-launch fences at DAA {at} does not validate: {e}"))?;
+    *params = moved;
+    Ok(moves)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -811,5 +934,133 @@ mod tests {
             public.consensus_params_id(),
             "the genesis and the registry are the whole difference"
         );
+    }
+
+    /// **The release's one list names fences, and each entry sets its own fence and nothing else.**
+    /// Every entry is a name `Params::palw_fences_v1` knows, once; it is dormant on the four base
+    /// presets; and, on the drill ruleset, its `set` alone moves exactly its own fence to the height
+    /// and — set back to the height it had — leaves the ruleset byte-identical (`Debug`) to where it
+    /// started, so a `set` that touched anything else (another fence, a window, a mirror it does not
+    /// restore) fails here, for every entry a later lane adds.
+    #[test]
+    fn the_post_launch_fence_list_names_fences_and_each_entry_sets_its_own_alone() {
+        use crate::config::params::{
+            DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS,
+            palw_t12_drill_params_v1,
+        };
+        assert!(!PALW_T12_POST_LAUNCH_FENCES_V1.is_empty());
+        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        let fences = drill.palw_fences_v1();
+        let height = |p: &crate::config::params::Params, name: &str| {
+            p.palw_fences_v1().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is a fence")).1
+        };
+        let original = format!("{drill:?}");
+        for (i, fence) in PALW_T12_POST_LAUNCH_FENCES_V1.iter().enumerate() {
+            assert!(fences.iter().any(|(name, _)| *name == fence.name), "{} is a Params::palw_fences_v1 name", fence.name);
+            assert!(PALW_T12_POST_LAUNCH_FENCES_V1[..i].iter().all(|other| other.name != fence.name), "{} listed once", fence.name);
+            for preset in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+                assert_eq!(height(preset, fence.name), None, "{} is dormant on {}", fence.name, preset.net);
+            }
+            let was = height(&drill, fence.name);
+            let mut one = drill.clone();
+            (fence.set)(&mut one, Some(ForkActivation::new(40)));
+            for ((name, before), (_, after)) in fences.iter().zip(one.palw_fences_v1().iter()) {
+                if *name == fence.name {
+                    assert_eq!(*after, Some(ForkActivation::new(40)), "{name}'s entry sets it");
+                } else {
+                    assert_eq!(before, after, "{}'s entry moved {name}", fence.name);
+                }
+            }
+            assert_ne!(one.consensus_params_id(), drill.consensus_params_id(), "{} is in the fingerprint", fence.name);
+            (fence.set)(&mut one, was);
+            assert_eq!(format!("{one:?}"), original, "{}'s entry touches its own fence and mirrors alone", fence.name);
+        }
+    }
+
+    /// **`--palw-drill-fence-at` on a drill ruleset: the release's fences at the drill's height, and
+    /// nothing else.** Every listed fence is ARMED from the release's dormant state (or MOVED once the
+    /// release arms it), each rule is live from the height on and not below it (the registry mirror
+    /// included), the ruleset validates, and the fingerprint, the schedule and the fork id move — the
+    /// drill chain's params id is not the release drill's. Every other fence is where it was, and
+    /// setting the listed ones back gives the release drill byte for byte.
+    #[test]
+    fn a_drill_crosses_the_post_launch_flag_day_at_a_low_height_and_nothing_else_moves() {
+        use crate::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1, palw_t12_drill_params_v1};
+        use crate::fork_id_v1::{fork_id_gate_fences_v1, fork_id_v1};
+        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        let mut moved = drill.clone();
+        let moves = palw_drill_post_launch_fences_at_v1(&mut moved, 40).expect("a drill crosses the flag day at DAA 40");
+        assert_eq!(
+            moves.iter().map(|m| m.name).collect::<Vec<_>>(),
+            PALW_T12_POST_LAUNCH_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>(),
+            "every post-launch fence, in the list's order"
+        );
+        let fences = drill.palw_fences_v1();
+        for m in &moves {
+            let release = fences.iter().find(|(name, _)| *name == m.name).unwrap().1;
+            assert_eq!(m.was, release.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score()), "{}: the release's height", m.name);
+            assert_eq!(m.at, 40);
+            let line = m.to_string();
+            assert!(line.contains(m.name) && line.contains("DAA 40"), "{line}");
+            assert!(if m.was.is_none() { line.contains("ARMED") } else { line.contains("MOVED") || line.contains("own height") }, "{line}");
+        }
+        // Each rule is live from the height, and not below it — the fold's mirror included.
+        assert_eq!(moved.palw_registry_resilience, Some(ForkActivation::new(40)));
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &moved.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(bundle.state.registry_resilience_from_daa(), Some(40), "the fold's mirror follows");
+        assert!(moved.palw_panel_seed_execution_active_at(40) && !moved.palw_panel_seed_execution_active_at(39));
+        assert_eq!(moved.palw_heartbeat_transparent_same_chain_fence(), Some(ForkActivation::new(40)), "under a live transparency rule");
+        moved.validate_palw_v2().expect("the moved drill ruleset validates");
+        // The drill chain's ids move with the heights; the genesis is the salt's, untouched.
+        assert_eq!(moved.genesis.hash, drill.genesis.hash);
+        assert_ne!(moved.consensus_params_id(), drill.consensus_params_id(), "the drill chain's params id differs");
+        assert_ne!(moved.consensus_schedule_id(), drill.consensus_schedule_id());
+        assert!(fork_id_gate_fences_v1(&moved).contains(&40) && !fork_id_gate_fences_v1(&drill).contains(&40));
+        assert_ne!(fork_id_v1(&moved, 0), fork_id_v1(&drill, 0), "a drill node without the flag announces another fork id");
+        // Nothing else: every other fence where it was, and the listed ones set back give the release drill.
+        for ((name, before), (_, after)) in fences.iter().zip(moved.palw_fences_v1().iter()) {
+            if PALW_T12_POST_LAUNCH_FENCES_V1.iter().all(|f| f.name != *name) {
+                assert_eq!(before, after, "{name} did not move");
+            }
+        }
+        let mut back = moved.clone();
+        for (fence, m) in PALW_T12_POST_LAUNCH_FENCES_V1.iter().zip(&moves) {
+            (fence.set)(&mut back, m.was.map(ForkActivation::new));
+        }
+        assert_eq!(format!("{back:?}"), format!("{drill:?}"), "the release's fences are the whole difference");
+        assert_eq!(back.consensus_params_id(), drill.consensus_params_id());
+    }
+
+    /// **The move refuses by name, and a refusal leaves the ruleset as it came:** public testnet-12
+    /// (its genesis is the release's), any other network, a height of 0 or never, another fence's
+    /// height (invisible to the fork id), and a move that moves nothing.
+    #[test]
+    fn the_drill_fence_move_refuses_by_name_and_leaves_the_ruleset_alone() {
+        use crate::config::params::{PALW_T12_POST_LAUNCH_FENCES_V1, Params, palw_t12_drill_params_v1};
+        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        let refusal = |mut params: Params, at: u64| -> String {
+            let before = format!("{params:?}");
+            let why = palw_drill_post_launch_fences_at_v1(&mut params, at).expect_err("refused");
+            assert_eq!(format!("{params:?}"), before, "a refusal leaves the ruleset as it came ({why})");
+            why
+        };
+        assert!(refusal(Params::from(palw_drill_network_v1()), 40).contains("PUBLIC testnet-12"));
+        for net in [NetworkType::Devnet, NetworkType::Simnet, NetworkType::Mainnet] {
+            assert!(refusal(Params::from(NetworkId::new(net)), 40).contains("testnet-12 drill only"), "{net:?}");
+        }
+        assert!(refusal(Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11)), 40).contains("testnet-12 drill only"));
+        assert!(refusal(drill.clone(), 0).contains("not genesis"));
+        assert!(refusal(drill.clone(), u64::MAX).contains("not never"));
+        let (other, height) = drill
+            .palw_fences_v1()
+            .into_iter()
+            .filter(|(name, _)| PALW_T12_POST_LAUNCH_FENCES_V1.iter().all(|f| f.name != *name))
+            .find_map(|(name, fence)| fence.map(|f| (name, f.daa_score())).filter(|(_, h)| *h != 0 && *h != u64::MAX))
+            .expect("testnet-12 schedules a fence past genesis (palw_bond_maturity)");
+        let why = refusal(drill.clone(), height);
+        assert!(why.contains(other) && why.contains("fork id"), "{why}");
+        let mut once = drill.clone();
+        palw_drill_post_launch_fences_at_v1(&mut once, 40).unwrap();
+        assert!(refusal(once, 40).contains("move nothing"));
     }
 }
