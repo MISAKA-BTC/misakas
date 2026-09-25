@@ -2,21 +2,27 @@ name: Build and upload assets
 on:
   release:
     types: [ published ]
+  # **A dry run of the whole release, publishing nothing.** Every leg builds, smoke-starts its
+  # kaspad and uploads its files as workflow artifacts; `sign` hashes, signs, attests and writes
+  # the SBOM; `verify` then checks all of it the way a user would. Only a `release` event uploads
+  # to a GitHub release. Run it on the commit you intend to tag, before tagging it.
+  workflow_dispatch:
 
 # Least privilege: read by default; the upload jobs below opt into contents: write.
 permissions:
   contents: read
 
-# The network the release is cut for. It is written into every platform's components manifest,
-# so it is spelled once here rather than once per step.
+# The tag the files are named after. A dry run has no tag, so it names them after the run. The
+# network, the identity the binaries must print and whether consensus is frozen are NOT spelled in
+# this file: they are read from `release.json`, the one place a release declares them.
 env:
-  RELEASE_NETWORK: testnet-12
+  RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || format('dryrun-{0}', github.run_number) }}
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: write # upload release assets (softprops/action-gh-release)
+      contents: read # the files go to a workflow artifact; only `sign` writes to the release
     strategy:
       fail-fast: false
       matrix:
@@ -116,7 +122,7 @@ jobs:
           test -x bin/kaspa-pq-validator
           test -x bin/kaspa-pq-signer
           test -x bin/misaka
-          archive="bin/rusty-kaspa-${{ github.event.release.tag_name }}-linux-amd64.zip"
+          archive="bin/rusty-kaspa-${{ env.RELEASE_TAG }}-linux-amd64.zip"
           zip -r "${archive}" ./bin/*
           echo "archive=${archive}" >> $GITHUB_ENV
 
@@ -132,14 +138,15 @@ jobs:
           platform=x86_64-unknown-linux-musl
           py=$(command -v python3 || command -v python)
           "$py" scripts/misaka-components-manifest.py \
-            --release "${{ github.event.release.tag_name }}" \
-            --network "$RELEASE_NETWORK" \
+            --release "${{ env.RELEASE_TAG }}" \
+            --network "$("$py" -c 'import json, sys; sys.stdout.write(json.load(open("release.json"))["network"])')" \
             --platform "$platform" \
-            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}" \
             --archive "${{ env.archive }}" \
             --out "components-${platform}.json" \
             bin/kaspad bin/misaka
           echo "manifest=components-${platform}.json" >> $GITHUB_ENV
+          echo "platform=${platform}" >> $GITHUB_ENV
 
       # ARM64 Linux is a native glibc build: the musl cross toolchain above targets x86_64 only.
       # The binaries need a glibc at least as new as the runner's (Ubuntu 24.04, glibc 2.39),
@@ -162,7 +169,7 @@ jobs:
             cp "target/release/$b" bin/
             test -x "bin/$b"
           done
-          archive="bin/rusty-kaspa-${{ github.event.release.tag_name }}-linux-arm64.zip"
+          archive="bin/rusty-kaspa-${{ env.RELEASE_TAG }}-linux-arm64.zip"
           zip -r "${archive}" ./bin/*
           echo "archive=${archive}" >> $GITHUB_ENV
 
@@ -170,15 +177,17 @@ jobs:
         if: runner.os == 'Linux' && runner.arch == 'ARM64'
         run: |
           platform=$(rustc -vV | sed -n 's/^host: //p')
-          python3 scripts/misaka-components-manifest.py \
-            --release "${{ github.event.release.tag_name }}" \
-            --network "$RELEASE_NETWORK" \
+          py=python3
+          "$py" scripts/misaka-components-manifest.py \
+            --release "${{ env.RELEASE_TAG }}" \
+            --network "$("$py" -c 'import json, sys; sys.stdout.write(json.load(open("release.json"))["network"])')" \
             --platform "$platform" \
-            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}" \
             --archive "${{ env.archive }}" \
             --out "components-${platform}.json" \
             bin/kaspad bin/misaka
           echo "manifest=components-${platform}.json" >> $GITHUB_ENV
+          echo "platform=${platform}" >> $GITHUB_ENV
 
       - name: Build on Windows
         if: runner.os == 'Windows'
@@ -206,7 +215,7 @@ jobs:
           test -f bin/kaspa-pq-validator.exe
           test -f bin/kaspa-pq-signer.exe
           test -f bin/misaka.exe
-          archive="bin/rusty-kaspa-${{ github.event.release.tag_name }}-win64.zip"
+          archive="bin/rusty-kaspa-${{ env.RELEASE_TAG }}-win64.zip"
           powershell "Compress-Archive bin/* \"${archive}\""
           echo "archive=${archive}" >> $GITHUB_ENV
 
@@ -220,14 +229,15 @@ jobs:
           platform=$(rustc -vV | sed -n 's/^host: //p')
           py=$(command -v python3 || command -v python)
           "$py" scripts/misaka-components-manifest.py \
-            --release "${{ github.event.release.tag_name }}" \
-            --network "$RELEASE_NETWORK" \
+            --release "${{ env.RELEASE_TAG }}" \
+            --network "$("$py" -c 'import json, sys; sys.stdout.write(json.load(open("release.json"))["network"])')" \
             --platform "$platform" \
-            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}" \
             --archive "${{ env.archive }}" \
             --out "components-${platform}.json" \
             bin/kaspad.exe bin/misaka.exe
           echo "manifest=components-${platform}.json" >> $GITHUB_ENV
+          echo "platform=${platform}" >> $GITHUB_ENV
 
       - name: Build on MacOS
         if: runner.os == 'macOS'
@@ -254,7 +264,7 @@ jobs:
           test -x bin/kaspa-pq-validator
           test -x bin/kaspa-pq-signer
           test -x bin/misaka
-          archive="bin/rusty-kaspa-${{ github.event.release.tag_name }}-osx.zip"
+          archive="bin/rusty-kaspa-${{ env.RELEASE_TAG }}-osx.zip"
           zip -r "${archive}" ./bin/*
           echo "archive=${archive}" >> $GITHUB_ENV
 
@@ -264,29 +274,45 @@ jobs:
           platform=$(rustc -vV | sed -n 's/^host: //p')
           py=$(command -v python3 || command -v python)
           "$py" scripts/misaka-components-manifest.py \
-            --release "${{ github.event.release.tag_name }}" \
-            --network "$RELEASE_NETWORK" \
+            --release "${{ env.RELEASE_TAG }}" \
+            --network "$("$py" -c 'import json, sys; sys.stdout.write(json.load(open("release.json"))["network"])')" \
             --platform "$platform" \
-            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}" \
             --archive "${{ env.archive }}" \
             --out "components-${platform}.json" \
             bin/kaspad bin/misaka
           echo "manifest=components-${platform}.json" >> $GITHUB_ENV
+          echo "platform=${platform}" >> $GITHUB_ENV
 
-      - name: Upload release asset
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      # **Every platform's binary is started once before it ships.** The node runs on the network
+      # `release.json` names, in a throwaway app directory with DNS seeding off, until it
+      # prints its consensus params fingerprint and fence schedule; both must match the file.
+      # A binary that does not start, or that starts on a different ruleset, fails its leg, and
+      # `sign` then refuses the whole release.
+      - name: Smoke-start kaspad and read its identity
+        shell: bash
+        run: |
+          k=bin/kaspad
+          [ -f bin/kaspad.exe ] && k=bin/kaspad.exe
+          py=$(command -v python3 || command -v python)
+          "$py" scripts/misaka-release-smoke.py --kaspad "$k" --release-json release.json \
+            --platform "${{ env.platform }}" --out "release-identity-${{ env.platform }}.json"
+
+      - name: Keep the files for the sign job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          files: |
-            ./${{ env.archive }}
-            ./${{ env.manifest }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: release-${{ env.platform }}
+          if-no-files-found: error
+          path: |
+            ${{ env.archive }}
+            ${{ env.manifest }}
+            release-identity-${{ env.platform }}.json
 
   build-wasm:
     runs-on: ubuntu-latest
     name: Building WASM32 SDK
     permissions:
-      contents: write # upload release assets (softprops/action-gh-release)
+      contents: read
     steps:
       - name: Checkout sources
         uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
@@ -377,53 +403,71 @@ jobs:
           cd wasm
           bash build-release
           cd release
-          zip -q -r kaspa-wasm32-sdk-${{ github.event.release.tag_name }}.zip kaspa-wasm32-sdk
-          archive="wasm/release/kaspa-wasm32-sdk-${{ github.event.release.tag_name }}.zip"
+          zip -q -r kaspa-wasm32-sdk-${{ env.RELEASE_TAG }}.zip kaspa-wasm32-sdk
+          archive="wasm/release/kaspa-wasm32-sdk-${{ env.RELEASE_TAG }}.zip"
           echo "archive=${archive}" >> $GITHUB_ENV
 
-      - name: Upload release asset
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      - name: Keep the files for the sign job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          files: ./${{ env.archive }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: release-wasm32-sdk
+          if-no-files-found: error
+          path: ${{ env.archive }}
 
   # **A release is only as trustworthy as the way a stranger can check it.** Once every platform
-  # and the WASM SDK are uploaded, this job hashes every asset into one `SHA256SUMS`, writes an
-  # SPDX SBOM of the source tree (the Cargo.lock dependency graph), signs `SHA256SUMS` keylessly
-  # with Sigstore (the signing identity is this workflow at this tag, recorded in the public
-  # Rekor log), and attests build provenance for every asset. It needs every build leg: a
-  # release missing a platform is never signed as if it were whole. Verification steps for
-  # users are in docs/release-process.md.
+  # and the WASM SDK are built and smoke-started, this job writes RELEASE-INFO.json (the identity
+  # every platform's kaspad printed, which must be the same on all of them, beside what
+  # release.json declares), an SPDX SBOM of the source tree, and one SHA256SUMS over every
+  # file; signs SHA256SUMS keylessly with Sigstore (the signing identity is this workflow at this
+  # ref, recorded in the public Rekor log); and attests build provenance for every file. It needs
+  # every leg: a release missing a platform is never signed as if it were whole. Only on a
+  # `release` event does anything reach the GitHub release, and then all of it at once.
   sign:
-    name: Checksums, signature and SBOM
+    name: Release info, checksums, signature and SBOM
     needs: [ build, build-wasm ]
     runs-on: ubuntu-latest
     permissions:
-      contents: write     # upload SHA256SUMS, its signature bundle and the SBOM
-      id-token: write     # Sigstore keyless signing with the workflow's OIDC identity
+      contents: write     # upload the signed set to the release (release events only)
+      id-token: write     # Sigstore keyless signing and provenance, with the workflow's OIDC identity
       attestations: write # GitHub build-provenance attestations
     env:
-      TAG: ${{ github.event.release.tag_name }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout sources
         uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
 
-      - name: Download the release's assets
+      - name: Collect every leg's files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      # upload-artifact keeps each leg's relative paths (the archives sit under bin/, the SDK
+      # under wasm/release/); a release is a flat list of files, so flatten before hashing.
+      - name: Flatten the collected files
         run: |
-          mkdir dist
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist
-          # A re-run must not hash or re-sign its own earlier outputs.
-          rm -f dist/SHA256SUMS dist/SHA256SUMS.sigstore.json dist/*.spdx.json
+          mkdir flat
+          find dist -type f -exec mv -n {} flat/ \;
+          if [ -n "$(find dist -type f)" ]; then echo "two legs produced the same file name"; exit 1; fi
+          rm -rf dist && mv flat dist
           ls -l dist
+
+      - name: Write RELEASE-INFO.json from what the binaries printed
+        run: |
+          mkdir identities
+          mv dist/release-identity-*.json identities/
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          python3 scripts/misaka-release-info.py --release-json release.json \
+            --tag "$RELEASE_TAG" --commit "$GITHUB_SHA" --rust "rustc $channel" \
+            --out dist/RELEASE-INFO.json --summary "$GITHUB_STEP_SUMMARY" identities/*.json
 
       - name: Write the SBOM (SPDX)
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           path: .
           format: spdx-json
-          output-file: dist/misakas-${{ github.event.release.tag_name }}.spdx.json
+          output-file: dist/misakas-${{ env.RELEASE_TAG }}.spdx.json
           upload-artifact: false
           upload-release-assets: false
 
@@ -437,16 +481,73 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign SHA256SUMS (Sigstore, keyless)
-        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+        run: |
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+          mv SHA256SUMS SHA256SUMS.sigstore.json dist/
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: |
-            dist/*
-            SHA256SUMS
+          subject-path: dist/*
 
-      - name: Upload checksums, signature and SBOM
+      - name: Keep the signed set for the verify job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-release
+          if-no-files-found: error
+          path: dist/*
+
+      - name: Publish to the GitHub release
+        if: github.event_name == 'release'
+        run: gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*
+
+  # **Check the release the way a user will, from a clean runner.** On a release event the files
+  # come from the GitHub release itself; on a dry run, from the signed artifact. Any check that
+  # fails fails the run.
+  verify:
+    name: Verify as a user would
+    needs: [ sign ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download the release
+        if: github.event_name == 'release'
         run: |
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            SHA256SUMS SHA256SUMS.sigstore.json "dist/misakas-${TAG}.spdx.json"
+          mkdir dl
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dl
+
+      - name: Download the dry run's signed set
+        if: github.event_name != 'release'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: signed-release
+          path: dl
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # `sha256sum --check` without --ignore-missing fails on any listed file that was not
+      # downloaded, so a release missing a file cannot pass.
+      - name: Verify the signature, the checksums and the provenance
+        working-directory: dl
+        run: |
+          ls -l
+          cosign verify-blob SHA256SUMS \
+            --bundle SHA256SUMS.sigstore.json \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${{ github.workflow_ref }}"
+          sha256sum --check --strict SHA256SUMS
+          while read -r _ f; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
+          done < SHA256SUMS
+          {
+            echo "## Release verified as a user would"
+            echo
+            echo "- Sigstore signature on \`SHA256SUMS\`: OK (identity \`https://github.com/${{ github.workflow_ref }}\`)"
+            echo "- \`sha256sum --check\`: OK, $(wc -l < SHA256SUMS) files"
+            echo "- \`gh attestation verify\`: OK for every file"
+          } >> "$GITHUB_STEP_SUMMARY"

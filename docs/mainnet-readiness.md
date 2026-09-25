@@ -11,7 +11,8 @@ marked only by what this repository can show. The mark is not a plan or an inten
 
 Last reviewed: **2026-09-25**, against `main` at testnet-12's release commit `0e8ec984e`. A PASS
 turns back into PARTIAL or TODO when later work removes its evidence. Anybody changing a mark
-changes it in the same commit as the evidence.
+changes it in the same commit as the evidence. Every CI run counts the marks in this file into its
+job summary (`scripts/misaka-ci-summary.py`), next to the test counts of that run.
 
 **Summary.** The engineering base is strong: gated CI that can be reproduced locally, a pinned
 toolchain, post-quantum isolation enforced by the build, many audits published with their fixes,
@@ -28,7 +29,7 @@ add more rules.
 | status | item | evidence / what is missing |
 |---|---|---|
 | **PASS** | Consensus tests run on every push | `Test Suite` job in [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) (`cargo nextest run`, doctests, devnet-prealloc); `Context vectors (release)` runs the ADR-0110 4,096- and 32,768-position vectors in release mode |
-| **PASS** | Consensus identity is explicit | every node prints its consensus params fingerprint and fence schedule at startup, and the handshake refuses a peer on a different ruleset (`consensus_params_id`) |
+| **PASS** | Consensus identity is explicit | every node prints its consensus params fingerprint and fence schedule at startup, and the handshake refuses a peer on a different ruleset (`consensus_params_id`). The release workflow starts every platform's binary and fails unless it prints the identity [`release.json`](../release.json) declares |
 | **PASS** | Activation-fence upgrade path exercised live | testnet-11 crossed fences at DAA 1150, 1900, 2150, 2400, 3500, 4000, 7100 and more on a public network ([history](history/testnet-11.md)) |
 | **PASS** | Genesis constants guarded | a change to the premine constants (`consensus/core/src/config/premine.rs`) moves every network's genesis hash and is refused at startup until re-pinned (audit M-07) |
 | **PARTIAL** | Pinned fingerprints in tests | `shipped_presets_have_pinned_fingerprints` exists, but `scripts/ci-gates.sh --list` declares it a known red until the next single re-pin |
@@ -81,7 +82,7 @@ add more rules.
 | **PARTIAL** | Reproducible binaries | testnet-12's build matched byte-for-byte across two checkouts; nobody else has reproduced it, and CI does not check it |
 | **PARTIAL** | Multi-platform binaries | CI builds and smoke-runs Windows. `deploy.yaml` builds x86_64 Linux, ARM64 Linux, x86_64 Windows and ARM64 macOS when a release is published. The ARM64 Linux leg has not run yet, and testnet-12 ships x86_64 Linux only |
 | **TODO** | Tagged releases | testnet-12 shipped as commit `0e8ec984e` with no tag and no GitHub release; the last release is testnet-11's `testnet-main-e65ccf20` (2026-09-07) |
-| **PARTIAL** | Signed artifacts | `deploy.yaml`'s `sign` job writes `SHA256SUMS`, signs it with Sigstore (`SHA256SUMS.sigstore.json`) and attests provenance for every asset ([release-process.md](release-process.md)). No release has been cut with it yet |
+| **PARTIAL** | Signed artifacts | `deploy.yaml`'s `sign` job writes `SHA256SUMS`, signs it with Sigstore (`SHA256SUMS.sigstore.json`) and attests provenance for every file, and its `verify` job checks all of it from a clean runner ([release-process.md](release-process.md)). It has not had its first dry run yet, and no release has been cut with it |
 | **TODO** | Signed tags | no release tag is signed yet; [release-process.md](release-process.md) §2 makes it a step |
 | **PARTIAL** | SBOM | `deploy.yaml` writes an SPDX SBOM of the source tree on release; no release carries one yet |
 
