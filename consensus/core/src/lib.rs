@@ -196,6 +196,11 @@ pub mod palw_chain_weight;
 pub mod palw_checkpoint_court_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
+/// ADR-0152 §4-quater — class-derived verification deadlines behind
+/// `Params::palw_class_verify_deadline`: the constants, the measured-row type and the two pure
+/// derivations of `D(c)` (the state-reading half is in `palw_state_v2`). `None` on every preset but
+/// testnet-12.
+pub mod palw_class_verify_deadline_v1;
 pub mod palw_clock_cursor_v1;
 pub mod palw_context_ladder;
 /// ADR-0077 SA-4: the court's turn deadline is a slashing rule, so it is DERIVED from what an

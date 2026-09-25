@@ -23,7 +23,10 @@ const A2: u64 = 8_802;
 
 #[test]
 fn the_2m_gate_refuses_a_second_claim_after_the_first_is_licensed_past_and_below_the_fence() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (_, id2m) = model_classes(&p);

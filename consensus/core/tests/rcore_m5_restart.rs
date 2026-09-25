@@ -228,11 +228,17 @@ fn t01_revert_and_ibd_twins_of_the_staged_lifecycle() {
 /// written. Each tape then reverts block by block to its base (each reverted tip loading under its
 /// root) and re-applies, is folded again from its base (the IBD twin: a model row's readiness is a
 /// carriage edit here, so the scratch genesis is the tape's base), and restarts at every tip.
+///
+/// **ADR-0152 §4-quater (U-D1):** the 2M row is closed at launch, so its tape runs past the flag day
+/// that installs its measured row (`t12_2m_open`, measuring the derived 13,995-DAA deadline); and a
+/// claim's Final is DL-1's licensed floor `max(L + wc, H)` (V4) — `L + wc` for the 8k row (`D` 15),
+/// the verification horizon `H = B* + 13,995 + 1` for the 2M claim — where it was `L + wc` alone. The
+/// run steps past that floor, each claim's pinned against both terms.
 #[test]
 fn t01_model_class_twins_8k_released_and_held_and_2m_held_to_final() {
-    let p = t12();
-    let (short, id2m) = model_classes(&p);
+    let (short, id2m) = model_classes(&t12());
     for (class, what) in [(short, "8k"), (id2m, "2M")] {
+        let p = if class == id2m { t12_2m_open() } else { t12() };
         let mut c = model_chain(p.clone(), class, 1);
         c.attribution = true;
         let readied_at = c.daa - 1;
@@ -277,7 +283,15 @@ fn t01_model_class_twins_8k_released_and_held_and_2m_held_to_final() {
         let last = claims
             .iter()
             .map(|(id, _)| match t.c.s.claim(id).unwrap().phase {
-                PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => licensed_daa + t.c.sp.window_challenge_at(licensed_daa),
+                PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
+                    let floor = licensed_daa + t.c.sp.window_challenge_at(licensed_daa);
+                    let bound = t.c.s.panel(id).expect("a bound panel").bound_daa;
+                    let horizon = if class == id2m { bound + 13_995 + 1 } else { bound + 15 + 1 };
+                    let deadline = t.c.s.deadline_of(id).expect("a licensed claim owes its Final deadline");
+                    assert_eq!(deadline, floor.max(horizon), "{what}: DL-1's licensed floor max(L + wc, H)");
+                    assert_eq!(deadline == horizon, class == id2m, "{what}: only the 2M claim's H outlives L + wc");
+                    deadline
+                }
                 ref other => panic!("{what}: licensed: {other:?}"),
             })
             .max()

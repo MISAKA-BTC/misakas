@@ -31,6 +31,7 @@ use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2,
     PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1, challenge_v2,
 };
+use kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClassVerifyRowV1;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PALW_RECEIPT_V3_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3,
@@ -87,16 +88,64 @@ struct Gate {
 /// testnet-12 with harness cards at genesis; `armed = false` is the fence-off twin (the fence and
 /// C7 unset, the bundle's mirrors re-synced to the dormant values), as `t12_rcore_skeleton_gate`'s.
 fn gate(armed: bool) -> Gate {
+    gate_on(armed, false)
+}
+
+/// **The measured row ADR-0153's flag day would install for testnet-12's 2M row, as a fixture** — the
+/// core suites' `t12_2m_flag_day_row`: `a_R` at the registry's reference rate over the canonical job's
+/// 262,145 positions, so the row's canonical `D` is the derived 13,995 DAA, measured; λ the row's
+/// declared canonical leaves over those positions. Active from genesis.
+fn t12_2m_flag_day_row(params: &kaspa_consensus_core::config::params::Params) -> PalwClassVerifyRowV1 {
+    use kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2;
+    let class_id = kaspa_consensus_core::config::params::PALW_T12_RCORE_CONSERVATIVE_CLASSES[0];
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
+    let leaves = bundle
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            Obj::ClassRegistered { class_id: id, pwu_rule, .. } if *id == class_id => Some(match pwu_rule {
+                PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => *pwu_per_inference,
+                PalwPwuRuleV2::MaxPerAttempt(max) => *max,
+                #[allow(unreachable_patterns)]
+                _ => 0,
+            }),
+            _ => None,
+        })
+        .expect("the 2M row is a genesis class");
+    let row = PalwClassVerifyRowV1 {
+        class_id,
+        activation_daa: 0,
+        a_r_ps: 3_203_188_000_000,
+        b_r_ps: 0,
+        t_fixed_ms: 0,
+        canonical_positions: 262_145,
+        leaves_per_position: leaves.div_ceil(262_145).max(1),
+    };
+    assert_eq!(row.daa(262_145), 13_995, "the fixture measures the derived deadline");
+    row
+}
+
+/// [`gate`], and with `two_m_open` testnet-12 past ADR-0153's flag day: the 2M row's measured row
+/// installed from genesis ([`t12_2m_flag_day_row`], the core suites' `t12_2m_open`). At launch
+/// ADR-0152 §4-quater V2 refuses every 2M claim (U-D1: the row's deadline is unmeasured), so a
+/// fixture whose premise is a LIVE 2M claim runs here, the one configuration in which one exists.
+fn gate_on(armed: bool, two_m_open: bool) -> Gate {
     kaspa_core::log::try_init_logger("warn");
     let (config, _, _premine, _floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
     assert!(config.params.palw_rcore_plus.is_some_and(|f| f.is_active(0)), "testnet-12 arms R-core+ from genesis");
-    let config: Config = if armed {
+    let config: Config = if armed && !two_m_open {
         config
     } else {
         let mut params = config.params.clone();
-        params.palw_rcore_plus = None;
-        params.palw_rcore_conservative_classes = &[];
-        params.sync_palw_rcore_plus();
+        if !armed {
+            params.palw_rcore_plus = None;
+            params.palw_rcore_conservative_classes = &[];
+            params.sync_palw_rcore_plus();
+        }
+        if two_m_open {
+            params.palw_class_verify_rows = Box::leak(Box::new([t12_2m_flag_day_row(&params)]));
+            params.sync_palw_class_verify_deadline();
+        }
         ConfigBuilder::new(params).skip_proof_of_work().build()
     };
     config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
@@ -806,7 +855,9 @@ async fn t12_x22_three_v2_valids_license_v1_not_s2() {
 // launch-reachable case is the free-prompt lane, whose lock is priced on `max(R, rr)` above its duty;
 // no processor fixture builds a free-prompt licence, and the path it would take is this one.) The row
 // is seeded as the fold half seeds it — made `Active` and every card proved ready through the carriage —
-// and the claim is the template block's own attempt, restated for the row.
+// and the claim is the template block's own attempt, restated for the row. Since ADR-0152 §4-quater the
+// 2M row takes a claim only past the flag day that installs its measured row (U-D1), so these run on
+// `gate_on(true, true)`, as the fold half runs on `t12_2m_open`.
 
 impl Gate {
     /// `edit` applied to the walk's state through its carriage — the load path, as the core suites'
@@ -921,7 +972,7 @@ fn t33_claim(g: &mut Gate) -> (Hash64, PalwSegmentAssignmentV2, Vec<usize>, usiz
 /// the helper leaves the coverage door's answer as it was; the V1 legs are the ones P2-5 turns green.
 #[tokio::test]
 async fn t12_t33_the_v1_and_coverage_assemblers_return_the_backed_subset() {
-    let mut g = gate(true);
+    let mut g = gate_on(true, true);
     let (claim, assignment, cards, victim) = t33_claim(&mut g);
     let panel_params = g.bundle.panel;
     let point = g.next();
@@ -1006,7 +1057,7 @@ async fn t12_t33_the_v1_and_coverage_assemblers_return_the_backed_subset() {
 #[tokio::test]
 async fn t12_t45_the_collector_prefers_a_backed_v1_over_s2_and_never_waits_on_an_unbacked_one() {
     use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1 as Door;
-    let mut g = gate(true);
+    let mut g = gate_on(true, true);
     let (claim, assignment, cards, victim) = t33_claim(&mut g);
     let panel_params = g.bundle.panel;
     let point = g.next();
@@ -1076,12 +1127,18 @@ async fn t12_t45_the_collector_prefers_a_backed_v1_over_s2_and_never_waits_on_an
     let record = g.state.claim(&claim).unwrap().clone();
     let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = record.phase else { panic!("licensed: {:?}", record.phase) };
     assert_eq!(record.rcore.basis_k, 3);
+    // Restated for ADR-0152 §4-quater V4: the plain licence row is the one Final floor
+    // `max(L + wc, H)`, and for the 2M row `H = B* + D + 1 = B* + W_r(c) + 1` (`W_r(c) = D(c)` =
+    // 13,995), which is Q-5's gate term `receipt_deadline + 1` — the two rows now land on the same
+    // DAA for a long-D claim, so "off the gate" is read off the gate's predicate and the row off the
+    // one floor, not off a deadline that differs.
+    assert!(!kaspa_consensus_core::palw_state_v2::palw_rcore_licence_awaits_replay_v1(&record), "not on Q-5's gate");
     let (deadline, receipt_deadline) = g.deadlines(claim);
-    assert_ne!(
-        deadline,
-        Some((licensed_daa + g.sp().window_challenge_at(licensed_daa)).max(receipt_deadline + 1)),
-        "not on Q-5's gate"
-    );
+    let floor = kaspa_consensus_core::palw_state_v2::palw_claim_final_floor_v1(&g.state, g.sp(), &claim, &record, licensed_daa)
+        .expect("no overflow");
+    assert_eq!(deadline, Some(floor.max(g.daa)), "the plain licence row: the one Final floor");
+    let bound = g.state.panel(&claim).expect("a bound panel").bound_daa;
+    assert_eq!((floor, receipt_deadline), (bound + 13_995 + 1, bound + 13_995), "H is the 2M row's measured horizon");
 }
 
 /// **The fence-off twin: below `palw_rcore_plus` the V1 assembler is what it was.** On the floor with

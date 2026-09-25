@@ -63,7 +63,10 @@ fn commitment(class_id: Hash64, leaves: u64, n: u64, seed: u64) -> PalwConsensus
 
 #[test]
 fn a_commitment_that_would_take_the_2m_attempts_room_is_refused_and_the_attempt_is_admitted() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (short, id2m) = model_classes(&p);

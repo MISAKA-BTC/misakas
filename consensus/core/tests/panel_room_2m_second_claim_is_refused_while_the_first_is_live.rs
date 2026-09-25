@@ -31,7 +31,10 @@ fn at_eight_ready_seats_the_second_2m_claim_is_refused_bound_and_licensed() {
 }
 
 fn scenario(n_ready: usize) {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let economy = p.palw_seat_economy_at(0).expect("t12 arms the panel economy");

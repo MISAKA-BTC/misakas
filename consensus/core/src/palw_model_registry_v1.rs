@@ -1634,7 +1634,12 @@ pub fn palw_model_registry_read_v2(
                     !rate_rule,
                     Some(
                         (row.profile.verification_window_spans as u64).saturating_mul(f.span_daa.max(1))
-                            <= params.receipt_window_for_claim_v1(state, class_id, tip_daa),
+                            <= params.receipt_window_for_claim_v1(
+                                state,
+                                class_id,
+                                crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                                tip_daa,
+                            ),
                     ),
                 ),
                 (Some(_), None) => "the registry is not in force".to_string(),

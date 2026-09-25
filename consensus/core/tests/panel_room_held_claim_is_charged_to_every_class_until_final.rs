@@ -32,7 +32,10 @@ const PRODUCER: u64 = 9_301;
 
 #[test]
 fn a_licensed_2m_claim_keeps_charging_the_short_rows_room_until_final() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (short, id2m) = model_classes(&p);
@@ -93,17 +96,29 @@ fn a_licensed_2m_claim_keeps_charging_the_short_rows_room_until_final() {
     assert!(released.class_is_held_v1(&id2m) && !palw_panel_held_to_final_v1(released.model_lifecycle(&id2m).unwrap()));
     let listed_2m_owed = owed(&p, &released, id2m);
     let licensed_2m_owed = owed(&p, &s, id2m);
+    // ADR-0152 §4-quater K-1: past `palw_class_verify_deadline` the room also holds every long-D class,
+    // and the 2M row's canonical job derives 13,995 DAA whatever window its profile states — so with
+    // the list empty it is still held there. C7's own definition is what this counterfactual reads,
+    // so it is read with the deadline fence off as well (restated when the fence landed); the
+    // K-1 hold is asserted beside it.
     let mut unlisted = p.clone();
     unlisted.palw_rcore_plus = None;
     unlisted.palw_rcore_conservative_classes = &[];
     unlisted.sync_palw_rcore_plus();
+    let k1_2m_owed = owed(&unlisted, &released, id2m);
+    unlisted.palw_class_verify_deadline = None;
+    unlisted.sync_palw_class_verify_deadline();
     let unlisted_sp = bundle(&unlisted).state.clone();
     let released_short_room = op186(&unlisted, &unlisted_sp, &released, short, daa).panel_room;
     let released_2m_owed = owed(&unlisted, &released, id2m);
 
-    // One block past the challenge window: the claim is Final and charges no class.
+    // One block past its Final deadline: the claim is Final and charges no class.
+    // Restated for ADR-0152 §4-quater V4: a licensed claim Finals one block past its DL-1 deadline, now
+    // `max(L + wc, H)` — for a 2M claim the verification horizon `bound + 13,996`, far past `L + 120`.
     let challenge = sp.window_challenge_at(licensed_daa);
-    daa = licensed_daa + challenge + 1;
+    let final_at = s.deadline_of(&claim).expect("a licensed claim owes its Final deadline");
+    assert!(final_at > licensed_daa + challenge, "the horizon is the floor");
+    daa = final_at + 1;
     s = rd(&s, daa - 1);
     s = go(&p, &sp, &s, &ctx(0xA200_0004, daa, daa, 0), &[], PalwBlockWorkV3::None, Hash64::default()).expect("the sweep").0;
     assert!(matches!(s.claim(&claim).expect("the claim").phase, PalwClaimPhaseV2::Final { .. }));
@@ -128,7 +143,8 @@ fn a_licensed_2m_claim_keeps_charging_the_short_rows_room_until_final() {
     assert_eq!(
         (released_short_room, released_2m_owed),
         (5, 0),
-        "under 1,000 spans and off the list the 2M row is not held: the licence releases its claim from every class's budget"
+        "under 1,000 spans and off the list the 2M row is not held by C7: the licence releases its claim from every class's budget"
     );
+    assert_eq!(k1_2m_owed, licensed_2m_owed, "past the deadline fence K-1 holds it all the same: its derived deadline is long");
     assert_eq!(final_rooms, empty, "Final releases both");
 }
