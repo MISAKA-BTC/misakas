@@ -186,10 +186,11 @@ pub struct PalwProducerFactsV2 {
     /// only the refusal started inferences its share could no longer admit.
     pub bond_class_share: Option<(u64, u32)>,
     /// **Lane bind-deadlock (`Params::palw_anchor_at_ceiling`): the candidate block would be a binder.**
-    /// `true` where the fence and R-core+ are in force at the candidate's DAA and the tip holds a claim
-    /// `Provisional` with its anchor slot at or below it — so an attempt this producer mines now is that
-    /// claim's anchor, which the chain keeps even when the bond has no room for a claim of its own
-    /// (the attempt then carries none). A producer whose only hold is
+    /// `true` where the fence and R-core+ are in force at the candidate's DAA, past the operator-anchor
+    /// fence (`Params::palw_operator_anchor`, lane A) there the named bond is an operator's, and the tip
+    /// holds a claim `Provisional` with its anchor slot at or below it — so an attempt this producer
+    /// mines now is that claim's anchor, which the chain keeps even when the bond has no room for a
+    /// claim of its own (the attempt then carries none). A producer whose only hold is
     /// [`PALW_NOT_READY_EXPOSURE_FULL_V2`] mines exactly then, so a fleet at its ceilings still binds.
     /// Filled by the caller that holds the fences (`false` from [`palw_producer_facts_v4`]).
     pub binder_due: bool,

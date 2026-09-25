@@ -459,7 +459,8 @@ pub(crate) fn palw_producer_ready_v1(
 /// Exactly when the only thing between the bond and an attempt is its exposure ceiling
 /// ([`PALW_NOT_READY_EXPOSURE_FULL_V2`], the last question `ready_to_produce_v3` asks, so every other
 /// one passed) and the chain would keep the attempt as a binder (`PalwProducerFactsV2::binder_due`:
-/// the fence in force at the candidate and a claim due at it). Every other hold holds.
+/// the fence in force at the candidate, past lane A's operator-anchor fence the bond an operator's,
+/// and a claim due at it). Every other hold holds.
 pub(crate) fn palw_producer_binds_at_ceiling_v1(facts: &PalwProducerFactsV2, hold: &PalwProducerHoldV1) -> bool {
     use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2;
     facts.binder_due && *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2)

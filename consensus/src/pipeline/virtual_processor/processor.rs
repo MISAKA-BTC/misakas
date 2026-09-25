@@ -5431,13 +5431,18 @@ impl VirtualStateProcessor {
             .map(|refusal| refusal.to_string());
         }
         // **Lane bind-deadlock (`palw_anchor_at_ceiling`): would the candidate be a binder?** The
-        // walk's own conditions, read at the tip for the candidate's DAA: the fence and R-core+ in
-        // force there, and a claim `Provisional` with its slot at or below it (the attempt lane is the
-        // one the producer mines). Past the operator-anchor fence the walk also asks that the attempt
-        // be an operator's (`palw_block_may_anchor_a_panel_v1`); a non-operator's binder is
-        // disqualified there, so an integration that carries that fence adds the bond's operator
-        // question here.
+        // walk's own conditions (`palw_v2_anchor_at_ceiling_binder_v1`), read at the tip for the
+        // candidate's DAA: the fence and R-core+ in force there; past lane A's fence there, the named
+        // bond is an operator's (the walk keeps an operator's own attempt only — a non-operator's
+        // binder is disqualified, an inference wasted); and a claim `Provisional` with its slot at or
+        // below the candidate's DAA — the slots the producer's own attempt anchors (the attempt lane
+        // below lane A; past it an operator's attempt reaches its own DAA).
+        let lane_a_admits_the_bond = match self.palw_operator_anchor.as_ref().filter(|rule| rule.active_at(candidate_daa)) {
+            Some(rule) => bond.is_some_and(|outpoint| rule.operators().any(|(operator, _)| operator.0 == outpoint)),
+            None => true,
+        };
         facts.binder_due = self.palw_anchor_at_ceiling_at(candidate_daa)
+            && lane_a_admits_the_bond
             && self.palw_rcore_plus_at(candidate_daa)
             && self.palw_panel_params_v2.as_ref().is_some_and(|panel| {
                 !kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1(
@@ -12486,13 +12491,21 @@ impl VirtualStateProcessor {
     /// and hands the fold its attempt — exactly when:
     ///
     /// 1. the fence is active at the block's DAA;
-    /// 2. the block may anchor a panel ([`Self::palw_sw8_anchor_delay_for`]: R-core+ at the block and
-    ///    the one anchor predicate, which past the operator-anchor fence admits an operator's attempt
-    ///    only — the two rules compose through that predicate and nothing else);
-    /// 3. the parent holds a claim `Provisional` with its slot at or below the block's DAA — so this
-    ///    block IS that claim's anchor (every anchor-capable block at or past a slot binds or voids the
-    ///    claim there, step 4c) and binds or voids it now; a block with nothing to anchor stays
-    ///    disqualified, so binders are bounded by the anchor events claims create;
+    /// 2. **past lane A's fence (`Params::palw_operator_anchor`) at the block's DAA, the block's OWN
+    ///    attempt is an operator's** (`PalwOperatorAnchorRuleV1::operator_of_v1`). Lane A lets a chain
+    ///    block anchor through an operator attempt it merely MERGES, whatever its own lane; that
+    ///    capability is the merged attempt's, and any chain block that merges it — a heartbeat, which
+    ///    has no ceiling — carries it, so a non-operator at its ceiling is never the one block that can
+    ///    bind those claims and is disqualified as before. What lane A leaves stuck is the operator's
+    ///    own attempt at its ceiling: disqualified, it is popped from the sink search and merged by no
+    ///    template, so the claims due at it wait for an operator with room — none, in the deadlock;
+    /// 3. the block anchors a panel, and the parent holds a claim `Provisional` with its slot at or
+    ///    below the highest slot the block anchors ([`Self::palw_sw8_anchor_for`]: R-core+ at the block
+    ///    and the one per-block answer the anchor walk and step 4c read — below lane A the block's lane,
+    ///    reaching its own DAA; past it the operator attempts it is or merges, reaching the latest of
+    ///    them, which for an operator's own attempt is its own DAA) — so this block IS that claim's
+    ///    anchor and step 4c binds or voids it here; a block with nothing to anchor stays disqualified,
+    ///    so binders are bounded by the anchor events claims create;
     /// 4. the full admission passes with item 8 waived — signature, pins, pwu, producer floor, budget,
     ///    identity, class lottery: an anchor still costs a won draw by a registered bond's key.
     ///
@@ -12512,9 +12525,19 @@ impl VirtualStateProcessor {
         if !self.palw_anchor_at_ceiling_at(point.daa_score) {
             return None;
         }
-        let anchor_delay = self.palw_sw8_anchor_delay_for(point)?;
-        if kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1(state, point.daa_score, anchor_delay)
-            .is_empty()
+        // (2) Past lane A only an operator's own attempt binds at its ceiling.
+        if self.palw_operator_anchor.as_ref().is_some_and(|rule| rule.active_at(point.daa_score) && rule.operator_of_v1(header).is_none())
+        {
+            return None;
+        }
+        // (3) Due at the slots this block anchors — `reach`, as step 4c caps it — not at its own DAA.
+        let (anchor_delay, reach) = self.palw_sw8_anchor_for(point)?;
+        if kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1(
+            state,
+            reach.min(point.daa_score),
+            anchor_delay,
+        )
+        .is_empty()
         {
             return None;
         }

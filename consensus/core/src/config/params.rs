@@ -1496,9 +1496,11 @@ pub struct Params {
     /// until the `BindTimeout` backstop voids them, unpaid, and the cycle can repeat (audit-lifecycle
     /// T12-052, measured in `t12_bind_deadlock`). Past this fence — keyed on the candidate chain
     /// block's own DAA — such a block is not disqualified when it is the anchor of at least one claim
-    /// (`palw_sw8_anchor_delay_for`: an attempt block that may anchor, which past the operator-anchor
-    /// fence is an operator's; and a claim `Provisional` in its parent with its slot at or below the
-    /// block) and it passes every other item of the full admission (signature, pins, pwu, class
+    /// (the processor's `palw_sw8_anchor_for`: a block that anchors, and a claim `Provisional` in its
+    /// parent with its slot at or below the highest slot the block anchors) — past the operator-anchor
+    /// fence (`palw_operator_anchor`, lane A) only when the block's OWN attempt is an operator's, since
+    /// a block that anchors there by merely merging an operator attempt is one a heartbeat can stand in
+    /// for — and it passes every other item of the full admission (signature, pins, pwu, class
     /// lottery, identity) with item 8 waived. The fold then treats its attempt exactly as
     /// finding 17's step-4 skip already does (`AttemptExposureCeiling`): no claim, no reservation, the
     /// worker carve withheld (`palw_v2_skipped_own_attempt_carve`) — while its derived bindings bind

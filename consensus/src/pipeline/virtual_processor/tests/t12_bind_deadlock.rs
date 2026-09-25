@@ -22,6 +22,12 @@
 //!   due at it, carries no claim of its own (the fold's finding-17 skip) and is paid no worker carve
 //!   (on testnet-12 the carve is the whole worker share, so a binder is paid nothing but its fees);
 //!   a second binder with nothing left to bind is disqualified as before.
+//! * `f2`: the binder beside lane A (`palw_operator_anchor`, with lane F1, all three fences armed):
+//!   only an operator's OWN at-ceiling attempt binds. A non-operator's at-ceiling attempt that merges a
+//!   displaced operator attempt anchors under lane A — but only the slots that attempt reached, which
+//!   are below the claims due at it — and it is disqualified as before (the node is told no binder is
+//!   due for a non-operator); the operator's at-ceiling attempt then binds every claim due at it, on
+//!   its own execution's seed.
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::BlockHash;
@@ -62,6 +68,39 @@ fn t12_at(fence: Option<u64>) -> (Config, PalwConsensusParamsV2, Premine, Premin
     (config, bundle, premine, floats)
 }
 
+/// The cards `f2`'s lane-A rule trusts; 6 and 7 stand outside it (as in lane A's own processor test).
+const OPERATORS: [usize; 6] = [0, 1, 2, 3, 4, 5];
+
+/// testnet-12 with harness cards and the three post-launch fences this lane composes with armed at one
+/// height `h`: lane A (`palw_operator_anchor`, over cards 0–5), its prerequisite lane F1
+/// (`palw_panel_seed_execution`) and this lane's `palw_anchor_at_ceiling`.
+fn t12_with_lane_a(h: u64) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    assert_eq!(config.params.palw_operator_anchor, None, "testnet-12 ships lane A's fence dormant");
+    let cards: Vec<PalwBondKeyV2> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+            _ => None,
+        })
+        .collect();
+    let mut operators: Vec<PalwBondKeyV2> = OPERATORS.iter().map(|i| cards[*i]).collect();
+    operators.sort();
+    let mut params = config.params.clone();
+    params.palw_operator_anchor =
+        Some(kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorV1 { activation: ForkActivation::new(h), operators });
+    params.palw_panel_seed_execution = Some(ForkActivation::new(h));
+    params.palw_anchor_at_ceiling = Some(ForkActivation::new(h));
+    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    config.params.validate_palw_v2().expect("testnet-12 with lane A, F1 and the binder armed is a runnable ruleset");
+    let PalwConsensusMode::ConsensusV2(armed) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
+    assert_eq!(armed, &bundle, "the fences are Params fields: the bundle does not move");
+    (config, bundle, premine, floats)
+}
+
 /// The harness chain plus an attempt builder that does NOT refuse an unready card — the node's
 /// pre-check is exactly what a binder has to get past, so the test must be able to build one.
 struct Fleet {
@@ -72,8 +111,12 @@ struct Fleet {
 
 impl Fleet {
     fn new(fence: Option<u64>) -> Self {
-        kaspa_core::log::try_init_logger("warn");
         let (config, bundle, premine, floats) = t12_at(fence);
+        Self::on(config, bundle, premine, floats)
+    }
+
+    fn on(config: Config, bundle: PalwConsensusParamsV2, premine: Premine, floats: Premine) -> Self {
+        kaspa_core::log::try_init_logger("warn");
         let chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             config.params.net.to_string().as_bytes(),
@@ -524,4 +567,117 @@ async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_cla
         withheld as f64 / MSK
     );
     assert_eq!(paid, 0, "testnet-12 escrows the whole worker share, so a binder (no fees here) is paid nothing: a duty, not an income");
+}
+
+/// **`f2`: the binder beside lane A** (`palw_operator_anchor` over cards 0–5, lane F1 and
+/// `palw_anchor_at_ceiling`, all armed at DAA 2). Past lane A a chain block anchors a claim iff it IS or
+/// MERGES an operator attempt at or past the claim's slot, and it anchors only the slots at or below the
+/// latest such attempt (`sw8_anchor_reach`). The binder is kept only for an operator's OWN attempt:
+///
+/// 1. card 7 (a non-operator) fills its ceiling with claims whose slot is `s7`; card 0 (an operator)
+///    fills its own a DAA later;
+/// 2. card 1's attempt O, a DAA below `s7`, loses the selected-parent race to a heartbeat sibling and
+///    arrives only after that chain has reached `s7`;
+/// 3. card 7's at-ceiling attempt N, past `s7`, merges O: under lane A it anchors (it merges an
+///    operator attempt), but only up to O's DAA — below every claim due at it. The binder refuses a
+///    non-operator (a rule keyed on the block's own DAA would have kept N on the chain binding nothing):
+///    N is disqualified as before, nothing binds or voids, and the node told card 7 no binder was due;
+/// 4. card 0's at-ceiling attempt B — an operator's own, merging O as well — is a binder: every one of
+///    card 7's claims binds in it with a full jury, on B's own execution (O is below the slot, so it
+///    seeds nothing), B carries no claim and card 0's commitment does not move; card 0's own claims,
+///    whose slot is one DAA later, stay `Provisional`.
+#[tokio::test]
+async fn t12_bind_deadlock_f2_beside_lane_a_only_an_operators_own_at_ceiling_attempt_binds() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::palw_panel_v2::{palw_panel_anchor_execution_v1, palw_panel_draw_seed_v1};
+    use kaspa_consensus_core::palw_state_v2::PalwBlockContextV2;
+    let h = 2;
+    let (config, bundle, premine, floats) = t12_with_lane_a(h);
+    let anchor_delay = bundle.panel.anchor_delay();
+    let mut f = Fleet::on(config, bundle, premine, floats);
+    f.beat_to(h).await;
+
+    // 1. Card 7 (non-operator) at its ceiling, then card 0 (operator) a DAA later.
+    let claims_7 = f.fill_the_ceiling(7).await;
+    let s7 = f.state().claim(&claims_7[0]).unwrap().bind_base_daa() + anchor_delay;
+    f.beat_to(f.sink_daa() + 1).await;
+    let claims_0 = f.fill_the_ceiling(0).await;
+    let s0 = f.state().claim(&claims_0[0]).unwrap().bind_base_daa() + anchor_delay;
+    assert!(s7 < s0, "card 7's claims fall due first ({s7} < {s0})");
+    let committed_0 = f.committed(0);
+    println!("[f2] card 7 (non-operator): {} claims, slot {s7}; card 0 (operator): {} claims, slot {s0}", claims_7.len(), claims_0.len());
+
+    // 2. O (card 1, an operator with room) just below s7 — within the merge depth of what follows —
+    //    displaced by a heartbeat sibling and held back.
+    f.beat_to(s7 - 1).await;
+    let (o, _) = f.build_attempt(1);
+    let o = o.to_immutable();
+    let sibling = f.chain.heartbeat(f.ttpb(), Vec::new()).await;
+    assert_eq!(o.header.direct_parents(), sibling.header.direct_parents(), "siblings on the same parents");
+    assert!(o.header.daa_score < s7, "O stands below card 7's slot ({} < {s7})", o.header.daa_score);
+    f.beat_to(s7).await;
+    f.chain.ctx.consensus.validate_and_insert_block(o.clone()).virtual_state_task.await.expect("the operator's attempt is valid");
+    assert_ne!(f.chain.sink(), o.header.hash, "O arrives late and is not the chain");
+    assert_eq!(phases(&f.state(), &claims_7).get("Provisional"), Some(&claims_7.len()), "nothing has anchored card 7's claims");
+
+    // 3. Card 7's at-ceiling attempt N merges O.
+    assert_eq!(f.ready(7), Err(PALW_NOT_READY_EXPOSURE_FULL_V2), "card 7 holds on its ceiling");
+    assert!(!f.facts(7).binder_due, "past lane A the node tells a non-operator no binder is due, though claims are");
+    let sink = f.chain.sink();
+    let (n, _) = f.build_attempt(7);
+    let n_header = n.header.clone();
+    assert!(n_header.daa_score >= s7, "N stands past card 7's slot ({} >= {s7})", n_header.daa_score);
+    let (n_hash, status) = f.insert(n).await;
+    let merged = f.chain.vp().ghostdag_store.get_data(n_hash).expect("ghostdag data");
+    assert!(merged.mergeset_blues.contains(&o.header.hash) || merged.mergeset_reds.contains(&o.header.hash), "N merges O");
+    let vp = f.chain.vp();
+    let point = PalwBlockContextV2 { block: n_hash, daa_score: n_header.daa_score, blue_score: n_header.blue_score, subsidy: 0 };
+    assert_eq!(vp.palw_sw8_anchor_delay_for(&point), Some(anchor_delay), "under lane A N anchors: it merges an operator attempt");
+    assert_eq!(vp.palw_anchor_reach_of_v1(n_hash, &n_header), Some(o.header.daa_score), "but only up to O's DAA, below s7");
+    println!("[f2] N (card 7, DAA {}) merges O (card 1, DAA {}): reach {}; {status:?}", n_header.daa_score, o.header.daa_score, o.header.daa_score);
+    assert_eq!(status, BlockStatus::StatusDisqualifiedFromChain, "a non-operator's at-ceiling attempt is no binder past lane A");
+    assert_eq!(f.chain.sink(), sink, "the chain does not take it");
+    assert_eq!(phases(&f.state(), &claims_7).get("Provisional"), Some(&claims_7.len()), "nothing bound, nothing voided");
+
+    // 4. Card 0's at-ceiling attempt B — an operator's own — binds every claim due at it.
+    assert_eq!(f.ready(0), Err(PALW_NOT_READY_EXPOSURE_FULL_V2), "card 0 holds on its ceiling");
+    assert!(f.facts(0).binder_due, "an operator at its ceiling is told a binder is due");
+    let (b, b_attempt) = f.build_attempt(0);
+    let b_header = b.header.clone();
+    let (b_hash, status) = f.insert(b).await;
+    assert_eq!(status, BlockStatus::StatusUTXOValid, "the operator's at-ceiling attempt {b_hash} is a binder");
+    assert_eq!(f.chain.sink(), b_hash);
+    let merged = f.chain.vp().ghostdag_store.get_data(b_hash).expect("ghostdag data");
+    let merges_o = merged.mergeset_blues.contains(&o.header.hash) || merged.mergeset_reds.contains(&o.header.hash);
+    let state = f.state();
+    let bound = phases(&state, &claims_7);
+    println!("[f2] B (card 0, DAA {}, merges O: {merges_o}): card 7's claims {bound:?}; card 0's {:?}", b_header.daa_score, phases(&state, &claims_0));
+    assert_eq!(bound.get("PanelBound"), Some(&claims_7.len()), "every claim due at the operator's binder binds in it");
+    let network = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        f.chain.config.params.net.to_string().as_bytes(),
+        Some(f.chain.config.params.genesis.hash),
+    );
+    let execution = palw_panel_anchor_execution_v1(network, &b_header).expect("an attempt's execution");
+    for claim_id in &claims_7 {
+        let panel = state.panel(claim_id).expect("a bound claim has a panel");
+        assert_eq!(panel.seats.len(), f.chain.bundle.panel.seat_count() as usize, "a full jury");
+        assert_eq!(panel.anchor, palw_panel_draw_seed_v1(&execution, claim_id), "on the binder's own execution (lane F1)");
+        assert!(matches!(state.claim(claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa } if bound_daa == b_header.daa_score));
+    }
+    if b_header.daa_score < s0 {
+        assert_eq!(phases(&state, &claims_0).get("Provisional"), Some(&claims_0.len()), "card 0's own claims are not due yet");
+    }
+    assert!(state.claim(&b_attempt).is_none(), "the binder's attempt carries no claim");
+    // Card 0 is not the executor of card 7's claims, so the draw may seat it in what room its ceiling
+    // leaves (less than one claim's): its commitment moves by those seat duties alone — the binder
+    // reserved nothing of its own.
+    let card_0 = f.chain.bonds[0];
+    let seat_duties: u128 = claims_7
+        .iter()
+        .filter(|c| state.panel(c).is_some_and(|panel| panel.seats.iter().any(|seat| seat.bond == card_0)))
+        .map(|c| state.panel_duty_row_of(c).map_or(0, |row| row.seat_exposure))
+        .sum();
+    println!("[f2] card 0 committed {:.4} → {:.4} MSK (seat duties {:.4})", msk(committed_0), msk(f.committed(0)), msk(seat_duties));
+    assert_eq!(f.committed(0), committed_0 + seat_duties, "card 0's commitment moves by its seat duties only: the binder reserved nothing");
+    assert!(!f.facts(7).binder_due, "and card 7 is still told no binder is due");
 }
