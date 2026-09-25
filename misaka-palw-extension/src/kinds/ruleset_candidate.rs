@@ -143,6 +143,21 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             let terms = params.palw_activation_pool.map(|pool| pool.terms).unwrap_or_default();
             params.palw_activation_pool = Some(kaspa_consensus_core::config::params::PalwActivationPoolParamsV1 { activation: at, terms });
         }
+        // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis-only
+        // (a crossing would count one row by two horizons), so a height is refused here by name. At
+        // genesis the horizon this preset carries is kept, a preset that carries none takes
+        // testnet-12's twenty-four, and the bundle's mirror is set with it — `validate_palw_v2`
+        // refuses the two apart.
+        "palw_readiness_v2_max_age_spans" => {
+            genesis_only(name, at)?;
+            let max_age_spans = params
+                .palw_readiness_v2_max_age_spans
+                .map(|horizon| horizon.max_age_spans)
+                .unwrap_or(kaspa_consensus_core::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1);
+            params.palw_readiness_v2_max_age_spans =
+                Some(kaspa_consensus_core::config::params::PalwReadinessV2MaxAgeParamsV1 { activation: at, max_age_spans });
+            params.sync_palw_readiness_v2_max_age_spans();
+        }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
         "palw_objective_offence" => params.palw_objective_offence = Some(at),
@@ -431,5 +446,28 @@ mod tests {
         );
         // testnet-11 arms none of its prerequisites at genesis, so the candidate is a refusal there.
         assert!(armed.validate_palw_v2().is_err_and(|e| e.to_string().contains("palw_activation_pool")));
+    }
+
+    /// **The readiness-V2 horizon's fence is refused at a height and set, with its spans and the
+    /// bundle's mirror, at genesis** (user decision 2026-09-25, readiness capacity option (a)): it is
+    /// genesis-only, so a candidate naming a height is a regenesis and is refused by name before any
+    /// fingerprint is printed; at genesis a preset without a horizon takes testnet-12's twenty-four.
+    #[test]
+    fn the_readiness_horizon_fence_is_refused_at_a_height_and_set_with_its_spans_at_genesis() {
+        let params: Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
+        let name = "palw_readiness_v2_max_age_spans";
+        let at_height = set_fence_by_name(&mut params.clone(), name, ForkActivation::new(9_000_000));
+        assert!(at_height.as_ref().is_err_and(|why| why.contains("is genesis-only")), "{at_height:?}");
+        let mut armed = params.clone();
+        set_fence_by_name(&mut armed, name, ForkActivation::always()).expect("genesis is accepted");
+        let after = armed.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
+        assert_eq!(after, Some(ForkActivation::always()), "set by name");
+        assert_eq!(armed.palw_readiness_v2_max_age_spans.map(|horizon| horizon.max_age_spans), Some(24), "testnet-12's horizon");
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else {
+            panic!("testnet-11 is ConsensusV2")
+        };
+        assert_eq!(bundle.state.readiness_v2_max_age_spans(), Some(24), "the bundle mirrors the fence");
+        // testnet-11 arms readiness V2 at a height, not at genesis, so the candidate is a refusal there.
+        assert!(armed.validate_palw_v2().is_err_and(|e| e.to_string().contains("palw_readiness_v2_max_age_spans")));
     }
 }

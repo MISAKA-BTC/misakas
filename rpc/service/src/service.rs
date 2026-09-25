@@ -2018,8 +2018,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             probation_claims: globals.map(|g| g.probation_claims).unwrap_or(0),
             stable_epochs: globals.map(|g| g.stable_epochs).unwrap_or(0),
             // The age a row is JUDGED by now (the readiness-age sweep, 2026-09-24): readiness V2's
-            // eight spans past its fence, the globals' thirty before it — what `readySeatsNow`
-            // counts by, not the globals' V1 constant a reader would otherwise print.
+            // horizon past its fence (eight spans; 24 on testnet-12, `Params::palw_readiness_v2_max_age_spans`),
+            // the globals' thirty before it — what `readySeatsNow` counts by, not the globals' V1
+            // constant a reader would otherwise print.
             readiness_probe_max_age_spans: (read.readiness_max_age_daa / read.span_daa.max(1)).min(u32::MAX as u64) as u32,
             readiness_collateral_multiple: globals.map(|g| g.readiness_collateral_multiple).unwrap_or(0),
             classes,
@@ -2635,7 +2636,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let class = read.classes.iter().find(|c| c.class_id == class_id);
         // A proof expires one readiness age after it was dated — the age the registry judges by
-        // (the readiness-age sweep: V2's eight spans past its fence, not the V1 thirty).
+        // (the readiness-age sweep: V2's horizon past its fence — eight spans, 24 on testnet-12 —
+        // not the V1 thirty).
         let max_age = read.readiness_max_age_daa;
         let seats = read
             .readiness

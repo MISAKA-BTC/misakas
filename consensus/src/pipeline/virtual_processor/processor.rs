@@ -11637,12 +11637,16 @@ impl VirtualStateProcessor {
             return None;
         }
         let lane = self.palw_execution_lane_at(daa_score)?;
-        // The panel's seat count is the network's (the bundle's panel params), not the global
-        // constant's: a devnet with three-seat panels needs five ready seats, testnet-11 seven.
-        let mut globals = kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1;
-        if let Some(panel) = self.palw_panel_params_v2.as_ref() {
-            globals.seat_count = panel.seat_count();
-        }
+        // The network's globals, from its bundle in one place (`palw_registry_globals_of_bundle_v1`):
+        // the panel's seat count, not the global constant's (a devnet with three-seat panels needs
+        // five ready seats, testnet-11 seven), and the readiness-V2 horizon every judge of a row reads
+        // (`Params::palw_readiness_v2_max_age_spans`: 24 spans on testnet-12, eight elsewhere — user
+        // decision 2026-09-25, readiness capacity option (a)).
+        let globals = self
+            .palw_v2_bundle
+            .as_ref()
+            .map(kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1)
+            .unwrap_or(kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1);
         let activation_daa = self.palw_model_registry.map(|f| f.daa_score()).unwrap_or(0);
         Some(kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryFoldV1 {
             globals,
@@ -11708,7 +11712,8 @@ impl VirtualStateProcessor {
         }
         let state = self.palw_state_params_v2.as_ref()?;
         // **The readiness-age sweep (2026-09-24): the draw judges a row by the registry's rule** —
-        // readiness V2's eight spans and no V1 row — but only past the 2026-09-23 audit fence, since
+        // readiness V2's horizon (the fold's globals: eight spans, 24 on testnet-12) and no V1 row —
+        // but only past the 2026-09-23 audit fence, since
         // the draw is consensus (the panel a claim is bound to). Below it (testnet-11) the old rule
         // stands byte for byte: any row, the V1 age.
         let readiness_v2 = self.palw_audit_2026_09_23_at(anchor_daa) && self.palw_readiness_v2_at(anchor_daa);

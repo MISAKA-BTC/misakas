@@ -168,8 +168,9 @@ pub fn registry_fold(p: &Params, daa: u64) -> Option<kaspa_consensus_core::palw_
     }
     let lane = p.palw_execution_lane_at(daa)?;
     let b = bundle(p);
-    let mut globals = PALW_REGISTRY_GLOBALS_V1;
-    globals.seat_count = b.panel.seat_count();
+    // The processor's one builder: the bundle's seat count and the readiness-V2 horizon (24 spans on
+    // testnet-12 — user decision 2026-09-25, readiness capacity option (a)).
+    let globals = palw_registry_globals_of_bundle_v1(&b);
     let mut works = palw_genesis_model_works_v1(&b.genesis_objects);
     for (id, w) in palw_rc_typed_class_works_v1() {
         works.entry(id).or_insert(w);

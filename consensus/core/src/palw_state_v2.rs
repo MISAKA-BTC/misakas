@@ -1392,6 +1392,16 @@ pub struct PalwStateParamsV2 {
     /// on testnet-12 at launch.
     #[borsh(skip)]
     class_verify_rows: Vec<crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1>,
+    /// **`Params::palw_readiness_v2_max_age_spans`'s horizon, in spans** (user decision 2026-09-25,
+    /// readiness capacity option (a)), mirrored here by `Params::sync_palw_readiness_v2_max_age_spans`
+    /// because the registry fold is built from the bundle
+    /// ([`crate::palw_model_registry_v1::palw_registry_globals_of_bundle_v1`]) and every judge of a
+    /// readiness row reads the fold's globals. `None` on every network but testnet-12 (`Some(24)`);
+    /// read through [`Self::readiness_v2_max_age_spans_v1`], which answers the default eight for
+    /// `None`. Skipped by borsh for `short_challenge_window_from_daa`'s reason: the fence itself is
+    /// what the params and schedule ids name, Some-only.
+    #[borsh(skip)]
+    readiness_v2_max_age_spans: Option<u32>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1553,6 +1563,7 @@ impl PalwStateParamsV2 {
             held_unanswerable_classes: Vec::new(),
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
+            readiness_v2_max_age_spans: None,
         })
     }
 
@@ -1674,6 +1685,28 @@ impl PalwStateParamsV2 {
         self.class_verify_deadline_from_daa = from_daa;
         self.class_verify_rows = rows;
         self
+    }
+
+    /// **The readiness-V2 horizon's mirror** (user decision 2026-09-25, readiness capacity option
+    /// (a)): the bundle's copy of `Params::palw_readiness_v2_max_age_spans`, written by
+    /// `Params::sync_palw_readiness_v2_max_age_spans` and by nothing else; `None` where the fence is
+    /// not armed.
+    pub fn with_readiness_v2_max_age_spans(mut self, spans: Option<u32>) -> Self {
+        self.readiness_v2_max_age_spans = spans;
+        self
+    }
+
+    /// The mirror as it is (`None` on every network but testnet-12).
+    pub fn readiness_v2_max_age_spans(&self) -> Option<u32> {
+        self.readiness_v2_max_age_spans
+    }
+
+    /// **How long a readiness-V2 row stands on this network, in spans** — the mirror, or the default
+    /// [`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1`] (eight) where the fence is
+    /// not armed. The fence is genesis-only, so "armed" is "in force at every DAA". What the registry
+    /// fold's globals carry ([`crate::palw_model_registry_v1::palw_registry_globals_of_bundle_v1`]).
+    pub fn readiness_v2_max_age_spans_v1(&self) -> u32 {
+        self.readiness_v2_max_age_spans.unwrap_or(crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1)
     }
 
     /// ADR-0152 §4-quater: the fence's height, if the network arms it (the mirror).
@@ -13139,8 +13172,9 @@ impl PalwFoldReadV1<'_> {
         now_daa: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
     ) -> bool {
-        // ADR-0133 §11.2: past readiness V2 a row stands for eight spans, not thirty, and a V1 row
-        // does not stand at all — the challenge rotates every span and the rotation has to bite.
+        // ADR-0133 §11.2: past readiness V2 a row stands for the globals' V2 horizon (eight spans;
+        // twenty-four on testnet-12, user decision 2026-09-25), not thirty, and a V1 row does not
+        // stand at all — the challenge rotates every span and the rotation has to bite.
         // **The one predicate** (the 2026-09-24 readiness-age sweep): the same five clauses the
         // registry read serves as `readySeatsNow` — `palw_seat_not_ready_reason_under_v1`, under
         // THIS block's `readiness_v2_active` — so the count and the RPC cannot disagree. Clause for
@@ -34646,6 +34680,68 @@ pub(crate) mod tests {
             let f_v2 = PalwModelRegistryFoldV1 { readiness_v2_active: true, ..f.clone() };
             assert_eq!(palw_model_registry_ready_seats_v1(&s3, &p, &kimi_id(), 201, &f_v2), 0, "not the seven the V1 age counted");
             assert_eq!(palw_model_registry_ready_seats_v1(&s3, &p, &kimi_id(), 201, &f), 7, "below readiness V2 the seven stand");
+        }
+
+        /// **The configured readiness-V2 horizon moves every judge of a row together** (user decision
+        /// 2026-09-25, readiness capacity option (a); `Params::palw_readiness_v2_max_age_spans`). Seven
+        /// V2 rows proved at span 11 (DAA 110), judged at the default eight spans and at testnet-12's
+        /// twenty-four: exactly the horizon old, every row counts; one DAA past it, none does — and at
+        /// both DAA the fold's ready-seat count, the RPC's count, `readySeatsNow`, each seat's `fresh`,
+        /// the age the read reports, ADR-0147's jury predicate (`model_registry_seat_is_ready`) and the
+        /// draw's policy past the audit fence give one answer. The horizon reaches them all through
+        /// the fold's globals; nothing restates it.
+        #[test]
+        fn the_fold_the_rpc_the_jury_and_the_draw_take_the_configured_readiness_horizon() {
+            use crate::palw_model_registry_v1::{
+                PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1, PALW_READINESS_V2_MAX_AGE_SPANS_V1, PalwReadinessPolicyV1,
+                PalwRegistryGlobalsV1, PalwSeatReadinessRowV1, palw_model_registry_read_v1, palw_model_registry_ready_seats_v1,
+            };
+            let p = params();
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let (mut s2, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+            // The rows the V2 arm writes for a proof naming span 11: dated at the span's first DAA.
+            for n in 2..=8 {
+                s2.seat_readiness.insert(
+                    (bond_key(n), kimi_id()),
+                    PalwSeatReadinessRowV1 { proved_daa: 110, proved_span: 11, leaf_index: 0, proof_version: 2, chunks: 16 },
+                );
+            }
+            for spans in [PALW_READINESS_V2_MAX_AGE_SPANS_V1, PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1] {
+                let f = PalwModelRegistryFoldV1 {
+                    globals: PalwRegistryGlobalsV1 { readiness_v2_max_age_spans: spans, ..f.globals },
+                    readiness_v2_active: true,
+                    ..f.clone()
+                };
+                let e = PalwTransitionExtrasV1 { readiness_v2_active: true, ..extras(Some(f.clone())) };
+                let fold_read = PalwFoldReadV1::outside(&s2, &p, &e);
+                let horizon = spans as u64 * SPAN;
+                for (now, fresh) in [(110 + horizon, true), (110 + horizon + 1, false)] {
+                    let seats = if fresh { 7 } else { 0 };
+                    let chain = fold_read.model_registry_ready_seats(&kimi_id(), now, &f);
+                    assert_eq!(chain, seats, "{spans} spans at DAA {now}: the fold's count");
+                    assert_eq!(palw_model_registry_ready_seats_v1(&s2, &p, &kimi_id(), now, &f), chain, "the RPC counts what the chain counts");
+                    let read = palw_model_registry_read_v1(&s2, &p, now, Some(0), Some(&f), None);
+                    assert_eq!(read.readiness_max_age_daa, horizon, "the age the read reports");
+                    let class = read.classes.iter().find(|c| c.class_id == kimi_id()).expect("Kimi is read");
+                    assert_eq!(class.ready_seats_now, chain, "readySeatsNow is the chain's count");
+                    let marked = read.readiness.iter().filter(|r| r.class_id == kimi_id() && r.fresh).count() as u32;
+                    assert_eq!(marked, seats, "each seat's `fresh`");
+                    let policy = PalwReadinessPolicyV1::at(&f, now, p.base_class_id(), true);
+                    assert_eq!(policy.max_age_daa, horizon);
+                    for n in 2..=8 {
+                        let row = s2.seat_readiness(&bond_key(n), &kimi_id()).expect("a row");
+                        assert_eq!(policy.admits(row), fresh, "{spans} spans, bond {n}: the draw");
+                        let bond = s2.bonds.get(&bond_key(n)).expect("a bond");
+                        assert_eq!(
+                            fold_read.model_registry_seat_is_ready(&bond_key(n), bond, &kimi_id(), now, &f),
+                            fresh,
+                            "{spans} spans, bond {n}: ADR-0147's jury asks the same predicate"
+                        );
+                    }
+                }
+            }
         }
 
         #[test]

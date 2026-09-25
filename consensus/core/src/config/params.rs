@@ -719,6 +719,36 @@ pub struct PalwActivationPoolParamsV1 {
     pub terms: crate::palw_activation_pool_v1::PalwActivationPoolTermsV1,
 }
 
+/// **The readiness-V2 horizon** (user decision 2026-09-25, readiness capacity option (a)) — how many
+/// execution spans a `SeatReadinessProvedV2` row stands past `Params::palw_readiness_v2`, where every
+/// network without this fence keeps the eight of
+/// [`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1`].
+///
+/// A seat counts as READY for a class only while its latest possession proof is fresh, and a V2
+/// proof is ~48.9 KB (~195,508 transient mass, two a block at one block a DAA): at eight spans the
+/// integration owner's network model kept about 6.4 of testnet-12's sixteen rows fresh on empty
+/// blocks and 2.7–4.2 in a DA storm, against the ten that keep both genesis model classes out of
+/// HELD. The user chose the longer horizon, with the node's re-prove cadence (half of it) scaled to
+/// it; `max_age_spans` is the companion value, hashed into `consensus_params_id` and reported
+/// beside the height in `consensus_schedule_id`, invisible to the fence visitor.
+///
+/// Genesis-only — a crossing would count one row ready and not ready either side of one height,
+/// with no drill that crosses it — and refused by [`Params::validate_palw_v2`] off ConsensusV2,
+/// above genesis, without `palw_model_registry` and `palw_readiness_v2` armed at genesis beside it,
+/// with a horizon outside `[8, 30]` spans
+/// ([`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1`]), or with the V2
+/// bundle's mirror unsynced. `Some(always, 24)` on testnet-12 only; `None` on every other preset,
+/// and hashed Some-only everywhere, so every other network's ids are byte-identical to a build
+/// without it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwReadinessV2MaxAgeParamsV1 {
+    /// When the horizon takes effect — genesis or never.
+    pub activation: ForkActivation,
+    /// How long a V2 row stands, in execution spans
+    /// ([`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1`] on testnet-12).
+    pub max_age_spans: u32,
+}
+
 /// The Activation Pool's terms, in declaration order, into a fingerprint (`consensus_params_id`
 /// and `consensus_schedule_id` write the same bytes).
 fn palw_activation_pool_terms_write_v1(h: &mut ConsensusParamsId, terms: &crate::palw_activation_pool_v1::PalwActivationPoolTermsV1) {
@@ -1435,6 +1465,10 @@ pub struct Params {
     /// **ADR-0152-adjacent: the Activation Pool, R1 and R2** (user decision 2026-09-25) — see
     /// [`PalwActivationPoolParamsV1`]. `Some` at genesis on testnet-12 only; hashed Some-only.
     pub palw_activation_pool: Option<PalwActivationPoolParamsV1>,
+    /// **The readiness-V2 horizon** (user decision 2026-09-25, readiness capacity option (a)) — see
+    /// [`PalwReadinessV2MaxAgeParamsV1`]. `Some` at genesis on testnet-12 only (24 spans); hashed
+    /// Some-only. The bundle's mirror is made by `sync_palw_readiness_v2_max_age_spans`.
+    pub palw_readiness_v2_max_age_spans: Option<PalwReadinessV2MaxAgeParamsV1>,
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -3854,6 +3888,9 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid(why));
             }
         }
+        // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis
+        // only, over the registry and readiness V2 at genesis, inside [8, 30] spans, mirrored.
+        self.validate_palw_readiness_v2_max_age_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -4950,6 +4987,11 @@ impl Params {
         if self.palw_activation_pool.is_some_and(|pool| pool.activation == ForkActivation::never()) {
             self.palw_activation_pool = None;
         }
+        // The readiness-V2 horizon (user decision 2026-09-25): Some-only hashed, the pool's shape — the
+        // whole option collapses, so the spans beside a never-armed fence leave the identity with it.
+        if self.palw_readiness_v2_max_age_spans.is_some_and(|horizon| horizon.activation == ForkActivation::never()) {
+            self.palw_readiness_v2_max_age_spans = None;
+        }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
         }
@@ -5792,6 +5834,85 @@ impl Params {
         Ok(())
     }
 
+    /// **The readiness-V2 horizon's mirror** (user decision 2026-09-25, readiness capacity option
+    /// (a)): the `#[borsh(skip)]` copy on `PalwStateParamsV2` the registry fold's globals are built
+    /// from (`palw_registry_globals_of_bundle_v1`), written here and nowhere else. `None` where the
+    /// fence is not armed. Called where a bundle is assembled over a preset that armed the fence,
+    /// beside `sync_palw_class_verify_deadline`; `validate_palw_v2` refuses a ruleset whose copy
+    /// disagrees, so a missed call is a startup refusal rather than a fold counting by eight spans.
+    pub fn sync_palw_readiness_v2_max_age_spans(&mut self) {
+        let spans = self
+            .palw_readiness_v2_max_age_spans
+            .filter(|horizon| horizon.activation != ForkActivation::never())
+            .map(|horizon| horizon.max_age_spans);
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_readiness_v2_max_age_spans(spans);
+        }
+    }
+
+    /// **What `palw_readiness_v2_max_age_spans` refuses** (user decision 2026-09-25, readiness capacity
+    /// option (a)). Called by `validate_palw_v2`, and public so a test can name each refusal alone.
+    /// Below the fence it checks only that the bundle's mirror is the dormant `None`.
+    pub fn validate_palw_readiness_v2_max_age_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_model_registry_v1::{PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1, PALW_READINESS_V2_MAX_AGE_SPANS_V1};
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.readiness_v2_max_age_spans()),
+            _ => None,
+        };
+        let Some(horizon) = self.palw_readiness_v2_max_age_spans.filter(|horizon| horizon.activation != ForkActivation::never())
+        else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a readiness-V2 horizon without palw_readiness_v2_max_age_spans armed: mirror the \
+                     fence with Params::sync_palw_readiness_v2_max_age_spans after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans is armed on a network that is not ConsensusV2: the horizon is the V2 \
+                 registry's readiness rule",
+            ));
+        };
+        // Genesis only: a crossing would count one row ready and not ready either side of one height —
+        // the registry's count, ADR-0147's jury and the draw all move at once — with no drill that
+        // crosses it.
+        if horizon.activation.daa_score() != 0 {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans may only be armed at genesis (DAA 0): the horizon decides which seats \
+                 are ready, and a crossing would count one row by two horizons",
+            ));
+        }
+        // The horizon is readiness V2's and the registry's: both from genesis beside it, so no block
+        // judges a V2 row by any other horizon.
+        let at_genesis = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() == 0);
+        if !(at_genesis(self.palw_model_registry) && at_genesis(self.palw_readiness_v2)) {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans is armed without palw_model_registry and palw_readiness_v2 both armed \
+                 at genesis: the horizon is the V2 possession row's, which only the registry past readiness V2 counts",
+            ));
+        }
+        // Never below the default (at eight the half-age duty, due past `max / 2` — age 5 — still
+        // comes before the M1 escalation from `max − 2` — age 6; at six they would meet), never past
+        // the V1 age (a V2 row exists to make possession bite harder than the one-leaf row it
+        // replaced).
+        if !(PALW_READINESS_V2_MAX_AGE_SPANS_V1..=PALW_READINESS_V2_MAX_AGE_SPANS_MAX_V1).contains(&horizon.max_age_spans) {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans is outside [8, 30] spans: never shorter than the eight a V2 row stands \
+                 by default, never longer than the V1 age (thirty), which would make the V2 row the laxer one",
+            ));
+        }
+        if mirror != Some(horizon.max_age_spans) {
+            return Err(Invalid(
+                "palw_readiness_v2_max_age_spans disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_readiness_v2_max_age_spans after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn set_palw_short_challenge_window(&mut self, at: Option<ForkActivation>) {
         self.palw_short_challenge_window = at;
         let from_daa = at.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
@@ -6437,6 +6558,30 @@ impl Params {
         self.palw_activation_pool_fence().filter(|pool| pool.activation.is_active(daa_score)).map(|pool| pool.terms)
     }
 
+    /// **The readiness-V2 horizon's fence** (user decision 2026-09-25, readiness capacity option
+    /// (a)), resolved off a ConsensusV2 ruleset — `Some` on testnet-12 alone.
+    pub fn palw_readiness_v2_max_age_spans_fence(&self) -> Option<PalwReadinessV2MaxAgeParamsV1> {
+        match (&self.palw_consensus_mode, self.palw_readiness_v2_max_age_spans) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(horizon))
+                if horizon.activation != ForkActivation::never() =>
+            {
+                Some(horizon)
+            }
+            _ => None,
+        }
+    }
+
+    /// **How long a readiness-V2 row stands on this network, in spans**: the fence's horizon where it
+    /// is armed (genesis-only, so at every DAA), else the default eight
+    /// ([`crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1`]). The fold reads the
+    /// bundle's mirror (`PalwStateParamsV2::readiness_v2_max_age_spans_v1`), which `validate_palw_v2`
+    /// holds equal to this.
+    pub fn palw_readiness_v2_max_age_spans_v1(&self) -> u32 {
+        self.palw_readiness_v2_max_age_spans_fence()
+            .map(|horizon| horizon.max_age_spans)
+            .unwrap_or(crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1)
+    }
+
     /// Whether a false `Valid` is judged by `palw_check_panel_false_valid_v2` at `daa_score`
     /// (`PalwTransitionExtrasV1::offence_attribution_active`): the V1 kind refused, the V2 kind
     /// admitted. `false` on every preset but testnet-12.
@@ -6570,6 +6715,7 @@ impl Params {
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
             palw_activation_pool,
+            palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6673,6 +6819,7 @@ impl Params {
             ("palw_rcore_plus", *palw_rcore_plus),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
             ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
+            ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -7049,6 +7196,14 @@ impl Params {
             h.write(pool.activation.daa_score().to_le_bytes());
             palw_activation_pool_terms_write_v1(&mut h, &pool.terms);
         }
+        // The readiness-V2 horizon (user decision 2026-09-25), NAMED and Some-only, with its spans
+        // beside the height for the pool's SA-4 reason: two operators arming it with different
+        // horizons count different seats ready and must see it in the log.
+        if let Some(horizon) = self.palw_readiness_v2_max_age_spans {
+            h.write(b"palw_readiness_v2_max_age_spans");
+            h.write(horizon.activation.daa_score().to_le_bytes());
+            h.write(horizon.max_age_spans.to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -7246,6 +7401,7 @@ impl Params {
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
             palw_activation_pool,
+            palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7571,6 +7727,11 @@ impl Params {
         // its reason — the terms are a value beside it (the D1 rule).
         if let Some(pool) = palw_activation_pool.as_mut() {
             fork(&mut pool.activation, visit);
+        }
+        // The readiness-V2 horizon (user decision 2026-09-25): the height only, SOME-ONLY, as the pool
+        // above and for its reason — the spans are a value beside it (the D1 rule).
+        if let Some(horizon) = palw_readiness_v2_max_age_spans.as_mut() {
+            fork(&mut horizon.activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
         match palw_artifact_root_ownership.as_mut() {
@@ -8159,6 +8320,7 @@ impl Params {
             palw_class_verify_deadline,
             palw_class_verify_rows,
             palw_activation_pool,
+            palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -8483,6 +8645,13 @@ impl Params {
             h.write(b"palw_activation_pool");
             h.write(pool.activation.daa_score().to_le_bytes());
             palw_activation_pool_terms_write_v1(&mut h, &pool.terms);
+        }
+        // The readiness-V2 horizon (user decision 2026-09-25): the height and its spans, Some-only, so
+        // every preset but testnet-12 fingerprints byte-identically to a build without the field.
+        if let Some(horizon) = palw_readiness_v2_max_age_spans {
+            h.write(b"palw_readiness_v2_max_age_spans");
+            h.write(horizon.activation.daa_score().to_le_bytes());
+            h.write(horizon.max_age_spans.to_le_bytes());
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
         if let Some(activation) = palw_artifact_root_ownership {
@@ -9261,6 +9430,11 @@ impl Params {
             // testnet-12 fails `validate_palw_v2` on the prerequisite the override dropped
             // (`palw_admission_independence`) instead of silently disarming R1, R2 and the pool.
             palw_activation_pool: self.palw_activation_pool,
+            // The readiness-V2 horizon (user decision 2026-09-25): CARRIED for the pool's reason — an
+            // overridden testnet-12 keeps the horizon its rows are counted by, and fails
+            // `validate_palw_v2` on a prerequisite the override dropped rather than silently
+            // counting them by eight spans.
+            palw_readiness_v2_max_age_spans: self.palw_readiness_v2_max_age_spans,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -10267,6 +10441,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
+    palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10489,6 +10664,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
+    palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10693,6 +10869,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
+    palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -16431,6 +16608,16 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // illustrative scale, to be tuned.
     params.palw_activation_pool =
         Some(PalwActivationPoolParamsV1 { activation: at, terms: crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1 });
+    // **The readiness-V2 horizon** (`Params::palw_readiness_v2_max_age_spans`, user decision
+    // 2026-09-25, readiness capacity option (a)): a possession row stands twenty-four spans (24 DAA)
+    // instead of eight, so two proofs a block keep both genesis model classes' seats counted, and the
+    // node re-proves at half of it. Genesis-only; its prerequisites (`palw_model_registry`,
+    // `palw_readiness_v2`) are armed at 0 by pass 2's walk. The bundle's mirror is re-made by
+    // `sync_palw_readiness_v2_max_age_spans`.
+    params.palw_readiness_v2_max_age_spans = Some(PalwReadinessV2MaxAgeParamsV1 {
+        activation: at,
+        max_age_spans: crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1,
+    });
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
@@ -16804,6 +16991,9 @@ pub fn palw_v2_params_on_base(
     // ADR-0152 §4-quater, for the same reason and in the same place: the fence's height and its
     // measured rows, mirrored onto the bundle this function built.
     params.sync_palw_class_verify_deadline();
+    // The readiness-V2 horizon (user decision 2026-09-25), for the same reason and in the same place:
+    // its spans, mirrored onto the bundle this function built.
+    params.sync_palw_readiness_v2_max_age_spans();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -16958,6 +17148,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
+    palw_readiness_v2_max_age_spans: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,

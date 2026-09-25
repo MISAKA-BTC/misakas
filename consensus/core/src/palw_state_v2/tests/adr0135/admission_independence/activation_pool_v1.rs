@@ -674,3 +674,63 @@ fn a_probe_final_credits_its_credited_seats_operators() {
     b.reverse_convicted_final(&ctx(6, 125, 6), claim_id, PalwVoidReasonV2::CourtFraud).expect("the Final reverses");
     assert!(b.state.activation_pool(&h64(1)).unwrap().probe_credited.is_empty(), "the convicted Final's credits are gone");
 }
+
+/// **(a) under the configured readiness horizon** (user decision 2026-09-25, readiness capacity
+/// option (a)): a drawn juror is paid on a V2 row that LANDED at `S − 2` or earlier (the fix round's
+/// F4) AND is fresh at `S` by the registry's one rule — so the horizon moves only how old a row may
+/// be, never when it may have landed. At twenty-four spans a row naming `S − 24` pays and one naming
+/// `S − 25` does not; at the default eight, `S − 8` pays and `S − 9` does not; a fresh row that
+/// landed in `S − 1`, after the seed existed, pays under neither. The landing window
+/// (`palw_readiness_landing_spans_v1`, 40 spans on one-DAA spans) is not asked and need not change:
+/// the pay reads the span a proof landed in, which no proof built with the seed in hand can put at
+/// `S − 2`, and a row older than the horizon is stale whenever it landed.
+#[test]
+fn a_is_paid_on_a_row_landed_by_s_minus_2_and_fresh_at_s_under_the_configured_horizon() {
+    let all: Vec<u64> = SYBILS.chain(HONEST).collect();
+    let t = to_audit(1_000 * MSK, &all);
+    let jury = drawn(&t);
+    assert_eq!(jury.len(), 5);
+    let s = t.audit;
+    const DEFAULT_HORIZON: u32 = crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1;
+    // Per drawn juror: (the span its row names, the span it landed in, paid at 24 spans, paid at 8).
+    let cases = [
+        (s - 24, s - 2, true, false),  // exactly the configured horizon old at S
+        (s - 25, s - 2, false, false), // a span past it
+        (s - 2, s - 1, false, false),  // fresh, but landed after S − 2
+        (s - 8, s - 8, true, true),    // the default horizon's own edge, landed long before
+        (s - 9, s - 3, true, false),   // past the default, inside twenty-four
+    ];
+    for spans in [crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1, DEFAULT_HORIZON] {
+        let mut f = fold(kimi_work());
+        f.globals.readiness_v2_max_age_spans = spans;
+        f.readiness_v2_active = true;
+        let extras = PalwTransitionExtrasV1 { readiness_v2_active: true, ..pooled(Some(f.clone())) };
+        let mut before = t.before.clone();
+        for (n, (named, landed, ..)) in jury.iter().zip(cases) {
+            before.seat_readiness.insert(
+                (bond_key(*n), kimi_id()),
+                crate::palw_model_registry_v1::PalwSeatReadinessRowV1 {
+                    proved_daa: named * SPAN,
+                    proved_span: named,
+                    leaf_index: 0,
+                    proof_version: 2,
+                    chunks: 16,
+                },
+            );
+            before.activation_readiness_landed.insert((kimi_id(), bond_key(*n)), landed);
+        }
+        let audit = step_checked(&before, &t.ctx_at(s), &[], None, &extras).unwrap();
+        for (n, (named, landed, at_24, at_8)) in jury.iter().zip(cases) {
+            let fresh = f.readiness_row_is_fresh(before.seat_readiness(&bond_key(*n), &kimi_id()).unwrap(), s * SPAN);
+            let pays = if spans == DEFAULT_HORIZON { at_8 } else { at_24 };
+            assert_eq!(fresh && landed + 2 <= s, pays, "{spans} spans, juror {n}: the pay is exactly `landed ≤ S − 2 ∧ fresh at S`");
+            assert_eq!(
+                payout_of(&audit, *n).is_some(),
+                pays,
+                "{spans} spans, juror {n}: a row naming S − {} that landed at S − {}",
+                s - named,
+                s - landed
+            );
+        }
+    }
+}

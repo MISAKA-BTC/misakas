@@ -5,8 +5,10 @@
 //!
 //! **The hole.** A class stays out of HELD only while at least `seat_count` of its seats hold a
 //! fresh possession row, and leaves PREFETCHING/HELD only at `seat_count + spare_seats` (5 and 7 on
-//! testnet-12). A V2 row stands [`palw_readiness_max_age_daa_v1`] (eight spans — 8 DAA on
-//! testnet-12's one-DAA spans) and the seat re-proves at half of it (`palw_readiness_duty_due_v2`).
+//! testnet-12). A V2 row stands [`palw_readiness_max_age_daa_v1`] (the fold's globals' horizon:
+//! eight spans by default, 24 — 24 DAA on its one-DAA spans — on testnet-12, user decision
+//! 2026-09-25, readiness capacity option (a)) and the seat re-proves at half of it
+//! (`palw_readiness_duty_due_v2`).
 //! Each proof is one lifecycle carrier of tens of KB. Past R-core+ those proofs rode the panel's
 //! Ordinary lane behind the court queue, and P2-9 lets conviction, DA and reporter carriers lead
 //! every template and hold a mempool reserve — so a storm of cheap accusations could keep an honest
@@ -14,12 +16,15 @@
 //!
 //! **The margin** ([`PALW_READINESS_ESCALATION_LANDING_DAA_V1`]): a carrier sent now is included by
 //! the next block and accepted by the chain block that merges it — two blocks, two DAA at one block
-//! a DAA. A row escalates from `max_age − landing` DAA of age (6 on testnet-12): a proof escalated
+//! a DAA. A row escalates from `max_age − landing` DAA of age (22 on testnet-12; 6 at the default
+//! eight spans): a proof escalated
 //! then is accepted by the last DAA the old row counts, so the seat is never out — if it lands in the
 //! very next block. The margin buys no queueing: a proof that waits one block for the head writes
 //! its row a DAA late (the M1 review, LOW 3), which is why the capacity figures are upper bounds.
-//! Below that age nothing changes: the seat's half-age duty (age 5) sends the proof on the ordinary
-//! lane exactly as before, and only a proof that has not landed by age 6 is hurried.
+//! Below that age nothing changes: the seat's half-age duty (age 13 on testnet-12, 5 at eight
+//! spans) sends the proof on the ordinary lane exactly as before, and only a proof that has not
+//! landed by `max_age − landing` is hurried. The horizon is read, never restated: every function
+//! here reaches it through `g` and [`palw_readiness_max_age_daa_v1`].
 //!
 //! **Only a row that exists escalates** (the M1 review, MEDIUM 5): a bond with no row for a class —
 //! any Active bond, for any class — and a V1 row past readiness V2 (which never counted) are not
