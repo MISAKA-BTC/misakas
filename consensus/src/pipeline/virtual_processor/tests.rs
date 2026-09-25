@@ -16403,6 +16403,10 @@ mod t46_false_valid_real_claim;
 mod p2_b3_vesting_payee_gate;
 // ADR-0152 Phase 2, P2-2: the mint path on real testnet-12 blocks (T58, T03, T47, T25, T05, T29).
 mod p2_mint_path;
+// Lane maturity (post-launch, 2026-09-26): ADR-0065 D1 brought forward — a bond registered at DAA 13
+// is drawable below the fence, and past it only once its own window has run; the genesis seats carry
+// every claim across it.
+mod t12_seat_maturity_fence;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;

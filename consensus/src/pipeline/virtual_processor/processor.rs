@@ -328,6 +328,10 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
     /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
     pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
+    /// Lane maturity's fence (post-launch, 2026-09-26: ADR-0065 D1 brought forward), MODE-folded
+    /// (`Params::palw_bond_maturity_early_fence`), `None` on every shipped preset. Read only through
+    /// [`Self::palw_bond_maturity_at`], beside the field above whose window it applies.
+    pub(super) palw_bond_maturity_early: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0071 SA-1..SA-4's fence, `None` on every shipped preset. Past it a capability
     /// declaration is bounded, priced and refused for a retiring bond, and a seat is drawn for a
     /// class only after a production fact. See [`Self::palw_capability_bound_at`], which is the
@@ -1019,6 +1023,7 @@ impl VirtualStateProcessor {
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,
             palw_bond_maturity: params.palw_bond_maturity,
+            palw_bond_maturity_early: params.palw_bond_maturity_early_fence(),
             // The MODE-folded fence: capability declarations, the claim lane and the panel draw
             // exist only under ConsensusV2, so the mode condition is folded once in `Params`
             // rather than remembered at each of the three sites below.
@@ -11658,7 +11663,11 @@ impl VirtualStateProcessor {
     /// since it registered. ONE place, read by the validator, the assembler and the registry
     /// warning alike, so the three recompute one identical panel. Below the fence, or with fewer
     /// than `depth` anchors before the anchor (the bootstrap waiver), it is the window itself.
-    fn palw_bond_maturity_window_at(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, anchor_daa: u64) -> Option<u64> {
+    pub(super) fn palw_bond_maturity_window_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        anchor_daa: u64,
+    ) -> Option<u64> {
         let window = self.palw_bond_maturity_at(anchor_daa)?;
         let floor = self
             .palw_second_clock_depth_at(state, anchor_daa)
@@ -11753,8 +11762,18 @@ impl VirtualStateProcessor {
     /// that assembles one — must get the same answer, because a panel is accepted only if it
     /// equals the derived one exactly: a node that resolved the window differently would propose
     /// panels its own peers refuse, and blame the claim.
+    ///
+    /// **Lane maturity (post-launch, 2026-09-26)** brings the same rule forward: past
+    /// `palw_bond_maturity_early` the window is `palw_bond_maturity`'s even below that fence's own
+    /// height — one OR over one window (`palw_bond_maturity_window_in_force_v1`), so the two fences
+    /// never disagree and there is no gap where the early one hands over. Below both it is `None`,
+    /// byte for byte the released rule.
     fn palw_bond_maturity_at(&self, daa_score: u64) -> Option<u64> {
-        self.palw_bond_maturity.filter(|m| m.activation.is_active(daa_score)).map(|m| m.window_daa)
+        kaspa_consensus_core::config::params::palw_bond_maturity_window_in_force_v1(
+            self.palw_bond_maturity,
+            self.palw_bond_maturity_early,
+            daa_score,
+        )
     }
 
     /// **ADR-0071 SA-1..SA-4, resolved in exactly one place**, for the D1 reason: a panel is

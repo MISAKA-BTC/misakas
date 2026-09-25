@@ -569,6 +569,10 @@ mod tests {
             "palw_bond_maturity" => {
                 params.palw_bond_maturity = Some(crate::config::params::PalwBondMaturityV1 { activation: at, window_daa: 1_000 })
             }
+            // Lane maturity (post-launch, 2026-09-26): refused without `palw_bond_maturity` scheduled above
+            // it by `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_bond_maturity_early" => params.palw_bond_maturity_early = Some(at),
             "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
             // lane: rcore/f1-forkchoice-attacks
             "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
