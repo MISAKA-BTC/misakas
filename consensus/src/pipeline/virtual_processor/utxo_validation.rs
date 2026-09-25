@@ -608,36 +608,49 @@ impl VirtualStateProcessor {
         } else {
             (0, 0)
         };
-        let mut effects = resolve_slashing_side_effects(
-            &accepted_txs,
-            selected_parent_bond_view,
-            pov_daa_score,
-            dns_params.reward_params.slashing_reporter_reward_bps,
-            security_reserve_bps,
-            victim_epoch_pool_bps,
-        );
         // **MSK-26A (2026-09 pre-freeze security review): the UTXO side-effect obeys the same
         // genuineness rule the bond-REGISTRY mutation already does.** `resolve_slashing_side_effects`
         // verifies no signature — it slashes any accepted evidence whose bond resolves Active — so a
         // forged slashing / precommit evidence riding in a MERGE-blue block (which the own-body
         // `check_slashing_evidence_genuine` block rule never sees, and which the registry path drops
         // via `proved_slash_targets`) removes an honest validator's staked output-0 and mints its
-        // author a reward. Past `palw_slashing_evidence_utxo_genuine`, keep only the effects whose
-        // bond is `proved_slash_targets` — the same signatures, freshness and status the registry
-        // path re-checks over this block's whole accepted set — so a slash reaches the UTXO set only
-        // on evidence the accused validator actually signed. `None`/dormant on every shipped preset,
-        // so the effects (and the utxo_commitment) are byte-identical to before the field existed;
-        // construction and validation read the same fence, so they compute one commitment.
-        if self.palw_slashing_evidence_utxo_genuine.is_some_and(|fence| fence.is_active(pov_daa_score)) {
-            let proved = proved_slash_targets(
-                &accepted_txs,
-                selected_parent_bond_view,
-                self.genesis.hash,
-                pov_daa_score,
-                dns_params.evidence_window_blocks,
-            );
-            effects.retain(|effect| proved.contains(&effect.bond_outpoint));
-        }
+        // author a reward. Past `palw_slashing_evidence_utxo_genuine`, resolution runs over the
+        // PROVED evidence transactions only (`proved_slashing_evidence_txs`: each tx judged alone by
+        // the registry's own signature, freshness and status checks), so a slash reaches the UTXO
+        // set only on evidence the accused validator actually signed.
+        //
+        // The filter is by TRANSACTION, not by bond: resolution keeps the FIRST evidence naming a
+        // bond (canonical order), and that tx supplies the reporter payload, the mint outpoint
+        // `(slashing_tx_id, 0)` and the `slashed_epoch` the victim pool pays. Filtering the resolved
+        // effects by bond would let a forged tx sorted ahead of a genuine one for the same bond
+        // choose all three (MSK-26A follow-up); filtering before resolution makes the first PROVED
+        // tx win, so every field comes from signed evidence.
+        //
+        // `None`/dormant on every shipped preset, so the effects (and the utxo_commitment) are
+        // byte-identical to before the field existed; construction and validation read the same
+        // fence, so they compute one commitment.
+        let proved_txs: Vec<Transaction>;
+        let evidence_txs: &[Transaction] =
+            if self.palw_slashing_evidence_utxo_genuine.is_some_and(|fence| fence.is_active(pov_daa_score)) {
+                proved_txs = proved_slashing_evidence_txs(
+                    &accepted_txs,
+                    selected_parent_bond_view,
+                    self.genesis.hash,
+                    pov_daa_score,
+                    dns_params.evidence_window_blocks,
+                );
+                &proved_txs
+            } else {
+                &accepted_txs
+            };
+        let mut effects = resolve_slashing_side_effects(
+            evidence_txs,
+            selected_parent_bond_view,
+            pov_daa_score,
+            dns_params.reward_params.slashing_reporter_reward_bps,
+            security_reserve_bps,
+            victim_epoch_pool_bps,
+        );
         // ADR-0018 "本格版" (PoS-v2) victim compensation: for each slashed bond with a victim pool,
         // recompute the slashed validator's epoch's honest (non-slashed) included set from the
         // selected-parent window and build the victim outputs. Inert when fenced (pool = 0 ⇒ skip) —
@@ -2212,6 +2225,30 @@ pub(super) fn proved_slash_targets(
         }
     }
     proved
+}
+
+/// **MSK-26A: the accepted slashing / precommit evidence transactions that PROVE their slash**, in
+/// their original (canonical) order — the input `apply_slashing_side_effects` hands
+/// `resolve_slashing_side_effects` past `palw_slashing_evidence_utxo_genuine`.
+///
+/// Each tx is judged alone by [`proved_slash_targets`] (the registry path's own signature,
+/// freshness and status rules), so a forged tx never condemns or displaces a genuine sibling. The
+/// filter is per TRANSACTION rather than per bond on purpose: resolution keeps the first evidence
+/// naming a bond, and that tx decides the reporter payload, the mint outpoint and the victim epoch.
+/// Dropping unproved txs BEFORE resolution makes the first PROVED tx win, so none of those fields
+/// can be chosen by a forgery sorted ahead of a genuine equivocation. Non-evidence txs are dropped
+/// too; resolution ignores them anyway.
+pub(super) fn proved_slashing_evidence_txs(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    net_id: BlockHash,
+    including_daa: u64,
+    evidence_window_blocks: u64,
+) -> Vec<Transaction> {
+    txs.iter()
+        .filter(|tx| !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty())
+        .cloned()
+        .collect()
 }
 
 fn slashing_evidence_genuine(

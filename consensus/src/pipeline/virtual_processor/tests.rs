@@ -16355,3 +16355,326 @@ mod p2_mint_path;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
+
+/// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
+/// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
+/// that the honest virtual MERGES (M has lower blue work than the sink, so it is never
+/// chain-validated and its own body is never genuineness-checked), then an honest template `C`
+/// merges it. Pins the shipped (dormant) behaviour, the armed fix, the genuine-evidence control,
+/// the mixed-order case (a forgery sorted ahead of a genuine equivocation must not choose the
+/// reporter payout or the victim epoch), and the node-side mempool refusal.
+mod msk26a_slash_genuineness {
+    use super::*;
+    use kaspa_consensus_core::{
+        Hash64,
+        config::params::ForkActivation,
+        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
+        tx::{MutableTransaction, ScriptPublicKey},
+    };
+
+    struct World {
+        ctx: TestContext,
+        honest: dns_harness::HarnessValidator,
+        atk: dns_harness::HarnessValidator,
+        bond_outpoint: TransactionOutpoint,
+        target_daa: u64,
+        side_parent: BlockHash,
+        k_funds: Vec<(TransactionOutpoint, u64, u64)>,
+        a_funds: Vec<(TransactionOutpoint, u64, u64)>,
+        k_payload: [u8; 64],
+        a_payload: [u8; 64],
+    }
+
+    fn paid(b: &Block, spk: &ScriptPublicKey) -> (TransactionOutpoint, u64, u64) {
+        let cb = &b.transactions[0];
+        let (i, o) = cb.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == *spk).expect("coinbase pays the key");
+        (TransactionOutpoint::new(cb.id(), i as u32), o.value, b.header.daa_score)
+    }
+
+    async fn world(fence: Option<ForkActivation>) -> World {
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| {
+                p.max_block_parents = 4;
+                p.mergeset_size_limit = 10;
+                p.coinbase_maturity = 2;
+                let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+                dns.dns_activation_daa_score = 0;
+                dns.pos_v2_activation_daa_score = 0;
+                dns.epoch_length_blocks = 2;
+                dns.reward_uniqueness_window_blocks = 50;
+                dns.max_reorg_horizon_blocks = 2;
+                dns.attestation_epoch_length_blue_score = 3;
+                dns.attestation_lag_blue_score = 2;
+                dns.attestation_anchor_backoff_blue_score = 1;
+                dns.stake_score_window_blue_score = 10_000;
+                p.dns_params = Some(dns);
+                p.palw_slashing_evidence_utxo_genuine = fence;
+            })
+            .build();
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        let honest = dns_harness::harness_validator([0x42u8; 32]);
+        let atk = dns_harness::harness_validator([0x77u8; 32]);
+        let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&honest.pubkey).as_bytes();
+        let a_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&atk.pubkey).as_bytes();
+        let k_spk = p2pkh_mldsa87_spk(&k_payload);
+        let a_spk = p2pkh_mldsa87_spk(&a_payload);
+        let k_miner = MinerData::new(k_spk.clone(), vec![]);
+        let a_miner = MinerData::new(a_spk.clone(), vec![]);
+        // A block's coinbase pays its selected parent's miner, so the funding is one block behind.
+        ctx.mine_block(k_miner.clone(), vec![]).await;
+        let h1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+        let h2 = ctx.mine_block(k_miner.clone(), vec![]).await;
+        let h3 = ctx.mine_block(a_miner.clone(), vec![]).await;
+        let x1 = ctx.mine_block(a_miner.clone(), vec![]).await;
+        let x2 = ctx.mine_block(a_miner.clone(), vec![]).await;
+        let x3 = ctx.mine_block(new_miner_data(), vec![]).await;
+        let k_funds = vec![paid(&h1, &k_spk), paid(&h2, &k_spk), paid(&h3, &k_spk)];
+        let a_funds = vec![paid(&x1, &a_spk), paid(&x2, &a_spk), paid(&x3, &a_spk)];
+        for _ in 0..5 {
+            ctx.mine_block(new_miner_data(), vec![]).await;
+        }
+        let storage = ctx.consensus.params().storage_mass_parameter;
+        let (op, value, daa) = k_funds[0];
+        let (bond_tx, _, _) = dns_harness::funded_signed_bond_tx(honest.seed, op, value, daa, value - 100_000, 0, storage);
+        let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
+        let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+        assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid);
+        let mut buried = Vec::new();
+        for _ in 0..6 {
+            buried.push(ctx.mine_block(new_miner_data(), vec![]).await);
+        }
+        let target_daa = buried[1].header.daa_score;
+        // M hangs off the sink's grandparent: strictly lower blue work than the sink, so the sink
+        // search never pops it (never chain-validated) and the virtual keeps it as a merge parent.
+        let side_parent = buried[buried.len() - 3].header.hash;
+        World { ctx, honest, atk, bond_outpoint, target_daa, side_parent, k_funds, a_funds, k_payload, a_payload }
+    }
+
+    /// Two attestations for the honest bond carrying the honest validator's id, signed by the
+    /// ATTACKER's key (the attacker cannot sign as the validator) — structurally valid evidence.
+    fn forged(w: &World, epoch: u64, reporter: [u8; 64]) -> SlashingEvidencePayload {
+        let net = w.ctx.consensus.params().genesis.hash;
+        let mut a = dns_harness::build_signed_attestation(
+            &w.atk,
+            net.as_byte_slice(),
+            w.bond_outpoint,
+            epoch,
+            Hash64::from_bytes([0x5a; 64]),
+            w.target_daa,
+            Hash64::default(),
+        );
+        let mut b = dns_harness::build_signed_attestation(
+            &w.atk,
+            net.as_byte_slice(),
+            w.bond_outpoint,
+            epoch,
+            Hash64::from_bytes([0x9b; 64]),
+            w.target_daa,
+            Hash64::default(),
+        );
+        a.validator_id = w.honest.validator_id;
+        b.validator_id = w.honest.validator_id;
+        SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: w.bond_outpoint,
+            attestation_a: a,
+            attestation_b: b,
+            reporter_reward_spk_payload: reporter,
+        }
+    }
+
+    /// A GENUINE equivocation by the bonded validator (it really signed both).
+    fn genuine(w: &World, epoch: u64, reporter: [u8; 64]) -> SlashingEvidencePayload {
+        let net = w.ctx.consensus.params().genesis.hash;
+        let a = dns_harness::build_signed_attestation(
+            &w.honest,
+            net.as_byte_slice(),
+            w.bond_outpoint,
+            epoch,
+            Hash64::from_bytes([0xa1; 64]),
+            w.target_daa,
+            Hash64::default(),
+        );
+        let b = dns_harness::build_signed_attestation(
+            &w.honest,
+            net.as_byte_slice(),
+            w.bond_outpoint,
+            epoch,
+            Hash64::from_bytes([0xb2; 64]),
+            w.target_daa,
+            Hash64::default(),
+        );
+        SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: w.bond_outpoint,
+            attestation_a: a,
+            attestation_b: b,
+            reporter_reward_spk_payload: reporter,
+        }
+    }
+
+    fn evidence_tx(w: &World, funder: [u8; 32], fund: (TransactionOutpoint, u64, u64), ev: SlashingEvidencePayload) -> Transaction {
+        let storage = w.ctx.consensus.params().storage_mass_parameter;
+        dns_harness::funded_signed_slashing_evidence_tx(funder, fund.0, fund.1, fund.2, ev, storage)
+    }
+
+    /// Insert side block M (utxo-invalid coinbase, never chain-validated) carrying `txs`, then mine
+    /// an honest template C that merges it. Returns (M, C).
+    async fn merge_side_block(w: &mut World, txs: Vec<Transaction>) -> (BlockHash, Block) {
+        w.ctx.simulated_time += w.ctx.consensus.params().target_time_per_block();
+        let mut m = w.ctx.consensus.build_block_with_parents_and_transactions(blockhash::NONE, vec![w.side_parent], txs);
+        m.header.timestamp = w.ctx.simulated_time;
+        m.header.nonce = w.ctx.simulated_time;
+        m.header.finalize();
+        let m_hash = m.header.hash;
+        w.ctx.validate_and_insert_block(m.to_immutable()).await;
+        assert!(w.ctx.consensus.get_virtual_parents().contains(&m_hash), "the honest virtual merges M");
+        let c = w.ctx.mine_block(new_miner_data(), vec![]).await;
+        assert!(c.header.direct_parents().contains(&m_hash), "the honest template C merges M");
+        assert_eq!(w.ctx.consensus.block_status(c.header.hash), BlockStatus::StatusUTXOValid, "C is UTXO-valid");
+        assert_eq!(w.ctx.consensus.get_sink(), c.header.hash);
+        (m_hash, c)
+    }
+
+    fn utxos(w: &World) -> std::collections::HashMap<TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry> {
+        w.ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect()
+    }
+
+    fn registry_slashed(w: &World) -> Option<Option<u64>> {
+        w.ctx.consensus.virtual_processor().initial_active_bond_view().get(&w.bond_outpoint).map(|r| r.slashed_at_daa_score)
+    }
+
+    async fn forged_only(fence: Option<ForkActivation>) -> (bool, Option<(u64, ScriptPublicKey)>, Option<Option<u64>>) {
+        let mut w = world(fence).await;
+        let tx = evidence_tx(&w, w.atk.seed, w.a_funds[0], forged(&w, 1, w.a_payload));
+        let id = tx.id();
+        assert!(utxos(&w).contains_key(&w.bond_outpoint), "the honest bond's stake exists before");
+        merge_side_block(&mut w, vec![tx]).await;
+        let u = utxos(&w);
+        let mint = u.get(&TransactionOutpoint::new(id, 0)).map(|e| (e.amount, e.script_public_key.clone()));
+        (u.contains_key(&w.bond_outpoint), mint, registry_slashed(&w))
+    }
+
+    /// (1) The failure on the shipped behaviour (fence dormant = 0e8ec984e's code path).
+    #[tokio::test]
+    async fn dormant_a_merged_forged_evidence_burns_the_honest_stake_and_pays_the_forger() {
+        let (bond_present, mint, registry) = forged_only(None).await;
+        eprintln!("DORMANT: bond_utxo_present={bond_present} mint={mint:?} registry_slashed_at={registry:?}");
+        assert!(!bond_present, "shipped: the honest bond's staked output-0 is removed by forged evidence");
+        assert!(mint.is_some(), "shipped: the forger is minted a reporter reward");
+        assert_eq!(registry, Some(None), "while the registry still reads the bond unslashed");
+    }
+
+    /// (1') The fix, armed: the same attack is a no-op.
+    #[tokio::test]
+    async fn armed_a_merged_forged_evidence_burns_nothing() {
+        let (bond_present, mint, registry) = forged_only(Some(ForkActivation::always())).await;
+        eprintln!("ARMED: bond_utxo_present={bond_present} mint={mint:?} registry_slashed_at={registry:?}");
+        assert!(bond_present, "armed: the honest bond's stake stays");
+        assert!(mint.is_none(), "armed: no reporter mint");
+        assert_eq!(registry, Some(None));
+    }
+
+    /// Control: armed, a GENUINE equivocation merged the same way still slashes (no false negative).
+    #[tokio::test]
+    async fn armed_a_merged_genuine_evidence_still_slashes() {
+        let mut w = world(Some(ForkActivation::always())).await;
+        let tx = evidence_tx(&w, w.honest.seed, w.k_funds[1], genuine(&w, 1, w.k_payload));
+        let id = tx.id();
+        merge_side_block(&mut w, vec![tx]).await;
+        let u = utxos(&w);
+        eprintln!(
+            "ARMED GENUINE: bond_utxo_present={} mint={:?} registry_slashed_at={:?}",
+            u.contains_key(&w.bond_outpoint),
+            u.get(&TransactionOutpoint::new(id, 0)).map(|e| e.amount),
+            registry_slashed(&w)
+        );
+        assert!(!u.contains_key(&w.bond_outpoint), "a genuine merged equivocation still slashes the UTXO");
+        assert!(u.contains_key(&TransactionOutpoint::new(id, 0)), "and pays its reporter");
+        assert!(matches!(registry_slashed(&w), Some(Some(_))), "and the registry agrees");
+    }
+
+    /// (2) Regression for the MSK-26A follow-up: resolution keeps the FIRST evidence naming a bond,
+    /// and that tx supplies the reporter payload, the mint outpoint and the victim epoch. A forged
+    /// tx placed ahead of a genuine one in the same mergeset must decide none of them — armed, the
+    /// unproved tx is dropped BEFORE resolution, so the genuine tx is the effect.
+    #[tokio::test]
+    async fn armed_a_forged_evidence_ahead_of_a_genuine_one_neither_takes_the_mint_nor_picks_the_epoch() {
+        let mut w = world(Some(ForkActivation::always())).await;
+        let forged_tx = evidence_tx(&w, w.atk.seed, w.a_funds[0], forged(&w, 99, w.a_payload));
+        let genuine_tx = evidence_tx(&w, w.honest.seed, w.k_funds[1], genuine(&w, 1, w.k_payload));
+        let (fid, gid) = (forged_tx.id(), genuine_tx.id());
+
+        // Pure-function view of exactly what `apply_slashing_side_effects` computes past the fence.
+        {
+            use kaspa_consensus_core::dns_finality::resolve_slashing_side_effects;
+            let view = w.ctx.consensus.virtual_processor().initial_active_bond_view();
+            let txs = vec![forged_tx.clone(), genuine_tx.clone()];
+            let daa = w.ctx.consensus.get_virtual_daa_score();
+            let window = w.ctx.consensus.params().dns_params.clone().unwrap().evidence_window_blocks;
+            let net = w.ctx.consensus.params().genesis.hash;
+            // What the by-bond filter computed: the forged tx wins the dedup and survives.
+            let mut by_bond = resolve_slashing_side_effects(&txs, &view, daa, 1000, 4000, 4000);
+            let proved = crate::pipeline::virtual_processor::utxo_validation::proved_slash_targets(&txs, &view, net, daa, window);
+            by_bond.retain(|e| proved.contains(&e.bond_outpoint));
+            assert_eq!(by_bond.len(), 1);
+            assert_eq!(by_bond[0].slashing_tx_id, fid, "the by-bond filter lets the forgery choose (the bug this pins)");
+            // What the fix computes: only proved txs reach resolution.
+            let proved_txs =
+                crate::pipeline::virtual_processor::utxo_validation::proved_slashing_evidence_txs(&txs, &view, net, daa, window);
+            assert_eq!(proved_txs.iter().map(|t| t.id()).collect::<Vec<_>>(), vec![gid], "only the genuine tx is proved");
+            let effects = resolve_slashing_side_effects(&proved_txs, &view, daa, 1000, 4000, 4000);
+            eprintln!(
+                "PURE: effects={} slashed_epoch={} slashing_tx_is_genuine={} reporter_is_honest={}",
+                effects.len(),
+                effects[0].slashed_epoch,
+                effects[0].slashing_tx_id == gid,
+                effects[0].reporter_output.as_ref().map(|o| o.script_public_key == p2pkh_mldsa87_spk(&w.k_payload)).unwrap_or(false)
+            );
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].slashed_epoch, 1, "the victim epoch is the SIGNED epoch of the genuine evidence");
+            assert_eq!(effects[0].slashing_tx_id, gid);
+            assert_eq!(
+                effects[0].reporter_output.as_ref().map(|o| o.script_public_key.clone()),
+                Some(p2pkh_mldsa87_spk(&w.k_payload)),
+                "the genuine reporter is the one paid"
+            );
+        }
+
+        merge_side_block(&mut w, vec![forged_tx, genuine_tx]).await;
+        let u = utxos(&w);
+        let forged_mint = u.get(&TransactionOutpoint::new(fid, 0)).map(|e| e.amount);
+        let genuine_mint = u.get(&TransactionOutpoint::new(gid, 0)).map(|e| (e.amount, e.script_public_key.clone()));
+        eprintln!(
+            "ARMED MIXED: bond_utxo_present={} forged_mint={forged_mint:?} genuine_mint={genuine_mint:?} registry_slashed_at={:?}",
+            u.contains_key(&w.bond_outpoint),
+            registry_slashed(&w)
+        );
+        assert!(!u.contains_key(&w.bond_outpoint), "the genuine equivocation slashes");
+        assert_eq!(forged_mint, None, "the forger is minted nothing");
+        assert_eq!(
+            genuine_mint.map(|(_, spk)| spk),
+            Some(p2pkh_mldsa87_spk(&w.k_payload)),
+            "the reporter reward is minted at the GENUINE tx, to its reporter"
+        );
+        assert!(matches!(registry_slashed(&w), Some(Some(_))), "and the registry agrees");
+    }
+
+    /// (3) The node-only half: the mempool refuses the forged evidence and admits the genuine one.
+    #[tokio::test]
+    async fn node_mempool_refuses_forged_admits_genuine() {
+        let w = world(None).await;
+        let forged_tx = evidence_tx(&w, w.atk.seed, w.a_funds[0], forged(&w, 1, w.a_payload));
+        let genuine_tx = evidence_tx(&w, w.honest.seed, w.k_funds[1], genuine(&w, 1, w.k_payload));
+        let mempool = |tx: &Transaction| {
+            let mut m = MutableTransaction::from_tx(tx.clone());
+            w.ctx.consensus.validate_mempool_transaction(&mut m, &Default::default())
+        };
+        let f = mempool(&forged_tx);
+        let g = mempool(&genuine_tx);
+        eprintln!("MEMPOOL: forged={f:?} genuine={g:?}");
+        assert!(matches!(f, Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwSlashingEvidenceNotGenuine(_))));
+        assert!(g.is_ok());
+    }
+}
