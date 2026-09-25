@@ -3017,6 +3017,111 @@ mod tests {
         }
         assert_eq!(key(K::ExecutorRefuted, &executor, &[1, 2, 3]), None, "an undecodable body");
     }
+
+    /// **MSK-26A-PALW-19 sibling, on the t12 routes.** The root pin (`committed_execution_root ==
+    /// the claim's execution_root`) ties a binding to the claim's PRODUCER, and a producer chooses
+    /// its own root: `attempt.execution_root` is carried verbatim into the claim row and nothing
+    /// recomputes it at admission. So a producer can commit the root of a binding claiming
+    /// `u64::MAX` step leaves for a job that saturates the count, on a profile with a KV aux series,
+    /// and then file `ExecutorRefuted` (kind 4, no signature) against itself. On 0e8ec984e the
+    /// structural pass's `step_leaf_count_capped_v1(.., cap = u64::MAX)` then overflowed adding the
+    /// aux series — a process exit for every node validating the object. Now every route answers.
+    #[test]
+    fn a_producer_committed_saturating_binding_is_answered_not_a_panic() {
+        use crate::palw_step::{PalwStepOpKindV1, PalwStepOutLenV1};
+        use crate::palw_step_leg::{PalwStepBindingV2, PalwStepEvidenceV1, PalwStepRefutationV1, binding_commitment_root_v1};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the RC BASE-0 profile");
+        profile.n_ctx = 1 << 21;
+        profile.n_batch = profile.n_ctx;
+        profile.n_ubatch = profile.n_ctx;
+        profile.kv_chunk_calls = 1;
+        for node in profile.attn_nodes.iter_mut().filter(|n| n.op_kind != PalwStepOpKindV1::AttnFused) {
+            node.out_len = PalwStepOutLenV1::KvScaled { multiplier: u32::MAX };
+        }
+        profile.validate_shape().expect("inside every declared ceiling");
+        let context = crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"misaka-testnet-12".to_vec(),
+            job_id: h64(0x11),
+            job_nullifier: h64(0x12),
+            assignment_id: h64(0x13),
+            execution_seed: [0x22; 32],
+            model_profile_id: h64(0x31),
+            runtime_manifest_hash: h64(0x32),
+            runtime_class_id: h64(0x33),
+            shape_profile_id: profile.shape_profile_id(),
+            trace_scheme_id: crate::palw_v2::trace_scheme_id_v2(),
+            cu_ruleset_id: h64(0x36),
+            tokenizer_id: h64(0x37),
+            prompt_token_ids_hash: h64(0x38),
+            declared_prefill_tokens: 1 << 20,
+            exact_decode_tokens: 2,
+            max_context_tokens: (1 << 20) + 2,
+        };
+        let checkpoint_profile = crate::palw_legs::PalwCheckpointProfileV1 {
+            version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            checkpoint_interval: 1,
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+        };
+        let checkpoint_count = crate::palw_context_ladder::palw_checkpoint_count_v1(&profile, &context, 1);
+        let mut binding = PalwStepBindingV2 {
+            version: crate::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+            checkpoint_merkle_root: if checkpoint_count == 0 {
+                crate::palw_step_leg::checkpoint_empty_root_v2(&context.context_hash())
+            } else {
+                h64(0x81)
+            },
+            job_context: context,
+            state_chunk_map_id: profile.state_chunk_map_id,
+            shape_profile: profile,
+            checkpoint_profile,
+            full_logits_trace_root: h64(0x82),
+            activation_leg_root: h64(0x83),
+            step_leaf_count: u64::MAX,
+            step_merkle_root: h64(0x84),
+            checkpoint_count,
+            committed_execution_root: Hash64::default(),
+        };
+        binding.committed_execution_root = binding_commitment_root_v1(&binding);
+        let root = binding.committed_execution_root;
+        let structural =
+            PalwPanelContradictionV1::StepStructural(PalwStepRefutationV1 { binding, evidence: PalwStepEvidenceV1::Shape });
+
+        // The claim row carries the producer's own root, as `attempt.execution_root` is carried.
+        let state = live_state(PalwClaimPhaseV2::Provisional, root, h64(0xAF));
+
+        // Kind 4, ExecutorRefuted: the claim's executor (seat 99) files against itself.
+        let kind4 = borsh::to_vec(&PalwExecutorRefutedEvidenceV1 {
+            version: PALW_EXECUTOR_REFUTED_VERSION_V1,
+            claim_id: h64(CLAIM),
+            contradiction: structural.clone(),
+            prompt_ids_opening: None,
+            reporter_reveal: Vec::new(),
+        })
+        .unwrap();
+        assert!(kind4.len() as u64 <= PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES, "one carrier holds it: {} bytes", kind4.len());
+        let refuted =
+            catch_unwind(AssertUnwindSafe(|| palw_check_executor_refuted_v1(&state, &seat(99), &kind4, false, false, rules())));
+        assert_eq!(
+            refuted.expect("ExecutorRefuted must not panic").map(|_| ()),
+            Err(E::PanelFalseValidNeedsContradiction),
+            "the clamped count equals the claim and nothing else is at fault: no conviction, no panic"
+        );
+
+        // Kind 3 V2, PanelFalseValidV2 (the fold's reading: no signature half).
+        let v2 = catch_unwind(AssertUnwindSafe(|| judge(&state, &evidence(full(1), structural.clone()))));
+        assert_eq!(v2.expect("PanelFalseValidV2 must not panic").map(|_| ()), Err(E::PanelFalseValidNeedsContradiction));
+
+        // And the shared execution check directly, at the shipped and the context-ladder depths.
+        for ladder in [1u64 << 22, 1 << 26, 1 << 32] {
+            let direct =
+                catch_unwind(AssertUnwindSafe(|| palw_false_valid_convicts_execution_v2(&structural, None, root, h64(0xAF), ladder)));
+            assert_eq!(direct.expect("the execution check must not panic"), Err(E::PanelFalseValidNeedsContradiction));
+        }
+    }
 }
 
 /// **ADR-0152 v3.1 F1c / F1-M, Tier A** (addendum §4-bis.3–7): the logits head on every shipped

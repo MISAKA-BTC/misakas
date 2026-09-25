@@ -124,6 +124,57 @@ fn offence(kind: PalwOffenceKindV1, accused: PalwBondKeyV2, evidence: Vec<u8>) -
 /// `verify_binding` recomputes its root — the step leg and the checkpoint leg over the context, then
 /// the execution root over the four legs. Asserted equal to the producer's own commitment on an
 /// untouched run before it is used on a touched one.
+/// The MSK-26A-PALW-19 sibling's binding: the RC BASE-0 profile widened so its job's step count
+/// clamps at `u64::MAX` (every non-fused attention node a `u32::MAX`-wide context-shaped row, a 2^21
+/// context), a KV aux series (`kv_chunk_calls = 1`), and `step_leaf_count = u64::MAX`. The context is
+/// `base`'s with the profile id, the job's length and its budget moved; the root is recomputed.
+fn saturating_binding(base: &PalwJobContextV2) -> PalwStepBindingV2 {
+    use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, PalwStepOutLenV1, kv_aux_leaf_count};
+    let mut profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the RC BASE-0 profile");
+    profile.n_ctx = 1 << 21;
+    profile.n_batch = profile.n_ctx;
+    profile.n_ubatch = profile.n_ctx;
+    profile.kv_chunk_calls = 1;
+    for node in profile.attn_nodes.iter_mut().filter(|n| n.op_kind != PalwStepOpKindV1::AttnFused) {
+        node.out_len = PalwStepOutLenV1::KvScaled { multiplier: u32::MAX };
+    }
+    profile.validate_shape().expect("inside every declared ceiling");
+    let mut context = base.clone();
+    context.shape_profile_id = profile.shape_profile_id();
+    context.declared_prefill_tokens = 1 << 20;
+    context.exact_decode_tokens = 2;
+    context.max_context_tokens = (1 << 20) + 2;
+    assert!(kv_aux_leaf_count(&profile, &context) > 0, "the aux series is what overflowed");
+    let checkpoint_profile = kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1 {
+        version: kaspa_consensus_core::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+        checkpoint_interval: 1,
+        state_layout_id: kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+    };
+    let checkpoint_count = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_count_v1(&profile, &context, 1);
+    let mut binding = PalwStepBindingV2 {
+        version: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+        checkpoint_merkle_root: if checkpoint_count == 0 {
+            kaspa_consensus_core::palw_step_leg::checkpoint_empty_root_v2(&context.context_hash())
+        } else {
+            Hash64::from_u64_word(0x81)
+        },
+        job_context: context,
+        state_chunk_map_id: profile.state_chunk_map_id,
+        shape_profile: profile,
+        checkpoint_profile,
+        full_logits_trace_root: Hash64::from_u64_word(0x82),
+        activation_leg_root: Hash64::from_u64_word(0x83),
+        step_leaf_count: u64::MAX,
+        step_merkle_root: Hash64::from_u64_word(0x84),
+        checkpoint_count,
+        committed_execution_root: Hash64::default(),
+    };
+    rebind(&mut binding);
+    binding
+}
+
 fn rebind(b: &mut PalwStepBindingV2) {
     let ctx_hash = b.job_context.context_hash();
     let profile_hash = b.shape_profile.shape_profile_id();
@@ -201,6 +252,11 @@ enum Fault {
     /// A non-canonical step-leaf count (`+ 1`), re-committed — a shape the structural pass answers
     /// from the binding alone.
     Shape,
+    /// **MSK-26A-PALW-19 sibling:** the producer commits the root of a binding it wrote by hand — a
+    /// profile with a KV aux series whose job's count clamps at `u64::MAX`, and `step_leaf_count =
+    /// u64::MAX`, the cap the structural pass counts at. On 0e8ec984e the count's aux add overflowed
+    /// there (a process exit); the proof now convicts nothing and nobody panics.
+    SaturatingShape,
     /// **F1 T18e (the relabel):** the producer runs ANOTHER anchor's prompt with this block's anchor
     /// written into the context as `job_id` and `execution_seed` — the attack J1 and J3 cannot see
     /// and J5 (the whole canonical context, its prompt root) does.
@@ -984,6 +1040,15 @@ impl H {
                 let contradiction = C::ForgedOutput { binding: binding.clone(), pin, position: 0 };
                 (roots, binding, honest.material.clone(), Some(contradiction), None)
             }
+            Fault::SaturatingShape => {
+                pin = None;
+                let binding = saturating_binding(&direct.binding.job_context);
+                verify_binding_v1(&binding).expect("the hand-written commitment is well-formed");
+                let roots = Roots { execution: binding.committed_execution_root, ..of(&honest) };
+                let contradiction =
+                    C::StepStructural(PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::Shape });
+                (roots, binding, honest.material.clone(), Some(contradiction), None)
+            }
             Fault::Shape => {
                 pin = None;
                 let mut binding = direct.binding.clone();
@@ -1004,6 +1069,7 @@ impl H {
         }
         if let Some(contradiction) = &claim.contradiction
             && matches!(contradiction, C::StepArithmetic { .. } | C::StepStructural(_) | C::ForgedOutput { .. })
+            && fault != Fault::SaturatingShape
         {
             let root = walk.state.claim(&claim.claim_id).unwrap().execution_root;
             self.convicts(contradiction, root, ladder).expect("the proof convicts the claim's own committed root");
@@ -3658,6 +3724,36 @@ async fn t18b_a_borrowed_root_answers_another_job() {
 /// for withholding. (iv) **The R1 residual, pinned:** an honest step tree over garbage logits (the
 /// argmax unmoved) is refused by every route F1 has — `ForgedOutput`, `IdentityMismatch`,
 /// `OutputMismatch`, the shape pass — until F1c's `LogitsNotStepOutput`.
+/// **MSK-26A-PALW-19 sibling, on testnet-12's live route.** A producer commits the root of a binding
+/// it wrote by hand — the claim row takes `attempt.execution_root` verbatim, as `Fault::Shape` shows
+/// for a `+ 1` count — then files `ExecutorRefuted` (kind 4: no receipt, no signature) against its
+/// own claim. The root pin holds, so the structural pass counts the hand-written job at the binding's
+/// own `u64::MAX`; on 0e8ec984e the count's aux add overflowed there — a panic in the gate every
+/// block, template and (past R-core+) mempool admission runs, i.e. every node that saw the object
+/// exited. Now the adjudicator, the gate and the acceptance walk refuse it by name, and so does the
+/// fold.
+#[tokio::test]
+async fn msk_26a_palw_19_a_producer_committed_saturating_binding_is_refused_not_a_panic() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let h = harness(true);
+    let mut walk = h.genesis_walk();
+    let claim = h.open_claim(&mut walk, Fault::SaturatingShape);
+    assert_eq!(
+        walk.state.claim(&claim.claim_id).expect("the claim is open").execution_root,
+        claim.binding.committed_execution_root,
+        "the chain took the producer's hand-written root"
+    );
+    let contradiction = claim.contradiction();
+    let judged = catch_unwind(AssertUnwindSafe(|| h.judge_refuted(&walk.state, claim.claim_id, contradiction.clone())))
+        .expect("the kind-4 adjudicator must not panic");
+    let why = judged.map(|_| ()).expect_err("a count that equals its own clamp convicts nothing");
+    assert_eq!(why, E::PanelFalseValidNeedsContradiction);
+    let object = h.refuted(claim.claim_id, contradiction.clone());
+    catch_unwind(AssertUnwindSafe(|| h.refused(&walk, &object, &why.to_string()))).expect("the gate must not panic");
+    let fold_why = catch_unwind(AssertUnwindSafe(|| h.fold_refusal(&walk, &object))).expect("the fold must not panic");
+    assert!(fold_why.contains(&why.to_string()), "the fold refuses it for the gate's reason: {fold_why}");
+}
+
 #[tokio::test]
 async fn t18c_before_licence_the_executor_is_refuted() {
     let h = harness(true);
