@@ -54,7 +54,7 @@
     <li><b>CRITICAL &mdash; panel-seed grinding:</b> the panel seed is the anchor block's identity, so an anchor producer can redraw its panel before publishing; fenced within 36 hours of launch, before outside seats mature (1,000 DAA). Until then, per-operator panel skew is monitored.</li>
     <li><b>DNS finality is in Bootstrap:</b> validators are funded after launch; until then the DNS reorg gate does not act, and the EVM bridge's deposit claims wait for it.</li>
     <li><b>Valid locks after Final</b> may fill a seat's 500&permil; room (predicted): at &lambda;&nbsp;5 seats may stop binding within 1&ndash;3 days. Monitored; the remedy is being designed.</li>
-    <li><b>Unlicensed claims (V04):</b> a claim can stay unlicensed although every seat filed Valid. Under investigation.</li>
+    <li><b>Unlicensed claims (V04):</b> a claim can stay unlicensed although every seat filed Valid. Cause found (collectors license claims in claim-id order, so large ids wait); fixed by a node update due well before the first receipt deadline.</li>
     <li><b>8k readiness:</b> a stalled 8k seat can drop the class to Held, which voids its unbound claims. Partly fixed in this release; the rest follows by fence and node update.</li>
     <li><b>Scheduled fixes:</b> registry resilience, the bridge audit (BR-1&ndash;BR-7), position fixes.</li>
   </ul>
