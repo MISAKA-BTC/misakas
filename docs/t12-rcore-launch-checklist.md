@@ -6,6 +6,9 @@ test の所在を全番号の表（§1a）に置き換え、欠けていた test
 **更新 2（同日、lane 3 の review 対応）**: gate の item ごとの判定（§1.0）を足した — **gate は未達**。T06 と T62 を書き（§1b）、
 T37・T66・T18m を「一部」に直し、監査 branch の snapshot を local の sha で取り直し（§1a、§5 の identity を動かすもの）、
 §3 の値を貼れない形にし、§4 の順序を 8270cf03 の状態に合わせた。
+**更新 3（同日 15:10 頃）**: `rcore/int-3` が `f7350af91`（15:01、A-held node `2f92228f` の merge — `1ee0e08d4` と shard court の
+`8be0f661` を含む）に進んだので、本 lane に merge し（`rcore/gate-evidence` の merge commit）、本 lane の test を merge 後の tree で回し直した
+（§1b）。item 7・8・9-8 の「merge」の条件は満たされた — 判定は §1.0。
 ADR 本体は `docs/adr/0152-account-stake-staged-reserve-and-vested-rewards.md` v3.1（§8.3 が gate、§8.4 が公開後の観測）。
 配備の手順と kit は `contrib/t12-deploy-kit/PLAN.md`、explorer は `contrib/misakascan-t12/DEPLOY.md`、公開後の drill は
 `contrib/t12-drill-kit/README.md`。
@@ -23,7 +26,7 @@ a0af3c92 の状態は 2026-09-25 に `git merge-base --is-ancestor` と `git gre
 
 ### 1.0 gate の判定（item ごと）— **gate は未達。公開できる状態ではない**
 
-`rcore/gate-evidence`（base `rcore/int-3` @ `8270cf03`、本 lane の test を含む）で 2026-09-25 に判定。**満** = 規則と test が揃い、
+`rcore/gate-evidence`（base `rcore/int-3` @ `8270cf03`、本 lane の test、その後 `rcore/int-3` @ `f7350af91` を merge）で 2026-09-25 に判定。**満** = 規則と test が揃い、
 残りは出荷 commit で証拠を取るだけ。**未** = 規則・test・merge のどれかが欠けている（欠けているものを右に書く）。
 
 | item | 判定 | 何が欠けているか（blocking） |
@@ -34,9 +37,9 @@ a0af3c92 の状態は 2026-09-25 に `git merge-base --is-ancestor` と `git gre
 | 4 — T41 golden | **未** | §5 の再 pin を出荷 commit で一度（readiness-horizon と Pool の merge の後） |
 | 5 — Phase 2 の要（C12） | 8270cf03 で test は全部 **有** | 出荷 commit の battery で GREEN を取る（T50 は evm 側） |
 | 6 — SEAT-R 等 | code と test は 8270cf03 に **有** | 出荷 commit で PASS を取る |
-| 7 — held-class の穴 | **未** | A-held（`feat/t12-aheld-node` @ `2f92228fc`、修正の中身は `1ee0e08d4`）と `8be0f661` が祖先ではない。2M を閉じる 4-quater は満（`a66509f9`） |
-| 8 — launch line の修正 | **未** | shard court の one-move（`8be0f661`、J-8）が祖先ではない（A-held と一緒に入る） |
-| 9 — IA-14 | **未** | 9-8 だけ（§2）。9-1〜9-7 は満 |
+| 7 — held-class の穴 | code は **有**（int-3 `f7350af91` で merge）— 証拠は未 | A-held（`2f92228f`、`1ee0e08d4`、object 57・N3/N4・F3 (B)・F5）と `8be0f661` は `f7350af91` の祖先。2M を閉じる 4-quater も満（`a66509f9`）。**出荷 commit で取る**: A-held の T-A1〜T-A11（`palw_state_v2.rs` の `t_a1_…`・`t_a2_…`・`t_a6_…`・`t_a7_…`・`t_a11_…`、kaspad `palw_panel/held_court_e2e.rs` の `t_a9_…`・`t_a10_…`、`held_court.rs` の `t_a10_…`）と T-D2 の PASS（kaspad の test は本 lane では回していない）、8k の実 weight timing drill は公開後（IA-12） |
+| 8 — launch line の修正 | code は **有**（`8be0f661` は `f7350af91` の祖先） | 出荷 commit で J-8 の test の PASS を取る |
+| 9 — IA-14 | 9-1〜9-7 は満、9-8 は merge 済み | 9-8 の「監査の review 後」— A-held line の review（4 回目 `1ee0e08d4` まで）の結論を添付する |
 
 ### item 1 — M1〜M5 GREEN（§7.1）。F1-M・F1c・stake 加重の抽選・addendum の T18q〜T18y・T18p-M・SR-10・U2/U3 を含む
 
@@ -135,6 +138,10 @@ test の doc の番号の言及で機械的に拾い（`#[test]` / `#[tokio::tes
 読み直した — これらは今も動いているので、step 1 の merge の後に出荷候補の上でもう一度読む）:
 
 * `feat/t12-aheld-node` @ `2f92228fc`（14:36、int-3 8270cf03 の merge。修正の中身は `1ee0e08d4`、13:11）。
+* **15:10 の読み直し**: `rcore/int-3` は `f7350af91`（15:01、A-held node `2f92228f` を merge — 下の A-held の行は int-3 に入った）、
+  `feat/t12-activation-pool` は `f92f34a7f`（14:41、P4 の review 修正）、`feat/t12-readiness-horizon` は `a9d9f8320`（15:09: `3e9ae4ba1` で
+  horizon を genesis-only の param に — t12 は 24 span、他は None（既定の 8）— し、pool `f92f34a7` と int-3 `f7350af9` を merge して t12 の
+  pin を取り直した）。以下は 14:40 の記録。
 * `feat/t12-activation-pool` @ `2932bd57d`（14:16）: 前回の `2e5f370e` の後に **P4** `b84afa1a5`（13:32、登録が listing を sponsor、RPC）、
   **P1** `8ccc41e0e`（14:00、(b) の operator cap `b_cap = E × 200‰ / 5`、payee cap 50、`PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI`）、
   **P2** `2932bd57d`（14:16、pool の fence 以降は admission jury を panel の床の bond から引く — T90 の行を参照）。
@@ -332,6 +339,8 @@ mutation を戻した後: core の `t06_stake_draw_ev_grid`（3）・`t90_…`�
 `rcore_s4_conviction_funnel`（9）が ok。consensus の `t46_false_valid_real_claim` 全体（子の t62・t28 を含む）は下の再実行の 2 行目。
 数値: T06 の実 race（6,000 panel）の P2 は design point 0.5050（法則 0.5003）、P3 閾値の母集団 0.2385（0.2408）、最悪の許容状態
 0.5063（0.5006）、`stake: None` 0.5133（一様の法則 0.5026）。T28 の probe は行の写しを `basis_k` 1 にしても報酬 194,458,535,283 sompi のまま。
+**int-3 `f7350af91`（A-held）を merge した後の tree でも**: core の上の 6 target（19 test）が ok、consensus の `t46_false_valid_real_claim`
+全体（t62 の 3・t28・t18m・t47・t54d・t54f・p2_8・p2_t29 を含む）が 87 passed / 0 failed（merge 前も 87 / 0）。
 
 再実行:
 
@@ -358,7 +367,7 @@ release-prep の読みで、履歴として残す。判定は出荷 commit で�
 | 9-5 | `misaka-palw-derive` と stranger script は network の attempt rule（t12 は `CoreV1`）で `output_root` を再計算。FP worker も | **満**。`a4682a8d`・`d675423d` は祖先。`misaka-palw-derive/tests/output_root_rules.rs`（4 本）、`scripts/misaka-palw-derive-stranger.py` | あり | `cargo test --locked -p misaka-palw-derive --test output_root_rules`、`python3 scripts/misaka-palw-derive-stranger.py selftest` |
 | 9-6 | `PALW_RCORE_VESTING_ROWS_LANDED_V1 = true` と S-4 の funnel（kaspad は false なら起動しない） | **満**。`true`（`consensus/core/src/palw_state_v2.rs:2961`）、S-4 の merge `68f0d672` は祖先、kaspad `palw_rcore_build_can_run_v1`・test `n1_rcore_plus_needs_the_vesting_rows_at_startup`（`kaspad/src/daemon.rs:2216`） | あり | flag の値、`rcore_s4_conviction_funnel.rs` と n1 の PASS |
 | 9-7 | 4-quater の consensus 半分と P-1（`palw_class_verify_deadline`、pruning depth ≈ 74,920 DAA、D_cap 16,000）が genesis params にある — 2M は規則で閉じる | **満**（a0af3c92 から変わった）。merge `a66509f9`（`a4323997`）。`Params::palw_class_verify_deadline`、`params.rs` の `T12_PRUNING_DEPTH = 74_920`（T-D7 の test）、2M の拒否は `core/tests/t12_class_verify_deadline.rs::td2_the_2m_row_is_refused_at_launch_attempt_and_free_prompt`。t12 の params と fingerprint は a0af3c92 から動いている（§3 の値は古い） | 無い | 出荷 commit の t12 params、`probe-identity-local.sh` の fingerprint、T-D2 の PASS |
-| 9-8 | A-held と shard court（`feat/t12-aheld`、8be0f661 の上）が監査の review 後に merge、B の routing・object 57 の自動応答・N4 | **未**。local `feat/t12-aheld-node` @ `2f92228fc`（修正 `1ee0e08d4` ＋ int-3 8270cf03 の merge）も `8be0f661` も祖先ではない（lane 1 の merge 待ち） | 無い | 監査 review の結論、merge commit、item 7 の test |
+| 9-8 | A-held と shard court（`feat/t12-aheld`、8be0f661 の上）が監査の review 後に merge、B の routing・object 57 の自動応答・N4 | 8270cf03 では **未**。**int-3 `f7350af91`（15:01）で merge 済み**: `2f92228f`（`1ee0e08d4` を含む）と `8be0f661` は祖先（本 lane はこれを merge した）。残りは review の結論の添付と item 7 の test の PASS | 無い | 監査 review の結論、merge commit、item 7 の test |
 | — | 公開条件ではない（IA-13）: SEAT-S4 の forged-sibling residual（2M の flag day 項目） | — | — | — |
 
 **IA-14 のうち 8270cf03 で「未」は 9-8 だけ**（item 8 の shard court（8be0f661）も同じ merge で入る）。**これは item 9 だけの判定で、
@@ -397,8 +406,8 @@ fingerprint `8a481023…` は EVM bridge ledger（fad522c6、int-3 への merge 
 | step | 何を | 誰 | 確認 |
 |---|---|---|---|
 | 1 | ~~**deadline ＋ P-1**（`feat/t12-class-verify-deadline`）を merge~~ — **済（8270cf03）**: `a66509f9` が `a4323997` を入れた（`git merge-base --is-ancestor` で確認） | — | |
-| 2 | **A-held の node 半分**（`feat/t12-aheld` ＋ local `feat/t12-aheld-node` @ `2f92228fc`、修正 `1ee0e08d4`、`8be0f661` を含む）を merge。review 後。item 7・8・9-8 | 監査 → 実装 | |
-| 3 | **Activation Pool と readiness-horizon**（local `feat/t12-activation-pool` @ `2932bd57d` の P1/P2/P4、`feat/t12-readiness-horizon` @ `694012721` — pool を含み、新しい t12 param `palw_readiness_v2_max_age_spans` を足す）を merge。**§5 の再 pin の前に**（さもなければ fingerprint を 2 度 pin し直す）。T90 の source 検査は Pool の改名を読む（§1a）。T06 は Pool の P1 が足す `PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI` を `E` に使える | 実装 | |
+| 2 | ~~**A-held の node 半分**を merge~~ — **済（int-3 `f7350af91`、15:01）**: `feat/t12-aheld-node` @ `2f92228f`（`1ee0e08d4`、`8be0f661` を含む）。item 7・8・9-8 の証拠は出荷 commit で | — | |
+| 3 | **Activation Pool と readiness-horizon**（local `feat/t12-activation-pool` @ `f92f34a7f`（15:10 時点。P1/P2/P4 と P4 の review）、`feat/t12-readiness-horizon` @ `a9d9f8320`（15:09、pool `f92f34a7` と int-3 `f7350af9` を merge 済みで t12 の pin を取り直した。新しい t12 param `palw_readiness_v2_max_age_spans`、genesis-only、t12 だけ 24 span、他の preset は None）を merge — readiness-horizon を merge すれば pool も入る）。**§5 の再 pin の前に**（さもなければ fingerprint を 2 度 pin し直す）。T90 の source 検査は Pool の改名を読む（§1a）。T06 は Pool の P1 が足す `PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI` を `E` に使える | 実装 | |
 | 3b | **P2-8e**（`rcore/p2-8e` @ `ade4b4581`、T54g。A-held node の上なので step 2 の後）。**S-5**（T57）はユーザーが入れると決めた場合だけ | 実装（S-5 はユーザー判断） | S-5 は **【確認】** |
 | 4 | ~~**B の lane**（`rcore/p2-file`、`rcore/m5b-tests`、`rcore/readiness-escalation`）を merge~~ — **済（8270cf03）**: `ec657a445`・`bad93f808`・`2b356156c` は祖先 | — | |
 | 5 | §1・§2 の各 test を出荷候補で確認し、残りの一部 cell（§1.0）を監査と詰める。merge 後に監査 branch の番号の外の test も集める | 実装・監査 | |
@@ -430,7 +439,9 @@ pin を動かす前に、何が動いたのかを 1 つずつ言えること（�
   `palw_readiness_horizon_is_t12_only.rs` の pin を解いている（WIP）— merge で入る値を出荷 commit でもう一度確かめる。
 * Activation Pool: R1 の genesis-only fence `palw_activation_pool`、P1 の terms（`bonus_cap_sompi` などが params の hash に入る）と
   `PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI`、P2 の jury の床と seed v2、P4 の登録 sponsor（consensus なら identity に入る）。
-* A-held（object 57 と N4）、P2-8e、S-5（入れる場合）— genesis の params に何が入るかを merge の後に `git diff 8270cf03 -- consensus/core/src/config/params.rs` で列挙する。
+* A-held（int-3 `f7350af91` で merge 済み）: `Params::validate_palw_held_answerability_v1` と、genesis の held 行から導く bundle の mirror
+  `held_unanswerable_classes`（`sync_palw_held_answerability`）。mirror が identity に入るかは再 pin の時に確かめる。P2-8e、S-5（入れる場合）
+  — genesis の params に何が入るかを merge の後に `git diff 8270cf03 -- consensus/core/src/config/params.rs` で列挙する。
 
 1. **t12 の identity**
    - `contrib/t12-deploy-kit/probe-identity-local.sh --build` → `EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID`・schedule id・rule manifest digest。
