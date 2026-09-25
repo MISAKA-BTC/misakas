@@ -2232,6 +2232,18 @@ pub(crate) fn palw_seat_tail_v1(
     PalwSeatTailV1::Waits { unserved: true }
 }
 
+/// **The due DAA of a seat's own court filing** — a one-move accusation (`ShardCourtAccused`, which
+/// opens a held dissection past `palw_offence_attribution`) or a named leaf's pursuit (ADR-0111
+/// Decision 6) — in the priority lane's EDF (`palw_court_queue_edf_v1`; the A-held node's second
+/// review, MEDIUM): its landing margin before the duty's own deadline
+/// ([`PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1`], P2-6's), and now once that has passed. The duty's
+/// deadline is the receipt window's end, never later than the claim's earliest `Final` (a licence
+/// lands inside it and `Final` is a challenge window after), so the date is early, never late: an
+/// undated item waited behind every dated one, and a lie it would have convicted reached `Final`.
+pub(crate) fn palw_seat_court_filing_due_v1(duty_deadline: u64, current_daa: u64) -> u64 {
+    duty_deadline.saturating_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1).max(current_daa)
+}
+
 /// **The landing margin of an automatic accusation** (ADR-0152 §3.8, DA-6: a seat accuses "until
 /// `bound + window_receipt − 60`"), in DAA before the receipt deadline the loop reads for the duty.
 /// The accusation must fold while the claim is still `PanelBound`: a seat's session pauses the claim
@@ -7332,6 +7344,12 @@ impl PalwPanelService {
             // ADR-0152 §4-ter N3: the held route — the chain reads it asks for, its moves (each with the
             // DAA its session says it is due by), and the builds the ledger admits, off the tick.
             {
+                // 4-ter.3 step 6: once a start, the pursuits this bond's held forfeits call for and the
+                // demands it holds open, rebuilt from the chain (they live in memory otherwise).
+                if !held_court.seeded_v1() {
+                    let seeds = session.clone().spawn_blocking(move |c| c.palw_held_pursuit_seeds_v1(vec![bond_key])).await;
+                    held_court.seed_v1(seeds);
+                }
                 // 4-ter.3 step 6's pursuits past their sessions: the pursued claims' rows, off the tick.
                 let pursued = held_court.pursued_claims_v1();
                 let open_claims = if pursued.is_empty() {
@@ -7975,6 +7993,9 @@ impl PalwPanelService {
                                     accused.insert(duty.claim_id);
                                 }
                                 if !court_pending.iter().any(|(sid, _, _, _)| *sid == key) {
+                                    // Dated (the second review's MEDIUM): an undated item waits behind
+                                    // every dated one, and a lie it would have convicted reaches `Final`.
+                                    court_due.insert((key, 0, false), palw_seat_court_filing_due_v1(deadline, current_daa));
                                     court_pending.push((key, 0, false, object));
                                 }
                             }
@@ -8554,6 +8575,13 @@ impl PalwPanelService {
                                                                     duty.claim_id
                                                                 );
                                                                 accused.insert(duty.claim_id);
+                                                                // Dated (the second review's MEDIUM): the
+                                                                // held dissection this opens must not wait
+                                                                // behind every dated item past `Final`.
+                                                                court_due.insert(
+                                                                    (session_id, 0, false),
+                                                                    palw_seat_court_filing_due_v1(deadline, current_daa),
+                                                                );
                                                                 court_pending.push((session_id, 0, false, object));
                                                             }
                                                             Err(why) => warn!(

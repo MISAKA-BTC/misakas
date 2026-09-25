@@ -65,6 +65,8 @@ const NETWORK: &[u8] = b"misaka-palw-rc";
 const PRODUCER: u64 = 1;
 const SEAT: u64 = 2;
 const COLLUDER: u64 = 4;
+/// A bonded party that is no seat of the claim's panel — a challenger the claim's own rows never list.
+const STRANGER: u64 = 5;
 /// The fixture's network ladder: its job builds densely too, so the drill can lie in a retained tile.
 const LADDER: u64 = 1 << 22;
 /// The class's canonical job: 64 prompt positions, 8 decode calls.
@@ -325,6 +327,7 @@ fn licensed_many_under(
         bond(PRODUCER),
         bond(SEAT),
         bond(COLLUDER),
+        bond(STRANGER),
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
             artifact_root,
@@ -422,6 +425,11 @@ fn licensed_many_under(
 /// `SEAT`'s one-move accusation of `d`'s claim at `d`'s fused leaf: the executor's own leaf evidence,
 /// stripped of its history — the object the bound verdict defers to the held dissection.
 fn accusation_of(d: &Produced, claim_id: Hash64) -> PalwConsensusObjectV2 {
+    accusation_by(d, claim_id, SEAT)
+}
+
+/// [`accusation_of`] by `accuser`'s bond.
+fn accusation_by(d: &Produced, claim_id: Hash64, accuser: u64) -> PalwConsensusObjectV2 {
     let binding = binding_of(&d.material);
     let evidence = kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
         &d.backend,
@@ -434,15 +442,20 @@ fn accusation_of(d: &Produced, claim_id: Hash64) -> PalwConsensusObjectV2 {
     )
     .expect("the executor's own evidence at the leaf")
     .for_the_one_move_v2();
-    let mut accusation = evidence.into_accusation_v1(claim_id, d.execution_root, d.trace_root, bond_key(PRODUCER), bond_key(SEAT));
+    let mut accusation = evidence.into_accusation_v1(claim_id, d.execution_root, d.trace_root, bond_key(PRODUCER), bond_key(accuser));
     accusation.signature = vec![9; 8];
     PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(accusation) }
 }
 
 /// The session `SEAT` opened on `claim_id`.
 fn session_of(s: &PalwChainStateV2, claim_id: Hash64) -> Hash64 {
+    session_by(s, claim_id, SEAT)
+}
+
+/// The session `challenger` opened on `claim_id`.
+fn session_by(s: &PalwChainStateV2, claim_id: Hash64, challenger: u64) -> Hash64 {
     s.court_sessions_iter()
-        .find(|(_, x)| x.claim == claim_id && x.challenger_bond == bond_key(SEAT))
+        .find(|(_, x)| x.claim == claim_id && x.challenger_bond == bond_key(challenger))
         .map(|(k, _)| *k)
         .expect("the held dissection opened")
 }
@@ -545,7 +558,7 @@ fn challenger_evidence(
     filed: &PalwConsensusObjectV2,
 ) -> PalwAttnHeldEvidenceV1 {
     let duty = duty_of(s, SEAT, sid).expect("the seat's duty");
-    let (_, filing) = palw_held_filing_of_duty_v1(std::slice::from_ref(filed), &duty, PALW_HELD_STEP_LADDER_V1, &HashSet::new())
+    let (_, filing) = palw_held_filing_of_duty_v1(std::slice::from_ref(filed), &duty, PALW_HELD_STEP_LADDER_V1)
         .expect("the filing stands for the claim at its leaf");
     palw_held_challenger_evidence_v1(seat, &filing, duty.terminal_index.expect("the leaf"), None).expect("N2")
 }
@@ -1144,11 +1157,24 @@ impl Node {
         }
     }
 
+    /// **A restart**: the held route's memory and the court queue are gone (the chain is not).
+    fn restart_v1(&mut self) {
+        self.held = PalwHeldCourtV1::default();
+        self.pending.clear();
+        self.due.clear();
+        self.moved.clear();
+        self.last_lane = None;
+    }
+
     /// **One tick of the panel's held route, then its carrier slot**; the object it carries, if any.
     async fn tick(&mut self, state: &PalwChainStateV2, chain: &[PalwConsensusObjectV2], daa: u64) -> Option<PalwConsensusObjectV2> {
         self.host.state = state.clone();
         let duties = palw_court_duties_v2(state, &[self.host.bond]);
         self.held.begin_tick_v1(&duties, daa).await;
+        // Once a start: the pursuits rebuilt from the chain, as the panel's tick asks consensus.
+        if !self.held.seeded_v1() {
+            self.held.seed_v1(kaspa_consensus_core::palw_producer_v2::palw_held_pursuit_seeds_v1(state, &[self.host.bond]));
+        }
         let held_duties: Vec<PalwCourtDutyV2> = duties.into_iter().filter(|d| self.held.routes_v1(&self.host, d, daa)).collect();
         for read in self.held.chain_reads_v1(&self.host, &held_duties, daa) {
             let objects = chain
@@ -1329,15 +1355,16 @@ async fn the_responder_builds_first_then_the_soonest_deadline() {
     held.settle_v1().await;
 }
 
-/// **The review's HIGH, on the node: a decoy the fold refused never poisons the seat's N2, and a
-/// filing N2 fails on is evicted.** The chain holds the forger's decoy — its genuine held root claim
-/// with one slice sub-root swapped, refused by the fold at H3 but on an accepted carrier — BEFORE the
-/// genuine one. The seat's node reads both, skips the decoy (the fold's own checks), builds N2 from
-/// the genuine filing and names the lie's child at every round. A second seat whose backend's weights
-/// are not the class's fails N2 on the genuine filing: the filing is evicted, and no build is started
-/// from it again.
+/// **The review's HIGH, on the node: a decoy the fold refused never poisons the seat's N2 — and (the
+/// second review's HIGH) the filing that stands is never evicted.** The chain holds the forger's
+/// decoy — its genuine held root claim with one slice sub-root swapped, refused by the fold at H3 but
+/// on an accepted carrier — BEFORE the genuine one. The seat's node reads both, skips the decoy (the
+/// fold's own checks), builds N2 from the genuine filing and names the lie's child at every round. A
+/// second seat's N2 fails for its own reason — its ledger will not hold the evidence's resident bytes
+/// (the ~470 MB of an 8k site) — and the filing is kept: the build is tried again a re-plan later,
+/// from the same filing, and once the ledger has room the seat names the lied child inside its rung.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_refused_decoy_filing_never_poisons_the_seats_node_and_a_failed_filing_is_evicted() {
+async fn a_refused_decoy_filing_never_poisons_the_seats_node_and_a_failed_build_keeps_its_filing() {
     let (artifact, profile) = held_fixture(128);
     let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
     let liar = produce(&artifact, &profile, true);
@@ -1376,34 +1403,28 @@ async fn a_refused_decoy_filing_never_poisons_the_seats_node_and_a_failed_filing
     );
     assert_eq!(seat.host.asked.lock().unwrap().len(), 1, "and never rebuilt");
 
-    // A seat whose weights are not the class's: N2 fails on the genuine filing — evicted.
-    let other = {
-        use misaka_palw_base0::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
-        let shape = Base0ShapeV1 {
-            n_layers: 2,
-            n_heads: 4,
-            n_kv_heads: 2,
-            d_head: 8,
-            d_ff: 64,
-            vocab: 128,
-            max_position: 128,
-            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
-            eps_q: 1,
-        };
-        Arc::new(
-            Base0ArtifactV1::derive_deterministic(shape, 0x0BAD)
-                .expect("a valid shape")
-                .with_a16_params(misaka_palw_base0::engine_a16::derived_a16_store(&shape))
-                .expect("sorted"),
-        )
-    };
-    let p = profile.clone();
-    let mut wrong = Node::new(FixtureHost::new(SEAT, move || backend(&other, &p)));
-    let _ = wrong.tick(&s, &chain, 106).await; // N2 starts from the genuine filing, and fails
-    let _ = wrong.tick(&s, &chain, 107).await; // collected: the filing is evicted
-    let _ = wrong.tick(&s, &chain, 107 + COURT_MOVE_REPLAN_DAA + 1).await; // no standing filing is left to build from
-    let asked = wrong.host.asked.lock().unwrap().clone();
-    assert_eq!(asked.len(), 1, "one failed build, and the evicted filing is never built from again: {asked:?}");
+    // A seat whose ledger will not hold the evidence's resident bytes: its N2 fails for its own reason.
+    let (a, p) = (artifact.clone(), profile.clone());
+    let mut tight = FixtureHost::new(SEAT, move || backend(&a, &p));
+    tight.ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(1_500), || None);
+    let mut tight = Node::new(tight);
+    let _ = tight.tick(&s, &chain, 106).await; // N2 builds from the genuine filing; the ledger refuses its bytes
+    let _ = tight.tick(&s2, &chain, 107).await; // collected: failed — the filing kept
+    assert_eq!(tight.host.asked.lock().unwrap().len(), 1);
+    assert!(tight.tick(&s2, &chain, 108).await.is_none(), "inside the re-plan nothing is rebuilt, and nothing is named");
+    assert_eq!(tight.host.asked.lock().unwrap().len(), 1, "one build inside the re-plan");
+    // The ledger has room now; a re-plan later the build is tried again, from the same filing.
+    tight.host.ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, None, || None);
+    let retry = 107 + COURT_MOVE_REPLAN_DAA;
+    let _ = tight.tick(&s2, &chain, retry).await;
+    assert_eq!(tight.host.asked.lock().unwrap().clone(), vec![(claim, false), (claim, false)], "rebuilt from the kept filing");
+    let named = tight.tick(&s2, &chain, retry + 1).await;
+    let rung = duty_of(&s2, SEAT, sid).expect("the seat's duty").rung_deadline_daa;
+    assert!(
+        matches!(named, Some(PalwConsensusObjectV2::CourtAttnChildChosen { .. })) && retry + 1 <= rung,
+        "and the seat names the lied child inside its rung ({} ≤ {rung}): {named:?}",
+        retry + 1
+    );
 }
 
 // ---- ADR-0152 §4-ter.3 step 6, through the tick and the fold ---------------------------------------
@@ -1521,6 +1542,9 @@ struct Step6Played {
     forger_closed: Option<u64>,
     choices: usize,
     forfeit: Option<kaspa_consensus_core::palw_state_v2::PalwHeldForfeitV1>,
+    restarted: Option<u64>,
+    /// The first DAA the claim had no deadline (a pause), and the claim's phase at the end.
+    paused_at: Option<u64>,
 }
 
 /// The forger's R-core+ answer to one unit of the seat's DA session: P2-7's builders
@@ -1555,7 +1579,7 @@ fn rcore_answer_of(
 /// the claim is voided or at `until`.
 #[allow(clippy::too_many_arguments)]
 async fn play_step6(
-    mut s: PalwChainStateV2,
+    s: PalwChainStateV2,
     forger: &Produced,
     (claim, sid): (Hash64, Hash64),
     artifact_root: Hash64,
@@ -1565,6 +1589,37 @@ async fn play_step6(
     race: bool,
     until: u64,
 ) -> (PalwChainStateV2, Step6Played) {
+    let forger_plays = ForgerPlay { race, ..Default::default() };
+    play_step6_as(s, forger, (claim, sid), artifact_root, accused, seat, chain, forger_plays, until).await
+}
+
+/// How the forger plays a step-6 game, and what befalls the seat's node.
+#[derive(Clone, Copy, Default)]
+struct ForgerPlay {
+    /// Close the bottom with its acquittal the block it is reached.
+    race: bool,
+    /// Never answer the demand (DA-7 then defaults it).
+    withhold: bool,
+    /// Answer the demand only at its session's deadline, not the block after it lands.
+    late: bool,
+    /// The seat's node restarts (its memory gone: the held route, its queue) the block after the close.
+    restart_after_close: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn play_step6_as(
+    mut s: PalwChainStateV2,
+    forger: &Produced,
+    (claim, sid): (Hash64, Hash64),
+    artifact_root: Hash64,
+    accused: &PalwAttnHeldEvidenceV1,
+    seat: &mut Node,
+    chain: &mut Vec<PalwConsensusObjectV2>,
+    how: ForgerPlay,
+    until: u64,
+) -> (PalwChainStateV2, Step6Played) {
+    let race = how.race;
+    let challenger = seat.host.bond;
     let mut played = Step6Played::default();
     let positions = accused.site_v1(artifact_root, true, PALW_HELD_STEP_LADDER_V1).expect("the anchored site").site.anchor_positions;
     let mut owed: Option<(u32, u32)> = None;
@@ -1574,6 +1629,14 @@ async fn play_step6(
         }
         if let Some((_, record)) = s.held_forfeits_of_claim(&claim).next() {
             played.forfeit = Some(record.clone());
+        }
+        if played.paused_at.is_none()
+            && played.demand.is_some()
+            && matches!(phase_of(&s, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. })
+            && s.deadline_of(&claim).is_none()
+            && s.court_session(&sid).is_none()
+        {
+            played.paused_at = Some(daa);
         }
         let mut objects = Vec::new();
         // The forger's moves.
@@ -1586,16 +1649,25 @@ async fn play_step6(
             }
             objects.push(object);
         }
-        if let Some((checkpoint, chunk)) = owed.take() {
+        let answer_now = owed.is_some()
+            && !how.withhold
+            && (!how.late || s.da_session(&claim, &challenger).is_some_and(|session| session.deadline_daa == daa));
+        if answer_now && let Some((checkpoint, chunk)) = owed.take() {
             if RCORE.with(|rcore| rcore.get()) {
                 // Past R-core+ the session draws more units beside the named one, and the producer
                 // answers every one — through P2-7's own builders, from its own (forged) capture.
-                let units = s.da_session(&claim, &bond_key(SEAT)).expect("the seat's DA session").units.clone();
+                let units = s.da_session(&claim, &challenger).expect("the challenger's DA session").units.clone();
                 objects.extend(units.into_iter().map(|unit| rcore_answer_of(forger, claim, unit)));
             } else {
                 objects.push(disclosure_of(accused, claim, positions, checkpoint, chunk));
             }
             played.disclosed = Some(daa);
+        }
+        // A restart the block after the close: the node's memory — the held route and its queue — is
+        // gone, and what it knows it reads back off the chain.
+        if how.restart_after_close && played.forger_closed.is_some_and(|closed| daa == closed + 1) {
+            seat.restart_v1();
+            played.restarted = Some(daa);
         }
         // The seat's node.
         if let Some(object) = seat.tick(&s, chain, daa).await {
@@ -1770,6 +1842,31 @@ async fn an_honest_acquittal_still_charges_the_challenger_and_its_forfeit_goes_a
     let forfeits: Vec<_> = end.held_forfeits_of_claim(&claim).map(|(session, record)| (*session, record.clone())).collect();
     assert_eq!(forfeits.len(), 1, "the forfeit is kept while the claim can still be tried");
     assert_eq!((forfeits[0].0, forfeits[0].1.challenger, forfeits[0].1.amount), (sid, bond_key(SEAT), charged), "what the close took");
+    // The seat demands the acquittal's chunk anyway, and the honest producer discloses every unit (the
+    // second review: a legitimately lost pursuit refunds nothing) — the session refuted, no void.
+    let record = forfeits[0].1.clone();
+    let demand = PalwConsensusObjectV2::DefaultAccusedHeld {
+        accusation: Box::new(kaspa_consensus_core::palw_held_da_v1::PalwHeldAccusationV1 {
+            version: kaspa_consensus_core::palw_held_da_v1::PALW_HELD_DA_VERSION_V1,
+            claim,
+            missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StateChunk {
+                checkpoint: record.anchor_checkpoint,
+                chunk: record.chunks[0],
+            },
+            accuser: bond_key(SEAT),
+            binding: binding_of(&honest.material),
+            signature: vec![0xAA; 8],
+        }),
+    };
+    let at = end.last_point().expect("a tip").daa_score + 1;
+    let end = step(&end, at, &[demand]).expect("the demand of the acquittal's chunk opens a session");
+    let units = end.da_session(&claim, &bond_key(SEAT)).expect("the seat's DA session").units.clone();
+    let answers: Vec<_> = units.into_iter().map(|unit| rcore_answer_of(&honest, claim, unit)).collect();
+    let end = step(&end, at + 1, &answers).expect("the honest producer answers every unit");
+    assert!(end.da_session(&claim, &bond_key(SEAT)).is_none(), "refuted and closed");
+    assert!(matches!(phase_of(&end, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "an answer is no verdict");
+    assert_eq!(end.held_forfeits_of_claim(&claim).count(), 1, "and the forfeit is still kept, unrefunded");
+    assert_eq!(collateral(&end, SEAT), before_s - charged, "the seat still charged");
     let mut state = end;
     for at in 3_000..6_000 {
         if matches!(phase_of(&state, &claim), PalwClaimPhaseV2::Final { .. }) {
@@ -1906,4 +2003,158 @@ async fn held_evidence_outlives_a_quiet_duty_set_for_the_grace_and_is_never_held
     assert!(node.tick(&s, &[], 106).await.is_none(), "no root claim from an evidence the ledger would not hold");
     assert!(!node.held.holds_built_evidence_v1(&key), "dropped, not held unreserved");
     assert_eq!(node.host.ledger.reserved_bytes(), 0, "nothing left reserved");
+}
+
+/// **The second review's HIGH (the withholding escape), through the node and the fold.** The forger
+/// closes its acquittal first, the seat's node demands the chunk it rested on — and the forger never
+/// discloses it, for a withholding default (S1) is cheaper than a conviction (S2). DA-7 voids the claim
+/// `ProducerWithholding` at the demand's deadline, and restores the seat's forfeit: its collateral ends
+/// no lower than it started; the forger is charged; no forfeit record outlives the void.
+#[tokio::test(flavor = "multi_thread")]
+async fn step6_a_forger_that_withholds_the_chunk_is_voided_and_the_seat_made_whole() {
+    RCORE.with(|rcore| rcore.set(true));
+    let (artifact, profile) = held_fixture(128);
+    let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+    let canonical = binding_of(&produce(&artifact, &profile, false).material).job_context;
+    let forger = [(0u8, 20_000), (0, -20_000), (1, 20_000), (1, -20_000)]
+        .into_iter()
+        .find_map(|(kind, delta)| forge_cache_row(&artifact, &profile, 20, kind, delta))
+        .expect("a cache-row lie that reaches a committed fused tile");
+    let (s, claims) = licensed_many_under(&[&forger], &canonical, &profile, root);
+    let claim = claims[0];
+    let accusation = accusation_of(&forger, claim);
+    let s = step(&s, 104, std::slice::from_ref(&accusation)).expect("the held dissection opens");
+    let sid = session_of(&s, claim);
+    let accused = forger.backend.attn_site_evidence_held_v1(&forger.material, forger.leaf, Some(&forger.ids()), None).expect("N1");
+    let (before_p, before_s) = (collateral(&s, PRODUCER), collateral(&s, SEAT));
+    let (a, p) = (artifact.clone(), profile.clone());
+    let mut host = FixtureHost::new(SEAT, move || backend(&a, &p));
+    host.carried = Some(forger.ids());
+    let mut seat = Node::new(host);
+    let mut chain = vec![accusation];
+    let window = kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&params());
+    let how = ForgerPlay { race: true, withhold: true, ..Default::default() };
+    let (end, played) = play_step6_as(s, &forger, (claim, sid), root, &accused, &mut seat, &mut chain, how, 200 + window).await;
+    assert!(played.forger_closed.is_some() && played.forfeit.is_some(), "the acquittal, and the forfeit kept");
+    assert!(played.demand.is_some() && played.disclosed.is_none(), "demanded, never disclosed");
+    assert!(
+        matches!(phase_of(&end, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }),
+        "the withholding default: {:?}",
+        phase_of(&end, &claim)
+    );
+    assert!(collateral(&end, PRODUCER) < before_p, "the forger is charged");
+    assert!(collateral(&end, SEAT) >= before_s, "the seat is made whole: {} ≥ {before_s}", collateral(&end, SEAT));
+    assert_eq!(end.held_forfeits_of_claim(&claim).count(), 0);
+    RCORE.with(|rcore| rcore.set(false));
+}
+
+/// **The second review's MEDIUM (pursuits lived in memory), through the node and the fold.** The
+/// seat's node restarts the block after the forger's acquittal: its held route and its queue are gone.
+/// Its first tick rebuilds the pursuit from the chain — the held forfeit its bond holds, and the demand
+/// it already has open (never filed twice) — reads the session's filing back, rebuilds N2, derives the
+/// units from the record, reads the forger's disclosure and files `CheckpointAccused`: the claim is
+/// voided `CourtFraud` and the seat made whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn step6_a_restarted_seats_node_resumes_its_pursuit_from_the_chain() {
+    RCORE.with(|rcore| rcore.set(true));
+    let (artifact, profile) = held_fixture(128);
+    let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+    let canonical = binding_of(&produce(&artifact, &profile, false).material).job_context;
+    let forger = [(0u8, 20_000), (0, -20_000), (1, 20_000), (1, -20_000)]
+        .into_iter()
+        .find_map(|(kind, delta)| forge_cache_row(&artifact, &profile, 20, kind, delta))
+        .expect("a cache-row lie that reaches a committed fused tile");
+    let (s, claims) = licensed_many_under(&[&forger], &canonical, &profile, root);
+    let claim = claims[0];
+    let accusation = accusation_of(&forger, claim);
+    let s = step(&s, 104, std::slice::from_ref(&accusation)).expect("the held dissection opens");
+    let sid = session_of(&s, claim);
+    let accused = forger.backend.attn_site_evidence_held_v1(&forger.material, forger.leaf, Some(&forger.ids()), None).expect("N1");
+    let before_s = collateral(&s, SEAT);
+    let (a, p) = (artifact.clone(), profile.clone());
+    let mut host = FixtureHost::new(SEAT, move || backend(&a, &p));
+    host.carried = Some(forger.ids());
+    let mut seat = Node::new(host);
+    let mut chain = vec![accusation];
+    let how = ForgerPlay { race: true, restart_after_close: true, ..Default::default() };
+    let (end, played) = play_step6_as(s, &forger, (claim, sid), root, &accused, &mut seat, &mut chain, how, 600).await;
+    let restarted = played.restarted.expect("the seat's node restarted after the close");
+    let (accused_at, _) = played.accused.expect("the rebuilt pursuit files CheckpointAccused");
+    assert!(accused_at > restarted, "after the restart ({accused_at} > {restarted})");
+    let demands = chain
+        .iter()
+        .filter(|object| matches!(object, PalwConsensusObjectV2::DefaultAccusedHeld { accusation } if accusation.accuser == bond_key(SEAT)))
+        .count();
+    assert_eq!(demands, 1, "the demand the chain already held is not filed again");
+    assert!(
+        matches!(phase_of(&end, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "{:?}",
+        phase_of(&end, &claim)
+    );
+    assert!(collateral(&end, SEAT) >= before_s, "the seat is made whole");
+    RCORE.with(|rcore| rcore.set(false));
+}
+
+/// **The second review's MEDIUM (a non-seat is outrun by `Final`), through the node and the fold.** A
+/// bonded party that is no seat of the claim's panel opens the held dissection and loses it to the
+/// forger's acquittal. Its node pursues the claim from the claims it could still dispute (no seat row
+/// lists it) and demands the chunk; the demand of a live forfeit's challenger pauses the claim as a
+/// seat's does, so the forger's answer at the demand's very deadline still lands before `Final` — and
+/// the stranger's node files `CheckpointAccused` on it: voided `CourtFraud`, the stranger made whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn step6_a_non_seat_challengers_demand_holds_final_off_until_the_late_disclosure() {
+    RCORE.with(|rcore| rcore.set(true));
+    let (artifact, profile) = held_fixture(128);
+    let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+    let canonical = binding_of(&produce(&artifact, &profile, false).material).job_context;
+    let forger = [(0u8, 20_000), (0, -20_000), (1, 20_000), (1, -20_000)]
+        .into_iter()
+        .find_map(|(kind, delta)| forge_cache_row(&artifact, &profile, 20, kind, delta))
+        .expect("a cache-row lie that reaches a committed fused tile");
+    let (s, claims) = licensed_many_under(&[&forger], &canonical, &profile, root);
+    let claim = claims[0];
+    assert!(!s.panel(&claim).expect("a panel").seats.iter().any(|seat| seat.bond == bond_key(STRANGER)), "no seat");
+    let accusation = accusation_by(&forger, claim, STRANGER);
+    let s = step(&s, 104, std::slice::from_ref(&accusation)).expect("a non-seat opens the held dissection");
+    let sid = session_by(&s, claim, STRANGER);
+    let accused = forger.backend.attn_site_evidence_held_v1(&forger.material, forger.leaf, Some(&forger.ids()), None).expect("N1");
+    let before = collateral(&s, STRANGER);
+    let (a, p) = (artifact.clone(), profile.clone());
+    let mut host = FixtureHost::new(STRANGER, move || backend(&a, &p));
+    host.carried = Some(forger.ids());
+    let mut stranger = Node::new(host);
+    let mut chain = vec![accusation];
+    let window = kaspa_consensus_core::palw_state_v2::palw_da_disclose_window_daa_v1(&params());
+    let how = ForgerPlay { race: true, late: true, ..Default::default() };
+    let (end, played) = play_step6_as(s, &forger, (claim, sid), root, &accused, &mut stranger, &mut chain, how, 300 + window).await;
+    assert!(played.forger_closed.is_some() && played.forfeit.is_some(), "the acquittal, and the stranger's forfeit kept");
+    let (demanded, _) = played.demand.expect("the stranger's node demands the chunk");
+    assert!(played.paused_at.is_some(), "the demand pauses the claim");
+    let disclosed = played.disclosed.expect("the forger answers at the demand's deadline");
+    assert!(disclosed >= demanded + window, "late: at the session's deadline ({disclosed} ≥ {demanded} + {window})");
+    let (accused_at, _) = played.accused.expect("and the stranger's node convicts on it");
+    assert!(accused_at > disclosed);
+    assert!(
+        matches!(phase_of(&end, &claim), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "convicted before Final: {:?}",
+        phase_of(&end, &claim)
+    );
+    assert!(collateral(&end, STRANGER) >= before, "the stranger is made whole");
+    RCORE.with(|rcore| rcore.set(false));
+}
+
+/// **The seat's own court filings are dated** (the second review's MEDIUM): a one-move accusation that
+/// opens a held dissection and a named leaf's pursuit are due at their landing margin before the duty's
+/// deadline, never undated behind every dated item — and both sites insert the date beside the push.
+#[test]
+fn the_seats_court_filings_are_dated_in_the_priority_lane() {
+    use super::{PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1, palw_seat_court_filing_due_v1};
+    assert_eq!(palw_seat_court_filing_due_v1(1_000, 900), 1_000 - PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1);
+    assert_eq!(palw_seat_court_filing_due_v1(1_000, 990), 990, "past its margin: due now");
+    let source = include_str!("../palw_panel.rs");
+    for push in ["court_pending.push((session_id, 0, false, object));", "court_pending.push((key, 0, false, object));"] {
+        let at = source.find(push).unwrap_or_else(|| panic!("{push}"));
+        let before = &source[at.saturating_sub(700)..at];
+        assert!(before.contains("court_due.insert(") && before.contains("palw_seat_court_filing_due_v1("), "dated: {push}");
+    }
 }

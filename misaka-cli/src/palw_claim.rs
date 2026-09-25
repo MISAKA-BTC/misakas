@@ -430,6 +430,28 @@ fn voided(r: &GetPalwFreePromptClaimResponse, w: Option<&Windows>, now: u64) -> 
              convicted on an honest run usually holds a different artifact for the same class"
                 .to_string(),
         ),
+        // ADR-0152 §4-ter (F3, decision (B)): past `palw_offence_attribution` a dissection's bottom proved
+        // the executor's own disclosure false — charged exactly as `court_fraud`.
+        "court_held_verdict" => (
+            format!(
+                "voided at DAA {at}: court_held_verdict. A held dissection's bottom proved the executor's own disclosure \
+                 wrong; the collateral this claim reserved was slashed from the bond."
+            ),
+            "nothing to recover. Before committing again check that this host runs the class's pinned artifact and that its \
+             node answers its own held dissections (--palw-panel with the class's artifact)"
+                .to_string(),
+        ),
+        // ADR-0152 F2 residual: past `palw_offence_attribution` a court DEFAULT (an unanswered rung, a
+        // close declared and never assembled) — charged exactly as `court_fraud`, but no proof of fraud.
+        "court_default" => (
+            format!(
+                "voided at DAA {at}: court_default. The executor's side of a court session went unanswered (a rung it owed, or \
+                 a close it declared and never assembled); the collateral this claim reserved was slashed from the bond."
+            ),
+            "nothing to recover. Keep --palw-panel running with the class's artifact until each claim is final: that is what \
+             answers a court"
+                .to_string(),
+        ),
         "producer_withholding" => (
             format!(
                 "voided at DAA {at}: producer_withholding. The executor failed a data-availability obligation (an accusation \
@@ -1208,6 +1230,8 @@ mod tests {
             ("receipt_timeout", "not slashed", "was slashed from"),
             ("court_fraud", "was slashed from the bond", "not slashed"),
             ("producer_withholding", "was slashed from the bond", "not slashed"),
+            ("court_held_verdict", "was slashed from the bond", "not slashed"),
+            ("court_default", "was slashed from the bond", "not slashed"),
         ] {
             let mut r = claim("voided", 11_000);
             r.void_reason = reason.to_string();
