@@ -443,3 +443,126 @@ async fn t12_a_bond_registered_after_launch_is_drawable_below_the_fence_and_wait
         past_fence.len()
     );
 }
+
+// ---- lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on the model registry ------------------
+
+/// A heartbeat-only run: the newcomer's real registration at DAA ~12, then heartbeats until the sink
+/// reaches `until` — no claim, so nothing but the registry could tell the armed chain from the released.
+async fn run_heartbeats(fence: Option<u64>, until: u64) -> Run {
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats, funding) = harness(fence);
+    let ttpb = config.params.target_time_per_block();
+    let mut chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let mut blocks = Vec::new();
+    while sink_daa(&chain) + 1 < CARRIER_DAA {
+        chain.heartbeat(ttpb, Vec::new()).await;
+        record(&chain, &mut blocks);
+    }
+    let carrier = registration_carrier(&config, &bundle, &funding);
+    let carrying = chain.heartbeat(ttpb, vec![carrier.clone()]).await;
+    assert!(carrying.transactions.iter().any(|tx| tx.id() == carrier.id()), "the carrier rides the block");
+    record(&chain, &mut blocks);
+    while sink_daa(&chain) < until {
+        chain.heartbeat(ttpb, Vec::new()).await;
+        record(&chain, &mut blocks);
+    }
+    let newcomer = PalwBondKeyV2(TransactionOutpoint::new(carrier.id(), COLLATERAL_INDEX));
+    let registered_daa = chain.tip_state().1.bond(&newcomer).expect("the chain registered the newcomer").registered_daa;
+    Run { chain, newcomer, registered_daa, blocks }
+}
+
+/// **Lane maturity-ext at the processor, on a real testnet-12 chain crossing the fence**: the same
+/// fence (`palw_bond_maturity_early`) that keeps the newcomer off the draw keeps it off the model
+/// registry's ready count (and ADR-0147's jury, which reads the same fold) until its own window has run.
+///
+/// * **The processor's resolution** — `palw_model_registry_fold_at`, the fold every block of this
+///   chain is handed, the RPC's `readySeatsNow` and op 186 read — carries ADR-0065 D1 (the window 1,000,
+///   the second clock's depth) from the fence on, not a DAA before, and across 1,000; the released
+///   processor carries it at no DAA (it never applied D1 to the registry).
+/// * **Below the fence and past it, the release byte for byte where no newcomer is ready** — the
+///   released chain fed to an armed node folds the released PALW root at every block, the fence's
+///   height and the dozen blocks past it included (the genesis cards' registry is untouched).
+/// * **The one predicate on the chain's own state** — its real registration, possession rows for the
+///   eight cards and the newcomer on both genesis model classes, judged with the processor's fold at
+///   each DAA: the newcomer counts below the fence, not from it to `registered + 999`, and again from
+///   `registered + 1,000`; the eight cards count at every DAA; the released processor counts nine.
+#[tokio::test]
+async fn t12_the_registry_counts_a_newcomer_below_the_fence_and_waits_its_window_past_it() {
+    use kaspa_consensus_core::palw_model_registry_v1::{
+        PALW_SEAT_NOT_READY_IMMATURE_V1, PalwBondMaturityFoldV1, PalwSeatReadinessRowV1, palw_model_registry_ready_seats_v1,
+        palw_seat_not_ready_reason_v1,
+    };
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let until = FENCE + 12;
+    let armed = run_heartbeats(Some(FENCE), until).await;
+    let twin = run_heartbeats(None, until).await;
+    assert_eq!((armed.newcomer, armed.registered_daa), (twin.newcomer, twin.registered_daa), "one carrier, one bond");
+    let registered = armed.registered_daa;
+    let window = PALW_T12_BOND_MATURITY_WINDOW_DAA;
+    eprintln!("[t12-maturity-ext] the newcomer registered at DAA {registered}; the chains run to DAA {until}");
+
+    // ---- the processor's resolution ----------------------------------------------------------------
+    let depth = armed.chain.config.params.palw_settled_anchor_depth.expect("testnet-12 runs the second clock");
+    for daa in (0..=until).chain([500, 999, 1_000, registered + window, 5_000]) {
+        let a = armed.chain.vp().palw_model_registry_fold_at(daa).expect("testnet-12's registry is in force").bond_maturity;
+        let t = twin.chain.vp().palw_model_registry_fold_at(daa).expect("and on the twin").bond_maturity;
+        let expect = (daa >= FENCE).then_some(PalwBondMaturityFoldV1 { window_daa: window, settled_anchor_depth: Some(depth) });
+        assert_eq!(a, expect, "DAA {daa}: the armed processor hands the fold D1 from the fence on");
+        assert_eq!(t, None, "DAA {daa}: the released processor never does");
+    }
+
+    // ---- the release, byte for byte, where no newcomer is ready --------------------------------------
+    let (config, bundle, premine, floats, _) = harness(Some(FENCE));
+    let replay = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    assert!(twin.blocks.iter().any(|b| b.0 >= FENCE), "the script crosses the fence");
+    for (i, (daa, hash, released_root)) in twin.blocks.iter().enumerate() {
+        let block = twin.chain.ctx.consensus.get_block(*hash).expect("the released node holds its chain");
+        replay
+            .ctx
+            .consensus
+            .validate_and_insert_block(block)
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("released block #{i} (DAA {daa}) was refused by an armed node: {e}"));
+        assert_eq!(replay.sink(), *hash, "released block #{i} (DAA {daa}) is the armed node's sink too");
+        assert_eq!(replay.tip_state().1.state_root(), *released_root, "block #{i} (DAA {daa}): the released root");
+    }
+
+    // ---- the one predicate on the chain's own state -------------------------------------------------
+    let (_, state) = armed.chain.tip_state();
+    let sp = armed.chain.bundle.state.clone();
+    let classes: Vec<Hash64> =
+        state.classes_iter().map(|(id, _)| *id).filter(|id| *id != armed.chain.bundle.base_class_id).collect();
+    assert_eq!(classes.len(), 2, "testnet-12's two genesis model classes");
+    assert!(armed.chain.bonds.iter().all(|k| state.bond(k).is_some_and(|b| b.registered_daa == 0)), "the cards are genesis bonds");
+    let mut seats = armed.chain.bonds.clone();
+    seats.push(armed.newcomer);
+    for daa in [FENCE - 1, FENCE, FENCE + 1, 500, 999, 1_000, registered + window - 1, registered + window, 5_000] {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        for class in &classes {
+            for seat in &seats {
+                carriage.seat_readiness.insert(
+                    (*seat, *class),
+                    PalwSeatReadinessRowV1 { proved_daa: daa, proved_span: daa, leaf_index: 0, proof_version: 2, chunks: 16 },
+                );
+            }
+        }
+        let rowed = carriage.into_state(&sp, None).expect("the rows are a consistent state");
+        let counted = daa < FENCE || daa >= registered + window;
+        for class in &classes {
+            let fold = armed.chain.vp().palw_model_registry_fold_at(daa).unwrap();
+            let released = twin.chain.vp().palw_model_registry_fold_at(daa).unwrap();
+            let ready = palw_model_registry_ready_seats_v1(&rowed, &sp, class, daa, &fold);
+            let row = rowed.seat_readiness(&armed.newcomer, class).unwrap();
+            let reason = palw_seat_not_ready_reason_v1(&rowed, &sp, &armed.newcomer, row, daa, &fold);
+            eprintln!("[t12-maturity-ext] DAA {daa:>5}, class {class}: armed ready {ready}, newcomer {reason:?}");
+            assert_eq!(ready, 8 + counted as u32, "DAA {daa}: the eight cards, and the newcomer iff mature");
+            assert_eq!(reason, (!counted).then_some(PALW_SEAT_NOT_READY_IMMATURE_V1), "DAA {daa}: the newcomer's reason");
+            for card in &armed.chain.bonds {
+                let row = rowed.seat_readiness(card, class).unwrap();
+                assert_eq!(palw_seat_not_ready_reason_v1(&rowed, &sp, card, row, daa, &fold), None, "DAA {daa}: a card is ready");
+            }
+            assert_eq!(palw_model_registry_ready_seats_v1(&rowed, &sp, class, daa, &released), 9, "DAA {daa}: the release counts nine");
+        }
+    }
+}
