@@ -42,6 +42,8 @@ use std::path::{Path, PathBuf};
 /// classified by a human as "executes" or "converts", and adding one without touching this list
 /// fails the completeness check below.
 const CONSENSUS_PATH: &[&str] = &[
+    // A-held: the held-attention site evidence and its windowed builder (integer only).
+    "src/attn_held.rs",
     "src/lib.rs",
     "src/artifact.rs",
     "src/backend.rs",

@@ -7599,7 +7599,7 @@ mod aheld_end_to_end {
         for layer in [0u16, 2, 3] {
             let honest = drilled(&artifact, &profile, layer, call, None);
             let responder =
-                honest.backend.attn_site_evidence_held_v1(&honest.run.outcome.material, honest.leaf, Some(&ids), None).expect("r");
+                honest.backend.attn_site_evidence_held_v1(&honest.run.outcome.material, honest.leaf, Some(&ids), None).expect("the held site's evidence");
             let site = responder.site_v1(root, false, PALW_HELD_STEP_LADDER_V1).expect("site");
             let tiles = u64::from(site.history_positions).div_ceil(u64::from(site.tile_positions));
             assert!(tiles >= 3, "layer {layer}: the history plays rounds");
