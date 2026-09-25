@@ -16345,6 +16345,9 @@ mod t12_round_lane_e2e;
 // ADR-0152 M4: the stake-weighted draw where the chain draws — the one resolver (SW-1) and the
 // one-state, bind-only-in-the-anchor-block derivation (SW-8, T89) on a real testnet-12 chain.
 mod t12_stake_draw_integration;
+// Post-launch lane bind-deadlock (`palw_anchor_at_ceiling`): a producer at its exposure ceiling mines
+// no attempt, so nothing anchors its claims — measured on the released rule and closed past the fence.
+mod t12_bind_deadlock;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;
