@@ -308,7 +308,7 @@ mod tests {
                     };
                     let pick = walk
                         .into_iter()
-                        .find(|claim| pending.contains_key(claim) && !submitted[j].get(claim).is_some_and(|at| daa < at + replan));
+                        .find(|claim| pending.contains_key(claim) && submitted[j].get(claim).is_none_or(|at| daa >= at + replan));
                     if let Some(claim) = pick {
                         submitted[j].insert(claim, daa);
                         picks.insert(claim);
