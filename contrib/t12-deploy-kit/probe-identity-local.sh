@@ -32,6 +32,8 @@
 # throwaway dir (kaspad writes ~/.misaka/<net>/endpoints.json on start: the operator's registry is never
 # touched), no PALW flag, and `env -i` so no KASPAD_* variable of the caller's shell reaches it. It is
 # stopped with SIGINT and its throwaway dir removed; its log is kept (PROBE_OUT, default ./probe-out).
+# PROBE_WAIT_S (default 180) bounds the wait for the identity over RPC; build-release-local.sh raises it
+# when the release binary runs under emulation in a linux/amd64 container.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -44,7 +46,7 @@ while [ $# -gt 0 ]; do
         --layout) LAYOUT=1 ;;
         --kaspad) KASPAD=${2:?--kaspad needs a path}; shift ;;
         --drill-salt) SALT=${2:?--drill-salt needs 64 hex}; shift ;;
-        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
     shift
@@ -93,14 +95,15 @@ env -i PATH="$PATH" HOME="$WORK/home" "$KASPAD" --testnet --netsuffix=12 --appdi
 PID=$!
 
 FP=""; GEN=""; out=""
-for _ in $(seq 1 90); do
+WAIT_S=${PROBE_WAIT_S:-180}   # build-release-local.sh raises it for a container probe under emulation
+for _ in $(seq 1 $(( (WAIT_S + 1) / 2 ))); do
     sleep 2
     kill -0 "$PID" 2>/dev/null || { tail -30 "$LOG" >&2; die "the probe node exited — see $LOG"; }
     out=$(python3 "$KIT/t12check.py" --port "$JSON" --probe 2>/dev/null || true)
     FP=$(sed -n 's/^FP=//p' <<<"$out"); GEN=$(sed -n 's/^GENESIS=//p' <<<"$out")
     [ -n "$FP" ] && [ -n "$GEN" ] && break
 done
-[ -n "$FP" ] && [ -n "$GEN" ] || { tail -30 "$LOG" >&2; die "no identity over RPC within 180 s — see $LOG"; }
+[ -n "$FP" ] && [ -n "$GEN" ] || { tail -30 "$LOG" >&2; die "no identity over RPC within $WAIT_S s (PROBE_WAIT_S) — see $LOG"; }
 PREMINE=$(python3 "$KIT/t12check.py" --port "$JSON" --premine 2>/dev/null | sed -n 's/^PREMINE_TXID=//p' || true)
 GLAYOUT=$(python3 "$KIT/t12check.py" --port "$JSON" --layout 2>/dev/null || true)
 kill -INT "$PID" 2>/dev/null || true
@@ -155,7 +158,7 @@ cat <<EOF
 
 # ---- probe-identity-local.sh $(date -u +%FT%TZ) ----
 # binary   $KASPAD
-# sha256   $KSHA  (THIS machine's build; the fleet's KASPAD_SHA256 comes from build-release-5104.sh)
+# sha256   $KSHA  (the probed binary; the fleet's KASPAD_SHA256 is the release build's — build-release-local.sh, or build-release-5104.sh)
 # source   ${REVSRC:-unknown} (the tree this script sits in; the binary is whatever --kaspad named)
 # log      $LOG   (probe stopped: $([ "$PID_EXITED" = 1 ] && echo cleanly || echo 'SIGKILL'))
 EXPECT_FP=$FP

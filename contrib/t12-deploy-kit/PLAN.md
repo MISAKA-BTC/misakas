@@ -204,9 +204,18 @@ gRPC は .113 以外 `--nogrpc`（同一 host 2 node で既定ポートが衝突
 2. **Mac で先に identity を読む**: `./probe-identity-local.sh --build`（または `--kaspad <path>`）。隔離した node（127.0.0.1 のみ、
    peer 無し、DNS 無し、使い捨て appdir と HOME、`env -i`、PALW flag 無し）を起動して `EXPECT_FP`・`EXPECT_GENESIS`・
    `PREMINE_TXID` を読み、止める。値は profile や CPU に依らない（params と genesis の関数）。
-3. 5.104 で `build-release-5104.sh <commit>` — `/root/t12-rel/src`（blobless clone）→ `/root/t12-rel/incoming/<rev12>/`。最後に同じ
-   隔離 probe（`env -i`・使い捨て HOME: root の `~/.misaka/testnet-12/endpoints.json` は live node のものなので書き換えない）で
-   `IDENTITY` を出す。**Mac の probe と 3 値が一致しなければ止める**。**（ユーザー確認: 5.104 でのビルド開始）**
+3. **release build は Mac で（推奨、§13）**: `PROBE_IMAGE=rust:latest ./build-release-local.sh <commit>`。出荷 commit の clean な
+   worktree（`git worktree add --detach`）から `cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.39` で
+   5.104 版と同じ 4 本（kaspad（既定 feature = `evm` 込み）・misaka・palw-class・misaka-dnsseeder、1 回の呼び出し）を作り、
+   `.cache/<rev12>/` に SHA256SUMS・REV・BUILD-INFO・ELF-CHECK（x86-64 ELF、interpreter `/lib64/ld-linux-x86-64.so.2`、NEEDED が glibc
+   だけ、GLIBC_ の最大が 2.39 以下）を置く。続けて **release の kaspad そのもの** を、この Mac に既にある linux/amd64 の image
+   （`PROBE_IMAGE`: glibc ≥ 2.39・bash・python3。`--pull never`・`--network none`）の中で colima の qemu で動かして隔離 probe し、
+   `IDENTITY` を書く。`NATIVE_PROBE=1` で同じ commit の Mac 用 dev build も probe し、3 値の一致を確かめる（step 2 を兼ねる）。
+   最後に貼る `fleet.env` の行を出す。リモートには触れない。**5.104 の MemAvailable にも公開 node にも触れない**。
+   **フォールバック**（Mac が使えないとき）: 5.104 で `build-release-5104.sh <commit>` — `/root/t12-rel/src`（blobless clone）→
+   `/root/t12-rel/incoming/<rev12>/`。最後に同じ隔離 probe（`env -i`・使い捨て HOME: root の `~/.misaka/testnet-12/endpoints.json` は
+   live node のものなので書き換えない）で `IDENTITY` を出す。**Mac の probe と 3 値が一致しなければ止める**。
+   **（ユーザー確認: 5.104 でのビルド開始）**
 4. Mac の `fleet.env` に `REV`・`KASPAD_SHA256`・`MISAKA_SHA256`・`PALW_CLASS_SHA256`・`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID` を
    貼る。`SEEDER_SHA256` は既定 `KEEP`（§10 Q9）。genesis が a27f8f44 から動いた場合は a27f8f44 を `FORBIDDEN_GENESIS` に足す（c8652a97 の
    build はそれを走らせる）。公開後の drill は salt ごとに genesis が変わるので、drill を始める前に
@@ -233,8 +242,8 @@ release build → fleet.env → 確認 → 配備 → explorer → seeder → �
 | A0 | 実装・監査 → **ユーザー** | 出荷 commit を決める（checklist §4 step 1〜8: 未 merge の 4 本、再 pin、battery 2 回）。push は **【確認】** |
 | A1 | ユーザー（Mac） | `./probe-identity-local.sh --build --layout` で出荷 commit の identity を読み、kit の写し（CLASS_8K・ART_8K_BYTES（sidecar と）・CLASS_2M_PREFIX・FEE_FLOAT_BASE・explorer の表）が binary と一致することを確かめる（exit 4 なら §5 の再 pin。リモートに触れない） |
 | A2 | ユーザー（Mac） | `cp fleet.env.example fleet.env`（初回のみ）、`HB_ADDR`（card 0 の payout address が入っている）を確認 → `./distribute-from-mac.sh kit`（3 host の `/root/t12-rel/kit` に kit を置く）**【確認】** |
-| A3 | ユーザー（5.104） | `cd /root/t12-rel/kit && ./build-release-5104.sh <commit>`（~21 分。MemAvailable ≥ 10 GiB が条件）**【確認】**。`IDENTITY` が A1 の 3 値と一致すること |
-| A4 | ユーザー（Mac） | `fleet.env` を埋める → もう一度 `kit` → `binaries` → `artifact`（8k は 09-24 に配置済みなら skip）**【確認】** |
+| A3 | ユーザー（Mac） | `PROBE_IMAGE=rust:latest ./build-release-local.sh <commit>`（§13: cold ~32 分・-j4、container probe ~22 分。リモートに触れない）。`IDENTITY` が A1 の 3 値と一致すること。**フォールバック**: 5.104 で `cd /root/t12-rel/kit && ./build-release-5104.sh <commit>`（~21 分。MemAvailable ≥ 10 GiB が条件）**【確認】** |
+| A4 | ユーザー（Mac） | `fleet.env` を埋める（A3 が最後に出す行）→ もう一度 `kit` → `binaries`（`.cache/<REV>` に Mac の build があれば 5.104・.113・ibm の 3 台へ、無ければ 5.104 の build を Mac 経由で .113・ibm へ。`BIN_SOURCE=local\|5104` で固定）→ `artifact`（8k は 09-24 に配置済みなら skip）**【確認】** |
 | A5 | ユーザー（各 host） | `./install-<host>.sh preflight` → `./install-<host>.sh stage`（binary・artifact を sha 検証して `/root/t12-rel/<REV>/` に置き、launch script と unit を**その下に**書き、各 launch script の `--check` を通すだけ。/etc も稼働中 service も触らない）。preflight は drill node がホストで動いていれば NOT OK。stage は MemoryMax < share ＋ artifact ＋ 1 GiB の行を拒否 |
 
 ### Phase B — 切替（公開 chain の停止は ~10 分）— **B1〜B4 は公開 node を止めて置き換える: それぞれ【確認】**
@@ -325,8 +334,9 @@ host ごとに逆順（5.104 → .113 → ibm）: `./install-<host>.sh rollback`
 | `probe-identity-local.sh` | Mac | 出荷 commit の kaspad を隔離して起動し、`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID`（＋schedule id・rule manifest digest）を読み、genesis の class（id・artifact bytes・root）と bond outpoint を kit の写しと比べる（不一致は exit 4）。`--layout` で `t12_deploy_kit_constants`（premine の index 配置・class id・explorer の表）と 8k sidecar の sha も。`--drill-salt` で drill genesis も出す。リモートに触れない |
 | `SEEDERS.md`・`seeders/` | Mac | seeder 専用の手順と script（変更なし）。`fleet.env` の `SEEDER_SHA256`・`EXPECT_FP` を読む |
 | `t12check.py` | host / Mac | stdlib だけの JSON wRPC checker（fp・genesis・peer・lane mix・producer・memory・registry）。`--expect-premine`・`--expect-class`・`--expect-class-prefix` で kit の写しを確かめ（switch の gate と check が使う）、live が share を下回れば警告。`--probe` は隔離 node の fp/genesis、`--premine` は genesis bond の txid、`--layout` は genesis の class と bond |
-| `build-release-5104.sh` | 5.104 | 独自 clone で release build → `incoming/<rev12>` + SHA256SUMS + 隔離 probe（`env -i`・使い捨て HOME）で IDENTITY |
-| `distribute-from-mac.sh` | Mac | kit / binary / 8k artifact を Mac 経由で配布（host 間に鍵を足さない）、各段で sha 検証 |
+| `build-release-local.sh` | Mac | **推奨の release build**（§13）: clean worktree → `cargo zigbuild`（x86_64 Linux、glibc 2.39 floor）→ `.cache/<rev12>/` に 4 本 + SHA256SUMS・REV・BUILD-INFO・ELF-CHECK → release の kaspad を linux/amd64 container で隔離 probe（`PROBE_IMAGE`、pull しない・network none）して IDENTITY → `fleet.env` の行。リモートに触れない |
+| `build-release-5104.sh` | 5.104 | **フォールバック**: 独自 clone で release build → `incoming/<rev12>` + SHA256SUMS + 隔離 probe（`env -i`・使い捨て HOME）で IDENTITY |
+| `distribute-from-mac.sh` | Mac | kit / binary / 8k artifact を Mac 経由で配布（host 間に鍵を足さない）、各段で sha 検証。`binaries` は Mac の build（`.cache/<REV>/BUILD-INFO`）があれば 3 host へ、無ければ 5.104 の build を .113・ibm へ |
 | `check-fleet.sh` | Mac | 読み取りのみ: 全 host の check、`seeders/40-verify.sh`、公開 DNS、外からの P2P 疎通 |
 | （tree の test）`consensus/core/tests/t12_deploy_kit_constants.rs` | Mac / CI | kit と explorer の写し（`FEE_FLOAT_BASE`・`CLASS_8K`・`ART_8K_BYTES`・`CLASS_2M_PREFIX`・`LLM_CLASSES`・`PANEL_BOND_TX`・`FORBIDDEN_GENESIS`）がこの build の genesis と一致することの pin |
 | （tree の test）`kaspad/tests/t12_role_memory_figures.rs` | Mac | `#[ignore]` の worksheet: 仕事ごとの予約額と、install-*.sh の各行の share・MemoryMax の下限（§2） |
