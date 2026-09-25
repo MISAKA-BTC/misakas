@@ -4315,10 +4315,11 @@ function mtpCatLegend(){
 // read-only because there is nothing left for it to accept.
 function mtpRegisterSection(){
   return `
-    <div class="note"><b>Which network is scored.</b> The published ledgers score <b>testnet-11</b>, the previous network
-      (each signed ledger names its network; the leaderboard's <b>Scored network</b> card shows it). testnet-12 activity is
-      <b>not scored yet</b>: whether and when MTP moves to testnet-12 has not been decided. The rules below are how the
-      ledger scores.</div>
+    <div class="note"><b>Which network is scored.</b> Since 2026-09-26 MTP collects <b>testnet-12</b> activity every hour
+      (each signed ledger names its network; the leaderboard's <b>Scored network</b> card shows it). No testnet-12 epoch has
+      been signed yet, so the leaderboard stays empty until the first one is published; the testnet-11 store was archived,
+      not merged. How testnet-12's new record types count (e.g. <b>Sampled</b> seat verdicts) is still being decided. The
+      rules below are how the ledger scores.</div>
     <div class="kv">
       <div class="row"><div class="key">1 · make an address</div><div class="val">
         <span class="hash">misaka key gen --out mtp.seed</span>
