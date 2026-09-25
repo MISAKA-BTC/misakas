@@ -4077,6 +4077,18 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_court_duties_v2(&state, mine)
     }
 
+    /// **ADR-0152 §4-ter.3 step 6: the held forfeits and open DA sessions `mine` holds**, at the tip.
+    pub fn palw_held_pursuit_seeds_v1_impl(
+        &self,
+        mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwHeldPursuitSeedsV1 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Default::default() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
+            return Default::default();
+        };
+        kaspa_consensus_core::palw_producer_v2::palw_held_pursuit_seeds_v1(&state, mine)
+    }
+
     /// **The data-availability duties this node holds** (ADR-0062 D3): every claim under an open
     /// accusation whose producing bond is in `mine`, with the event it must open.
     pub fn palw_da_duties_v2_impl(
