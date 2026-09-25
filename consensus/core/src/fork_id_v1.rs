@@ -628,6 +628,10 @@ mod tests {
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
             "palw_rcore_plus" => params.palw_rcore_plus = Some(at),
+            // Lane F1 (the panel seed, post-launch): refused without R-core+ at or below it by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_panel_seed_execution" => params.palw_panel_seed_execution = Some(at),
             // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
             // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
             // hashers and the schedule.

@@ -574,6 +574,11 @@ pub struct VirtualStateProcessor {
     /// bundle's mirror (`PalwStateParamsV2::rcore_plus_active_at`), which `validate_palw_rcore_plus_v1`
     /// keeps equal to it.
     pub(super) palw_rcore_plus: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **Lane F1 (post-launch, 2026-09-25): `Params::palw_panel_seed_execution`** — past it (at a
+    /// claim's ANCHOR DAA) the panel is drawn from the anchor attempt's execution commitment, not the
+    /// anchor block's identity. Dormant on every shipped preset; resolved once in
+    /// [`Self::palw_panel_seed_execution_at`].
+    pub(super) palw_panel_seed_execution: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
@@ -1078,6 +1083,7 @@ impl VirtualStateProcessor {
             palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
+            palw_panel_seed_execution: params.palw_panel_seed_execution_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_exec_quantum_maturity_daa: params.palw_exec_quantum_maturity_v1(),
@@ -10596,10 +10602,43 @@ impl VirtualStateProcessor {
             // The first block BELOW the slot is the witness; the last one recorded at or above it
             // is the anchor.
             let (anchor_block, anchor_daa) = candidate?;
-            return Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: daa });
+            return self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, daa);
         }
         let (anchor_block, anchor_daa) = candidate?;
-        Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: 0 })
+        self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, 0)
+    }
+
+    /// **The anchor fact, with what the panel seed is keyed on** (lane F1, the post-launch panel-seed
+    /// fence `Params::palw_panel_seed_execution`, 2026-09-25).
+    ///
+    /// Past the fence — resolved at the ANCHOR block's DAA score, a fact of the anchor header this
+    /// walk already found, so every node (reorg, IBD, a pruning-proof sync) resolves it alike — the
+    /// fact carries the anchor ATTEMPT's execution commitment, read off the anchor block's own header
+    /// (`palw_panel_anchor_execution_v1`: the key the fold dedups that block's attempt on and its class
+    /// ticket is drawn from), and the claim's panel, its segment assignment and its S3 sample are
+    /// drawn from `H(execution ‖ claim)`
+    /// ([`kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2::panel_seed`]): no signature,
+    /// timestamp or nonce inside the bucket moves it. Below the fence `None`, and the seed is the
+    /// anchor block, byte for byte the rule testnet-12 launched with.
+    ///
+    /// `validate_palw_v2` refuses the fence without `palw_rcore_plus` at or below it, so past it
+    /// every anchor is an attempt block ([`Self::palw_block_may_anchor_a_panel_v1`]). A header the
+    /// store cannot serve, or an attempt envelope that does not decode (the header stage refuses one,
+    /// so a chain block never does), names no anchor: nothing binds, and the claim voids at its bind
+    /// window as if its anchor had not arrived — a function of the candidate chain's own headers.
+    fn palw_v2_anchor_fact_with_seed_v1(
+        &self,
+        anchor_block: BlockHash,
+        anchor_daa: u64,
+        predecessor_daa: u64,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
+        let anchor_execution = if self.palw_panel_seed_execution_at(anchor_daa) {
+            let header = self.headers_store.get_header(anchor_block).ok()?;
+            Some(kaspa_consensus_core::palw_panel_v2::palw_panel_anchor_execution_v1(self.palw_network_domain_v2(), &header)?)
+        } else {
+            None
+        };
+        Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa, anchor_execution })
     }
 
     /// **Which chain blocks may be a panel's anchor** — the one predicate the anchor walk
@@ -10623,7 +10662,14 @@ impl VirtualStateProcessor {
     ///   anchor block (SW-8), so the anchor re-roll is the ONE post-seed lever left, and ADR-0152
     ///   prices it at one block's work per try; an attempt's execution commits to its header's
     ///   pre-PoW hash (`execution_anchor_v3`), so every other header — and so every other anchor —
-    ///   costs one more inference, the charge the job anchor makes for the same reason. What this
+    ///   costs one more inference, the charge the job anchor makes for the same reason. **That holds
+    ///   only where the seed is not the block's identity** (2026-09-25, `wf_72c1a397-e23`): the
+    ///   identity also covers the attempt's signature, the timestamp and the nonce inside its bucket,
+    ///   none of which the lottery prices, so one win re-rolled the panel for a re-signature. Past
+    ///   lane F1's fence (`Params::palw_panel_seed_execution`, post-launch) the seed is the anchor
+    ///   attempt's execution commitment and the claim ([`Self::palw_v2_anchor_fact_with_seed_v1`]);
+    ///   another panel is another lottery win — while audit P0-10 is open, ~279 junk BLAKE2b draws on
+    ///   the testnet-12 floor rather than an inference. What this
     ///   costs is waiting: the anchor is the first ATTEMPT block at or past the slot, which
     ///   `PalwConsensusParamsV2::validate` already holds to `anchor_delay + max_beacon_gap <
     ///   window_bind` (ADR-0077's lattice promise, written for this reading; 20 + 400 < 600 on the
@@ -11447,6 +11493,13 @@ impl VirtualStateProcessor {
     /// DAA the rule is resolved at (SW-1: the anchor's; SW-8's one-state derivation: the block's).
     pub(super) fn palw_rcore_plus_at(&self, daa_score: u64) -> bool {
         self.palw_rcore_plus.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Lane F1 (the panel seed, post-launch), resolved in exactly one place** — at a claim's
+    /// ANCHOR block's DAA score ([`Self::palw_v2_anchor_fact_with_seed_v1`]). `false` on every
+    /// shipped preset (the fence is dormant until armed at a post-launch height).
+    pub(super) fn palw_panel_seed_execution_at(&self, anchor_daa: u64) -> bool {
+        self.palw_panel_seed_execution.is_some_and(|fence| fence.is_active(anchor_daa))
     }
 
     /// The second clock's depth where the fence carries it; `None` is the DAA-only rule.
@@ -12700,12 +12753,16 @@ impl VirtualStateProcessor {
         let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
         // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
         // panel of a sharded class would ask shard seats to judge a whole model.
+        // Lane F1, the panel seed: for a claim anchored past `Params::palw_panel_seed_execution`
+        // `H(anchor attempt's execution ‖ claim)`, below it the anchor block — the one value the gate
+        // recomputes and the fold stores.
+        let seed = anchor.panel_seed(claim_id);
         let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
             Some(shard_count) => kaspa_consensus_core::palw_panel_v2::derive_stratified_panel_v2(
                 state,
                 panel_params,
                 claim_id,
-                anchor.anchor_block,
+                seed,
                 min_collateral,
                 maturity_floor,
                 capability_bound,
@@ -12715,7 +12772,7 @@ impl VirtualStateProcessor {
                 state,
                 panel_params,
                 claim_id,
-                anchor.anchor_block,
+                seed,
                 min_collateral,
                 maturity_floor,
                 capability_bound,
@@ -12727,11 +12784,7 @@ impl VirtualStateProcessor {
         // carries the fence — and the acceptance layer demands that panel exactly, so a node
         // proposes only what its own fold will take. The identity test that stood here
         // compared fields a registrant writes for itself, and is gone with the rule it served.
-        Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
-            claim: *claim_id,
-            anchor: anchor.anchor_block,
-            seats,
-        })
+        Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound { claim: *claim_id, anchor: seed, seats })
     }
 
     fn palw_v2_objects_of_block(
