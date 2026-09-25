@@ -1418,12 +1418,12 @@ async fn a_refused_decoy_filing_never_poisons_the_seats_node_and_a_failed_build_
     let retry = 107 + COURT_MOVE_REPLAN_DAA;
     let _ = tight.tick(&s2, &chain, retry).await;
     assert_eq!(tight.host.asked.lock().unwrap().clone(), vec![(claim, false), (claim, false)], "rebuilt from the kept filing");
-    let named = tight.tick(&s2, &chain, retry + 1).await;
+    let named_at = retry + 1;
+    let named = tight.tick(&s2, &chain, named_at).await;
     let rung = duty_of(&s2, SEAT, sid).expect("the seat's duty").rung_deadline_daa;
     assert!(
-        matches!(named, Some(PalwConsensusObjectV2::CourtAttnChildChosen { .. })) && retry + 1 <= rung,
-        "and the seat names the lied child inside its rung ({} ≤ {rung}): {named:?}",
-        retry + 1
+        matches!(named, Some(PalwConsensusObjectV2::CourtAttnChildChosen { .. })) && named_at <= rung,
+        "and the seat names the lied child inside its rung ({named_at} ≤ {rung}): {named:?}"
     );
 }
 
