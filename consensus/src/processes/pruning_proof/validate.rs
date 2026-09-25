@@ -214,6 +214,10 @@ impl ProofContext {
                     ppm.palw_heartbeat_transparent,
                     // ADR-0125: and the round lane's rule, validation as building.
                     ppm.palw_round_lane,
+                    // lane: rcore/hf-pptake: the attempt-lane proof-weight rule, validation as
+                    // building — a syncing node must color a level exactly as the node that built
+                    // the proof did, or it would accept a proof the builder's own validate rejects.
+                    ppm.palw_attempt_proof_weight,
                 )
             })
             .collect_vec();
