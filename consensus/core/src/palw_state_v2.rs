@@ -8162,6 +8162,13 @@ pub enum PalwStateV2Error {
          Activation Pool of it (F3)"
     )]
     ActivationPoolOnFloor(Hash64),
+    // ---- the readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)) ----
+    #[error(
+        "a possession proof of bond {bond:?} for class {class_id} names span {span}, and its row already stands at span \
+         {row_span}: a proof that is not newer than the row is a replay, refused past \
+         Params::palw_readiness_v2_max_age_spans"
+    )]
+    ReadinessProofNotNewer { bond: PalwBondKeyV2, class_id: Hash64, span: u64, row_span: u64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -18148,6 +18155,30 @@ impl<'a> TransitionBuilder<'a> {
         self.extras.model_registry.as_ref()
     }
 
+    /// **A possession proof must be newer than the row it would write** (the readiness-horizon
+    /// review's replay finding; user decision 2026-09-25, readiness capacity option (a)). A proof's
+    /// signature covers (bond, class, span, the opened bytes) and nothing binds it to its carrier, so
+    /// anyone may re-file a seat's OLDER proof inside the landing window — and the row writer took
+    /// the latest-landed proof, so the replay dated the row back to the old span (at 24 spans a
+    /// proof up to 40 spans old writes a row that is stale on arrival, taking the seat out of the
+    /// count, the jury and the draw), and re-dated the pool's F4 landing record with it. Past
+    /// `Params::palw_readiness_v2_max_age_spans` (the bundle's mirror; genesis-only, so armed is in
+    /// force at every DAA — testnet-12 alone) a proof naming a span at or below the row's
+    /// `proved_span` is refused by name, so the row and the landing record only move forward. An
+    /// equal-span duplicate is refused too: it renews nothing. Below the fence (testnet-11, devnet,
+    /// mainnet) the latest proof overwrites, byte for byte as before.
+    fn refuse_readiness_proof_not_newer_v1(&self, bond: &PalwBondKeyV2, class_id: &Hash64, span: u64) -> Result<(), PalwStateV2Error> {
+        if self.params.readiness_v2_max_age_spans().is_none() {
+            return Ok(());
+        }
+        match self.state.seat_readiness.get(&(*bond, *class_id)) {
+            Some(row) if span <= row.proved_span => {
+                Err(PalwStateV2Error::ReadinessProofNotNewer { bond: *bond, class_id: *class_id, span, row_span: row.proved_span })
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// **A seat's possession proof** (`SeatReadinessProved`): the opening reconstructs the class's
     /// registered artifact root, the leaf is one the (class, bond, span) challenge names, and the
     /// span is this one or the one just closed. The row it writes is what the draw reads.
@@ -18178,6 +18209,8 @@ impl<'a> TransitionBuilder<'a> {
                 "the proof names span {span} at span {span_now} (a proof lands within {landing} spans)"
             )));
         }
+        // Past the readiness horizon's fence a proof no newer than the row is a replay.
+        self.refuse_readiness_proof_not_newer_v1(bond, class_id, span)?;
         let bond_bytes = borsh::to_vec(bond).expect("a bond key is borsh-serializable");
         let seed = registry::palw_readiness_challenge_seed_v1(class_id, &bond_bytes, span);
         let (start, width) = registry::palw_readiness_window_v1(&seed, opening.leaf_count);
@@ -18314,6 +18347,9 @@ impl<'a> TransitionBuilder<'a> {
                 "the proof names span {span} at span {span_now} (a proof lands within {landing} spans)"
             )));
         }
+        // Past the readiness horizon's fence a proof no newer than the row is a replay: refused before
+        // the row or the pool's landing record is touched.
+        self.refuse_readiness_proof_not_newer_v1(bond, class_id, span)?;
         let bond_bytes = borsh::to_vec(bond).expect("a bond key is borsh-serializable");
         let seed = registry::palw_readiness_v2_challenge_seed_v1(class_id, &bond_bytes, span);
         // The first V2 producer opened all sixteen leaves under a 1 MiB ceiling. Preserve that
@@ -35082,6 +35118,68 @@ pub(crate) mod tests {
             let f_v2 = PalwModelRegistryFoldV1 { readiness_v2_active: true, ..f.clone() };
             assert_eq!(palw_model_registry_ready_seats_v1(&s3, &p, &kimi_id(), 201, &f_v2), 0, "not the seven the V1 age counted");
             assert_eq!(palw_model_registry_ready_seats_v1(&s3, &p, &kimi_id(), 201, &f), 7, "below readiness V2 the seven stand");
+        }
+
+        /// **Past the readiness horizon's fence a proof no newer than its row is a replay** (the
+        /// readiness horizon's replay fix). A V2 proof of span 11 writes the row; the same proof again
+        /// (an equal-span duplicate) and a genuine older proof of span 10 — re-filed by anyone, inside
+        /// the landing window — are refused by name and the row stays at 11; a newer proof of span 12
+        /// still advances it. The fence-off twin (the bundle without the mirror: testnet-11, devnet,
+        /// mainnet) keeps the old rule — the latest-landed proof overwrites, so the older proof dates
+        /// the row back to 10.
+        #[test]
+        fn past_the_horizon_a_readiness_proof_no_newer_than_its_row_is_a_replay() {
+            use crate::palw_artifact::{artifact_leaf_v1, palw_artifact_multiproof_v1};
+            use crate::palw_model_registry_v1::{palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_leaves_v1};
+            let off = params();
+            let armed = params().with_readiness_v2_max_age_spans(Some(24));
+            let operands: Vec<PalwArtifactOperandV1> = (0..40u32)
+                .map(|i| PalwArtifactOperandV1 { tensor_name: "w".to_string(), layer: None, row_start: i * 8, bytes: vec![i as u8; 8] })
+                .collect();
+            let root = PalwArtifactInventoryV1::new(operands.clone()).expect("a well-formed inventory").root();
+            let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+            let f = fold(kimi_work());
+            let seat = bond_key(2);
+            let bond_bytes = borsh::to_vec(&seat).unwrap();
+            let v2 = |span: u64| {
+                let wanted = palw_readiness_v2_leaves_v1(&palw_readiness_v2_challenge_seed_v1(&kimi_id(), &bond_bytes, span), 40);
+                let opened: Vec<(u32, PalwArtifactOperandV1)> = wanted.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+                PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                    bond: seat,
+                    class_id: kimi_id(),
+                    span,
+                    proof: Box::new(palw_artifact_multiproof_v1(&leaves, &opened).expect("the seat holds the artifact")),
+                    signature: vec![1],
+                }
+            };
+            let on = PalwTransitionExtrasV1 { readiness_v2_active: true, ..extras(Some(f.clone())) };
+            let apply = |parent: &PalwChainStateV2, p: &PalwStateParamsV2, block: u64, daa: u64, object: PalwConsensusObjectV2| {
+                apply_palw_transition_v2_with_extras(parent, p, &ctx(block, daa, block), &[object], None, false, false, false, false, &on)
+                    .map(|(state, _)| state)
+            };
+            let row_span = |state: &PalwChainStateV2| state.seat_readiness(&seat, &kimi_id()).map(|row| row.proved_span);
+            for (p, fenced) in [(&armed, true), (&off, false)] {
+                let (s1, _) = step(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+                let (s2, _) = step(&s1, p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+                let s3 = apply(&s2, p, 3, 115, v2(11)).expect("the first proof writes the row");
+                assert_eq!(row_span(&s3), Some(11));
+                let duplicate = apply(&s3, p, 4, 116, v2(11));
+                let older = apply(&s3, p, 4, 117, v2(10));
+                if fenced {
+                    for (refused, span) in [(&duplicate, 11u64), (&older, 10)] {
+                        assert!(
+                            matches!(refused, Err(PalwStateV2Error::ReadinessProofNotNewer { span: s, row_span: 11, .. }) if *s == span),
+                            "span {span}: {:?}",
+                            refused.as_ref().map(|_| ())
+                        );
+                    }
+                } else {
+                    assert_eq!(row_span(duplicate.as_ref().expect("below the fence a duplicate is taken")), Some(11));
+                    assert_eq!(row_span(older.as_ref().expect("and an older proof too")), Some(10), "the old overwrite: dated back");
+                }
+                let newer = apply(&s3, p, 4, 125, v2(12)).expect("a newer proof advances the row");
+                assert_eq!(row_span(&newer), Some(12), "fenced {fenced}");
+            }
         }
 
         /// **The configured readiness-V2 horizon moves every judge of a row together** (user decision
