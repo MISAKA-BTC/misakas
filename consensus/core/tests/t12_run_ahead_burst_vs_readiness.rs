@@ -1,6 +1,9 @@
 //! **A run-ahead burst against a readiness row, on the lifecycle fold** — the 2026-09-25
-//! mainnet-values review's HIGH, measured rather than inferred. **Open for the user's decision
-//! before launch: nothing here is a fix.**
+//! mainnet-values review's HIGH, measured rather than inferred. **Closed by the lead cap** (the
+//! user's option (a), `palw_clock_lead_cap`, armed on testnet-12 from genesis): a header that moves
+//! the clock is admitted at most 132 s past the receiving node's clock, so a burst is `⌊132 / I⌋ + 1`
+//! = 2 whatever the tolerance — the last cases below. The uncapped cases stay as the measurement of
+//! what the cap closes.
 //!
 //! testnet-12's future-drift bound became mainnet's 1,620 s (user decision 2026-09-25). The clock
 //! floor still spaces two tick STAMPS one interval apart, but nothing spaces them in wall time: a
@@ -28,8 +31,9 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test t12_run_ahead_burst_vs_readiness -- --nocapture
 
-use kaspa_consensus_core::config::params::Params;
+use kaspa_consensus_core::config::params::{ForkActivation, Params};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
+use kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS;
 use kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS as I;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_model_registry_v1::{
@@ -163,6 +167,11 @@ fn t12_a_run_ahead_burst_outlasts_a_readiness_row() {
     assert_eq!(t12.timestamp_deviation_tolerance, 1_620, "testnet-12 runs mainnet's tolerance");
     let (b_shipped, b_before) = (burst(t12.timestamp_deviation_tolerance), burst(132));
     assert_eq!((b_shipped, b_before), (14, 2), "one producer's burst: 14 DAA at 1,620 s, 2 at 132 s");
+    // The lead cap: armed on testnet-12, it bounds a clock-moving header's lead at 132 s whatever the
+    // tolerance, so the burst is the 132 s one.
+    assert_eq!(t12.palw_clock_lead_cap, Some(ForkActivation::always()), "testnet-12 arms the lead cap from genesis");
+    let b_capped = PALW_CLOCK_LEAD_CAP_MS / I + 1;
+    assert_eq!(b_capped, 2, "one producer's burst under the cap");
 
     // The arithmetic the other horizons run is the fold's own at 8.
     let h8 = Rule::Fold.horizon();
@@ -183,6 +192,8 @@ fn t12_a_run_ahead_burst_outlasts_a_readiness_row() {
         ("1,620 s, H 24 (rcore/int-3's t12 horizon)", Rule::Horizon { h: 24, due: 12 }, b_shipped),
         ("1,620 s, H 30 (the horizon's ceiling)", Rule::Horizon { h: 30, due: 15 }, b_shipped),
         ("1,620 s, H 24, re-proving past H − B − 2 = 8", Rule::Horizon { h: 24, due: 24 - b_shipped - 2 }, b_shipped),
+        ("1,620 s under the lead cap, H 8", Rule::Fold, b_capped),
+        ("1,620 s under the lead cap, H 24 (rcore/int-3's t12 horizon)", Rule::Horizon { h: 24, due: 12 }, b_capped),
     ];
     let mut measured = Vec::new();
     for (name, rule, b) in cases {
@@ -228,4 +239,12 @@ fn t12_a_run_ahead_burst_outlasts_a_readiness_row() {
         (at("1,620 s, H 30 (the horizon's ceiling)", "aligned"), at("1,620 s, H 30 (the horizon's ceiling)", "staggered"));
     assert!(a30.3 && a30.2 == seats, "aligned at H 30: every row lapses for a DAA");
     assert!(!s30.3, "staggered at H 30: {} rows lapse and the class stays drawable", s30.2);
+    // **What ships: the lead cap.** At either horizon the burst fits the escalation's margin again —
+    // no row lapses and the class stays Active, aligned or staggered.
+    for name in ["1,620 s under the lead cap, H 8", "1,620 s under the lead cap, H 24 (rcore/int-3's t12 horizon)"] {
+        for layout in ["aligned", "staggered"] {
+            let capped = at(name, layout);
+            assert_eq!((capped.2, capped.3, capped.4), (0, false, PalwModelLifecycleV1::Active), "{layout}: {name}");
+        }
+    }
 }

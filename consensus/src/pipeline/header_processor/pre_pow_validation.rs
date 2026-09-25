@@ -112,7 +112,11 @@ impl HeaderProcessor {
         // than 132 s ahead of wall time holds every step (a step is stamped above the median), so the
         // DAA clock stalls until wall time catches up — it does not run: DAA-denominated windows keep
         // their wall length, and no readiness row lapses for lack of a block
-        // (`t12_a_median_pushed_ahead_stalls_the_clock_and_lapses_no_row`).
+        // (`t12_a_median_pushed_ahead_stalls_the_clock_and_lapses_no_row`). A beat granted BELOW such
+        // a median (withheld through the push, or relayed late) is admitted here, and merged it would
+        // make every template of every lane a step past the cap — so virtual does not merge it until
+        // wall time catches up (`palw_lead_cap_virtual_parents`, a local policy), and production goes
+        // on (`t12_a_granted_beat_released_under_a_pushed_median_waits_and_every_lane_keeps_building`).
         if self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(header.daa_score))
             && clock.lead_capped(header.pow_algo_id)
             && let Err(latest) =

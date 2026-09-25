@@ -1516,6 +1516,15 @@ impl VirtualStateProcessor {
         let sink_ghostdag_data = Lazy::new(|| self.ghostdag_store.get_data(new_sink).unwrap());
         // Cache the DAA and Median time windows of the sink for future use, as well as prepare for virtual's window calculations
         self.cache_sink_windows(new_sink, prev_sink, &sink_ghostdag_data);
+        // The lead cap's local policy (`palw_clock_lead_cap`): a granted beat whose step every template
+        // would have to stamp past this node's clock plus 132 s is not merged yet. Asked after the sink's
+        // windows are cached, so the virtual windows it computes build on them.
+        let (virtual_parents, virtual_ghostdag_data) =
+            self.palw_lead_cap_virtual_parents(virtual_parents, virtual_ghostdag_data, pruning_point);
+        assert_eq!(
+            virtual_ghostdag_data.selected_parent, new_sink,
+            "the lead cap's policy leaves only merged tips out, never the sink"
+        );
 
         let new_virtual_state = self
             .calculate_and_commit_virtual_state(
@@ -15099,6 +15108,158 @@ impl VirtualStateProcessor {
         Ok(())
     }
 
+    /// **The stamp a template built on a virtual carries — or the lead cap's refusal of it.** One
+    /// computation for the template builder and for [`Self::palw_lead_cap_virtual_parents`], so the
+    /// policy leaves out exactly what the builder would refuse.
+    ///
+    /// `max(now, median + 1)`, raised to the slot where the clock floor is armed and the block steps
+    /// (H5; `clock` is the virtual's own clock decision, `None` only where neither the floor nor the
+    /// cap is armed). Where `lead_capped` and the block steps (`granted`), a stamp more than
+    /// [`PALW_CLOCK_LEAD_CAP_MS`](kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS)
+    /// past `now` is `ClockStepTemplateTooFarAhead`: every header stage, this node's included, would
+    /// refuse the block (`ClockLeadTooFarAhead`), so the builder waits instead. The heartbeat adapter
+    /// then stamps a beat at `max(template, slot)` and hands that stamp back as `earliest`, and the
+    /// miner mints no beat while `earliest` is past its own clock.
+    fn palw_template_stamp_v1(
+        &self,
+        clock: Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockStepV1>,
+        lead_capped: bool,
+        past_median_time: u64,
+        now: u64,
+    ) -> Result<u64, RuleError> {
+        let proposed = u64::max(past_median_time + 1, now);
+        let timestamp = match clock {
+            Some(clock) if self.palw_clock_floor.is_some() => clock.floor_stamp(proposed),
+            _ => proposed,
+        };
+        if lead_capped
+            && clock.is_some_and(|clock| clock.granted)
+            && let Err(latest) = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(timestamp, now)
+        {
+            return Err(RuleError::ClockStepTemplateTooFarAhead(timestamp, latest, timestamp - latest));
+        }
+        Ok(timestamp)
+    }
+
+    /// **Would a template built on a virtual with this GHOSTDAG data step the clock past the lead
+    /// cap?** — [`Self::palw_template_stamp_v1`]'s refusal, asked of a candidate virtual. `false`
+    /// wherever the cap is not in force, the virtual steps nothing, or a window cannot be computed
+    /// (the builder then answers for itself).
+    fn palw_virtual_steps_past_lead_cap(&self, ghostdag_data: &GhostdagData, now: u64) -> bool {
+        let Some(fence) = self.palw_clock_lead_cap else {
+            return false;
+        };
+        let Ok(window) = self.window_manager.block_daa_window(ghostdag_data) else {
+            return false;
+        };
+        if !fence.is_active(window.daa_score) || !window.clock.granted {
+            return false;
+        }
+        let Ok((past_median_time, _)) = self.window_manager.calc_past_median_time(ghostdag_data) else {
+            return false;
+        };
+        self.palw_template_stamp_v1(Some(window.clock), true, past_median_time, now).is_err()
+    }
+
+    /// **The lead cap's local policy on virtual's parents** (`palw_clock_lead_cap`; the lead-cap
+    /// review's HIGH): a granted beat whose step every template would have to stamp past this node's
+    /// clock plus 132 s is not merged YET.
+    ///
+    /// A virtual whose mergeset carries a granted beat steps the clock, so every template built on it
+    /// — every lane's — is a step, stamped `max(now, median + 1, slot)`. A producer can hold the
+    /// past-median time more than 132 s ahead with blocks that move no clock (they keep the full
+    /// tolerance), and a beat granted BELOW that median — its own past carries none of the push:
+    /// withheld and released after it, or merely relayed late — is still a valid block and a tip.
+    /// Merged, it would make every template past the cap: the builder would refuse them all and the
+    /// node would produce nothing, in any lane, until wall time caught up — up to the tolerance less
+    /// the cap after the last push, and longer while the push is renewed, the pusher the only
+    /// producer meanwhile. So virtual leaves such a beat out, as it leaves out a tip past the merge
+    /// depth: a local choice of which tips to merge, never a verdict. The beat stays a valid tip, and
+    /// the first virtual resolved once wall time reaches the step's stamp less the cap merges it (if
+    /// the merge depth has passed it first, it is never merged, and the next beat takes the slot).
+    /// Every lane keeps building non-step blocks meanwhile, and what stalls is the DAA clock alone —
+    /// which the push holds anyway, since any step is stamped above the median: DAA-denominated
+    /// windows keep their wall length and no readiness row lapses.
+    ///
+    /// Left out, in order, until a template on the rest steps nothing past the cap: every parent
+    /// that brings a heartbeat into the mergeset (the sink excepted), then every parent but the sink
+    /// (the case of a sink that is itself the granted beat, merging the push beside it). A sink that
+    /// is a granted beat stepping past the cap on its own past is left as it is — the builder then
+    /// refuses until wall time catches up; that takes a push inside the beat's own median window
+    /// that the beat, stamped within the cap of the node that admitted it, did not already exceed.
+    ///
+    /// Its warnings are rate-limited to one a minute (a push is renewed block by block, and the
+    /// virtual is resolved at every block); the limiter is log state only, read by nothing else.
+    pub(super) fn palw_lead_cap_virtual_parents(
+        &self,
+        virtual_parents: Vec<BlockHash>,
+        virtual_ghostdag_data: GhostdagData,
+        pruning_point: BlockHash,
+    ) -> (Vec<BlockHash>, GhostdagData) {
+        /// The wall-clock millisecond this policy last warned at. Log state only.
+        static LAST_WARNED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let warn_due = |now: u64| {
+            use std::sync::atomic::Ordering::Relaxed;
+            let last = LAST_WARNED_MS.load(Relaxed);
+            now >= last.saturating_add(60_000) && LAST_WARNED_MS.compare_exchange(last, now, Relaxed, Relaxed).is_ok()
+        };
+        if self.palw_clock_lead_cap.is_none() || virtual_parents.len() < 2 {
+            return (virtual_parents, virtual_ghostdag_data);
+        }
+        let is_beat = |hash: BlockHash| {
+            self.headers_store
+                .get_header(hash)
+                .is_ok_and(|header| header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID)
+        };
+        let sink = virtual_ghostdag_data.selected_parent;
+        let merged_beats: Vec<BlockHash> =
+            virtual_ghostdag_data.unordered_mergeset_without_selected_parent().filter(|hash| is_beat(*hash)).collect();
+        // No beat in the mergeset: nothing is granted, and there is nothing to decide.
+        if merged_beats.is_empty() && !is_beat(sink) {
+            return (virtual_parents, virtual_ghostdag_data);
+        }
+        let now = unix_now();
+        if !self.palw_virtual_steps_past_lead_cap(&virtual_ghostdag_data, now) {
+            return (virtual_parents, virtual_ghostdag_data);
+        }
+        let _prune_guard = self.pruning_lock.blocking_read();
+        let without_beats: Vec<BlockHash> = virtual_parents
+            .iter()
+            .copied()
+            .filter(|parent| {
+                *parent == sink || !merged_beats.iter().any(|beat| self.reachability_service.is_dag_ancestor_of(*beat, *parent))
+            })
+            .collect();
+        let mut narrower = Vec::with_capacity(2);
+        if without_beats.len() < virtual_parents.len() {
+            narrower.push(without_beats);
+        }
+        narrower.push(vec![sink]);
+        for kept in narrower {
+            let (kept, kept_ghostdag_data) = self.remove_bounded_merge_breaking_parents(kept, pruning_point);
+            if !self.palw_virtual_steps_past_lead_cap(&kept_ghostdag_data, now) {
+                let left_out = virtual_parents.iter().filter(|parent| !kept.contains(parent)).count();
+                if warn_due(now) {
+                    warn!(
+                        "[palw-clock] virtual leaves {left_out} tip(s) unmerged for now: merged, a beat grants a clock step every \
+                         template would stamp more than 132 s past this node's clock (the past-median time stands that far ahead — \
+                         palw_clock_lead_cap); non-step blocks are built meanwhile and the DAA clock waits for wall time"
+                    );
+                } else {
+                    debug!("[palw-clock] virtual leaves {left_out} tip(s) unmerged for now (palw_clock_lead_cap)");
+                }
+                return (kept, kept_ghostdag_data);
+            }
+        }
+        if warn_due(now) {
+            warn!(
+                "[palw-clock] the sink {sink} is a beat whose clock step every template would stamp more than 132 s past this \
+                 node's clock (palw_clock_lead_cap): templates wait for wall time"
+            );
+        }
+        (virtual_parents, virtual_ghostdag_data)
+    }
+
     /// **ADR-0142: the clock's decision for a block built on `parents`** — the cursor its window
     /// derives at its selected parent's score and whether its mergeset carries a granted beat.
     ///
@@ -15745,6 +15906,22 @@ impl VirtualStateProcessor {
         // [`calc_block_parents`] can use deep blocks below the pruning point for this calculation, so we
         // need to hold the pruning lock.
         let _prune_guard = self.pruning_lock.blocking_read();
+        // **The template's stamp, decided before anything is built on it** (`palw_template_stamp_v1`:
+        // the median, H5's floor, and the lead cap's construction half). Past median time is the
+        // exclusive lower bound for valid block time. **H5 (the clock floor): a template that steps the
+        // clock on a beat's grant is stamped at or past the slot it consumes** — the header stage
+        // refuses it otherwise (`ClockStepBeforeItsSlot`). Raised here rather than left to the miner
+        // because every lane's template can be the step: on testnet-12 the first block of any lane
+        // built after a granted beat carries the tick. Decided on the virtual's own clock decision —
+        // the one this block's DAA score was computed from. **The lead cap**: such a step stamped past
+        // this node's clock plus 132 s is refused by every header stage, so it is refused here.
+        let lead_capped = self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let clock = if self.palw_clock_floor.is_some() || lead_capped {
+            Some(self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock)
+        } else {
+            None
+        };
+        let timestamp = self.palw_template_stamp_v1(clock, lead_capped, virtual_state.past_median_time, unix_now())?;
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let header_pruning_point =
             self.pruning_point_manager.expected_header_pruning_point(virtual_state.ghostdag_data.to_compact()).pruning_point;
@@ -15927,44 +16104,6 @@ impl VirtualStateProcessor {
         let accepted_id_merkle_root = self
             .calc_accepted_id_merkle_root(virtual_state.accepted_tx_ids.iter().copied(), virtual_state.ghostdag_data.selected_parent);
         let utxo_commitment = virtual_state.multiset.clone().finalize();
-        // Past median time is the exclusive lower bound for valid block time, so we increase by 1 to get the valid min
-        let min_block_time = virtual_state.past_median_time + 1;
-        // **H5 (the clock floor): a template that steps the clock on a beat's grant is stamped at or
-        // past the slot it consumes** — the header stage refuses it otherwise (`ClockStepBeforeItsSlot`).
-        // Raised here rather than left to the miner because every lane's template can be the step: on
-        // testnet-12 the first block of any lane built after a granted beat carries the tick. The
-        // raise is at most the granted beat's own lead over this node's clock, which peers accepted
-        // for the beat and accept for this block likewise. Decided on the virtual's own clock
-        // decision — the one this block's DAA score was computed from.
-        let lead_capped = self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
-        let clock = if self.palw_clock_floor.is_some() || lead_capped {
-            Some(self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock)
-        } else {
-            None
-        };
-        let now = unix_now();
-        let timestamp = {
-            let proposed = u64::max(min_block_time, now);
-            match clock {
-                Some(clock) if self.palw_clock_floor.is_some() => clock.floor_stamp(proposed),
-                _ => proposed,
-            }
-        };
-        // **The lead cap's construction half** (`palw_clock_lead_cap`): a template that steps the
-        // clock is stamped `max(now, median + 1, slot)`, and past `now + 132 s` the header stage — this
-        // node's and every peer's — refuses it. Wait instead of building it. Only this lane-agnostic
-        // half is asked here: the heartbeat adapter stamps a beat at `max(template, slot)` and hands
-        // back that stamp as `earliest`, and the miner mints no beat while `earliest` is past its own
-        // clock. The slot cannot put a step past the cap — a granted beat this node admitted was
-        // stamped at or past it and within the cap — so what reaches this refusal is a past-median
-        // time held more than 132 s ahead of this clock (the stall the header stage documents), or
-        // this host's clock stepping back.
-        if lead_capped
-            && clock.is_some_and(|clock| clock.granted)
-            && let Err(latest) = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(timestamp, now)
-        {
-            return Err(RuleError::ClockStepTemplateTooFarAhead(timestamp, latest, timestamp - latest));
-        }
         let header = Header::new_finalized(
             version,
             parents_by_level,

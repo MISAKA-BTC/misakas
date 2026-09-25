@@ -2270,6 +2270,43 @@ pub(crate) fn palw_carrier_replaceable_v1(tx: &Transaction) -> bool {
     }
 }
 
+/// **Does this carrier of ours keep its slot against an ESCALATED proof, `unconfirmed_daa` after it
+/// was sent?** (the 2026-09-25 review of the shipped node, LOW.) A court move of a session this node
+/// is a party to (either side's: the opening, a rung's disclosure or verdict, the attention
+/// dissection's root claim, rounds and choices, the close or the held checkpoint accusation that
+/// bottoms it), or its answer to a data-availability accusation, is re-planned by its own lane only
+/// [`COURT_MOVE_REPLAN_DAA`] after it was sent (`court_moved`) — so a proof that replaced it merely
+/// LATE ([`PALW_CARRIER_LATE_DAA_V1`]) left it neither in the pool nor queued for up to eight DAA,
+/// and a move sent in the last of its turn missed its deadline: the default a missed rung or answer
+/// convicts. Such a carrier yields only once LOST ([`PALW_CARRIER_LOST_DAA_V1`] — the re-plan
+/// horizon itself, so its lane has re-queued it by the tick that replaces it): a lapsing row delays
+/// a seat, a missed move slashes it. Every other lane carrier yields as before.
+pub(crate) fn palw_carrier_keeps_its_turn_v1(tx: &Transaction, unconfirmed_daa: u64) -> bool {
+    if unconfirmed_daa >= PALW_CARRIER_LOST_DAA_V1 || tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE {
+        return false;
+    }
+    borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload).is_ok_and(|payload| {
+        matches!(
+            payload.object,
+            PalwConsensusObjectV2::CourtOpened { .. }
+                | PalwConsensusObjectV2::CourtVerdictPosted { .. }
+                | PalwConsensusObjectV2::CourtClosed { .. }
+                | PalwConsensusObjectV2::CourtDisclosed { .. }
+                | PalwConsensusObjectV2::CourtCloseDeclared { .. }
+                | PalwConsensusObjectV2::CourtCloseChunk { .. }
+                | PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
+                | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. }
+                | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. }
+                | PalwConsensusObjectV2::CourtAttnDissected { .. }
+                | PalwConsensusObjectV2::CourtAttnChildChosen { .. }
+                | PalwConsensusObjectV2::CheckpointAccused { .. }
+                | PalwConsensusObjectV2::MaterialDisclosed { .. }
+                | PalwConsensusObjectV2::MaterialDisclosedHeld { .. }
+                | PalwConsensusObjectV2::MaterialDisclosedV2 { .. }
+        )
+    })
+}
+
 /// **The fee a replacement pays** so the pool takes it over the carrier it replaces: the relay floor,
 /// and above `replaced_feerate` (sompi a gram) by a sixteenth plus one sompi over `mass` — the pool
 /// replaces only at a strictly higher feerate. A sixteenth, not more: a proof that replaces a proof
@@ -4212,7 +4249,8 @@ impl PalwPanelService {
     /// proof's from here, `inflight` is one again, and the replaced object is left to its lane, which
     /// re-offers what did not land. Nothing is replaced when the late carrier is not one of ours this
     /// node can read, spends an input the chain has not confirmed, or moves money
-    /// ([`palw_carrier_replaceable_v1`]). `true` when the pool took the proof.
+    /// ([`palw_carrier_replaceable_v1`]), nor a court move or a data-availability answer before it is
+    /// lost ([`palw_carrier_keeps_its_turn_v1`]). `true` when the pool took the proof.
     #[allow(clippy::too_many_arguments)]
     async fn replace_late_carrier_v1(
         &self,
@@ -4243,6 +4281,16 @@ impl PalwPanelService {
                 format!(
                     "[{PALW_PANEL}] a possession proof for class {class_id} waits behind carrier {stuck} ({unconfirmed_daa} DAA \
                      unconfirmed): it moves money or registers, and is not replaced"
+                )
+            });
+            return false;
+        }
+        if palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa) {
+            crate::palw_backends::note_throttled_v1("panel-proof-replace-deferred", || {
+                format!(
+                    "[{PALW_PANEL}] a possession proof for class {class_id} waits behind carrier {stuck} ({unconfirmed_daa} DAA \
+                     unconfirmed): a court move or a data-availability answer, replaced only once lost \
+                     ({PALW_CARRIER_LOST_DAA_V1} DAA), when its lane re-plans it"
                 )
             });
             return false;
@@ -19889,6 +19937,109 @@ mod readiness_memory_and_stuck_carrier_tests {
             assert!(fee as f64 / mass as f64 > replaced_feerate, "mass {mass}: strictly above the replaced feerate");
         }
         assert_eq!(palw_replacement_fee_v1(500, 0.0, 0), 500, "nothing to beat: the floor");
+    }
+
+    /// **The review of the shipped node (2026-09-25), LOW: a court move or a data-availability answer
+    /// is replaced only once its own lane re-plans it.** On 0e8ec984e an escalated proof replaced any
+    /// lane carrier of ours 2 DAA late ([`PALW_CARRIER_LATE_DAA_V1`]), and the court lane re-plans a
+    /// move only [`COURT_MOVE_REPLAN_DAA`] after it sent it (`court_moved`): for eight DAA the move
+    /// was in neither the pool nor the queue, and one sent in the last of its 42-DAA turn missed its
+    /// deadline — the default a missed rung or answer convicts. Now such a carrier yields only once
+    /// LOST, at the re-plan horizon itself, so at every DAA the escalated site would replace it the
+    /// lane has already re-queued it; every other lane carrier (the drill's duplicate
+    /// `ObjectiveOffence`, a proof of our own) yields late, as before.
+    #[test]
+    fn a_court_move_is_replaced_only_once_its_lane_re_plans_it() {
+        use kaspa_consensus_core::{palw_attn_court_v1, palw_bisect, palw_offence_v1};
+        let session_id = Hash64::from_u64_word(7);
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(1), 0));
+        let moves = [
+            PalwConsensusObjectV2::CourtOpened {
+                session_id,
+                claim: Hash64::from_u64_word(8),
+                challenger_bond: bond,
+                space: palw_bisect::PalwBisectSpaceV1::StepLeaves,
+                space_size: 8,
+                signature: vec![],
+            },
+            PalwConsensusObjectV2::CourtVerdictPosted {
+                session_id,
+                verdict: palw_bisect::PalwBisectVerdictV1 { version: 1, session_id, round: 3, agree: true },
+                signature: vec![],
+            },
+            PalwConsensusObjectV2::CourtAttnChildChosen {
+                session_id,
+                choice: palw_attn_court_v1::PalwAttnDissectChoiceV1 { version: 1, session_id, round: 2, child: 1 },
+                signature: vec![],
+            },
+        ];
+        // The court lane's debounce, as the duty loop reads `court_moved`: a move sent at `sent` is
+        // skipped while `current_daa < sent + COURT_MOVE_REPLAN_DAA`, and re-planned from then on.
+        let replanned = |sent: u64, now: u64| now >= sent.saturating_add(COURT_MOVE_REPLAN_DAA);
+        let sent = 1_000u64;
+        // The gap the review found: late at 2 DAA, and not re-planned for 8 more.
+        assert!(
+            palw_readiness_replaces_carrier_v1(true, PALW_CARRIER_LATE_DAA_V1) && !replanned(sent, sent + PALW_CARRIER_LATE_DAA_V1),
+            "the shipped escalated site replaced a move its lane had not re-planned"
+        );
+        for object in moves {
+            let name = object_name(&object);
+            let tx = carrier(object, 1);
+            assert!(palw_carrier_replaceable_v1(&tx), "{name}: a lane object on one input and its change");
+            for now in sent..sent + 3 * COURT_MOVE_REPLAN_DAA {
+                let late = now - sent;
+                // Either site, as wired: the carrier is late (or lost) for the proof, and it yields.
+                let replaced = palw_readiness_replaces_carrier_v1(true, late) && !palw_carrier_keeps_its_turn_v1(&tx, late);
+                assert_eq!(replaced, late >= PALW_CARRIER_LOST_DAA_V1, "{name}, {late} DAA unconfirmed");
+                assert!(!replaced || replanned(sent, now), "{name}: replaced {late} DAA late, before its lane re-plans it");
+            }
+        }
+        // Every other lane carrier yields late, as before — the drill's own case above all.
+        let offence = PalwConsensusObjectV2::ObjectiveOffence {
+            kind: palw_offence_v1::PalwOffenceKindV1::ExecutorEquivocation,
+            accused: bond,
+            evidence_id: Hash64::from_u64_word(9),
+            evidence: vec![],
+        };
+        assert!(!palw_carrier_keeps_its_turn_v1(&carrier(offence, 1), PALW_CARRIER_LATE_DAA_V1), "the drill's ObjectiveOffence");
+        let proof = PalwConsensusObjectV2::SeatReadinessProvedV2 {
+            bond,
+            class_id: Hash64::from_u64_word(2),
+            span: 3,
+            proof: Box::new(kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1 {
+                leaf_count: 1,
+                opened: vec![],
+                siblings: vec![],
+            }),
+            signature: vec![],
+        };
+        assert!(!palw_carrier_keeps_its_turn_v1(&carrier(proof, 1), PALW_CARRIER_LATE_DAA_V1), "a proof of our own");
+        // Every court move and every data-availability answer is named (the answers carry a whole
+        // step binding, so the list is read rather than built).
+        let source = production();
+        let keeps = &source[source.find("pub(crate) fn palw_carrier_keeps_its_turn_v1(").expect("the rule")..];
+        let keeps = &keeps[..keeps.find("\n}\n").expect("its end")];
+        for variant in [
+            "CourtClosed",
+            "CourtDisclosed",
+            "CourtCloseDeclared",
+            "CourtCloseChunk",
+            "CourtAttnRootClaimed",
+            "CourtAttnRootClaimedAnchored",
+            "CourtAttnRootClaimedHeld",
+            "CourtAttnDissected",
+            "CheckpointAccused",
+            "MaterialDisclosed",
+            "MaterialDisclosedHeld",
+            "MaterialDisclosedV2",
+        ] {
+            assert!(keeps.contains(&format!("PalwConsensusObjectV2::{variant} {{ .. }}")), "{variant} keeps its turn");
+        }
+        // And the replacement asks it before it builds anything.
+        let replace = &source[source.find("    async fn replace_late_carrier_v1(").expect("the replacement fn")..];
+        let replace = &replace[..replace.find("\n    }\n").expect("its end")];
+        let asked = replace.find("palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa)").expect("asked");
+        assert!(asked < replace.find("self.build_lifecycle_tx_priced_v1(").expect("the build"), "before the build");
     }
 
     /// A replacement that did not go out leaves the site it entered with nothing sent.

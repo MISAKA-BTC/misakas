@@ -64,7 +64,11 @@
 //!   ([`PalwMemoryLedgerV1::new_with_proof_carve`]): an ordinary reservation never takes the
 //!   carve's bytes, and a proof-lane reservation ([`PALW_READINESS_PROOF_ROLE_V1`]) may take them
 //!   and whatever else is free. Every grant, in either lane, still keeps the pool's total under
-//!   `min(share, live)`: the carve is carved OUT of the share, never added to it.
+//!   the share: the carve is carved OUT of the share, never added to it. On the live axis the
+//!   proof lane asks only that its own bytes be free now (less what the lane already holds): the
+//!   live reading already excludes every page an outstanding replay has touched, and charging the
+//!   whole replay against it again refused the proof for the replay's whole life on a seat whose
+//!   live bound binds (the 2026-09-25 review of the shipped node; `available_for`).
 //!
 //! **Node-local, never consensus.** Nothing here is read by the chain; a refusal delays a duty and
 //! rejects no block. And capacity is not capability: what a class earns and locks is derived from
@@ -155,9 +159,7 @@ impl std::fmt::Display for PalwMemoryRefusalV1 {
             write!(f, ", less the readiness proof lane's {:.2} GiB", gib(self.proof_carve_bytes))?;
         }
         write!(f, ", less {:.2} GiB already reserved", gib(self.reserved_bytes))?;
-        if self.held.is_empty() {
-            write!(f, ")")
-        } else {
+        if !self.held.is_empty() {
             write!(f, " by ")?;
             for (i, row) in self.held.iter().enumerate() {
                 if i > 0 {
@@ -165,8 +167,12 @@ impl std::fmt::Display for PalwMemoryRefusalV1 {
                 }
                 write!(f, "{} of class {} job {} ({:.2} GiB)", row.key.role, row.key.class_id, row.key.job, gib(row.bytes))?;
             }
-            write!(f, ")")
         }
+        if self.key.as_ref().is_some_and(|key| key.role == PALW_READINESS_PROOF_ROLE_V1) && self.live_bytes.is_some() {
+            // The proof lane charges the reservations to the share only (`available_for`).
+            write!(f, "; for a readiness proof, reserved bytes are charged to the share and the headroom only to the proof lane")?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -304,10 +310,33 @@ impl PalwMemoryLedgerV1 {
 
     /// What a request of `role` may take now: an ordinary one never the carve, the proof lane the
     /// carve and everything else free — never, in either lane, past the bound.
+    ///
+    /// **The proof lane charges the reservations on the share axis only** (the 2026-09-25 review of
+    /// the shipped node, LOW–MEDIUM): `min(share − reserved, live − proofs held)`. The live reading
+    /// already excludes every page an outstanding reservation has touched, so charging the whole
+    /// reservation against it again counts the touched part twice — the ordinary lane's deliberate
+    /// error (the module doc), which on a 3.5 GiB seat under a 9 GiB cgroup refused the proof's
+    /// 32 MiB for the whole life of an 8k replay ("the proof's own 32.0 MiB are not free").
+    /// Nothing is lost by it: every ordinary grant left the carve free on BOTH axes when it was
+    /// made, so the headroom it has not yet touched is still in `live` beside the carve, and the
+    /// share axis still charges every byte. Without a declared share the live axis is the only one,
+    /// and the proof lane reads it as the headroom less what the lane itself holds — the carve's
+    /// untouched half of an ordinary grant is exactly what the ordinary lane left free for it.
     fn available_for(&self, state: &LedgerState, role: &str) -> (Option<u64>, Option<u64>, u64, Option<u64>) {
         if role == PALW_READINESS_PROOF_ROLE_V1 {
-            let (share, live, reserved, bound) = self.raw_bounds(state);
-            (share, live, reserved, bound.map(|b| b.saturating_sub(reserved)))
+            let (share, live, reserved, _) = self.raw_bounds(state);
+            let proofs: u64 = state
+                .rows
+                .iter()
+                .filter(|r| r.key.role == PALW_READINESS_PROOF_ROLE_V1)
+                .fold(0u64, |acc, r| acc.saturating_add(r.bytes));
+            let available = match (share.map(|s| s.saturating_sub(reserved)), live.map(|l| l.saturating_sub(proofs))) {
+                (Some(share), Some(live)) => Some(share.min(live)),
+                (Some(share), None) => Some(share),
+                (None, Some(live)) => Some(live),
+                (None, None) => None,
+            };
+            (share, live, reserved, available)
         } else {
             self.bounds(state)
         }
@@ -682,6 +711,71 @@ mod tests {
         let plain = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(share), || None);
         assert_eq!(plain.proof_carve(), 0);
         assert!(plain.can_reserve(share).is_ok());
+    }
+
+    /// **The review of the shipped node (2026-09-25), LOW–MEDIUM: the proof lane's carve holds on the
+    /// live axis too.** The reviewer's probe (`review/shipped-0925` b5610a9cf), kept as the
+    /// regression: a 3.5 GiB seat under a cgroup whose live bound binds (`past_reserve` 3,686 MiB
+    /// idle), an 8k replay reserved (3,456 MiB) whose scratch then lands (the probe sees 1,740 MiB
+    /// fewer). On 0e8ec984e the proof lane read `min(share, live) − every reservation` = 0 and the
+    /// proof's 32 MiB was refused for the replay's whole life — the replay counted twice, once in
+    /// `live` and once as reserved. Now the share axis charges every reservation and the live axis
+    /// only what the host has free: `min(3,584 − 3,456, 1,946)` = 128 MiB, and the proof is granted.
+    /// The ordinary lane keeps its deliberate double count, and the live axis still binds the proof
+    /// when the host really has less than its bytes free.
+    #[test]
+    fn the_proof_lane_is_not_starved_when_the_live_bound_binds_during_a_replay() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        const MIB: u64 = 1 << 20;
+        let carve = PALW_READINESS_PROOF_CARVE_BYTES_V1;
+        let live = Arc::new(AtomicU64::new(3_686 * MIB)); // `past_reserve` of an idle 3.5 GiB seat
+        let probe = live.clone();
+        let ledger = PalwMemoryLedgerV1::new_with_proof_carve(PalwMemoryPoolV1::Host, Some(3_584 * MIB), carve, move || {
+            let v = probe.load(Ordering::SeqCst);
+            Some(PalwHostHeadroomV1 { past_reserve: v, haircut: v * 7 / 10 })
+        });
+        let proof_key = |job| PalwMemoryReservationKeyV1 {
+            role: PALW_READINESS_PROOF_ROLE_V1,
+            class_id: Hash64::from_u64_word(0x8C),
+            job: Hash64::from_u64_word(job),
+        };
+        ledger.capacity_admits(3_456 * MIB).expect("the seat is a seat for the 8k class");
+        let replay = ledger.reserve(key("full-seat", 1), 3_456 * MIB).expect("the 8k replay starts");
+        // The replay's scratch (~1.7 GiB anon) lands in memory; the live probe sees it.
+        live.store(3_686 * MIB - 1_740 * MIB, Ordering::SeqCst);
+        // The ordinary lane keeps its double count: nothing else starts beside the replay.
+        assert!(ledger.reserve(key("court", 2), MIB).is_err(), "an ordinary duty is still held (the module doc's safe error)");
+        // The proof lane: its carve is free on the share axis, and the host has it free now.
+        let proof = ledger.reserve(proof_key(3), carve).unwrap_or_else(|e| panic!("the proof's own bytes during the replay: {e}"));
+        assert!(ledger.reserved_bytes() <= 3_584 * MIB, "never past the share");
+        // A second proof beside it is charged the first on both axes: 96 MiB are left on the share.
+        let second = ledger.reserve(proof_key(4), carve).expect("the share still has room for a second");
+        assert!(ledger.reserve(proof_key(5), 3 * carve).is_err(), "past the share: 3,584 − 3,456 − 64 = 64 MiB left");
+        drop(second);
+        drop(proof);
+        // The live axis still binds the proof: a host that really has less than its bytes free.
+        live.store(carve - 1, Ordering::SeqCst);
+        let refused = ledger.reserve(proof_key(6), carve).expect_err("the host has less than the proof's bytes free");
+        assert_eq!((refused.available_bytes, refused.proof_carve_bytes), (carve - 1, 0), "{refused}");
+        assert!(refused.to_string().contains("charged to the share"), "the line says which axis charged what: {refused}");
+        drop(replay);
+        live.store(3_686 * MIB, Ordering::SeqCst);
+        let _after = ledger.reserve(proof_key(7), carve).expect("and after the replay, as always");
+
+        // Without a declared share the live axis is the only one: an unbudgeted host (the haircut)
+        // whose replay was granted beside the carve, then touched its scratch.
+        let haircut = Arc::new(AtomicU64::new(4 * GIB));
+        let read = haircut.clone();
+        let undeclared = PalwMemoryLedgerV1::new_with_proof_carve(PalwMemoryPoolV1::Host, None, carve, move || {
+            let v = read.load(Ordering::SeqCst);
+            Some(PalwHostHeadroomV1 { past_reserve: v * 10 / 7, haircut: v })
+        });
+        let replay = undeclared.reserve(key("full-seat", 8), 3 * GIB).expect("fits the haircut beside the carve");
+        haircut.store(4 * GIB - 1_740 * MIB * 7 / 10, Ordering::SeqCst);
+        assert!(undeclared.reserve(key("court", 9), MIB).is_err(), "an ordinary duty is still held");
+        let proof = undeclared.reserve(proof_key(10), carve).expect("the proof's bytes: the headroom the replay left the carve");
+        assert!(undeclared.reserve(proof_key(11), 4 * GIB).is_err(), "never past the headroom less what the lane holds");
+        drop((proof, replay));
     }
 
     /// A device pool is its own ledger: a host reservation does not consume device bytes and the
