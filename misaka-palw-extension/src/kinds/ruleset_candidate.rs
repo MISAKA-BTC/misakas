@@ -53,6 +53,9 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // `palw_bond_maturity` scheduled above it.
         "palw_bond_maturity_early" => params.palw_bond_maturity_early = Some(at),
         "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
+        // lane rcore/f1-forkchoice-attacks (post-launch): a bare height — a deep reorg needs a strict
+        // economic win past it.
+        "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
         "palw_heartbeat" => {
             companion(&mut params.palw_heartbeat, name, "work_log2 and the mergeset bound", at, |f, at| f.activation = at)?
         }
