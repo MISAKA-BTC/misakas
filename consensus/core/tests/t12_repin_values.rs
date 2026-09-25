@@ -18,6 +18,7 @@
 
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::block::Block;
+use kaspa_consensus_core::config::drill::{PALW_DRILL_SALT_LEN_V1, PalwDrillSaltV1, palw_t12_drill_genesis_block_v1};
 use kaspa_consensus_core::config::genesis::GenesisBlock;
 use kaspa_consensus_core::config::params::*;
 use kaspa_consensus_core::config::premine::*;
@@ -130,11 +131,17 @@ fn print_every_value_the_pins_hold() {
     };
     out("testnet-12.class.8k", row(PALW_T12_NARROW_DENSE_N_CTX));
     out("testnet-12.class.2m", row(PALW_T12_DENSE_N_CTX));
-    out("testnet-12.class.c7", PALW_T12_RCORE_CONSERVATIVE_CLASSES.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","));
+    // C7 as the chain DERIVES it (the 2M row), not the pinned `PALW_T12_2M_CLASS_ID_BYTES` literal the
+    // const preset carries — that literal is one of the pins compared against this.
+    out("testnet-12.class.c7", palw_t12_rcore_conservative_classes_v1().iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","));
 
     // ---- 6. the deploy kit's copies of chain facts ----
     out("kit.fee_float_base", MAIN_PREMINE_INDEX + 1);
     let card0 = PALW_T12_GENESIS_BONDS.first().expect("a genesis card");
     out("kit.hb_addr", Address::new(Prefix::Testnet, Version::PubKeyHashMlDsa87, &card0.payout_payload));
     out("kit.cards", PALW_T12_GENESIS_BONDS.iter().map(|c| c.premine_index.to_string()).collect::<Vec<_>>().join(","));
+
+    // ---- 7. the checklist's example drill genesis (salt `53…53`, what `probe-identity-local.sh --drill-salt` prints) ----
+    let salt = PalwDrillSaltV1::from_bytes([0x53; PALW_DRILL_SALT_LEN_V1]).expect("a non-zero salt");
+    out("drill.testnet-12.salt53.genesis", palw_t12_drill_genesis_block_v1(&salt).hash);
 }

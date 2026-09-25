@@ -147,7 +147,7 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
 
 - **genesis と fp は deploy kit の `fleet.env` から読む**（`EXPECT_GENESIS` / `EXPECT_FP`、出荷 commit の probe で固定。
   `docs/t12-rcore-launch-checklist.md` §4）。`deploy.sh` の既定 genesis（`f6cc9576…`）は削除し、`FORBIDDEN_GENESIS` と
-  `DRILL_GENESES` にある genesis は拒否する。8270cf03 での暫定値は genesis `a27f8f44…`、fp `99eae89d…`（出荷値ではない。`scripts/t12-repin.sh` が書き換える）。
+  `DRILL_GENESES` にある genesis は拒否する。**8270cf03 での暫定値（出荷値ではない）**: genesis `a27f8f44…`、fp `99eae89d…`（`scripts/t12-repin.sh` が値と表示を書き換える）。
 - **`app.js` の `PANEL_BOND_TX`** を t12 固有の premine txid `5e0d5f1b…` にした（旧値は共有 sentinel `6d697361…` で、t12 の bond
   outpoint と一致しないため座席表の bond 列と receipt の突合が外れていた）。出荷 commit の probe の `PREMINE_TXID` と照合してから stage する。
 - 2M は公開時点で閉じる（ADR-0152 §8.3 item 7、O-11）。`LLM_CLASSES` の 2M 行の説明にそう書いた。class id 3 本は a0af3c92 でも同じ

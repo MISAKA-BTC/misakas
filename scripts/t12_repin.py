@@ -8,10 +8,19 @@ the launch checklist's §3. This reads every one of them (the REGISTRY below: fi
 reads the value this build COMPUTES for it (the REPIN lines `consensus/core/tests/t12_repin_values.rs`
 prints, and the lines the pin tests themselves print before they assert), and sets them side by side.
 
-    t12-repin.sh                               dry run: "pinned vs computed" for every pin, exit 1 on drift
-    t12-repin.sh --apply --reason "<why>"      rewrite the drifted t12 / mainnet / layout pins in place,
-                                               one reason comment each, then run the affected tests
+    t12-repin.sh [--shipping]                  dry run: "pinned vs computed" for every pin
+    t12-repin.sh --apply [--shipping] --reason "<why>"
+                                               rewrite the drifted t12 / mainnet / layout pins in place,
+                                               one reason comment each, then run every pin test
     t12-repin.sh --selftest                    the decision rules on the last harvest logs (no build)
+
+Exit: 0 clean; 1 (dry run) only drift a rewrite fixes; 3 anything a rewrite cannot fix — a REFUSE, a pin
+NOT COMPUTED or NOT FOUND, a CHECK, an UNREGISTERED literal — whatever else drifted (--apply stops there,
+in any round); 4 the harvest build failed; 5 applied, but a pin test failed or the rounds did not converge.
+
+`--shipping` declares the shipping tree: the pin files and gate tests a step-1 merge brings must be there
+(otherwise they are "absent", not an error), and `--apply --shipping` relabels the documents' copy blocks
+as the shipping values (the dry run with --shipping reports a still-provisional label as a CHECK).
 
 **--apply runs in rounds, inputs first.** A genesis constant is not only a pin, it is an INPUT: the params
 ids hash `genesis.hash`, so a fingerprint, a twin or a copy computed while the constant is stale is
@@ -26,23 +35,29 @@ fail. Two classes sit between:
 
 * **t11-layout** — testnet-11/dormant goldens that hash a v22 state root (the t11 dormant-parity dump,
   the dormant ring root, the t11 verdict roots). They move when the v22 LAYOUT moves and never
-  otherwise. The tool re-pins one only when (a) a v22 layout golden moved in the same run and (b) every
+  otherwise. The tool re-pins one only when (a) a v22 layout golden moved in the same run, (b) every
   non-root value beside it held — the dump with its roots masked, its length and line count; the lock
-  and collaterals beside the verdict roots. Otherwise it is a t11 behaviour change and it refuses.
+  and collaterals beside the verdict roots — and (c) `--allow-t11-layout` was given, after the audit
+  signed off what the run lists (the ring and verdict guards cannot tell a layout move from a t11 fold
+  change the way the masked dump can). Otherwise it refuses.
 * **verdict** — ADR-0150's stored-corpus verdict digest is network-independent (a stateless gate): it
   moves only with a raised ruleset revision, so it is re-pinned only with `--allow-verdict` AND a rule
   manifest digest that moved.
 
-The values are never typed: each comes from a build of THIS tree. Pins in files that do not exist yet
-(the Activation Pool's `palw_activation_pool_is_t12_only.rs` before its merge) are reported absent, and
-a quoted hex literal in a pin file that no registry entry covers is reported UNREGISTERED — add an
-entry (and, if the value is built inside a test, a print before the assertion) rather than editing by hand.
+The values are never typed: each comes from a build of THIS tree. Pins in files a step-1 merge brings
+(EXPECTED_BY_MERGE: the Activation Pool's and the readiness horizon's `*_is_t12_only.rs`) are reported
+absent before that merge; any other missing pin file, or one HEAD's history once had, is NOT FOUND. A
+quoted 64/128-hex literal in any `consensus/core/tests/*.rs` that no registry entry covers is
+UNREGISTERED and blocks — add an entry (and, if the value is built inside a test, a print before the
+assertion) rather than editing by hand. GATES are tests with no literal (the A-held line's v22 root-block
+and tail order) that must pass on the shipping tree; they run in the harvest.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import glob
 import hashlib
 import json
 import os
@@ -74,6 +89,7 @@ HARVEST_TARGETS = [
     "t12_two_clock_ring",
     "palw_offence_attribution_t11_verdicts",
     "palw_same_fingerprint_same_verdict",
+    "palw_readiness_horizon_is_t12_only",
 ]
 HARVEST_FILTERS = [
     "print_every_value_the_pins_hold",
@@ -85,6 +101,7 @@ HARVEST_FILTERS = [
     "a_dormant_network_ticks_at_final_and_never_touches_the_ring",
     "t11_the_v1_fold_is_the_fold_it_was",
     "the_stored_corpus_gets_the_verdicts_this_build_pinned",
+    "the_horizon_moves_testnet12s_fingerprint_and_nothing_else_did",
 ]
 # The one lib test whose value is only visible in its own failure message (or, when it passes, is
 # the pin itself): run alone, so its result line is unambiguous.
@@ -113,6 +130,10 @@ HARVEST_LINES = [
     (r"the next block empty root (\w+)", ["t11.verdicts.root_empty_next"]),
     (r"corpus verdict digest (\w+) \(", ["corpus.verdict_digest"]),
     (r"a version-22 root moved: empty (\w+) \(want \w+\); inhabited (\w+) \(want", ["v22.state.empty", "v22.state.full"]),
+    # `palw_readiness_horizon_is_t12_only` prints both id triples (`{:?}` of a String tuple) before its asserts.
+    (r'testnet-12 with the horizon \("(\w+)", "(\w+)", "(\w+)"\) / without \("(\w+)", "(\w+)", "(\w+)"\)',
+     ["twin.with_horizon.params_id", "twin.with_horizon.identity_id", "twin.with_horizon.schedule_id",
+      "twin.no_horizon.params_id", "twin.no_horizon.identity_id", "twin.no_horizon.schedule_id"]),
 ]
 T41_RECORD = re.compile(r"T41 record (\w+)[^:\n]*: ([0-9a-f]{64})")
 REPIN_LINE = re.compile(r"REPIN (\S+) (\S+)")
@@ -211,6 +232,7 @@ FLOOR = "consensus/core/tests/palw_clock_floor_is_t12_only.rs"
 ATTR = "consensus/core/tests/palw_offence_attribution_is_t12_only.rs"
 DEADLINE = "consensus/core/tests/palw_class_verify_deadline_is_t12_only.rs"
 POOL = "consensus/core/tests/palw_activation_pool_is_t12_only.rs"
+HORIZON = "consensus/core/tests/palw_readiness_horizon_is_t12_only.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 PARAMS = "consensus/core/src/config/params.rs"
@@ -231,12 +253,69 @@ CHECKLIST = "docs/t12-rcore-launch-checklist.md"
 REGEN_DOC = "docs/testnet-12-regenesis-2026-09-23.md"
 JOIN_DOC = "docs/testnet12-join-mining.md"
 
-T41_RECORDS = ["PalwClaimRcoreV1", "PalwVestingRowV1", "PalwVestingCountersV1", "PalwPendingRewardV1", "PalwReporterCommitV1",
-               "PalwReporterCountersV1", "PalwDaSessionV1", "PalwDaClaimV1", "PalwSlashableLockV1",
-               "PalwPanelLiabilityRecordV1", "PalwConsumedOffenceV1"]
+# Pin files a step-1 merge brings (checklist §4 steps 1–3). Before that merge their rows are "absent"
+# (reported, not an error); once this tree's history has had the file, or with --shipping, a missing
+# file is NOT FOUND — a pin file that was renamed or deleted must not read as "no drift".
+EXPECTED_BY_MERGE = {
+    POOL: "feat/t12-activation-pool (with feat/t12-readiness-horizon)",
+    HORIZON: "feat/t12-readiness-horizon",
+}
 
-LAYOUT_GUARDS = ("v22.state.empty", "v22.state.full", "v22.t41.empty_root", "v22.t41.empty_carriage",
-                 *(f"v22.t41.record.{r}" for r in T41_RECORDS))
+# Tests with NO literal that must pass on the shipping tree (checklist §5, item 4): the A-held line's
+# pins of the v22 root-block order (`rcore_plus/v1` < `activation_pool/v1` < `held_forfeits/v1`) and
+# carriage-tail order (0xB4 < 0xB5 < 0xB6), read off the source, and of the delta entries 76–79 it
+# reserves for the Activation Pool (which the pool merge must reconcile). They run in the harvest's lib
+# run once the source has them, and a failure is a CHECK (the dry run exits 3, --apply refuses). Absent
+# before the A-held merge; with --shipping, absent is a CHECK too.
+GATES = [
+    ("palw_state_v2::tests::held_forfeits_v1::the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool",
+     STATE, "feat/t12-aheld-node"),
+    ("palw_state_v2::tests::held_forfeits_v1::the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused",
+     STATE, "feat/t12-aheld-node"),
+]
+
+# The one phrase that says whose values a document's copy block holds, in either form. `--apply` rewrites
+# the commit in it (files it re-pinned); `--apply --shipping` turns every one into the shipping form.
+LABEL = re.compile(r"(?:([0-9a-f]{8,12}) での暫定値（出荷値ではない）|出荷 commit（([0-9a-f]{8,12}) ＋ 再 pin）の値)")
+LABEL_ANCHOR = r"\*\*(?=" + LABEL.pattern + r"\*\*)"
+
+
+def label_text(head: str, shipping: bool) -> str:
+    return f"出荷 commit（{head[:8]} ＋ 再 pin）の値" if shipping else f"{head[:8]} での暫定値（出荷値ではない）"
+
+
+def t41_record_names() -> list[str]:
+    """The records `t41_the_v22_record_encodings_are_pinned` pins, in its `want` order, by each literal's
+    trailing `// <Record>` comment (a literal without one stays UNREGISTERED)."""
+    path = os.path.join(REPO, GOLDEN)
+    if not os.path.exists(path):
+        return []
+    text = open(path, encoding="utf-8").read()
+    fn = re.search(r"fn t41_the_v22_record_encodings_are_pinned\(\)", text)
+    want = re.compile(r"let want = \[", re.M).search(text, fn.end()) if fn else None
+    end = re.compile(r"^\s*\];", re.M).search(text, want.end()) if want else None
+    if not end:
+        return []
+    return re.findall(r'"[0-9a-f]{64}",\s*//\s*(\w+)\s*$', text[want.end():end.start()], re.M)
+
+
+def t41_want_count() -> int:
+    path = os.path.join(REPO, GOLDEN)
+    if not os.path.exists(path):
+        return 0
+    text = open(path, encoding="utf-8").read()
+    fn = re.search(r"fn t41_the_v22_record_encodings_are_pinned\(\)", text)
+    want = re.compile(r"let want = \[", re.M).search(text, fn.end()) if fn else None
+    end = re.compile(r"^\s*\];", re.M).search(text, want.end()) if want else None
+    return len(HEXLIT[64].findall(text, want.end(), end.start())) if end else 0
+
+
+def _single(key):
+    """A computed value that must be exactly one 128-hex id (a one-element list printed joined)."""
+    def of(c):
+        v = c.get(key)
+        return v if v and re.fullmatch(r"[0-9a-f]{128}", v) else None
+    return of
 
 
 def registry() -> list[Pin]:
@@ -258,6 +337,8 @@ def registry() -> list[Pin]:
                   (f"{DEADLINE}::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_fence",))
     pins += _rows("pool.BEFORE_THE_POOL", _net_scope, POOL, "const BEFORE_THE_POOL: &[(&str, &str, &str, &str)] = &[", _shipped,
                   (f"{POOL}::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_pool",))
+    pins += _rows("horizon.BEFORE_THE_HORIZON", _net_scope, HORIZON, "const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[",
+                  _shipped, (f"{HORIZON}::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_horizon",))
     rel = (f"{RELEASE}::the_shipped_release_fingerprint_did_not_move",)
     for const, what in [("T11_CONSENSUS_PARAMS_ID", "params_id"), ("T11_CONSENSUS_IDENTITY_ID", "identity_id"),
                         ("T11_CONSENSUS_SCHEDULE_ID", "schedule_id")]:
@@ -293,6 +374,13 @@ def registry() -> list[Pin]:
     pins += _triple("evm.T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION", "t12", EVM,
                     "const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
                     "twin.evm_parent", (f"{EVM}::the_ledger_is_the_only_thing_that_moved_testnet12",))
+    # The readiness-V2 horizon (arrives with feat/t12-readiness-horizon): its twin, and testnet-12's
+    # FULL ids — the one code pin of the fingerprint a node announces (the shipped preset's).
+    horizon_twin = (f"{HORIZON}::the_horizon_moves_testnet12s_fingerprint_and_nothing_else_did",)
+    pins += _triple("horizon.T12_BEFORE_THE_HORIZON", "t12", HORIZON, "const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (",
+                    "twin.no_horizon", horizon_twin)
+    pins += _triple("horizon.T12_WITH_THE_HORIZON", "t12", HORIZON, "const T12_WITH_THE_HORIZON: (&str, &str, &str) = (",
+                    "shipped.testnet-12", horizon_twin)
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)
@@ -300,6 +388,15 @@ def registry() -> list[Pin]:
                                                              r"hex\(dense\.shape_profile_id\(\)\),"], "testnet-12.class.2m", tests=held))
     pins.append(Pin("regenesis.held_row_8k", "t12", REGEN, [r"fn the_held_rows_are_the_fleets_classes\(\)",
                                                              r"hex\(narrow\.shape_profile_id\(\)\),"], "testnet-12.class.8k", tests=held))
+    # ADR-0152 C7: the const preset's literal of the 2M row's class id. An INPUT of testnet-12's params id
+    # (hashed in `consensus_params_id`, checked against the genesis held rows by `validate_palw_v2`), so
+    # stage 0: re-pinned and rebuilt before the fingerprint and its copies are read.
+    c7 = ("lib::config::params::consensus_params_id_tests::the_t12_c7_list_is_the_2m_row",)
+    pins.append(Pin("params.PALW_T12_2M_CLASS_ID_BYTES", "t12", PARAMS, [r"^const PALW_T12_2M_CLASS_ID_BYTES: \[u8; 64\] = "],
+                    _single("testnet-12.class.c7"), fmt="bytes", stage=0, tests=c7,
+                    note="compared with palw_t12_rcore_conservative_classes_v1(), the derivation"))
+    pins.append(Pin("params.c7_doc", "copy", PARAMS, [r"^/// `(?=[0-9a-f]{4,}…[0-9a-f]*`, the 2M row's class id)"],
+                    _single("testnet-12.class.c7"), fmt="abbr", comment=None))
     for tag, big, fn in [("2m", "2M", "the_committed_manifest_parses_to_what_it_says"),
                          ("8k", "8K", "the_committed_8k_manifest_parses_to_what_it_says")]:
         t = (f"lib::config::class_manifest_const_v1::tests::{fn}",)
@@ -319,10 +416,11 @@ def registry() -> list[Pin]:
                     note="a real testnet-12 fold: moves with a rule as well as a layout"))
     pins.append(Pin("t41.inhabited_carriage", "t12", GOLDEN, anchor, "v22.t41.inhabited_carriage", nth=1, length=64,
                     until=r"^\}", tests=t41))
-    for i, record in enumerate(T41_RECORDS):
+    for record in t41_record_names():
         pins.append(Pin(f"t41.record.{record}", "layout", GOLDEN,
-                        [r"fn t41_the_v22_record_encodings_are_pinned\(\)", r"let want = \["], f"v22.t41.record.{record}",
-                        nth=i, length=64, until=r"^\}", tests=(f"{GOLDEN}::t41_the_v22_record_encodings_are_pinned",)))
+                        [r"fn t41_the_v22_record_encodings_are_pinned\(\)", r"let want = \[",
+                         rf'^\s*(?="[0-9a-f]{{64}}",\s*//\s*{re.escape(record)}\s*$)'], f"v22.t41.record.{record}",
+                        length=64, until=r"^\}", tests=(f"{GOLDEN}::t41_the_v22_record_encodings_are_pinned",)))
     v22 = (f"lib::{LIB_GOLDEN_TEST}",)
     pins.append(Pin("state_v2.want_empty", "layout", STATE, [r"fn the_version_22_state_root_golden_vectors\(\)", r"let want_empty = "],
                     "v22.state.empty", tests=v22))
@@ -385,6 +483,11 @@ def registry() -> list[Pin]:
                     length=64, until=r"^## 4\. ", group="checklist.sec3"))
     pins.append(Pin("checklist.rule_manifest_digest", "copy", CHECKLIST, sec3 + [r"^# rule manifest digest "], "rule_manifest.digest",
                     fmt="token", length=128, until=r"^## 4\. ", group="checklist.sec3"))
+    pins.append(Pin("checklist.drill_genesis_salt53", "copy", CHECKLIST, [r"の drill genesis は `"], "drill.testnet-12.salt53.genesis",
+                    fmt="abbr", comment=None))
+    # The label on each document's copy block ("<commit> での暫定値（出荷値ではない）" / the shipping form).
+    for name, file in [("checklist", CHECKLIST), ("plan", PLAN), ("scan_deploy", SCAN_DEPLOY)]:
+        pins.append(Pin(f"label.{name}", "label", file, [LABEL_ANCHOR], None, fmt="label", comment=None))
     # PLAN.md §4's provisional line.
     pins.append(Pin("plan.EXPECT_FP", "copy", PLAN, [r"^`EXPECT_FP="], "from.testnet-12.params_id", fmt="token", length=64, comment=None))
     pins.append(Pin("plan.EXPECT_GENESIS", "copy", PLAN, [r"^`EXPECT_FP=", r"`EXPECT_GENESIS="], "genesis.testnet-12.hash", fmt="abbr", comment=None))
@@ -403,18 +506,32 @@ def registry() -> list[Pin]:
     pins.append(Pin("join_doc.genesis", "copy", JOIN_DOC, [r"The genesis is `"], "genesis.testnet-12.hash", fmt="abbr", comment=None))
     pins.append(Pin("join_doc.premine", "copy", JOIN_DOC, [r"The premine sits on `"], "testnet-12.premine_txid", fmt="abbr",
                     comment=None))
-    pins.append(Pin("scan_deploy.genesis", "copy", SCAN_DEPLOY, [r"暫定値は genesis `"], "genesis.testnet-12.hash", fmt="abbr",
+    pins.append(Pin("scan_deploy.genesis", "copy", SCAN_DEPLOY, [r"\*\*: genesis `"], "genesis.testnet-12.hash", fmt="abbr",
                     comment=None))
-    pins.append(Pin("scan_deploy.fp", "copy", SCAN_DEPLOY, [r"暫定値は genesis `", r"fp `"], "from.testnet-12.params_id", fmt="abbr",
+    pins.append(Pin("scan_deploy.fp", "copy", SCAN_DEPLOY, [r"\*\*: genesis `", r"、fp `"], "from.testnet-12.params_id", fmt="abbr",
                     comment=None))
     pins.append(Pin("scan_deploy.PANEL_BOND_TX", "copy", SCAN_DEPLOY, [r"固有の premine txid `"], "testnet-12.premine_txid", fmt="abbr",
                     comment=None))
     return pins
 
 
-# Quoted hex literals in these files are pins; any not located by an entry above is UNREGISTERED.
-SCANNED = sorted({RCORE, FLOOR, ATTR, DEADLINE, POOL, EVM, RELEASE, GOLDEN, PARITY, RING, VERDICTS, CORPUS, REGEN, MANIFEST,
-                  "consensus/core/tests/t12_deploy_kit_constants.rs"})
+def scanned_files() -> list[str]:
+    """Quoted 64/128-hex literals in these files are pins; any not located by a registry entry is
+    UNREGISTERED (the dry run exits 3, --apply refuses). Every consensus-core integration test file —
+    a glob, so a pin file a merge adds cannot be invisible — plus the class-manifest transcription."""
+    tests = glob.glob(os.path.join(REPO, "consensus/core/tests/*.rs"))
+    return sorted({os.path.relpath(t, REPO) for t in tests} | {MANIFEST})
+
+
+_HISTORY: dict[str, bool] = {}
+
+
+def in_history(file: str) -> bool:
+    """Whether HEAD's history ever had `file` (a pin file that is missing now was renamed or deleted)."""
+    if file not in _HISTORY:
+        p = subprocess.run(["git", "log", "-1", "--format=%h", "HEAD", "--", file], cwd=REPO, capture_output=True, text=True)
+        _HISTORY[file] = bool(p.stdout.strip())
+    return _HISTORY[file]
 
 # ---------------------------------------------------------------------------------------------------
 # Locating and reading a pin.
@@ -458,6 +575,11 @@ def locate(text: str, pin: Pin):
             raise LocateError(f"no {pin.length}-hex literal #{pin.nth} after the anchor")
         m = found[pin.nth]
         return m.start(1), m.end(1), m.group(1), line_at
+    if pin.fmt == "label":
+        m = LABEL.match(text, pos)
+        if not m or m.end() > limit:
+            raise LocateError("no copy-block label right after the anchor")
+        return m.start(0), m.end(0), m.group(0), line_at
     if pin.fmt == "bytes":
         m = BYTES.match(text, pos)
         if not m:
@@ -525,7 +647,8 @@ def harvest(log_dir: str, from_logs: list[str] | None) -> tuple[dict[str, str], 
                    for a in ("--test", t)]
         _, tests_out = sh(base + ["--no-fail-fast"] + targets + ["--", "--nocapture", "--test-threads=1"] + HARVEST_FILTERS,
                           os.path.join(log_dir, "harvest-tests.log"))
-        _, lib_out = sh(base + ["--lib", "--", "--exact", LIB_GOLDEN_TEST, "--nocapture"], os.path.join(log_dir, "harvest-lib.log"))
+        _, lib_out = sh(base + ["--lib", "--", "--exact", LIB_GOLDEN_TEST, *present_gates(), "--nocapture"],
+                        os.path.join(log_dir, "harvest-lib.log"))
         texts = [tests_out, lib_out]
         for what, text in [("the pin tests", tests_out), ("the lib golden", lib_out)]:
             if not compiled(text):
@@ -535,10 +658,24 @@ def harvest(log_dir: str, from_logs: list[str] | None) -> tuple[dict[str, str], 
     return computed, notes
 
 
+def present_gates() -> list[str]:
+    out = []
+    for name, file, _ in GATES:
+        path = os.path.join(REPO, file)
+        if os.path.exists(path) and f"fn {name.split('::')[-1]}(" in open(path, encoding="utf-8").read():
+            out.append(name)
+    return out
+
+
 def parse_harvest(texts: list[str]) -> tuple[dict[str, str], dict[str, str]]:
     text = "\n".join(texts)
     computed = harvest_text(text)
     computed.update(file_facts())
+    failed = set(re.findall(r"^    (\S+)$", "\n".join(re.findall(r"^failures:\n((?:    \S+\n)+)", text, re.M)), re.M))
+    for name, _, _ in GATES:
+        m = re.search(rf"^test {re.escape(name)} \.\.\. (ok|FAILED)", text, re.M)
+        if m or name in failed:
+            computed[f"gate.{name}"] = "FAILED" if name in failed or (m and m.group(1) == "FAILED") else "ok"
     # The lib golden prints its values only in its failure message; when it passes, its pins hold.
     if "v22.state.empty" not in computed and re.search(re.escape(f"test {LIB_GOLDEN_TEST} ... ok"), text):
         computed["v22.state.empty"] = computed["v22.state.full"] = "=pinned"
@@ -551,22 +688,29 @@ def parse_harvest(texts: list[str]) -> tuple[dict[str, str], dict[str, str]]:
 @dataclass
 class Row:
     pin: Pin
-    status: str                   # ok | drift | absent | nocompute | locate-error | history
+    status: str                   # ok | drift | absent | nocompute | locate-error | history | label
     pinned: str = ""
     computed: str = ""
     span: tuple = ()
     line_at: int = -1
     detail: str = ""
     decision: str = ""            # move | refuse | keep
+    t11_layout_pending: bool = False  # refused only for want of --allow-t11-layout
 
 
-def compare(pins: list[Pin], computed: dict[str, str], notes: dict[str, str]) -> list[Row]:
+def compare(pins: list[Pin], computed: dict[str, str], notes: dict[str, str], shipping: bool = False) -> list[Row]:
     rows = []
     cache: dict[str, str] = {}
     for pin in pins:
         path = os.path.join(REPO, pin.file)
         if not os.path.exists(path):
-            rows.append(Row(pin, "absent", detail=f"{pin.file} does not exist (yet)"))
+            arrives = EXPECTED_BY_MERGE.get(pin.file)
+            if arrives and not shipping and not in_history(pin.file):
+                rows.append(Row(pin, "absent", detail=f"{pin.file} arrives with {arrives} (not merged yet)"))
+            else:
+                why = ("this tree's history had it: renamed or deleted?" if in_history(pin.file) else
+                       f"--shipping: {arrives} must have landed" if arrives else "no such file")
+                rows.append(Row(pin, "locate-error", detail=f"{pin.file} does not exist ({why})"))
             continue
         text = cache.setdefault(pin.file, open(path, encoding="utf-8").read())
         try:
@@ -574,9 +718,9 @@ def compare(pins: list[Pin], computed: dict[str, str], notes: dict[str, str]) ->
         except LocateError as e:
             rows.append(Row(pin, "locate-error", detail=f"{pin.file}: {e}"))
             continue
-        row = Row(pin, "history", pinned=pinned, span=(start, end), line_at=line_at)
+        row = Row(pin, "label" if pin.scope == "label" else "history", pinned=pinned, span=(start, end), line_at=line_at)
         rows.append(row)
-        if pin.scope == "history":
+        if pin.scope in ("history", "label"):
             continue
         try:
             value = pin.value(computed) if callable(pin.value) else computed.get(pin.value)
@@ -595,7 +739,7 @@ def compare(pins: list[Pin], computed: dict[str, str], notes: dict[str, str]) ->
     return rows
 
 
-def decide(rows: list[Row], allow_verdict: bool) -> None:
+def decide(rows: list[Row], allow_verdict: bool, allow_t11_layout: bool = False) -> None:
     by_key = {r.pin.key: r for r in rows}
     layout_moved = [r.pin.key for r in rows if r.pin.scope == "layout" and r.status == "drift"]
     for r in rows:
@@ -614,10 +758,16 @@ def decide(rows: list[Row], allow_verdict: bool) -> None:
             elif not layout_moved:
                 r.decision = "refuse"
                 r.detail = "only its roots moved, and no v22 LAYOUT golden moved in this run: a testnet-11 state change"
+            elif not allow_t11_layout:
+                r.decision = "refuse"
+                r.t11_layout_pending = True
+                r.detail = ("a v22 layout move (" + ", ".join(layout_moved[:2]) + (", …" if len(layout_moved) > 2 else "") +
+                            ") with every non-root value beside it held — it moves only with --allow-t11-layout, after the audit's "
+                            "sign-off (AUDIT SIGN-OFF below; checklist §5, item 5)")
             else:
                 r.decision = "move"
                 r.detail = ("a v22 layout move (" + ", ".join(layout_moved[:2]) + (", …" if len(layout_moved) > 2 else "") +
-                            "); every non-root value beside it held — the audit confirms (checklist §5-5)")
+                            "); every non-root value beside it held; --allow-t11-layout (the audit signed off, checklist §5, item 5)")
         elif s == "verdict":
             manifest = by_key.get("checklist.rule_manifest_digest")
             manifest_moved = manifest is not None and manifest.status == "drift"
@@ -644,7 +794,7 @@ def unregistered(rows: list[Row]) -> list[str]:
         if r.span:
             covered.setdefault(r.pin.file, set()).add(r.span[0])
     out = []
-    for f in SCANNED:
+    for f in scanned_files():
         path = os.path.join(REPO, f)
         if not os.path.exists(path):
             continue
@@ -755,21 +905,26 @@ def superseded_genesis(rows: list[Row], reason: str, head: str) -> list[str]:
 
 
 def run_tests(rows: list[Row], extra: set[str], log_dir: str) -> tuple[int, str]:
-    """The tests the moved pins sit in (whole integration targets; the named lib tests), plus `extra`."""
+    """Every pin's test after a rewrite, not only the moved ones' (a merged pin file's other tests, a
+    twin whose premise a rewrite changed): each integration target that holds a pin, the lib tests the
+    registry names, the A-held gates' module once the source has it, plus `extra` targets."""
     targets, lib_filters = set(extra), set()
     for r in rows:
-        if r.decision != "move":
-            continue
         for t in r.pin.tests:
             if t.startswith("lib::"):
                 lib_filters.add(t[len("lib::"):])
             else:
                 targets.add(os.path.splitext(os.path.basename(t.split("::")[0]))[0])
+        if r.pin.file.startswith("consensus/core/tests/") and r.pin.file.endswith(".rs"):
+            targets.add(os.path.splitext(os.path.basename(r.pin.file))[0])
+    lib_filters.add(LIB_GOLDEN_TEST)
+    state = os.path.join(REPO, STATE)
+    if "mod held_forfeits_v1" in open(state, encoding="utf-8").read():
+        lib_filters.add("palw_state_v2::tests::held_forfeits_v1")
     targets = sorted(t for t in targets if os.path.exists(os.path.join(REPO, "consensus/core/tests", t + ".rs")))
     rc, out = 0, ""
-    if lib_filters:
-        rc1, o = sh(["cargo", "test", "--locked", "-p", CORE, "--lib", "--"] + sorted(lib_filters), os.path.join(log_dir, "verify-lib.log"))
-        rc, out = rc or rc1, out + o
+    rc1, o = sh(["cargo", "test", "--locked", "-p", CORE, "--lib", "--"] + sorted(lib_filters), os.path.join(log_dir, "verify-lib.log"))
+    rc, out = rc or rc1, out + o
     if targets:
         cmd = ["cargo", "test", "--locked", "-p", CORE, "--no-fail-fast"] + [a for t in targets for a in ("--test", t)]
         rc2, o = sh(cmd, os.path.join(log_dir, "verify-tests.log"))
@@ -786,10 +941,92 @@ def summarize_results(out: str) -> list[str]:
     return res
 
 
+def structural_problems(rows: list[Row], computed: dict[str, str], shipping: bool, check_labels: bool) -> list[str]:
+    """What a rewrite cannot fix (a CHECK: the dry run exits 3, --apply refuses). Judged as the tree will
+    stand AFTER this run's pending moves, so a copy the rewrite fixes is not also a CHECK."""
+    problems = []
+    registered = computed.get("testnet-12.class.registered", "")
+    if registered:
+        on_chain = set(registered.split(",")) | {computed.get("testnet-12.class.floor", "")}
+        app = open(os.path.join(REPO, APP), encoding="utf-8").read()
+        start = app.find("const LLM_CLASSES = [")
+        in_app = set(re.findall(r'id:"([0-9a-f]{128})"', app[start:app.find("];", start)]))
+        for r in rows:
+            if r.pin.key.startswith("app.LLM_CLASSES.") and r.status == "drift" and r.decision == "move":
+                in_app.discard(r.pinned)
+                in_app.add(r.computed)
+        problems += [f"{APP} LLM_CLASSES names {x[:16]}…, not a genesis class of this build — edit by hand" for x in sorted(in_app - on_chain)]
+        problems += [f"{APP} LLM_CLASSES lacks genesis class {x[:16]}… — add its row by hand (name, model, tag)"
+                     for x in sorted(on_chain - in_app)]
+        order = registered.split(",")
+        if order != [computed.get("testnet-12.class.8k"), computed.get("testnet-12.class.2m")]:
+            problems.append(f"testnet-12's genesis model classes are {[o[:8] for o in order]}, not [8k, 2M]: "
+                            "t12_regenesis::the_held_rows_are_the_fleets_classes and the kit's node tables need a hand edit")
+    c7 = computed.get("testnet-12.class.c7")
+    if c7 is not None and _single("testnet-12.class.c7")(computed) is None:
+        problems.append(f"palw_t12_rcore_conservative_classes_v1() derives {c7!r}, not one class id: PALW_T12_2M_CLASS_ID_BYTES "
+                        "(a one-element C7 list) needs a hand edit")
+    if computed.get("kit.cards") and computed["kit.cards"] != ",".join(str(i) for i in range(8)):
+        problems.append(f"PALW_T12_GENESIS_BONDS declares premine indices {computed['kit.cards']}, not 0..7 in order: the kit's "
+                        "`$PREMINE_TXID:N` / FEE_FLOAT_BASE+N naming breaks (t12_deploy_kit_constants)")
+    gen = computed.get("genesis.testnet-12.hash")
+    m = re.search(r'^FORBIDDEN_GENESIS="([0-9a-f\s]*)"', open(os.path.join(REPO, FLEET), encoding="utf-8").read(), re.M)
+    if gen and m and gen in m.group(1).split():
+        problems.append(f"{FLEET} FORBIDDEN_GENESIS lists this build's own genesis {gen[:16]}…")
+    # T41's records: one printed digest per pinned literal, by name, and one pin per name.
+    names = t41_record_names()
+    printed = sorted(k[len("v22.t41.record."):] for k in computed if k.startswith("v22.t41.record."))
+    want_count = t41_want_count()
+    if len(names) != want_count:
+        problems.append(f"{GOLDEN}: {want_count} record digests but {len(names)} carry a `// <Record>` comment — name every literal")
+    if len(set(names)) != len(names):
+        problems.append(f"{GOLDEN}: a record name is pinned twice ({sorted(n for n in set(names) if names.count(n) > 1)})")
+    if printed and sorted(names) != printed:
+        problems.append(f"{GOLDEN}: the test printed records {sorted(set(printed) - set(names))} with no pinned digest and pins "
+                        f"{sorted(set(names) - set(printed))} it did not print — the want array and the records disagree")
+    # The literal-free gates (the A-held line's order and placeholder pins).
+    present = present_gates()
+    for name, _, arrives in GATES:
+        if name not in present:
+            if shipping:
+                problems.append(f"gate {name.split('::')[-1]} is not in this tree (--shipping: {arrives} must have landed, "
+                                "or the test was renamed — update GATES)")
+            continue
+        result = computed.get(f"gate.{name}")
+        if result != "ok":
+            problems.append(f"gate {name} " + ("FAILED" if result else "did not run") + " (checklist §5, item 4)")
+    if check_labels:
+        for r in rows:
+            if r.status == "label" and not r.pinned.startswith("出荷 commit"):
+                problems.append(f"{r.pin.file}: its copy block is still labelled {r.pinned!r} (--shipping: run --apply --shipping)")
+    return problems
+
+
+def relabel(rows: list[Row], head: str, shipping: bool, files: set[str]) -> list[str]:
+    """Rewrite each copy block's label: the commit these values were computed at (the files this run
+    re-pinned), or with --shipping every label to the shipping form."""
+    touched = []
+    for r in rows:
+        if r.status != "label" or not (shipping or r.pin.file in files):
+            continue
+        new = label_text(head, shipping)
+        if r.pinned == new:
+            continue
+        path = os.path.join(REPO, r.pin.file)
+        text = open(path, encoding="utf-8").read()
+        start, end = r.span
+        assert text[start:end] == r.pinned, f"{r.pin.file}: the label moved under the run"
+        open(path, "w", encoding="utf-8").write(text[:start] + new + text[end:])
+        touched.append(r.pin.file)
+    return touched
+
+
 def selftest(log_dir: str) -> int:
     """The decision rules on THIS tree's own harvest logs with one value changed at a time (no build):
-    each scenario names the pins that must drift and what the tool must decide for each."""
+    each scenario names the pins that must drift and what the tool must decide for each, and the CHECK
+    lines it must raise. A scenario over a pin file this tree does not have yet is skipped."""
     base = ["\n".join(open(os.path.join(log_dir, name), errors="replace").read() for name in ("harvest-tests.log", "harvest-lib.log"))]
+    base_computed, _ = parse_harvest(base)
 
     def flip(v: str) -> str:
         # The FIRST digit, so an abbreviated copy (`a27f8f44…`) sees the move too.
@@ -805,64 +1042,114 @@ def selftest(log_dir: str) -> int:
             return text
         return mutate
 
+    def everywhere(key):
+        """Change one computed value everywhere the harvest printed it (a moved class id is also in
+        the registered-class list)."""
+        old = base_computed[key]
+        return lambda text: text.replace(old, flip(old))
+
+    def drop(line_regex):
+        return lambda text: re.sub(line_regex, "", text, flags=re.M)
+
     rep_line = lambda key: rf"REPIN {re.escape(key)} "
+    layout = {"allow_t11_layout": True}
+    gate = GATES[0][0]
     scenarios = [
-        ("the tree as built", change(), False, {}),
-        ("t11 dump: only its roots moved, no layout golden moved", change((r"t11 dump: \d+ bytes, \d+ lines, BLAKE2b-256 ",)), False,
+        ("the tree as built", change(), {}, {}),
+        ("t11 dump: only its roots moved, no layout golden moved", change((r"t11 dump: \d+ bytes, \d+ lines, BLAKE2b-256 ",)), layout,
          {"parity.PARENT_DUMP_BLAKE2B_256": "refuse"}),
-        ("t11 dump roots moved WITH a v22 record encoding", change((r"t11 dump: \d+ bytes, \d+ lines, BLAKE2b-256 ",),
-                                                                   (r"T41 record PalwVestingRowV1: ",)), False,
+        ("t11 dump roots moved WITH a v22 record encoding, --allow-t11-layout",
+         change((r"t11 dump: \d+ bytes, \d+ lines, BLAKE2b-256 ",), (r"T41 record PalwVestingRowV1: ",)), layout,
          {"parity.PARENT_DUMP_BLAKE2B_256": "move", "t41.record.PalwVestingRowV1": "move"}),
+        ("t11 dump roots moved WITH a v22 record encoding, no flag",
+         change((r"t11 dump: \d+ bytes, \d+ lines, BLAKE2b-256 ",), (r"T41 record PalwVestingRowV1: ",)), {},
+         {"parity.PARENT_DUMP_BLAKE2B_256": "refuse", "t41.record.PalwVestingRowV1": "move"}),
         ("t11 dump: a non-root line moved too (masked digest)", change((r"t11 dump: \d+ bytes, \d+ lines, BLAKE2b-256 ",),
                                                                        (r"t11 dump roots masked: BLAKE2b-256 ",),
-                                                                       (r"T41 record PalwVestingRowV1: ",)), False,
+                                                                       (r"T41 record PalwVestingRowV1: ",)), layout,
          {"parity.PARENT_DUMP_BLAKE2B_256": "refuse", "parity.PARENT_DUMP_ROOTS_MASKED_BLAKE2B_256": "refuse",
           "t41.record.PalwVestingRowV1": "move"}),
         ("t11 verdict roots moved with the lock, and a layout move", change((r"licensed root ",), (r"T41 empty carriage: ",),
-                                                                            (r"licensed root \w+ lock ",)), False,
+                                                                            (r"licensed root \w+ lock ",)), layout,
          {"t11_verdicts.ROOT_LICENSED": "refuse", "t11_verdicts.SEAT_LOCK_SOMPI": "refuse", "t41.empty_carriage": "move"}),
-        ("the dormant ring root moved with a layout move", change((r"dormant root = ",), (r"T41 empty carriage: ",)), False,
-         {"ring.DORMANT_GOLDEN_ROOT": "move", "t41.empty_carriage": "move"}),
-        ("the corpus verdicts moved (allowed, but the manifest did not move)", change((r"corpus verdict digest ",)), True,
-         {"corpus.CORPUS_VERDICT_DIGEST": "refuse"}),
+        ("the dormant ring root moved with a layout move, no flag", change((r"dormant root = ",), (r"T41 empty carriage: ",)), {},
+         {"ring.DORMANT_GOLDEN_ROOT": "refuse", "t41.empty_carriage": "move"}),
+        ("the dormant ring root moved with a layout move, --allow-t11-layout", change((r"dormant root = ",), (r"T41 empty carriage: ",)),
+         layout, {"ring.DORMANT_GOLDEN_ROOT": "move", "t41.empty_carriage": "move"}),
+        ("the corpus verdicts moved (allowed, but the manifest did not move)", change((r"corpus verdict digest ",)),
+         {"allow_verdict": True}, {"corpus.CORPUS_VERDICT_DIGEST": "refuse"}),
         ("testnet-11's params id moved", change((rep_line("shipped.testnet-11.params_id"),), (rep_line("preset_net.testnet-11.params_id"),)),
-         False, {k: "refuse" for k in ["rcore.AT_V22.testnet-11.params_id", "floor.BEFORE_THE_FLOOR.testnet-11.params_id",
-                                       "attribution.BEFORE_THE_ATTRIBUTION.testnet-11.params_id",
-                                       "deadline.BEFORE_THE_DEADLINE.testnet-11.params_id", "release.T11_CONSENSUS_PARAMS_ID",
-                                       "params.shipped_presets.testnet-11"]}),
-        ("devnet's identity moved", change((rep_line("shipped.devnet.identity_id"),)), False,
+         {}, {k: "refuse" for k in ["rcore.AT_V22.testnet-11.params_id", "floor.BEFORE_THE_FLOOR.testnet-11.params_id",
+                                    "attribution.BEFORE_THE_ATTRIBUTION.testnet-11.params_id",
+                                    "deadline.BEFORE_THE_DEADLINE.testnet-11.params_id", "release.T11_CONSENSUS_PARAMS_ID",
+                                    "params.shipped_presets.testnet-11", "pool.BEFORE_THE_POOL.testnet-11.params_id",
+                                    "horizon.BEFORE_THE_HORIZON.testnet-11.params_id"]}),
+        ("devnet's identity moved", change((rep_line("shipped.devnet.identity_id"),)), {},
          {k: "refuse" for k in ["rcore.AT_V22.devnet.identity_id", "floor.BEFORE_THE_FLOOR.devnet.identity_id",
-                                "attribution.BEFORE_THE_ATTRIBUTION.devnet.identity_id", "deadline.BEFORE_THE_DEADLINE.devnet.identity_id"]}),
+                                "attribution.BEFORE_THE_ATTRIBUTION.devnet.identity_id", "deadline.BEFORE_THE_DEADLINE.devnet.identity_id",
+                                "pool.BEFORE_THE_POOL.devnet.identity_id", "horizon.BEFORE_THE_HORIZON.devnet.identity_id"]}),
         ("mainnet's ruleset moved", change((rep_line("shipped.mainnet.params_id"),), (rep_line("const.mainnet.params_id"),),
-                                           (rep_line("preset_net.mainnet.params_id"),)), False,
+                                           (rep_line("preset_net.mainnet.params_id"),)), {},
          {k: "move" for k in ["rcore.AT_V22.mainnet.params_id", "rcore.AT_V21.mainnet.params_id", "floor.BEFORE_THE_FLOOR.mainnet.params_id",
                               "attribution.BEFORE_THE_ATTRIBUTION.mainnet.params_id", "deadline.BEFORE_THE_DEADLINE.mainnet.params_id",
-                              "release.MAINNET_CONSENSUS_PARAMS_ID", "params.shipped_presets.mainnet"]}),
+                              "release.MAINNET_CONSENSUS_PARAMS_ID", "params.shipped_presets.mainnet",
+                              "pool.BEFORE_THE_POOL.mainnet.params_id", "horizon.BEFORE_THE_HORIZON.mainnet.params_id"]}),
         ("testnet-12's fingerprint and a twin moved", change((rep_line("from.testnet-12.params_id"),),
-                                                             (r"testnet-12 without the fence: params ",)), False,
+                                                             (r"testnet-12 without the fence: params ",)), {},
          {k: "move" for k in ["checklist.EXPECT_FP", "plan.EXPECT_FP", "scan_deploy.fp", "attribution.T12_BEFORE_THE_ATTRIBUTION.params_id"]}),
+        ("testnet-12's shipped params moved (the horizon's full-ids pin)", change((rep_line("shipped.testnet-12.params_id"),)), {},
+         {"horizon.T12_WITH_THE_HORIZON.params_id": "move"}),
+        ("the horizon's twin moved", change((r'/ without \("',)), {}, {"horizon.T12_BEFORE_THE_HORIZON.params_id": "move"}),
         ("testnet-12's genesis moved", change((rep_line("genesis.testnet-12.hash"),), (rep_line("genesis.testnet-12.utxo_commitment"),)),
-         False, {k: "move" for k in ["genesis.testnet-12.hash", "genesis.testnet-12.utxo_commitment", "checklist.EXPECT_GENESIS",
-                                     "plan.EXPECT_GENESIS", "regen_doc.genesis_hash", "regen_doc.utxo_commitment", "join_doc.genesis",
-                                     "scan_deploy.genesis"]}),
+         {}, {k: "move" for k in ["genesis.testnet-12.hash", "genesis.testnet-12.utxo_commitment", "checklist.EXPECT_GENESIS",
+                                  "plan.EXPECT_GENESIS", "regen_doc.genesis_hash", "regen_doc.utxo_commitment", "join_doc.genesis",
+                                  "scan_deploy.genesis"]}),
+        ("the 2M row's class id moved (C7, the held row, the kit and explorer copies; no CHECK)", everywhere("testnet-12.class.2m"), {},
+         {k: "move" for k in ["params.PALW_T12_2M_CLASS_ID_BYTES", "params.c7_doc", "regenesis.held_row_2m", "kitlib.CLASS_2M_PREFIX",
+                              "app.LLM_CLASSES.2m"]}),
+        ("the example drill genesis moved", change((rep_line("drill.testnet-12.salt53.genesis"),)), {},
+         {"checklist.drill_genesis_salt53": "move"}),
         ("a twin was never printed (its premise failed first)", lambda t: t.replace("testnet-12 at the parent without the attribution",
-                                                                                   "(premise failed)"), False,
+                                                                                   "(premise failed)"), {},
          {f"evm.T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION.{w}": "nocompute" for w in ["params_id", "identity_id", "schedule_id"]}),
+        ("a T41 record was not printed (its digest pin cannot be read)", drop(r"^T41 record PalwConsumedOffenceV1:.*\n"), {},
+         {"t41.record.PalwConsumedOffenceV1": "nocompute", "CHECK": "the want array and the records disagree"}),
+        ("an A-held gate failed", lambda t: re.sub(rf"^test {re.escape(gate)} \.\.\. ok", f"test {gate} ... FAILED", t, flags=re.M), {},
+         {"CHECK": "FAILED (checklist §5, item 4)"}),
     ]
-    failures = 0
-    for name, mutate, allow_verdict, want in scenarios:
+    requires = {"testnet-12's shipped params moved (the horizon's full-ids pin)": HORIZON, "the horizon's twin moved": HORIZON,
+                "an A-held gate failed": ("gate", gate)}
+    failures = skipped = 0
+    for name, mutate, opts, want in scenarios:
+        need = requires.get(name)
+        if (isinstance(need, str) and not os.path.exists(os.path.join(REPO, need))) or \
+                (isinstance(need, tuple) and need[1] not in present_gates()):
+            skipped += 1
+            print(f"SKIP  {name}: {need if isinstance(need, str) else 'the gate'} is not in this tree yet")
+            continue
+        want = dict(want)
+        want_check = want.pop("CHECK", None)
         computed, notes = parse_harvest([mutate(t) for t in base])
         rows = compare(registry(), computed, notes)
-        decide(rows, allow_verdict)
+        decide(rows, opts.get("allow_verdict", False), opts.get("allow_t11_layout", False))
         got = {r.pin.key: (r.decision if r.status == "drift" else r.status) for r in rows
                if r.status in ("drift", "nocompute", "locate-error")}
-        ok = got == want
+        # The pool / horizon rows exist only once their file does: expect them only then.
+        want = {k: v for k, v in want.items()
+                if not (k.startswith("pool.") and not os.path.exists(os.path.join(REPO, POOL)))
+                and not (k.startswith("horizon.") and not os.path.exists(os.path.join(REPO, HORIZON)))}
+        problems = structural_problems(rows, computed, False, False)
+        ok = got == want and (any(want_check in p for p in problems) if want_check else not problems)
         failures += not ok
-        print(f"{'PASS' if ok else 'FAIL'}  {name}: {len(want)} pin(s) " + (", ".join(sorted(set(want.values()))) if want else "none"))
+        print(f"{'PASS' if ok else 'FAIL'}  {name}: {len(want)} pin(s) " + (", ".join(sorted(set(want.values()))) if want else "none")
+              + (f" + CHECK" if want_check else ""))
         if not ok or os.environ.get("REPIN_SELFTEST_VERBOSE"):
             for k in sorted(set(got) | set(want)):
                 print(f"        {k:60} got {got.get(k, 'ok'):10} want {want.get(k, 'ok')}")
-    print(f"\nselftest: {len(scenarios) - failures}/{len(scenarios)} scenarios as expected")
+            for p in problems:
+                print(f"        CHECK {p}")
+    ran = len(scenarios) - skipped
+    print(f"\nselftest: {ran - failures}/{ran} scenarios as expected" + (f" ({skipped} skipped)" if skipped else ""))
     return 1 if failures else 0
 
 
@@ -872,12 +1159,17 @@ def short(v: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="testnet-12 re-pin: pinned vs computed, and --apply")
-    ap.add_argument("--apply", action="store_true", help="rewrite the drifted movable pins, then run the affected tests")
+    ap.add_argument("--apply", action="store_true", help="rewrite the drifted movable pins, then run every pin test")
     ap.add_argument("--reason", help="the one line each rewrite's comment carries (required with --apply)")
     ap.add_argument("--allow-verdict", action="store_true", help="let the ADR-0150 corpus verdict digest move (with the manifest)")
+    ap.add_argument("--allow-t11-layout", action="store_true",
+                    help="let the testnet-11 goldens that hash a v22 root move with a v22 layout move (after the audit's sign-off)")
+    ap.add_argument("--shipping", action="store_true",
+                    help="this is the shipping tree: every merge-borne pin file and gate must be present, and (with --apply) "
+                         "the copy blocks are labelled as the shipping values")
     ap.add_argument("--from-log", action="append", help="parse these harvest logs instead of running cargo (repeatable)")
     ap.add_argument("--log-dir", default=None, help="cargo logs (default: $CARGO_TARGET_DIR/t12-repin, else target/t12-repin)")
-    ap.add_argument("--no-verify", action="store_true", help="with --apply: do not run the affected tests afterwards")
+    ap.add_argument("--no-verify", action="store_true", help="with --apply: do not run the pin tests afterwards")
     ap.add_argument("--drift-only", action="store_true", help="print only the rows that are not ok")
     ap.add_argument("--selftest", action="store_true", help="check the decision rules on the last harvest logs (no build)")
     args = ap.parse_args()
@@ -888,7 +1180,8 @@ def main() -> int:
     os.makedirs(log_dir, exist_ok=True)
     if args.selftest:
         return selftest(log_dir)
-    print(f"t12-repin: tree {head}{' + uncommitted changes' if dirty.strip() else ''}; logs in {log_dir}")
+    print(f"t12-repin: tree {head}{' + uncommitted changes' if dirty.strip() else ''}; logs in {log_dir}"
+          + ("; --shipping" if args.shipping else ""))
     if args.apply and not (args.reason and args.reason.strip()):
         print("--apply needs --reason \"<one line: what moved these pins>\"", file=sys.stderr)
         return 2
@@ -904,26 +1197,30 @@ def main() -> int:
         if "*" in notes:
             print(f"\nHARVEST FAILED: {notes['*']}")
             return 4
-        rows = compare(registry(), computed, notes)
-        decide(rows, args.allow_verdict)
-        drift, refused, moves, broken, problems, unreg = report(rows, computed, args.drift_only)
+        rows = compare(registry(), computed, notes, args.shipping)
+        decide(rows, args.allow_verdict, args.allow_t11_layout)
+        drift, refused, moves, broken, problems, unreg = report(rows, computed, args.drift_only, args.shipping, True)
         if drift:
             print(f"\nDRY RUN: {len(drift)} pin(s) drifted — {len(moves)} movable, {len(refused)} refused.")
             if any(r.pin.stage == 0 for r in moves):
-                print("NOTE: a genesis constant drifted. Every value that hashes the genesis (the params and identity ids, the twins, "
-                      "their copies) is computed above over the constant AS IT STANDS; --apply re-pins the genesis first, rebuilds, "
-                      "and recomputes them.")
+                print("NOTE: a stage-0 input drifted (a genesis constant, C7). Every value that hashes it (the params and identity "
+                      "ids, the twins, their copies) is computed above over the constant AS IT STANDS; --apply re-pins it first, "
+                      "rebuilds, and recomputes them.")
             stale = stale_mentions(moves, rows)
             if stale:
                 print("Other mentions of the moving old values (not rewritten; review by hand):")
                 for line in stale:
                     print("  " + line)
-            print("Nothing may be applied until the refused pins are explained." if refused else
-                  "Re-run with --apply --reason \"…\" to rewrite them.")
+        blocking = [f"{len(refused)} REFUSE"] * bool(refused) + [f"{len(broken)} NOT COMPUTED / NOT FOUND"] * bool(broken) + \
+                   [f"{len(problems)} CHECK"] * bool(problems) + [f"{len(unreg)} UNREGISTERED"] * bool(unreg)
+        if blocking:
+            print(f"\nDRY RUN: NOT CLEAN — {', '.join(blocking)} (above). Nothing may be applied until each is resolved.")
+            return 3
+        if drift:
+            print("Re-run with --apply --reason \"…\" to rewrite them.")
             return 1
-        print("\nDRY RUN: no drift — every checked pin is this build's value." +
-              (" But see NOT CHECKED / CHECK above." if broken or problems or unreg else ""))
-        return 3 if broken or problems else 0
+        print("\nDRY RUN: no drift — every checked pin is this build's value, every gate in this tree passed, no literal is unregistered.")
+        return 0
 
     # ---- --apply: in rounds, inputs first; each round is a fresh build and harvest ----
     reason = args.reason.strip()
@@ -936,17 +1233,19 @@ def main() -> int:
         if "*" in notes:
             print(f"\nHARVEST FAILED: {notes['*']}" + (f" (already rewritten: {sorted(written)})" if written else ""))
             return 4
-        rows = compare(registry(), computed, notes)
-        decide(rows, args.allow_verdict)
-        drift, refused, moves, broken, problems, unreg = report(rows, computed, True)
-        if refused or broken:
-            print(f"\n--apply REFUSED in round {round_} (above)." +
+        rows = compare(registry(), computed, notes, args.shipping)
+        decide(rows, args.allow_verdict, args.allow_t11_layout)
+        drift, refused, moves, broken, problems, unreg = report(rows, computed, True, args.shipping, False)
+        if refused or broken or problems or unreg:
+            print(f"\n--apply REFUSED in round {round_} (REFUSE / NOT COMPUTED / NOT FOUND / CHECK / UNREGISTERED above)." +
                   (f" Rewritten in earlier rounds (review or `git checkout -- <file>`): {sorted(written)}" if written else
                    " Nothing was written."))
             return 3
         if not moves:
             if round_ == 1:
-                print("\n--apply: nothing drifted; nothing written.")
+                labels = relabel(rows, head, True, set()) if args.shipping else []
+                print("\n--apply: nothing drifted; nothing re-pinned." +
+                      (f" Labelled the copy blocks as the shipping values: {sorted(set(labels))}" if labels else ""))
                 return 0
             print(f"\nround {round_}: no drift — the re-pin converged.")
             break
@@ -964,31 +1263,34 @@ def main() -> int:
     else:
         print(f"\n--apply did not converge in {MAX_ROUNDS} rounds: a value moves every time it is re-pinned. Rewritten: {sorted(written)}")
         return 5
-    print(f"\n--apply: {len(moved)} pin(s) re-pinned in {len(written)} file(s).")
+    labels = relabel(rows, head, args.shipping, written)
+    written |= set(labels)
+    print(f"\n--apply: {len(moved)} pin(s) re-pinned in {len(written)} file(s)." +
+          (f" Copy-block labels rewritten ({'shipping' if args.shipping else head[:8]}): {sorted(set(labels))}" if labels else ""))
     stale = stale_mentions(list(moved.values()), rows)
     if stale:
         print("Other mentions of the old values (NOT rewritten; review by hand):")
         for line in stale:
             print("  " + line)
     if args.no_verify:
-        print("(--no-verify: the affected tests were not run)")
+        print("(--no-verify: the pin tests were not run)")
         return 0
-    rc, out = run_tests(list(moved.values()), {"t12_deploy_kit_constants", "t12_regenesis", "t12_repin_values"}, log_dir)
-    print("\naffected tests:")
+    rc, out = run_tests(rows, {"t12_deploy_kit_constants", "t12_regenesis", "t12_repin_values"}, log_dir)
+    print("\npin tests after the rewrite:")
     for line in summarize_results(out):
         print("  " + line)
     print("\nThe last round was the confirming dry run. Review `git diff` and the `re-pin` comments, fix the prose above, commit.")
     return 0 if rc == 0 else 5
 
 
-def report(rows: list[Row], computed: dict[str, str], drift_only: bool):
+def report(rows: list[Row], computed: dict[str, str], drift_only: bool, shipping: bool, dry_run: bool):
     """Print the pinned-vs-computed table and what a rewrite cannot fix; return the row classes."""
     width = max(len(r.pin.key) for r in rows)
     label = {"drift": "DRIFT", "ok": "ok", "absent": "absent", "nocompute": "NOT COMPUTED", "locate-error": "NOT FOUND",
-             "history": "history"}
+             "history": "history", "label": "label"}
     print(f"\n{'pin':{width}}  {'scope':10}  {'status':12}  {'pinned':18} {'computed':18}")
     for r in rows:
-        if drift_only and r.status in ("ok", "history", "absent"):
+        if drift_only and r.status in ("ok", "history", "absent", "label"):
             continue
         tail = f"  -> {r.decision.upper()}" if r.status == "drift" else ""
         print(f"{r.pin.key:{width}}  {r.pin.scope:10}  {label[r.status]:12}  {short(r.pinned):18} {short(r.computed):18}{tail}")
@@ -998,36 +1300,22 @@ def report(rows: list[Row], computed: dict[str, str], drift_only: bool):
     for r in rows:
         counts[label[r.status]] = counts.get(label[r.status], 0) + 1
     print("\nsummary: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+    for detail in sorted({r.detail for r in rows if r.status == "absent"}):
+        print(f"  absent: {detail} — with --shipping this is NOT FOUND")
     for key in ["from.testnet-12.params_id", "genesis.testnet-12.hash", "testnet-12.premine_txid", "from.testnet-12.schedule_id",
                 "rule_manifest.digest"]:
         print(f"  computed {key:30} {computed.get(key, '-')}")
+    present = present_gates()
+    for name, _, arrives in GATES:
+        state = computed.get(f"gate.{name}", "did not run") if name in present else f"not in this tree (arrives with {arrives})"
+        print(f"  gate {name.split('::')[-1]}: {state}")
 
-    problems = []
-    registered = computed.get("testnet-12.class.registered", "")
-    if registered:
-        on_chain = set(registered.split(",")) | {computed.get("testnet-12.class.floor", "")}
-        app = open(os.path.join(REPO, APP), encoding="utf-8").read()
-        start = app.find("const LLM_CLASSES = [")
-        in_app = set(re.findall(r'id:"([0-9a-f]{128})"', app[start:app.find("];", start)]))
-        problems += [f"{APP} LLM_CLASSES names {x[:16]}…, not a genesis class of this build — edit by hand" for x in sorted(in_app - on_chain)]
-        problems += [f"{APP} LLM_CLASSES lacks genesis class {x[:16]}… — add its row by hand (name, model, tag)"
-                     for x in sorted(on_chain - in_app)]
-        order = registered.split(",")
-        if order != [computed.get("testnet-12.class.8k"), computed.get("testnet-12.class.2m")]:
-            problems.append(f"testnet-12's genesis model classes are {[o[:8] for o in order]}, not [8k, 2M]: "
-                            "t12_regenesis::the_held_rows_are_the_fleets_classes and the kit's node tables need a hand edit")
-    if computed.get("kit.cards") and computed["kit.cards"] != ",".join(str(i) for i in range(8)):
-        problems.append(f"PALW_T12_GENESIS_BONDS declares premine indices {computed['kit.cards']}, not 0..7 in order: the kit's "
-                        "`$PREMINE_TXID:N` / FEE_FLOAT_BASE+N naming breaks (t12_deploy_kit_constants)")
-    gen = computed.get("genesis.testnet-12.hash")
-    m = re.search(r'^FORBIDDEN_GENESIS="([0-9a-f\s]*)"', open(os.path.join(REPO, FLEET), encoding="utf-8").read(), re.M)
-    if gen and m and gen in m.group(1).split():
-        problems.append(f"{FLEET} FORBIDDEN_GENESIS lists this build's own genesis {gen[:16]}…")
+    problems = structural_problems(rows, computed, shipping, shipping and dry_run)
     for p in problems:
         print("CHECK: " + p)
     unreg = unregistered(rows)
     if unreg:
-        print("\nUNREGISTERED quoted hex literals in pin files (not checked — add a registry entry):")
+        print("\nUNREGISTERED quoted hex literals in pin files (a pin the registry does not check — add an entry):")
         for u in unreg:
             print("  " + u)
 
@@ -1045,7 +1333,17 @@ def report(rows: list[Row], computed: dict[str, str], drift_only: bool):
             print(f"  {r.pin.key} [{r.pin.scope}] {short(r.pinned)} -> {short(r.computed)}: {r.detail}")
             for t in r.pin.tests:
                 print(f"      would fail: {t}")
+    pending = [r for r in refused if r.t11_layout_pending]
+    if pending:
+        layout_moved = [r.pin.key for r in drift if r.pin.scope == "layout"]
+        print("\nAUDIT SIGN-OFF NEEDED before --allow-t11-layout (checklist §5, item 5):")
+        print("  1. the v22 layout pins that moved in this run, and why each encoding changed: " + ", ".join(layout_moved))
+        print("  2. the testnet-11 goldens that would move with them: " + ", ".join(r.pin.key for r in pending))
+        print("  3. that testnet-11's fold changed only by that encoding: the parity dump's roots-masked digest, length and line "
+              "count held; the verdict fixture's lock and collaterals held; the dormant ring's premises (empty ring, no ring "
+              "delta) are asserted before its root prints — the audit reads the diff of the fold code, not only these guards.")
     return drift, refused, moves, broken, problems, unreg
+
 
 if __name__ == "__main__":
     sys.exit(main())
