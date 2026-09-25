@@ -37748,6 +37748,10 @@ pub(crate) mod tests {
             // module's contested network.
             mod activation_pool_v1;
 
+            // Lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on this module's jury and on the
+            // registry's ready count.
+            mod bond_maturity_ext_v1;
+
             fn fold_step(
                 parent: &PalwChainStateV2,
                 p: &PalwStateParamsV2,
