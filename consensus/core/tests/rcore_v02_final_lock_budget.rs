@@ -31,6 +31,9 @@ use kaspa_consensus_core::palw_state_v2::{
     palw_rcore_gate_room_v1, palw_second_clock_depth_v1,
 };
 use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+use kaspa_consensus_core::palw_admission_v2::{PalwAdmissionV2Error, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2};
+use kaspa_consensus_core::palw_panel_v2::{PalwPanelValidLockV1, PalwRcoreSeatFilterV1};
+use kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v4;
 
 const MSK: u128 = 100_000_000;
 
@@ -376,4 +379,99 @@ fn v02_binds_continue_past_the_fence_once_locks_fill_the_ceiling_and_a_convictio
     }
     assert!(!binds(&full, now + 1, claim4), "100% still bounds the bind past the fence");
     assert!(binds(&c, now + 1, claim4), "…and the same seats without those locks bind it");
+}
+
+/// The admission fences the processor resolves at `daa` (`palw_epoch_budget_fences_at`), as far as the
+/// stateful half reads them — `rcore_s3_one_ledger`'s.
+fn admission_fences(p: &Params, daa: u64) -> PalwEpochBudgetFencesV1 {
+    let fold = registry_fold(p, daa).expect("the registry");
+    PalwEpochBudgetFencesV1 {
+        audit_2026_09_23_active: p.palw_audit_2026_09_23_active_at(daa),
+        canonical_work_daa: p.palw_canonical_work_daa(),
+        base_known_draw: fold.genesis_works.get(&bundle(p).base_class_id).map(|w| w.economic_ccu_per_claim),
+        settled_anchor_depth: extras(p, daa).settled_anchor_depth,
+        ..Default::default()
+    }
+}
+
+/// **The producer-seat (testnet-12's b1 / b6: a floor producer that also sits on panels): every reader
+/// of the work gate gives one answer on each side of the fence.** The floor producer's post-`Final`
+/// locks put its ledger at its ceiling + 50,000 MSK. Below the fence (and on the launch build past it)
+/// admission refuses its next floor attempt `ExposureCeilingExceeded`, the fold skips it, the producer's
+/// facts say no room, and the draw's seat filter leaves it out; from the height admission admits, the
+/// fold records the claim, the facts say room (their `committed_off_ceiling` is the resolved term), and
+/// the filter seats it — `committed` itself is the same number on both sides.
+#[test]
+fn v02_the_producer_seat_admission_the_fold_the_facts_and_the_draw_agree_on_each_side() {
+    let fence = 1_100u64;
+    let p = armed(fence);
+    let mut c = Chain::new(p.clone());
+    let (producer, _, _) = floor_producer(&p);
+    let (floor, _, _, _) = genesis_classes(&p)[0];
+    let b = bundle(&p);
+    c.step(&[]);
+    let now = c.daa;
+    let fill = (ceiling(&c, &producer) + 50_000 * MSK).saturating_sub(committed(&c, &producer, now));
+    c.s = with_retired_locks(&c.sp, &c.s, h(0x0E_7125), &[(producer, fill)], now + c.sp.window_court());
+    let twin = chain_on(t12(), c.s.clone(), c.daa);
+    let (_, pubkey, operator) = floor_producer(&p);
+    for (chain, t, open) in [(&c, fence - 1, false), (&twin, fence, false), (&c, fence, true), (&c, fence + 500, true)] {
+        let label = format!("{} at {t}", if chain.p.palw_final_lock_full_collateral.is_some() { "armed" } else { "launch" });
+        let raw = raw_depth(chain, t);
+        let committed_t = palw_bond_committed_raw_v1(&chain.s, &chain.sp, &producer, t, raw);
+        assert!(committed_t > ceiling(chain, &producer), "{label}: the premise");
+        let pwu = chain.floor_pwu(t);
+        // `rcore_s3_one_ledger::floor_attempt`'s shape: the floor's registered artifact root (admission reads it).
+        let (mut env, _, _) = junk_attempt(floor, producer, pubkey.clone(), &operator, pwu, 0x0305 + t, 0x10C0 + t);
+        env.attempt.artifact_root = chain.s.class(&floor).expect("the floor").artifact_root;
+        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(h(NET), h(0x10C0 + t), floor, &producer.0, 7);
+        let key = kaspa_consensus_core::palw_attempt_v2::execution_commitment_v3(&env.attempt, anchor);
+        let id = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&env.attempt);
+        let ctx_t = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: h(0x0800_0000 + t), daa_score: t, blue_score: t, subsidy: 0 };
+        let adm = check_palw_attempt_admission_v2(&chain.s, &chain.sp, &b.admission, &ctx_t, &env, admission_fences(&chain.p, t));
+        let (next, _, skips) = chain.try_fold(&chain.s, &ctx_t, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands");
+        let facts = palw_producer_facts_v4(
+            &chain.s,
+            &chain.sp,
+            &b.admission,
+            kaspa_consensus_core::BlockHash::from_u64_word(1),
+            t,
+            floor,
+            Some(&producer),
+            None,
+            chain.p.palw_canonical_work_daa(),
+            admission_fences(&chain.p, t).base_known_draw,
+            true,
+            0,
+            raw,
+        )
+        .expect("the floor has facts");
+        let bond_facts = facts.bond.expect("a genesis bond");
+        assert_eq!(bond_facts.committed, committed_t, "{label}: the facts read the one ledger whole");
+        let escaped = palw_second_clock_depth_v1(raw, chain.s.recent_anchor_daas(), t, chain.sp.window_court());
+        let filter = PalwPanelValidLockV1 {
+            required: u128::MAX,
+            now_daa: t,
+            settled_anchor_depth: escaped,
+            window_court: chain.sp.window_court(),
+            rcore: Some(PalwRcoreSeatFilterV1 {
+                eligibility: 640 * MSK,
+                ceiling_permille: chain.sp.fp_max_exposure_ratio_permille(),
+                resolved_locks_off_ceiling: chain.sp.final_lock_full_collateral_active_at(t),
+            }),
+        };
+        if open {
+            adm.unwrap_or_else(|e| panic!("{label}: admission admits: {e:?}"));
+            assert!(skips.is_empty() && next.claim(&id).is_some(), "{label}: the fold records it: {skips:?}");
+            assert_eq!(bond_facts.committed_off_ceiling, fill, "{label}: the facts' off-ceiling part is the resolved lock");
+            assert!(bond_facts.has_committed_room(), "{label}: the producer's pre-check agrees");
+            assert!(filter.admits(&chain.s, &producer), "{label}: the draw seats it");
+        } else {
+            assert!(matches!(adm, Err(PalwAdmissionV2Error::ExposureCeilingExceeded { .. })), "{label}: admission refuses: {adm:?}");
+            assert!(next.claim(&id).is_none() && skips.len() == 1, "{label}: the fold skips the own attempt, the block stands");
+            assert_eq!(bond_facts.committed_off_ceiling, 0, "{label}: nothing is off the ceiling");
+            assert!(!bond_facts.has_committed_room(), "{label}: the producer's pre-check agrees");
+            assert!(!filter.admits(&chain.s, &producer), "{label}: the draw leaves it out");
+        }
+    }
 }
