@@ -35,6 +35,7 @@ use crate::model::stores::headers::HeaderStoreReader;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, TemplateBuildMode};
+use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::config::{Config, ConfigBuilder};
 use kaspa_consensus_core::errors::block::RuleError;
 use kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2;
@@ -59,6 +60,12 @@ struct Duel {
 /// field the mainnet-values branch moves for this question (132 s -> 1,620 s). Both nodes start at
 /// the same genesis with the premine imported.
 fn duel(tolerance_s: Option<u64>) -> Duel {
+    duel_armed(tolerance_s, None)
+}
+
+/// [`duel`], with F1's same-chain fence (`Params::palw_heartbeat_transparent_same_chain`, ADR-0105
+/// §11) armed at DAA `same_chain` on BOTH nodes — `None` is testnet-12 as launched.
+fn duel_armed(tolerance_s: Option<u64>, same_chain: Option<u64>) -> Duel {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let config = match tolerance_s {
         Some(t) if t != config.params.timestamp_deviation_tolerance => {
@@ -68,6 +75,7 @@ fn duel(tolerance_s: Option<u64>) -> Duel {
         }
         _ => config,
     };
+    let config = with_same_chain(&config, same_chain);
     config.params.validate_palw_v2().expect("a runnable ruleset");
     let victim = t12_genesis_chain(&config, &bundle, &premine, &floats);
     let attacker = t12_genesis_chain(&config, &bundle, &premine, &floats);
@@ -505,6 +513,10 @@ async fn hb_probe_b_sibling_beats_outweigh_a_heartbeat_only_chain() {
 /// slots up to that clock, X in the first; the attacker mines from the same parent, Y in the first
 /// holder, stamping holder and step AT each slot (m = 1, the honest shape) until its own node refuses
 /// a holder as too far in the future, then releases everything at once.
+///
+/// Measured on `2004c588`, before the lead cap: 1,620 s gave thirteen slots of lead and the double
+/// spend landed. On the release this branch sits on (`0e8ec984e`) the cap is armed, so both runs stop
+/// at 132 s past the clock — one slot of lead — and the assertions below read the bound in force.
 #[tokio::test]
 async fn hb_probe_b_future_stamped_beats_run_the_private_branch_ahead() {
     kaspa_core::log::try_init_logger("warn");
@@ -553,16 +565,31 @@ async fn hb_probe_b_future_stamped_beats_run_the_private_branch_ahead() {
             private.len(),
             (last as f64 - now as f64) / 1_000.0
         );
-        assert!(matches!(refusal, RuleError::TimeTooFarIntoTheFuture(..)), "{tag}: only the future bound stops the run-ahead");
+        // **On the release this probe now sits on (`0e8ec984e`), the beat lead cap is armed**
+        // (`palw_clock_lead_cap`, merged after the probe was measured): a clock-moving header is
+        // refused 132 s past the receiving clock whatever the tolerance, so the run-ahead is bounded
+        // by `min(T, 132 s)` and the refusal may be the cap's own. At 1,620 s the probe measured
+        // thirteen slots of lead and a landed double spend on the uncapped base; capped, it is the
+        // 132 s case.
+        let capped = d.config.params.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(0));
+        let bound_ms = if capped {
+            (tolerance * 1_000).min(kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS)
+        } else {
+            tolerance * 1_000
+        };
+        assert!(
+            matches!(refusal, RuleError::TimeTooFarIntoTheFuture(..) | RuleError::ClockLeadTooFarAhead(..)),
+            "{tag}: only the future bound (or, capped, the lead cap) stops the run-ahead"
+        );
         let r = release(&tag, &mut d.victim, &private, fork, &mut d.nonce, 8).await;
         assert!(r.refused.is_empty(), "{tag}: the victim accepts every beat its bound admitted a moment ago");
         let (x, y) = payments(&tag, &d);
         assert_eq!(r.flipped(), y && !x, "{tag}: the flip is exactly the double spend");
-        if tolerance == 1_620 {
-            assert!(r.flipped() && y && !x, "{tag}: thirteen slots of lead carry the double spend");
+        if bound_ms == 1_620_000 {
+            assert!(r.flipped() && y && !x, "{tag}: thirteen slots of lead carry the double spend (uncapped)");
         }
         let lead = private_slots as i64 - public_slots as i64;
-        let budget = (tolerance * 1_000 / I) as i64;
+        let budget = (bound_ms / I) as i64;
         eprintln!(
             "[hb-probe {tag}] lead: private {private_slots} slots vs public {public_slots} = {lead} slots ahead (floor(T / I) = {budget}); blue work +{} vs +{}; the victim's sink now at DAA +{} above the fork after {public_slots} slots of wall time",
             r.private_bw_max,
@@ -859,4 +886,765 @@ async fn hb_probe_e_a_final_anchor_after_x_refuses_the_heavier_private_branch() 
             assert_eq!(r.flipped(), y && !x, "{tag}: the flip is exactly the double spend");
         }
     }
+}
+
+// ================================================================================================
+// **F1 — the absorb hole and the post-launch fence that closes it (ADR-0105 §11, 2026-09-25).**
+//
+// The heartbeat double-spend verifier (workflow wf_35c50751-12d) found what the probes above did not
+// try: a bondless heartbeat miner does not need more weight than the public chain, it can BORROW it.
+// Its private branch merges the public attempts, and under the rule testnet-12 launched with a
+// non-heartbeat block ignores every heartbeat in its anticone — the attacker's too — so each public
+// attempt is BLUE on the private branch and its 2^20 counts there as well as on the public chain.
+// The private branch then out-weighs the public one by its own ε, and the victim reorgs X away (the
+// verifier's g2: private +2,097,158 vs public +2,097,157).
+//
+// testnet-12 launched with that rule, so the fix is a flag day: past
+// `Params::palw_heartbeat_transparent_same_chain` (keyed on the CANDIDATE's own DAA score) a
+// non-heartbeat block ignores heartbeats only in a block whose selected chain its own selected parent
+// is on — the late draw ADR-0105 was written for — and is colored classically, against the other
+// branch's beats, anywhere else. Every attack below runs twice: on testnet-12 as launched (the fence
+// `None` — the double spend lands, the verifier's measurement kept as the control) and with the fence
+// armed below the fork (it does not). Below the height the armed build IS the launched build, block
+// for block (`hb_regression_below_the_fence_the_armed_build_is_the_launched_build`), and an honest
+// chain crosses the height with its clock running and every late draw blue
+// (`hb_regression_the_fence_crosses_an_honest_chain_and_the_clock_runs`).
+// ================================================================================================
+
+/// testnet-12's harness config with F1's same-chain fence armed at DAA `at` (`None`: as launched).
+/// Every other field is left as it was.
+fn with_same_chain(config: &Config, at: Option<u64>) -> Config {
+    let mut config = config.clone();
+    config.params.palw_heartbeat_transparent_same_chain = at.map(ForkActivation::new);
+    config.params.validate_palw_v2().expect("the same-chain fence rides testnet-12's transparency, armed from genesis");
+    assert_eq!(config.params.palw_heartbeat_transparent_same_chain_fence(), at.map(ForkActivation::new));
+    config
+}
+
+/// Where a run puts the fence: below the fork point of every attack here (the harness's third honest
+/// slot is DAA 2 or more), so every public attempt is past it.
+const ARMED_BELOW_THE_FORK: u64 = 1;
+
+/// What the attacker's own node did with one public attempt, read off the attacker's next block.
+#[derive(Debug)]
+struct Absorb {
+    /// The attacker's sink was on its private branch when that block was built on its virtual.
+    sink_private: bool,
+    /// The public attempt was BLUE in that block.
+    blue: bool,
+    /// The attempt's selected parent is the fork point itself: an attempt both branches hang from,
+    /// which either may count — the public chain counts it too, so it decides nothing.
+    at_the_fork: bool,
+    /// The attempt's own DAA score — the key F1's fence is read at.
+    daa: u64,
+    /// The attacker's next block merged it at all. Past the horizon the template leaves it out — a
+    /// block that merged it red below the merge-depth root would be invalid — so it is neither.
+    merged: bool,
+}
+
+/// One absorb run: what the attacker's node did with each public attempt, the release to the victim,
+/// which payment the victim holds, and the two nodes.
+struct AbsorbRun {
+    seen: Vec<Absorb>,
+    released: Released,
+    /// `(X's output, Y's output)` in the victim's UTXO set.
+    held: (bool, bool),
+    duel: Duel,
+    private: Vec<Block>,
+}
+
+impl AbsorbRun {
+    fn double_spent(&self) -> bool {
+        !self.held.0 && self.held.1
+    }
+}
+
+/// **The verifier's `g_absorb2`, kept as it was run and made to report.** A heartbeat-only attacker
+/// forks with Y and one slot of `m`-sibling beats; then, for each of `slots` public attempts, it
+/// mirrors every public block up to and including the attempt and mines its own slot on its own
+/// virtual, whose first block merges the attempt. `x_in_attempt` rides X inside the first public
+/// attempt (built at the fork point) instead of a public holder. `release` hands the private branch
+/// to the victim at the end (the h2 horizon is measured without). `same_chain` arms F1's fence on both
+/// nodes (`None`: testnet-12 as launched).
+async fn absorb(tag: &str, slots: usize, m: usize, x_in_attempt: bool, release_it: bool, same_chain: Option<u64>) -> AbsorbRun {
+    kaspa_core::log::try_init_logger("warn");
+    let mut d = duel_armed(None, same_chain);
+    for _ in 0..3 {
+        honest_slot_mirrored(&mut d).await;
+    }
+    let fork = d.victim.sink();
+    let mut private = private_slot(&mut d.attacker, &mut d.nonce, m, vec![d.y.clone()]).await;
+    private.extend(private_slot(&mut d.attacker, &mut d.nonce, m, Vec::new()).await);
+    let mut public: Vec<Block> = Vec::new();
+    if !x_in_attempt {
+        public.push(d.victim.heartbeat(1_000, vec![d.x.clone()]).await);
+    }
+    let cards = [1usize, 3, 4, 5, 7, 0];
+    let mut seen = Vec::new();
+    let mut mirrored = 0usize;
+    for s in 0..slots {
+        let txs = if x_in_attempt && s == 0 { vec![d.x.clone()] } else { Vec::new() };
+        let (attempt, _) = d.victim.attempt(cards[s % cards.len()], 1_000, txs, &|_| true).await;
+        let hash = attempt.header.hash;
+        let daa = attempt.header.daa_score;
+        public.push(attempt);
+        for b in &public[mirrored..] {
+            mirror(&mut d.attacker, b).await;
+        }
+        mirrored = public.len();
+        let sink_private = private.iter().any(|b| b.header.hash == d.attacker.sink());
+        // Once the attacker's own node has left its branch for the heavier public chain, its miner
+        // is just another heartbeat miner on that chain: it mines the honest slot there (the rigid
+        // `private_slot` shape assumes a slot boundary the public tip need not be on).
+        let slot = if sink_private {
+            private_slot(&mut d.attacker, &mut d.nonce, m, Vec::new()).await
+        } else {
+            honest_slot(&mut d.attacker, Vec::new()).await
+        };
+        let gd = d.attacker.vp().ghostdag_store.get_data(slot[0].header.hash).unwrap();
+        let a = Absorb {
+            sink_private,
+            blue: gd.mergeset_blues.contains(&hash),
+            at_the_fork: d.attacker.vp().ghostdag_store.get_selected_parent(hash).unwrap() == fork,
+            daa,
+            merged: gd.mergeset_blues.contains(&hash) || gd.mergeset_reds.contains(&hash),
+        };
+        eprintln!(
+            "[hb-regression {tag}] public attempt {} (DAA {daa}): {a:?}; attacker tip +{} blue work, public tip +{}",
+            s + 1,
+            bw(&d.attacker, d.attacker.sink()) - bw(&d.attacker, fork),
+            bw(&d.victim, d.victim.sink()) - bw(&d.victim, fork)
+        );
+        seen.push(a);
+        private.extend(slot);
+        public.extend(honest_slot(&mut d.victim, Vec::new()).await);
+    }
+    let released = if release_it { release(tag, &mut d.victim, &private, fork, &mut d.nonce, 8).await } else { Released::default() };
+    let held = payments(tag, &d);
+    if release_it {
+        assert_same_coloring(tag, &d.attacker, &d.victim, &private);
+    }
+    AbsorbRun { seen, released, held, duel: d, private }
+}
+
+/// The rule, stated over what the attacker's node did: past the fence a public attempt is blue in a
+/// block the attacker built on its PRIVATE branch only if it was built at the fork point itself.
+fn assert_nothing_borrowed(tag: &str, seen: &[Absorb]) {
+    for (i, a) in seen.iter().enumerate() {
+        if a.sink_private && !a.at_the_fork {
+            assert!(!a.blue, "{tag}: public attempt {} (built on the public branch) is RED on the private branch — F1", i + 1);
+        }
+    }
+}
+
+/// How many public attempts built on the public branch the private branch counted blue.
+fn borrowed(seen: &[Absorb]) -> usize {
+    seen.iter().filter(|a| a.sink_private && !a.at_the_fork && a.blue).count()
+}
+
+/// **The rule is a function of the DAG.** The victim saw the public chain first and the private
+/// branch in one burst; the attacker built that branch while its own sink moved between the two. Both
+/// color every released block identically — selected parent, blue score, blue work, blues and reds.
+fn assert_same_coloring(tag: &str, a: &T12Chain, b: &T12Chain, blocks: &[Block]) {
+    for block in blocks {
+        let h = block.header.hash;
+        let (x, y) = (a.vp().ghostdag_store.get_data(h).unwrap(), b.vp().ghostdag_store.get_data(h).unwrap());
+        assert_eq!(
+            (x.selected_parent, x.blue_score, x.blue_work, &x.mergeset_blues, &x.mergeset_reds),
+            (y.selected_parent, y.blue_score, y.blue_work, &y.mergeset_blues, &y.mergeset_reds),
+            "{tag}: the two nodes color {h} differently"
+        );
+    }
+}
+
+/// Every block `c` holds but genesis, each after all of its parents — what a second node must be fed
+/// to hold the same DAG.
+fn blocks_in_topological_order(c: &T12Chain) -> Vec<Block> {
+    let genesis = c.config.params.genesis.hash;
+    let headers = c.vp().headers_store.clone();
+    let mut seen: HashSet<BlockHash> = HashSet::new();
+    let mut order = Vec::new();
+    let mut stack: Vec<(BlockHash, bool)> = c.ctx.consensus.get_tips().into_iter().map(|h| (h, false)).collect();
+    while let Some((h, parents_done)) = stack.pop() {
+        if h == genesis {
+            continue;
+        }
+        if parents_done {
+            order.push(h);
+            continue;
+        }
+        if !seen.insert(h) {
+            continue;
+        }
+        stack.push((h, true));
+        for parent in headers.get_header(h).unwrap().direct_parents() {
+            if !seen.contains(parent) {
+                stack.push((*parent, false));
+            }
+        }
+    }
+    order.into_iter().map(|h| c.ctx.consensus.get_block(h).unwrap_or_else(|e| panic!("{h}: {e}"))).collect()
+}
+
+/// Feed every block `from` holds to `to`, parents first, and demand `to` colors each one exactly as
+/// `from` did and ends on the same sink. Returns how many blocks were compared.
+async fn replay_and_compare(tag: &str, from: &T12Chain, to: &mut T12Chain) -> usize {
+    let blocks = blocks_in_topological_order(from);
+    for b in &blocks {
+        mirror(to, b).await;
+    }
+    assert_same_coloring(tag, from, to, &blocks);
+    assert_eq!(from.sink(), to.sink(), "{tag}: the same sink");
+    blocks.len()
+}
+
+/// **g2 — the verifier's headline case: X in a public holder, two public attempts, a bondless
+/// heartbeat attacker at two siblings a layer.** As launched: both attempts blue on the private
+/// branch, +2,097,158 against +2,097,157, the victim flips, X gone and Y kept — the control, and
+/// the reason for the fence. Past the fence: the first attempt is red on the private branch (its
+/// selected parent is the public holder), the attacker's own node follows the heavier public chain
+/// once it has seen it, and X stands. (The victim may still end on a block the attacker mined — one
+/// built on the public chain after its node adopted it, which carries X; that is why these assert
+/// the payments, not the probe's "sink on a released block".)
+#[tokio::test]
+async fn hb_regression_g2_a_heartbeat_branch_cannot_borrow_the_public_attempts() {
+    let launched = absorb("g2 launched", 2, 2, false, true, None).await;
+    assert!(launched.released.refused.is_empty(), "g2 launched: every released block is valid");
+    assert_eq!(borrowed(&launched.seen), 2, "g2 launched: the private branch counts both public attempts — the hole");
+    assert!(launched.double_spent(), "g2 launched: X reorged away and Y kept — the verifier's measurement, reproduced");
+
+    let fenced = absorb("g2 fenced", 2, 2, false, true, Some(ARMED_BELOW_THE_FORK)).await;
+    assert!(fenced.released.refused.is_empty(), "g2 fenced: every released block is valid");
+    assert!(
+        fenced.seen[0].merged && fenced.seen[0].sink_private && !fenced.seen[0].at_the_fork,
+        "g2 fenced: the first attempt is merged on the private branch"
+    );
+    assert!(!fenced.seen[0].blue, "g2 fenced: and it is RED there — the attacker's beats count against another branch's attempt");
+    assert_nothing_borrowed("g2 fenced", &fenced.seen);
+    assert!(fenced.held.0 && !fenced.held.1, "g2 fenced: X stands and Y is not in the victim's UTXO set");
+}
+
+/// **h1 — X inside the first public attempt, three attempts.** The first attempt is built at the fork
+/// point, so both branches hang from its selected parent and either may count it: blue on the private
+/// branch in both runs, stated — the public chain counts it too, and on the private branch X loses to
+/// the Y it accepted first. As launched the second and third are borrowed and the double spend lands;
+/// past the fence the second is red on the private branch (by the third the attacker's own node has
+/// left that branch for the heavier public chain) and X stands.
+#[tokio::test]
+async fn hb_regression_h1_an_attempt_at_the_fork_decides_nothing() {
+    let launched = absorb("h1 launched", 3, 2, true, true, None).await;
+    assert!(launched.released.refused.is_empty(), "h1 launched: every released block is valid");
+    assert!(borrowed(&launched.seen) >= 1, "h1 launched: the private branch borrows an attempt of the public branch");
+    assert!(launched.double_spent(), "h1 launched: X (inside a public attempt) reorged away and Y kept");
+
+    let fenced = absorb("h1 fenced", 3, 2, true, true, Some(ARMED_BELOW_THE_FORK)).await;
+    assert!(fenced.released.refused.is_empty(), "h1 fenced: every released block is valid");
+    assert!(
+        fenced.seen[0].merged && fenced.seen[0].at_the_fork && fenced.seen[0].sink_private,
+        "h1 fenced: the first attempt hangs from the fork point"
+    );
+    assert!(fenced.seen[0].blue, "h1 fenced: which the private branch may count, as the public one does");
+    assert!(fenced.seen[1..].iter().all(|a| !a.at_the_fork), "h1 fenced: the later attempts are built on the public branch");
+    assert_nothing_borrowed("h1 fenced", &fenced.seen);
+    assert!(fenced.held.0 && !fenced.held.1, "h1 fenced: X stands and Y is not in the victim's UTXO set");
+}
+
+/// **h2 — the horizon: how many public attempts a private branch at the honest shape (one beat a
+/// layer) can borrow before the merge depth reddens one.** As launched the verifier measured eight,
+/// the ninth red at merge depth 30 (~10 minutes of the public chain); past the fence none.
+#[tokio::test]
+async fn hb_regression_h2_the_horizon_is_zero_past_the_fence() {
+    let launched = absorb("h2 launched", 14, 1, false, false, None).await;
+    let horizon = launched.seen.iter().take_while(|a| a.sink_private && a.blue).count();
+    let after = launched.seen.get(horizon).map(|a| (a.merged, a.blue));
+    eprintln!(
+        "[hb-regression h2] launched: the private branch borrowed public attempts 1..={horizon} of 14; attempt {} (merged, blue) = {after:?}",
+        horizon + 1
+    );
+    assert!(horizon >= 2, "h2 launched: the private branch borrows several public attempts in a row — the hole");
+    assert!(horizon < 14, "h2 launched: and the merge depth ends the run");
+
+    let fenced = absorb("h2 fenced", 14, 1, false, false, Some(ARMED_BELOW_THE_FORK)).await;
+    assert_nothing_borrowed("h2 fenced", &fenced.seen);
+    assert_eq!(borrowed(&fenced.seen), 0, "h2 fenced: not one public attempt borrowed");
+}
+
+/// **The fence inside an attack: the attempt below the height is borrowed, the one at it is not.**
+/// g2's DAG, with the fence armed at the second public attempt's own DAA score — so the first attempt
+/// is colored by the launched rule in every block that merges it (keyed on the candidate, not on the
+/// merging block: blue on the private branch, stated) and the second by F1's (red there). One borrowed
+/// attempt against two public ones: X stands. The attack window a scheduled fence leaves is the
+/// attempts minted below it, and it closes as they fall out of the merge depth.
+#[tokio::test]
+async fn hb_regression_the_fence_splits_an_attack_at_the_candidates_own_daa() {
+    let launched = absorb("straddle probe", 2, 2, false, false, None).await;
+    let (first, second) = (launched.seen[0].daa, launched.seen[1].daa);
+    assert!(first < second, "the harness mints the two public attempts at different DAA scores ({first}, {second})");
+    let straddled = absorb("straddle", 2, 2, false, true, Some(second)).await;
+    assert_eq!((straddled.seen[0].daa, straddled.seen[1].daa), (first, second), "the public branch is the same DAG");
+    assert!(straddled.released.refused.is_empty(), "straddle: every released block is valid");
+    assert!(
+        straddled.seen[0].sink_private && straddled.seen[0].blue,
+        "straddle: the attempt below the height is borrowed, as launched"
+    );
+    if straddled.seen[1].sink_private {
+        assert!(!straddled.seen[1].blue, "straddle: the attempt at the height is red on the private branch");
+    }
+    assert_eq!(borrowed(&straddled.seen), 1, "straddle: exactly the attempt below the fence is borrowed");
+    assert!(straddled.held.0 && !straddled.held.1, "straddle: one borrowed attempt does not out-weigh two — X stands");
+}
+
+/// **Below its height the armed build IS the launched build, on the DAG where the two rules differ.**
+/// g2's attack as testnet-12 launched it (the double spend lands), replayed block for block into a node
+/// that has the fence scheduled far above this chain: every block colored identically — selected
+/// parent, blue score, blue work, blues and reds — the same sink, and the same (double-spent) UTXO set.
+/// A fleet can install the armed build before the height with nothing to disagree about.
+#[tokio::test]
+async fn hb_regression_below_the_fence_the_armed_build_is_the_launched_build() {
+    let launched = absorb("g2 twin", 2, 2, false, true, None).await;
+    assert!(launched.double_spent(), "the attack DAG, as launched");
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let scheduled = with_same_chain(&config, Some(1_000_000));
+    let mut twin = t12_genesis_chain(&scheduled, &bundle, &premine, &floats);
+    let compared = replay_and_compare("scheduled twin", &launched.duel.victim, &mut twin).await;
+    let x_out = TransactionOutpoint::new(launched.duel.x.id(), 0);
+    let y_out = TransactionOutpoint::new(launched.duel.y.id(), 0);
+    assert_eq!((has_utxo(&twin, x_out), has_utxo(&twin, y_out)), launched.held, "the same UTXO set: the twin double-spent too");
+    eprintln!(
+        "[hb-regression twin] {compared} blocks, {} of them the private branch: colored identically below the fence",
+        launched.private.len()
+    );
+    // …and the same DAG through a node with the fence ARMED below it is a different chain: the
+    // private blocks that borrowed are colored otherwise, which is the flag day.
+    let armed = with_same_chain(&config, Some(ARMED_BELOW_THE_FORK));
+    let mut other = t12_genesis_chain(&armed, &bundle, &premine, &floats);
+    let mut differs = 0usize;
+    for b in blocks_in_topological_order(&launched.duel.victim) {
+        // A block whose header blue work the armed rule does not reproduce is refused as invalid —
+        // stated, not avoided: the flag day is where the two builds stop sharing blocks.
+        if other.ctx.consensus.validate_and_insert_block(b.clone()).virtual_state_task.await.is_err() {
+            differs += 1;
+            continue;
+        }
+        other.ctx.simulated_time = other.ctx.simulated_time.max(b.header.timestamp);
+    }
+    assert!(differs > 0, "past the fence the absorb DAG is not the armed build's chain ({differs} blocks refused)");
+    let x_out_held = has_utxo(&other, x_out);
+    assert!(x_out_held, "and the armed node keeps X");
+}
+
+/// **f — a bonded attacker: one attempt of its own plus one borrowed against two public attempts.**
+/// As launched the public A1 is blue on the private branch, so one bond out-weighs two and the double
+/// spend lands; past the fence A1 is red there, one attempt does not out-weigh two, and X stands.
+#[tokio::test]
+async fn hb_regression_f_one_bond_cannot_borrow_a_second_attempt() {
+    kaspa_core::log::try_init_logger("warn");
+    for same_chain in [None, Some(ARMED_BELOW_THE_FORK)] {
+        let tag = if same_chain.is_some() { "f fenced" } else { "f launched" };
+        let mut d = duel_armed(None, same_chain);
+        for _ in 0..3 {
+            honest_slot_mirrored(&mut d).await;
+        }
+        let fork = d.victim.sink();
+        let holder = d.victim.heartbeat(1_000, vec![d.x.clone()]).await;
+        let (a1, _) = d.victim.attempt(1, 1_000, Vec::new(), &|_| true).await;
+        let clock = d.attacker.ctx.simulated_time + 1_000;
+        let mut private = layer(&mut d.attacker, &mut d.nonce, 1, clock, vec![d.y.clone()]).await.expect("holder");
+        let (b1, _) = d.attacker.attempt(2, 1_000, Vec::new(), &|_| true).await;
+        private.push(b1);
+        private.extend(private_slot(&mut d.attacker, &mut d.nonce, 2, Vec::new()).await);
+        mirror(&mut d.attacker, &holder).await;
+        mirror(&mut d.attacker, &a1).await;
+        assert!(private.iter().any(|b| b.header.hash == d.attacker.sink()), "{tag}: the attacker still builds on its private branch");
+        let s = private_slot(&mut d.attacker, &mut d.nonce, 2, Vec::new()).await;
+        let gd = d.attacker.vp().ghostdag_store.get_data(s[0].header.hash).unwrap();
+        eprintln!(
+            "[hb-regression {tag}] the private block after the mirror: A1 blue {} red {}; attacker tip +{} blue work",
+            gd.mergeset_blues.contains(&a1.header.hash),
+            gd.mergeset_reds.contains(&a1.header.hash),
+            bw(&d.attacker, s[0].header.hash) - bw(&d.attacker, fork)
+        );
+        let a1_blue = gd.mergeset_blues.contains(&a1.header.hash);
+        private.extend(s);
+        for _ in 0..8 {
+            private.extend(private_slot(&mut d.attacker, &mut d.nonce, 2, Vec::new()).await);
+        }
+        honest_slot(&mut d.victim, Vec::new()).await;
+        d.victim.attempt(3, 1_000, Vec::new(), &|_| true).await;
+        for _ in 0..7 {
+            honest_slot(&mut d.victim, Vec::new()).await;
+        }
+        let r = release(tag, &mut d.victim, &private, fork, &mut d.nonce, 8).await;
+        assert!(r.refused.is_empty(), "{tag}: every released block is valid");
+        let (x, y) = payments(tag, &d);
+        assert_same_coloring(tag, &d.attacker, &d.victim, &private);
+        if same_chain.is_none() {
+            assert!(a1_blue, "{tag}: the public A1 is BLUE on the private branch — the hole");
+            assert!(r.flipped() && !x && y, "{tag}: one bond plus a borrowed attempt out-weighs two — the double spend lands");
+        } else {
+            assert!(!a1_blue, "{tag}: the public A1 is RED on the private branch — F1");
+            assert!(!r.flipped(), "{tag}: one attempt and a slot's worth of extra beats do not out-weigh two attempts");
+            assert!(x && !y, "{tag}: X stands and Y is not in the victim's UTXO set");
+        }
+    }
+}
+
+/// Mines every heartbeat slot that opens before `lands_at` — `m` heartbeat miners, `m` siblings a
+/// layer (one template each) — and returns how many heartbeats that was.
+async fn beat_until(c: &mut T12Chain, nonce: &mut u64, lands_at: u64, m: usize) -> usize {
+    let mut minted = 0usize;
+    while ts(c, c.sink()) + I <= lands_at {
+        minted += if m == 1 { honest_slot(c, Vec::new()).await.len() } else { private_slot(c, nonce, m, Vec::new()).await.len() };
+    }
+    minted
+}
+
+/// Lands `draw` `delay_ms` after its template on `c` — every heartbeat slot that opens before then
+/// mined first by `m` heartbeat miners — and returns the heartbeat that merges it and how many
+/// heartbeats were minted while it was drawn.
+async fn land_late_m(c: &mut T12Chain, nonce: &mut u64, draw: &Block, delay_ms: u64, m: usize) -> (Block, usize) {
+    let lands_at = draw.header.timestamp + delay_ms;
+    let minted = beat_until(c, nonce, lands_at, m).await;
+    c.ctx.simulated_time = c.ctx.simulated_time.max(lands_at);
+    c.ctx.consensus.validate_and_insert_block(draw.clone()).virtual_state_task.await.expect("a late draw is a valid block");
+    assert_ne!(c.sink(), draw.header.hash, "a draw on its template's parents lands behind the heartbeat tip");
+    (c.heartbeat(1_000, Vec::new()).await, minted)
+}
+
+/// [`land_late_m`] with one heartbeat miner.
+async fn land_late(c: &mut T12Chain, draw: &Block, delay_ms: u64) -> Block {
+    let mut nonce = 1u64 << 44;
+    land_late_m(c, &mut nonce, draw, delay_ms, 1).await.0
+}
+
+/// A draw that lands `delay_ms` after its template on testnet-12, while the chain goes on at the
+/// 120 s heartbeat slots with `m` heartbeat miners, is merged by the next heartbeat. Returns whether
+/// that heartbeat colored it BLUE, the blue work the merger added over its selected parent, and how
+/// many heartbeats were minted while it was drawn. `transparent: false` is the same network with
+/// ADR-0105 taken away — classic GHOSTDAG, the control; `same_chain` arms F1's fence.
+async fn a_late_draw_on_t12(transparent: bool, same_chain: Option<u64>, delay_ms: u64, m: usize) -> (bool, i128, usize) {
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let config = if transparent {
+        with_same_chain(&config, same_chain)
+    } else {
+        let mut params = config.params.clone();
+        params.palw_heartbeat_transparent = None;
+        ConfigBuilder::new(params).skip_proof_of_work().build()
+    };
+    assert_eq!(config.params.palw_heartbeat_transparent_fence().is_some(), transparent);
+    assert_eq!(config.params.ghostdag_k(), 1, "testnet-12's k: two blues in an anticone make a block red");
+    let mut c = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let mut nonce = 1u64 << 41;
+    for _ in 0..3 {
+        honest_slot(&mut c, Vec::new()).await;
+    }
+    // The producer takes its template now, on the tip it sees, and draws.
+    let (draw, _) = c.build_attempt(1, 1_000, Vec::new(), &|_| true);
+    let draw = draw.to_immutable();
+    let (merger, minted) = land_late_m(&mut c, &mut nonce, &draw, delay_ms, m).await;
+    let gd = c.vp().ghostdag_store.get_data(merger.header.hash).unwrap();
+    assert!(gd.unordered_mergeset().any(|h| h == draw.header.hash), "the next heartbeat merges the draw");
+    let blue = gd.mergeset_blues.contains(&draw.header.hash);
+    let added = bw(&c, merger.header.hash) - bw(&c, gd.selected_parent);
+    eprintln!(
+        "[hb-regression late-draw] transparent {transparent}, same-chain {same_chain:?}, landed {:.0} s after its template, {m} miner(s), {minted} heartbeats minted meanwhile: blue {blue}, the merger added {added}",
+        delay_ms as f64 / 1_000.0,
+    );
+    (blue, added, minted)
+}
+
+/// **ADR-0105's property, kept past F1's fence, on testnet-12: a slow producer's bonded block is not
+/// turned red by the heartbeats minted on its own chain while it was computing.** An 8k draw takes
+/// ~200 s of inference; at 120 s heartbeat slots one slot opens meanwhile (two beats a miner). With one
+/// heartbeat miner and with two (two siblings a layer, as the fleet mined), the draw's selected parent
+/// is still on the chain when it lands, so the heartbeat that merges it colors it BLUE and carries its
+/// whole 2^20 — as launched and past the fence alike. The control — the same network with ADR-0105
+/// taken away — colors it RED, which is the 2026-09-10 incident: the test exercises the rule, not a
+/// DAG that would be blue anyway.
+#[tokio::test]
+async fn hb_regression_an_8k_draw_200s_late_stays_blue_on_its_own_chain() {
+    let attempt = 1i128 << 20;
+    for m in [1usize, 2] {
+        for same_chain in [None, Some(ARMED_BELOW_THE_FORK)] {
+            let (blue, added, minted) = a_late_draw_on_t12(true, same_chain, 200_000, m).await;
+            assert!(
+                minted >= 2,
+                "{m} miner(s), {same_chain:?}: heartbeats were minted on the draw's chain while it was drawn ({minted})"
+            );
+            assert!(
+                blue,
+                "{m} miner(s), {same_chain:?}: the draw hangs from the merger's chain, so heartbeats do not count against it"
+            );
+            assert!(
+                added > attempt,
+                "{m} miner(s), {same_chain:?}: the merging heartbeat carries the draw's whole 2^20 (added {added})"
+            );
+        }
+        let (classic_blue, classic_added, _) = a_late_draw_on_t12(false, None, 200_000, m).await;
+        assert!(!classic_blue && classic_added < attempt, "{m} miner(s): without ADR-0105 the same DAG makes it red — the control");
+    }
+}
+
+/// **The fence crosses an honest testnet-12 chain, and nothing but the rule's name changes.** F1 armed
+/// at DAA 8 (the operator will pick a common height for every post-launch fence; 8 is what the harness
+/// reaches in a few minutes of slots). The chain runs the fleet's shapes across it: one and two
+/// heartbeat miners, 200 s draws landing behind the heartbeat tip, a draw that lands before any
+/// heartbeat (a chain block), two draws on one template, and heartbeat-only stretches on both sides.
+///
+/// * **The clock runs**: every honest slot steps the DAA score by exactly one, before, at and after
+///   the height, and the chain ends well past it — the flag-day freeze of 2026-09-18 (a fence that
+///   stopped whatever ticked the clock) cannot hide here, because the slots are counted one by one.
+/// * **Every draw is blue**, on both sides of the height: a late draw hangs from the chain it lands on.
+/// * **The launched build agrees, block for block**: a node with the fence absent, fed this chain,
+///   colors every block identically and ends on the same sink — on an honest chain the flag day has
+///   nothing to disagree about, so a straggler is refused by the fork id, not by a fork.
+#[tokio::test]
+async fn hb_regression_the_fence_crosses_an_honest_chain_and_the_clock_runs() {
+    const H: u64 = 8;
+    kaspa_core::log::try_init_logger("warn");
+    let (launched, bundle, premine, floats) = t12_with_harness_cards();
+    let armed = with_same_chain(&launched, Some(H));
+    let mut c = t12_genesis_chain(&armed, &bundle, &premine, &floats);
+    let mut nonce = 1u64 << 45;
+    let mut draws: Vec<(Block, Block)> = Vec::new();
+    // Every honest slot must step the clock by exactly one — read at each slot's last block.
+    let mut steps: Vec<(u64, u64)> = Vec::new();
+    async fn stepped(c: &mut T12Chain, steps: &mut Vec<(u64, u64)>) {
+        let before = c.daa_of(c.sink());
+        honest_slot(c, Vec::new()).await;
+        steps.push((before, c.daa_of(c.sink())));
+    }
+    for _ in 0..3 {
+        stepped(&mut c, &mut steps).await;
+    }
+    // Below the height: a 200 s draw with one heartbeat miner, then one with two.
+    for m in [1usize, 2] {
+        let d = c.build_attempt(m, 1_000, Vec::new(), &|_| true).0.to_immutable();
+        let (merger, _) = land_late_m(&mut c, &mut nonce, &d, 200_000, m).await;
+        draws.push((d, merger));
+        // The merging beat may be a slot's holder: finish the slot, so the next draw's heartbeat
+        // miners start on a slot boundary.
+        stepped(&mut c, &mut steps).await;
+    }
+    // A heartbeat-only stretch across the height.
+    while c.daa_of(c.sink()) < H + 2 {
+        stepped(&mut c, &mut steps).await;
+    }
+    // Past the height: an attempt that lands before any heartbeat (it becomes the sink), two draws on
+    // one template (the loser of the hash tie is a candidate beside the winner), and 200 s draws with
+    // one and two heartbeat miners.
+    let (chain_attempt, _) = c.attempt(3, 1_000, Vec::new(), &|_| true).await;
+    stepped(&mut c, &mut steps).await;
+    let (t1, _) = c.build_attempt(4, 1_000, Vec::new(), &|_| true);
+    let (t2, _) = c.build_attempt(5, 0, Vec::new(), &|_| true);
+    let (t1, t2) = (t1.to_immutable(), t2.to_immutable());
+    assert_eq!(t1.header.direct_parents(), t2.header.direct_parents(), "two draws on one template");
+    for t in [&t1, &t2] {
+        c.ctx.consensus.validate_and_insert_block(t.clone()).virtual_state_task.await.expect("a draw on the tip is valid");
+    }
+    let twin_merger = c.heartbeat(1_000, Vec::new()).await;
+    stepped(&mut c, &mut steps).await;
+    for m in [1usize, 2] {
+        let d = c.build_attempt(5 + m, 1_000, Vec::new(), &|_| true).0.to_immutable();
+        let (merger, _) = land_late_m(&mut c, &mut nonce, &d, 200_000, m).await;
+        draws.push((d, merger));
+        stepped(&mut c, &mut steps).await;
+    }
+    // A heartbeat-only stretch to finish.
+    for _ in 0..6 {
+        stepped(&mut c, &mut steps).await;
+    }
+
+    let gd = |h: BlockHash| c.vp().ghostdag_store.get_data(h).unwrap();
+    for (i, (d, merger)) in draws.iter().enumerate() {
+        let side = if d.header.daa_score < H { "below" } else { "past" };
+        assert!(
+            gd(merger.header.hash).mergeset_blues.contains(&d.header.hash),
+            "draw {i} (DAA {}, {side} the fence) is blue",
+            d.header.daa_score
+        );
+    }
+    assert!(draws[..2].iter().all(|(d, _)| d.header.daa_score < H), "two draws minted below the height");
+    assert!(draws[2..].iter().all(|(d, _)| d.header.daa_score >= H), "two draws minted past it");
+    assert!(chain_attempt.header.daa_score >= H, "the chain attempt is past the height");
+    let tm = gd(twin_merger.header.hash);
+    for t in [&t1, &t2] {
+        assert!(
+            tm.selected_parent == t.header.hash || tm.mergeset_blues.contains(&t.header.hash),
+            "both draws on one template are blue past the height ({})",
+            t.header.hash
+        );
+    }
+    for (before, after) in &steps {
+        assert_eq!(after - before, 1, "an honest slot steps the clock by exactly one ({before} -> {after})");
+    }
+    assert!(steps.iter().any(|(b, _)| *b < H) && steps.iter().any(|(b, _)| *b >= H), "slots on both sides of the height");
+    let end = c.daa_of(c.sink());
+    assert!(end >= H + 8, "the chain ends well past the height (DAA {end})");
+    eprintln!(
+        "[hb-regression crossing] fence at DAA {H}; {} slots stepped one by one; the chain ends at DAA {end}; draws at DAA {:?}, all blue",
+        steps.len(),
+        draws.iter().map(|(d, _)| d.header.daa_score).collect::<Vec<_>>()
+    );
+
+    let mut straggler = t12_genesis_chain(&launched, &bundle, &premine, &floats);
+    let compared = replay_and_compare("launched straggler", &c, &mut straggler).await;
+    eprintln!("[hb-regression crossing] a node without the fence colors all {compared} blocks identically");
+}
+
+/// **F1 through testnet-12's pruning proof: built, validated, applied — and colored the same by the
+/// node that applied it,** as launched and with the fence armed. testnet-12's ruleset with the depths
+/// `t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225` shrinks (finality 20,
+/// pruning 50, `m` 10; archival), and below the pruning point two ~200 s draws: one drawn on a tip that
+/// stays on the chain (it hangs from its merger's chain: blue either way), and one drawn on the
+/// heartbeat that then loses its sibling tie — blue as launched, and past the fence colored
+/// classically, i.e. red: the case F1 gives up, stated. A testnet-12 proof's level 0 is the whole
+/// history below the pruning point, and a node that applies it recomputes GHOSTDAG over both draws
+/// from the GHOSTDAG data the proof rebuilds (`apply_proof`), whose reachability tree is filled by
+/// header blue work, not grown block by block: every level-0 header must come out with the source's
+/// selected parent, blues and reds, and the staging node must build back the proof it was sent.
+#[tokio::test]
+async fn hb_regression_the_same_chain_rule_colors_the_same_through_the_pruning_proof() {
+    for same_chain in [None, Some(ARMED_BELOW_THE_FORK)] {
+        let draw2_blue = proof_round_trip(same_chain).await;
+        assert_eq!(
+            draw2_blue,
+            same_chain.is_none(),
+            "{same_chain:?}: the sibling-tie draw is blue as launched and red past the fence"
+        );
+    }
+}
+
+/// One pruning-proof round trip for [`hb_regression_the_same_chain_rule_colors_the_same_through_the_pruning_proof`];
+/// returns whether draw 2 (the sibling-tie draw) is blue.
+async fn proof_round_trip(same_chain: Option<u64>) -> bool {
+    use super::TestContext;
+    use super::t12_clock_floor::t12_trusted_set;
+    use crate::consensus::test_consensus::TestConsensus;
+    use crate::model::services::reachability::ReachabilityService;
+    use kaspa_consensus_core::BlockHashSet;
+    use kaspa_consensus_core::pruning::PruningProofMetadata;
+    kaspa_core::log::try_init_logger("warn");
+    let (shipped, bundle, premine, floats) = t12_with_harness_cards();
+    let mut config = with_same_chain(&shipped, same_chain);
+    config.params.blockrate.finality_depth = 20;
+    config.params.blockrate.pruning_depth = 50;
+    config.params.pruning_proof_m = 10;
+    config.is_archival = true;
+    let m = config.params.pruning_proof_m;
+    let genesis = config.params.genesis.hash;
+    let mut c = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let mut nonce = 1u64 << 42;
+    for _ in 0..3 {
+        honest_slot(&mut c, Vec::new()).await;
+    }
+
+    // Draw 1: drawn on a tip that stays on the chain.
+    let d1 = c.build_attempt(1, 1_000, Vec::new(), &|_| true).0.to_immutable();
+    let m1 = land_late(&mut c, &d1, 200_000).await;
+    let g1 = c.vp().ghostdag_store.get_data(m1.header.hash).unwrap();
+    assert!(g1.mergeset_blues.contains(&d1.header.hash), "draw 1 hangs from its merger's chain: blue");
+
+    // Draw 2: two sibling heartbeats from one template; the draw's template is taken while only the
+    // first has arrived, and the second sorts above it (equal blue work, larger hash), so the chain
+    // goes on through the second.
+    let clock = c.ctx.simulated_time + 1_000;
+    let mut t = c
+        .ctx
+        .consensus
+        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Vec::new())), TemplateBuildMode::Standard)
+        .expect("a template");
+    stamp_harness_time(&c.config.params, &mut t.block.header, clock);
+    t.block.header.finalize();
+    let (t, _) = c.vp().heartbeat_adapt_block_template(t).expect("the heartbeat lane is open on testnet-12");
+    let sibling = |n: &mut u64| {
+        *n += 1;
+        let mut b = t.block.clone();
+        b.header.nonce = *n;
+        b.header.finalize();
+        b.to_immutable()
+    };
+    let (x, y) = (sibling(&mut nonce), sibling(&mut nonce));
+    let (loser, winner) = if x.header.hash < y.header.hash { (x, y) } else { (y, x) };
+    mirror(&mut c, &loser).await;
+    let d2 = c.build_attempt(2, 1_000, Vec::new(), &|_| true).0.to_immutable();
+    mirror(&mut c, &winner).await;
+    assert_eq!(c.sink(), winner.header.hash, "the second sibling takes the tie");
+    let m2 = land_late(&mut c, &d2, 200_000).await;
+    let g2 = c.vp().ghostdag_store.get_data(m2.header.hash).unwrap();
+    assert_eq!(c.vp().ghostdag_store.get_selected_parent(d2.header.hash).unwrap(), loser.header.hash);
+    assert!(!c.ctx.consensus.services.reachability_service.is_chain_ancestor_of(loser.header.hash, m2.header.hash));
+    let draw2_blue = g2.mergeset_blues.contains(&d2.header.hash);
+    assert!(draw2_blue || g2.mergeset_reds.contains(&d2.header.hash), "draw 2 is merged by the heartbeat after it");
+
+    // Heartbeats until the headers declare a settled pruning point with both mergers below it.
+    let headers = c.vp().headers_store.clone();
+    let settle = config.params.anticone_finalization_depth() + 4;
+    let below = headers.get_blue_score(m2.header.hash).unwrap();
+    let mut slots = 0u64;
+    let pp = loop {
+        honest_slot(&mut c, Vec::new()).await;
+        slots += 1;
+        let sink = headers.get_header(c.sink()).unwrap();
+        let declared = headers.get_blue_score(sink.pruning_point).unwrap();
+        if declared >= 6 * m && declared > below && sink.blue_score >= declared + settle {
+            break sink.pruning_point;
+        }
+        assert!(slots < 300, "no header declared a settled pruning point in {slots} slots");
+    };
+    let sink = c.sink();
+    let relay = headers.get_header(sink).unwrap();
+    let trusted = t12_trusted_set(&c.ctx.consensus, pp, sink);
+    c.ctx.consensus.intrusive_pruning_point_update(pp, sink).unwrap_or_else(|e| panic!("{pp} is not a pruning point: {e}"));
+    let proof = c.ctx.consensus.get_pruning_point_proof();
+    let level0: BlockHashSet = proof[0].iter().map(|h| h.hash).collect();
+    for h in [d1.header.hash, m1.header.hash, loser.header.hash, winner.header.hash, d2.header.hash, m2.header.hash] {
+        assert!(level0.contains(&h), "{h} is in the proof's level 0");
+    }
+
+    // A node at genesis validates it.
+    let fresh = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    fresh
+        .ctx
+        .consensus
+        .validate_pruning_proof(&proof, &PruningProofMetadata::new(relay.blue_work))
+        .unwrap_or_else(|e| panic!("a node at genesis refused the proof: {e}"));
+    // A staging node applies it and colors every level-0 header as the source did.
+    let mut staging_config = config.clone();
+    staging_config.process_genesis = false;
+    staging_config.is_archival = false;
+    let staging = TestContext::new(TestConsensus::new(&staging_config));
+    staging.consensus.apply_pruning_proof((*proof).clone(), &trusted).unwrap_or_else(|e| panic!("the proof did not apply: {e}"));
+    staging
+        .consensus
+        .import_pruning_points(c.ctx.consensus.pruning_point_headers())
+        .unwrap_or_else(|e| panic!("the pruning points: {e}"));
+    let (source, applied) = (c.ctx.consensus.ghostdag_store(), staging.consensus.ghostdag_store());
+    for header in proof[0].iter().filter(|h| h.hash != genesis) {
+        let (s, a) = (source.get_data(header.hash).unwrap(), applied.get_data(header.hash).unwrap());
+        assert_eq!(
+            (s.selected_parent, &s.mergeset_blues, &s.mergeset_reds),
+            (a.selected_parent, &a.mergeset_blues, &a.mergeset_reds),
+            "{same_chain:?} {}: the applying node colors it as the source did",
+            header.hash
+        );
+    }
+    assert!(applied.get_data(m1.header.hash).unwrap().mergeset_blues.contains(&d1.header.hash));
+    assert_eq!(applied.get_data(m2.header.hash).unwrap().mergeset_blues.contains(&d2.header.hash), draw2_blue);
+    let rebuilt = staging.consensus.get_pruning_point_proof();
+    for (level, (sent, built)) in proof.iter().zip(rebuilt.iter()).enumerate() {
+        assert_eq!(
+            sent.iter().map(|h| h.hash).collect::<BlockHashSet>(),
+            built.iter().map(|h| h.hash).collect::<BlockHashSet>(),
+            "{same_chain:?} level {level}: the staging node builds the proof it was sent"
+        );
+    }
+    eprintln!(
+        "[hb-regression proof] same-chain {same_chain:?}: pruning point at blue score {} after {slots} slots; level 0 {} headers; draw 1 blue, draw 2 {} — on the source and on the node that applied the proof",
+        headers.get_blue_score(pp).unwrap(),
+        proof[0].len(),
+        if draw2_blue { "blue" } else { "red" }
+    );
+    draw2_blue
 }

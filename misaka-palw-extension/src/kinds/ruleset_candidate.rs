@@ -106,6 +106,8 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
         "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
         "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
+        // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency).
+        "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
         "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
         "palw_model_registry" => params.palw_model_registry = Some(at),
         "palw_economic_payout" => {

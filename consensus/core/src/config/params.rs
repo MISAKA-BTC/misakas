@@ -2681,6 +2681,30 @@ pub struct Params {
     /// [`Self::palw_heartbeat_transparent_fence`] only.
     pub palw_heartbeat_transparent: Option<ForkActivation>,
 
+    // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+    /// **ADR-0105 §11 — heartbeat transparency stops at the merging block's own selected chain.**
+    /// `None` on every shipped preset, testnet-12 included, so no fingerprint, identity, schedule or
+    /// fork id moves on any network until a post-launch flag day arms it at a height.
+    ///
+    /// Past this fence a non-heartbeat mergeset candidate is heartbeat-transparent
+    /// ([`Self::palw_heartbeat_transparent`]) only when its selected parent lies on the merging
+    /// block's own selected chain, at most `merge_depth` blue score below the merging block's
+    /// selected parent — a draw that landed late on the chain it was drawn on, the block ADR-0105 was
+    /// written for. Any other non-heartbeat candidate is colored classically, against every blue, the
+    /// other branch's heartbeats included. Keyed, like the transparency fence, on the CANDIDATE's own
+    /// DAA score, which is fixed before any block that merges it is colored: a candidate below the
+    /// height is colored by the shipped rule in every block that ever merges it, byte for byte.
+    ///
+    /// Why (the 2026-09-25 heartbeat double-spend verifier, probes g2/h1/f/h2): under the shipped rule
+    /// a bondless heartbeat miner's private branch merges the public chain's attempts BLUE — its own
+    /// beats are invisible to them — so every public 2^20 counts on both branches and the private one
+    /// out-weighs the public one by its own ε: X reorged away inside the merge depth, with no bond.
+    ///
+    /// Refines the transparency fence, so `validate_palw_v2` refuses it unless that fence is in force
+    /// at or below its height. Hashed Some-only in every writer. Read it through
+    /// [`Self::palw_heartbeat_transparent_same_chain_fence`] only.
+    pub palw_heartbeat_transparent_same_chain: Option<ForkActivation>,
+    // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
     /// **ADR-0107: a class's cadence share grows only on work that reached `Final`.**
     ///
     /// The growth rule (ADR-0054, `derive_class_share_growth_v1`) reads the closed epoch's
@@ -3757,6 +3781,22 @@ impl Params {
                  there is nothing for it to decide (ADR-0105)",
             ));
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // The same-chain restriction narrows ADR-0105's transparency; armed where that rule is not in
+        // force at or below its height it would enter the fingerprint and restrict nothing.
+        if let Some(same_chain) = self.palw_heartbeat_transparent_same_chain
+            && same_chain != ForkActivation::never()
+            && !self
+                .palw_heartbeat_transparent_fence()
+                .is_some_and(|transparent| transparent != ForkActivation::never() && transparent.daa_score() <= same_chain.daa_score())
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_heartbeat_transparent_same_chain is armed where palw_heartbeat_transparent is not in force at or below its \
+                 height: it restricts which candidates that rule exempts, and without the rule there is nothing to restrict \
+                 (ADR-0105 §11)",
+            ));
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // **ADR-0107 reads the closed epoch's finals off the claim records, so it must not be
         // armable where those records are gone before the boundary reads them** — or on a network
         // with no V2 lane at all, where there are no claims and the fence would hash and not fire.
@@ -5290,6 +5330,13 @@ impl Params {
         if self.palw_heartbeat_transparent == Some(ForkActivation::never()) {
             self.palw_heartbeat_transparent = None;
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // A bare Some-only fence: the same collapse, or a build that schedules it and a build that
+        // does not would refuse each other on deploy day over a height neither has reached.
+        if self.palw_heartbeat_transparent_same_chain == Some(ForkActivation::never()) {
+            self.palw_heartbeat_transparent_same_chain = None;
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // ADR-0107, a bare fence: the same collapse for the same reason.
         if self.palw_share_growth_final == Some(ForkActivation::never()) {
             self.palw_share_growth_final = None;
@@ -5364,6 +5411,16 @@ impl Params {
             _ => None,
         }
     }
+
+    // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+    /// **ADR-0105 §11's same-chain restriction with the mode, the lane AND the transparency fence
+    /// folded in** — `Some` only where [`Self::palw_heartbeat_transparent_fence`] is. GHOSTDAG carries
+    /// it inside `HeartbeatTransparency`, so the restriction is never read where the rule it narrows
+    /// is not.
+    pub fn palw_heartbeat_transparent_same_chain_fence(&self) -> Option<ForkActivation> {
+        self.palw_heartbeat_transparent_fence().and(self.palw_heartbeat_transparent_same_chain)
+    }
+    // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
 
     /// **ADR-0107's share-growth rule, read in ONE place** — `Some` only on a `ConsensusV2`
     /// network that has armed it, for [`Self::palw_fp_da_pins_fence`]'s reason. The transition
@@ -6906,6 +6963,8 @@ impl Params {
             palw_attempt_header_pins,
             palw_signature_contexts_v2,
             palw_heartbeat_transparent,
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            palw_heartbeat_transparent_same_chain,
             palw_share_growth_final,
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation: _,
@@ -7045,6 +7104,8 @@ impl Params {
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
             ("palw_signature_contexts_v2", *palw_signature_contexts_v2),
             ("palw_heartbeat_transparent", *palw_heartbeat_transparent),
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            ("palw_heartbeat_transparent_same_chain", *palw_heartbeat_transparent_same_chain),
             ("palw_share_growth_final", *palw_share_growth_final),
         ]
     }
@@ -7438,6 +7499,14 @@ impl Params {
             h.write(b"palw_heartbeat_transparent");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // NAMED and Some-only: it changes which blocks are blue past its height, so an operator reading
+        // the schedule must see the height; a preset that leaves it `None` prints the id it printed.
+        if let Some(activation) = self.palw_heartbeat_transparent_same_chain {
+            h.write(b"palw_heartbeat_transparent_same_chain");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // ADR-0107. Some-only, at the tail: it changes which epochs grow a class's share past its
         // height, so the schedule must show the height, and a preset that leaves it `None` prints
         // the id of a build from before the field existed.
@@ -7609,6 +7678,8 @@ impl Params {
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            palw_heartbeat_transparent_same_chain,
             palw_share_growth_final,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
@@ -8235,6 +8306,14 @@ impl Params {
         if let Some(activation) = palw_heartbeat_transparent.as_mut() {
             fork(activation, visit);
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // SOME-ONLY, for the reason above: a `u64::MAX`-for-absence arm would put eight bytes into every
+        // preset that leaves it `None`. Visited, so a scheduled height normalises out of the identity
+        // (a rolling deploy peers until it fires) and joins `fence_schedule_v1` and the fork id.
+        if let Some(activation) = palw_heartbeat_transparent_same_chain.as_mut() {
+            fork(activation, visit);
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // ADR-0107. Some-only and at the tail, for the same reason as the fence above it.
         if let Some(activation) = palw_share_growth_final.as_mut() {
             fork(activation, visit);
@@ -8531,6 +8610,8 @@ impl Params {
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            palw_heartbeat_transparent_same_chain,
             palw_share_growth_final,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
@@ -9241,6 +9322,15 @@ impl Params {
             h.write(b"palw_heartbeat_transparent");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // WRITTEN, Some-only: arming it changes which blocks are blue past its height, and every
+        // preset that leaves it `None` — all of them, testnet-12 included — fingerprints byte-identically
+        // to a build without the field.
+        if let Some(activation) = palw_heartbeat_transparent_same_chain {
+            h.write(b"palw_heartbeat_transparent_same_chain");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // ADR-0107. Some-only, like every fence above it: every preset leaves it `None` and
         // fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_share_growth_final {
@@ -9665,6 +9755,8 @@ impl Params {
             palw_panel_exposure_floor: self.palw_panel_exposure_floor,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            palw_heartbeat_transparent_same_chain: self.palw_heartbeat_transparent_same_chain,
             palw_share_growth_final: self.palw_share_growth_final,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
@@ -10692,6 +10784,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
+    palw_heartbeat_transparent_same_chain: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -10917,6 +11011,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
+    palw_heartbeat_transparent_same_chain: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -11124,6 +11220,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
+    palw_heartbeat_transparent_same_chain: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -17526,6 +17624,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
+    palw_heartbeat_transparent_same_chain: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,

@@ -16327,7 +16327,9 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
 // this module so it reuses `TestContext` and the harness identities.
 mod t12_clock_floor;
 // 2026-09-25 question: can a heartbeat miner's private fork carry a double spend? Two nodes, one
-// released private branch, the victim's sink and blue work measured (a probe; no rule changes).
+// released private branch, the victim's sink and blue work measured (a probe; no rule changes) — and,
+// below it, the regressions of the absorb hole F1's post-launch fence closes (ADR-0105 §11,
+// `Params::palw_heartbeat_transparent_same_chain`; `hb_regression_*`).
 mod hb_fork_choice_probe;
 // ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the node's H-1 gate asks the fold about a carrier
 // before this node admits, relays, spares or mines it.

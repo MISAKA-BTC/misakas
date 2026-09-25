@@ -733,7 +733,7 @@ async fn t12_blocks_are_level_zero_under_mainnet_s_ceiling() {
 /// for the node's own pruning point and only while its virtual is deep above it; the DAA and
 /// GHOSTDAG windows it adds are what the blocks ABOVE the point are validated with, which this test
 /// does not process.)
-fn t12_trusted_set(source: &TestConsensus, pp: BlockHash, sink: BlockHash) -> Vec<TrustedBlock> {
+pub(super) fn t12_trusted_set(source: &TestConsensus, pp: BlockHash, sink: BlockHash) -> Vec<TrustedBlock> {
     let mut hashes = vec![pp];
     hashes.extend(source.dag_traversal_manager().anticone(pp, std::iter::once(sink), None).expect("the anticone from the sink"));
     let mut blocks: Vec<TrustedBlock> = hashes

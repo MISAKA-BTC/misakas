@@ -327,7 +327,7 @@ impl T12Chain {
     }
 
     /// [`Self::attempt`]'s block, built and not inserted — so two can be built on the same parents.
-    fn build_attempt(
+    pub(super) fn build_attempt(
         &mut self,
         card: usize,
         step_ms: u64,
