@@ -2895,9 +2895,7 @@ pub fn palw_rcore_gate_room_split_of_v1(
     let posted = collateral as u128;
     let ceiling = posted.saturating_mul(ratio_permille as u128) / 1000;
     match gate {
-        PalwRcoreGateV1::Work => {
-            palw_rcore_work_room_of_ceiling_v1(posted, ceiling, committed, off_ceiling, accuser_reserve, accuser)
-        }
+        PalwRcoreGateV1::Work => palw_rcore_work_room_of_ceiling_v1(posted, ceiling, committed, off_ceiling, accuser_reserve, accuser),
         PalwRcoreGateV1::Accuser => posted.saturating_sub(committed.max(ceiling)).saturating_sub(accuser),
     }
 }
