@@ -195,13 +195,98 @@ async fn m1_every_possession_proof_is_put_to_the_fold_and_the_tip_read_escalates
     assert!(g.tx_refusal(junk_proof(bond, class_id, daa)).is_some(), "a junk proof buys nothing: the gate refuses it");
     let carrier = PalwReadinessCarrierV1 { bond, class_id, span: daa, proof_version: 2 };
     assert!(g.state.seat_readiness(&bond, &class_id).is_none(), "no row at genesis");
-    assert!(g.ctx.consensus.virtual_processor().palw_readiness_escalated_at(carrier, daa), "no row: this span's proof escalates");
     let v1 = PalwReadinessCarrierV1 { proof_version: 1, ..carrier };
-    assert!(!g.ctx.consensus.virtual_processor().palw_readiness_escalated_at(v1, daa), "a V1 proof renews nothing past V2");
-    assert!(g.ctx.consensus.palw_readiness_escalated_v1(carrier), "the API reads the same answer at the virtual's DAA");
+    assert_eq!(
+        g.ctx.consensus.virtual_processor().palw_readiness_escalated_at(&[carrier, v1], daa),
+        vec![true, false],
+        "no row: this span's proof escalates; a V1 proof renews nothing past V2"
+    );
+    assert_eq!(
+        g.ctx.consensus.palw_readiness_escalated_v1(&[v1, carrier]),
+        vec![false, true],
+        "the API reads the same answers at the virtual's DAA, one per carrier, in order"
+    );
+    assert!(g.ctx.consensus.palw_readiness_escalated_v1(&[]).is_empty());
 
     let off = gate(false);
     let daa = off.ctx.consensus.get_virtual_daa_score();
     assert_eq!(off.tx_refusal(junk_proof(bond, class_id, daa)), None, "below R-core+ the gate asks nothing, as before");
-    assert!(!off.ctx.consensus.virtual_processor().palw_readiness_escalated_at(carrier, daa), "and nothing escalates");
+    assert_eq!(
+        off.ctx.consensus.virtual_processor().palw_readiness_escalated_at(&[carrier, v1], daa),
+        vec![false, false],
+        "and nothing escalates"
+    );
+}
+
+/// **M1: an honest possession proof passes the gate** — the half the junk-proof refusal above does
+/// not show. Putting every proof to the fold at admission must never refuse the seat's own: a card
+/// proves one of testnet-12's genesis classes (re-rooted, in a copy of the genesis state, onto a
+/// synthetic inventory whose leaves the test can open) for this span — the challenge's sixteen
+/// leaves, the multiproof, the bond's own ML-DSA-87 signature — and the acceptance layer and the
+/// fold's arm both take it; under another card's key it is refused. A proof of the NEXT span (a
+/// seat one block ahead of this node) is refused at this node's DAA and taken at its span's first
+/// DAA — the DAA the gate judges it at (`palw_readiness_gate_daa_v1`), so a peer the newest block
+/// has not reached does not turn it away.
+#[tokio::test]
+async fn m1_an_honest_possession_proof_passes_the_gate() {
+    use kaspa_consensus_core::palw_artifact::{
+        PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, palw_artifact_multiproof_v1,
+    };
+    use kaspa_consensus_core::palw_model_registry_v1::{
+        PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT, palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1,
+        palw_readiness_v2_opening_is_the_challenge_v1, palw_seat_readiness_message_v2,
+    };
+    use kaspa_consensus_core::palw_readiness_escalation_v1::palw_readiness_gate_daa_v1;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let g = gate(true);
+    let class_id = *g.state.classes_iter().map(|(id, _)| id).last().expect("testnet-12 registers classes at genesis");
+    const LEAVES: u32 = 4_096;
+    let (card, daa) = (1usize, g.point.daa_score);
+    let bond = g.cards[card];
+    let bond_bytes = borsh::to_vec(&bond).unwrap();
+    let operand = |index: u32| PalwArtifactOperandV1 {
+        tensor_name: "blk.0.ffn_up".into(),
+        layer: Some(0),
+        row_start: index,
+        bytes: vec![index as u8; 64],
+    };
+    let leaves: Vec<Hash64> = (0..LEAVES).map(|index| artifact_leaf_v1(&operand(index))).collect();
+    let mut carriage = PalwStateCarriageV2::from_state(&g.state);
+    carriage.classes.get_mut(&class_id).unwrap().artifact_root = artifact_root_v1(&leaves).unwrap();
+    let state = carriage.into_state(&g.params, None).expect("the re-rooted genesis state is consistent");
+    // testnet-12's one-DAA spans: the span IS the DAA.
+    let proved = |signer: u64, span: u64| {
+        let draw = palw_readiness_v2_draw_v1(&palw_readiness_v2_challenge_seed_v1(&class_id, &bond_bytes, span), LEAVES);
+        let mut opened: Vec<_> = draw.iter().map(|index| (*index, operand(*index))).collect();
+        palw_readiness_v2_opening_is_the_challenge_v1(&draw, &opened.iter().map(|(i, o)| (*i, o.bytes.len())).collect::<Vec<_>>())
+            .expect("sixteen small leaves are the whole challenge");
+        opened.sort_by_key(|(index, _)| *index);
+        let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("the leaves are the inventory's");
+        let message = palw_seat_readiness_message_v2(g.network_domain, &bond_bytes, &class_id, span, &proof);
+        let key = TestConsensus::palw_v2_registry_keypair(signer);
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &key.signing_key,
+            message.as_byte_slice(),
+            PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT,
+            [0u8; 32],
+        )
+        .expect("sign")
+        .as_ref()
+        .to_vec();
+        Obj::SeatReadinessProvedV2 { bond, class_id, span, proof: Box::new(proof), signature }
+    };
+    let gate_at = |daa_score: u64, object: &Obj| {
+        let point = PalwBlockContextV2 { daa_score, ..g.point };
+        g.ctx.consensus.virtual_processor().palw_h1_carrier_refusal_on(&state, &g.params, &point, object)
+    };
+    assert_eq!(gate_at(daa, &proved(card as u64, daa)), None, "the seat's own proof of this span passes");
+    assert!(
+        gate_at(daa, &proved(2, daa)).is_some_and(|why| why.contains("not signed by")),
+        "another card's key does not sign for card 1"
+    );
+    let ahead = proved(card as u64, daa + 1);
+    assert!(gate_at(daa, &ahead).is_some(), "at this node's DAA the fold refuses a span it has not reached");
+    assert_eq!(palw_readiness_gate_daa_v1(daa, daa + 1, 1), daa + 1, "the gate judges it at its own span's first DAA");
+    assert_eq!(gate_at(daa + 1, &ahead), None, "where the fold takes it");
+    assert!(gate_at(daa, &proved(card as u64, daa + 2)).is_some(), "two blocks ahead: refused as before");
 }

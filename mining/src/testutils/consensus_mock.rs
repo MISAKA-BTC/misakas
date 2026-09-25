@@ -148,9 +148,10 @@ impl ConsensusApi for ConsensusMock {
 
     fn palw_readiness_escalated_v1(
         &self,
-        carrier: kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1,
-    ) -> bool {
-        self.palw_readiness_escalated.read().contains(&(carrier.bond, carrier.class_id))
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<bool> {
+        let escalated = self.palw_readiness_escalated.read();
+        carriers.iter().map(|carrier| escalated.contains(&(carrier.bond, carrier.class_id))).collect()
     }
 
     fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, _: &TransactionValidationArgs) -> TxResult<()> {

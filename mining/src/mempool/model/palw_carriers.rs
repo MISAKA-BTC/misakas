@@ -21,9 +21,12 @@
 //! to the fold, the index keeps every proof, and a proof is ACTIVE — a carrier, keyed by its
 //! `(bond, class)` row — exactly while the tip read says its row escalates
 //! (`ConsensusApi::palw_readiness_escalated_v1`, asked when it enters and at every new block). An
-//! inactive proof is an ordinary transaction: no place in the reserve, no slot in the lane. The lane
-//! puts the first active proof at its head, one a template, so a DA storm filling the lane cannot keep
-//! an honest seat's rows past staleness, and the storm keeps the rest of the lane.
+//! inactive proof is an ordinary transaction: no place in the reserve, no slot in the lane, and not
+//! in the lane order at all — so however many a pool holds, they never push an H-1 carrier out of
+//! the lane's scan. The lane puts the first active proof at its head, one a template, found in its
+//! own order (so a storm of better-paying H-1 carriers cannot push it out of the scan either); a DA
+//! storm filling the lane cannot keep an honest seat's rows past staleness, and the storm keeps the
+//! rest of the lane.
 //!
 //! **Arrival, not mass, breaks a feerate tie** (review finding 5): lighter-first let five 8-byte
 //! signatures out-rank one honest ML-DSA-87 filing at the same feerate, and a filer cannot choose
@@ -171,7 +174,11 @@ struct PalwCarrierEntryV1 {
 /// that starts or stops escalating takes or gives up its place the same way
 /// ([`Self::set_readiness_escalated`]).
 pub(crate) struct PalwCarrierIndexV1 {
+    /// The ACTIVE carriers in lane order: every H-1 carrier and every escalating possession proof.
     order: BTreeSet<PalwCarrierOrderKeyV1>,
+    /// **M1: the escalating possession proofs alone**, in the same order — where the lane's head is
+    /// looked for, so it is found however many H-1 carriers out-pay it.
+    readiness_order: BTreeSet<PalwCarrierOrderKeyV1>,
     entries: HashMap<TransactionId, PalwCarrierEntryV1>,
     bytes: usize,
     next_seq: u64,
@@ -185,6 +192,7 @@ impl PalwCarrierIndexV1 {
     pub(crate) fn new(reserve: PalwCarrierReserveV1) -> Self {
         Self {
             order: Default::default(),
+            readiness_order: Default::default(),
             entries: Default::default(),
             bytes: 0,
             next_seq: 0,
@@ -244,7 +252,12 @@ impl PalwCarrierIndexV1 {
             self.take_place(bytes, lane_key.as_ref());
         }
         self.entries.insert(id, PalwCarrierEntryV1 { order, lane_key, bytes, reserved, readiness, active });
-        self.order.insert(order);
+        if active {
+            self.order.insert(order);
+            if readiness.is_some() {
+                self.readiness_order.insert(order);
+            }
+        }
         self.bytes += bytes;
     }
 
@@ -253,6 +266,7 @@ impl PalwCarrierIndexV1 {
     pub(crate) fn remove(&mut self, id: &TransactionId) {
         let Some(entry) = self.entries.remove(id) else { return };
         self.order.remove(&entry.order);
+        self.readiness_order.remove(&entry.order);
         self.bytes -= entry.bytes;
         if entry.reserved {
             self.give_up_place(entry.bytes, entry.lane_key.as_ref());
@@ -268,7 +282,7 @@ impl PalwCarrierIndexV1 {
         if entry.readiness.is_none() || entry.active == escalated {
             return;
         }
-        let (bytes, lane_key) = (entry.bytes, entry.lane_key.clone());
+        let (order, bytes, lane_key) = (entry.order, entry.bytes, entry.lane_key.clone());
         if escalated {
             let reserved = self.would_reserve(bytes, lane_key.as_ref());
             if reserved {
@@ -277,19 +291,29 @@ impl PalwCarrierIndexV1 {
             let entry = self.entries.get_mut(id).expect("held above");
             entry.active = true;
             entry.reserved = reserved;
+            // Back into the lane order at its ARRIVAL: its key (and seq) never changed.
+            self.order.insert(order);
+            self.readiness_order.insert(order);
         } else {
             let entry = self.entries.get_mut(id).expect("held above");
             entry.active = false;
-            if std::mem::replace(&mut entry.reserved, false) {
+            let was_reserved = std::mem::replace(&mut entry.reserved, false);
+            self.order.remove(&order);
+            self.readiness_order.remove(&order);
+            if was_reserved {
                 self.give_up_place(bytes, lane_key.as_ref());
             }
         }
     }
 
-    /// The possession proofs the index holds, active or not — what the pool asks the tip about at a
-    /// new block.
+    /// The possession proofs the index holds, active or not, in lane order (feerate, then arrival) —
+    /// what the pool asks the tip about at a new block, so the proofs a nearly full reserve takes are
+    /// the best-paying and earliest, never a hash map's pick.
     pub(crate) fn readiness_entries(&self) -> Vec<(TransactionId, PalwReadinessCarrierV1)> {
-        self.entries.iter().filter_map(|(id, entry)| entry.readiness.map(|carrier| (*id, carrier))).collect()
+        let mut proofs: Vec<_> =
+            self.entries.values().filter_map(|entry| entry.readiness.map(|carrier| (entry.order, carrier))).collect();
+        proofs.sort_by(|a, b| a.0.cmp(&b.0));
+        proofs.into_iter().map(|(order, carrier)| (order.id, carrier)).collect()
     }
 
     /// A reserved place is given up: it passes to the best unreserved active carrier that fits.
@@ -362,20 +386,23 @@ impl PalwCarrierIndexV1 {
 
     /// The carriers in lane order: `(id, mass, lane key)` — every H-1 carrier and every possession
     /// proof that escalates now; a proof that does not is an ordinary transaction and is not here.
-    /// The walk looks at no more than [`PALW_H1_CARRIER_LANE_SCAN`] entries, the inactive included.
     pub(crate) fn in_lane_order(&self) -> impl Iterator<Item = (TransactionId, u64, Option<&PalwH1LaneKeyV1>)> + '_ {
-        self.order.iter().take(PALW_H1_CARRIER_LANE_SCAN).filter_map(|key| {
-            let entry = self.entries.get(&key.id)?;
-            entry.active.then_some((key.id, key.mass, entry.lane_key.as_ref()))
-        })
+        Self::walk(&self.order, &self.entries)
     }
 
     /// **M1: the escalating possession proofs in lane order** — the candidates for the head of the
-    /// lane (`TransactionsPool::build_palw_carrier_lane`).
+    /// lane (`TransactionsPool::build_palw_carrier_lane`), walked in their own order.
     pub(crate) fn escalated_readiness_in_lane_order(
         &self,
     ) -> impl Iterator<Item = (TransactionId, u64, Option<&PalwH1LaneKeyV1>)> + '_ {
-        self.in_lane_order().filter(|(id, ..)| self.entries.get(id).is_some_and(|entry| entry.readiness.is_some()))
+        Self::walk(&self.readiness_order, &self.entries)
+    }
+
+    fn walk<'a>(
+        order: &'a BTreeSet<PalwCarrierOrderKeyV1>,
+        entries: &'a HashMap<TransactionId, PalwCarrierEntryV1>,
+    ) -> impl Iterator<Item = (TransactionId, u64, Option<&'a PalwH1LaneKeyV1>)> + 'a {
+        order.iter().map(move |key| (key.id, key.mass, entries.get(&key.id).and_then(|entry| entry.lane_key.as_ref())))
     }
 }
 
@@ -468,6 +495,62 @@ mod tests {
         // holds none — the earliest of the feerate tie.
         index.remove(&id(20));
         assert!(index.is_reserved(&id(2)) && (3..=10).all(|n| !index.is_reserved(&id(n))));
+    }
+
+    fn proof(bond: u64, class: u64) -> PalwReadinessCarrierV1 {
+        PalwReadinessCarrierV1 {
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(id(bond), 0)),
+            class_id: Hash64::from_u64_word(class),
+            span: 1,
+            proof_version: 2,
+        }
+    }
+
+    /// **M1: an inactive possession proof is not in the lane order at all**, so however many a pool
+    /// holds — each can pay far more than any carrier — they never push an H-1 carrier out of the
+    /// lane's scan or the reserve's promotion walk. A proof that starts escalating enters the order at
+    /// its ARRIVAL (a later escalation does not jump the carriers filed after it arrived), and leaves
+    /// it when its row is renewed.
+    #[test]
+    fn inactive_proofs_never_crowd_the_lane_scan() {
+        let mut index = roomy();
+        let flood = PALW_H1_CARRIER_LANE_SCAN as u64 + 100;
+        for n in 0..flood {
+            index.insert_readiness(id(10_000 + n), 1_000_000, 1_000, 100, proof(n, 7), false);
+        }
+        index.insert(id(1), 1_000, 1_000, 100, None); // an H-1 carrier at the floor, filed after the flood
+        assert_eq!(index.in_lane_order().map(|(id, ..)| id).collect::<Vec<_>>(), vec![id(1)], "the flood is no carrier");
+        assert_eq!(index.escalated_readiness_in_lane_order().count(), 0);
+        assert_eq!(index.readiness_entries().len(), flood as usize, "every proof is still indexed, for the next block's read");
+
+        index.set_readiness_escalated(&id(10_000), true);
+        assert_eq!(index.in_lane_order().map(|(id, ..)| id).collect::<Vec<_>>(), vec![id(10_000), id(1)], "it pays more: first");
+        assert!(index.is_reserved(&id(10_000)));
+        index.set_readiness_escalated(&id(10_000), false);
+        assert_eq!(index.in_lane_order().map(|(id, ..)| id).collect::<Vec<_>>(), vec![id(1)], "renewed: out of the order");
+        assert!(!index.is_reserved(&id(10_000)) && index.reserved() == (1, 100));
+
+        // At an equal feerate the order is arrival, not escalation time.
+        let mut index = roomy();
+        index.insert_readiness(id(20), 1_000, 1_000, 100, proof(1, 7), false);
+        index.insert(id(21), 1_000, 1_000, 100, None);
+        index.set_readiness_escalated(&id(20), true);
+        assert_eq!(index.in_lane_order().map(|(id, ..)| id).collect::<Vec<_>>(), vec![id(20), id(21)]);
+        index.remove(&id(20));
+        assert_eq!(index.escalated_readiness_in_lane_order().count(), 0, "a removed proof leaves both orders");
+    }
+
+    /// **M1: the lane's head is found behind any number of better-paying carriers** — the escalating
+    /// proofs have their own order, so a storm longer than the lane's scan cannot hide one.
+    #[test]
+    fn the_head_is_found_behind_any_storm() {
+        let mut index = roomy();
+        for n in 0..(PALW_H1_CARRIER_LANE_SCAN as u64 + 100) {
+            index.insert(id(n), 5_000, 1_000, 100, Some(PalwH1LaneKeyV1::DaSession(Hash64::from_u64_word(n))));
+        }
+        index.insert_readiness(id(50_000), 4_000, 4_000, 100, proof(1, 7), true);
+        assert!(index.in_lane_order().take(PALW_H1_CARRIER_LANE_SCAN).all(|(id, ..)| id != self::id(50_000)));
+        assert_eq!(index.escalated_readiness_in_lane_order().next().map(|(id, ..)| id), Some(id(50_000)));
     }
 
     /// The reserve is the constant, or an eighth of a smaller pool — never all of it.

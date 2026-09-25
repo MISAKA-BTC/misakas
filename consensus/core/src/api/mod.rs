@@ -925,14 +925,15 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
-    /// **The 2026-09-25 model-registry review, M1: does this possession proof escalate at the tip?**
-    /// Its row there is about to lapse and the proof renews it
+    /// **The 2026-09-25 model-registry review, M1: do these possession proofs escalate at the tip?**
+    /// One answer per carrier, in order: its row there is about to lapse and the proof renews it
     /// (`palw_readiness_escalation_v1::palw_readiness_proof_escalates_v1`), at the virtual's DAA —
-    /// the tip read the mempool's carrier index asks when a proof enters and at every new block, so
-    /// the reserve and the template lane hold a proof exactly while it escalates. `false` below
-    /// `palw_rcore_plus` (every network but testnet-12), off `ConsensusV2`, and without a registry.
-    fn palw_readiness_escalated_v1(&self, _carrier: crate::palw_readiness_escalation_v1::PalwReadinessCarrierV1) -> bool {
-        false
+    /// the tip read the mempool's carrier index asks when a proof enters and, for every proof it
+    /// holds at once, at every new block (one tip load, one registry fold), so the reserve and the
+    /// template lane hold a proof exactly while it escalates. All `false` below `palw_rcore_plus`
+    /// (every network but testnet-12), off `ConsensusV2`, and without a registry.
+    fn palw_readiness_escalated_v1(&self, carriers: &[crate::palw_readiness_escalation_v1::PalwReadinessCarrierV1]) -> Vec<bool> {
+        vec![false; carriers.len()]
     }
 
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):

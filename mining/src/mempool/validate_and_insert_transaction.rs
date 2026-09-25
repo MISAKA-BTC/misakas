@@ -175,23 +175,28 @@ impl Mempool {
             return None;
         }
         let carrier = kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1::of_tx(&transaction.tx)?;
-        Some(crate::mempool::model::palw_carriers::PalwReadinessAdmissionV1 {
-            carrier,
-            escalated: consensus.palw_readiness_escalated_v1(carrier),
-        })
+        let escalated = consensus.palw_readiness_escalated_v1(&[carrier]).first().copied().unwrap_or(false);
+        Some(crate::mempool::model::palw_carriers::PalwReadinessAdmissionV1 { carrier, escalated })
     }
 
     /// **M1: re-ask the tip about every possession proof the pool holds** — at each new block, when
     /// the DAA moves and rows renew. A proof whose row now escalates becomes a carrier (a reserved
     /// place if one is free, the lane); one whose row was renewed — by it, or by a copy another block
-    /// carried — goes back to being an ordinary transaction. A no-op where the flag is off.
+    /// carried — goes back to being an ordinary transaction. One tip read for the whole pool, the
+    /// proofs taken in lane order (feerate, then arrival), so the ones a nearly full reserve takes
+    /// are the best-paying and earliest. A no-op where the flag is off or the pool holds no proof.
     pub(crate) fn refresh_palw_readiness(&mut self, consensus: &dyn ConsensusApi) {
         if !self.config.palw_h1_carrier_priority {
             return;
         }
-        for (id, carrier) in self.transaction_pool.palw_readiness_entries() {
-            let escalated = consensus.palw_readiness_escalated_v1(carrier);
-            self.transaction_pool.set_palw_readiness_escalated(&id, escalated);
+        let proofs = self.transaction_pool.palw_readiness_entries();
+        if proofs.is_empty() {
+            return;
+        }
+        let carriers: Vec<_> = proofs.iter().map(|(_, carrier)| *carrier).collect();
+        let escalated = consensus.palw_readiness_escalated_v1(&carriers);
+        for ((id, _), escalated) in proofs.iter().zip(escalated.into_iter().chain(std::iter::repeat(false))) {
+            self.transaction_pool.set_palw_readiness_escalated(id, escalated);
         }
     }
 

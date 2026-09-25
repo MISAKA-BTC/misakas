@@ -42,6 +42,24 @@ use kaspa_hashes::Hash64;
 /// has no more than this left before the last DAA it counts.
 pub const PALW_READINESS_ESCALATION_LANDING_DAA_V1: u64 = 2;
 
+/// **How far ahead of a node's own virtual a possession proof may name its span and still be put
+/// to the fold as the seat meant it** (the gate, `palw_mempool_h1_carrier_refusal`). A seat names
+/// ITS virtual's span; a peer the newest block has not reached yet sits one DAA behind, and the
+/// fold's own window (`span > span_now` refuses) would turn the seat's proof away there — relay and
+/// template alike — where no gate asked before M1. One DAA is exactly the skew that is still safe
+/// to mine: a block built one DAA behind is accepted by a chain block at least one DAA later, which
+/// has reached the span.
+pub const PALW_READINESS_GATE_SKEW_DAA_V1: u64 = 1;
+
+/// **The DAA the gate puts a possession proof naming `span` to the fold at**: the virtual's, or —
+/// when the span begins at most [`PALW_READINESS_GATE_SKEW_DAA_V1`] past it — the span's first
+/// DAA, so a seat one block ahead of this node is judged at its own span. Anything further ahead is
+/// judged at the virtual's DAA, where the fold refuses it as before.
+pub fn palw_readiness_gate_daa_v1(virtual_daa: u64, span: u64, span_daa: u64) -> u64 {
+    let first = span.saturating_mul(span_daa.max(1));
+    if first > virtual_daa && first <= virtual_daa.saturating_add(PALW_READINESS_GATE_SKEW_DAA_V1) { first } else { virtual_daa }
+}
+
 /// **The DAA from which `row` escalates** — `proved_daa + max_age − landing`, or `0` (now) for a
 /// row that counts for nothing: none at all, or a V1 row past readiness V2.
 pub fn palw_readiness_escalates_from_daa_v1(
@@ -220,6 +238,20 @@ mod tests {
         assert!(!palw_readiness_proof_escalates_v1(Some(&r), 104, 2, 110, 1, &G, true), "a renewal that is itself lapsing");
         assert!(palw_readiness_proof_escalates_v1(Some(&r), 105, 2, 110, 1, &G, true), "a renewal with room to count");
         assert!(!palw_readiness_proof_escalates_v1(Some(&r), 106, 1, 106, 1, &G, true), "a V1 proof renews nothing past V2");
+    }
+
+    /// **The gate's clock tolerates exactly one DAA of skew**: a proof of the virtual's span, or an
+    /// older one, is judged at the virtual; one of the next DAA's span (a peer one block ahead) at
+    /// its span's first DAA; anything further ahead at the virtual, where the fold refuses it.
+    #[test]
+    fn the_gate_judges_a_proof_one_block_ahead_at_its_own_span() {
+        assert_eq!(palw_readiness_gate_daa_v1(100, 100, 1), 100);
+        assert_eq!(palw_readiness_gate_daa_v1(100, 90, 1), 100, "an older span: the virtual's clock");
+        assert_eq!(palw_readiness_gate_daa_v1(100, 101, 1), 101, "one block ahead: its own span");
+        assert_eq!(palw_readiness_gate_daa_v1(100, 102, 1), 100, "two ahead: the fold refuses it as before");
+        assert_eq!(palw_readiness_gate_daa_v1(104, 21, 5), 105, "five-DAA spans: the next span starts one DAA on");
+        assert_eq!(palw_readiness_gate_daa_v1(103, 21, 5), 103, "…and two DAA on is too far");
+        assert_eq!(palw_readiness_gate_daa_v1(100, u64::MAX, 1), 100, "no overflow");
     }
 
     fn lifecycle_tx(object: PalwConsensusObjectV2) -> Transaction {

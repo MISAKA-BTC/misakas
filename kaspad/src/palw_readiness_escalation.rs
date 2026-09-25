@@ -560,9 +560,9 @@ mod tests {
             let head = u64::from(w.transient_mass <= lane);
             let max_proof_tx = PALW_OBJECT_CHUNK_MAX_BYTES as u64 + overhead as u64;
             println!(
-                "{name}: {p} proofs a block alone -> {} rows at the seat's cadence ({cadence} DAA), {} at the latest ({latest} DAA); \
-                 under a DA storm with better-paying traffic: {head} a block (the lane's head) -> {} rows; \
-                 each of this node's own duplicate re-sends halves these; a one-carrier worst ({max_proof_tx} B tx) is {} transient mass",
+                "{name}: {p} proofs a block alone -> {} rows kept fresh at the seat's cadence ({cadence} DAA), {} at the latest \
+                 ({latest} DAA); under a DA storm with better-paying traffic: {head} a block (the lane's head) -> {} rows; the \
+                 largest proof one carrier may hold ({max_proof_tx} B tx) is {} transient mass",
                 p * cadence,
                 p * latest,
                 head * latest,

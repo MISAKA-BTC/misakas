@@ -1267,7 +1267,10 @@ impl VirtualStateProcessor {
     /// proof whose row nears staleness takes a reserved place and the head of the template lane
     /// (`palw_readiness_escalation_v1`), and whether it does moves with the DAA after it entered —
     /// so every proof is put to the fold here, at admission and at every template, and a junk proof
-    /// naming any bond's absent row is never kept, let alone hurried.
+    /// naming any bond's absent row is never kept, let alone hurried. A proof is judged at its own
+    /// span's first DAA when that is at most one DAA past the virtual's
+    /// (`palw_readiness_gate_daa_v1`): a seat names its own virtual's span, and a node the newest
+    /// block has not reached yet must not turn the honest proof away where no gate asked before.
     pub(super) fn palw_mempool_h1_carrier_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
         if !self.palw_rcore_plus_at(virtual_daa_score) {
             return None;
@@ -1275,9 +1278,26 @@ impl VirtualStateProcessor {
         let object = kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(tx)?;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        // M1: a proof names its seat's virtual span — judged at that span's first DAA when the seat
+        // is at most one block ahead of this node, so a peer the newest block has not reached yet
+        // does not turn an honest proof away (`palw_readiness_gate_daa_v1`).
+        let daa_score = match &object {
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::SeatReadinessProved { span, .. }
+            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::SeatReadinessProvedV2 { span, .. } => {
+                match self.palw_model_registry_fold_at(virtual_daa_score) {
+                    Some(fold) => kaspa_consensus_core::palw_readiness_escalation_v1::palw_readiness_gate_daa_v1(
+                        virtual_daa_score,
+                        *span,
+                        fold.span_daa,
+                    ),
+                    None => virtual_daa_score,
+                }
+            }
+            _ => virtual_daa_score,
+        };
         let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
             block: chain_point,
-            daa_score: virtual_daa_score,
+            daa_score,
             // The next block's: past the tip's, which is all the fold asks of it for these objects.
             blue_score: state.last_point().map_or(0, |last| last.blue_score.saturating_add(1)),
             subsidy: 0,
@@ -4174,42 +4194,49 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(state, state_params, &extras, claim, accuser, now_daa)
     }
 
-    /// **The 2026-09-25 model-registry review, M1: does `carrier` escalate at the tip?** — the row
-    /// the tip holds for its `(bond, class)`, judged at the virtual's DAA by the one predicate
-    /// (`PalwReadinessCarrierV1::escalates`) under the registry fold's own span clock, globals and
-    /// readiness rule. The pool's carrier index asks it when a proof enters and at every new block;
-    /// the proof itself was put to the fold by the carrier gate
-    /// ([`Self::palw_mempool_h1_carrier_refusal`]) when it entered. Node-local; `false` below
+    /// **The 2026-09-25 model-registry review, M1: do `carriers` escalate at the tip?** — for each,
+    /// the row the tip holds for its `(bond, class)`, judged at the virtual's DAA by the one
+    /// predicate (`PalwReadinessCarrierV1::escalates`) under the registry fold's own span clock,
+    /// globals and readiness rule; one tip load and one fold for the whole batch. The pool's carrier
+    /// index asks it when a proof enters and, for every proof it holds, at every new block; the
+    /// proof itself was put to the fold by the carrier gate
+    /// ([`Self::palw_mempool_h1_carrier_refusal`]) when it entered. Node-local; all `false` below
     /// `palw_rcore_plus`, so every network but testnet-12 keeps a proof an ordinary transaction.
     pub fn palw_readiness_escalated_v1_impl(
         &self,
-        carrier: kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1,
-    ) -> bool {
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<bool> {
         let Some(virtual_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
-            return false;
+            return vec![false; carriers.len()];
         };
-        self.palw_readiness_escalated_at(carrier, virtual_daa)
+        self.palw_readiness_escalated_at(carriers, virtual_daa)
     }
 
     /// [`Self::palw_readiness_escalated_v1_impl`] at a given DAA.
     pub(super) fn palw_readiness_escalated_at(
         &self,
-        carrier: kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1,
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
         virtual_daa: u64,
-    ) -> bool {
-        if !self.palw_rcore_plus_at(virtual_daa) {
-            return false;
+    ) -> Vec<bool> {
+        let none = || vec![false; carriers.len()];
+        if carriers.is_empty() || !self.palw_rcore_plus_at(virtual_daa) {
+            return none();
         }
-        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return false };
-        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else { return false };
-        let Some(fold) = self.palw_model_registry_fold_at(virtual_daa) else { return false };
-        carrier.escalates(
-            state.seat_readiness(&carrier.bond, &carrier.class_id),
-            virtual_daa,
-            fold.span_daa,
-            &fold.globals,
-            fold.readiness_v2_active,
-        )
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return none() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else { return none() };
+        let Some(fold) = self.palw_model_registry_fold_at(virtual_daa) else { return none() };
+        carriers
+            .iter()
+            .map(|carrier| {
+                carrier.escalates(
+                    state.seat_readiness(&carrier.bond, &carrier.class_id),
+                    virtual_daa,
+                    fold.span_daa,
+                    &fold.globals,
+                    fold.readiness_v2_active,
+                )
+            })
+            .collect()
     }
 
     /// **Who may be served a claim's private material**, at the tip (ADR-0077 Decision 16's
