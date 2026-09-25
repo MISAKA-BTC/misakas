@@ -221,6 +221,16 @@ fn msk_26a_palw_16_voided_junk_commitment_discounts_honest_claim() {
     )
     .expect("the griefer's junk commitment is accepted");
     assert!(matches!(s1.claim(&griefer_claim).unwrap().phase, PalwClaimPhaseV2::Provisional));
+    {
+        let gc = s1.claim(&griefer_claim).unwrap();
+        println!(
+            "griefer claim: reserved = {} sompi ({:.6} MSK), rights_reserved = {} sompi ({:.6} MSK) — the most a void could forfeit before any S1/S2 action",
+            gc.reserved,
+            msk(gc.reserved),
+            gc.rights_reserved,
+            msk(gc.rights_reserved)
+        );
+    }
     assert_eq!(s1.fp_claimed_prompt_ids_of(&floor, commit_daa + 1).len(), 1, "a row is written for a Provisional claim");
 
     // No panel ever binds; the bind window closes and the claim voids at BindTimeout.
