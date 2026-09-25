@@ -407,12 +407,13 @@ fn t41_the_v22_record_encodings_are_pinned() {
         "3d319ff29614dc063db42a7e9aa7a8ff7767cee6519a310d654e9f09bfbd86a0", // PalwPanelLiabilityRecordV1
         "e8e4d8837819bb9984f1561da937f8b18ba64045c1fd552bd91cb2dee4d576f5", // PalwConsumedOffenceV1
     ];
-    let mut moved = Vec::new();
-    for ((what, value), want) in got.iter().zip(want) {
+    // Every record is printed before anything is compared (`scripts/t12-repin.sh` reads these lines),
+    // and a record without its pinned digest — or a digest without its record — fails by count, not
+    // by a `zip` that stops at the shorter side.
+    for (what, value) in &got {
         println!("T41 record {what}: {value}");
-        if value != want {
-            moved.push(*what);
-        }
     }
+    assert_eq!(got.len(), want.len(), "one pinned digest per record, in order");
+    let moved: Vec<&str> = got.iter().zip(want).filter(|((_, value), want)| value != want).map(|((what, _), _)| *what).collect();
     assert!(moved.is_empty(), "v22 record encodings moved: {moved:?} (re-pinned only on the shipping commit)");
 }

@@ -119,22 +119,29 @@ a0af3c92: licence-stall（a4dfe903、d94d3a1b）あり、panel-room の C7 re-ke
 
 ---
 
-## 3. a0af3c92 での identity（**暫定。出荷値ではない**）
+## 3. testnet-12 の identity（§5 の tool が書く）
 
-2026-09-25、Mac、`contrib/t12-deploy-kit/probe-identity-local.sh`（dev build の kaspad、sha256 `2a7dd6e4…`、隔離 node）で読んだ値。
-§1 item 7・§2 9-7/9-8 の merge（deadline＋P-1、A-held、Activation Pool）と P2-8 がこれを動かす。
+**8270cf03 での暫定値（出荷値ではない）** — `scripts/t12-repin.sh` が build から計算した値（`consensus/core/tests/t12_repin_values.rs` の
+`REPIN` 行。node が起動ログに出すのと同じ関数: fingerprint は `Params::from(testnet-12).consensus_params_id()`、genesis は premine から
+再計算した utxo commitment・merkle root・header hash）。下の block は §5 の `--apply` が書き換え（`# re-pin` 行が理由）、太字の表示も
+tool が書く（`--apply` は計算した commit に、出荷 commit での `--apply --shipping` は「出荷 commit（<commit> ＋ 再 pin）の値」に）。
+release build の probe（§4 step 10〜11 の `IDENTITY`）がこれと一致しなければ止める。
 
 ```
-EXPECT_FP=8a4810231e4f54e7d62b57ef0c4bc7973b23ebb87b1943b6541c05190b2d5ee6
+# re-pin 2026-09-25 @8270cf032d24: provisional ids at rcore/int-3 8270cf03 (the class-verify-deadline merge a66509f9 moved t12's params and schedule ids after a0af3c92) (was 8a481023…, 8b0ee13c…)
+EXPECT_FP=99eae89db05887c0ee21e451d5a78bd296533db59eb818edb3a4a320565c0ba3
 EXPECT_GENESIS=a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23
 PREMINE_TXID=5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669
-# schedule id 8b0ee13cd93ed0ca532466ec907fe58c655e9be32e8d532f3cc46c5077e284c8（fence schedule "1000"）
+# schedule id 5f53b691c98dbd4352835d18699c3051af209064c8ff79e2a920bbcfae421c1b（fence schedule "1000"）
 # rule manifest digest 9def81a1c56c02d5d1f9d24c5ddbe78d6f7598b31928ab6f388a2a074f14b4d4d4cf8c2245666bc13b9c91688c106efe428e8643075b68b40c4820adb4201d8d
 ```
 
-fingerprint `8a481023…` は EVM bridge ledger（fad522c6、int-3 への merge dee8b595）の時点でメモリに記録された t12 の値と同じ（その後の merge は t12 の params を動かしていない）。genesis は c8652a97 の候補
-`a27f8f44…` のまま（R-core+ の genesis 行はまだ動いていない）。drill salt `5353…53`（例示用）の drill genesis は
-`1678f353…70349`（`--drill-salt` の出力。実際の drill の salt ではない）。
+経緯: a0af3c92 で `probe-identity-local.sh` が読んだ値は fingerprint `8a481023…`・schedule id `8b0ee13c…`（genesis・premine txid・rule
+manifest は同じ）。deadline＋P-1 の merge（a66509f9、t12 の pruning depth 12,002 → 74,920）が params id と schedule id を動かした。
+8270cf03 の後の A-held・Activation Pool（readiness horizon を含む）・P2-8e・本番値の merge もこれを動かす（§5 の再 pin が吸収する）。
+
+drill salt `5353…53`（例示用。実際の drill の salt ではない）の drill genesis は `1678f353…70349`（`probe-identity-local.sh --drill-salt` が
+出す値。tool が t12 の genesis と一緒に計算して書き換える）。
 
 ---
 
@@ -147,8 +154,8 @@ fingerprint `8a481023…` は EVM bridge ledger（fad522c6、int-3 への merge 
 | 3 | **Activation Pool**（`feat/t12-activation-pool`）を merge（genesis の行を動かし得る） | 実装 | |
 | 4 | **B の lane**（`rcore/p2-file` の P2-8 filer 3 本、`rcore/m5b-tests`、必要なら `rcore/readiness-escalation`）を merge。merge は手で解いたら push 前に build（メモリ則） | 実装 | |
 | 5 | §1・§2 の各 test を出荷候補で確認し、所在不明の番号を監査と詰める | 実装・監査 | |
-| 6 | **再 pin**（§5）。t12 の identity と kit の写しを読み直し（`probe-identity-local.sh --build --layout`、exit 0 が条件）、resource profile を再評価して PLAN §2 の表と install-*.sh の share / memmax を直す: `cargo test --locked -p kaspad --test t12_role_memory_figures -- --ignored --nocapture`（全行が `OK`） | 実装 | |
-| 7 | genesis が a27f8f44 から動いたら、a27f8f44 を `fleet.env.example` の `FORBIDDEN_GENESIS` と `t12_regenesis.rs` の superseded 接頭辞リストに足し、docs（`docs/testnet12-join-mining.md`、`docs/testnet-12-regenesis-2026-09-23.md`）と explorer の `PANEL_BOND_TX` を直す。class id・premine 配置・kit の写しは §5 の 7〜9 | 実装 | |
+| 6 | **再 pin**（§5）: `scripts/t12-repin.sh --shipping`（dry run）→ `--apply --shipping --reason "…"`（t11 の layout golden が動くなら監査の確認の後に `--allow-t11-layout`）→ もう一度 `--shipping` の dry run で `no drift`（exit 0）。t12 の identity と kit の写しを probe でも読み直し（`probe-identity-local.sh --build --layout`、exit 0 かつ §3 の block と一致）、resource profile を再評価して PLAN §2 の表と install-*.sh の share / memmax を直す: `cargo test --locked -p kaspad --test t12_role_memory_figures -- --ignored --nocapture`（全行が `OK`） | 実装 | |
+| 7 | genesis が a27f8f44 から動いたら: 旧 genesis を `fleet.env.example` の `FORBIDDEN_GENESIS` と `t12_regenesis.rs` の superseded 接頭辞リストに足すのは step 6 の `--apply` が行う（`genesis.rs`・§3・regenesis 記録の表・join 文書・explorer の写しも）。tool が「Other mentions of the old values」に出した散文（PLAN・DEPLOY・docs の説明文）を手で直す | 実装 | |
 | 8 | **最終 battery を 2 回**（§1 item 2 のコマンド、既定と `--features evm`）。同じ commit で core・kaspad・base0・cli も | 実装 | |
 | 9 | 出荷 commit を origin に push | ユーザー | **【確認】** |
 | 10 | **release build は Mac で**（推奨、PLAN §13）: `colima start` の後、出荷 commit の checkout で `PROBE_IMAGE=rust:latest NATIVE_PROBE=1 contrib/t12-deploy-kit/build-release-local.sh <commit>`（cargo-zigbuild、x86_64 Linux・glibc 2.39 floor、`env -i`、path remap で場所に依らず同じ sha、release の kaspad そのものを linux/amd64 container で probe、Mac の dev build の probe と header 以外の全行で照合。同じ WORK・target dir の run は同時に 1 本だけ）。IDENTITY が step 6 の値と一致。`colima start` は `misaka-searxng-core`（restart `unless-stopped`）も起動するので、終わったら `colima stop`。`distribute-from-mac.sh binaries` は IDENTITY と `fleet.env` の 3 値が違えば何も送らない。フォールバック: 5.104 で `build-release-5104.sh <commit>` | ユーザー | Mac は確認不要（リモートに触れない。colima の container が一時的に起動する）。5.104 のフォールバックは **【確認】**（公開予定ホストでの 20 分超のビルド） |
@@ -167,73 +174,129 @@ fingerprint `8a481023…` は EVM bridge ledger（fad522c6、int-3 への merge 
 ## 5. 再 pin の手順（出荷 commit で一度だけ。step 6）
 
 pin を動かす前に、何が動いたのかを 1 つずつ言えること（「両側を残す機械的 merge」や「default hash は全てと一致する」の事故則）。
-値は **計算して貼る**（手で打たない）。
+値は **計算して貼る**（手で打たない）。その作業は `scripts/t12-repin.sh`（本体と pin の registry は `scripts/t12_repin.py`）が行う。
+計算側はこの tree の build だけ: `consensus/core/tests/t12_repin_values.rs` の `REPIN` 行（全 preset の params / identity / schedule id、
+全 network の genesis を premine から再計算した hash・merkle root・utxo commitment、t12 の premine / community txid、class id と C7 の導出、
+kit の値、例示 drill salt の drill genesis）、pin test が assert の前に print する値（「その fence だけが t12 を動かした」twin、readiness
+horizon の twin と t12 の全 id、T41、t11 parity の dump、dormant ring root、t11 verdict の root、corpus の verdict digest）、committed class
+manifest を JSON として読んだ値（`class_manifest_const_v1` の転記 test の第二経路）。
 
-1. **t12 の identity**
-   - `contrib/t12-deploy-kit/probe-identity-local.sh --build` → `EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID`・schedule id・rule manifest digest。
-   - genesis が動いた場合: `cargo test -p kaspa-consensus-core --lib config::genesis::tests::gen_kaspa_pq_genesis_hashes -- --nocapture` と
-     `config::premine::tests::print_premine_commitment` の出力を `consensus/core/src/config/genesis.rs` の `PALW_T12_GENESIS`（`hash`・
-     `hash_merkle_root`・`utxo_commitment`）へ。`test_genesis_hashes` と `every_genesis_commits_to_the_premine_this_build_mints`（`genesis.rs` の doc が旧名 `every_shipped_genesis_commits_to_its_own_premine` で呼んでいる test）が確認する。
-     `consensus/src/consensus/utxo_set_override.rs` の `print_repinned_t12_genesis` も同じ値を出す。
-   - premine の salt が動いた場合のみ: `consensus/core/src/config/premine.rs` の `TESTNET12_COMMUNITY_TXID`。
-2. **t12 の fingerprint を名指しで pin している test**（`git grep -n -E '"[0-9a-f]{64}"' -- 'consensus/core/tests/*.rs'` で全数を確認）
-   - `consensus/core/tests/palw_offence_attribution_is_t12_only.rs` — `T12_BEFORE_THE_ATTRIBUTION`（fence を外した t12 の params / identity /
-     schedule id）。t12 の他の params が動くと動く。
-   - `consensus/core/tests/evm_bridge_ledger_is_t12_only.rs` — `T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION`（ledger と attribution を外した t12）。
-   - これらは「その fence だけが t12 を動かした」ことの pin。新しい merge が t12 を動かしたら、何が動かしたかを書いて値を更新する。
-3. **t11 / devnet / mainnet が動いていないことの pin**（動いたら出荷しない。動かすべき理由があるときだけ更新）
-   - `consensus/core/src/config/params.rs` の `shipped_presets_have_pinned_fingerprints`（mainnet `badaa8e9…`、testnet、testnet-11 `bd633ce9…`、
-     simnet、devnet `7a27f341…`）と `the_pinned_testnet_fingerprint_is_the_one_a_node_announces`。
-   - `consensus/core/tests/palw_rcore_plus_is_t12_only.rs`（`AT_V21`・`AT_V22`）、`palw_clock_floor_is_t12_only.rs`、
-     `palw_offence_attribution_is_t12_only.rs`（t11 / devnet / mainnet の 3 つ組）、`palw_the_release_did_not_move.rs`（`T11_CONSENSUS_*`、
-     `MAINNET_CONSENSUS_PARAMS_ID`）。
-4. **T41 の v22 golden**
-   - `consensus/core/tests/rcore_m5_v22_golden.rs`: `t41_the_v22_golden_vectors_empty_and_inhabited`（空と全 map 充填の 2 値）と
-     `t41_the_v22_record_encodings_are_pinned`（`PalwClaimRcoreV1`〜`PalwConsumedOffenceV1` の 11 個の encoding digest）。
-   - `consensus/core/src/palw_state_v2.rs` の `the_version_22_state_root_golden_vectors`（`want_empty` / `want_full`）。
-   - v22 は一度だけ切る（v23 は作らない、handoff §3）。record の encoding が動いたなら、どの field がなぜ動いたかを test の doc に書く。
-5. **t11 の休眠 parity**: `consensus/core/tests/panel_room_t11_dormant_parity.rs` の `PARENT_DUMP_BLAKE2B_256`。t11 の fold の dump が
-   動いたら、その理由（R-core+ は t11 で休眠のはず）を監査が確認してから更新する。
-6. **その他の digest**: `consensus/core/tests/palw_same_fingerprint_same_verdict.rs` の `CORPUS_VERDICT_DIGEST`（verdict が動いたときだけ）、
-   `consensus/core/src/config/params.rs` の `PALW_T12_RCORE_CONSERVATIVE_CLASSES`（2M の class id。graph-v7 profile が動いたときだけ、
-   `the_t12_c7_list_is_the_2m_row` が確認）、`consensus/core/tests/t12_regenesis.rs` の genesis 系 test、`kaspad/src/palw_drill.rs` の T53。
-7. **genesis の class id・artifact root**（A-held や Activation Pool が genesis の行や graph-v7 profile を動かしたら動く）
-   - `consensus/core/src/config/class_manifest_const_v1.rs` の `the_committed_manifest_parses_to_what_it_says`（2M: inventory root
-     `f63af2c4…`、class id `74c67e63…`、artifact digest `b5baca63…`）と `the_committed_8k_manifest_parses_to_what_it_says`（8k: `88096dc1…`、
-     `ebf44d0a…`、`f4af38d9…`）。committed sidecar（`consensus/core/src/config/class-manifests/*.palwmanifest`）を差し替えたら、その sha256 を
-     kit の `MANIFEST_8K_SHA256` に。
-   - `consensus/core/tests/t12_regenesis.rs` の `the_held_rows_are_the_fleets_classes`（2M `74c67e63…`・8k `ebf44d0a…` の shape profile id と、
-     genesis に登録される model class が「8k、2M の順にこの 2 本だけ」）、`t12_genesis_reads_its_root_from_the_committed_manifest`・
-     `t12_genesis_roots_are_all_read_from_committed_manifests`（root は committed manifest から）、`t12_certifies_both_lanes_of_the_classes_it_registers`。
-   - `consensus/core/src/config/params.rs` の `PALW_T12_RCORE_CONSERVATIVE_CLASSES`（`the_t12_c7_list_is_the_2m_row`）。
-   - `t12_regenesis.rs` の `t12_shares_no_premine_outpoint_or_genesis_with_the_sentinel_chains` にある **superseded genesis の接頭辞リスト**
-     （`f6cc9576`・`a8cabac4`・`d73dbf44`）: genesis が a27f8f44 から動いたら `a27f8f44` を足す（`FORBIDDEN_GENESIS` と同時に）。
-8. **premine の index 配置**（Activation Pool の行や card の並べ替えで動き得る）
-   - `consensus/core/src/config/premine.rs`: `MAIN_PREMINE_INDEX = 40`、genesis bond の collateral は card が **宣言した** index
-     （`premine_index`）、fee float は `MAIN_PREMINE_INDEX + 1 + i`（i は `PALW_T12_GENESIS_BONDS` の **並び順**。`bonded_genesis_utxos_on`）。
-     kit は card N を bond `PREMINE_TXID:N`・fee float `PREMINE_TXID:(FEE_FLOAT_BASE + N)` と一つの番号で呼ぶので、両者が一致している必要がある。
-   - `t12_regenesis.rs` の `t12_bond_collateral_matches_the_card`・`the_fleets_premine_indices_are_unchanged_on_t12s_own_txid`・
-     `t12_genesis_mints_exactly_the_cap`。
-9. **kit と explorer の写し**（node は起動時にこれらを確かめない。`--check` は flag と sha だけ、switch の旧 gate は fp と genesis だけだった）
-   - `contrib/t12-deploy-kit/fleet.env.example`: `FEE_FLOAT_BASE`（41）、`CLASS_8K`、`ART_8K_BYTES`、`ART_8K_SHA256`、`MANIFEST_8K_SHA256`、
-     `FORBIDDEN_GENESIS`、`HB_ADDR`（card 0 の payout address）。
-   - `contrib/t12-deploy-kit/lib.sh`: `CLASS_2M_PREFIX`（74c67e63）。
-   - `contrib/misakascan-t12/app.js`: `LLM_CLASSES`（floor・8k・2M の id）、`PANEL_BOND_TX`。
-   - **pin**: `consensus/core/tests/t12_deploy_kit_constants.rs` がこれらをこの build の genesis と突き合わせる（上の 8 の配置、class id、
-     artifact bytes、explorer の表、`FORBIDDEN_GENESIS` に自分の genesis が無いこと）。`MANIFEST_8K_SHA256` は `probe-identity-local.sh --layout`
-     が committed sidecar の sha と比べる。
-     ```bash
-     cargo test --locked -p kaspa-consensus-core --test t12_deploy_kit_constants -- --nocapture   # LAYOUT card N … の表を印字
-     contrib/t12-deploy-kit/probe-identity-local.sh --build --layout                               # binary の genesis の class と bond も比べる（exit 0）
-     ```
-   - 公開時の gate: `install-<host>.sh switch` は node ごとに bond 8 本が `PREMINE_TXID:0..7`、`CLASS_8K` が登録済み、
-     `CLASS_2M_PREFIX` の class が登録済みであることを RPC で確かめ、違えばその node を止める（`lib.sh` `wait_genesis`、`t12check.py --expect-*`）。
-10. **文書と kit**: `docs/testnet12-join-mining.md`・`docs/testnet-12-regenesis-2026-09-23.md`（genesis `a27f8f44…`、premine `5e0d5f1b…`）、
-   `contrib/t12-deploy-kit/PLAN.md` §4 の暫定値と §2 の表（`kaspad/tests/t12_role_memory_figures.rs` の印字）、`contrib/misakascan-t12/app.js`
-   の `PANEL_BOND_TX`、この文書の §3。
-11. 再 pin の commit の後に step 8 の battery を 2 回（上の 2 本の test も含まれる: `-p kaspa-consensus-core --tests` と `-p kaspad`）。
+**手順**（出荷候補の commit で。`CARGO_TARGET_DIR` はその build のもの、`CARGO_BUILD_JOBS=4`）:
 
----
+1. `scripts/t12-repin.sh --shipping` — dry run。consensus-core の pin test 群を build して走らせ、全 pin を `pinned vs computed` の表にする
+   （初回は consensus-core の test build、Mac Studio で約 12 分）。`--shipping` は「これが出荷 tree」の宣言で、merge が持ち込む pin file
+   （`palw_activation_pool_is_t12_only.rs`・`palw_readiness_horizon_is_t12_only.rs`）と A-held の gate test が無ければ `NOT FOUND` / `CHECK`
+   にする（`--shipping` 無しでは merge 前の `absent` として数えない。ただし HEAD の履歴に一度あった pin file が無いのは常に `NOT FOUND`）。
+   exit: **0** = drift 無し・gate 全 pass・未登録 literal 無し、**1** = 書き換えで直る drift だけ（行ごとに `-> MOVE`）、**3** = `REFUSE`・
+   `NOT COMPUTED`・`NOT FOUND`・`CHECK`・`UNREGISTERED` のどれか（drift の有無によらない）、**4** = build 失敗。
+   - `DRIFT -> MOVE` の各行について、**どの merge がそれを動かしたかを言えること**。言えなければ止める。
+   - `REFUSE` があれば止める。testnet-11・testnet-10・devnet・simnet の pin が動いた build は出荷しない（`would fail:` がその test）。
+   - `NOT COMPUTED` は、値を出す test が print より前で落ちた（例: twin の前提 `pruning_depth == 12_002` が本番値の変更で動いた）。
+     前提を直して再実行する。`NOT FOUND` は pin の書式か anchor が変わった、または pin file が消えた: registry を直す。
+   - `UNREGISTERED` は consensus-core の integration test（`consensus/core/tests/*.rs` 全部を glob で読む）に registry が知らない 64/128 桁の
+     hex literal がある（merge で足された pin）。`scripts/t12_repin.py` の `registry()` に 1 行足す。値を test の中で作る pin なら、その test
+     に assert より前の print も足す（twin の print と同じ形）。
+   - `CHECK` は書き換えでは直らないもの（explorer の `LLM_CLASSES` に genesis class の行が足りない・余る、genesis class の並びが [8k, 2M] で
+     ない、C7 の導出が 1 本でない、card の premine index が 0..7 でない、T41 の record と `want` の名前・数が合わない、gate test の失敗、
+     `--shipping` で表示が暫定のまま）。書き換えが直す写し（`app.js` の class id など）は、書き換えた後の姿で判定するので `CHECK` にならない。
+   - `scripts/t12-repin.sh --selftest`（build 不要、直前の harvest log を 1 値ずつ書き換えて判定規則を確かめる。まだ無い pin file と gate の
+     場合は SKIP）。
+2. `scripts/t12-repin.sh --apply --shipping --reason "<何が動かしたか、1 行>"` — `MOVE` の pin を書き換え、各書き換え（表の行・tuple const・
+   genesis field・`want` 配列ごと）の上に `re-pin <日付> @<commit>: <reason> (was <旧値>…)` の 1 行 comment を残す（Markdown の表と散文には
+   残さない。commit message が理由を持つ）。**round で進む**: genesis 定数と C7 の literal（`PALW_T12_2M_CLASS_ID_BYTES`）は pin であると
+   同時に入力（params id がそれを hash する）なので、それが動いたら 1 round 目はそれだけを書き換えて build し直し、読み直した値で 2 round 目
+   に残りを書き換え、最後の round は drift 0 を確かめる build（確認の dry run を兼ねる）。dry run がそれと一緒に出す fingerprint・twin・写し
+   の値は古い定数の上で計算したもので、`--apply` の 2 round 目で出る値が正しい（salt を変えた試験では fingerprint が 1 round 目
+   `fe4e0c92…`、2 round 目 `5633ba0d…` だった）。t12 の genesis が動いたら旧 genesis を `fleet.env.example` の `FORBIDDEN_GENESIS`（全桁と
+   comment 行）と `t12_regenesis.rs` の superseded 接頭辞リストに足す。§3・PLAN §4・misakascan `DEPLOY.md` の写しの block の太字の表示
+   （「<commit> での暫定値（出荷値ではない）」）は、`--shipping` なら「出荷 commit（<commit> ＋ 再 pin）の値」に書き換える（無しなら
+   書き換えた file の表示の commit だけ）。その後、pin を持つ test を全部走らせて結果を出す（lib の genesis / params / C7 / class manifest /
+   v22 golden と A-held の `held_forfeits_v1`、pin のある integration target 全部、`t12_deploy_kit_constants`・`t12_regenesis`・
+   `t12_repin_values`。exit 5 = どれかが落ちた）。どの round でも `REFUSE`・`NOT COMPUTED`・`NOT FOUND`・`CHECK`・`UNREGISTERED` が
+   1 つでもあればそこで止まる（exit 3。1 round 目なら何も書いていない）。
+3. `--apply` の最後の round が drift 0 でなければ exit 3/4/5 で止まる。commit の前にもう一度 `scripts/t12-repin.sh --shipping` →
+   `DRY RUN: no drift`（exit 0）。`--apply` が「Other mentions of the old values」に出した行（PLAN・misakascan DEPLOY・docs の散文、
+   fleet.env.example の説明 comment など）を手で直す。`git diff` を読み、`re-pin` comment の reason を確かめ、record の encoding が動いた
+   なら T41 の test の doc にどの field がなぜ動いたかを書いて commit。
+4. identity の照合: dry run の末尾の `computed from.testnet-12.params_id / genesis.testnet-12.hash / testnet-12.premine_txid /
+   from.testnet-12.schedule_id / rule_manifest.digest` が §3 の block（`--apply` が書いた）と同じで、
+   `contrib/t12-deploy-kit/probe-identity-local.sh --build --layout`（exit 0）と release build の `IDENTITY`（§4 step 10）がそれと同じこと。
+   fleet.env は release build の probe から埋める（§3 から貼らない）。
+5. その後に step 8 の battery を 2 回（`-p kaspa-consensus-core --tests` と `-p kaspad` が上の pin test を全部含む）。
+
+**判定の規則**（scope は registry の各行にある）:
+
+| scope | 主な pin | drift したとき |
+|---|---|---|
+| `t12` | `genesis.rs` の `PALW_T12_GENESIS`（hash・merkle root・utxo commitment）、`params.rs` の C7 literal `PALW_T12_2M_CLASS_ID_BYTES`、twin（`T12_BEFORE_THE_ATTRIBUTION`・`…_AND_THE_DEADLINE`・`T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION`・`T12_BEFORE_THE_HORIZON`）、`T12_WITH_THE_HORIZON`（t12 の全 id）、`the_held_rows_are_the_fleets_classes` の class id、`class_manifest_const_v1` の転記 6 値、T41 の inhabited root / carriage | MOVE |
+| `mainnet` | `shipped_presets_have_pinned_fingerprints` の mainnet、`AT_V22`・`BEFORE_THE_FLOOR`・`BEFORE_THE_ATTRIBUTION`・`BEFORE_THE_DEADLINE`・`BEFORE_THE_POOL`・`BEFORE_THE_HORIZON` の mainnet 行と `AT_V21` の mainnet 行（同じ test が等しいと assert）、`MAINNET_CONSENSUS_PARAMS_ID`、`GENESIS` | MOVE（本番値の変更。mainnet は未公開） |
+| `layout` | T41 の empty root / carriage と record encoding（`want` の各 literal の `// <Record>` comment で名指し）、`palw_state_v2` の `want_empty` / `want_full` | MOVE（v22 の encoding が動いた。T41 の doc に理由） |
+| `copy` | `fleet.env.example`（`CLASS_8K`・`FEE_FLOAT_BASE`・`ART_8K_BYTES`・`MANIFEST_8K_SHA256`・`HB_ADDR`）、`lib.sh` の `CLASS_2M_PREFIX`、`app.js` の `PANEL_BOND_TX`・`LLM_CLASSES`、`params.rs` の C7 の doc の略記、§3 の block と例示 drill genesis、PLAN §4 の暫定値、regenesis 記録の表、`testnet12-join-mining.md`、misakascan `DEPLOY.md` | MOVE |
+| `label` | §3・PLAN §4・misakascan `DEPLOY.md` の写しの block の太字の表示 | 比べない。`--apply` が commit を、`--apply --shipping` が出荷の表示を書く。`--shipping` の dry run で暫定のままなら `CHECK` |
+| `t11-layout` | t11 parity の `PARENT_DUMP_BLAKE2B_256`、`t12_two_clock_ring` の `DORMANT_GOLDEN_ROOT`、t11 verdict の `ROOT_*` 3 本 | 同じ run で `layout` の pin が動き、隣の非 root 値（parity の roots-masked digest・長さ・行数 / verdict の lock・collateral）が動いておらず、**かつ `--allow-t11-layout` を付けたとき**だけ MOVE。flag 無しでは REFUSE にして「AUDIT SIGN-OFF NEEDED」に監査が確かめること（動いた layout pin、動く t11 golden、t11 の fold が encoding 以外で動いていないこと）を出す。ring root と verdict root の guard は parity の masked digest ほど強くないので、flag は監査の確認の後だけ付ける（下の 5） |
+| `verdict` | `CORPUS_VERDICT_DIGEST`（ADR-0150、stateless で全 network） | `--allow-verdict` かつ rule manifest digest が動いたときだけ MOVE（`PALW_CONSENSUS_RULE_MANIFEST_V1` の revision を上げた commit） |
+| `testnet-11`・`devnet`・`testnet-10`・`simnet` | 上の表の各 network の行、`T11_CONSENSUS_*`、各 genesis、parity の roots-masked digest・長さ・行数、t11 verdict の lock・collateral | REFUSE |
+
+registry が持つ pin の所在（表の読み方。書き換えは tool が行う）:
+
+1. **t12 の identity**: `consensus/core/src/config/genesis.rs` の `PALW_T12_GENESIS`（`test_genesis_hashes`、
+   `every_genesis_commits_to_the_premine_this_build_mints` — `genesis.rs` の doc が旧名 `every_shipped_genesis_commits_to_its_own_premine` で
+   呼んでいる test）。premine txid はコードに pin されていない（`premine_txid_for(testnet-12)` が salt から導く）: 動くのは
+   `PALW_T12_PREMINE_SALT` か sentinel が動いたときだけで、そのとき写し（`app.js` `PANEL_BOND_TX`、§3、PLAN、regenesis 記録、join 文書）が
+   drift する。`TESTNET12_COMMUNITY_TXID` は sentinel（入力）で pin ではない。**t12 の fingerprint そのもの**は readiness horizon の merge
+   からコードに pin される: `palw_readiness_horizon_is_t12_only.rs` の `T12_WITH_THE_HORIZON`（shipped preset の params / identity /
+   schedule id。tool は `palw_t12_shipped_params()` の値と比べる）。それまでは §3 と kit の写しだけ。
+2. **twin**（その fence だけが t12 を動かした）: `palw_offence_attribution_is_t12_only.rs`、`evm_bridge_ledger_is_t12_only.rs`
+   （Activation Pool と readiness horizon の merge 後は、その 2 つも外した値。horizon の branch が両 test で `palw_activation_pool = None` と
+   `palw_readiness_v2_max_age_spans = None` にする）、`palw_readiness_horizon_is_t12_only.rs` の `T12_BEFORE_THE_HORIZON`（test が
+   `testnet-12 with the horizon (…) / without (…)` を assert の前に print する）。
+3. **t11 / devnet / mainnet が動いていないことの pin**: `params.rs` の `shipped_presets_have_pinned_fingerprints`、
+   `palw_rcore_plus_is_t12_only.rs`（`AT_V22`。`AT_V21` は f1192685 の記録で、mainnet 行以外は比べない）、`palw_clock_floor_is_t12_only.rs`、
+   `palw_offence_attribution_is_t12_only.rs`、`palw_class_verify_deadline_is_t12_only.rs`、`palw_activation_pool_is_t12_only.rs`・
+   `palw_readiness_horizon_is_t12_only.rs`（merge 後。`BEFORE_THE_POOL`・`BEFORE_THE_HORIZON`）、`palw_the_release_did_not_move.rs`。
+4. **T41 の v22 golden**: `rcore_m5_v22_golden.rs` の 4 値と record（`want` の各 literal を行末の `// <Record>` comment で名指し。test は
+   全 record を print してから数を assert する）、`palw_state_v2.rs` の `the_version_22_state_root_golden_vectors`（lib test。値は失敗 message
+   にだけ出るので単独で走らせ、pass なら pin が現在値）。v22 は一度だけ切る（v23 は作らない、handoff §3）。T41 は R-core+ の item しか
+   埋めないので、**root block の並びは固定していない**。並びの pin は literal の無い gate test で、A-held の merge で入る（tool が harvest で
+   走らせ、落ちれば `CHECK`、`--shipping` で無ければ `CHECK`。両方の merge の後に pass すること）:
+
+   | gate（`palw_state_v2::tests::held_forfeits_v1::`） | 固定するもの |
+   |---|---|
+   | `the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool` | root block `rcore_plus/v1` < `activation_pool/v1` < `held_forfeits/v1`、carriage tail 0xB4 < 0xB5 < 0xB6（source を読む） |
+   | `the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused` | delta entry 80（held forfeit）と、Activation Pool 用に予約した 76〜79 の placeholder の拒否。**pool の merge が 76〜79 を実 entry にするなら、この test をその merge で直す**（A-held と pool の `palw_state_v2.rs` は merge で衝突する） |
+
+5. **t11 の休眠 parity**: `panel_room_t11_dormant_parity.rs` の `PARENT_DUMP_BLAKE2B_256` は v22 layout が動いたときだけ動く。それを
+   区別するために同じ dump の state root を伏せた digest（`PARENT_DUMP_ROOTS_MASKED_BLAKE2B_256`、8270cf03 で固定、書き換えない）と長さ・
+   行数を pin した。`t12_two_clock_ring.rs` の `DORMANT_GOLDEN_ROOT` と `palw_offence_attribution_t11_verdicts.rs` の root 3 本にはこれほど
+   強い区別が無い（ring は前提の assert、verdict は lock と collateral だけ）。だから t11-layout の pin は `--allow-t11-layout` 無しでは
+   動かさない。監査が「AUDIT SIGN-OFF NEEDED」の 3 点（動いた layout pin とその理由、動く t11 golden、t11 の fold が encoding 以外で
+   動いていないこと — fold code の diff を読む）を確かめてから flag を付けて再実行し、commit する。
+6. **その他の digest**: `palw_same_fingerprint_same_verdict.rs` の `CORPUS_VERDICT_DIGEST`（verdict）。`kaspad/src/palw_drill.rs` の T53 の
+   salt は入力で pin ではない。
+7. **genesis の class id・artifact root・C7**: `class_manifest_const_v1.rs` の 2 test（committed sidecar を JSON として読んだ値と比べる）、
+   `t12_regenesis.rs` の `the_held_rows_are_the_fleets_classes`、`params.rs` の `PALW_T12_RCORE_CONSERVATIVE_CLASSES` の literal
+   `PALW_T12_2M_CLASS_ID_BYTES`（ADR-0152 C7。tool は `palw_t12_rcore_conservative_classes_v1()` の導出と比べ、lib test
+   `consensus_params_id_tests::the_t12_c7_list_is_the_2m_row` が同じことを assert する。t12 の params id の入力なので stage 0）とその doc の
+   略記。genesis class の並びが [8k, 2M] でなくなったら `CHECK`（node の表と `t12_regenesis` は手で）。committed sidecar を差し替えたら
+   kit の `MANIFEST_8K_SHA256`・`ART_8K_BYTES` も drift する（MOVE）。`ART_8K_SHA256` は host 上の artifact file の sha で、この tree からは
+   計算できない: sidecar が動いたときは artifact を作った host で取り直す。
+8. **premine の index 配置**: `MAIN_PREMINE_INDEX + 1 = FEE_FLOAT_BASE`（copy）、card の宣言 index が 0..7 の順（`CHECK`）。
+   `t12_regenesis.rs` の `t12_bond_collateral_matches_the_card`・`the_fleets_premine_indices_are_unchanged_on_t12s_own_txid`・
+   `t12_genesis_mints_exactly_the_cap` と `t12_deploy_kit_constants`（`--apply` の後に走る）。
+9. **kit と explorer の写し**: 上の `copy`。node は起動時にこれらを確かめない。`t12_deploy_kit_constants` がこの build の genesis と突き合わせ
+   （`cargo test --locked -p kaspa-consensus-core --test t12_deploy_kit_constants -- --nocapture` が `LAYOUT card N …` を印字）、
+   `probe-identity-local.sh --build --layout` が binary の genesis の class と bond、committed sidecar の sha も比べる（exit 0）。
+   公開時の gate: `install-<host>.sh switch` は node ごとに bond 8 本が `PREMINE_TXID:0..7`、`CLASS_8K` と `CLASS_2M_PREFIX` の class が
+   登録済みであることを RPC で確かめ、違えばその node を止める（`lib.sh` `wait_genesis`、`t12check.py --expect-*`）。
+
+**tool の外に残るもの**（手で。tool は数えない）:
+
+- 手で導出した数値の pin: t12 の pruning depth（`T12_PRUNING_DEPTH = 74_920`、`palw_class_verify_deadline_is_t12_only` の lattice）、
+  withdrawal delay `12_900`、twin の前提 `12_002` など。本番値の変更が窓を動かせばこれらも動く（その merge が導出と一緒に直す）。twin の
+  前提が落ちると tool は twin を `NOT COMPUTED` と出す。
+- `misaka-palw-derive` の transformer id と free-prompt の golden（`scripts/check-repin-enumeration.py` の MOVES）: derive の tree が
+  動いたときだけ動く。battery（§1 item 2）が拾う。`misaka-palw-base0` の context vector が pin する devnet の params id は devnet で、動かない。
+- resource profile（§4 step 6 の `t12_role_memory_figures`）、release binary の sha256 と `fleet.env`（§4 step 10〜11）。
 
 ## 6. 公開後（ADR §8.4）
 

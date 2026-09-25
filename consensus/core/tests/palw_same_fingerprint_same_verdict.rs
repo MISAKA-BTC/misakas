@@ -182,6 +182,7 @@ fn the_stored_corpus_gets_the_verdicts_this_build_pinned() {
     }
     assert!(lines.len() >= 10, "a corpus of {} cases is not a corpus", lines.len());
     let digest = digest_of(&lines);
+    println!("corpus verdict digest {digest} ({} cases)", lines.len());
     assert_eq!(
         digest,
         CORPUS_VERDICT_DIGEST,
