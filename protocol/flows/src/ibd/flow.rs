@@ -2673,6 +2673,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                     return Err(ProtocolError::OtherOwned(format!("sent empty block body for block {}", hash)));
                 }
                 let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Arc::new(evm_payload) };
+                // Bridge audit BR-1: a payload the stored header does not commit to is the peer's
+                // fault; refuse it (disconnect) before consensus sees it.
+                crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
                 // TODO (relaxed): sending ghostdag data may be redundant, especially when the headers were already verified.
                 // Consider sending empty ghostdag data, simplifying a great deal. The result should be the same -
                 // a trusted task is sent, however the header is already verified, and hence only the block body will be verified.
@@ -2711,6 +2714,8 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                 if block.is_header_only() {
                     return Err(ProtocolError::OtherOwned(format!("sent header of {} where expected block with body", block.hash())));
                 }
+                // Bridge audit BR-1: the id does not cover the payload bytes (see above).
+                crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
                 // TODO (relaxed): sending ghostdag data may be redundant, especially when the headers were already verified.
                 // Consider sending empty ghostdag data, simplifying a great deal. The result should be the same -
                 // a trusted task is sent, however the header is already verified, and hence only the block body will be verified.
@@ -2821,6 +2826,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             if block.is_header_only() {
                 return Err(ProtocolError::OtherOwned(format!("sent header of {} where expected block with body", block.hash())));
             }
+            // Bridge audit BR-1: the id does not cover the payload bytes; a payload the header
+            // does not commit to is the sync peer's fault, never the block's.
+            crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
             current_daa_score = block.header.daa_score;
             current_timestamp = block.header.timestamp;
             jobs.push(consensus.validate_and_insert_block(block).virtual_state_task);
@@ -2858,6 +2866,8 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                 return Err(ProtocolError::OtherOwned(format!("sent empty block body for block {}", expected_hash)));
             }
             let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Arc::new(evm_payload) };
+            // Bridge audit BR-1: see sync_missing_trusted_bodies_no_headers.
+            crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
             current_daa_score = block.header.daa_score;
             current_timestamp = block.header.timestamp;
             jobs.push(consensus.validate_and_insert_block(block).virtual_state_task);

@@ -1500,6 +1500,12 @@ impl FlowContext {
         if block.transactions.is_empty() {
             return Err(RuleError::NoTransactions)?;
         }
+        // Bridge audit BR-1: a submitted payload the header does not commit to is refused before
+        // consensus, with the rule error consensus would report (consensus refuses it too, without
+        // condemning the block id).
+        if let Some(fault) = crate::evm_payload_delivery::evm_payload_delivery_fault(&block) {
+            return Err(fault)?;
+        }
         let hash = block.hash();
         let BlockValidationFutures { block_task, virtual_state_task } = consensus.validate_and_insert_block(block.clone());
         if let Err(err) = block_task.await {

@@ -74,11 +74,18 @@ impl BlockBodyProcessor {
             return Ok(());
         }
         let bytes = block.evm_payload.payload_bytes();
-        if bytes.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
-            return Err(RuleError::EvmPayloadTooLarge(bytes.len(), MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK));
-        }
+        // Bridge audit BR-1 (node-only): the commitment is checked BEFORE the size cap. A payload
+        // that does not hash to the header's commitment is a bad delivery (`EvmPayloadHashMismatch`,
+        // which the body processor never persists as `StatusInvalid`); only a payload the block id
+        // really commits to can be judged too large — and then the block itself is invalid. Every
+        // (header, payload) pair gets the same accept/reject as before; only the error of a pair
+        // that fails both changes. Hashing an over-cap payload is bounded: P2P decoding refuses
+        // bytes over the cap, and RPC is bounded by its message limit.
         if block.header.evm_payload_hash != kaspa_consensus_core::evm::payload_hash_of_bytes(&bytes) {
             return Err(RuleError::EvmPayloadHashMismatch);
+        }
+        if bytes.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
+            return Err(RuleError::EvmPayloadTooLarge(bytes.len(), MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK));
         }
         // ADR-0089: deposit claims and market settlements are two budgets — each op kind is
         // counted against its own cap, so a settlement never spends a claim's slot or vice versa.
