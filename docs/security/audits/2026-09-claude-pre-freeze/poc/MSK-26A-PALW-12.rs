@@ -201,17 +201,50 @@ fn overwrites_in(delta: &PalwStateDeltaV2, key: &Hash64) -> Vec<(Option<PalwPayo
 /// Seed the genesis line and give the holders positions. Returns the line.
 fn open_market(c: &mut Chain, holders: &[Hash64], each_msk: u64) -> Hash64 {
     let line = *c.state.classes_iter().map(|(id, _)| id).next().expect("testnet-12 registers its models at genesis");
-    let floor = c.p.palw_model_seed_min_sompi_at(1);
-    c.block(1, &[Obj::ModelSeed { line_id: line, seeder: h(0x5EED), msk_seed: floor, sink_index: 1 }]);
+    seed_and_buy(c, line, holders, each_msk);
+    line
+}
+
+/// **A line whose owner is a bonded party** (ADR-0088 Decision 1: any Active bond founds a line on
+/// an Active class and becomes its owner), seeded, with the holders' positions. On testnet-12's
+/// genesis the founding lines' owner legs are burned (their registrant has no bond row), so the
+/// owner-leg wipe needs a founded line — the normal way a line gets an owner who is paid.
+fn open_owned_market(c: &mut Chain, holders: &[Hash64], each_msk: u64) -> (Hash64, Hash64) {
+    use kaspa_consensus_core::palw_model_lines_v1::model_line_id_v1;
+    use kaspa_consensus_core::palw_state_v2::PalwBondStatusV2;
+    let base = c.sp.base_class_id();
+    let class_id = *c
+        .state
+        .classes_iter()
+        .find(|(id, cls)| **id != base && matches!(cls.status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active))
+        .map(|(id, _)| id)
+        .expect("an Active non-floor genesis class");
+    let (founder, owner_payload) = c
+        .state
+        .bonds_iter()
+        .find(|(_, b)| matches!(b.status, PalwBondStatusV2::Active))
+        .map(|(k, b)| (*k, b.payout_payload))
+        .expect("an Active genesis bond");
+    let name = b"poc-line".to_vec();
+    let line = model_line_id_v1(&class_id, &founder, &name);
+    let d = c.daa + 1;
+    c.block(d, &[Obj::ModelLineFounded { class_id, name, founder, root: h(0xB0B0_B0B0), signature: vec![1] }]);
+    seed_and_buy(c, line, holders, each_msk);
+    (line, owner_payload)
+}
+
+fn seed_and_buy(c: &mut Chain, line: Hash64, holders: &[Hash64], each_msk: u64) {
+    let d = c.daa + 1;
+    let floor = c.p.palw_model_seed_min_sompi_at(d);
+    c.block(d, &[Obj::ModelSeed { line_id: line, seeder: h(0x5EED), msk_seed: floor, sink_index: 1 }]);
     assert!(c.state.model_market(&line).is_some_and(|m| m.is_open()), "the seed opened the pair");
     let buys: Vec<Obj> = holders.iter().map(|holder| buy(line, *holder, each_msk)).collect();
-    c.block(2, &buys);
+    c.block(d + 1, &buys);
     for holder in holders {
         assert!(c.state.model_position(&line, holder) > 0, "every holder holds units");
     }
     // Start from an empty queue so every sompi below is accounted for.
     c.drain_everything();
-    line
 }
 
 /// The shipped fences this depends on (reachability, printed and asserted).
@@ -307,6 +340,7 @@ fn msk_26a_palw_12_second_sell_at_equal_daa_overwrites_the_first_sells_queued_pr
     assert_eq!(c_paid_h, c_rows2.iter().map(|(_, a)| *a).sum::<u64>(), "both sales paid");
     println!("[result] equal DAA: H paid {paid_h} for sales worth {} (lost {net1}); control paid {c_paid_h}", net1 + net2);
 }
+
 /// **Third-party owner-leg wipe.** Victim V buys (market move 0 of chain block N), queuing the line
 /// owner's leg. In chain block N+1 at the same DAA an attacker's tiny ModelBuy naming `holder = V`
 /// (the holder field is authorised only by the sink payment) is market move 0 and writes the same
@@ -320,8 +354,10 @@ fn gift_scenario(victim: Hash64) -> Option<(u64, u64, u64, u64)> {
     let mut c = Chain::t12();
     let backlog: Vec<Seller> = (0..24u8).map(|i| seller(0x40 + i)).collect();
     let holders: Vec<Hash64> = backlog.iter().map(|s| s.holder).collect();
-    let line = open_market(&mut c, &holders, 20_000 * MSK);
+    let (line, owner_payload) = open_owned_market(&mut c, &holders, 20_000 * MSK);
     let owner_paid_before = c.state.model_market(&line).unwrap().registrant_paid_sompi;
+    let owner_drained_before = c.paid_to(&owner_payload);
+    assert!(owner_paid_before > 0, "the founded line pays its bonded owner a leg");
     assert!(c.state.pending_payouts_iter().next().is_none(), "the queue starts empty");
 
     let d = c.daa + 1;
@@ -339,9 +375,9 @@ fn gift_scenario(victim: Hash64) -> Option<(u64, u64, u64, u64)> {
             PalwDeltaEntryV2::Payout { key, old: None, new: Some(row) } => Some((*key, row.clone())),
             _ => None,
         })
-        .expect("the victim's buy queued the owner's leg (the genesis line's owner is a bonded registrant)");
+        .expect("the victim's buy queued the owner's leg");
+    assert_eq!(o1.payload, owner_payload, "the first row of block N is the victim buy's owner leg");
     assert!(o1.amount > 0);
-    let owner_payload = o1.payload;
     let survives = !c.next_drain().contains(&o1_key);
 
     // Chain block N+1 at the same DAA: the attacker's 5 MSK gift buy for V is market move 0.
@@ -351,7 +387,7 @@ fn gift_scenario(victim: Hash64) -> Option<(u64, u64, u64, u64)> {
     let owner_leg_2 = c.state.model_market(&line).unwrap().registrant_paid_sompi - owner_before_attack;
     let owner_credited = c.state.model_market(&line).unwrap().registrant_paid_sompi - owner_paid_before;
     c.drain_everything();
-    let owner_paid = c.paid_to(&owner_payload);
+    let owner_paid = c.paid_to(&owner_payload) - owner_drained_before;
     if !survives {
         // Drained (paid) at N+1's start, then re-inserted: nothing lost.
         assert_eq!(owner_paid, owner_credited, "a drained row was paid; no loss for this victim");
