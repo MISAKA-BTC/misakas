@@ -39,10 +39,7 @@ fn repo_file(rel: &str) -> String {
 /// the first blank (a trailing `# comment` is dropped), quotes removed. Multi-line values are not read.
 fn shell_value(file: &str, text: &str, name: &str) -> String {
     let prefix = format!("{name}=");
-    let line = text
-        .lines()
-        .find(|l| l.starts_with(&prefix))
-        .unwrap_or_else(|| panic!("{file}: no line assigns {name}"));
+    let line = text.lines().find(|l| l.starts_with(&prefix)).unwrap_or_else(|| panic!("{file}: no line assigns {name}"));
     let value = line[prefix.len()..].split_whitespace().next().unwrap_or("");
     value.trim_matches('"').to_string()
 }
@@ -93,13 +90,22 @@ fn the_deploy_kit_and_the_explorer_name_this_builds_classes_and_premine_layout()
         let n = i as u32;
         // `bonded_genesis_utxos_on` puts the collateral at the card's DECLARED index and the float at
         // MAIN + 1 + its POSITION in the list; the kit names both by one card number, so the two must agree.
-        assert_eq!(card.premine_index, n, "card in list position {i} declares premine index {}: the kit's `$PREMINE_TXID:{n}` would name another bond", card.premine_index);
+        assert_eq!(
+            card.premine_index, n,
+            "card in list position {i} declares premine index {}: the kit's `$PREMINE_TXID:{n}` would name another bond",
+            card.premine_index
+        );
         let bond = premine_outpoint_for(t12(), n);
         let float = premine_outpoint_for(t12(), fee_float_base + n);
         assert!(set.contains_key(&bond), "card {n}: no collateral at {bond:?}");
         let entry = set.get(&float).unwrap_or_else(|| panic!("card {n}: no fee float at index {}", fee_float_base + n));
         let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&card.payout_payload);
-        assert_eq!(entry.script_public_key, spk, "card {n}: the float at index {} is not paid to this card's payout key", fee_float_base + n);
+        assert_eq!(
+            entry.script_public_key,
+            spk,
+            "card {n}: the float at index {} is not paid to this card's payout key",
+            fee_float_base + n
+        );
         let addr = Address::new(Prefix::Testnet, Version::PubKeyHashMlDsa87, &card.payout_payload);
         println!("LAYOUT card {n}: bond {txid}:{n}  fee float {txid}:{}  payout {addr}", fee_float_base + n);
     }

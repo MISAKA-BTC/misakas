@@ -29,7 +29,9 @@ use kaspa_consensus_core::palw_resource_profile_v1::{
     palw_profile_max_tile_len_v1, palw_resource_profile_v1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
-use kaspad_lib::palw_backends::{PALW_REPLAY_HOST_RESERVE_BYTES_V1, PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1, palw_partial_seat_streamed_fold_bytes_v1};
+use kaspad_lib::palw_backends::{
+    PALW_REPLAY_HOST_RESERVE_BYTES_V1, PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1, palw_partial_seat_streamed_fold_bytes_v1,
+};
 use std::path::PathBuf;
 
 const MIB: u64 = 1 << 20;
@@ -121,7 +123,12 @@ fn t12_role_memory_figures() {
     let runtime = PalwRuntimeProfileV1::A16KvI16;
     let art_8k = artifact_bytes_of_sidecar("consensus/core/src/config/class-manifests/qwen25-1.5b-a16-8k.palwmanifest");
     let art_2m = artifact_bytes_of_sidecar("consensus/core/src/config/class-manifests/qwen25-1.5b-a16-2m.palwmanifest");
-    println!("runtime {} · threads {threads} · prefill run {} · 8k artifact {art_8k} B ({} MiB)", runtime.name(), limits.prefill_run_positions, mib(art_8k));
+    println!(
+        "runtime {} · threads {threads} · prefill run {} · 8k artifact {art_8k} B ({} MiB)",
+        runtime.name(),
+        limits.prefill_run_positions,
+        mib(art_8k)
+    );
 
     let mut eight_k: Option<(u64, u64, u64)> = None; // (full need, partial worst need, attempt need), bytes
     for o in bundle.genesis_objects.iter() {
@@ -134,7 +141,8 @@ fn t12_role_memory_figures() {
             kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
             profile,
         );
-        let leaves = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, job, ladder).expect("the canonical job's step space");
+        let leaves =
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, job, ladder).expect("the canonical job's step space");
         let fold = PalwCaptureRetentionV1::Fold {
             retain_level: misaka_palw_base0::fp_capture::palw_base0_sparse_retain_level_for_class_v1(profile, ladder),
         };
@@ -159,7 +167,10 @@ fn t12_role_memory_figures() {
         let seats: u16 = std::env::var("T12_PARTIAL_SEATS").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
         let mut worst_partial = 0u64;
         for segment in 0..seats.saturating_sub(1) {
-            let p = derive(PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment }, PalwCaptureRetentionV1::ReplayHashes);
+            let p = derive(
+                PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment },
+                PalwCaptureRetentionV1::ReplayHashes,
+            );
             // The panel re-prices the partial seat's capture as the streamed fold it keeps.
             let w = p.working_set_bytes() - p.capture_retained_bytes + palw_partial_seat_streamed_fold_bytes_v1(p.leaves);
             worst_partial = worst_partial.max(w);
@@ -203,7 +214,8 @@ fn t12_role_memory_figures() {
             }
             // The share the plan intends: one of each duty at once (the second seat replay excluded) on a
             // producer; one duty at a time on a seat-only node.
-            let intended: u64 = if produce == "none" { duties.iter().map(|d| d.need).max().unwrap_or(0) } else { duties.iter().map(|d| d.need).sum() };
+            let intended: u64 =
+                if produce == "none" { duties.iter().map(|d| d.need).max().unwrap_or(0) } else { duties.iter().map(|d| d.need).sum() };
             let (w_running, what) = worst_running_w(&duties, share, true);
             let (w_all, what_all) = worst_running_w(&duties, share, false);
             let ram_scale = kaspad_lib::args::palw_ram_scale_for_share_v1(share * MIB);
