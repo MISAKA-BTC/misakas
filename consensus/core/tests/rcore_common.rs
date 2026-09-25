@@ -278,6 +278,83 @@ pub fn da_accuse(claim: Hash64, accuser: PalwBondKeyV2, row: u32) -> PalwConsens
     }
 }
 
+/// The session id of a court `challenger` opens on `claim` over [`court_opened`]'s space (the
+/// executor's step leaves, 16 of them).
+pub fn court_session_of(s: &PalwChainStateV2, claim: Hash64, challenger: PalwBondKeyV2) -> Hash64 {
+    let record = s.claim(&claim).expect("the claim").clone();
+    kaspa_consensus_core::palw_court_v2::court_session_id_v2(
+        &claim,
+        &record.trace_root,
+        &record.bond,
+        &challenger,
+        kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+        16,
+    )
+}
+
+/// A court on licensed `claim` opened by `challenger` (T07's shape): its responder never moves.
+pub fn court_opened(s: &PalwChainStateV2, claim: Hash64, challenger: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+    PalwConsensusObjectV2::CourtOpened {
+        session_id: court_session_of(s, claim, challenger),
+        claim,
+        challenger_bond: challenger,
+        space: kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+        space_size: 16,
+        signature: Vec::new(),
+    }
+}
+
+/// **A court cleared: `CourtClosed(ChallengerDefeated)` on `session_id`** — the challenger-side
+/// close (`rearm_after_challenger_side_close`). The fold reads the verdict and never the proof (the
+/// processor's `adjudicate_court_close_v3` is the proof's gate), so this carries a skeleton
+/// `Arithmetic` refutation over the floor profile, as the fold's own unit test does
+/// (`q5_a_court_clearing_on_an_s2_licence_keeps_the_gate`).
+pub fn court_cleared(session_id: Hash64) -> PalwConsensusObjectV2 {
+    use kaspa_consensus_core::palw_step_leg::{
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, PalwStepOpeningV1, PalwStepTileLeafV1,
+    };
+    let profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor profile");
+    let job_context = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, 512, 256);
+    let refutation = kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1 {
+        binding: PalwStepBindingV2 {
+            version: 2,
+            job_context,
+            shape_profile: profile,
+            checkpoint_profile: kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1 {
+                version: 1,
+                checkpoint_interval: 1,
+                state_layout_id: Hash64::default(),
+            },
+            state_chunk_map_id: Hash64::default(),
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            step_leaf_count: 16,
+            step_merkle_root: Hash64::default(),
+            checkpoint_count: 0,
+            checkpoint_merkle_root: Hash64::default(),
+            committed_execution_root: Hash64::default(),
+        },
+        output_opening: PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: Vec::new() },
+        output_preimage: PalwStepTileLeafV1 {
+            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+            coord: kaspa_consensus_core::palw_step::PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 },
+            value_count: 0,
+            values_le: Vec::new(),
+        },
+        inputs: Vec::new(),
+        prompt_token_ids: Vec::new(),
+        decode_tokens: None,
+        kv_checkpoint: None,
+    };
+    PalwConsensusObjectV2::CourtClosed {
+        session_id,
+        verdict: kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ChallengerDefeated,
+        proof: kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: Vec::new() },
+    }
+}
+
 /// A standalone `ExecutorEquivocation` (kind 0) against `bond` on `class`'s job, its two
 /// attestations' roots drawn from `nonce` (a distinct nonce is a distinct `evidence_id`), and the
 /// evidence id the fold consumes it under — `rcore_s4`'s shape with a nonce. The acceptance layer
