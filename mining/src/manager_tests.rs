@@ -1510,6 +1510,100 @@ mod tests {
         assert_ne!(template.block.transactions.get(1).map(|tx| tx.id()), Some(lapsing_id), "renewed: it no longer leads");
     }
 
+    /// **V01 (the 2026-09-25 sweep, CRITICAL): a node that never builds a template evicts a carrier
+    /// the tip's fold stopped taking at the next block, keeps the honest one, and refuses the evicted
+    /// one when a peer relays it back.**
+    ///
+    /// The template's re-ask of the H-1 gate was the only way such a carrier left a pool, so a
+    /// seat-only node (and every relay) kept it — Low priority, as the panel's RPC submits it, so
+    /// the High revalidation never looked, for the 720 DAA of Low expiry — and the seat's one carrier
+    /// slot with it. Here no template is ever built: only blocks arrive. The refused carrier leaves
+    /// with its redeemer (a child spending its change), one eviction is counted, the honest carrier
+    /// and an ordinary transaction stay through every later block, and the refused carrier sent
+    /// again from a peer meets the same gate at admission and does not come back.
+    #[test]
+    fn a_non_template_node_evicts_a_carrier_the_fold_refuses_at_the_next_block() {
+        use kaspa_consensus_core::{
+            palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2},
+            palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
+            subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        };
+        let consensus = Arc::new(ConsensusMock::new());
+        let mut config = Config::build_default(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS);
+        config.palw_h1_carrier_priority = true;
+        let counters = Arc::new(MiningCounters::default());
+        let mining_manager = MiningManager::with_config(config, None, counters.clone(), None);
+        let accusation = |salt: u32, claim: u64| {
+            let mut carrier = create_transaction_with_utxo_entry(salt, 0);
+            let object = PalwConsensusObjectV2::DefaultAccused {
+                claim: Hash64::from_u64_word(claim),
+                missing_event_index: 0,
+                accuser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+                signature: vec![1; 8],
+            };
+            let mut tx = carrier.tx.as_ref().clone();
+            tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
+            tx.payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+            carrier.tx = tx.into();
+            let mass = transaction_estimated_serialized_size(&carrier.tx);
+            carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+            carrier
+        };
+        let refused = accusation(1_000, 0xC1A1);
+        let refused_tx = refused.tx.as_ref().clone();
+        // As a peer's relay reaches consensus: the carrier's funding outpoint is still unspent, so
+        // its entry is found (the mock's UTXO set does not hold this fixture's funding, so it rides in).
+        let relayed_again = refused.clone();
+        let refused_id = refused.id();
+        let honest = accusation(1_001, 0xC1A2);
+        let honest_id = honest.id();
+        let ordinary = create_transaction_with_utxo_entry(1_002, 0);
+        let ordinary_id = ordinary.id();
+        for tx in [refused, honest, ordinary] {
+            validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), tx).expect("the tip takes all three");
+        }
+        let redeemer = create_transaction(&refused_tx, DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
+        let redeemer_id = redeemer.id();
+        mining_manager
+            .validate_and_insert_transaction(consensus.as_ref(), redeemer, Priority::Low, Orphan::Allowed, RbfPolicy::Forbidden)
+            .expect("a child spending the carrier's change");
+        let pooled = |id: TransactionId| mining_manager.has_transaction(&id, TransactionQuery::TransactionsOnly);
+        let evicted = || counters.palw_carrier_refused_evicted_counts.load(std::sync::atomic::Ordering::Relaxed);
+
+        // A block with nothing the tip refuses: nothing moves.
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 1, &build_block_transactions(std::iter::empty())).unwrap();
+        assert!(pooled(refused_id) && pooled(redeemer_id) && pooled(honest_id) && pooled(ordinary_id));
+        assert_eq!(evicted(), 0);
+
+        // The tip stops taking the first carrier (say, another seat's accusation of its claim opened
+        // the session); the next block's sweep evicts it and its redeemer, and nothing else.
+        consensus.set_palw_h1_carrier_refusal(refused_id, Some("the claim's session is already open".to_string()));
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 2, &build_block_transactions(std::iter::empty())).unwrap();
+        assert!(!pooled(refused_id), "the refused carrier leaves a pool no template was ever built from");
+        assert!(!pooled(redeemer_id), "with its redeemer");
+        assert!(pooled(honest_id), "the honest carrier stays");
+        assert!(pooled(ordinary_id), "an ordinary transaction is never swept");
+        assert_eq!(evicted(), 1, "one eviction counted (redeemers are not)");
+        assert_eq!(counters.snapshot().palw_carrier_refused_evicted_counts, 1, "and exposed in the counters' snapshot");
+
+        // A peer relays the evicted carrier back: the admission gate is the same predicate.
+        let again = validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), relayed_again);
+        assert!(
+            matches!(again, Err(MiningManagerError::MempoolError(RuleError::RejectTxRule(TxRuleError::PalwH1CarrierRefused(_))))),
+            "a re-relayed refused carrier is refused at admission: {again:?}"
+        );
+        assert!(!pooled(refused_id));
+
+        // Later blocks: the honest carrier and the ordinary transaction stay.
+        for daa in 3..6 {
+            mining_manager
+                .handle_new_block_transactions(consensus.as_ref(), daa, &build_block_transactions(std::iter::empty()))
+                .unwrap();
+        }
+        assert!(pooled(honest_id) && pooled(ordinary_id));
+        assert_eq!(evicted(), 1);
+    }
+
     /// **The daemon's switch reads the ruleset** (P2-9 review, finding 6): the lane and the reserve
     /// are on where `palw_rcore_plus` is armed — testnet-12 — and off on testnet-11, devnet and
     /// mainnet, which therefore select and evict exactly as before.

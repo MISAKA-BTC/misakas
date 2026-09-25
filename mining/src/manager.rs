@@ -54,6 +54,13 @@ use tokio::sync::mpsc::UnboundedSender;
 /// admission is never blocked by a slow subscriber (design R-4/R-5, R-10).
 const EVM_TX_ADMISSION_CHANNEL_CAP: usize = 4096;
 
+/// **V01 (the 2026-09-25 sweep): the most pooled carriers one new block puts to the H-1 gate**
+/// (`MiningManager::evict_palw_refused_carriers`). Honest demand is one carrier in flight per panel
+/// plus the reporters' commitments — tens — so every carrier is asked at every block; a pool that
+/// holds more is swept in arrival order across blocks, so no block pays more than this many fold
+/// rehearsals however many carriers a flood left admitted.
+pub(crate) const PALW_CARRIER_SWEEP_PER_BLOCK: usize = 256;
+
 pub struct MiningManager {
     config: Arc<Config>,
     block_template_cache: BlockTemplateCache,
@@ -1157,18 +1164,77 @@ impl MiningManager {
         // problem of the internal implementation and unrelated to the caller
 
         // write lock on mempool
-        let unorphaned_transactions = {
+        let (unorphaned_transactions, palw_carrier_sweep) = {
             let mut mempool = self.mempool.write();
             let unorphaned = mempool.handle_new_block_transactions(block_daa_score, block_transactions)?;
             // M1: the DAA moved and rows renewed — re-ask the tip which possession proofs escalate.
             mempool.refresh_palw_readiness(consensus);
-            unorphaned
+            // V01: the carriers this block's sweep puts to the H-1 gate (empty off testnet-12).
+            let sweep = mempool.next_palw_carrier_sweep(PALW_CARRIER_SWEEP_PER_BLOCK);
+            (unorphaned, sweep)
         };
 
         // alternate no & write lock on mempool
         let accepted_transactions = self.validate_and_insert_unorphaned_transactions(consensus, unorphaned_transactions);
 
+        // no lock, then write lock on mempool
+        self.evict_palw_refused_carriers(consensus, palw_carrier_sweep);
+
         Ok(accepted_transactions)
+    }
+
+    /// **V01 (the 2026-09-25 sweep, CRITICAL): every node evicts the H-1 carriers the tip's fold now
+    /// refuses, at every new block — not only a node that builds templates.**
+    ///
+    /// The H-1 gate (`ConsensusApi::palw_h1_carrier_refusals_v1`, the processor's
+    /// `palw_mempool_h1_carrier_refusal`) was asked at admission and at every template build, and
+    /// the template's `InvalidInBlockTemplate` was the only way a carrier the tip stopped taking left
+    /// a pool. A seat-only node never builds one, a lifecycle carrier its RPC submitted is Low
+    /// priority (so `revalidate_high_priority_transactions` never looks at it), and Low expiry is 720
+    /// DAA away: the carrier sat in the pool, the seat's panel saw its one carrier slot held, and the
+    /// seat's readiness, licences, receipts, reporting and court moves all stopped until a restart.
+    ///
+    /// `sweep` is the window the pool's carrier index gave this block (`next_palw_carrier_sweep`: at
+    /// most [`PALW_CARRIER_SWEEP_PER_BLOCK`], in arrival order, wrapping). Each is asked the fold's
+    /// own question with no mempool lock held; a refused one still in the pool is removed with its
+    /// redeemers (`TxRemovalReason::PalwCarrierRefused`), one log line each, and counted in
+    /// `MiningCounters::palw_carrier_refused_evicted_counts`. An honest carrier is never touched: the
+    /// predicate is the one that let it in. A peer that re-relays an evicted carrier meets the same
+    /// gate at admission (`validate_mempool_transaction_impl`) and is refused. Returns how many
+    /// carriers were evicted.
+    pub(crate) fn evict_palw_refused_carriers(
+        &self,
+        consensus: &dyn ConsensusApi,
+        sweep: Vec<(TransactionId, Arc<Transaction>)>,
+    ) -> usize {
+        if sweep.is_empty() {
+            return 0;
+        }
+        let txs: Vec<Arc<Transaction>> = sweep.iter().map(|(_, tx)| tx.clone()).collect();
+        let refusals = consensus.palw_h1_carrier_refusals_v1(&txs);
+        let refused: Vec<(TransactionId, String)> =
+            sweep.iter().zip(refusals).filter_map(|((id, _), refusal)| refusal.map(|why| (*id, why))).collect();
+        if refused.is_empty() {
+            return 0;
+        }
+        let mut evicted = 0usize;
+        let mut mempool = self.mempool.write();
+        for (id, why) in refused {
+            // Mined, replaced or evicted since the window was taken: nothing to do.
+            if !mempool.has_transaction(&id, TransactionQuery::TransactionsOnly) {
+                continue;
+            }
+            info!("Evicting PALW carrier {id} and its redeemers: the tip's fold refuses it ({why})");
+            match mempool.remove_transaction(&id, true, TxRemovalReason::PalwCarrierRefused, "") {
+                Ok(()) => evicted += 1,
+                Err(err) => warn!("Failed to evict refused PALW carrier {id} from the mempool: {err}"),
+            }
+        }
+        drop(mempool);
+        if evicted > 0 {
+            self.counters.palw_carrier_refused_evicted_counts.fetch_add(evicted as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        evicted
     }
 
     pub fn expire_low_priority_transactions(&self, consensus: &dyn ConsensusApi) {

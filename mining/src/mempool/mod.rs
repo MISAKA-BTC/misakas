@@ -185,6 +185,15 @@ impl Mempool {
         self.transaction_pool.update_revalidated_transaction(transaction)
     }
 
+    /// **V01 (the 2026-09-25 sweep): the next carriers to put to the H-1 gate** at a new block
+    /// (`TransactionsPool::next_palw_carrier_sweep`). Empty where the carrier flag is off.
+    pub(crate) fn next_palw_carrier_sweep(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(TransactionId, Arc<kaspa_consensus_core::tx::Transaction>)> {
+        self.transaction_pool.next_palw_carrier_sweep(limit)
+    }
+
     pub(crate) fn has_accepted_transaction(&self, transaction_id: &TransactionId) -> bool {
         self.accepted_transactions.has(transaction_id)
     }

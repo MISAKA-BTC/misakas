@@ -241,6 +241,9 @@ pub(crate) struct PalwCarrierIndexV1 {
     /// The places possession proofs hold, inside [`PalwCarrierReserveV1::readiness_share_holds`].
     reserved_readiness_txs: usize,
     reserved_readiness_bytes: usize,
+    /// **V01 (the 2026-09-25 sweep): where the next gate sweep starts**, as an arrival `seq`
+    /// ([`Self::next_sweep_window`]).
+    sweep_cursor: u64,
 }
 
 impl PalwCarrierIndexV1 {
@@ -260,7 +263,27 @@ impl PalwCarrierIndexV1 {
             reserved_keys: Default::default(),
             reserved_readiness_txs: 0,
             reserved_readiness_bytes: 0,
+            sweep_cursor: 0,
         }
+    }
+
+    /// **V01 (the 2026-09-25 sweep): the next `limit` indexed transactions — H-1 carriers and
+    /// possession proofs alike — for the gate sweep at a new block**, in arrival order from where
+    /// the last sweep stopped, wrapping round, so a pool holding more than `limit` has every one
+    /// asked within a few blocks and a pool holding fewer has every one asked at every block. The
+    /// index is exactly the set the H-1 gate judges (`palw_gated_carrier_object_of_tx_v1`: an H-1
+    /// object or a possession proof), so the sweep asks the fold of nothing else.
+    pub(crate) fn next_sweep_window(&mut self, limit: usize) -> Vec<TransactionId> {
+        if self.entries.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let mut arrivals: Vec<(u64, TransactionId)> = self.entries.iter().map(|(id, entry)| (entry.order.seq, *id)).collect();
+        arrivals.sort_unstable();
+        let start = arrivals.partition_point(|(seq, _)| *seq < self.sweep_cursor);
+        let window: Vec<(u64, TransactionId)> =
+            arrivals[start..].iter().chain(arrivals[..start].iter()).take(limit).copied().collect();
+        self.sweep_cursor = window.last().map_or(0, |(seq, _)| seq + 1);
+        window.into_iter().map(|(_, id)| id).collect()
     }
 
     /// **Would a carrier of `bytes` under `lane_key` be reserved if it entered now?** The one rule
@@ -643,6 +666,34 @@ mod tests {
         index.insert(id(7), 20_000, 2_000, 10, None); // feerate 10, last
         let order: Vec<_> = index.in_lane_order().map(|(id, ..)| id).collect();
         assert_eq!(order, vec![id(7), id(1), id(2), id(3), id(4), id(5), id(6)]);
+    }
+
+    /// **V01 (the 2026-09-25 sweep): the gate sweep walks every indexed transaction — H-1 carriers
+    /// and possession proofs alike — in ARRIVAL order, `limit` at a time, wrapping round**, so a pool
+    /// holding more carriers than one block's sweep has each asked within a few blocks, a pool within
+    /// the limit is asked whole at every block, and a removed carrier is simply skipped.
+    #[test]
+    fn the_gate_sweep_walks_every_carrier_in_arrival_order_and_wraps() {
+        let mut index = roomy();
+        assert!(index.next_sweep_window(4).is_empty(), "an empty index sweeps nothing");
+        // Feerates rising with arrival, so the lane order (feerate first) is the reverse of arrival.
+        for n in 1..=5 {
+            index.insert(id(n), 1_000 * n, 1_000, 10, None);
+        }
+        let proof = PalwReadinessCarrierV1 {
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(id(0xB0), 0)),
+            class_id: Hash64::from_u64_word(7),
+            span: 1,
+            proof_version: 2,
+        };
+        index.insert_readiness(id(6), 1_000, 1_000, 10, proof, None, true);
+        assert_eq!(index.next_sweep_window(2), vec![id(1), id(2)]);
+        assert_eq!(index.next_sweep_window(2), vec![id(3), id(4)]);
+        index.remove(&id(1));
+        assert_eq!(index.next_sweep_window(2), vec![id(5), id(6)], "a proof that does not escalate is swept too");
+        assert_eq!(index.next_sweep_window(2), vec![id(2), id(3)], "the sweep wraps round, skipping what left");
+        assert_eq!(index.next_sweep_window(10), vec![id(4), id(5), id(6), id(2), id(3)], "within the limit: every one, once");
+        assert_eq!(index.next_sweep_window(10), vec![id(4), id(5), id(6), id(2), id(3)], "and again at the next block");
     }
 
     /// The index follows the pool exactly: bytes and count come back to zero, and a lane key rides

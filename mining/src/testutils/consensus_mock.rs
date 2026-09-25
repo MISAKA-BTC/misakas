@@ -38,6 +38,10 @@ pub(crate) struct ConsensusMock {
             kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1,
         >,
     >,
+    /// V01: the carriers the mock's tip fold refuses, and why — answered by the H-1 gate's two
+    /// askers alike, the sweep (`palw_h1_carrier_refusals_v1`) and admission
+    /// (`validate_mempool_transaction`, after the UTXO context as the processor asks it).
+    palw_h1_refused: RwLock<HashMap<TransactionId, String>>,
 }
 
 impl ConsensusMock {
@@ -48,7 +52,17 @@ impl ConsensusMock {
             utxos: RwLock::new(HashMap::default()),
             sink_blue_score: RwLock::new(0),
             palw_readiness_urgency: RwLock::new(Default::default()),
+            palw_h1_refused: RwLock::new(Default::default()),
         }
+    }
+
+    /// V01: whether the mock's tip fold refuses the carrier `id` (`Some(reason)`) or takes it.
+    #[allow(dead_code)]
+    pub(crate) fn set_palw_h1_carrier_refusal(&self, id: TransactionId, refusal: Option<String>) {
+        match refusal {
+            Some(why) => self.palw_h1_refused.write().insert(id, why),
+            None => self.palw_h1_refused.write().remove(&id),
+        };
     }
 
     /// M1: how urgently the row `(bond, class)` needs its proof at the mock's tip (`None`: it does not).
@@ -158,6 +172,11 @@ impl ConsensusApi for ConsensusMock {
         carriers.iter().map(|carrier| urgency.get(&(carrier.bond, carrier.class_id)).copied()).collect()
     }
 
+    fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        let refused = self.palw_h1_refused.read();
+        txs.iter().map(|tx| refused.get(&tx.id()).cloned()).collect()
+    }
+
     fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, _: &TransactionValidationArgs) -> TxResult<()> {
         // If a predefined status was registered to simulate an error, return it right away
         if let Some(status) = self.statuses.read().get(&mutable_tx.id())
@@ -190,6 +209,9 @@ impl ConsensusApi for ConsensusMock {
         if mutable_tx.calculated_fee.is_none() {
             let calculated_fee = total_in - total_out;
             mutable_tx.calculated_fee = Some(calculated_fee);
+        }
+        if let Some(why) = self.palw_h1_refused.read().get(&mutable_tx.id()) {
+            return Err(TxRuleError::PalwH1CarrierRefused(why.clone()));
         }
         Ok(())
     }

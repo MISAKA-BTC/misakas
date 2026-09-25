@@ -2282,6 +2282,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_readiness_urgency_v1_impl(carriers)
     }
 
+    fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        self.virtual_processor.palw_h1_carrier_refusals_v1_impl(txs)
+    }
+
     fn palw_claim_readers_v2(&self, claim: kaspa_consensus_core::Hash64) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
     }

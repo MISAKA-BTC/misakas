@@ -1353,6 +1353,20 @@ impl VirtualStateProcessor {
         .map(|why| why.to_string())
     }
 
+    /// **The 2026-09-25 sweep, V01: [`Self::palw_mempool_h1_carrier_refusal`] on each of `txs`, at
+    /// the virtual's DAA** — the gate the mempool asks at admission and the template asks at every
+    /// build, asked now by every node's mempool at each new block over the carriers it holds. The
+    /// template's re-ask was the only way out for a carrier the tip stopped taking, so a node that
+    /// never builds a template (a seat-only node, a relay) kept it — and a seat's one carrier slot
+    /// with it — until the Low-priority expiry, 720 DAA later. Node-local; all `None` with no
+    /// virtual state, and below `palw_rcore_plus` (the gate's own fence).
+    pub fn palw_h1_carrier_refusals_v1_impl(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        let Some(virtual_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
+            return vec![None; txs.len()];
+        };
+        txs.iter().map(|tx| self.palw_mempool_h1_carrier_refusal(tx, virtual_daa)).collect()
+    }
+
     /// **P-B1 at the template: one payout-queue budget across every market carrier the template
     /// selects**, so two carriers that each fit the room alone but not together are not both mined —
     /// the second stays in the pool for a later template. `None` below `palw_audit_2026_09_23`

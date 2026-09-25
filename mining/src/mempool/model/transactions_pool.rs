@@ -454,6 +454,20 @@ impl TransactionsPool {
         self.palw_carriers.set_readiness_urgency(id, urgency);
     }
 
+    /// **V01 (the 2026-09-25 sweep): the next carriers the gate sweep puts to the tip's fold** —
+    /// the index's next window (`PalwCarrierIndexV1::next_sweep_window`), with each transaction.
+    /// Empty where `Config::palw_h1_carrier_priority` is off: nothing is indexed there.
+    pub(crate) fn next_palw_carrier_sweep(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(TransactionId, Arc<kaspa_consensus_core::tx::Transaction>)> {
+        self.palw_carriers
+            .next_sweep_window(limit)
+            .into_iter()
+            .filter_map(|id| self.all_transactions.get(&id).map(|tx| (id, tx.mtx.tx.clone())))
+            .collect()
+    }
+
     /// The pre-H-1 composition within `block_mass` (what the carrier lane left; the whole block when
     /// it is empty, and then exactly the selector this pool built before the lane existed).
     fn build_selector_within(&self, latest_ready_epoch: Option<u64>, block_mass: u64) -> Box<dyn TemplateTransactionSelector> {

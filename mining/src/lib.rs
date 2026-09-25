@@ -60,6 +60,10 @@ pub struct MiningCounters {
     /// kaspa-pq audit v26 (H-4): cumulative count of attestation-shard txs quarantined after the
     /// consensus template classifier dropped them with a transient reason.
     pub attestation_quarantined_counts: AtomicU64,
+    /// **V01 (the 2026-09-25 sweep): H-1 carriers the gate sweep evicted at a new block** because
+    /// the tip's fold refuses them (`MiningManager::evict_palw_refused_carriers`); their redeemers
+    /// are not counted.
+    pub palw_carrier_refused_evicted_counts: AtomicU64,
 
     // Samples
     pub ready_txs_sample: AtomicU64,
@@ -90,6 +94,7 @@ impl Default for MiningCounters {
             attestation_conflict_rejected_counts: Default::default(),
             attestation_template_evicted_counts: Default::default(),
             attestation_quarantined_counts: Default::default(),
+            palw_carrier_refused_evicted_counts: Default::default(),
             ready_txs_sample: Default::default(),
             txs_sample: Default::default(),
             orphans_sample: Default::default(),
@@ -118,6 +123,7 @@ impl MiningCounters {
             attestation_conflict_rejected_counts: self.attestation_conflict_rejected_counts.load(Ordering::Relaxed),
             attestation_template_evicted_counts: self.attestation_template_evicted_counts.load(Ordering::Relaxed),
             attestation_quarantined_counts: self.attestation_quarantined_counts.load(Ordering::Relaxed),
+            palw_carrier_refused_evicted_counts: self.palw_carrier_refused_evicted_counts.load(Ordering::Relaxed),
             ready_txs_sample: self.ready_txs_sample.load(Ordering::Relaxed),
             txs_sample: self.txs_sample.load(Ordering::Relaxed),
             orphans_sample: self.orphans_sample.load(Ordering::Relaxed),
@@ -163,6 +169,7 @@ pub struct MempoolCountersSnapshot {
     pub attestation_conflict_rejected_counts: u64,
     pub attestation_template_evicted_counts: u64,
     pub attestation_quarantined_counts: u64,
+    pub palw_carrier_refused_evicted_counts: u64,
     pub ready_txs_sample: u64,
     pub txs_sample: u64,
     pub orphans_sample: u64,
@@ -232,6 +239,9 @@ impl core::ops::Sub for &MempoolCountersSnapshot {
                 .attestation_template_evicted_counts
                 .saturating_sub(rhs.attestation_template_evicted_counts),
             attestation_quarantined_counts: self.attestation_quarantined_counts.saturating_sub(rhs.attestation_quarantined_counts),
+            palw_carrier_refused_evicted_counts: self
+                .palw_carrier_refused_evicted_counts
+                .saturating_sub(rhs.palw_carrier_refused_evicted_counts),
             ready_txs_sample: (self.ready_txs_sample + rhs.ready_txs_sample) / 2,
             txs_sample: (self.txs_sample + rhs.txs_sample) / 2,
             orphans_sample: (self.orphans_sample + rhs.orphans_sample) / 2,
