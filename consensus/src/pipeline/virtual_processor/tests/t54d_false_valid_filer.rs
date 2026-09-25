@@ -6,7 +6,7 @@
 //! producer's own claims, the licences the cards signed, and every object through the gate, the
 //! acceptance walk and the fold, weighed in one 0x4b carrier.
 //!
-//! What runs is the node's own path from a proof to the objects its seam queues: the licence's
+//! What runs is the node's own path from a proof to the filings it hands the reporter filer: the licence's
 //! `Valid` receipts in the form each was licensed in (`palw_false_valid_receipts_of_licence_v1`, what
 //! kaspad's chain walk reads), their admission (`palw_false_valid_admit_receipts_v1` over the
 //! processor's `palw_false_valid_receipt_relied_v1_at`, what kaspad asks through

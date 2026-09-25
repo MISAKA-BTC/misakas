@@ -61,7 +61,7 @@ impl Filing {
     }
 
     /// What `card`'s filer reads at the next block — with the gate on the evidence when `gate`.
-    fn read(&self, h: &H, walk: &Walk, card: usize, gate: bool) -> PalwReporterFilingReadV1 {
+    pub(super) fn read(&self, h: &H, walk: &Walk, card: usize, gate: bool) -> PalwReporterFilingReadV1 {
         let point = walk.next();
         h.vp()
             .palw_reporter_filing_read_v1_at(
@@ -81,7 +81,7 @@ impl Filing {
 /// grades it (`fp_capture_samples_clear`: the prover's refutation, the class's rows, the network's
 /// prompt carriage, `check_execution_step_refutation_opened_capped_v1` at the class ladder — `Ok` is
 /// the fault), then kind 4 over it by the node's one builder.
-fn capture_arm_fault(h: &H, walk: &Walk, claim: &RealClaim, leaf: u64) -> Obj {
+pub(super) fn capture_arm_fault(h: &H, walk: &Walk, claim: &RealClaim, leaf: u64) -> Obj {
     use kaspa_consensus_core::palw_step_refute::{
         check_execution_step_refutation_opened_capped_v1, palw_refutation_prompt_carriage_v1,
     };

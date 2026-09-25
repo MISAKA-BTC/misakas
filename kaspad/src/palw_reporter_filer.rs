@@ -54,6 +54,19 @@
 //! may still file; a J1 filing that expired releases its claim's probes. A proven fault is never
 //! left unfiled because kind 4 stalled.
 //!
+//! ## The court queue's order is not the filer's
+//!
+//! The filer is a step machine ([`palw_filer_step_v1`]): each tick reads the chain's rows and queues
+//! at most the ONE object the next step needs, so nothing it does rests on the queue carrying its
+//! items in the order they were queued — the evidence is queued only once the commitment is a row,
+//! the reveal only once the conviction is. A copy's resend interval runs from when the carrier lane
+//! CARRIED it (`court_moved`), so an item a deadline-ordered queue held back is not re-queued the
+//! moment it goes out. Each item it queues states the DAA it is due by
+//! ([`palw_filer_step_due_v1`]: the evidence its `file_by_daa` or court window, the commitment the
+//! commit depth before that, the reveal R-3's reveal window's end `reveal_until`; a fallback its
+//! filing's `file_by_daa`), readable by queue key through [`PalwReporterFilerV1::queued_due_v1`] —
+//! where an earliest-deadline-first priority lane's due-time function plugs in.
+//!
 //! ## What goes through it — and what does not
 //!
 //! Only filings whose conviction opens a commit–reveal reward — the capture arm's and J1's kind 4,
@@ -416,6 +429,31 @@ pub(crate) fn palw_filer_step_v1(entry: &PalwFilerEntryV1, read: &PalwReporterFi
     }
 }
 
+/// **The DAA the object a sending step queues is due by** — what an earliest-deadline-first court
+/// queue orders this filer's objects by (the priority lane's pluggable due-time function reads it
+/// through [`PalwReporterFilerV1::queued_due_v1`]; the filer itself never relies on the queue's
+/// order: every step is read off the chain's rows, never off what went out before it).
+///
+/// * **Evidence**: its `file_by_daa` — for a kind 4 the landing margin before the claim's receipt
+///   deadline (the claim must still be live for S2; P2-6's accusation is due by the same margin) —
+///   else, for a filing with no shorter deadline (P2-8c's kind 3), the end of its court window,
+///   after which the filing expires unconvicted. Past it the evidence is overdue, and still sent.
+/// * **Commitment**: [`PALW_FILER_COMMIT_DEPTH_DAA_V1`] before the evidence's date — the last DAA at
+///   which a rooted commitment still lets the evidence wait for it.
+/// * **Reveal**: R-3's reveal window's end, the pending reward's `reveal_until` (R-4: the
+///   conviction's DAA plus `window_receipt`), after which the sweep pays whoever leads.
+///
+/// `None` for a step that queues nothing, and for a reveal the chain shows no pending reward for.
+pub(crate) fn palw_filer_step_due_v1(entry: &PalwFilerEntryV1, step: PalwFilerStepV1, read: &PalwReporterFilingReadV1) -> Option<u64> {
+    let evidence_due = entry.file_by_daa.unwrap_or_else(|| entry.registered_daa.saturating_add(read.window_court));
+    match step {
+        PalwFilerStepV1::Commit => Some(evidence_due.saturating_sub(PALW_FILER_COMMIT_DEPTH_DAA_V1)),
+        PalwFilerStepV1::File => Some(evidence_due),
+        PalwFilerStepV1::Reveal => read.pending.map(|pending| pending.reveal_until),
+        PalwFilerStepV1::Wait | PalwFilerStepV1::Done(_) => None,
+    }
+}
+
 /// What [`PalwReporterFilerV1::file`] made of a filing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PalwFileOutcomeV1 {
@@ -460,6 +498,11 @@ pub(crate) struct PalwReporterFilerV1 {
     probe_window: u64,
     /// Captures of each claim digested this window ([`PALW_J1_DIGESTS_PER_CLAIM_WINDOW_V1`]).
     digests: HashMap<Hash64, u8>,
+    /// **The due DAA of every court-queue item this book queued** ([`palw_filer_step_due_v1`]; a
+    /// hand-back's fallback is due by its filing's `file_by_daa`), by queue key — what the priority
+    /// lane's due-time function reads ([`Self::queued_due_v1`]). Node memory, like the queue it
+    /// dates; each tick keeps only the keys still queued.
+    queued_due: HashMap<(Hash64, u32, bool), u64>,
 }
 
 /// The book's file magic: the format and its version, so a future book never misreads this one.
@@ -532,6 +575,25 @@ impl PalwReporterFilerV1 {
     /// it: the other lanes neither hand it again nor replay its claim while it is.
     pub(crate) fn holds(&self, offence_key: &Hash64) -> bool {
         self.entries.contains_key(offence_key)
+    }
+
+    /// **The DAA a court-queue item this book queued is due by** — the commitment, the evidence or
+    /// the reveal of a live filing under its round ([`palw_filer_step_due_v1`]), or a stalled
+    /// filing's fallback — `None` for every other item (another lane's states its own) and for a
+    /// fallback whose filing had no deadline. The hook an earliest-deadline-first priority lane plugs
+    /// this filer into: `(key, round, responder)` is the queue entry's own key. (Not called on this
+    /// line yet: the court queue is carried in its own order here; the A-held node line's
+    /// earliest-deadline-first lane is where it is read.)
+    #[allow(dead_code)]
+    pub(crate) fn queued_due_v1(&self, queue_key: &(Hash64, u32, bool)) -> Option<u64> {
+        self.queued_due.get(queue_key).copied()
+    }
+
+    /// Every dated item this book has queued, `(queue key, due DAA)` — [`Self::queued_due_v1`] in
+    /// bulk, for a lane that keeps its due dates in one map (`court_due.extend(..)`).
+    #[allow(dead_code)]
+    pub(crate) fn queued_dues_v1(&self) -> impl Iterator<Item = ((Hash64, u32, bool), u64)> + '_ {
+        self.queued_due.iter().map(|(key, due)| (*key, *due))
     }
 
     /// **A second finder's fallback, adopted by the filing already in the book** (the integration of
@@ -646,6 +708,22 @@ impl PalwReporterFilerV1 {
         self.probes_left = PALW_J1_PROBES_PER_TICK_V1;
         let mut ended = Vec::new();
         for key in self.entries.keys().copied().collect::<Vec<_>>() {
+            // FIFO-free: a copy's interval runs from when it was CARRIED (`court_moved`, stamped by the
+            // carrier lane at submission), not from when it was queued — an item a deadline-ordered
+            // queue held behind earlier-due ones is not re-queued the moment it finally goes out.
+            let live = self.entries.get_mut(&key).expect("a key just listed");
+            for (round, sent) in [
+                (PALW_FILER_ROUND_COMMIT_V1, &mut live.commit_sent),
+                (PALW_FILER_ROUND_EVIDENCE_V1, &mut live.evidence_sent),
+                (PALW_FILER_ROUND_REVEAL_V1, &mut live.reveal_sent),
+            ] {
+                if let Some(carried) = court_moved.get(&(key, round, false)).copied()
+                    && sent.is_some_and(|queued| carried > queued)
+                {
+                    *sent = Some(carried);
+                    self.dirty = true;
+                }
+            }
             let entry = self.entries.get(&key).expect("a key just listed").clone();
             let Some(chain) = read(&entry, None) else { continue };
             let leads = chain.pending.is_some_and(|pending| {
@@ -726,6 +804,10 @@ impl PalwReporterFilerV1 {
             };
             let live = self.entries.get_mut(&key).expect("live");
             let now = chain.now_daa;
+            match palw_filer_step_due_v1(live, step, &chain) {
+                Some(due) => self.queued_due.insert((key, round, false), due),
+                None => self.queued_due.remove(&(key, round, false)),
+            };
             let (sent, sends) = match step {
                 Step::Commit => (&mut live.commit_sent, &mut live.commit_sends),
                 Step::File => (&mut live.evidence_sent, &mut live.evidence_sends),
@@ -750,6 +832,8 @@ impl PalwReporterFilerV1 {
         court_pending.retain(|(key, round, responder, object)| {
             !palw_filer_queued_v1(*round, *responder, object) || self.entries.contains_key(key)
         });
+        // Dates only for what is still queued (the carrier lane drains the queue between ticks).
+        self.queued_due.retain(|queue_key, _| court_pending.iter().any(|(k, r, responder, _)| (*k, *r, *responder) == *queue_key));
         ended
     }
 
@@ -784,6 +868,10 @@ impl PalwReporterFilerV1 {
                     if !court_pending.iter().any(|(k, r, responder, _)| (*k, *r, *responder) == (*queue_key, 0, false)) {
                         court_pending.push((*queue_key, 0, false, object.clone()));
                     }
+                    // The accusation must land while the claim is live, as the filing it replaces.
+                    if let Some(by) = entry.file_by_daa {
+                        self.queued_due.insert((*queue_key, 0, false), by);
+                    }
                     info!(
                         "[{PALW_PANEL}] claim {}: offence {} ({:?}) ended {end:?}; its fallback, {}, is filed instead (P2-8)",
                         entry.claim_id,
@@ -801,17 +889,13 @@ impl PalwReporterFilerV1 {
                     false
                 }
             });
-        match entry.origin {
-            // The capture arm's own filing, or another lane's that adopted its accusation
-            // ([`Self::adopt_fallback_v1`]): the claim is the capture arm's to let go of.
-            PalwFilingOriginV1::CaptureArm if !fallback_queued => {
-                accused.remove(&entry.claim_id);
-            }
-            _ if entry.fallback.is_some() && !fallback_queued => {
-                accused.remove(&entry.claim_id);
-            }
-            PalwFilingOriginV1::BorrowedRoot if end == PalwFilerEndV1::Expired => self.release_claim_probes_v1(&entry.claim_id),
-            _ => {}
+        // The capture arm's own filing, or another lane's that adopted its accusation
+        // ([`Self::adopt_fallback_v1`]): the claim is the capture arm's to let go of.
+        if (entry.origin == PalwFilingOriginV1::CaptureArm || entry.fallback.is_some()) && !fallback_queued {
+            accused.remove(&entry.claim_id);
+        }
+        if entry.origin == PalwFilingOriginV1::BorrowedRoot && end == PalwFilerEndV1::Expired {
+            self.release_claim_probes_v1(&entry.claim_id);
         }
     }
 
@@ -1668,8 +1752,6 @@ mod tests {
         assert_ne!(garbage, borrowed);
     }
 
-    /// Only this filer's objects on its rounds are its queue entries — never a court move, a P2-6
-    /// accusation, or a P2-7 answer whose folded round happens to land on one of its rounds.
     /// **One offence key, whichever lane files first** (the integration of P2-8 with P2-8b/8c). A
     /// replay's kind 4 is in the book; the capture arm's kind 4 of the same claim is `AlreadyFiled`
     /// (one filing an offence), and its court accusation is ADOPTED as the replay filing's fallback —
@@ -1722,6 +1804,8 @@ mod tests {
         assert!(accused.contains(&entry.claim_id) && book.len() == 0, "its lane re-hands it; the capture arm's set is untouched");
     }
 
+    /// Only this filer's objects on its rounds are its queue entries — never a court move, a P2-6
+    /// accusation, or a P2-7 answer whose folded round happens to land on one of its rounds.
     #[test]
     fn the_filers_queue_entries_are_its_own() {
         let reveal = PalwConsensusObjectV2::ReporterRevealed { offence_key: h(1), reporter: bond(ME), salt: [0; 32] };
@@ -1934,6 +2018,96 @@ mod tests {
         assert!(matches!(ended[..], [(_, PalwFilerEndV1::Forgone(_))]));
         assert!(queue.is_empty() && accused.contains(&entry.claim_id));
         assert_eq!(court_moved.len(), 1);
+    }
+
+    /// **Every object the filer queues states the DAA it is due by, and the queue's order is not the
+    /// filer's** (the integration, for the priority lane's earliest-deadline-first order). The
+    /// commitment is due the commit depth before the evidence's date, the evidence by its
+    /// `file_by_daa` (or, with none, its court window's end), the reveal by R-3's `reveal_until`, a
+    /// stalled filing's fallback by the filing's `file_by_daa`; each is readable by its queue key and
+    /// forgotten once it left the queue. A copy the queue held back past the resend interval is not
+    /// re-queued the tick after it is finally carried: its interval runs from the carry
+    /// (`court_moved`), not from the queuing.
+    #[test]
+    fn every_queued_object_states_its_due_daa_and_the_queue_order_is_not_the_filers() {
+        let mut book = PalwReporterFilerV1::default();
+        let entry = filed(&mut book, filing(30, Some(640)), &chain(100));
+        let key = entry.offence_key;
+        let (commit, evidence, reveal) = (
+            (key, PALW_FILER_ROUND_COMMIT_V1, false),
+            (key, PALW_FILER_ROUND_EVIDENCE_V1, false),
+            (key, PALW_FILER_ROUND_REVEAL_V1, false),
+        );
+        let mut queue = Vec::new();
+        let mut court_moved = HashMap::new();
+        let tick =
+            |book: &mut PalwReporterFilerV1, queue: &mut Queue, court_moved: &mut HashMap<_, _>, read: PalwReporterFilingReadV1| {
+                book.tick(queue, court_moved, &mut HashSet::new(), |_, gated| {
+                    Some(PalwReporterFilingReadV1 { object_gate: gated.map(|_| Ok(())), ..read.clone() })
+                })
+            };
+        tick(&mut book, &mut queue, &mut court_moved, chain(100));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(book.queued_due_v1(&commit), Some(640 - PALW_FILER_COMMIT_DEPTH_DAA_V1), "rooted deep enough by file_by");
+        // A deadline-ordered queue holds the commitment back past its resend interval: not queued twice.
+        tick(&mut book, &mut queue, &mut court_moved, chain(100 + PALW_FILER_RESEND_DAA_V1 + 5));
+        assert_eq!((queue.len(), book.entry(&key).unwrap().commit_sends), (1, 1));
+        // Carried at last, at 125: the next copy waits a full interval from the carry.
+        queue.clear();
+        court_moved.insert(commit, 125);
+        tick(&mut book, &mut queue, &mut court_moved, chain(126));
+        assert!(queue.is_empty(), "carried a DAA ago: still landing");
+        assert_eq!(book.entry(&key).unwrap().commit_sent, Some(125));
+        assert_eq!(book.queued_due_v1(&commit), None, "a date only while queued");
+        tick(&mut book, &mut queue, &mut court_moved, chain(125 + PALW_FILER_RESEND_DAA_V1));
+        assert_eq!((queue.len(), book.entry(&key).unwrap().commit_sends), (1, 2), "lost: the next copy, an interval after the carry");
+        queue.clear();
+        // Rooted: the evidence, due by file_by — and, pluggable, ahead of an undated item.
+        let rooted = |now| PalwReporterFilingReadV1 { committed_daa: Some(136), ..chain(now) };
+        tick(&mut book, &mut queue, &mut court_moved, rooted(138));
+        assert_eq!(book.queued_due_v1(&evidence), Some(640));
+        let undated = (h(0xAA), 7, false, entry.object.clone());
+        queue.insert(0, undated.clone());
+        queue.sort_by_key(|(k, r, responder, _)| book.queued_due_v1(&(*k, *r, *responder)).map_or((1, 0), |due| (0, due)));
+        assert_eq!((queue[0].0, queue[0].1, &queue[1]), (key, PALW_FILER_ROUND_EVIDENCE_V1, &undated), "dated first");
+        queue.clear();
+        // Convicted: the reveal, due by R-3's reveal window's end.
+        let convicted = PalwReporterFilingReadV1 {
+            consumed: Some(consumed(&entry, 150)),
+            pending: Some(pending(&entry, 150, None)),
+            ..rooted(151)
+        };
+        tick(&mut book, &mut queue, &mut court_moved, convicted.clone());
+        assert_eq!(book.queued_due_v1(&reveal), convicted.pending.map(|p| p.reveal_until));
+        assert_eq!(book.queued_dues_v1().collect::<Vec<_>>(), vec![(reveal, 150 + 600)]);
+
+        // No shorter deadline (P2-8c's kind 3): the court window's end, the commitment before it.
+        let mut book = PalwReporterFilerV1::default();
+        let entry = filed(&mut book, filing(31, None), &chain(100));
+        let mut queue = Vec::new();
+        tick(&mut book, &mut queue, &mut HashMap::new(), chain(100));
+        assert_eq!(
+            book.queued_due_v1(&(entry.offence_key, PALW_FILER_ROUND_COMMIT_V1, false)),
+            Some(100 + 3_000 - PALW_FILER_COMMIT_DEPTH_DAA_V1)
+        );
+        let step = |step| palw_filer_step_due_v1(&entry, step, &chain(100));
+        assert_eq!(
+            (step(PalwFilerStepV1::File), step(PalwFilerStepV1::Reveal), step(PalwFilerStepV1::Wait)),
+            (Some(3_100), None, None)
+        );
+
+        // A stalled filing's fallback is due by the filing's own date.
+        let court_key = h(0xC0_2C);
+        let accusation =
+            PalwConsensusObjectV2::DefaultAccused { claim: h(32), missing_event_index: 0, accuser: bond(ME), signature: vec![3] };
+        let mut book = PalwReporterFilerV1::default();
+        let entry = filed(&mut book, filing(32, Some(640)).with_fallback(Some((court_key, accusation))), &chain(100));
+        let live = book.entries.get_mut(&entry.offence_key).unwrap();
+        (live.evidence_sent, live.evidence_sends) = (Some(150), PALW_FILER_MAX_SENDS_V1);
+        let mut queue = Vec::new();
+        tick(&mut book, &mut queue, &mut HashMap::new(), rooted(160));
+        assert_eq!(queue.len(), 1, "the fallback");
+        assert_eq!(book.queued_due_v1(&(court_key, 0, false)), Some(640));
     }
 
     /// **J1 auto's digests are bounded per claim and window** (the review of P2-8, F6): once a claim's

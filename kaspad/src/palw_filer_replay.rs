@@ -1379,8 +1379,9 @@ mod tests {
     /// capture to the injected leaf, in at most `1 + ⌈log₂ n⌉` rungs each reserved on the ledger
     /// (the O(log n) bound on a real trace) and released with its rung, and the proof it builds is
     /// kind 4's `StepArithmetic` that the fold's own predicate convicts; the object encodes it as the
-    /// gate decodes it, under the per-claim ledger key, and the seam queues it once under that key —
-    /// and not again while a carrier of it may still land (finding 8).
+    /// gate decodes it, under the per-claim ledger key, and the book hands it to the reporter filer
+    /// once under that key — never again while the filer holds it, and once more at most after it
+    /// left the filer unconvicted while the duty stands (finding 8, now the filer's book).
     #[test]
     fn p2_8b_a_real_lie_is_bisected_to_its_leaf_in_log_rungs_and_filed_once() {
         let (backend, class_id, artifact_root) = floor();
