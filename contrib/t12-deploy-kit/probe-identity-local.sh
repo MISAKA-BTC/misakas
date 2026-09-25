@@ -104,8 +104,16 @@ for _ in $(seq 1 $(( (WAIT_S + 1) / 2 ))); do
     [ -n "$FP" ] && [ -n "$GEN" ] && break
 done
 [ -n "$FP" ] && [ -n "$GEN" ] || { tail -30 "$LOG" >&2; die "no identity over RPC within $WAIT_S s (PROBE_WAIT_S) — see $LOG"; }
-PREMINE=$(python3 "$KIT/t12check.py" --port "$JSON" --premine 2>/dev/null | sed -n 's/^PREMINE_TXID=//p' || true)
-GLAYOUT=$(python3 "$KIT/t12check.py" --port "$JSON" --layout 2>/dev/null || true)
+# The seats and the class registry can answer empty for a moment after the wRPC listener opens (seen
+# 2026-09-25 on the release kaspad under qemu: the identity was read in the listener's first second and
+# --layout came back empty, which reads as a kit mismatch). Ask again for up to 60 s before concluding.
+PREMINE=""; GLAYOUT=""
+for _ in $(seq 1 30); do
+    [ -n "$PREMINE" ] || PREMINE=$(python3 "$KIT/t12check.py" --port "$JSON" --premine 2>/dev/null | sed -n 's/^PREMINE_TXID=//p' || true)
+    GLAYOUT=$(python3 "$KIT/t12check.py" --port "$JSON" --layout 2>/dev/null || true)
+    [ -n "$PREMINE" ] && grep -q '^CLASS ' <<<"$GLAYOUT" && grep -q '^BOND ' <<<"$GLAYOUT" && break
+    sleep 2
+done
 kill -INT "$PID" 2>/dev/null || true
 for _ in $(seq 1 30); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
 PID_EXITED=1; kill -0 "$PID" 2>/dev/null && PID_EXITED=0

@@ -79,7 +79,7 @@ node 切替を rollback した場合（旧 t12 の unit に戻す場合）も、
 | `50-rollback.sh <name> <TS>` | 書く | `.bak-t12seed-<TS>` のバイナリと設定を戻し（バックアップは消さない）、restart して verify する |
 | `60-join-check.sh <kaspad>` | 5.104 に appdir とログを置く | 段階 3 の e2e 確認。5.104 で release の kaspad を `--addpeer` も `--connect` も付けず、127.0.0.1 だけに bind し、palw 系のフラグなしで 240 秒動かす。見るのは次の点: 指紋が `EXPECT_FP` と一致するか、`Retrieved N addresses from DNS seeder`、outbound peer ができるか、IBD が進むか、mismatch 系のメッセージ |
 
-再ビルドを選ぶ場合も、ビルドを 1 回増やさずに済む方法がある。node の release を 5.104 でビルドするとき（`build-release-5104.sh`）に `-p misaka-dnsseeder` も一緒に作り、その成果物を Mac に取ってきて `20-stage.sh` に渡せばよい。この場合は `fleet.env` の `SEEDER_SHA256` にその sha を入れる。
+再ビルドを選ぶ場合も、ビルドを 1 回増やさずに済む方法がある。node の release は `misaka-dnsseeder` も一緒に作る — Mac の `build-release-local.sh`（推奨、PLAN §13）なら `.cache/<rev12>/misaka-dnsseeder` がそのまま、5.104 の `build-release-5104.sh`（フォールバック）ならその成果物を Mac に取ってきて、`20-stage.sh` に渡せばよい。この場合は `fleet.env` の `SEEDER_SHA256` にその sha を入れる。
 
 ## 6. ユーザーに決めてもらうこと
 - **Q1 anchor 構成。** 新しい t12 で ibm の公開 node を :26311 に移すかどうか。

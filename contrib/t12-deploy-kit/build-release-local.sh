@@ -18,6 +18,12 @@
 #      feature unification), the toolchain rust-toolchain.toml pins, kaspad's default features (incl.
 #      `evm`: t12 activates the EVM lane at DAA 0; a build without it refuses to start). RUSTFLAGS and
 #      friends from the caller's shell are dropped, so the bytes depend on the commit, not the shell.
+#      The only rustflags are path remaps: rustc embeds the absolute path of every source file it compiles
+#      (panic locations, include!d OUT_DIR files), so without them the sha256 depends on where the
+#      checkout, the target dir and ~/.cargo sit, and the binary carries the builder's home directory.
+#      Mapped to /misaka, /target and /cargo, the same commit builds to the same bytes in any directory
+#      (2026-09-25: two builds of 8270cf03 from different checkouts into different, empty target dirs
+#      gave four byte-identical binaries — PLAN.md §13).
 #   3. every binary: an x86-64 ELF, interpreter /lib64/ld-linux-x86-64.so.2, NEEDED only glibc's own
 #      libraries (the C++ runtime and libgcc are linked in), and no GLIBC_x.y symbol version above the
 #      floor → SHA256SUMS, REV, BUILD-INFO.
@@ -41,7 +47,9 @@
 #   JOBS              cargo -j (default 4 — other work shares this machine; the thin-LTO link of kaspad
 #                     alone peaks at several GiB)
 #   GLIBC_FLOOR       default 2.39 (the fleet's glibc; zig links against that version's symbol set)
-#   WORK              default $HOME/.cache/misaka-t12-rel (the clean worktree and the default target dir)
+#   WORK              default $HOME/.cache/misaka-t12-rel (the clean worktree and the default target dir;
+#                     the remaps name both, so keep WORK and CARGO_TARGET_DIR fixed to reuse dependency builds)
+#   CACHE             default $KIT/.cache (where <rev12>/ lands — distribute-from-mac.sh reads $KIT/.cache)
 #   PROBE             auto (default: direct on x86_64 Linux, docker on a Mac when PROBE_IMAGE is set,
 #                     else skip) | docker | direct | skip
 #   PROBE_IMAGE       the local image for the container probe (required for PROBE=docker)
@@ -130,14 +138,21 @@ trap cleanup_src EXIT
 STAGE="$CACHE/.$REV12.partial"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cargo_flags=(--release --locked -j "$JOBS" --target "$TRIPLE.$GLIBC_FLOOR")
+# the path remaps (see the header), most specific last — rustc applies the LAST matching one
+SRC_P=$(cd "$SRC" && pwd -P)
+mkdir -p "$CARGO_TARGET_DIR"; TGT_P=$(cd "$CARGO_TARGET_DIR" && pwd -P)
+CH_P=$(cd "${CARGO_HOME:-$HOME/.cargo}" && pwd -P)
+ENC_RUSTFLAGS=$(printf '%s\n' "${#CH_P} $CH_P=/cargo" "${#TGT_P} $TGT_P=/target" "${#SRC_P} $SRC_P=/misaka" \
+    | sort -n | cut -d' ' -f2- | sed 's/^/--remap-path-prefix=/' | paste -sd $'\x1f' -)
 [ "${OFFLINE:-0}" = 1 ] && cargo_flags+=(--offline)
 for b in "${BINS[@]}"; do cargo_flags+=(--bin "$b"); done
 say "building $REV12 ($(git -C "$SRC" log -1 --format=%s | cut -c1-80)) for $TRIPLE, glibc floor $GLIBC_FLOOR, -j$JOBS"
 say "  source $SRC, target $CARGO_TARGET_DIR, log $STAGE/build.log"
 t0=$(date +%s)
 set +e
-( cd "$SRC" && env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS -u CARGO_BUILD_RUSTFLAGS \
+( cd "$SRC_P" && env -u RUSTFLAGS -u CARGO_BUILD_RUSTFLAGS \
       -u "CARGO_TARGET_$(tr 'a-z-' 'A-Z_' <<<"$TRIPLE")_RUSTFLAGS" -u RUSTC_WRAPPER -u CARGO_BUILD_TARGET \
+      CARGO_ENCODED_RUSTFLAGS="$ENC_RUSTFLAGS" CARGO_TARGET_DIR="$TGT_P" \
       CARGO_INCREMENTAL=0 nice -n 10 cargo zigbuild "${cargo_flags[@]}" ) > "$STAGE/build.log" 2>&1
 rc=$?
 set -e
@@ -186,6 +201,7 @@ echo "$COMMIT" > "$STAGE/REV"
     echo "zig=$(zig version)"
     echo "cargo_zigbuild=$(sed -n 's/.*"cargo-zigbuild \([^ ]*\) .*/\1/p' "$HOME/.cargo/.crates2.json" 2>/dev/null | head -1)"
     echo "command=cargo zigbuild ${cargo_flags[*]}"
+    echo "rustflags=$(tr $'\x1f' ' ' <<<"$ENC_RUSTFLAGS")"
     echo "cargo_target_dir=$CARGO_TARGET_DIR"
 } > "$STAGE/BUILD-INFO"
 cat "$STAGE/SHA256SUMS" >&2
@@ -216,7 +232,7 @@ docker)
         --entrypoint bash "$PROBE_IMAGE" -c 'ldd --version | head -1 >&2; cd /tmp && /kit/probe-identity-local.sh --kaspad /rel/kaspad' \
         > "$STAGE/probe-release.txt" 2> "$STAGE/probe-release.err" \
         || { tail -20 "$STAGE/probe-release.err" >&2; die "the container probe failed — see $STAGE/probe-release.err and $STAGE/probe/"; }
-    PROBED="release kaspad, $PROBE_IMAGE linux/amd64 ($(head -1 "$STAGE/probe-release.err" | sed 's/^ldd //'))" ;;
+    PROBED="release kaspad, $PROBE_IMAGE linux/amd64, $(head -1 "$STAGE/probe-release.err" | sed 's/^ldd //')" ;;
 skip)
     say "identity probe SKIPPED (PROBE=skip, or a Mac without PROBE_IMAGE): IDENTITY is not written;"
     say "  fill EXPECT_FP / EXPECT_GENESIS / PREMINE_TXID from probe-identity-local.sh (Mac) — install-*.sh switch re-checks each node" ;;
