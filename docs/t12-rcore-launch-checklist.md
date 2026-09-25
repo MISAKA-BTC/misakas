@@ -1,6 +1,8 @@
 # testnet-12 R-core+ 公開チェックリスト（ADR-0152 §8.3 の launch gate と IA-14 の ship 条件）
 
 作成: 2026-09-25。基準は統合線 `rcore/int-3` @ `a0af3c92`（このファイルは branch `rcore/release-prep`）。
+**更新（2026-09-25、lane 3「gate の証拠」、branch `rcore/gate-evidence`、base `rcore/int-3` @ `8270cf03`）**: §1 item 1 と item 5 の
+test の所在を全番号の表（§1a）に置き換え、欠けていた test を足し（§1b）、§2 の IA-14 を 8270cf03 で読み直した。
 ADR 本体は `docs/adr/0152-account-stake-staged-reserve-and-vested-rewards.md` v3.1（§8.3 が gate、§8.4 が公開後の観測）。
 配備の手順と kit は `contrib/t12-deploy-kit/PLAN.md`、explorer は `contrib/misakascan-t12/DEPLOY.md`、公開後の drill は
 `contrib/t12-drill-kit/README.md`。
@@ -18,17 +20,19 @@ a0af3c92 の状態は 2026-09-25 に `git merge-base --is-ancestor` と `git gre
 
 ### item 1 — M1〜M5 GREEN（§7.1）。F1-M・F1c・stake 加重の抽選・addendum の T18q〜T18y・T18p-M・SR-10・U2/U3 を含む
 
-添付: 下の各 file の test が出荷 commit で全部 PASS した battery のログ（§1 item 2 の 2 本）と、所在不明の番号についての監査の回答。
+添付: §1a の各 test が出荷 commit で全部 PASS した battery のログ（item 2 の 2 本と、同じ commit の core・kaspad・base0・cli）。
+**番号ごとの所在は §1a**（8270cf03 で読み直した全番号の表。a0af3c92 時点のこの節の表を置き換えた）。8270cf03 ＋ 本 lane で:
 
-| 範囲 | ADR の test | 所在（a0af3c92） |
-|---|---|---|
-| M1（F2） | T46a〜T46n、T26、T31 | `consensus/src/pipeline/virtual_processor/tests/t46_false_valid_real_claim.rs`、`consensus/core/src/palw_state_v2.rs`（t26）。T31 は所在不明 |
-| M2（F1、F1-M、F1c） | T18、T18b〜T18h、T18k、T18m、T-THREAD、T62 | `…/tests/t46_false_valid_real_claim.rs`（t18b〜t18k・t18m・t18y・T-THREAD）、`consensus/core/src/palw_offence_attribution_v1.rs`（T18h）、`…/tests/t12_round_lane_e2e.rs`（T-THREAD）。T62 は所在不明 |
-| addendum | T18p、T18p-M、T18q〜T18y | `misaka-palw-base0/tests/seat_material_duty.rs`（t18p、T18p-M）、`misaka-palw-base0/tests/f1c_logits_not_step_output.rs`（t18q、t18r）、`…/tests/t47_model_class_attribution.rs`（T18s、T18t、t18u）、`consensus/core/tests/palw_court_decode_close_door.rs`（t18v）、`consensus/core/src/palw_attempt_rules_v1.rs`（t18w）、`consensus/core/tests/palw_offence_attribution_t11_verdicts.rs`（T18x）、`…/tests/t46_false_valid_real_claim.rs`（T18y） |
-| S（担保・vesting・slash） | T01〜T05、T08、T09、T11〜T17、T20〜T24、T27、T28、T30、T33、T35〜T37、T39、T43、T44、T57、T76〜T78、T81、T82、T84 | `consensus/core/tests/rcore_s2_staged_reserve.rs`、`rcore_s3_one_ledger.rs`、`rcore_s4_conviction_funnel.rs`、`rcore_s6_per_bond_share.rs`、`consensus/core/src/palw_state_v2/tests/vesting_fold_v1.rs`、`consensus/core/tests/dos_repro_2_free_prompt_flood_linear_per_block_cost.rs`（T02、t02c、T17）、`dos_l5_4_reorg_fuzz.rs`（T09）、`kaspad/src/palw_producer_t12_tests.rs`（T08 の node 側）。T02b・T05・T28・T57 は所在不明（T05 は P2 側 `p2_b3_vesting_payee_gate.rs` にも言及あり） |
-| M3（DA court） | T32、T34、T42、T64〜T69、T27 | `consensus/core/tests/rcore_m3_da_court.rs`、`…/tests/t46_false_valid_real_claim.rs` |
-| M4（F4、SEAT-R、stake 加重の抽選、SR-10） | T06、T15、T45、T70〜T74、T85〜T94、T18p-M | `consensus/core/src/palw_panel_v2.rs`（t85〜t94）、`consensus/core/tests/adr0152_sw9_ready_eff_room.rs`（t91）、`consensus/core/tests/palw_rcore_q5_gate.rs`（T72、t72b）、`…/tests/t12_rcore_sr10_door_gate.rs`（T33、T45、T72）、`consensus/core/src/palw_state_v2.rs`（t70、t71、t74）、`consensus/core/src/palw_da_rcore_v1.rs`（T73）、`consensus/src/pipeline/virtual_processor/tests/t12_stake_draw_integration.rs`（T89 / IA-1）。**T06（EV grid）と T90 は所在不明** — T06 の閾値は `docs/handoff/t12-rcore-20260924/v3calc/v31_stake_draw.py` 側にある可能性 |
-| M5（reorg・restart・golden） | T07、T40、T41、T75、T83、T01 の revert/IBD twin | `consensus/core/tests/rcore_m5_reorg.rs`、`rcore_m5_restart.rs`、`rcore_m5_v22_golden.rs`。**`rcore/m5b-tests` @ 8f3adebb（T40 の Q-5 DL-1 行、T01 の twin）は a0af3c92 に未 merge** |
+* **有**: M1〜M5 の番号のほぼ全部。a0af3c92 で所在不明だった T02b・T28・T90 と T18m の kind 3／Final 後の cell、T37 の F18、T02 の
+  `NoCapablePanel` 0 は本 lane で書いた（§1b）。T31・T57・T62・T06 の扱いは下。
+* **規則欠（gap、production code は書いていない）**: **T57**（SR-9: S-5 の object 56 `PanelUnavailableQuorum` が int-3 に無く、fold は
+  名指しで拒否する）。安全側（RT#2 と `NotReplayBacked` が同じ S0′ を課す）だが、D-8 の SR-9 と §3.7 の SR-9 付きの H_f は成り立たない。
+* **欠（test だけ、owner 付きで監査へ）**: **T62**（J-6 の一意の経路を全有罪 kind で性質として。A）、**T06**（実 stake 抽選の EV grid。B、
+  部分は `adr0152_stake_draw_sw10_split.rs`）、T16/T82 の V3S-02 条項（session が開いた head 行の後ろの行が動き続ける。A/B）、
+  T42 の引き出し完了の端から端（A）、T26 の fence 未満の F21 twin（A。公開 t12 には届かない）、
+  T18p の kaspad 層の partial seat（B）。
+* **N/A**: T31 の fence 未満の半分と T04 の ConflictingPermit 1 share（R-core+ は attribution を前提に要求し、S4′ の `ShareBurned` に
+  writer が無い）、T18m と T39 の 2M cell（2M は公開時に閉じている、U-D1）。
 
 ### item 2 — kaspa-consensus の battery を 2 回（既定 features と `--features evm`）
 
@@ -59,15 +63,9 @@ D-1〜D-10 の中身は `scripts/misaka-palw-t12-rcore-drill.sh steps`。drill �
 ### item 5 — Phase 2 の要の部分が出荷 commit で GREEN（C12）
 
 添付: T03、T05、T23（両半分: `palw_v2_locked_bond_outpoints` / `palw_v2_bond_burn_obligations` で UTXO 層に B-3）、T25、T47〜T53、T58 の PASS。
-所在（a0af3c92）: `consensus/src/pipeline/virtual_processor/tests/p2_mint_path.rs`（T03、T05、T25、T29、T48、T49、T50、T56、T58）、
-`p2_b3_vesting_payee_gate.rs`（T05、T23）、`p2_reorg_and_ibd.rs`（T48、T49）、`p2_evm_twin.rs`（T50、`--features evm`）、
-`p2_t29_conviction_and_maturity.rs`、`consensus/core/src/palw_vesting_read_v1.rs` / `misaka-cli/src/palw_vesting.rs`（T51）、
-`misaka-cli/src/operator/*` / `kaspad/src/palw_panel.rs`（T52）、`consensus/src/pipeline/virtual_processor/tests/t53_drill_isolation.rs` と
-`kaspad/src/palw_drill.rs`（T53）、`consensus/core/src/palw_state_v2/tests/vesting_fold_v1.rs`（T47、T58）。
-T54a と T54b は processor 層の半分が `consensus/src/pipeline/virtual_processor/tests/t46_false_valid_real_claim.rs` にある:
-`t34_t54a_an_unserved_seats_automatic_accusation_defaults_a_silent_producer_and_pays_it_through_3d`（T54a、:4771）と
-`t32_t54b_a_silent_producers_covering_signer_answers_and_the_accusers_pay`（T54b、:4546）。どちらも doc が「devnet preset 上の node e2e は
-公開後」と書いている。T54c・T54d〜T54g・T55 は所在不明または P2-8（`rcore/p2-file`、未 merge）に依存。D-4 と D-5 は P2-7 と P2-8 が要る。
+**所在は §1a の「item 5」表**（8270cf03 で全部 **有**。T50 は `--features evm` の battery でだけ build される）。T54a〜T54f は processor の
+半分が有（node e2e は公開後）、**T54g は監査 branch `rcore/p2-8e` にだけある**（P2-8e の merge で入る）、T55 は ledger の列が無く規則欠
+（item 5 の範囲外）。D-4 と D-5 は P2-7 と P2-8 が要る（どちらも 8270cf03 に merge 済み）。
 
 ### item 6 — SEAT-R は F2 の fence と同じ binary（T18p-M GREEN）、SEAT-S1〜S4 と `PalwDrillFaultV1` も
 
@@ -91,6 +89,8 @@ cargo test --locked -p kaspad --lib -- seat_s_tests::c1_s3_never_attests_past_th
 a0af3c92 には **無い**: `feat/t12-aheld` @ 19736312、`feat/t12-aheld-node` @ c68479db（object 57 `CourtAttnRootClaimedHeld` の自動応答、
 N4）、その下の `fix/t12-shard-court-openings-first` @ 8be0f661。2M を閉じる 4-quater（`feat/t12-class-verify-deadline` @ a4323997、
 `ClassDeadlineUnmeasured`）も無い。8k の実 weight timing drill は公開後（IA-12）。
+**8270cf03（lane 3 が確認）**: 4-quater は merge 済み（a66509f9 が a4323997 を入れる。`core/tests/t12_class_verify_deadline.rs::td2_the_2m_row_is_refused_at_launch_attempt_and_free_prompt`）。
+A-held（`feat/t12-aheld-node` @ 1ee0e08d）と 8be0f661 は **まだ祖先ではない**（`git merge-base --is-ancestor` で確認）— 8k の半分は未達。
 添付: A-held の C1〜C5 と object 57 の test（8k fixture で attention の嘘が有罪になる、kaspad producer が期限内に object 57 で答える）、
 2M の attempt と FP claim が `ClassDeadlineUnmeasured` で拒否される test（O-11 の T-D2）。
 
@@ -98,24 +98,216 @@ N4）、その下の `fix/t12-shard-court-openings-first` @ 8be0f661。2M を閉
 
 a0af3c92: licence-stall（a4dfe903、d94d3a1b）あり、panel-room の C7 re-key（e93be0f2、f8c91f19、
 `consensus/core/tests/panel_room_short_class_is_released_at_licence.rs`、T20、T21）あり、**shard court の one-move rule（8be0f661、J-8）は無い**（A-held と一緒に入る）。
+8270cf03 でも同じ（a4dfe903・d94d3a1b・e93be0f2・f8c91f19 は祖先、8be0f661 は祖先ではない）。
 
 ### item 9 — ship 条件（IA-14）: §2
+
+### 1a. test の所在表（§8.3 item 1 と item 5 の全番号）— `rcore/int-3` @ `8270cf03` ＋ 本 lane
+
+作成: 2026-09-25、lane 3（branch `rcore/gate-evidence`、base `rcore/int-3` @ `8270cf032`）。ADR は v3.1（post-edits と
+integration amendments 込み）の §7.1（M1〜M5 の "done when"）と §8.1（test 表）。各番号を、test 名の接頭辞（`fn tNN_…`）と
+test の doc の番号の言及で機械的に拾い（`#[test]` / `#[tokio::test]` の直前の doc と fn 名）、各行の条項を本文で読み合わせた。
+監査の未 merge branch（`feat/t12-aheld-node` @ `1ee0e08d`、`feat/t12-activation-pool` @ `2e5f370e`、`feat/t12-readiness-horizon`
+@ `eb360804`、`rcore/p2-8e` @ `ade4b458`）も同じ方法で `git show` から読んだ。readiness-horizon は現時点で pool ＋ int-3 3692c7e9 の
+merge だけで、本表の番号を持つ test を足していない。p2-8e が足すのは T54g だけ（下の「参考」）。
+
+**状態の読み方**: **有** = その番号を実装する test が 8270cf03 にある（GREEN かどうかは出荷 commit の battery で取る、item 2）。
+**有（本 lane）** = 本 lane で書いた test（commit は §1b）。rule を一時的に壊すと red になることを確かめた。**一部** = 条項の一部
+だけ（欠けた条項を書く）。**欠** = rule は int-3 にあるが test が無い（owner と、本 lane で書かなかった理由）。**規則欠** = rule が
+int-3 に無い（gap。production code は書いていない）。**N/A** = 構成上起こらない（理由）。path は repo からの相対。
+`t46::` = `consensus/src/pipeline/virtual_processor/tests/t46_false_valid_real_claim.rs`、`t47::` = 同 `t47_model_class_attribution.rs`、
+`core/tests/` = `consensus/core/tests/`、`vf::` = `consensus/core/src/palw_state_v2/tests/vesting_fold_v1.rs`、
+`sv2::` = `consensus/core/src/palw_state_v2.rs` の lib test、`pv2::` = `consensus/core/src/palw_panel_v2.rs` の lib test。
+
+#### M1（F2 = SPEC §3）
+
+| ID | ADR の要求（一行） | test | 状態 |
+|---|---|---|---|
+| T46a–T46n | 実 producer の claim で F2 の赤・注入 fault の有罪（full と leaf の partial）・forged output（full のみ）・Shape・Final 後・retirement 後・FP・kind 1 拒否・正直・domain 違い・拒否 kind・(seat, claim) 1 件・reorg/restart・open session | `t46::t46a_…`〜`t46n_session_open`、`t46n_r_an_rcore_da_session_does_not_defer_a_conviction`（ほか t46o〜t46u） | 有 |
+| （M1 GREEN の付帯） | `palw_offence_attribution_is_t12_only`、`palw_offence_attribution_t11_verdicts` | `core/tests/palw_offence_attribution_is_t12_only.rs`、`core/tests/palw_offence_attribution_t11_verdicts.rs` | 有 |
+| T26 | fence 以降、`CourtExecutorGuilty` と `ExecutorEquivocation` の kind 3 は `ContradictionNotAdmitted`。fence 未満では無関係 job の Eq ＋ `CourtExecutorGuilty` を拒否し、root 0 の consumed offence は何も bind しない（F21） | fence 以降: `t46::t46k_refused_kinds`、`palw_offence_attribution_v1.rs` lib（`palw_false_valid_admission_v1` の拒否）。fence 未満: fold の拒否（`sv2` 16868 付近 "CourtExecutorGuilty does not name this claim's executor"）はあるが名指しの test 無し。※ `sv2::t26_t81_a_proven_court_verdict_records_court_conviction…` は名前に T26 を含むが court verdict の test（T81 側） | 一部（F21 の fence 未満 twin が欠。t12 では fence が genesis から武装なので公開 t12 には届かない。owner A） |
+| T31 | fence 以降 `ConflictingPermit` は名指しで拒否、kind 1 は `SupersededOnThisNetwork`（S4′ は t12 で発火しない）。fence 未満は v3 の場合（Final のまま、1 share burn、reload） | `t46::t46h_v1_kind_refused_past_fence`、`t46::t46k_refused_kinds`（`ConflictingPermit`）、`sv2::f2_the_fence_supersedes_the_v1_kind_and_arms_the_v2_kind` | 有（fence 以降）。fence 未満の半分は N/A: `palw_rcore_plus` は `palw_offence_attribution` を前提に要求し（`palw_rcore_plus_is_t12_only::validate_refuses_the_fence_without_each_prerequisite` の "attribution"）、S4′ の `PalwVestingNoteV1::ShareBurned` を書く writer は無い。ADR の「fence 未満の v3 の場合」は R-core+ と両立しない（ADR の文言を直す候補） |
+
+#### M2（F1 = SPEC §4、F1-M、F1c、addendum）と Seat fixes
+
+| ID | ADR の要求（一行） | test | 状態 |
+|---|---|---|---|
+| T18 | P0-10 naive: 素材なしの DA default は S1、告発なしなら RT#2 で没収 | `core/tests/rcore_m3_da_court.rs::t18_da7_a_live_default_is_s1_and_writes_one_da_default_record`、RT#2: `core/tests/rcore_s4_conviction_funnel.rs::t22_s0_prime_the_second_failed_panel_forfeits_the_commitment_and_nothing_else`、filer: `t46_p2_8_reporter_filer.rs::t18_t54c_…` | 有 |
+| T18b | 借り root: R と C1 は admit、R の開示は identity で拒否、C1 は `ProducerWithholding`、C2 の kind 4 `IdentityMismatch` は `CourtFraud` | `t46::t18b_a_borrowed_root_answers_another_job`、`t18b_r_a_borrowed_root_answers_no_rcore_session` | 有 |
+| T18c(i–iii) | licence 前の kind 4（算術・Shape）、preimage 無しの root は default | `t46::t18c_before_licence_the_executor_is_refuted`、`t18c_ii_a_root_with_no_preimage_defaults`、`t18c_ii_r_…` | 有 |
+| T18c(iv) | 正直な step tree 上の garbage logits は `LogitsNotStepOutput` で有罪（F1c、gate 内） | `t46::t18c_before_licence_the_executor_is_refuted`（(iv) の段）、`t46::t46u_…`、`t54f_replay_filer.rs::t54f_f1c_garbage_logits_on_an_honest_step_tree_are_refuted_by_12`、base0 `f1c_logits_not_step_output.rs::t18q_…` | 有 |
+| T18d | output grind は `OutputMismatch`、正直な `output_root` は拒否 | `t46::t18d_the_output_grind_is_refuted` | 有 |
+| T18e（floor） | relabel は full-context の検査で有罪 | `t46::t18e_the_floor_relabel_is_refuted_by_j5` | 有 |
+| T18e（8k、F1-M） | 同、model class で | `t47::t47a_the_model_relabel_is_refuted_by_j5b`（8k 行の family = held A16 graph-v7、n_ctx 128 の fixture と Qwen3.6 v7） | 有 |
+| T18e（2M、F1-M） | 同、2M で | `t47::t47e_the_2m_relabel_is_refuted_by_prompt_not_anchored`、`t47f_a_prompt_fault_convicts_every_valid_signer`（13 は `AnyValid`） | 有 |
+| T18f / T18g / T18h / T18k | J4 の trace root 不一致 / `job_identity == 0` は有罪にしない / FP pin 不一致と `fp_pin_spellings_agree` / claim 単位の没収は C0 の行を残す | `t46::t18f_…`、`t46::t18g_…`、`palw_offence_attribution_v1.rs::f1_fp_pin_spellings_agree_and_convict_on_the_free_prompt_lane`、`t46::t18k_…` | 有 |
+| T18m（F1-M） | `ForgedOutputTiled` が 8k tiled/A16 の実 decode と 2M fixture の forged token を kind 3（full-mask signer）と kind 4 で Final の前後に有罪。正直な tiled decode は有罪にしない | 既存: `t47::t47d_a_models_logits_and_tokens_are_refuted_by_root`（kind 4・licence 前・A16/Qwen3.6）、base0 `f1c_logits_not_step_output.rs::t18r_eleven_convicts_a_forged_tiled_token`。**本 lane**: `t18m_forged_output_tiled.rs::t18m_forged_output_tiled_convicts_the_full_mask_signer_before_final_and_never_an_honest_decode`（kind 3、partial は `SiteNotAttested`、正直な decode は kind 3・4 とも `TokenHolds`）、`::t18m_forged_output_tiled_after_final_reverses_it_by_kind_3_and_by_kind_4`（Final の取り消し、root 没収、vesting 行の burn と S3、kind 3 は seat の S4 も） | 有（本 lane）。2M の cell は N/A: 2M 幅の producer は test で動かず（`t47e` の注記）、2M 行は §4-quater（U-D1）で公開時に閉じている（`t12_class_verify_deadline::td2_…`）。adjudicator は幅を読まない。2M の cell は 2M を開ける flag day の gate |
+| T18p | partial な kaspad seat が借り root の claim を拒否（`AnyValid` の根拠） | base0 `seat_s4_segment_opening.rs::the_floor_authenticates_every_segment_link_and_refuses_each_forgery`（「another claim's opening (a borrowed binding)」→ `NotTheClaimsExecution`）、`seat_s1_whole_job.rs` | 一部（family 層の拒否はある。kaspad の partial seat（`palw_v2_try_partial_resume_v1`）で借り root を拒否する名指しの test は無い。owner B（kaspad）。addendum は `AnyValid` の根拠を T18p-M ＋ SEAT-S1/S3/S4 に移している） |
+| T18p-M | 全 drill fault で `Valid` が出ない、replay 不一致は終端、material/interval/capture の arm は `Valid` を出さない、S3 は `verify_material == Matches` の後だけ | base0 `seat_material_duty.rs::t18p_m_no_drill_fault_gets_a_full_valid`、`the_floors_/the_a16_/the_qwen36_seat_gives_no_valid_to_a_drill_fault…`、kaspad `seat_s_tests::c1_s3_never_attests_past_the_fence_without_verify_material`、`q7_…::s3_samples_only_a_capture_seat_s3_verified` | 有 |
+| T18q / T18r | 12（行×argmax の曲げ×lane、dense と fold、ragged vocab 8,292）/ 11 `NotSelected` と `OutOfVocab` | base0 `f1c_logits_not_step_output.rs::t18q_twelve_convicts_exactly_the_bent_row_and_tile`、`::t18r_eleven_convicts_a_forged_tiled_token`、chain: `t47::t47d_…` | 有 |
+| T18s / T18t | 10 を model attempt と FP model claim に、claim 単位の没収 / J6・J7・J5a | `t47::t47b_the_model_output_rule_convicts_by_claim` / `t47::t47c_the_moved_legs_and_the_non_formula_contexts_are_refuted` | 有 |
+| T18u | heavy budget: 1 block に 2 本目の `Whole` 13 は計算前に落ち、block は残り root は同じ | `t47::t18u_a_block_recomputes_one_whole_2m_prompt`、`t18u_holding_the_heavy_slot_costs_what_it_consumes` | 有 |
+| T18v / T18w / T18x | court の扉 / admission（非 formula canonical・head 述語・Float32・Kimi は拒否、genesis 行は通る）/ tag 9–13 の V1 parity | `core/tests/palw_court_decode_close_door.rs::t18v_…` / `palw_attempt_rules_v1.rs::t18w_a_registration_is_attributable_or_refused_by_name`、`t18w_testnet_12s_genesis_rows_are_attributable` / `core/tests/palw_offence_attribution_t11_verdicts.rs::t11_attribution_tags_and_kinds_are_refused_as_they_were` | 有 |
+| T18y | DA session 下の claim を kind 4 が void、sweep・予約・行が整合、reload | `t46::t46n_session_open`、`t46n_r_an_rcore_da_session_does_not_defer_a_conviction` | 有 |
+| T-THREAD | pipeline で mined した block が `job_identity ==` producer の anchor を記録（自分の work と merged blue）、reorg と v22 の reload | `t12_round_lane_e2e.rs::t12_a_claim_records_the_anchor_of_the_header_that_carried_it`、`t46::t18_thread_a_claim_records_the_anchor_of_its_own_header`、`t46::t18_job_identity_survives_reorg_across_admission` | 有 |
+| T62 | 一意の経路（J-6）を性質として: 全有罪が claim → root → job → index → signer → fault → target を claim・liability 記録・（R-core+ 以降）vesting 行の写し（N8）で解決、retired claim を含む | 名指しの test 無し。部品: `t46::t46f_after_retirement`（retired claim を liability 記録で解決）、`vf`（N8 の写し: 451〜478 行の assert）、`palw_offence_target_v1` | 欠（owner A [M2/S]。全有罪 kind を横断する性質 test で、kind ごとに実 claim の harness が要るため本 lane では書かず、監査へ） |
+| Tier B golden | `job_for_anchor` under `CoreV1` = `palw_attempt_context_v1`（16 anchor × 3 family ＋ 実 8k/2M/Q36 の profile） | base0 `attempt_rules_core_v1_golden.rs`、`floor_attempt_context_golden.rs` | 有 |
+| v22 golden（M2/M5） | v22 の golden vector | `core/tests/rcore_m5_v22_golden.rs::t41_…` ×2、`sv2::the_version_22_state_root_golden_vectors` | 有（再 pin は §5） |
+
+#### S（Phase 1 skeleton。T01–T44 の P1 部分、T02c、T17、T22、T47、T57、T74 V2、T75–T78、T80–T82、T84）
+
+| ID | ADR の要求（一行） | test | 状態 |
+|---|---|---|---|
+| T01 | staged lifecycle: 全 seat Valid の quorum/coverage licence で `E` 解放、Withheld/Incapable/Sampled/欠/redraw/S2 は保持、C7 は Final まで、8k は floor 同様、Final で `w`、revert/IBD、reload | `core/tests/rcore_s2_staged_reserve.rs::t01_…`、`rcore_m5_restart.rs::t01_revert_and_ibd_twins_of_the_staged_lifecycle`、`::t01_model_class_twins_8k_released_and_held_and_2m_held_to_final`、`rcore_m5_q5_gate.rs::t01_q5_twins_…`、`rcore_s2::u1_a_c7_claim_holds_the_escrow_to_final_on_a_full_service_licence` | 有 |
+| T02 | 公開時の課金: 2 回目の `ReceiptTimeout` は S0′（strike・報酬なし）、`BindTimeout`・`NoCapablePanel`・1 回目の RT は 0 | `rcore_s4::t22_s0_prime_…`（RT#1 0、RT#2 S0′）、`pv2::t94_a_refused_draw_binds_nothing_and_the_claim_voids_bind_timeout_without_forfeit`（step 4c の BindTimeout 0）。**本 lane**: `core/tests/t02b_rt2_is_s0_prime_on_every_class.rs::t02_bind_timeout_and_no_capable_panel_charge_nothing`（bind window の backstop で floor は `BindTimeout`、8k 行は `NoCapablePanel`、どちらも bond 不変・strike/記録なし・予約は void で解放） | 有（`NoCapablePanel` 0 は本 lane） |
+| T02b | regenesis 時点に X10 は無く、RT#2 は全 class で S0′。fence を跨ぐ twin は M6 | **本 lane**: `core/tests/t02b_rt2_is_s0_prime_on_every_class.rs::t02b_rt2_is_s0_prime_on_the_floor_the_8k_row_and_the_2m_row`（floor・8k・2M（`t12_2m_open`）で RT#1 は 0、RT#2 は commitment ちょうど、strike・記録・seat 課金なし）。FP は `rcore_m5_q5_gate::t40_dl1_q5_a_compute_priced_fp_licence…`（`rr` 込みで RT#2 と同額） | 有（本 lane、regenesis の半分）。twin は M6 |
+| T02c | FP の abandon hold 600 DAA、load で再導出、hold 中の restart | `core/tests/dos_repro_2_…::t02c_the_free_prompt_abandon_hold_is_the_commitment_to_its_boundary_and_reloads_mid_hold`、`rcore_m5_restart::t40_dl1_restart_mid_abandon_hold` | 有 |
+| T03 | 行の作成と正確な移動、counter、coinbase の恒等式 | `vf::t03_…` ×2、`p2_mint_path.rs::p2_t03_the_coinbase_identity_closes_over_real_finals_a_real_conviction_and_real_mints`、`::p2_t58_t03_…` | 有 |
+| T04 | burn: 実行を証明する有罪で行を削除、ConflictingPermit は 1 share、行と lock の述語が F+2,999 / F+3,000 で一致 | `vf::t04_a_row_burns_until_it_moves_and_never_after`、述語の一致: `vf::t12_the_maturity_clocks_and_the_halt`（`palw_vesting_lock_is_live_v1 == is_live_v3` の grid） | 有（ConflictingPermit の 1 share は T31 と同じ理由で N/A） |
+| T05 | state 層と UTXO 層で抜け道なし | `p2_b3_vesting_payee_gate.rs::p2_t23_every_utxo_site_holds_a_vesting_payee_exactly_while_v4a_does`、`p2_mint_path.rs::p2_t25_t05_a_leg_is_no_utxo_until_minted_and_then_obeys_decision_a_alone` | 有 |
+| T07 | reorg fuzz: bond ごとに Σ回収可能 ≥ Σ抽出可能、1 有罪の 2 写しで reporter が違う twin（F17） | `core/tests/rcore_m5_reorg.rs::t07_…` ×4（`t07_f17_…` を含む） | 有 |
+| T08 | capacity は p と f の関数、fold = processor = node が sompi まで一致 | `rcore_s3_one_ledger.rs::t08_fold_admission_producer_facts_and_draw_read_one_committed_number`、kaspad `palw_producer_t12_tests.rs`（2 本）、`kaspad/src/palw_producer.rs::the_nodes_decision_is_the_chains_refusal_on_the_same_state` | 有 |
+| T09 | (seat, claim) ごとに `max(duty, lock)`、`dos_l5_4b` | `core/tests/dos_l5_4_reorg_fuzz.rs::dos_l5_4b_one_ledger_backs_every_lock_and_duty` | 有 |
+| T11 / T12 | 行は claim の retirement より長生き / 同 block の有罪と maturity は burn が先 | `vf::t11_a_row_outlives_claim_retirement` / `vf::t12_a_same_block_conviction_burns_before_maturity_moves`、`p2_t29_conviction_and_maturity.rs::p2_t29_…` | 有 |
+| T13 / T14 / T15 | buyback の除外と価格、FP の権利は `G_res` / staging は単調、`escrow_released` は戻らない / lock は再計数した k で価格、flat-/3 の反例 | `vf::t13_…` ×2、`vf::t03_t13_…`、`rcore_s3::t13_…` / `rcore_s2::t01_…`（"T14"）、`rcore_s2::t74_sr1b_…` / `rcore_s3::t15_every_door_locks_l1s_price_with_the_attested_mask` | 有 |
+| T16 | V-7 の予算は新 key で数え market 予約付き、止まり飛ばさない、運ばれた行も burn 可、**head 行に 1,200 DAA 開いた session が後の latch 済み行を止めない（V3S-02）** | `vf::t16_the_budget_is_new_keys_with_the_market_reserve_and_stops_never_skips`、`vf::t04_…`（運ばれた行の burn） | 一部（V3S-02 の条項の test が欠。DA-5 の re-key（`da_rekey_v1`）は `rcore_m3::t66_…` にあるが「後の行が move し続ける」は未検証。owner A/B） |
+| T17 | 床: 129,999.99 MSK は抽選されず、13,000 は登録可、U2 の producer 床（S0′ 後は ADM と `apply_attempt` と FP executor で拒否、再登録で通る）、`ProducerBelowFloor` は block を無効にしない、shortfall の読み、kaspad の P6 | `rcore_s3::t17_u2_a_producer_below_the_floor_after_s0_prime_is_refused_until_it_re_registers`、`dos_repro_2::t17_an_fp_executor_below_the_producer_floor_commits_nothing`、`palw_producer_v2.rs::ready_to_produce_v3_reads_the_floor_and_the_committed_ledger_past_the_fence`、kaspad `palw_producer_t12_tests::under_the_t12_floor_the_node_and_the_fold_both_name_the_floor` | 有 |
+| T20 | C7 は t12 genesis でちょうど {2M}、2M は Final まで借り `c_2M = 1`、8k は保持しない、≥1,000 span の後発 class は規則で C7、held 行の外の C7 は拒否、2M の RT#2 は S0′、増幅 1.00 | `core/tests/panel_room_short_class_is_released_at_licence.rs::the_genesis_c7_set_is_the_2m_row_alone`・`beside_it_the_2m_row_is_still_held_to_final_at_its_cap_of_one`、`params.rs::the_t12_c7_list_is_the_2m_row`、`palw_work_target_v1.rs::adr0152_c7_is_a_window_of_at_least_1000_spans`、`palw_rcore_plus_is_t12_only`（C7 の拒否）、`rcore_s6_per_bond_share.rs::t20_…`、2M の RT#2: `dos_repro_3_…`、本 lane の T02b | 有 |
+| T21 | rate room（C7 に re-key）: bond ごとの share、C7 外の class は licence で replay 解放（8k の (owed, room) = (0, 5)、6 本目が fold）、2M は解放しない、court は再課金、非 seat の DA は止めも課金もしない、t11 parity | `panel_room_short_class_is_released_at_licence.rs`（4 本）、`rcore_s6::t21_…` ×2、`panel_room_step3_…::an_rcore_da_session_on_a_licensed_claim_recharges_nothing`、`panel_room_t11_dormant_parity.rs` | 有 |
+| T22 | m = 3 の各 tier と上限、strike の epoch、claim ごとの没収、U3（FP の Final 後有罪は `≤ 3·G_fp`）、IA-9（court default は forfeit ＋ S2 で記録なし、kind 3 の記録は producer の leg 込み、lock の無い seat は 0） | `sv2::t22_the_action_tiers_are_the_adrs_table`、`sv2::t22_u3_an_fp_claim_convicted_after_final_charges_the_capped_producer_tier_once`、`rcore_s4::t22_t35_t36_…`・`t22_s0_prime_…`・`s2_a_court_default_is_charged_as_a_fraud_and_writes_no_court_conviction`、`t46::t46g_fp_claim`（U3） | 有 |
+| T23 | B-3: gate は `palw_bond_committed_v1 > 0`・`accuser_exposure > 0`・未成熟行、retire-while-bound は保持、exit の上限を関数として（12,900 / 18,900 / F + 9,000）、UTXO の半分（P2-1） | `sv2::v6_is_v5_below_the_fence_and_adds_the_accuser_clause_past_it`、`sv2`（`with_rcore_plus_mirrors(Some(0), 12_900, …)` の pin）、`p2_b3_vesting_payee_gate.rs::p2_t23_…` | 有 |
+| T24 | fingerprint: t11/devnet/mainnet は pin、v22 の params id は一度だけ再 pin、前提ごとの負例（`palw_operator_id_unique` と `DuplicateOperator` を含む）、mirror 不一致、V5 以外、C7 と shard licensing、reporter bps = DnsParams | `core/tests/palw_rcore_plus_is_t12_only.rs::validate_refuses_the_fence_without_each_prerequisite`（ほか AT_V21/AT_V22 と :115 の bps）、`params.rs::shipped_presets_have_pinned_fingerprints`、`sv2::an_operator_identity_already_on_the_chain_cannot_be_registered_again` | 有 |
+| T27 | X2 の release: 3 Valid ＋ 2 欠/Unavailable/Incapable/S3 だけの Sampled は保持、5 Valid で解放 | `rcore_s2::t27_t68_missing_and_unavailable_seats_hold_the_escrow_to_final`・`t27_u1_the_8k_row_holds_on_incapable_and_releases_on_full_service`、`rcore_m3::t27_t68_x2_…`、`sv2::t70_a_sampled_seat_is_credited_takes_no_lock_and_is_never_dissent_slashed` | 有 |
+| T28 | F+3,001…F+9,000 の有罪が、第 2 時計が保持中・retirement 後に行を burn、`basis_k` は行から | **本 lane**: `t28_a_retired_claims_row_burns.rs::t28_a_conviction_after_retirement_under_a_held_second_clock_burns_the_row`（retirement 後 F+4,000 に kind 3: 行 burn・S3・S4・記録、報酬の X は liability 記録の `basis_k`） | 有（本 lane） |
+| T29 / T30 | 1,016 の queue と 3d の maturity で filter = fold / market 行が queue を埋めても成熟中は 1 block ≥ 1 行、queue ≤ 1,032 | `p2_mint_path.rs::p2_t29_…`、`p2_t29_conviction_and_maturity.rs` / `vf::t30_t58_…` | 有 |
+| T32 / T33 | X7（licence 済みで producer 沈黙 → S1 と signer S4、signer が開示すれば告発者負け）/ backed subset（4 backed ＋ 1 unbacked で licence） | `rcore_m3::t32_c7_…`、`t46::t32_t64_…`・`t32_t54b_…` / `rcore_s3::t33_…`・`n1_…`、`t12_rcore_sr10_door_gate.rs::t12_t33_…` | 有 |
+| T34 | DA を全 class で、自動 DA（node の半分）、`dos_repro_4` を自動告発で | `rcore_m3::t34_da_on_the_8k_row_defaults_like_the_floor`・`t34_p2_6_…`、`t46::t34_t54a_…`、kaspad `palw_panel.rs::t34_an_unavailable_accuses_inside_its_landing_margin_on_every_class`、`dos_repro_4_…` | 有 |
+| T35 / T36 | `withholding_strikes` の root・運搬・revert・7,500 で剪定・最大 9 / 昇格なし・status 不変・tombstone なし | `sv2::t35_the_strike_rule`、`rcore_s4::t22_t35_t36_…` | 有 |
+| T37 | 3 本の genesis retirement・`NoCapablePanel`・heartbeat だけの区間で licence halt、**FP だけの区間も halt（F18）**、upgrade しない S2 は `settled_attempt_finals` を進めない（C5） | `vf::t37_rows_never_mature_during_a_licence_halt`、`rcore_s2::t37_t74_coverage_ticks_s2_does_not_and_its_v2_door_upgrade_ticks_and_releases`。**本 lane（F18）**: `core/tests/t37_an_fp_only_stretch_is_a_halt.rs::t37_f18_a_stretch_in_which_only_free_prompts_license_is_a_halt` | 有（F18 は本 lane）。「3 本の genesis retirement」「`NoCapablePanel`」で halt に至る場面の名指し test は無い（halt 自体は述語 `palw_chain_vesting_halted_v1` で同じ） |
+| T38 | heartbeat の carrier: H-1 の全 object を heartbeat block で fold、miner が入れ、relay が保つ | `t12_h1_carrier_gate.rs::h1_the_gate_passes_what_the_fold_takes_and_refuses_what_it_drops`、`palw_heartbeat_carriers_v1.rs`、`mining/src/manager_tests.rs`・`transactions_pool.rs`（carrier）、`protocol/flows/src/palw_heartbeat_relay.rs`（2 本） | 有 |
+| T39 | reporter 報酬（`collected` の基底、枯れた bond、gate の開いた bond は 0、`ΣR ≤ r·Σcollected`、自己有罪は負、commit–reveal、DA/court key への commit 拒否、DA default は最早の告発者、court default は報酬なし、基底の kind 違いは拒否、pending 中の commitment は剪定しない、2M j < k は ADR-0153 まで expected-FAIL） | `sv2::t39_…` ×6、`rcore_s4::r2_a_bond_whose_gate_is_open_collects_nothing`、`t46_p2_8_reporter_filer.rs::t39_…`、kaspad `palw_reporter_filer.rs::t39_…` | 有（2M j < k は 2M が公開時に閉じているため N/A） |
+| T40 | revert 後の load で再導出（licensed の released/held、open DA）、DL-1: session 中・gate 中・各 phase・U ≥ floor の upgrade 後・abandon hold 中の restart | `rcore_m5_restart.rs::t40_dl1_restart_mid_session_and_mid_gate_on_every_phase_equals_the_uninterrupted_run`・`t40_dl1_restart_mid_abandon_hold`、`rcore_m5_q5_gate.rs::t40_…` ×5、`palw_rcore_q5_gate.rs::dl1_gates_an_s2_licence_past_both_doors_and_the_twin_does_not` | 有 |
+| T41 | v22 golden（空と全 map 充填） | `rcore_m5_v22_golden.rs::t41_the_v22_golden_vectors_empty_and_inhabited`・`t41_the_v22_record_encodings_are_pinned`、`vf::t41_…` | 有（出荷 commit で再 pin、§5） |
+| T42 | 引き出しは `max(since + 12,900, 最後の F + 9,000)` で完了（court・DA session の有無で）、session を開いたまま retire する告発者は session と `refuted_held` の解決まで保持 | `rcore_m3::t84_t42_an_accuser_uses_its_free_half_and_its_exposure_is_held_until_the_claim_resolves`、上限の関数: `sv2::v6_is_v5_below_the_fence_and_adds_the_accuser_clause_past_it`（12,900） | 一部（「court と DA session の有無で引き出しが上限ちょうどで完了する」端から端の test が欠。owner A） |
+| T43 / T44 | trickle で F + 9,000 に成熟 / 行がある限り liability を剪定しない、latch は re-arm を越える | `vf::t43_the_trickle_regime_matures_at_the_bound` / `vf::t44_no_decision_a_term_and_the_latch_survives_a_re_arm` | 有 |
+| T47 | `0xFF` の claim id は `0x00` key（A-KEY） | `vf::t47_an_0xff_claim_id_keys_0x00_and_mints_behind_a_full_market`、`p2_mint_path.rs::p2_t47_…` | 有 |
+| T57 | SR-9: 1 枚目の panel で 3 Unavailable → 早期 redraw、2 枚目で `UnavailableQuorum`（S0′） | 無し | **規則欠**: S-5（object 56 `PanelUnavailableQuorum`）が int-3 に無い。fold は tag 56 を名指しで拒否し（`RcoreObjectNotLanded`、`palw_state_v2.rs` の "arms 55 … and not yet 56 (S-5)"）、void reason 5 を書く規則が無い（`PalwVoidReasonV2::UnavailableQuorum` の doc「written by S-5, by nobody yet」）。node 側（P2-6 の filer）も無い。production code は書いていない。影響: RT#2 と Q-5 の `NotReplayBacked` が同じ S0′ を課すので安全側（早期 redraw が無い分 H_f が長い、ADR §3.7 の "v3 without SR-9"）。drill D-8 の SR-9 部分は通らない |
+| T74（V2 の扉） | SR-1b: L+60 の補完 receipt で flip、L+61 は flip しない、Sampled は flip しない、un-flip なし | `rcore_s2::t74_sr1b_flips_at_l_plus_60_and_not_at_l_plus_61`、`rcore_s2::t37_t74_…` | 有 |
+| T75 | 報酬の時期: sweep → `reporter_rewards` → 3d、reorg twin、admission 時の DA key への投機的 commit は拒否 | `sv2::t75_reward_timing_and_its_reorg_twins`、`rcore_m5_reorg.rs::t75_reorg_twin_…` | 有 |
+| T76 / T77 / T78 | Eq は `min(C, 3·G_eq)`、genesis 2 本の Eq の後も licence / `duty_bind`（8k 0.6212、2M 1.0000）/ 2M の licence 時 top-up・`lock_2` 適格・FP lane | `rcore_s4::t76_eq_takes_min_c_3_g_eq_and_licensing_continues` / `rcore_s3::t77_…` / `rcore_s3::t78_the_2m_top_up_and_the_lock_2_eligibility` | 有 |
+| T80 | kaspad は t11 の params と datadir を起動時に拒否 | `kaspad/src/daemon.rs::t80_testnet_11_is_refused_at_startup_by_name`、`consensus/src/model/stores/palw_state_v2.rs::t80_a_carriage_of_another_state_version_is_refused_by_name` | 有 |
+| T81 / T82 / T84 | 4/5/6 の consumed offence と root の扱い（V-2b）/ 6,000 DAA の halt 後の V-7 / A-6 の free half、`accuser_exposure` の再導出、court 挑戦者の予約 | `rcore_s4::t81_…`、`sv2::t26_t81_…` / `vf::t82_a_post_halt_backlog_drains_at_least_one_row_per_block` / `rcore_s3::t84_a_court_challenger_accuses_on_its_free_half`、`rcore_m3::t84_t42_…` | 有（T82 の「行に開いた session が drain を止めない」は T16 の V3S-02 と同じく欠） |
+
+#### M3（F3: DA court）
+
+| ID | ADR の要求（一行） | test | 状態 |
+|---|---|---|---|
+| T64 | 抽選 unit は受理 block が seed、run の内側、held unit、全 unit に答える、Flat の答えと `OutOfRange` | `rcore_m3::t64_da3_an_event_accusation_draws_inside_the_one_row_run`、`t46::t32_t64_…`、`palw_da_rcore_v1.rs` lib（`the_draw_is_seeded_by_the_block_…`、`one_flat_answers_…`） | 有 |
+| T65 | 独占なし（Sybil の session が seat を塞がない、非 seat の上限 3 と生涯 16、seat の 5 本目は拒否、2 人目の告発者、非 seat の `StepLeaf`、`NeedsDissection` は拒否） | `rcore_m3::t65_da8_seats_and_non_seats_each_accuse_and_nobody_monopolizes` | 有 |
+| T66 | licence 後と Final 後の session（行の re-key、default で行 burn ＋ S3 ＋ covering signer の S4、3 round で F + 4,000 でも S4、coverage で honest partial は課金されない、floor の X2 端から端） | `rcore_m3::t66_da5_da7_a_final_row_is_rekeyed_and_its_default_is_s3_and_s4`（re-key と「lock が session に付いて行く」V3S-04 の assert）、`rcore_m3::t32_c7_…`（coverage の honest partial は 0）、`t46::t66_x2_a_seat_names_the_divergent_leaf_and_the_executor_is_convicted` | 有（「3 round で F + 4,000」の経路そのものは無く、lock の追従の assert が代わる） |
+| T67 / T68 / T69 | pause credit / 「served」は Valid だけ / session の費用と refuted の保持・返金・burn | `rcore_m3::t67_…`、`t46::t67_r_…` / `rcore_s2::t27_t68_…`、`rcore_m3::t27_t68_…` / `rcore_m3::t69_…` ×2、`t46::t69_r_…`、`palw_da_rcore_v1.rs::a_session_costs_r_times_its_stage_base_and_never_more_than_the_floor` | 有 |
+
+#### M4（F4、SEAT-R、stake 加重の抽選、SR-10）
+
+| ID | ADR の要求（一行） | test | 状態 |
+|---|---|---|---|
+| T06 | 実 stake 加重の抽選で `(P_k, q, q_f)` の EV grid（coverage の嘘、V1 withholding、re-roll の各戦略）が §4.3 の閾値（floor 17.29M / 13.39M / 8.32M / 6.63M / 50.83M、SW-10 床の最悪 12.74M / 9.88M / 7.15M / 5.72M / 25.61M、executor 項で 6.63M、`stake: None` で 20/16/10/8/56）を再現 | 部分: `core/tests/adr0152_stake_draw_sw10_split.rs::sw10_floor_is_the_split_v31_review_numbers_prices`（SW-10 床の Sybil 数を実 race で再現）。EV grid 本体は handoff の python model（`docs/handoff/t12-rcore-20260924/v3calc/v31_stake_draw.py`、int-3 に無い） | 欠（owner B [M4]、A が review。§4.3 の EV model を Rust に移し実 race で回す分析 test で、本 lane の範囲（数日）を超えるため書かない） |
+| T45 | collector は S2 より `basis_k ≥ 2` の組を選ぶ | `t12_rcore_sr10_door_gate.rs::t12_t45_…`、kaspad `palw_panel.rs::the_collector_assembles_coverage_then_v1_then_optimistic`・`the_collector_composes_a_backed_v1_before_s2_…` | 有 |
+| T54e | seat の役割: Sampled と S1 Valid（node 端から端） | kaspad `q7_sampled_and_collector_tests::sampled_is_due_only_for_a_partial_seat_at_the_end_of_its_window_past_every_fence`・`sampled_is_filed_as_the_seats_v3_over_its_assigned_mask`・`s3_samples_only_a_capture_seat_s3_verified` | 一部（node の単体はある。devnet preset の node e2e は T54a/b と同じく公開後） |
+| T70 / T71 | Sampled（S3 seat が署名、V2 の答えに写像、quorum/coverage に数えない、lock なし、served でない、dissent slash なし、outsider の Sampled は veto を満たさない、fence 未満は拒否）/ 再計数 | `sv2::t70_…` ×5 / `sv2::t71_the_recount_through_the_v3_door`・`t71_a_mixed_set_with_a_v2_full_replay_valid` | 有 |
+| T72 / T72b | S2 の fast path（licence、replay は課金のまま、escrow 保持、anchor を刻まない、upgrade で `max(L+120, U)` に Final、1 枚目は redraw、2 枚目は `NotReplayBacked`）/ V3S-01 | `palw_rcore_q5_gate.rs::an_upgrade_lifts_the_gate_and_rearms_the_deadline`・`t72b_…`、`t12_rcore_sr10_door_gate.rs::t12_q5_an_s2_licence_redraws_once_then_voids_not_replay_backed`・`t12_t72b_…` | 有 |
+| T73 | Q-6: Sampled の receipt は liable にならない、lock の mask = 割当 mask、DA-7 は lock mask で covering signer だけ（(seat, claim) key）、後の `ProducerWithholding` 提出は no-op | `palw_offence_attribution_v1.rs` lib（Sampled → `PanelFalseValidNotValidVerdict`、2441〜2455 行）、`rcore_s3::t15_…`（mask）、`rcore_m3::t32_c7_…`（covering のみ、(seat, claim) key）、`rcore_m3::m3r_f1_a_post_final_da_default_is_withholding_and_convicts_no_signer`（後の `ProducerWithholding` は no-op）、`palw_da_rcore_v1.rs::only_a_full_mask_covers_a_da_unit` | 有（部品に分かれている） |
+| T74（V3 の扉、SR-10） | SR-1b の V3 半分 | `sv2::t74_v3_a_completing_set_at_l_plus_60_reaches_the_sr1b_seam_and_at_l_plus_61_does_not`、`sv2::sr1b_the_v3_flip_moves_the_escrow_term_off_the_producer_ledger` | 有 |
+| T85 / T86 / T87 | 整数 log の golden・key 比較・重み上限・2 domain / 抽選の法則（successive sampling、4σ、P2、等重みで一様）/ 重みは operator の 1 bond の担保で上限付き、`DuplicateOperator`、anchor 後の登録は無、ledger は重みを動かさない | `pv2::t85_the_integer_log_the_key_order_and_the_cap` / `pv2::t86_the_draw_is_successive_sampling_and_s1_is_untouched` / `pv2::t87_the_weight_sums_eligible_bonds_and_keys_are_the_operators_own`、`pv2::t93_another_bonds_commitments_move_no_key` | 有 |
+| T88 / T89 | `stake: None` は ADR-0130/0147 と byte 一致 / build = accept = fold を 1 state で、anchor 後の `PanelBound` は拒否され `BindTimeout`、IA-1a/1c | `pv2::t88_…` ×2（ほか） / `pv2::build_equals_accept_…`・`t89_…` ×4、`t12_stake_draw_integration.rs::t12_genesis_binds_under_the_stake_draw`・`sw8_the_anchor_block_voids_a_claim_it_does_not_bind` | 有 |
+| T90 | admission jury は fence の前後で ADR-0147 のまま（無加重）、`stake` を読まない。残余（40 × 13,000 MSK の Sybil が 0.9728 で過半）は文書のみ | **本 lane**: `core/tests/t90_admission_jury_is_unweighted.rs::t90_the_admission_jury_is_the_operator_ticket_order_whatever_the_stake`（256 母集団 × 再配置・分割・逆順で陪審不変、対照に stake race は動く）、`::t90_the_folds_jury_reads_neither_the_stake_nor_the_fence`（`admission_jury_seated` と `palw_admission_jury_v1` の本文） | 有（本 lane） |
+| T91 / T92 / T93 / T94 | `ready_eff` / `InsufficientEligibleBonds` の条件、cap の operator は 1 席 / anchor 後に panel は動かない / SW-10 床（875‰ で bind、874‰ で拒否、…、executor 項） | `pv2::t91_…`・`sw9_…`、`core/tests/adr0152_sw9_ready_eff_room.rs` ×3 / `pv2::t92_…` / `pv2::t93_…` ×2 / `pv2::t94_…` ×5 | 有。T94 の「still to add: その void で producer の予約が解放される」（IA-1c）は `pv2::t94_a_refused_draw_…` が既に assert している（"the executor's reservation is released"）— ADR の pending 表記は古い |
+| T18p-M | （上の M2 表） | | 有 |
+
+#### M5（統合後の fold / reorg / restart）
+
+| ID | ADR の要求（一行） | test | 状態 |
+|---|---|---|---|
+| T07 / T40 / T41 / T75 の reorg twin / T01 の revert・IBD twin | （上の S 表） | `rcore_m5_reorg.rs`、`rcore_m5_restart.rs`、`rcore_m5_q5_gate.rs`、`rcore_m5_v22_golden.rs` | 有 |
+| T48 | mint の reorg | `p2_reorg_and_ibd.rs::p2_t48_a_reorg_across_latch_move_mint_and_burn_lands_on_a_fresh_replay_s_root` | 有 |
+| T49 | backlog の中の IBD | `p2_reorg_and_ibd.rs::p2_t49_…` ×2 | 有 |
+| T83 | session 中・reveal window 中・backlog 中の restart で root が一致 | `rcore_m5_restart.rs::t83_restart_mid_session_mid_reveal_window_and_mid_backlog` | 有 |
+
+#### item 5（Phase 2 の要の部分、C12）
+
+| ID | ADR の要求（一行） | test | 状態 |
+|---|---|---|---|
+| T03 / T05 / T23 / T25 | （上の S 表）/ Decision A の分離 | T25: `p2_mint_path.rs::p2_t25_t05_…`・`p2_t25_a_licence_halt_latches_and_moves_nothing_at_the_processor_s_fold`、`vf::t44_…` | 有 |
+| T23 の UTXO 半分 | B-3 を UTXO 層で（`palw_v2_locked_bond_outpoints`、`palw_v2_bond_burn_obligations`） | `p2_b3_vesting_payee_gate.rs::p2_t23_every_utxo_site_holds_a_vesting_payee_exactly_while_v4a_does` | 有 |
+| T47 | `0xFF` key | （上の S 表） | 有 |
+| T48 / T49 | （上の M5 表） | | 有 |
+| T50 | EVM twin | `p2_evm_twin.rs::p2_t50_…` ×2（`--features evm` でのみ build） | 有（evm の battery で走る） |
+| T51 | RPC | `palw_vesting_read_v1.rs::t51_…` ×7、`misaka-cli/src/palw_vesting.rs::t51_…`、`rpc/core/src/model/message.rs` | 有 |
+| T52 | CLI | `misaka-cli`（`operator/roles.rs`・`status.rs`・`work.rs`・`wallet.rs`・`main.rs`）、kaspad `palw_panel.rs::t52_the_fee_funder_…` | 有 |
+| T53 | drill の隔離（drill chain の登録・attempt・有罪は公開 t12 で拒否、drill の miner script で coinbase txid が別） | `t53_drill_isolation.rs` ×4、`consensus/core/src/config/drill.rs` ×6、kaspad `palw_drill.rs` ×5、`protocol/flows/src/flow_context.rs`、`utxo_set_override.rs`、`misaka-cli/src/bond.rs` | 有 |
+| T58 | queue の補題 | `p2_mint_path.rs::p2_t58_t03_…`、`vf::t30_t58_…` | 有 |
+
+**参考（release-prep lane が a0af3c92 で所在不明とした番号のうち上に無いもの、と IA-14 9-3）**:
+T54a（`t46::t34_t54a_…`、processor 半分）・T54b（`t46::t32_t54b_…`）・T54c（kaspad `palw_reporter_filer.rs::t54c_…`、`t46_p2_8_reporter_filer.rs::t18_t54c_…`）・
+T54d（`t54d_false_valid_filer.rs` 12 本、int-3 で merge 済み）・T54f（`t54f_replay_filer.rs` 7 本）は **有**（devnet preset の node e2e は公開後）。
+**T54g は監査 branch `rcore/p2-8e` @ `ade4b458` にだけある**（`consensus/src/pipeline/virtual_processor/tests/t54g_object_rehearsal.rs` 2 本、
+`kaspad/src/palw_filer_held_e2e.rs` 13 本）— P2-8e の merge で入る。**T55**（経済 ledger の `named`・`minted`・`burned_by_conviction` が
+root の counter と一致）は **規則欠**: `palw_economics_ledger_v1.rs` にその列が無い（item 5 の範囲外）。T56 は `p2_mint_path.rs::p2_t03_…`（供給の恒等式）で有。
+**IA-14 9-3 の processor e2e**（正直な producer が DA 告発に答え、課金されない）は **有**:
+`t46::p2_7_an_honest_producer_answers_two_accusers_with_the_nodes_builder_and_is_not_charged`・`p2_7_a_held_session_on_an_attempt_claim_is_answered_from_its_capture`。
+
+**監査の未 merge branch に属するもの（本 lane では書かない。監査へ）**: A-held（`feat/t12-aheld-node`）の T-A 系（object 57 の自動応答、C1〜C5、
+`palw_filer_held_e2e`）と shard court の one-move（`8be0f661`、J-8。int-3 の祖先ではない）の test は item 7・8・9-8 の証拠で、
+番号 T01〜T94 の外。Activation Pool（`feat/t12-activation-pool`）の P1〜P5 の回帰と R1/R2 の test も同じ。merge 後に出荷 commit で上の表と一緒に取る。
+
+### 1b. 本 lane で足した test と、red になることの確認（mutation）
+
+commit `3568510f`（test だけ。production code は変えていない）＋ rustfmt と本文書の commit（§1b の記録）。いずれも base `8270cf03` の上。
+
+| test | 番号 | 一時的に壊した rule（mutation） | 結果 |
+|---|---|---|---|
+| `consensus/core/tests/t02b_rt2_is_s0_prime_on_every_class.rs::t02b_rt2_is_s0_prime_on_the_floor_the_8k_row_and_the_2m_row` | T02b（regenesis） | `sweep_deadlines` の RT#2 の `void_and_slash` を floor（`base_class_id`）だけにした | red: "8k row: S0′ — the producer forfeits exactly its commitment"（left 0） |
+| `…::t02_bind_timeout_and_no_capable_panel_charge_nothing` | T02 | `sweep_deadlines` の `Provisional` の void を `void_claim` → `void_and_slash` | red: "floor: S0 — no bond is charged" |
+| `consensus/core/tests/t37_an_fp_only_stretch_is_a_halt.rs::t37_f18_a_stretch_in_which_only_free_prompts_license_is_a_halt` | T37（F18） | `license_claim` の `ticks` から `attempt &&` を外した（FP の licence も anchor を刻む） | red: "F18: a free prompt's licence settles no anchor"（left `(2, [1005, 1129])`） |
+| `consensus/core/tests/t90_admission_jury_is_unweighted.rs::t90_the_admission_jury_is_the_operator_ticket_order_whatever_the_stake` | T90 | `palw_admission_jury_v1` を「担保の多い operator から」並べた | red: "member 0: the jury is the lowest operator tickets" |
+| `…::t90_the_folds_jury_reads_neither_the_stake_nor_the_fence` | T90（fold） | 同上（jury の本文が `collateral` を読む）／`admission_jury_seated` に `PalwPanelStakeDrawV1` を置いた | red: "palw_admission_jury_v1 reads `collateral`…"／red: "admission_jury_seated reads `stake`…" |
+| `consensus/src/pipeline/virtual_processor/tests/t28_a_retired_claims_row_burns.rs::t28_a_conviction_after_retirement_under_a_held_second_clock_burns_the_row` | T28 | (1) `post_final_producer_leg_v1` が retired claim（claim 記録なし）を飛ばす（行を burn しない）／(2) `palw_claim_g_v1` の liability 記録の `basis_k` を 1 に | (1) red: "the conviction burned the row"／(2) red: "with the claim record gone, G and basis_k are the liability record's"（left `basis_k` 1、right 2） |
+| `…/t18m_forged_output_tiled.rs::t18m_forged_output_tiled_convicts_the_full_mask_signer_before_final_and_never_an_honest_decode`、`::t18m_forged_output_tiled_after_final_reverses_it_by_kind_3_and_by_kind_4` | T18m | `palw_forged_output_tiled_fault_v1` の `NotSelected` と `OutOfVocab` を常に `TokenHolds` | 両方 red: 前者は partial の拒否理由が `TokenHolds`（"the committed token is its row's selection…"）に変わり、後者は gate が有罪の object を拒否 |
+
+mutation を戻した後、同じ test は全部 GREEN（core: 本 lane の 3 file ＋ `rcore_s4_conviction_funnel`・`t12_class_verify_deadline`・`palw_rcore_plus_is_t12_only` が ok。consensus: `t46_false_valid_real_claim` の全体（子の t47・t18m・t28・t54d・t54f・p2_8・p2_t29、IA-14 9-3 の `p2_7_…` を含む）84 passed / 0 failed。stranger script の `selftest` も PASSED（21 checks、IA-14 9-5））。数値（test の出力）: T02b の RT#2 は floor 320,095,402,740 / 8k 369,516,654,680 /
+2M 6,294,378,856,900 sompi（= commitment）。T28 は F 123 → retire 3,124 → 有罪 4,123、行 320,084,650,080 sompi（`basis_k` 2）burn、S3 960,289,208,220、
+S4 984,302,020,940、X 5,876,330（`basis_k` 1 なら 11,752,660）。T37/F18 は anchor 1,005、FP licence 1,129、halt 7,005（window_court 3,000）。
+T90 は 256 母集団で陪審不変、同じ再配置で stake race は 142 母集団で動いた（対照）。
+
+再実行:
+
+```bash
+export CARGO_TARGET_DIR=<target> CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0
+cargo test --locked -p kaspa-consensus-core --test t02b_rt2_is_s0_prime_on_every_class --test t37_an_fp_only_stretch_is_a_halt --test t90_admission_jury_is_unweighted
+cargo test --locked -p kaspa-consensus --lib -- t28_a_retired_claims_row_burns t18m_forged_output_tiled
+```
+
 
 ---
 
 ## 2. IA-14 の ship 条件（各項目を出荷 commit で）
 
-| # | 条件 | a0af3c92 | 添付する証拠 |
-|---|---|---|---|
-| 9-1 | F2 と F1 の fence（`palw_offence_attribution`）は SEAT-S1・SEAT-S2・SEAT-R と一緒にだけ出す。SEAT-S2 の kaspad 半分は `palw_seat_replay_step_v1` で `CoreV1` の `output_root` を比べる | あり（`449fd892` の実 model-class replay test、`palw_seat_replay_step_v1`） | `449fd892` の test（held A16 v7 行: 正直な `CoreV1` claim が licence、Legacy の `output_root` は refute）の PASS |
-| 9-2 | `AnyValid` fence の H-1（S3 の layer-sample は `verify_material` の前に Valid を署名しない）と H-2（FP S1 resume は `palw_fp_job_pin_of_context_v1(&ctx) == duty.fp_job_pin_v1()`） | H-1 あり（`1e20edd50`、test `c1_s3_never_attests_past_the_fence_without_verify_material`）。H-2 あり（`kaspad/src/palw_panel.rs` の `palw_fp_job_pin_of_context_v1(&ctx) != pin` の拒否、`d675423d` 取り込み済み） | 両 test の PASS、T18p-M の PASS。H-2 が入っていなければ identity site は `Whole` のまま |
-| 9-3 | producer の V2 DA responder が `palw_rcore_plus` を武装する全 build にある（honest producer が告発に答え、課金されない processor e2e） | P2-7 merge 済み（7c2850b3、`palw_disclosure_duties_v1` が自分の claim と lock が覆う claim の session を列挙）。processor e2e は `t46_false_valid_real_claim.rs` の `p2_7_an_honest_producer_answers_two_accusers_with_the_nodes_builder_and_is_not_charged`（:4428）と `p2_7_a_held_session_on_an_attempt_claim_is_answered_from_its_capture`（:4655） | 両 test の PASS。監査の M3 review F2（CRITICAL）が閉じたことの確認。**運用上の飢え**（seat replay 2 本が DA 応答の余地を取る、PLAN §2.5 R-2b）は §7 の open item |
-| 9-4 | `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1` は seat の DA 自動応答（P2-7）と同じ commit でだけ `true` | `true`（`consensus/core/src/palw_da_rcore_v1.rs:67`）、P2-7 と同じ line | flag の値と、covering signer の `MaterialDisclosedV2` の test |
-| 9-5 | `misaka-palw-derive` と stranger script は network の attempt rule（t12 は `CoreV1`）で `output_root` を再計算。FP worker も | あり（`a4682a8d`、`d675423d`）。stranger script は `scripts/misaka-palw-derive-stranger.py` | `cargo test --locked -p misaka-palw-derive --test output_root_rules`（`the_network_names_the_rule_testnet_12_core_v1_and_testnet_11_legacy`、`derive_recomputes_the_chains_root_on_every_testnet_12_model_class`、`the_output_commitment_is_the_strangers_pinned_literal`）、`python3 scripts/misaka-palw-derive-stranger.py selftest`（build 不要）、FP worker の rule の test の PASS |
-| 9-6 | `PALW_RCORE_VESTING_ROWS_LANDED_V1 = true` と S-4 の funnel（kaspad は false なら起動しない） | `true`（`consensus/core/src/palw_state_v2.rs:2846`）、S-4 merge 済み | flag の値と `rcore_s4_conviction_funnel.rs` の PASS |
-| 9-7 | 4-quater の consensus 半分と P-1（`palw_class_verify_deadline`、pruning depth ≈ 74,920 DAA、D_cap 16,000）が genesis params にある — 2M は規則で閉じる | **無い**（`feat/t12-class-verify-deadline` 未 merge）。pruning depth は regenesis でしか決められない | 出荷 commit の t12 params の値（`probe-identity-local.sh` の fingerprint が動くこと）と O-11 の拒否 test |
-| 9-8 | A-held と shard court（`feat/t12-aheld`、8be0f661 の上）が監査の review 後に merge、B の routing・object 57 の自動応答・N4 | **無い** | 監査 review の結論、merge commit、item 7 の test |
-| — | 公開条件ではない（IA-13）: SEAT-S4 の forged-sibling residual（2M の flag day 項目） | — | — |
+「8270cf03」列は lane 3 が 2026-09-25 に code と `git merge-base --is-ancestor` で確かめた判定（**満** / **未**）と根拠。「a0af3c92」列は
+release-prep の読みで、履歴として残す。判定は出荷 commit でもう一度取る（merge で動く）。
+
+| # | 条件 | 8270cf03（lane 3） | a0af3c92（release-prep） | 添付する証拠 |
+|---|---|---|---|---|
+| 9-1 | F2 と F1 の fence（`palw_offence_attribution`）は SEAT-S1・SEAT-S2・SEAT-R と一緒にだけ出す。SEAT-S2 の kaspad 半分は `palw_seat_replay_step_v1` で `CoreV1` の `output_root` を比べる | **満**。SEAT-R: `palw_seat_r_in_force_v1`（`kaspad/src/palw_panel.rs`、test `seat_r_is_in_force_on_testnet_12_from_genesis_and_nowhere_else` :15153）。SEAT-S1: base0 `seat_s1_whole_job.rs`（3 本）。SEAT-S2: base0 `seat_s2_output_root.rs`（3 本）と kaspad の `palw_replay_answer_v1`（`Some(root) if root == claimed_output_root => Reproduces`）、test `past_seat_r_the_replay_step_refutes_a_claim_whose_answer_is_not_the_core_v1_root`（:15736、`449fd892` は祖先） | あり | 上の test の PASS |
+| 9-2 | `AnyValid` fence の H-1（S3 の layer-sample は `verify_material` の前に Valid を署名しない）と H-2（FP S1 resume は `palw_fp_job_pin_of_context_v1(&ctx) == duty.fp_job_pin_v1()`） | **満**。H-1: `1e20edd50` は祖先、test `seat_s_tests::c1_s3_never_attests_past_the_fence_without_verify_material`（:16583）。H-2: `kaspad/src/palw_panel.rs:13158` の `palw_fp_job_pin_of_context_v1(&ctx) != pin` → `None`（source test :16972）、`d675423d` は祖先。T18p-M は base0 `seat_material_duty.rs`。※ ADR §8.3 item 9 の「H-2 is pending」と IA-14 の同文は古い | あり | 両 test と T18p-M の PASS。入っていなければ identity site は `Whole` |
+| 9-3 | producer の V2 DA responder が `palw_rcore_plus` を武装する全 build にある（honest producer が告発に答え、課金されない processor e2e） | **満**。kaspad は `session.palw_disclosure_duties_v1(vec![bond_key])`（:7607）で自分の claim の session も読む（`palw_da_duties_v2` は court 用に残る）。processor e2e: `t46::p2_7_an_honest_producer_answers_two_accusers_with_the_nodes_builder_and_is_not_charged`（:4428）、`p2_7_a_held_session_on_an_attempt_claim_is_answered_from_its_capture`。※ ADR の「the responder's end-to-end test is to be written」は古い | あり | 両 test の PASS。運用上の飢え（PLAN §2.5 R-2b）は §7 |
+| 9-4 | `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1` は seat の DA 自動応答（P2-7）と同じ commit でだけ `true` | **満**。`true`（`consensus/core/src/palw_da_rcore_v1.rs:67`）、P2-7（`b34df2ff`・`fc5e30d8`）は祖先。covering signer の答え: `t46::t32_t54b_…`、core `rcore_m3::t32_c7_…`（`landed` の両側） | あり | flag の値と上の test |
+| 9-5 | `misaka-palw-derive` と stranger script は network の attempt rule（t12 は `CoreV1`）で `output_root` を再計算。FP worker も | **満**。`a4682a8d`・`d675423d` は祖先。`misaka-palw-derive/tests/output_root_rules.rs`（4 本）、`scripts/misaka-palw-derive-stranger.py` | あり | `cargo test --locked -p misaka-palw-derive --test output_root_rules`、`python3 scripts/misaka-palw-derive-stranger.py selftest` |
+| 9-6 | `PALW_RCORE_VESTING_ROWS_LANDED_V1 = true` と S-4 の funnel（kaspad は false なら起動しない） | **満**。`true`（`consensus/core/src/palw_state_v2.rs:2961`）、S-4 の merge `68f0d672` は祖先、kaspad `palw_rcore_build_can_run_v1`・test `n1_rcore_plus_needs_the_vesting_rows_at_startup`（`kaspad/src/daemon.rs:2216`） | あり | flag の値、`rcore_s4_conviction_funnel.rs` と n1 の PASS |
+| 9-7 | 4-quater の consensus 半分と P-1（`palw_class_verify_deadline`、pruning depth ≈ 74,920 DAA、D_cap 16,000）が genesis params にある — 2M は規則で閉じる | **満**（a0af3c92 から変わった）。merge `a66509f9`（`a4323997`）。`Params::palw_class_verify_deadline`、`params.rs` の `T12_PRUNING_DEPTH = 74_920`（T-D7 の test）、2M の拒否は `core/tests/t12_class_verify_deadline.rs::td2_the_2m_row_is_refused_at_launch_attempt_and_free_prompt`。t12 の params と fingerprint は a0af3c92 から動いている（§3 の値は古い） | 無い | 出荷 commit の t12 params、`probe-identity-local.sh` の fingerprint、T-D2 の PASS |
+| 9-8 | A-held と shard court（`feat/t12-aheld`、8be0f661 の上）が監査の review 後に merge、B の routing・object 57 の自動応答・N4 | **未**。`feat/t12-aheld-node` @ `1ee0e08d` も `8be0f661` も祖先ではない（lane 1 の merge 待ち） | 無い | 監査 review の結論、merge commit、item 7 の test |
+| — | 公開条件ではない（IA-13）: SEAT-S4 の forged-sibling residual（2M の flag day 項目） | — | — | — |
+
+**8270cf03 で「未」は 9-8 だけ。** item 8 の shard court（8be0f661）も同じ merge で入る。
 
 ---
 
@@ -123,6 +315,8 @@ a0af3c92: licence-stall（a4dfe903、d94d3a1b）あり、panel-room の C7 re-ke
 
 2026-09-25、Mac、`contrib/t12-deploy-kit/probe-identity-local.sh`（dev build の kaspad、sha256 `2a7dd6e4…`、隔離 node）で読んだ値。
 §1 item 7・§2 9-7/9-8 の merge（deadline＋P-1、A-held、Activation Pool）と P2-8 がこれを動かす。
+**lane 3 の注記（8270cf03）**: deadline ＋ P-1（9-7）と P2-8 は既に merge されたので、下の値は 8270cf03 の t12 とは一致しない
+（lane 3 は identity を読み直していない。再 pin は §5 で出荷 commit に対して一度だけ）。
 
 ```
 EXPECT_FP=8a4810231e4f54e7d62b57ef0c4bc7973b23ebb87b1943b6541c05190b2d5ee6
@@ -273,5 +467,11 @@ O-13 の計数。**X10（M6）**: `palw_rcore_attributed_charging` は M1〜M5 �
 - **実装（公開前に推奨）**: 自分の claim の DA duty が保留中は seat の 2 本目の replay を始めない、または DA 応答に ledger の予約枠を先取りさせる
   （PLAN §2.5 R-2b。`kaspad/src/palw_panel.rs` の `PalwSeatReplaysV1::IN_FLIGHT = 2` と `reserve_replay_v1("da-answer")`）。入らなければ既知リスク
   として公開し O-7 で監視する。
-- **監査**: 所在不明の test 番号（T02b、T06、T28、T31、T57、T62、T90、T54c〜T54g、T55）の所在か追加／4-quater と A-held の review と merge／
-  `fix/t12-live-seat0` が公開 line に要るか／t11 の休眠 parity の digest が動いた場合の確認。
+- **監査**: ~~所在不明の test 番号（T02b、T06、T28、T31、T57、T62、T90、T54c〜T54g、T55）の所在か追加~~ → lane 3 が §1a で所在を示し、
+  T02b（regenesis の半分）・T02 の 0 の cell・T28・T90・T18m の残りの cell・T37 の F18 を書いた（§1b）。**残り**: T62（J-6 の一意の経路の性質 test、A）、
+  T06（EV grid、B が書き A が review）、T16/T82 の V3S-02 条項、T42 の引き出し完了の端から端、T26 の F21 twin、
+  T18p の kaspad 層（B）／**T57 は規則欠**（S-5 の object 56 と P2-6 の filer。公開に入れるか、RT#2 ＝ S0′ で足りるとして公開後にするかの判断）／
+  **T55 も規則欠**（ledger の `named`・`minted`・`burned_by_conviction` の列。item 5 の外）／ADR の古い記述の訂正（§8.3 item 9 と IA-14 の
+  「H-2 pending」「the responder's end-to-end test is to be written」、IA-1c と T94 の「reservation release の test は未」— どれも 8270cf03 で
+  満たされている。T31 の「fence 未満は v3 の場合」— R-core+ は attribution を前提に要求するので起こらない）／A-held の review と merge
+  （9-8、item 7・8）／`fix/t12-live-seat0` が公開 line に要るか／t11 の休眠 parity の digest が動いた場合の確認。

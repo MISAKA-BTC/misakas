@@ -26,7 +26,10 @@ const MSK: u64 = 100_000_000;
 
 /// A V1 quorum licence: every floor seat's `Valid`, signed at the bind.
 fn quorum(t: &Tape, claim: Hash64, bound: u64) -> PalwConsensusObjectV2 {
-    PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: t.c.floor_seats().iter().map(|(k, _)| valid(claim, *k, bound)).collect() }
+    PalwConsensusObjectV2::ReceiptLicensed {
+        claim,
+        receipts: t.c.floor_seats().iter().map(|(k, _)| valid(claim, *k, bound)).collect(),
+    }
 }
 
 /// **T37 / F18.** An attempt licensed by the full quorum settles an anchor (the ring gains its DAA)
@@ -110,8 +113,6 @@ fn t37_f18_a_stretch_in_which_only_free_prompts_license_is_a_halt() {
     let at = halt.max(control.c.daa + 1);
     control.at(at, vec![]);
     assert!(!palw_chain_vesting_halted_v1(&control.c.s, raw, at, wc), "the control: not halted");
-    println!(
-        "T37/F18: anchor {anchor}; FP licensed {fp_licensed}; halted at {halt} (window_court {wc}); control anchor {b_anchor}"
-    );
+    println!("T37/F18: anchor {anchor}; FP licensed {fp_licensed}; halted at {halt} (window_court {wc}); control anchor {b_anchor}");
     t.revert_to_base_and_reapply();
 }

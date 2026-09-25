@@ -173,8 +173,9 @@ fn t90_the_admission_jury_is_the_operator_ticket_order_whatever_the_stake() {
         if operators as usize >= SEATS as usize {
             let claim = Hash64::from_u64_word(0x90C1_0000 + member);
             let anchor = BlockHash::from_u64_word(0x90A0_0000 + member);
-            let race =
-                |list: &[(PalwBondKeyV2, PalwBondStateV2)]| palw_panel_stake_race_of_v1(SEATS, &claim, anchor, &refs(list), &refs(list), &stake);
+            let race = |list: &[(PalwBondKeyV2, PalwBondStateV2)]| {
+                palw_panel_stake_race_of_v1(SEATS, &claim, anchor, &refs(list), &refs(list), &stake)
+            };
             let ops = |seats: Vec<kaspa_consensus_core::palw_state_v2::PalwPanelSeatV2>| {
                 let mut ops: Vec<Hash64> = seats.into_iter().map(|s| s.operator_id).collect();
                 ops.sort();

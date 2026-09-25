@@ -157,7 +157,12 @@ fn t02_bind_timeout_and_no_capable_panel_charge_nothing() {
             }),
             PalwVoidReasonV2::BindTimeout,
         ),
-        ("8k row", model_chain(p, short, 1), Box::new(move |c: &mut Chain| (model_claim(c, short, 1, 0x02BC), bond_key(1))), PalwVoidReasonV2::NoCapablePanel),
+        (
+            "8k row",
+            model_chain(p, short, 1),
+            Box::new(move |c: &mut Chain| (model_claim(c, short, 1, 0x02BC), bond_key(1))),
+            PalwVoidReasonV2::NoCapablePanel,
+        ),
     ];
     for (label, mut c, open, want) in cases {
         let (id, producer) = open(&mut c);

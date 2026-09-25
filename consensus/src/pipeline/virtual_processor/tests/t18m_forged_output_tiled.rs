@@ -128,7 +128,11 @@ async fn t18m_forged_output_tiled_after_final_reverses_it_by_kind_3_and_by_kind_
             assert_eq!(s.safe_weight(), at_final.safe_weight() - contribution, "{label}: safe_weight falls by what the Final added");
             assert!(s.palw_execution_root_is_forfeited_v1(&root), "{label}: the proven-false root is forfeit");
             assert!(s.vesting_row(&id).is_none(), "{label}: the vesting row is burned");
-            assert_eq!(s.vesting_counters().burned - at_final.vesting_counters().burned, row.total_sompi_u128(), "{label}: once, whole");
+            assert_eq!(
+                s.vesting_counters().burned - at_final.vesting_counters().burned,
+                row.total_sompi_u128(),
+                "{label}: once, whole"
+            );
             let g = g_of(s, id);
             let c0 = at_final.bond(&executor).unwrap().collateral;
             let s3 = palw_rcore_s3s4_action_v1(c0, g);
