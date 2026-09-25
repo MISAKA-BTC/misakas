@@ -14,43 +14,51 @@
 //! fix (a lottery ticket that costs a certified execution) lands.
 //!
 //! **The rule, precisely.** For a claim with anchor slot `s = bind_base_daa + anchor_delay`, the anchor
-//! is the FIRST block on the candidate's selected chain whose DAA score is at or past `s` and which may
-//! anchor a panel. Past `palw_rcore_plus` "may anchor" was "is an attempt block"; past this fence —
-//! resolved at THAT block's own DAA score, the key lane F1 resolves the seed rule at — it is "is an
-//! attempt block produced by an operator bond" ([`PalwOperatorAnchorRuleV1::operator_of_v1`]): the
-//! envelope decodes, its `executor_bond` is an operator bond, and its `executor_pubkey` is that bond's
-//! genesis-registered key. The header stage has already verified the envelope's ML-DSA-87 signature
-//! against that carried key (the relay path's `palw_carriage_stateless_v1`), so the predicate is a
-//! function of the header and the genesis registry alone, and naming an operator's outpoint under
-//! another key is not operator production. Everything else follows from the processor's existing
-//! machinery, which reads this one predicate (`palw_block_may_anchor_a_panel_v1`):
+//! (the block that binds, SW-8) is the FIRST block on the candidate's selected chain whose DAA score is
+//! at or past `s` and which anchors a panel for `s`. Past `palw_rcore_plus` that was "is an attempt
+//! block"; past this fence — resolved at THAT block's own DAA score, the key lane F1 resolves the seed
+//! rule at — it is "**is, or merges** (blue or red), an operator's attempt whose DAA score is at or
+//! past `s`", whatever the block's own lane. An operator's attempt is
+//! [`PalwOperatorAnchorRuleV1::operator_of_v1`]: the envelope decodes, its `executor_bond` is an
+//! operator bond, and its `executor_pubkey` is that bond's genesis-registered key. The header stage
+//! has already verified the envelope's ML-DSA-87 signature against that carried key (the relay path's
+//! `palw_carriage_stateless_v1`), so the test is a function of the header and the genesis registry
+//! alone, and naming an operator's outpoint under another key is not operator production. The
+//! mergeset half lives in the processor, which holds the GHOSTDAG data
+//! (`palw_chain_block_as_anchor_v1`, the one answer its anchor walk, step 4c and the one-state
+//! pre-check read):
 //!
-//! * a non-operator attempt at or past the slot is not an anchor — it binds nothing and (SW-8 step
-//!   4c, `sw8_anchor_delay = None`) voids nothing; the claim waits for the next operator attempt;
-//! * the first operator attempt at or past the slot binds the claim in its own acceptance (SW-8) or,
+//! * a block that neither is nor merges an operator attempt at or past the slot — a non-operator's
+//!   attempt, a heartbeat — binds nothing and (SW-8 step 4c, `sw8_anchor_delay = None`) voids nothing;
+//!   the claim waits;
+//! * the first chain block that is or merges one binds the claim in its own acceptance (SW-8) or,
 //!   where the draw refuses, voids it there (S0, no forfeit) — or re-anchors it at its next slot past
-//!   the registry-resilience fence (V03);
+//!   the registry-resilience fence (V03). It anchors only slots at or below the latest operator
+//!   attempt it is or merges (`sw8_anchor_reach`), so a claim whose slot falls after that attempt waits;
 //! * a slot no operator attempt reaches before the bind window lapses voids `BindTimeout` at the
 //!   window's backstop `bind_base + window_bind` (S0, no forfeit), exactly as a slot no attempt at all
 //!   reaches did.
 //!
-//! **The seed's source, and why it is not simply the anchor.** "First on the selected chain" is a
+//! **The seed's source, and why "is or merges".** "First operator attempt on the selected chain" is a
 //! race a non-operator can enter after the fact: an operator's attempt is published before anyone
 //! builds on it, its panel for every waiting claim can be read off its header (lane F1's seed is a
-//! function of the header and the claim), and a heavier sibling released at that moment (one extra
-//! withheld blue parent, or the hash tie-break between equal-work siblings) takes the selected-parent
-//! slot and merges the operator's attempt instead. Under a pure chain rule each such displacement
-//! would be a fresh draw at the next operator attempt — hundreds per 580-DAA bind window. So the
-//! processor's walk reads the seed off the EARLIEST operator attempt at or past the slot in the
-//! anchor's past (the minimal `(DAA score, hash)` among the operator attempts that are, or are merged
-//! by, the chain blocks from the slot to the anchor): undisturbed that is the anchor itself;
-//! displaced, it is the displaced attempt, which the next chain block merges whoever wins the race.
-//! A displacement then moves where the claim binds, never what it draws. `validate_palw_v2` requires
-//! lane F1 at or below this fence, so the seed is always that attempt's execution commitment.
+//! function of the header and the claim), and a sibling released at that moment (the hash tie-break
+//! between equal-work siblings, or one extra withheld blue parent) takes the selected-parent slot. Keyed
+//! on the next operator attempt ON the chain, each such displacement would be a fresh draw — hundreds
+//! per 580-DAA bind window — and a bonded non-operator displacing every one would hold every claim off
+//! its anchor until the backstop voided it (verification, 2026-09-26). So the seed is read off the
+//! EARLIEST operator attempt at or past the slot that the anchor is or merges (minimal `(DAA score,
+//! hash)`), and the draw's DAA-keyed inputs are resolved at that attempt's DAA score. Undisturbed, the
+//! anchor is the operator's attempt itself; displaced, the claim binds in the first chain block that
+//! merges it — the very next one, whoever produces it — on its seed and at its DAA. A displacement then
+//! moves the binding by one block and changes neither the seed nor the draw's clock; what it can still
+//! change is the state the draw reads (the binding block's pre-object base, one block later).
+//! `validate_palw_v2` requires lane F1 at or below this fence, so the seed is always that attempt's
+//! execution commitment.
 //!
-//! Deterministic: the predicate reads the header (algorithm id, DAA score, carried envelope) and the
-//! genesis registry, both chain data every node holds, so reorg, IBD and a pruning-proof sync resolve
-//! it alike; the switch key is the candidate anchor's own DAA score, so a claim whose slot is below the
+//! Deterministic: the rule reads headers (algorithm id, DAA score, carried envelope), the chain block's
+//! GHOSTDAG mergeset and the genesis registry, all chain data every node holds, so reorg, IBD and a
+//! pruning-proof sync resolve it alike; the switch key is the candidate anchor's own DAA score, so a claim whose slot is below the
 //! fence and whose first attempt past the slot is past it takes the new rule.
 
 use crate::config::params::ForkActivation;
@@ -166,9 +174,12 @@ impl PalwOperatorAnchorRuleV1 {
         (self.keys.get(&bond)? == &envelope.attempt.executor_pubkey).then_some(bond)
     }
 
-    /// **Whether the rule lets `header` anchor a panel**: below the fence (at the header's OWN DAA
+    /// **Whether `header` passes the rule's header half**: below the fence (at the header's OWN DAA
     /// score) always — the lane rule the caller applies decides alone, byte for byte the released
-    /// behaviour; at or past it only an operator-produced attempt ([`Self::operator_of_v1`]).
+    /// behaviour; at or past it only an operator-produced attempt ([`Self::operator_of_v1`]). Past the
+    /// fence the chain's anchor rule also takes a block that MERGES such an attempt (the processor's
+    /// `palw_chain_block_as_anchor_v1`, which holds the mergeset); for a block that merges none — every
+    /// block an attacker makes that has not merged a displaced operator attempt — this is the answer.
     pub fn admits_anchor_v1(&self, header: &Header) -> bool {
         !self.active_at(header.daa_score) || self.operator_of_v1(header).is_some()
     }
@@ -289,7 +300,10 @@ mod tests {
                 assert!(rule.admits_anchor_v1(&operator(daa)), "algo {algo}, DAA {daa}: an operator's attempt anchors");
                 assert!(!rule.admits_anchor_v1(&listed_out(daa)), "algo {algo}, DAA {daa}: a genesis bond off the list does not");
                 assert!(!rule.admits_anchor_v1(&stranger(daa)), "algo {algo}, DAA {daa}: a non-operator's attempt does not");
-                assert!(!rule.admits_anchor_v1(&impersonation(daa)), "algo {algo}, DAA {daa}: an operator's outpoint under another key does not");
+                assert!(
+                    !rule.admits_anchor_v1(&impersonation(daa)),
+                    "algo {algo}, DAA {daa}: an operator's outpoint under another key does not"
+                );
             }
         }
         // Not an attempt, or an envelope that does not decode: never an operator's.

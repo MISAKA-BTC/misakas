@@ -22946,8 +22946,11 @@ pub fn apply_palw_transition_v7(
     //     what is resolved. `sw8_anchor_delay` is `Some` only on a block that may anchor a panel past
     //     the fence; `None` — every other block, every network but testnet-12, and testnet-12 with
     //     the fence off — never reaches it, so those claims wait out the bind window as before.
+    //     Past lane A the block anchors only the slots at or below `sw8_anchor_reach` (the latest
+    //     operator attempt it is or merges), so a claim whose slot falls after that attempt waits.
     if let Some(anchor_delay) = extras.sw8_anchor_delay {
-        palw_void_claims_unbound_in_their_anchor_block_v1(&mut builder, ctx, anchor_delay)?;
+        let reach = extras.sw8_anchor_reach.map_or(ctx.daa_score, |reach| reach.min(ctx.daa_score));
+        palw_void_claims_unbound_in_their_anchor_block_v1(&mut builder, ctx, anchor_delay, reach)?;
     }
 
     // 5. Frontier observation — the definition `palw_fork_choice` states and this used to miss:
@@ -25625,7 +25628,9 @@ pub fn palw_claims_provisional_past_their_anchor_slot_v1(state: &PalwChainStateV
 /// ([`palw_claims_provisional_past_their_anchor_slot_v1`]). The caller runs it only on a block that
 /// may anchor a panel past `palw_rcore_plus` (`PalwTransitionExtrasV1::sw8_anchor_delay`), where
 /// the chain's anchor for a slot is the first such block at or past it, so each claim voided here
-/// is one its anchor block (this one) did not bind.
+/// is one its anchor block (this one) did not bind. `reach` is the highest slot this block anchors —
+/// its own DAA score, except past lane A (`PalwTransitionExtrasV1::sw8_anchor_reach`), where a block
+/// anchors only the slots at or below the latest operator attempt it is or merges.
 ///
 /// **The exact void DAA DL-1 leaves to M4** is therefore the anchor block's own DAA, and the claim
 /// is terminal from that block on. S0: nothing is forfeited — `void_claim` releases the producer's
@@ -25642,8 +25647,9 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     anchor_delay: u64,
+    reach: u64,
 ) -> Result<(), PalwStateV2Error> {
-    for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, ctx.daa_score, anchor_delay) {
+    for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, reach, anchor_delay) {
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
         let reason = builder.bind_timeout_reason(&claim, ctx);
         builder.void_claim(claim_id, &claim, ctx.daa_score, reason)?;
@@ -29808,6 +29814,17 @@ pub struct PalwTransitionExtrasV1 {
     /// `assert_deadline_consistency` are unchanged. Carrying the lane's answer here, rather than
     /// asking the block's work, keeps the fold on whatever lane rule the walk reads.
     pub sw8_anchor_delay: Option<u64>,
+    /// **Lane A (`Params::palw_operator_anchor`, testnet-12's post-launch stopgap): the highest anchor
+    /// slot this block anchors**, where [`Self::sw8_anchor_delay`] is `Some`. Past lane A a chain block
+    /// anchors a claim iff it IS, or MERGES, an operator attempt at or past the claim's slot, so it is
+    /// the anchor of the claims whose slot is at or below the latest operator attempt it is or merges
+    /// (capped at its own DAA score) — and not of a claim whose slot falls after that attempt, though
+    /// at or below the block (a displaced operator attempt merged a DAA or two late). Step 4c voids
+    /// only claims whose slot is at or below `min(this, the block's DAA score)`. `None` — by `Default`,
+    /// and on every block whose anchor rule is not lane A's — is the block's own DAA score, byte for
+    /// byte the rule before the field existed. Resolved by the processor from the same per-block
+    /// answer its anchor walk and its one-state pre-check read (`palw_anchor_reach_of_v1`).
+    pub sw8_anchor_reach: Option<u64>,
 }
 
 /// What each `Valid` signer of one set locks: `every` seat's price, except the one seat a door
@@ -58174,6 +58191,7 @@ pub(crate) mod tests {
                 own_attempt_class: None,
                 own_job_anchor: Hash64::default(),
                 sw8_anchor_delay: None,
+                sw8_anchor_reach: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -58424,6 +58442,7 @@ pub(crate) mod tests {
                 own_attempt_class: None,
                 own_job_anchor: Hash64::default(),
                 sw8_anchor_delay: None,
+                sw8_anchor_reach: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,

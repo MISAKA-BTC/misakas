@@ -142,9 +142,9 @@ fn header_of(p: &Params, att: &Att, daa: u64) -> Header {
     header
 }
 
-/// **Step 4c's lane answer for a block at `daa` carrying `att`**, exactly as the processor resolves it
-/// under lane A (`palw_sw8_anchor_delay_for` → `palw_block_may_anchor_a_panel_v1`): an attempt block
-/// past R-core+ may anchor iff the operator rule admits its header.
+/// **Step 4c's lane answer for a block at `daa` carrying `att` that merges no other operator attempt**,
+/// as the processor resolves it under lane A (`palw_sw8_anchor_for` → `palw_chain_block_as_anchor_v1`):
+/// such a block anchors iff it is itself an operator's attempt — the operator rule's header half.
 fn lane_of(p: &Params, att: &Att, daa: u64) -> Option<u64> {
     let rule = p.palw_operator_anchor_rule_v1();
     kaspa_consensus_core::palw_operator_anchor_v1::palw_operator_anchor_admits_v1(rule.as_ref(), &header_of(p, att, daa))

@@ -206,6 +206,25 @@ pub(crate) enum PalwWeighFaultV2 {
     StoreUnreadable,
 }
 
+/// **How one chain block stands as a panel anchor** ([`VirtualStateProcessor::palw_chain_block_as_anchor_v1`]).
+struct PalwChainAnchorV1 {
+    /// The highest claim slot the block anchors: its own DAA score, or past lane A the latest operator
+    /// attempt it is or merges, capped at its own DAA score.
+    reach: u64,
+    /// Past lane A, the operator attempts the block is or merges, `(DAA score, hash)`; `None` below it,
+    /// where the anchor block keys the seed itself.
+    operator_attempts: Option<Vec<(u64, BlockHash)>>,
+}
+
+impl PalwChainAnchorV1 {
+    /// The seed's source for a claim whose slot is `slot`: past lane A the earliest operator attempt at
+    /// or past it that the block is or merges — the minimal `(DAA score, hash)`, so among concurrent
+    /// attempts at one DAA their hashes decide — and `None` below it.
+    fn seed_source_for(&self, slot: u64) -> Option<(u64, BlockHash)> {
+        self.operator_attempts.as_ref()?.iter().filter(|(daa, _)| *daa >= slot).min().copied()
+    }
+}
+
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -580,9 +599,10 @@ pub struct VirtualStateProcessor {
     /// [`Self::palw_panel_seed_execution_at`].
     pub(super) palw_panel_seed_execution: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **Lane A (post-launch, 2026-09-26): `Params::palw_operator_anchor`, resolved** — the fence and
-    /// each operator bond's genesis key. Past it (at a candidate anchor block's own DAA) only an
-    /// operator's attempt may anchor a panel ([`Self::palw_block_may_anchor_a_panel_v1`]). `None` on
-    /// every shipped preset.
+    /// each operator bond's genesis key. Past it (at a candidate anchor block's own DAA) a chain block
+    /// anchors a claim only if it is, or merges, an operator's attempt at or past the claim's slot, and
+    /// that attempt seeds the draw ([`Self::palw_chain_block_as_anchor_v1`]). `None` on every shipped
+    /// preset.
     pub(super) palw_operator_anchor: Option<kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
@@ -10585,85 +10605,128 @@ impl VirtualStateProcessor {
 
     /// The panel's anchor, derived from THIS candidate's chain (Decision 7's sortition input).
     ///
-    /// The first chain block at or past `accepted_daa + anchor_delay`, with the predecessor's DAA
-    /// as the witness that makes "first at or past" checkable — the same shape as the free-prompt
-    /// beacon, for the same reason: a producer that supplies its own anchor picks its own jury.
+    /// The first chain block at or past `accepted_daa + anchor_delay` that anchors a claim with that
+    /// slot ([`Self::palw_chain_block_as_anchor_v1`]), with the predecessor's DAA as the witness that
+    /// makes "first at or past" checkable — the same shape as the free-prompt beacon, for the same
+    /// reason: a producer that supplies its own anchor picks its own jury.
     ///
-    /// **Lane A (`Params::palw_operator_anchor`) adds the seed's source.** Past it the anchor (the
-    /// block that binds, SW-8) is the first OPERATOR attempt on the chain at or past the slot, and the
-    /// seed is read off the EARLIEST operator attempt at or past the slot in that anchor's past — the
-    /// minimal `(DAA score, hash)` among the operator attempts that are, or are merged by, a chain
-    /// block from the slot to the anchor ([`Self::palw_operator_seed_sources_of_v1`]). Undisturbed
-    /// that is the anchor itself. It differs only when an operator attempt at or past the slot lost
-    /// the selected-parent race — honestly, or because a non-operator released a heavier sibling
-    /// after reading the attempt's panel off its published header — and then the displaced attempt,
-    /// merged by the next chain block, still keys the seed: displacing an operator attempt moves
-    /// where the claim binds, never what it draws. The only draws left to such a race are the
-    /// operator attempts produced concurrently at the minimal DAA, which none but an operator makes.
-    fn palw_v2_anchor_fact_of_candidate(
+    /// **Lane A (`Params::palw_operator_anchor`)** decides which chain block that is and what keys its
+    /// draw. Past it (at the chain block's own DAA score) a chain block anchors a claim iff it IS, or
+    /// MERGES (blue or red), an operator's attempt at or past the claim's slot. The seed is read off
+    /// the earliest such attempt — the minimal `(DAA score, hash)` among the operator attempts at or
+    /// past the slot that the anchor is or merges — and the draw's DAA-keyed inputs (the draw policy,
+    /// the readiness clock, the maturity floor, the capability bound, the shard plan) are resolved at
+    /// that attempt's DAA score ([`Self::palw_v2_anchor_fact_with_seed_v1`]). Undisturbed, the anchor
+    /// is the operator's attempt itself. When a non-operator displaces it from the selected chain (a
+    /// sibling that wins the selected-parent tie-break after reading the attempt's panel off its
+    /// published header), the claim binds in the first chain block that merges the displaced attempt
+    /// — the very next one unless the displacer also keeps it out of that block's past — on the
+    /// displaced attempt's seed and at its DAA. Displacement therefore neither buys a fresh draw nor
+    /// holds a claim off its anchor (verification of lane A, 2026-09-26, finding 1: the rule this
+    /// replaces bound only at an operator attempt that was itself a chain block, so a bonded
+    /// non-operator displacing every operator attempt voided every claim `BindTimeout` at its
+    /// backstop, and the displaced attempt's seed was carried to a binding block up to the whole bind
+    /// window later, finding 2).
+    pub(super) fn palw_v2_anchor_fact_of_candidate(
         &self,
         from: BlockHash,
         accepted_daa: u64,
         panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
     ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
         let slot = accepted_daa.checked_add(panel_params.anchor_delay())?;
-        let mut candidate: Option<(BlockHash, u64)> = None;
-        // Lane A: the earliest operator attempt at or past the slot in the recorded candidate's past.
-        let mut seed_source: Option<(u64, BlockHash)> = None;
+        // The latest chain block recorded at or past the slot that anchors it — the earliest on the
+        // chain once the walk is done — with, past lane A, the seed's source.
+        let mut candidate: Option<(BlockHash, u64, Option<(u64, BlockHash)>)> = None;
         for block in self.reachability_service.default_backward_chain_iterator(from) {
             let header = self.headers_store.get_header(block).ok()?;
             let daa = header.daa_score;
             if daa >= slot {
-                if self.palw_block_may_anchor_a_panel_v1(&header, slot) {
-                    candidate = Some((block, daa));
-                    // A newer chain block's merges are not in this (older) candidate's past.
-                    seed_source = None;
-                }
-                if let Some(rule) = self.palw_operator_anchor.as_ref() {
-                    self.palw_operator_seed_sources_of_v1(rule, block, &header, slot, &mut seed_source)?;
+                match self.palw_chain_block_as_anchor_v1(block, &header)? {
+                    Some(anchor) if anchor.reach >= slot => candidate = Some((block, daa, anchor.seed_source_for(slot))),
+                    _ => {}
                 }
                 continue;
             }
             // The first block BELOW the slot is the witness; the last one recorded at or above it
             // is the anchor.
-            let (anchor_block, anchor_daa) = candidate?;
-            return self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, daa, seed_source.map(|(_, b)| b));
+            let (anchor_block, anchor_daa, seed_source) = candidate?;
+            return self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, daa, seed_source);
         }
-        let (anchor_block, anchor_daa) = candidate?;
-        self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, 0, seed_source.map(|(_, b)| b))
+        let (anchor_block, anchor_daa, seed_source) = candidate?;
+        self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, 0, seed_source)
     }
 
-    /// **Lane A: fold chain block `block` into the seed-source search** — the block itself and every
-    /// block its GHOSTDAG merges (blue or red; not its selected parent, a chain block the walk visits
+    /// **How chain block `block` stands as a panel anchor — the one answer the anchor walk
+    /// ([`Self::palw_v2_anchor_fact_of_candidate`], so the chain's derivation and the acceptance gate
+    /// alike), step 4c (`sw8_anchor_delay` and `sw8_anchor_reach`, [`Self::palw_sw8_anchor_for`]) and
+    /// the one-state pre-check read**, so they cannot disagree about which block a claim binds in.
+    ///
+    /// `Some(None)`: the block anchors no claim. `Some(Some(anchor))`: it anchors every claim whose slot
+    /// is at or below `anchor.reach` and that no earlier chain block at or past the slot anchored.
+    /// `None`: the store cannot serve a GHOSTDAG record or a merged header lane A reads — a node that
+    /// cannot read the past names no anchor, as for a missing header.
+    ///
+    /// * **Below lane A's fence at the block's own DAA score** (every network but an armed
+    ///   testnet-12): the block's lane decides alone ([`Self::palw_block_may_anchor_a_panel_v1`]), and
+    ///   a block that may anchor reaches its own DAA score — byte for byte the walk testnet-12 launched
+    ///   with.
+    /// * **Past it:** the operator attempts the block is or merges
+    ///   ([`Self::palw_operator_attempts_of_chain_block_v1`]). None, and the block anchors nothing,
+    ///   whatever its lane; otherwise it reaches the latest of them, capped at its own DAA score — a
+    ///   claim whose slot falls after that attempt (a displaced attempt merged a DAA or two late) is
+    ///   not this block's to bind or to void. So a heartbeat or a non-operator's attempt that merges a
+    ///   displaced operator attempt anchors the claims that attempt reached: the block binds them, the
+    ///   operator's execution seeds them. The block's lane no longer matters there, because the seed
+    ///   is never the block's own: lane A requires lane F1 at or below it, so it is the operator
+    ///   attempt's execution commitment.
+    fn palw_chain_block_as_anchor_v1(&self, block: BlockHash, header: &Header) -> Option<Option<PalwChainAnchorV1>> {
+        let daa = header.daa_score;
+        match self.palw_operator_anchor.as_ref().filter(|rule| rule.active_at(daa)) {
+            Some(rule) => {
+                let attempts = self.palw_operator_attempts_of_chain_block_v1(rule, block, header)?;
+                let latest = attempts.iter().map(|(attempt_daa, _)| *attempt_daa).max();
+                Some(latest.map(|latest| PalwChainAnchorV1 { reach: latest.min(daa), operator_attempts: Some(attempts) }))
+            }
+            None => Some(
+                self.palw_block_may_anchor_a_panel_v1(header, daa)
+                    .then_some(PalwChainAnchorV1 { reach: daa, operator_attempts: None }),
+            ),
+        }
+    }
+
+    /// **Lane A: the operator attempts chain block `block` is or merges** — the block itself and every
+    /// block its GHOSTDAG merges (blue or red; not its selected parent, a chain block that answers for
     /// itself), each counted iff it is an operator's attempt
-    /// ([`kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1::operator_of_v1`])
-    /// at or past `slot`; `acc` keeps the minimal `(DAA score, hash)`. Reads only chain data every node
-    /// holds (the headers and the GHOSTDAG mergesets of the candidate's chain), so reorg, IBD and a
-    /// pruning-proof sync resolve it alike. `None` where a chain block's GHOSTDAG data or a merged
-    /// header is missing — a node that cannot read the past names no anchor, as for a missing header.
-    fn palw_operator_seed_sources_of_v1(
+    /// ([`kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1::operator_of_v1`]),
+    /// as `(DAA score, hash)`. Reads only chain data every node holds (the block's header, its GHOSTDAG
+    /// mergeset and the merged headers), so reorg, IBD and a pruning-proof sync resolve it alike.
+    /// `None` where the block's GHOSTDAG record or a merged header is missing.
+    fn palw_operator_attempts_of_chain_block_v1(
         &self,
         rule: &kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1,
         block: BlockHash,
         header: &Header,
-        slot: u64,
-        acc: &mut Option<(u64, BlockHash)>,
-    ) -> Option<()> {
-        let mut note = |hash: BlockHash, header: &Header| {
-            if header.daa_score >= slot && rule.operator_of_v1(header).is_some() {
-                let key = (header.daa_score, hash);
-                if acc.is_none_or(|held| key < held) {
-                    *acc = Some(key);
-                }
-            }
-        };
-        note(block, header);
+    ) -> Option<Vec<(u64, BlockHash)>> {
+        let mut attempts = Vec::new();
+        if rule.operator_of_v1(header).is_some() {
+            attempts.push((header.daa_score, block));
+        }
         let data = self.ghostdag_store.get_data(block).ok()?;
         for merged in data.mergeset_blues.iter().chain(data.mergeset_reds.iter()).filter(|hash| **hash != data.selected_parent) {
             let merged_header = self.headers_store.get_header(*merged).ok()?;
-            note(*merged, &merged_header);
+            if rule.operator_of_v1(&merged_header).is_some() {
+                attempts.push((merged_header.daa_score, *merged));
+            }
         }
-        Some(())
+        Some(attempts)
+    }
+
+    /// **The highest claim slot chain block `block` anchors**, or `None` where it anchors none (or the
+    /// store cannot serve what lane A reads): [`Self::palw_chain_block_as_anchor_v1`]'s answer, as step
+    /// 4c and the one-state pre-check read it. Below lane A it is the block's own DAA score on every
+    /// block whose lane may anchor.
+    pub(super) fn palw_anchor_reach_of_v1(&self, block: BlockHash, header: &Header) -> Option<u64> {
+        self.palw_chain_block_as_anchor_v1(block, header).flatten().map(|anchor| anchor.reach)
     }
 
     /// **The anchor fact, with what the panel seed is keyed on** (lane F1, the post-launch panel-seed
@@ -10680,37 +10743,54 @@ impl VirtualStateProcessor {
     /// anchor block, byte for byte the rule testnet-12 launched with.
     ///
     /// `validate_palw_v2` refuses the fence without `palw_rcore_plus` at or below it, so past it
-    /// every anchor is an attempt block ([`Self::palw_block_may_anchor_a_panel_v1`]). A header the
-    /// store cannot serve, or an attempt envelope that does not decode (the header stage refuses one,
-    /// so a chain block never does), names no anchor: nothing binds, and the claim voids at its bind
-    /// window as if its anchor had not arrived — a function of the candidate chain's own headers.
+    /// every anchor below lane A is an attempt block ([`Self::palw_block_may_anchor_a_panel_v1`]). A
+    /// header the store cannot serve, or an attempt envelope that does not decode (the header stage
+    /// refuses one, so a chain block never does), names no anchor: nothing binds, and the claim voids
+    /// at its bind window as if its anchor had not arrived — a function of the candidate chain's own
+    /// headers.
     ///
-    /// **Past lane A's fence at the anchor's DAA** the execution is read off `seed_source` — the
-    /// earliest operator attempt at or past the slot in the anchor's past
-    /// ([`Self::palw_v2_anchor_fact_of_candidate`]), which is the anchor itself unless an operator
-    /// attempt was displaced from the chain — and `anchor_block` stays the block that binds (SW-8's
-    /// "only in its own anchor block"). `validate_palw_v2` refuses lane A without F1 at or below it, so
-    /// there the seed is always an execution commitment.
+    /// **Past lane A's fence at the anchor block's DAA** the seed is read off `seed_source` — the
+    /// earliest operator attempt at or past the slot that the anchor is or merges
+    /// ([`Self::palw_v2_anchor_fact_of_candidate`]), the anchor itself unless an operator attempt was
+    /// displaced from the chain — and the fact's `anchor_daa`, the DAA score every draw input is
+    /// resolved at (the draw policy with its readiness clock, the maturity floor, the capability bound,
+    /// the shard plan; by the chain's derivation and by the gate alike), is that attempt's: a
+    /// displacement cannot move a seat across a readiness lapse or a maturity boundary. `anchor_block`
+    /// stays the block that binds (SW-8's "only in its own anchor block"), and the fences here are
+    /// resolved at its DAA, as the walk resolves lane A. `validate_palw_v2` refuses lane A without F1
+    /// at or below it, so there the seed is always an execution commitment.
     fn palw_v2_anchor_fact_with_seed_v1(
         &self,
         anchor_block: BlockHash,
         anchor_daa: u64,
         predecessor_daa: u64,
-        seed_source: Option<BlockHash>,
+        seed_source: Option<(u64, BlockHash)>,
     ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
-        let seed_block = if self.palw_operator_anchor_at(anchor_daa) { seed_source.unwrap_or(anchor_block) } else { anchor_block };
+        let (seed_block, draw_daa) = if self.palw_operator_anchor_at(anchor_daa) {
+            // A lane-A anchor anchors a slot only through an operator attempt at or past it, so the
+            // walk always hands one in.
+            let (source_daa, source) = seed_source?;
+            (source, source_daa.min(anchor_daa))
+        } else {
+            (anchor_block, anchor_daa)
+        };
         let anchor_execution = if self.palw_panel_seed_execution_at(anchor_daa) {
             let header = self.headers_store.get_header(seed_block).ok()?;
             Some(kaspa_consensus_core::palw_panel_v2::palw_panel_anchor_execution_v1(self.palw_network_domain_v2(), &header)?)
         } else {
             None
         };
-        Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa, anchor_execution })
+        Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 {
+            anchor_block,
+            anchor_daa: draw_daa,
+            predecessor_daa,
+            anchor_execution,
+        })
     }
 
-    /// **Which chain blocks may be a panel's anchor** — the one predicate the anchor walk
-    /// ([`Self::palw_v2_anchor_fact_of_candidate`], so the chain's derivation and the acceptance gate
-    /// alike) reads, resolved for a claim whose slot is `slot`.
+    /// **Which chain blocks' LANE may anchor a panel** — the header-only half of the one answer
+    /// ([`Self::palw_chain_block_as_anchor_v1`]) below lane A's fence, resolved for a claim whose slot
+    /// is `slot`.
     ///
     /// **The anchor has to cost an inference to move.** The anchor block's hash is one of the two
     /// randomness inputs the panel draw runs on, so whoever can cheaply produce blocks at the anchor
@@ -10743,54 +10823,50 @@ impl VirtualStateProcessor {
     ///   RC lattice); a slot no attempt block reaches before the bind window lapses voids
     ///   `BindTimeout` at the window's backstop, without forfeit (S0), and a network with no attempts
     ///   has no claims to bind. The fold's step 4c voids a claim its anchor block did not bind at
-    ///   that block, on this same lane rule ([`Self::palw_sw8_anchor_delay_for`]).
+    ///   that block, on this same lane rule ([`Self::palw_sw8_anchor_for`]).
     ///
-    /// * **Past lane A's fence (`Params::palw_operator_anchor`, testnet-12's post-launch stopgap,
-    ///   2026-09-26): an operator's attempt only**
-    ///   ([`kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1::admits_anchor_v1`]:
-    ///   the envelope names one of the listed genesis bonds as executor under that bond's genesis key,
-    ///   whose signature the header stage verified). While P0-10 is open a win is ~279 junk draws, so
-    ///   whoever may produce the anchor re-rolls a claim's panel by drawing fresh wins; past the fence
-    ///   the attacker cannot hold the position, and the claim it fixed before the slot buys one draw on
-    ///   an execution it neither picks nor predicts. The anchor is the first OPERATOR attempt on the
-    ///   selected chain at or past the slot — a non-operator attempt there binds nothing and (step 4c,
-    ///   through [`Self::palw_sw8_anchor_delay_for`]) voids nothing — and a slot no operator attempt
-    ///   reaches before the bind window lapses voids `BindTimeout` at the backstop (S0). The seed is
-    ///   read off the earliest operator attempt at or past the slot in the anchor's past, so a
-    ///   non-operator that displaces an operator attempt from the chain (a heavier sibling released
-    ///   after reading its panel) moves where the claim binds, not what it draws
-    ///   ([`Self::palw_v2_anchor_fact_of_candidate`]).
+    /// **Past lane A's fence (`Params::palw_operator_anchor`, testnet-12's post-launch stopgap,
+    /// 2026-09-26) this predicate is not asked**: while P0-10 is open whoever may produce the anchor
+    /// re-rolls a claim's panel by drawing fresh wins, so there a chain block anchors a claim iff it
+    /// is, or merges, an OPERATOR's attempt at or past the claim's slot — whatever its own lane — and
+    /// the seed is that operator attempt's execution ([`Self::palw_chain_block_as_anchor_v1`]). The
+    /// attacker cannot hold the seed's position, and the claim it fixed before the slot buys it one
+    /// draw on an execution it neither picks nor predicts.
     ///
     /// The R-core+ fence is resolved at the SLOT: `palw_rcore_plus` is genesis-only
     /// (`validate_palw_rcore_plus_v1`), so the slot, the anchor and the block give one answer on every
-    /// chain that can run. Lane A's is resolved at the candidate block's OWN DAA score (the header
-    /// field), the key lane F1 resolves the seed at: every caller — the walk, step 4c's
-    /// `sw8_anchor_delay` and the one-state pre-check — hands in the candidate's header, so they read
-    /// one answer for one block. `validate_palw_v2` refuses lane A without R-core+ at or below it, so
-    /// the operator rule only ever narrows the attempt-only branch.
+    /// chain that can run.
     pub(super) fn palw_block_may_anchor_a_panel_v1(&self, header: &Header, slot: u64) -> bool {
         if self.palw_rcore_plus_at(slot) {
             kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
-                && kaspa_consensus_core::palw_operator_anchor_v1::palw_operator_anchor_admits_v1(self.palw_operator_anchor.as_ref(), header)
         } else {
             !kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id)
         }
     }
 
-    /// **ADR-0152 SW-8 / DL-1 (M4): `PalwTransitionExtrasV1::sw8_anchor_delay` for the block `point`
-    /// names** — the panel's `anchor_delay` iff `palw_rcore_plus` is active at the block and the
-    /// block's own lane may anchor a panel ([`Self::palw_block_may_anchor_a_panel_v1`], read off its
-    /// header: the same predicate the anchor walk reads, at the same fence), `None` otherwise. So the
-    /// fold's step 4c voids, in a block, exactly the claims whose anchor block it is by the walk's
-    /// own rule and which it did not bind. A block whose header the store does not hold (none that
-    /// the pipeline folds) answers `None`: its claims wait out the bind window's backstop.
-    pub(super) fn palw_sw8_anchor_delay_for(&self, point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2) -> Option<u64> {
+    /// **ADR-0152 SW-8 / DL-1 (M4): `PalwTransitionExtrasV1::{sw8_anchor_delay, sw8_anchor_reach}` for
+    /// the block `point` names** — the panel's `anchor_delay` and the highest slot the block anchors,
+    /// iff `palw_rcore_plus` is active at the block and the block anchors any claim
+    /// ([`Self::palw_anchor_reach_of_v1`], the same per-block answer the anchor walk reads, at the
+    /// same fences); `None` otherwise. So the fold's step 4c voids, in a block, exactly the claims
+    /// whose anchor block it is by the walk's own rule and which it did not bind. A block whose
+    /// header the store does not hold (none that the pipeline folds) answers `None`: its claims wait
+    /// out the bind window's backstop.
+    fn palw_sw8_anchor_for(&self, point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2) -> Option<(u64, u64)> {
         if !self.palw_rcore_plus_at(point.daa_score) {
             return None;
         }
         let panel = self.palw_panel_params_v2.as_ref()?;
         let header = self.headers_store.get_header(point.block).ok()?;
-        self.palw_block_may_anchor_a_panel_v1(&header, point.daa_score).then(|| panel.anchor_delay())
+        let reach = self.palw_anchor_reach_of_v1(point.block, &header)?;
+        Some((panel.anchor_delay(), reach))
+    }
+
+    /// [`Self::palw_sw8_anchor_for`]'s `anchor_delay`: `Some` iff the block `point` names anchors a
+    /// panel past `palw_rcore_plus` — what the processor tests read back as a block's lane answer.
+    #[cfg(test)]
+    pub(super) fn palw_sw8_anchor_delay_for(&self, point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2) -> Option<u64> {
+        self.palw_sw8_anchor_for(point).map(|(anchor_delay, _)| anchor_delay)
     }
 
     /// **ADR-0065 D4, resolved in exactly one place.** Every consumer — the receipt tally, the
@@ -11072,7 +11148,8 @@ impl VirtualStateProcessor {
     /// fence and below it). Where it is `Some` the draw also refuses under SW-10's eligible-stake floor
     /// (`InsufficientEligibleStake`), a panel binds only in its own anchor block (SW-8,
     /// `validate_panel_bound_v2_with_policy`), that anchor is an attempt block
-    /// (`palw_block_may_anchor_a_panel_v1`), and a claim the anchor block does not bind voids there
+    /// (`palw_block_may_anchor_a_panel_v1`; past lane A, a block that is or merges an operator's
+    /// attempt, `palw_chain_block_as_anchor_v1`), and a claim the anchor block does not bind voids there
     /// (the fold's step 4c); `None` — testnet-11, devnet, mainnet, and testnet-12 with the fence off —
     /// is ADR-0130's operator lottery and ADR-0147's outsider ticket, byte for byte (T88).
     ///
@@ -11169,6 +11246,8 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
     ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
         let daa_score = point.daa_score;
+        // SW-8's step 4c, read once: `(anchor_delay, reach)` where the block anchors a panel.
+        let sw8 = self.palw_sw8_anchor_for(point);
         kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
@@ -11341,7 +11420,12 @@ impl VirtualStateProcessor {
             // panel past `palw_rcore_plus`. Written explicitly for the reason every line above
             // gives: an unwritten default here would leave a refused claim holding its reservation
             // for the whole bind window.
-            sw8_anchor_delay: self.palw_sw8_anchor_delay_for(point),
+            sw8_anchor_delay: sw8.map(|(anchor_delay, _)| anchor_delay),
+            // **Lane A: the highest slot this block anchors** — below lane A its own DAA score; past
+            // it the latest operator attempt it is or merges. Written explicitly for the same reason:
+            // a default here would void, at a block that merges a displaced operator attempt, claims
+            // whose slot falls after that attempt and which the block never anchored.
+            sw8_anchor_reach: sw8.map(|(_, reach)| reach),
         }
     }
 
@@ -12640,7 +12724,8 @@ impl VirtualStateProcessor {
     ///
     /// **Most blocks bind nothing, and cost nothing here** (M4 review finding 6). Past
     /// `palw_rcore_plus` a panel anchors only on an attempt block
-    /// ([`Self::palw_block_may_anchor_a_panel_v1`]), and step 2 cannot make a claim this block's
+    /// ([`Self::palw_block_may_anchor_a_panel_v1`]; past lane A only on a block that is or merges an
+    /// operator's attempt, [`Self::palw_anchor_reach_of_v1`]), and step 2 cannot make a claim this block's
     /// anchor (a redraw re-bases on this block, so its slot is later; the sweeps only remove claims),
     /// so a block binds only claims its PARENT already holds `Provisional` with their slot at or
     /// below this block's DAA (`palw_claims_provisional_past_their_anchor_slot_v1`). The pre-object
@@ -12666,13 +12751,15 @@ impl VirtualStateProcessor {
             // processed); a node that cannot read it derives nothing rather than guessing a point.
             return Vec::new();
         };
-        // Finding 6's pre-check, on the parent: an anchor-lane block with a claim whose slot it
-        // reaches, or nothing to derive. Resolved at the block's DAA, which is every candidate's
-        // anchor DAA (the candidates' slots are at or below it and the block is their anchor).
+        // Finding 6's pre-check, on the parent: a block that anchors, with a claim whose slot it
+        // reaches, or nothing to derive. The reach is the block's own DAA score, except past lane A,
+        // where a block anchors only the slots at or below the latest operator attempt it is or merges
+        // (`palw_anchor_reach_of_v1`, the answer the walk and step 4c read).
         let anchor_delay = panel_params.anchor_delay();
-        if !self.palw_block_may_anchor_a_panel_v1(&header, block_daa)
-            || palw_claims_provisional_past_their_anchor_slot_v1(state, block_daa, anchor_delay).is_empty()
-        {
+        let Some(reach) = self.palw_anchor_reach_of_v1(block, &header) else {
+            return Vec::new();
+        };
+        if palw_claims_provisional_past_their_anchor_slot_v1(state, reach, anchor_delay).is_empty() {
             return Vec::new();
         }
         // The walk's chain point, spelled as the pipeline spells it for this block.
@@ -12700,9 +12787,9 @@ impl VirtualStateProcessor {
             Err(_) => return Vec::new(),
         };
         // Claim-id order, over the claims the base holds `Provisional` with their slot at or below
-        // this block (a binding moves only its own claim, so the list cannot change under the loop;
-        // every other `Provisional` claim's anchor is a later block, so it could not bind here).
-        let provisional = palw_claims_provisional_past_their_anchor_slot_v1(&folded, block_daa, anchor_delay);
+        // this block's reach (a binding moves only its own claim, so the list cannot change under the
+        // loop; every other `Provisional` claim's anchor is a later block, so it could not bind here).
+        let provisional = palw_claims_provisional_past_their_anchor_slot_v1(&folded, reach, anchor_delay);
         let mut out = Vec::new();
         for claim_id in provisional {
             let Some(claim) = folded.claim(&claim_id) else { continue };

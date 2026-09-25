@@ -31,8 +31,11 @@
 //! and after its slot: it voids `BindTimeout` at the backstop `bind_base + window_bind` (S0), not
 //! before. A third races the operator's anchor attempt against a non-operator's sibling that wins the
 //! selected-parent tie-break (the displacement a non-operator can stage after reading the anchor's
-//! panel off its header): the claim binds at the next operator attempt, on the DISPLACED attempt's
-//! seed — displacement moves where a claim binds, never what it draws.
+//! panel off its header), five times, with a heartbeat, a non-operator's attempt and another operator's
+//! attempt as the next chain block: each merges the displaced attempt and binds the claim there, on the
+//! DISPLACED attempt's seed, with the draw's clock at its DAA and the seats it drew while it was the
+//! chain — displacement moves the binding one block and buys no draw, and cannot hold a claim off its
+//! anchor. A fourth shows such a merging block anchors only the slots the merged attempt reached.
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;
@@ -239,13 +242,21 @@ async fn cross(rule: Rule, h: u64) -> Crossing {
         run.assert_bound_by("C (released: the first attempt past its slot)", &c, &skip_6);
         bound.push(("C", c, skip_6.clone()));
     } else {
-        assert_eq!(phase(&run.chain, &c), PalwClaimPhaseV2::Provisional, "{rule:?}: a non-operator's attempt past the fence anchors nothing");
+        assert_eq!(
+            phase(&run.chain, &c),
+            PalwClaimPhaseV2::Provisional,
+            "{rule:?}: a non-operator's attempt past the fence anchors nothing"
+        );
     }
     run.beat().await;
     run.beat().await;
     let (_, c7) = run.attempt(7).await;
     if rule.operator_anchored() {
-        assert_eq!(phase(&run.chain, &c), PalwClaimPhaseV2::Provisional, "{rule:?}: nor does a second one — and step 4c voided nothing");
+        assert_eq!(
+            phase(&run.chain, &c),
+            PalwClaimPhaseV2::Provisional,
+            "{rule:?}: nor does a second one — and step 4c voided nothing"
+        );
     }
     run.beat().await;
 
@@ -269,7 +280,11 @@ async fn cross(rule: Rule, h: u64) -> Crossing {
         }
     } else {
         for claim in [x, x6, c7] {
-            assert_eq!(phase(&run.chain, &claim), PalwClaimPhaseV2::Provisional, "{rule:?}: card 6's attempt at X's slot anchors nothing");
+            assert_eq!(
+                phase(&run.chain, &claim),
+                PalwClaimPhaseV2::Provisional,
+                "{rule:?}: card 6's attempt at X's slot anchors nothing"
+            );
         }
     }
     let (anchor_x, _) = run.attempt(2).await;
@@ -312,19 +327,32 @@ async fn a_chain_crossing_the_operator_anchor_fence_anchors_only_on_operator_att
         if i < released.first_past {
             assert_eq!(armed_root, *released_root, "block #{i} (DAA {daa}): below the fence the armed node folds the released root");
         } else {
-            assert_ne!(armed_root, *released_root, "block #{i} (DAA {daa}): the first non-operator attempt past the fence anchors C only on the released rule");
+            assert_ne!(
+                armed_root, *released_root,
+                "block #{i} (DAA {daa}): the first non-operator attempt past the fence anchors C only on the released rule"
+            );
         }
     }
     let (_, replayed) = replay.tip_state();
     let (name_a, a, anchor_a) = &released.bound[0];
     assert_eq!(*name_a, "A");
-    assert_eq!(replayed.panel(a).map(|p| p.anchor), Some(anchor_a.header.hash), "A (below the fence): the released panel on an armed node");
+    assert_eq!(
+        replayed.panel(a).map(|p| p.anchor),
+        Some(anchor_a.header.hash),
+        "A (below the fence): the released panel on an armed node"
+    );
     let (_, c, _) = released.bound.iter().find(|(n, ..)| *n == "C").expect("C bound");
-    assert_eq!(replayed.claim(c).map(|r| r.phase.clone()), Some(PalwClaimPhaseV2::Provisional), "C: the armed node did not bind it there");
+    assert_eq!(
+        replayed.claim(c).map(|r| r.phase.clone()),
+        Some(PalwClaimPhaseV2::Provisional),
+        "C: the armed node did not bind it there"
+    );
     let (next, next_daa, _) = released.run.blocks[released.first_past + 1];
     let block = released.run.chain.ctx.consensus.get_block(next).expect("the released node holds its chain");
     let verdict = replay.ctx.consensus.validate_and_insert_block(block).virtual_state_task.await;
-    eprintln!("[t12-lane-a] the released chain's block after the first non-operator attempt past the fence (DAA {next_daa}) on an armed node: {verdict:?}");
+    eprintln!(
+        "[t12-lane-a] the released chain's block after the first non-operator attempt past the fence (DAA {next_daa}) on an armed node: {verdict:?}"
+    );
     assert_ne!(replay.sink(), next, "an armed node does not follow the released chain past the fence");
 
     // ---- the armed chains: who anchored whom ------------------------------------------------------------
@@ -334,10 +362,14 @@ async fn a_chain_crossing_the_operator_anchor_fence_anchors_only_on_operator_att
             crossing.run.attempts.iter().filter(|(_, card)| OPERATORS.contains(card)).map(|(b, _)| b.header.hash).collect();
         for (name, claim, anchor) in &crossing.bound {
             if anchor.header.daa_score >= h {
-                assert!(operator_blocks.contains(&anchor.header.hash), "{rule:?}: {name} ({claim}) is anchored past the fence by an operator");
+                assert!(
+                    operator_blocks.contains(&anchor.header.hash),
+                    "{rule:?}: {name} ({claim}) is anchored past the fence by an operator"
+                );
             }
         }
-        let outsiders_past = crossing.run.attempts.iter().filter(|(b, card)| !OPERATORS.contains(card) && b.header.daa_score >= h).count();
+        let outsiders_past =
+            crossing.run.attempts.iter().filter(|(b, card)| !OPERATORS.contains(card) && b.header.daa_score >= h).count();
         let bound_past = crossing.bound.iter().filter(|(_, _, b)| b.header.daa_score >= h).count();
         let (first, last) = (crossing.run.blocks.first().unwrap().1, crossing.run.blocks.last().unwrap().1);
         assert!(last > h && last > first, "{rule:?}: the DAA clock ran through the crossing ({first} → {last})");
@@ -351,7 +383,11 @@ async fn a_chain_crossing_the_operator_anchor_fence_anchors_only_on_operator_att
     }
     // Past the fence the panel is keyed on the operator attempt's execution, never on a block identity.
     let (_, c_f, anchor_c_f) = armed.bound.iter().find(|(n, ..)| *n == "C").unwrap();
-    assert_ne!(armed.run.chain.tip_state().1.panel(c_f).unwrap().anchor, anchor_c_f.header.hash, "lane A + F1: not the block identity");
+    assert_ne!(
+        armed.run.chain.tip_state().1.panel(c_f).unwrap().anchor,
+        anchor_c_f.header.hash,
+        "lane A + F1: not the block identity"
+    );
 
     // ---- the anchor is chain data: a second armed node fed the armed chain agrees ----------------------
     let (config, bundle, premine, floats) = t12_with(Rule::LaneAWithF1, h);
@@ -406,7 +442,11 @@ async fn a_slot_only_non_operators_reach_voids_at_the_bind_window_backstop() {
     while next < backstop {
         run.beat_to(next).await;
         run.attempt(if (next / 40) % 2 == 0 { 6 } else { 7 }).await;
-        assert_eq!(phase(&run.chain, &claim), PalwClaimPhaseV2::Provisional, "DAA {next}: a non-operator's attempt binds and voids nothing");
+        assert_eq!(
+            phase(&run.chain, &claim),
+            PalwClaimPhaseV2::Provisional,
+            "DAA {next}: a non-operator's attempt binds and voids nothing"
+        );
         next += 40;
     }
     run.beat_to(backstop - 1).await;
@@ -420,34 +460,36 @@ async fn a_slot_only_non_operators_reach_voids_at_the_bind_window_backstop() {
     );
 }
 
-/// **Displacement moves where a claim binds, never what it draws.** The operator's attempt at the slot
-/// (card 1) and a non-operator's sibling on the same parents (card 6) that wins the selected-parent
-/// tie-break — what a non-operator can stage after reading the operator attempt's panel off its header.
-/// While the operator's attempt is the sink it binds the claim; once the sibling takes the chain the
-/// claim is `Provisional` again, the next heartbeat merges the displaced attempt, and the next operator
-/// attempt (card 2) binds the claim on the DISPLACED attempt's execution seed — the draw the sibling was
-/// released to escape — not its own. Under a pure "first operator attempt on the chain" rule this
-/// displacement would have been a fresh draw.
-#[tokio::test]
-async fn a_displaced_operator_attempt_still_keys_the_seed() {
-    kaspa_core::log::try_init_logger("warn");
-    let h = 2;
-    let (config, bundle, premine, floats) = t12_with(Rule::LaneAWithF1, h);
-    let chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
-    let mut run = Run { chain, rule: Rule::LaneAWithF1, h, blocks: Vec::new(), attempts: Vec::new() };
-    run.beat_to(h).await;
-    let (_, claim) = run.attempt(0).await;
-    let slot = slot_of(&run.chain, &claim);
-    run.beat_to(slot).await;
-    let ttpb = run.chain.config.params.target_time_per_block();
+/// Which block follows a displacing sibling onto the chain (and so merges the displaced operator attempt).
+#[derive(Clone, Copy, Debug)]
+enum Merger {
+    /// A heartbeat — anyone's.
+    Heartbeat,
+    /// An attempt by a non-operator card (the displacer's side).
+    NonOperator(usize),
+    /// An attempt by another operator card — its own execution is later than the displaced one's.
+    Operator(usize),
+}
 
-    // The race: the operator's attempt O, and a non-operator's sibling P on the same parents whose hash
-    // wins the tie between equal blue work (the heavier-sibling variant — one extra withheld blue parent —
-    // needs no grinding at all).
-    let (o, _) = run.chain.build_attempt(1, ttpb, Vec::new(), &|_| true);
+/// **One displacement race at `claim`'s slot**: the operator card `operator`'s attempt O at or past the
+/// slot, published first (so it is the sink and binds the claim while it is the chain); then the
+/// non-operator card `displacer`'s sibling P on the same parents, whose hash wins the tie between equal
+/// blue work (the heavier-sibling variant — one extra withheld blue parent — needs no grinding at all),
+/// which takes the chain; then `merger`'s block on P. Returns (O, the seed and seats O bound while it
+/// was the sink, P, the merging block).
+async fn displace(
+    run: &mut Run,
+    claim: &Hash64,
+    operator: usize,
+    displacer: usize,
+    merger: Merger,
+) -> (Block, (Hash64, Vec<PalwPanelSeatV2>), Block, Block) {
+    let ttpb = run.chain.config.params.target_time_per_block();
+    let slot = slot_of(&run.chain, claim);
+    let (o, _) = run.chain.build_attempt(operator, ttpb, Vec::new(), &|_| true);
     let o = o.to_immutable();
     let p = loop {
-        let (p, _) = run.chain.build_attempt(6, ttpb, Vec::new(), &|_| true);
+        let (p, _) = run.chain.build_attempt(displacer, ttpb, Vec::new(), &|_| true);
         let p = p.to_immutable();
         if p.header.hash > o.header.hash {
             break p;
@@ -457,36 +499,181 @@ async fn a_displaced_operator_attempt_still_keys_the_seed() {
     assert!(o.header.daa_score >= slot && p.header.daa_score >= slot, "both stand at or past the slot");
     run.chain.ctx.consensus.validate_and_insert_block(o.clone()).virtual_state_task.await.expect("the operator's attempt is valid");
     assert_eq!(run.chain.sink(), o.header.hash, "published first, the operator's attempt is the sink");
-    let drawn_at_o = run.chain.tip_state().1.panel(&claim).map(|x| x.anchor);
-    assert_eq!(drawn_at_o, Some(execution_seed(&run.chain, &o, &claim)), "while it is the chain, O binds the claim on its seed");
+    let at_o =
+        run.chain.tip_state().1.panel(claim).map(|x| (x.anchor, x.seats.clone())).expect("while it is the chain, O binds the claim");
+    assert_eq!(at_o.0, execution_seed(&run.chain, &o, claim), "on O's execution seed");
     run.chain.ctx.consensus.validate_and_insert_block(p.clone()).virtual_state_task.await.expect("the sibling is valid");
     assert_eq!(run.chain.sink(), p.header.hash, "the sibling wins the selected-parent tie-break: O is displaced");
-    assert_eq!(phase(&run.chain, &claim), PalwClaimPhaseV2::Provisional, "off the chain, O binds nothing");
-
-    // The next heartbeat merges the displaced attempt.
-    let beat = run.chain.heartbeat(ttpb, Vec::new()).await;
-    let merged = run.chain.vp().ghostdag_store.get_data(beat.header.hash).expect("ghostdag data");
+    assert_eq!(phase(&run.chain, claim), PalwClaimPhaseV2::Provisional, "off the chain, O binds nothing, and P anchors nothing");
+    assert_eq!(lane_answer(&run.chain, &p), None, "the displacer merges no operator attempt: it anchors nothing");
+    let b = match merger {
+        Merger::Heartbeat => run.chain.heartbeat(ttpb, Vec::new()).await,
+        Merger::NonOperator(card) | Merger::Operator(card) => run.chain.attempt(card, ttpb, Vec::new(), &|_| true).await.0,
+    };
+    let merged = run.chain.vp().ghostdag_store.get_data(b.header.hash).expect("ghostdag data");
+    assert_eq!(merged.selected_parent, p.header.hash, "the merging block builds on the displacer");
     assert!(
         merged.mergeset_blues.contains(&o.header.hash) || merged.mergeset_reds.contains(&o.header.hash),
-        "the heartbeat merges the displaced operator attempt"
+        "{merger:?} merges the displaced operator attempt"
     );
-    assert_eq!(phase(&run.chain, &claim), PalwClaimPhaseV2::Provisional);
+    (o, at_o, p, b)
+}
 
-    // The next operator attempt binds the claim — on the displaced attempt's seed, not its own.
-    let (b, _) = run.chain.attempt(2, ttpb, Vec::new(), &|_| true).await;
+/// **Displacing an operator attempt holds no claim off its anchor, and buys no new draw** (verification
+/// of lane A, 2026-09-26, finding 1 — its probe `probe_sustained_displacement_voids_a_claim_whose_slot_
+/// operator_attempts_reached`, flipped). Under the rule this replaces a claim bound only at an operator
+/// attempt that was itself a chain block, so a registered non-operator that displaced every one — a
+/// sibling winning the selected-parent tie-break, 50% per race — voided every claim `BindTimeout` at its
+/// backstop. Past lane A a chain block anchors a claim iff it IS or MERGES an operator attempt at or past
+/// the slot, so the block right after the displacer — whatever it is: a heartbeat, the non-operator
+/// side's own attempt, another operator's — merges the displaced attempt and binds the claim, on the
+/// DISPLACED attempt's seed (the earliest; an operator merger's own later execution does not replace it),
+/// with the draw's clock at the displaced attempt's DAA (the anchor fact names it; finding 2), and with
+/// the very seats O drew while it was the chain. Claims by operators and by non-operators alike; the
+/// claimant itself displacing its own claim's anchor included (the withdrawal-after-observation shape).
+#[tokio::test]
+async fn displacing_an_operator_attempt_binds_the_claim_in_the_next_block_on_the_displaced_draw() {
+    kaspa_core::log::try_init_logger("warn");
+    let h = 2;
+    let (config, bundle, premine, floats) = t12_with(Rule::LaneAWithF1, h);
+    let chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let mut run = Run { chain, rule: Rule::LaneAWithF1, h, blocks: Vec::new(), attempts: Vec::new() };
+    run.beat_to(h).await;
+    // (claimant, operator O, displacer P, merger)
+    let rounds = [
+        (0, 1, 6, Merger::Heartbeat),
+        (7, 2, 6, Merger::NonOperator(7)),
+        (0, 4, 7, Merger::Operator(3)),
+        (6, 5, 6, Merger::Heartbeat),
+        (1, 3, 7, Merger::NonOperator(6)),
+    ];
+    let mut bound = Vec::new();
+    for (round, (claimant, operator, displacer, merger)) in rounds.into_iter().enumerate() {
+        let ttpb = run.chain.config.params.target_time_per_block();
+        let (_, claim) = run.chain.attempt(claimant, ttpb, Vec::new(), &|_| true).await;
+        let base = run.chain.tip_state().1.claim(&claim).expect("the claim").bind_base_daa();
+        let slot = base + bundle.panel.anchor_delay();
+        run.beat_to(slot).await;
+        let (o, (seed_o, seats_o), _p, b) = displace(&mut run, &claim, operator, displacer, merger).await;
+        let (_, state) = run.chain.tip_state();
+        let record = state.claim(&claim).expect("the claim");
+        assert_eq!(
+            record.phase,
+            PalwClaimPhaseV2::PanelBound { bound_daa: b.header.daa_score },
+            "round {round}: the block merging the displaced attempt ({merger:?}) binds the claim (SW-8)"
+        );
+        let panel = state.panel(&claim).expect("bound");
+        assert_eq!(panel.anchor, seed_o, "round {round}: on the DISPLACED attempt's seed");
+        assert_eq!(
+            panel.seats, seats_o,
+            "round {round}: the seats O drew while it was the chain — the displacement bought no new panel"
+        );
+        if let Merger::Operator(_) = merger {
+            assert_ne!(
+                execution_seed(&run.chain, &b, &claim),
+                seed_o,
+                "round {round}: the merging operator's own execution is another draw"
+            );
+        }
+        assert_eq!(lane_answer(&run.chain, &b), Some(bundle.panel.anchor_delay()), "round {round}: {merger:?} anchors — it merges O");
+        let fact = run
+            .chain
+            .vp()
+            .palw_v2_anchor_fact_of_candidate(b.header.hash, base, &bundle.panel)
+            .expect("the claim's anchor on the chain");
+        assert_eq!(fact.anchor_block, b.header.hash, "round {round}: the binding block is the anchor (SW-8)");
+        assert_eq!(fact.anchor_daa, o.header.daa_score, "round {round}: the draw's clock is the displaced attempt's DAA");
+        assert_eq!(fact.panel_seed(&claim), seed_o, "round {round}: the fact keys O's seed");
+        eprintln!(
+            "[t12-lane-a] round {round}: claim by card {claimant}; O (card {operator}, DAA {}) displaced by card {displacer}; bound by {merger:?} at DAA {} on O's seed {seed_o}, seats {:?}",
+            o.header.daa_score,
+            b.header.daa_score,
+            panel.seats.iter().map(|s| s.bond.0.index).collect::<Vec<_>>()
+        );
+        bound.push((claim, b.header.daa_score));
+    }
+    // Nothing the races touched was voided: every claim stays bound where its merging block bound it.
     let (_, state) = run.chain.tip_state();
-    let record = state.claim(&claim).expect("the claim");
-    assert_eq!(record.phase, PalwClaimPhaseV2::PanelBound { bound_daa: b.header.daa_score }, "bound at the next operator attempt (SW-8)");
-    let panel = state.panel(&claim).expect("bound");
-    let (seed_o, seed_b) = (execution_seed(&run.chain, &o, &claim), execution_seed(&run.chain, &b, &claim));
-    eprintln!(
-        "[t12-lane-a] displacement: O (card 1) at DAA {} displaced by P (card 6); bound at B (card 2, DAA {}) on seed {} — O's {}, B's {}",
-        o.header.daa_score,
-        b.header.daa_score,
-        panel.anchor,
-        seed_o,
-        seed_b
+    for (claim, bound_daa) in &bound {
+        assert_eq!(state.claim(claim).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::PanelBound { bound_daa: *bound_daa }));
+    }
+}
+
+/// **A block merging a displaced operator attempt anchors only the slots that attempt reached** (step
+/// 4c's `sw8_anchor_reach`), and binds however late it merges it. Claims X and Y with slots
+/// `slot_x < slot_y`; the operator attempt O at X's slot — before Y's — loses the race to a
+/// non-operator sibling P and reaches the node only after P's chain has passed Y's slot (withheld, or
+/// kept out of the next blocks' past), so the heartbeat that finally merges it stands past both slots.
+/// That heartbeat binds X on O's seed with the draw's clock at O's DAA; Y's slot came after O, so O may
+/// not seed Y (a claim is keyed only on an execution produced at or past its slot): the heartbeat
+/// neither binds nor voids Y, and the next operator attempt binds Y on its own execution.
+#[tokio::test]
+async fn a_block_merging_a_displaced_operator_attempt_anchors_only_the_slots_it_reached() {
+    kaspa_core::log::try_init_logger("warn");
+    let h = 2;
+    let (config, bundle, premine, floats) = t12_with(Rule::LaneAWithF1, h);
+    let chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let mut run = Run { chain, rule: Rule::LaneAWithF1, h, blocks: Vec::new(), attempts: Vec::new() };
+    run.beat_to(h).await;
+    let ttpb = run.chain.config.params.target_time_per_block();
+    let (_, x) = run.attempt(0).await;
+    let slot_x = slot_of(&run.chain, &x);
+    run.beat_to(run.chain.daa_of(run.chain.sink()) + 1).await;
+    let (_, y) = run.attempt(3).await;
+    let slot_y = slot_of(&run.chain, &y);
+    assert!(slot_x < slot_y, "X's slot before Y's ({slot_x} < {slot_y})");
+    run.beat_to(slot_x).await;
+
+    // O at X's slot and P on the same parents; the node sees P first, and P's chain runs past Y's slot.
+    let (o, _) = run.chain.build_attempt(1, ttpb, Vec::new(), &|_| true);
+    let o = o.to_immutable();
+    let (p, _) = run.chain.build_attempt(6, ttpb, Vec::new(), &|_| true);
+    let p = p.to_immutable();
+    assert_eq!(o.header.direct_parents(), p.header.direct_parents(), "siblings on the same parents");
+    assert!(o.header.daa_score >= slot_x && o.header.daa_score < slot_y, "O stands at X's slot, before Y's ({})", o.header.daa_score);
+    run.chain.ctx.consensus.validate_and_insert_block(p.clone()).virtual_state_task.await.expect("the sibling is valid");
+    assert_eq!(run.chain.sink(), p.header.hash);
+    run.beat_to(slot_y).await;
+    assert_eq!(phase(&run.chain, &x), PalwClaimPhaseV2::Provisional, "no operator attempt on P's chain: X waits");
+    assert_eq!(phase(&run.chain, &y), PalwClaimPhaseV2::Provisional, "and Y");
+    // O arrives; P's chain is heavier, so O stays off it until the next block merges it.
+    run.chain.ctx.consensus.validate_and_insert_block(o.clone()).virtual_state_task.await.expect("the operator's attempt is valid");
+    assert_ne!(run.chain.sink(), o.header.hash, "O arrives late and is not the chain");
+    let b = run.chain.heartbeat(ttpb, Vec::new()).await;
+    let merged = run.chain.vp().ghostdag_store.get_data(b.header.hash).expect("ghostdag data");
+    assert!(merged.mergeset_blues.contains(&o.header.hash) || merged.mergeset_reds.contains(&o.header.hash), "the heartbeat merges O");
+    assert!(b.header.daa_score >= slot_y, "the merging heartbeat stands past Y's slot ({} >= {slot_y})", b.header.daa_score);
+    assert_eq!(lane_answer(&run.chain, &b), Some(bundle.panel.anchor_delay()), "the heartbeat anchors: it merges an operator attempt");
+
+    let seed_o = execution_seed(&run.chain, &o, &x);
+    let (_, state) = run.chain.tip_state();
+    assert_eq!(
+        state.claim(&x).map(|c| c.phase.clone()),
+        Some(PalwClaimPhaseV2::PanelBound { bound_daa: b.header.daa_score }),
+        "X binds at the block that merges O"
     );
-    assert_ne!(seed_o, seed_b, "the two operator attempts are two draws");
-    assert_eq!(panel.anchor, seed_o, "the displaced attempt keys the draw: the displacement bought no new panel");
+    assert_eq!(state.panel(&x).map(|p| p.anchor), Some(seed_o), "X: on O's seed");
+    let fact = run
+        .chain
+        .vp()
+        .palw_v2_anchor_fact_of_candidate(b.header.hash, slot_x - bundle.panel.anchor_delay(), &bundle.panel)
+        .expect("X's anchor");
+    assert_eq!((fact.anchor_block, fact.anchor_daa), (b.header.hash, o.header.daa_score), "bound by the heartbeat, drawn at O's DAA");
+    assert_eq!(
+        state.claim(&y).map(|c| c.phase.clone()),
+        Some(PalwClaimPhaseV2::Provisional),
+        "Y: its slot came after O — the heartbeat past it neither binds nor voids it"
+    );
+    let (o2, _) = run.chain.attempt(2, ttpb, Vec::new(), &|_| true).await;
+    let (_, state) = run.chain.tip_state();
+    assert_eq!(state.claim(&y).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::PanelBound { bound_daa: o2.header.daa_score }));
+    assert_eq!(
+        state.panel(&y).map(|p| p.anchor),
+        Some(execution_seed(&run.chain, &o2, &y)),
+        "Y: on the next operator attempt's own seed"
+    );
+    eprintln!(
+        "[t12-lane-a] reach: O at DAA {} (X's slot {slot_x}) kept off the chain until a heartbeat at DAA {} merges it: X binds there on O's seed, drawn at DAA {}; Y (slot {slot_y}) waits and binds at card 2's attempt, DAA {}",
+        o.header.daa_score, b.header.daa_score, fact.anchor_daa, o2.header.daa_score
+    );
 }
