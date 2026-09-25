@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>MISAKAScan — Misaka testnet</title>
-<meta name="description" content="MISAKAScan block explorer for the Misaka (post-quantum) testnet — blocks, transactions, PoS/DNS finality, and the EVM execution lane." />
+<title>MISAKAScan — Misaka testnet-12</title>
+<meta name="description" content="MISAKAScan block explorer for the Misaka (post-quantum) testnet-12 — blocks, transactions, PALW model classes, DNS finality, and the EVM execution lane." />
 <link rel="icon" href="/misaka-favicon-64.png" />
 <meta name="theme-color" content="#0b0a12" />
 <link rel="stylesheet" href="/style.css?v=m15" />
@@ -15,7 +15,7 @@
   <a class="brand" href="#/">
     <img src="/misaka-logo.svg" alt="" class="brand-logo" onerror="this.style.display='none'"/>
     <span class="brand-name">MISAKA<b>Scan</b></span>
-    <span class="brand-tag">Misaka testnet</span>
+    <span class="brand-tag">Misaka testnet-12</span>
   </a>
   <form class="search" id="searchForm" autocomplete="off">
     <input id="searchInput" type="text" aria-label="Search blocks, transactions, addresses or MTP IDs" placeholder="Search blocks, transactions, addresses or MTP IDs…" />
@@ -25,27 +25,46 @@
 </header>
 
 <details class="upgrade-note" id="upgradeNote">
-  <summary>Node operator notice <span>2026-09-19 release · expand details</span></summary>
+  <summary>testnet-12 is live <span>2026-09-25 launch · two CRITICAL known issues · when a payment is final &mdash; expand</span></summary>
   <div class="upgrade-body">
-  <b>Node operators &mdash; the fleet moved to a new build on 2026-09-19.</b> A node started from
-  today's <span class="mono">main</span> prints params fingerprint
-  <span class="mono">c3a5e91d&hellip;</span> and this fence schedule:
-  <span class="mono">1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301</span>.
-  If your node prints anything else &mdash; <span class="mono">060e3597&hellip;</span> and a schedule
-  ending <span class="mono">6900, 7000</span> is the build this notice used to describe &mdash; it is
-  the older one.
+  <b>This explorer shows testnet-12</b> (R-core+, ADR-0152 v3.1), launched 2026-09-25 about 23:15 JST
+  from release <span class="mono">0e8ec984e</span> (now <span class="mono">main</span>). A node on this
+  network prints params fingerprint
+  <span class="mono" style="word-break:break-all">b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f</span>
+  and fence schedule <span class="mono">1000</span> (schedule id <span class="mono">93da24cc&hellip;</span>).
+  Genesis <span class="mono" title="a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23">a27f8f44fe4d91a5&hellip;</span>;
+  the eight genesis bonds are outputs 0&ndash;7 of premine txid
+  <span class="mono" title="5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669">5e0d5f1b&hellip;</span>.
   <br/><br/>
-  <b>What is still ahead, and the one height to act before.</b> Everything at or below
-  <span class="mono">6,900</span> is identical in both builds, so the two interoperate today. They
-  part at <span class="mono">DAA&nbsp;7,000</span>: only the OLDER build schedules a fence there, and
-  from that height it judges blocks by a rule the new build does not apply until
-  <span class="mono">7,100</span>. <b>Upgrade before 7,000</b> or your node will follow a chain the
-  fleet is not on. After that, <span class="mono">7,101</span> arms the PALW upgrade bundle
-  (execution lane, panel economy, DNS stake gate, model registry) and <span class="mono">7,200</span>
-  verification V2.
+  <b>Join.</b> Build <span class="mono">main</span> (or <span class="mono">0e8ec984e</span>) and run
+  <span class="mono">kaspad --testnet --netsuffix=12</span>; the CLI is
+  <span class="mono">misaka --network testnet-12</span> (its default). Peers come from the DNS seeders
+  <span class="mono">seeder1&ndash;4.misakascan.com</span>; the P2P port is <span class="mono">26311</span>.
+  A datadir from an earlier testnet-12 genesis is refused at startup &mdash; move it aside. A
+  <span class="mono">main</span> build no longer joins testnet-11 (the previous network; build
+  <span class="mono">1f98d3bf4</span> for it). The faucet has no testnet-12 funding yet.
+  Producing or verifying:
+  <a href="https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md" target="_blank" rel="noopener">docs/testnet12-join-mining.md</a>.
   <br/><br/>
-  Keep your appdir &mdash; the genesis did not move. Rebuild from <span class="mono">main</span>;
-  details in <span class="mono">docs/testnet11-6701-upgrade-announcement.md</span>.
+  <b>Known issues</b> &mdash; details in the
+  <a href="https://github.com/MISAKA-BTC/misakas/blob/main/docs/t12-launch-2026-09-25.md" target="_blank" rel="noopener">launch note</a>
+  (in Japanese). The two CRITICAL ones are fixed by activation fences after launch: rebuild when the fence release is announced.
+  <ul style="margin:6px 0 0 18px;padding:0">
+    <li><b>CRITICAL &mdash; heartbeat transparency:</b> a heartbeat miner with no bond can pull published attempts into a private chain and reorg within the merge depth (about 30 blue, about 10 minutes) &mdash; a double spend.</li>
+    <li><b>CRITICAL &mdash; panel-seed grinding:</b> the panel seed is the anchor block's identity, so an anchor producer can redraw its panel before publishing; fenced within 36 hours of launch, before outside seats mature (1,000 DAA). Until then, per-operator panel skew is monitored.</li>
+    <li><b>DNS finality is in Bootstrap:</b> validators are funded after launch; until then the DNS reorg gate does not act, and the EVM bridge's deposit claims wait for it.</li>
+    <li><b>Valid locks after Final</b> may fill a seat's 500&permil; room (predicted): at &lambda;&nbsp;5 seats may stop binding within 1&ndash;3 days. Monitored; the remedy is being designed.</li>
+    <li><b>Unlicensed claims (V04):</b> a claim can stay unlicensed although every seat filed Valid. Under investigation.</li>
+    <li><b>8k readiness:</b> a stalled 8k seat can drop the class to Held, which voids its unbound claims. Partly fixed in this release; the rest follows by fence and node update.</li>
+    <li><b>Scheduled fixes:</b> registry resilience, the bridge audit (BR-1&ndash;BR-7), position fixes.</li>
+  </ul>
+  <br/>
+  <b>When is a payment final?</b> Never count blocks, blue-score depth, DAA or heartbeats &mdash;
+  heartbeats can inflate all of them, and a stretch with only heartbeats confirms nothing.
+  Small amounts: on your node's selected chain, a blue attempt block at least 30 blue score above
+  the block carrying the transaction, with attempts still following. Large amounts: finality depth
+  600 blue (about 4 hours), or a <b>Final</b> PALW anchor
+  (<span class="mono">getPalwSettlement</span> / <span class="mono">misaka palw settlement</span>).
   </div>
 </details>
 

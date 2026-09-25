@@ -163,3 +163,19 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
   `install-113.sh explorer-apply` は `t12g.conf` があれば止まる。切り替えるときは先に相手の rollback を行う。
 - **R-core+ の表示が未対応**: vesting 行（`getPalwVesting`、op 199）、DA session、reporter の commit–reveal、stake 加重の panel 抽選は
   explorer に出ていない。公開後の観測 O-2 / O-5 は `misaka palw vesting` と analyzer で読む。explorer への追加は公開後の作業。
+
+## 10. 公開 t12 向けの文面（2026-09-25 夜、branch `rcore/explorer-t12-content`）
+
+- **`index.html` の告知ブロックは t12 の公開告知に差し替えた**（identity・参加方法・既知の問題 7 件・入金確定の基準、
+  launch note と join guide は GitHub main へのリンク）。testnet-11 の告知は無い。**deploy は `NOTICE=keep`**（既定の
+  `strip` だとこの告知も外れる）。ブロックは `<details class="upgrade-note">` 1 つで入れ子の `<details>` を持たないので、
+  `strip` の正規表現もそのまま効く。Peers ページの「banner と比べよ」はこの告知の fingerprint を指す。
+- §7 の表で「文面の更新が要る」とした箇所は直した: Faucet（t12・未入金と明記、bond は 13,000 / 130,000 MSK で grant では
+  足りない）、LLM ページ（`--network testnet-11` の replay 手順と QWEN36 を外し、8k artifact の変換と
+  `palw-class manifest --check` に置換）、MTP（台帳は testnet-11 を採点・t12 は未採点と明記、`--palw-panel` /
+  `kaspad --palw-register-class` の案内を外した）。
+- `Params::from(testnet-12)` を 971c002c8（0e8ec984e との差は docs と probe.mjs だけ）で読んで合わせた値: EVM は genesis から（旧文面の DAA 6,500,000 は誤り）、
+  PanelDa（mode 2）は DAA 0 から armed（旧文面「mode 1 のみ」は誤り）、challenge window は short 120 DAA、attempt は
+  prefill-only の 1 token（`palw_prefill_draw` 0）、floor の最小 share 20‰、panel 5 / quorum 3、DNS は 6 validator・
+  120,000,000 MSK・bridge の anchor 距離 14 blue、finality depth 600 / merge depth 30。
+- 未対応のまま: MTP の台帳・collector（運用者判断）、`/pool/`、peer census の remedy 文言、faucet backend の資金。

@@ -270,22 +270,23 @@ function llmInCell(text, ids, anchorDerived){
 // **What the page says about a prompt, on a network that publishes prompts.**
 //
 // This site does not render the words — that is a choice, and it is the only part of this a site
-// can decide. What it must not do is call them private. Privacy mode 1 (PublicDa) is the only
-// mode any shipped preset arms, and under it the commitment transaction carries the prompt's
-// token ids WHOLE: they sit in the payload of the tx that carries the claim, permanently, for
-// anyone with a node. Mode 2 (PanelDa) would keep them off chain, and `Params::palw_panel_da` is
-// None on every preset including this network's.
+// can decide. What it must not do is call them private. testnet-12 arms both prompt modes
+// (`Params::palw_panel_da` is Some from DAA 0, which its held classes require): under mode 1
+// (PublicDa) the commitment transaction carries the prompt's token ids WHOLE — they sit in the
+// payload of the tx that carries the claim, permanently, for anyone with a node; under mode 2
+// (PanelDa) it carries a digest and the ids reach the drawn seats over the authenticated pull.
+// This page does not decode which mode a claim used.
 //
-// So the honest sentence is "on chain, not shown here", and the tooltip says where to look. A
-// reader who wants their prompt unread should learn that from this page and not from a stranger
-// quoting it back at them.
+// So the honest sentence is "committed, not shown here", and the tooltip says what each mode
+// publishes. A reader who wants their prompt unread should learn that from this page and not from
+// a stranger quoting it back at them.
 function llmPromptOnChain(extra){
-  const title = "This network runs privacy mode 1 (PublicDa): the prompt's token ids are carried WHOLE in the "
-    + "payload of the commitment transaction, so the prompt is public on chain and permanent. This site chooses not "
-    + "to render it; that is not privacy. Mode 2 (PanelDa) would keep a prompt off chain and reaching only the five "
-    + "drawn seats \u2014 it is dormant on every shipped preset. Even armed, a data-availability court close carries the "
+  const title = "testnet-12 arms both prompt modes. Mode 1 (PublicDa): the prompt's token ids are carried WHOLE in the "
+    + "payload of the commitment transaction, so the prompt is public on chain and permanent. Mode 2 (PanelDa): the "
+    + "commitment carries only a digest, and the ids reach the five drawn seats over an authenticated pull. This site "
+    + "chooses not to render either; that is not privacy. Even under mode 2 a data-availability court close carries the "
     + "ids, so a disputed prompt becomes public: private unless disputed, never confidential.";
-  return `<span class="dim" title="${esc(title)}">\u{1F310} prompt \u2014 <b>on chain</b>, not shown here${extra||""}</span>`;
+  return `<span class="dim" title="${esc(title)}">\u{1F310} prompt — <b>committed</b>, not shown here${extra||""}</span>`;
 }
 function llmSealed(what, commitment, extra){
   const title = `${what} is committed on chain and not published: the bytes reach the claim's five drawn seats over an `
@@ -310,7 +311,7 @@ function llmOutCell(text, ids){
 // candidate is won by running a pinned model rather than by hashing. Older nodes omit powAlgoId
 // entirely, so an absent value is reported as unknown rather than assumed to be the hash lane.
 //
-// 6 is what testnet-11 actually runs and it was missing here, so every block on the live network
+// 6 is the attempt lane this network's PALW blocks carry, and it was once missing here, so every block
 // rendered as a bare "algo-6" with no name — the one field that says this is not a hash chain.
 function powLaneLabel(algo){
   var a = (algo === undefined || algo === null || algo === "") ? null : Number(algo);
@@ -475,11 +476,14 @@ async function renderFaucet(){
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   viewFor(__g).innerHTML = `
     <div class="crumbs"><a href="#/">Home</a> › Faucet</div>
-    <h1 class="page">Testnet Faucet <span class="dim" style="font-size:13px;font-weight:400">(testnet-11 — coins with no value, by design)</span></h1>
+    <h1 class="page">Testnet Faucet <span class="dim" style="font-size:13px;font-weight:400">(testnet-12 — coins with no value, by design)</span></h1>
+    <div class="note"><b>The faucet has no testnet-12 funding yet.</b> Funding it from the testnet-12 premine is the
+      operator's decision, and until it is funded every request is refused — the status below says which.</div>
     <div class="note">One grant of <b><span id="fcGrant">0.5</span> ${SYMBOL}</b> per address, <b>ever</b> — and one
-      request per source per day. That is plenty to join the network: registering a PALW bond locks
-      <code>0.004</code> ${SYMBOL} of collateral, and the faucet pays with a regular transaction, which is exactly
-      the <b>non-coinbase</b> output a bond needs. Testnet coins are worthless and the chain can reset at any time.</div>
+      request per source per day. A grant pays transaction fees and a fee float; it does <b>not</b> fund a PALW bond:
+      testnet-12 runs the mainnet-assumed bonds — at least <b>13,000 ${SYMBOL}</b> for a producer and
+      <b>130,000 ${SYMBOL}</b> for a panel seat. The faucet pays with a regular transaction, a <b>non-coinbase</b>
+      output. Testnet coins are worthless and the chain can reset at any time.</div>
     <h2 class="sec">Status</h2>
     <div id="fcCards" class="cards"><div class="loading">Loading…</div></div>
     <h2 class="sec">Request funds</h2>
@@ -493,8 +497,9 @@ async function renderFaucet(){
       <div id="fcOut" style="margin-top:10px"></div>
     </div>
     <h2 class="sec">Then what?</h2>
-    <div class="note">Once the grant confirms you can lock a bond and produce blocks — the floor execution class
-      needs no model at all. The walkthrough is <code>docs/testnet11-node-operator.md</code> in the repo; the
+    <div class="note">Running a node needs no funds. Producing blocks needs a registered bond (above) — the floor
+      execution class needs no model at all. The walkthrough is
+      <a href="https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md" target="_blank" rel="noopener">docs/testnet12-join-mining.md</a>; the
       <a href="#/llm">LLM Jobs</a> page shows the classes and the verifier seats currently live.</div>`;
 
   const cards = document.getElementById("fcCards");
@@ -521,7 +526,7 @@ async function renderFaucet(){
   go.onclick = async () => {
     const address = addrBox.value.trim();
     if (!/^misakatest:[a-z0-9]{100,140}$/.test(address)) {
-      out.innerHTML = `<span style="color:#ff8f8f">That is not a testnet-11 address — it starts with <code>misakatest:</code>.</span>`;
+      out.innerHTML = `<span style="color:#ff8f8f">That is not a testnet address — it starts with <code>misakatest:</code>.</span>`;
       return;
     }
     go.disabled = true; const label = go.textContent; go.textContent = "Sending…";
@@ -630,14 +635,14 @@ const MODEL_DISPLAY = {
   "QWEN36":      { name: "Qwen 3.6 35B",       sub: "Large reasoning model",                              size: "~34 GB", icon: "🤖" },
   "QWEN25-A16":  { name: "Qwen 2.5 1.5B @512", sub: "Lightweight model — chat and reasoning",             size: "~1.7 GB",icon: "🤖" },
   "QWEN25-A16-8K":{ name: "Qwen 2.5 1.5B @8k",  sub: "Held-context lightweight model — graph-v7@8192",    size: "~1.7 GB",icon: "🤖" },
-  "QWEN25-A16-2M":{ name: "Qwen 2.5 1.5B @2M",  sub: "Held-context lightweight model — graph-v7@2097152", size: "~2.7 GB",icon: "🤖" },
+  "QWEN25-A16-2M":{ name: "Qwen 2.5 1.5B @2M",  sub: "Held-context lightweight model — graph-v7@2097152 · closed at launch, takes no claims", size: "~2.7 GB",icon: "🤖" },
   "QWEN38-27B":  { name: "Qwen 3.8 27B",       sub: "Dense reasoning model",                              size: null,     icon: "🤖" },
 };
 function modelDisplay(classId) {
   const c = (typeof LLM_CLASS_BY_ID !== "undefined" && LLM_CLASS_BY_ID) ? LLM_CLASS_BY_ID[classId] : null;
   const d = c ? MODEL_DISPLAY[c.name] : null;
   if (d && c) return { ...d, code: c.name, spec: c.model, known: true };
-  // **Degrade honestly.** The chain reports five classes on testnet-11 and this table names four:
+  // **Degrade honestly.** The chain can report more classes than this table names:
   // a class registered permissionlessly has no display entry until somebody adds one. An unknown
   // model says so and shows its id — never a blank, and never a guess.
   return { name: null, sub: "This model has no name on the explorer yet.", size: null, icon: "？",
@@ -1084,7 +1089,7 @@ async function refreshHomeInner(){
   await refreshBridgeAnchorBlue(dns);   // claude-bridge-fresh-v2
   // **This chain is not found by hashing, so it does not report a hashrate.**
   //
-  // testnet-11 blocks carry `powAlgoId` 6 — PALW, where a candidate is won by running a pinned
+  // PALW attempt blocks carry `powAlgoId` 6 — where a candidate is won by running a pinned
   // LLM inference and the lottery is over ATTEMPTS, not hashes. `estimateNetworkHashesPerSecond`
   // still answers, because it only divides accumulated blue work by elapsed time, and the answer
   // ("30.6 kH/s") is a unit this network has no machine for: nothing on it computes hashes at any
@@ -1336,7 +1341,7 @@ async function refreshTxFeedInner(sink){
   // withholds its claim's escrowed worker reward from its own coinbase (ADR-0042 Decision 10) and
   // pays it out only when that claim reaches Final, so per-block coinbase legitimately ranges from
   // near zero to several times the base. Taking the smallest sample reported 0.0037 MSK/block on
-  // testnet-11 against a measured ~573 MSK/block actually minted.
+  // the previous network against a measured ~573 MSK/block actually minted.
   let cbSum = 0, cbBlocks = 0;
   const fresh = [];
   const windowIds = new Set();        // every non-coinbase txid in THIS sweep's window (dedup floor)
@@ -1800,7 +1805,7 @@ async function maybeRefreshOverlay(sink, anchor){
     // **Count nodes from every vantage we have, not from one node's degree.**
     //
     // This used to be `seedRpc("getConnectedPeerInfo").length + 1` — the number of peers ONE node
-    // happens to hold open. That is a degree, not a census, and on testnet-11 the node it asks is
+    // happens to hold open. That is a degree, not a census, and on the previous network the node it asked was
     // the worst possible witness: it runs with `--nodnsseed` and two `--addpeer` entries, only one
     // of which is reachable, so it reported 1 peer and the site said "Nodes 2" while the network
     // had nine. Most participants sit behind NAT — they dial out to a public node and accept no
@@ -2084,7 +2089,7 @@ async function renderOverlay(){
     <h2 class="sec">Recent attestations <span class="dim" style="font-size:13px">(which block each validator scored)</span></h2>
     <div class="note" style="margin-bottom:8px">Each row is a validator attestation shard (subnetwork <span class="mono">11..</span>): the validator signs an
       <b>approval</b> of a selected-chain anchor block, advancing that block's <b>StakeScore</b> toward DNS finality
-      (ADR-0009). "Scored block" is the attested anchor; "epoch" = DAA ÷ ${100}.</div>
+      (ADR-0009). "Scored block" is the attested anchor; "epoch" is the attestation epoch the shard signs for.</div>
     ${(overlayStats.attLog && overlayStats.attLog.length) ? `<table class="tbl"><thead><tr>
         <th class="num">Epoch</th><th>Scored block (anchor)</th><th class="num">Target DAA</th>
         <th>Validator</th><th class="num">#att</th><th class="right">Age</th></tr></thead><tbody>${
@@ -2137,7 +2142,7 @@ async function renderFinality(){
   viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › DNS Finality</div>
     <h1 class="page">DNS-final blocks <span class="dim" style="font-size:14px">(stake-confirmed, in order)</span></h1>
     <div class="cards" id="finalCards"><div class="loading">Loading DNS-final chain…</div></div>
-    <div class="note" style="margin:10px 0">Every block below sits on the selected chain at or below the stake-confirmed anchor — <b>irreversible under DNS finality</b> (ADR-0009). Newest first; the anchor advances as validators attest. This is the <b>selected-chain backbone</b>: DAA counts <i>every</i> DAG block, so between two chain rows it steps by <b>1 + Merged</b> — the parallel blocks that block absorbs but which aren't on the chain (at ~10 BPS the DAG runs ~2-wide, so DAA usually jumps by 2). Those merged blocks are finalized too, as part of the chain's past. Verified per-block via <span class="mono">getDnsConfirmation(blockHash)</span>.</div>
+    <div class="note" style="margin:10px 0">Every block below sits on the selected chain at or below the stake-confirmed anchor — <b>irreversible under DNS finality</b> (ADR-0009). Newest first; the anchor advances as validators attest. This is the <b>selected-chain backbone</b>: <b>Merged</b> counts the parallel blocks each chain block absorbs but which aren't on the chain. Those merged blocks are finalized too, as part of the chain's past. On testnet-12 DAA is the chain's clock (about one step per 120 s), not a block count, so it does not step by the number of blocks between rows. Verified per-block via <span class="mono">getDnsConfirmation(blockHash)</span>.</div>
     <table class="tbl"><thead><tr>
       <th class="num">DAA</th><th class="num">Blue score</th><th class="num">Merged</th><th>Block</th><th>Age</th><th class="num">Attestations</th><th>Status</th>
     </tr></thead><tbody id="finalBody"><tr><td colspan="7" class="spin">Walking the selected chain…</td></tr></tbody></table>`;
@@ -2159,7 +2164,7 @@ async function refreshFinality(){
     const anchorOk = !!(anchor && /[1-9a-f]/i.test(anchor) && dns && dns.dnsConfirmed);
     if (!anchorOk){
       cards.innerHTML = `<div class="card"><div class="k">DNS finality</div><div class="v sm">${dns?(dns.powConfirmed?"PoW only":"pending"):"n/a"}</div><div class="sub">${dns?esc(DNS_HEALTH[dns.health]||dns.health):""}</div></div>`;
-      body.innerHTML = `<tr><td colspan="7" class="dim">DNS finality is not confirming yet${dns?` — stage ${esc(ROLLOUT_STAGES[dns.rolloutStage]||dns.rolloutStage)}`:""}. Blocks become DNS-final once a bonded validator's attestations advance a selected-chain anchor past the required StakeScore (see <a href="#/overlay">PoS overlay</a>).</td></tr>`;
+      body.innerHTML = `<tr><td colspan="7" class="dim">DNS finality is not confirming yet${dns?` — stage ${esc(ROLLOUT_STAGES[dns.rolloutStage]||dns.rolloutStage)}`:""}. Blocks become DNS-final once a bonded validator's attestations advance a selected-chain anchor past the required StakeScore (see <a href="#/overlay">PoS overlay</a>). On testnet-12 DNS finality activates only once at least 6 validators hold at least 120,000,000 ${SYMBOL} of active stake; validators are funded after launch. Until then, treat a payment as final only at finality depth (600 blue, about 4 hours) or once a <b>Final</b> PALW anchor covers it (<span class="mono">getPalwSettlement</span>).</td></tr>`;
       finalAnchor = null;
       return;
     }
@@ -2310,27 +2315,17 @@ async function renderEvmLane(){
       recentClaims.sort((a,b)=>b.daa-a.daa);
     } catch {}
   }
-  // ADR-0020 flag day. Below the fence consensus FORCES both EVM header commitments to zero, so
-  // "inactive" here is the rule working, not a stall — say how far off it is rather than leaving
-  // the reader to guess. 10 BPS is the network's TARGET rate and the realized rate runs a little
-  // under it, so this ETA is a floor ("at least N days"), which is the safe direction to err in
-  // for something operators read as an upgrade deadline.
-  const EVM_FENCE_DAA = 6500000;
-  const sinkDaa = hd ? Number(hd.daaScore || 0) : 0;
+  // ADR-0020's flag day is DAA 0 on testnet-12 (`evm_activation_daa_score` = 0, the testnet base):
+  // every block from genesis commits to its (possibly empty) EVM payload, so a sink header without
+  // the commitment is not a lane waiting for its fence — it is worth saying so rather than printing
+  // a countdown to a height the chain has already passed.
   let laneSub;
   if (active) {
-    laneSub = "EVM commitments live (ADR-0020)";
-  } else if (sinkDaa > 0) {
-    const remaining = EVM_FENCE_DAA - sinkDaa;
-    if (remaining > 0) {
-      const days = remaining / (10 * 86400);
-      const eta = days >= 1 ? "~" + days.toFixed(1) + " days" : "~" + Math.max(1, Math.round(days * 24)) + " h";
-      laneSub = "pre-EVM · activates at DAA " + num(EVM_FENCE_DAA) + " — " + num(remaining) + " to go (" + eta + " at 10 BPS)";
-    } else {
-      laneSub = "past the DAA " + num(EVM_FENCE_DAA) + " fence — waiting for the first committed chain block";
-    }
+    laneSub = "EVM commitments live (ADR-0020) · active from genesis";
+  } else if (hd) {
+    laneSub = "the sink header carries no EVM commitment — unexpected: testnet-12 runs the lane from genesis";
   } else {
-    laneSub = "pre-EVM — activates at DAA " + num(EVM_FENCE_DAA);
+    laneSub = "sink header unavailable";
   }
   const cards = [
     ["Lane status", active?'<span class="pill chain">active</span>':(hd?'<span class="pill">inactive</span>':"n/a"), laneSub, "ov"],
@@ -2365,7 +2360,7 @@ async function renderEvmLane(){
         <td class="num">${num(t.daa)}</td>
         <td class="right dim" title="${esc(dt(t.ts))}">${ago(t.ts)}</td></tr>`).join("")
     }</tbody></table>${evmBlocks.length?`<div class="note" style="margin-top:8px">${num(recentTxs.length)} EVM transaction(s) across ${num(evmBlocks.length)} payload block(s) in the recent window.</div>`:""}`
-      : `<div class="note">No EVM transactions in the recent block window. Blocks carry EVM transactions only while accounts are transacting — submit one (or use the lookup above) and it appears here. Below the activation fence (DAA 6,500,000) both header commitments are consensus-forced to zero; from the fence on, every block commits to its (possibly empty) payload hash.${(typeof keccak256!=="function")?" <b>Note:</b> the keccak library did not load, so tx hashes can't be derived in-browser.":""}</div>`}
+      : `<div class="note">No EVM transactions in the recent block window. Blocks carry EVM transactions only while accounts are transacting — submit one (or use the lookup above) and it appears here. On testnet-12 the lane is active from genesis: every block commits to its (possibly empty) payload hash.${(typeof keccak256!=="function")?" <b>Note:</b> the keccak library did not load, so tx hashes can't be derived in-browser.":""}</div>`}
     <h2 class="sec">Recent bridge deposit-claims <span class="dim" style="font-size:13px">(UTXO→EVM credits · §9.2 system ops in payloads)</span></h2>
     ${recentClaims.length ? `<table class="tbl"><thead><tr><th>EVM address (credited)</th><th class="num">Amount (MSK)</th><th class="num">Tip</th><th>Lock outpoint</th><th>In block</th><th>Executed</th><th class="right">Age</th></tr></thead><tbody>${
       recentClaims.slice(0,40).map(c=>`<tr>
@@ -2377,7 +2372,7 @@ async function renderEvmLane(){
         <td>${c.chain ? `<span class="pill chain">credited</span>` : `<span class="pill" title="Only a chain block's payload executes; this block is not on the selected chain, so this copy of the claim credits nothing.">not executed · off the selected chain</span>`}</td>
         <td class="right dim" title="${esc(dt(c.ts))}">${ago(c.ts)}</td></tr>`).join("")
     }</tbody></table><div class="note" style="margin-top:8px">${num(recentClaims.length)} deposit-claim(s) in the recent window, ${num(recentClaims.filter(c=>c.chain).length)} executed by a chain block — a claim two producers both carried shows twice, and only the chain block's copy credits. Claims are §9.2 bridge system ops (UTXO→EVM credits), not Ethereum transactions, so they carry no 0x tx hash.</div>`
-      : `<div class="note">No bridge deposit-claims in the recent block window. A claim appears here when a deposit-lock is claimed on a mining node (credits the destination EVM address).</div>`}
+      : `<div class="note">No bridge deposit-claims in the recent block window. A claim appears here when a deposit-lock is claimed on a mining node (credits the destination EVM address). Producers carry a claim only while DNS finality is confirmed and keeping up with the tip; on testnet-12 DNS finality is in Bootstrap until its validators are funded, so deposit claims wait until then.</div>`}
     <div class="note" style="margin-top:12px"><b>Bridge:</b> UTXO→EVM via a deposit-lock output claimed on a mining node (credits the EVM address); EVM→UTXO via the <span class="mono">0x…F002</span> withdraw precompile, which materializes a synthetic UTXO at the destination. Native <b>MSK</b> is the EVM gas + value token (18 decimals).</div>
     ${evmLaneExtraSections()}`;
   const f = document.getElementById("evmLookup");
@@ -2948,18 +2943,21 @@ const PANEL_QUORUM = 3;
 // (contrib/t12-deploy-kit/probe-identity-local.sh → PREMINE_TXID); re-check it against fleet.env at the
 // shipping commit before staging this file (DEPLOY.md §9).
 const PANEL_BOND_TX = "5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669";
-// testnet-12 roster (the R-core+ regenesis): eight genesis bonds, every one a verifier seat that
-// holds the dense 8k artifact. Card 7 was re-keyed for testnet-12 (its old key was on no host). No
-// seat holds the 2M artifact: 2M is CLOSED at launch (ADR-0152 §8.3 item 7 / O-11: every 2M attempt
-// and FP claim is refused until 2M's flag day). Deployment truth, updated with the fleet.
+// testnet-12 roster (the R-core+ regenesis, public launch 2026-09-25): eight genesis bonds on
+// PANEL_BOND_TX:0..7, every one a verifier seat that holds the dense 8k artifact
+// (contrib/t12-deploy-kit/PLAN.md §1 and the NODES tables of install-ibm/113/5104.sh). Producers:
+// 8k = bond 0 (ibm node0), floor = bonds 1 (ibm node1) and 6 (.113). Card 7 was re-keyed for
+// testnet-12 (its old key was on no host). No seat holds the 2M artifact: 2M is CLOSED at launch
+// (ADR-0152 §8.3 item 7 / O-11: every 2M attempt and FP claim is refused until 2M's flag day).
+// Deployment truth, updated with the fleet.
 const PANEL_SEATS = [
-  { ix:0, host:"seat 0 · ibm (node0)",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:1, host:"seat 1 · ibm public node (node1)",           holds:["PALW-BASE-0","QWEN25-A16-8K"] },
+  { ix:0, host:"seat 0 · ibm node0 (8k producer)",           holds:["PALW-BASE-0","QWEN25-A16-8K"] },
+  { ix:1, host:"seat 1 · ibm node1 (floor producer)",        holds:["PALW-BASE-0","QWEN25-A16-8K"] },
   { ix:2, host:"seat 2 · 5.104.81.23",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
   { ix:3, host:"seat 3 · 5.104.81.23",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
   { ix:4, host:"seat 4 · 5.104.81.23",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
   { ix:5, host:"seat 5 · 5.104.81.23",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
-  { ix:6, host:"seat 6 · .113 public entry node",            holds:["PALW-BASE-0","QWEN25-A16-8K"] },
+  { ix:6, host:"seat 6 · .113 explorer node (floor producer)", holds:["PALW-BASE-0","QWEN25-A16-8K"] },
   { ix:7, host:"seat 7 · 5.104.81.23 (re-keyed for t12)",    holds:["PALW-BASE-0","QWEN25-A16-8K"] },
 ];
 function verifierCount(name){ return PANEL_SEATS.filter(s => s.holds.includes(name)).length; }
@@ -2987,9 +2985,9 @@ const LLM_CLASSES = [
   { id:"f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
     name:"PALW-BASE-0", model:"deterministic integer floor — no model file", tag:"floor" },
   { id:"ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
-    name:"QWEN25-A16-8K", model:"Qwen/Qwen2.5-1.5B/graph-v7@8192 · W8A16 static PTQ, 8k held context (genesis)", tag:"llm" },
+    name:"QWEN25-A16-8K", model:"Qwen/Qwen2.5-1.5B/graph-v7@8192 · W8A16 static PTQ, 8k held context (genesis row; Prefetching → Probation once 7 seats prove readiness after the grace)", tag:"llm" },
   { id:"74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
-    name:"QWEN25-A16-2M", model:"Qwen/Qwen2.5-1.5B/graph-v7@2097152 · W8A16 static PTQ, 2M held context (genesis row; closed at launch until its flag day)", tag:"llm" },
+    name:"QWEN25-A16-2M", model:"Qwen/Qwen2.5-1.5B/graph-v7@2097152 · W8A16 static PTQ, 2M held context (genesis row; closed at launch by rule — no claims until a flag day installs its measured row)", tag:"llm" },
   // testnet-12 registers no hybrid row at genesis (the held map's GDN convolution gather is wrong for
   // Qwen3.6-35B-A3B's 16/32 key/value heads). A permissionless registration appears here by its
   // class id from getPalwModelRegistry; name it in this table when it registers.
@@ -3161,13 +3159,14 @@ function renderLlm(){
       seats and needs <b>3 matching receipts</b> (<code>ReceiptLicensed</code>) — that is the panel, never
       the admission bar. A class is minable only after the registry sees <b><code>requiredReadySeats</code></b>
       possession proofs on chain via <code>SeatReadinessProved</code>. That number is <b>derived per class</b>
-      (ADR-0135): the floor is <b>7</b> (5 panel seats + 2 spare), but a heavy canonical job needs more seats
-      at the target utilization — e.g. graph-v7@2M with canonical <code>262143+2</code> currently reads
-      <b>9,992</b> on chain, not 7.
+      (ADR-0135): at least <b>7</b> (5 panel seats + 2 spare), and more for a class whose canonical job is
+      heavy at the target utilization. On testnet-12 the 8k row starts in <b>Prefetching</b> and moves to
+      <b>Probation</b> once 7 seats of distinct operators have proved readiness after the registry's grace;
+      the 2M row is <b>closed at launch</b> by rule and takes no claim.
       Prefetching admits nothing, even if five operators have the file. The ticks below that say
       <i>holds</i> are the operator's deployment (the floor is derived — every seat verifies it by
       construction); a seat is <b>Ready</b> only when the chain counts it, which is the same
-      <code>6d69…:N</code> identity the approvals table shows.</div>
+      <code>${esc(short(PANEL_BOND_TX,4))}:N</code> identity the approvals table shows.</div>
     <div id="llmSeatMatrix" class="tblscroll"></div>
     <h2 class="sec">The lifecycle a claim walks</h2>
     <div class="palw-flow" style="margin-bottom:6px">
@@ -3175,27 +3174,27 @@ function renderLlm(){
       <div class="palw-stage ok"><span class="n">2</span><div class="t">Panel bound</div><div class="d">Five bonded seats are drawn on-chain (<code>PanelBound</code>) — the producer cannot pick its judges.</div></div>
       <div class="palw-stage ok"><span class="n">3</span><div class="t">Verified</div><div class="d">Each seat re-derives the job from the served material and signs a receipt: <b>Valid</b>, <b>Unavailable</b> or <b>Incapable</b>.</div></div>
       <div class="palw-stage ok"><span class="n">4</span><div class="t">Approved</div><div class="d"><code>ReceiptLicensed</code> carries the 3-of-5 quorum of signed receipts; a withholding producer gets <code>ProducerDefaulted</code> and is slashed.</div></div>
-      <div class="palw-stage wait"><span class="n">5</span><div class="t">Final</div><div class="d">A licensed claim can still be disputed in court; unchallenged for 1200 DAA, it becomes <b>Final</b> and its weight counts.</div></div>
+      <div class="palw-stage wait"><span class="n">5</span><div class="t">Final</div><div class="d">A licensed claim can still be disputed in court; unchallenged through its challenge window (120 DAA on testnet-12, about 4 hours), it becomes <b>Final</b> and its weight counts.</div></div>
     </div>
     <div class="sec-row"><h2 class="sec">Submitted LLM work</h2><span class="sec-more dim" id="llmSubCount"></span></div>
     <div class="note" style="margin-top:4px">The <b>input</b> of an attempt-lane job is not chosen by anyone: it is a
       prompt derived deterministically from the block's own position, the class and the producer's bond (the anchor) —
       that is what makes it a lottery ticket nobody can pre-compute, and why it reads as random tokens. The
-      <b>output</b> is what the model actually generated from it — exactly <b>2 tokens</b>, because the
-      canonical job pinned in consensus is (prefill 7, decode 2) for QWEN36 and (63, 2) for QWEN25-A16-2M:
-      the smallest unit that proves the model ran, since up to five seats re-execute every claim and the
-      material carries ~1 MB of logits per generated token. This lane certifies inference; long-form
-      generation belongs to the free-prompt lane. Every panel seat re-derives both halves before signing.</div>
+      <b>output</b> is what the model actually generated from it — a <b>single token</b>: on testnet-12 an
+      attempt's job is its class's canonical prefill with one generated token (ADR-0117, one forward pass),
+      the smallest unit that proves the model ran over the whole prompt, since up to five seats re-execute
+      every claim and the material carries a full logits row per generated token. This lane certifies
+      inference; long-form generation belongs to the free-prompt lane. Every panel seat re-derives both
+      halves before signing.</div>
     <div class="note" style="margin-top:4px"><b>What this page shows, and what the chain publishes — two different
       things.</b> A claim puts COMMITMENTS on chain for its ANSWER — the roots over its trace, its output and its
       execution — and those bytes stay with the executor, reaching the five drawn seats over an authenticated pull.
-      <b>The prompt is not like that.</b> This network runs privacy mode 1 (PublicDa), the only mode any shipped
-      preset arms, and under it the commitment transaction carries the prompt's token ids <b>whole</b>: every
-      free-prompt input on this chain is public and permanent, readable by anyone with a node. This page does not
-      render those words, which is a courtesy and not a protection — <b>do not type anything here you would not
-      publish</b>. Mode 2 (PanelDa) would keep a prompt off chain and reaching only the five seats; it is dormant
-      on every preset, and even armed, a data-availability court close carries the ids, so a disputed prompt
-      becomes public. Private unless disputed, never confidential. An attempt-lane input is shown outright because
+      <b>The prompt depends on its mode, and testnet-12 arms both.</b> Under mode 1 (PublicDa) the commitment
+      transaction carries the prompt's token ids <b>whole</b>: public and permanent, readable by anyone with a node.
+      Under mode 2 (PanelDa) it carries only a digest, and the ids reach the five drawn seats over an authenticated
+      pull. This page renders neither, which is a courtesy and not a protection — <b>do not submit a mode-1 prompt
+      you would not publish</b>. Even under mode 2 a data-availability court close carries the ids, so a disputed
+      prompt becomes public. Private unless disputed, never confidential. An attempt-lane input is shown outright because
       nobody chose it — anyone recomputes it from the block's anchor. An ANSWER becomes public exactly when somebody
       <b>demands</b> it — a data-availability accusation the executor answers on chain (ADR-0062) — and the
       demand costs the accuser if the answer comes. Those disclosures appear here marked
@@ -3213,25 +3212,17 @@ function renderLlm(){
       re-execution matches <b>bit-for-bit</b> — no tolerances, no judgement calls. Anyone can re-derive what a
       panel approved. The re-verification market at
       <a href="https://llm.misakascan.com/" target="_blank" rel="noopener">llm.misakascan.com</a> walks the deposit-backed path.</div>
-    <pre class="cmd"># QWEN25-A16-2M · replay any row above on YOUR machine and compare bit-for-bit
-#    (measured 2026-08-30 across Intel Broadwell, two AMD EPYC hosts and an Apple-silicon Mac:
-#     identical 9.7 MB material — all 16 integer logit rows — same SHA-256 on every device)
-cargo build --release -p misaka-palw-base0 --bin qwen25-convert
-cargo build --release -p misaka-palw-job-replay
-./target/release/qwen25-convert Qwen2.5-1.5B-Instruct/ --a16 --out qwen25-1.5b-a16.palwart
-#    deterministic conversion: SHA-256 a8c4e53e5b30dd0d…, pairs under root c00faa480f2344d4…
-./target/release/misaka-palw-job-replay --network testnet-11 \
-  --artifact qwen25-1.5b-a16.palwart --anchor &lt;anchor&gt;   # hover any row above to see its anchor
-#    prints the prompt, the generated ids and material_sha256 — equal for every honest machine
+    <pre class="cmd"># QWEN25-A16-8K · rebuild the exact artifact testnet-12 registered, and check it against the chain's pin
+#    (the chain pins the class id and the root, not a filename)
+cargo build --release --bin qwen25-convert --bin palw-class
+./target/release/qwen25-convert Qwen2.5-1.5B-Instruct/ --a16 --n-ctx 8192 --out qwen25-1.5b-a16-8k.palwart
+#    input model.safetensors SHA-256 dd924a11b4c220f3…; expect 1,799,359,436 bytes
+./target/release/palw-class manifest --network testnet-12 qwen25-1.5b-a16-8k.palwart          # writes the .palwmanifest sidecar
+./target/release/palw-class manifest --network testnet-12 --check qwen25-1.5b-a16-8k.palwart  # exit 1 on a mismatch
+#    expect class ebf44d0aa09ff7d1…, inventory root 88096dc177826d88…
 
-# QWEN36 · prove your artifact IS the registered class (the chain pins the root, not a filename)
-./target/release/qwen36-run --artifact qwen36.palwq36 --root-only
-#    must print f4aad4fd543928eb…  — anything else is not the class testnet-11 registered
-#    the artifact, verifiable end-to-end (SHA-256 7a944595a4256ab0…, 34 GiB):
-#    https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime
-
-# the full path — conversion, verification, panel duty:
-#    docs/palw-public-testnet-classes-runbook.md</pre>`;
+# the full path — conversion, memory, bond, panel duty:
+#    docs/testnet12-join-mining.md §6</pre>`;
   const chips = document.getElementById("llmChips");
   if (chips) chips.addEventListener("click", e => {
     const b = e.target.closest("button"); if (!b) return;
@@ -3295,18 +3286,17 @@ async function refreshLlmInner(){
         <span class="wbar-title">Class ratios — issuance vs chain weight</span>
         <span class="wbar-big">LLM classes: <b class="amt-in">${fmtP(llmB)}%</b> <span class="dim" style="font-size:12px;font-weight:400">of block issuance</span> · <b class="amt-in">${fmtP(llmW)}%</b> <span class="dim" style="font-size:12px;font-weight:400">of chain weight</span></span>
       </div>
-      <div class="wbar-row"><span class="wbar-lbl" title="the epoch's per-class block budgets from the on-chain share table — every block earns the SAME subsidy carve, so MSK issuance follows these block counts; as LLM production grows the retarget walks the floor's share down toward its 100‰ (10%) liveness minimum">issuance (block budget)</span><div class="wbar">${bSum ? wRows.map(r=>wSeg(r,r.budget,bSum,"the epoch's block budget","blocks")).join("") : '<i class="none">no budgets visible</i>'}</div></div>
+      <div class="wbar-row"><span class="wbar-lbl" title="the epoch's per-class block budgets from the on-chain share table — every block earns the SAME subsidy carve, so MSK issuance follows these block counts; as LLM production grows the retarget walks the floor's share down toward its liveness minimum (20‰ = 2% on testnet-12)">issuance (block budget)</span><div class="wbar">${bSum ? wRows.map(r=>wSeg(r,r.budget,bSum,"the epoch's block budget","blocks")).join("") : '<i class="none">no budgets visible</i>'}</div></div>
       <div class="wbar-row"><span class="wbar-lbl" title="pwu per block × epoch block budget — what the claims WEIGH in consensus (chain security, reorg depth, slash exposure), not what they pay">chain weight (pwu)</span><div class="wbar">${wSum ? wRows.map(r=>wSeg(r,r.designed,wSum,"the epoch weight budget","pwu")).join("") : '<i class="none">no weight visible</i>'}</div></div>
       <div class="wbar-row"><span class="wbar-lbl" title="pwu × blocks actually produced in the running epoch — resets at the epoch boundary">weight produced now</span><div class="wbar">${rSum ? wRows.map(r=>wSeg(r,r.realized,rSum,"the weight produced so far","pwu")).join("") : '<i class="none">no blocks yet this epoch</i>'}</div></div>
       <div class="wbar-legend">${wRows.map(r=>`<span><span class="swatch" style="background:${r.color}"></span>${esc(r.c.name)} <span class="dim">issuance</span> <b>${fmtP(bSum?r.budget/bSum*100:0)}%</b> · <span class="dim">weight</span> <b>${fmtP(wSum?r.designed/wSum*100:0)}%</b> <span class="dim">· ${num(r.pwu)} pwu/block${r.mult?` · ×${num(r.mult)} floor`:""}${r.c.tag==="floor"?" · liveness backbone":""}</span></span>`).join("")}</div>
       <div class="wbar-note">Every block earns the <b>same subsidy carve</b> whatever its class — PALW pay is a carve of the fixed
         emission, never an addition to it (an attempt-lane chain block's reward sits in <b>escrow until its claim is Final</b>;
         a voided claim burns it). So <b>issuance follows block counts</b>: the on-chain share table budgets each class's blocks
-        per epoch, and as LLM production grows the per-class retarget walks the floor's share down toward its <b>10% liveness
-        minimum</b>. <b>Consensus follows pwu</b>: a claim weighs its class's verified work units, so chain security is carried
-        almost entirely by the LLM classes even while the model-free floor — the liveness backbone — mines most blocks. The
-        LLM block budgets above are currently almost unclaimed: same pay per block, almost no competition, for anyone who
-        points a model at them.</div>
+        per epoch, and as LLM production grows the per-class retarget walks the floor's share down toward its <b>liveness
+        minimum</b> (20‰ = 2% on testnet-12). <b>Consensus follows pwu</b>: a claim weighs its class's verified work units, so chain security is carried
+        almost entirely by the LLM classes even while the model-free floor — the liveness backbone — mines most blocks. An
+        LLM block budget pays the same per block as the floor's, to any producer whose class the registry admits.</div>
     </div>`;
 
   const fc = document.getElementById("llmClasses");
@@ -3600,8 +3590,8 @@ async function fillBlockVerification(blockHash){
   // **The seats, without pretending to a chain scan.**
   //
   // `ReceiptLicensed` rides a 0x4b transaction in some LATER block, and "later" is not near: the
-  // licence waits for the claim's receipt window and `Final` waits another 1,200 DAA past that, so
-  // the carrier for a finalized claim sits a thousand-odd blocks beyond its acceptance. The forward
+  // licence waits for the claim's receipt window and `Final` waits its challenge window past that
+  // (120 DAA on testnet-12), so the carrier for a finalized claim sits well beyond its acceptance. The forward
   // walk this function used to do reached none of it and reported "0 pages", which reads as
   // "nobody signed" — the one thing it must never say by accident.
   //
@@ -3617,7 +3607,7 @@ async function fillBlockVerification(blockHash){
     seatBox.innerHTML = `<div class="note">${ph.judged
         ? `Three of the five drawn seats signed matching receipts — that is what <b>${esc(ph.label)}</b> is, and it is
            the node's own state that says so, not this page. Which bonds those were rides the licensing carrier, a
-           transaction a thousand-odd blocks past this one, so this page does not walk out to fetch it: the seats are
+           transaction in a later block, so this page does not walk out to fetch it: the seats are
            listed on the <a href="#/llm">LLM Jobs</a> page under <b>Verification &amp; approvals</b>.`
         : `No seat has filed a receipt yet, and that is what this phase means: ${esc(meaning)}. Five bonded seats are
            drawn on chain — the producer cannot pick its judges — and the licence is carried once three of them agree.`}</div>`;
@@ -3770,10 +3760,11 @@ function paintLlm(){
         <td style="font-size:12.5px">${what||'<span class="dim">—</span>'}</td>
         <td>${linkBlock(e.block)}</td></tr>`;
     };
-    ew.innerHTML = !llmEvents.length ? `<div class="note">No approvals on this chain yet — the panel seats are
-      still collecting receipts (a claim's receipt window opens 600 DAA after acceptance, and the first
-      <code>ReceiptLicensed</code> carrier lands once a 3-of-5 quorum stands). Panel <i>bindings</i> are derived
-      by every node from state and never ride a transaction, so they are deliberately absent here.</div>` :
+    ew.innerHTML = !llmEvents.length ? `<div class="note">No lifecycle objects in the recent window yet — the
+      panel seats may still be collecting receipts (a <code>ReceiptLicensed</code> carrier lands once a 3-of-5
+      quorum stands; on testnet-12 the first floor licences were expected about 40–50 minutes after launch).
+      This page sweeps only the most recent blocks. Panel <i>bindings</i> are derived by every node from state
+      and never ride a transaction, so they are deliberately absent here.</div>` :
     `<div class="tblscroll"><table class="tbl"><thead><tr>
       <th>Age</th><th>Event</th><th>Claim</th><th>What the chain recorded</th><th>Block</th>
     </tr></thead><tbody>${llmEvents.slice(0,30).map(row).join("")}</tbody></table></div>`;
@@ -3924,8 +3915,8 @@ function isLoopbackIp(ip){ return ip === "127.0.0.1" || ip === "::1" || /^127\./
 // **The nodes the handshake refuses are in no peer list** (claude-census-v1, 2026-09-10).
 //
 // The Nodes tile counts the peers the explorer's node is CONNECTED to. A node the handshake turns
-// away never gets there, so when a build rollout cuts part of the network off (testnet-11,
-// 2026-09-09: the fence at DAA 2,400) the tile reads as the network shrinking and says nothing to
+// away never gets there, so when a build rollout cuts part of the network off (the previous
+// network, 2026-09-09: the fence at DAA 2,400) the tile reads as the network shrinking and says nothing to
 // the operators who were cut off. They are in that node's log, one line per attempt, with the
 // reason; a timer on this host (misakascan-peer-census.py) turns the last hour of those lines into
 // /peer-census.json. Refused is not the same question as connected, so it is shown next to the
@@ -3967,8 +3958,9 @@ function censusRemedy(r){
 // claude-bridge-fresh-v2: the node's own bridge gate, restated for the tile. Since main a5f1bdf7,
 // dns_finality_fresh_for_bridge() is: DNS confirmed AND (sink blue score − the confirmed anchor's
 // blue score) ≤ dns_bridge_max_anchor_distance_blue_score() — the anchor's healthy distance below
-// the tip (testnet-11: lag 2 + backoff 1 + epoch 2 × (1 + 3 inclusion epochs) + (2 − 1) = 12) plus
-// bridge_finality_max_staleness_daa_score (2). The rule before it (virtual DAA − anchor DAA ≤ 2)
+// the tip (testnet-12's 120 s DNS preset: lag 2 + backoff 1 + epoch 2 × (1 + 3 inclusion epochs) + (2 − 1) = 12)
+// plus bridge_finality_max_staleness_daa_score (2) = 14, which is what Params::from(testnet-12) gives at
+// 0e8ec984e (dns_bridge_max_anchor_distance_blue_score). The rule before it (virtual DAA − anchor DAA ≤ 2)
 // could never hold: the newest confirmable anchor sits at least 3 blue (10–12 DAA) below the tip.
 const BRIDGE_MAX_ANCHOR_DISTANCE_BLUE = 14;
 let bridgeAnchor = { hash: null, blue: null };
@@ -4321,30 +4313,35 @@ function mtpCatLegend(){
 // How a participant gets an id: they already have one. Points accrue to `addr:<their address>`,
 // derived from the address itself — there is no registration step, and the HTTP surface stays
 // read-only because there is nothing left for it to accept.
-const MTP_DOC_URL = "https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet-participation.md";
 function mtpRegisterSection(){
   return `
+    <div class="note"><b>Which network is scored.</b> The published ledgers score <b>testnet-11</b>, the previous network
+      (each signed ledger names its network; the leaderboard's <b>Scored network</b> card shows it). testnet-12 activity is
+      <b>not scored yet</b>: whether and when MTP moves to testnet-12 has not been decided. The rules below are how the
+      ledger scores.</div>
     <div class="kv">
       <div class="row"><div class="key">1 · make an address</div><div class="val">
-        <span class="hash">misaka key gen --network testnet-11 --out mtp.seed</span>
+        <span class="hash">misaka key gen --out mtp.seed</span>
         <div class="dim" style="font-size:12px;margin-top:4px">It prints your <span class="hash">misakatest:…</span> address.
           That address <b>is</b> your points id — <span class="hash">addr:misakatest:…</span>. Back the key up; it cannot be recovered.</div></div></div>
       <div class="row"><div class="key">2 · there is no step 2</div><div class="val">
-        No invitation, no signature, no handle, nothing to submit. Use the address on
-        <span class="hash">testnet-11</span> and the next epoch run credits it.
+        No invitation, no signature, no handle, nothing to submit. Use the address on the scored network and the next
+        epoch run credits it.
         <div class="dim" style="font-size:12px;margin-top:4px">Every point still cites the block hash or transaction id it came from, so anyone can re-check it against the chain.</div></div></div>
       <div class="row"><div class="key">mine (C1)</div><div class="val">
-        Point a miner at <span class="hash">testnet-11</span> with your address as the payout address. Each accepted block whose coinbase pays you
+        Mine on the scored network with your address as the payout address. Each accepted block whose coinbase pays you
         is one point, up to <b>200 points per epoch</b>.
         <div class="dim" style="font-size:12px;margin-top:4px">A block that ends up red pays no coinbase, so it earns no point either.</div></div></div>
       <div class="row"><div class="key">LLM mining (C5)</div><div class="val">
-        Run a PALW producer on <span class="hash">testnet-11</span> (<span class="hash">--palw-produce</span>) with a bond whose payout address is yours. Every claim you
+        Run a PALW producer (<span class="hash">--palw-produce</span>) with a bond whose payout address is yours. Every claim you
         produce that becomes <b>final</b> — licensed by three bonded seats and unchallenged through its window — is <b>10 points</b>; an answer to a free prompt is <b>30</b>.
         <div class="dim" style="font-size:12px;margin-top:4px">Counted in the epoch the claim became final. Up to 10,000 points an epoch, together with seat receipts.</div></div></div>
       <div class="row"><div class="key">LLM verification (C5)</div><div class="val">
-        Hold a class artifact on a bonded panel seat (<span class="hash">--palw-panel</span>). Every <b>Valid</b> receipt you sign on a claim that becomes final is <b>2 points</b>.</div></div>
+        Hold a class artifact on a bonded panel seat (on testnet-12 builds the seat duties are always on for a bonded node; no flag).
+        Every <b>Valid</b> receipt you sign on a claim that becomes final is <b>2 points</b>.</div></div>
       <div class="row"><div class="key">register a model (C5)</div><div class="val">
-        Register a new model class on <span class="hash">testnet-11</span> (<span class="hash">kaspad --palw-register-class</span>, or <b>Add model</b> in MISAKA Studio):
+        Register a new model class through your running node (<span class="hash">misaka model add</span> — never a second
+        <span class="hash">kaspad</span> with the same bond: on testnet-12 two processes on one bond can get it slashed):
         <b>1,000 points</b> to the registering bond's payout address, once per class.
         <div class="dim" style="font-size:12px;margin-top:4px">Only a registration the chain accepted counts; genesis classes, and a dormant class registered again, do not.</div></div></div>
       <div class="row"><div class="key">transact (C3)</div><div class="val">
@@ -4359,8 +4356,7 @@ function mtpRegisterSection(){
     </div>
     <div class="note"><b>An address is not a person.</b> Two addresses are two participants here, even if one human holds both, and nothing links an
       address to any account elsewhere. That is the deliberate trade for having no enrolment: the per-epoch caps above, and the allocation rules, are
-      where sybil resistance lives — not in a registration check that used to silently drop the points of anyone who earned on chain without signing up first.
-      Full walkthrough: <a href="${MTP_DOC_URL}" target="_blank" rel="noopener">docs/testnet-participation.md</a>.</div>`;
+      where sybil resistance lives — not in a registration check that used to silently drop the points of anyone who earned on chain without signing up first.</div>`;
 }
 // The operator key + the exact commands that re-derive this page from scratch.
 function mtpVerifySection(op, epoch){
@@ -4393,7 +4389,8 @@ function mtpVerifySection(op, epoch){
         <span class="dim">/mtp/v1/points/&lt;id&gt; · /mtp/v1/epoch/&lt;n&gt;[/facts|/all]</span></div></div>
     </div>
     <pre class="cmd">${esc(cmd)}</pre>
-    <div class="note">The bundled CLI's query client speaks plain HTTP/1.1 with no TLS, so
+    <div class="note"><span class="hash">misaka mtp</span> is not part of the testnet-12 release build (<span class="hash">0e8ec984e</span>);
+      its query client speaks plain HTTP/1.1 with no TLS, so
       <span class="hash">misaka mtp points</span> / <span class="hash">leaderboard</span> only work against an <span class="hash">http://</span> instance —
       read this endpoint with <span class="hash">curl</span> as above. That costs nothing in trust: <span class="hash">verify-epoch</span> is offline,
       and it is the step that actually proves the numbers.</div>`;
@@ -4480,7 +4477,7 @@ async function renderMtpId(id){
     return viewFor(__g).innerHTML = `${crumbs}<h1 class="page">${esc(id)}</h1>` + (e.status === 404
       ? `<div class="note">No published epoch scores this id yet. Points appear here once the epoch covering the
            activity is published — there is nothing to sign up for, so if the address has mined, transacted or served on
-           <span class="hash">testnet-11</span>, it will appear at the next epoch run.</div>
+           the scored network, it will appear at the next epoch run. testnet-12 activity is not scored yet.</div>
          <h2 class="sec">Start earning</h2>${mtpRegisterSection()}
          <div style="margin-top:14px"><a class="sec-more" href="#/mtp">← back to the leaderboard</a></div>`
       : `<div class="err">Points service unreachable — ${esc(e.message)}</div>`);
