@@ -1278,10 +1278,25 @@ impl VirtualStateProcessor {
         let object = kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(tx)?;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa_score, chain_point, &state)
+    }
+
+    /// [`Self::palw_mempool_h1_carrier_refusal`] on a given tip (`chain_point`, `state`) for the
+    /// object the transaction carries — the DAA the gate judges a possession proof at, the point, both
+    /// layers — so a test can put a proof through it on a state whose class root it can open (the M1
+    /// review, LOW 1: the gate's clock was reachable only through the tip).
+    pub(super) fn palw_mempool_h1_carrier_refusal_with(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        virtual_daa_score: u64,
+        chain_point: kaspa_consensus_core::BlockHash,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> Option<String> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
         // M1: a proof names its seat's virtual span — judged at that span's first DAA when the seat
         // is at most one block ahead of this node, so a peer the newest block has not reached yet
         // does not turn an honest proof away (`palw_readiness_gate_daa_v1`).
-        let daa_score = match &object {
+        let daa_score = match object {
             kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::SeatReadinessProved { span, .. }
             | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::SeatReadinessProvedV2 { span, .. } => {
                 match self.palw_model_registry_fold_at(virtual_daa_score) {
@@ -1302,7 +1317,7 @@ impl VirtualStateProcessor {
             blue_score: state.last_point().map_or(0, |last| last.blue_score.saturating_add(1)),
             subsidy: 0,
         };
-        self.palw_h1_carrier_refusal_on(&state, state_params, &point, &object)
+        self.palw_h1_carrier_refusal_on(state, state_params, &point, object)
     }
 
     /// [`Self::palw_mempool_h1_carrier_refusal`]'s question on a given state and point: the
@@ -4194,41 +4209,55 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(state, state_params, &extras, claim, accuser, now_daa)
     }
 
-    /// **The 2026-09-25 model-registry review, M1: do `carriers` escalate at the tip?** — for each,
-    /// the row the tip holds for its `(bond, class)`, judged at the virtual's DAA by the one
-    /// predicate (`PalwReadinessCarrierV1::escalates`) under the registry fold's own span clock,
+    /// **The 2026-09-25 model-registry review, M1: how urgently do `carriers`' rows need them at the
+    /// tip?** — for each, the row the tip holds for its `(bond, class)`, judged at the virtual's DAA by
+    /// the one predicate (`PalwReadinessCarrierV1::urgency`) under the registry fold's own span clock,
     /// globals and readiness rule; one tip load and one fold for the whole batch. The pool's carrier
-    /// index asks it when a proof enters and, for every proof it holds, at every new block; the
-    /// proof itself was put to the fold by the carrier gate
-    /// ([`Self::palw_mempool_h1_carrier_refusal`]) when it entered. Node-local; all `false` below
-    /// `palw_rcore_plus`, so every network but testnet-12 keeps a proof an ordinary transaction.
-    pub fn palw_readiness_escalated_v1_impl(
+    /// index asks it when a proof enters and, for every proof it holds, at every new block; the proof
+    /// itself was put to the fold by the carrier gate ([`Self::palw_mempool_h1_carrier_refusal`]) when
+    /// it entered. Node-local; all `None` below `palw_rcore_plus`, so every network but testnet-12
+    /// keeps a proof an ordinary transaction.
+    pub fn palw_readiness_urgency_v1_impl(
         &self,
         carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
-    ) -> Vec<bool> {
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
         let Some(virtual_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
-            return vec![false; carriers.len()];
+            return vec![None; carriers.len()];
         };
-        self.palw_readiness_escalated_at(carriers, virtual_daa)
+        self.palw_readiness_urgency_at(carriers, virtual_daa)
     }
 
-    /// [`Self::palw_readiness_escalated_v1_impl`] at a given DAA.
-    pub(super) fn palw_readiness_escalated_at(
+    /// [`Self::palw_readiness_urgency_v1_impl`] at a given DAA.
+    pub(super) fn palw_readiness_urgency_at(
         &self,
         carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
         virtual_daa: u64,
-    ) -> Vec<bool> {
-        let none = || vec![false; carriers.len()];
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        let none = || vec![None; carriers.len()];
         if carriers.is_empty() || !self.palw_rcore_plus_at(virtual_daa) {
             return none();
         }
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return none() };
         let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else { return none() };
+        self.palw_readiness_urgency_on(&state, carriers, virtual_daa)
+    }
+
+    /// [`Self::palw_readiness_urgency_at`] on a given state (a test's rows).
+    pub(super) fn palw_readiness_urgency_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+        virtual_daa: u64,
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        let none = || vec![None; carriers.len()];
+        if !self.palw_rcore_plus_at(virtual_daa) {
+            return none();
+        }
         let Some(fold) = self.palw_model_registry_fold_at(virtual_daa) else { return none() };
         carriers
             .iter()
             .map(|carrier| {
-                carrier.escalates(
+                carrier.urgency(
                     state.seat_readiness(&carrier.bond, &carrier.class_id),
                     virtual_daa,
                     fold.span_daa,

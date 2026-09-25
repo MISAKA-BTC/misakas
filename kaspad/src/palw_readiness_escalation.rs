@@ -3,26 +3,35 @@
 //! reads: which of this tick's proofs escalates, and which one takes the `ReadinessEscalated` site
 //! of the one carrier scheduler (`palw_panel::PalwCarrierSlotsV1`).
 //!
-//! A proof escalates when its row at the tip is about to lapse and the proof renews it (the one
-//! predicate the pool and the tip read ask too), past R-core+ only — and not while this seat's own
-//! last proof for the class is still landing: a copy sent then cannot land sooner, so hurrying it
-//! would only take the court's slot. The scheduler then carries at most one escalated proof a tick,
-//! never two slots running, ahead of the court queue; a proof that does not escalate keeps the Own
-//! site exactly as before.
+//! A proof escalates when its row at the tip exists and is lapsing or lapsed and the proof renews it
+//! (the one predicate the pool and the tip read ask too), past R-core+ only — and not while this
+//! seat's own last proof for the class is still landing: a copy sent then cannot land sooner, so
+//! hurrying it would only take the court's slot. The scheduler then carries at most one escalated
+//! proof a tick — the most urgent — never two slots running, ahead of the court queue, and
+//! transparent to P2-6's licence turn; a proof that does not escalate keeps the Own site exactly as
+//! before.
+//!
+//! **What this cannot do** (the M1 review, MEDIUM 3; measured in the tests below): one carrier is
+//! in flight per panel (`MAX_INFLIGHT_CARRIERS`) and every carrier chains on the last one's change,
+//! so while a seat's proof waits for a template's head its court and licence carriers wait too. With
+//! eight seats × two classes sharing one head a block, the seats spend a large share of their slots
+//! blocked behind proofs. Lifting the cap for proofs alone would not help — a court carrier chained
+//! on a waiting proof's change is mined only after it — and a second funding chain for proofs is a
+//! funding change for the operator to decide.
 
 use kaspa_consensus_core::palw_model_registry_v1::{PalwRegistryGlobalsV1, PalwSeatReadinessRowV1};
 use kaspa_consensus_core::palw_readiness_escalation_v1::{
-    PALW_READINESS_ESCALATION_LANDING_DAA_V1, palw_readiness_proof_escalates_v1,
+    PALW_READINESS_ESCALATION_LANDING_DAA_V1, PalwReadinessUrgencyV1, palw_readiness_proof_urgency_v1,
 };
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_hashes::Hash64;
 
-/// One possession proof this tick may carry (`PalwPanelService::readiness_duties`), and whether it
-/// escalates ([`palw_readiness_duty_escalates_v1`]).
+/// One possession proof this tick may carry (`PalwPanelService::readiness_duties`), and how urgently
+/// it escalates ([`palw_readiness_duty_urgency_v1`]; `None`: it does not).
 #[derive(Clone, Debug)]
 pub struct PalwReadinessDutyV1 {
     pub object: PalwConsensusObjectV2,
-    pub escalates: bool,
+    pub urgency: Option<PalwReadinessUrgencyV1>,
 }
 
 impl PalwReadinessDutyV1 {
@@ -34,6 +43,11 @@ impl PalwReadinessDutyV1 {
             _ => None,
         }
     }
+
+    /// Whether the proof escalates (takes the `ReadinessEscalated` site).
+    pub fn escalates(&self) -> bool {
+        self.urgency.is_some()
+    }
 }
 
 /// **Is this seat's last proof for a class still landing?** — submitted in `last_submitted_span`,
@@ -44,11 +58,21 @@ pub fn palw_readiness_proof_in_flight_v1(last_submitted_span: Option<u64>, now_d
         .is_some_and(|span| now_daa < span.saturating_mul(span_daa.max(1)).saturating_add(PALW_READINESS_ESCALATION_LANDING_DAA_V1))
 }
 
-/// **Does this span's proof escalate?** `armed` (R-core+ in force at `now_daa`), the proof
-/// escalates against the tip's `row` (`palw_readiness_proof_escalates_v1`), and this seat's own last
-/// proof for the class is not still landing ([`palw_readiness_proof_in_flight_v1`]).
+/// **Is this span's proof held back because the seat's last proof for the class is still landing?**
+/// Past R-core+ only (`armed`). A copy sent then cannot land sooner — its row is written by the same
+/// block either way — so it would only take a slot, and since an escalation keeps the licences' turn
+/// (`PalwCarrierLaneV1::Readiness`), the slot right after one is the licences': the copy took it at
+/// the Own site (the M1 review, MEDIUM 3, found in the single-seat storm once the turn was kept).
+pub fn palw_readiness_duty_waits_v1(armed: bool, last_submitted_span: Option<u64>, now_daa: u64, span_daa: u64) -> bool {
+    armed && palw_readiness_proof_in_flight_v1(last_submitted_span, now_daa, span_daa)
+}
+
+/// **How urgently does this span's proof escalate?** `armed` (R-core+ in force at `now_daa`), the
+/// proof's urgency against the tip's `row` (`palw_readiness_proof_urgency_v1`: a row that exists and
+/// is lapsing or lapsed, and a proof that renews it), and this seat's own last proof for the class is
+/// not still landing ([`palw_readiness_proof_in_flight_v1`]). `None`: it does not escalate.
 #[allow(clippy::too_many_arguments)]
-pub fn palw_readiness_duty_escalates_v1(
+pub fn palw_readiness_duty_urgency_v1(
     armed: bool,
     row: Option<&PalwSeatReadinessRowV1>,
     span_now: u64,
@@ -58,15 +82,17 @@ pub fn palw_readiness_duty_escalates_v1(
     span_daa: u64,
     g: &PalwRegistryGlobalsV1,
     readiness_v2: bool,
-) -> bool {
-    armed
-        && !palw_readiness_proof_in_flight_v1(last_submitted_span, now_daa, span_daa)
-        && palw_readiness_proof_escalates_v1(row, span_now, proof_version, now_daa, span_daa, g, readiness_v2)
+) -> Option<PalwReadinessUrgencyV1> {
+    if !armed || palw_readiness_proof_in_flight_v1(last_submitted_span, now_daa, span_daa) {
+        return None;
+    }
+    palw_readiness_proof_urgency_v1(row, span_now, proof_version, now_daa, span_daa, g, readiness_v2)
 }
 
-/// **Which proof takes the escalated site**: the first that escalates — one a tick.
+/// **Which proof takes the escalated site**: the most urgent that escalates (the row closest to
+/// lapsing; a lapsed row last), the first of a tie — one a tick.
 pub fn palw_escalated_readiness_pick_v1(duties: &[PalwReadinessDutyV1]) -> Option<usize> {
-    duties.iter().position(|duty| duty.escalates)
+    duties.iter().enumerate().filter_map(|(at, duty)| duty.urgency.map(|urgency| (urgency, at))).min().map(|(_, at)| at)
 }
 
 #[cfg(test)]
@@ -83,17 +109,32 @@ mod tests {
         PalwSeatReadinessRowV1 { proved_daa, proved_span: proved_daa, leaf_index: 0, proof_version: 2, chunks: 16 }
     }
 
-    /// **Armed only past R-core+, only for a lapsing row, never for a copy of a proof still
-    /// landing** — and the pick is the first escalating proof, one a tick.
+    fn is_readiness(lane: Option<PalwCarrierLaneV1>) -> bool {
+        matches!(lane, Some(PalwCarrierLaneV1::Readiness { .. }))
+    }
+
+    /// **Armed only past R-core+, only for a row that exists and is lapsing or lapsed, never for a
+    /// copy of a proof still landing** — and the pick is the most urgent escalating proof, one a tick.
     #[test]
     fn a_duty_escalates_only_past_the_fence_for_a_lapsing_row_not_already_landing() {
         let r = row(100);
-        assert!(palw_readiness_duty_escalates_v1(true, Some(&r), 106, 2, Some(100), 106, 1, &G, true), "age 6: escalated");
-        assert!(!palw_readiness_duty_escalates_v1(false, Some(&r), 106, 2, Some(100), 106, 1, &G, true), "the twin: disarmed, never");
-        assert!(!palw_readiness_duty_escalates_v1(true, Some(&r), 105, 2, Some(100), 105, 1, &G, true), "age 5: the Own site");
-        assert!(!palw_readiness_duty_escalates_v1(true, Some(&r), 107, 2, Some(106), 107, 1, &G, true), "its proof of 106 is landing");
-        assert!(palw_readiness_duty_escalates_v1(true, Some(&r), 108, 2, Some(106), 108, 1, &G, true), "…and did not land by 108");
+        let lapsing = Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 108 });
+        assert_eq!(palw_readiness_duty_urgency_v1(true, Some(&r), 106, 2, Some(100), 106, 1, &G, true), lapsing, "age 6: escalated");
+        assert_eq!(palw_readiness_duty_urgency_v1(false, Some(&r), 106, 2, Some(100), 106, 1, &G, true), None, "the twin: never");
+        assert_eq!(palw_readiness_duty_urgency_v1(true, Some(&r), 105, 2, Some(100), 105, 1, &G, true), None, "age 5: the Own site");
+        assert_eq!(palw_readiness_duty_urgency_v1(true, Some(&r), 107, 2, Some(106), 107, 1, &G, true), None, "its 106 proof lands");
+        assert_eq!(palw_readiness_duty_urgency_v1(true, Some(&r), 108, 2, Some(106), 108, 1, &G, true), lapsing, "…and did not");
+        assert_eq!(palw_readiness_duty_urgency_v1(true, None, 108, 2, None, 108, 1, &G, true), None, "a first proof: the Own site");
+        assert_eq!(
+            palw_readiness_duty_urgency_v1(true, Some(&r), 120, 2, Some(108), 120, 1, &G, true),
+            Some(PalwReadinessUrgencyV1::Lapsed),
+            "a seat back from downtime recovers its row, behind every lapsing one"
+        );
         assert!(!palw_readiness_proof_in_flight_v1(Some(10), 52, 5), "five-DAA spans: the next span is past the landing");
+        assert!(palw_readiness_duty_waits_v1(true, Some(106), 107, 1), "its proof of 106 is landing: no copy at 107");
+        assert!(!palw_readiness_duty_waits_v1(true, Some(106), 108, 1), "…and at 108 it did not land: send again");
+        assert!(!palw_readiness_duty_waits_v1(false, Some(106), 107, 1), "the twin: today's duty, unchanged");
+        assert!(!palw_readiness_duty_waits_v1(true, None, 107, 1));
         let object = |class: u64| PalwConsensusObjectV2::SeatReadinessProvedV2 {
             bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
                 Hash64::from_u64_word(1),
@@ -109,13 +150,72 @@ mod tests {
             signature: vec![],
         };
         let duties = vec![
-            PalwReadinessDutyV1 { object: object(1), escalates: false },
-            PalwReadinessDutyV1 { object: object(2), escalates: true },
-            PalwReadinessDutyV1 { object: object(3), escalates: true },
+            PalwReadinessDutyV1 { object: object(1), urgency: None },
+            PalwReadinessDutyV1 { object: object(2), urgency: Some(PalwReadinessUrgencyV1::Lapsed) },
+            PalwReadinessDutyV1 { object: object(3), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 110 }) },
+            PalwReadinessDutyV1 { object: object(4), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }) },
+            PalwReadinessDutyV1 { object: object(5), urgency: Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 109 }) },
         ];
-        assert_eq!(palw_escalated_readiness_pick_v1(&duties), Some(1));
+        assert_eq!(palw_escalated_readiness_pick_v1(&duties), Some(3), "the row closest to lapsing, the first of a tie");
+        assert_eq!(palw_escalated_readiness_pick_v1(&duties[..3]), Some(2), "a lapsing row before a lapsed one");
         assert_eq!(duties[1].class_id(), Some(Hash64::from_u64_word(2)));
+        assert!(!duties[0].escalates() && duties[1].escalates());
         assert_eq!(palw_escalated_readiness_pick_v1(&duties[..1]), None, "nothing escalates: nothing is picked");
+    }
+
+    /// **The panel reads these rules, not copies of them**: `readiness_duties` holds a due proof back
+    /// while the seat's last one for the class is still landing (`palw_readiness_duty_waits_v1`, past
+    /// R-core+) and asks `palw_readiness_duty_urgency_v1` for its escalation, and the tick's
+    /// `ReadinessEscalated` site takes `palw_escalated_readiness_pick_v1`'s proof.
+    #[test]
+    fn the_panel_reads_the_duty_rules_from_here() {
+        let source = include_str!("palw_panel.rs");
+        let duties = &source[source.find("    fn readiness_duties(").expect("readiness_duties")..];
+        let duties = &duties[..duties.find("\n    }\n").expect("its end")];
+        let due = duties.find("palw_readiness_duty_due_v2(").expect("the duty");
+        let waits = duties.find("|| crate::palw_readiness_escalation::palw_readiness_duty_waits_v1(").expect("the copy guard");
+        assert!(due < waits && waits - due < 600, "the guard is the duty's own condition");
+        assert!(duties.contains("crate::palw_readiness_escalation::palw_readiness_duty_urgency_v1("));
+        assert!(duties.contains("self.consensus_config.params.palw_rcore_plus_active_at(current_daa),\n                last,"));
+        assert!(source.contains("crate::palw_readiness_escalation::palw_escalated_readiness_pick_v1(duties)"));
+    }
+
+    /// Runs one tick's carrier sites through the tick's own scheduler, in the tick's own order.
+    fn carrier_tick(
+        last: Option<PalwCarrierLaneV1>,
+        holds: impl Fn(PalwCarrierSiteV1) -> bool,
+    ) -> (Vec<PalwCarrierSiteV1>, Option<PalwCarrierLaneV1>) {
+        let mut slots = PalwCarrierSlotsV1::new(last);
+        let (mut inflight, mut sent) = (0usize, Vec::new());
+        for site in PalwCarrierSiteV1::TICK_ORDER {
+            slots.at(site, inflight);
+            if slots.offers(site, inflight) && holds(site) {
+                inflight += 1;
+                sent.push(site);
+            }
+        }
+        (sent, slots.finish(inflight))
+    }
+
+    /// **An escalated proof is transparent to P2-6's turn** (the M1 review, MEDIUM 3): after a court
+    /// carrier, an escalated proof takes the slot and the next slot is still the licences' — P, R, L,
+    /// never P, R, P; after a licence the proof takes the slot and the court goes next — L, R, P. Never
+    /// two escalations running.
+    #[test]
+    fn an_escalated_proof_keeps_the_licences_turn() {
+        use PalwCarrierSiteV1::{Licences, PriorityAfterLicences, PriorityFirst, ReadinessEscalated};
+        let storm = |site: PalwCarrierSiteV1| matches!(site, ReadinessEscalated | PriorityFirst | PriorityAfterLicences | Licences);
+        let (sent, lane) = carrier_tick(Some(PalwCarrierLaneV1::Priority), storm);
+        assert_eq!((sent, lane), (vec![ReadinessEscalated], Some(PalwCarrierLaneV1::Readiness { licence_turn: true })));
+        assert_eq!(carrier_tick(lane, storm).0, vec![Licences], "P, R, L");
+        let (sent, lane) = carrier_tick(Some(PalwCarrierLaneV1::Licence), storm);
+        assert_eq!((sent, lane), (vec![ReadinessEscalated], Some(PalwCarrierLaneV1::Readiness { licence_turn: false })));
+        assert_eq!(carrier_tick(lane, storm).0, vec![PriorityFirst], "L, R, P");
+        let only_licences = |site: PalwCarrierSiteV1| matches!(site, ReadinessEscalated | Licences);
+        assert_eq!(carrier_tick(Some(PalwCarrierLaneV1::Readiness { licence_turn: false }), only_licences).0, vec![Licences]);
+        // A turn with nothing sent after an escalation keeps it.
+        let (sent, lane) = carrier_tick(Some(PalwCarrierLaneV1::Readiness { licence_turn: true }), |_| false);
+        assert_eq!((sent, lane), (vec![], Some(PalwCarrierLaneV1::Readiness { licence_turn: true })));
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,9 +262,10 @@ mod tests {
             if court_files(t) {
                 court += 1;
             }
-            let mut duties: Vec<(usize, bool)> = (0..classes)
+            let mut duties: Vec<(usize, Option<PalwReadinessUrgencyV1>)> = (0..classes)
                 .filter(|c| palw_readiness_duty_due_v2(Some(&rows[*c]), t, t, last_submitted[*c], 1, &G, true))
-                .map(|c| (c, palw_readiness_duty_escalates_v1(armed, Some(&rows[c]), t, 2, last_submitted[c], t, 1, &G, true)))
+                .filter(|c| !palw_readiness_duty_waits_v1(armed, last_submitted[*c], t, 1))
+                .map(|c| (c, palw_readiness_duty_urgency_v1(armed, Some(&rows[c]), t, 2, last_submitted[c], t, 1, &G, true)))
                 .collect();
             let mut slots = PalwCarrierSlotsV1::new(last_lane);
             let mut inflight = 0usize; // last tick's carrier was carried by this block
@@ -176,8 +277,10 @@ mod tests {
                 let sent = match site {
                     PalwCarrierSiteV1::ReadinessEscalated => duties
                         .iter()
-                        .position(|(_, escalates)| *escalates)
-                        .map(|at| Sent::Proof { class: duties.remove(at).0, span: t }),
+                        .enumerate()
+                        .filter_map(|(at, (_, urgency))| urgency.map(|urgency| (urgency, at)))
+                        .min()
+                        .map(|(_, at)| Sent::Proof { class: duties.remove(at).0, span: t }),
                     PalwCarrierSiteV1::PriorityFirst | PalwCarrierSiteV1::PriorityAfterLicences => (court > 0).then(|| {
                         court -= 1;
                         Sent::Court
@@ -201,50 +304,329 @@ mod tests {
         out
     }
 
-    /// **The storm: a court queue that never empties and a licence always waiting.** Today's order
-    /// carries a seat's proofs only on the licences' turn, so two classes due in the same DAA put the
-    /// second one's carrier in at age 7 and its row lapses; escalated, the second goes at age 6
-    /// ahead of the court and no row ever lapses — while the court still gets most slots, never
-    /// loses two running to an escalation, and the licences are still carried.
+    /// **The storm: a court queue that never empties and a licence always waiting**, one seat whose
+    /// every carrier lands in the next block. Today's order carries a seat's proofs only on the
+    /// licences' turn, so two classes due in the same DAA put the second one's carrier in at age 7 and
+    /// its row lapses; escalated, the second goes at age 6 ahead of the court and no row ever lapses —
+    /// while the court keeps two slots in five, an escalation never takes two slots running, and it
+    /// never takes the licences' turn (MEDIUM 3), so the licences keep exactly the share today's order
+    /// gives them (a sixth of the slots with two classes, a third with one).
     #[test]
-    fn a_da_storm_never_lapses_a_row_and_the_court_still_flows() {
+    fn a_da_storm_never_lapses_a_row_and_the_court_and_licences_still_flow() {
         const TICKS: u64 = 1_000;
         for classes in [1usize, 2] {
             let armed = run(TICKS, &vec![0; classes], true, |_| true, |_| true);
+            let today = run(TICKS, &vec![0; classes], false, |_| true, |_| true);
             assert!(
                 armed.lapsed.is_empty(),
                 "{classes} classes: no row lapses under the storm: {:?}",
                 &armed.lapsed[..armed.lapsed.len().min(5)]
             );
-            let court = armed.sent.iter().filter(|(_, s)| *s == Sent::Court).count();
+            let count = |run: &Run, kind: fn(&Sent) -> bool| run.sent.iter().filter(|(_, s)| kind(s)).count();
+            let court = count(&armed, |s| *s == Sent::Court);
+            let licences = count(&armed, |s| *s == Sent::Licence);
             assert!(court * 5 >= TICKS as usize * 2, "{classes} classes: the court keeps two slots in five ({court} of {TICKS})");
-            assert!(armed.sent.iter().any(|(_, s)| *s == Sent::Licence), "licences are still carried");
             assert!(
-                armed.lanes.windows(2).all(|pair| pair != [Some(PalwCarrierLaneV1::Readiness), Some(PalwCarrierLaneV1::Readiness)]),
+                licences * 6 >= TICKS as usize - 6,
+                "{classes} classes: licences keep a sixth of the slots ({licences} of {TICKS})"
+            );
+            assert!(
+                licences >= count(&today, |s| *s == Sent::Licence),
+                "{classes} classes: an escalation never takes the licences' turn: {licences} vs today's {}",
+                count(&today, |s| *s == Sent::Licence)
+            );
+            assert!(
+                armed.lanes.windows(2).all(|pair| !(is_readiness(pair[0]) && is_readiness(pair[1]))),
                 "an escalation never takes two slots running"
             );
-            let proofs = armed.sent.iter().filter(|(_, s)| matches!(s, Sent::Proof { .. })).count();
-            let escalated = armed.lanes.iter().filter(|lane| **lane == Some(PalwCarrierLaneV1::Readiness)).count();
-            println!("storm, {classes} classes: court {court}, proofs {proofs} ({escalated} escalated) of {TICKS} slots");
+            let proofs = count(&armed, |s| matches!(s, Sent::Proof { .. }));
+            let escalated = armed.lanes.iter().filter(|lane| is_readiness(**lane)).count();
+            println!(
+                "storm, {classes} classes, one seat: court {court}, licences {licences}, proofs {proofs} ({escalated} escalated) of {TICKS} slots"
+            );
         }
         let today = run(TICKS, &[0, 0], false, |_| true, |_| true);
         assert!(!today.lapsed.is_empty(), "the hole this closes: today's order lapses a row under the same storm");
     }
 
-    /// **Sparse traffic: nothing changes.** A court move every tenth DAA, no licences, the seat's
-    /// classes not all due in one DAA: its proofs go at the Own site at age 5 as they always did, and
-    /// one a court move held to age 6 goes the next DAA either way (escalated, it rides the new site
-    /// — the same carrier in the same DAA). The same carriers, the same DAA, no row lapsing, armed or
-    /// not. (Two classes due in the SAME DAA are not sparse for a one-carrier seat: the second reaches
-    /// age 6 behind the first proof's own re-send, and there the escalation sends it ahead of that
-    /// duplicate — the storm test's case.)
+    /// **A known P2-6 gap, not M1's** (the M1 review, LOW 2): with three classes due in staggered
+    /// DAA on one seat, the Own site — ahead of the collector on the licences' turn, P2-6's own order
+    /// — takes nearly every licences' turn under a storm, so the licences starve with or without M1.
+    /// M1 never makes it worse (its escalations keep the licences' turn), and with the three due in
+    /// the same DAA its copy guard frees them (today's seat re-sent each proof on the licences' turn).
     #[test]
-    fn sparse_traffic_sends_the_same_carriers_armed_or_not() {
+    fn three_classes_on_one_seat_starve_its_licences_with_or_without_m1() {
+        const TICKS: u64 = 1_000;
+        for proved in [vec![0u64, 0, 0], vec![0, 2, 4]] {
+            let armed = run(TICKS, &proved, true, |_| true, |_| true);
+            let today = run(TICKS, &proved, false, |_| true, |_| true);
+            let licences = |run: &Run| run.sent.iter().filter(|(_, s)| *s == Sent::Licence).count();
+            println!("storm, 3 classes {proved:?}: licences armed {}, today {}", licences(&armed), licences(&today));
+            assert!(licences(&armed) >= licences(&today), "{proved:?}: M1 never costs the licences a slot");
+            assert!(licences(&today) * 20 < TICKS as usize, "{proved:?}: today's P2-6 gap: {}", licences(&today));
+            if proved == [0, 2, 4] {
+                assert!(licences(&armed) * 20 < TICKS as usize, "staggered: the gap stands with M1: {}", licences(&armed));
+            }
+        }
+    }
+
+    /// **Sparse traffic: nothing is hurried and nothing lapses; the copies go.** A court move every
+    /// tenth DAA, no licences: the court carriers go in the same DAA armed or not, no row lapses either
+    /// way — and the armed seat no longer sends a second copy of each proof the DAA after the first
+    /// (the row is written a block after its carrier is mined, so today's duty found it still due and
+    /// re-sent: every proof twice, `palw_readiness_duty_waits_v1`). Past R-core+ that halves the
+    /// seats' own demand on the block.
+    #[test]
+    fn sparse_traffic_is_not_hurried_and_sends_no_copies() {
         for proved in [vec![0u64], vec![0, 3], vec![0, 2, 4]] {
             let armed = run(500, &proved, true, |t| t % 10 == 3, |_| false);
             let today = run(500, &proved, false, |t| t % 10 == 3, |_| false);
-            assert_eq!(armed.sent, today.sent, "{proved:?}: the same carriers, in the same DAA");
+            let court = |run: &Run| run.sent.iter().filter(|(_, s)| *s == Sent::Court).copied().collect::<Vec<_>>();
+            let proofs = |run: &Run| {
+                run.sent
+                    .iter()
+                    .filter_map(|(t, s)| if let Sent::Proof { class, .. } = s { Some((*t, *class)) } else { None })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(court(&armed), court(&today), "{proved:?}: the same court carriers, in the same DAA");
             assert!(armed.lapsed.is_empty() && today.lapsed.is_empty(), "{proved:?}: no row lapses");
+            let copies = |proofs: &[(u64, usize)]| proofs.iter().filter(|(t, c)| proofs.contains(&(t.wrapping_sub(1), *c))).count();
+            assert_eq!(copies(&proofs(&armed)), 0, "{proved:?}: no copy of a proof still landing");
+            assert!(copies(&proofs(&today)) > 0, "{proved:?}: today's seat sends them");
+            assert!(proofs(&armed).len() < proofs(&today).len(), "{proved:?}: fewer proofs on the block");
+        }
+    }
+
+    // ---- The network: many seats, one head a block (the M1 review, MEDIUM 3 and LOW 3) ----
+
+    /// **What a block's lane does** in the network model. `H1_LANE` ML-DSA-87 carriers fill the lane
+    /// alone (250,000 / 49,044 on testnet-12); `beside` is how many still fit beside a head proof (a
+    /// p50-row A16 proof, 207,968 of the lane: 0; a typical one, 195,508: 1).
+    #[derive(Clone, Copy, Debug)]
+    enum Lane {
+        /// No other traffic: `n` proofs a block, escalated first (most urgent, then earliest), then the
+        /// rest; no court traffic.
+        Open(usize),
+        /// A storm: every seat's court queue never empties and better-paying traffic fills the fee
+        /// market, so a proof lands only as the head, with `beside` court carriers. `shipped` is the
+        /// shipped rule (the M1 review, HIGH 2): when none fits beside the head and the last block
+        /// carried a proof, the waiting court carriers lead and the head does not fit behind them;
+        /// otherwise — and always without `shipped` — the head leads.
+        Storm { shipped: bool, beside: usize },
+        /// Today's order under the storm: no head, the lane is the court carriers', no proof lands.
+        Today,
+    }
+
+    const H1_LANE: usize = 5;
+
+    #[derive(Debug, Default)]
+    struct Network {
+        slots: u64,
+        court: u64,
+        licences: u64,
+        proofs: u64,
+        /// Seat-ticks a seat sent nothing because its one carrier in flight was a proof still waiting.
+        blocked: u64,
+        rows: u64,
+        lapsed: u64,
+        /// Class-DAA with fewer than `seat_count` fresh rows (the class is HELD).
+        held: u64,
+    }
+
+    impl Network {
+        fn fresh_rows_per_daa(&self, ticks: u64) -> f64 {
+            (self.rows - self.lapsed) as f64 / ticks as f64
+        }
+    }
+
+    /// **The network's seats, one DAA at a time, on testnet-12's clock**, each with the tick's own
+    /// scheduler, site order, duty rule, copy guard and escalation, and — unlike [`run`] — its one
+    /// carrier in flight held until a block carries it (`MAX_INFLIGHT_CARRIERS`, the chained funding).
+    /// A block carries the head's proofs (the pool's head order: `PalwReadinessUrgencyV1`, then
+    /// arrival), then court carriers up to what the lane leaves (earliest first), and every licence
+    /// (the fee market is not the limit modelled here). A proof past the fold's landing window is
+    /// evicted by the gate and its seat funds afresh. A carried proof writes its row a DAA later.
+    fn network(seats: usize, classes: usize, ticks: u64, armed: bool, lane: Lane) -> Network {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Carrier {
+            Court { sent: u64 },
+            Licence,
+            Proof { class: usize, span: u64, sent: u64 },
+        }
+        let storm = !matches!(lane, Lane::Open(_));
+        let max_age = palw_readiness_max_age_daa_v1(1, &G, true);
+        let landing_window = kaspa_consensus_core::palw_model_registry_v1::palw_readiness_landing_spans_v1(1);
+        // Rows staggered over the half-age cadence, so the network is not all due in one DAA.
+        let mut rows: Vec<Vec<PalwSeatReadinessRowV1>> =
+            (0..seats).map(|s| (0..classes).map(|c| row(((s + 3 * c) % 5) as u64)).collect()).collect();
+        let mut last_submitted = vec![vec![None::<u64>; classes]; seats];
+        let mut last_lane = vec![None::<PalwCarrierLaneV1>; seats];
+        let mut pending = vec![None::<Carrier>; seats];
+        let mut landing: Vec<(u64, usize, usize, u64)> = Vec::new();
+        let mut last_carried = false;
+        let mut out = Network::default();
+        for t in 8..8 + ticks {
+            // The rows the chain counts at this DAA.
+            for c in 0..classes {
+                let fresh = (0..seats).filter(|s| t.saturating_sub(rows[*s][c].proved_daa) <= max_age).count();
+                out.rows += seats as u64;
+                out.lapsed += (seats - fresh) as u64;
+                out.held += u64::from(fresh < G.seat_count as usize);
+            }
+            landing.retain(|(at, s, c, span)| {
+                if *at == t {
+                    rows[*s][*c] = row(*span);
+                }
+                *at != t
+            });
+            // Block t.
+            let mut heads: Vec<(Option<PalwReadinessUrgencyV1>, u64, usize)> = Vec::new();
+            let mut court: Vec<(u64, usize)> = Vec::new();
+            for s in 0..seats {
+                match pending[s] {
+                    Some(Carrier::Licence) => {
+                        out.licences += 1;
+                        pending[s] = None;
+                    }
+                    Some(Carrier::Court { sent }) => court.push((sent, s)),
+                    Some(Carrier::Proof { span, .. }) if t > span + landing_window => pending[s] = None,
+                    Some(Carrier::Proof { class, span, sent }) => {
+                        // The pool's tip read: the row at the tip, this DAA (M1's pools).
+                        let urgency = palw_readiness_proof_urgency_v1(Some(&rows[s][class]), span, 2, t, 1, &G, true);
+                        if urgency.is_some() || matches!(lane, Lane::Open(_)) {
+                            heads.push((urgency, sent, s));
+                        }
+                    }
+                    None => {}
+                }
+            }
+            heads.sort_by_key(|(urgency, sent, s)| (urgency.is_none(), *urgency, *sent, *s));
+            court.sort();
+            let (proofs, court_room) = match lane {
+                Lane::Open(n) => (n, H1_LANE),
+                Lane::Today => (0, H1_LANE),
+                Lane::Storm { shipped, beside } => {
+                    let carriers_lead = shipped && beside == 0 && last_carried && !court.is_empty();
+                    if heads.is_empty() || carriers_lead { (0, H1_LANE) } else { (1, beside) }
+                }
+            };
+            last_carried = false;
+            for (_, _, s) in heads.into_iter().take(proofs) {
+                let Some(Carrier::Proof { class, span, .. }) = pending[s] else { unreachable!() };
+                landing.push((t + 1, s, class, span));
+                pending[s] = None;
+                out.proofs += 1;
+                last_carried = true;
+            }
+            for (_, s) in court.into_iter().take(court_room) {
+                pending[s] = None;
+                out.court += 1;
+            }
+            // Tick t on every seat.
+            for s in 0..seats {
+                out.slots += 1;
+                if matches!(pending[s], Some(Carrier::Proof { .. })) {
+                    out.blocked += 1;
+                }
+                let mut duties: Vec<(usize, Option<PalwReadinessUrgencyV1>)> = (0..classes)
+                    .filter(|c| palw_readiness_duty_due_v2(Some(&rows[s][*c]), t, t, last_submitted[s][*c], 1, &G, true))
+                    .filter(|c| !palw_readiness_duty_waits_v1(armed, last_submitted[s][*c], t, 1))
+                    .map(|c| (c, palw_readiness_duty_urgency_v1(armed, Some(&rows[s][c]), t, 2, last_submitted[s][c], t, 1, &G, true)))
+                    .collect();
+                let mut slots = PalwCarrierSlotsV1::new(last_lane[s]);
+                let mut inflight = usize::from(pending[s].is_some());
+                for site in PalwCarrierSiteV1::TICK_ORDER {
+                    slots.at(site, inflight);
+                    if !slots.offers(site, inflight) {
+                        continue;
+                    }
+                    let sent = match site {
+                        PalwCarrierSiteV1::ReadinessEscalated => duties
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(at, (_, urgency))| urgency.map(|urgency| (urgency, at)))
+                            .min()
+                            .map(|(_, at)| duties.remove(at).0)
+                            .map(|class| Carrier::Proof { class, span: t, sent: t }),
+                        PalwCarrierSiteV1::PriorityFirst | PalwCarrierSiteV1::PriorityAfterLicences => {
+                            storm.then_some(Carrier::Court { sent: t })
+                        }
+                        PalwCarrierSiteV1::Own => {
+                            (!duties.is_empty()).then(|| Carrier::Proof { class: duties.remove(0).0, span: t, sent: t })
+                        }
+                        PalwCarrierSiteV1::Licences => storm.then_some(Carrier::Licence),
+                        PalwCarrierSiteV1::OwnReceipts => None,
+                    };
+                    if let Some(carrier) = sent {
+                        if let Carrier::Proof { class, span, .. } = carrier {
+                            last_submitted[s][class] = Some(span);
+                        }
+                        pending[s] = Some(carrier);
+                        inflight += 1;
+                    }
+                }
+                last_lane[s] = slots.finish(inflight);
+            }
+        }
+        out
+    }
+
+    /// **Eight seats × two classes sharing one head a block** (the M1 review, MEDIUM 3, HIGH 2 and
+    /// LOW 3): what the single-seat storm above cannot show. A seat's one carrier in flight is held
+    /// while its proof waits for the network's head, so its court carrier and its licence wait too;
+    /// the rows kept fresh fall well short of the capacity bound (proofs a block × 6), because the
+    /// two-DAA margin leaves no room to queue and sixteen rows re-proved at the half-age cadence ask
+    /// 3.2 proofs a block. What the shipped order must still do: (a) with p50-row proofs — no ML-DSA
+    /// carrier fits beside the head — keep the court moving, which a head every block does not (the
+    /// review's HIGH 2: the lane beside it is empty); (b) keep more rows fresh than today's order,
+    /// which lands no proof at all under the storm; (c) never cost the licences a slot against
+    /// today's; (d) stay under the capacity bound. The numbers are printed for the operator.
+    #[test]
+    fn eight_seats_sharing_one_head_a_block() {
+        const TICKS: u64 = 1_000;
+        let (seats, classes) = (8usize, 2usize);
+        let scenarios = [
+            ("no other traffic, 2 proofs a block", Lane::Open(2)),
+            ("storm, p50 proofs, a head every block (the reviewed commit)", Lane::Storm { shipped: false, beside: 0 }),
+            ("storm, p50 proofs, shipped: the lead alternates", Lane::Storm { shipped: true, beside: 0 }),
+            ("storm, typical proofs, shipped: a head every block, one carrier beside it", Lane::Storm { shipped: true, beside: 1 }),
+            ("storm, today's order", Lane::Today),
+        ];
+        let mut results = Vec::new();
+        for (name, lane) in scenarios {
+            let n = network(seats, classes, TICKS, !matches!(lane, Lane::Today), lane);
+            println!(
+                "{name}: of {} seat-slots court {} ({:.0}%), licences {} ({:.0}%), proofs {}, blocked behind a proof {} ({:.0}%); \
+                 fresh rows {:.1} a DAA of {}; lapsed row-DAA {} of {}; class-DAA below {} fresh rows {} of {}",
+                n.slots,
+                n.court,
+                100.0 * n.court as f64 / n.slots as f64,
+                n.licences,
+                100.0 * n.licences as f64 / n.slots as f64,
+                n.proofs,
+                n.blocked,
+                100.0 * n.blocked as f64 / n.slots as f64,
+                n.fresh_rows_per_daa(TICKS),
+                seats * classes,
+                n.lapsed,
+                n.rows,
+                G.seat_count,
+                n.held,
+                TICKS * classes as u64
+            );
+            results.push(n);
+        }
+        let [open, p50_every, p50_shipped, typical_shipped, today] = &results[..] else { unreachable!() };
+        // (a) p50 proofs: the alternation keeps the court moving at least as well as a head every block.
+        assert!(p50_shipped.court >= p50_every.court, "{p50_shipped:?} vs {p50_every:?}");
+        // (b), (c), (d).
+        let bound = |proofs_a_block: f64| proofs_a_block * (palw_readiness_max_age_daa_v1(1, &G, true) - 2) as f64;
+        for (n, proofs_a_block) in [(p50_every, 1.0), (p50_shipped, 1.0), (typical_shipped, 1.0), (open, 2.0)] {
+            assert!(n.lapsed < today.lapsed, "more rows than today's order: {n:?}");
+            assert!(n.fresh_rows_per_daa(TICKS) <= bound(proofs_a_block), "under the bound: {n:?}");
+        }
+        for n in [p50_every, p50_shipped, typical_shipped] {
+            assert!(n.licences >= today.licences && n.court >= today.court, "nothing lost against today's order: {n:?}");
         }
     }
 
@@ -536,8 +918,11 @@ mod tests {
         }
         let (small, typical, worst) = at_shipped_scale.unwrap();
 
-        // 3. Rows one block a DAA keeps fresh. A row stands `max_age`; the seat re-proves it at half
-        //    that (every `max_age / 2 + 1` DAA), and at the latest it must send by `max_age − landing`.
+        // 3. Rows one block a DAA keeps fresh — UPPER BOUNDS (the M1 review, LOW 3): a perfect
+        //    schedule, every proof landing in the very next block. A row stands `max_age`; the seat
+        //    re-proves it at half that (every `max_age / 2 + 1` DAA), and at the latest it must send
+        //    by `max_age − landing`. The realized figures (the seats' own cadence, one carrier in
+        //    flight, a queue at the head) come from the network model after the table.
         let block = params.max_block_mass;
         let lane = block / 2; // P2-9's carrier lane: half a block
         let per_block = |w: &Weighed| block / w.transient_mass.max(w.compute_mass);
@@ -555,21 +940,7 @@ mod tests {
             G.seat_count as usize * classes,
             (G.seat_count + G.spare_seats) as usize * classes
         );
-        for (name, w) in [("fixture", &fixture), ("A16 p50 rows", &small), ("A16 typical", &typical), ("A16 worst", &worst)] {
-            let p = per_block(w);
-            let head = u64::from(w.transient_mass <= lane);
-            let max_proof_tx = PALW_OBJECT_CHUNK_MAX_BYTES as u64 + overhead as u64;
-            println!(
-                "{name}: {p} proofs a block alone -> {} rows kept fresh at the seat's cadence ({cadence} DAA), {} at the latest \
-                 ({latest} DAA); under a DA storm with better-paying traffic: {head} a block (the lane's head) -> {} rows; the \
-                 largest proof one carrier may hold ({max_proof_tx} B tx) is {} transient mass",
-                p * cadence,
-                p * latest,
-                head * latest,
-                max_proof_tx * kaspa_consensus_core::constants::TRANSIENT_BYTE_TO_MASS_FACTOR
-            );
-        }
-        // What the storm keeps of the lane while a proof leads it: an ML-DSA-87 accusation's carrier.
+        // What the storm's ML-DSA-87 carriers weigh (an accusation's carrier), for the head's rule.
         let accusation = PalwConsensusObjectV2::DefaultAccused {
             claim: Hash64::from_u64_word(0xDA),
             missing_event_index: 0,
@@ -579,15 +950,65 @@ mod tests {
         let accusation_mass =
             kaspa_consensus_core::mass::transaction_estimated_serialized_size(&carrier_tx(&accusation, &params, &kp).0)
                 * kaspa_consensus_core::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
+        for (name, w) in [("fixture", &fixture), ("A16 p50 rows", &small), ("A16 typical", &typical), ("A16 worst", &worst)] {
+            let p = per_block(w);
+            // The shipped head: every block while an ML-DSA carrier still fits beside it, every other
+            // block under contention when none does, never when the proof exceeds the lane.
+            let heads_per_two_blocks = if w.transient_mass > lane {
+                0
+            } else if lane - w.transient_mass >= accusation_mass {
+                2
+            } else {
+                1
+            };
+            let max_proof_tx = PALW_OBJECT_CHUNK_MAX_BYTES as u64 + overhead as u64;
+            println!(
+                "{name}: {p} proofs a block alone -> at most {} rows kept fresh at the seat's cadence ({cadence} DAA), at most {} \
+                 at the latest ({latest} DAA); under a DA storm with better-paying traffic: {} head(s) in two blocks -> at most {} \
+                 rows; the largest proof one carrier may hold ({max_proof_tx} B tx) is {} transient mass",
+                p * cadence,
+                p * latest,
+                heads_per_two_blocks,
+                heads_per_two_blocks * latest / 2,
+                max_proof_tx * kaspa_consensus_core::constants::TRANSIENT_BYTE_TO_MASS_FACTOR
+            );
+        }
+        // What the storm keeps of the lane while a proof leads it.
         for (name, w) in [("A16 p50 rows", &small), ("A16 typical", &typical)] {
             let left = lane - w.transient_mass;
             println!(
                 "{name} at the lane's head leaves {left} of the lane's {lane}: {} DA accusation carriers of {accusation_mass} mass \
-                 (the lane alone holds {})",
+                 (the lane alone holds {}){}",
                 left / accusation_mass,
-                lane / accusation_mass
+                lane / accusation_mass,
+                if left < accusation_mass { " — so under contention the lead alternates: 2.5 carriers a block" } else { "" }
             );
         }
+        // The realized figures (the network model: the seats' own cadence and copy guard, one carrier
+        // in flight per seat, the head's queue), 8 seats × 2 classes over 1,000 DAA.
+        for (name, lane) in [
+            ("no other traffic, 2 proofs a block", Lane::Open(2)),
+            ("a DA storm, p50 proofs (the lead alternates)", Lane::Storm { shipped: true, beside: 0 }),
+            ("a DA storm, typical proofs (a head every block)", Lane::Storm { shipped: true, beside: 1 }),
+        ] {
+            let n = network(bonds, classes, 1_000, true, lane);
+            println!(
+                "realized, {name}: {:.1} fresh rows a DAA of {} (at least {} keep both classes out of HELD); a class HELD in {} of {} \
+                 class-DAA",
+                n.fresh_rows_per_daa(1_000),
+                bonds * classes,
+                G.seat_count as usize * classes,
+                n.held,
+                1_000 * classes
+            );
+        }
+        println!(
+            "the staleness horizon buys queueing slack as well as capacity: at {max_age} DAA the seats' cadence asks {:.1} proofs a \
+             block of {} rows against {} a block, so the head queues and every DAA a proof waits is a DAA its row does not count",
+            (bonds * classes) as f64 / cadence as f64,
+            bonds * classes,
+            per_block(&typical)
+        );
         assert_eq!((cadence, latest), (5, 6), "testnet-12's clock");
         assert_eq!(per_block(&typical), 2, "two typical A16 proofs a block, and no third");
         assert!(typical.transient_mass <= lane, "a typical A16 proof fits the lane's head");

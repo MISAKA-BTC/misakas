@@ -181,14 +181,18 @@ fn junk_proof(bond: PalwBondKeyV2, class_id: Hash64, span: u64) -> Obj {
 }
 
 /// **M1 (the 2026-09-25 model-registry review): every possession proof is put to the fold, and the
-/// tip read says which escalate.** A proof can now buy a reserved place and the head of the template
-/// lane once its row nears staleness, so the gate refuses a junk proof exactly as it refuses a junk
-/// accusation; and the escalation read (`palw_readiness_escalated_at`) answers from the tip's row:
-/// a seat with no row yet escalates this span's proof — nothing counts it ready — and the fence-off
-/// twin escalates nothing and gates nothing, so every network but testnet-12 is untouched.
+/// tip read says how urgently each row needs its proof.** A proof can buy a reserved place and the
+/// head of the template lane once its row nears staleness, so the gate refuses a junk proof exactly
+/// as it refuses a junk accusation; and the urgency read (`palw_readiness_urgency_at`) answers from
+/// the tip's row: a seat with no row escalates nothing (the M1 review, MEDIUM 5 — an absent row was
+/// a free key to the head for any Active bond), a row within two DAA of its last fresh DAA is
+/// lapsing, one past it lapsed; the fence-off twin escalates nothing and gates nothing, so every
+/// network but testnet-12 is untouched.
 #[tokio::test]
-async fn m1_every_possession_proof_is_put_to_the_fold_and_the_tip_read_escalates() {
-    use kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1;
+async fn m1_every_possession_proof_is_put_to_the_fold_and_the_tip_read_says_how_urgent() {
+    use kaspa_consensus_core::palw_model_registry_v1::PalwSeatReadinessRowV1;
+    use kaspa_consensus_core::palw_readiness_escalation_v1::{PalwReadinessCarrierV1, PalwReadinessUrgencyV1};
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
     let g = gate(true);
     let (bond, class_id) = (g.cards[1], Hash64::from_u64_word(0xC1A5));
     let daa = g.ctx.consensus.get_virtual_daa_score();
@@ -197,24 +201,45 @@ async fn m1_every_possession_proof_is_put_to_the_fold_and_the_tip_read_escalates
     assert!(g.state.seat_readiness(&bond, &class_id).is_none(), "no row at genesis");
     let v1 = PalwReadinessCarrierV1 { proof_version: 1, ..carrier };
     assert_eq!(
-        g.ctx.consensus.virtual_processor().palw_readiness_escalated_at(&[carrier, v1], daa),
-        vec![true, false],
-        "no row: this span's proof escalates; a V1 proof renews nothing past V2"
+        g.ctx.consensus.virtual_processor().palw_readiness_urgency_at(&[carrier, v1], daa),
+        vec![None, None],
+        "no row: a first proof rides the ordinary lane"
     );
-    assert_eq!(
-        g.ctx.consensus.palw_readiness_escalated_v1(&[v1, carrier]),
-        vec![false, true],
-        "the API reads the same answers at the virtual's DAA, one per carrier, in order"
+    assert_eq!(g.ctx.consensus.palw_readiness_urgency_v1(&[v1, carrier]), vec![None, None], "the API reads the same tip");
+    assert!(g.ctx.consensus.palw_readiness_urgency_v1(&[]).is_empty());
+
+    // A row proved at DAA 100 for one of testnet-12's genesis classes, on the tip's own registry
+    // clock (one-DAA spans, eight-DAA rows).
+    let class_id = *g.state.classes_iter().map(|(id, _)| id).last().expect("testnet-12 registers classes at genesis");
+    let carrier = PalwReadinessCarrierV1 { class_id, ..carrier };
+    let mut carriage = PalwStateCarriageV2::from_state(&g.state);
+    carriage.seat_readiness.insert(
+        (bond, class_id),
+        PalwSeatReadinessRowV1 { proved_daa: 100, proved_span: 100, leaf_index: 0, proof_version: 2, chunks: 16 },
     );
-    assert!(g.ctx.consensus.palw_readiness_escalated_v1(&[]).is_empty());
+    let state = carriage.into_state(&g.params, None).expect("a consistent state");
+    let at = |now: u64| {
+        let proof = PalwReadinessCarrierV1 { span: now, ..carrier };
+        let v1 = PalwReadinessCarrierV1 { proof_version: 1, ..proof };
+        g.ctx.consensus.virtual_processor().palw_readiness_urgency_on(&state, &[proof, v1], now)
+    };
+    assert_eq!(at(105), vec![None, None], "age 5: the ordinary lane");
+    assert_eq!(at(106), vec![Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 108 }), None], "age 6: lapsing");
+    assert_eq!(at(108), vec![Some(PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 108 }), None], "the last DAA it counts");
+    assert_eq!(at(109), vec![Some(PalwReadinessUrgencyV1::Lapsed), None], "past it: lapsed; a V1 proof renews nothing");
 
     let off = gate(false);
     let daa = off.ctx.consensus.get_virtual_daa_score();
     assert_eq!(off.tx_refusal(junk_proof(bond, class_id, daa)), None, "below R-core+ the gate asks nothing, as before");
     assert_eq!(
-        off.ctx.consensus.virtual_processor().palw_readiness_escalated_at(&[carrier, v1], daa),
-        vec![false, false],
+        off.ctx.consensus.virtual_processor().palw_readiness_urgency_at(&[carrier, v1], daa),
+        vec![None, None],
         "and nothing escalates"
+    );
+    assert_eq!(
+        off.ctx.consensus.virtual_processor().palw_readiness_urgency_on(&state, &[carrier], 106),
+        vec![None],
+        "whatever the row"
     );
 }
 
@@ -289,4 +314,27 @@ async fn m1_an_honest_possession_proof_passes_the_gate() {
     assert_eq!(palw_readiness_gate_daa_v1(daa, daa + 1, 1), daa + 1, "the gate judges it at its own span's first DAA");
     assert_eq!(gate_at(daa + 1, &ahead), None, "where the fold takes it");
     assert!(gate_at(daa, &proved(card as u64, daa + 2)).is_some(), "two blocks ahead: refused as before");
+
+    // **The same through the mempool's transaction gate** (the M1 review, LOW 1): the DAA it judges a
+    // proof at is the wiring the lines above only compute. At virtual DAA `daa` the seat's proof of
+    // the next span passes — this node is one block behind the seat — and one two spans ahead does
+    // not; the current span passes and another card's key does not.
+    let through_the_gate = |object: Obj| {
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+        let tx = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput::new(1, ScriptPublicKey::from_vec(0, vec![0x51]))],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload,
+        );
+        let object = kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(&tx).expect("gated");
+        g.ctx.consensus.virtual_processor().palw_mempool_h1_carrier_refusal_with(&object, daa, g.point.block, &state)
+    };
+    assert_eq!(through_the_gate(proved(card as u64, daa)), None, "this span, at this node's DAA");
+    assert_eq!(through_the_gate(proved(card as u64, daa + 1)), None, "the next span: judged at its own first DAA, and taken");
+    assert!(through_the_gate(proved(card as u64, daa + 2)).is_some(), "two spans ahead: refused");
+    assert!(through_the_gate(proved(2, daa + 1)).is_some(), "the skew buys no pass to a forgery");
 }

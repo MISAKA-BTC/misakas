@@ -2457,8 +2457,10 @@ pub(crate) enum PalwCarrierLaneV1 {
     Ordinary,
     /// **An escalated possession proof** (the 2026-09-25 model-registry review, M1): one whose row
     /// would lapse before an ordinary carrier could land it (`palw_readiness_proof_escalates_v1`),
-    /// carried ahead of the court queue. The slot after it is never another — it is the court's.
-    Readiness,
+    /// carried ahead of the court queue. The slot after it is never another. It is transparent to
+    /// P2-6's turn (the M1 review, MEDIUM 3): `licence_turn` is the turn the slot it took had, and
+    /// the next slot has it again — so a storm reads P, R, L, never P, R, P.
+    Readiness { licence_turn: bool },
 }
 
 /// **P2-6: is this carrier slot the licences' turn?** — the slot right after a priority carrier. One
@@ -2469,8 +2471,12 @@ pub(crate) enum PalwCarrierLaneV1 {
 /// quorums before the priority lane, which takes the slot in the same tick if no quorum stands. So
 /// the priority lane is never two carriers in a row ahead of a waiting licence, a licence never
 /// delays the priority lane by more than one carrier, and a slot nobody else wants is never idle.
+///
+/// **M1:** an escalated possession proof passes the turn on unchanged
+/// (`PalwCarrierLaneV1::Readiness { licence_turn }`): the slot after it is the licences' exactly when
+/// the slot it took was.
 pub(crate) fn palw_carrier_licence_turn_v1(last: Option<PalwCarrierLaneV1>) -> bool {
-    last == Some(PalwCarrierLaneV1::Priority)
+    matches!(last, Some(PalwCarrierLaneV1::Priority) | Some(PalwCarrierLaneV1::Readiness { licence_turn: true }))
 }
 
 /// **Where the tick offers its carrier slot, in the order it reaches them** (P2-6, the P2-6 review's
@@ -2479,8 +2485,8 @@ pub(crate) fn palw_carrier_licence_turn_v1(last: Option<PalwCarrierLaneV1>) -> b
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwCarrierSiteV1 {
     /// **M1: a possession proof whose row is about to lapse, ahead of the court queue** — past
-    /// R-core+ only, at most one a tick, and never two slots running: after one, the next slot is
-    /// the priority lane's (`PalwCarrierLaneV1::Readiness`). A row not near staleness keeps the Own
+    /// R-core+ only, at most one a tick, and never two slots running (`PalwCarrierLaneV1::Readiness`);
+    /// the slot after it keeps the turn the slot it took had. A row not near staleness keeps the Own
     /// site as before.
     ReadinessEscalated,
     /// The priority lane ahead of every other carrier (`carry_priority_v1`) — except on the
@@ -2502,10 +2508,11 @@ impl PalwCarrierSiteV1 {
     pub(crate) const TICK_ORDER: [Self; 6] =
         [Self::ReadinessEscalated, Self::PriorityFirst, Self::Own, Self::Licences, Self::PriorityAfterLicences, Self::OwnReceipts];
 
-    /// The lane a carrier sent from this site rode — what the next tick's turn reads.
-    pub(crate) fn lane(self) -> PalwCarrierLaneV1 {
+    /// The lane a carrier sent from this site rode, on a slot whose turn was `licence_turn` — what
+    /// the next tick's turn reads.
+    pub(crate) fn lane(self, licence_turn: bool) -> PalwCarrierLaneV1 {
         match self {
-            Self::ReadinessEscalated => PalwCarrierLaneV1::Readiness,
+            Self::ReadinessEscalated => PalwCarrierLaneV1::Readiness { licence_turn },
             Self::PriorityFirst | Self::PriorityAfterLicences => PalwCarrierLaneV1::Priority,
             Self::Licences => PalwCarrierLaneV1::Licence,
             Self::Own | Self::OwnReceipts => PalwCarrierLaneV1::Ordinary,
@@ -2526,11 +2533,18 @@ impl PalwCarrierSiteV1 {
 ///   on that turn it is offered after the collector instead, so a DA storm shares the slots with the
 ///   licences one for one and a slot the collector cannot fill still goes to the storm.
 ///
-/// * **M1: an escalated possession proof ahead of both, never twice running** (the 2026-09-25
-///   model-registry review): the tick offers `ReadinessEscalated` first unless the last carrier was
-///   one, so a proof whose row is about to lapse is never held behind a DA storm and the storm still
-///   gets at least every other slot. What escalates is the one predicate the pool and the tip read ask
-///   (`palw_readiness_escalation_v1`); a tick that holds none offers the sites exactly as before.
+/// * **M1: an escalated possession proof ahead of both, never twice running, and transparent to the
+///   turn** (the 2026-09-25 model-registry review; its review, MEDIUM 3 and LOW 2): the tick offers
+///   `ReadinessEscalated` first unless the last carrier was one, so a proof whose row is about to
+///   lapse is never held behind a DA storm and the storm still gets at least every other slot. The
+///   slot after it has the turn the slot it took had — P, R, L, not P, R, P — so it never takes the
+///   licences' turn; it can precede the court after a licence or an own carrier. What escalates is
+///   the one predicate the pool and the tip read ask (`palw_readiness_escalation_v1`); a tick that
+///   holds none offers the sites exactly as before. P2-6's "never two priority slots while a licence
+///   waits" still holds only while the seat has no OWN carrier due: the Own site comes before the
+///   collector on the licences' turn (P2-6's own order) and resets the turn to the court, so a seat
+///   with three classes due in staggered DAA can starve its licences under a storm, with or without
+///   M1.
 ///
 /// The tick marks each site as it reaches it ([`Self::at`]) and reads the lane back at the end
 /// ([`Self::finish`]); a site whose carrier went out (`inflight` moved past what it was when the
@@ -2566,7 +2580,7 @@ impl PalwCarrierSlotsV1 {
         if let Some((site, from)) = self.at
             && inflight > from
         {
-            self.last = Some(site.lane());
+            self.last = Some(site.lane(self.licence_turn));
         }
     }
 
@@ -2574,7 +2588,7 @@ impl PalwCarrierSlotsV1 {
     pub(crate) fn offers(&self, site: PalwCarrierSiteV1, inflight: usize) -> bool {
         inflight < MAX_INFLIGHT_CARRIERS
             && match site {
-                PalwCarrierSiteV1::ReadinessEscalated => self.last != Some(PalwCarrierLaneV1::Readiness),
+                PalwCarrierSiteV1::ReadinessEscalated => !matches!(self.last, Some(PalwCarrierLaneV1::Readiness { .. })),
                 PalwCarrierSiteV1::PriorityFirst => !self.licence_turn,
                 PalwCarrierSiteV1::PriorityAfterLicences => self.licence_turn,
                 PalwCarrierSiteV1::Own | PalwCarrierSiteV1::Licences | PalwCarrierSiteV1::OwnReceipts => true,
@@ -3394,9 +3408,9 @@ impl PalwPanelService {
     /// bond's key. **Fail-closed**: a class this node holds no artifact for, or holds under a
     /// different root, gets no proof and is named once in the log — the node is not a seat for it.
     ///
-    /// **M1 (the 2026-09-25 model-registry review):** each proof comes with whether it escalates —
-    /// its row about to lapse, past R-core+ (`palw_readiness_duty_escalates_v1`) — which is what the
-    /// tick's `ReadinessEscalated` site reads.
+    /// **M1 (the 2026-09-25 model-registry review):** each proof comes with how urgently it escalates
+    /// — its row lapsing or lapsed, past R-core+ (`palw_readiness_duty_urgency_v1`) — which is what
+    /// the tick's `ReadinessEscalated` site reads.
     fn readiness_duties(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -3482,9 +3496,9 @@ impl PalwPanelService {
             }
             let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
             let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
-            // M1: whether this span's proof escalates — the tip's row about to lapse, past R-core+.
+            // M1: how urgently this span's proof escalates — the tip's row lapsing, past R-core+.
             let readiness_v2 = self.consensus_config.params.palw_readiness_v2_at(current_daa);
-            let escalates = crate::palw_readiness_escalation::palw_readiness_duty_escalates_v1(
+            let urgency = crate::palw_readiness_escalation::palw_readiness_duty_urgency_v1(
                 self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
                 row.as_ref(),
                 span_now,
@@ -3503,6 +3517,11 @@ impl PalwPanelService {
                 read.span_daa,
                 &globals,
                 self.consensus_config.params.palw_readiness_v2_at(current_daa),
+            ) || crate::palw_readiness_escalation::palw_readiness_duty_waits_v1(
+                self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                last,
+                current_daa,
+                read.span_daa,
             ) {
                 continue;
             }
@@ -3643,7 +3662,7 @@ impl PalwPanelService {
                         proof: Box::new(proof),
                         signature,
                     },
-                    escalates,
+                    urgency,
                 });
                 continue;
             }
@@ -3690,7 +3709,7 @@ impl PalwPanelService {
                     opening,
                     signature,
                 },
-                escalates,
+                urgency,
             });
         }
         out
@@ -3738,7 +3757,7 @@ impl PalwPanelService {
                     Ok(()) => {
                         info!(
                             "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}{}",
-                            if duty.escalates { " — escalated: its row is about to lapse" } else { "" }
+                            if duty.escalates() { " — escalated: its row is lapsing or lapsed" } else { "" }
                         );
                         self.readiness_submitted.lock().unwrap().insert(class_id, span);
                         let next = TransactionOutpoint::new(txid, 0);

@@ -1319,7 +1319,8 @@ mod tests {
             subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
         };
         const SMALL_BLOCK_MASS: u64 = 3_000;
-        const TRAFFIC: u64 = 50;
+        // Enough traffic that a quarter of the pool's reserve holds one proof's bytes.
+        const TRAFFIC: u64 = 400;
         let traffic_size = create_transaction_with_utxo_entry(0, 0).mempool_estimated_bytes();
         let full_manager = |carrier_priority: bool| {
             let consensus = Arc::new(ConsensusMock::new());
@@ -1384,8 +1385,11 @@ mod tests {
     /// possession proof enters and at every new block.** Under a FULL mempool of transactions paying
     /// a hundred times its feerate, a min-fee proof whose row is fresh is refused as any transaction
     /// would be; once the tip says its row is about to lapse, the same seat's proof is admitted and
-    /// follows the coinbase in every template; and when the tip says the row was renewed, the next
-    /// block turns it back into an ordinary transaction that no longer leads.
+    /// follows the coinbase in every template; after a block that carried a possession proof, a
+    /// waiting H-1 carrier the proof would leave no room for leads instead (the M1 review, HIGH 2: the
+    /// lead alternates), and after one that did not the proof leads again; and when the tip says the
+    /// row was renewed, the next block turns it back into an ordinary transaction that no longer
+    /// leads.
     #[test]
     fn the_tip_read_keeps_and_templates_a_lapsing_proof_and_releases_it_when_renewed() {
         use kaspa_consensus_core::{
@@ -1395,7 +1399,8 @@ mod tests {
             subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
         };
         const SMALL_BLOCK_MASS: u64 = 3_000;
-        const TRAFFIC: u64 = 50;
+        // Enough traffic that a quarter of the pool's reserve holds one proof's bytes.
+        const TRAFFIC: u64 = 400;
         let traffic_size = create_transaction_with_utxo_entry(0, 0).mempool_estimated_bytes();
         let consensus = Arc::new(ConsensusMock::new());
         let mut config = Config::build_default(TARGET_TIME_PER_BLOCK, false, SMALL_BLOCK_MASS);
@@ -1409,8 +1414,17 @@ mod tests {
             validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), tx).unwrap();
         }
         let (bond, class_id) = (PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)), Hash64::from_u64_word(0xC1));
-        let proof = |salt: u32| {
+        let lifecycle = |salt: u32, object: PalwConsensusObjectV2| {
             let mut carrier = create_transaction_with_utxo_entry(salt, 0);
+            let mut tx = carrier.tx.as_ref().clone();
+            tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
+            tx.payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+            carrier.tx = tx.into();
+            let mass = transaction_estimated_serialized_size(&carrier.tx);
+            carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+            carrier
+        };
+        let proof = |salt: u32| {
             let object = PalwConsensusObjectV2::SeatReadinessProvedV2 {
                 bond,
                 class_id,
@@ -1423,19 +1437,17 @@ mod tests {
                             tensor_name: String::new(),
                             layer: None,
                             row_start: 0,
-                            bytes: vec![1],
+                            // Heavy enough that no accusation fits beside it in the 1,500-mass lane (a p50-row
+                            // proof at the lane's scale).
+                            bytes: vec![1; 900],
                         },
                     )],
                     siblings: vec![],
                 }),
                 signature: vec![1; 8],
             };
-            let mut tx = carrier.tx.as_ref().clone();
-            tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
-            tx.payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
-            carrier.tx = tx.into();
-            let mass = transaction_estimated_serialized_size(&carrier.tx);
-            carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
+            let mut carrier = lifecycle(salt, object);
+            carrier.calculated_fee = Some(2 * DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
             carrier
         };
 
@@ -1444,7 +1456,11 @@ mod tests {
             matches!(refused, Err(MiningManagerError::MempoolError(RuleError::RejectMempoolIsFull))),
             "a fresh row's proof is an ordinary transaction: {refused:?}"
         );
-        consensus.set_palw_readiness_escalated(bond, class_id, true);
+        consensus.set_palw_readiness_urgency(
+            bond,
+            class_id,
+            Some(kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1::Lapsing { last_fresh_daa: 8 }),
+        );
         let lapsing = proof(1_001);
         let lapsing_id = lapsing.id();
         validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), lapsing).expect("the reserve admits it");
@@ -1455,8 +1471,40 @@ mod tests {
             assert_eq!(template.block.transactions.get(1).map(|tx| tx.id()), Some(lapsing_id), "the proof follows the coinbase");
         }
 
-        consensus.set_palw_readiness_escalated(bond, class_id, false);
-        mining_manager.handle_new_block_transactions(consensus.as_ref(), 1, &build_block_transactions(std::iter::empty())).unwrap();
+        // A DA accusation waits; a block carries another seat's possession proof: the carriers' turn.
+        let accusation = lifecycle(
+            2_000,
+            PalwConsensusObjectV2::DefaultAccused {
+                claim: Hash64::from_u64_word(0xDA),
+                missing_event_index: 0,
+                accuser: bond,
+                signature: vec![1; 8],
+            },
+        );
+        let accusation_id = accusation.id();
+        validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), accusation).expect("the reserve admits it");
+        let other_seat = proof(3_000);
+        mining_manager
+            .handle_new_block_transactions(consensus.as_ref(), 1, &build_block_transactions(std::iter::once(other_seat.tx.as_ref())))
+            .unwrap();
+        mining_manager.clear_block_template();
+        let template = mining_manager.get_block_template(consensus.as_ref(), &miner_data).expect("a template");
+        assert_eq!(
+            template.block.transactions.get(1).map(|tx| tx.id()),
+            Some(accusation_id),
+            "after a block that carried a proof, the waiting carrier the proof leaves no room for leads"
+        );
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 2, &build_block_transactions(std::iter::empty())).unwrap();
+        mining_manager.clear_block_template();
+        let template = mining_manager.get_block_template(consensus.as_ref(), &miner_data).expect("a template");
+        assert_eq!(
+            template.block.transactions.get(1).map(|tx| tx.id()),
+            Some(lapsing_id),
+            "after one that did not, the proof leads again"
+        );
+
+        consensus.set_palw_readiness_urgency(bond, class_id, None);
+        mining_manager.handle_new_block_transactions(consensus.as_ref(), 3, &build_block_transactions(std::iter::empty())).unwrap();
         mining_manager.clear_block_template();
         let template = mining_manager.get_block_template(consensus.as_ref(), &miner_data).expect("a template");
         assert_ne!(template.block.transactions.get(1).map(|tx| tx.id()), Some(lapsing_id), "renewed: it no longer leads");
