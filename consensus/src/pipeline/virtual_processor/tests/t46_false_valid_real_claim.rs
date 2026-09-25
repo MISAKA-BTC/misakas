@@ -5235,3 +5235,8 @@ mod t54d_false_valid_filer;
 /// this suite's real claims, every object it leads to through this suite's doors; a child, like T47.
 #[path = "t54f_replay_filer.rs"]
 mod t54f_replay_filer;
+
+/// **ADR-0152 v3.1 T28 (§8.1, S): a conviction after retirement under a held second clock burns the
+/// row, `basis_k` read from the row** — on this suite's real claim and real conviction; a child, like T47.
+#[path = "t28_a_retired_claims_row_burns.rs"]
+mod t28_a_retired_claims_row_burns;
