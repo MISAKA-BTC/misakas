@@ -1,11 +1,15 @@
 # Joining Testnet-12 as a PALW producer
 
-Checked against `feat/testnet-12-regenesis` at `5a559459` on 2026-09-23. **testnet-12 has not
-launched on this genesis yet.** Three values are still open and appear as **TBD** below:
+**testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`, now
+`main`). The identity values below were checked against that release. Read
+[`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists what the release contains, the
+known issues (two CRITICAL ones are fixed by post-launch activation fences) and when a payment may be
+treated as final.
 
-* the consensus params fingerprint and the release commit/binary, which change when the pending
-  DoS-audit fixes merge;
-* the faucet, which has no testnet-12 funding yet (the operator decides that).
+The collateral and bond sections (§5 onwards) were written for `5a559459` (2026-09-23), before R-core+
+(ADR-0152 v3.1) replaced the collateral model. They are being re-checked against the release. Where
+they disagree with the node, the node and `misaka bond status` are authoritative. The faucet is still
+**TBD**: it has no testnet-12 funding yet (the operator decides that).
 
 The deployment record, which covers the genesis, the collateral and why, is
 [`testnet-12-regenesis-2026-09-23.md`](testnet-12-regenesis-2026-09-23.md).
@@ -37,7 +41,8 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 1. Build
 
-Use the testnet-12 release commit. **TBD:** it is published after the DoS-fix merge.
+Use the testnet-12 release commit `0e8ec984e` (current `main`). The public fleet runs the x86_64 Linux
+release build of that commit (kaspad sha256 `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149`).
 
 ```bash
 cargo build --release -p kaspad -p misaka-cli
@@ -82,8 +87,8 @@ The node bootstraps from the built-in DNS seeders. `--addpeer` takes IP addresse
 Check the startup log for these lines:
 
 ```text
-Consensus params fingerprint: <TBD> (network testnet-12)
-Consensus fence schedule: 1000 (schedule id …)
+Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f (network testnet-12)
+Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a

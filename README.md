@@ -5,11 +5,25 @@
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
 > [!IMPORTANT]
-> **Current status (2026-09-22).** The live public network is **`testnet-11`**, Relaunch 5f.
-> Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
-> `misaka --network testnet-11`, and verify fingerprint
-> **`79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640`** (the current main build
-> verified on 2026-09-22). Its fence schedule is `1150, 1900, 2150, 2400, 3500, 4000, 6900,
+> **Current status (2026-09-25).** The public network is **`testnet-12`** (R-core+, ADR-0152 v3.1),
+> launched on 2026-09-25/26 JST from release commit **`0e8ec984e`** (current `main`). Run it with
+> `kaspad --testnet --netsuffix=12` or `misaka --network testnet-12` (the CLI's default) and verify:
+> * consensus params fingerprint **`b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f`**
+> * genesis `a27f8f44fe4d91a5…` and schedule id `93da24cc60f7a77e…`
+>
+> Read **[docs/t12-launch-2026-09-25.md](docs/t12-launch-2026-09-25.md)** before relying on it: what the
+> release contains, the known issues (two CRITICAL ones are fixed by post-launch activation fences),
+> and when a payment may be treated as final — **never count blocks, blue-score depth or DAA on
+> testnet-12**; use finality depth (600 blue, about 4 h) or a `Final` PALW anchor. To produce or
+> verify: [docs/testnet12-join-mining.md](docs/testnet12-join-mining.md).
+
+> [!NOTE]
+> **testnet-11 (previous network; status 2026-09-22).** Relaunch 5f. **Current `main` no longer
+> builds a testnet-11 node:** this release moves testnet-11's identity (the fifth certified family,
+> state v21/v22), so a `main` build is refused by testnet-11 peers. To keep running testnet-11, build
+> commit **`1f98d3bf4`** (the last testnet-11 `main`), select it explicitly with
+> `--testnet --netsuffix=11` or `misaka --network testnet-11`, and verify fingerprint
+> **`79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640`** (verified on 2026-09-22). Its fence schedule is `1150, 1900, 2150, 2400, 3500, 4000, 6900,
 > 7100, 7101, 7200, 7300, 7301, 7780, 7800, 8100, 8160, 8500, 8600, 8700, 2125000`. The held
 > regime and the audit's deep fixes are at DAA 7,100; the DAA 7,101
 > flag day carries ADR-0130's operator lottery and 5-DAA spans, the model registry, the economic
