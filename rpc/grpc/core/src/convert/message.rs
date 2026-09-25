@@ -1429,6 +1429,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwActivationPoolResponse>, protowire
         scheduled_sompi: item.scheduled_sompi,
         class_is_floor: item.class_is_floor,
         recommended_pool_sompi: item.recommended_pool_sompi,
+        bonus_cap_sompi: item.bonus_cap_sompi,
         error: None,
     }
 });
@@ -3396,6 +3397,7 @@ try_from!(item: &protowire::GetPalwActivationPoolResponseMessage, RpcResult<kasp
         scheduled_sompi: item.scheduled_sompi,
         class_is_floor: item.class_is_floor,
         recommended_pool_sompi: item.recommended_pool_sompi,
+        bonus_cap_sompi: item.bonus_cap_sompi,
     }
 });
 try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {

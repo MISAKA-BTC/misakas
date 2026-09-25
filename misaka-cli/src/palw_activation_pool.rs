@@ -219,10 +219,11 @@ pub async fn pool(ctx: &Ctx, class_text: &str) -> CliResult {
         println!("  registrant     operator {} (never paid from its own pool)", r.registrant_operator);
     }
     println!(
-        "  terms          A0 {}, α {}‰, β {}‰, ramp {} DAA, caps {}/{}, least top-up {}",
+        "  terms          A0 {}, α {}‰, β {}‰ (at most {} an operator), ramp {} DAA, caps {}/{}, least top-up {}",
         msk(r.prep_base_sompi),
         r.prep_share_permille,
         r.bonus_share_permille,
+        msk(r.bonus_cap_sompi),
         r.ramp_daa,
         r.prep_payee_cap,
         r.bonus_payee_cap,

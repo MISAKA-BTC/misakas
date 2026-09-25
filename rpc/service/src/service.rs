@@ -2783,6 +2783,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             ramp_daa: if armed { terms.ramp_daa } else { 0 },
             prep_payee_cap: if armed { terms.prep_payee_cap as u32 } else { 0 },
             bonus_payee_cap: if armed { terms.bonus_payee_cap as u32 } else { 0 },
+            bonus_cap_sompi: if armed { terms.bonus_cap_sompi } else { 0 },
             total_funded_sompi: saturated(read.counters.funded_sompi),
             total_paid_sompi: saturated(read.counters.paid_sompi),
             total_withheld_sompi: saturated(read.counters.withheld_sompi),

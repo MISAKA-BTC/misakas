@@ -2810,5 +2810,7 @@ message GetPalwActivationPoolResponseMessage {
   bool classIsFloor = 36;
   // NON-BINDING recommended pool (user decision 2026-09-25): 16 · A_MAX / α of the terms in force.
   uint64 recommendedPoolSompi = 37;
+  // b_cap (P1): the most (b) pays one operator.
+  uint64 bonusCapSompi = 38;
   RPCError error = 1000;
 }

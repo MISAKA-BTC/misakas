@@ -2426,6 +2426,7 @@ mod mockery {
                 scheduled_sompi: mock(),
                 class_is_floor: mock(),
                 recommended_pool_sompi: mock(),
+                bonus_cap_sompi: mock(),
             }
         }
     }

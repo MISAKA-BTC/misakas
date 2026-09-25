@@ -11298,6 +11298,9 @@ pub struct GetPalwActivationPoolResponse {
     /// in force (`palw_activation_recommended_pool_sompi_v1`) — what pays a listing's preparers in
     /// full. Nothing enforces it; 0 where the pool is not armed or the class is the floor.
     pub recommended_pool_sompi: u64,
+    /// `b_cap`: the most (b) pays one operator (the pool's P1) — the per-Final seat pay at the
+    /// heaviest class; 0 where the pool is not armed.
+    pub bonus_cap_sompi: u64,
 }
 
 impl Serializer for GetPalwActivationPoolResponse {
@@ -11340,6 +11343,7 @@ impl Serializer for GetPalwActivationPoolResponse {
         store!(u64, &self.scheduled_sompi, writer)?;
         store!(bool, &self.class_is_floor, writer)?;
         store!(u64, &self.recommended_pool_sompi, writer)?;
+        store!(u64, &self.bonus_cap_sompi, writer)?;
         Ok(())
     }
 }
@@ -11385,6 +11389,7 @@ impl Deserializer for GetPalwActivationPoolResponse {
             scheduled_sompi: load!(u64, reader)?,
             class_is_floor: load!(bool, reader)?,
             recommended_pool_sompi: load!(u64, reader)?,
+            bonus_cap_sompi: load!(u64, reader)?,
         })
     }
 }

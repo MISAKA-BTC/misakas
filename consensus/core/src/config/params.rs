@@ -729,6 +729,7 @@ fn palw_activation_pool_terms_write_v1(h: &mut ConsensusParamsId, terms: &crate:
     h.write(terms.prep_payee_cap.to_le_bytes());
     h.write(terms.bonus_payee_cap.to_le_bytes());
     h.write(terms.min_topup_sompi.to_le_bytes());
+    h.write(terms.bonus_cap_sompi.to_le_bytes());
 }
 
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
@@ -15671,8 +15672,11 @@ pub fn palw_rc_base_params() -> Params {
             schedule_span_daa: 1,
         },
     });
-    params.palw_overlay_carve =
-        Some(PalwOverlayCarveV1 { activation: flag_day_6001, subsidy_validator_bps: 2_000, worker_carve_permille: 720 });
+    params.palw_overlay_carve = Some(PalwOverlayCarveV1 {
+        activation: flag_day_6001,
+        subsidy_validator_bps: 2_000,
+        worker_carve_permille: PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1,
+    });
     // **ADR-0135 Protocol Upgrade A and ADR-0132 Protocol Upgrade C, on the same flag day** (the
     // operator's decision, after the devnet drill): the permissionless model registry governs every
     // class the node can describe from 6,001 (rows open at the first span boundary past it, the
@@ -15871,6 +15875,19 @@ pub const PALW_SUBSIDY_MONTH0_BASE_SOMPI: u64 = 3_704_683_450;
 /// **What testnet-12's first block pays** — [`palw_genesis_block_subsidy_sompi`] at its 120,000 ms
 /// block time, pinned so the card's escrow input is a number an operator can read.
 pub const PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI: u64 = 444_562_014_000;
+
+/// **The overlay's worker carve, 720 ‰ of the subsidy** (ADR-0126): testnet-11's flag-day value,
+/// carried to testnet-12 by its base card. One spelling for the preset and for the figures derived
+/// from what a claim escrows.
+pub const PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1: u16 = 720;
+
+/// **`E`: the escrow a testnet-12 genesis-era claim of the heaviest class carries** — its first
+/// block's subsidy through the overlay's worker carve, `escrow_for_a_genesis_claim_v1`'s arithmetic
+/// (3,200.85 MSK). The price of work pays the heaviest weight-bearing class the escrow whole, so
+/// this is the most one claim pays. Pinned against the card by
+/// `palw_t12_genesis_claim_escrow_is_the_cards`.
+pub const PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI: u64 =
+    PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI / 1_000 * PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1 as u64;
 
 fn escrow_for_a_genesis_claim_v1((subsidy, carve_permille): &(u64, Option<u16>)) -> u64 {
     let permille = carve_permille.unwrap_or(0) as u64;
@@ -24039,6 +24056,20 @@ mod palw_overlay_carve_tests {
 
     fn t11_carve() -> PalwOverlayCarveV1 {
         PalwOverlayCarveV1 { activation: ForkActivation::new(T11_HEIGHT), subsidy_validator_bps: 2_000, worker_carve_permille: 720 }
+    }
+
+    /// **`E`, as the card computes it** (the Activation Pool's P1 derives `b_cap` from it): testnet-12's
+    /// first-block subsidy through its own overlay carve is `PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI`,
+    /// 3,200.85 MSK — and testnet-11's carve is the same constant, so the literal left no preset.
+    #[test]
+    fn palw_t12_genesis_claim_escrow_is_the_cards() {
+        let t12 = palw_t12_shipped_params();
+        let carve = t12.palw_overlay_carve.map(|carve| carve.worker_carve_permille);
+        assert_eq!(carve, Some(PALW_OVERLAY_WORKER_CARVE_PERMILLE_V1));
+        assert_eq!(palw_genesis_block_subsidy_sompi(&t12), PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI);
+        assert_eq!(escrow_for_a_genesis_claim_v1(&(palw_genesis_block_subsidy_sompi(&t12), carve)), PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI);
+        assert_eq!(PALW_T12_GENESIS_CLAIM_ESCROW_SOMPI, 320_084_650_080);
+        assert_eq!(palw_rc_shipped_params().palw_overlay_carve.map(|carve| carve.worker_carve_permille), Some(720));
     }
 
     fn armed(carve: PalwOverlayCarveV1) -> Params {

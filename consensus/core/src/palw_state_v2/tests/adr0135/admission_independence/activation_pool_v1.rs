@@ -434,8 +434,11 @@ fn to_active_limited(state: &PalwChainStateV2, credited: &[u64], span: u64, next
 /// included, the registrant excluded — and a re-formation pays only new operators** (the review's A1).
 #[test]
 fn the_activation_bonus_pays_the_credited_operators_at_active_limited_and_only_new_ones_on_reformation() {
-    let (probation, span, next) = in_probation(1_000 * MSK);
+    // A pool small enough that every share here is under P1's b_cap: this test is about the split.
+    let (probation, span, next) = in_probation(500 * MSK);
     let bonus_before = probation.activation_pool(&kimi_id()).unwrap().bonus_sompi;
+    // The largest share below is the re-formation's lone payee: β of what the first run left, a quarter.
+    assert!(bonus_before / 4 < terms().bonus_cap_sompi, "the premise: no share here reaches b_cap");
     // Credited: two sybils, an honest outsider (the ADR-0147 seat), and the registrant's operator.
     let active = to_active_limited(&probation, &[2, 3, 17, 9], span + 1, next);
     assert!(matches!(active.model_lifecycle(&kimi_id()).map(|row| row.state), Some(PalwModelLifecycleV1::ActiveLimited { .. })));
@@ -466,7 +469,7 @@ fn the_activation_bonus_pays_the_credited_operators_at_active_limited_and_only_n
     let again = to_active_limited(&back, &[2, 5], span + 3, next + 2);
     let pool_again = again.activation_pool(&kimi_id()).cloned().unwrap();
     let b2 = palw_activation_bonus_reward_v1(&terms(), pool.bonus_sompi, 1);
-    assert_eq!(payout_of(&again, 5), Some(b2), "only the new operator, alone: the whole β share");
+    assert_eq!(payout_of(&again, 5), Some(b2), "only the new operator, alone: the whole β share (to b_cap)");
     // Operator 2's first bonus left the queue with the drains since; nothing new was written for it.
     assert_eq!(payout_of(&again, 2), None, "a paid operator is not paid again");
     assert!(pool_again.bonus_paid.contains(&op_id(25)) && pool_again.bonus_paid.len() == 4);
@@ -482,6 +485,40 @@ fn the_activation_bonus_pays_the_credited_operators_at_active_limited_and_only_n
     .unwrap();
     let after = sponsored.activation_pool(&kimi_id()).cloned().unwrap();
     assert_eq!((after.prep_sompi, after.bonus_sompi), (0, pool_again.bonus_sompi + 10 * MSK));
+}
+
+/// **P1 (user decision 2026-09-25): a huge sponsored pool pays each credited operator at most
+/// `b_cap`, and keeps the rest** — `b = min(⌊bonus × β / n⌋, b_cap)`, the per-`Final` seat pay at the
+/// heaviest class (128.03 MSK). The budget loses exactly `n × b_cap`, every sompi stays accounted
+/// (I1), and a later operator on a re-formation is paid out of what the cap kept.
+#[test]
+fn a_huge_sponsored_pool_pays_each_operator_at_most_b_cap_and_keeps_the_rest() {
+    let huge = 10_000_000 * MSK;
+    let (probation, span, next) = in_probation(huge);
+    let before = probation.activation_pool(&kimi_id()).cloned().unwrap();
+    let b_cap = terms().bonus_cap_sompi;
+    assert_eq!(b_cap, 12_803_386_003, "E × 200 ‰ / 5");
+    assert!(before.bonus_sompi / 2 / 3 > b_cap, "the premise: the uncapped share is far past the cap");
+    let active = to_active_limited(&probation, &[2, 3, 17], span + 1, next);
+    let pool = active.activation_pool(&kimi_id()).cloned().unwrap();
+    for n in [2u64, 3, 17] {
+        assert_eq!(payout_of(&active, n), Some(b_cap), "operator {n} is paid b_cap, not its share");
+    }
+    assert_eq!(pool.bonus_sompi, before.bonus_sompi - 3 * b_cap, "the rest stays for later operators");
+    assert!(pool.is_balanced(), "I1: funded == prep + bonus + scheduled + paid + withheld");
+    assert_eq!(pool.funded_sompi, before.funded_sompi);
+
+    // A re-formation pays a new operator out of what the cap kept — and still at most b_cap.
+    let mut held = active.clone();
+    let mut row = held.model_lifecycles.get(&kimi_id()).cloned().unwrap();
+    row.state = PalwModelLifecycleV1::Held;
+    held.set_model_lifecycle_for_tests(kimi_id(), row);
+    let back = step_checked(&held, &ctx(next + 1, (span + 2) * SPAN, next + 1), &[], None, &pooled(Some(fold(kimi_work())))).unwrap();
+    let again = to_active_limited(&back, &[5], span + 3, next + 2);
+    assert_eq!(payout_of(&again, 5), Some(b_cap));
+    let kept = again.activation_pool(&kimi_id()).cloned().unwrap();
+    assert_eq!(kept.bonus_sompi, pool.bonus_sompi - b_cap);
+    assert!(kept.is_balanced());
 }
 
 /// **(b) pays the CREDITED bond's payload** (the fix round's L3), not whichever bond of the operator
