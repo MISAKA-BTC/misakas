@@ -338,6 +338,9 @@ wait_for "curl -fsS 'http://127.0.0.1:$GATEWAY_PORT/health' -o '$WORK_DIR/gatewa
 # own fee outpoint, which that node's panel spends on readiness proofs and receipts long before the
 # chat; a one-shot rail pointed at it finds it spent. The watcher selects the bond's own spendable
 # outputs — node-0's floor rewards — and submits one job at a time as the bond has room.
+# (Devnet arms no ADR-0152 R-core+, so a Final pays at once and this funding exists within minutes. On
+# testnet-12 the same reward VESTS for about 3,147 DAA and a number of licences before it is a UTXO
+# — phase2-plan.md §1.8 — so a testnet-12 run funds the rail from a float or the main wallet instead.)
 "$RAIL_BIN" --watch "$WORK_DIR/outbox" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" --rpc "127.0.0.1:$RPC_BASE" \
   --interval 10 >"$WORK_DIR/rail.log" 2>&1 &
 pids+=($!)

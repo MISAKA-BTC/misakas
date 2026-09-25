@@ -120,7 +120,10 @@ fn short_quantum_leaves(p: &Params, sp: &PalwStateParamsV2, short: Hash64) -> u6
 
 #[test]
 fn a_one_quantum_commitment_in_the_last_part_job_is_kept_beside_the_2m_attempt() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (short, id2m) = model_classes(&p);
@@ -283,7 +286,10 @@ fn at_zero_room_a_commitment_that_fills_the_last_part_job_is_kept_and_a_whole_jo
 /// two (a whole job).
 #[test]
 fn a_class_held_to_final_refuses_a_part_job_commitment_at_its_cap() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (_, id2m) = model_classes(&p);

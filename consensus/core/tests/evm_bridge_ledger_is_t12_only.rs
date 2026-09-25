@@ -37,10 +37,24 @@ const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the
 /// attribution fence, whose pin is the one number recorded at the parent) and testnet-12's ruleset,
 /// identity and schedule are exactly the parent's.
+///
+/// ADR-0152 §4-quater's `palw_class_verify_deadline` landed beside the ledger (merged after the
+/// parent), so it is taken away too — the fence cleared, its state-params mirror synced, and the
+/// pruning depth re-derived without it (its P-1 lattice, 74,920, back to the parent's 12,002), as a
+/// build without the fence derives it. Its own "only thing that moved" pin is
+/// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE`.
 #[test]
 fn the_ledger_is_the_only_thing_that_moved_testnet12() {
     let mut parent = inert_twin(&palw_t12_shipped_params());
-    println!("testnet-12 at the parent (the ledger taken away): {:?}", ids(&parent));
+    parent.palw_class_verify_deadline = None;
+    parent.sync_palw_class_verify_deadline();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &parent.palw_consensus_mode else {
+        panic!("testnet-12 is ConsensusV2")
+    };
+    parent.blockrate.pruning_depth =
+        kaspa_consensus_core::config::params::palw_v2_pruning_depth_v1(&parent.blockrate, bundle, parent.palw_da_court, None);
+    assert_eq!(parent.blockrate.pruning_depth, 12_002, "the parent's depth");
+    println!("testnet-12 at the parent (the ledger and the deadline fence taken away): {:?}", ids(&parent));
     parent.palw_offence_attribution = None;
     // ADR-0152-adjacent: the Activation Pool landed after this pin was taken; it is taken away
     // here too, and `palw_activation_pool_is_t12_only` pins what it moves.

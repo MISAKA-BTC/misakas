@@ -39,6 +39,9 @@ pub struct Ctx {
     pub evm_rpc: String,
     pub timeout_secs: u64,
     pub quiet: bool,
+    /// `--palw-drill-genesis-salt` (ADR-0152 §8.2): the testnet-12 drill whose genesis this CLI's
+    /// params carry (`wallet::chain_params`); `None` on every real network.
+    pub palw_drill_genesis_salt: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]

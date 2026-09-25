@@ -925,10 +925,80 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0152 R-3/R-4 (Phase 2, P2-8): what the reporter's filer reads of one filing** at the
+    /// tip, for the DAA the virtual's next block folds at — its commitment's row, the conviction and
+    /// the reward under `offence_key` ([`crate::palw_state_v2::palw_reporter_filing_read_v1`]) — and,
+    /// when `gated` is given (the evidence, the signed commitment, or the court accusation the filer
+    /// falls back to), the processor's own object gate on it at that DAA (the adjudicator the fold
+    /// runs), so the node never pays a carrier for an object the chain refuses. A read: it decides
+    /// nothing a block accepts. `None` when there is no tip state (off `ConsensusV2`).
+    fn palw_reporter_filing_read_v1(
+        &self,
+        _offence_key: crate::Hash64,
+        _commitment: crate::Hash64,
+        _reporter: crate::palw_state_v2::PalwBondKeyV2,
+        _gated: Option<crate::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Option<crate::palw_state_v2::PalwReporterFilingReadV1> {
+        None
+    }
+
+    /// **ADR-0152 DA-3 / J-6 (Phase 2, P2-8d): what a `StepLeaf` demand of `claim` by `accuser`
+    /// comes to** at the tip, for the DAA the virtual's next block folds at — the fold's own gates for
+    /// the named leaf (`palw_producer_v2::palw_da_step_leaf_demand_check_v1`). `None` off `ConsensusV2`.
+    fn palw_da_step_leaf_demand_check_v1(
+        &self,
+        _claim: crate::Hash64,
+        _accuser: crate::palw_state_v2::PalwBondKeyV2,
+        _leaf: u64,
+    ) -> Option<crate::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
+        None
+    }
+
+    /// **The 2026-09-25 model-registry review, M1: how urgently do these possession proofs' rows need
+    /// them at the tip?** One answer per carrier, in order: `Some` when its row there exists and is
+    /// lapsing or lapsed and the proof renews it (`palw_readiness_escalation_v1::
+    /// palw_readiness_proof_urgency_v1`), at the virtual's DAA — the tip read the mempool's carrier
+    /// index asks when a proof enters and, for every proof it holds at once, at every new block (one
+    /// tip load, one registry fold), so the reserve and the template's head hold a proof exactly while
+    /// it escalates, in urgency order. All `None` below `palw_rcore_plus` (every network but
+    /// testnet-12), off `ConsensusV2`, and without a registry.
+    fn palw_readiness_urgency_v1(
+        &self,
+        carriers: &[crate::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<Option<crate::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        vec![None; carriers.len()]
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {
         Vec::new()
+    }
+
+    /// **ADR-0152 v3.1 N10 (Phase 2, P2-8c): what filing this `PanelFalseValidV2` object comes to**
+    /// at the tip, for the block the virtual's next block folds at — the ONE adjudicator
+    /// (`palw_check_panel_false_valid_v2`), then the processor's gate with the signature, then the
+    /// fold itself on the tip (as the licence assembler asks `palw_v2_object_licenses_claim_v1`), so
+    /// a filer never pays a carrier for an object the fold refuses. `None` when there is no tip state
+    /// to read (off `ConsensusV2`). Node policy's read; never what a block accepts.
+    fn palw_false_valid_filing_check_v1(
+        &self,
+        _object: crate::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<crate::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        None
+    }
+
+    /// **ADR-0152 v3.1 N10 (P2-8c): which of `receipts` the chain relied on**, at the tip — one
+    /// answer a receipt, in order (`palw_false_valid_receipt_relied_v1`: a `Valid` whose lock over
+    /// this receipt's mask, liability row or conviction is in state, signed under this chain's
+    /// domain and the seat's registered key). A filer admits a receipt it read off the chain only
+    /// on `true`, so a licence object the gate dropped cannot fill its slots. `None` with no tip
+    /// state or below `Params::palw_rcore_plus`. Node policy's read; never what a block accepts.
+    fn palw_false_valid_relied_receipts_v1(
+        &self,
+        _receipts: Vec<crate::palw_offence_attribution_v1::PalwFalseValidReceiptV1>,
+    ) -> Option<Vec<bool>> {
+        None
     }
 
     /// **What a node's receipt pool reads off the tip** (node policy, the 2026-09-24 launch review's

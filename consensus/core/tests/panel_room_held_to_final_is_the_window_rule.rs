@@ -20,7 +20,11 @@
 //! * the threshold itself through the fold (HELD-2, second case): the short row, ladder kept, with
 //!   its registered verification compute set so the fold's own span step derives 999 spans, and
 //!   1,000. At 999 a second claim folds beside the first, Provisional or licensed; at 1,000 it
-//!   meets the derived cap.
+//!   meets the derived cap. **Measured on the fence-off twin since ADR-0152 §4-quater**: past
+//!   `palw_class_verify_deadline` (testnet-12 as shipped) K-1 holds every long-D class — any window
+//!   past 24 spans — beside C7, and V2 closes one past 120 spans until a measured row names it, so on
+//!   the shipped rules a 999-span row is closed unmeasured and held once measured (the last test
+//!   here). C7's own threshold is what the twin isolates.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_held_to_final_is_the_window_rule
 
@@ -140,7 +144,10 @@ fn a_class_with_a_held_ladder_and_a_window_under_1000_spans_is_not_held() {
 /// (testnet-12 as shipped) or takes it out through the carriage; the outcome is the same, because
 /// the hold is the window's.
 fn held_2m_walk(ladder: bool) {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (_, id2m) = model_classes(&p);
@@ -217,8 +224,12 @@ fn held_2m_walk(ladder: bool) {
         through_the_window.push((after, read(&s, daa), capped(&attempt_second(&s, daa + 1))));
     }
 
-    // One block past the challenge window: Final, and the slot is free.
-    daa = licensed_daa + challenge + 1;
+    // One block at the claim's Final deadline: Final, and the slot is free. Restated for ADR-0152
+    // §4-quater V4: the deadline is DL-1's floor `max(L + wc, H)`, and a 2M claim's verification
+    // horizon `bound + 13,996` lies far past `L + 120` (it was `L + challenge + 1` before the fence).
+    let final_at = s.deadline_of(&claim).expect("a licensed claim owes its Final deadline");
+    assert!(final_at > licensed_daa + challenge, "the verification horizon, not the challenge window, is the floor");
+    daa = final_at + 1;
     s = readied(&sp, &s, &honest, id2m, daa - 1);
     s = go(&p, &sp, &s, &ctx(0x5600_0000 + daa, daa, daa, 0), &[], PalwBlockWorkV3::None, Hash64::default()).expect("the sweep").0;
     assert!(matches!(s.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
@@ -293,8 +304,15 @@ struct WindowWalk {
 /// stepping, and a row whose stored window disagrees with its work would be `Held` for the one
 /// boundary until the two agree.
 fn window_walk(spans: u32) -> WindowWalk {
+    // C7's window rule alone: testnet-12 with `palw_class_verify_deadline` off (see the module note).
+    let mut p = t12();
+    p.palw_class_verify_deadline = None;
+    p.sync_palw_class_verify_deadline();
+    window_walk_on(p, spans)
+}
+
+fn window_walk_on(p: kaspa_consensus_core::config::params::Params, spans: u32) -> WindowWalk {
     use kaspa_consensus_core::palw_model_registry_v1::{PalwModelWorkV1, palw_verification_window_spans_v1};
-    let p = t12();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (short, _) = model_classes(&p);
@@ -422,6 +440,51 @@ fn the_window_threshold_through_the_fold_999_spans_is_released_and_1000_is_held(
     assert!(
         matches!(at.second_while_licensed, Err(PalwStateV2Error::ClassInflightCapped { inflight: 1, cap: 1, .. })),
         "1,000 spans: a second claim beside the licensed one meets the cap: {:?}",
+        at.second_while_licensed
+    );
+}
+
+/// **The shipped rules at 999 spans (ADR-0152 §4-quater V2 and K-1).** On testnet-12 as shipped the
+/// same 999-span row derives `D = 4,995 > 600`: NM, so its first attempt is refused
+/// `ClassDeadlineUnmeasured` by the producer's gate. Once a flag day measures it (a row pricing its
+/// canonical job at the derived 4,995 DAA) it takes a claim — and, long-D, it is held to Final beside
+/// C7: a second claim meets the cap of one while the first is Provisional and while it is licensed.
+#[test]
+fn past_the_deadline_fence_a_999_span_row_is_closed_unmeasured_and_held_once_measured() {
+    use kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClassVerifyRowV1;
+    let p = t12();
+    let (short, _) = model_classes(&p);
+    // Unmeasured: the walk's own first attempt is refused by name.
+    let unmeasured = std::panic::catch_unwind(|| window_walk_on(t12(), PALW_RCORE_C7_WINDOW_SPANS_V1 - 1));
+    assert!(unmeasured.is_err(), "the 999-span row takes no claim without a measured row");
+    // Measured: 2 × 2.997·10¹⁴ ps × 1,000 positions over 120 s = 4,995 DAA.
+    let row = PalwClassVerifyRowV1 {
+        class_id: short,
+        activation_daa: 0,
+        a_r_ps: 299_700_000_000_000,
+        b_r_ps: 0,
+        t_fixed_ms: 0,
+        canonical_positions: 1_000,
+        leaves_per_position: 1,
+    };
+    assert_eq!(row.daa(1_000), 4_995);
+    let mut measured = p.clone();
+    measured.palw_class_verify_rows = Box::leak(Box::new([row]));
+    measured.sync_palw_class_verify_deadline();
+    measured.validate_palw_v2().expect("the measured row validates on testnet-12's own horizon");
+    let at = window_walk_on(measured, PALW_RCORE_C7_WINDOW_SPANS_V1 - 1);
+    println!("999 spans, measured, shipped rules: {at:?}");
+    assert_eq!(at.window, PALW_RCORE_C7_WINDOW_SPANS_V1 - 1, "not C7 by the window rule");
+    assert_eq!(at.provisional, (1, 0), "K-1: the room is the cap's");
+    assert!(
+        matches!(at.second_while_provisional, Err(PalwStateV2Error::ClassInflightCapped { inflight: 1, cap: 1, .. })),
+        "K-1: a second claim beside the Provisional one meets the cap: {:?}",
+        at.second_while_provisional
+    );
+    assert_eq!(at.licensed, (1, 0), "K-1: the licence releases nothing, owed to Final");
+    assert!(
+        matches!(at.second_while_licensed, Err(PalwStateV2Error::ClassInflightCapped { inflight: 1, cap: 1, .. })),
+        "K-1: and beside the licensed one: {:?}",
         at.second_while_licensed
     );
 }

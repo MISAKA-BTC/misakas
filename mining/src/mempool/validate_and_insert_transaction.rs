@@ -99,9 +99,11 @@ impl Mempool {
         //       feerate of the replacement tx is very low relative to the mempool overall.
         //
 
-        // Before adding the transaction, check if there is room in the pool
+        // Before adding the transaction, check if there is room in the pool. M1: a possession proof
+        // whose row is lapsing at the tip may take a reserved place and lead the lane (asked once, here).
         let transaction_size = transaction.mempool_estimated_bytes();
-        let txs_to_remove = self.transaction_pool.limit_transaction_count(&transaction, transaction_size)?;
+        let palw_readiness = self.palw_readiness_admission(consensus, &transaction);
+        let txs_to_remove = self.transaction_pool.limit_transaction_count_with(&transaction, transaction_size, palw_readiness)?;
         if !txs_to_remove.is_empty() {
             let transaction_pool_len_before = self.transaction_pool.len();
             for x in txs_to_remove.iter() {
@@ -138,7 +140,7 @@ impl Mempool {
         // Add the transaction to the mempool as a MempoolTransaction and return a clone of the embedded Arc<Transaction>
         let accepted_transaction = self
             .transaction_pool
-            .add_transaction(transaction, consensus.get_virtual_daa_score(), priority, transaction_size)?
+            .add_transaction_with(transaction, consensus.get_virtual_daa_score(), priority, transaction_size, palw_readiness)?
             .mtx
             .tx
             .clone();
@@ -158,6 +160,44 @@ impl Mempool {
             warn!("Failed to remove superseded attestation shard {old_tx_id}: {err}");
         }
         Ok(TransactionPostValidation { removed: removed_transaction, accepted: Some(accepted_transaction) })
+    }
+
+    /// **M1 (the 2026-09-25 model-registry review): what the tip says of a possession proof as it
+    /// enters** — the proof, and how urgently its row needs it (`ConsensusApi::palw_readiness_urgency_v1`).
+    /// `None` for every other transaction and where `Config::palw_h1_carrier_priority` is off
+    /// (every network but testnet-12), so nothing else is decoded or asked.
+    pub(crate) fn palw_readiness_admission(
+        &self,
+        consensus: &dyn ConsensusApi,
+        transaction: &MutableTransaction,
+    ) -> Option<crate::mempool::model::palw_carriers::PalwReadinessAdmissionV1> {
+        if !self.config.palw_h1_carrier_priority {
+            return None;
+        }
+        let carrier = kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1::of_tx(&transaction.tx)?;
+        let urgency = consensus.palw_readiness_urgency_v1(&[carrier]).first().copied().flatten();
+        Some(crate::mempool::model::palw_carriers::PalwReadinessAdmissionV1 { carrier, urgency })
+    }
+
+    /// **M1: re-ask the tip about every possession proof the pool holds** — at each new block, when
+    /// the DAA moves and rows renew. A proof whose row now escalates may represent it (a head
+    /// candidate, and a reserved place while the row is lapsing); one whose row was renewed — by it,
+    /// or by a copy another block carried — goes back to being an ordinary transaction. One tip read
+    /// for the whole pool, the proofs taken in lane order (feerate, then arrival). A no-op where the
+    /// flag is off or the pool holds no proof.
+    pub(crate) fn refresh_palw_readiness(&mut self, consensus: &dyn ConsensusApi) {
+        if !self.config.palw_h1_carrier_priority {
+            return;
+        }
+        let proofs = self.transaction_pool.palw_readiness_entries();
+        if proofs.is_empty() {
+            return;
+        }
+        let carriers: Vec<_> = proofs.iter().map(|(_, carrier)| *carrier).collect();
+        let urgencies = consensus.palw_readiness_urgency_v1(&carriers);
+        for ((id, _), urgency) in proofs.iter().zip(urgencies.into_iter().chain(std::iter::repeat(None))) {
+            self.transaction_pool.set_palw_readiness_urgency(id, urgency);
+        }
     }
 
     /// Validates that the transaction wasn't already accepted into the DAG

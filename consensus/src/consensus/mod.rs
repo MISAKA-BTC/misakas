@@ -2238,8 +2238,48 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_da_accusation_check_v1_impl(claim, accuser)
     }
 
+    fn palw_reporter_filing_read_v1(
+        &self,
+        offence_key: kaspa_consensus_core::Hash64,
+        commitment: kaspa_consensus_core::Hash64,
+        reporter: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        gated: Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwReporterFilingReadV1> {
+        self.virtual_processor.palw_reporter_filing_read_v1_impl(offence_key, commitment, reporter, gated)
+    }
+
+    fn palw_da_step_leaf_demand_check_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        leaf: u64,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
+        self.virtual_processor.palw_da_step_leaf_demand_check_v1_impl(claim, accuser, leaf)
+    }
+
+    fn palw_readiness_urgency_v1(
+        &self,
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        self.virtual_processor.palw_readiness_urgency_v1_impl(carriers)
+    }
+
     fn palw_claim_readers_v2(&self, claim: kaspa_consensus_core::Hash64) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
+    }
+
+    fn palw_false_valid_filing_check_v1(
+        &self,
+        object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        self.virtual_processor.palw_false_valid_filing_check_v1_impl(&object)
+    }
+
+    fn palw_false_valid_relied_receipts_v1(
+        &self,
+        receipts: Vec<kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidReceiptV1>,
+    ) -> Option<Vec<bool>> {
+        self.virtual_processor.palw_false_valid_relied_receipts_v1_impl(&receipts)
     }
 
     fn palw_receipt_pool_facts_v1(

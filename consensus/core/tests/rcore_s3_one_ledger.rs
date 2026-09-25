@@ -27,7 +27,11 @@ use kaspa_consensus_core::palw_panel_v2::{
 use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
 use kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v4;
 use kaspa_consensus_core::palw_state_v2::{
-    PALW_RCORE_VESTING_ROWS_LANDED_V1, PalwBlockContextV2, PalwStateV2Error, palw_accuser_exposure_v1, palw_bond_collateral_is_locked_v6, palw_bond_committed_raw_v1, palw_bond_committed_v1, palw_bond_is_payee_of_unmatured_row_v1, palw_panel_valid_lock_required_v1, palw_rcore_bind_prices_v1, palw_rcore_duty_bind_v1, palw_rcore_lock_unvested_v1, palw_rcore_lock_vested_at_cap_v1, palw_rcore_lock_vested_v1, palw_rcore_seat_lock_v1, palw_second_clock_depth_of_v1, palw_second_clock_depth_v1, palw_v2_object_licenses_claim_v1,
+    PALW_RCORE_VESTING_ROWS_LANDED_V1, PalwBlockContextV2, PalwStateV2Error, palw_accuser_exposure_v1,
+    palw_bond_collateral_is_locked_v6, palw_bond_committed_raw_v1, palw_bond_committed_v1, palw_bond_is_payee_of_unmatured_row_v1,
+    palw_panel_valid_lock_required_v1, palw_rcore_bind_prices_v1, palw_rcore_duty_bind_v1, palw_rcore_lock_unvested_v1,
+    palw_rcore_lock_vested_at_cap_v1, palw_rcore_lock_vested_v1, palw_rcore_seat_lock_v1, palw_second_clock_depth_of_v1,
+    palw_second_clock_depth_v1, palw_v2_licence_backed_seats_v1, palw_v2_object_licenses_claim_v1,
 };
 use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
 use std::collections::BTreeSet;
@@ -446,7 +450,10 @@ fn t15_every_door_locks_l1s_price_with_the_attested_mask() {
 /// pinned through the same formula (processor extras, L1).
 #[test]
 fn t77_duty_bind_per_class_and_the_amplification_bound() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let (short, id2m) = model_classes(&p);
     let mut rows = Vec::new();
     for (name, class) in [("floor", None), ("8k", Some(short)), ("2M", Some(id2m))] {
@@ -510,7 +517,10 @@ fn t77_duty_bind_per_class_and_the_amplification_bound() {
 /// the vesting build will price are ADR §2's 22,252.74 / 33,379.11 MSK (processor extras, L1).
 #[test]
 fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let (_, id2m) = model_classes(&p);
     let mut c = model_chain(p.clone(), id2m, 1);
     let id = model_claim(&mut c, id2m, 1, 0x7801);
@@ -618,7 +628,8 @@ fn n1_on_the_floor_and_the_8k_row_the_licence_needs_no_top_up_and_five_valids_li
 
 /// **T33 (SR-6): a licence on the backed subset.** One seat is unbacked at the licence (its room
 /// gone after the bind). On the V1 door the other four license: the unbacked one takes no lock, no
-/// credit and no served bit (so the escrow is held), and the assemblers' predicate agrees. On the
+/// credit and no served bit (so the escrow is held), and the assemblers' predicate agrees — as does
+/// the subset they offer (Phase 2 P2-5, `palw_v2_licence_backed_seats_v1`: the four). On the
 /// coverage door the backed four do not cover testnet-12's cut (every segment needs its unique
 /// partial holder), so the object is inert and the predicate says so. Fence off, the same set is
 /// inert on both doors (today's all-or-nothing rule).
@@ -628,10 +639,14 @@ fn n1_on_the_floor_and_the_8k_row_the_licence_needs_no_top_up_and_five_valids_li
 /// it): the licence needs no top-up there, so every seat is backed whatever its room — a seat cannot
 /// be unbacked on those classes. The 2M row's duty is capped below its lock, so its licence takes the
 /// top-up from the seat's room, and that is where SR-6 bites. The fence-off twin keeps the floor.
+///
+/// ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the
+/// flag day that installs its measured row — the armed cases run there (`t12_2m_open`, measuring the
+/// derived 13,995-DAA deadline); the licence's pricing does not read the deadline.
 #[test]
 fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
     for (door, armed) in [("quorum", true), ("coverage", true), ("quorum", false)] {
-        let p = if armed { t12() } else { twin(&t12()) };
+        let p = if armed { t12_2m_open() } else { twin(&t12()) };
         let (mut c, id, seats) = if armed {
             let (_, id2m) = model_classes(&p);
             let mut c = model_chain(p.clone(), id2m, 1);
@@ -677,6 +692,18 @@ fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
             f.da_court,
             &c.extras_at(at),
         );
+        // Phase 2 P2-5: the backed subset the V1 and coverage assemblers offer, read off the same fold.
+        let subset = palw_v2_licence_backed_seats_v1(
+            &c.s,
+            &c.sp,
+            &ctx_at,
+            &object,
+            f.unavailable_abstains,
+            f.capability_bound,
+            f.uncertified_weightless,
+            f.da_court,
+            &c.extras_at(at),
+        );
         c.step(&[object]);
         let after = c.claim(&id);
         let licensed = matches!(after.phase, PalwClaimPhaseV2::ReceiptLicensed { .. });
@@ -684,6 +711,8 @@ fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
         match (door, armed) {
             ("quorum", true) => {
                 assert!(licensed, "four backed Valids are a quorum");
+                let backed: Vec<_> = seats.iter().enumerate().filter(|(i, _)| *i != victim_index).map(|(_, (k, _))| *k).collect();
+                assert_eq!(subset, Some(backed), "the assemblers' subset: the four seats the fold locked, in carried order");
                 assert!(c.s.slashable_lock(victim, id).is_none(), "the unbacked Valid takes no lock");
                 assert_eq!(after.rcore.served_mask & (1 << victim_index), 0, "…and no served bit");
                 assert_eq!(after.rcore.served_mask.count_ones(), 4);
@@ -691,7 +720,10 @@ fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
                 let row = c.s.panel_duty_row_of(&id).expect("duty row");
                 assert_eq!(row.seats.get(&victim), Some(&0), "…and no credit");
             }
-            _ => assert!(!licensed, "{door}/armed={armed}: inert"),
+            _ => {
+                assert!(!licensed, "{door}/armed={armed}: inert");
+                assert_eq!(subset, None, "{door}/armed={armed}: no subset to offer (below the fence none is read)");
+            }
         }
     }
 }
@@ -865,7 +897,12 @@ fn t17_u2_a_producer_below_the_floor_after_s0_prime_is_refused_until_it_re_regis
         let seats = c.floor_seats();
         for _ in 0..2 {
             let bound = c.bind(id, &seats);
-            let rw = c.sp.receipt_window_for_claim_v1(&c.s, &accepted.class_id, bound);
+            let rw = c.sp.receipt_window_for_claim_v1(
+                &c.s,
+                &accepted.class_id,
+                kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(&accepted),
+                bound,
+            );
             c.step_at(bound + rw + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
         }
         assert!(

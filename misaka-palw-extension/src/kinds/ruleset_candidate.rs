@@ -150,6 +150,15 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // The V2 bundle carries this height (and the lane's span) beside the fence;
         // `validate_palw_v2` refuses the two apart, so they are set together.
         "palw_class_receipt_window" => params.set_palw_class_receipt_window(Some(at)),
+        // ADR-0152 §4-quater: genesis-only (the pruning depth its deadlines need is a genesis fact), so a
+        // height is refused here by name rather than left to surface as a validation failure; at
+        // genesis the bundle carries the height beside the fence and `validate_palw_v2` refuses the two
+        // apart, so they are set together.
+        "palw_class_verify_deadline" => {
+            genesis_only(name, at)?;
+            params.palw_class_verify_deadline = Some(at);
+            params.sync_palw_class_verify_deadline();
+        }
         "palw_execution_quanta" => params.palw_execution_quanta = Some(at),
         "palw_public_model_source_required" => {
             params.palw_public_model_source_required =
@@ -219,6 +228,22 @@ pub fn would_print_v1(params: &Params) -> PalwWouldPrintV1 {
     }
 }
 
+/// **The arming build's derived depths, re-derived after its fences are set.** A V2 network's
+/// `finality_depth` and `pruning_depth` are derived from its bundle and fences, not carried: past
+/// `palw_class_verify_deadline` the pruning depth is the D_cap claim lattice (ADR-0152 §4-quater
+/// P-1 — 74,920 on testnet-12, against 12,002 without the fence). The arming build derives them
+/// after its fences are set ([`Params::with_palw_v2_depths`], raised, never lowered), so the
+/// candidate does the same — else a genesis candidate for that fence prints a params id the arming
+/// build never prints, and trips K18 on a depth the arming build would never carry. A V1 network is
+/// returned as it is.
+pub fn with_derived_depths_v1(arming: Params) -> Params {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &arming.palw_consensus_mode else {
+        return arming;
+    };
+    let bundle = bundle.clone();
+    arming.with_palw_v2_depths(&bundle)
+}
+
 pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensionError> {
     let manifest = cx.manifest();
     let requested: Vec<(String, PalwFenceRequestV1)> = manifest.requires.fences.iter().map(|(n, r)| (n.clone(), r.clone())).collect();
@@ -278,6 +303,7 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
             }
         }
     }
+    let arming = with_derived_depths_v1(arming);
 
     let arm = would_print_v1(&arming);
     cx.record("arming.params_id", &arm.params_id);
@@ -363,6 +389,25 @@ mod tests {
             }
         }
         assert!(set_fence_by_name(&mut params.clone(), "palw_no_such_fence", ForkActivation::always()).is_err());
+    }
+
+    /// **The class-verify-deadline fence is refused at a height and set, with its bundle mirror, at
+    /// genesis** (the §4-quater review's L5): it is genesis-only, so a candidate naming a height is a
+    /// regenesis and is refused by name before any fingerprint is printed.
+    #[test]
+    fn the_class_verify_deadline_fence_is_refused_at_a_height_and_mirrored_at_genesis() {
+        let params: Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
+        let name = "palw_class_verify_deadline";
+        let at_height = set_fence_by_name(&mut params.clone(), name, ForkActivation::new(9_000_000));
+        assert!(at_height.as_ref().is_err_and(|why| why.contains("is genesis-only")), "{at_height:?}");
+        let mut armed = params.clone();
+        set_fence_by_name(&mut armed, name, ForkActivation::always()).expect("genesis is accepted");
+        let after = armed.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
+        assert_eq!(after, Some(ForkActivation::always()), "set by name");
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else {
+            panic!("testnet-11 is ConsensusV2")
+        };
+        assert_eq!(bundle.state.class_verify_deadline_from_daa(), Some(0), "the bundle mirrors the fence");
     }
 
     /// **The Activation Pool's fence is refused at a height and set, with its terms, at genesis**

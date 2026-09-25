@@ -58,7 +58,32 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// is the ONLY thing that moved them is pinned by `evm_bridge_ledger_is_t12_only`
 /// (`the_ledger_is_the_only_thing_that_moved_testnet12`), which takes both fences away and lands on
 /// the previous value here. M3: `f5eee474…` / `75666d42…` / `75282ad2…`.
+///
+/// **Re-pinned once more by ADR-0152 §4-quater**: `palw_class_verify_deadline` is armed on
+/// testnet-12 from genesis and named (Some-only) in all three ids, so testnet-12 with this fence taken
+/// away moved with it. The value is testnet-12 with this fence alone taken away (the deadline fence
+/// and the bridge ledger still armed); with BOTH this fence and the deadline fence taken away
+/// testnet-12 is exactly the bridge-ledger value above
+/// ([`T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE`]), which pins that the deadline fence is the only
+/// thing that moved it. (At `2ce3094a`, before the bridge ledger: `8c1b6da8…` / `e14dce00…` /
+/// `7d9a75c4…`.)
+///
+/// **And by its P-1**: past the deadline fence testnet-12's pruning depth is the D_cap claim lattice
+/// (74,920, was 12,002), and the depth is hashed into the params and identity ids; the schedule does
+/// not move (no height moved). (At `2c4b6516`, before the bridge ledger: `afdce629…` / `c070a0e4…` /
+/// `7d9a75c4…`.)
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
+    "f5b564f3267e3a0a5c19dafaf5901069481132c05f4bfa464773848a3e44f1d0",
+    "8eaabe3eea0f6feb11e6a211f893bc590dc2e2427771e73c8f0629cf6dbe830c",
+    "b758ee801d47058306f97dcc7d558009f27c8162439990259bbee756c2a90478",
+);
+
+/// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
+/// without the deadline fence, as a build without it derives it — the bridge-ledger value of
+/// [`T12_BEFORE_THE_ATTRIBUTION`] (`rcore/int-3` at `8b35c0c2`), unchanged: the class-verify-deadline
+/// fence (with its P-1 depth) moved nothing else. (Before the bridge ledger it was the M3 value,
+/// `f5eee474…` / `75666d42…` / `75282ad2…`.)
+const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
     "ea2e5a18e28949bec3b605de7f6764be9edd4f432ced6d8632c3d64df891135a",
     "ad43854c76b2fbec6377e29ed1b8b937168075f6bd6b1f58537ec4590e82454e",
     "9ebe1dcc0c6c0e2913aeac199e7fd61fc36a412d682481dcd448a4632becc936",
@@ -141,6 +166,25 @@ fn the_fence_moves_testnet12s_fingerprint_and_nothing_else_did() {
     assert_ne!(t12.consensus_params_id(), without.consensus_params_id(), "the ruleset a node announces names the fence");
     assert_ne!(t12.consensus_identity_id(), without.consensus_identity_id(), "in force from block one: two identities");
     assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and the schedule the operator log names it");
+    let mut without_both = without.clone();
+    without_both.palw_class_verify_deadline = None;
+    without_both.sync_palw_class_verify_deadline();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &without_both.palw_consensus_mode else {
+        panic!("testnet-12 is ConsensusV2")
+    };
+    without_both.blockrate.pruning_depth = kaspa_consensus_core::config::params::palw_v2_pruning_depth_v1(
+        &without_both.blockrate,
+        bundle,
+        without_both.palw_da_court,
+        None,
+    );
+    assert_eq!(without_both.blockrate.pruning_depth, 12_002, "the pre-fence depth");
+    let both = ids(&without_both);
+    assert_eq!(
+        (both.0.as_str(), both.1.as_str(), both.2.as_str()),
+        T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE,
+        "with the deadline fence taken away too, testnet-12 is its pre-deadline parent: that fence moved nothing else"
+    );
 }
 
 /// **Genesis or not at all**: a fence at any later height is refused by `validate_palw_v2`, and

@@ -199,6 +199,11 @@ pub mod palw_chain_weight;
 pub mod palw_checkpoint_court_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
+/// ADR-0152 §4-quater — class-derived verification deadlines behind
+/// `Params::palw_class_verify_deadline`: the constants, the measured-row type and the two pure
+/// derivations of `D(c)` (the state-reading half is in `palw_state_v2`). `None` on every preset but
+/// testnet-12.
+pub mod palw_class_verify_deadline_v1;
 pub mod palw_clock_cursor_v1;
 pub mod palw_context_ladder;
 /// ADR-0077 SA-4: the court's turn deadline is a slashing rule, so it is DERIVED from what an
@@ -239,6 +244,8 @@ pub mod palw_execution_lane_v1;
 pub mod palw_execution_quanta_v1;
 pub mod palw_exposure;
 pub mod palw_facts;
+/// ADR-0152 v3.1 N10 / §7.3 P2-8c: the node's half of `PanelFalseValidV2` (node policy, never validity).
+pub mod palw_false_valid_filing_v1;
 pub mod palw_fork_authority_v2;
 pub mod palw_fork_choice;
 pub mod palw_fp_admission_v3;
@@ -253,6 +260,10 @@ pub mod palw_heartbeat_v1;
 /// ADR-0152 v3.1 H-1 — the lifecycle objects a heartbeat must be able to carry: the one list the
 /// miner's carrier lane and the relay's exemption read (P2-9). Node policy; no rule reads it.
 pub mod palw_heartbeat_carriers_v1;
+/// The 2026-09-25 model-registry review, M1 — a possession proof whose row is about to lapse outranks
+/// the court queue at the seat and holds a carrier's place in the pool and the template. Node
+/// policy past R-core+; no rule reads it.
+pub mod palw_readiness_escalation_v1;
 /// ADR-0103 — the context is held off the chain: the seat's interval of positions, its route, its
 /// width and its fetch, as pure functions. Consensus-inert.
 pub mod palw_held_context_v1;
@@ -341,6 +352,10 @@ pub mod palw_receipt;
 /// adjudication maths. Land-stage, consensus-inert.
 pub mod palw_reference;
 pub mod palw_registry;
+/// ADR-0152 v3.1 Phase 2, P2-8b / P2-8d: the replay-mismatch contradiction builder — a seat's own
+/// replay against the claim's served capture, bisected to the first divergent step and held to the
+/// fold's own predicates. Node policy's read-side builder; nothing here is read by the fold.
+pub mod palw_replay_refute_v1;
 /// ADR-0151 follow-up, item 1: what a ROLE needs to execute a class — the one working-set
 /// derivation the producer, the panel and the court read; node-local capacity, never a chain fact.
 pub mod palw_resource_profile_v1;

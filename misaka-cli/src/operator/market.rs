@@ -36,6 +36,7 @@ fn ctx_for(ctx: &crate::node::Ctx, profile: &Profile) -> crate::node::Ctx {
         evm_rpc: ctx.evm_rpc.clone(),
         timeout_secs: ctx.timeout_secs,
         quiet: ctx.quiet,
+        palw_drill_genesis_salt: ctx.palw_drill_genesis_salt.clone(),
     }
 }
 

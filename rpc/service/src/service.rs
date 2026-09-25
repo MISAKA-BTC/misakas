@@ -491,6 +491,13 @@ pub struct RpcCoreService {
     validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>>,
     /// `getPalwClassContexts`: the build's class ledger, where the node has one.
     palw_class_ledger_provider: Option<Arc<dyn PalwClassLedgerProvider>>,
+    /// **A testnet-12 drill's drill-only pay addresses** (ADR-0152 §8.2; P2-12 review finding 6):
+    /// every owner payload the drill keyring derives, computed once at start-up (at most 6 × 32
+    /// ML-DSA-87 key generations) and `None` on every real network. `getBlockTemplate` pays only
+    /// these on a drill: a public miner script on a drill coinbase mints an outpoint public
+    /// testnet-12 can mint too, and a spend of one is a spend of the other — kaspad refuses such a
+    /// `--palw-producer-pay-address` at start-up, and this is the same rule for an external miner.
+    palw_drill_pay_payloads: Option<Arc<std::collections::HashSet<[u8; 64]>>>,
 }
 
 const RPC_CORE: &str = "rpc-core";
@@ -697,6 +704,11 @@ impl RpcCoreService {
         let notifier =
             Arc::new(Notifier::new(RPC_CORE, EVENT_TYPE_ARRAY[..].into(), collectors, subscribers, subscription_context, 1, policies));
 
+        // A drill's pay addresses, once (see the field); `None` on every real network.
+        let palw_drill_pay_payloads = config
+            .palw_drill_genesis_salt
+            .map(|salt| Arc::new(kaspa_consensus_core::config::drill::PalwDrillKeyringV1::new(salt).payloads()));
+
         Self {
             consensus_manager,
             notifier,
@@ -722,6 +734,7 @@ impl RpcCoreService {
             mining_rule_engine,
             validator_status_provider,
             palw_class_ledger_provider: None,
+            palw_drill_pay_payloads,
         }
     }
 
@@ -883,6 +896,19 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Err(RpcError::InvalidRpcScriptClass(
                 "pay address must be an ML-DSA-87 P2PKH (PubKeyHashMlDsa87) address".to_owned(),
             ));
+        }
+
+        // ADR-0152 §8.2: a testnet-12 drill pays only its own keyring's addresses (see the field).
+        if let Some(drill) = &self.palw_drill_pay_payloads
+            && !<[u8; 64]>::try_from(request.pay_address.payload.as_slice()).is_ok_and(|payload| drill.contains(&payload))
+        {
+            return Err(RpcError::General(format!(
+                "this node is a testnet-12 DRILL (salt id {}) and pays only drill-only addresses: {} is not one of its keyring's. A \
+                 public miner script on a drill coinbase mints an outpoint public testnet-12 can mint too — take a pay address from \
+                 the drill's keyring (kaspad --palw-drill-write-keyring)",
+                self.config.palw_drill_genesis_salt.as_ref().map(|salt| salt.id()).unwrap_or_default(),
+                request.pay_address
+            )));
         }
 
         // Build block template
@@ -1679,6 +1705,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             lane_last_work_daa: rt.lane_last_work_daa,
             lane_mix: rt.lane_mix,
             lane_alarm: rt.lane_alarm,
+            // What an off-node signer checks before it signs (ADR-0152 §8.2, P2-12): the genesis
+            // this node's params carry, and — on a drill only — the salt's short id.
+            genesis_hash: params.genesis.hash.to_string(),
+            drill_salt_id: self.config.palw_drill_genesis_salt.as_ref().map(|salt| salt.id()).unwrap_or_default(),
         })
     }
 

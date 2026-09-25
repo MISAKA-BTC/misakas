@@ -1380,6 +1380,18 @@ pub struct PalwStateParamsV2 {
     /// different question.
     #[borsh(skip)]
     held_unanswerable_classes: Vec<Hash64>,
+    /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
+    /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
+    /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
+    /// views that hold no transition extras. `None` on every network but testnet-12. Skipped by borsh
+    /// for `short_challenge_window_from_daa`'s reason.
+    #[borsh(skip)]
+    class_verify_deadline_from_daa: Option<u64>,
+    /// **ADR-0152 §4-quater's measured rows** (`Params::palw_class_verify_rows`), mirrored by the
+    /// same setter, borsh-skipped for the same reason; empty where the fence is not armed, and empty
+    /// on testnet-12 at launch.
+    #[borsh(skip)]
+    class_verify_rows: Vec<crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1539,6 +1551,8 @@ impl PalwStateParamsV2 {
             withdrawal_delay_daa: 0,
             rcore_conservative_classes: Vec::new(),
             held_unanswerable_classes: Vec::new(),
+            class_verify_deadline_from_daa: None,
+            class_verify_rows: Vec::new(),
         })
     }
 
@@ -1573,7 +1587,24 @@ impl PalwStateParamsV2 {
     /// the only state it reads is `verification_window_spans`, which a class's registered work
     /// fixes for its whole life — a row's `state`, `ready_seats` and utilization all move, and a
     /// deadline derived from those would move under a claim that had already been bound.
-    pub fn receipt_window_for_claim_v1(&self, state: &PalwChainStateV2, class_id: &Hash64, bound_daa: u64) -> u64 {
+    ///
+    /// **ADR-0152 §4-quater V3: past `Params::palw_class_verify_deadline` (at `bound_daa`) this is
+    /// `W_r(c) = max(window_receipt, D(c))`** with `D(c)` = [`Self::claim_verify_daa_v1`] — the class's
+    /// window counted in reference spans of 5 DAA, not in the lane's span (1 DAA on testnet-12, which
+    /// gave the 2M row 2,799 DAA of a 13,995-DAA derivation). `shape` is the claim's
+    /// ([`crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim`]); a class-level
+    /// reader asks for the canonical job (`Attempt`). Below the fence `shape` is unread and this is
+    /// §11.3's rule byte for byte.
+    pub fn receipt_window_for_claim_v1(
+        &self,
+        state: &PalwChainStateV2,
+        class_id: &Hash64,
+        shape: crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1,
+        bound_daa: u64,
+    ) -> u64 {
+        if self.class_verify_deadline_active_at(bound_daa) {
+            return self.window_receipt.max(self.claim_verify_daa_v1(state, class_id, shape, bound_daa));
+        }
         let Some(rule) = self.class_receipt_window else {
             return self.window_receipt;
         };
@@ -1584,6 +1615,90 @@ impl PalwStateParamsV2 {
             return self.window_receipt;
         };
         self.window_receipt.max((row.profile.verification_window_spans as u64).saturating_mul(rule.span_daa.max(1)))
+    }
+
+    /// **ADR-0152 §4-quater V1: `D(c)`, the compute-bearing verification deadline of a claim of
+    /// `class_id` and `shape` bound at `bound_daa`, in DAA.** A pure function of the claim's class
+    /// row (its registered `verification_ccu`, fixed for the class's life), the class's published
+    /// free-prompt work profile (write-once, and past `palw_fp_derived_work` present before the first
+    /// free-prompt claim), the measured rows and `bound_daa` — so it is the same at the bind, at every
+    /// receipt, at the sweep and at the rebuild.
+    ///
+    /// Past the fence at `bound_daa`:
+    /// * a class with an active measured row at `bound_daa` (ADR-0153's flag day) —
+    ///   `min(D_cap, ⌈(m·T_R(N) + t_fixed) / τ⌉)` at the claim's `N` ([`PalwClassVerifyRowV1::daa`]);
+    /// * otherwise the derived branch: an attempt is `5 × verification_window_spans`
+    ///   ([`crate::palw_class_verify_deadline_v1::palw_derived_verify_daa_v1`]; floor 10, Qwen3.6 10,
+    ///   8k 15, 2M 13,995); a free-prompt claim is the larger of that and the class's largest run
+    ///   ([`palw_class_fp_verify_daa_v1`]); a class without a registry row has no canonical term (0).
+    ///
+    /// Below the fence it is §11.3's product verbatim — `verification_window_spans × span_daa` where
+    /// §11.3 is in force at `bound_daa` for a rowed class (spans × 5 on testnet-11), 0 otherwise — and
+    /// nothing below the fence reads it for a rule.
+    ///
+    /// [`PalwClassVerifyRowV1::daa`]: crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1::daa
+    pub fn claim_verify_daa_v1(
+        &self,
+        state: &PalwChainStateV2,
+        class_id: &Hash64,
+        shape: crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1,
+        bound_daa: u64,
+    ) -> u64 {
+        use crate::palw_class_verify_deadline_v1::{PalwClaimVerifyShapeV1, palw_derived_verify_daa_v1};
+        if !self.class_verify_deadline_active_at(bound_daa) {
+            return match (self.class_receipt_window, state.model_lifecycle(class_id)) {
+                (Some(rule), Some(row)) if bound_daa >= rule.activation_daa => {
+                    (row.profile.verification_window_spans as u64).saturating_mul(rule.span_daa.max(1))
+                }
+                _ => 0,
+            };
+        }
+        if let Some(row) = self.class_verify_row_at(class_id, bound_daa) {
+            return row.daa(row.positions_of(shape));
+        }
+        let canonical = state.model_lifecycle(class_id).map_or(0, |row| palw_derived_verify_daa_v1(row.work.verification_ccu));
+        match shape {
+            PalwClaimVerifyShapeV1::Attempt => canonical,
+            PalwClaimVerifyShapeV1::FreePrompt { .. } => canonical.max(palw_class_fp_verify_daa_v1(state, class_id).unwrap_or(0)),
+        }
+    }
+
+    /// **ADR-0152 §4-quater: sets the bundle's copies of `Params::palw_class_verify_deadline` and
+    /// `Params::palw_class_verify_rows`** — written by `Params::sync_palw_class_verify_deadline` and by
+    /// nothing else, so the two cannot drift.
+    pub fn with_class_verify_deadline(
+        mut self,
+        from_daa: Option<u64>,
+        rows: Vec<crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1>,
+    ) -> Self {
+        self.class_verify_deadline_from_daa = from_daa;
+        self.class_verify_rows = rows;
+        self
+    }
+
+    /// ADR-0152 §4-quater: the fence's height, if the network arms it (the mirror).
+    pub fn class_verify_deadline_from_daa(&self) -> Option<u64> {
+        self.class_verify_deadline_from_daa
+    }
+
+    /// ADR-0152 §4-quater: whether class-derived verification deadlines are in force at `daa_score`.
+    /// `false` on every network but testnet-12, where it is armed at genesis.
+    pub fn class_verify_deadline_active_at(&self, daa_score: u64) -> bool {
+        self.class_verify_deadline_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// ADR-0152 §4-quater: the measured rows (the mirror; empty on every network at launch).
+    pub fn class_verify_rows(&self) -> &[crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1] {
+        &self.class_verify_rows
+    }
+
+    /// The measured row that prices `class_id` at `daa_score`, if one is active there.
+    pub fn class_verify_row_at(
+        &self,
+        class_id: &Hash64,
+        daa_score: u64,
+    ) -> Option<&crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1> {
+        self.class_verify_rows.iter().find(|row| row.class_id == *class_id && row.is_active_at(daa_score))
     }
 
     /// Disarm ADR-0133 §11.3's rule — every class back on the network's `window_receipt`.
@@ -3053,6 +3168,162 @@ pub fn palw_rcore_release_record_holds_v1(state: &PalwChainStateV2, claim_id: &H
     rcore.served_mask == crate::palw_verification_v2::PalwSegmentMaskV2::full(seats as u16).0
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0152 §4-quater: class-derived verification deadlines, the state-reading half
+// (`Params::palw_class_verify_deadline`; the pure half is `palw_class_verify_deadline_v1`)
+// ---------------------------------------------------------------------------------------------
+
+/// **The deadline of the largest free-prompt run `class_id`'s context holds**, derived:
+/// `5 × window_spans(ccu of that run)` ([`crate::palw_class_verify_deadline_v1::palw_fp_class_verify_ccu_v1`]
+/// over the class's published work profile). `None` where the class has published no profile (no
+/// free-prompt claim of it exists past `palw_fp_derived_work`) or the profile has no economic shape.
+/// The launch form of a free-prompt claim's `D` is this class-level maximum (§4-quater.4).
+pub fn palw_class_fp_verify_daa_v1(state: &PalwChainStateV2, class_id: &Hash64) -> Option<u64> {
+    let profile = state.fp_work_profiles.get(class_id)?;
+    crate::palw_class_verify_deadline_v1::palw_fp_class_verify_ccu_v1(profile)
+        .map(crate::palw_class_verify_deadline_v1::palw_derived_verify_daa_v1)
+}
+
+/// **NM: does `class_id` need a measured row before it may take a claim?** (§4-quater.4, U-D2.)
+/// Either (i) its canonical job's derived deadline exceeds `window_receipt` — the one global
+/// receipt window is what the chain can state without a measurement (the 2M row: 13,995 > 600) —
+/// or (ii) it is held (a recorded step ladder, ADR-0119) with a published `n_ctx` past 8,192, a
+/// history nobody has measured a seat replaying. `false` for a class without a registry row: it owes
+/// no class-derived deadline at all.
+///
+/// Not here: §4-quater's (iii), a paging class (`working_set_bytes` past a reference resident
+/// size) — its constant is UNVERIFIED (§4-quater.16) and the registry reserves `working_set_bytes`
+/// from every admission rule until a manifest carries measured bytes, so it belongs to the
+/// post-genesis registration gate (V2b/V2c), not to this claim gate.
+pub fn palw_class_needs_measured_row_v1(params: &PalwStateParamsV2, state: &PalwChainStateV2, class_id: &Hash64) -> bool {
+    let Some(row) = state.model_lifecycle(class_id) else { return false };
+    if crate::palw_class_verify_deadline_v1::palw_derived_verify_daa_v1(row.work.verification_ccu) > params.window_receipt() {
+        return true;
+    }
+    state.class_is_held_v1(class_id)
+        && state
+            .fp_work_profiles
+            .get(class_id)
+            .is_some_and(|profile| profile.n_ctx > crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_HELD_N_CTX_MAX_V1)
+}
+
+/// **Long-D (K-1): a class whose canonical job's derived deadline is past the short challenge
+/// window** (`5 × verification_window_spans > 120`) — a pure function of the registry row, as the
+/// room's hold must be. Such a class's claims can outlive their licence's `L + 120`, so the panel may
+/// still be replaying them after licence. No testnet-12 genesis class is long-D except the 2M row,
+/// which is closed (the 8k row derives 15; the floor has no registry row).
+pub fn palw_class_row_is_long_d_v1(row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1) -> bool {
+    crate::palw_class_verify_deadline_v1::palw_derived_verify_daa_v1(row.work.verification_ccu)
+        > crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_LONG_D_DAA_V1
+}
+
+/// **The panel room's hold to Final** (ADR-0152 T-2(b) and §4-quater K-1): C7
+/// ([`palw_rcore_class_is_c7_v1`] — the window rule united with the conservative list) or, past
+/// `palw_class_verify_deadline`, a long-D class ([`palw_class_row_is_long_d_v1`]). A class it selects
+/// owes the panel every claim in flight until Final and is held to its static `max_inflight_claims`.
+/// Deliberately NOT C7 itself: C7 also holds the escrow to Final and makes a second failed panel S0′,
+/// and K-1 is a capacity rule only — a long-D class's escrow follows SR-1 like any other class's.
+///
+/// Read with the fence's Some-ness (it is genesis-only, so armed is in force at every DAA), because
+/// the room is read by views that hold no DAA.
+pub fn palw_panel_holds_to_final_v1(params: &PalwStateParamsV2, state: &PalwChainStateV2, class_id: &Hash64) -> bool {
+    palw_rcore_class_is_c7_v1(params, state, class_id)
+        || (params.class_verify_deadline_from_daa().is_some()
+            && state.model_lifecycles.get(class_id).is_some_and(palw_class_row_is_long_d_v1))
+}
+
+/// **`H(c)`, the verification horizon** (§4-quater.4): `B*(c) + D(c) + 1`, with `B*(c)` =
+/// `panels[c].bound_daa` (which V6 advances by a long-D claim's seat-DA pause) and `D(c)` =
+/// [`PalwStateParamsV2::claim_verify_daa_v1`] at that bound. `None` below the fence (at `B*`) and
+/// for a claim without a bound panel — nothing is then floored by it. No economic release of a
+/// claim happens before it (INV-L), SR-1's all-seats-Valid escrow release excepted.
+pub fn palw_claim_verify_horizon_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> Option<u64> {
+    let bound = state.panels.get(claim_id)?.bound_daa;
+    if !params.class_verify_deadline_active_at(bound) {
+        return None;
+    }
+    let shape = crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim);
+    Some(bound.saturating_add(params.claim_verify_daa_v1(state, &claim.class_id, shape, bound)).saturating_add(1))
+}
+
+/// **§4-quater V4: the ONE licensed Final floor** — `L + window_challenge_at(L)`, and past the fence
+/// no earlier than `H(c)` ([`palw_claim_verify_horizon_v1`]). Every site that arms a licensed claim's
+/// path to `Final` reads it: DL-1's licensed row (the licence, the rebuild, the load check past
+/// `palw_rcore_plus`, M3's DA close and the sweep's re-arm), the load check below `palw_rcore_plus`,
+/// the court-close re-arm and the ADR-0062 DA-close re-arm. No other expression may compute it (the
+/// `class_verify_deadline_final_floor_has_one_producer` structure test pins that).
+///
+/// A pure function of rooted data — `licensed_daa`, `panels[c].bound_daa` (after V6's writes), the
+/// class row and profile, and the params — so the rebuild's `max(floor, last_daa)` stays exact.
+pub fn palw_claim_final_floor_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    licensed_daa: u64,
+) -> Result<u64, PalwStateV2Error> {
+    let floor =
+        licensed_daa.checked_add(params.window_challenge_at(licensed_daa)).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+    Ok(match palw_claim_verify_horizon_v1(state, params, claim_id, claim) {
+        Some(horizon) => floor.max(horizon),
+        None => floor,
+    })
+}
+
+/// **What a node reads to date a claim's verification duties** (§4-quater N-1, N-8, N-9): one
+/// claim's class-derived deadlines, as the fold states them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwClaimVerifyDeadlineV1 {
+    /// `B*(c)`: the bound panel's `bound_daa` (V6-advanced by a long-D claim's seat-DA pause).
+    pub bound_daa: u64,
+    /// `D(c)`: the compute-bearing deadline ([`PalwStateParamsV2::claim_verify_daa_v1`]).
+    pub verify_daa: u64,
+    /// `W_r(c)` ([`PalwStateParamsV2::receipt_window_for_claim_v1`]).
+    pub receipt_window_daa: u64,
+    /// The chain's receipt deadline — DL-1's `PanelBound` row (`bound + W_r(c)` from the phase's
+    /// bound) while the claim is bound, `B* + W_r(c)` after it licenses (the supplementary door's).
+    pub receipt_deadline_daa: u64,
+    /// `H(c)` past the fence, `None` below it.
+    pub horizon_daa: Option<u64>,
+    /// `D(c)` came from a measured row (ADR-0153's flag day), not the derived branch.
+    pub measured: bool,
+}
+
+/// **The claim's class-derived verification deadlines** ([`PalwClaimVerifyDeadlineV1`]), for the
+/// node's duty clock (N-1: a seat's duty ends at `receipt_deadline_daa`, not the global
+/// `bound + window_receipt`), its readiness self-selection (N-8) and the operator's phase display
+/// (N-9). `None` for a claim without a bound panel.
+pub fn palw_class_verify_deadline_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> Option<PalwClaimVerifyDeadlineV1> {
+    let bound_daa = state.panels.get(claim_id)?.bound_daa;
+    let shape = crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim);
+    let receipt_window_daa = params.receipt_window_for_claim_v1(state, &claim.class_id, shape, bound_daa);
+    let receipt_base = match claim.phase {
+        PalwClaimPhaseV2::PanelBound { bound_daa: phase_bound } => phase_bound,
+        _ => bound_daa,
+    };
+    let receipt_deadline_daa =
+        receipt_base.saturating_add(params.receipt_window_for_claim_v1(state, &claim.class_id, shape, receipt_base));
+    Some(PalwClaimVerifyDeadlineV1 {
+        bound_daa,
+        verify_daa: params.claim_verify_daa_v1(state, &claim.class_id, shape, bound_daa),
+        receipt_window_daa,
+        receipt_deadline_daa,
+        horizon_daa: palw_claim_verify_horizon_v1(state, params, claim_id, claim),
+        measured: params.class_verify_deadline_active_at(bound_daa)
+            && params.class_verify_row_at(&claim.class_id, bound_daa).is_some(),
+    })
+}
+
 /// **Q-3 over the chain's record: the attested masks of a claim's counted `Valid` signers**, in
 /// panel seat order, with the claim's segment cut (`palw_segment_count_v2(seats)`). A seat is
 /// counted iff it holds a lock on the claim: every door and every supplementary set locks each
@@ -3249,15 +3520,22 @@ pub fn palw_claim_receipt_deadline_v1(
     let Some(panel) = state.panels.get(claim_id) else { return Ok(None) };
     panel
         .bound_daa
-        .checked_add(params.receipt_window_for_claim_v1(state, &claim.class_id, panel.bound_daa))
+        .checked_add(params.receipt_window_for_claim_v1(
+            state,
+            &claim.class_id,
+            crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+            panel.bound_daa,
+        ))
         .map(Some)
         .ok_or(PalwStateV2Error::Overflow("receipt deadline"))
 }
 
 /// **DL-1 (S's rows): a claim's one deadline**, a pure function of rooted data and the last point's
 /// DAA (`last_daa`, the state's `last_point` at load or the block being folded). These are today's
-/// rows, bit for bit — the bind deadline from the bind base, the receipt deadline, none while a
-/// court is open on a licence, `max(licensed + window_challenge_at(licensed), last)` for a licence,
+/// rows, bit for bit — the bind deadline from the bind base, the receipt deadline (`W_r(c)`,
+/// ADR-0152 §4-quater V3), none while a court is open on a licence, `max(floor, last)` for a licence
+/// with the floor [`palw_claim_final_floor_v1`] (`licensed + window_challenge_at(licensed)`, and past
+/// `palw_class_verify_deadline` no earlier than the verification horizon — §4-quater V4),
 /// the disclose deadline, and a terminal record's abandon hold or retirement — so the arm sites,
 /// `rebuild_deadline_index_v2`, `expected_deadline` and `assert_deadline_consistency` can read one
 /// function.
@@ -3296,15 +3574,20 @@ pub fn palw_rcore_deadline_v1(
         }
         PalwClaimPhaseV2::PanelBound { bound_daa } => Some(
             bound_daa
-                .checked_add(params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
+                .checked_add(params.receipt_window_for_claim_v1(
+                    state,
+                    &claim.class_id,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                    bound_daa,
+                ))
                 .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
         ),
         PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => None,
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
-            let mut floor = licensed_daa
-                .checked_add(params.window_challenge_at(licensed_daa))
-                .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
-            // M4, Q-5's gate: an S2 licence not yet raised to 2 waits out both supplementary doors.
+            // §4-quater V4: the one licensed Final floor, `max(L + wc, H)` past the fence.
+            let mut floor = palw_claim_final_floor_v1(state, params, claim_id, claim, licensed_daa)?;
+            // M4, Q-5's gate: an S2 licence not yet raised to 2 waits out both supplementary doors
+            // (`max(L + wc, B* + W_r(c) + 1, H, last)` — the receipt deadline reads the claim's `W_r(c)`).
             if palw_rcore_licence_awaits_replay_v1(claim)
                 && let Some(receipt_deadline) = palw_claim_receipt_deadline_v1(state, params, claim_id, claim)?
             {
@@ -3436,6 +3719,31 @@ pub fn palw_reporter_commit_message_v1(network_domain: &Hash64, commitment: &Has
     message.extend_from_slice(commitment.as_byte_slice());
     message.extend_from_slice(&borsh::to_vec(reporter).expect("a bond key is borsh-serializable"));
     message
+}
+
+/// **R-3 (P2-8): the node's one builder of a signed `ReporterCommitted` (tag 53)** — the commitment
+/// [`palw_reporter_commitment_v1`]`(offence_key, evidence_id, reporter, salt)`, signed through `sign`
+/// over [`palw_reporter_commit_message_v1`]`(network_domain, commitment, reporter)` under
+/// [`PALW_REPORTER_COMMIT_MLDSA87_CONTEXT`] — what the processor's gate verifies against the reporter
+/// bond's registered key. Returns the commitment beside the object (the filer keeps it, with the
+/// salt, to find its row and to reveal). `None` when `sign` signs nothing (no bond key), or the
+/// object cannot ride a carrier. Pure: whether the fold roots it is the fold's
+/// (`apply_reporter_committed`).
+pub fn palw_reporter_commit_object_v1(
+    network_domain: &Hash64,
+    offence_key: &Hash64,
+    evidence_id: &Hash64,
+    reporter: PalwBondKeyV2,
+    salt: &[u8; 32],
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Option<(Hash64, PalwConsensusObjectV2)> {
+    let commitment = palw_reporter_commitment_v1(offence_key, evidence_id, &reporter, salt);
+    let signature =
+        sign(&palw_reporter_commit_message_v1(network_domain, &commitment, &reporter), PALW_REPORTER_COMMIT_MLDSA87_CONTEXT)
+            .filter(|signature| !signature.is_empty())?;
+    let object = PalwConsensusObjectV2::ReporterCommitted { commitment, reporter, signature };
+    crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).ok()?;
+    Some((commitment, object))
 }
 
 /// **U2 / B-4: how far a bond's posted collateral is below the producer floor** (S-SPEC §10a;
@@ -7611,6 +7919,32 @@ pub enum PalwStateV2Error {
     ClassNotAdmitting { class: Hash64, state: String },
     #[error("class {class} has {inflight} claims in flight against the registry's cap of {cap}")]
     ClassInflightCapped { class: Hash64, inflight: u32, cap: u32 },
+    /// **ADR-0152 §4-quater V2(a)**: the class needs a measured verification row (NM: its derived
+    /// deadline exceeds `window_receipt`, or it is held with `n_ctx > 8,192`) and none is active — no
+    /// claim of it is taken on any lane (the 2M row at testnet-12's launch, U-D1).
+    #[error(
+        "class {class} needs a measured verification row before it takes a claim: its derived deadline is {derived_daa} DAA, the chain states at most {open_daa} without a measurement (ADR-0152 §4-quater V2)"
+    )]
+    ClassDeadlineUnmeasured { class: Hash64, derived_daa: u64, open_daa: u64 },
+    /// **ADR-0152 §4-quater V2(b)**: the class's largest free-prompt run derives a deadline past
+    /// `window_receipt` and no measured row states it.
+    #[error(
+        "a free-prompt claim of class {class} needs a measured verification row: the class's largest run derives {derived_daa} DAA, the chain states at most {open_daa} without one (ADR-0152 §4-quater V2(b))"
+    )]
+    FreePromptDeadlineUnmeasured { class: Hash64, derived_daa: u64, open_daa: u64 },
+    /// **ADR-0152 §4-quater V2(c)**: the class's measured row prices this free-prompt claim past D_cap.
+    #[error(
+        "a free-prompt claim of class {class} measures {measured_daa} DAA against the cap of {cap_daa} (ADR-0152 §4-quater V2(c))"
+    )]
+    FreePromptDeadlineOverCap { class: Hash64, measured_daa: u64, cap_daa: u64 },
+    /// **ADR-0152 §4-quater V2(d)** (the review's L3): the claim's own deadline is long (past the
+    /// short challenge window) but the panel room does not hold its class to Final (K-1 keys on the
+    /// class's canonical job; a short class's long free-prompt run is the case) — its licence would
+    /// release the room while seats still replay to `H`.
+    #[error(
+        "a claim of class {class} derives {verify_daa} DAA, past the {hold_daa} DAA a class the panel room releases at licence may take (ADR-0152 §4-quater V2(d), K-1)"
+    )]
+    ClaimDeadlineOutlivesRoomHold { class: Hash64, verify_daa: u64, hold_daa: u64 },
     #[error(
         "the panel has no room for a claim of class {class}: {inflight_replay} of replay in flight against a budget of {budget} over {horizon_spans} spans"
     )]
@@ -7807,6 +8141,68 @@ impl PalwReporterCountersV1 {
     /// Both zero: the dormant value, which the R-core+ root block does not hash.
     pub fn is_zero(&self) -> bool {
         self.awarded_sompi == 0 && self.forgone_sompi == 0
+    }
+}
+
+/// **R-3/R-4 (P2-8): what a reporter's filer reads of ONE filing at the tip** — the rows the fold
+/// keeps for it, at the DAA the next block folds at, so the node commits, files, reveals and lets go
+/// by what the chain holds NOW rather than by what it sent: a commitment or a conviction a reorg took
+/// back reads as absent here, and the filer's next step is recomputed from that (re-send, or let the
+/// reward go). Built by [`palw_reporter_filing_read_v1`]; `object_gate` is the processor's (the
+/// object gate's verdict at that DAA on the one object the filer asked about — the filing's
+/// evidence, its signed commitment, or the court accusation it falls back to — asked only when the
+/// filer is about to spend a carrier on it). Node policy's read: nothing here decides what a block
+/// accepts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwReporterFilingReadV1 {
+    /// The DAA the virtual's next block folds at.
+    pub now_daa: u64,
+    /// `Params::palw_rcore_plus` is active at `now_daa`: objects 53/54 fold. Below it the fold
+    /// refuses both by name, and a filing goes straight to its evidence.
+    pub rcore_plus: bool,
+    /// `window_court`: how long a commitment no open reward guards stays rooted (the V3S-11 prune,
+    /// `sweep_reporter_commitments`) — the longest a filer may wait on its evidence before its
+    /// commitment is gone.
+    pub window_court: u64,
+    /// The reporter may root a new commitment: a bond `Active` at or above the floor
+    /// (`palw_bond_may_take_work_v2`, the rule `apply_reporter_committed` applies) holding fewer
+    /// than [`PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1`] open.
+    pub reporter_may_commit: bool,
+    /// The DAA the reporter's slot of the commitment was rooted at ([`PalwChainStateV2::reporter_commitment_of`]).
+    pub committed_daa: Option<u64>,
+    /// The conviction under the offence key, once consumed (`accepted_daa` is what the commitment
+    /// must precede, strictly; `kind` and `accused` say whose it is).
+    pub consumed: Option<crate::palw_offence_v1::PalwConsumedOffenceV1>,
+    /// The reward waiting out its reveal window under the key (R-4).
+    pub pending: Option<PalwPendingRewardV1>,
+    /// The award the sweep wrote under the key, until step 3d moves it (R-4).
+    pub awarded: Option<PalwPayoutV2>,
+    /// The processor's object gate at `now_daa` on the object asked about, when one was.
+    pub object_gate: Option<Result<(), String>>,
+}
+
+/// **[`PalwReporterFilingReadV1`] on a state** — every row read through the state's own accessors,
+/// the reporter's room through the rule the fold's `apply_reporter_committed` applies. Pure.
+pub fn palw_reporter_filing_read_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now_daa: u64,
+    offence_key: &Hash64,
+    commitment: &Hash64,
+    reporter: &PalwBondKeyV2,
+) -> PalwReporterFilingReadV1 {
+    let reporter_may_commit = state.bond(reporter).is_some_and(|bond| palw_bond_may_take_work_v2(bond, params.min_collateral_sompi()))
+        && state.reporter_open_commitments(reporter) < PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1;
+    PalwReporterFilingReadV1 {
+        now_daa,
+        rcore_plus: params.rcore_plus_active_at(now_daa),
+        window_court: params.window_court(),
+        reporter_may_commit,
+        committed_daa: state.reporter_commitment_of(commitment, reporter).map(|row| row.committed_daa),
+        consumed: state.consumed_offence(offence_key).cloned(),
+        pending: state.reward_pending(offence_key).copied(),
+        awarded: state.reporter_reward(offence_key).copied(),
+        object_gate: None,
     }
 }
 
@@ -11032,7 +11428,12 @@ impl PalwChainStateV2 {
                 PalwClaimPhaseV2::PanelBound { bound_daa } => {
                     expected.insert((
                         bound_daa
-                            .checked_add(params.receipt_window_for_claim_v1(self, &claim.class_id, bound_daa))
+                            .checked_add(params.receipt_window_for_claim_v1(
+                                self,
+                                &claim.class_id,
+                                crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                                bound_daa,
+                            ))
                             .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
                         *id,
                     ));
@@ -11044,9 +11445,8 @@ impl PalwChainStateV2 {
                     // The stored deadline may be LATER than licensed+window when a court cleared
                     // after the window had already passed (the re-arm rule). Membership by claim,
                     // with the stored daa at least the licensed floor, is the checkable fact.
-                    let floor = licensed_daa
-                        .checked_add(params.window_challenge_at(licensed_daa))
-                        .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+                    // §4-quater V4: the floor is the one helper's (`max(L + wc, H)` past the fence).
+                    let floor = palw_claim_final_floor_v1(self, params, id, claim, licensed_daa)?;
                     let stored = self
                         .deadlines
                         .iter()
@@ -12361,6 +12761,100 @@ impl PalwFoldReadV1<'_> {
         }
     }
 
+    /// **ADR-0152 §4-quater V2: may a claim of `class_id` and `shape` be taken at `now_daa`, as far as
+    /// its verification deadline decides?** Past `palw_class_verify_deadline` (at `now_daa`; below it
+    /// nothing is asked):
+    ///
+    /// * (a) an NM class ([`palw_class_needs_measured_row_v1`]) without a measured row active at
+    ///   `now_daa` is refused `ClassDeadlineUnmeasured` on every lane — the 2M row at testnet-12's
+    ///   launch (U-D1), attempt and free prompt alike;
+    /// * (b) without an active row, a free-prompt claim of a class whose largest run derives a deadline
+    ///   past `window_receipt` is refused `FreePromptDeadlineUnmeasured` (a class-level answer);
+    /// * (c) with an active row, a free-prompt claim whose measured `D` exceeds D_cap is refused
+    ///   `FreePromptDeadlineOverCap` — asked only where the claim's `work_leaves` are known
+    ///   (`per_claim`, the free-prompt arm), since the class gate carries none;
+    /// * (d) (the review's L3) a claim whose own `D` is long (past 120, so its `H` can outlive
+    ///   `L + 120`) on a class the panel room does NOT hold to Final ([`palw_panel_holds_to_final_v1`]:
+    ///   K-1 keys on the class's canonical job, which a short class's long free-prompt run does not
+    ///   move) is refused `ClaimDeadlineOutlivesRoomHold` — the licence would release the room while
+    ///   seats still replay. Refused here rather than making K-1 read the free-prompt profile: the
+    ///   room's hold stays a function of the registry row. Asked wherever the claim's `D` is known
+    ///   (an attempt, the free-prompt arm, or a class with no row).
+    ///
+    /// Every other testnet-12 genesis class passes and behaves as it did: the floor (no registry row,
+    /// no class-derived term) and the 8k row (`D` 15, its largest free-prompt run 75).
+    ///
+    /// **TODO(ADR-0153, before any MoE registration — the review's L1): V2c, the paging predicate**
+    /// (§4-quater.4 NM (iii), refused at registration beside `verify_class_admission_v9` as V2b), is
+    /// not here. When it lands it must key on `artifact_bytes` — the bytes a seat pages — and NOT on
+    /// `working_set_bytes`, which for a mixture counts only the resident experts and would call a
+    /// paging MoE class resident. **And node N-8** (readiness self-selection) must compare a host's
+    /// `m·T` with the claim's `receipt_window_daa` (`W_r = max(window_receipt, D)`), never with the
+    /// raw `verify_daa`: for a short class `D` (15 for the 8k row) is far below the 600 DAA the chain
+    /// actually gives a seat, and a node reading `D` would deselect itself from classes it can serve.
+    fn check_class_verify_admits_v1(
+        &self,
+        class_id: &Hash64,
+        now_daa: u64,
+        shape: crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1,
+        per_claim: bool,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_class_verify_deadline_v1::{PALW_CLASS_VERIFY_CAP_DAA_V1, PalwClaimVerifyShapeV1, palw_derived_verify_daa_v1};
+        if !self.params.class_verify_deadline_active_at(now_daa) {
+            return Ok(());
+        }
+        let open_daa = self.params.window_receipt();
+        match self.params.class_verify_row_at(class_id, now_daa) {
+            Some(row) => {
+                if per_claim && let PalwClaimVerifyShapeV1::FreePrompt { .. } = shape {
+                    let raw = row.raw_daa(row.positions_of(shape));
+                    if raw > u128::from(PALW_CLASS_VERIFY_CAP_DAA_V1) {
+                        return Err(PalwStateV2Error::FreePromptDeadlineOverCap {
+                            class: *class_id,
+                            measured_daa: u64::try_from(raw).unwrap_or(u64::MAX),
+                            cap_daa: PALW_CLASS_VERIFY_CAP_DAA_V1,
+                        });
+                    }
+                }
+            }
+            None => {
+                if palw_class_needs_measured_row_v1(self.params, self.state, class_id) {
+                    let derived_daa = self
+                        .state
+                        .model_lifecycle(class_id)
+                        .map(|row| palw_derived_verify_daa_v1(row.work.verification_ccu))
+                        .unwrap_or(0);
+                    return Err(PalwStateV2Error::ClassDeadlineUnmeasured { class: *class_id, derived_daa, open_daa });
+                }
+                if let PalwClaimVerifyShapeV1::FreePrompt { .. } = shape
+                    && let Some(derived_daa) = palw_class_fp_verify_daa_v1(self.state, class_id)
+                    && derived_daa > open_daa
+                {
+                    return Err(PalwStateV2Error::FreePromptDeadlineUnmeasured { class: *class_id, derived_daa, open_daa });
+                }
+            }
+        }
+        // (d) The room must hold what the claim's horizon can outlive. `D` is known for an attempt, in
+        // the free-prompt arm (`per_claim`), and on the derived branch (a class-level free-prompt `D`);
+        // the class gate's free-prompt shape under a measured row carries no size, and its arm asks.
+        let d_known = matches!(shape, PalwClaimVerifyShapeV1::Attempt)
+            || per_claim
+            || self.params.class_verify_row_at(class_id, now_daa).is_none();
+        if d_known {
+            let verify_daa = self.params.claim_verify_daa_v1(self.state, class_id, shape, now_daa);
+            if verify_daa > crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_LONG_D_DAA_V1
+                && !palw_panel_holds_to_final_v1(self.params, self.state, class_id)
+            {
+                return Err(PalwStateV2Error::ClaimDeadlineOutlivesRoomHold {
+                    class: *class_id,
+                    verify_daa,
+                    hold_daa: crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_LONG_D_DAA_V1,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// `incoming` is the claim asked about ([`PalwGatedClaimV1`]): an attempt — every caller below
     /// the fence — or, past it, a free-prompt commitment of so many quanta (2026-09-24 DoS audit
     /// #11). Past the fence the rate room counts it POOLED with its class's claims in flight; the
@@ -12373,6 +12867,16 @@ impl PalwFoldReadV1<'_> {
         if let Some(state) = self.class_lifecycle_refusal(class_id) {
             return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state });
         }
+        // §4-quater V2: after the lifecycle, before the room — a class whose deadline the chain
+        // cannot state takes no claim on any lane, whatever room it has. The gate carries no
+        // free-prompt claim's size, so the per-claim measured cap (V2(c)) is the free-prompt arm's.
+        let shape = match incoming {
+            PalwGatedClaimV1::Attempt => crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+            PalwGatedClaimV1::FreePrompt { .. } => {
+                crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 0 }
+            }
+        };
+        self.check_class_verify_admits_v1(class_id, now_daa, shape, false)?;
         // What the lifecycle let through without a row to read — the base class, and a class
         // without a row below the work target — has no room to check either.
         if *class_id == self.params.base_class_id() {
@@ -12408,8 +12912,10 @@ impl PalwFoldReadV1<'_> {
             // second.
             // C7 is read through `palw_rcore_class_is_c7_v1` — the window rule united with the
             // conservative list, one predicate with the escrow's release (the S review's L2; the
-            // list is empty below `palw_rcore_plus`, so this is the window rule there).
-            if audited && !exempt && palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
+            // list is empty below `palw_rcore_plus`, so this is the window rule there) — and past
+            // `palw_class_verify_deadline` a long-D class is held beside it (§4-quater K-1,
+            // `palw_panel_holds_to_final_v1`; no genesis class is long-D but the closed 2M row).
+            if audited && !exempt && palw_panel_holds_to_final_v1(self.params, self.state, class_id) {
                 let inflight = self.model_registry_inflight(class_id);
                 if (inflight as u64).saturating_add(whole) > row.profile.max_inflight_claims as u64 {
                     return Err(PalwStateV2Error::ClassInflightCapped {
@@ -12547,8 +13053,8 @@ impl PalwFoldReadV1<'_> {
     ) -> (u64, u128, u128, u64) {
         let rate = self.panel_rate_v1(class_id, row, fold, now_daa, None);
         let mut room = rate.room();
-        // C7 through the one predicate (the S review's L2).
-        if palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
+        // C7 through the one predicate (the S review's L2), with §4-quater K-1's long-D classes.
+        if palw_panel_holds_to_final_v1(self.params, self.state, class_id) {
             room = room.min((row.profile.max_inflight_claims as u128).saturating_sub(rate.owed).min(u64::MAX as u128) as u64);
         }
         (room, rate.inflight_replay(), rate.per_span.saturating_mul(rate.window as u128), rate.window)
@@ -12671,6 +13177,13 @@ impl PalwFoldReadV1<'_> {
     /// registry, on the base class, on a class without a row, and where the room does not govern
     /// (`work_target_active && fold.governs_at(now)`, the gate's own condition — inside the
     /// registry's grace the static cap bounds the class and no share is read).
+    ///
+    /// **TODO(ADR-0152 §4-quater K-1 — must fix before any long-D class is accepted):** `c_class`
+    /// keys on C7 ([`palw_rcore_class_is_c7_v1`]) and not on K-1's hold,
+    /// [`palw_panel_holds_to_final_v1`] (C7 ∪ long-D past `palw_class_verify_deadline`), so a long-D
+    /// class outside C7 would get the rate-derived share while its room holds it to Final by its
+    /// static cap. No testnet-12 class is long-D and open today (the 2M row is C7 and closed until
+    /// its measured row, U-D1), so nothing reads the difference yet; no behaviour change here.
     fn bond_class_share_v1(&self, class_id: &Hash64, now_daa: u64) -> Option<u64> {
         if !self.params.rcore_plus_active_at(now_daa) {
             return None;
@@ -12820,6 +13333,12 @@ pub fn palw_bond_class_unlicensed_v1(state: &PalwChainStateV2, class_id: &Hash64
 /// The ONE decision: the fold's `panel_rate_v1` / `panel_room_v1` and op 186
 /// (`palw_model_registry_room_ready_v1`) all ask it, so they cannot disagree about which classes
 /// count this way (T91).
+///
+/// **TODO(ADR-0152 §4-quater K-1 — must fix before any long-D class is accepted):** "held to Final"
+/// here is the window rule (`palw_panel_held_to_final_v1` of `palw_work_target_v1`), not K-1's
+/// [`palw_panel_holds_to_final_v1`] (C7 ∪ long-D past `palw_class_verify_deadline`), so a long-D
+/// class the room holds to Final would still count `ready_eff`. No testnet-12 class is long-D and
+/// open today (the 2M row is C7 and closed until its measured row, U-D1); no behaviour change here.
 pub fn palw_panel_room_ready_eff_terms_v1(
     params: &PalwStateParamsV2,
     row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
@@ -12981,6 +13500,13 @@ pub fn palw_model_carrier_payout_rows_v1(tx: &crate::tx::Transaction) -> Option<
 /// applies): those rows are the margin for the claim and seat rows that block may write, which the
 /// market never refuses, so that what a node mined as fitting is not later refused for want of a
 /// refund row by the acceptance filter, which counts them.
+///
+/// **Past `Params::palw_rcore_plus` (ADR-0152 V-2/V-7; phase2-plan F5) those claim and seat rows
+/// no longer arrive at step 2**: a `Final` writes a vesting row, and step 3d writes the matured legs
+/// AFTER every object — exempt from the cap (M-10) and bounded by V-7's budget, so a committed queue
+/// holds at most the cap plus one drain. The room stays conservative for the same arithmetic: the
+/// drain's rows are still not credited, and a tip queue above the cap gives zero. Doc only; the rule
+/// is unchanged.
 pub fn palw_model_payout_room_v1(state: &PalwChainStateV2) -> usize {
     PALW_V2_MAX_PENDING_PAYOUTS.saturating_sub(state.pending_payouts.len())
 }
@@ -13483,8 +14009,9 @@ fn palw_panel_owed_v1(
     let per_job = params.fp_quanta_per_canonical_job as u64;
     // A class without a lifecycle row is never held: it puts no term on the budget, and the gate
     // does not read its room. C7 is read through the one predicate the escrow's release reads
-    // (`palw_rcore_class_is_c7_v1`, the S review's L2; the conservative list is empty below the fence).
-    let held_to_final = |id: &Hash64| state.model_lifecycles.contains_key(id) && palw_rcore_class_is_c7_v1(params, state, id);
+    // (`palw_rcore_class_is_c7_v1`, the S review's L2; the conservative list is empty below the fence),
+    // with §4-quater K-1's long-D classes past `palw_class_verify_deadline` (`palw_panel_holds_to_final_v1`).
+    let held_to_final = |id: &Hash64| state.model_lifecycles.contains_key(id) && palw_panel_holds_to_final_v1(params, state, id);
     // (attempts, free-prompt claims, free-prompt quanta), pooled per class.
     let mut pooled: BTreeMap<Hash64, (u64, u64, u64)> = BTreeMap::new();
     for (id, tally) in index.iter().filter(|(id, _)| **id != base) {
@@ -13628,8 +14155,8 @@ pub fn palw_panel_room_read_v1(
     };
     let rate = PalwPanelRateV1::read(class_id, per_span, row.profile.verification_window_spans as u64, claim_replay, owed, terms);
     let room = rate.room();
-    // C7 through the one predicate (the S review's L2).
-    if palw_rcore_class_is_c7_v1(params, state, class_id) {
+    // C7 through the one predicate (the S review's L2), with §4-quater K-1's long-D classes.
+    if palw_panel_holds_to_final_v1(params, state, class_id) {
         room.min((row.profile.max_inflight_claims as u128).saturating_sub(rate.owed).min(u64::MAX as u128) as u64)
     } else {
         room
@@ -14707,10 +15234,57 @@ impl<'a> TransitionBuilder<'a> {
                 if resumed != claim {
                     self.write_claim(claim_id, Some(resumed));
                 }
+                // §4-quater V6: a long-D claim's pause moves `H` too — before the re-arm reads it.
+                self.credit_verify_pause_v6(claim_id, since, now_daa);
             }
             self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
         }
         Ok(())
+    }
+
+    /// **ADR-0152 §4-quater V6: a seat-DA pause is returned to a long-D claim's verification
+    /// horizon.** DA-5 credits the pause to the phase's anchor — `bound_daa` of a `PanelBound` claim,
+    /// `licensed_daa` of a `ReceiptLicensed` one — but `H(c) = B* + D + 1` counts from the rooted
+    /// panel bound, which DA-5 never moves: a seat that could only get the producer's material through
+    /// the DA court would lose the pause from its `D`, and a licensed claim could `Final` before that
+    /// seat finished replaying (K31, red-team F5). So when the claim's last seat session closes, past
+    /// the fence and for a claim whose `D(c)` is long (past 120), `panels[c].bound_daa` is advanced by
+    /// the SAME credit ([`crate::palw_da_rcore_v1::palw_da_pause_credit_v1`] from `paused_since` to
+    /// `now`). An existing rooted field, written through `write_panel` with its delta entry: no new
+    /// state. For a `PanelBound` claim the rooted bound stays equal to the phase's shifted bound.
+    ///
+    /// Long-D only: for `D ≤ 120` DA-5's `licensed_daa` shift already leaves at least the whole
+    /// challenge window after the disclosure, and a short claim's panel bound — which the receipt
+    /// pool and the supplementary door read — stays what every testnet-12 genesis class has today. `D`
+    /// is the claim's own (a free-prompt claim's run included), judged at the bound it is credited
+    /// from; the credit only moves the bound forward, so the fence and any measured row that priced
+    /// the claim still price it.
+    ///
+    /// **Receipts signed before the shift no longer verify** (`signed_daa < bound_daa`): every seat
+    /// re-signs for the new bound, which is a new duty key on the node. The node must therefore keep a
+    /// seat's replay result per (claim, job) — N-2's resumable replay — so a re-sign never costs a
+    /// second replay (the review's INFO; a flag-day item: no launch class is long-D).
+    fn credit_verify_pause_v6(&mut self, claim_id: Hash64, paused_since: u64, now_daa: u64) {
+        let Some(panel) = self.state.panels.get(&claim_id).cloned() else { return };
+        if !self.params.class_verify_deadline_active_at(panel.bound_daa) {
+            return;
+        }
+        let Some(claim) = self.state.claims.get(&claim_id) else { return };
+        // A `Provisional` claim (redrawn) still names its old panel until the next bind replaces it;
+        // there is no horizon to credit until then.
+        if !matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+            return;
+        }
+        let shape = crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim);
+        if self.params.claim_verify_daa_v1(&self.state, &claim.class_id, shape, panel.bound_daa)
+            <= crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_LONG_D_DAA_V1
+        {
+            return;
+        }
+        let credited = crate::palw_da_rcore_v1::palw_da_pause_credit_v1(panel.bound_daa, paused_since, now_daa);
+        if credited != panel.bound_daa {
+            self.write_panel(claim_id, Some(PalwPanelStateV2 { bound_daa: credited, ..panel }));
+        }
     }
 
     /// **DL-1 re-armed from the record**: the claim's one deadline, disarmed and re-derived by
@@ -15458,7 +16032,10 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
             return;
         }
-        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
+        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(
+            self.valid_lock_anchor_v1(&claim_id, now_daa),
+            self.params.window_court,
+        );
         self.write_slashable_lock(
             (seat, claim_id),
             Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
@@ -15470,6 +16047,19 @@ impl<'a> TransitionBuilder<'a> {
                 segments,
             }),
         );
+    }
+
+    /// **§4-quater V5: the DAA a `Valid` lock taken at `now_daa` on `claim_id` is dated from** —
+    /// `max(now, H(c))`, so a lock written at licence (or by a supplementary receipt) stays live until
+    /// `H + window_court`: a conviction an honest seat can only file once its replay finishes still
+    /// finds the lock. Below the fence `H` is `None` and this is `now_daa`, byte for byte. The lock
+    /// written at Final (`persist_panel_liability`) is dated from `F ≥ H` already.
+    fn valid_lock_anchor_v1(&self, claim_id: &Hash64, now_daa: u64) -> u64 {
+        self.state
+            .claims
+            .get(claim_id)
+            .and_then(|claim| palw_claim_verify_horizon_v1(&self.state, self.params, claim_id, claim))
+            .map_or(now_daa, |horizon| now_daa.max(horizon))
     }
 
     /// [`PalwFoldReadV1::panel_valid_lock_required`], on this fold's inputs.
@@ -15711,7 +16301,10 @@ impl<'a> TransitionBuilder<'a> {
         if available < required {
             return Err(PalwStateV2Error::SeatValidLockRefused { seat, claim: claim_id, required, available });
         }
-        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
+        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(
+            self.valid_lock_anchor_v1(&claim_id, now_daa),
+            self.params.window_court,
+        );
         self.write_slashable_lock(
             (seat, claim_id),
             Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
@@ -17852,6 +18445,17 @@ impl<'a> TransitionBuilder<'a> {
         self.read().check_class_admits_claim(class_id, now_daa, incoming)
     }
 
+    /// [`PalwFoldReadV1::check_class_verify_admits_v1`] (§4-quater V2), on this fold's inputs.
+    fn check_class_verify_admits_v1(
+        &self,
+        class_id: &Hash64,
+        now_daa: u64,
+        shape: crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1,
+        per_claim: bool,
+    ) -> Result<(), PalwStateV2Error> {
+        self.read().check_class_verify_admits_v1(class_id, now_daa, shape, per_claim)
+    }
+
     /// ADR-0152 T-2(a)'s per-bond share (S-6), past `Params::palw_rcore_plus` only — see
     /// [`PalwFoldReadV1::check_bond_class_share`].
     fn check_bond_class_share(&self, bond: &PalwBondKeyV2, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
@@ -18208,7 +18812,12 @@ impl<'a> TransitionBuilder<'a> {
                     // through the same helper the deadline is armed from, so the verdict and the
                     // deadline cannot disagree.
                     window_fits_receipt: (profile.verification_window_spans as u64).saturating_mul(fold.span_daa.max(1))
-                        <= self.params.receipt_window_for_claim_v1(&self.state, class_id, ctx.daa_score),
+                        <= self.params.receipt_window_for_claim_v1(
+                            &self.state,
+                            class_id,
+                            crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                            ctx.daa_score,
+                        ),
                     span_stable: (!utilization_gates || utilization < 1_000)
                         && row.probes_failed_this_span == 0
                         && ready >= profile.required_ready_seats,
@@ -21317,21 +21926,117 @@ pub fn palw_v2_object_licenses_claim_v1(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> bool {
+    palw_v2_licensed_state_v1(
+        base,
+        params,
+        ctx,
+        object,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )
+    .is_some()
+}
+
+/// The one fold behind [`palw_v2_object_licenses_claim_v1`] and [`palw_v2_licence_backed_seats_v1`]:
+/// the claim and the state `object` leaves, when it licenses that claim on `base`.
+#[allow(clippy::too_many_arguments)]
+fn palw_v2_licensed_state_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Option<(Hash64, PalwChainStateV2)> {
     let claim = match object {
         PalwConsensusObjectV2::ReceiptLicensed { claim, .. }
         | PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. }
         | PalwConsensusObjectV2::OptimisticLicensed { claim, .. } => *claim,
-        _ => return false,
+        _ => return None,
     };
     // ADR-0152 S-SPEC §3.4 step 6: past `palw_rcore_plus` only a `PanelBound → ReceiptLicensed`
     // transition is a licence for the assemblers — a supplementary set on a licensed claim is not.
     if params.rcore_plus_active_at(ctx.daa_score)
         && !base.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }))
     {
-        return false;
+        return None;
     }
-    palw_v2_apply_one_object_v1(base, params, ctx, object, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)
-        .is_ok_and(|next| next.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })))
+    palw_v2_apply_one_object_v1(
+        base,
+        params,
+        ctx,
+        object,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )
+    .ok()
+    .filter(|next| next.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })))
+    .map(|next| (claim, next))
+}
+
+/// **Which carried `Valid`s a licence object is licensed on, as the fold says** (ADR-0152 SR-6;
+/// Phase 2 P2-5, the assemblers' half).
+///
+/// Past `Params::palw_rcore_plus` a licence set whose `Valid`s include an unbacked signer — one whose
+/// seat cannot post `lock_{max(k,2)}` over its duty — licenses on its BACKED SUBSET when that subset
+/// still meets the door's rule, and is inert otherwise (`license_rcore_v1`); the unbacked `Valid`
+/// gets no lock, no credit and no served bit. `Some(seats)` when `object` licenses its claim on `base`
+/// (the fold and the answer of [`palw_v2_object_licenses_claim_v1`]): the carried `Valid` signers the
+/// licence locks, in carried order. That is the backed subset exactly — every backed signer locks
+/// (or keeps the lock that backed it: a seat already locked on the claim is backed by that lock) and
+/// an unbacked one never does — read off the state the fold leaves, so this is the fold's subset and
+/// not a second copy of SR-6's price arithmetic. `None` when the object licenses nothing, and below
+/// the fence, where a licence is the whole set's or nothing (`receipt_set_is_backed`) and
+/// [`palw_v2_object_licenses_claim_v1`] is the whole answer.
+///
+/// Node policy: the V1 and coverage assemblers read it to offer the backed subset (SR-6: they "skip
+/// unbacked candidates"), never what a block accepts.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_licence_backed_seats_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Option<Vec<PalwBondKeyV2>> {
+    if !params.rcore_plus_active_at(ctx.daa_score) {
+        return None;
+    }
+    let (claim, next) = palw_v2_licensed_state_v1(
+        base,
+        params,
+        ctx,
+        object,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )?;
+    let valid = |receipt: &crate::palw_panel_v2::PalwSeatReceiptV2| {
+        matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid).then_some(receipt.seat_bond)
+    };
+    let carried: Vec<PalwBondKeyV2> = match object {
+        PalwConsensusObjectV2::ReceiptLicensed { receipts, .. } => receipts.iter().filter_map(valid).collect(),
+        PalwConsensusObjectV2::ReceiptLicensedV2 { receipts, .. } | PalwConsensusObjectV2::OptimisticLicensed { receipts, .. } => {
+            receipts.iter().filter_map(|signed| valid(&signed.receipt)).collect()
+        }
+        _ => return None,
+    };
+    Some(carried.into_iter().filter(|seat| next.slashable_locks.contains_key(&(*seat, claim))).collect())
 }
 
 /// **What one supplementary set does to its licensed claim, as the fold says** (ADR-0152 SR-10, Q-5,
@@ -22068,9 +22773,8 @@ fn rearm_claim_after_court_close(
     if !builder.state.open_courts_by_claim.contains_key(&claim_id)
         && let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase
     {
-        let floor = licensed_daa
-            .checked_add(builder.params.window_challenge_at(licensed_daa))
-            .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+        // §4-quater V4: the one licensed floor (`max(L + wc, H)` past the fence).
+        let floor = palw_claim_final_floor_v1(&builder.state, builder.params, &claim_id, claim, licensed_daa)?;
         builder.arm_deadline(floor.max(ctx.daa_score), claim_id);
     }
     Ok(())
@@ -22316,6 +23020,8 @@ fn close_da_session_refuted_v2(
     debug_assert_eq!(paused, ctx.daa_score.saturating_sub(accused_daa), "the pause is the session's own length");
     let restored = resume_claim_after_da_session_v2(claim_id, claim, resumed, paused)?;
     builder.write_claim(claim_id, Some(restored.clone()));
+    // §4-quater V6 on the ADR-0062 court (below `palw_rcore_plus`), before the re-arm reads `H`.
+    builder.credit_verify_pause_v6(claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score);
     builder.disarm_deadline(claim_id);
     rearm_claim_after_da_session(builder, ctx, claim_id, &restored)
 }
@@ -22736,7 +23442,12 @@ fn rearm_claim_after_da_session(
         }
         PalwClaimPhaseV2::PanelBound { bound_daa } => {
             let at = bound_daa
-                .checked_add(builder.params.receipt_window_for_claim_v1(&builder.state, &claim.class_id, bound_daa))
+                .checked_add(builder.params.receipt_window_for_claim_v1(
+                    &builder.state,
+                    &claim.class_id,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                    bound_daa,
+                ))
                 .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
             builder.arm_deadline(at, claim_id);
         }
@@ -22745,9 +23456,9 @@ fn rearm_claim_after_da_session(
         // — the same rule `rearm_claim_after_court_close` applies, so the two cannot drift.
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
             if !builder.state.open_courts_by_claim.contains_key(&claim_id) {
-                let floor = licensed_daa
-                    .checked_add(builder.params.window_challenge_at(licensed_daa))
-                    .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+                // §4-quater V4: the one licensed floor (`max(L + wc, H)` past the fence) — the DA
+                // close was the site the draft missed (red-team F1).
+                let floor = palw_claim_final_floor_v1(&builder.state, builder.params, &claim_id, claim, licensed_daa)?;
                 builder.arm_deadline(floor.max(ctx.daa_score), claim_id);
             }
         }
@@ -26409,11 +27120,12 @@ fn apply_object(
             let mut bound = claim;
             bound.phase = PalwClaimPhaseV2::PanelBound { bound_daa: ctx.daa_score };
             let class_id = bound.class_id;
+            let shape = crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(&bound);
             builder.write_claim(*claim_id, Some(bound));
             builder.disarm_deadline(*claim_id);
             let deadline = ctx
                 .daa_score
-                .checked_add(builder.params.receipt_window_for_claim_v1(&builder.state, &class_id, ctx.daa_score))
+                .checked_add(builder.params.receipt_window_for_claim_v1(&builder.state, &class_id, shape, ctx.daa_score))
                 .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
             builder.arm_deadline(deadline, *claim_id);
         }
@@ -27479,6 +28191,8 @@ fn apply_object(
             debug_assert_eq!(paused, ctx.daa_score.saturating_sub(accused_daa), "the pause is the session's own length");
             let restored = resume_claim_after_da_session_v2(*claim_id, &claim, *resumed, paused)?;
             builder.write_claim(*claim_id, Some(restored.clone()));
+            // §4-quater V6 on the ADR-0062 court (below `palw_rcore_plus`), before the re-arm reads `H`.
+            builder.credit_verify_pause_v6(*claim_id, ctx.daa_score.saturating_sub(paused), ctx.daa_score);
             // The session's own clock goes with the session — a claim holds at most one deadline,
             // and leaving the disclose entry behind would sweep a claim that is no longer disputed.
             builder.disarm_deadline(*claim_id);
@@ -27551,6 +28265,16 @@ fn apply_object(
             // byte-identical.
             // Asked for one quantum here — the least a commitment carries, so the least room it can
             // need — and for the priced quanta below.
+            // **ADR-0152 §4-quater V2, on this lane by name**: an NM class (the 2M row at launch) takes
+            // no free-prompt claim, a class whose largest run the chain cannot state takes none
+            // unmeasured, and a measured class takes none past D_cap — asked before anything is
+            // priced, with this claim's own `work_leaves`, and whether or not the gate below runs.
+            builder.check_class_verify_admits_v1(
+                class_id,
+                ctx.daa_score,
+                crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::FreePrompt { work_leaves: *work_leaves },
+                true,
+            )?;
             if builder.extras.audit_2026_09_23_active {
                 builder.check_class_admits_claim(class_id, ctx.daa_score, PalwGatedClaimV1::FreePrompt { quanta: 1 })?;
             }
@@ -33254,7 +33978,12 @@ pub(crate) mod tests {
             let off = p.clone();
             for class in [heavy, light, unrowed] {
                 assert_eq!(
-                    off.receipt_window_for_claim_v1(&state, &class, FENCE + 1),
+                    off.receipt_window_for_claim_v1(
+                        &state,
+                        &class,
+                        crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                        FENCE + 1
+                    ),
                     40,
                     "below the fence every class is judged by the one global window, whatever it derives"
                 );
@@ -33262,23 +33991,51 @@ pub(crate) mod tests {
 
             let on = p.with_class_receipt_window(FENCE, SPAN).expect("a ten-DAA span is a legal span");
             assert_eq!(
-                on.receipt_window_for_claim_v1(&state, &heavy, FENCE - 1),
+                on.receipt_window_for_claim_v1(
+                    &state,
+                    &heavy,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                    FENCE - 1
+                ),
                 40,
                 "a claim bound one DAA below the fence keeps the window it was bound under"
             );
             assert_eq!(
-                on.receipt_window_for_claim_v1(&state, &heavy, FENCE),
+                on.receipt_window_for_claim_v1(
+                    &state,
+                    &heavy,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                    FENCE
+                ),
                 1_399 * SPAN,
                 "past it the heavy class is judged by the window its own graph derives"
             );
-            assert!(on.receipt_window_for_claim_v1(&state, &heavy, FENCE) > off.window_receipt(), "which is the point: wider");
+            assert!(
+                on.receipt_window_for_claim_v1(
+                    &state,
+                    &heavy,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                    FENCE
+                ) > off.window_receipt(),
+                "which is the point: wider"
+            );
             assert_eq!(
-                on.receipt_window_for_claim_v1(&state, &light, FENCE),
+                on.receipt_window_for_claim_v1(
+                    &state,
+                    &light,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                    FENCE
+                ),
                 40,
                 "a class already inside the global deadline is not TIGHTENED to its own three spans"
             );
             assert_eq!(
-                on.receipt_window_for_claim_v1(&state, &unrowed, FENCE),
+                on.receipt_window_for_claim_v1(
+                    &state,
+                    &unrowed,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+                    FENCE
+                ),
                 40,
                 "a class the registry holds no row for has no derived window, so it keeps the global one"
             );
@@ -61497,6 +62254,548 @@ pub(crate) mod tests {
             assert_eq!((row.kind, row.claim_id), (PalwOffenceKindV1::DaDefault, claim_id));
             assert_eq!(b.state.withholding_strikes(&producer), Some(&[3_104u64][..]), "S1 strikes");
             assert_eq!(reward_calls(), vec![(3_104, key, 0, PalwConvictionBasisV1::DaDefault { accuser: bond_key(9) })]);
+        }
+    }
+
+    /// **ADR-0152 §4-quater: class-derived verification deadlines, at the builder and the pure
+    /// functions** — the pieces the testnet-12 fold suite (`t12_class_verify_deadline`) cannot reach
+    /// without a real DA answer (a refutation needs `t46`'s real-claim harness): the DA-close re-arm
+    /// and V6 on a hand-made licensed claim, V5's lock, the NM predicate's held branch, and the one
+    /// Final-floor producer (T-D0).
+    mod class_verify_deadline {
+        use super::*;
+        use crate::palw_class_verify_deadline_v1::{
+            PALW_CLASS_VERIFY_CAP_DAA_V1, PALW_CLASS_VERIFY_LONG_D_DAA_V1, PalwClaimVerifyShapeV1, PalwClassVerifyRowV1,
+            palw_derived_verify_daa_v1,
+        };
+        use crate::palw_da_rcore_v1::{PalwDaClaimV1, PalwDaSessionV1, PalwDaStageV1, PalwDaUnitV1};
+        use crate::palw_model_registry_v1::{PalwDerivedProfileV1, PalwModelLifecycleRowV1, PalwModelWorkV1};
+
+        const CLASS: u64 = 0xDC;
+        /// testnet-12's windows: bind 600, receipt 600, challenge 1,200 — 120 past the short fence,
+        /// armed at 0 — court 3,000.
+        const WC: u64 = PALW_SHORT_CHALLENGE_WINDOW_DAA_V1;
+
+        /// testnet-12's bundle in miniature: its four windows, the short challenge window and
+        /// §11.3 (with the 1-DAA lane span) at genesis, option A and R-core+ armed, and the fence
+        /// armed at 0 (or not: the fence-off twin).
+        fn t12_like(armed: bool) -> PalwStateParamsV2 {
+            PalwStateParamsV2::new(100, 600, 600, 1_200, 3_000, 1_000, h64(1), 4, 1000, 100, 1000, 600)
+                .unwrap()
+                .with_short_challenge_window_from_daa(Some(0))
+                .with_class_receipt_window(0, 1)
+                .unwrap()
+                .with_escrow_backed_exposure_from_daa(Some(0))
+                .with_rcore_plus_mirrors(Some(0), 12_900, Vec::new())
+                .with_class_verify_deadline(armed.then_some(0), Vec::new())
+        }
+
+        /// The `verification_ccu` whose derived deadline is `d` (a multiple of 5): `(d/5 − 1)` reference
+        /// half-spans of 1.2·10¹² MAC-eq.
+        fn ccu_for(d: u64) -> u128 {
+            let ccu = u128::from(d / 5 - 1) * 1_200_000_000_000;
+            assert_eq!(palw_derived_verify_daa_v1(ccu), d, "the fixture's ccu derives {d}");
+            ccu
+        }
+
+        /// An `Active` row whose canonical job derives `d` DAA (its spans are the registry's own).
+        fn row(d: u64, max_inflight: u32) -> PalwModelLifecycleRowV1 {
+            PalwModelLifecycleRowV1 {
+                state: crate::palw_model_registry_v1::PalwModelLifecycleV1::Active,
+                work: PalwModelWorkV1 {
+                    verification_ccu: ccu_for(d),
+                    economic_ccu_per_claim: 1,
+                    ops_supported: true,
+                    ..Default::default()
+                },
+                profile: PalwDerivedProfileV1 {
+                    verification_window_spans: (d / 5) as u32,
+                    max_inflight_claims: max_inflight,
+                    ..Default::default()
+                },
+                since_span: 0,
+                probes_passed: 0,
+                probes_failed: 0,
+                probes_passed_this_span: 0,
+                probes_failed_this_span: 0,
+                ready_seats: 0,
+                inflight_claims: 0,
+                utilization_permille: 0,
+                admission_milli: 0,
+                cap_utilization_permille: 0,
+                priced_share_permille: 0,
+            }
+        }
+
+        fn claim(phase: PalwClaimPhaseV2) -> PalwClaimStateV2 {
+            PalwClaimStateV2 {
+                source: PalwClaimSourceV2::Attempt,
+                class_id: h64(CLASS),
+                bond: bond_key(1),
+                pwu: 10,
+                accepted_daa: 1_000,
+                rebound_daa: None,
+                accepted_blue_score: 1_000,
+                accepted_block: block(1_000),
+                trace_root: h64(31),
+                output_root: h64(32),
+                execution_root: h64(41),
+                trace_chunk_count: 4,
+                trace_retention_daa: 6_400,
+                reserved: 50,
+                immature_contribution: 0,
+                escrowed_reward: 0,
+                work_leaves: 0,
+                work_id: None,
+                phase,
+                rights_reserved: 0,
+                job_identity: Hash64::default(),
+                rcore: PalwClaimRcoreV1::default(),
+            }
+        }
+
+        fn panel(bound_daa: u64) -> PalwPanelStateV2 {
+            PalwPanelStateV2 {
+                anchor: h64(0xA0),
+                seats: (2..=6).map(|n| PalwPanelSeatV2 { bond: bond_key(n), operator_id: op_id(n) }).collect(),
+                bound_daa,
+            }
+        }
+
+        /// A state holding one class row of deadline `d` and one claim `h64(0xC0)` in `phase`, bound at
+        /// `bound`.
+        fn state(d: u64, phase: PalwClaimPhaseV2, bound: u64) -> PalwChainStateV2 {
+            let mut s = PalwChainStateV2::genesis();
+            s.set_model_lifecycle_for_tests(h64(CLASS), row(d, 2));
+            s.claims.insert(h64(0xC0), claim(phase));
+            s.panels.insert(h64(0xC0), panel(bound));
+            s
+        }
+
+        /// A dense Qwen2.5-A16 profile of `n_ctx`, small enough to derive in a test.
+        fn profile(n_ctx: u32) -> crate::palw_step::PalwShapeProfileV3 {
+            crate::palw_qwen25_profile::qwen25_a16_profile_v1(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+                layer_count: 2,
+                hidden_dim: 64,
+                ffn_dim: 128,
+                attn_heads: 2,
+                attn_kv_heads: 1,
+                attn_head_dim: 32,
+                vocab_size: 64,
+                n_ctx,
+                n_threads: 1,
+                rms_eps_q: 1,
+                tile_len: 32,
+            })
+            .expect("a small dense profile projects")
+        }
+
+        /// **T-D9 / V1 / V3: the units.** Past the fence a class's `D` is its registry window counted
+        /// in 5-DAA reference spans and the receipt window is `max(window_receipt, D)`: a 30-span class
+        /// (D 150) keeps 600, the 2M row's 2,799 spans are 13,995 DAA, not the 2,799 the 1-DAA lane span
+        /// gave it. Below the fence (the twin) both are §11.3's product at the lane's span, verbatim —
+        /// and with testnet-11's 5-DAA span that product is already `spans × 5`. A class with no row
+        /// has no class-derived term.
+        #[test]
+        fn td9_v1_v3_the_deadline_is_counted_in_reference_spans() {
+            let (on, off) = (t12_like(true), t12_like(false));
+            let mut s = PalwChainStateV2::genesis();
+            let (thirty, two_m, unrowed) = (h64(0x30), h64(0x2A), h64(0x55));
+            s.set_model_lifecycle_for_tests(thirty, row(150, 5));
+            let mut heavy = row(13_995, 1);
+            heavy.work.verification_ccu = 3_357_306_292_151_296; // the 2M row's CONFIRMED ccu (K4)
+            s.set_model_lifecycle_for_tests(two_m, heavy);
+            let a = PalwClaimVerifyShapeV1::Attempt;
+            assert_eq!((on.claim_verify_daa_v1(&s, &thirty, a, 10), on.receipt_window_for_claim_v1(&s, &thirty, a, 10)), (150, 600));
+            assert_eq!(
+                (on.claim_verify_daa_v1(&s, &two_m, a, 10), on.receipt_window_for_claim_v1(&s, &two_m, a, 10)),
+                (13_995, 13_995)
+            );
+            assert_eq!((on.claim_verify_daa_v1(&s, &unrowed, a, 10), on.receipt_window_for_claim_v1(&s, &unrowed, a, 10)), (0, 600));
+            // Below the fence: §11.3 verbatim, at the 1-DAA span — the unit bug, a fifth of 13,995.
+            assert_eq!((off.claim_verify_daa_v1(&s, &thirty, a, 10), off.receipt_window_for_claim_v1(&s, &thirty, a, 10)), (30, 600));
+            assert_eq!(
+                (off.claim_verify_daa_v1(&s, &two_m, a, 10), off.receipt_window_for_claim_v1(&s, &two_m, a, 10)),
+                (2_799, 2_799)
+            );
+            // testnet-11's shape (a 5-DAA span): its product is unchanged, and already in reference spans.
+            let t11 = t12_like(false).with_class_receipt_window(0, 5).unwrap();
+            assert_eq!(t11.receipt_window_for_claim_v1(&s, &two_m, a, 10), 13_995, "t11's §11.3 product: 2,799 × 5");
+            assert_eq!(t11.claim_verify_daa_v1(&s, &thirty, a, 10), 150);
+            // A free-prompt claim without a published profile is priced at the canonical job.
+            let fp = PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 1 };
+            assert_eq!(on.claim_verify_daa_v1(&s, &thirty, fp, 10), 150);
+            // The shape a claim record carries.
+            let mut fp_claim = claim(PalwClaimPhaseV2::Provisional);
+            fp_claim.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
+            fp_claim.work_leaves = 77;
+            assert_eq!(PalwClaimVerifyShapeV1::of_claim(&fp_claim), PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 77 });
+            assert_eq!(PalwClaimVerifyShapeV1::of_claim(&claim(PalwClaimPhaseV2::Provisional)), PalwClaimVerifyShapeV1::Attempt);
+        }
+
+        /// **T-D8 (the pure half) / V1's measured branch:** a row prices its class from its activation,
+        /// at the claim's own `N` — an attempt at `N0`, a free-prompt claim at `⌈leaves / λ⌉` — clamped to
+        /// D_cap; before the activation the class is on the derived branch.
+        #[test]
+        fn td8_a_measured_row_prices_its_class_from_its_activation() {
+            let r = PalwClassVerifyRowV1 {
+                class_id: h64(0x2A),
+                activation_daa: 5_000,
+                a_r_ps: 1_000_000_000_000,
+                b_r_ps: 0,
+                t_fixed_ms: 60_000,
+                canonical_positions: 1_000,
+                leaves_per_position: 10,
+            };
+            let p = t12_like(true).with_class_verify_deadline(Some(0), vec![r]);
+            let mut s = PalwChainStateV2::genesis();
+            s.set_model_lifecycle_for_tests(h64(0x2A), row(13_995, 1));
+            let a = PalwClaimVerifyShapeV1::Attempt;
+            assert_eq!(p.claim_verify_daa_v1(&s, &h64(0x2A), a, 4_999), 13_995, "before the row: derived");
+            assert_eq!(p.claim_verify_daa_v1(&s, &h64(0x2A), a, 5_000), 18, "from the row: ⌈(2·1,000 s + 60 s) / 120 s⌉");
+            assert_eq!(p.receipt_window_for_claim_v1(&s, &h64(0x2A), a, 5_000), 600);
+            let big = PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 100_000_000 };
+            assert_eq!(p.claim_verify_daa_v1(&s, &h64(0x2A), big, 5_000), PALW_CLASS_VERIFY_CAP_DAA_V1, "clamped to D_cap");
+        }
+
+        /// **V2 (T-D2's pure half, T-D16):** past the fence an NM class takes no claim on any lane until a
+        /// row is active — derived past `window_receipt` (the 2M shape), or held with a published
+        /// `n_ctx` past 8,192 (and not at 8,192, the 8k row) — and a light class passes; a free-prompt
+        /// claim of a class whose largest run derives past `window_receipt` is refused unmeasured; with
+        /// a row a free-prompt claim past D_cap is refused and one inside it passes. Below the fence
+        /// nothing is asked.
+        #[test]
+        fn v2_nm_classes_are_refused_by_name_until_a_row_names_them() {
+            let (on, off) = (t12_like(true), t12_like(false));
+            let mut s = PalwChainStateV2::genesis();
+            let (two_m, light, held16k, held8k, wide) = (h64(0x2A), h64(0x15), h64(0x16), h64(0x08), h64(0x77));
+            s.set_model_lifecycle_for_tests(two_m, row(13_995, 1));
+            s.set_model_lifecycle_for_tests(light, row(15, 5));
+            for (id, n_ctx) in [(held16k, 16_384), (held8k, 8_192)] {
+                s.set_model_lifecycle_for_tests(id, row(15, 5));
+                s.class_step_ladders.insert(id, 1 << 40);
+                s.fp_work_profiles.insert(id, Box::new(profile(n_ctx)));
+            }
+            s.set_model_lifecycle_for_tests(wide, row(15, 5));
+            s.fp_work_profiles.insert(wide, Box::new(profile(1 << 21)));
+            let fp_d = palw_class_fp_verify_daa_v1(&s, &wide).expect("the wide profile derives");
+            assert!(fp_d > 600, "the premise: a 2^21 context's largest run derives {fp_d} > 600, non-held");
+            assert!(!palw_class_needs_measured_row_v1(&on, &s, &wide), "the wide class is not NM: its canonical job is light");
+            let extras = PalwTransitionExtrasV1::default();
+            let a = PalwClaimVerifyShapeV1::Attempt;
+            let fp = PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 10 };
+            let ask = |p: &PalwStateParamsV2, s: &PalwChainStateV2, class, shape| {
+                TransitionBuilder::new(s, p, false, false, false, false, &extras)
+                    .check_class_verify_admits_v1(&class, 100, shape, true)
+            };
+            for shape in [a, fp] {
+                assert!(
+                    matches!(ask(&on, &s, two_m, shape), Err(PalwStateV2Error::ClassDeadlineUnmeasured { class, derived_daa: 13_995, open_daa: 600 }) if class == two_m),
+                    "{shape:?}: the 2M shape is refused by name"
+                );
+                assert!(
+                    matches!(ask(&on, &s, held16k, shape), Err(PalwStateV2Error::ClassDeadlineUnmeasured { class, derived_daa: 15, .. }) if class == held16k),
+                    "{shape:?}: held past 8,192 is NM"
+                );
+                assert_eq!(ask(&on, &s, held8k, shape), Ok(()), "{shape:?}: the 8k row's context is not");
+                assert_eq!(ask(&on, &s, light, shape), Ok(()), "{shape:?}: a light class passes");
+                for class in [two_m, held16k, wide] {
+                    assert_eq!(ask(&off, &s, class, shape), Ok(()), "{shape:?}: below the fence nothing is asked");
+                }
+            }
+            assert_eq!(ask(&on, &s, wide, a), Ok(()), "an attempt of the wide class is its canonical job");
+            assert!(
+                matches!(ask(&on, &s, wide, fp), Err(PalwStateV2Error::FreePromptDeadlineUnmeasured { derived_daa, open_daa: 600, .. }) if derived_daa == fp_d),
+                "its free-prompt claim is refused unmeasured (T-D16)"
+            );
+            // A measured row opens the 2M shape, and caps its free-prompt claims at D_cap.
+            let r = PalwClassVerifyRowV1 {
+                class_id: two_m,
+                activation_daa: 50,
+                a_r_ps: 1_000_000_000_000,
+                b_r_ps: 0,
+                t_fixed_ms: 60_000,
+                canonical_positions: 1_000,
+                leaves_per_position: 10,
+            };
+            let rowed = t12_like(true).with_class_verify_deadline(Some(0), vec![r]);
+            assert_eq!(ask(&rowed, &s, two_m, a), Ok(()), "the row names it");
+            assert_eq!(ask(&rowed, &s, two_m, fp), Ok(()), "a small free-prompt claim fits");
+            let over = PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 100_000_000 };
+            assert!(
+                matches!(ask(&rowed, &s, two_m, over), Err(PalwStateV2Error::FreePromptDeadlineOverCap { cap_daa, .. }) if cap_daa == PALW_CLASS_VERIFY_CAP_DAA_V1),
+                "past D_cap: refused"
+            );
+            let not_yet = t12_like(true).with_class_verify_deadline(Some(0), vec![PalwClassVerifyRowV1 { activation_daa: 101, ..r }]);
+            assert!(
+                matches!(ask(&not_yet, &s, two_m, a), Err(PalwStateV2Error::ClassDeadlineUnmeasured { .. })),
+                "before its activation"
+            );
+        }
+
+        /// **V2(d), the review's L3: a short class's long free-prompt run is refused by name.** A class
+        /// whose canonical job derives 15 DAA (not long-D, so K-1 releases its room at licence) with a
+        /// published context whose largest run derives between 120 and 600: its free-prompt claim —
+        /// at the class gate and in the free-prompt arm alike — is `ClaimDeadlineOutlivesRoomHold`,
+        /// since its `H` could outlive `L + 120` with the room already released; its attempt passes.
+        /// If the room holds the class (C7's list names it), the claim passes; below the fence nothing
+        /// is asked.
+        #[test]
+        fn v2d_a_short_class_s_long_free_prompt_run_is_refused_by_name() {
+            let short_fp = h64(0x5F);
+            // The context whose largest run lands in (120, 600]: the tiny profile's history cost grows
+            // with n², so a doubling search finds it.
+            let (n_ctx, fp_d) = (17..=22)
+                .map(|shift| 1u32 << shift)
+                .flat_map(|base| [base, base + base / 2])
+                .find_map(|n| {
+                    let mut s = PalwChainStateV2::genesis();
+                    s.fp_work_profiles.insert(short_fp, Box::new(profile(n)));
+                    palw_class_fp_verify_daa_v1(&s, &short_fp).filter(|d| *d > 120 && *d <= 600).map(|d| (n, d))
+                })
+                .expect("a context whose largest run derives past 120 and inside 600");
+            let mut s = PalwChainStateV2::genesis();
+            s.set_model_lifecycle_for_tests(short_fp, row(15, 5));
+            s.fp_work_profiles.insert(short_fp, Box::new(profile(n_ctx)));
+            let (on, off) = (t12_like(true), t12_like(false));
+            assert!(!palw_class_needs_measured_row_v1(&on, &s, &short_fp), "the premise: not NM (15, and not held)");
+            assert!(!palw_panel_holds_to_final_v1(&on, &s, &short_fp), "the premise: K-1 releases the room (canonical 15)");
+            let extras = PalwTransitionExtrasV1::default();
+            let ask = |p: &PalwStateParamsV2, shape, per_claim| {
+                TransitionBuilder::new(&s, p, false, false, false, false, &extras)
+                    .check_class_verify_admits_v1(&short_fp, 100, shape, per_claim)
+            };
+            let fp = PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 10 };
+            for per_claim in [false, true] {
+                assert_eq!(
+                    ask(&on, fp, per_claim),
+                    Err(PalwStateV2Error::ClaimDeadlineOutlivesRoomHold {
+                        class: short_fp,
+                        verify_daa: fp_d,
+                        hold_daa: PALW_CLASS_VERIFY_LONG_D_DAA_V1
+                    }),
+                    "n_ctx {n_ctx}: the free-prompt claim (per_claim {per_claim})"
+                );
+                assert_eq!(ask(&off, fp, per_claim), Ok(()), "below the fence nothing is asked");
+            }
+            assert_eq!(ask(&on, PalwClaimVerifyShapeV1::Attempt, false), Ok(()), "its attempt is the canonical job's 15");
+            let held = t12_like(true).with_rcore_plus_mirrors(Some(0), 12_900, vec![short_fp]);
+            assert!(palw_panel_holds_to_final_v1(&held, &s, &short_fp));
+            assert_eq!(ask(&held, fp, true), Ok(()), "a class the room holds to Final may take the long run");
+        }
+
+        /// **V4: the one floor.** Past the fence a licensed claim's Final floor is `max(L + wc, H)`:
+        /// a D-400 claim licensed at `B + 10` Finals no earlier than `B + 401`, not `L + 120`; a D-15
+        /// claim at `L + 120` (H is inside the challenge window); the twin, and a claim with no bound
+        /// panel, at `L + 120`. DL-1's licensed row IS this floor (maxed with the last point).
+        #[test]
+        fn v4_the_licensed_final_floor_is_the_later_of_the_window_and_the_horizon() {
+            let (b, l) = (2_000u64, 2_010u64);
+            let licensed = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: l };
+            let id = h64(0xC0);
+            for (d, armed, expected) in [(400, true, b + 401), (15, true, l + WC), (400, false, l + WC)] {
+                let p = t12_like(armed);
+                let s = state(d, licensed.clone(), b);
+                let c = s.claims[&id].clone();
+                assert_eq!(palw_claim_final_floor_v1(&s, &p, &id, &c, l).unwrap(), expected, "D {d}, armed {armed}");
+                assert_eq!(palw_rcore_deadline_v1(&s, &p, &id, &c, Some(l)).unwrap(), Some(expected), "DL-1's row is the floor");
+                assert_eq!(
+                    palw_rcore_deadline_v1(&s, &p, &id, &c, Some(expected + 7)).unwrap(),
+                    Some(expected + 7),
+                    "maxed with last"
+                );
+                assert_eq!(
+                    palw_claim_verify_horizon_v1(&s, &p, &id, &c),
+                    armed.then_some(b + d + 1),
+                    "H = B + D + 1 past the fence, none below"
+                );
+            }
+            let mut unbound = state(400, licensed.clone(), b);
+            unbound.panels.clear();
+            let c = unbound.claims[&id].clone();
+            assert_eq!(palw_claim_final_floor_v1(&unbound, &t12_like(true), &id, &c, l).unwrap(), l + WC, "no panel, no horizon");
+            // The peer's read (N-1/N-8/N-9): D, W_r, the receipt deadline and H in one record.
+            let s = state(400, licensed, b);
+            let read = palw_class_verify_deadline_v1(&s, &t12_like(true), &id, &s.claims[&id]).unwrap();
+            assert_eq!(
+                read,
+                PalwClaimVerifyDeadlineV1 {
+                    bound_daa: b,
+                    verify_daa: 400,
+                    receipt_window_daa: 600,
+                    receipt_deadline_daa: b + 600,
+                    horizon_daa: Some(b + 401),
+                    measured: false
+                }
+            );
+        }
+
+        /// A `ReceiptLicensed` claim at `L` whose one SEAT session (accuser `bond_key(2)`, a panel seat)
+        /// has been open since `paused_since`: the record, the session, no deadline armed (DL-1's pause).
+        fn paused(d: u64, b: u64, l: u64, paused_since: u64) -> PalwChainStateV2 {
+            let mut s = state(d, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: l }, b);
+            let id = h64(0xC0);
+            s.da_sessions.insert(
+                (id, bond_key(2)),
+                PalwDaSessionV1 {
+                    opened_daa: paused_since,
+                    deadline_daa: paused_since + 1_200,
+                    accuser_is_seat: true,
+                    exposure: 9,
+                    units: vec![PalwDaUnitV1::Event { row: 0, tile: 0 }],
+                    stage: PalwDaStageV1::Licensed,
+                },
+            );
+            s.da_claims.insert(
+                id,
+                PalwDaClaimV1 {
+                    open_seat_sessions: 1,
+                    opened_by_seat: [(bond_key(2), 1)].into_iter().collect(),
+                    paused_since: Some(paused_since),
+                    ..Default::default()
+                },
+            );
+            s.da_by_accuser.insert((bond_key(2), id));
+            s
+        }
+
+        /// **T-D4 (iii) and T-D4b (V6, INV-M) at the DA close — the fifth Final-floor site.** A D-400
+        /// claim licensed at `B + 10`, a seat accusing at `B + X_ASK` (60), the producer answering at the
+        /// edge (`t = B + 900`): DA-5 moves `licensed_daa` by the pause and V6 moves the rooted panel
+        /// bound by the same credit, so `H` moves by the pause and the claim cannot Final before
+        /// `t + D + 1 − X_ASK`; the re-arm is DL-1's (the index equals it at `t`, and a rebuild after the
+        /// close — before `H` — gives it again). A D-15 claim's panel bound does not move (V6 is
+        /// long-D only); below the fence nothing moves but DA-5's licence shift.
+        #[test]
+        fn v6_a_long_d_pause_moves_h_and_the_da_close_rearms_at_the_shifted_floor() {
+            let (b, l, x_ask) = (2_000u64, 2_010u64, 60u64);
+            let (since, t) = (b + x_ask, b + 900);
+            let id = h64(0xC0);
+            let extras = PalwTransitionExtrasV1::default();
+            for (d, armed) in [(400u64, true), (15, true), (400, false)] {
+                let p = t12_like(armed);
+                let s = paused(d, b, l, since);
+                assert_eq!(palw_rcore_deadline_v1(&s, &p, &id, &s.claims[&id], Some(since)).unwrap(), None, "paused");
+                let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+                builder.da_close_session_v1(id, bond_key(2), true, true, t).expect("the session closes refuted");
+                let after = builder.state.clone();
+                let shift = t - since;
+                let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = after.claims[&id].phase else { panic!("still licensed") };
+                assert_eq!(licensed_daa, l + shift, "DA-5: the licence gets the pause back");
+                let long = armed && d > PALW_CLASS_VERIFY_LONG_D_DAA_V1;
+                assert_eq!(after.panels[&id].bound_daa, if long { b + shift } else { b }, "V6: D {d}, armed {armed}");
+                let expected = if long { (b + shift + d + 1).max(l + shift + WC) } else { l + shift + WC };
+                let armed_at: Vec<u64> = after.deadlines.iter().filter(|(_, c)| *c == id).map(|(at, _)| *at).collect();
+                assert_eq!(armed_at, vec![expected.max(t)], "D {d}, armed {armed}: re-armed at the shifted floor");
+                assert_eq!(
+                    palw_rcore_deadline_v1(&after, &p, &id, &after.claims[&id], Some(t)).unwrap(),
+                    Some(expected.max(t)),
+                    "DL-1"
+                );
+                if long {
+                    assert!(expected >= t + d + 1 - x_ask, "INV-M: no Final before disclose + D + 1 − X_ASK");
+                    assert_eq!(expected, t + d + 1 - x_ask, "…exactly, for a seat that accused at X_ASK");
+                }
+                // A restart between the close and H: the index rebuilt from the record is the same.
+                let mut rebuilt = after.clone();
+                rebuilt.last_point = Some(PalwBlockContextV2 { daa_score: t, ..ctx(9, t, 9) });
+                rebuild_deadline_index_v2(&mut rebuilt, &p).unwrap();
+                assert_eq!(rebuilt.deadlines, after.deadlines, "D {d}, armed {armed}: the rebuild reproduces the re-arm");
+                rebuilt.assert_deadline_consistency(&p).expect("and the load check accepts it");
+            }
+        }
+
+        /// **T-D5 / V5: a lock written at licence lives to `max(now, H) + window_court`** — the D-400
+        /// claim's seat lock at `L = B + 10` expires at `B + 401 + 3,000`, a D-15 claim's at
+        /// `B + 16 + 3,000`; below the fence at `L + 3,000` whatever `D` is.
+        #[test]
+        fn v5_a_lock_at_licence_lives_to_the_horizon_plus_the_court_window() {
+            let (b, l) = (2_000u64, 2_010u64);
+            let id = h64(0xC0);
+            let extras = PalwTransitionExtrasV1::default();
+            // A D-15 claim licensed ten DAA after its bind is still inside its D: its lock is dated
+            // from `H = B + 16`, six DAA past the licence (the Final re-dates it to `F + 3,000` anyway).
+            for (d, armed, anchor) in [(400u64, true, b + 401), (15, true, b + 16), (400, false, l)] {
+                let p = t12_like(armed);
+                let s = state(d, PalwClaimPhaseV2::PanelBound { bound_daa: b }, b);
+                let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+                builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l);
+                assert_eq!(builder.state.slashable_locks[&(bond_key(2), id)].expiry_daa, anchor + 3_000, "D {d}, armed {armed}");
+            }
+        }
+
+        /// **K-1:** past the fence a long-D class (canonical `D > 120`) is held to Final by the panel
+        /// room beside C7; a short one (the 8k row's 15) is not; below the fence only C7 is.
+        #[test]
+        fn k1_a_long_d_class_owes_the_room_until_final() {
+            let mut s = PalwChainStateV2::genesis();
+            let (long, short) = (h64(0x4D), h64(0x15));
+            s.set_model_lifecycle_for_tests(long, row(150, 3));
+            s.set_model_lifecycle_for_tests(short, row(15, 5));
+            let (on, off) = (t12_like(true), t12_like(false));
+            assert!(palw_panel_holds_to_final_v1(&on, &s, &long) && !palw_panel_holds_to_final_v1(&on, &s, &short));
+            assert!(!palw_panel_holds_to_final_v1(&off, &s, &long), "below the fence only C7 is held");
+            assert!(!palw_rcore_class_is_c7_v1(&on, &s, &long), "and K-1 is not C7: the escrow follows SR-1");
+            let c7 = on.clone().with_rcore_plus_mirrors(Some(0), 12_900, vec![short]);
+            assert!(palw_panel_holds_to_final_v1(&c7, &s, &short), "C7 is held whatever its D");
+            assert!(palw_class_row_is_long_d_v1(&row(125, 1)) && !palw_class_row_is_long_d_v1(&row(120, 1)), "past 120, not at it");
+        }
+
+        /// **T-D0: no expression but `palw_claim_final_floor_v1` computes a licensed claim's Final
+        /// floor.** Every non-comment use of `window_challenge_at(` in this file's rules is one of: the
+        /// helper's own, SR-1b's flip window (`/ 2` in `palw_rcore_release_window_closes_v1`, a release
+        /// window, not a floor), the two row-expiry re-keys (dated from a Final or an accusation, not a
+        /// licence), or the definition —
+        /// and the helper is called at every site that arms a licensed claim's path to Final: DL-1's
+        /// licensed row (the licence, the rebuild, the load check past `palw_rcore_plus`, M3's DA close,
+        /// the sweep), the load check below it, the court-close re-arm and the ADR-0062 DA-close re-arm.
+        #[test]
+        fn td0_the_final_floor_has_one_producer() {
+            let source = include_str!("palw_state_v2.rs");
+            let rules = &source[..source.find("\n#[cfg(test)]").expect("the rules precede the tests")];
+            let lines: Vec<&str> = rules.lines().collect();
+            let helper_start = lines.iter().position(|l| l.starts_with("pub fn palw_claim_final_floor_v1(")).expect("the helper");
+            let helper_end = helper_start + lines[helper_start..].iter().position(|l| *l == "}").expect("its end");
+            // SR-1b's release window (int-3's `palw_rcore_release_window_closes_v1`): `L + ⌊wc(L) / 2⌋`
+            // capped at the receipt deadline — the last DAA a supplementary set may flip the escrow
+            // release, a window inside the challenge window, never a Final floor.
+            let release_start =
+                lines.iter().position(|l| l.starts_with("pub fn palw_rcore_release_window_closes_v1(")).expect("SR-1b's window");
+            let release_end = release_start + lines[release_start..].iter().position(|l| *l == "}").expect("its end");
+            for (n, line) in lines.iter().enumerate() {
+                let code = line.trim_start();
+                if code.starts_with("//") || !code.contains("window_challenge_at(") {
+                    continue;
+                }
+                let allowed = (helper_start..=helper_end).contains(&n)
+                    || code.starts_with("pub fn window_challenge_at(")
+                    || ((release_start..=release_end).contains(&n) && code.contains("window_challenge_at(licensed_daa) / 2"))
+                    || code.contains("window_challenge_at(final_daa)")
+                    || code.contains("window_challenge_at(ctx.daa_score)");
+                assert!(allowed, "line {}: a Final floor computed outside palw_claim_final_floor_v1: {code}", n + 1);
+            }
+            // The helper at every re-arm: DL-1's row, the legacy load check, the court close, the
+            // ADR-0062 DA close.
+            let body = |name: &str| {
+                let start = lines.iter().position(|l| l.contains(name)).unwrap_or_else(|| panic!("{name}"));
+                // A function's body ends at the first closing brace at its own indentation.
+                let indent = &lines[start][..lines[start].len() - lines[start].trim_start().len()];
+                let close = format!("{indent}}}");
+                let end = start + lines[start..].iter().position(|l| *l == close).unwrap();
+                lines[start..=end].join("\n")
+            };
+            for site in [
+                "pub fn palw_rcore_deadline_v1(",
+                "pub fn assert_deadline_consistency(",
+                "fn rearm_claim_after_court_close(",
+                "fn rearm_claim_after_da_session(",
+            ] {
+                assert!(body(site).contains("palw_claim_final_floor_v1("), "{site} reads the one floor");
+            }
+            // And DL-1 serves the licence, the rebuild, M3's DA close and the sweep.
+            for site in ["fn license_claim(", "fn rebuild_deadline_index_v2(", "fn rearm_claim_deadline_dl1_v1("] {
+                assert!(body(site).contains("palw_rcore_deadline_v1("), "{site} arms from DL-1");
+            }
         }
     }
 }

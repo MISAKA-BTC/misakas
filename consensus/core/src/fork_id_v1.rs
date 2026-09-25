@@ -626,6 +626,10 @@ mod tests {
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
             "palw_rcore_plus" => params.palw_rcore_plus = Some(at),
+            // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
+            // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
+            // hashers and the schedule.
+            "palw_class_verify_deadline" => params.palw_class_verify_deadline = Some(at),
             // ADR-0152-adjacent (Activation Pool): the height with the user's terms beside it.
             "palw_activation_pool" => {
                 params.palw_activation_pool = Some(crate::config::params::PalwActivationPoolParamsV1 {

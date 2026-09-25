@@ -639,10 +639,10 @@ pub struct VirtualStateProcessor {
     /// ADR-0109 Decision 1: the deposit-lock index — every lock the virtual set holds, claimed by
     /// every template unasked. Staged in `commit_virtual_state` from the same diff as the set.
     pub(super) evm_deposit_lock_store: Arc<RwLock<DbEvmDepositLockStore>>,
-    /// ADR-0109 Decision 3: the PALW locked-bond set the mempool refuses spends of, memoised per
-    /// (registry tip, DAA) so a burst of admissions does not rebuild it per transaction.
-    pub(super) palw_mempool_locked_cache:
-        parking_lot::Mutex<Option<(BlockHash, u64, Arc<std::collections::HashSet<TransactionOutpoint>>)>>,
+    /// ADR-0109 Decision 3: the PALW bond gate the mempool asks — the locked set it refuses spends
+    /// of and the burn obligations a released bond's spend must pay — memoised per (registry tip,
+    /// DAA) so a burst of admissions does not rebuild it per transaction.
+    pub(super) palw_mempool_locked_cache: parking_lot::Mutex<Option<(BlockHash, u64, Arc<PalwMempoolBondGate>)>>,
     pub(super) evm_receipts_store: Arc<crate::model::stores::evm::DbEvmReceiptsStore>,
     pub(super) evm_tx_index_store: Arc<crate::model::stores::evm::DbEvmTxIndexStore>,
     pub(super) evm_block_hash_map_store: Arc<crate::model::stores::evm::DbEvmBlockHashMapStore>,
@@ -1267,21 +1267,62 @@ impl VirtualStateProcessor {
     /// network but testnet-12 admits and templates exactly as before. It reads the TIP and skips the
     /// next block's pre-object sweeps, so it can be one fold step behind in either direction — what
     /// slips through is the fold's, as it always was.
+    ///
+    /// **Every possession proof too** (the 2026-09-25 model-registry review, M1): past R-core+ a
+    /// proof whose row nears staleness takes a reserved place and the head of the template lane
+    /// (`palw_readiness_escalation_v1`), and whether it does moves with the DAA after it entered —
+    /// so every proof is put to the fold here, at admission and at every template, and a junk proof
+    /// naming any bond's absent row is never kept, let alone hurried. A proof is judged at its own
+    /// span's first DAA when that is at most one DAA past the virtual's
+    /// (`palw_readiness_gate_daa_v1`): a seat names its own virtual's span, and a node the newest
+    /// block has not reached yet must not turn the honest proof away where no gate asked before.
     pub(super) fn palw_mempool_h1_carrier_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
         if !self.palw_rcore_plus_at(virtual_daa_score) {
             return None;
         }
-        let object = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(tx)?;
+        let object = kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(tx)?;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa_score, chain_point, &state)
+    }
+
+    /// [`Self::palw_mempool_h1_carrier_refusal`] on a given tip (`chain_point`, `state`) for the
+    /// object the transaction carries — the DAA the gate judges a possession proof at, the point, both
+    /// layers — so a test can put a proof through it on a state whose class root it can open (the M1
+    /// review, LOW 1: the gate's clock was reachable only through the tip).
+    pub(super) fn palw_mempool_h1_carrier_refusal_with(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        virtual_daa_score: u64,
+        chain_point: kaspa_consensus_core::BlockHash,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> Option<String> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        // M1: a proof names its seat's virtual span — judged at that span's first DAA when the seat
+        // is at most one block ahead of this node, so a peer the newest block has not reached yet
+        // does not turn an honest proof away (`palw_readiness_gate_daa_v1`).
+        let daa_score = match object {
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::SeatReadinessProved { span, .. }
+            | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::SeatReadinessProvedV2 { span, .. } => {
+                match self.palw_model_registry_fold_at(virtual_daa_score) {
+                    Some(fold) => kaspa_consensus_core::palw_readiness_escalation_v1::palw_readiness_gate_daa_v1(
+                        virtual_daa_score,
+                        *span,
+                        fold.span_daa,
+                    ),
+                    None => virtual_daa_score,
+                }
+            }
+            _ => virtual_daa_score,
+        };
         let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
             block: chain_point,
-            daa_score: virtual_daa_score,
+            daa_score,
             // The next block's: past the tip's, which is all the fold asks of it for these objects.
             blue_score: state.last_point().map_or(0, |last| last.blue_score.saturating_add(1)),
             subsidy: 0,
         };
-        self.palw_h1_carrier_refusal_on(&state, state_params, &point, &object)
+        self.palw_h1_carrier_refusal_on(state, state_params, &point, object)
     }
 
     /// [`Self::palw_mempool_h1_carrier_refusal`]'s question on a given state and point: the
@@ -1328,22 +1369,28 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(&state))
     }
 
-    /// ADR-0109 Decision 3: the PALW bonds the registry holds locked at the virtual tip — the set the
-    /// acceptance path skips spends of — memoised per (registry tip, DAA). `None` when the network
-    /// has no V2 registry or the registry has no tip yet.
-    fn palw_mempool_locked_bonds(&self, now_daa: u64) -> Option<Arc<std::collections::HashSet<TransactionOutpoint>>> {
+    /// ADR-0109 Decision 3: the PALW bond gate at the virtual tip — the bonds the registry holds
+    /// locked (the set the acceptance path skips spends of) and the burn each released, slashed bond's
+    /// spend owes (audit C-08 part three) — memoised per (registry tip, DAA). The same two functions
+    /// the chain walk and the template read (`palw_v2_locked_bond_outpoints`,
+    /// `palw_v2_bond_burn_obligations`), so the mempool refuses exactly the spends every block skips.
+    /// `None` when the network has no V2 registry or the registry has no tip yet.
+    fn palw_mempool_bond_gate(&self, now_daa: u64) -> Option<Arc<PalwMempoolBondGate>> {
         let params = self.palw_state_params_v2.as_ref()?;
         let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten()?;
         let mut cache = self.palw_mempool_locked_cache.lock();
-        if let Some((cached_tip, cached_daa, set)) = cache.as_ref()
+        if let Some((cached_tip, cached_daa, gate)) = cache.as_ref()
             && *cached_tip == tip
             && *cached_daa == now_daa
         {
-            return Some(set.clone());
+            return Some(gate.clone());
         }
-        let set = Arc::new(self.palw_v2_locked_bond_outpoints(&state, now_daa));
-        *cache = Some((tip, now_daa, set.clone()));
-        Some(set)
+        let gate = Arc::new(PalwMempoolBondGate {
+            locked: self.palw_v2_locked_bond_outpoints(&state, now_daa),
+            burns: self.palw_v2_bond_burn_obligations(&state, now_daa),
+        });
+        *cache = Some((tip, now_daa, gate.clone()));
+        Some(gate)
     }
 
     pub fn worker(self: &Arc<Self>) {
@@ -1530,8 +1577,11 @@ impl VirtualStateProcessor {
     /// Calculates the UTXO state of `to` starting from the state of `from`.
     /// The provided `diff` is assumed to initially hold the UTXO diff of `from` from virtual.
     /// The function returns the top-most UTXO-valid block on `chain(to)` which is ideally
-    /// `to` itself (with the exception of returning `from` if `to` is already known to be UTXO disqualified).
-    /// When returning it is guaranteed that `diff` holds the diff of the returned block from virtual
+    /// `to` itself (with the exception of returning `from` if `to` is already known to be UTXO disqualified,
+    /// of returning the old-chain block whose PALW delta the backward walk could not revert, and of
+    /// returning the block below the one whose stored PALW delta the forward walk could not re-apply).
+    /// When returning it is guaranteed that `diff` holds the diff of the returned block from virtual —
+    /// and that the bond view and, wherever the walk established one, its PALW state stand there too.
     pub(super) fn calculate_utxo_state_relatively(
         &self,
         stores: &VirtualStores,
@@ -1683,19 +1733,24 @@ impl VirtualStateProcessor {
                 break;
             }
 
-            let mergeset_diff = self.utxo_diffs_store.get(current).unwrap();
-            // Apply the diff in reverse
-            diff.with_diff_in_place(&mergeset_diff.as_reversed()).unwrap();
-            if track_bonds {
-                // Mirror the reverse on the bond view. `current` is leaving the
-                // selected chain, so its acceptance data is committed.
-                bond_view.revert(&self.dns_bond_mutations_for_chain_block(current, bond_view));
-            }
             // ADR-0042 Unit C: the PALW state walks in lockstep with `diff`, for the same reason
             // the bond view does — a candidate's V2 standing must be a fold over THAT candidate's
             // chain and never a read of the node's sink (P0-4, the partition this layout exists to
             // make unrepresentable). `revert_delta_v2` verifies every value it replaces, so a
             // delta applied to the wrong parent is an error rather than a quiet divergence.
+            //
+            // **Reverted FIRST, before `diff` and the bond view** (ADR-0152 Phase 2, P2-3: found by
+            // `p2_an_undecodable_vesting_delta_is_a_fault_and_the_reorg_it_blocks_holds_the_sink`).
+            // This used to run after both had been reversed through `current` and then return
+            // `from`, breaking this function's one guarantee — `diff` holds the diff of the block
+            // it returns: the caller took `from` as established while `diff` stood one block lower,
+            // so a node holding on a delta row it could not revert (an undecodable or pruned row
+            // under its sink, with a heavier chain in reach) committed a virtual UTXO set without
+            // its sink's own acceptance — spent outputs back, created ones gone — and every later
+            // walk from there reversed the same block again. The PALW revert touches neither, so
+            // the order of the two is free; running it first means a stop leaves `diff` and the
+            // bond view at `current`, which is what is returned — `from` itself when the gap is
+            // the first block. A node-local fault path only: on a store that reads, nothing moves.
             if let Some(state) = palw_state.as_mut() {
                 // The backward twin of the forward leg's rule: a row this node does not have is a
                 // gap in this node. Stopping returns the last point actually established, which is
@@ -1708,13 +1763,21 @@ impl VirtualStateProcessor {
                     Ok(previous) => *state = previous,
                     Err(why) => {
                         error!(
-                            "PALW V2 state cannot be reverted through chain block {current} ({why}); the UTXO walk stops at {from} \
-                             and virtual will hold there. This is a gap in THIS node's delta store, not a fault of the chain — \
+                            "PALW V2 state cannot be reverted through chain block {current} ({why}); the UTXO walk stops at {current} \
+                             and virtual will not move onto {to}. This is a gap in THIS node's delta store, not a fault of the chain — \
                              resync this data directory if it persists."
                         );
-                        return from;
+                        return current;
                     }
                 }
+            }
+            let mergeset_diff = self.utxo_diffs_store.get(current).unwrap();
+            // Apply the diff in reverse
+            diff.with_diff_in_place(&mergeset_diff.as_reversed()).unwrap();
+            if track_bonds {
+                // Mirror the reverse on the bond view. `current` is leaving the
+                // selected chain, so its acceptance data is committed.
+                bond_view.revert(&self.dns_bond_mutations_for_chain_block(current, bond_view));
             }
         }
 
@@ -1748,17 +1811,27 @@ impl VirtualStateProcessor {
 
             match self.utxo_diffs_store.get(current) {
                 Ok(mergeset_diff) => {
-                    diff.with_diff_in_place(mergeset_diff.deref()).unwrap();
-                    diff_point = current;
-                    if track_bonds {
-                        // `current` is an already-validated chain block joining
-                        // the diff; its acceptance data is committed.
-                        bond_view.apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
-                    }
                     // Unit C, forward leg: this block was validated before, so its delta is on
                     // disk and re-applying it reproduces the transition bit-for-bit. Re-running
                     // the transition here instead would be a second computation of one fact, and
                     // a second chance to disagree with what the chain already committed to.
+                    //
+                    // **Applied FIRST, before `diff`, `diff_point` and the bond view** — the
+                    // forward twin of the backward leg's order above (ADR-0152 Phase 2, P2-3
+                    // review; `p2_a_damaged_row_the_forward_leg_must_reapply_holds_the_old_sink`).
+                    // This used to run after all three had moved onto `current`, so a row that
+                    // would not apply returned `current` — a block whose PALW state this walk
+                    // never reached. The sink search took it as established; every later walk
+                    // from it had to derive its state through the same damaged row (the tip row
+                    // stood elsewhere), failed there and returned it again; no candidate, not
+                    // even the previous sink, could be reached from it; and the exhausted-heap
+                    // `assert_eq!` killed the virtual processor — on that block and again on
+                    // every restart. A node on a chain B that kept an old chain A's rows, one of
+                    // them damaged, died the moment A's heavier tail arrived. Now a stop returns
+                    // the unchanged `diff_point`, where `diff`, the bond view and the PALW state
+                    // all still stand, and the next walk from there reads only rows that apply.
+                    // The PALW apply reads neither `diff` nor the bond view, so on a store that
+                    // reads the order is free and nothing moves.
                     if let Some(state) = palw_state.as_mut() {
                         // **A delta this node does not have is a gap in this node, not a verdict on
                         // the block.** Both of these used to be `expect`, on the reasoning above:
@@ -1785,6 +1858,13 @@ impl VirtualStateProcessor {
                                 return diff_point;
                             }
                         }
+                    }
+                    diff.with_diff_in_place(mergeset_diff.deref()).unwrap();
+                    diff_point = current;
+                    if track_bonds {
+                        // `current` is an already-validated chain block joining
+                        // the diff; its acceptance data is committed.
+                        bond_view.apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
                     }
                 }
                 Err(StoreError::KeyNotFound(_)) => {
@@ -3971,6 +4051,13 @@ impl VirtualStateProcessor {
     /// nor the drain asks which phase enqueued an entry, so a payout to some party other than the
     /// producer (an accuser that voided a claim, say) needs a transition that writes one, not a
     /// new mechanism on the paying side.
+    ///
+    /// **Past `Params::palw_rcore_plus` (ADR-0152 V-2, testnet-12) `Final` names a vesting ROW, not
+    /// a payout**: the same producer, seat and reserve amounts, with the payees fixed at `Final`
+    /// (I-5), held until V-4 matures the row; the payout is named at maturity, when step 3d moves the
+    /// row's legs into the queue `palw_v2_payout_outputs` renders — so "which claims became
+    /// spendable" is then "which rows matured", and the reporter reward (ADR-0152 §3.6 R), the other
+    /// non-producer payee this paragraph anticipated, reaches the queue through the same step.
     /// **The escrows a block's coinbase must pay, from its parent's committed queue.**
     ///
     /// `state` is the SELECTED PARENT's state, not this block's: a claim that reaches `Final` is
@@ -4173,6 +4260,177 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(state, state_params, &extras, claim, accuser, now_daa)
     }
 
+    /// **ADR-0152 R-3/R-4 (Phase 2, P2-8): the reporter filer's read of one filing** — at the tip,
+    /// for the DAA the virtual's next block folds at: the commitment's row, the conviction and the
+    /// reward under `offence_key`, and (when `gated` is given — the evidence, the signed commitment,
+    /// or the court accusation the filer falls back to) this processor's object gate on it at that
+    /// DAA, so an object the node sends is one the gate admits. `None` with no tip state.
+    pub fn palw_reporter_filing_read_v1_impl(
+        &self,
+        offence_key: kaspa_consensus_core::Hash64,
+        commitment: kaspa_consensus_core::Hash64,
+        reporter: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        gated: Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwReporterFilingReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let candidate_daa = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score)?;
+        self.palw_reporter_filing_read_v1_at(
+            &state,
+            chain_point,
+            candidate_daa,
+            &offence_key,
+            &commitment,
+            &reporter,
+            gated.as_ref(),
+        )
+    }
+
+    /// [`Self::palw_reporter_filing_read_v1_impl`] on a given state, for the block at `now_daa` on
+    /// `chain_point` — the real-claim tests call it on the state they folded. The gate is
+    /// [`Self::palw_v2_validate_objects`] itself: the adjudicator the fold runs, with the signature
+    /// half, never a restatement of it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn palw_reporter_filing_read_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        chain_point: kaspa_consensus_core::BlockHash,
+        now_daa: u64,
+        offence_key: &kaspa_consensus_core::Hash64,
+        commitment: &kaspa_consensus_core::Hash64,
+        reporter: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        gated: Option<&kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwReporterFilingReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let mut read = kaspa_consensus_core::palw_state_v2::palw_reporter_filing_read_v1(
+            state,
+            state_params,
+            now_daa,
+            offence_key,
+            commitment,
+            reporter,
+        );
+        if let Some(object) = gated {
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: chain_point,
+                daa_score: now_daa,
+                blue_score: 0,
+                subsidy: 0,
+            };
+            read.object_gate = Some(self.palw_v2_validate_objects(state, state_params, &point, std::slice::from_ref(object)));
+        }
+        Some(read)
+    }
+
+    /// **ADR-0152 DA-3 / J-6 (Phase 2, P2-8d): what a `StepLeaf` demand of `claim` by `accuser`
+    /// comes to** — at the tip, for the DAA the virtual's next block folds at, under that block's
+    /// extras, exactly as [`Self::palw_da_accusation_check_v1_impl`] reads P2-6's accusation. `None`
+    /// with no tip state.
+    pub fn palw_da_step_leaf_demand_check_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        leaf: u64,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let candidate_daa = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score)?;
+        Some(self.palw_da_step_leaf_demand_check_v1_at(&state, chain_point, candidate_daa, &claim, &accuser, leaf))
+    }
+
+    /// [`Self::palw_da_step_leaf_demand_check_v1_impl`] on a given state, for the block at `now_daa`
+    /// on `chain_point` (the real-claim tests call it on the state they folded). No state params: the
+    /// court is dormant.
+    pub(crate) fn palw_da_step_leaf_demand_check_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        chain_point: kaspa_consensus_core::BlockHash,
+        now_daa: u64,
+        claim: &kaspa_consensus_core::Hash64,
+        accuser: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        leaf: u64,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1::Refused(
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::DaCourtDormant,
+            );
+        };
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: now_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        kaspa_consensus_core::palw_producer_v2::palw_da_step_leaf_demand_check_v1(
+            state,
+            state_params,
+            &extras,
+            claim,
+            accuser,
+            leaf,
+            now_daa,
+        )
+    }
+
+    /// **The 2026-09-25 model-registry review, M1: how urgently do `carriers`' rows need them at the
+    /// tip?** — for each, the row the tip holds for its `(bond, class)`, judged at the virtual's DAA by
+    /// the one predicate (`PalwReadinessCarrierV1::urgency`) under the registry fold's own span clock,
+    /// globals and readiness rule; one tip load and one fold for the whole batch. The pool's carrier
+    /// index asks it when a proof enters and, for every proof it holds, at every new block; the proof
+    /// itself was put to the fold by the carrier gate ([`Self::palw_mempool_h1_carrier_refusal`]) when
+    /// it entered. Node-local; all `None` below `palw_rcore_plus`, so every network but testnet-12
+    /// keeps a proof an ordinary transaction.
+    pub fn palw_readiness_urgency_v1_impl(
+        &self,
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        let Some(virtual_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
+            return vec![None; carriers.len()];
+        };
+        self.palw_readiness_urgency_at(carriers, virtual_daa)
+    }
+
+    /// [`Self::palw_readiness_urgency_v1_impl`] at a given DAA.
+    pub(super) fn palw_readiness_urgency_at(
+        &self,
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+        virtual_daa: u64,
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        let none = || vec![None; carriers.len()];
+        if carriers.is_empty() || !self.palw_rcore_plus_at(virtual_daa) {
+            return none();
+        }
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return none() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else { return none() };
+        self.palw_readiness_urgency_on(&state, carriers, virtual_daa)
+    }
+
+    /// [`Self::palw_readiness_urgency_at`] on a given state (a test's rows).
+    pub(super) fn palw_readiness_urgency_on(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        carriers: &[kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+        virtual_daa: u64,
+    ) -> Vec<Option<kaspa_consensus_core::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        let none = || vec![None; carriers.len()];
+        if !self.palw_rcore_plus_at(virtual_daa) {
+            return none();
+        }
+        let Some(fold) = self.palw_model_registry_fold_at(virtual_daa) else { return none() };
+        carriers
+            .iter()
+            .map(|carrier| {
+                carrier.urgency(
+                    state.seat_readiness(&carrier.bond, &carrier.class_id),
+                    virtual_daa,
+                    fold.span_daa,
+                    &fold.globals,
+                    fold.readiness_v2_active,
+                )
+            })
+            .collect()
+    }
+
     /// **Who may be served a claim's private material**, at the tip (ADR-0077 Decision 16's
     /// transport half) — see `PalwChainStateV2::claim_readers_v2`.
     pub fn palw_claim_readers_v2_impl(
@@ -4184,6 +4442,140 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         state.claim_readers_v2(&claim)
+    }
+
+    /// **The tip a P2-8c filer asks from** — the tip block's state at the point the licence assembler
+    /// asks from (the tip block, the virtual's DAA and blue score), so what the filer is told is what
+    /// the next block folds. `None` with no tip state.
+    fn palw_false_valid_tip_v1(
+        &self,
+    ) -> Option<(Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>, kaspa_consensus_core::palw_state_v2::PalwBlockContextV2)>
+    {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        Some((state, point))
+    }
+
+    /// `palw_network_domain_v2_for(network id, genesis)` — the domain the gate verifies every
+    /// receipt under.
+    fn palw_false_valid_chain_domain_v1(&self) -> kaspa_consensus_core::Hash64 {
+        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash))
+    }
+
+    /// **ADR-0152 v3.1 N10 (Phase 2, P2-8c): what filing this `PanelFalseValidV2` object comes to**
+    /// at the tip ([`Self::palw_false_valid_filing_check_v1_at`]). `None` with no tip state.
+    pub fn palw_false_valid_filing_check_v1_impl(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        let (state, point) = self.palw_false_valid_tip_v1()?;
+        Some(self.palw_false_valid_filing_check_v1_at(&state, &point, object))
+    }
+
+    /// **ADR-0152 v3.1 N10 (P2-8c): which of `receipts` the chain relied on**, at the tip — one answer
+    /// a receipt, in order ([`Self::palw_false_valid_receipt_relied_v1_at`]). `None` with no tip state
+    /// or below `Params::palw_rcore_plus`, where the filer does not run.
+    pub fn palw_false_valid_relied_receipts_v1_impl(
+        &self,
+        receipts: &[kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidReceiptV1],
+    ) -> Option<Vec<bool>> {
+        let (state, point) = self.palw_false_valid_tip_v1()?;
+        if !self.palw_rcore_plus_at(point.daa_score) {
+            return None;
+        }
+        Some(receipts.iter().map(|receipt| self.palw_false_valid_receipt_relied_v1_at(&state, receipt).is_ok()).collect())
+    }
+
+    /// [`Self::palw_false_valid_relied_receipts_v1_impl`] for one receipt on a given state: the core
+    /// admission (`palw_false_valid_receipt_relied_v1`) under this chain's domain and the gate's own
+    /// ML-DSA-87 verifier — the real-claim tests call it on the state they folded.
+    pub(crate) fn palw_false_valid_receipt_relied_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        receipt: &kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidReceiptV1,
+    ) -> Result<(), &'static str> {
+        kaspa_consensus_core::palw_false_valid_filing_v1::palw_false_valid_receipt_relied_v1(
+            state,
+            receipt,
+            self.palw_false_valid_chain_domain_v1(),
+            &Self::verify_mldsa87_with_context_bool,
+        )
+    }
+
+    /// [`Self::palw_false_valid_filing_check_v1_impl`] on a given state at `point` — the one place the
+    /// answers are asked in order (the real-claim tests call it on the state they folded):
+    ///
+    /// 1. **the ledger key, the receipt's admission and the adjudicator, classified**
+    ///    (`palw_false_valid_filing_check_v1`): a (seat, claim) already convicted; a receipt the
+    ///    chain never relied on (`Unrelied`: its signature under this chain's domain and the seat's
+    ///    registered key with the gate's verifier, its lock or row) — before the liability rule can
+    ///    call junk `NotLiable`; then `palw_check_panel_false_valid_v2` without the signature, under
+    ///    the rules and decode switch the gate and the fold read at `point`, so a liability refusal
+    ///    (`NotLiable`) and an open court (`Wait`) are told apart from every other refusal;
+    /// 2. **the gate** (`palw_v2_validate_objects`): the adjudicator again with the signature, the
+    ///    seat `Active` or `Retiring`;
+    /// 3. **the fold** (`palw_v2_apply_one_object_v1` on the tip): the lock the seat must still hold
+    ///    or the liability row that lists it, the heavy-prompt budget, and S-4's funnel — so the
+    ///    answer is the fold's own and cannot drift from it.
+    ///
+    /// `Dormant` below `Params::palw_rcore_plus` (P2-8c, like everything Phase 2 adds, lives past
+    /// it; the fence requires `palw_offence_attribution`, so kind 3 exists wherever this answers).
+    pub(crate) fn palw_false_valid_filing_check_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1 {
+        use kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1 as Check;
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Check::Dormant };
+        if !self.palw_rcore_plus_at(point.daa_score) {
+            return Check::Dormant;
+        }
+        let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
+            kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2,
+            accused,
+            evidence,
+            ..
+        } = object
+        else {
+            return Check::Refused("not a PanelFalseValidV2 filing".into());
+        };
+        let check = kaspa_consensus_core::palw_false_valid_filing_v1::palw_false_valid_filing_check_v1(
+            state,
+            accused,
+            evidence,
+            state_params.fp_decode_rules_at(point.daa_score),
+            self.palw_identity_rules_v1(point.daa_score),
+            self.palw_false_valid_chain_domain_v1(),
+            &Self::verify_mldsa87_with_context_bool,
+        );
+        if !matches!(check, Check::File { .. }) {
+            return check;
+        }
+        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+            return Check::Refused(why);
+        }
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        ) {
+            Ok(_) => check,
+            Err(why) => Check::Refused(why.to_string()),
+        }
     }
 
     /// What a node's receipt pool reads off the tip — see the trait doc. Node policy: a read.
@@ -5078,13 +5470,21 @@ impl VirtualStateProcessor {
     /// (audit3 H3). Reads the materialized tip, so it answers the same question
     /// `palw_v2_locked_bond_outpoints` answers on the block path — one predicate, two callers.
     pub fn palw_locked_bond_outpoints_v2_impl(&self) -> Vec<TransactionOutpoint> {
+        self.palw_locked_bond_outpoints_v2_at(self.lkg_virtual_state.load().daa_score)
+    }
+
+    /// [`Self::palw_locked_bond_outpoints_v2_impl`] at an explicit DAA: the wallet's answer is the
+    /// tip's `palw_v2_locked_bond_outpoints` at the node's virtual DAA, and nothing else — split out
+    /// so ADR-0152 T23 can hold the wallet's set, the block path's and the burn obligations to
+    /// `palw_bond_collateral_is_locked_v6` at the DAAs B-3 turns on (`F + 2,999`, `F + 3,000`, a
+    /// licence halt, a carried row) without a chain that long.
+    pub(super) fn palw_locked_bond_outpoints_v2_at(&self, now_daa: u64) -> Vec<TransactionOutpoint> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else {
             return Vec::new();
         };
         let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else {
             return Vec::new();
         };
-        let now_daa = self.lkg_virtual_state.load().daa_score;
         let mut out: Vec<TransactionOutpoint> = self.palw_v2_locked_bond_outpoints(&state, now_daa).into_iter().collect();
         // Deterministic order, so two nodes answering the same question give the same answer and a
         // paging caller cannot be handed a shuffled set.
@@ -5197,6 +5597,22 @@ impl VirtualStateProcessor {
     /// resolved at its own DAA, the expression `apply_attempt` stores — is withheld anyway and never
     /// released: burned, as a skipped merged blue's is. An admitted attempt's claim is found and
     /// withheld from its record exactly as before, so the figure moves only for a skipped one.
+    ///
+    /// **Past `Params::palw_rcore_plus` (ADR-0152 V-2) nothing here moves: withholding stays at
+    /// acceptance, and only the RELEASE is deferred.** The release path is `Final → vesting row →
+    /// step 3d at maturity → pending_payouts → the next block's coinbase`
+    /// ([`Self::palw_v2_payout_outputs`], unchanged): `Final` names the escrow in a row instead of
+    /// the queue, a conviction inside the conviction window burns the row (V-5) — withheld here and
+    /// never minted, exactly as a void's forfeit — and only a matured row's legs reach a coinbase.
+    /// So every sompi withheld here stands, at any committed state, in exactly one of: the escrow
+    /// of a claim not yet resolved (`Provisional` through `ReceiptLicensed`, still recorded on the
+    /// claim), minted from a row, moved and not yet minted (a queue row the next coinbase renders),
+    /// a live row, a row burned (or a void's forfeit, or a skipped attempt's carve), the work-price
+    /// remainder named nowhere, the ADR-0091 buyback slice, or `panel_reserve_sompi` — V-3's
+    /// coinbase identity (T03, which attributes the minted term by coinbase position against the
+    /// parent queue's keys, since one payout script receives round fees, vesting mints and seat pay
+    /// alike). Reporter rewards and market rows are minted from the same queue and are NOT in that
+    /// identity: they are funded by slashes and by sinks, never by this carve.
     pub(super) fn palw_v2_escrow_withheld_at(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -5206,7 +5622,16 @@ impl VirtualStateProcessor {
             .claims_iter()
             .filter(|(_, claim)| claim.accepted_block == block)
             .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward));
-        recorded.saturating_add(self.palw_v2_skipped_own_attempt_carve(state, block))
+        let skipped = self.palw_v2_skipped_own_attempt_carve(state, block);
+        // One carve, withheld once: from the claim the fold admitted, or as the carve of the attempt
+        // it skipped — never both. Only an attempt escrows (a free-prompt claim records 0), and an
+        // attempt's claim is recorded against its CARRYING block, so a block whose own attempt was
+        // skipped has no escrowing claim accepted in it. T03's identity counts each carve once.
+        debug_assert!(
+            recorded == 0 || skipped == 0,
+            "block {block}: an attempt's carve is withheld from its claim or as skipped, not both"
+        );
+        recorded.saturating_add(skipped)
     }
 
     /// The carve of `block`'s own attempt where the fold skipped it — see
@@ -5575,14 +6000,63 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    /// **The PALW payouts a block's coinbase mints: the first [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] rows
+    /// of the SELECTED PARENT's `pending_payouts`, in key order — and nothing else, on every network**
+    /// (ADR-0042 Decision 10; ADR-0152 V-4 "on moving a row", V-7; phase2-plan F1, §2.7).
+    ///
+    /// **Where the rows come from.** Below `Params::palw_rcore_plus` a claim's `Final` writes them:
+    /// the producer's share under the raw `claim_id`, each credited seat's under its payee key
+    /// (`0xFE`, accumulated), beside the market's fee legs and the carrier refunds (`0xFF`). **Past it
+    /// (testnet-12) `Final` writes no row at all** — it names a vesting row (V-2), and step 3d of a
+    /// LATER block's fold moves the row's legs into this queue once V-4 matures it: the producer's leg
+    /// under its A-KEY key (`palw_vesting_payout_key_v1`, `0x00`), each seat's under the same `0xFE`
+    /// payee key, the reserve into `panel_reserve_sompi` (never a row); a reporter reward the same way
+    /// under `palw_reporter_payout_key_v1`. So the release path is `Final → row → 3d → queue → this`,
+    /// and this function did not change for it: a moved leg is minted byte-identically on the build
+    /// and the validate path because both render the one committed queue (T58's build == validate).
+    ///
+    /// **The queue lemma** (phase2-plan F2, ADR-0152 V-7, T58): past `palw_rcore_plus` step 3d is the
+    /// ONLY writer of a key below the market's `0xFF` (the market and the refunds key under it; a
+    /// Final writes a row); it creates at most [`palw_vesting_v1::PALW_V2_VESTING_LEGS_PER_BLOCK`]
+    /// (= this width) new keys per block (the planner's one exception, a row wider than that, needs a
+    /// panel of more than seven seats); and step 1b of the next block drains this very prefix. So the
+    /// non-market part of every committed queue is at most this width, every non-market row is in the
+    /// prefix rendered here, and **every leg is minted exactly one block after its move**.
+    /// Carry-over lives in the vesting table, never in the queue; the `0x00` A-KEY prefix is what
+    /// keeps a producer leg whose raw `claim_id` begins `0xFF` out of the market's tail (T47). Debug
+    /// builds assert the lemma here, at the one site whose correctness rests on it.
+    ///
+    /// **Rules for any later change** (phase2-plan §2.7, F6): never render anything from `vesting`
+    /// directly — a row is not money until 3d has moved it into this queue (V-6); and never mutate a
+    /// template's coinbase outputs after it is built, because the EVM lane's commitment
+    /// (`evm_template_fields`) is derived after the coinbase and never re-reads it — a future path
+    /// that must do so re-derives through `evm_template_fields`, as `heartbeat_recommit_evm_for_stamp`
+    /// does.
+    ///
+    /// [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`]: kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK
+    /// [`palw_vesting_v1::PALW_V2_VESTING_LEGS_PER_BLOCK`]: kaspa_consensus_core::palw_vesting_v1::PALW_V2_VESTING_LEGS_PER_BLOCK
     fn palw_v2_payout_outputs(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Vec<TransactionOutput> {
+        use kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK;
+        // The queue lemma, where it holds: past `palw_rcore_plus` at the block that committed
+        // `state`. Every testnet-12 panel has five seats, so a row costs at most six keys and the
+        // planner's full-width head belt (a row wider than the budget) never fires; a preset that
+        // armed R-core+ with a panel of more than seven seats would trip this, and should — its rows
+        // would then wait in the queue, which is M-10's delay, not a mint of the wrong amount.
+        debug_assert!(
+            !state.last_point().is_some_and(|point| self.palw_rcore_plus_at(point.daa_score))
+                || kaspa_consensus_core::palw_vesting_v1::palw_vesting_non_market_rows_waiting_v1(state)
+                    <= PALW_V2_MAX_PAYOUTS_PER_BLOCK,
+            "the queue lemma (ADR-0152 V-7, T58): past palw_rcore_plus the non-market part of a committed queue fits one drain"
+        );
         // The SAME prefix the transition drains — see `PALW_V2_MAX_PAYOUTS_PER_BLOCK`. Both sides
         // read the selected parent's queue in `BTreeMap` key order, so "the first N" names one set
         // on every node. Paying more than the transition clears would pay a claim twice; clearing
-        // more than the coinbase pays would destroy the reward the escrow exists to deliver.
+        // more than the coinbase pays would destroy the reward the escrow exists to deliver. The
+        // `take` IS the width bound: `PALW_V2_COINBASE_EXTRA_OUTPUTS` is defined from the same
+        // constant, so the coinbase's output budget cannot drift from what is rendered here.
         state
             .pending_payouts_iter()
-            .take(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK)
+            .take(PALW_V2_MAX_PAYOUTS_PER_BLOCK)
             .map(|(_, payout)| {
                 TransactionOutput::new(
                     payout.amount,
@@ -5630,6 +6104,32 @@ impl VirtualStateProcessor {
         block: BlockHash,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block, None).0
+    }
+
+    /// The fold's two answers on a licence object that the V1 and coverage assemblers read
+    /// (ADR-0152 SR-6, Phase 2 P2-5) — its backed subset (`palw_v2_licence_backed_seats_v1`) and
+    /// whether it licenses at all ([`Self::palw_v2_offered_licence_licenses_v1`]) — at this
+    /// processor's fences and extras, reachable from the sibling test module.
+    #[cfg(test)]
+    pub(super) fn palw_v2_licence_fold_answers_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> (Option<Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>>, bool) {
+        let backed = kaspa_consensus_core::palw_state_v2::palw_v2_licence_backed_seats_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        );
+        (backed, self.palw_v2_offered_licence_licenses_v1(state, state_params, point, object))
     }
 
     /// [`Self::palw_v2_derived_panel_bindings`] — the chain's own derivation of the bindings `block`
@@ -6154,6 +6654,17 @@ impl VirtualStateProcessor {
         // EXACTLY: accepted moves' rows are in `folded`, owed refunds are reserved, and a refused
         // move promises nothing — the review's starvation, where a cheap refused buy took two
         // phantom rows from the valid moves after it, is gone. Below it, the old promise counter.
+        //
+        // **Past `palw_rcore_plus` the queue also grows at step 3d — after every object, 3′ and 3c —
+        // by the matured vesting legs and reporter rewards it moves** (ADR-0152 V-4/V-7; phase2-plan
+        // F4). Nothing here reserves for them, and nothing needs to: the count below is the queue as
+        // the fold's step 3 sees it (`palw_v2_pre_object_base_v1` mirrors steps 1b–2, and past the
+        // fence a `Final` in step 2 writes a row, not a payout — I-3), which is exactly what the
+        // fold's own market room reads; 3d's moves are exempt from `PALW_V2_MAX_PENDING_PAYOUTS`
+        // (M-10) and bounded instead by V-7's per-block budget, so a committed queue holds at most
+        // the cap plus one drain. Were a fold path ever to write the queue BEFORE 3d, this rehearsal
+        // would have to reserve those rows the way it reserves refunds. T29 pins the agreement with a
+        // 1,016-row queue, a row maturing in the same block, and a same-block conviction.
         let exact_queue = audit_active && self.palw_audit_2026_09_23_at(point.daa_score);
         let mut certifications_graded = 0usize;
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
@@ -7196,24 +7707,29 @@ impl VirtualStateProcessor {
             return None;
         }
 
-        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
-        let mut verdict: Option<Q> = None;
-        for candidate in candidates {
-            let mut attempt = kept.clone();
-            attempt.push(candidate.clone());
-            match kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_policy(
+        // The acceptance layer's V1 check, bound as the gate binds it: the greedy loop's judge and,
+        // past `palw_rcore_plus`, the backed subset's (below).
+        let quorum = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2]| {
+            kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_policy(
                 &state,
                 panel_params,
                 state_params,
                 &point,
                 network_domain,
                 &claim,
-                &attempt,
+                receipts,
                 verify,
                 self.palw_unavailable_abstains_at(point.daa_score),
                 // ADR-0147: the same height the fold and the acceptance layer read.
                 self.palw_admission_independence_daa(),
-            ) {
+            )
+        };
+        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
+        let mut verdict: Option<Q> = None;
+        for candidate in candidates {
+            let mut attempt = kept.clone();
+            attempt.push(candidate.clone());
+            match quorum(&attempt) {
                 Ok(q) => {
                     kept = attempt;
                     verdict = Some(q);
@@ -7231,9 +7747,23 @@ impl VirtualStateProcessor {
             }
         }
         match verdict? {
-            Q::Licensed { .. } => {
-                Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: kept })
-            }
+            // ADR-0152 SR-6 (Phase 2 P2-5): past `palw_rcore_plus` the loop's set — every clean
+            // candidate, which is where a backed subset is found if any part of the pool has one
+            // (`palw_v2_offered_backed_subset_v1`) — is offered as the fold's backed subset, or not
+            // at all. Not the `ProducerDefaulted` arm below, nor the shard parts above.
+            Q::Licensed { .. } => self.palw_v2_offered_backed_subset_v1(
+                state,
+                state_params,
+                point,
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: kept },
+                |backed| {
+                    matches!(
+                        backed,
+                        kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { receipts, .. }
+                            if matches!(quorum(receipts), Ok(Q::Licensed { .. }))
+                    )
+                },
+            ),
             Q::ProducerUnavailable { .. } => {
                 Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ProducerDefaulted { claim, receipts: kept })
             }
@@ -7304,7 +7834,7 @@ impl VirtualStateProcessor {
                 self.palw_admission_independence_daa(),
             )
         };
-        let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_coverage_licence_v2(candidates, coverage, |receipts| {
+        let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_coverage_licence_v2(candidates, &coverage, |receipts| {
             self.palw_v2_offered_licence_licenses_v1(
                 &state,
                 state_params,
@@ -7312,7 +7842,105 @@ impl VirtualStateProcessor {
                 &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: receipts.to_vec() },
             )
         })?;
-        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts })
+        // ADR-0152 SR-6 (Phase 2 P2-5): past `palw_rcore_plus`, the fold's backed subset of the set
+        // the selection found (its largest sound set, so a backed subset is found if one exists).
+        // On testnet-12's cut every segment has ONE partial holder beside the full seat, so a
+        // coverage set needs every one of its `Valid`s: its backed subset is the whole set or
+        // nothing, and the fold's `licenses` above already refused the nothing — here the rule is
+        // the V1 door's, kept in one place for a cut where a seat could be spared.
+        self.palw_v2_offered_backed_subset_v1(
+            state,
+            state_params,
+            point,
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts },
+            |backed| {
+                matches!(
+                    backed,
+                    kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { receipts, .. }
+                        if matches!(coverage(receipts), Ok(kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. }))
+                )
+            },
+        )
+    }
+
+    /// **ADR-0152 SR-6 at the V1 and coverage doors (Phase 2 P2-5): offer the fold's backed subset, or
+    /// nothing.** Past `Params::palw_rcore_plus` a licence set carrying a `Valid` whose seat cannot post
+    /// `lock_{max(k,2)}` licenses on its backed subset when that subset still meets the door's rule,
+    /// and is INERT otherwise (`license_rcore_v1`). The two assemblers that keep every clean
+    /// candidate would offer such a set whole: an inert one — and X22 asks V1 BEFORE S2
+    /// (`palw_licence_offer_order_v1`), so kaspad would resubmit it every replan and never reach the
+    /// fast path until the receipt window voided the claim — or a licensing one carrying a `Valid`
+    /// the fold neither locks nor credits.
+    ///
+    /// The fold is asked which carried `Valid`s it licenses on
+    /// (`palw_v2_licence_backed_seats_v1`: read off the locks the fold writes, so SR-6's price
+    /// arithmetic is not restated here); `None` when it licenses nothing. Those it does not back
+    /// are dropped, and a set that changed is put to the door (`door_takes`, the acceptance check
+    /// bound as the gate binds it) and to the fold once more. **The whole clean set is the right set to
+    /// ask**: backing is monotone in the set — more `Valid`s recount no lower, so the price each is
+    /// tested at is no higher (SR-6's fall-once re-test included) — so a subset never backs a seat
+    /// the whole set does not, and when the whole set licenses nothing no part of it does. The
+    /// backed subset re-tests to itself (same recount, same price), so the second fold agrees.
+    ///
+    /// **The re-check is kept in release builds, by choice (the P2-5 review's LOW 3).** It is
+    /// redundant by the argument above — the review's exhaustive probe over every sub-pool found it
+    /// never changes the answer — but the door is a separate predicate from the fold (its own verdict
+    /// precedence over what remains: the `Unavailable` obligations, the outsider, the window), and a
+    /// carrier the door refuses is not an inert licence but a mempool refusal, on which kaspad's
+    /// licence collector drops its funding chain for the rest of the tick. So what is offered is what
+    /// the door and the fold were both shown, not what a monotonicity proof says they would say. Its
+    /// price — one acceptance check (the ML-DSA verifications) and one more fold (a parent-state
+    /// clone) — is paid only when a `Valid` was dropped, and such a set is offered, submitted and
+    /// throttled for `COURT_MOVE_REPLAN_DAA`, so it does not recur each tick. What does recur is the
+    /// first fold, on a pool that licenses nothing (re-assembled every tick; only submitted claims
+    /// are throttled): that is SR-6's own question, the price the coverage and S2 doors already pay
+    /// through `palw_v2_offered_licence_licenses_v1`, once per `palw_v1_offer_v1` prefix that reaches
+    /// the acceptance quorum.
+    ///
+    /// Below the fence `object` is returned as it came (byte-identical to the assemblers before
+    /// P2-5): a licence there is the whole set's or nothing, and each caller keeps the rule it had.
+    fn palw_v2_offered_backed_subset_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        door_takes: impl FnOnce(&kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> bool,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid;
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        if !state_params.rcore_plus_active_at(point.daa_score) {
+            return Some(object);
+        }
+        let backed = kaspa_consensus_core::palw_state_v2::palw_v2_licence_backed_seats_v1(
+            state,
+            state_params,
+            point,
+            &object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )?;
+        let keeps = |receipt: &kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2| {
+            !matches!(receipt.verdict, Valid) || backed.contains(&receipt.seat_bond)
+        };
+        let subset = match &object {
+            Obj::ReceiptLicensed { claim, receipts } => {
+                Obj::ReceiptLicensed { claim: *claim, receipts: receipts.iter().filter(|receipt| keeps(receipt)).cloned().collect() }
+            }
+            Obj::ReceiptLicensedV2 { claim, receipts } => Obj::ReceiptLicensedV2 {
+                claim: *claim,
+                receipts: receipts.iter().filter(|signed| keeps(&signed.receipt)).cloned().collect(),
+            },
+            // Only the two doors that keep every clean candidate come here.
+            _ => return None,
+        };
+        if subset == object {
+            return Some(object);
+        }
+        (door_takes(&subset) && self.palw_v2_offered_licence_licenses_v1(state, state_params, point, &subset)).then_some(subset)
     }
 
     /// ADR-0133 S2: assemble an `OptimisticLicensed` from V3 receipts when the full-replay seat's
@@ -7401,15 +8029,16 @@ impl VirtualStateProcessor {
     /// whose `Valid` signer cannot post its door's price licenses nothing: past the audit fence it
     /// is INERT — it folds, and the claim stays `PanelBound` (an S2 set whose full-replay seat
     /// cannot post the whole-gain price is the case the review found) — and below it the fold
-    /// refuses it (`SeatValidLockRefused`) and the rehearsal drops the object. kaspad asks coverage,
+    /// refuses it (`SeatValidLockRefused`) and the rehearsal drops the object. kaspad asked coverage,
     /// then optimistic (`.or_else` in `palw_panel.rs`), so a set the first door offered and the fold
     /// did not take kept the second from ever being tried: the node resubmitted it every replan
     /// until the receipt window voided a claim the other door would have licensed.
     ///
-    /// On a Verification V2 chain those two are the only doors kaspad can form. Its V1 pool holds
-    /// the inner halves of its V3 receipts, signed over the V3 message, and the V1 quorum and
-    /// supplementary validators check the V2 message — so nothing falls through past optimistic,
-    /// and a seat the licence did not carry is not credited later.
+    /// On a Verification V2 chain those two were the only doors kaspad could form while its V1 pool
+    /// held only the inner halves of its V3 receipts (signed over the V3 message, which the V1
+    /// validators refuse). Past SEAT-R a replaying seat also files its whole-job V2 `Valid`, so the V1
+    /// door forms too, and past `palw_rcore_plus` it is asked before S2 (X22); from Phase 2 (P2-5) it
+    /// asks the fold as well, through [`Self::palw_v2_offered_backed_subset_v1`].
     ///
     /// The fold is asked directly (`palw_v2_object_licenses_claim_v1`), so this is the fold's
     /// predicate, not a second copy of it. It is asked on every network: it decides only which set
@@ -13966,9 +14595,13 @@ impl VirtualStateProcessor {
         // ADR-0109 Decision 3: a spend of a PALW bond the registry holds locked at the virtual tip is
         // refused here, with the merge's own error, instead of being carried by a block and skipped
         // at the merge where nobody hears it. The same set the acceptance path builds
-        // (`palw_v2_locked_bonds`), read at the tip the mempool judges against.
-        if let Some(locked) = self.palw_mempool_locked_bonds(virtual_daa_score)
-            && let Some(outpoint) = first_locked_input(&mutable_tx.tx, &locked)
+        // (`palw_v2_locked_bonds`), read at the tip the mempool judges against. Its burn half — a
+        // released, slashed bond's spend must leave what the bond lost unclaimed — needs the input
+        // amounts, so it is asked in the UTXO context below, before the script check, with the
+        // block path's own rule (`palw_bond_burn_paid`).
+        let bond_gate = self.palw_mempool_bond_gate(virtual_daa_score);
+        if let Some(gate) = bond_gate.as_ref()
+            && let Some(outpoint) = first_locked_input(&mutable_tx.tx, &gate.locked)
         {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::SpendsNonReleasableBond(outpoint));
         }
@@ -13978,7 +14611,13 @@ impl VirtualStateProcessor {
         if let Some(refusal) = self.palw_mempool_market_refusal(&mutable_tx.tx, virtual_daa_score) {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
         }
-        self.validate_mempool_transaction_in_utxo_context(mutable_tx, virtual_utxo_view, virtual_daa_score, args)?;
+        self.validate_mempool_transaction_in_utxo_context(
+            mutable_tx,
+            virtual_utxo_view,
+            virtual_daa_score,
+            args,
+            bond_gate.as_ref().map(|gate| &gate.burns),
+        )?;
         // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
         // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
         // rehearsal — and the template asks again (`validate_block_template_transaction`).
@@ -13986,6 +14625,28 @@ impl VirtualStateProcessor {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
         }
         Ok(())
+    }
+
+    /// [`Self::validate_mempool_transaction`] as if the virtual stood at `virtual_daa_score` — the
+    /// virtual UTXO set, median time and PALW tip as they are, only the DAA the policy reads moved.
+    /// Test-only: ADR-0152 T23/T05 ask the mempool's bond gate at the DAAs B-3 turns on, and T25
+    /// asks the coinbase-maturity policy at a minted leg's `M + 599` and `M + 600`, without mining
+    /// the six hundred blocks between.
+    #[cfg(test)]
+    pub(super) fn validate_mempool_transaction_at_daa_for_tests(
+        &self,
+        mutable_tx: &mut MutableTransaction,
+        virtual_daa_score: u64,
+    ) -> TxResult<()> {
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state = virtual_read.state.get().unwrap();
+        self.validate_mempool_transaction_impl(
+            mutable_tx,
+            &virtual_read.utxo_set,
+            virtual_daa_score,
+            virtual_state.past_median_time,
+            &Default::default(),
+        )
     }
 
     pub fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, args: &TransactionValidationArgs) -> TxResult<()> {
@@ -15117,6 +15778,11 @@ impl VirtualStateProcessor {
                 &self.palw_round_blocks_of(&virtual_state.ghostdag_data),
             )
             .unwrap();
+        // **The coinbase is fixed HERE, before `evm_template_fields` commits the lane** (phase2-plan
+        // §5.4, F6): the lane never reads the block's own coinbase, so the vesting mints and seat
+        // pay it renders need no re-commit — and a later edit of these outputs must re-derive the
+        // lane (`palw_v2_payout_outputs`' rules). T50 (`p2_evm_twin`) holds build == validate with
+        // the lane as shipped over mint-carrying attempts and a restamped heartbeat.
         txs.insert(0, coinbase.tx);
         // kaspa-pq EVM Lane v0.4 (§4.3/§15): the template declares the
         // fork-correct header version — v2 (two EVM commitments) at/after
@@ -16151,6 +16817,17 @@ pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_c
         timeout_daa_score: lock.timeout_daa_score,
         block_daa_score: entry.block_daa_score,
     })
+}
+
+/// **ADR-0109 Decision 3's mempool gate, both halves** — what the chain walk and the template hand
+/// the per-transaction check as `BondSpendFilter`'s PALW side, read at the virtual tip: the bonds a
+/// spend may not touch, and what a spend of a released, slashed bond must leave unclaimed
+/// (`BondBurnNotPaid`). The lock half alone left a signed, burn-evading spend of a released bond
+/// admitted and relayed, then dropped by every template and skipped at every merge (the PROC-A
+/// review's probe); the burn half closes that the way the lock half closed the locked spend.
+pub(super) struct PalwMempoolBondGate {
+    pub(super) locked: std::collections::HashSet<TransactionOutpoint>,
+    pub(super) burns: std::collections::HashMap<TransactionOutpoint, u64>,
 }
 
 /// ADR-0109 Decision 3: the first input of `tx` that spends a locked PALW bond, if any.

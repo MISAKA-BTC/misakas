@@ -22,7 +22,10 @@ const PRODUCER: u64 = 9_101;
 
 #[test]
 fn a_licensed_2m_claim_keeps_the_2m_room_at_zero_until_final() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (_, id2m) = model_classes(&p);
@@ -66,8 +69,12 @@ fn a_licensed_2m_claim_keeps_the_2m_room_at_zero_until_final() {
     let licensed_now = (owed(&p, &s, id2m), op186(&p, &sp, &s, id2m, daa).panel_room);
     let gate_licensed = gate(&p, &sp, &s, id2m, daa + 1);
 
-    // One block past the challenge window: the claim is Final and owes nothing.
-    daa = licensed_daa + sp.window_challenge_at(licensed_daa) + 1;
+    // One block past its Final deadline: the claim is Final and owes nothing.
+    // Restated for ADR-0152 §4-quater V4: a licensed claim Finals one block past its DL-1 deadline, now
+    // `max(L + wc, H)` — for a 2M claim the verification horizon `bound + 13,996`, far past `L + 120`.
+    let final_at = s.deadline_of(&claim).expect("a licensed claim owes its Final deadline");
+    assert!(final_at > licensed_daa + sp.window_challenge_at(licensed_daa), "the horizon is the floor");
+    daa = final_at + 1;
     s = readied(&sp, &s, &ready, id2m, daa - 1);
     s = go(&p, &sp, &s, &ctx(0x9101_0004, daa, daa, 0), &[], PalwBlockWorkV3::None, Hash64::default()).expect("the sweep").0;
     let final_phase = s.claim(&claim).expect("the claim").phase.clone();
