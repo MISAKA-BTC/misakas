@@ -63,6 +63,32 @@ use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
+/// **ADR-0152 R-3 (P2-8): the reporter's commit–reveal filer**, and the capture arm's
+/// `ExecutorRefuted` and J1 auto that feed it — a child of this module, so each call site below is
+/// one line (see its own header).
+#[path = "palw_reporter_filer.rs"]
+pub(crate) mod reporter_filer;
+
+/// ADR-0152 v3.1 Phase 2, P2-8b + P2-8d: the replay filer — a child module, so it reads this
+/// service's own seams (the ledger, the backends, the court queue) without widening them.
+#[path = "palw_filer_replay.rs"]
+mod palw_filer_replay;
+
+/// **Take the host ledger's reservation for a replay of `role`** — the body of
+/// [`PalwPanelService::reserve_replay_v1`], free of the service so a blocking task that prices its
+/// own need (the replay filer's, which decodes its candidates off the loop) takes it through the
+/// same one rule. Held for the replay's life; `Err` is the hold's sentence.
+fn reserve_replay_on_host_v1(
+    role: &'static str,
+    need: &crate::palw_backends::PalwRoleMemoryNeedV1,
+    class_id: Hash64,
+    job: Hash64,
+) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
+    crate::palw_memory_ledger::host_ledger_v1()
+        .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, need.total_bytes())
+        .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
+}
+
 const PALW_PANEL: &str = "palw-panel";
 
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
@@ -3756,9 +3782,7 @@ impl PalwPanelService {
         class_id: Hash64,
         job: Hash64,
     ) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
-        crate::palw_memory_ledger::host_ledger_v1()
-            .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, need.total_bytes())
-            .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
+        reserve_replay_on_host_v1(role, need, class_id, job)
     }
 
     fn fee_state_path(&self) -> PathBuf {
@@ -4389,6 +4413,11 @@ impl PalwPanelService {
                         Ok(()) => {
                             if palw_da_accusation_queued_v1(round, mine_is_responder, &object) {
                                 info!("[{PALW_PANEL}] submitted this seat's DefaultAccused of claim {session_id} in tx {txid} (P2-6)");
+                            } else if reporter_filer::palw_filer_queued_v1(round, mine_is_responder, &object) {
+                                info!(
+                                    "[{PALW_PANEL}] submitted {} for offence {session_id} in tx {txid} (the reporter filer, R-3)",
+                                    object_name(&object)
+                                );
                             } else {
                                 info!(
                                     "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
@@ -5844,6 +5873,9 @@ impl PalwPanelService {
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        // ADR-0152 R-3 (P2-8): every conviction this node files on its own evidence — commit, then the
+        // evidence, then the reveal, through `court_pending` — persisted so a restart still reveals.
+        let mut reporter_filer = reporter_filer::PalwReporterFilerV1::load(&self.config.state_dir);
         // ADR-0100: the claims this seat has accused in the one-move court, so a fault that
         // recurs on every tick (the duty stands until the claim ends) is filed once.
         let mut accused: HashSet<Hash64> = HashSet::new();
@@ -5876,6 +5908,11 @@ impl PalwPanelService {
         let mut last_lane: Option<PalwCarrierLaneV1> = None;
         // P2-6: the claims this seat accuses of withholding, until the chain has the accusation.
         let mut accusations = PalwSeatAccusationsV1::default();
+        // P2-8c: the claims this node holds a proof against, and the false-Valid filings it made. In
+        // memory, like the accusations above: a restart forgets it (the module's "What a restart loses").
+        let mut false_valid = crate::palw_filer_false_valid::PalwFalseValidFilerV1::for_params(&self.consensus_config.params);
+        // P2-8b / P2-8d: the claims this seat's replay refuted, pursued to a proof (`palw_filer_replay`).
+        let mut replay_filer = palw_filer_replay::PalwReplayFilerV1::default();
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -7227,6 +7264,21 @@ impl PalwPanelService {
                             continue;
                         };
                         info!("[{PALW_PANEL}] session {} closes as {verdict:?} on step {index}", duty.session_id);
+                        // P2-8c (ADR-0152 N10): a close this node's replay built that proves the executor
+                        // guilty proves every `Valid` signer the audit's rule reaches false too.
+                        if verdict == kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty && !duty.i_am_responder {
+                            false_valid.note_court_close_v1(
+                                crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                    &self.consensus_config.params,
+                                    self.config.fee_outpoint.is_some(),
+                                    current_daa,
+                                ),
+                                duty.claim_id,
+                                &proof,
+                                index,
+                                current_daa,
+                            );
+                        }
                         Some(PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof })
                     }
                     // Not our move: the other party owes this rung. Counted, because "waiting" and
@@ -8208,6 +8260,19 @@ impl PalwPanelService {
                                     job_pin: duty.fp_job_pin_v1(),
                                 };
                                 if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
+                                    // P2-8, J1 auto: the claim's committed execution under another job?
+                                    self.j1_auto_probe_v1(
+                                        &session,
+                                        &mut reporter_filer,
+                                        duty,
+                                        deadline,
+                                        current_daa,
+                                        bond_key,
+                                        &network_domain,
+                                        &payload.capture,
+                                        roots,
+                                    )
+                                    .await;
                                     continue;
                                 }
                                 let Some(shape) = backend.capture_shape(&payload.capture) else { continue };
@@ -8339,15 +8404,48 @@ impl PalwPanelService {
                                     // this seat found, and it is recorded rather than dropped.
                                     CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {
                                         self.note_seat_fault_v1(duty.claim_id, leaf, 1);
+                                        // P2-8c (ADR-0152 N10): the same refutation is a proof against every
+                                        // `Valid` signer of the claim, filed once a licence names them.
+                                        false_valid.note_step_refutation_v1(
+                                            crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                                &self.consensus_config.params,
+                                                self.config.fee_outpoint.is_some(),
+                                                current_daa,
+                                            ),
+                                            duty.claim_id,
+                                            &refutation,
+                                            &openings,
+                                            prompt_opening.as_ref(),
+                                            crate::palw_filer_false_valid::PalwFalseValidSourceV1::CaptureSample { leaf },
+                                            Some(duty.bound_daa),
+                                            current_daa,
+                                        );
+                                        // **P2-8 (SR-8): past `palw_rcore_plus`, `ExecutorRefuted` over
+                                        // the refutation in hand** — built before the accusation below
+                                        // takes the refutation by value; `None` below the fence.
+                                        let refuted = self.capture_arm_filing_v1(
+                                            duty,
+                                            deadline,
+                                            current_daa,
+                                            bond_key,
+                                            &refutation,
+                                            &openings,
+                                            &prompt_opening,
+                                        );
                                         // **The one thing a seat that found a lie files** (ADR-0098
                                         // Decision 2, ADR-0099 Decision 5): on a network whose
                                         // acceptance layer takes it, the accusation — the leaf, the
                                         // refutation it just ran, the openings it just proved —
                                         // signed under this seat's bond key and queued on the same
                                         // carrier path every court move rides. Once per claim.
-                                        if crate::palw_producer::palw_shard_court_in_force_v1(&self.consensus_config, current_daa)
-                                            && !accused.contains(&duty.claim_id)
-                                        {
+                                        let court = 'court: {
+                                            if !(crate::palw_producer::palw_shard_court_in_force_v1(
+                                                &self.consensus_config,
+                                                current_daa,
+                                            ) && !accused.contains(&duty.claim_id))
+                                            {
+                                                break 'court None;
+                                            }
                                             use kaspa_consensus_core::palw_shard_court_v1::{
                                                 PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, PALW_SHARD_COURT_VERSION_V1,
                                                 PalwShardCourtAccusationV1, palw_shard_court_session_id_v1,
@@ -8369,7 +8467,7 @@ impl PalwPanelService {
                                                     "[{PALW_PANEL}] claim {}: {} leaves is above this network's refutation ladder of {ladder}; the fault is recorded, not accused",
                                                     duty.claim_id, refutation.binding.step_leaf_count
                                                 );
-                                                break 'verdict None;
+                                                break 'court None;
                                             }
                                             let mut accusation = PalwShardCourtAccusationV1 {
                                                 version: PALW_SHARD_COURT_VERSION_V1,
@@ -8400,14 +8498,7 @@ impl PalwPanelService {
                                                             accusation: Box::new(accusation),
                                                         };
                                                         match kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
-                                                            Ok(()) => {
-                                                                info!(
-                                                                    "[{PALW_PANEL}] claim {}: accusing leaf {leaf} in the one-move court (session {session_id})",
-                                                                    duty.claim_id
-                                                                );
-                                                                accused.insert(duty.claim_id);
-                                                                court_pending.push((session_id, 0, false, object));
-                                                            }
+                                                            Ok(()) => break 'court Some((session_id, object)),
                                                             Err(why) => warn!(
                                                                 "[{PALW_PANEL}] claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed",
                                                                 duty.claim_id
@@ -8420,7 +8511,22 @@ impl PalwPanelService {
                                                     duty.claim_id
                                                 ),
                                             }
-                                        }
+                                            None
+                                        };
+                                        // P2-8: kind 4 through the reporter filer first, the accusation
+                                        // kept as its fallback; else the accusation, as below the fence.
+                                        self.capture_arm_files_v1(
+                                            &session,
+                                            &mut reporter_filer,
+                                            &mut accused,
+                                            &mut court_pending,
+                                            duty,
+                                            leaf,
+                                            bond_key,
+                                            &network_domain,
+                                            refuted,
+                                            court,
+                                        );
                                         break 'verdict None;
                                     }
                                 }
@@ -8565,20 +8671,31 @@ impl PalwPanelService {
                             ) else {
                                 break 'verdict None;
                             };
-                            let arm = palw_attempt_material_arm_v1(
-                                seat_r,
-                                PalwSeatArmV1::AttemptMaterial,
-                                backend.as_ref(),
-                                bytes,
-                                PalwClaimRootsV1 {
-                                    execution_root: duty.execution_root,
-                                    trace_root: duty.trace_root,
-                                    anchor,
-                                    attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
-                                    output_root: Some(duty.output_root),
-                                    job_pin: duty.fp_job_pin_v1(),
-                                },
-                            );
+                            let roots = PalwClaimRootsV1 {
+                                execution_root: duty.execution_root,
+                                trace_root: duty.trace_root,
+                                anchor,
+                                attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                                output_root: Some(duty.output_root),
+                                job_pin: duty.fp_job_pin_v1(),
+                            };
+                            let arm =
+                                palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, backend.as_ref(), bytes, roots);
+                            if arm == PalwMaterialArmV1::Nothing {
+                                // P2-8, J1 auto: the claim's committed execution under another job?
+                                self.j1_auto_probe_v1(
+                                    &session,
+                                    &mut reporter_filer,
+                                    duty,
+                                    deadline,
+                                    current_daa,
+                                    bond_key,
+                                    &network_domain,
+                                    bytes,
+                                    roots,
+                                )
+                                .await;
+                            }
                             if arm != PalwMaterialArmV1::Nothing {
                                 // **Retained here, and only here**: the chain carries this claim, this
                                 // seat is on its panel, and these exact bytes reproduce its committed
@@ -9306,6 +9423,70 @@ impl PalwPanelService {
                 // review's note).
                 court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));
             }
+
+            // --- P2-8b / P2-8d: this seat's replay filer (`palw_filer_replay`) ---
+            //
+            // ADR-0152 SR-8, §3.9's garbage row, J-6, DA-3: a claim this seat's replay refuted, or on
+            // which a fault finder recorded a fault, is bisected off the loop against the claim's served
+            // capture; the first divergent step is handed to the reporter filer as `ExecutorRefuted`
+            // (or demanded as a `StepLeaf` the served material cannot open, onto the court queue the
+            // priority lane carries below).
+            let replay_made = self
+                .replay_filer_tick_v1(
+                    &session,
+                    &mut replay_filer,
+                    &mut reporter_filer,
+                    current_daa,
+                    network_domain,
+                    bond_key,
+                    &duties,
+                    &replay_refuted,
+                    &materials,
+                    &accused,
+                    &mut court_pending,
+                    &mut court_moved,
+                )
+                .await;
+            // P2-8c (N10): the replay's contradiction proves the claim's liable `Valid` signers false too.
+            if let Some((refuted, bound_daa)) = &replay_made {
+                false_valid.note_executor_refuted_v1(
+                    crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                        &self.consensus_config.params,
+                        self.config.fee_outpoint.is_some(),
+                        current_daa,
+                    ),
+                    &refuted.object,
+                    Some(*bound_daa),
+                    current_daa,
+                );
+            }
+
+            // --- P2-8c: this node's automatic PanelFalseValidV2 filings ---
+            //
+            // ADR-0152 v3.1 N10: a proof the capture arm or a court close noted above is filed against
+            // every `Valid` signer of the claim the audit's liability rule reaches, once a licence
+            // names them — off the tick, one claim a tick, each filing asked of the chain first and
+            // handed to the reporter filer below through the panel's door (`palw_filer_false_valid.rs`).
+            // Below `palw_rcore_plus`, and on a node that carries nothing, the book is emptied.
+            if crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                &self.consensus_config.params,
+                self.config.fee_outpoint.is_some(),
+                current_daa,
+            ) {
+                crate::palw_filer_false_valid::palw_false_valid_tick_v1(
+                    &mut false_valid,
+                    &session,
+                    bond_key,
+                    current_daa,
+                    &mut self.conviction_door_v1(&session, &mut reporter_filer, bond_key, network_domain),
+                )
+                .await;
+            } else {
+                false_valid.clear();
+            }
+
+            // --- P2-8: the reporter's commit–reveal filer (ADR-0152 R-3; `reporter_filer`) ---
+            self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending, &mut court_moved, &mut accused);
 
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
@@ -10508,7 +10689,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
 /// acceptance data (the merged blocks' transactions it accepted, in reverse), stopping below the
 /// height or after `max_chain_blocks` chain blocks. A transaction the chain did not accept, or on
 /// another subnetwork, or whose payload does not decode, is never visited.
-fn walk_accepted_lifecycle_objects_v1(
+pub(crate) fn walk_accepted_lifecycle_objects_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     not_before_daa: u64,
     max_chain_blocks: usize,

@@ -186,6 +186,71 @@ pub struct PalwPanelFalseValidEvidenceV2 {
     pub reporter_reveal: Vec<u8>,
 }
 
+impl PalwPanelFalseValidEvidenceV2 {
+    /// **The evidence a filer sends** (ADR-0152 v3.1 N10, §7.3 P2-8c): version 2, the accused
+    /// named by the receipt it signed (the adjudicator's step 3 refuses any other seat), the
+    /// contradiction in the carriage the caller built — a step refutation's prompt through
+    /// [`crate::palw_step_refute::palw_refutation_prompt_carriage_v1`], exactly as the one-move
+    /// court's pair — and F7's slot EMPTY: on testnet-12 `reporter_armed` is `false` and R-3's
+    /// reporter files through objects 53/54, never through this slot. A pure constructor; what the
+    /// evidence proves is [`palw_check_panel_false_valid_v2`]'s to say.
+    pub fn filed_v2(
+        claim_id: Hash64,
+        receipt: PalwFalseValidReceiptV1,
+        contradiction: PalwPanelContradictionV1,
+        prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
+    ) -> Self {
+        Self {
+            version: PALW_PANEL_FALSE_VALID_VERSION_V2,
+            claim_id,
+            accused_seat: receipt.inner().seat_bond.0,
+            receipt,
+            contradiction,
+            prompt_ids_opening,
+            reporter_reveal: Vec::new(),
+        }
+    }
+
+    /// **The `ObjectiveOffence` that carries it**: kind 3 against the accused seat, the borsh bytes
+    /// as the evidence and `evidence_id` their digest ([`crate::palw_offence_v1::palw_offence_evidence_digest_v1`],
+    /// which the gate and the fold both check) — the id R-3's commitment binds (N12), so a
+    /// reporter filer reads it from here and never recomputes it.
+    pub fn object_v2(&self) -> crate::palw_state_v2::PalwConsensusObjectV2 {
+        let evidence = borsh::to_vec(self).expect("a false-Valid evidence is borsh-serializable");
+        crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
+            kind: crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2,
+            accused: PalwBondKeyV2(self.accused_seat),
+            evidence_id: crate::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence),
+            evidence,
+        }
+    }
+}
+
+/// **The `Valid` receipts a licence object carried, each in the form it was licensed in** (C-3,
+/// P2-8c): a V1 `ReceiptLicensed` — which also carries a supplementary receipt — holds full V2
+/// receipts (`Full`, signed over `palw_receipt_message_v2`); a Verification V2 `ReceiptLicensedV2`
+/// and an S2 `OptimisticLicensed` hold V3 receipts with their masks (`Segmented`, signed over
+/// `palw_receipt_message_v3` with the mask). The form is the one the seat SIGNED, so a V3 receipt
+/// is never offered as `Full`: its signature verifies only under the V3 message. `None` for any
+/// other object; only `Valid` receipts naming the licence's own claim are returned, since the
+/// adjudicator convicts nothing else (`Sampled` is never liable, Q-1).
+pub fn palw_false_valid_receipts_of_licence_v1(
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+) -> Option<(Hash64, Vec<PalwFalseValidReceiptV1>)> {
+    use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    let valid = |inner: &PalwSeatReceiptV2, claim: &Hash64| inner.claim == *claim && inner.verdict == PalwReceiptVerdictV2::Valid;
+    match object {
+        Obj::ReceiptLicensed { claim, receipts } => {
+            Some((*claim, receipts.iter().filter(|r| valid(r, claim)).cloned().map(PalwFalseValidReceiptV1::Full).collect()))
+        }
+        Obj::ReceiptLicensedV2 { claim, receipts } | Obj::OptimisticLicensed { claim, receipts } => Some((
+            *claim,
+            receipts.iter().filter(|r| valid(&r.receipt, claim)).cloned().map(PalwFalseValidReceiptV1::Segmented).collect(),
+        )),
+        _ => None,
+    }
+}
+
 /// Which lane a claim came from. Not stored as such: read off the claim row when a target is
 /// resolved, or off the liability row's `free_prompt` where the row recorded the claim's identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,6 +280,51 @@ pub struct PalwExecutorRefutedEvidenceV1 {
     pub prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
     /// F7's commit–reveal slot, as kind 3's: empty until its own fence, never in the ledger key.
     pub reporter_reveal: Vec<u8>,
+}
+
+/// **C-5 (ADR-0152 v3.1 §7.3 P2-8, J-4): kind 4's evidence as a filer sends it — `(evidence_id,
+/// bytes)`.** The version the adjudicator reads, the claim, the contradiction as given, the prompt
+/// opening, and an EMPTY reporter slot: on t12 the reporter rides R-3's objects 53/54, and a filled
+/// slot is refused (`ReporterSlotNotArmed`, SPEC §3.3 step 2). `evidence_id` is
+/// [`crate::palw_offence_v1::palw_offence_evidence_digest_v1`] of the bytes — what
+/// `ObjectiveOffence.evidence_id` must equal and what a reporter's commitment binds (R-3, N12).
+///
+/// A step refutation must already be in the network's prompt carriage
+/// (`palw_refutation_prompt_carriage_v1`, which the capture sampler applies before it grades a
+/// leaf), with its tile as `prompt_ids_opening`; the adjudicator refuses an opening beside any other
+/// contradiction. Pure: it judges nothing (the adjudicator, [`palw_check_executor_refuted_v1`], does).
+pub fn palw_executor_refuted_evidence_v1(
+    claim_id: Hash64,
+    contradiction: PalwPanelContradictionV1,
+    prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
+) -> (Hash64, Vec<u8>) {
+    let bytes = borsh::to_vec(&PalwExecutorRefutedEvidenceV1 {
+        version: PALW_EXECUTOR_REFUTED_VERSION_V1,
+        claim_id,
+        contradiction,
+        prompt_ids_opening,
+        reporter_reveal: Vec::new(),
+    })
+    .expect("kind 4's evidence is borsh-serializable");
+    (crate::palw_offence_v1::palw_offence_evidence_digest_v1(&bytes), bytes)
+}
+
+/// **C-5: the `ObjectiveOffence { kind: ExecutorRefuted }` object** over
+/// [`palw_executor_refuted_evidence_v1`] — `accused` is the claim's executor bond, which is the one
+/// bond the adjudicator lets a kind-4 name (`AccusedNotTheExecutor` otherwise).
+pub fn palw_executor_refuted_object_v1(
+    executor: PalwBondKeyV2,
+    claim_id: Hash64,
+    contradiction: PalwPanelContradictionV1,
+    prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
+) -> crate::palw_state_v2::PalwConsensusObjectV2 {
+    let (evidence_id, evidence) = palw_executor_refuted_evidence_v1(claim_id, contradiction, prompt_ids_opening);
+    crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
+        kind: crate::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted,
+        accused: executor,
+        evidence_id,
+        evidence,
+    }
 }
 
 /// **What the identity checks read besides the target and the binding**: the network's prompt-id
@@ -1537,6 +1647,55 @@ pub fn palw_executor_refuted_offence_id_v1(executor: &TransactionOutpoint, claim
     )
 }
 
+/// **R-3: the key a FILED conviction is consumed under, when — and only when — it takes a
+/// reporter's commitment** (ADR-0152 v3.1 §3.6 R-3 "Which keys take commitments"; P2-8's filer).
+///
+/// `Some(offence_key)` for exactly the filings whose conviction opens a commit–reveal reward
+/// (`PalwConvictionBasisV1::CheckedEvidence`), under the key the fold writes `consumed_offences` and
+/// `reward_pending` under — which is also what a `ReporterCommitted` commits to and a
+/// `ReporterRevealed` names:
+///
+/// * kind 4 on any claim: [`palw_executor_refuted_offence_id_v1`] (one per claim; every admitted
+///   contradiction, 5, 6, 8–13, refutes the claim and pays);
+/// * kind 3 whose contradiction the admission table ([`palw_false_valid_admission_v1`]) calls
+///   `ExecutionProving` or `ClaimProving`: [`palw_false_valid_offence_id_v2`] (one per (seat, claim)).
+///   Contradictions 2 (`ProducerWithholding`) and 4 (`CourtFraud`) restate a DA default or a court
+///   verdict: the fold opens no reward for them (`acts_on_claim` is false), so a commitment to one
+///   could never be revealed;
+/// * a standalone kind 0 (S-SPEC P10): `palw_offence_id_v1(ExecutorEquivocation, accused,
+///   evidence_id)`, the key `consume_objective_offence` consumes it under.
+///
+/// `None` for everything else — in particular the NAMED rewards (a DA default's accuser, a court
+/// conviction's challenger; V3S-03): their keys are public at admission, the fold refuses every
+/// reveal on them (`PalwPendingRewardV1::accepts_reveals`), and a commitment to one only spends one of
+/// the reporter's 64 slots for 3,000 DAA. This reads the evidence's claim and the contradiction's
+/// admission class; it judges nothing (the adjudicators do, in the gate and the fold).
+pub fn palw_filed_offence_commit_key_v1(
+    kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    accused: &TransactionOutpoint,
+    evidence_id: &Hash64,
+    evidence: &[u8],
+) -> Option<Hash64> {
+    use crate::palw_offence_v1::PalwOffenceKindV1 as K;
+    match kind {
+        K::ExecutorRefuted => {
+            let payload: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(evidence).ok()?;
+            Some(palw_executor_refuted_offence_id_v1(accused, &payload.claim_id))
+        }
+        K::PanelFalseValidV2 => {
+            let payload: PalwPanelFalseValidEvidenceV2 = borsh::from_slice(evidence).ok()?;
+            match palw_false_valid_admission_v1(&payload.contradiction).ok()? {
+                PalwFalseValidAdmissionV1::ExecutionProving | PalwFalseValidAdmissionV1::ClaimProving => {
+                    Some(palw_false_valid_offence_id_v2(accused, &payload.claim_id))
+                }
+                PalwFalseValidAdmissionV1::NamedVoid { .. } => None,
+            }
+        }
+        K::ExecutorEquivocation => Some(crate::palw_offence_v1::palw_offence_id_v1(kind, accused, evidence_id)),
+        K::PanelFalseValid | K::CourtExecutorGuilty | K::DaDefault | K::CourtConviction => None,
+    }
+}
+
 /// **Which contradictions refute an executor** (ADR-0152 v3.1 J-4, addendum §4-bis.7): the proofs
 /// against its own committed execution (5 `StepArithmetic`, 6 `StepStructural`, 8 `ForgedOutput`,
 /// 11 `ForgedOutputTiled`, 12 `LogitsNotStepOutput`) and against the job or output its claim answers
@@ -2793,6 +2952,59 @@ mod tests {
     fn zeroed<T: borsh::BorshDeserialize>() -> T {
         let zeros = vec![0u8; 1 << 16];
         T::deserialize(&mut zeros.as_slice()).expect("an all-zero encoding decodes")
+    }
+
+    /// **C-5 and R-3's filed key (P2-8).** Kind 4's constructor: the id is the digest of its bytes,
+    /// the reporter slot is empty and the bytes decode back to what was given; its object names the
+    /// executor. The filed key: kind 4's per-claim id; kind 3's per-(seat, claim) id on a claim- or
+    /// execution-proving contradiction and none on a restated `CourtFraud`; kind 0's ledger id; none
+    /// for the fold-recorded kinds, the V1 kinds and an undecodable body.
+    #[test]
+    fn p2_8_the_kind_4_constructor_and_the_filed_commit_key() {
+        use crate::palw_offence_v1::{PalwOffenceKindV1 as K, palw_offence_evidence_digest_v1, palw_offence_id_v1};
+        let binding = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(
+            &h64(0xA2C0),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+        );
+        let identity = PalwPanelContradictionV1::IdentityMismatch { binding };
+        let (id, body) = palw_executor_refuted_evidence_v1(h64(CLAIM), identity.clone(), None);
+        assert_eq!(id, palw_offence_evidence_digest_v1(&body));
+        let back: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(&body).expect("decodes");
+        assert_eq!(
+            back,
+            PalwExecutorRefutedEvidenceV1 {
+                version: PALW_EXECUTOR_REFUTED_VERSION_V1,
+                claim_id: h64(CLAIM),
+                contradiction: identity.clone(),
+                prompt_ids_opening: None,
+                reporter_reveal: Vec::new(),
+            }
+        );
+        let executor = seat(99);
+        let crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence: carried } =
+            palw_executor_refuted_object_v1(executor, h64(CLAIM), identity.clone(), None)
+        else {
+            panic!("an objective offence")
+        };
+        assert_eq!((kind, accused, evidence_id, &carried), (K::ExecutorRefuted, executor, id, &body));
+
+        let key = |kind, accused: &PalwBondKeyV2, evidence: &[u8]| {
+            palw_filed_offence_commit_key_v1(kind, &accused.0, &palw_offence_evidence_digest_v1(evidence), evidence)
+        };
+        assert_eq!(key(K::ExecutorRefuted, &executor, &body), Some(palw_executor_refuted_offence_id_v1(&executor.0, &h64(CLAIM))));
+        let proving = bytes(&evidence(full(3), identity));
+        assert_eq!(key(K::PanelFalseValidV2, &seat(3), &proving), Some(palw_false_valid_offence_id_v2(&seat(3).0, &h64(CLAIM))));
+        let restated = bytes(&evidence(full(3), PalwPanelContradictionV1::CourtFraud { voided_daa: 7 }));
+        assert_eq!(key(K::PanelFalseValidV2, &seat(3), &restated), None, "a restated CourtFraud pays no reward of its own");
+        let eq = vec![0xE0; 8];
+        assert_eq!(
+            key(K::ExecutorEquivocation, &executor, &eq),
+            Some(palw_offence_id_v1(K::ExecutorEquivocation, &executor.0, &palw_offence_evidence_digest_v1(&eq)))
+        );
+        for kind in [K::DaDefault, K::CourtConviction, K::PanelFalseValid, K::CourtExecutorGuilty] {
+            assert_eq!(key(kind, &executor, &body), None, "{kind:?}");
+        }
+        assert_eq!(key(K::ExecutorRefuted, &executor, &[1, 2, 3]), None, "an undecodable body");
     }
 }
 

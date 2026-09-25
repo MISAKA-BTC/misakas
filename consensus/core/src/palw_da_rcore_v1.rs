@@ -755,6 +755,72 @@ pub fn palw_da_accusation_object_v1(
     Ok(object)
 }
 
+/// **Why node policy builds no `DefaultAccusedHeld`** — each a refusal the acceptance layer or the
+/// fold's opening would make of the object, found before a carrier is paid for.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwDaHeldAccusationBuildErrorV1 {
+    /// The unit is not inside what the binding commits, or the binding is not the claim's
+    /// (`palw_held_da_check_accusation_v1`, which the fold's opening runs: `HeldDaRefused`).
+    #[error("the fold refuses the held unit: {0}")]
+    Refused(String),
+    /// A fused-attention `StepLeaf`: its terminal is a held dissection (DA-3, `DaUnitNeedsDissection`).
+    #[error("step leaf {0} is a fused-attention leaf: a held dissection's, never a unit")]
+    NeedsDissection(u64),
+    #[error("no signing key for the accuser")]
+    Unsigned,
+    #[error("the accusation cannot ride a carrier: {0}")]
+    CannotRide(&'static str),
+}
+
+/// **DA-3 / J-6 (P2-8d): the ONE builder of a held `DefaultAccusedHeld`** — a seat's demand of a
+/// divergent step leaf its own replay located (`palw_replay_refute_v1`'s `DemandLeaf`), beside P2-6's
+/// event builder above.
+///
+/// Before it signs, it asks the two STATELESS halves of the fold's opening
+/// (`open_da_session_rcore_v1`) of the unit: `palw_held_da_check_accusation_v1` (the binding rebuilds
+/// the claim's `execution_root`, the unit is inside what it commits, a prompt tile only on a tiled
+/// prompt) and, for a `StepLeaf`, `palw_da_step_leaf_is_fused_v1` (a fused leaf is a dissection's).
+/// It signs `palw_held_da_accusation_message_v1` over the network, the version, the claim, the unit
+/// and the accuser under `PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT` with `sign(message, context)`, and
+/// holds the object to the ride rule (signed, under the close ceiling). The stateful half — C-8's gate
+/// (stage, retention, standing, DA-8's caps, A-6's room), the identity rule on the binding (J-5), and
+/// `DaUnitAlreadyAnswered` — is the fold's, asked through `palw_producer_v2::palw_da_accusation_check_v1`
+/// before this is called and by the fold again.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_da_held_accusation_object_v1(
+    network_domain: &Hash64,
+    claim: Hash64,
+    claim_execution_root: &Hash64,
+    missing: PalwHeldMissingV1,
+    binding: crate::palw_step_leg::PalwStepBindingV2,
+    accuser: PalwBondKeyV2,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<crate::palw_state_v2::PalwConsensusObjectV2, PalwDaHeldAccusationBuildErrorV1> {
+    use crate::palw_held_da_v1::{
+        PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldAccusationV1, palw_held_da_accusation_message_v1,
+        palw_held_da_check_accusation_v1,
+    };
+    if let PalwHeldMissingV1::StepLeaf { leaf } = missing
+        && binding.committed_execution_root == *claim_execution_root
+        && palw_da_step_leaf_is_fused_v1(&binding, leaf)
+    {
+        return Err(PalwDaHeldAccusationBuildErrorV1::NeedsDissection(leaf));
+    }
+    palw_held_da_check_accusation_v1(claim_execution_root, &missing, &binding, form)
+        .map_err(|e| PalwDaHeldAccusationBuildErrorV1::Refused(e.to_string()))?;
+    let mut accusation =
+        PalwHeldAccusationV1 { version: PALW_HELD_DA_VERSION_V1, claim, missing, accuser, binding, signature: Vec::new() };
+    let message = palw_held_da_accusation_message_v1(network_domain.as_byte_slice(), &accusation);
+    accusation.signature = sign(message.as_byte_slice(), PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT)
+        .filter(|signature| !signature.is_empty())
+        .ok_or(PalwDaHeldAccusationBuildErrorV1::Unsigned)?;
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::DefaultAccusedHeld { accusation: Box::new(accusation) };
+    crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object)
+        .map_err(PalwDaHeldAccusationBuildErrorV1::CannotRide)?;
+    Ok(object)
+}
+
 /// Every domain and context this module keys — listed in `PALW_STATE_V2_ALL_DOMAINS` (the family
 /// the cross-family uniqueness sweep and the committed context set are derived from).
 pub const PALW_DA_RCORE_ALL_DOMAINS: &[&[u8]] = &[
