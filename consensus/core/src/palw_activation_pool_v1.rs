@@ -472,6 +472,29 @@ pub fn palw_activation_prep_reward_v1(terms: &PalwActivationPoolTermsV1, prep_so
     palw_activation_prep_cap_v1(terms, age_daa).min(prep_sompi / 10)
 }
 
+/// **`P_full`'s multiplier: sixteen full preparation rewards** (the user's figure, 2026-09-25). A
+/// preparation budget of `16·A_MAX` is paid at the full `A_MAX` by the first two juries of five
+/// under `a = min(A_MAX, ⌊prep/10⌋)` (`16 → 11 → 6` rewards left), and the tail keeps paying at the
+/// `⌊prep/10⌋` rate after them.
+pub const PALW_ACTIVATION_RECOMMENDED_PREP_REWARDS_V1: u64 = 16;
+
+/// **`P_full`, the NON-BINDING recommended pool of a listing**: `16 · A_MAX / α`, `A_MAX = 3·A0` the
+/// ramp's top ([`palw_activation_prep_cap_v1`] at `W`), rounded up so that `α` of it — the inflow
+/// split's `⌊amount × α / 1000⌋` — is at least `16·A_MAX` of preparation budget. 2,400 MSK at the
+/// terms of 2026-09-25 (`A0` 20 MSK, `α` 400 ‰). What a sponsor is told a listing needs to pay its
+/// preparers in full: nothing in the fold reads it, no top-up is refused or scaled by it, and it
+/// replaces the registry's derived `registration_bond_sompi` (1,000 MSK a window span, never
+/// charged) as the figure a reader is shown (user decision 2026-09-25). `0` where `α` is 0: no
+/// inflow reaches (a), so no pool pays a preparer.
+pub fn palw_activation_recommended_pool_sompi_v1(terms: &PalwActivationPoolTermsV1) -> u64 {
+    let alpha = u128::from(terms.prep_share_permille.min(1_000));
+    if alpha == 0 {
+        return 0;
+    }
+    let a_max = u128::from(palw_activation_prep_cap_v1(terms, terms.ramp_daa));
+    (u128::from(PALW_ACTIVATION_RECOMMENDED_PREP_REWARDS_V1) * a_max * 1_000).div_ceil(alpha).min(u128::from(u64::MAX)) as u64
+}
+
 /// **(b)'s per-payee amount**: `⌊bonus × β / 1000 / n⌋` — zero for no payee.
 pub fn palw_activation_bonus_reward_v1(terms: &PalwActivationPoolTermsV1, bonus_sompi: u64, payees: usize) -> u64 {
     if payees == 0 {
@@ -679,6 +702,33 @@ mod tests {
             "script version 0 only"
         );
         assert_eq!(crate::mldsa87_primitives::p2pkh_mldsa87_payload(&spk), None, "an OP_RETURN is never a payee");
+    }
+
+    /// **P4 (user decision 2026-09-25): the recommended pool is `16·A_MAX/α`, derived** — 2,400 MSK
+    /// at the terms, and `α` of it is exactly sixteen full rewards, of which the first two juries of
+    /// five are paid in full.
+    #[test]
+    fn the_recommended_pool_is_sixteen_full_rewards_over_alpha() {
+        let t = PALW_ACTIVATION_POOL_TERMS_V1;
+        let msk = crate::constants::SOMPI_PER_KASPA;
+        let p_full = palw_activation_recommended_pool_sompi_v1(&t);
+        assert_eq!(p_full, 2_400 * msk, "16 × 60 MSK / 0.4");
+        let a_max = palw_activation_prep_cap_v1(&t, t.ramp_daa);
+        assert_eq!(a_max, 3 * t.prep_base_sompi, "A_MAX is the ramp's top");
+        let (mut prep, _) = palw_activation_inflow_split_v1(p_full, t.prep_share_permille, true);
+        assert_eq!(prep, 16 * a_max);
+        for jury in 0..2 {
+            let a = palw_activation_prep_reward_v1(&t, prep, t.ramp_daa);
+            assert_eq!(a, a_max, "jury {jury} is paid the full A_MAX");
+            prep -= 5 * a;
+        }
+        assert!(palw_activation_prep_reward_v1(&t, prep, t.ramp_daa) < a_max, "the third is not");
+        // Rounded up: α of the figure never falls short of sixteen rewards.
+        let odd = PalwActivationPoolTermsV1 { prep_share_permille: 333, ..t };
+        let p_odd = palw_activation_recommended_pool_sompi_v1(&odd);
+        assert!(palw_activation_inflow_split_v1(p_odd, 333, true).0 >= 16 * a_max);
+        assert!(palw_activation_inflow_split_v1(p_odd - 1, 333, true).0 < 16 * a_max);
+        assert_eq!(palw_activation_recommended_pool_sompi_v1(&PalwActivationPoolTermsV1 { prep_share_permille: 0, ..t }), 0);
     }
 
     /// The pool payout key sorts after the seats' `0xFE` rows and before the market's `0xFF`.

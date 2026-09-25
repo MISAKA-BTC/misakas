@@ -399,8 +399,18 @@ pub async fn preflight(ctx: &Ctx, manifest: &Path, json: bool) -> CliResult {
 /// `submit`: build the existing object and file it through `palw submit-object`'s path (dry-run
 /// unless `--yes`). A `model-class` / `context-profile` becomes a `ClassRegistered` built by the SDK
 /// and signed by the operator's key, which must be the bond's; a certification is its object file;
-/// a transformer and a ruleset candidate have nothing to file, and say so.
-pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&str>, yes: bool, json: bool) -> CliResult {
+/// a transformer and a ruleset candidate have nothing to file, and say so. A class registration is
+/// followed by its listing's sponsor (`sponsor`, the Activation Pool's P4) once the chain folds it,
+/// where the chain arms a pool.
+pub async fn submit(
+    ctx: &Ctx,
+    manifest: &Path,
+    ks: &KeySource,
+    bond: Option<&str>,
+    yes: bool,
+    json: bool,
+    sponsor: Option<u64>,
+) -> CliResult {
     let mf = read_manifest(manifest)?;
     let net = network_of(&mf)?;
     let kind = mf.parsed.manifest.kind;
@@ -621,7 +631,36 @@ pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&st
                     }
                 }
             }
-            crate::palw_fp::submit_objects(ctx, ks, &carriers, yes).await.map(|_| ())
+            // The pool's P4 (user decision 2026-09-25): the listing's sponsor, a follow-up carrier
+            // filed once the registration folds — where the chain arms a pool.
+            let class_id = *class_id;
+            let sponsor = sponsor.filter(|_| params.palw_activation_pool_at(daa).is_some());
+            if let Some(amount) = sponsor
+                && !json_mode(ctx, json)
+            {
+                println!(
+                    "then: sponsor {} into the class's Activation Pool once the registration folds (a donation to its preparers; \
+                     --sponsor <MSK> changes it, --no-sponsor skips it)",
+                    crate::palw_model::msk(amount)
+                );
+            }
+            crate::palw_fp::submit_objects(ctx, ks, &carriers, yes).await?;
+            if let Some(amount) = sponsor.filter(|_| yes) {
+                match crate::palw_activation_pool::sponsor_listing(ctx, ks, class_id, amount, std::time::Duration::from_secs(20 * 60))
+                    .await
+                {
+                    Ok(txid) if !json_mode(ctx, json) => {
+                        println!("sponsored {} into class {class_id}'s Activation Pool: carrier {txid}", crate::palw_model::msk(amount))
+                    }
+                    Ok(_) => {}
+                    // The registration stands: a sponsor not filed is a warning and a command.
+                    Err(why) => eprintln!(
+                        "warning: the sponsor was not filed: {why} — {}",
+                        crate::palw_activation_pool::sponsor_retry_hint(&class_id, amount)
+                    ),
+                }
+            }
+            Ok(())
         }
     }
 }

@@ -326,3 +326,131 @@ fn l4_a_dormant_class_registered_again_re_enters_as_a_candidate() {
     assert_eq!(rows[0], (Some(PalwModelLifecycleV1::Candidate), true), "past the fence: a Candidate again, its pool kept");
     assert_eq!(rows[1], (Some(PalwModelLifecycleV1::Active), false), "the old rule keeps the stale row");
 }
+
+/// A lifecycle carrier as the CLI builds one: the payer's change to its own P2PKH-ML-DSA-87 script
+/// at output 0 (the payee P-B1 pays a refusal back to), then `sinks`, the object in the payload.
+fn lifecycle_carrier(object: &PalwConsensusObjectV2, payer: Hash64, sinks: Vec<crate::tx::TransactionOutput>, nonce: u32) -> crate::tx::Transaction {
+    use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    use crate::tx::{TransactionInput, TransactionOutpoint, TransactionOutput};
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap();
+    let mut outputs = vec![TransactionOutput::new(3 * 100_000_000, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&payer.as_bytes()))];
+    outputs.extend(sinks);
+    crate::tx::Transaction::new(
+        0,
+        vec![TransactionInput::new(TransactionOutpoint::new(h64(0xF00D), nonce), vec![], 0, 1)],
+        outputs,
+        0,
+        crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    )
+}
+
+/// One chain block accepting `carriers`, the way `VirtualStateProcessor` folds it: the lifecycle
+/// walk in acceptance order, the rehearsal that drops each object the fold refuses and — past the
+/// 2026-09-23 audit fence — names what its carrier is owed (P-B1), then the transition handed those
+/// refunds. A reorg of the block must undo it. Returns the state and the refunds.
+fn block_of_carriers(
+    b: &PalwConsensusParamsV2,
+    base: &PalwChainStateV2,
+    block: u64,
+    daa: u64,
+    carriers: &[crate::tx::Transaction],
+    extras: &PalwTransitionExtrasV1,
+) -> (PalwChainStateV2, Vec<PalwCarrierRefundV1>) {
+    use crate::palw_lifecycle_objects_v2::{palw_lifecycle_objects_from_accepted_txs_v2, palw_model_carrier_refund_v1};
+    let ctx = bctx(block, daa);
+    let walk = palw_lifecycle_objects_from_accepted_txs_v2(carriers);
+    assert_eq!(walk.objects.len(), carriers.len(), "every carrier rides: {:?}", walk.skipped);
+    let mut folded = palw_v2_pre_object_base_v1(base, &b.state, &ctx, false, false, false, false, extras).expect("the pre-object base");
+    let (mut accepted, mut refunds) = (Vec::new(), Vec::new());
+    for carried in walk.objects {
+        let tx = carriers.iter().find(|tx| tx.id() == carried.carrier).expect("the carrier");
+        match palw_v2_apply_one_object_v1(&folded, &b.state, &ctx, &carried.object, false, false, false, false, extras) {
+            Ok(next) => {
+                folded = next;
+                accepted.push(carried.object);
+            }
+            Err(_) if extras.audit_2026_09_23_active => {
+                refunds.extend(palw_model_carrier_refund_v1(tx, &carried.object));
+            }
+            Err(_) => {}
+        }
+    }
+    let with_refunds = PalwTransitionExtrasV1 { carrier_market_refunds: refunds.clone(), ..extras.clone() };
+    let (next, delta, _) = apply_palw_transition_v7(
+        base,
+        &b.state,
+        None,
+        &ctx,
+        &accepted,
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        &with_refunds,
+    )
+    .expect("the block folds");
+    assert_eq!(revert_delta_v2(&next, &delta, &b.state).unwrap().state_root(), base.state_root(), "a reorg undoes the block");
+    (next, refunds)
+}
+
+/// **The pool's P4 (user decision 2026-09-25: the CLI sponsors a listing at its registration): a
+/// top-up in its registration's own block is credited or paid back — never lost.** A lifecycle
+/// carrier carries one object, so the sponsor is its own carrier; `misaka model add` files it once
+/// the registration has folded (a node's mempool refuses a top-up of a class the tip does not
+/// hold). Were the two mined into one block anyway, on testnet-12's own card: the fold applies the
+/// block's objects in acceptance order against the running state, so a sponsor BEHIND its
+/// registration finds the Candidate it just listed and is split by `α` into its pool; one AHEAD of
+/// it finds no class, is refused `MissingClass`, and is paid back whole to its payer through P-B1.
+/// Either way every sompi the activation sink took is in the pool or owed back.
+#[test]
+fn p4_a_sponsor_in_its_registrations_block_is_credited_behind_it_and_paid_back_ahead_of_it() {
+    use crate::palw_activation_pool_v1::{PALW_ACTIVATION_POOL_TERMS_V1, palw_activation_sink_spk_v1};
+    let p = palw_t12_shipped_params();
+    let b = bundle_of(&p);
+    let extras = card_extras(&p, None);
+    assert!(extras.activation_pool.is_some() && extras.audit_2026_09_23_active, "testnet-12 arms the pool and P-B1");
+    let s0 = genesis_of(&b, true, &extras);
+    let (class_id, reg) = bought(&b, &s0, 71_004);
+    let sponsor = 500 * 100_000_000u64;
+    let payer = h64(0x5B0);
+    let registration = lifecycle_carrier(&reg, h64(REGISTRANT), Vec::new(), 1);
+    let top_up = lifecycle_carrier(
+        &PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount: sponsor, sink_index: 1 },
+        payer,
+        vec![crate::tx::TransactionOutput::new(sponsor, palw_activation_sink_spk_v1(&class_id))],
+        2,
+    );
+    let owed = |state: &PalwChainStateV2| {
+        let key = palw_model_refund_payout_key_v1(&top_up.id());
+        state.pending_payouts_iter().find(|(k, _)| **k == key).map(|(_, row)| (row.payload, row.amount))
+    };
+
+    // Behind its registration: credited, split by α, owed nothing.
+    let (behind, refunds) = block_of_carriers(&b, &s0, 2, 2, &[registration.clone(), top_up.clone()], &extras);
+    assert!(refunds.is_empty(), "{refunds:?}");
+    assert_eq!(behind.model_lifecycle(&class_id).map(|row| row.state), Some(PalwModelLifecycleV1::Candidate));
+    let pool = behind.activation_pool(&class_id).cloned().expect("the listing's pool");
+    let alpha = u64::from(PALW_ACTIVATION_POOL_TERMS_V1.prep_share_permille);
+    assert_eq!((pool.funded_sompi, pool.prep_sompi, pool.bonus_sompi), (sponsor, sponsor * alpha / 1_000, sponsor - sponsor * alpha / 1_000));
+    assert!(pool.is_balanced());
+    assert_eq!(owed(&behind), None, "a folded sponsor is the pool's");
+
+    // Ahead of it: refused, paid back whole to the change its payer signed; the listing still stands.
+    let (ahead, refunds) = block_of_carriers(&b, &s0, 2, 2, &[top_up.clone(), registration.clone()], &extras);
+    assert_eq!(refunds.len(), 1, "the sponsor is the one refused carrier");
+    assert!(matches!(ahead.class(&class_id).map(|c| &c.status), Some(PalwClassStatusV2::Active)), "the registration folds");
+    let pool = ahead.activation_pool(&class_id).cloned().expect("the listing's pool opens empty");
+    assert_eq!(pool.funded_sompi, 0);
+    assert_eq!(owed(&ahead), Some((payer, sponsor)), "paid back through P-B1");
+
+    // Never lost: the sink's MSK is in the pool or owed back, in both orders.
+    for (state, name) in [(&behind, "behind"), (&ahead, "ahead")] {
+        let in_pool = state.activation_pool(&class_id).map(|pool| pool.funded_sompi).unwrap_or(0);
+        assert_eq!(in_pool + owed(state).map(|(_, amount)| amount).unwrap_or(0), sponsor, "{name}");
+    }
+}
