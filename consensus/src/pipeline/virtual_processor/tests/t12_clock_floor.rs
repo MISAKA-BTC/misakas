@@ -903,3 +903,151 @@ async fn t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225()
         );
     }
 }
+
+/// The same history as `proof`, every non-genesis level-0 header re-emitted with `add` on its
+/// self-declared `blue_work` and its nonce moved by `nonce_tweak`, parents re-wired to the re-emitted
+/// hashes. Topology, lanes and algorithm ids are untouched, so every weight the proof's GHOSTDAG
+/// recomputes is the same — only the declarations move (the pptake review's probe forgery).
+fn pptake_reemit(
+    proof: &kaspa_consensus_core::pruning::PruningPointProof,
+    genesis: BlockHash,
+    add: kaspa_consensus_core::BlueWorkType,
+    nonce_tweak: u64,
+) -> kaspa_consensus_core::pruning::PruningPointProof {
+    let mut renamed: std::collections::HashMap<BlockHash, BlockHash> = std::collections::HashMap::new();
+    let mut out = proof.clone();
+    out[0] = proof[0]
+        .iter()
+        .map(|h| {
+            if h.hash == genesis {
+                return h.clone();
+            }
+            let mut nh: Header = (**h).clone();
+            nh.blue_work = nh.blue_work.saturating_add(add);
+            nh.nonce = nh.nonce.wrapping_add(nonce_tweak);
+            let parents: Vec<BlockHash> = nh.direct_parents().iter().map(|p| *renamed.get(p).unwrap_or(p)).collect();
+            nh.parents_by_level.set_direct_parents(parents);
+            nh.finalize();
+            renamed.insert(h.hash, nh.hash);
+            std::sync::Arc::new(nh)
+        })
+        .collect();
+    out
+}
+
+/// **lane rcore/hf-pptake: a pruning proof is decided by numbers this node can vouch for.**
+///
+/// The pptake review measured, on the shipped code, that the proof comparison was won by
+/// declarations: an honest history re-emitted with every self-declared `blue_work` raised by 2^40 —
+/// no extra history — beat a node's own proof (probe B), and a node standing at genesis (every
+/// testnet-12 node today) compared its whole chain against the challenger's pruning-period claim PLUS
+/// its pre-pruning-point history, counted twice. Node-only, measured here on testnet-12's ruleset at
+/// the moved-pruning-point test's shrunk depths:
+///
+/// * the honest proof still validates — standalone, at a node at genesis, and at a genesis-pp node
+///   whose own chain is lighter than the claim;
+/// * the forged proof is refused before any comparison: a level-0 proof rooted at genesis (every
+///   testnet-12 proof) recomputes each header's work with the header pipeline's own GHOSTDAG, and the
+///   declared figures must match it;
+/// * the same history re-hashed with honest numbers passes that check and ties at the node that holds
+///   it — a tie keeps the defender;
+/// * at a node standing at genesis with a chain of its own, the challenger must claim strictly more
+///   tip work than that chain — a claim the header sync then verifies — and the old double count
+///   (pre-pruning-point history + claim) no longer carries a lighter one over.
+#[tokio::test]
+async fn t12_pptake_a_proof_is_held_to_its_declared_work_and_weighed_from_its_own_pruning_point() {
+    use kaspa_consensus_core::BlueWorkType;
+    use kaspa_consensus_core::errors::pruning::{ProofWeakness, PruningImportError};
+
+    kaspa_core::log::try_init_logger("info");
+    let (shipped, _bundle, premine, _floats) = t12_with_harness_cards();
+    let mut config = shipped.clone();
+    config.params.blockrate.finality_depth = 20;
+    config.params.blockrate.pruning_depth = 50;
+    config.params.pruning_proof_m = 10;
+    config.is_archival = true;
+    let m = config.params.pruning_proof_m;
+    let genesis = config.params.genesis.hash;
+    let mut ctx = t12_at_genesis(&config, &premine);
+    let headers = ctx.consensus.virtual_processor().headers_store.clone();
+    let settle = config.params.anticone_finalization_depth() + 4;
+    let mut slots = 0u64;
+    let pp = loop {
+        honest_slot(&mut ctx, 10_000 + 4 * slots).await;
+        slots += 1;
+        let sink = headers.get_header(ctx.consensus.get_sink()).unwrap();
+        let declared_bs = headers.get_blue_score(sink.pruning_point).unwrap();
+        if declared_bs >= 6 * m && sink.blue_score >= declared_bs + settle {
+            break sink.pruning_point;
+        }
+        assert!(slots < 300, "no header declared a settled pruning point {} deep in {slots} slots", 6 * m);
+    };
+    let sink = ctx.consensus.get_sink();
+    let relay = headers.get_header(sink).unwrap();
+    ctx.consensus.intrusive_pruning_point_update(pp, sink).unwrap_or_else(|e| panic!("{pp} is not a pruning point: {e}"));
+    let proof = ctx.consensus.get_pruning_point_proof();
+    let pp_work = headers.get_header(pp).unwrap().blue_work;
+    assert_eq!(proof[0].first().map(|h| h.hash), Some(genesis), "a testnet-12 level-0 proof is rooted at genesis");
+
+    // The honest proof: sound on its own, and accepted by a node at genesis.
+    let fresh = t12_at_genesis(&config, &premine);
+    fresh.consensus.validate_pruning_proof_standalone(&proof).unwrap_or_else(|e| panic!("the honest proof, standalone: {e}"));
+    fresh
+        .consensus
+        .validate_pruning_proof(&proof, &PruningProofMetadata::new(relay.blue_work))
+        .unwrap_or_else(|e| panic!("a node at genesis refused the honest proof: {e}"));
+
+    // Probe B: the same history, every declared `blue_work` + 2^40. Refused by soundness alone —
+    // standalone, at the node at genesis, and at the node standing at the real pruning point.
+    let c = BlueWorkType::from_u64(1u64 << 40);
+    let inflated = pptake_reemit(&proof, genesis, c, 1);
+    let inflated_meta = PruningProofMetadata::new(relay.blue_work.saturating_add(c));
+    for (who, verdict) in [
+        ("standalone", fresh.consensus.validate_pruning_proof_standalone(&inflated)),
+        ("at genesis", fresh.consensus.validate_pruning_proof(&inflated, &inflated_meta)),
+        ("at the pruning point", ctx.consensus.validate_pruning_proof(&inflated, &inflated_meta)),
+    ] {
+        eprintln!("[pptake] inflated declarations, {who}: {verdict:?}");
+        assert!(
+            matches!(verdict, Err(PruningImportError::PruningProofInconsistentBlueWork(_, 0))),
+            "{who}: a proof whose declared work is not its own recomputation must be refused, got {verdict:?}"
+        );
+    }
+
+    // Control: the same history re-hashed with honest numbers is sound, and at the node that holds it
+    // the two sides tie exactly — which keeps the defender.
+    let rehashed = pptake_reemit(&proof, genesis, BlueWorkType::from_u64(0), 1);
+    fresh.consensus.validate_pruning_proof_standalone(&rehashed).unwrap_or_else(|e| panic!("the re-hashed history, standalone: {e}"));
+    let tie = ctx.consensus.validate_pruning_proof(&rehashed, &PruningProofMetadata::new(relay.blue_work));
+    eprintln!("[pptake] re-hashed, honest numbers, at the pruning point: {tie:?}");
+    assert!(
+        matches!(tie, Err(PruningImportError::ProofWeaknessError(ProofWeakness::InsufficientBlueWork))),
+        "equal work is not better work, got {tie:?}"
+    );
+
+    // A node standing at genesis with a chain of its own — every testnet-12 node today.
+    let mut other = t12_at_genesis(&config, &premine);
+    for s in 0..slots + 2 {
+        honest_slot(&mut other, 50_000 + 4 * s).await;
+    }
+    assert_eq!(other.consensus.pruning_point(), genesis);
+    let other_headers = other.consensus.virtual_processor().headers_store.clone();
+    let held = other_headers.get_header(other.consensus.get_header_download_hint()).unwrap().blue_work;
+    assert!(held > pp_work, "the genesis-pp node's own chain outweighs the challenger's pruning point ({held} vs {pp_work})");
+    let at = |claim: BlueWorkType| other.consensus.validate_pruning_proof(&proof, &PruningProofMetadata::new(claim));
+    let one = BlueWorkType::from_u64(1);
+    // Strictly more than the node holds: accepted (the header sync that follows must then reproduce it).
+    at(held.saturating_add(one)).unwrap_or_else(|e| panic!("a claim above the held tip was refused: {e}"));
+    // Equal: a tie keeps the defender.
+    assert!(matches!(at(held), Err(PruningImportError::ProofWeaknessError(ProofWeakness::InsufficientBlueWork))));
+    // Lighter than the held tip, but heavy enough once the challenger's pre-pruning-point history is
+    // counted a second time — the shipped same-span cut at a genesis defender accepted exactly this.
+    let lighter = held.saturating_sub(BlueWorkType::from_u64(pp_work.as_u64() / 2));
+    assert!(lighter < held && pp_work.saturating_add(lighter) > held, "the shipped rule would have accepted this claim");
+    let verdict = at(lighter);
+    eprintln!("[pptake] genesis-pp node holding {held}, challenger pp {pp_work} claiming {lighter}: {verdict:?}");
+    assert!(
+        matches!(verdict, Err(PruningImportError::ProofWeaknessError(ProofWeakness::InsufficientBlueWork))),
+        "a claim lighter than the held chain is refused, got {verdict:?}"
+    );
+}
