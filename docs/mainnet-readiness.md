@@ -79,10 +79,11 @@ add more rules.
 | **PASS** | Checksums published | per-binary sha256 in [the launch note](t12-launch-2026-09-25.md); `SHA256SUMS` on earlier GitHub releases |
 | **PASS** | Component digests | [components manifest](components-manifest.md) (`misaka/components/v1`) is written on release |
 | **PARTIAL** | Reproducible binaries | testnet-12's build matched byte-for-byte across two checkouts; nobody else has reproduced it, and CI does not check it |
-| **PARTIAL** | Multi-platform binaries | CI builds and smoke-runs Windows; `deploy.yaml` builds Linux, Windows and macOS when a release is published. testnet-12 ships x86_64 Linux only, and ARM64 builds are not produced |
+| **PARTIAL** | Multi-platform binaries | CI builds and smoke-runs Windows. `deploy.yaml` builds x86_64 Linux, ARM64 Linux, x86_64 Windows and ARM64 macOS when a release is published. The ARM64 Linux leg has not run yet, and testnet-12 ships x86_64 Linux only |
 | **TODO** | Tagged releases | testnet-12 shipped as commit `0e8ec984e` with no tag and no GitHub release; the last release is testnet-11's `testnet-main-e65ccf20` (2026-09-07) |
-| **TODO** | Signed tags and artifacts | no signed tag, no `SHA256SUMS.sig` or equivalent |
-| **TODO** | SBOM | none. The components manifest records digests, but it is not an SBOM |
+| **PARTIAL** | Signed artifacts | `deploy.yaml`'s `sign` job writes `SHA256SUMS`, signs it with Sigstore (`SHA256SUMS.sigstore.json`) and attests provenance for every asset ([release-process.md](release-process.md)). No release has been cut with it yet |
+| **TODO** | Signed tags | no release tag is signed yet; [release-process.md](release-process.md) §2 makes it a step |
+| **PARTIAL** | SBOM | `deploy.yaml` writes an SPDX SBOM of the source tree on release; no release carries one yet |
 
 ---
 
@@ -94,7 +95,7 @@ here.
 1. **Stop new consensus features.** Land only testnet-12's scheduled fixes (launch note §2).
 2. **Declare the freeze.** After the freeze, a consensus rule changes only to fix a Critical
    safety issue, and every such change is recorded in this file with its fence height.
-3. **Cut `v0.9.0-rc.1`** as a signed tag. Attach Linux x86_64 and ARM64, Windows x86_64 and
+3. **Cut `v0.9.0-rc.1`** as a signed tag ([release-process.md](release-process.md)). Attach Linux x86_64 and ARM64, Windows x86_64 and
    macOS ARM64 binaries, `SHA256SUMS`, its signature, an SBOM and the source archive. Operators run
    the tag, not `main`.
 4. **Audit the tag.** Commission at least one independent, named review of the RC commit.

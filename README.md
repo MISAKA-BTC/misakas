@@ -44,10 +44,11 @@ Only what the tree can show is marked done. The evidence for every line is in
 | ✅ | Activation-fence upgrade path exercised on a live public network (testnet-11) |
 | ✅ | Public seeders, explorer, web wallet, RPC |
 | 🟡 | Reproducible release binaries — the testnet-12 build matched byte-for-byte across two checkouts; not yet independently reproduced or checked in CI |
-| 🟡 | Multi-platform binaries — Windows builds in CI; testnet-12 ships x86_64 Linux only |
+| 🟡 | Multi-platform binaries — the release workflow builds Linux x86_64/ARM64, Windows x86_64 and macOS ARM64; testnet-12 itself ships x86_64 Linux only |
 | 🟡 | External review — commissioned static reviews of code snapshots (2026-06-22 Kaspa-diff and EVM/NFT, 2026-08-21 PALW), all answered in the tree; no full-scope independent audit of a release |
 | ⏳ | Consensus freeze and a tagged release candidate |
-| ⏳ | Signed tags and artifacts, SBOM |
+| 🟡 | Signed checksums (Sigstore), provenance attestations and SBOM — in the release workflow ([release process](docs/release-process.md)); no release cut with them yet |
+| ⏳ | Signed release tags |
 | ⏳ | Fuzzing of blocks, transactions and RPC |
 | ⏳ | Recovery drills (crash, DB corruption, partition) run and published as reports |
 | ⏳ | Long public soak with no consensus change |
@@ -194,6 +195,10 @@ earlier build, and testnet-12 refuses it at the handshake. Whatever you run, the
 file name or the tag: it is the fingerprint your node prints on startup and the fence schedule on
 the line after it. If either does not match [Release status](#release-status), you are on the wrong
 ruleset.
+
+From the first release candidate on, releases carry Linux x86_64 and ARM64, Windows and macOS
+binaries with a Sigstore-signed `SHA256SUMS`, provenance attestations and an SBOM. How to verify
+them is in [docs/release-process.md](docs/release-process.md).
 
 The unified operator CLI is the `misaka` binary from the `misaka-cli` package. The package name is `misaka-cli`, while the installed binary name is `misaka`; build commands should name both explicitly (`-p misaka-cli --bin misaka`) so Cargo never depends on workspace defaults.
 

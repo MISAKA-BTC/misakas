@@ -5,6 +5,7 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 ## Current Testnet-12 documents
 
 - [Mainnet readiness](mainnet-readiness.md) — what is done, partly done and not done before a mainnet genesis, with the evidence for each
+- [Release process](release-process.md) — how a release is cut, signed and verified
 - [testnet-12 launch note (2026-09-25)](t12-launch-2026-09-25.md) — the release, its known issues and when a payment is final
 - [Join testnet-12 as a PALW producer](testnet12-join-mining.md)
 - [testnet-12 regenesis record](testnet-12-regenesis-2026-09-23.md)

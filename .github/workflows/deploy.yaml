@@ -7,6 +7,11 @@ on:
 permissions:
   contents: read
 
+# The network the release is cut for. It is written into every platform's components manifest,
+# so it is spelled once here rather than once per step.
+env:
+  RELEASE_NETWORK: testnet-12
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -17,7 +22,9 @@ jobs:
       matrix:
         # Build gnu-linux on ubuntu-18.04 and musl on ubuntu latest
         # os: [ ubuntu-18.04, ubuntu-latest, windows-latest, macos-latest ]
-        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        # ubuntu-latest: x86_64 Linux, static (musl). ubuntu-24.04-arm: ARM64 Linux, native glibc
+        # build. macos-latest is Apple silicon (ARM64); windows-latest is x86_64.
+        os: [ ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest ]
     name: Building, ${{ matrix.os }}
     steps:
       - name: Fix CRLF on Windows
@@ -62,15 +69,16 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # runner.arch keeps the x86_64 and ARM64 Linux legs from restoring each other's target/.
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
 
       - name: Check musl toolchain tag consistency
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.arch == 'X64'
         run: bash musl-toolchain/check-tag.sh
 
       - name: Build on Linux
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.arch == 'X64'
         # We're using musl to make the binaries statically linked and portable
         env:
           # Fail closed (audit H-5): error out if neither an in-repo pin
@@ -119,13 +127,52 @@ jobs:
       # points at the zip this job uploads and names its member, because the zip is what the
       # release publishes; a `url` at a loose `kaspad` would be a pointer at nothing.
       - name: Write the components manifest (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.arch == 'X64'
         run: |
           platform=x86_64-unknown-linux-musl
           py=$(command -v python3 || command -v python)
           "$py" scripts/misaka-components-manifest.py \
             --release "${{ github.event.release.tag_name }}" \
-            --network testnet-11 \
+            --network "$RELEASE_NETWORK" \
+            --platform "$platform" \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
+            --archive "${{ env.archive }}" \
+            --out "components-${platform}.json" \
+            bin/kaspad bin/misaka
+          echo "manifest=components-${platform}.json" >> $GITHUB_ENV
+
+      # ARM64 Linux is a native glibc build: the musl cross toolchain above targets x86_64 only.
+      # The binaries need a glibc at least as new as the runner's (Ubuntu 24.04, glibc 2.39),
+      # the same floor as testnet-12's x86_64 release build.
+      - name: Install build dependencies (Linux ARM64)
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config libssl-dev zip
+
+      - name: Build on Linux ARM64
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          cargo build --bin kaspad --bin rothschild --bin kaspa-wallet --release
+          cargo build -p kaspa-pq-miner -p kaspa-pq-validator -p kaspa-pq-signer --release
+          cargo build -p misaka-cli --bin misaka --release
+          cargo build --bin stratum-bridge --release
+          mkdir bin || true
+          for b in kaspad rothschild kaspa-wallet kaspa-pq-miner kaspa-pq-validator kaspa-pq-signer misaka stratum-bridge; do
+            cp "target/release/$b" bin/
+            test -x "bin/$b"
+          done
+          archive="bin/rusty-kaspa-${{ github.event.release.tag_name }}-linux-arm64.zip"
+          zip -r "${archive}" ./bin/*
+          echo "archive=${archive}" >> $GITHUB_ENV
+
+      - name: Write the components manifest (Linux ARM64)
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          platform=$(rustc -vV | sed -n 's/^host: //p')
+          python3 scripts/misaka-components-manifest.py \
+            --release "${{ github.event.release.tag_name }}" \
+            --network "$RELEASE_NETWORK" \
             --platform "$platform" \
             --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
             --archive "${{ env.archive }}" \
@@ -174,7 +221,7 @@ jobs:
           py=$(command -v python3 || command -v python)
           "$py" scripts/misaka-components-manifest.py \
             --release "${{ github.event.release.tag_name }}" \
-            --network testnet-11 \
+            --network "$RELEASE_NETWORK" \
             --platform "$platform" \
             --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
             --archive "${{ env.archive }}" \
@@ -218,7 +265,7 @@ jobs:
           py=$(command -v python3 || command -v python)
           "$py" scripts/misaka-components-manifest.py \
             --release "${{ github.event.release.tag_name }}" \
-            --network testnet-11 \
+            --network "$RELEASE_NETWORK" \
             --platform "$platform" \
             --url-base "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}" \
             --archive "${{ env.archive }}" \
@@ -340,3 +387,66 @@ jobs:
           files: ./${{ env.archive }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # **A release is only as trustworthy as the way a stranger can check it.** Once every platform
+  # and the WASM SDK are uploaded, this job hashes every asset into one `SHA256SUMS`, writes an
+  # SPDX SBOM of the source tree (the Cargo.lock dependency graph), signs `SHA256SUMS` keylessly
+  # with Sigstore (the signing identity is this workflow at this tag, recorded in the public
+  # Rekor log), and attests build provenance for every asset. It needs every build leg: a
+  # release missing a platform is never signed as if it were whole. Verification steps for
+  # users are in docs/release-process.md.
+  sign:
+    name: Checksums, signature and SBOM
+    needs: [ build, build-wasm ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # upload SHA256SUMS, its signature bundle and the SBOM
+      id-token: write     # Sigstore keyless signing with the workflow's OIDC identity
+      attestations: write # GitHub build-provenance attestations
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
+
+      - name: Download the release's assets
+        run: |
+          mkdir dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist
+          # A re-run must not hash or re-sign its own earlier outputs.
+          rm -f dist/SHA256SUMS dist/SHA256SUMS.sigstore.json dist/*.spdx.json
+          ls -l dist
+
+      - name: Write the SBOM (SPDX)
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/misakas-${{ github.event.release.tag_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Write SHA256SUMS
+        run: |
+          cd dist
+          sha256sum -- * > ../SHA256SUMS
+          cat ../SHA256SUMS
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign SHA256SUMS (Sigstore, keyless)
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*
+            SHA256SUMS
+
+      - name: Upload checksums, signature and SBOM
+        run: |
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            SHA256SUMS SHA256SUMS.sigstore.json "dist/misakas-${TAG}.spdx.json"
