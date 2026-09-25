@@ -17,14 +17,18 @@
 //! * **(a) an S2 licence (`basis_k` 1):** `max(L + wc(L), bound + window_receipt + 1, last)` —
 //!   restarted mid-gate, past `L + wc(L)` where a replay-backed licence would already be `Final`;
 //! * **(b) the upgrade in a block `U ≥ L + wc(L)`** through SR-10's V3 door and through the V2 door
-//!   (V3S-01: a counted partial seat's whole-job V2 `Valid` after a pay set credited it): re-derived
-//!   to `max(L + wc(L), U) = U`, restarted just before and just after `U`, `Final` at `U + 1`;
+//!   (V3S-01: a counted partial seat's whole-job V2 `Valid` after a pay set credited it), each in a
+//!   block `U > L + wc(L)` so `U` and the floor differ: re-derived to `max(L + wc(L), U) = U`,
+//!   restarted just before and just after `U`, `Final` at `U + 1`; and the V3 door's boundary `U =
+//!   L + wc(L)` on a sibling;
 //! * **(c) the gate on the first panel redraws** (`redraw_unreplayed_licence_v1`): the locks, the duty
 //!   row and its credit released, `rebound_daa` the sweep's DAA, the commitment unmoved, a bystander's
 //!   open DA session untouched; restarted mid-redraw;
 //! * **(d) the gate on the second panel voids `NotReplayBacked`** through `void_and_slash`, S-4's S0′
 //!   arm (`w + E + rr`, no strike, no action), charged exactly as its sibling's second
-//!   `ReceiptTimeout`; restarted, reverted and reorged across it;
+//!   `ReceiptTimeout`; restarted, reverted and reorged across it — on a floor attempt (`E > 0`,
+//!   `rr = 0`) and on a compute-priced free-prompt claim (`rr > 0`, `E = 0`), so each term of the
+//!   charge is one some run depends on;
 //! * **(e) a court cleared on an S2 licence** (`ChallengerDefeated`) re-arms through DL-1
 //!   (`rearm_claim_after_court_close`): the gate row, not the plain `max(L + wc(L), clearing)`.
 //!
@@ -40,8 +44,8 @@ mod common;
 use common::*;
 
 use kaspa_consensus_core::palw_state_v2::{
-    PalwVoidReasonV2, palw_claim_receipt_deadline_v1, palw_rcore_licence_awaits_replay_v1, palw_rcore_release_window_closes_v1,
-    palw_rcore_v2_door_takes_seat_v1,
+    PalwClaimSourceV2, PalwVoidReasonV2, palw_claim_receipt_deadline_v1, palw_rcore_licence_awaits_replay_v1,
+    palw_rcore_release_window_closes_v1, palw_rcore_v2_door_takes_seat_v1,
 };
 
 /// 1 MSK in sompi.
@@ -196,9 +200,12 @@ fn s2_licence(t: &mut Tape, id: Hash64) -> u64 {
 ///   last)` at every tip; a block past `L + wc(L)` (where a replay-backed licence would be `Final`)
 ///   and a block AT the gate itself leave it licensed.
 /// * V3 upgrades through SR-10's V3 door (the three other partial seats' `Valid`s) in block
-///   `U3 = L + wc(L)` exactly: `basis_k` 2, recorded Coverage, the anchor settled (V-8), the escrow
-///   still held (U3 is past SR-1b's window), and the deadline re-derived to `max(L + wc(L), U3) =
-///   U3`; `Final` at `U3 + 1`.
+///   `U3 = L + wc(L) + 5` — past the floor and before the doors shut at `bound + window_receipt`, so
+///   a re-arm that kept the floor (or any `U` but this block's) is a different deadline: `basis_k` 2,
+///   recorded Coverage, the anchor settled (V-8), the escrow still held (U3 is past SR-1b's window),
+///   and the deadline re-derived to `max(L + wc(L), U3) = U3`; `Final` at `U3 + 1`, not at the
+///   floor's `L + wc(L) + 1`. A sibling lands the same set ON the floor (`U = L + wc(L)`, the `≥`'s
+///   boundary): the deadline `L + wc(L)`, `Final` at `L + wc(L) + 1`.
 /// * V2: a third party's pay set credits two partial seats' V3 `Valid`s first (no upgrade: the silent
 ///   seat's segment has one replay; the gate stands); then, in `U2 > L + wc(L)`, one of those seats'
 ///   whole-job V2 `Valid` through the V2 door (V3S-01: `palw_rcore_v2_door_takes_seat_v1`) widens its
@@ -207,7 +214,8 @@ fn s2_licence(t: &mut Tape, id: Hash64) -> u64 {
 ///
 /// Restarts at every tip — just before and just after each `U` among them — load DL-1's row; a
 /// sibling fork on which the V3 upgrade does not land keeps V3 gated past `U3 + 1`, and the reorg to
-/// it and back reverts the re-arm; the run reverts to its base and replays by IBD.
+/// it and back reverts the re-arm; the boundary sibling restarts everywhere and reverts too; the run
+/// reverts to its base and replays by IBD.
 #[test]
 fn t40_dl1_the_q5_gate_row_and_the_upgrade_in_block_u_through_both_doors() {
     let mut t = armed_tape();
@@ -250,9 +258,11 @@ fn t40_dl1_the_q5_gate_row_and_the_upgrade_in_block_u_through_both_doors() {
         assert!(matches!(t.c.s.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "{id}: gated, not finalized");
     }
     assert_eq!(t.c.s.deadline_of(&g), Some(g_gate), "G mid-gate");
-    // U3 = L + wc(L): the V3 door with the three other partial seats.
-    let u3 = v3_l + sp.window_challenge_at(v3_l);
-    assert!(u3 > mid, "the premise: U3 lands after the mid-gate tip");
+    // U3 = L + wc(L) + 5: the V3 door with the three other partial seats, past the floor.
+    let v3_floor = v3_l + sp.window_challenge_at(v3_l);
+    let u3 = v3_floor + 5;
+    assert!(v3_floor > mid, "the premise: V3's floor lands after the mid-gate tip");
+    assert!(u3 != v3_floor && u3 <= v3_bound + wr, "the premise: U3 is past the floor and both doors still take the set");
     let (_, v3_partial) = geometry(&t, &v3);
     let v3_anchor = t.c.anchor(&v3);
     let settled = t.c.s.settled_attempt_finals();
@@ -260,7 +270,7 @@ fn t40_dl1_the_q5_gate_row_and_the_upgrade_in_block_u_through_both_doors() {
     let before_u3 = t.len();
     let v3_upgrade =
         PalwConsensusObjectV2::ReceiptLicensedV2 { claim: v3, receipts: covered(v3, v3_anchor, &seats, &v3_partial[1..], v3_bound) };
-    t.at(u3, vec![v3_upgrade]);
+    t.at(u3, vec![v3_upgrade.clone()]);
     let after_u3 = t.len();
     let up = t.c.s.claim(&v3).unwrap().clone();
     assert_eq!((up.rcore.basis_k, up.rcore.licence_door), (2, Some(PalwLicenceDoorTagV1::Coverage)), "V3: the V3 door upgrades");
@@ -268,7 +278,7 @@ fn t40_dl1_the_q5_gate_row_and_the_upgrade_in_block_u_through_both_doors() {
     assert!(!up.rcore.escrow_released, "U3 is past SR-1b's window: the escrow stays held to Final");
     assert_eq!(ledger(&t, &producer), held, "V3's upgrade moves no commitment past the window");
     assert_eq!(t.c.s.settled_attempt_finals(), settled + 1, "V-8: the upgrade settles the anchor");
-    assert_eq!(t.c.s.deadline_of(&v3), Some(u3), "Q-5: max(L + wc(L), U3) = U3");
+    assert_eq!(t.c.s.deadline_of(&v3), Some(u3), "Q-5: max(L + wc(L), U3) = U3, not the floor {v3_floor}");
     // U3 + 1: V3 finalizes, nobody else moves.
     t.at(u3 + 1, vec![]);
     assert!(matches!(t.c.s.claim(&v3).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "V3: Final at U3 + 1");
@@ -325,12 +335,28 @@ fn t40_dl1_the_q5_gate_row_and_the_upgrade_in_block_u_through_both_doors() {
         "without the upgrade V3 is not finalized unbacked"
     );
     assert_eq!(sibling.c.s.deadline_of(&v3), Some(v3_bound + wr + 1));
+    // The boundary sibling: the same V3 set ON the floor, U = L + wc(L).
+    let mut on_floor = t.fork(before_u3);
+    on_floor.at(v3_floor, vec![v3_upgrade]);
+    let on_floor_tip = on_floor.len();
+    assert_eq!(on_floor.c.s.claim(&v3).unwrap().rcore.basis_k, 2, "the boundary: upgraded on the floor");
+    assert_eq!(on_floor.c.s.deadline_of(&v3), Some(v3_floor), "Q-5 at U = L + wc(L): max(L + wc(L), U) = L + wc(L)");
+    on_floor.at(v3_floor + 1, vec![]);
+    assert!(matches!(on_floor.c.s.claim(&v3).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the boundary: Final at L + wc(L) + 1");
+    assert_eq!(on_floor.restart_at(on_floor_tip).deadline_of(&v3), Some(v3_floor), "(b) restarted just after the boundary U");
     t.reorg_to(before_u3, &sibling);
-    let rows = restart_everywhere_against_dl1(&t, &[g, v3, v2]) + restart_everywhere_against_dl1(&sibling, &[g, v3, v2]);
+    t.reorg_to(before_u3, &on_floor);
+    let rows = restart_everywhere_against_dl1(&t, &[g, v3, v2])
+        + restart_everywhere_against_dl1(&sibling, &[g, v3, v2])
+        + restart_everywhere_against_dl1(&on_floor, &[g, v3, v2]);
     t.revert_to_base_and_reapply();
     sibling.revert_to_base_and_reapply();
+    on_floor.revert_to_base_and_reapply();
     t.ibd_from(scratch_genesis());
-    println!("(a)+(b): {} blocks, {rows} (tip, claim) DL-1 rows checked at load; U3 {u3}, U2 {u2}, G's gate {g_gate}", t.len());
+    println!(
+        "(a)+(b): {} blocks, {rows} (tip, claim) DL-1 rows checked at load; V3's floor {v3_floor}, U3 {u3}, U2 {u2}, G's gate {g_gate}",
+        t.len()
+    );
 }
 
 /// **(c): the gate on the first panel redraws (`redraw_unreplayed_licence_v1`), with a bystander's DA
@@ -427,7 +453,9 @@ fn t40_dl1_q5_the_first_panel_redraws_with_a_bystanders_session_open() {
 }
 
 /// **(d): the gate on the second panel voids `NotReplayBacked` through `void_and_slash`, S-4's S0′
-/// arm.** N is S2-licensed, redrawn at its first gate (the commitment unmoved, the first panel's
+/// arm.** N — a floor ATTEMPT, so `E > 0` and `rr = 0` (an attempt reserves no receipt rights; the
+/// `rr > 0` twin is [`t40_dl1_q5_a_compute_priced_fp_licence_voids_not_replay_backed_forfeiting_its_receipt_rights`])
+/// — is S2-licensed, redrawn at its first gate (the commitment unmoved, the first panel's
 /// locks released), re-bound, S2-licensed again (gated from the second panel's bound), and at the
 /// second gate voided `NotReplayBacked` at the sweep's DAA: the producer is charged `w + E + rr` —
 /// `slashed` and `collateral` move by exactly that, and the reservation leaves its ledger — with no
@@ -466,7 +494,8 @@ fn t40_dl1_q5_the_second_panel_voids_not_replay_backed_charged_as_rt2() {
     let before = t.c.s.clone();
     let claim = before.claim(&n).unwrap().clone();
     let commitment = u64::try_from(claim.reserved + escrow(&sp, &claim) + claim.rights_reserved).unwrap();
-    assert!(commitment > 0 && escrow(&sp, &claim) > 0);
+    assert!(commitment > 0 && escrow(&sp, &claim) > 0, "the premise: an attempt's charge carries E");
+    assert_eq!(claim.rights_reserved, 0, "the premise: an attempt reserves no receipt rights (rr = 0 on this run)");
     let void_at = gate2 + 1;
     t.at(void_at, vec![]);
     let void_tip = t.len();
@@ -509,6 +538,126 @@ fn t40_dl1_q5_the_second_panel_voids_not_replay_backed_charged_as_rt2() {
     t.reorg_to(fork_at, &sibling);
     println!(
         "(d): redrawn at {}, rebound at {bound2}, voided NotReplayBacked at {void_at}, charged {charged} = RT#2's; {rows} rows",
+        gate1 + 1
+    );
+}
+
+/// The free-prompt executor bond of the `rr > 0` run.
+const FP_BOND: u64 = 51;
+
+/// **A floor with its free-prompt lane ready and bond [`FP_BOND`] registered to use it** (M5's
+/// [`fp_floor_ready`]), folded with `work_target_active` as the processor resolves it on testnet-12
+/// (`room_extras`; armed at DAA 0) — the one extra that `fp_receipt_rights_inputs_v1` needs besides
+/// the 2026-09-23 audit fence, so a compute-priced commitment in a block with a subsidy reserves its
+/// receipt rights. Deterministic: called twice it stands on the same root (the IBD twin's base).
+fn fp_rights_tape() -> (Tape, u64) {
+    let mut c = Chain::new(t12());
+    c.attribution = true;
+    c.room = true;
+    let collateral = at_least_the_floor(&c.p, 100_000 * MSK);
+    fp_floor_ready(c, FP_BOND, collateral)
+}
+
+/// **(d) with `rr > 0`: a compute-priced free-prompt claim through Q-5's gate on both panels — the
+/// S0′ charge's receipt-rights term.** `OptimisticLicensed` does not restrict the claim's source, so a
+/// free-prompt claim reaches the gate exactly as an attempt does, and on testnet-12 its receipt
+/// rights (`rr`, fixed at acceptance: `compute × worker_carve / W₀`) are the charge's largest term.
+/// F is committed in a block with the network's subsidy (`w > 0`, `rr > 0`, `E = 0`: the FP lane
+/// escrows nothing; the ledger takes `w + rr`), bound, S2-licensed (`basis_k` 1, gated), redrawn at
+/// its first gate — the claim keeps `w` and `rr`, the ledger keeps `w + rr`, the first panel's locks
+/// released — re-bound, S2-licensed again, and at the second gate voided `NotReplayBacked`: charged
+/// exactly `w + E + rr` (`slashed` and `collateral` move by it, the reservation leaves the ledger
+/// whole — no abandon hold, which is `BindTimeout`'s), no strike, DL-1's terminal row. Its sibling,
+/// forked after the second bind, times out (RT#2) and is charged the same. Both tapes restart at
+/// every tip against DL-1 and revert to their base; the run replays by IBD from a base rebuilt from
+/// scratch and reorgs to the sibling and back across the void.
+#[test]
+fn t40_dl1_q5_a_compute_priced_fp_licence_voids_not_replay_backed_forfeiting_its_receipt_rights() {
+    let (mut t, leaves) = fp_rights_tape();
+    let sp = t.c.sp.clone();
+    let wr = sp.window_receipt();
+    let seats = t.c.floor_seats();
+    let bond = bond_key(FP_BOND);
+    let before = ledger(&t, &bond);
+    let (commit, f) = fp_commit_of(&t.c, FP_BOND, leaves, 0x5D0F);
+    let skips = t.block(t.c.daa + 1, vec![commit], None, T12_BLOCK_SUBSIDY_SOMPI).expect("the commitment's block folds");
+    assert!(skips.is_empty(), "the commitment is accepted: {skips:?}");
+    let accepted = t.c.s.claim(&f).expect("the commitment is a claim").clone();
+    assert!(matches!(accepted.source, PalwClaimSourceV2::FreePrompt { .. }));
+    let (w, e, rr) = (accepted.reserved, escrow(&sp, &accepted), accepted.rights_reserved);
+    assert!(w > 0 && rr > 0, "the premise: compute-priced, the receipt rights reserved beside the weight (w {w}, rr {rr})");
+    assert_eq!(e, 0, "the FP lane escrows nothing");
+    assert_eq!(ledger(&t, &bond) - before, w + rr, "acceptance commits w + E + rr");
+    // The first panel: S2, the gate, the redraw.
+    let bound1 = t.bind(f);
+    s2_licence(&mut t, f);
+    let (full1, partial1) = geometry(&t, &f);
+    assert!(
+        t.c.s.slashable_lock(seats[full1].0, f).is_some() && t.c.s.slashable_lock(seats[partial1[0]].0, f).is_some(),
+        "the S2 signers lock"
+    );
+    let gate1 = bound1 + wr + 1;
+    t.at(gate1 + 1, vec![]);
+    let redraw_tip = t.len();
+    let redrawn = t.c.s.claim(&f).unwrap().clone();
+    assert_eq!(
+        (redrawn.phase.clone(), redrawn.rebound_daa),
+        (PalwClaimPhaseV2::Provisional, Some(gate1 + 1)),
+        "the first gate redraws the free-prompt claim"
+    );
+    assert_eq!((redrawn.reserved, redrawn.rights_reserved), (w, rr), "the redraw keeps the weight and the receipt rights");
+    assert_eq!(ledger(&t, &bond) - before, w + rr, "and the ledger keeps w + E + rr");
+    assert!(t.c.s.slashable_lock(seats[full1].0, f).is_none() && t.c.s.slashable_lock(seats[partial1[0]].0, f).is_none());
+    // The second panel: S2 again, the gate, NotReplayBacked.
+    let bound2 = t.bind(f);
+    let fork_at = t.len();
+    s2_licence(&mut t, f);
+    let gate2 = bound2 + wr + 1;
+    t.at(gate2, vec![]);
+    let pre = t.c.s.clone();
+    let claim = pre.claim(&f).unwrap().clone();
+    assert_eq!((claim.reserved, claim.rights_reserved, escrow(&sp, &claim)), (w, rr, 0), "the second licence holds the same terms");
+    let charge = w + e + rr;
+    let void_at = gate2 + 1;
+    t.at(void_at, vec![]);
+    let void_tip = t.len();
+    assert_eq!(
+        t.c.s.claim(&f).unwrap().phase,
+        PalwClaimPhaseV2::Voided { voided_daa: void_at, reason: PalwVoidReasonV2::NotReplayBacked },
+        "the second panel's gate voids the free-prompt claim NotReplayBacked"
+    );
+    let (bond_before, bond_after) = (pre.bond(&bond).unwrap().clone(), t.c.s.bond(&bond).unwrap().clone());
+    let charged = u128::from(bond_after.slashed - bond_before.slashed);
+    assert_eq!(charged, charge, "S0′: w + E + rr with rr = {rr} > 0, and no action tier");
+    assert!(charged > w, "the receipt rights are charged, not only the weight");
+    assert_eq!(u128::from(bond_before.collateral - bond_after.collateral), charged, "burned from the collateral");
+    assert_eq!(pre.reserved_exposure(&bond) - ledger(&t, &bond), w + rr, "the whole reservation leaves the ledger with the void");
+    assert_eq!(ledger(&t, &bond), before, "no abandon hold on a NotReplayBacked void");
+    assert!(t.c.s.withholding_strikes(&bond).is_none(), "S0′ writes no strike");
+    assert_eq!(t.c.s.deadline_of(&f), Some(void_at + sp.claim_retirement_daa()), "DL-1's terminal row: the retirement");
+    // The sibling: the second panel never licenses — RT#2, charged the same.
+    let mut sibling = t.fork(fork_at);
+    let rt2 = bound2 + wr + 1;
+    sibling.at(rt2, vec![]);
+    assert_eq!(
+        sibling.c.s.claim(&f).unwrap().phase,
+        PalwClaimPhaseV2::Voided { voided_daa: rt2, reason: PalwVoidReasonV2::ReceiptTimeout },
+        "the sibling's second panel times out"
+    );
+    let rt2_charged = sibling.c.s.bond(&bond).unwrap().slashed - sibling.base.bond(&bond).unwrap().slashed;
+    assert_eq!(charged, u128::from(rt2_charged), "NotReplayBacked is charged exactly as the second ReceiptTimeout, rr included");
+    // Restart mid-redraw, just before and just after the void, then everywhere; revert, IBD, reorg.
+    let loaded = t.restart_at(redraw_tip);
+    assert_eq!(loaded.reserved_exposure(&bond) - before, w + rr, "the held w + rr re-derived at load mid-redraw");
+    assert_eq!(t.restart_at(void_tip - 1).deadline_of(&f), Some(gate2));
+    assert_eq!(t.restart_at(void_tip).reserved_exposure(&bond), before, "the void's release re-derived at load");
+    let rows = restart_everywhere_against_dl1(&t, &[f]) + restart_everywhere_against_dl1(&sibling, &[f]);
+    t.revert_to_base_and_reapply();
+    sibling.revert_to_base_and_reapply();
+    t.ibd_from(fp_rights_tape().0.base);
+    t.reorg_to(fork_at, &sibling);
+    println!(
+        "(d) rr > 0: w {w}, rr {rr}; redrawn at {}, rebound at {bound2}, voided NotReplayBacked at {void_at}, charged {charged} = RT#2's; {rows} rows",
         gate1 + 1
     );
 }
@@ -615,7 +764,8 @@ fn t40_dl1_q5_a_court_clearing_on_an_s2_licence_keeps_the_gate() {
 ///   held, `E` released only with `w` at `Final`;
 /// * C: the V3 door at `U = L + wc(L)`, past the window — upgraded but held: `E` stays to `Final`;
 /// * N: never upgraded — redrawn (commitment unmoved), re-bound, S2 again, voided `NotReplayBacked`:
-///   `w + E + rr` forfeited, the reservation off the ledger.
+///   `w + E + rr` forfeited (an attempt: `rr = 0`; the free-prompt twin with `rr > 0` is (d)'s
+///   compute-priced test), the reservation off the ledger.
 ///
 /// `Final` releases the rest for A, B, C and D; the producer's ledger ends where it began and its
 /// collateral is down exactly N's `w + E`. The run reverts block by block to testnet-12's genesis
@@ -732,6 +882,7 @@ fn t01_q5_twins_escrow_held_on_s2_released_at_the_upgrade_and_forfeited_at_not_r
     s2_licence(&mut t, n);
     let n_claim = t.c.s.claim(&n).unwrap().clone();
     let forfeit = n_claim.reserved + escrow(&sp, &n_claim) + n_claim.rights_reserved;
+    assert_eq!(n_claim.rights_reserved, 0, "the premise: N is an attempt (rr = 0)");
     assert_eq!(ledger(&t, &producer), committed, "N: its second S2 licence holds E too");
     t.at(n_bound2 + wr + 2, vec![]);
     assert!(matches!(t.c.s.claim(&n).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::NotReplayBacked, .. }));
