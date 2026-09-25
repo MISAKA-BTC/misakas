@@ -11,11 +11,12 @@
 //! every later child, delta and root equal to the uninterrupted run's (the restart twin). A
 //! `CarriageInconsistent` anywhere fails the test.
 //!
-//! **Not here (deferred to after the F4 part 2 merge, not on `rcore/int-3`):** DL-1's
-//! `ReceiptLicensed` row for `basis_k < 2` under Q-5's gate (`max(licensed + window_challenge_at,
-//! bound + window_receipt + 1, last)`), an S2 upgrade in a block `U ≥` that floor, and the
-//! first-panel redraw of F4 part 2. The S2 licence and its SR-1b upgrade AS `rcore/int-3` HAS THEM
-//! ride T01's lifecycle below, where every tip restarts.
+//! **Not here:** DL-1's `ReceiptLicensed` row for `basis_k < 2` under Q-5's gate (`max(licensed +
+//! window_challenge_at, bound + window_receipt + 1, last)`), an S2 upgrade in a block `U ≥` that
+//! floor through both supplementary doors, the first-panel redraw, the second panel's
+//! `NotReplayBacked`, a court clearing on an S2 licence, and T01's twins of those lifecycles —
+//! F4 part 2's rows, in `rcore_m5_q5_gate.rs` on the same [`Tape`]. The S2 licence and its SR-1b
+//! upgrade through the V2 door also ride T01's lifecycle below, where every tip restarts.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_m5_restart
 
@@ -52,28 +53,6 @@ fn v1(
     let mut receipts: Vec<_> = valid_seats.iter().map(|i| valid(id, seats[*i].0, signed)).collect();
     receipts.extend(unavailable_seats.iter().map(|i| unavailable(id, seats[*i].0, signed)));
     PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }
-}
-
-/// A court on licensed `claim` opened by `challenger` (T07's shape): its responder never moves.
-fn court_opened(s: &PalwChainStateV2, claim: Hash64, challenger: PalwBondKeyV2) -> PalwConsensusObjectV2 {
-    const SPACE: kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1 =
-        kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves;
-    let record = s.claim(&claim).expect("the claim").clone();
-    PalwConsensusObjectV2::CourtOpened {
-        session_id: kaspa_consensus_core::palw_court_v2::court_session_id_v2(
-            &claim,
-            &record.trace_root,
-            &record.bond,
-            &challenger,
-            SPACE,
-            16,
-        ),
-        claim,
-        challenger_bond: challenger,
-        space: SPACE,
-        space_size: 16,
-        signature: Vec::new(),
-    }
 }
 
 /// Restart at every tip of `t` and at its tip: every restart loads and replays equal.
