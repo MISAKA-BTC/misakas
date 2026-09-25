@@ -16388,6 +16388,9 @@ mod t12_stake_draw_integration;
 // testnet-12 and crossed by a real chain — the processor's mirror, a floor claim unchanged across the
 // height, and the no-capable-panel re-anchor at a real anchor block.
 mod t12_registry_resilience;
+// Lane F1 (post-launch): a testnet-12 chain crossing the panel-seed fence — the block below it, the
+// anchor attempt's execution commitment past it, and a second node that agrees.
+mod t12_panel_seed_fence;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;

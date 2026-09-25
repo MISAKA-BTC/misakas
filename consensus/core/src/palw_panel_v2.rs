@@ -82,6 +82,13 @@ pub const PALW_PANEL_V2_DOMAIN_STAKE_TICKET: &[u8] = b"misaka-palw/panel-v2/stak
 /// class's own draw. There is no stake-jury domain: the admission jury is NOT weighted (SW-A4), and
 /// [`palw_admission_jury_v1`] stays ADR-0147's.
 pub const PALW_PANEL_V2_DOMAIN_STAKE_OUTSIDER_TICKET: &[u8] = b"misaka-palw/panel-v2/stake-outsider-ticket/v1";
+/// **The panel seed past `Params::palw_panel_seed_execution` (lane F1, the post-launch fence for the
+/// 2026-09-25 anchor-identity re-roll):** `seed = H(this domain ‖ the anchor ATTEMPT's execution
+/// commitment ‖ claim)` ([`palw_panel_draw_seed_v1`]). Hashed into `consensus_params_id` beside the
+/// fence's height (the rule's version rides its fence), so two builds that arm the fence at one height
+/// with different seed rules announce different rulesets; a build that leaves it dormant hashes
+/// nothing new.
+pub const PALW_PANEL_V2_DOMAIN_DRAW_SEED_V1: &[u8] = b"misaka-palw/panel-v2/draw-seed/v1";
 /// **C-02 (mainnet audit 2026-09-11 deep fence): the ceiling on a bond's stake-weighted
 /// sub-tickets.** Past the fence a bond draws `floor(collateral / min_collateral)` sub-tickets, but
 /// a premine-scale bond would otherwise mint hundreds of thousands (t11's `min_collateral` is
@@ -309,6 +316,8 @@ pub const PALW_PANEL_V2_ALL_DOMAINS: &[&[u8]] = &[
     // committed signature-context set does not move.
     PALW_PANEL_V2_DOMAIN_STAKE_TICKET,
     PALW_PANEL_V2_DOMAIN_STAKE_OUTSIDER_TICKET,
+    // The 2026-09-25 panel seed: a hashing domain too.
+    PALW_PANEL_V2_DOMAIN_DRAW_SEED_V1,
 ];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
@@ -552,11 +561,97 @@ pub fn derive_stratified_panel_v2(
 /// block whose DAA score reached `accepted_daa + anchor_delay`, and `predecessor_daa` is its
 /// selected parent's DAA score — carried so "first" is checkable: the predecessor must still be
 /// short of the slot.
+///
+/// `anchor_execution` is the anchor ATTEMPT's execution commitment
+/// ([`palw_panel_anchor_execution_v1`] of the anchor block's header) when the network keys its panel
+/// seed on it — for a claim whose anchor block is at or past `Params::palw_panel_seed_execution`
+/// (lane F1; only attempt blocks anchor there, since the fence needs `palw_rcore_plus`) — and `None`
+/// below it, where the seed is `anchor_block` byte for byte as testnet-12 launched
+/// ([`Self::panel_seed`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwAnchorFactV2 {
     pub anchor_block: BlockHash,
     pub anchor_daa: u64,
     pub predecessor_daa: u64,
+    pub anchor_execution: Option<Hash64>,
+}
+
+impl PalwAnchorFactV2 {
+    /// **The one seed a claim's panel is drawn from — and its segment assignment and S3 sample.**
+    ///
+    /// `Some(execution)`: [`palw_panel_draw_seed_v1`]`(execution, claim)`. `None`: the anchor block's
+    /// identity, as every claim anchored below `Params::palw_panel_seed_execution` has always drawn.
+    ///
+    /// The seed is what a `PanelBound` names as its `anchor` and what the fold stores as
+    /// `PalwPanelStateV2::anchor`, and every later draw of the claim reads THAT field — the segment
+    /// assignment (`palw_segment_assignment_v2`), the S3 sample (`palw_layer_sample_v3`), the S2
+    /// optimistic door and the leaf-evidence interval draw — so the three are keyed on one value by
+    /// construction and cannot drift apart.
+    pub fn panel_seed(&self, claim_id: &Hash64) -> Hash64 {
+        match self.anchor_execution {
+            Some(execution) => palw_panel_draw_seed_v1(&execution, claim_id),
+            None => self.anchor_block,
+        }
+    }
+}
+
+/// **The panel seed past `Params::palw_panel_seed_execution` (lane F1): `H(draw-seed domain ‖ anchor
+/// execution ‖ claim)`** (2026-09-25, the anchor-identity re-roll, `wf_72c1a397-e23`).
+///
+/// **What was wrong.** The seed was the anchor BLOCK's identity hash, and the identity covers the
+/// carrier bytes of `palw_commitment` — the attempt's ML-DSA-87 signature among them — plus the
+/// timestamp and the full nonce, none of which the class lottery prices: `execution_commitment_v3`
+/// blanks the challenge, the pre-PoW hash zeroes nonce and timestamp and excludes the commitment, and
+/// the nonce enters only through its `2^22` bucket. So the producer of the anchor block computed the
+/// panel privately and re-rolled it for the cost of one re-signature (~1.2 ms), a timestamp tick or a
+/// nonce inside its bucket, with the same winning ticket: a coverage lie reached `Final` with 0 slash
+/// on two Sybil seats in ~1,000 re-signs, and a silent panel could be dealt to an honest claim.
+///
+/// **What it is now.** `anchor_execution` is the anchor attempt's execution commitment — the value
+/// its class ticket is drawn from (`class_ticket_v3`) and the fold dedups on — so every identity one
+/// lottery win can take (any signature, any timestamp, any nonce of the bucket) draws ONE panel, and
+/// another panel costs another execution commitment: another lottery win. `claim` makes the seed
+/// per-claim (one anchor block anchors several claims; each still draws its own panel). Both are fixed
+/// consensus data every node reads from the anchor block's header and the claim record, so the seed
+/// is a pure function of the chain: reorg, IBD and a pruning-proof sync recompute it bit for bit.
+///
+/// **What it does not close.** While audit P0-10 is open a lottery win itself is cheap — a junk trace
+/// root is one BLAKE2b ticket, ~279 expected draws on the testnet-12 floor — so a new panel costs
+/// ~279 hashes, not an inference: in wall time about what a re-signature cost. The fence is the
+/// half of the fix that makes a re-roll cost a lottery WIN; only an inference-bound win (P0-10) makes
+/// that win expensive. docs/t12-panel-seed-2026-09-25.md states why no seed rule alone can close it.
+pub fn palw_panel_draw_seed_v1(anchor_execution: &Hash64, claim_id: &Hash64) -> Hash64 {
+    let mut seed = keyed(PALW_PANEL_V2_DOMAIN_DRAW_SEED_V1);
+    seed.update(anchor_execution.as_byte_slice());
+    seed.update(claim_id.as_byte_slice());
+    finish(seed)
+}
+
+/// **The anchor attempt's execution commitment, from the anchor block's header alone** —
+/// `execution_commitment_v3(attempt, execution_anchor_v3(network, pre_pow(header), class, bond,
+/// header.nonce))`, exactly the processor's `palw_execution_key_v1` for that block (the key the fold
+/// dedups on and the anchor its class ticket was drawn under). `None` for a header that carries no
+/// attempt, or an envelope that does not decode (the header stage refuses such a block, so a stored
+/// chain block never answers `None` past `palw_rcore_plus`, where only attempt blocks anchor — which
+/// `Params::palw_panel_seed_execution` requires at or below itself).
+///
+/// Invariant under everything the class lottery does not price: the signature (outside the attempt),
+/// the timestamp and the nonce inside its bucket (outside the pre-PoW hash and the bucket index), and
+/// the challenge (blanked). Moved by anything it does price.
+pub fn palw_panel_anchor_execution_v1(network_domain: Hash64, header: &crate::header::Header) -> Option<Hash64> {
+    if !crate::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
+        return None;
+    }
+    let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).ok()?;
+    let attempt = &envelope.attempt;
+    let execution_anchor = crate::palw_attempt_v2::execution_anchor_v3(
+        network_domain,
+        crate::hashing::header::pre_pow_hash_64(header),
+        attempt.class_id,
+        &attempt.executor_bond,
+        header.nonce,
+    );
+    Some(crate::palw_attempt_v2::execution_commitment_v3(attempt, execution_anchor))
 }
 
 /// **How many DISTINCT OPERATORS could take a seat right now** — the live registry measured with
@@ -1490,8 +1585,11 @@ fn palw_panel_seat_ticket_state_v1(anchor_block: BlockHash, claim_id: &Hash64, b
 }
 
 /// **A bond's ticket on a claim's panel** — `H(seat-ticket domain ‖ anchor ‖ claim ‖ bond)`, the
-/// unweighted draw's ticket. Past the panel economy it no longer decides who sits; it decides which
-/// of an operator's eligible bonds the operator sits with.
+/// unweighted draw's ticket. `anchor_block` here, and in every ticket of the draw, is the panel SEED
+/// ([`PalwAnchorFactV2::panel_seed`]): past `Params::palw_panel_seed_execution` the anchor attempt's
+/// execution commitment hashed with the claim, below it the anchor block. Past the panel economy it
+/// no longer decides who sits; it decides which of an operator's eligible bonds the operator sits
+/// with.
 pub fn palw_panel_seat_ticket_v1(anchor_block: BlockHash, claim_id: &Hash64, bond_key: &PalwBondKeyV2) -> Hash64 {
     finish(palw_panel_seat_ticket_state_v1(anchor_block, claim_id, bond_key))
 }
@@ -2067,8 +2165,21 @@ pub fn validate_panel_bound_v2_with_policy(
     if anchor.predecessor_daa >= slot {
         return Err(PalwPanelV2Error::AnchorMismatch("the named anchor is not the FIRST block at the slot"));
     }
-    if proposed_anchor != anchor.anchor_block {
-        return Err(PalwPanelV2Error::AnchorMismatch("the object's anchor is not the chain's anchor block"));
+    // **Lane F1, the panel seed** ([`PalwAnchorFactV2::panel_seed`]): for a claim anchored past
+    // `Params::palw_panel_seed_execution` the processor's one anchor walk
+    // (`palw_v2_anchor_fact_of_candidate`) supplies the anchor ATTEMPT's execution commitment —
+    // resolved at the ANCHOR's DAA, where this gate's policy is resolved too, and supplied to the
+    // chain's own derivation by the same walk — and the panel is keyed on `H(execution ‖ claim)`,
+    // never on the anchor block's re-signable identity. Below it (`anchor_execution: None`) the seed
+    // is the anchor block, byte for byte. The object names the SEED it was drawn from, and the fold
+    // stores it: the segment assignment and the S3 sample read it back from there.
+    let seed = anchor.panel_seed(claim_id);
+    if proposed_anchor != seed {
+        return Err(PalwPanelV2Error::AnchorMismatch(if anchor.anchor_execution.is_some() {
+            "the object's anchor is not the panel seed of the chain's anchor attempt"
+        } else {
+            "the object's anchor is not the chain's anchor block"
+        }));
     }
 
     // Binding window: not before the anchor exists, not past the bind deadline (the sweep will
@@ -2115,7 +2226,7 @@ pub fn validate_panel_bound_v2_with_policy(
             state,
             params,
             claim_id,
-            anchor.anchor_block,
+            seed,
             state_params.min_collateral_sompi(),
             registered_by_daa,
             capability_proof,
@@ -2125,7 +2236,7 @@ pub fn validate_panel_bound_v2_with_policy(
             state,
             params,
             claim_id,
-            anchor.anchor_block,
+            seed,
             state_params.min_collateral_sompi(),
             registered_by_daa,
             capability_proof,
@@ -3840,7 +3951,7 @@ mod tests {
         // The acceptance layer recomputes the same panel under the same policy.
         let anchor = BlockHash::from_u64_word(0xB007);
         let seats = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, policy).unwrap();
-        let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104 };
+        let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104, anchor_execution: None };
         validate_panel_bound_v2_with_policy(
             &state,
             &params,
@@ -4082,7 +4193,7 @@ mod tests {
                 stake: None,
             };
             let lottery = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, economy).unwrap();
-            let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104 };
+            let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104, anchor_execution: None };
             let validate = |seats: &[PalwPanelSeatV2], policy| {
                 validate_panel_bound_v2_with_policy(
                     &state,
@@ -4253,7 +4364,7 @@ mod tests {
             assert_eq!(sat, thick, "anchor {i}: only the bonds that can reserve the floor sit");
             // The acceptance layer recomputes the same panel under the same floor, and refuses it
             // under none wherever the two differ.
-            let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104 };
+            let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104, anchor_execution: None };
             let validate = |policy| {
                 validate_panel_bound_v2_with_policy(
                     &state,
@@ -5094,20 +5205,20 @@ mod tests {
         let sp = state_params();
         // Claim accepted at daa 101; anchor slot = 105; bind deadline = 111.
         let anchor_block = BlockHash::from_u64_word(0xA0C0);
-        let anchor = PalwAnchorFactV2 { anchor_block, anchor_daa: 105, predecessor_daa: 104 };
+        let anchor = PalwAnchorFactV2 { anchor_block, anchor_daa: 105, predecessor_daa: 104, anchor_execution: None };
         let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block, 0).unwrap();
 
         let ok = validate_panel_bound_v2(&state, &p, &sp, &ctx(3, 106, 3), &claim_id, &anchor, anchor_block, &seats);
         assert!(ok.is_ok(), "a conforming binding is accepted: {ok:?}");
 
         // Anchor before the slot.
-        let early = PalwAnchorFactV2 { anchor_block, anchor_daa: 104, predecessor_daa: 103 };
+        let early = PalwAnchorFactV2 { anchor_block, anchor_daa: 104, predecessor_daa: 103, anchor_execution: None };
         assert!(matches!(
             validate_panel_bound_v2(&state, &p, &sp, &ctx(3, 106, 3), &claim_id, &early, anchor_block, &seats),
             Err(PalwPanelV2Error::AnchorMismatch(_))
         ));
         // Not the FIRST block at the slot.
-        let not_first = PalwAnchorFactV2 { anchor_block, anchor_daa: 106, predecessor_daa: 105 };
+        let not_first = PalwAnchorFactV2 { anchor_block, anchor_daa: 106, predecessor_daa: 105, anchor_execution: None };
         assert!(matches!(
             validate_panel_bound_v2(&state, &p, &sp, &ctx(3, 107, 3), &claim_id, &not_first, anchor_block, &seats),
             Err(PalwPanelV2Error::AnchorMismatch(_))
@@ -6158,7 +6269,7 @@ mod tests {
         assert!(seats.iter().all(|seat| seat.bond != PalwBondKeyV2(bond_outpoint(1))), "the executor is never seated");
         assert_eq!(seats, derive_stratified_panel_v2(&state, &panel_params(), &claim_id, anchor_block, 0, None, false, 2).unwrap());
 
-        let anchor = PalwAnchorFactV2 { anchor_block, anchor_daa: 106, predecessor_daa: 105 };
+        let anchor = PalwAnchorFactV2 { anchor_block, anchor_daa: 106, predecessor_daa: 105, anchor_execution: None };
         let sp = state_params();
         validate_panel_bound_v2_with_shards(
             &state,
@@ -7124,7 +7235,8 @@ mod tests {
                 let mut differs = 0usize;
                 for i in 0..48u64 {
                     let at = anchor(i);
-                    let fact = PalwAnchorFactV2 { anchor_block: at, anchor_daa: slot, predecessor_daa: slot - 1 };
+                    let fact =
+                        PalwAnchorFactV2 { anchor_block: at, anchor_daa: slot, predecessor_daa: slot - 1, anchor_execution: None };
                     // SW-8 (M4): the binding block IS the anchor block — `anchor(i)`'s own word.
                     let in_anchor = ctx(0x5700_0000 + i, slot, 9_000);
                     let later = ctx(9_000, slot + 1, 9_000);
@@ -7703,6 +7815,160 @@ mod tests {
             assert_eq!(palw_panel_ready_eff_v1(&[w(130_000); 3], 5), 3, "never more than the ready operators");
         }
 
+        // ---- lane F1 (post-launch fence): the panel seed is the anchor ATTEMPT's execution --------
+
+        /// **The anchor-identity re-roll, closed at the pure layer** (`wf_72c1a397-e23`; the fence
+        /// is `Params::palw_panel_seed_execution`, which reaches this layer as
+        /// `PalwAnchorFactV2::anchor_execution`). The processor's end (the anchor walk reading the
+        /// commitment off the anchor header, on a real testnet-12 chain that crosses the fence) is
+        /// `t12_panel_seed_fence`; the attacker's grind against it is
+        /// `consensus/core/tests/void_after_panel_probe.rs` (T2a, T3a, T3b) and
+        /// `consensus/core/tests/void_after_panel_adv_verify.rs` (a1–a4).
+        mod panel_seed_2026_09_25 {
+            use super::*;
+            use crate::palw_state_v2::{PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras};
+            use crate::palw_verification_v2::palw_segment_assignment_v2;
+
+            fn exec(i: u64) -> Hash64 {
+                h64(0xE5EC_0000 + i)
+            }
+
+            fn fact(block: BlockHash, slot: u64, execution: Option<Hash64>) -> PalwAnchorFactV2 {
+                PalwAnchorFactV2 { anchor_block: block, anchor_daa: slot, predecessor_daa: slot - 1, anchor_execution: execution }
+            }
+
+            /// **The seed is `H(execution ‖ claim)`: every identity of one anchor attempt names one seed.**
+            /// Below the fence (`None`) it is the anchor block, byte for byte; above it no block identity
+            /// enters, a different execution or a different claim is a different seed, and the seed is
+            /// never the execution itself or the identity.
+            #[test]
+            fn the_seed_is_the_execution_and_the_claim_never_the_identity() {
+                let claim = h64(0xC1A1);
+                let one = fact(anchor(0), 105, Some(exec(0))).panel_seed(&claim);
+                for i in 0..256u64 {
+                    assert_eq!(fact(anchor(i), 105, Some(exec(0))).panel_seed(&claim), one, "identity {i}: one execution, one seed");
+                    assert_eq!(fact(anchor(i), 105, None).panel_seed(&claim), anchor(i), "identity {i}: below the fence, the block");
+                }
+                assert_eq!(one, palw_panel_draw_seed_v1(&exec(0), &claim));
+                assert_ne!(one, exec(0));
+                assert_ne!(one, anchor(0));
+                assert_ne!(fact(anchor(0), 105, Some(exec(1))).panel_seed(&claim), one, "another execution, another seed");
+                assert_ne!(fact(anchor(0), 105, Some(exec(0))).panel_seed(&h64(0xC1A2)), one, "another claim, another seed");
+                // The anchor DAA and predecessor are the walk's facts, never seed inputs.
+                assert_eq!(fact(anchor(0), 999, Some(exec(0))).panel_seed(&claim), one);
+            }
+
+            /// **The gate demands the seed and the panel drawn from it; the fold stores the seed and the
+            /// assignment reads it back.** On a stake-draw state, 32 anchor identities carrying ONE
+            /// execution: every one derives the same panel, the gate accepts `PanelBound { anchor: seed }`
+            /// with it in that block (SW-8) and refuses the block identity as the anchor
+            /// (`AnchorMismatch`) and any panel drawn from the identity where it differs
+            /// (`PanelMismatch`); the fold stores `anchor = seed`, and the segment assignment (and so the
+            /// S3 sample and S2 door, which read the same field) is one assignment for all 32.
+            #[test]
+            fn the_gate_demands_the_seed_and_the_fold_stores_it() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (state, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let slot = state.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                let extras = PalwTransitionExtrasV1 { panel_economy_active: true, ..Default::default() };
+                let (mut panels, mut assignments, mut identity_differs) =
+                    (std::collections::BTreeSet::new(), std::collections::BTreeSet::new(), 0usize);
+                for i in 0..32u64 {
+                    let f = fact(anchor(i), slot, Some(exec(7)));
+                    let point = ctx(0x5700_0000 + i, slot, 9_000);
+                    let seed = f.panel_seed(&claim_id);
+                    let validate = |proposed: Hash64, seats: &[PalwPanelSeatV2]| {
+                        validate_panel_bound_v2_with_policy(
+                            &state,
+                            &five(),
+                            &sp,
+                            &point,
+                            &claim_id,
+                            &f,
+                            proposed,
+                            seats,
+                            None,
+                            false,
+                            sw_policy(),
+                            None,
+                        )
+                    };
+                    let seats = derive_panel_v2_with_policy(&state, &five(), &claim_id, seed, 100, None, false, sw_policy()).unwrap();
+                    assert_eq!(validate(seed, &seats), Ok(()), "identity {i}: build = accept on the seed");
+                    assert!(
+                        matches!(validate(anchor(i), &seats), Err(PalwPanelV2Error::AnchorMismatch(_))),
+                        "identity {i}: the block identity is not the panel's anchor any more"
+                    );
+                    let by_identity =
+                        derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i), 100, None, false, sw_policy()).unwrap();
+                    if by_identity != seats {
+                        identity_differs += 1;
+                        assert_eq!(validate(seed, &by_identity), Err(PalwPanelV2Error::PanelMismatch), "identity {i}");
+                    }
+                    let object = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: seed, seats: seats.clone() };
+                    let (folded, _) = apply_palw_transition_v2_with_extras(
+                        &state,
+                        &sp,
+                        &point,
+                        &[object],
+                        None,
+                        false,
+                        false,
+                        false,
+                        false,
+                        &extras,
+                    )
+                    .expect("the anchor block folds its binding");
+                    let stored = folded.panel(&claim_id).expect("bound").clone();
+                    assert_eq!((stored.anchor, &stored.seats), (seed, &seats), "identity {i}: the fold stores the seed");
+                    assignments
+                        .insert(format!("{:?}", palw_segment_assignment_v2(stored.anchor, claim_id, stored.seats.len() as u16)));
+                    panels.insert(seats.iter().map(|seat| seat.bond).collect::<Vec<_>>());
+                }
+                assert_eq!(panels.len(), 1, "32 identities of one anchor attempt draw ONE panel");
+                assert_eq!(assignments.len(), 1, "…and one segment assignment");
+                assert!(identity_differs > 0, "the identity-keyed draw moved with the identity, or the refusal is vacuous");
+            }
+
+            /// **Honest paths keep their law.** The stake race over execution-keyed seeds seats each
+            /// operator at its exact inclusion probability (successive sampling, `exact_law`), within 4σ
+            /// over 2^12 executions — eight genesis seats and five floor operators — exactly as the
+            /// identity-keyed draw did: the seed changes who can steer the draw, not its distribution.
+            #[test]
+            fn execution_keyed_panels_keep_the_draw_s_law() {
+                let (state, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let rows = genesis_and_small(5);
+                let mut weights: Vec<f64> = vec![939_063.0; 8];
+                weights.extend([130_000.0; 5]);
+                let marked = vec![false; weights.len()];
+                let (inclusion, _) = exact_law(&weights, 5, &marked);
+                const N: usize = 1 << 12;
+                for (label, keyed) in [("execution-keyed", true), ("identity-keyed", false)] {
+                    let mut seated = vec![0usize; rows.len()];
+                    let mut distinct = std::collections::BTreeSet::new();
+                    for i in 0..N as u64 {
+                        let seed = if keyed { palw_panel_draw_seed_v1(&exec(i), &claim_id) } else { anchor(i) };
+                        let seats =
+                            derive_panel_v2_with_policy(&state, &five(), &claim_id, seed, 100, None, false, sw_policy()).unwrap();
+                        for seat in &seats {
+                            let index = rows.iter().position(|row| PalwBondKeyV2(bond_outpoint(row.0)) == seat.bond).expect("a row");
+                            seated[index] += 1;
+                        }
+                        distinct.insert(seats.iter().map(|seat| seat.bond).collect::<Vec<_>>());
+                    }
+                    for (index, hits) in seated.iter().enumerate() {
+                        assert!(
+                            within_4_sigma(*hits, N, inclusion[index]),
+                            "{label}: bond {} seated {hits} of {N}, exact {:.5}",
+                            rows[index].0,
+                            inclusion[index]
+                        );
+                    }
+                    assert!(distinct.len() > N / 4, "{label}: {} distinct panels over {N} seeds", distinct.len());
+                }
+            }
+        }
+
         // ---- M4: the integration (ADR-0152 §3.14 SW-1, SW-8, SW-9, SW-10 at the fold) ----------
 
         /// **ADR-0152 M4's core half** — the stake draw where the processor wires it: one state per
@@ -7732,7 +7998,12 @@ mod tests {
             /// reads (its predecessor below both slots), and the chain point that binds in it.
             fn anchored_at(word: u64, daa: u64, predecessor_daa: u64) -> (PalwAnchorFactV2, PalwBlockContextV2) {
                 (
-                    PalwAnchorFactV2 { anchor_block: BlockHash::from_u64_word(word), anchor_daa: daa, predecessor_daa },
+                    PalwAnchorFactV2 {
+                        anchor_block: BlockHash::from_u64_word(word),
+                        anchor_daa: daa,
+                        predecessor_daa,
+                        anchor_execution: None,
+                    },
                     ctx(word, daa, daa),
                 )
             }

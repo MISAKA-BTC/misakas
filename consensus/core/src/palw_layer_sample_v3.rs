@@ -38,6 +38,12 @@ fn sample_draw(anchor: Hash64, claim_id: Hash64, seat_index: u16, counter: u32) 
 /// The sites seat `seat_index` of this bind must recompute. Distinct, stable, a function of the
 /// bind — never of the seat's choosing. Empty when the class has no layer or the job has no
 /// position: there is nothing to sample.
+///
+/// `anchor` is the panel's stored seed (`PalwPanelStateV2::anchor`): for a claim anchored past
+/// `Params::palw_panel_seed_execution` (lane F1, post-launch) `H(anchor attempt's execution
+/// commitment ‖ claim)` (`palw_panel_v2::palw_panel_draw_seed_v1`) — the seed the panel and the
+/// segment assignment are drawn from too — so no re-signed or re-stamped anchor block draws another
+/// sample; below it the anchor block, as testnet-12 launched.
 pub fn palw_layer_sample_v3(
     anchor: Hash64,
     claim_id: Hash64,
