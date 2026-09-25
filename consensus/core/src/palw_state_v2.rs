@@ -1368,6 +1368,17 @@ pub struct PalwStateParamsV2 {
     /// Unread by the fold until S-2.
     #[borsh(skip)]
     rcore_conservative_classes: Vec<Hash64>,
+    // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock off the work ceiling ----
+    /// **Lane V02: `Params::palw_final_lock_full_collateral`'s height**, mirrored here by
+    /// `Params::sync_palw_final_lock_full_collateral` because every reader of the work gate — the
+    /// fold, admission, the draw's seat filter, the producer's facts — holds these params and no
+    /// `Params`. `None` on every shipped preset. Read through
+    /// [`Self::final_lock_full_collateral_active_at`]. Skipped by borsh for
+    /// `short_challenge_window_from_daa`'s reason: the fence is what `Params::consensus_params_id`
+    /// hashes (Some-only), and `validate_palw_v2` refuses a bundle whose copy disagrees with it.
+    #[borsh(skip)]
+    final_lock_full_collateral_from_daa: Option<u64>,
+    // ---- end lane V02 ----
     /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
     /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
     /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
@@ -1560,6 +1571,7 @@ impl PalwStateParamsV2 {
             rcore_plus_from_daa: None,
             withdrawal_delay_daa: 0,
             rcore_conservative_classes: Vec::new(),
+            final_lock_full_collateral_from_daa: None,
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
@@ -2070,6 +2082,28 @@ impl PalwStateParamsV2 {
         self.rcore_conservative_classes = conservative_classes;
         self
     }
+
+    // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock off the work ceiling ----
+
+    /// **Lane V02: the mirror's setter** — written by `Params::sync_palw_final_lock_full_collateral`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_final_lock_full_collateral_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.final_lock_full_collateral_from_daa = from_daa;
+        self
+    }
+
+    /// Lane V02: `Params::palw_final_lock_full_collateral`'s height, if the network arms it.
+    pub fn final_lock_full_collateral_from_daa(&self) -> Option<u64> {
+        self.final_lock_full_collateral_from_daa
+    }
+
+    /// **Lane V02: does a gate evaluated at `daa_score` count a resolved claim's lock against the whole
+    /// collateral instead of the work ceiling?** `false` on every shipped preset. Asked at the gate's
+    /// own DAA ([`palw_bond_off_ceiling_v1`]).
+    pub fn final_lock_full_collateral_active_at(&self, daa_score: u64) -> bool {
+        self.final_lock_full_collateral_from_daa.is_some_and(|from| daa_score >= from)
+    }
+    // ---- end lane V02 ----
 
     /// ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn (the
     /// mirror; empty where `palw_offence_attribution` is not armed).
@@ -2823,13 +2857,105 @@ pub fn palw_rcore_gate_room_of_v1(
     accuser: u128,
     gate: PalwRcoreGateV1,
 ) -> u128 {
+    palw_rcore_gate_room_split_of_v1(collateral, ratio_permille, committed, 0, accuser, gate)
+}
+
+// ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock is carried by the whole collateral ----
+//
+// The 2026-09-25 sweep's V02 (HIGH) and the user's option (a). Below `Params::palw_final_lock_full_collateral`
+// every function here answers what the one ledger answered before (`off_ceiling = 0`), byte for byte.
+
+/// **Lane V02: the gate room with the resolved locks off the work ceiling** — [`palw_rcore_gate_room_of_v1`]
+/// with `off_ceiling ≤ committed` the part of `committed` the `ratio‰` ceiling does not carry
+/// ([`palw_bond_off_ceiling_v1`]):
+///
+/// * [`PalwRcoreGateV1::Work`]: `min(ceiling − (committed − off_ceiling), C − committed − accuser)` —
+///   the ceiling bounds the work in flight, and the whole ledger (resolved locks included) still never
+///   passes the collateral;
+/// * [`PalwRcoreGateV1::Accuser`]: unchanged, `C − max(committed, ceiling) − accuser`.
+///
+/// So `committed + accuser ≤ C` holds at both gates for every `off_ceiling`, the work room is never
+/// less than [`palw_rcore_gate_room_of_v1`]'s (`off_ceiling = 0`) and the accuser room is the same.
+/// Saturating; pure.
+pub fn palw_rcore_gate_room_split_of_v1(
+    collateral: u64,
+    ratio_permille: u32,
+    committed: u128,
+    off_ceiling: u128,
+    accuser: u128,
+    gate: PalwRcoreGateV1,
+) -> u128 {
     let posted = collateral as u128;
     let ceiling = posted.saturating_mul(ratio_permille as u128) / 1000;
     match gate {
-        PalwRcoreGateV1::Work => ceiling.saturating_sub(committed).min(posted.saturating_sub(committed).saturating_sub(accuser)),
+        PalwRcoreGateV1::Work => ceiling
+            .saturating_sub(committed.saturating_sub(off_ceiling))
+            .min(posted.saturating_sub(committed).saturating_sub(accuser)),
         PalwRcoreGateV1::Accuser => posted.saturating_sub(committed.max(ceiling)).saturating_sub(accuser),
     }
 }
+
+/// **Lane V02: the part of [`palw_bond_committed_v1`] that stands behind claims no longer live** — Σ
+/// over `bond`'s slashable locks whose claim is terminal (`Final`, voided) or retired from the claim
+/// map and which are live at `(now_daa, settled_attempt_finals, escaped_depth, window_court)`, of the
+/// lock's excess over the bond's duty on that claim. These are exactly the terms of
+/// `palw_bond_committed_v1` whose claim has resolved (a live claim's lock is counted there whatever
+/// its clocks, and never here), so the value never exceeds `committed − reserved − registration`. The
+/// class of a lock is its claim's phase at `now_daa`, never the height its lock was written at.
+/// Saturating. Cost `O(locks_of(bond) · log n)`.
+pub fn palw_bond_resolved_locks_v1(
+    state: &PalwChainStateV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    escaped_depth: Option<u64>,
+    window_court: u64,
+) -> u128 {
+    let settled_now = state.settled_attempt_finals;
+    state
+        .slashable_locks
+        .range((*bond, ZERO_HASH64)..)
+        .take_while(|((holder, _), _)| holder == bond)
+        .filter(|((_, claim_id), lock)| {
+            state.claims.get(claim_id).is_none_or(|claim| claim.phase.is_terminal())
+                && lock.is_live_v3(now_daa, settled_now, escaped_depth, window_court)
+        })
+        .map(|((_, claim_id), lock)| lock.amount.saturating_sub(palw_seat_duty_of_v1(state, claim_id, bond)))
+        .fold(0u128, u128::saturating_add)
+}
+
+/// **Lane V02: what the work ceiling does not carry for `bond` at `now_daa`** — its resolved locks
+/// ([`palw_bond_resolved_locks_v1`]) where `palw_final_lock_full_collateral` is in force at `now_daa`
+/// (the bundle's mirror), `0` below it and on every network that does not arm it. `escaped_depth` is
+/// the depth after the liveness escape, as [`palw_bond_committed_v1`] reads it.
+pub fn palw_bond_off_ceiling_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    escaped_depth: Option<u64>,
+) -> u128 {
+    if !params.final_lock_full_collateral_active_at(now_daa) {
+        return 0;
+    }
+    palw_bond_resolved_locks_v1(state, bond, now_daa, escaped_depth, params.window_court())
+}
+
+/// [`palw_bond_off_ceiling_v1`] from the second clock's RAW depth, the escape computed here as
+/// [`palw_bond_committed_raw_v1`] computes it.
+pub fn palw_bond_off_ceiling_raw_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+) -> u128 {
+    if !params.final_lock_full_collateral_active_at(now_daa) {
+        return 0;
+    }
+    let escaped = palw_second_clock_depth_v1(raw_depth, &state.recent_anchor_daas, now_daa, params.window_court());
+    palw_bond_off_ceiling_v1(state, params, bond, now_daa, escaped)
+}
+// ---- end lane V02 ----
 
 /// [`palw_rcore_gate_room_of_v1`] on `state` at `now_daa` and the RAW second-clock depth (the escape
 /// computed here), with `params.fp_max_exposure_ratio_permille`. A missing bond has no room.
@@ -2842,10 +2968,12 @@ pub fn palw_rcore_gate_room_v1(
     gate: PalwRcoreGateV1,
 ) -> u128 {
     let Some(record) = state.bonds.get(bond) else { return 0 };
-    palw_rcore_gate_room_of_v1(
+    // Lane V02: past `palw_final_lock_full_collateral` the resolved locks leave the ceiling (0 below).
+    palw_rcore_gate_room_split_of_v1(
         record.collateral,
         params.fp_max_exposure_ratio_permille,
         palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth),
+        palw_bond_off_ceiling_raw_v1(state, params, bond, now_daa, raw_depth),
         palw_accuser_exposure_v1(state, bond),
         gate,
     )
@@ -16233,10 +16361,13 @@ impl<'a> TransitionBuilder<'a> {
     /// `collateral − committed − accuser`; an accuser gate's is the free half less the accuser ledger.
     fn gate_room(&self, bond: &PalwBondKeyV2, now_daa: u64, gate: PalwRcoreGateV1) -> u128 {
         let Some(record) = self.state.bonds.get(bond) else { return 0 };
-        palw_rcore_gate_room_of_v1(
+        palw_rcore_gate_room_split_of_v1(
             record.collateral,
             self.params.fp_max_exposure_ratio_permille,
             self.committed_at(bond, now_daa),
+            // Lane V02: past `palw_final_lock_full_collateral` (at this gate's DAA) the resolved locks
+            // leave the work ceiling and stay in the 100% term; 0 below it.
+            palw_bond_off_ceiling_v1(&self.state, self.params, bond, now_daa, self.second_clock_depth(now_daa)),
             // ADR-0152 §4-ter C4 (the review's F7): a held session at its charge, not its `reserved`.
             self.read().accuser_ledger_v1(bond, now_daa),
             gate,
@@ -29090,7 +29221,10 @@ pub fn palw_fp_bond_room_v2(
     }
     let record = state.bonds.get(bond)?;
     let declared = if capability_bound { palw_bond_capability_exposure_v1(record) } else { 0 };
-    let backed = palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth).saturating_add(declared);
+    // Lane V02: past `palw_final_lock_full_collateral` the resolved locks leave the ceiling (0 below).
+    let backed = palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth)
+        .saturating_sub(palw_bond_off_ceiling_raw_v1(state, params, bond, now_daa, raw_depth))
+        .saturating_add(declared);
     let ceiling = (record.collateral as u128).saturating_mul(params.fp_max_exposure_ratio_permille as u128) / 1000;
     Some(ceiling.saturating_sub(backed))
 }

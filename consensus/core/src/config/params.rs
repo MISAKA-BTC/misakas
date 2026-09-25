@@ -1454,6 +1454,32 @@ pub struct Params {
     /// presets built by struct update (`..TESTNET_PARAMS`) cannot carry one (a `Vec` gives the type
     /// drop glue a const cannot evaluate). The bundle's mirror is the `Vec` the spec names.
     pub palw_rcore_conservative_classes: &'static [crate::Hash64],
+    // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock is carried by the whole collateral ----
+    /// **Lane V02: a resolved claim's lock leaves the 500‰ work ceiling** (the 2026-09-25 sweep's
+    /// V02, HIGH; the user's option (a)). Past it, at a gate's own DAA, the slashable locks a bond holds
+    /// on claims that are no longer live (`Final`, voided or retired — the locks
+    /// `persist_panel_liability` re-dates to `F + window_court`) are counted against the bond's WHOLE
+    /// posted collateral and not against the `fp_max_exposure_ratio_permille` ceiling that gates new
+    /// work: the work gate's room is `min(ceiling − (committed − resolved), C − committed − accuser)`
+    /// ([`crate::palw_state_v2::palw_rcore_gate_room_split_of_v1`]). The lock itself, its clocks, its
+    /// liability row, its slash and the bond's exit gate are untouched, and `committed + accuser ≤ C`
+    /// holds at every gate as before; the accuser gate is unchanged.
+    ///
+    /// Why: below it an honest `Valid` seat's post-`Final` lock (≈ 160–240 MSK per Final on a
+    /// testnet-12 floor claim) sits in the 500‰ budget for `window_court` (3,000 DAA), so at 2–4 floor
+    /// claims per DAA every seat's bind room closes within about 600–1,700 DAA of the first Final and
+    /// no panel can bind (claims void at the anchor slot, escrow burned).
+    ///
+    /// Keyed on the evaluating block's DAA (the fold's `ctx.daa_score`, the draw's binding block,
+    /// admission's block, the producer's candidate DAA); the rule classifies every lock by its claim's
+    /// phase at that DAA, so a lock written below the height is read past it exactly as one written
+    /// past it. Refused by `validate_palw_v2` off ConsensusV2, without `palw_rcore_plus` (the one
+    /// ledger it splits) armed at or below it, or with the bundle's mirror unsynced
+    /// (`sync_palw_final_lock_full_collateral`, which `sync_palw_rcore_plus` also calls). Dormant
+    /// (`None`) on every shipped preset, testnet-12 included, until the operator arms the common
+    /// post-launch height; hashed Some-only in every writer with the `never()` collapse.
+    pub palw_final_lock_full_collateral: Option<ForkActivation>,
+    // ---- end lane V02 -------------------------------------------------------------------------------
     /// **ADR-0152 §4-quater: class-derived verification deadlines.** Past it a claim's
     /// compute-bearing deadline `D(c)` is its class's, in the registry's own units
     /// ([`crate::palw_class_verify_deadline_v1`]): the receipt window is `max(window_receipt, D(c))`
@@ -3938,6 +3964,8 @@ impl Params {
             // ADR-0151's stated maturity after it (user decision 2026-09-25): a value riding a fence
             // the prerequisites name first.
             self.validate_palw_rcore_plus_v1()?;
+            // Lane V02 (post-launch): over R-core+, mirrored.
+            self.validate_palw_final_lock_full_collateral_v1()?;
             return self.validate_palw_exec_quantum_maturity_v1();
         };
         bundle.validate()?;
@@ -4774,6 +4802,8 @@ impl Params {
         // ADR-0152 R-core+ (see the non-V2 return above), and then — after every fence's own
         // refusal, so a missing prerequisite names itself first — the §4-ter answerability mirror.
         self.validate_palw_rcore_plus_v1()?;
+        // Lane V02 (post-launch): over R-core+, mirrored.
+        self.validate_palw_final_lock_full_collateral_v1()?;
         self.validate_palw_held_answerability_v1()?;
         // ADR-0151's stated maturity (user decision 2026-09-25), after every fence's own refusal: it
         // rides `palw_economic_safety`, so a missing bundle is named by the rules that need it first.
@@ -5029,6 +5059,12 @@ impl Params {
         // ADR-0152 R-core+: Some-only hashed, so the same collapse.
         if self.palw_rcore_plus == Some(ForkActivation::never()) {
             self.palw_rcore_plus = None;
+        }
+        // Lane V02 (a resolved claim's lock off the work ceiling, post-launch): Some-only hashed, so
+        // the same collapse — a build that schedules it and one that does not share an identity until
+        // the height.
+        if self.palw_final_lock_full_collateral == Some(ForkActivation::never()) {
+            self.palw_final_lock_full_collateral = None;
         }
         // ADR-0152 §4-quater's class-verify-deadline fence: Some-only hashed, so the same collapse.
         if self.palw_class_verify_deadline == Some(ForkActivation::never()) {
@@ -5576,7 +5612,82 @@ impl Params {
         // Every caller that re-mirrors R-core+ after moving a fence re-mirrors this one too: it reads
         // `palw_offence_attribution`, R-core+'s own prerequisite.
         self.sync_palw_held_answerability();
+        // Lane V02 (post-launch): the fence that splits R-core+'s one ledger rides the same re-mirror.
+        self.sync_palw_final_lock_full_collateral();
     }
+
+    // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock is carried by the whole collateral ----
+
+    /// **Lane V02's fence** ([`Self::palw_final_lock_full_collateral`]), `never()` read as absence.
+    /// `None` on every shipped preset until the operator arms it.
+    pub fn palw_final_lock_full_collateral_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_final_lock_full_collateral) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a gate evaluated at `daa_score` counts a resolved claim's lock against the whole
+    /// collateral rather than the work ceiling. `false` on every shipped preset.
+    pub fn palw_final_lock_full_collateral_active_at(&self, daa_score: u64) -> bool {
+        self.palw_final_lock_full_collateral_fence().is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Lane V02's mirror**: the `#[borsh(skip)]` copy on `PalwStateParamsV2` every reader of the
+    /// work gate reads (`final_lock_full_collateral_active_at`) — the fold, admission, the draw's seat
+    /// filter and the producer's facts hold only the state params. Written here and nowhere else;
+    /// `None` where the fence is not armed. Called by `sync_palw_rcore_plus` (so every site that
+    /// assembles or re-fences a bundle re-mirrors it) and callable alone; `validate_palw_v2` refuses a
+    /// ruleset whose copy disagrees, so a missed call is a startup refusal.
+    pub fn sync_palw_final_lock_full_collateral(&mut self) {
+        let from_daa =
+            self.palw_final_lock_full_collateral.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_final_lock_full_collateral_from_daa(from_daa);
+        }
+    }
+
+    /// **What lane V02's fence refuses.** Called by `validate_palw_v2` after R-core+'s own refusals,
+    /// public so a test can name each. Below the fence it checks only that the bundle's mirror is
+    /// `None`. Past it: ConsensusV2 only; `palw_rcore_plus` (the one ledger this splits) armed at or
+    /// below its height; the mirror equal to the height. Any height is admissible — genesis included,
+    /// and on a live testnet-12 the common post-launch height.
+    pub fn validate_palw_final_lock_full_collateral_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.final_lock_full_collateral_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_final_lock_full_collateral.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a final-lock height without palw_final_lock_full_collateral armed: mirror the fence \
+                     with Params::sync_palw_final_lock_full_collateral after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_final_lock_full_collateral is armed on a network that is not ConsensusV2: the ledger it splits is \
+                 R-core+'s",
+            ));
+        };
+        if !self.palw_rcore_plus.is_some_and(|rcore| rcore != ForkActivation::never() && rcore.daa_score() <= fence.daa_score()) {
+            return Err(Invalid(
+                "palw_final_lock_full_collateral is armed without palw_rcore_plus at or below it: it splits R-core+'s one \
+                 committed ledger, which does not exist below that fence",
+            ));
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_final_lock_full_collateral disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_final_lock_full_collateral after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane V02 -------------------------------------------------------------------------------
 
     /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
     /// [`crate::palw_state_v2::palw_held_unanswerable_classes_of_v1`] over the bundle's genesis rows
@@ -6839,6 +6950,8 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes: _,
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
+            palw_final_lock_full_collateral,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
             palw_activation_pool,
@@ -6948,6 +7061,9 @@ impl Params {
             ("palw_clock_lead_cap", *palw_clock_lead_cap),
             ("palw_offence_attribution", *palw_offence_attribution),
             ("palw_rcore_plus", *palw_rcore_plus),
+            // Lane V02 (post-launch): a top-level fence an un-upgraded peer does not implement, so it
+            // is on the schedule and gates the fork id like every other.
+            ("palw_final_lock_full_collateral", *palw_final_lock_full_collateral),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
             ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
             ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
@@ -7325,6 +7441,14 @@ impl Params {
             h.write(b"palw_rcore_plus");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane V02 (a resolved claim's lock off the work ceiling, post-launch), NAMED and Some-only: it
+        // changes which binds, attempts and licences a bond's collateral admits past its height, so an
+        // operator reading the schedule must see it, and a preset that leaves it `None` prints the id
+        // of a build without the field.
+        if let Some(activation) = self.palw_final_lock_full_collateral {
+            h.write(b"palw_final_lock_full_collateral");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence, NAMED for the same reason and Some-only: it
         // changes which claims a block may carry and when a licensed claim may Final.
         if let Some(activation) = self.palw_class_verify_deadline {
@@ -7542,6 +7666,8 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes: _,
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
+            palw_final_lock_full_collateral,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
             palw_activation_pool,
@@ -7867,6 +7993,12 @@ impl Params {
         }
         // ADR-0152 R-core+: SOME-ONLY, as the floor above and for its reason.
         if let Some(activation) = palw_rcore_plus.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane V02 (post-launch): SOME-ONLY, as R-core+ above — a `None` visited through a sentinel
+        // would move every preset's schedule id — and its `Some(never())` collapses in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_final_lock_full_collateral.as_mut() {
             fork(activation, visit);
         }
         // ADR-0152 §4-quater's class-verify-deadline fence: SOME-ONLY, as the floor above and for its
@@ -8469,6 +8601,8 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes,
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
+            palw_final_lock_full_collateral,
             palw_class_verify_deadline,
             palw_class_verify_rows,
             palw_activation_pool,
@@ -8769,6 +8903,13 @@ impl Params {
         // without either field.
         if let Some(activation) = palw_rcore_plus {
             h.write(b"palw_rcore_plus");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane V02 (post-launch): the height, Some-only (and collapsed from `Some(never())` for the
+        // identity), so a build that leaves it dormant fingerprints byte-identically to one without
+        // the field.
+        if let Some(activation) = palw_final_lock_full_collateral {
+            h.write(b"palw_final_lock_full_collateral");
             h.write(activation.daa_score().to_le_bytes());
         }
         if !palw_rcore_conservative_classes.is_empty() {
@@ -9591,6 +9732,9 @@ impl Params {
             // dropped, instead of silently disarming R-core+.
             palw_rcore_plus: self.palw_rcore_plus,
             palw_rcore_conservative_classes: self.palw_rcore_conservative_classes,
+            // Lane V02 (post-launch): CARRIED with R-core+, whose ledger it splits, and with the bundle
+            // whose mirror it matches.
+            palw_final_lock_full_collateral: self.palw_final_lock_full_collateral,
             // ADR-0152 §4-quater: CARRIED like R-core+, never reset — an overridden testnet-12 then fails
             // `validate_palw_v2` on a prerequisite the override dropped instead of silently reopening
             // the 2M row.
@@ -10626,6 +10770,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_final_lock_full_collateral: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
@@ -10851,6 +10996,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_final_lock_full_collateral: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
@@ -11058,6 +11204,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_final_lock_full_collateral: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_activation_pool: None,
@@ -17423,6 +17570,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_final_lock_full_collateral: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_activation_pool: None,

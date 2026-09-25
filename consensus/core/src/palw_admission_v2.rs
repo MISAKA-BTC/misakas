@@ -676,10 +676,19 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         // `palw_rcore_gate_room_of_v1` — the 500‰ ceiling less `committed`, never past
         // `collateral − committed − accuser` — so `committed + accuser + claim ≤ C` holds here as in
         // the fold's `apply_attempt`. Reported as the ceiling this claim was measured against.
-        reserved.saturating_add(crate::palw_state_v2::palw_rcore_gate_room_of_v1(
+        reserved.saturating_add(crate::palw_state_v2::palw_rcore_gate_room_split_of_v1(
             bond.collateral,
             admission.max_exposure_ratio_permille,
             reserved,
+            // Lane V02: past `palw_final_lock_full_collateral` at this block's DAA the bond's resolved
+            // locks leave the ceiling (the fold's `gate_room`); 0 below it.
+            crate::palw_state_v2::palw_bond_off_ceiling_raw_v1(
+                state,
+                state_params,
+                &bond_key,
+                ctx.daa_score,
+                budget_fences.settled_anchor_depth,
+            ),
             crate::palw_state_v2::palw_accuser_exposure_v1(state, &bond_key),
             crate::palw_state_v2::PalwRcoreGateV1::Work,
         ))

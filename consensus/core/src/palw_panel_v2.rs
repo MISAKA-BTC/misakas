@@ -215,6 +215,11 @@ pub struct PalwPanelValidLockV1 {
 pub struct PalwRcoreSeatFilterV1 {
     pub eligibility: u128,
     pub ceiling_permille: u32,
+    /// **Lane V02 (post-launch, 2026-09-26): `Params::palw_final_lock_full_collateral` in force at the
+    /// binding block** (the bundle's mirror, `final_lock_full_collateral_active_at(now_daa)`). Where
+    /// `true` a bond's locks on resolved claims (`palw_bond_resolved_locks_v1`) leave the ceiling and
+    /// stay in the 100% term — the bind's own `gate_room`; `false` below the fence and everywhere else.
+    pub resolved_locks_off_ceiling: bool,
 }
 
 impl PalwPanelValidLockV1 {
@@ -230,10 +235,18 @@ impl PalwPanelValidLockV1 {
             let Some(record) = state.bond(bond) else { return false };
             let committed =
                 crate::palw_state_v2::palw_bond_committed_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court);
-            let room = crate::palw_state_v2::palw_rcore_gate_room_of_v1(
+            // Lane V02: past `palw_final_lock_full_collateral` the resolved locks leave the ceiling,
+            // exactly as the bind's `gate_room` reads them (same DAA, same escaped depth).
+            let off_ceiling = if filter.resolved_locks_off_ceiling {
+                crate::palw_state_v2::palw_bond_resolved_locks_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court)
+            } else {
+                0
+            };
+            let room = crate::palw_state_v2::palw_rcore_gate_room_split_of_v1(
                 record.collateral,
                 filter.ceiling_permille,
                 committed,
+                off_ceiling,
                 crate::palw_state_v2::palw_accuser_exposure_v1(state, bond),
                 crate::palw_state_v2::PalwRcoreGateV1::Work,
             );
@@ -7526,7 +7539,11 @@ mod tests {
                 now_daa: 103,
                 settled_anchor_depth: None,
                 window_court: sp.window_court(),
-                rcore: Some(PalwRcoreSeatFilterV1 { eligibility: 50_000 * MSK as u128, ceiling_permille: 500 }),
+                rcore: Some(PalwRcoreSeatFilterV1 {
+                    eligibility: 50_000 * MSK as u128,
+                    ceiling_permille: 500,
+                    resolved_locks_off_ceiling: false,
+                }),
             };
             let policy = PalwPanelDrawPolicyV1 { valid_lock: Some(filter), ..sw_policy() };
             let key = |b: u64| PalwBondKeyV2(bond_outpoint(b));

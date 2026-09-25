@@ -173,7 +173,11 @@ fn t08_fold_admission_producer_facts_and_draw_read_one_committed_number() {
         now_daa: t,
         settled_anchor_depth: escaped,
         window_court: c.sp.window_court(),
-        rcore: Some(PalwRcoreSeatFilterV1 { eligibility, ceiling_permille: c.sp.fp_max_exposure_ratio_permille() }),
+        rcore: Some(PalwRcoreSeatFilterV1 {
+            eligibility,
+            ceiling_permille: c.sp.fp_max_exposure_ratio_permille(),
+            resolved_locks_off_ceiling: false,
+        }),
     };
     let room = u128::from(x) * u128::from(c.sp.fp_max_exposure_ratio_permille()) / 1000 - committed;
     assert!(filter(room).admits(&s, &bond_key(1)), "committed + eligibility = ceiling is drawn");
@@ -217,6 +221,8 @@ fn draw_policy(c: &Chain, id: &Hash64, claim: &PalwClaimStateV2, daa: u64) -> Pa
         rcore: sp.rcore_plus_active_at(daa).then(|| PalwRcoreSeatFilterV1 {
             eligibility: palw_rcore_bind_prices_v1(&c.s, sp, &e, id, claim, seat_count, daa).eligibility,
             ceiling_permille: sp.fp_max_exposure_ratio_permille(),
+            // Lane V02: as the processor resolves it at the binding block.
+            resolved_locks_off_ceiling: sp.final_lock_full_collateral_active_at(daa),
         }),
     });
     PalwPanelDrawPolicyV1 {
@@ -556,7 +562,11 @@ fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
         now_daa: bound,
         settled_anchor_depth: None,
         window_court: c.sp.window_court(),
-        rcore: Some(PalwRcoreSeatFilterV1 { eligibility, ceiling_permille: c.sp.fp_max_exposure_ratio_permille() }),
+        rcore: Some(PalwRcoreSeatFilterV1 {
+            eligibility,
+            ceiling_permille: c.sp.fp_max_exposure_ratio_permille(),
+            resolved_locks_off_ceiling: false,
+        }),
     };
     assert_eq!(filter(prices.eligibility).admits(&c.s, &seat), committed + prices.lock_2 <= ceiling);
     assert!(filter(ceiling - committed).admits(&c.s, &seat) && !filter(ceiling - committed + 1).admits(&c.s, &seat));

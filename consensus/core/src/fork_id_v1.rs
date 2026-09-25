@@ -628,6 +628,9 @@ mod tests {
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
             "palw_rcore_plus" => params.palw_rcore_plus = Some(at),
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch): refused without R-core+
+            // at or below it and an unsynced mirror by `validate_palw_v2`, which the probe does not run.
+            "palw_final_lock_full_collateral" => params.palw_final_lock_full_collateral = Some(at),
             // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
             // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
             // hashers and the schedule.

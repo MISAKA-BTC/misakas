@@ -58,6 +58,12 @@ pub struct PalwProducerBondFactsV2 {
     /// `Params::palw_rcore_plus`, `0` below it. The work gate never lets `committed + accuser` pass
     /// the collateral (the S review's M1).
     pub accuser_exposure: u128,
+    /// **Lane V02 (post-launch, 2026-09-26): the part of [`Self::committed`] the ceiling does not
+    /// carry** — the bond's locks on resolved claims (`palw_bond_off_ceiling_raw_v1`) where
+    /// `Params::palw_final_lock_full_collateral` is in force at the candidate DAA, `0` below it. The
+    /// fold's work gate is then `committed − committed_off_ceiling + claim ≤ exposure_ceiling`, and the
+    /// whole `committed` still counts against the collateral.
+    pub committed_off_ceiling: u128,
 }
 
 impl PalwProducerBondFactsV2 {
@@ -72,7 +78,8 @@ impl PalwProducerBondFactsV2 {
     /// up to registration exposure, which admission item 8 always counted (the accuser ledger is `0`
     /// there and the ratio is at most 1000‰, so the second clause is implied).
     pub fn has_committed_room(&self) -> bool {
-        self.committed.saturating_add(self.claim_exposure) <= self.exposure_ceiling
+        // Lane V02: `committed_off_ceiling` is 0 below `palw_final_lock_full_collateral`.
+        self.committed.saturating_sub(self.committed_off_ceiling).saturating_add(self.claim_exposure) <= self.exposure_ceiling
             && self.committed.saturating_add(self.accuser_exposure).saturating_add(self.claim_exposure) <= self.collateral as u128
     }
 }
@@ -487,6 +494,8 @@ pub fn palw_producer_facts_v4(
             } else {
                 0
             },
+            // Lane V02: 0 below `palw_final_lock_full_collateral` (and below R-core+, which it requires).
+            committed_off_ceiling: crate::palw_state_v2::palw_bond_off_ceiling_raw_v1(state, state_params, key, daa_score, raw_depth),
         })
     });
     Some(PalwProducerFactsV2 {

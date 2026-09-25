@@ -10922,6 +10922,8 @@ impl VirtualStateProcessor {
                 )
                 .eligibility,
                 ceiling_permille: state_params.fp_max_exposure_ratio_permille(),
+                // Lane V02 (post-launch): the bind's own split room, at the binding block's DAA.
+                resolved_locks_off_ceiling: state_params.final_lock_full_collateral_active_at(now_daa),
             }),
         })
     }
