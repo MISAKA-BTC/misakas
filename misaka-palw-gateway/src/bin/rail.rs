@@ -145,6 +145,9 @@ fn main() {
     // because the two halves must retire the same artifacts, and a rail with a longer TTL would
     // submit exactly what the gateway retired.
     let mut anchor_ttl_daa: u64 = 3_000;
+    // ADR-0152 §8.2 (P2-12 review finding 1): a testnet-12 DRILL's salt — the identity's network
+    // domain is then the drill genesis's, checked against the node before it is printed.
+    let mut drill_salt: Option<kaspa_consensus_core::config::drill::PalwDrillSaltV1> = None;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -175,6 +178,12 @@ fn main() {
             "--print-bond-pubkey" => print_pubkey = true,
             "--derive-artifact" => derive_stem = Some(PathBuf::from(value("--derive-artifact"))),
             "--print-derived-message" => print_derived_message = true,
+            "--palw-drill-genesis-salt" => {
+                drill_salt = Some(
+                    kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex(&value("--palw-drill-genesis-salt"))
+                        .unwrap_or_else(|e| die(format!("--palw-drill-genesis-salt: {e}"))),
+                )
+            }
             other => die(format!(
                 "unknown argument {other:?}\nusage: misaka-palw-fp-rail --artifact <outbox/fp-job-XXXX> [--print-claim] \
                  [--bond-key-seed <file> [--print-bond-pubkey] --funding-outpoint <txid:index> --funding-amount <sompi> \
@@ -184,7 +193,7 @@ fn main() {
                  [--funding-outpoint <txid:index> --funding-amount <sompi>] [--coinbase-funding-only] [--interval <secs>] [--max-attempts <n>] [--once] \
                  [--fee <sompi>] [--class-leaves <u64>] [--retention-dir <dir>] [--anchor-ttl-daa <n>]\
                  \n       misaka-palw-fp-rail --print-identity --bond-key-seed <file> --rpc <host:port> --class-id <128hex> \
-                 [--bond <txid:index>]\
+                 [--bond <txid:index>] [--palw-drill-genesis-salt <64hex>]\
                  \n       misaka-palw-fp-rail --derive-artifact <outbox/fp-job-XXXX> (--bond-key-seed <file> | --print-derived-message)"
             )),
         }
@@ -201,7 +210,7 @@ fn main() {
                  `misaka palw certified <id>` says whether it is on the free-prompt lane)"
                 .into())
         });
-        print_gateway_identity(&endpoint, &ValidatorKey::from_seed(seed), class, bond_flag.as_deref());
+        print_gateway_identity(&endpoint, &ValidatorKey::from_seed(seed), class, bond_flag.as_deref(), drill_salt.as_ref());
         return;
     }
     // **The submitter the gateway needs beside it.** The gateway holds no key (ADR-0079 Decision
@@ -695,15 +704,40 @@ fn try_rpc_connect(runtime: &tokio::runtime::Runtime, endpoint: &str) -> Result<
 /// incarnation of the network cannot be reused by accident), the bond — named, or found in the
 /// registry by this key, the way `misaka bond status` finds it — its registered operator id, and a
 /// check that the class exists and says whether it is seated on the free-prompt lane.
-fn print_gateway_identity(endpoint: &str, key: &ValidatorKey, class_id: &str, bond: Option<&str>) {
+fn print_gateway_identity(
+    endpoint: &str,
+    key: &ValidatorKey,
+    class_id: &str,
+    bond: Option<&str>,
+    drill_salt: Option<&kaspa_consensus_core::config::drill::PalwDrillSaltV1>,
+) {
     use kaspa_rpc_core::api::rpc::RpcApi;
     let class: Hash64 = class_id.trim().parse().unwrap_or_else(|_| die(format!("--class-id {class_id:?} is not a 128-hex class id")));
     let ours = faster_hex::hex_string(key.public_key());
     let named = bond.map(parse_outpoint);
     let runtime = rpc_runtime();
     let client = try_rpc_connect(&runtime, endpoint).unwrap_or_else(|e| die(e));
-    let (info, found) = runtime.block_on(async {
+    let (found, params) = runtime.block_on(async {
         let info = client.get_server_info().await.unwrap_or_else(|e| die(format!("cannot read the node's server info: {e}")));
+        // **The network domain is the node's GENESIS's** (ADR-0152 §8.2; P2-12 review finding 1).
+        // A testnet-12 drill answers to `testnet-12` on another genesis, so the params are the
+        // chain the salt names (the constructor kaspad and the CLI share), and the node's own
+        // report (`getPalwNodeStatus` v4) must agree before an identity every job is signed
+        // under is printed. Asked of testnet-12 and of any node when a salt is given.
+        let params = kaspa_consensus_core::config::drill::palw_chain_params_v1(info.network_id, drill_salt)
+            .unwrap_or_else(|e| die(format!("--palw-drill-genesis-salt: {e}")));
+        if kaspa_consensus_core::config::drill::palw_node_genesis_check_applies_v1(info.network_id, drill_salt) {
+            let status = client.get_palw_node_status().await.unwrap_or_else(|e| {
+                die(format!("cannot read which genesis the node runs (getPalwNodeStatus: {e}) — no identity is printed for it"))
+            });
+            kaspa_consensus_core::config::drill::palw_node_genesis_verdict_v1(
+                &params,
+                drill_salt,
+                &status.genesis_hash,
+                &status.drill_salt_id,
+            )
+            .unwrap_or_else(|why| die(why));
+        }
         let candidates: Vec<TransactionOutpoint> = match named {
             Some(outpoint) => vec![outpoint],
             None => client
@@ -738,14 +772,13 @@ fn print_gateway_identity(endpoint: &str, key: &ValidatorKey, class_id: &str, bo
             }
         }
         let _ = client.disconnect().await;
-        (info, found)
+        (found, params)
     });
     let Some((outpoint, facts)) = found else {
         die("no bond registered to this key was found on this chain — register one (kaspad --palw-register-bond \
              --palw-producer-key <this seed>), or name it with --bond <txid:index> (the `registered bond` line in the node log)"
             .into())
     };
-    let params = kaspa_consensus_core::config::params::Params::from(info.network_id);
     let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         params.net.to_string().as_bytes(),
         Some(params.genesis.hash),

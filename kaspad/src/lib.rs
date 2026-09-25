@@ -6,6 +6,7 @@ pub mod eth_rpc;
 pub mod palw_agent;
 pub mod palw_backends;
 pub mod palw_class_context;
+pub mod palw_drill;
 pub mod palw_dump;
 pub mod palw_economics;
 /// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,

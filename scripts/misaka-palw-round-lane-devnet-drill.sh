@@ -187,6 +187,9 @@ granted="$(wait_log "\\[palw-round-lane\\] chain block [0-9a-f]+ merged [0-9]+ r
 log "    $granted"
 
 log "4/5 sending $SENDS fee-paying transactions and waiting for a granted round block to carry one"
+# The sends spend the devnet main wallet (a public seed), never an earned reward: devnet arms no ADR-0152
+# R-core+, and on testnet-12 a Final's reward vests for about 3,147 DAA before it is a UTXO
+# (phase2-plan.md §1.8), so no step here may be moved onto testnet-12 funded from rewards.
 RECIPIENT="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/recipient.seed" | tail -1 | awk '{print $NF}')"
 [ -n "$RECIPIENT" ] || die "cannot derive the recipient's address"
 balance() {

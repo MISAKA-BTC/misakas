@@ -241,6 +241,32 @@ impl<'a> UtxoProcessingContext<'a> {
     }
 }
 
+/// **Audit C-08 part three: what `tx` must leave unclaimed, in total** — the sum over its inputs of
+/// every released PALW bond's slashed sompi in `burns` (`palw_v2_bond_burn_obligations`). Usually
+/// zero, because usually no input is a bond.
+pub(crate) fn palw_bond_burn_owed(tx: &Transaction, burns: &std::collections::HashMap<TransactionOutpoint, u64>) -> u64 {
+    tx.inputs.iter().filter_map(|input| burns.get(&input.previous_outpoint)).fold(0u64, |a, b| a.saturating_add(*b))
+}
+
+/// **Audit C-08 part three, the one rule: a released bond's spend must destroy what the bond
+/// lost.** `in − out` is what the transaction leaves unclaimed (the accumulation site removes the
+/// same amount from the block's fee pool, so it is destroyed rather than handed to the miner); it
+/// must cover `owed` ([`palw_bond_burn_owed`]). `input_amounts` are the spent entries' amounts, in
+/// any order. Asked by the block path's per-transaction check (`BondSpendFilter`) and by the
+/// mempool (ADR-0109 D3's burn half), so the two cannot disagree about which spend pays.
+pub(crate) fn palw_bond_burn_paid(tx: &Transaction, input_amounts: impl IntoIterator<Item = u64>, owed: u64) -> TxResult<()> {
+    if owed == 0 {
+        return Ok(());
+    }
+    let total_in: u64 = input_amounts.into_iter().fold(0u64, |a, amount| a.saturating_add(amount));
+    let total_out: u64 = tx.outputs.iter().fold(0u64, |a, o| a.saturating_add(o.value));
+    let left = total_in.saturating_sub(total_out);
+    if left < owed {
+        return Err(TxRuleError::BondBurnNotPaid { owed, left });
+    }
+    Ok(())
+}
+
 /// kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): the per-tx bond-spend SKIP filter
 /// threaded into mergeset acceptance validation. When `Some`, a transaction that spends a **known
 /// non-releasable** bond's locked output-0 (resolved in `bond_view` at `daa_score`) fails UTXO
@@ -269,11 +295,23 @@ pub(crate) struct BondSpendFilter<'a> {
     palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
 }
 
-impl BondSpendFilter<'_> {
-    /// **What this transaction must leave unclaimed, in total.** The sum over its inputs of every
-    /// released PALW bond's slashed sompi — usually zero, because usually no input is a bond.
+impl<'a> BondSpendFilter<'a> {
+    /// The PALW half alone, as the chain walk builds it from the selected parent's state (the DNS
+    /// view absent) — test-only, so ADR-0152 T23/T05 can hand the block path's per-transaction check
+    /// the processor's own locked set and burn obligations at a DAA of their choosing.
+    #[cfg(test)]
+    pub(crate) fn palw_only_for_tests(
+        daa_score: u64,
+        palw_locked: &'a std::collections::HashSet<TransactionOutpoint>,
+        palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
+    ) -> Self {
+        Self { bond_view: None, daa_score, palw_locked, palw_burns }
+    }
+
+    /// **What this transaction must leave unclaimed, in total** — [`palw_bond_burn_owed`] over this
+    /// filter's obligations.
     fn burn_owed(&self, tx: &Transaction) -> u64 {
-        tx.inputs.iter().filter_map(|input| self.palw_burns.get(&input.previous_outpoint)).fold(0u64, |a, b| a.saturating_add(*b))
+        palw_bond_burn_owed(tx, self.palw_burns)
     }
 
     /// `true` iff `outpoint` is a known bond that is NOT releasable at `self.daa_score` (i.e. its
@@ -1784,18 +1822,10 @@ impl VirtualStateProcessor {
         // The lock above keeps a live bond's collateral unspendable; this is the other end. Without
         // it a bond that was slashed and then retired walks away with its whole outpoint, and
         // `PalwBondStateV2::slashed`'s "it leaves `collateral` and enters circulation nowhere" is
-        // false at the only moment it means anything. `in − out` is what the transaction leaves
-        // unclaimed, and the accumulation site removes the same amount from the block's fee pool so
-        // it is destroyed rather than handed to the miner.
+        // false at the only moment it means anything. The rule is `palw_bond_burn_paid`, which the
+        // mempool asks too.
         if let Some(filter) = bond_filter {
-            let owed = filter.burn_owed(transaction);
-            if owed > 0 {
-                let total_in: u64 = entries.iter().fold(0u64, |a, e| a.saturating_add(e.amount));
-                let total_out: u64 = transaction.outputs.iter().fold(0u64, |a, o| a.saturating_add(o.value));
-                if total_in.saturating_sub(total_out) < owed {
-                    return Err(TxRuleError::BondBurnNotPaid { owed, left: total_in.saturating_sub(total_out) });
-                }
-            }
+            palw_bond_burn_paid(transaction, entries.iter().map(|e| e.amount), filter.burn_owed(transaction))?;
         }
         let populated_tx = PopulatedTransaction::new(transaction, entries);
         // CONSENSUS path: DNS coinbase settlement is deliberately NOT consulted here
@@ -1844,15 +1874,27 @@ impl VirtualStateProcessor {
         Ok(())
     }
 
-    /// Populates the mempool transaction with maximally found UTXO entry data and proceeds to validation if all found
+    /// Populates the mempool transaction with maximally found UTXO entry data and proceeds to validation if all found.
+    ///
+    /// `palw_burns` is the burn half of the mempool's PALW bond gate (`palw_mempool_bond_gate`, the
+    /// tip's `palw_v2_bond_burn_obligations`): a spend of a released, slashed bond that does not
+    /// leave what the bond lost unclaimed is refused `BondBurnNotPaid` here — the block path's rule
+    /// (`palw_bond_burn_paid`), asked once the entries are known and before the script check —
+    /// instead of being relayed and skipped at every merge. `None` off a V2 registry.
     pub(super) fn validate_mempool_transaction_in_utxo_context(
         &self,
         mutable_tx: &mut MutableTransaction,
         utxo_view: &impl UtxoView,
         pov_daa_score: u64,
         args: &TransactionValidationArgs,
+        palw_burns: Option<&std::collections::HashMap<TransactionOutpoint, u64>>,
     ) -> TxResult<()> {
         self.populate_mempool_transaction_in_utxo_context(mutable_tx, utxo_view)?;
+        if let Some(burns) = palw_burns {
+            let owed = palw_bond_burn_owed(&mutable_tx.tx, burns);
+            // Every entry is populated here (`populate_…` refused a missing one).
+            palw_bond_burn_paid(&mutable_tx.tx, mutable_tx.entries.iter().flatten().map(|entry| entry.amount), owed)?;
+        }
 
         // ADR-0134: a compute-overlay transaction is not admitted to the mempool past the
         // retirement — the block rule above would refuse the template that carried it.

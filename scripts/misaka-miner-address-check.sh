@@ -76,11 +76,23 @@ short_text() {
 }
 
 # Plain-language gloss for a reward verdict, for display only.
+#
+# testnet-12 (ADR-0152 R-core+, V): a Final's producer and seat rewards VEST before they are UTXOs — a row
+# that is minted into a coinbase output only after its conviction window closes, about 3,147 DAA past the
+# Final and a number of later licences (phase2-plan.md §1.8), and burned instead if the claim is convicted.
+# Until then this address holds no reward UTXO for it at all, and `misaka palw vesting --address` is where
+# the reward is. Other networks arm no R-core+ and pay at the Final as before.
 reward_meaning() {
   case "$1" in
     RECENT_REWARD_SEEN)  echo "recent reward, immature coinbase present" ;;
     REWARD_HISTORY_SEEN) echo "past reward, mature only" ;;
-    NO_REWARD_UTXO)      echo "no reward UTXO for this address" ;;
+    NO_REWARD_UTXO)
+      if [ "$NETWORK" = "testnet-12" ]; then
+        echo "no reward UTXO for this address — on testnet-12 rewards vest first (see: misaka palw vesting --address)"
+      else
+        echo "no reward UTXO for this address"
+      fi
+      ;;
     *)                   echo "unknown" ;;
   esac
 }

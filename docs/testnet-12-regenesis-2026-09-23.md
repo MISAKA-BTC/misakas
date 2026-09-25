@@ -208,9 +208,77 @@ view が移った時点でまだ先にある ticket（窓の末尾）。
 
 ## 配備の順序（予定）
 
-DoS 修正の merge → release build（上表の TBD を埋める）→ drill（出荷する binary で、fence 1000 を
-跨ぐまで）→ 4 ホストへ配備 → seeder 切替 → 告知（告知は運用者が行う）。一般参加者向けの手順は
-[`testnet12-join-mining.md`](testnet12-join-mining.md)。
+DoS 修正の merge → release build（上表の TBD を埋める）→ 4 ホストへ配備 → seeder 切替 → 告知
+（告知は運用者が行う）→ **公開後に** drill（出荷する binary を **drill salt 付きで**、drill 専用鍵で。
+下の「drill（P2-12）」）。drill は公開前の gate ではない（運用者の決定 2026-09-24、ADR-0152 §8.3 item 3、
+§9.3 Q12 (b)）。一般参加者向けの手順は [`testnet12-join-mining.md`](testnet12-join-mining.md)。
+
+## drill（P2-12、ADR-0152 §8.2 — 公開後に実施）
+
+**drill は「出荷する binary で testnet-12 を動かす」ことではなくなった。「出荷する binary を drill salt
+付きで動かす」ことである。** salt 無しで出荷 binary を私設で動かすと、それは公開 testnet-12 と同じ
+genesis・同じ premine txid・同じ network domain の chain になり、そこで card 鍵が署名したものは公開
+chain でも有効になる（premine の spend も、登録も、receipt も）。salt はそれを構造的に閉じる。
+
+* **起動**: `kaspad --testnet --netsuffix=12 --palw-drill-genesis-salt=<64 hex> --nodnsseed
+  --addpeer=<他の drill ホスト> --appdir=<専用>`。salt は `openssl rand -hex 32` で作り、全 drill ホストに
+  同じものを渡す。**コマンドラインのみ**（環境変数・config file からは読まない。公開ノードと env を共有
+  しても事故で salt が付かない）。
+* **salt が動かすもの**: premine txid と community txid（`PALW_T12_PREMINE_SALT` の後ろに salt を足した
+  同じ導出）→ genesis の全 outpoint、`utxo_commitment`、genesis hash（coinbase marker も
+  `misaka-palw-t12-drill`）→ network domain（全 V2 署名）と `consensus_params_id` / `consensus_identity_id`。
+  ルール（fence・window・class 行・R-core+）は出荷物そのもの（`t53_the_drill_runs_the_shipping_rules_on_its_own_genesis`
+  が「genesis と registry 以外は fingerprint まで同じ」を検査）。
+* **drill 専用鍵**: genesis の 8 席（bond 鍵・operator 鍵・payout／fee float）、main wallet、heartbeat の
+  支払先、validator 鍵、drill で登録する bond（D-9 の 130,000 MSK 席、D-10 の再登録）、EVM account は
+  すべて salt から導出する鍵。card 鍵は一切使わない。`kaspad ... --palw-drill-genesis-salt=<salt>
+  --palw-drill-write-keyring=<dir>` が seed file（0600）と `manifest.json`（drill genesis、各席の bond
+  outpoint・fee float・address、heartbeat／payout／validator の鍵、EVM account（`evm`: address と
+  secp256k1 secret の file）、公開 t12 の genesis を並記）を書いて終了する。drill script はこの manifest
+  だけを読む（鍵を自分で導出しない）。
+* **EVM lane は salt で分離されない。** EVM tx は `EVM_CHAIN_ID`（全 network で同じ定数）と nonce にしか
+  束縛されず、genesis を含まない。公開 t12 で残高を持つ account が drill で署名した transfer・bridge
+  withdrawal・model market の操作は、公開 t12 でも同じ nonce で有効になり、drill の P2P port に届く誰でも
+  drill の block から取り出せる。したがって drill で署名する EVM account は manifest の `evm` だけ
+  （market step の buy/sell generator も含む）。salt 付きノードは `--evm-fee-recipient` を drill の
+  account に限り、EVM ingress（`eth_sendRawTransaction`／`submitEvmTransaction`）は drill account 以外の
+  sender を拒否する。構造的に閉じるには genesis ごとの EVM chain id が要るが、それは consensus 変更で
+  drill の範囲外。
+* **起動時に拒否されるもの**（`kaspad/src/palw_drill.rs`）: testnet-12 以外／`--nodnsseed` 無し／明示
+  peer 無し／`--override-params-file`／drill keyring に無い `--palw-producer-key`（card 鍵を含む）・
+  `--validator-key`・`--palw-producer-pay-address`・`--palw-heartbeat-miner-address`・
+  `--evm-fee-recipient`／公開 t12 の genesis txid を指す `--palw-producer-bond`・`--palw-fee-outpoint`・
+  `--stake-bond`（公開 unit の flag の写し）。起動後も同じ規則: `getBlockTemplate` は drill の address
+  にしか払わない（外部 miner 用）。
+* **off-node の署名者も salt を取る**: `misaka` CLI と gateway rail（`misaka-palw-fp-rail
+  --print-identity`）は `--palw-drill-genesis-salt=<salt>` で drill の params を作る（kaspad と同じ
+  `palw_chain_params_v1`）。署名の前に `getPalwNodeStatus`（v4: `genesisHash`・`drillSaltId`）でノードの
+  genesis を読み、自分の params と違えば署名しない（salt 無しで drill ノードに向けると「drill <id> の
+  salt を渡せ」と拒否。以前は公開 t12 の domain で署名していた — drill では拒否され、公開 t12 では有効）。
+* **app dir**: drill は `<appdir>/misaka-testnet-12/palw-drill-genesis` に marker を書く。marker の無い
+  既存データ（公開ノードの可能性）を drill は開かない — 開けば genesis 検査で「DB を消すか」と聞かれ、
+  `--yes` なら公開ノードの DB を消す。逆に salt 無しのノードは marker のある dir を開かない。
+* **公開 chain とは互いに拒否**: handshake は genesis で `WrongGenesis`（`t53_the_handshake_refuses_a_drill_and_public_testnet_12_to_each_other`）。
+  drill の登録・attempt・有罪判定を公開 t12 の test consensus に流すと missing UTXO／domain で拒否
+  （`t53_drill_isolation`）。同じ blue score で同じ miner script なら 2 chain の coinbase txid は一致する
+  （これが drill 専用鍵が要る理由）— drill 専用 script なら一致しない。
+* **devnet/simnet 専用だった drill 注入器**（`--palw-drill-tamper-fp-leaf`、`--palw-drill-answer-only`、
+  `--palw-drill-refuse-leaf-evidence`）は salt 付き drill でも使える（公開 t12 では従来どおり拒否）。
+* **場所**: fleet ホスト。**この Mac では絶対に動かさない。公開 t12 ノードが動いているホストでも
+  動かさない**（09-23 の crash loop の教訓）。`scripts/misaka-palw-t12-rcore-drill.sh check-host` が両方を
+  拒否する（unit 名・unit file・`--configfile` 起動を含む kaspad process・公開 t12 の既定 port の
+  listener・drill marker の無い `~/.rusty-kaspa/misaka-testnet-12`）。8k 行は異なる operator の ready seat
+  が 7 つ要るので、1 ホストに複数 seat（`node <seat>` を seat ごとに。app dir と port は seat ごとに別、
+  gRPC listener は無し — 既定の 127.0.0.1:26210 は 1 ホスト 1 つで、bind 失敗はノードを落とす）か、
+  7 ホスト以上に 1 seat ずつ。
+* **手順と証拠**: `scripts/misaka-palw-t12-rcore-drill.sh`（D-1〜D-10、位置で番号付け。証拠は各 action の
+  後に書かれた log と RPC だけ）。各 step の結果は exit code と `steps.status` に残る: 0 PASS／1 FAIL／
+  3 INCOMPLETE（getPalwVesting が無い build など、証拠を出せない）／4 MANUAL（手作業部分は `attest` で
+  証拠を記録）。`report` は全 step が PASS か ATTESTED で、analyzer も 0 のときだけ通る — 待ちの打ち切りや
+  証拠の欠落が「done」で終わることはない。`scripts/misaka-palw-t12-rcore-analyze.py`（door／withheld
+  histogram＝p、秒／DAA の実測、licence の cadence と O-1 判定。exit 0 PASS／3 INCOMPLETE／1 FAIL）。
+  どちらも構文検査と、ノードもホストも使わない self-test（script の step 機構、analyzer の合成データ）
+  のみで、どのホストにも流していない。
 
 ---
 
@@ -295,6 +363,10 @@ one it cannot now refuses to start.*
    bare `kill` in a script is not protected.
 
 ### Drill evidence (first deployment)
+
+*Superseded as a method (P2-12, 2026-09-25): the drill below ran the shipped binary on public testnet-12's
+own genesis. From P2-12 on, a drill runs the shipped binary **with the drill salt** and drill-only keys, so
+nothing it signs or mints is valid on public testnet-12 — see "drill（P2-12）" above.*
 
 Same binary as shipped. `consensus/tests/palw_t12_liveness.rs` and
 `consensus/core/tests/t12_economic_safety_drill.rs` cover the rule-level half; this is the live half.

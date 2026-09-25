@@ -3241,6 +3241,37 @@ pub fn palw_licence_offer_order_v1<O>(
     }
 }
 
+/// **The V1 set a node offers past SEAT-R: its quorum and nothing past it, and a different one each
+/// time** (the SEAT-R review, MEDIUM — the half a node can do without the processor; node policy).
+/// kaspad's licence collector calls it as `palw_licence_offer_order_v1`'s V1 door; it lives here,
+/// beside that order, so the processor's T45 (ADR-0152 X22 with SR-6, Phase 2 P2-5) drives the
+/// collector's own V1 composition over the real assembler rather than a copy of it.
+///
+/// Below `Params::palw_rcore_plus`, `palw_v2_receipt_quorum_assemble` keeps every clean candidate
+/// past the quorum and asks the fold nothing (past it, see the next paragraph), and past
+/// `palw_audit_2026_09_23` a set any one of whose `Valid` signers cannot post its lock folds INERT
+/// (`receipt_set_is_backed`): the claim stays `PanelBound` and the node pays a carrier every replan
+/// until the window closes. Past SEAT-R every seat of a floor or 8k panel replays and signs `Valid`,
+/// so the greedy set carries all five, and one short seat is enough. So the assembler is offered the
+/// SHORTEST prefix of the candidates it assembles from — the quorum, and the outsider where the claim
+/// has one — and the candidates are rotated by `sent`, the V1 sets the node has already sent for the
+/// claim, so a set that went inert is followed by one that leaves other seats out.
+///
+/// **Past `palw_rcore_plus` the assembler makes the fold-aware choice itself** (ADR-0152 SR-6, Phase
+/// 2 P2-5): it offers the fold's backed subset of the set it is handed, and nothing for a set whose
+/// backed subset is short of the quorum, so a prefix that carries an unbacked `Valid` is passed over
+/// for the next one and the V1 door falls through to S2 (X22) instead of holding the claim on an
+/// inert set. The prefix still bounds the set to the quorum and the rotation still varies it; below
+/// that fence (a SEAT-R network without R-core+) they are this door's only defence, as before.
+pub fn palw_v1_offer_v1<R: Clone, O>(candidates: &[R], sent: u32, mut assemble: impl FnMut(Vec<R>) -> Option<O>) -> Option<O> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut rotated = candidates.to_vec();
+    rotated.rotate_left(sent as usize % candidates.len());
+    (1..=rotated.len()).find_map(|n| assemble(rotated[..n].to_vec()))
+}
+
 /// **One shard's part** (ADR-0100 Decision 4): the same receipt checks, over the seats of THAT
 /// shard's slice of a stratified panel, at the same quorum a shard's seats are drawn for. Refused
 /// by name: a claim that does not license by parts, a part of another plan, a shard out of range,

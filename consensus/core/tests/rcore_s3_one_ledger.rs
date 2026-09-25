@@ -27,7 +27,11 @@ use kaspa_consensus_core::palw_panel_v2::{
 use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
 use kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v4;
 use kaspa_consensus_core::palw_state_v2::{
-    PALW_RCORE_VESTING_ROWS_LANDED_V1, PalwBlockContextV2, PalwStateV2Error, palw_accuser_exposure_v1, palw_bond_collateral_is_locked_v6, palw_bond_committed_raw_v1, palw_bond_committed_v1, palw_bond_is_payee_of_unmatured_row_v1, palw_panel_valid_lock_required_v1, palw_rcore_bind_prices_v1, palw_rcore_duty_bind_v1, palw_rcore_lock_unvested_v1, palw_rcore_lock_vested_at_cap_v1, palw_rcore_lock_vested_v1, palw_rcore_seat_lock_v1, palw_second_clock_depth_of_v1, palw_second_clock_depth_v1, palw_v2_object_licenses_claim_v1,
+    PALW_RCORE_VESTING_ROWS_LANDED_V1, PalwBlockContextV2, PalwStateV2Error, palw_accuser_exposure_v1,
+    palw_bond_collateral_is_locked_v6, palw_bond_committed_raw_v1, palw_bond_committed_v1, palw_bond_is_payee_of_unmatured_row_v1,
+    palw_panel_valid_lock_required_v1, palw_rcore_bind_prices_v1, palw_rcore_duty_bind_v1, palw_rcore_lock_unvested_v1,
+    palw_rcore_lock_vested_at_cap_v1, palw_rcore_lock_vested_v1, palw_rcore_seat_lock_v1, palw_second_clock_depth_of_v1,
+    palw_second_clock_depth_v1, palw_v2_licence_backed_seats_v1, palw_v2_object_licenses_claim_v1,
 };
 use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
 use std::collections::BTreeSet;
@@ -624,7 +628,8 @@ fn n1_on_the_floor_and_the_8k_row_the_licence_needs_no_top_up_and_five_valids_li
 
 /// **T33 (SR-6): a licence on the backed subset.** One seat is unbacked at the licence (its room
 /// gone after the bind). On the V1 door the other four license: the unbacked one takes no lock, no
-/// credit and no served bit (so the escrow is held), and the assemblers' predicate agrees. On the
+/// credit and no served bit (so the escrow is held), and the assemblers' predicate agrees — as does
+/// the subset they offer (Phase 2 P2-5, `palw_v2_licence_backed_seats_v1`: the four). On the
 /// coverage door the backed four do not cover testnet-12's cut (every segment needs its unique
 /// partial holder), so the object is inert and the predicate says so. Fence off, the same set is
 /// inert on both doors (today's all-or-nothing rule).
@@ -687,6 +692,18 @@ fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
             f.da_court,
             &c.extras_at(at),
         );
+        // Phase 2 P2-5: the backed subset the V1 and coverage assemblers offer, read off the same fold.
+        let subset = palw_v2_licence_backed_seats_v1(
+            &c.s,
+            &c.sp,
+            &ctx_at,
+            &object,
+            f.unavailable_abstains,
+            f.capability_bound,
+            f.uncertified_weightless,
+            f.da_court,
+            &c.extras_at(at),
+        );
         c.step(&[object]);
         let after = c.claim(&id);
         let licensed = matches!(after.phase, PalwClaimPhaseV2::ReceiptLicensed { .. });
@@ -694,6 +711,8 @@ fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
         match (door, armed) {
             ("quorum", true) => {
                 assert!(licensed, "four backed Valids are a quorum");
+                let backed: Vec<_> = seats.iter().enumerate().filter(|(i, _)| *i != victim_index).map(|(_, (k, _))| *k).collect();
+                assert_eq!(subset, Some(backed), "the assemblers' subset: the four seats the fold locked, in carried order");
                 assert!(c.s.slashable_lock(victim, id).is_none(), "the unbacked Valid takes no lock");
                 assert_eq!(after.rcore.served_mask & (1 << victim_index), 0, "…and no served bit");
                 assert_eq!(after.rcore.served_mask.count_ones(), 4);
@@ -701,7 +720,10 @@ fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
                 let row = c.s.panel_duty_row_of(&id).expect("duty row");
                 assert_eq!(row.seats.get(&victim), Some(&0), "…and no credit");
             }
-            _ => assert!(!licensed, "{door}/armed={armed}: inert"),
+            _ => {
+                assert!(!licensed, "{door}/armed={armed}: inert");
+                assert_eq!(subset, None, "{door}/armed={armed}: no subset to offer (below the fence none is read)");
+            }
         }
     }
 }
