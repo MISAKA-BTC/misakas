@@ -553,23 +553,45 @@ async fn hb_probe_b_future_stamped_beats_run_the_private_branch_ahead() {
             private.len(),
             (last as f64 - now as f64) / 1_000.0
         );
-        assert!(matches!(refusal, RuleError::TimeTooFarIntoTheFuture(..)), "{tag}: only the future bound stops the run-ahead");
+        // **What stops the run-ahead on the RELEASE (0e8ec984e), and it is the beat lead cap.** The
+        // probe was written on rcore/hb-fork-choice-probe, whose base carried the 1,620 s tolerance
+        // with NO cap, and it asserted the run-ahead was stopped by `TimeTooFarIntoTheFuture` at
+        // floor(T / I) slots. The launch release ships `palw_clock_lead_cap` armed on testnet-12
+        // (the 2026-09-25 mainnet-values review's HIGH, merged as `ce75beff`), which refuses any
+        // clock-moving header stamped more than `PALW_CLOCK_LEAD_CAP_MS` = 132 s past THIS node's
+        // clock — tighter than the 1,620 s tolerance. So at 1,620 s the stopper is
+        // `ClockLeadTooFarAhead`, not the future bound, and the run-ahead is bounded by the CAP,
+        // not the tolerance. This is verdict 4's "the rate is closed": measured, not asserted away.
+        let cap_ms = kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS;
+        let capped = matches!(refusal, RuleError::ClockLeadTooFarAhead(..));
+        assert!(
+            matches!(refusal, RuleError::TimeTooFarIntoTheFuture(..)) || capped,
+            "{tag}: the run-ahead is stopped by the future bound or the lead cap, and by nothing else — got {refusal}"
+        );
+        if tolerance == 1_620 {
+            assert!(capped, "{tag}: past 132 s the lead cap (not the 1,620 s tolerance) is what stops the run-ahead");
+        }
         let r = release(&tag, &mut d.victim, &private, fork, &mut d.nonce, 8).await;
         assert!(r.refused.is_empty(), "{tag}: the victim accepts every beat its bound admitted a moment ago");
         let (x, y) = payments(&tag, &d);
         assert_eq!(r.flipped(), y && !x, "{tag}: the flip is exactly the double spend");
-        if tolerance == 1_620 {
-            assert!(r.flipped() && y && !x, "{tag}: thirteen slots of lead carry the double spend");
-        }
         let lead = private_slots as i64 - public_slots as i64;
-        let budget = (tolerance * 1_000 / I) as i64;
+        // The run-ahead is bounded by the SMALLER of the tolerance and the lead cap, in whole slots.
+        let effective_ms = (tolerance * 1_000).min(cap_ms);
+        let budget = (effective_ms / I) as i64;
         eprintln!(
-            "[hb-probe {tag}] lead: private {private_slots} slots vs public {public_slots} = {lead} slots ahead (floor(T / I) = {budget}); blue work +{} vs +{}; the victim's sink now at DAA +{} above the fork after {public_slots} slots of wall time",
+            "[hb-probe {tag}] lead: private {private_slots} slots vs public {public_slots} = {lead} slots ahead (min(T, cap {} s) / I = {budget} slots); blue work +{} vs +{}; the victim's sink now at DAA +{} above the fork after {public_slots} slots of wall time; double spend landed: {}",
+            cap_ms / 1_000,
             r.private_bw_max,
             r.public_bw,
-            d.victim.daa_of(d.victim.sink()) - d.victim.daa_of(fork)
+            d.victim.daa_of(d.victim.sink()) - d.victim.daa_of(fork),
+            y && !x
         );
-        assert!(lead == budget || lead == budget + 1, "{tag}: the run-ahead is the drift budget in whole slots");
+        // The lead is at most the cap's worth of slots (plus the boundary slot the loop mines before
+        // its stamp trips the cap). At 1,620 s this is ~1 slot, NOT the 13 the uncapped tolerance
+        // would give — the residual is what verdict 4 calls "partial": a small run-ahead survives the
+        // cap, and it still flips a deep reorg whose PALW keys tie (see the fenced fix on this branch).
+        assert!(lead <= budget + 2, "{tag}: the run-ahead is bounded by min(tolerance, lead cap) in whole slots, got {lead} > {budget}+2");
     }
 }
 
