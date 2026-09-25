@@ -781,14 +781,16 @@ pub fn palw_class_census_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2
         row.seat_exposure_inflight_sompi =
             row.seat_exposure_inflight_sompi.saturating_add(duty.seat_exposure.saturating_mul(duty.seats.len() as u128));
     }
-    for (_, claim) in state.claims_iter() {
+    for (claim_id, claim) in state.claims_iter() {
         if !matches!(claim.source, PalwClaimSourceV2::Attempt) {
             continue;
         }
         let Some(row) = rows.get_mut(&claim.class_id) else { continue };
         row.claims_accepted += 1;
         row.escrow_accepted_sompi = row.escrow_accepted_sompi.saturating_add(claim.escrowed_reward as u128);
-        if claim.rebound_daa.is_some() {
+        // A redraw keeps the record of the panel it had; a claim lane F1 re-anchored after a
+        // no-capable-panel has none, and has drawn no second panel.
+        if claim.rebound_daa.is_some() && state.panel(claim_id).is_some() {
             row.claims_redrawn += 1;
         }
         match claim.phase {

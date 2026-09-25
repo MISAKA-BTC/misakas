@@ -1402,6 +1402,15 @@ pub struct PalwStateParamsV2 {
     /// what the params and schedule ids name, Some-only.
     #[borsh(skip)]
     readiness_v2_max_age_spans: Option<u32>,
+    /// **Lane F1: `Params::palw_registry_resilience`'s height** (the 2026-09-25 sweep's V03 and V05),
+    /// mirrored here by `Params::sync_palw_registry_resilience` because a retried claim's bind deadline
+    /// is re-derived at load, where only these params are at hand. `None` on every shipped preset.
+    /// Read through [`Self::registry_resilience_active_at`] and
+    /// [`Self::registry_resilience_governs_span_v1`]. Skipped by borsh for
+    /// `short_challenge_window_from_daa`'s reason: the fence is what `Params::consensus_params_id`
+    /// hashes (Some-only), and `validate_palw_v2` refuses a bundle whose copy disagrees with it.
+    #[borsh(skip)]
+    registry_resilience_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1564,6 +1573,7 @@ impl PalwStateParamsV2 {
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
             readiness_v2_max_age_spans: None,
+            registry_resilience_from_daa: None,
         })
     }
 
@@ -1699,6 +1709,43 @@ impl PalwStateParamsV2 {
     /// The mirror as it is (`None` on every network but testnet-12).
     pub fn readiness_v2_max_age_spans(&self) -> Option<u32> {
         self.readiness_v2_max_age_spans
+    }
+
+    /// **Lane F1: the registry-resilience mirror** — written by `Params::sync_palw_registry_resilience`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_registry_resilience_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.registry_resilience_from_daa = from_daa;
+        self
+    }
+
+    /// Lane F1: `Params::palw_registry_resilience`'s height, if the network arms it (the mirror).
+    pub fn registry_resilience_from_daa(&self) -> Option<u64> {
+        self.registry_resilience_from_daa
+    }
+
+    /// **Lane F1: are the registry-resilience rules in force at `daa_score`?** `false` on every shipped
+    /// preset. Past the fence:
+    /// * **V03(1)** — a claim its anchor block did not bind while its class could not seat a panel on
+    ///   the state the draw read is not voided there: it is re-based on the anchor block and retried
+    ///   at its next anchor slot, and only the bind window's backstop, `accepted_daa + window_bind`,
+    ///   voids it ([`palw_ncp_retry_is_due_v1`]). Asked at the ANCHOR BLOCK's DAA.
+    /// * **V03(2)** — a class `Held` out of `Probation` for readiness returns to the probation progress
+    ///   it had ([`crate::palw_model_registry_v1::palw_lifecycle_step_resilient_v1`]);
+    /// * **V05** — a probation resets only on failed probes of at least two distinct producer bonds
+    ///   ([`crate::palw_model_registry_v1::PALW_PROBATION_RESET_DISTINCT_BONDS_V1`]). V03(2) and V05
+    ///   are asked per SPAN ([`Self::registry_resilience_governs_span_v1`]).
+    pub fn registry_resilience_active_at(&self, daa_score: u64) -> bool {
+        self.registry_resilience_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **Lane F1: does the fence govern execution span `span`** — is it in force at the span's FIRST
+    /// DAA (`span × span_daa`)? The one key V03(2) and V05 share: a failed probe names its bond iff
+    /// the span it is counted in is governed, and the span step judges a span's probes by the
+    /// resilient rules iff that span is governed — so a span that straddles the height is judged,
+    /// whole, by the rules it began under, and no span is judged by one rule with probes noted under
+    /// the other. (On testnet-12 a span is one DAA, so the span's first DAA is the DAA itself.)
+    pub fn registry_resilience_governs_span_v1(&self, span: u64, span_daa: u64) -> bool {
+        self.registry_resilience_active_at(span.saturating_mul(span_daa.max(1)))
     }
 
     /// **How long a readiness-V2 row stands on this network, in spans** — the mirror, or the default
@@ -3604,9 +3651,7 @@ pub fn palw_rcore_deadline_v1(
         return Ok(None);
     }
     Ok(match claim.phase {
-        PalwClaimPhaseV2::Provisional => {
-            Some(claim.bind_base_daa().checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?)
-        }
+        PalwClaimPhaseV2::Provisional => Some(palw_provisional_bind_deadline_v1(state, params, claim_id, claim)?),
         PalwClaimPhaseV2::PanelBound { bound_daa } => Some(
             bound_daa
                 .checked_add(params.receipt_window_for_claim_v1(
@@ -8649,6 +8694,15 @@ pub struct PalwChainStateV2 {
     // close past `palw_offence_attribution` writes one) roots and carries exactly as before.
     /// By `(claim, session)`: one proven acquittal's forfeit, while the claim can still be tried.
     held_forfeits: BTreeMap<(Hash64, Hash64), PalwHeldForfeitV1>,
+    // ---- lane F1 (the 2026-09-25 sweep's V03(2)/V05): the probation's memory ----
+    //
+    // ONE Some-only root block (`registry_probation/v1`) after the held forfeits', and ONE carriage
+    // tail (`0xB7`), written only when a row exists — so a state holding none (every state below
+    // `Params::palw_registry_resilience`, the only thing that writes one) roots and carries exactly
+    // as before.
+    /// By class: the readiness hold's kept probation progress and the probation's failed bonds
+    /// ([`crate::palw_model_registry_v1::PalwProbationMemoryV1`]); a row is present only while non-empty.
+    probation_memory: BTreeMap<Hash64, crate::palw_model_registry_v1::PalwProbationMemoryV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -8796,6 +8850,7 @@ impl PalwChainStateV2 {
             activation_pool_scheduled: BTreeMap::new(),
             activation_readiness_landed: BTreeMap::new(),
             held_forfeits: BTreeMap::new(),
+            probation_memory: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -10473,6 +10528,11 @@ impl PalwChainStateV2 {
             || !self.activation_readiness_landed.is_empty()
     }
 
+    /// **The 2026-09-25 sweep's V03(2)/V05: a class's probation memory**, if it holds one.
+    pub fn probation_memory_of_v1(&self, class_id: &Hash64) -> Option<&crate::palw_model_registry_v1::PalwProbationMemoryV1> {
+        self.probation_memory.get(class_id)
+    }
+
     /// **4-ter.3 step 6: every held forfeit**, by `(claim, session)`.
     pub fn held_forfeits_iter(&self) -> impl Iterator<Item = (&(Hash64, Hash64), &PalwHeldForfeitV1)> + '_ {
         self.held_forfeits.iter()
@@ -10756,6 +10816,13 @@ impl PalwChainStateV2 {
         if !self.held_forfeits.is_empty() {
             state.update(b"held_forfeits/v1");
             state.update(collection_root(b"held_forfeits", &self.held_forfeits).as_byte_slice());
+        }
+        // **The 2026-09-25 sweep's V03(2)/V05: the probation memory, ONE Some-only block** (after the
+        // held forfeits') — hashed only when a row exists, so every state without one roots exactly as
+        // before.
+        if !self.probation_memory.is_empty() {
+            state.update(b"registry_probation/v1");
+            state.update(collection_root(b"probation_memory", &self.probation_memory).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -11254,6 +11321,7 @@ impl PalwChainStateV2 {
         // ADR-0152-adjacent: the Activation Pool's I1–I4.
         self.assert_activation_pool_consistency_v1()?;
         self.assert_held_forfeits_consistency_v1()?;
+        self.assert_probation_memory_consistency_v1()?;
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
@@ -11444,6 +11512,29 @@ impl PalwChainStateV2 {
         Ok(())
     }
 
+    /// **The 2026-09-25 sweep's V03(2)/V05: a probation memory is a rowed class's, non-empty, keeps
+    /// progress only while the class is `Held`, and names at most two failed bonds, sorted and unique.**
+    /// Empty on every network but testnet-12.
+    pub(crate) fn assert_probation_memory_consistency_v1(&self) -> Result<(), PalwStateV2Error> {
+        use crate::palw_model_registry_v1::{PALW_PROBATION_RESET_DISTINCT_BONDS_V1, PalwModelLifecycleV1};
+        for (class_id, memory) in &self.probation_memory {
+            let bad = |why: &str| Err(PalwStateV2Error::CarriageInconsistent(format!("probation memory {class_id}: {why}")));
+            let Some(row) = self.model_lifecycles.get(class_id) else { return bad("its class has no lifecycle row") };
+            if memory.is_empty() {
+                return bad("an empty memory is no row");
+            }
+            if memory.held_probes_passed.is_some() && !matches!(row.state, PalwModelLifecycleV1::Held) {
+                return bad("kept probation progress on a class that is not Held");
+            }
+            if memory.failed_bonds.len() > PALW_PROBATION_RESET_DISTINCT_BONDS_V1
+                || memory.failed_bonds.windows(2).any(|pair| pair[0] >= pair[1])
+            {
+                return bad("its failed bonds are not sorted, unique and at most two");
+            }
+        }
+        Ok(())
+    }
+
     /// **ADR-0152 §4-ter.3 step 6: a held forfeit lives exactly as long as its claim can still be
     /// tried** — its claim held and not terminal (every terminal door drops it), a non-zero amount,
     /// one or two chunks, sorted and unique. Empty on every network but testnet-12.
@@ -11573,10 +11664,7 @@ impl PalwChainStateV2 {
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {
-                    expected.insert((
-                        claim.bind_base_daa().checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?,
-                        *id,
-                    ));
+                    expected.insert((palw_provisional_bind_deadline_v1(self, params, id, claim)?, *id));
                 }
                 PalwClaimPhaseV2::PanelBound { bound_daa } => {
                     expected.insert((
@@ -12229,6 +12317,13 @@ pub enum PalwDeltaEntryV2 {
         key: (Hash64, Hash64),
         old: Option<PalwHeldForfeitV1>,
         new: Option<PalwHeldForfeitV1>,
+    },
+    /// A class's probation memory was written or dropped (81; the 2026-09-25 pre-launch sweep's
+    /// V03(2)/V05, [`crate::palw_model_registry_v1::PalwProbationMemoryV1`]).
+    ProbationMemory {
+        key: Hash64,
+        old: Option<crate::palw_model_registry_v1::PalwProbationMemoryV1>,
+        new: Option<crate::palw_model_registry_v1::PalwProbationMemoryV1>,
     },
 }
 
@@ -15334,6 +15429,19 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::DaClaim { key, old, new });
     }
 
+    /// **The 2026-09-25 sweep's V03(2)/V05: write or drop a class's probation memory** — the rooted
+    /// write and its delta entry (81). An empty memory is no row.
+    fn write_probation_memory_v1(&mut self, key: Hash64, new: Option<crate::palw_model_registry_v1::PalwProbationMemoryV1>) {
+        let new = new.filter(|memory| !memory.is_empty());
+        let old = match &new {
+            Some(memory) => self.state.probation_memory.insert(key, memory.clone()),
+            None => self.state.probation_memory.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ProbationMemory { key, old, new });
+        }
+    }
+
     /// **4-ter.3 step 6: write or drop one held forfeit** — the rooted write and its delta entry (80).
     fn write_held_forfeit(&mut self, key: (Hash64, Hash64), new: Option<PalwHeldForfeitV1>) {
         let old = match &new {
@@ -17781,7 +17889,7 @@ impl<'a> TransitionBuilder<'a> {
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score);
         self.unnote_activation_probe_credits_v1(&id, &claim);
-        self.note_model_probe(&claim, false);
+        self.note_model_probe(&claim, false, ctx.daa_score);
         self.uncount_claim_usage(&id, &claim);
         let mut voided = claim.clone();
         voided.phase = PalwClaimPhaseV2::Voided { voided_daa: ctx.daa_score, reason };
@@ -18431,6 +18539,11 @@ impl<'a> TransitionBuilder<'a> {
         }
         let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, fold.span_daa);
         let work = registry::palw_model_work_from_carriage_v1(profile, canonical);
+        // The 2026-09-25 sweep's V03(2)/V05: a row rewritten to its entry state starts no probation
+        // it had, so whatever the old row's probation remembered goes with it.
+        if self.state.probation_memory.contains_key(&class_id) {
+            self.write_probation_memory_v1(class_id, None);
+        }
         // **Registered is existence, not eligibility** (ADR-0145 §7, past the fence). A class a
         // registrant bought opens CANDIDATE: it holds a row, it can be read and benchmarked, and
         // it admits no claim and bears no weight until a seat outside the registrant's own
@@ -18882,23 +18995,50 @@ impl<'a> TransitionBuilder<'a> {
     /// Why a bind window closed: under the registry, a rowed class whose ready seats cannot fill a
     /// panel voids as `NoCapablePanel` — the capacity's failure, named — otherwise `BindTimeout`.
     fn bind_timeout_reason(&self, claim: &PalwClaimStateV2, ctx: &PalwBlockContextV2) -> PalwVoidReasonV2 {
-        if let Some(fold) = self.model_registry_fold()
-            && fold.governs_at(ctx.daa_score)
-            && claim.class_id != self.params.base_class_id()
-            && self.state.model_lifecycles.contains_key(&claim.class_id)
-            && self.model_registry_ready_seats(&claim.class_id, ctx.daa_score, fold) < fold.globals.seat_count as u32
-        {
+        if self.class_cannot_seat_a_panel_v1(claim, ctx) {
             return PalwVoidReasonV2::NoCapablePanel;
         }
         PalwVoidReasonV2::BindTimeout
     }
 
+    /// **`NoCapablePanel`'s test, on the builder's state as it stands**: the registry governs, the
+    /// claim's class is a rowed non-base class, and its ready seats are fewer than a panel. The one
+    /// spelling [`Self::bind_timeout_reason`] labels a void with and lane F1's step-4c re-anchor
+    /// (V03(1)) asks — the latter on the anchor block's pre-object base, the state the draw read.
+    fn class_cannot_seat_a_panel_v1(&self, claim: &PalwClaimStateV2, ctx: &PalwBlockContextV2) -> bool {
+        self.model_registry_fold().is_some_and(|fold| {
+            fold.governs_at(ctx.daa_score)
+                && claim.class_id != self.params.base_class_id()
+                && self.state.model_lifecycles.contains_key(&claim.class_id)
+                && self.model_registry_ready_seats(&claim.class_id, ctx.daa_score, fold) < fold.globals.seat_count as u32
+        })
+    }
+
     /// A probe of a class under the registry: a `Final` passes, a fault fails; counted for the span.
-    fn note_model_probe(&mut self, claim: &PalwClaimStateV2, passed: bool) {
-        if self.model_registry_fold().is_none() || !matches!(claim.source, PalwClaimSourceV2::Attempt) {
+    /// `now_daa` is the DAA of the block that notes it (lane F1 reads its span).
+    fn note_model_probe(&mut self, claim: &PalwClaimStateV2, passed: bool, now_daa: u64) {
+        let Some(span_daa) = self.model_registry_fold().map(|fold| fold.span_daa) else { return };
+        if !matches!(claim.source, PalwClaimSourceV2::Attempt) {
             return;
         }
         let Some(row) = self.state.model_lifecycles.get(&claim.class_id).cloned() else { return };
+        // **Lane F1 (the 2026-09-25 sweep's V05): past the registry-resilience fence a failed probe
+        // names its producer bond** in the class's probation memory while the class is in its
+        // probation (`Probation`, or the readiness hold that keeps it) — iff the fence governs the span
+        // the probe is counted in, the span the step will judge it with. The span step resets the
+        // probation only once two distinct bonds are named (`palw_lifecycle_step_resilient_v1`); the
+        // counters below still count every fault, for the reader and for `ActiveLimited`'s stable span.
+        if !passed
+            && self.params.registry_resilience_governs_span_v1(
+                crate::palw_execution_lane_v1::palw_execution_span_v1(now_daa, span_daa),
+                span_daa,
+            )
+        {
+            let mut memory = self.state.probation_memory.get(&claim.class_id).cloned().unwrap_or_default();
+            if memory.in_probation(row.state) && memory.note_failed_bond(claim.bond) {
+                self.write_probation_memory_v1(claim.class_id, Some(memory));
+            }
+        }
         let mut next = row;
         if passed {
             next.probes_passed_this_span = next.probes_passed_this_span.saturating_add(1);
@@ -19017,6 +19157,17 @@ impl<'a> TransitionBuilder<'a> {
         let Some(fold) = self.model_registry_fold().cloned() else { return };
         let base = self.params.base_class_id();
         let governs = fold.governs_at(ctx.daa_score);
+        // **Lane F1 (V03(2)/V05): the span this step judges is the PARENT's** — every probe counted
+        // since the last step was noted by a block of that span — and it is judged by the resilient
+        // rules iff the registry-resilience fence governs it (in force at its first DAA), the same key
+        // `note_model_probe` names a failed bond by. A block that crosses the height therefore judges
+        // the span before it by the shipped rules, byte for byte.
+        let resilient = self.state.last_point.is_some_and(|last| {
+            self.params.registry_resilience_governs_span_v1(
+                crate::palw_execution_lane_v1::palw_execution_span_v1(last.daa_score, fold.span_daa),
+                fold.span_daa,
+            )
+        });
         let class_ids: Vec<Hash64> = self.state.classes.keys().copied().collect();
         for class_id in &class_ids {
             if self.state.model_lifecycles.contains_key(class_id) {
@@ -19249,7 +19400,25 @@ impl<'a> TransitionBuilder<'a> {
                         jury.as_ref().is_some_and(|jury| jury.seated)
                     },
                 };
-                (palw_lifecycle_step_v1(row.state, &obs, &profile, &fold.globals), utilization)
+                // **Lane F1 (the 2026-09-25 sweep's V03(2)/V05), on a span the fence governs**: the step
+                // reads and rewrites the class's probation memory — a readiness hold keeps the
+                // probation's progress, and only two distinct bonds' failed probes reset it.
+                if resilient {
+                    let memory = self.state.probation_memory.get(class_id).cloned().unwrap_or_default();
+                    let (next_state, next_memory) = crate::palw_model_registry_v1::palw_lifecycle_step_resilient_v1(
+                        row.state,
+                        &obs,
+                        &profile,
+                        &fold.globals,
+                        &memory,
+                    );
+                    if next_memory != memory {
+                        self.write_probation_memory_v1(*class_id, Some(next_memory));
+                    }
+                    (next_state, utilization)
+                } else {
+                    (palw_lifecycle_step_v1(row.state, &obs, &profile, &fold.globals), utilization)
+                }
             };
             let admission_milli = profile.admission_claims_per_span_milli.saturating_mul(state.admission_permille() as u64) / 1_000;
             let changed = state != row.state;
@@ -21138,7 +21307,7 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
-        self.note_model_probe(claim, true);
+        self.note_model_probe(claim, true, final_daa);
         // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
         self.note_activation_probe_credits_v1(&id, claim);
         self.note_final_work(&id, claim, final_daa);
@@ -21365,7 +21534,7 @@ impl<'a> TransitionBuilder<'a> {
                 | PalwVoidReasonV2::ProducerWithholding
                 | PalwVoidReasonV2::CourtHeldVerdict
         ) {
-            self.note_model_probe(claim, false);
+            self.note_model_probe(claim, false, voided_daa);
         }
         // ADR-0132 Upgrade C: a voided claim is paid nothing, so its snapshot leaves with it.
         self.write_claim_economics(id, None);
@@ -22707,6 +22876,24 @@ pub fn apply_palw_transition_v7(
     //    than this fold would let through an object the fold refuses — which fails the block. An
     //    honest producer's headroom pre-check does not attach such an attempt; one that does gains
     //    no more than an attempt its bond can back already takes, the last slot for its own work.
+    // 2e. **Lane F1 (the 2026-09-25 sweep's V03(1)): the claims this block anchors whose class could
+    //     not seat a panel on the state the draw reads** — the pre-object base, which is fixed before
+    //     anything this block carries (the processor derives the block's bindings on exactly this
+    //     state, `palw_v2_pre_object_base_v1`). Only these may be re-anchored at step 4c, so no object,
+    //     merged work or attempt the anchor producer chooses can turn a draw it did not like into a
+    //     retry: where the class COULD seat a panel here, a claim left unbound voids as SW-8 always
+    //     voided it. Empty below the registry-resilience fence and off anchor blocks.
+    let ncp_at_draw: BTreeSet<Hash64> = match extras.sw8_anchor_delay {
+        Some(anchor_delay) if builder.params.registry_resilience_active_at(ctx.daa_score) => {
+            palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, ctx.daa_score, anchor_delay)
+                .into_iter()
+                .filter(|claim_id| {
+                    builder.state.claims.get(claim_id).is_some_and(|claim| builder.class_cannot_seat_a_panel_v1(claim, ctx))
+                })
+                .collect()
+        }
+        _ => BTreeSet::new(),
+    };
     if extras.audit_2026_09_23_active
         && let PalwBlockWorkV3::Attempt(envelope) = &block_work
     {
@@ -22946,8 +23133,12 @@ pub fn apply_palw_transition_v7(
     //     what is resolved. `sw8_anchor_delay` is `Some` only on a block that may anchor a panel past
     //     the fence; `None` — every other block, every network but testnet-12, and testnet-12 with
     //     the fence off — never reaches it, so those claims wait out the bind window as before.
+    //     **Past lane F1's registry-resilience fence (the 2026-09-25 sweep's V03(1)) a claim whose
+    //     class could not seat a panel on the state the draw read (2e) is re-based on this block
+    //     instead** and retries at its next anchor slot until the bind window's backstop,
+    //     `accepted + window_bind` (`palw_ncp_retry_is_due_v1`); every other claim still voids here.
     if let Some(anchor_delay) = extras.sw8_anchor_delay {
-        palw_void_claims_unbound_in_their_anchor_block_v1(&mut builder, ctx, anchor_delay)?;
+        palw_void_claims_unbound_in_their_anchor_block_v1(&mut builder, ctx, anchor_delay, &ncp_at_draw)?;
     }
 
     // 5. Frontier observation — the definition `palw_fork_choice` states and this used to miss:
@@ -23869,8 +24060,7 @@ fn rearm_claim_after_da_session(
 ) -> Result<(), PalwStateV2Error> {
     match claim.phase {
         PalwClaimPhaseV2::Provisional => {
-            let at =
-                claim.bind_base_daa().checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
+            let at = palw_provisional_bind_deadline_v1(&builder.state, builder.params, &claim_id, claim)?;
             builder.arm_deadline(at, claim_id);
         }
         PalwClaimPhaseV2::PanelBound { bound_daa } => {
@@ -25602,6 +25792,90 @@ fn sweep_panel_obligations(builder: &mut TransitionBuilder<'_>, parent: &PalwCha
     }
 }
 
+/// **Lane F1 (the 2026-09-25 sweep's V03(1)): is this claim waiting out a `NoCapablePanel` retry?**
+///
+/// Past the registry-resilience fence ([`PalwStateParamsV2::registry_resilience_active_at`]) a claim
+/// its anchor block did not bind while its class could not seat a panel is not voided there: step 4c
+/// re-bases it on that block (`rebound_daa = Some(anchor block's DAA)`), so its next anchor slot is one
+/// `anchor_delay` on and the processor's derivation and the panel validator — which both date the
+/// anchor from [`PalwClaimStateV2::bind_base_daa`] — draw it there, from that slot's anchor. Such a
+/// claim has never held a panel: every other way to be `Provisional` with a `rebound_daa` (the one
+/// redraw, from `PanelBound` or from an unreplayed licence, and a DA session's resume of a redrawn
+/// claim) keeps the record of the panel it had, and a panel record leaves only with its claim. So the
+/// retry is recognised from rooted state alone — `Provisional`, re-based at or past the fence, no
+/// panel record — and a restart, a reorg or an IBD derives it exactly as the fold wrote it. The
+/// height is read off the claim's own `rebound_daa` (a retry is written only by an anchor block the
+/// fence governs), never off the block asking, so the answer is one at every height it is asked
+/// from. `false` on every network without the fence.
+pub fn palw_claim_awaits_ncp_retry_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> bool {
+    matches!(claim.phase, PalwClaimPhaseV2::Provisional)
+        && claim.rebound_daa.is_some_and(|rebased| params.registry_resilience_active_at(rebased))
+        && !state.panels.contains_key(claim_id)
+}
+
+/// **A `Provisional` claim's bind deadline — the bind window's backstop.** `bind_base_daa() +
+/// window_bind` as always, except for a claim waiting out a `NoCapablePanel` retry
+/// ([`palw_claim_awaits_ncp_retry_v1`]), whose re-basing moves its anchor and never its window: its
+/// backstop stays `accepted_daa + window_bind` (a claim that is retried has never been redrawn, so
+/// its bind window was measured from acceptance). The one spelling every site that arms or checks a
+/// `Provisional` deadline reads, so the index, DL-1 and the load check cannot disagree.
+pub fn palw_provisional_bind_deadline_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> Result<u64, PalwStateV2Error> {
+    let base = if palw_claim_awaits_ncp_retry_v1(state, params, claim_id, claim) { claim.accepted_daa } else { claim.bind_base_daa() };
+    base.checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))
+}
+
+/// **Lane F1 (the 2026-09-25 sweep's V03(1)): may a claim its anchor block did not bind retry at its
+/// next anchor slot instead of voiding?** Only where the registry-resilience fence is in force at the
+/// ANCHOR BLOCK's DAA (`anchor_daa` — the block deciding, which every node folding it holds, so a claim
+/// accepted below the fence and anchored above it is re-anchored, and one anchored below is voided,
+/// on every node alike); only when its class could not seat a panel on the anchor block's pre-object
+/// base (`could_not_seat_at_draw` — the network's readiness, fixed before anything the anchor producer
+/// chooses to carry; any other refusal still voids there, SW-8's rule); only for a claim that has
+/// never held a panel (a redrawn claim has had its second window); and only while the next slot,
+/// `anchor_daa + anchor_delay`, is inside the bind window measured from acceptance:
+/// `anchor_daa + anchor_delay ≤ accepted_daa + window_bind`.
+///
+/// **No free re-draw.** A retry happens only where no panel was drawn: the class could not seat one on
+/// the state the draw read, so there was no panel at this slot for anyone — the anchor producer
+/// included — to observe and discard. A producer that sees the panel it drew cannot reach this arm by
+/// anything it carries: the test is taken before its objects, merged work and attempt fold.
+///
+/// **It cannot loop.** Every retry moves the slot at least `anchor_delay ≥ 1` on, and the backstop
+/// never moves ([`palw_provisional_bind_deadline_v1`]) — at most `⌊(window_bind − anchor_delay) /
+/// anchor_delay⌋` retries (29 on the RC lattice's 600/20), and the sweep voids at the backstop whatever
+/// else happens. **It keeps the obligation.** The claim stays `Provisional` with its reservation, escrow
+/// and retention obligation (its bond stays committed while the claim lives), and holds the class's
+/// in-flight count and rate room for at most the bind window every claim held before SW-8 — while the
+/// class cannot seat a panel, and it admits no new claim once `Held`.
+pub fn palw_ncp_retry_is_due_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    could_not_seat_at_draw: bool,
+    anchor_daa: u64,
+    anchor_delay: u64,
+) -> bool {
+    params.registry_resilience_active_at(anchor_daa)
+        && could_not_seat_at_draw
+        && matches!(claim.phase, PalwClaimPhaseV2::Provisional)
+        && !state.panels.contains_key(claim_id)
+        && anchor_daa
+            .checked_add(anchor_delay.max(1))
+            .zip(claim.accepted_daa.checked_add(params.window_bind))
+            .is_some_and(|(next_slot, backstop)| next_slot <= backstop)
+}
+
 /// **ADR-0152 SW-8 (M4): the claims `state` holds `Provisional` whose anchor slot
 /// `bind_base_daa() + anchor_delay` is at or below `daa_score`**, in claim-id order. Pure. Past
 /// `palw_rcore_plus` an anchor-lane block at `daa_score` is the anchor block of exactly these (every
@@ -25642,9 +25916,30 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     anchor_delay: u64,
+    ncp_at_draw: &BTreeSet<Hash64>,
 ) -> Result<(), PalwStateV2Error> {
     for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, ctx.daa_score, anchor_delay) {
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+        // **Lane F1 (the 2026-09-25 sweep's V03(1)): a claim no capable panel could take retries at its
+        // next anchor slot** (past the registry-resilience fence): re-based on this block, its deadline
+        // left at `accepted_daa + window_bind` — [`palw_ncp_retry_is_due_v1`] says when, why it cannot
+        // loop, and why it is no re-draw. `ncp_at_draw` is empty below the fence, so there every claim
+        // here voids exactly as before.
+        let could_not_seat_at_draw = ncp_at_draw.contains(&claim_id);
+        if palw_ncp_retry_is_due_v1(
+            &builder.state,
+            builder.params,
+            &claim_id,
+            &claim,
+            could_not_seat_at_draw,
+            ctx.daa_score,
+            anchor_delay,
+        ) {
+            let mut retried = claim.clone();
+            retried.rebound_daa = Some(ctx.daa_score);
+            builder.write_claim(claim_id, Some(retried));
+            continue;
+        }
         let reason = builder.bind_timeout_reason(&claim, ctx);
         builder.void_claim(claim_id, &claim, ctx.daa_score, reason)?;
     }
@@ -27549,6 +27844,9 @@ fn apply_object(
                 Err(_) if builder.extras.audit_2026_09_23_active => return Ok(()),
                 Err(e) => return Err(e),
             }
+            // The 2026-09-25 sweep's V03(1): asked BEFORE the panel record exists, which is what
+            // tells a `NoCapablePanel` retry from a redraw.
+            let was_ncp_retry = palw_claim_awaits_ncp_retry_v1(&builder.state, builder.params, claim_id, &claim);
             builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }));
             // ADR-0124 Decision 3: past the fence the drawn seats go on duty — a duty row, and each
             // seat's exposure reserved for the claim's life. Below it nothing is written.
@@ -27556,6 +27854,15 @@ fn apply_object(
                 builder.reserve_seat_duties(*claim_id, &claim, seats, ctx.daa_score)?;
             }
             let mut bound = claim;
+            // **A `NoCapablePanel` retry is not the one redraw** (V03(1)): its re-basing only moved
+            // the anchor, which the panel record now holds, so the bound claim leaves with
+            // `rebound_daa` as it was before the retries — `None` — and keeps its one redraw (a
+            // receipt timeout or an unreplayed licence still redraws once, rather than voiding and
+            // charging the producer for a panel the network's readiness had delayed) and SR-1's
+            // early escrow release.
+            if was_ncp_retry {
+                bound.rebound_daa = None;
+            }
             bound.phase = PalwClaimPhaseV2::PanelBound { bound_daa: ctx.daa_score };
             let class_id = bound.class_id;
             let shape = crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(&bound);
@@ -31353,6 +31660,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         // 4-ter.3 step 6: the held forfeits, verify-then-install.
         PalwDeltaEntryV2::HeldForfeit { key, old, new } => swap_write!(state.held_forfeits, key, old, new),
+        // The 2026-09-25 sweep's V03(2)/V05: the probation memory, verify-then-install.
+        PalwDeltaEntryV2::ProbationMemory { key, old, new } => swap_write!(state.probation_memory, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -31756,6 +32065,9 @@ pub struct PalwStateCarriageV2 {
     /// **ADR-0152 §4-ter.3 step 6: the held forfeits.** A tagged tail (`0xB6`, after the Activation
     /// Pool's `0xB5`), encoded only when a record exists (the root block's own guard); rooted.
     pub held_forfeits: BTreeMap<(Hash64, Hash64), PalwHeldForfeitV1>,
+    /// **The 2026-09-25 sweep's V03(2)/V05: the probation memory.** A tagged tail (`0xB7`, after the
+    /// held forfeits' `0xB6`), encoded only when a row exists (the root block's own guard); rooted.
+    pub probation_memory: BTreeMap<Hash64, crate::palw_model_registry_v1::PalwProbationMemoryV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -31861,6 +32173,9 @@ const PALW_CARRIAGE_ACTIVATION_POOL_TAIL_V1: u8 = 0xB5;
 /// without one, so its carriage is byte-identical to one before this tail existed. `0xB5` is the
 /// Activation Pool's (feat/t12-activation-pool).
 const PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1: u8 = 0xB6;
+/// The 2026-09-25 pre-launch sweep's V03(2)/V05: the probation memory, once a row exists. Rooted.
+/// Absent on every chain without one, so its carriage is byte-identical to one before this tail.
+const PALW_CARRIAGE_PROBATION_MEMORY_TAIL_V1: u8 = 0xB7;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -32052,6 +32367,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_HELD_FORFEITS_TAIL_V1.serialize(writer)?;
             self.held_forfeits.serialize(writer)?;
         }
+        if !self.probation_memory.is_empty() {
+            PALW_CARRIAGE_PROBATION_MEMORY_TAIL_V1.serialize(writer)?;
+            self.probation_memory.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -32164,6 +32483,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_activation_pool = false;
         let mut held_forfeits = BTreeMap::new();
         let mut seen_held_forfeits = false;
+        let mut probation_memory = BTreeMap::new();
+        let mut seen_probation_memory = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -32283,6 +32604,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_held_forfeits = true;
                     held_forfeits = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_PROBATION_MEMORY_TAIL_V1 if !seen_probation_memory => {
+                    seen_probation_memory = true;
+                    probation_memory = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -32381,6 +32706,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             activation_pool_scheduled,
             activation_readiness_landed,
             held_forfeits,
+            probation_memory,
         })
     }
 }
@@ -32457,6 +32783,7 @@ impl PalwStateCarriageV2 {
             activation_pool_scheduled: state.activation_pool_scheduled.clone(),
             activation_readiness_landed: state.activation_readiness_landed.clone(),
             held_forfeits: state.held_forfeits.clone(),
+            probation_memory: state.probation_memory.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -32601,6 +32928,7 @@ impl PalwStateCarriageV2 {
             activation_pool_scheduled: self.activation_pool_scheduled,
             activation_readiness_landed: self.activation_readiness_landed,
             held_forfeits: self.held_forfeits,
+            probation_memory: self.probation_memory,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -35342,6 +35670,416 @@ pub(crate) mod tests {
             let base_env = attempt(40, 9);
             step(&s11, &p, &ctx(12, 140 + age + SPAN + 1, 12), &[], Some(&base_env), Some(f.clone()))
                 .expect("the base class keeps producing");
+        }
+
+        // ---- lane F1: the 2026-09-25 sweep's V03 and V05 behind `palw_registry_resilience` ----
+
+        /// The fixture's step with SW-8's step 4c armed (`sw8_anchor_delay`), as testnet-12 runs it on
+        /// an anchor-lane block.
+        fn step_sw8(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+            fold: Option<PalwModelRegistryFoldV1>,
+            anchor_delay: u64,
+        ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+            let armed = PalwTransitionExtrasV1 { sw8_anchor_delay: Some(anchor_delay), ..extras(fold) };
+            let out = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &armed)?;
+            out.0.assert_internal_consistency(p).expect("internal consistency after apply");
+            Ok(out)
+        }
+
+        /// The fixture's params with the registry-resilience fence at `from` — the mirror
+        /// `Params::sync_palw_registry_resilience` writes.
+        fn resilient_from(from: u64) -> PalwStateParamsV2 {
+            params().with_registry_resilience_from_daa(Some(from))
+        }
+
+        /// The fence in force from the fixture's first block.
+        fn resilient() -> PalwStateParamsV2 {
+            resilient_from(0)
+        }
+
+        /// **Restart and reorg reproduce the new state exactly**: the carriage round trip (the
+        /// restart's reload: decode, rebuild the deadline index, run every load check) gives the same
+        /// root and the same deadlines, and the block's delta reverts to the parent and re-applies to
+        /// the child.
+        fn restart_and_reorg_reproduce(parent: &PalwChainStateV2, child: &PalwChainStateV2, delta: &PalwStateDeltaV2, p: &PalwStateParamsV2) {
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(child)).unwrap();
+            let reloaded = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(p, Some(child.state_root())).expect("reloads");
+            assert_eq!(reloaded.state_root(), child.state_root(), "a restart reloads the same root");
+            assert_eq!(reloaded.deadlines, child.deadlines, "…and re-derives the same deadlines");
+            assert_eq!(reloaded.probation_memory, child.probation_memory, "…and the same probation memory");
+            let back = revert_delta_v2(child, delta, p).expect("reverts");
+            assert_eq!(back.state_root(), parent.state_root(), "a reorg reverts the block to its parent");
+            assert_eq!(back.deadlines, parent.deadlines);
+            let again = apply_delta_v2(parent, delta, p).expect("re-applies");
+            assert_eq!(again.state_root(), child.state_root(), "…and re-applying it is the child");
+            assert_eq!(again.deadlines, child.deadlines);
+        }
+
+        /// **V03(1): a claim no capable panel could take is not voided at its anchor slot** — it is
+        /// re-based on the anchor block and retries at the next slot, keeping its reservation, its
+        /// escrow and its backstop `accepted + window_bind`; ready again, it binds in a later anchor
+        /// block and keeps its one redraw; still unready, the backstop voids it `NoCapablePanel` (S0:
+        /// nothing charged). Below the fence the anchor block voids it, as SW-8 always did.
+        #[test]
+        fn v03_a_no_capable_panel_claim_retries_at_its_next_anchor_slot_until_the_backstop() {
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let delay = 2;
+            for armed in [false, true] {
+                let p = if armed { resilient() } else { params() };
+                let s5 = kimi_with_a_final(&p, root);
+                let env = kimi_attempt(2, root);
+                let claim_id = attempt_id_v2(&env.attempt);
+                let (s6, _) = step_sw8(&s5, &p, &ctx(6, 125, 6), &[], Some(&env), Some(f.clone()), delay).unwrap();
+                let reserved = s6.reserved_exposure(&bond_key(1));
+                let escrow = s6.claim(&claim_id).unwrap().escrowed_reward;
+                assert_eq!(s6.deadline_of(&claim_id), Some(135), "the backstop: accepted 125 + window_bind 10");
+                // DAA 130: the boundary holds Kimi (no ready seat) and the claim's anchor slot (127) is reached.
+                let (s7, d7) = step_sw8(&s6, &p, &ctx(7, 130, 7), &[], None, Some(f.clone()), delay).unwrap();
+                assert_eq!(s7.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Held);
+                let claim = s7.claim(&claim_id).unwrap().clone();
+                if !armed {
+                    assert!(
+                        matches!(claim.phase, PalwClaimPhaseV2::Voided { voided_daa: 130, reason: PalwVoidReasonV2::NoCapablePanel }),
+                        "below the fence SW-8 voids it in its anchor block: {:?}",
+                        claim.phase
+                    );
+                    continue;
+                }
+                assert_eq!(claim.phase, PalwClaimPhaseV2::Provisional, "not voided at the anchor slot");
+                assert_eq!(claim.rebound_daa, Some(130), "re-based on the anchor block: the next slot is 132");
+                assert_eq!(claim.escrowed_reward, escrow, "the escrow stays with the claim");
+                assert!(palw_claim_awaits_ncp_retry_v1(&s7, &p, &claim_id, &claim));
+                assert_eq!(s7.deadline_of(&claim_id), Some(135), "the backstop does not move with the retry");
+                assert_eq!(s7.reserved_exposure(&bond_key(1)), reserved, "the reservation stays with the claim");
+                restart_and_reorg_reproduce(&s6, &s7, &d7, &p);
+
+                // (a) Still unready: DAA 133 retries once more (next slot 135 ≤ 135) …
+                let (a8, _) = step_sw8(&s7, &p, &ctx(8, 133, 8), &[], None, Some(f.clone()), delay).unwrap();
+                assert_eq!(a8.claim(&claim_id).unwrap().rebound_daa, Some(133));
+                assert_eq!(a8.deadline_of(&claim_id), Some(135));
+                // … and past the backstop the sweep voids it NoCapablePanel, charging nothing.
+                let collateral = a8.bond(&bond_key(1)).unwrap().collateral;
+                let (a9, _) = step_sw8(&a8, &p, &ctx(9, 136, 9), &[], None, Some(f.clone()), delay).unwrap();
+                assert!(
+                    matches!(
+                        a9.claim(&claim_id).unwrap().phase,
+                        PalwClaimPhaseV2::Voided { voided_daa: 136, reason: PalwVoidReasonV2::NoCapablePanel }
+                    ),
+                    "the backstop voids it: {:?}",
+                    a9.claim(&claim_id).unwrap().phase
+                );
+                assert_eq!(a9.bond(&bond_key(1)).unwrap().collateral, collateral, "S0: a NoCapablePanel void charges nothing");
+                // A retry whose next slot would pass the backstop is not taken: at 134 the next slot is 136.
+                let (late, _) = step_sw8(&s7, &p, &ctx(8, 134, 8), &[], None, Some(f.clone()), delay).unwrap();
+                assert!(
+                    matches!(late.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::NoCapablePanel, .. }),
+                    "no retry past the backstop"
+                );
+
+                // (b) Ready again: seven proofs land in a block that anchors nothing (131), and the
+                // claim binds in the anchor block of its next slot (132) — no void, escrow intact.
+                let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 13)).collect();
+                let (b8, _) = step(&s7, &p, &ctx(8, 131, 8), &proofs, None, Some(f.clone())).unwrap();
+                assert_eq!(b8.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional, "131 anchors nothing");
+                let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }];
+                let bind = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(78), seats };
+                let (b9, d9) = step_sw8(&b8, &p, &ctx(9, 132, 9), &[bind], None, Some(f.clone()), delay).unwrap();
+                let bound = b9.claim(&claim_id).unwrap();
+                assert_eq!(bound.phase, PalwClaimPhaseV2::PanelBound { bound_daa: 132 }, "bound at the later slot");
+                assert_eq!(bound.rebound_daa, None, "a NoCapablePanel retry is not the one redraw");
+                assert_eq!(bound.escrowed_reward, escrow, "the escrow rides to the bind");
+                restart_and_reorg_reproduce(&b8, &b9, &d9, &p);
+                // The panel says nothing: the receipt timeout REDRAWS it once (the redraw was kept),
+                // rather than voiding and charging the producer.
+                let receipt_deadline = b9.deadline_of(&claim_id).expect("a receipt deadline");
+                let (b10, _) = step(&b9, &p, &ctx(10, receipt_deadline + 1, 10), &[], None, Some(f.clone())).unwrap();
+                let redrawn = b10.claim(&claim_id).unwrap();
+                assert_eq!(redrawn.phase, PalwClaimPhaseV2::Provisional, "the one redraw, not a void");
+                assert_eq!(redrawn.rebound_daa, Some(receipt_deadline + 1));
+                assert!(!palw_claim_awaits_ncp_retry_v1(&b10, &p, &claim_id, redrawn), "a redrawn claim holds its first panel");
+            }
+        }
+
+        /// **V03(1)'s key is the state the draw read — the anchor block's pre-object base — never what
+        /// the anchor block carries.** So the anchor producer cannot turn a draw into a retry, and
+        /// cannot turn a retry into a void:
+        ///
+        /// * a class that could seat a panel before the block's objects, which the block's own objects
+        ///   then take below a panel (three seats retire in it), leaves its unbound claim VOIDED
+        ///   (`NoCapablePanel` by the post-fold label, as SW-8 always labelled it) — a post-fold key would
+        ///   have re-anchored it, a free second draw for whoever carried the retirements;
+        /// * a class that could not seat a panel before the block's objects, which the block's own
+        ///   proofs then make ready, keeps its claim RETRYING — a post-fold key would have voided it
+        ///   `BindTimeout` in the very block that brought the seats back.
+        #[test]
+        fn v03_the_re_anchor_reads_the_state_the_draw_read_not_what_the_anchor_block_carries() {
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let delay = 2;
+            let retire = |n: u64| PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(n), signature: vec![1] };
+            for armed in [false, true] {
+                let p = if armed { resilient() } else { params() };
+                let s5 = kimi_with_a_final(&p, root);
+                let env = kimi_attempt(2, root);
+                let claim_id = attempt_id_v2(&env.attempt);
+                let (s6, _) = step_sw8(&s5, &p, &ctx(6, 125, 6), &[], Some(&env), Some(f.clone()), delay).unwrap();
+                // Seven seats prove in a block that anchors nothing (126, span 12).
+                let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 12)).collect();
+                let (s7, _) = step(&s6, &p, &ctx(7, 126, 7), &proofs, None, Some(f.clone())).unwrap();
+                // The anchor block (130) carries three retirements and no binding.
+                let (s8, _) = step_sw8(&s7, &p, &ctx(8, 130, 8), &[retire(2), retire(3), retire(4)], None, Some(f.clone()), delay)
+                    .unwrap();
+                let kimi = s8.model_lifecycle(&kimi_id()).unwrap();
+                assert_eq!(kimi.ready_seats, 7, "the premise: the step, before the objects, read seven ready seats");
+                assert_eq!(
+                    s8.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: 130, reason: PalwVoidReasonV2::NoCapablePanel },
+                    "armed {armed}: drawable at the draw, so the anchor block's own retirements buy no retry"
+                );
+            }
+            // The other direction, past the fence: NCP at the draw, seats brought back by the anchor
+            // block itself — the claim keeps retrying rather than voiding BindTimeout there.
+            let p = resilient();
+            let s5 = kimi_with_a_final(&p, root);
+            let env = kimi_attempt(2, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s6, _) = step_sw8(&s5, &p, &ctx(6, 125, 6), &[], Some(&env), Some(f.clone()), delay).unwrap();
+            let (s7, _) = step_sw8(&s6, &p, &ctx(7, 130, 7), &[], None, Some(f.clone()), delay).unwrap();
+            assert_eq!(s7.claim(&claim_id).unwrap().rebound_daa, Some(130), "the premise: retried at 130");
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 13)).collect();
+            let (s8, d8) = step_sw8(&s7, &p, &ctx(8, 132, 8), &proofs, None, Some(f.clone()), delay).unwrap();
+            let claim = s8.claim(&claim_id).unwrap();
+            assert_eq!(
+                (claim.phase.clone(), claim.rebound_daa),
+                (PalwClaimPhaseV2::Provisional, Some(132)),
+                "NCP at the draw: retried again, though the block's own proofs made the class drawable after it"
+            );
+            restart_and_reorg_reproduce(&s7, &s8, &d8, &p);
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }];
+            let bind = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(79), seats };
+            let (s9, _) = step_sw8(&s8, &p, &ctx(9, 134, 9), &[bind], None, Some(f.clone()), delay).unwrap();
+            assert_eq!(s9.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa: 134 }, "and binds at 134");
+            // Drawable at the draw and left unbound, a claim past the fence voids BindTimeout there as
+            // it always did: the retry is for a class that cannot seat a panel, nothing else.
+            let (s9b, _) = step_sw8(&s8, &p, &ctx(9, 134, 9), &[], None, Some(f.clone()), delay).unwrap();
+            assert_eq!(
+                s9b.claim(&claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { voided_daa: 134, reason: PalwVoidReasonV2::BindTimeout },
+                "drawable and unbound: SW-8's void"
+            );
+        }
+
+        /// A Kimi row walked to `Probation { 0 }` through the NoCapablePanel test's own path, then
+        /// given `probes` passes (written into the row, as the span step would carry them).
+        fn kimi_in_probation(p: &PalwStateParamsV2, probes: u32) -> (PalwChainStateV2, Vec<PalwArtifactOperandV1>, Hash64) {
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let s5 = kimi_with_a_final(p, root);
+            let (s7, _) = step(&s5, p, &ctx(7, 130, 7), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s7.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Held);
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 13)).collect();
+            let (s9, _) = step(&s7, p, &ctx(9, 137, 9), &proofs, None, Some(f.clone())).unwrap();
+            let (mut s10, _) = step(&s9, p, &ctx(10, 140, 10), &[], None, Some(f.clone())).unwrap();
+            let mut row = s10.model_lifecycles[&kimi_id()].clone();
+            assert_eq!(row.state, PalwModelLifecycleV1::Probation { probes_passed: 0 });
+            row.state = PalwModelLifecycleV1::Probation { probes_passed: probes };
+            s10.model_lifecycles.insert(kimi_id(), row);
+            (s10, operands, root)
+        }
+
+        /// **V03(2): a class held out of `Probation` for readiness returns to the probation it had**
+        /// — Probation{4} → Held (the proofs age out) → Probation{4} (seven proofs again), the kept
+        /// count in the rooted probation memory, reproduced by a restart and a reorg; below the fence
+        /// the return is Probation{0}.
+        #[test]
+        fn v03_a_readiness_held_class_keeps_its_probation_progress() {
+            let f = fold(kimi_work());
+            let age = PALW_REGISTRY_GLOBALS_V1.readiness_probe_max_age_spans as u64 * SPAN;
+            for armed in [false, true] {
+                let p = if armed { resilient() } else { params() };
+                let (s10, operands, _) = kimi_in_probation(&p, 4);
+                let out_at = 140 + age + SPAN;
+                // Three seats re-prove just before the others age out: three ready seats cannot fill a
+                // panel of five — a READINESS hold (with none ready, the fixture's pre-audit-fence
+                // utilization reads 1,000 ‰ and the hold is one for load, which keeps nothing).
+                let three: Vec<PalwConsensusObjectV2> = (2..=4).map(|n| proof(&operands, bond_key(n), out_at / SPAN - 3)).collect();
+                let (s10b, _) = step(&s10, &p, &ctx(11, out_at - 3 * SPAN + 1, 11), &three, None, Some(f.clone())).unwrap();
+                assert_eq!(
+                    s10b.model_lifecycle(&kimi_id()).unwrap().state,
+                    PalwModelLifecycleV1::Probation { probes_passed: 4 },
+                    "the premise: still in probation while the first proofs stand"
+                );
+                let (s11, d11) = step(&s10b, &p, &ctx(12, out_at, 12), &[], None, Some(f.clone())).unwrap();
+                assert_eq!(s11.model_lifecycle(&kimi_id()).unwrap().ready_seats, 3, "the premise: three ready, a panel needs five");
+                assert_eq!(s11.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Held, "the proofs aged out");
+                let kept = s11.probation_memory_of_v1(&kimi_id()).and_then(|m| m.held_probes_passed);
+                assert_eq!(kept, armed.then_some(4), "the readiness hold keeps the progress only past the fence");
+                if armed {
+                    assert!(d11.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ProbationMemory { .. })), "journalled");
+                    restart_and_reorg_reproduce(&s10b, &s11, &d11, &p);
+                }
+                let span = out_at / SPAN;
+                let proofs: Vec<PalwConsensusObjectV2> = (5..=8).map(|n| proof(&operands, bond_key(n), span)).collect();
+                let (s12, _) = step(&s11, &p, &ctx(13, out_at + 1, 13), &proofs, None, Some(f.clone())).unwrap();
+                let (s13, d13) = step(&s12, &p, &ctx(14, out_at + SPAN, 14), &[], None, Some(f.clone())).unwrap();
+                assert_eq!(
+                    s13.model_lifecycle(&kimi_id()).unwrap().state,
+                    PalwModelLifecycleV1::Probation { probes_passed: if armed { 4 } else { 0 } },
+                    "armed {armed}: the return"
+                );
+                assert!(s13.probation_memory_of_v1(&kimi_id()).is_none(), "the memory leaves with the hold");
+                if armed {
+                    restart_and_reorg_reproduce(&s12, &s13, &d13, &p);
+                }
+            }
+        }
+
+        /// **V05: one bond's failed probes never reset a probation; two distinct bonds' do** — through
+        /// the fold's own `note_model_probe`, the rooted memory and the next span step. Below the fence
+        /// one failure resets it.
+        #[test]
+        fn v05_one_bonds_failures_do_not_reset_a_probation_and_two_bonds_do() {
+            let f = fold(kimi_work());
+            let armed_extras = extras(Some(f.clone()));
+            for armed in [false, true] {
+                let p = if armed { resilient() } else { params() };
+                let (s10, _, _) = kimi_in_probation(&p, 4);
+                let kimi_claim = s10.claims.values().find(|c| c.class_id == kimi_id()).expect("Kimi's Final").clone();
+                let failing = |n: u64| PalwClaimStateV2 { bond: bond_key(n), ..kimi_claim.clone() };
+                // One bond fails three times, in span 14.
+                let mut b = TransitionBuilder::new(&s10, &p, false, false, false, false, &armed_extras);
+                for _ in 0..3 {
+                    b.note_model_probe(&failing(3), false, 145);
+                }
+                let one = b.state.clone();
+                assert_eq!(one.model_lifecycle(&kimi_id()).unwrap().probes_failed_this_span, 3, "every fault still counted");
+                assert_eq!(
+                    one.probation_memory_of_v1(&kimi_id()).map(|m| m.failed_bonds.clone()),
+                    armed.then(|| vec![bond_key(3)]),
+                    "one bond named once"
+                );
+                let (after_one, _) = step(&one, &p, &ctx(11, 150, 11), &[], None, Some(f.clone())).unwrap();
+                assert_eq!(
+                    after_one.model_lifecycle(&kimi_id()).unwrap().state,
+                    PalwModelLifecycleV1::Probation { probes_passed: if armed { 4 } else { 0 } },
+                    "armed {armed}: one bond's failures"
+                );
+                if !armed {
+                    continue;
+                }
+                // A second, distinct bond fails (span 15): the probation resets and forgets both.
+                let mut b = TransitionBuilder::new(&after_one, &p, false, false, false, false, &armed_extras);
+                b.note_model_probe(&failing(4), false, 155);
+                let two = b.state.clone();
+                let mut both = vec![bond_key(4), bond_key(3)];
+                both.sort();
+                assert_eq!(two.probation_memory_of_v1(&kimi_id()).unwrap().failed_bonds, both);
+                let (after_two, d) = step(&two, &p, &ctx(12, 160, 12), &[], None, Some(f.clone())).unwrap();
+                assert_eq!(after_two.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Probation { probes_passed: 0 });
+                assert!(after_two.probation_memory_of_v1(&kimi_id()).is_none(), "the reset forgets its bonds");
+                restart_and_reorg_reproduce(&two, &after_two, &d, &p);
+                // A failure on a class out of probation names nobody.
+                let base_claim = PalwClaimStateV2 { class_id: h64(1), ..failing(5) };
+                let mut b = TransitionBuilder::new(&after_two, &p, false, false, false, false, &armed_extras);
+                b.note_model_probe(&base_claim, false, 165);
+                assert!(b.state.probation_memory_of_v1(&h64(1)).is_none(), "the ACTIVE base class keeps no memory");
+            }
+        }
+
+        /// **A chain crossing the fence mid-run** — every block below it the shipped chain's, root for
+        /// root, and one deterministic answer for what straddles it:
+        ///
+        /// * **V03(1) is keyed on the anchor block's DAA.** A claim accepted at 125 and anchored at 130
+        ///   is re-anchored with the fence at 128 or 130 (below at acceptance, in force at the anchor)
+        ///   and voided with it at 131 — where every block, the anchor included, is the shipped chain's
+        ///   to the root. A retry is recognised by its own `rebound_daa` against the height, never by
+        ///   the block asking: with the fence at 131 a `rebound_daa` of 130 is no retry.
+        /// * **V03(2) and V05 are keyed on the span's first DAA.** With the fence at 141 (inside span 14,
+        ///   which began at 140) a failure noted in span 14 names no bond and the step judging span 14 is
+        ///   the shipped one — one failure resets the probation, and the root is the shipped chain's;
+        ///   with the fence at 140 the same span is governed and one bond cannot reset it.
+        /// * **A fence far above the run is the shipped chain everywhere.**
+        #[test]
+        fn f1_a_chain_crossing_the_fence_is_the_shipped_chain_below_it() {
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            let delay = 2;
+            // V03(1).
+            let run = |p: &PalwStateParamsV2| -> Vec<PalwChainStateV2> {
+                let s5 = kimi_with_a_final(p, root);
+                let env = kimi_attempt(2, root);
+                let (s6, _) = step_sw8(&s5, p, &ctx(6, 125, 6), &[], Some(&env), Some(f.clone()), delay).unwrap();
+                let (s7, _) = step_sw8(&s6, p, &ctx(7, 130, 7), &[], None, Some(f.clone()), delay).unwrap();
+                let (s8, _) = step_sw8(&s7, p, &ctx(8, 136, 8), &[], None, Some(f.clone()), delay).unwrap();
+                vec![s5, s6, s7, s8]
+            };
+            let claim_id = attempt_id_v2(&kimi_attempt(2, root).attempt);
+            let shipped = run(&params());
+            let roots = |chain: &[PalwChainStateV2]| chain.iter().map(|s| s.state_root()).collect::<Vec<_>>();
+            assert_eq!(roots(&run(&resilient_from(1_000_000))), roots(&shipped), "a fence above the run: the shipped chain");
+            assert_eq!(roots(&run(&resilient_from(131))), roots(&shipped), "the anchor (130) below the fence: the shipped chain");
+            for from in [128, 130] {
+                let chain = run(&resilient_from(from));
+                assert_eq!(roots(&chain[..2]), roots(&shipped[..2]), "fence {from}: every block below it is the shipped one");
+                let retried = chain[2].claim(&claim_id).unwrap();
+                assert_eq!(
+                    (retried.phase.clone(), retried.rebound_daa),
+                    (PalwClaimPhaseV2::Provisional, Some(130)),
+                    "fence {from}: accepted below it, anchored at or past it — re-anchored"
+                );
+                assert!(
+                    matches!(
+                        chain[3].claim(&claim_id).unwrap().phase,
+                        PalwClaimPhaseV2::Voided { voided_daa: 136, reason: PalwVoidReasonV2::NoCapablePanel }
+                    ),
+                    "fence {from}: the backstop still voids"
+                );
+            }
+            // The retry is read off the claim's own `rebound_daa` against the height.
+            let retried = run(&resilient())[2].clone();
+            let claim = retried.claim(&claim_id).unwrap();
+            assert!(palw_claim_awaits_ncp_retry_v1(&retried, &resilient_from(130), &claim_id, claim));
+            assert!(!palw_claim_awaits_ncp_retry_v1(&retried, &resilient_from(131), &claim_id, claim), "rebased below the fence");
+            assert_eq!(palw_provisional_bind_deadline_v1(&retried, &resilient_from(130), &claim_id, claim).unwrap(), 135);
+            assert_eq!(palw_provisional_bind_deadline_v1(&retried, &params(), &claim_id, claim).unwrap(), 140, "the redraw's window");
+
+            // V03(2) / V05, one span judged by one rule.
+            let armed_extras = extras(Some(f.clone()));
+            let span14 = |p: &PalwStateParamsV2| -> (PalwChainStateV2, PalwChainStateV2) {
+                let (s10, _, _) = kimi_in_probation(p, 4);
+                let kimi_claim = s10.claims.values().find(|c| c.class_id == kimi_id()).expect("Kimi's Final").clone();
+                let mut b = TransitionBuilder::new(&s10, p, false, false, false, false, &armed_extras);
+                b.note_model_probe(&PalwClaimStateV2 { bond: bond_key(3), ..kimi_claim }, false, 145);
+                let noted = b.state.clone();
+                let (stepped, _) = step(&noted, p, &ctx(11, 150, 11), &[], None, Some(f.clone())).unwrap();
+                (noted, stepped)
+            };
+            let (shipped_noted, shipped_stepped) = span14(&params());
+            let (noted, stepped) = span14(&resilient_from(141));
+            assert!(noted.probation_memory_of_v1(&kimi_id()).is_none(), "fence 141: span 14 began at 140, so no bond is named");
+            assert_eq!(
+                stepped.model_lifecycle(&kimi_id()).unwrap().state,
+                PalwModelLifecycleV1::Probation { probes_passed: 0 },
+                "fence 141: span 14 is judged by the shipped rule"
+            );
+            assert_eq!(
+                (noted.state_root(), stepped.state_root()),
+                (shipped_noted.state_root(), shipped_stepped.state_root()),
+                "fence 141: span 14 is the shipped chain, root for root"
+            );
+            let (noted, stepped) = span14(&resilient_from(140));
+            assert_eq!(noted.probation_memory_of_v1(&kimi_id()).map(|m| m.failed_bonds.clone()), Some(vec![bond_key(3)]));
+            assert_eq!(
+                stepped.model_lifecycle(&kimi_id()).unwrap().state,
+                PalwModelLifecycleV1::Probation { probes_passed: 4 },
+                "fence 140: span 14 is governed, and one bond cannot reset it"
+            );
         }
 
         /// **The activation grace**: rows open and proofs are taken from the fence, but nothing is
@@ -48730,6 +49468,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ActivationReadinessLanded { .. } => "activation_readiness_landed",
                     // ADR-0152 §4-ter.3 step 6: its round trip is the held-forfeit suite's.
                     PalwDeltaEntryV2::HeldForfeit { .. } => "held_forfeit",
+                    // The 2026-09-25 sweep's V03(2)/V05: its round trip is the resilience suite's.
+                    PalwDeltaEntryV2::ProbationMemory { .. } => "probation_memory",
                 });
             }
         }
@@ -48839,6 +49579,8 @@ pub(crate) mod tests {
             (79, PalwDeltaEntryV2::ActivationReadinessLanded { key: (key, bond_key(1)), old: None, new: None }),
             // ADR-0152 §4-ter.3 step 6, after the pool's four.
             (80, PalwDeltaEntryV2::HeldForfeit { key: (key, key), old: None, new: None }),
+            // The 2026-09-25 pre-launch sweep's V03(2)/V05, after the held forfeit.
+            (81, PalwDeltaEntryV2::ProbationMemory { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -49447,6 +50189,7 @@ pub(crate) mod tests {
             // ADR-0152 §4-ter.3 step 6: its own Some-only block, empty here (the held-forfeit suite
             // pins its place and its separation).
             held_forfeits: _,
+            probation_memory: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 

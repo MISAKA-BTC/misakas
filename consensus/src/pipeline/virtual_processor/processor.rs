@@ -12576,8 +12576,9 @@ impl VirtualStateProcessor {
                 Err(Some(why)) => {
                     info!(
                         "Block {block}: claim {claim_id}'s panel is not bound — its draw refused in its anchor block ({why}); \
-                         under the stake-weighted draw a claim binds only there, so it voids BindTimeout in this block, \
-                         without forfeit (ADR-0152 SW-8/SW-10)"
+                         under the stake-weighted draw a claim binds only there, so it voids in this block, without forfeit \
+                         (ADR-0152 SW-8/SW-10) — or, past palw_registry_resilience with its class unable to seat a panel, \
+                         is re-anchored at its next slot (lane F1, V03)"
                     );
                     continue;
                 }
