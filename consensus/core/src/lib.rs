@@ -321,6 +321,10 @@ pub mod palw_offence_attribution_v1;
 /// ADR-0144 §9: objective-offence identity, PanelFalseValid payloads, and the processor's
 /// cryptographic gate. Consensus-inert until `Params::palw_objective_offence` is Some.
 pub mod palw_offence_v1;
+/// Lane A (testnet-12, post-launch stopgap, 2026-09-26): past `Params::palw_operator_anchor` only an
+/// attempt produced by an operator (genesis) bond may anchor a claim's panel. Consensus-inert while the
+/// fence is `None` (every shipped preset).
+pub mod palw_operator_anchor_v1;
 /// ADR-0133 S2: optimistic licence from the full-replay seat, behind `Params::palw_verification_s2`.
 pub mod palw_optimistic_licence_v2;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
