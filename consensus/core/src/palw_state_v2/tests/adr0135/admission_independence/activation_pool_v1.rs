@@ -859,3 +859,48 @@ fn a_is_paid_on_a_row_landed_by_s_minus_2_and_fresh_at_s_under_the_configured_ho
         }
     }
 }
+
+/// **A refused replay does not re-date the pool's landing record** (the readiness horizon's replay
+/// fix; the fix round's F4 record, delta 79). A holder's proof landed at `S − 2`; past
+/// `Params::palw_readiness_v2_max_age_spans` its replay in `S − 1` — the same proof, or an older one —
+/// is refused, so the record stays at `S − 2` and the juror is still paid; a newer proof still moves
+/// row and record forward. The fence-off twin shows the hole the fix closes: the same replay is taken
+/// and re-dates the record to `S − 1`, after the seed, which costs the juror its pay.
+#[test]
+fn a_refused_replay_does_not_re_date_the_pools_landing_record() {
+    let all: Vec<u64> = SYBILS.chain(HONEST).collect();
+    let t = to_audit(1_000 * MSK, &all);
+    let n = *drawn(&t).first().expect("a drawn juror");
+    let (operands, _) = inventory();
+    let armed = params().with_readiness_v2_max_age_spans(Some(24));
+    let extras = pooled(Some(fold(kimi_work())));
+    let at = ctx(t.next, (t.audit - 1) * SPAN + 7, t.next);
+    let landed = |state: &PalwChainStateV2| state.activation_readiness_landed(&kimi_id(), &bond_key(n));
+    assert_eq!(landed(&t.before), Some(t.audit - 2), "the holder's proof landed at S − 2");
+    for span in [t.audit - 2, t.audit - 5] {
+        let replay = proof(&operands, bond_key(n), span);
+        let refused = fold_step(&t.before, &armed, &at, &[replay], None, &extras);
+        assert!(
+            matches!(refused, Err(PalwStateV2Error::ReadinessProofNotNewer { .. })),
+            "span S − {}: {:?}",
+            t.audit - span,
+            refused.map(|_| ())
+        );
+    }
+    // The block the replay was refused from: the record and the row are the parent's.
+    let (kept, _) = fold_step(&t.before, &armed, &at, &[], None, &extras).unwrap();
+    assert_eq!(landed(&kept), Some(t.audit - 2), "the record only moves forward");
+    // …and a newer proof still moves it.
+    let (moved, _) = fold_step(&t.before, &armed, &at, &[proof(&operands, bond_key(n), t.audit - 1)], None, &extras).unwrap();
+    assert_eq!(landed(&moved), Some(t.audit - 1));
+    assert_eq!(moved.seat_readiness(&bond_key(n), &kimi_id()).map(|row| row.proved_span), Some(t.audit - 1));
+    // The fence-off twin: the replay is taken and re-dates the record past the seed.
+    let (twin, _) = fold_step(&t.before, &params(), &at, &[proof(&operands, bond_key(n), t.audit - 2)], None, &extras).unwrap();
+    assert_eq!(landed(&twin), Some(t.audit - 1), "below the fence the replay re-dates the record");
+    // At the audit the armed chain pays the juror; the twin that took the replay does not.
+    let audit_ctx = ctx(t.next + 1, t.audit * SPAN, t.next + 1);
+    let (paid, _) = fold_step(&kept, &armed, &audit_ctx, &[], None, &extras).unwrap();
+    assert!(payout_of(&paid, n).is_some(), "the record kept at S − 2: paid");
+    let (unpaid, _) = fold_step(&twin, &params(), &audit_ctx, &[], None, &extras).unwrap();
+    assert_eq!(payout_of(&unpaid, n), None, "re-dated to S − 1 by a stranger's replay: not paid");
+}

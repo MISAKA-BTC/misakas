@@ -339,6 +339,50 @@ async fn m1_an_honest_possession_proof_passes_the_gate() {
     assert_eq!(through_the_gate(proved(card as u64, daa + 1)), None, "the next span: judged at its own first DAA, and taken");
     assert!(through_the_gate(proved(card as u64, daa + 2)).is_some(), "two spans ahead: refused");
     assert!(through_the_gate(proved(2, daa + 1)).is_some(), "the skew buys no pass to a forgery");
+
+    // **A replay never reaches a block** (the readiness horizon's replay fix, past
+    // `Params::palw_readiness_v2_max_age_spans`): once the seat's row stands at this span, the same
+    // proof — or any proof naming this span or an older one — is refused by the gate, by name, as the
+    // fold refuses it; the next span's proof still passes.
+    let mut rowed = PalwStateCarriageV2::from_state(&state);
+    rowed.seat_readiness.insert(
+        (bond, class_id),
+        kaspa_consensus_core::palw_model_registry_v1::PalwSeatReadinessRowV1 {
+            proved_daa: daa,
+            proved_span: daa,
+            leaf_index: 0,
+            proof_version: 2,
+            chunks: 16,
+        },
+    );
+    let rowed = rowed.into_state(&g.params, None).expect("a consistent state");
+    let gate_rowed = |daa_score: u64, object: &Obj| {
+        let point = PalwBlockContextV2 { daa_score, ..g.point };
+        g.ctx.consensus.virtual_processor().palw_h1_carrier_refusal_on(&rowed, &g.params, &point, object)
+    };
+    assert!(
+        gate_rowed(daa, &proved(card as u64, daa)).is_some_and(|why| why.contains("is a replay")),
+        "an equal-span duplicate is a replay"
+    );
+    let tx_gate_rowed = |object: Obj| {
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+        let tx = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput::new(1, ScriptPublicKey::from_vec(0, vec![0x51]))],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload,
+        );
+        let object = kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(&tx).expect("gated");
+        g.ctx.consensus.virtual_processor().palw_mempool_h1_carrier_refusal_with(&object, daa, g.point.block, &rowed)
+    };
+    assert!(
+        tx_gate_rowed(proved(card as u64, daa)).is_some_and(|why| why.contains("is a replay")),
+        "the mempool's transaction gate refuses it too"
+    );
+    assert_eq!(tx_gate_rowed(proved(card as u64, daa + 1)), None, "a newer proof still passes");
 }
 
 /// **The processor hands testnet-12's fold the configured readiness horizon, and every reader of the
