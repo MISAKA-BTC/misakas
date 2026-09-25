@@ -618,6 +618,54 @@ mod tests {
         assert_eq!(palw_claim_phase_deadline_v1(&state, &id, &c, &base, None), Some(200 + base.window_challenge()), "below the fence");
     }
 
+    /// **V08: past R-core+ a `Provisional` row's date is its anchor slot** (`bind_base + anchor_delay`,
+    /// where SW-8 binds or voids it), from the redraw's DAA when it was re-bound; below the fence, and
+    /// for every other phase, the row keeps the date `palw_claim_phase_deadline_v1` gave it.
+    #[test]
+    fn v08_a_provisional_rows_date_is_its_anchor_slot_past_rcore_plus() {
+        let row = |phase: crate::palw_state_v2::PalwClaimPhaseV2, accepted_daa: u64, rebound_daa: Option<u64>, deadline: u64| {
+            PalwClaimRowV1 {
+                claim_id: h64(0xC1),
+                free_prompt: false,
+                quanta: 0,
+                quanta_spent: 0,
+                class_id: h64(1),
+                executor_bond: PalwBondKeyV2(bond_outpoint()),
+                phase,
+                accepted_daa,
+                accepted_block: crate::BlockHash::from_u64_word(0xB0),
+                rebound_daa,
+                seats: Vec::new(),
+                bound_daa: None,
+                deadline_daa: Some(deadline),
+                reserved: 0,
+                escrowed_reward: 0,
+                payout_pending: None,
+                work_leaves: 0,
+                open_courts: 0,
+                exec_lane: None,
+            }
+        };
+        use crate::palw_state_v2::PalwClaimPhaseV2 as P;
+        let base = state_params();
+        let armed = state_params().with_rcore_plus_mirrors(Some(50), 0, Vec::new());
+        let window = base.window_bind();
+        let mut rows = vec![
+            row(P::Provisional, 200, None, 200 + window),
+            row(P::Provisional, 200, Some(260), 260 + window),
+            row(P::Provisional, 40, None, 40 + window),
+            row(P::PanelBound { bound_daa: 220 }, 200, None, 220 + base.window_receipt()),
+        ];
+        let below = rows.clone();
+        palw_claim_rows_bind_by_anchor_slot_v1(&mut rows, &base, 20);
+        assert_eq!(rows, below, "below the fence every row is untouched");
+        palw_claim_rows_bind_by_anchor_slot_v1(&mut rows, &armed, 20);
+        assert_eq!(rows[0].deadline_daa, Some(220), "accepted + the anchor delay, not accepted + {window}");
+        assert_eq!(rows[1].deadline_daa, Some(280), "a redraw's slot counts from the redraw");
+        assert_eq!(rows[2].deadline_daa, Some(40 + window), "a bind base below the fence keeps the backstop");
+        assert_eq!(rows[3].deadline_daa, below[3].deadline_daa, "a bound claim keeps its receipt date");
+    }
+
     /// **ADR-0152 S-SPEC §2 / §10a: v4 hands the producer the ledger admission measures it by** —
     /// below `palw_rcore_plus` admission item 8's `reserved + registration`, past it the one
     /// committed ledger at the escaped depth of the raw depth given — and the producer floor's
@@ -1926,6 +1974,27 @@ pub fn palw_claim_phase_deadline_v1(
         P::Voided { voided_daa, .. } => {
             let retire = state_params.claim_retirement_daa();
             (retire > 0).then(|| voided_daa.saturating_add(retire))
+        }
+    }
+}
+
+/// **V08 (the pre-t12 sweep of 2026-09-25): past `palw_rcore_plus` a `Provisional` claim's date is
+/// its anchor slot, not the bind window's backstop.** Under SW-8 a claim binds in its anchor block —
+/// the first attempt block at or past `bind_base + anchor_delay` — or step 4c voids it there
+/// (`NoCapablePanel` / `BindTimeout`); `bind_base + window_bind` is reached only when no attempt block
+/// arrives in the whole window. `getPalwClaims` printed that backstop (accepted + 600) for claims the
+/// fold decided at accepted + 20, so an operator read 600 DAA of room where there were 20. The rows
+/// the chain answers with carry the slot — the earliest DAA the phase can end at — for every
+/// `Provisional` row whose bind base is past the fence; below it, and for every other phase, the row
+/// is untouched. Read-side only: the fold, the deadline index and every sweep read their own dates.
+pub fn palw_claim_rows_bind_by_anchor_slot_v1(rows: &mut [PalwClaimRowV1], state_params: &PalwStateParamsV2, anchor_delay: u64) {
+    for row in rows.iter_mut() {
+        if !matches!(row.phase, crate::palw_state_v2::PalwClaimPhaseV2::Provisional) {
+            continue;
+        }
+        let bind_base = row.rebound_daa.unwrap_or(row.accepted_daa);
+        if state_params.rcore_plus_active_at(bind_base) {
+            row.deadline_daa = Some(bind_base.saturating_add(anchor_delay));
         }
     }
 }

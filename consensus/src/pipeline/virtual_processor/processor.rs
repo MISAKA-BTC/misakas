@@ -5231,7 +5231,7 @@ impl VirtualStateProcessor {
             let next_daa = self.palw_next_block_daa_for_reads(&state);
             (next_daa, self.palw_settled_anchor_depth_at(next_daa))
         });
-        Some(kaspa_consensus_core::palw_producer_v2::palw_bond_claims_v1(
+        let mut claims = kaspa_consensus_core::palw_producer_v2::palw_bond_claims_v1(
             &state,
             state_params,
             &bond,
@@ -5239,7 +5239,17 @@ impl VirtualStateProcessor {
             include_terminal,
             limit,
             vesting_at,
-        ))
+        );
+        // V08 (the pre-t12 sweep): past R-core+ a `Provisional` row's date is its anchor slot, where
+        // SW-8 binds or voids it — not the bind window's backstop. Read-side only.
+        if let Some(panel) = self.palw_panel_params_v2.as_ref() {
+            kaspa_consensus_core::palw_producer_v2::palw_claim_rows_bind_by_anchor_slot_v1(
+                &mut claims.rows,
+                state_params,
+                panel.anchor_delay(),
+            );
+        }
+        Some(claims)
     }
 
     /// **The DAA the next block folds at, for a read of the committed tip** (ADR-0152 P2-10): the
