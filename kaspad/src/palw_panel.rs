@@ -3676,6 +3676,23 @@ impl PalwPanelService {
             self.consensus_config.params.net.to_string().as_bytes(),
             Some(self.consensus_config.genesis.hash),
         );
+        // P3: how often a `Candidate` meets its admission jury, in spans — the fold's period.
+        let audit_period =
+            crate::palw_candidate_proof_timing::palw_candidate_audit_period_spans_v1(&self.consensus_config.params, read.span_daa);
+        let mut candidate_sends: Vec<(Hash64, crate::palw_candidate_proof_timing::PalwCandidateProofRankV1)> = Vec::new();
+        // P3: this bond's `Candidate` classes — the ones it has a row for — to count how many share an audit.
+        let candidates_held: Vec<Hash64> = read
+            .classes
+            .iter()
+            .filter(|c| {
+                !c.is_base_class
+                    && c.row.as_ref().is_some_and(|lifecycle| {
+                        matches!(lifecycle.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)
+                    })
+                    && read.readiness.iter().any(|r| r.bond == bond_key && r.class_id == c.class_id)
+            })
+            .map(|c| c.class_id)
+            .collect();
         let mut out = Vec::new();
         for class in read.classes.iter().filter(|c| !c.is_base_class) {
             // **Node-local capacity, never consensus** (the operator's rule): a host without the
@@ -3704,7 +3721,9 @@ impl PalwPanelService {
                 &globals,
                 readiness_v2,
             );
-            if !kaspa_consensus_core::palw_model_registry_v1::palw_readiness_duty_due_v2(
+            // Today's duty for this span's proof: due at half the row's age, and not while this seat's
+            // last proof for the class is still landing (M1's copy guard, past R-core+).
+            let today_holds = !kaspa_consensus_core::palw_model_registry_v1::palw_readiness_duty_due_v2(
                 row.as_ref(),
                 current_daa,
                 span_now,
@@ -3717,9 +3736,65 @@ impl PalwPanelService {
                 last,
                 current_daa,
                 read.span_daa,
-            ) {
-                continue;
-            }
+            );
+            // **P3 (the Activation Pool research, 2026-09-25): a `Candidate` class is proved for its
+            // own admission audit** — one proof, landing by the audit's span − 2 and standing through
+            // an admission there, nothing in the spans before the audit, each at the Own site — and
+            // never on today's cadence or M1's escalation (`palw_candidate_proof_timing`: P3 wins for
+            // a Candidate). Every other class, and every network without R-core+, keeps today's duty
+            // and M1's urgency.
+            let candidate = crate::palw_candidate_proof_timing::palw_candidate_proof_plan_v1(
+                crate::palw_candidate_proof_timing::palw_candidate_proof_timing_armed_v1(&self.consensus_config.params, current_daa),
+                class.row.as_ref().is_some_and(|lifecycle| {
+                    matches!(lifecycle.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)
+                }),
+                row.as_ref(),
+                readiness_v2,
+                span_now,
+                last,
+                current_daa,
+                read.span_daa,
+                read.readiness_max_age_daa,
+                audit_period,
+                |span| {
+                    crate::palw_candidate_proof_timing::palw_candidate_audit_due_v1(
+                        &self.consensus_config.params,
+                        &class.class_id,
+                        span,
+                        audit_period,
+                    )
+                },
+                |audit_span| crate::palw_candidate_proof_timing::palw_candidate_stagger_v1(&bond_bytes, &class.class_id, audit_span),
+                |audit_span| {
+                    crate::palw_candidate_proof_timing::palw_candidate_sharing_v1(
+                        &class.class_id,
+                        &candidates_held,
+                        audit_span,
+                        |id, span| {
+                            crate::palw_candidate_proof_timing::palw_candidate_audit_due_v1(
+                                &self.consensus_config.params,
+                                id,
+                                span,
+                                audit_period,
+                            )
+                        },
+                    )
+                },
+            );
+            let urgency = match candidate {
+                crate::palw_candidate_proof_timing::PalwCandidateProofPlanV1::Hold { .. } => {
+                    self.readiness_note(class.class_id, candidate.note());
+                    continue;
+                }
+                // The Own site, never M1's escalated one — and behind every proof of a class that is
+                // not `Candidate` (a needed hand-off behind every one M1 hurries): the counted rows' guarantee.
+                crate::palw_candidate_proof_timing::PalwCandidateProofPlanV1::Send { rank, .. } => {
+                    candidate_sends.push((class.class_id, rank));
+                    None
+                }
+                crate::palw_candidate_proof_timing::PalwCandidateProofPlanV1::Today if today_holds => continue,
+                crate::palw_candidate_proof_timing::PalwCandidateProofPlanV1::Today => urgency,
+            };
             // **Through the panel's one resolve door** (the 2026-09-23 route-matrix audit's #5): the
             // tables, then — with `--palw-chain-classes` — the chain's own registration. The table-only
             // resolve that stood here built no proof for a class this build does not tabulate, so a
@@ -3907,7 +3982,13 @@ impl PalwPanelService {
                 urgency,
             });
         }
-        out
+        // P3: a Candidate's proofs take the Own site behind every other proof, in their rank's order —
+        // save a hand-off its row needs, behind every proof M1 hurries (`palw_candidate_own_order_v1`).
+        crate::palw_candidate_proof_timing::palw_candidate_own_order_v1(
+            out,
+            |duty| duty.class_id().and_then(|class_id| candidate_sends.iter().find(|(id, _)| *id == class_id).map(|(_, rank)| *rank)),
+            |duty| duty.escalates(),
+        )
     }
 
     /// **This tick's possession proofs** ([`Self::readiness_duties`]): a proof left waiting last tick
