@@ -352,10 +352,18 @@ pub fn palw_panel_network_view_v1(
         }
         if assignments.len() < PALW_PANEL_ASSIGNMENTS_CAP_V1 {
             let deadline = match claim.phase {
-                PalwClaimPhaseV2::PanelBound { bound_daa } => {
-                    bound_daa.saturating_add(params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
-                }
-                _ => panel.bound_daa.saturating_add(params.receipt_window_for_claim_v1(state, &claim.class_id, panel.bound_daa)),
+                PalwClaimPhaseV2::PanelBound { bound_daa } => bound_daa.saturating_add(params.receipt_window_for_claim_v1(
+                    state,
+                    &claim.class_id,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                    bound_daa,
+                )),
+                _ => panel.bound_daa.saturating_add(params.receipt_window_for_claim_v1(
+                    state,
+                    &claim.class_id,
+                    crate::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(claim),
+                    panel.bound_daa,
+                )),
             };
             let full_bond = panel.seats.get(assignment.full_seat as usize).map(|s| s.bond).unwrap_or(PalwBondKeyV2(
                 crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0u8; 64]), index: 0 },

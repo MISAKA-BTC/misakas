@@ -626,6 +626,10 @@ mod tests {
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
             "palw_rcore_plus" => params.palw_rcore_plus = Some(at),
+            // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
+            // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
+            // hashers and the schedule.
+            "palw_class_verify_deadline" => params.palw_class_verify_deadline = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),

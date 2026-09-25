@@ -5224,3 +5224,9 @@ mod t54f_replay_filer;
 /// read kaspad's held-dissection filer asks before it queues an opening; a child, like T54f.
 #[path = "t54g_object_rehearsal.rs"]
 mod t54g_object_rehearsal;
+
+/// **ADR-0152 Phase 2, T29's processor half** — a same-block conviction and maturity on this
+/// suite's real claim and real conviction: the rehearsal and the fold agree, and the burn comes
+/// before step 3d. A child of this suite for the reason `t47_model_class_attribution` is.
+#[path = "p2_t29_conviction_and_maturity.rs"]
+mod p2_t29_conviction_and_maturity;

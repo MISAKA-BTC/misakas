@@ -251,7 +251,12 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_forfeits_at_the_seco
     account(&s, daa, &mut last, &mut integral_other, &mut integral_attacker);
     s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats_of(&seats_a) }], PalwBlockWorkV3::None, Hash64::default(), 0);
     let other_after_bind = others(&s);
-    let receipt_window = sp.receipt_window_for_claim_v1(&s, &floor, daa);
+    let receipt_window = sp.receipt_window_for_claim_v1(
+        &s,
+        &floor,
+        kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(s.claim(&id).unwrap()),
+        daa,
+    );
     // Receipt window lapses -> redraw (claim back to Provisional).
     daa += receipt_window + 1;
     blue += 1;

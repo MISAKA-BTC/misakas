@@ -3,11 +3,16 @@ use std::sync::Arc;
 use kaspa_consensus_core::{
     BlockHash,
     api::ConsensusApi,
-    config::{Config, premine::genesis_premine_utxos_for},
+    config::{
+        Config,
+        drill::{PALW_T12_DRILL_GENESIS_COINBASE_PAYLOAD, palw_drill_network_v1, palw_t12_drill_genesis_utxos_v1},
+        premine::genesis_premine_utxos_for,
+    },
     header::Header,
     muhash::MuHashExtensions,
     tx::{TransactionOutpoint, UtxoEntry},
 };
+use kaspa_core::warn;
 use kaspa_muhash::MuHash;
 
 use crate::consensus::Consensus;
@@ -24,8 +29,13 @@ fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEn
     // `mut` is only exercised under `devnet-prealloc` (the extend below).
     #[cfg_attr(not(feature = "devnet-prealloc"), allow(unused_mut))]
     // Keyed by the full NetworkId: testnet-11 carries the carved-out extras; every other
-    // network carries the main wallet alone.
-    let mut set: Vec<(TransactionOutpoint, UtxoEntry)> = genesis_premine_utxos_for(config.params.net).into_iter().collect();
+    // network carries the main wallet alone. A testnet-12 DRILL (ADR-0152 §8.2, P2-12) carries its
+    // own set, on its salted txids and drill-only keys — read from the salt the config holds, never
+    // from the params, so the guard below compares two derivations and not one derivation twice.
+    let mut set: Vec<(TransactionOutpoint, UtxoEntry)> = match &config.palw_drill_genesis_salt {
+        Some(salt) => palw_t12_drill_genesis_utxos_v1(salt).into_iter().collect(),
+        None => genesis_premine_utxos_for(config.params.net).into_iter().collect(),
+    };
     #[cfg(feature = "devnet-prealloc")]
     set.extend(config.initial_utxo_set.iter().map(|(op, entry)| (*op, entry.clone())));
     #[cfg(not(feature = "devnet-prealloc"))]
@@ -41,6 +51,26 @@ pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
     // values, so an operator can never silently run a divergent genesis (e.g. a premine payload
     // edited — or a ceremony payload installed — without re-pinning the constants). We recompute and
     // then assert equality below.
+    //
+    // **A drill genesis passes this guard only with its salt, and a public genesis only without one**
+    // (ADR-0152 §8.2, P2-12). The params carry the genesis the salt derived at start-up
+    // (`palw_t12_drill_params_v1`); the set recomputed here comes from `config.palw_drill_genesis_salt`.
+    // Salted params with no salt recompute public testnet-12's premine, a salt beside public params
+    // recomputes the drill's, and either way the commitment assert below refuses to boot.
+    if let Some(salt) = &config.palw_drill_genesis_salt {
+        assert_eq!(
+            config.params.net,
+            palw_drill_network_v1(),
+            "a drill genesis salt is testnet-12's alone (ADR-0152 §8.2); this config names {}",
+            config.params.net
+        );
+        warn!(
+            "PALW DRILL CHAIN (ADR-0152 §8.2): genesis {} from drill salt id {} — this is NOT public testnet-12. Every \
+             genesis outpoint, the network domain and the handshake identity are the drill's own; drill-only keys only.",
+            config.params.genesis.hash,
+            salt.id()
+        );
+    }
     let hardcoded_commitment = config.params.genesis.utxo_commitment;
     let hardcoded_hash = config.params.genesis.hash;
 
@@ -58,8 +88,16 @@ pub fn set_genesis_utxo_commitment_from_config(config: &mut Config) {
     #[cfg(not(feature = "devnet-prealloc"))]
     {
         assert_eq!(
-            config.params.genesis.utxo_commitment, hardcoded_commitment,
-            "genesis utxo_commitment mismatch (audit M-07): the pinned GENESIS.utxo_commitment does not match the premine UTXO set — re-pin it after any premine change via the config::premine ceremony tool"
+            config.params.genesis.utxo_commitment,
+            hardcoded_commitment,
+            "genesis utxo_commitment mismatch (audit M-07): the pinned GENESIS.utxo_commitment does not match the premine UTXO set — re-pin it after any premine change via the config::premine ceremony tool{}",
+            if config.palw_drill_genesis_salt.is_some()
+                || config.params.genesis.coinbase_payload == PALW_T12_DRILL_GENESIS_COINBASE_PAYLOAD
+            {
+                " (a DRILL genesis: salted params and the drill salt arrive together, from kaspad's --palw-drill-genesis-salt, or not at all — ADR-0152 §8.2)"
+            } else {
+                ""
+            }
         );
         assert_eq!(
             config.params.genesis.hash, hardcoded_hash,
@@ -168,6 +206,17 @@ mod repin {
         println!("T12 hash_merkle_root: Hash64::from_bytes({}),", rust(genesis.hash_merkle_root.as_byte_slice()));
         println!("T12 utxo_commitment: Hash64::from_bytes({}),", rust(genesis.utxo_commitment.as_byte_slice()));
         println!("T12 hash: Hash64::from_bytes({}),", rust(header.hash.as_byte_slice()));
+
+        // **A drill genesis is derived at start-up, never pinned** (ADR-0152 §8.2, P2-12): printed
+        // here beside the public one when `MISAKA_PALW_DRILL_GENESIS_SALT` names a salt, so an
+        // operator can read the hash a drill fleet must agree on without starting a node
+        // (`kaspad --palw-drill-write-keyring` prints the same value into its manifest).
+        if let Ok(hex) = std::env::var("MISAKA_PALW_DRILL_GENESIS_SALT") {
+            let salt = kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex(&hex).expect("a drill salt");
+            let drill = kaspa_consensus_core::config::drill::palw_t12_drill_genesis_block_v1(&salt);
+            println!("T12 DRILL (salt id {}) utxo_commitment: {}", salt.id(), drill.utxo_commitment);
+            println!("T12 DRILL (salt id {}) hash: {}", salt.id(), drill.hash);
+        }
     }
 
     /// **Print the genesis constants a filled mainnet card implies** (mainnet audit 2026-09-06,
@@ -256,6 +305,51 @@ mod tests {
         set_genesis_utxo_commitment_from_config(&mut recomputed);
         assert_eq!(recomputed.params.genesis.utxo_commitment, expected_commitment);
         assert_eq!(recomputed.params.genesis.hash, static_hash, "premine commitment recompute must be idempotent");
+    }
+
+    /// **T53 / ADR-0152 §8.2: the start-up guard accepts a drill genesis only with its salt, and the
+    /// public genesis only without one.** The salted params and the salt together boot (idempotent,
+    /// and the genesis is not public testnet-12's); salted params with no salt, the public params
+    /// with a salt, and salted params with another drill's salt are each refused by the M-07
+    /// commitment assert — the node never starts on a genesis the config does not account for.
+    #[cfg(not(feature = "devnet-prealloc"))]
+    #[test]
+    fn t53_the_start_up_guard_accepts_a_drill_genesis_only_with_its_salt() {
+        use kaspa_consensus_core::config::drill::PalwDrillSaltV1;
+        use kaspa_consensus_core::config::params::{Params, palw_t12_drill_params_v1};
+        use kaspa_consensus_core::network::NetworkId;
+        let (a, b) = (PalwDrillSaltV1::from_bytes([0xA5; 32]).unwrap(), PalwDrillSaltV1::from_bytes([0x5A; 32]).unwrap());
+        let drill = palw_t12_drill_params_v1(&a);
+        let public = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let config = |params: &Params, salt: Option<PalwDrillSaltV1>| {
+            let mut config = Config::new(params.clone());
+            config.palw_drill_genesis_salt = salt;
+            config
+        };
+
+        let mut booted = config(&drill, Some(a));
+        set_genesis_utxo_commitment_from_config(&mut booted);
+        assert_eq!(booted.params.genesis.hash, drill.genesis.hash, "the salt's own genesis boots, unchanged");
+        assert_ne!(booted.params.genesis.hash, public.genesis.hash, "and it is not public testnet-12's");
+        let mut public_boots = config(&public, None);
+        set_genesis_utxo_commitment_from_config(&mut public_boots);
+        assert_eq!(public_boots.params.genesis.hash, public.genesis.hash, "public testnet-12 is untouched");
+
+        for (what, params, salt) in [
+            ("salted params, no salt", &drill, None),
+            ("public params, a salt", &public, Some(a)),
+            ("another drill's salt", &drill, Some(b)),
+        ] {
+            let mut refused = config(params, salt);
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| set_genesis_utxo_commitment_from_config(&mut refused)));
+            assert!(outcome.is_err(), "{what}: the start-up guard must refuse to boot");
+        }
+        // And the genesis set a salted node imports is the drill's, on the drill's own txids.
+        let set = genesis_initial_utxo_set(&config(&drill, Some(a)));
+        let drill_txid = kaspa_consensus_core::config::premine::palw_t12_drill_premine_txid_v1(&a);
+        assert!(set.iter().any(|(o, _)| o.transaction_id == drill_txid));
+        assert!(set.iter().all(|(o, _)| !genesis_premine_utxos_for(public.net).contains_key(o)));
     }
 
     /// audit M-07: on EVERY network the hardcoded `GENESIS.hash` / `utxo_commitment` must round-trip

@@ -896,6 +896,16 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **ADR-0152 §4-ter.3 step 6: the held forfeits `mine` holds and `mine`'s open data-availability
+    /// sessions**, at the tip — what a challenger's node rebuilds its step-6 pursuits from at start
+    /// ([`crate::palw_producer_v2::palw_held_pursuit_seeds_v1`]).
+    fn palw_held_pursuit_seeds_v1(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> crate::palw_producer_v2::PalwHeldPursuitSeedsV1 {
+        Default::default()
+    }
+
     /// The data-availability court's half (ADR-0062 D3): claims this node produced that are under
     /// an open accusation, with the event each must open.
     fn palw_da_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwDaDutyV2> {

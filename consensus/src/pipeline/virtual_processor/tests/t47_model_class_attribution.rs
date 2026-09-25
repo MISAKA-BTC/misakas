@@ -191,7 +191,21 @@ fn seed_profile(h: &H, walk: &mut Walk, label: &str, profile: &PalwShapeProfileV
         let given = if donor == floor { 1 } else { c.class_shares[&donor] / 2 };
         *c.class_shares.get_mut(&donor).unwrap() -= given;
         c.class_shares.insert(class_id, given);
-        let (_, row) = c.model_lifecycles.iter().find(|(id, _)| **id != floor).expect("testnet-12 registers model rows");
+        // testnet-12's 8k row, named: the model row with the shortest derived verification deadline
+        // (`D` 15). Not "the first non-floor row" — the map is keyed by class id and the 2M row
+        // (`0x74…`) sorts before the 8k one (`0xeb…`), and since ADR-0152 §4-quater the 2M row's
+        // derived 13,995-DAA deadline is unmeasured at launch (U-D1), so a class copying it is refused
+        // `ClassDeadlineUnmeasured` before this test's attribution is ever asked.
+        let (_, row) = c
+            .model_lifecycles
+            .iter()
+            .filter(|(id, _)| **id != floor)
+            .min_by_key(|(_, row)| row.work.verification_ccu)
+            .expect("testnet-12 registers model rows");
+        assert!(
+            !kaspa_consensus_core::palw_state_v2::palw_class_row_is_long_d_v1(row),
+            "{label}: the 8k row, a short-D class open at launch"
+        );
         let mut row = row.clone();
         row.state = PalwModelLifecycleV1::Active;
         row.profile.max_inflight_claims = row.profile.max_inflight_claims.max(8);

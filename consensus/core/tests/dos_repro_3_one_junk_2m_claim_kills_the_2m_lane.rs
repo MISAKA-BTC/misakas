@@ -306,7 +306,12 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
     blue += 1;
     s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats_of(&seats_a) }], PalwBlockWorkV3::None, Hash64::default(), 0);
     let other_after_bind: u128 = bonds.iter().map(|(k, _, _)| s.reserved_exposure(k)).sum();
-    let receipt_window = sp.receipt_window_for_claim_v1(&s, &floor, daa);
+    let receipt_window = sp.receipt_window_for_claim_v1(
+        &s,
+        &floor,
+        kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(s.claim(&id).unwrap()),
+        daa,
+    );
 
     // First receipt window lapses -> redraw.
     daa += receipt_window + 1;
@@ -369,7 +374,10 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
 /// Measured: the charge #10 takes, the honest capital pinned (peak and x time), the DAA closed.
 #[test]
 fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let economy = p.palw_seat_economy_at(0).expect("t12 arms the panel economy");
@@ -457,7 +465,12 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
         binds += 1;
         step(&mut s, daa, blue, vec![bound]);
         peak_pinned = peak_pinned.max(honest_reserved(&s));
-        receipt_window = sp.receipt_window_for_claim_v1(&s, &id2m, daa);
+        receipt_window = sp.receipt_window_for_claim_v1(
+            &s,
+            &id2m,
+            kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(s.claim(&id).unwrap()),
+            daa,
+        );
         probes.push((daa, if panel == 0 { "bound #1" } else { "bound #2 (redraw)" }, probe(&s, daa, blue)));
         // Two blocks before the receipt deadline (the probe folds the next one, still inside it),
         // then the lapse.
