@@ -37,7 +37,9 @@ fn msk_of(sompi: u128) -> f64 {
 
 /// A claim of `class` (`None`: the floor) on its own chain, with the panel it binds.
 fn claim_of(class: Option<Hash64>, seed: u64) -> (Chain, Hash64, Vec<(PalwBondKeyV2, Hash64)>) {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so its claim exists only past the flag
+    // day that installs its measured row (`t12_2m_open`); the floor and 8k rows read the same.
+    let p = t12_2m_open();
     match class {
         None => {
             let mut c = Chain::new(p);
@@ -62,7 +64,10 @@ fn claim_of(class: Option<Hash64>, seed: u64) -> (Chain, Hash64, Vec<(PalwBondKe
 #[test]
 fn h1_the_lock_prices_the_residual_and_the_vesting_row_holds_e() {
     assert!(PALW_RCORE_VESTING_ROWS_LANDED_V1, "the premise: finalize_claim writes the row and every post-Final conviction burns it");
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline). The residual prices are the same: `G_res` does not read the deadline.
+    let p = t12_2m_open();
     let (short, id2m) = model_classes(&p);
     let near = |got: u128, want: f64| (msk_of(got) - want).abs() < 0.02;
     for (name, class, residual) in

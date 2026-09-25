@@ -25,7 +25,10 @@ use kaspa_consensus_core::palw_work_target_v1::{palw_panel_capacity_by_rate_v1, 
 
 #[test]
 fn at_eight_ready_seats_with_the_short_class_admitting_a_second_2m_claim_is_refused() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let g = genesis_state(&p);
@@ -34,7 +37,12 @@ fn at_eight_ready_seats_with_the_short_class_admitting_a_second_2m_claim_is_refu
     let span = registry_fold(&p, now).unwrap().span_daa;
     let row = g.model_lifecycle(&id2m).unwrap().clone();
     let w = row.profile.verification_window_spans as u64;
-    let receipt_window = sp.receipt_window_for_claim_v1(&g, &id2m, now);
+    let receipt_window = sp.receipt_window_for_claim_v1(
+        &g,
+        &id2m,
+        kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::Attempt,
+        now,
+    );
     println!("2M: window {w} spans × span {span} DAA = {} DAA; receipt window {receipt_window}", w * span);
     assert!(p.palw_audit_2026_09_23_active_at(now) && p.palw_work_target_at(0), "t12 arms the fence and the work target");
     assert!(w * span <= receipt_window, "the 2M window fits its receipt deadline, so nothing past the fence holds the row");

@@ -1363,6 +1363,36 @@ pub struct Params {
     /// presets built by struct update (`..TESTNET_PARAMS`) cannot carry one (a `Vec` gives the type
     /// drop glue a const cannot evaluate). The bundle's mirror is the `Vec` the spec names.
     pub palw_rcore_conservative_classes: &'static [crate::Hash64],
+    /// **ADR-0152 §4-quater: class-derived verification deadlines.** Past it a claim's
+    /// compute-bearing deadline `D(c)` is its class's, in the registry's own units
+    /// ([`crate::palw_class_verify_deadline_v1`]): the receipt window is `max(window_receipt, D(c))`
+    /// with a registry span counted as 5 DAA (V1, V3 — testnet-12 counted it as its 1-DAA lane span,
+    /// a fifth of the window); a class whose deadline the chain cannot state without a measurement
+    /// (NM: `D > window_receipt`, or held with `n_ctx > 8,192`) takes no claim on any lane until a
+    /// measured row names it (V2 — the 2M row is closed at launch, U-D1); `Final` is floored at the
+    /// verification horizon `H(c) = bound + D(c) + 1` through one helper at every site that arms it
+    /// (V4); a `Valid` lock taken at licence lives to `H + window_court` (V5); a long-D claim's DA
+    /// pause moves `H` (V6); and a long-D class owes the panel room until Final (K-1).
+    ///
+    /// Genesis-only, and refused unless `palw_class_receipt_window` is armed at or below it (the rule
+    /// replaces §11.3's product), `palw_fp_derived_work` is too (a free-prompt claim's `D` reads
+    /// its class's published work profile, which that fence makes exist before the first such claim),
+    /// and `palw_short_challenge_window` is too (long-D is measured against its 120). **Its Some-ness
+    /// sets the pruning depth (P-1)**: the claim lattice past it is the D_cap one
+    /// (`palw_v2_claim_lattice_daa_v1`, 74,920 on testnet-12), chosen at genesis because a pruning
+    /// point can never move backward.
+    /// Independent of `palw_offence_attribution`. `Some(0)` on testnet-12 only; `None` elsewhere;
+    /// hashed Some-only, so every other preset's ids are byte-identical to a build without it. The
+    /// bundle's mirror is made by `sync_palw_class_verify_deadline`.
+    pub palw_class_verify_deadline: Option<ForkActivation>,
+    /// **ADR-0152 §4-quater's measured rows** (ADR-0153's flag day): the classes whose deadline a
+    /// measurement states. Empty on every preset — so at launch every NM class, the 2M row among
+    /// them, is refused by name. Non-empty only with `palw_class_verify_deadline` armed; each row
+    /// validated on its own ([`crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1::validate`]),
+    /// one per class, active no earlier than `palw_offence_attribution` (a class opens only when its
+    /// lies are attributable, U-D8); hashed into the params id only when non-empty. A `&'static`
+    /// slice for the reason `palw_rcore_conservative_classes` is one.
+    pub palw_class_verify_rows: &'static [crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1],
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -2694,18 +2724,81 @@ pub struct Params {
 /// preset's depth is decided by these two bounds, which
 /// `the_v2_pruning_depth_is_the_derivation_and_the_inherited_floor_never_binds` proves, and a floor
 /// that bound would leave the identity's normalisation unable to reproduce the pre-fence value.
+///
+/// **ADR-0152 §4-quater P-1:** past `palw_class_verify_deadline` the lattice is the class-verify
+/// one ([`palw_v2_claim_lattice_daa_v1`]) — keyed, like the DA term, on the fence's Some-ness, so no
+/// network's horizon depends on a height.
 pub fn palw_v2_pruning_depth_v1(
     blockrate: &BlockrateParams,
     bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
     da_court: Option<ForkActivation>,
+    class_verify_deadline: Option<ForkActivation>,
+) -> u64 {
+    palw_v2_pruning_depth_for_lattice_v1(blockrate, bundle, palw_v2_claim_lattice_daa_v1(bundle, da_court, class_verify_deadline))
+}
+
+/// **The claim lattice: the longest stretch past a claim's acceptance that a judgement of it can be
+/// anchored on** — the ONE lattice the pruning depth is derived from ([`palw_v2_pruning_depth_v1`])
+/// and `validate_palw_v2` (K18) holds the depth to, so the two cannot disagree.
+///
+/// * Below `palw_class_verify_deadline` (every network but testnet-12): two bind+receipt pairs (a
+///   claim is revived once), the challenge and court windows, and the DA court's `accuse + disclose`
+///   where its fence is set ([`palw_v2_da_court_lattice_daa`]) — the rule as it stood, byte for byte.
+/// * **Past it (ADR-0152 §4-quater P-1, U-D3)**: the receipt window is `max(window_receipt, D_cap)`
+///   (a measured class's claims are priced up to D_cap, and their receipt window is then D_cap), and
+///   the DA term is the long-D pause bound — the span of `R_eff` at D_cap
+///   ([`palw_class_verify_reff_span_daa_v1`]; DA-8 unchanged: a session fits `R_eff`), where the DA
+///   court is set. On testnet-12's windows: `2(600 + 16,000) + 1,200 + 3,000 + 37,520 = 74,920`.
+///
+/// Keyed on the fence's Some-ness (a `never()` is absence), exactly as the DA term is keyed on the DA
+/// court's, so a ruleset's horizon is a genesis fact: a pruning point can never move backward (K37),
+/// so a depth for D_cap can only be chosen at genesis — which is why the fence is genesis-only.
+pub fn palw_v2_claim_lattice_daa_v1(
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    da_court: Option<ForkActivation>,
+    class_verify_deadline: Option<ForkActivation>,
+) -> u64 {
+    let state = &bundle.state;
+    if class_verify_deadline.filter(|f| *f != ForkActivation::never()).is_none() {
+        return 2 * (state.window_bind() + state.window_receipt())
+            + state.window_challenge()
+            + state.window_court()
+            + palw_v2_da_court_lattice_daa(da_court, state);
+    }
+    let receipt = state.window_receipt().max(crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_CAP_DAA_V1);
+    let pause = if da_court.is_some() { palw_class_verify_reff_span_daa_v1(state) } else { 0 };
+    2 * (state.window_bind() + receipt) + state.window_challenge() + state.window_court() + pause
+}
+
+/// **The span of `R_eff` at D_cap** (ADR-0152 §4-quater.8): `2(W_bind + W_r) + max(wc, 1) + W_court +
+/// W_disclose` with `W_r = max(window_receipt, D_cap)` and `wc` the challenge window a licence gets —
+/// the longest a long-D claim's retention (and so its DA sessions, DA-8) can run past acceptance.
+/// Past `palw_class_verify_deadline` every licence gets the short window
+/// (`PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`, 120): `validate_palw_v2` refuses the fence without
+/// `palw_short_challenge_window` at or below it, since long-D is measured against that same 120. Read
+/// as the constant rather than off the bundle's mirror, so the depth `with_palw_v2_depths` derives
+/// before the mirrors are synced is the depth every later reader re-derives. 37,520 on testnet-12's
+/// windows.
+pub fn palw_class_verify_reff_span_daa_v1(state: &crate::palw_state_v2::PalwStateParamsV2) -> u64 {
+    let receipt = state.window_receipt().max(crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_CAP_DAA_V1);
+    2 * (state.window_bind() + receipt)
+        + crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1
+        + state.window_court()
+        + crate::palw_state_v2::palw_da_disclose_window_daa_v1(state)
+}
+
+/// [`palw_v2_pruning_depth_v1`]'s depth for a given claim `lattice`: the anticone-finalization lower
+/// bound or the lattice, whichever is longer, rounded off the finality boundary the pruning-sample
+/// walk needs. The one rounding, shared so a depth sized for a longer lattice (E-11) is laid out the
+/// way every V2 preset's is.
+pub fn palw_v2_pruning_depth_for_lattice_v1(
+    blockrate: &BlockrateParams,
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    lattice: u64,
 ) -> u64 {
     let k = blockrate.ghostdag_k as u64;
     let finality_depth = bundle.state.window_challenge() / 2;
     let lower_bound = finality_depth + blockrate.merge_depth * 2 + 4 * blockrate.mergeset_size_limit * k + 2 * k + 2;
-    let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
-        + bundle.state.window_challenge()
-        + bundle.state.window_court()
-        + palw_v2_da_court_lattice_daa(da_court, &bundle.state);
     let mut depth = lower_bound.max(lattice);
     let m = depth % finality_depth;
     if m <= k {
@@ -2782,8 +2875,12 @@ impl Params {
         // The horizon, from the ONE derivation the identity's normalisation re-applies. Raised,
         // never lowered: an inherited depth wider than the derivation stays (no preset's is —
         // `the_v2_pruning_depth_is_the_derivation_and_the_inherited_floor_never_binds`).
-        self.blockrate.pruning_depth =
-            self.blockrate.pruning_depth.max(palw_v2_pruning_depth_v1(&self.blockrate, bundle, self.palw_da_court));
+        self.blockrate.pruning_depth = self.blockrate.pruning_depth.max(palw_v2_pruning_depth_v1(
+            &self.blockrate,
+            bundle,
+            self.palw_da_court,
+            self.palw_class_verify_deadline,
+        ));
         self
     }
 
@@ -2968,6 +3065,7 @@ impl Params {
                 ));
             }
         }
+        self.validate_palw_class_verify_deadline_v1()?;
         // ADR-0089 Decision 9's two preconditions: an EVM face of a market that does not exist,
         // or on a lane that is inert, is a design that has not been armed.
         if let Some(evm) = self.palw_model_evm {
@@ -4287,11 +4385,12 @@ impl Params {
         // TWO bind+receipt pairs: a claim whose first panel concludes nothing is revived once and
         // binds a second (`sweep_deadlines`' `PanelBound` arm), so the longest path a judgement
         // can be anchored on is the redrawn one — and it is the length the horizon has to cover.
-        let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
-            + bundle.state.window_challenge()
-            + bundle.state.window_court()
-            // ADR-0062 SA-6: `+ accuse + disclose`, zero while the fence is `None`.
-            + palw_v2_da_court_lattice_daa(self.palw_da_court, &bundle.state);
+        // ADR-0062 SA-6: `+ accuse + disclose`, zero while the fence is `None`. ADR-0152 §4-quater
+        // P-1 / E-11: past `palw_class_verify_deadline` the receipt window is `max(window_receipt,
+        // D_cap)` and the DA term the `R_eff` span at D_cap — the ONE lattice the depth is derived
+        // from (`palw_v2_claim_lattice_daa_v1`), so a measured class (whose claims reach D_cap) can
+        // never sit on a horizon that prunes what its judgements read.
+        let lattice = palw_v2_claim_lattice_daa_v1(bundle, self.palw_da_court, self.palw_class_verify_deadline);
         if lattice > self.blockrate.pruning_depth {
             return Err(PalwModeV2Error::Invalid(
                 "the claim lattice outlives the pruning horizon — the headers its judgements are anchored on would be deleted first",
@@ -4637,7 +4736,8 @@ impl Params {
         if self.palw_da_court.is_some_and(|f| !f.is_active(0)) {
             self.palw_da_court = None;
             if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-                self.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&self.blockrate, bundle, None);
+                self.blockrate.pruning_depth =
+                    palw_v2_pruning_depth_v1(&self.blockrate, bundle, None, self.palw_class_verify_deadline);
             }
         } else if self.palw_da_court == Some(ForkActivation::never()) {
             self.palw_da_court = None;
@@ -4745,6 +4845,10 @@ impl Params {
         // ADR-0152 R-core+: Some-only hashed, so the same collapse.
         if self.palw_rcore_plus == Some(ForkActivation::never()) {
             self.palw_rcore_plus = None;
+        }
+        // ADR-0152 §4-quater's class-verify-deadline fence: Some-only hashed, so the same collapse.
+        if self.palw_class_verify_deadline == Some(ForkActivation::never()) {
+            self.palw_class_verify_deadline = None;
         }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
@@ -5483,6 +5587,111 @@ impl Params {
         Ok(())
     }
 
+    /// **ADR-0152 §4-quater: mirror `palw_class_verify_deadline` and its measured rows into the V2
+    /// bundle** — the two `#[borsh(skip)]` copies on `PalwStateParamsV2` the fold, the rebuild and
+    /// every view read, in one setter so they cannot drift. Where the fence is not armed both are
+    /// the dormant values (`None`, empty). Called where a bundle is assembled over a preset that
+    /// armed the fence, beside `sync_palw_rcore_plus`; `validate_palw_v2` refuses a ruleset whose
+    /// copies disagree, so a missed call is a startup refusal.
+    pub fn sync_palw_class_verify_deadline(&mut self) {
+        let from_daa = self.palw_class_verify_deadline.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+        let rows = if from_daa.is_some() { self.palw_class_verify_rows.to_vec() } else { Vec::new() };
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_class_verify_deadline(from_daa, rows);
+        }
+    }
+
+    /// **ADR-0152 §4-quater: what `palw_class_verify_deadline` refuses** (T-D7's fence part). Called
+    /// by `validate_palw_v2`, and public so a test can name each refusal alone. Below the fence it
+    /// checks only that nothing of it is set: rows without the fence, or a bundle whose mirrors are
+    /// not the dormant values.
+    pub fn validate_palw_class_verify_deadline_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_class_verify_deadline.filter(|f| *f != ForkActivation::never()) else {
+            if !self.palw_class_verify_rows.is_empty() {
+                return Err(Invalid(
+                    "palw_class_verify_rows is non-empty without palw_class_verify_deadline armed: a measured row prices a \
+                     class-derived deadline, and nothing reads one below the fence",
+                ));
+            }
+            if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+                && (bundle.state.class_verify_deadline_from_daa().is_some() || !bundle.state.class_verify_rows().is_empty())
+            {
+                return Err(Invalid(
+                    "the V2 bundle carries class-verify-deadline mirrors without palw_class_verify_deadline armed: mirror the \
+                     fence with Params::sync_palw_class_verify_deadline after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        // Genesis only: the pruning depth that fits a class-derived deadline is fixed at genesis
+        // (P-1 — a pruning point cannot move backward, so the depth can never be raised later), and a
+        // crossing would leave claims licensed below it finalizing at `L + wc` beside claims past it
+        // held to `H`, with no pruning depth sized for the second.
+        if fence.daa_score() != 0 {
+            return Err(Invalid(
+                "palw_class_verify_deadline may only be armed at genesis (DAA 0): the pruning depth its deadlines need \
+                 is a genesis fact",
+            ));
+        }
+        let armed_below =
+            |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score());
+        // The rule replaces §11.3's product: a class-derived receipt window must already be the rule.
+        if !armed_below(self.palw_class_receipt_window) {
+            return Err(Invalid(
+                "palw_class_verify_deadline is armed without palw_class_receipt_window at or below it: the class-derived \
+                 deadline replaces §11.3's receipt window and cannot precede it",
+            ));
+        }
+        // Long-D, the room's hold, V6 and the `R_eff` span in the pruning horizon are all measured
+        // against the SHORT challenge window (120): a licence that could still get the long one
+        // (1,200) would make every one of them the wrong bound.
+        if !armed_below(self.palw_short_challenge_window) {
+            return Err(Invalid(
+                "palw_class_verify_deadline is armed without palw_short_challenge_window at or below it: long-D, the room's \
+                 hold and the pruning horizon's R_eff span are all measured against the short challenge window",
+            ));
+        }
+        // A free-prompt claim's deadline reads its class's published work profile; past the derived-work
+        // fence no free-prompt claim exists without one, so the deadline a claim is bound under never
+        // changes when a profile is published later.
+        if !armed_below(self.palw_fp_derived_work) {
+            return Err(Invalid(
+                "palw_class_verify_deadline is armed without palw_fp_derived_work at or below it: a free-prompt claim's \
+                 deadline reads its class's work profile, which only that fence makes exist before the claim",
+            ));
+        }
+        let mut seen: Vec<crate::Hash64> = Vec::new();
+        for row in self.palw_class_verify_rows {
+            row.validate().map_err(Invalid)?;
+            if seen.contains(&row.class_id) {
+                return Err(Invalid("palw_class_verify_rows names one class twice: a class has one measured deadline"));
+            }
+            seen.push(row.class_id);
+            // U-D8: a class opens only when its lies are attributable.
+            if !self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= row.activation_daa) {
+                return Err(Invalid(
+                    "a palw_class_verify_rows row activates before palw_offence_attribution: a class that needs a measured \
+                     deadline opens only when a false Valid on it is attributable (U-D8)",
+                ));
+            }
+        }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && (bundle.state.class_verify_deadline_from_daa() != Some(fence.daa_score())
+                || bundle.state.class_verify_rows() != self.palw_class_verify_rows)
+        {
+            return Err(Invalid(
+                "palw_class_verify_deadline or palw_class_verify_rows disagree with the V2 bundle's mirrors: mirror them \
+                 with Params::sync_palw_class_verify_deadline after the bundle is assembled",
+            ));
+        }
+        // **E-11 / T-D8b**: a measured row opens deadlines up to D_cap, which only a pruning horizon
+        // sized for D_cap holds. Past this fence `validate_palw_v2`'s claim-lattice check (K18) reads
+        // `palw_v2_claim_lattice_daa_v1` — the D_cap lattice, the same number `with_palw_v2_depths`
+        // derives the depth from — so no row, and no fence, can stand on a shorter horizon.
+        Ok(())
+    }
+
     pub fn set_palw_short_challenge_window(&mut self, at: Option<ForkActivation>) {
         self.palw_short_challenge_window = at;
         let from_daa = at.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
@@ -6095,6 +6304,21 @@ impl Params {
         self.palw_rcore_plus_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0152 §4-quater's class-verify-deadline fence, resolved off a ConsensusV2 ruleset.
+    pub fn palw_class_verify_deadline_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_class_verify_deadline) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Whether class-derived verification deadlines are in force at `daa_score`. `false` on every
+    /// preset but testnet-12. The fold reads the bundle's mirror
+    /// (`PalwStateParamsV2::class_verify_deadline_active_at`), which `validate_palw_v2` holds equal.
+    pub fn palw_class_verify_deadline_active_at(&self, daa_score: u64) -> bool {
+        self.palw_class_verify_deadline_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// Whether a false `Valid` is judged by `palw_check_panel_false_valid_v2` at `daa_score`
     /// (`PalwTransitionExtrasV1::offence_attribution_active`): the V1 kind refused, the V2 kind
     /// admitted. `false` on every preset but testnet-12.
@@ -6225,6 +6449,8 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes: _,
+            palw_class_verify_deadline,
+            palw_class_verify_rows: _,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6326,6 +6552,7 @@ impl Params {
             ("palw_clock_floor", *palw_clock_floor),
             ("palw_offence_attribution", *palw_offence_attribution),
             ("palw_rcore_plus", *palw_rcore_plus),
+            ("palw_class_verify_deadline", *palw_class_verify_deadline),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -6688,6 +6915,12 @@ impl Params {
             h.write(b"palw_rcore_plus");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0152 §4-quater's class-verify-deadline fence, NAMED for the same reason and Some-only: it
+        // changes which claims a block may carry and when a licensed claim may Final.
+        if let Some(activation) = self.palw_class_verify_deadline {
+            h.write(b"palw_class_verify_deadline");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -6882,6 +7115,8 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes: _,
+            palw_class_verify_deadline,
+            palw_class_verify_rows: _,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7196,6 +7431,11 @@ impl Params {
         }
         // ADR-0152 R-core+: SOME-ONLY, as the floor above and for its reason.
         if let Some(activation) = palw_rcore_plus.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0152 §4-quater's class-verify-deadline fence: SOME-ONLY, as the floor above and for its
+        // reason.
+        if let Some(activation) = palw_class_verify_deadline.as_mut() {
             fork(activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
@@ -7782,6 +8022,8 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes,
+            palw_class_verify_deadline,
+            palw_class_verify_rows,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -8078,6 +8320,26 @@ impl Params {
             h.write((palw_rcore_conservative_classes.len() as u64).to_le_bytes());
             for class in palw_rcore_conservative_classes.iter() {
                 h.write(class.as_byte_slice());
+            }
+        }
+        // ADR-0152 §4-quater: the fence's height only, Some-only, for the floor's reason; and the
+        // measured rows only when non-empty, every field of each in declaration order, so every other
+        // preset — and testnet-12 at launch, whose rows are empty — hashes no row bytes at all.
+        if let Some(activation) = palw_class_verify_deadline {
+            h.write(b"palw_class_verify_deadline");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if !palw_class_verify_rows.is_empty() {
+            h.write(b"palw_class_verify_rows");
+            h.write((palw_class_verify_rows.len() as u64).to_le_bytes());
+            for row in palw_class_verify_rows.iter() {
+                h.write(row.class_id.as_byte_slice());
+                h.write(row.activation_daa.to_le_bytes());
+                h.write(row.a_r_ps.to_le_bytes());
+                h.write(row.b_r_ps.to_le_bytes());
+                h.write(row.t_fixed_ms.to_le_bytes());
+                h.write(row.canonical_positions.to_le_bytes());
+                h.write(row.leaves_per_position.to_le_bytes());
             }
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
@@ -8848,6 +9110,11 @@ impl Params {
             // dropped, instead of silently disarming R-core+.
             palw_rcore_plus: self.palw_rcore_plus,
             palw_rcore_conservative_classes: self.palw_rcore_conservative_classes,
+            // ADR-0152 §4-quater: CARRIED like R-core+, never reset — an overridden testnet-12 then fails
+            // `validate_palw_v2` on a prerequisite the override dropped instead of silently reopening
+            // the 2M row.
+            palw_class_verify_deadline: self.palw_class_verify_deadline,
+            palw_class_verify_rows: self.palw_class_verify_rows,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -9851,6 +10118,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_class_verify_deadline: None,
+    palw_class_verify_rows: &[],
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10070,6 +10339,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_class_verify_deadline: None,
+    palw_class_verify_rows: &[],
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10271,6 +10542,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_class_verify_deadline: None,
+    palw_class_verify_rows: &[],
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -15994,6 +16267,13 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // `sync_palw_rcore_plus` where the bundle is assembled.
     params.palw_rcore_plus = Some(at);
     params.palw_rcore_conservative_classes = &PALW_T12_RCORE_CONSERVATIVE_CLASSES;
+    // **ADR-0152 §4-quater** (`Params::palw_class_verify_deadline`), by name: a claim's verification
+    // deadline is its class's, in the registry's units (a registry span is 5 DAA, not this lane's
+    // 1-DAA span); `Final` waits for it; and a class whose deadline needs a measurement — the 2M row —
+    // takes no claim until a flag day installs a measured row (U-D1). The rows are empty at genesis.
+    // Its prerequisites (§11.3's receipt window, the derived free-prompt work) are armed at 0 by pass
+    // 2's walk. The bundle's mirror is re-made by `sync_palw_class_verify_deadline`.
+    params.palw_class_verify_deadline = Some(at);
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
@@ -16364,6 +16644,9 @@ pub fn palw_v2_params_on_base(
     // ADR-0152 R-core+, for the same reason and in the same place: the fence's height, the
     // processor's withdrawal delay and C7's list, mirrored onto the bundle this function built.
     params.sync_palw_rcore_plus();
+    // ADR-0152 §4-quater, for the same reason and in the same place: the fence's height and its
+    // measured rows, mirrored onto the bundle this function built.
+    params.sync_palw_class_verify_deadline();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -16515,6 +16798,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_class_verify_deadline: None,
+    palw_class_verify_rows: &[],
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -16712,6 +16997,205 @@ mod consensus_params_id_tests {
         assert_ne!(t12.consensus_identity_id(), without.consensus_identity_id(), "in force from block one separates identities");
         assert_ne!(t12.consensus_params_id(), without.consensus_params_id(), "testnet-12's ruleset names the fence");
         assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and so does its schedule");
+    }
+
+    /// testnet-12's pruning depth (ADR-0152 §4-quater P-1, U-D3): the D_cap claim lattice, 74,920,
+    /// which the finality-offset rounding leaves as it is. testnet-11's stays 12,002.
+    const T12_PRUNING_DEPTH: u64 = 74_920;
+
+    /// **T-D7 (the fence part): ADR-0152 §4-quater's class-verify-deadline fence is armed at genesis,
+    /// over §11.3's receipt window and the derived free-prompt work, or refused** — testnet-12 alone
+    /// arms it, at DAA 0, with empty rows, mirrored into its bundle, and validates; every other preset
+    /// leaves it and its rows unset. Refused by name: a later height, §11.3 absent or later, the
+    /// derived work absent, rows without the fence, a row that prices nothing or overshoots D_cap, a
+    /// class named twice, a row before `palw_offence_attribution`, and a bundle whose mirrors disagree.
+    /// `never()` collapses to `None`; a future height moves only the schedule; the fence in force
+    /// moves testnet-12's identity, params and schedule ids; a non-empty row set moves the params id.
+    /// Independent of `palw_offence_attribution`: the fence validates with that fence taken away.
+    #[test]
+    fn the_class_verify_deadline_fence_is_genesis_only_over_its_prerequisites() {
+        use crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1;
+        const ROW0: PalwClassVerifyRowV1 = PalwClassVerifyRowV1 {
+            class_id: crate::Hash64::from_bytes([7u8; 64]),
+            activation_daa: 0,
+            a_r_ps: 1_000_000_000_000,
+            b_r_ps: 0,
+            t_fixed_ms: 60_000,
+            canonical_positions: 1_000,
+            leaves_per_position: 10,
+        };
+        static ROW: [PalwClassVerifyRowV1; 1] = [ROW0];
+        static TWICE: [PalwClassVerifyRowV1; 2] = [ROW0, ROW0];
+        static FREE: [PalwClassVerifyRowV1; 1] = [PalwClassVerifyRowV1 { a_r_ps: 0, ..ROW0 }];
+        static OVER: [PalwClassVerifyRowV1; 1] = [PalwClassVerifyRowV1 { a_r_ps: 1_000_000_000_000_000, ..ROW0 }];
+        let t12 = Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+        assert_eq!(t12.palw_class_verify_deadline, Some(ForkActivation::always()), "testnet-12 arms it from genesis");
+        assert!(t12.palw_class_verify_rows.is_empty(), "no measured row at launch: the 2M row is closed (U-D1)");
+        assert!(t12.palw_class_verify_deadline_active_at(0));
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else { panic!("a V2 network") };
+        assert_eq!(bundle.state.class_verify_deadline_from_daa(), Some(0), "the bundle mirrors the fence");
+        assert!(bundle.state.class_verify_rows().is_empty());
+        t12.validate_palw_v2().expect("testnet-12 validates with the fence");
+        for (name, p) in
+            [("mainnet", mainnet_shipped_params()), ("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())]
+        {
+            assert_eq!(p.palw_class_verify_deadline, None, "{name}: dormant");
+            assert!(p.palw_class_verify_rows.is_empty(), "{name}: no rows");
+            assert!(!p.palw_class_verify_deadline_active_at(u64::MAX), "{name}: never in force");
+            if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode {
+                assert_eq!(b.state.class_verify_deadline_from_daa(), None, "{name}: no mirror");
+            }
+        }
+        // Each refusal is asked of the fence's own validator, so no unrelated rule of the edited
+        // preset answers first; `validate_palw_v2` runs it (the first case, asked through both).
+        let refused_with = |edit: &dyn Fn(&mut Params), needle: &str| {
+            let mut p = t12.clone();
+            edit(&mut p);
+            let refused = p.validate_palw_class_verify_deadline_v1();
+            let why = match &refused {
+                Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why)) => why.to_string(),
+                Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned(why)) => why.clone(),
+                other => panic!("{needle}: {other:?}"),
+            };
+            assert!(why.contains(needle), "{needle}: {why}");
+        };
+        let later = |p: &mut Params| {
+            p.palw_class_verify_deadline = Some(ForkActivation::new(1));
+            p.sync_palw_class_verify_deadline();
+        };
+        refused_with(&later, "palw_class_verify_deadline may only be armed at genesis");
+        let mut via_v2 = t12.clone();
+        later(&mut via_v2);
+        assert!(
+            matches!(via_v2.validate_palw_v2(), Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why)) if why.contains("palw_class_verify_deadline may only be armed at genesis")),
+            "validate_palw_v2 runs the fence's validator"
+        );
+        refused_with(
+            &|p| p.set_palw_class_receipt_window(Some(ForkActivation::new(5))),
+            "palw_class_verify_deadline is armed without palw_class_receipt_window",
+        );
+        refused_with(&|p| p.palw_fp_derived_work = None, "palw_class_verify_deadline is armed without palw_fp_derived_work");
+        refused_with(
+            &|p| p.set_palw_short_challenge_window(None),
+            "palw_class_verify_deadline is armed without palw_short_challenge_window",
+        );
+        refused_with(
+            &|p| {
+                p.palw_class_verify_deadline = None;
+                p.palw_class_verify_rows = &ROW;
+                p.sync_palw_class_verify_deadline();
+            },
+            "palw_class_verify_rows is non-empty without palw_class_verify_deadline armed",
+        );
+        refused_with(
+            &|p| {
+                p.palw_class_verify_deadline = None;
+                p.sync_palw_class_verify_deadline();
+                if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut p.palw_consensus_mode {
+                    b.state = b.state.clone().with_class_verify_deadline(Some(0), Vec::new());
+                }
+            },
+            "the V2 bundle carries class-verify-deadline mirrors without palw_class_verify_deadline armed",
+        );
+        refused_with(&|p| p.palw_class_verify_rows = &ROW, "disagree with the V2 bundle's mirrors");
+        for (rows, needle) in [
+            (&TWICE[..], "names one class twice"),
+            (&FREE[..], "measures a replay that costs nothing"),
+            (&OVER[..], "canonical deadline exceeds D_cap"),
+        ] {
+            refused_with(
+                &|p| {
+                    p.palw_class_verify_rows = rows;
+                    p.sync_palw_class_verify_deadline();
+                },
+                needle,
+            );
+        }
+        // P-1 / E-11 / T-D8b: testnet-12 carries the horizon its claims can reach. Its pruning depth is
+        // the claim lattice past the fence — `2(600 + D_cap) + 1,200 + 3,000 + R_eff span` — laid out as
+        // every V2 depth is (`palw_v2_pruning_depth_for_lattice_v1`); a measured row validates on
+        // testnet-12's own params; and one DAA short of the lattice `validate_palw_v2` refuses the
+        // ruleset (K18), row or no row, since the lattice past the fence is the D_cap one.
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(t12_bundle) = &t12.palw_consensus_mode else { unreachable!() };
+        let reff = palw_class_verify_reff_span_daa_v1(&t12_bundle.state);
+        assert_eq!(reff, 2 * (600 + 16_000) + 120 + 3_000 + 1_200, "R_eff's span at D_cap: 37,520");
+        let lattice = palw_v2_claim_lattice_daa_v1(t12_bundle, t12.palw_da_court, t12.palw_class_verify_deadline);
+        assert_eq!(lattice, 2 * (600 + 16_000) + 1_200 + 3_000 + reff, "the D_cap lattice (U-D3)");
+        assert_eq!(lattice, 74_920);
+        assert_eq!(
+            palw_v2_claim_lattice_daa_v1(t12_bundle, t12.palw_da_court, None),
+            2 * (600 + 600) + 1_200 + 3_000 + 5_400,
+            "below the fence the lattice is the one it always was"
+        );
+        assert_eq!(
+            t12.blockrate.pruning_depth,
+            palw_v2_pruning_depth_for_lattice_v1(&t12.blockrate, t12_bundle, lattice),
+            "testnet-12's depth IS the derivation"
+        );
+        assert_eq!(t12.blockrate.pruning_depth, T12_PRUNING_DEPTH, "testnet-12's pruning depth, pinned");
+        let mut rowed = t12.clone();
+        rowed.palw_class_verify_rows = &ROW;
+        rowed.sync_palw_class_verify_deadline();
+        rowed.validate_palw_v2().expect("a measured row validates on testnet-12's own horizon");
+        for with_row in [false, true] {
+            let mut short = if with_row { rowed.clone() } else { t12.clone() };
+            short.blockrate.pruning_depth = lattice - 1;
+            let refused = short.validate_palw_v2();
+            assert!(
+                matches!(&refused, Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why)) if why.contains("the claim lattice outlives the pruning horizon")),
+                "one DAA short of the D_cap lattice (row {with_row}): {refused:?}"
+            );
+            short.blockrate.pruning_depth = lattice;
+            short.validate_palw_v2().expect("at the lattice exactly");
+        }
+        // A measured row moves the params id (not the schedule); before `palw_offence_attribution` it
+        // is refused (U-D8).
+        assert_ne!(rowed.consensus_params_id(), t12.consensus_params_id(), "a row is a rule: the params id names it");
+        assert_eq!(rowed.consensus_schedule_id(), t12.consensus_schedule_id(), "a row is not a fence height");
+        refused_with(
+            &|p| {
+                p.palw_class_verify_rows = &ROW;
+                p.palw_offence_attribution = None;
+                p.palw_rcore_plus = None;
+                p.palw_rcore_conservative_classes = &[];
+                p.sync_palw_rcore_plus();
+                p.sync_palw_class_verify_deadline();
+            },
+            "activates before palw_offence_attribution",
+        );
+        // Independent of `palw_offence_attribution`: with no row, the fence stands without it.
+        let mut unattributed = t12.clone();
+        unattributed.palw_offence_attribution = None;
+        unattributed.palw_rcore_plus = None;
+        unattributed.palw_rcore_conservative_classes = &[];
+        unattributed.sync_palw_rcore_plus();
+        unattributed.validate_palw_class_verify_deadline_v1().expect("the fence does not ride the attribution fence");
+        // The ids: `never()` is absence; a future height is a schedule entry only; in force from
+        // genesis it separates testnet-12's identity, params and schedule.
+        let mut without = t12.clone();
+        without.palw_class_verify_deadline = None;
+        without.sync_palw_class_verify_deadline();
+        without.validate_palw_class_verify_deadline_v1().expect("the fence-off twin is consistent");
+        let mut never_armed = t12.clone();
+        never_armed.palw_class_verify_deadline = Some(ForkActivation::never());
+        assert_eq!(
+            never_armed.consensus_identity_id(),
+            without.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+        let mut scheduled = without.clone();
+        scheduled.palw_class_verify_deadline = Some(ForkActivation::new(1_000));
+        assert_eq!(scheduled.consensus_identity_id(), without.consensus_identity_id(), "a future height is not yet a rule");
+        assert_ne!(scheduled.consensus_schedule_id(), without.consensus_schedule_id(), "but the schedule names it");
+        assert_ne!(t12.consensus_identity_id(), without.consensus_identity_id(), "in force from block one separates identities");
+        assert_ne!(t12.consensus_params_id(), without.consensus_params_id(), "testnet-12's ruleset names the fence");
+        assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and so does its schedule");
+        assert!(
+            t12.palw_fences_v1()
+                .iter()
+                .any(|(name, fence)| *name == "palw_class_verify_deadline" && *fence == Some(ForkActivation::always())),
+            "registered in the fence list fork_id_v1 and the schedule id walk"
+        );
     }
 
     /// **ADR-0152 C7 on testnet-12 is the 2M row, pinned and derived** (U1): the literal
@@ -19115,12 +19599,12 @@ mod consensus_params_id_tests {
             checked += 1;
             assert_eq!(
                 preset.blockrate.pruning_depth,
-                palw_v2_pruning_depth_v1(&preset.blockrate, bundle, Some(fence)),
+                palw_v2_pruning_depth_v1(&preset.blockrate, bundle, Some(fence), preset.palw_class_verify_deadline),
                 "{name}: the shipped horizon is not the derivation — the identity's normalisation cannot reproduce it"
             );
             // …and the value the normalisation lands on is the derivation WITHOUT the DA term,
             // which is what the previous release shipped.
-            let without = palw_v2_pruning_depth_v1(&preset.blockrate, bundle, None);
+            let without = palw_v2_pruning_depth_v1(&preset.blockrate, bundle, None, preset.palw_class_verify_deadline);
             assert!(without < preset.blockrate.pruning_depth, "{name}: scheduling the court must widen the horizon");
         }
         assert!(checked > 0, "no shipped preset schedules the DA court — this test would pass by finding nothing");
@@ -19185,7 +19669,8 @@ mod consensus_params_id_tests {
             bundle.court_e2e_root = crate::Hash64::from_bytes(PALW_RC_FOUR_FAMILY_COURT_E2E_ROOT_BYTES);
         }
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &previous.palw_consensus_mode else { panic!("V2") };
-        previous.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None);
+        previous.blockrate.pruning_depth =
+            palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None, previous.palw_class_verify_deadline);
 
         // **The "previous" here WAS the build the testnet-11 fleet runs** (`71b35c25…`, the ADR-0083
         // flag day's), and this line pinned it until 2026-09-23. It cannot any more: the economic

@@ -450,7 +450,10 @@ fn t15_every_door_locks_l1s_price_with_the_attested_mask() {
 /// pinned through the same formula (processor extras, L1).
 #[test]
 fn t77_duty_bind_per_class_and_the_amplification_bound() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let (short, id2m) = model_classes(&p);
     let mut rows = Vec::new();
     for (name, class) in [("floor", None), ("8k", Some(short)), ("2M", Some(id2m))] {
@@ -514,7 +517,10 @@ fn t77_duty_bind_per_class_and_the_amplification_bound() {
 /// the vesting build will price are ADR §2's 22,252.74 / 33,379.11 MSK (processor extras, L1).
 #[test]
 fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let (_, id2m) = model_classes(&p);
     let mut c = model_chain(p.clone(), id2m, 1);
     let id = model_claim(&mut c, id2m, 1, 0x7801);
@@ -633,10 +639,14 @@ fn n1_on_the_floor_and_the_8k_row_the_licence_needs_no_top_up_and_five_valids_li
 /// it): the licence needs no top-up there, so every seat is backed whatever its room — a seat cannot
 /// be unbacked on those classes. The 2M row's duty is capped below its lock, so its licence takes the
 /// top-up from the seat's room, and that is where SR-6 bites. The fence-off twin keeps the floor.
+///
+/// ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the
+/// flag day that installs its measured row — the armed cases run there (`t12_2m_open`, measuring the
+/// derived 13,995-DAA deadline); the licence's pricing does not read the deadline.
 #[test]
 fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
     for (door, armed) in [("quorum", true), ("coverage", true), ("quorum", false)] {
-        let p = if armed { t12() } else { twin(&t12()) };
+        let p = if armed { t12_2m_open() } else { twin(&t12()) };
         let (mut c, id, seats) = if armed {
             let (_, id2m) = model_classes(&p);
             let mut c = model_chain(p.clone(), id2m, 1);
@@ -887,7 +897,12 @@ fn t17_u2_a_producer_below_the_floor_after_s0_prime_is_refused_until_it_re_regis
         let seats = c.floor_seats();
         for _ in 0..2 {
             let bound = c.bind(id, &seats);
-            let rw = c.sp.receipt_window_for_claim_v1(&c.s, &accepted.class_id, bound);
+            let rw = c.sp.receipt_window_for_claim_v1(
+                &c.s,
+                &accepted.class_id,
+                kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(&accepted),
+                bound,
+            );
             c.step_at(bound + rw + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
         }
         assert!(

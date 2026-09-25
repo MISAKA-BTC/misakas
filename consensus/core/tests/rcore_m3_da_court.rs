@@ -307,7 +307,10 @@ fn t69_da6_a_session_costs_r_times_the_stage_reward_base() {
 /// `committed + accuser + new ≤ C` would have admitted it; an identical bond with no court accuses.
 #[test]
 fn m1_a_da_accusation_is_refused_past_the_accusers_free_half() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let (_, id2m) = model_classes(&p);
     let mut c = model_chain(p, id2m, 1);
     let two_m = model_claim(&mut c, id2m, 1, 0xA6);

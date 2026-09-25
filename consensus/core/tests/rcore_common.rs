@@ -167,10 +167,15 @@ impl Chain {
         self.daa
     }
 
-    /// Finalize by stepping past the challenge window.
+    /// Finalize by stepping one block past the claim's Final deadline. Restated for ADR-0152 §4-quater
+    /// V4: the deadline is DL-1's licensed floor `max(L + wc, H)` — `L + wc` for every claim whose
+    /// verification horizon lies inside its challenge window (the floor's and the 8k row's), the
+    /// horizon for a long-D claim (a 2M claim past the flag day) — where it was `L + wc` alone.
     pub fn finalize(&mut self, claim: Hash64) {
         let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = self.claim(&claim).phase else { panic!("licensed first") };
-        let at = licensed_daa + self.sp.window_challenge_at(licensed_daa) + 1;
+        let deadline = self.s.deadline_of(&claim).expect("a licensed claim with no court or pause owes its Final deadline");
+        assert!(deadline >= licensed_daa + self.sp.window_challenge_at(licensed_daa), "never before the challenge window");
+        let at = deadline + 1;
         self.step_at(at, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
         assert!(matches!(self.claim(&claim).phase, PalwClaimPhaseV2::Final { .. }), "Final at {at}");
     }
