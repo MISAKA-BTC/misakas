@@ -4,6 +4,59 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
+## The stack: one chain, one app
+
+misakas is built the way [Hyperliquid](https://hyperliquid.xyz) is built, and borrows its shape on
+purpose: **a purpose-built L1 whose native state machine does the product's core work, an EVM
+lane beside it that reads and writes that state, and a first-party web app on its own domain.**
+Hyperliquid has its L1 (HyperCore + HyperEVM) and the app at `hyperliquid.xyz`; MISAKA has this
+repository and the app at **[misakaoptions.com](https://misakaoptions.com)**.
+
+| | Hyperliquid | MISAKA |
+|---|---|---|
+| the L1 | HyperCore — the order book lives in consensus | **misakas** (this repo) — PQ-only BlockDAG; blocks are won by *verified LLM inference* (PALW), and the model store lives in consensus |
+| the EVM lane | HyperEVM, reading and writing HyperCore through precompiles | the MISAKA EVM lane (chain id `0x4D534B`), reading the fold through read precompiles and writing through the native doors ([ADR-0089](docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)) |
+| the app | **hyperliquid.xyz** — trade perps and spot | **[misakaoptions.com](https://misakaoptions.com)** — join and leave AI models' stores |
+| the explorer | the Hyperliquid explorer | **[misakascan.com](https://misakascan.com)** |
+| the wallet | any EVM wallet | **[MISAKA Wallet](https://wallet.misakascan.com)** (ML-DSA-87), MetaMask or any EIP-1193 wallet on the EVM lane |
+| run a node | [`hyperliquid-dex/node`](https://github.com/hyperliquid-dex/node) | [Running a testnet node](#running-a-testnet-node) below |
+
+### misakaoptions.com
+
+**[misakaoptions.com](https://misakaoptions.com)** is the front-end for the chain's **model
+store**. On a PALW chain the models that mine blocks are first-class on-chain objects — a class
+with a registered graph, an owner, versions and a counted record of the inferences it served — and
+every model can have a store. What a store sells is a **membership**: access the model's owner
+declares on chain, and that the fold enforces where it can
+([ADR-0095](docs/adr/0095-a-position-is-a-membership-not-an-income.md)).
+
+- **One curve per model, no order book.** Memberships are whole units (500,000 per store), bought
+  from the line's protocol curve and sold back to it, never transferred
+  ([ADR-0087](docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md),
+  [ADR-0090](docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)).
+  Every join and leave burns part of its MSK leg and pays the model's owner a leg
+  ([ADR-0114](docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)); the
+  curve's reserve never falls under the opening deposit.
+- **A store is opened by somebody paying for it.** The opening deposit is real MSK, locked in the
+  curve for good, and buys its payer nothing
+  ([ADR-0120](docs/adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md) sets the least seed).
+- **Mining buys the pair; no holder is paid.** A membership is access, not an income
+  ([ADR-0091](docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)).
+- **Every figure is the chain's.** Each number on the site is an RPC reply or the chain's own curve
+  arithmetic applied to a market row — or a dash. No server side, no build step, no CDN: four
+  static files in [`web/misaka-options/`](web/misaka-options/), which a reader can serve locally
+  (`?mock=1` for a simulated node and wallet).
+
+Pages: **Store** (a model's price list, membership card and the Join/Leave desk), **My
+memberships**, **Models**, **Rankings** (by use, members, what mining bought back), **List a model**
+(the checklist from a registered class to an open store) and **How it works**.
+
+![misakaoptions.com — a model's store](web/misaka-options/screenshots/store.png)
+
+Configuration, deployment and the site-to-chain vocabulary are in
+[`web/misaka-options/README.md`](web/misaka-options/README.md). misakaoptions.com is testnet
+software on a testnet chain: MSK on it has no value, and nothing on it is an offer of an investment.
+
 > [!IMPORTANT]
 > **Current status (2026-09-25).** The public network is **`testnet-12`** (R-core+, ADR-0152 v3.1),
 > launched on 2026-09-25/26 JST from release commit **`0e8ec984e`** (current `main`). Run it with
