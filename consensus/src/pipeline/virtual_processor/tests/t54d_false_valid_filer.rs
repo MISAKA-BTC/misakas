@@ -17,16 +17,22 @@
 //! capture at the faulted leaf, with its operand openings, in the network's carriage (`H::carried`,
 //! the sampler's `palw_refutation_prompt_carriage_v1`) — or a court close's arithmetic form of the
 //! same refutation (`PalwFalseValidProofV1::of_court_close_v1`). What does NOT run here is kaspad
-//! itself — the book, the chain walk and the seam are `kaspad::palw_filer_false_valid`'s unit tests
-//! (the scan over a stubbed chain included); the seam queues the filing's `object` unchanged, which
-//! those tests pin. A node e2e on a devnet preset is post-launch (the operator moved every drill and
-//! node launch after the t12 launch, 2026-09-24).
+//! itself — the book, the chain walk and the door to P2-8's reporter filer are
+//! `kaspad::palw_filer_false_valid`'s unit tests (the scan over a stubbed chain included); the door
+//! hands the filing's `object` unchanged, keyed as the filer keys it, which those tests pin. Since the
+//! integration of the three Phase 2 lanes every filing takes the reporter filer's road, so the main
+//! test here does too (P2-8's `Filing`, `commit_then_file_all` and `reveal_and_paid`): the bystander's
+//! commitments root, the evidence folds, and its reward R arrives after the reveal. A node e2e on a
+//! devnet preset is post-launch (the operator moved every drill and node launch after the t12 launch,
+//! 2026-09-24).
 use super::*;
 use kaspa_consensus_core::palw_false_valid_filing_v1::{
     PALW_FALSE_VALID_RECEIPTS_PER_SEAT_V1, PalwFalseValidFilingCheckV1 as Check, PalwFalseValidFilingV1, PalwFalseValidPolicyV1,
     PalwFalseValidProofV1, palw_false_valid_admit_receipts_v1, palw_false_valid_filings_v1,
 };
 use kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_receipts_of_licence_v1;
+
+use super::t46_p2_8_reporter_filer::{Filing, commit_then_file_all, reveal_and_paid};
 
 /// The proof the capture arm holds for `claim`: its contradiction in the network's carriage.
 fn capture_proof(h: &H, claim: &RealClaim) -> PalwFalseValidProofV1 {
@@ -106,8 +112,11 @@ fn sorted(mut cards: Vec<usize>) -> Vec<usize> {
 /// Each object the node builds is byte for byte the suite's canonical V3-receipt evidence (`H::v2`),
 /// the two ride one block through the gate, the walk and the fold, and the conviction is T46b's: the
 /// seats' locks taken plus `min(25% · C₀, 3 G)`, the claim voided `CourtFraud` with S2 on its
-/// producer. Asked again after, both are `ConvictedBefore` — the node never files an offence twice —
-/// and a reward the conviction opened names the `evidence_id` the seam hands the reporter filer.
+/// producer. Both go the reporter filer's road (R-3): the bystander that proved the claim false
+/// commits to each (keyed as the chain keys it), the commitments root, the evidence folds two DAA
+/// later; asked again, both are `ConvictedBefore` — the node never files an offence twice — and each
+/// reward pends on the evidence the node filed, is revealed by the bystander, and arrives at its
+/// payout when the window closes.
 #[tokio::test]
 async fn t54d_the_capture_proof_files_every_liable_signer_and_the_funnel_charges_them() {
     let h = harness(true);
@@ -142,15 +151,20 @@ async fn t54d_the_capture_proof_files_every_liable_signer_and_the_funnel_charges
             assert_eq!(filing.not_liable, vec![filing.evidence_id], "recorded per receipt");
         }
     }
-    let objects: Vec<Obj> = filings.iter().filter(|f| f.files()).map(|f| f.object.clone()).collect();
-    let (licensed, _) = h.carry(&mut walk, objects);
+    // The reporter filer's road: each filing keyed as the filer keys it, committed, rooted, filed.
+    let reported: Vec<Filing> = filings
+        .iter()
+        .filter(|f| f.files())
+        .zip(0xD0u8..)
+        .map(|(f, salt)| {
+            let reported = Filing::of(f.object.clone(), [salt; 32]);
+            assert_eq!((reported.key, reported.evidence_id), (f.offence_id, f.evidence_id), "the filer keys it as the chain does");
+            reported
+        })
+        .collect();
+    let (licensed, committed_at) = commit_then_file_all(&h, &mut walk, &reported, BYSTANDER);
     let filed: Vec<usize> = filings.iter().filter(|f| f.files()).map(|f| h.card_of(&f.accused)).collect();
     assert_convicted_before_final(&h, &licensed, &walk.state, id, &filed, walk.daa);
-    for filing in filings.iter().filter(|f| f.files()) {
-        if let Some(pending) = walk.state.reward_pending(&filing.offence_id) {
-            assert_eq!(pending.evidence_id, filing.evidence_id, "the reward rests on the evidence the seam recorded (N12)");
-        }
-    }
     // Asked again: the chain has both; the rest are still not liable. Nothing files twice.
     let again = filings_at(&h, &walk, &proof, &receipts, BYSTANDER);
     assert!(again.iter().all(|f| !f.files()), "{:?}", again.iter().map(|f| &f.check).collect::<Vec<_>>());
@@ -160,7 +174,9 @@ async fn t54d_the_capture_proof_files_every_liable_signer_and_the_funnel_charges
             assert_eq!(filing.check, Check::ConvictedBefore { offence_id: filing.offence_id, accepted_daa: walk.daa }, "card {card}");
         }
     }
-    h.reloads(&walk.state);
+    // R-3/R-4: each reward rests on the evidence the node filed (N12), and arrives after the reveal.
+    let paid = reveal_and_paid(&h, &mut walk, &reported, BYSTANDER, committed_at);
+    assert_eq!(paid.len(), 2, "one reward a conviction, both the bystander's");
 }
 
 /// **T54d after `Final`: the same proof, filed once the claim finalised, reverses the `Final`** and

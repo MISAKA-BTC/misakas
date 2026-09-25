@@ -1,10 +1,17 @@
 //! **ADR-0152 v3.1 R-3 (Phase 2, P2-8): the reporter's commit–reveal filer — the one path every
-//! conviction this node files on its OWN evidence takes — and the two automatic filings that feed
-//! it: `ExecutorRefuted` from the capture arm (SR-8, J-4, C-5) and J1 auto (§3.9's borrowed
-//! strategy, J-6).**
+//! conviction this node files on its OWN evidence takes — and what feeds it: `ExecutorRefuted` from
+//! the capture arm (SR-8, J-4, C-5), J1 auto (§3.9's borrowed strategy, J-6), P2-8c's
+//! `PanelFalseValidV2` against every liable `Valid` signer (N10, `palw_filer_false_valid`) and P2-8b's
+//! `ExecutorRefuted` from a replay bisection (`palw_filer_replay`).**
 //!
 //! A child of `palw_panel` (declared there with `#[path]`), so its thin call sites stay one line
-//! each and the panel's own signer, ledger and backend seam are reused rather than restated.
+//! each and the panel's own signer, ledger and backend seam are reused rather than restated. The
+//! other two lanes reach it through ONE door, [`PalwConvictionDoorV1`] (the panel's is
+//! [`PalwPanelConvictionDoorV1`]): whether the book holds an offence, and [`PalwReporterFilerV1::file`]
+//! through the panel's [`PalwPanelService::reporter_filer_file_v1`] — so every filing is committed
+//! over this node's own bond, keyed by its offence (one filing an offence at a time, whichever lane
+//! found it: a capture-arm fault and a replay bisection of one claim are one kind-4 key), and never
+//! made against this node's own bond.
 //!
 //! ## Why a filer, and its order
 //!
@@ -49,7 +56,8 @@
 //!
 //! ## What goes through it — and what does not
 //!
-//! Only filings whose conviction opens a commit–reveal reward:
+//! Only filings whose conviction opens a commit–reveal reward — the capture arm's and J1's kind 4,
+//! P2-8b's kind 4 and P2-8c's kind 3 (an execution-proving step refutation):
 //! `palw_filed_offence_commit_key_v1` answers `Some(key)` for kind 4, kind 3 on an
 //! execution- or claim-proving contradiction, and a standalone kind 0 — and `None` for everything
 //! else. **P2-6's automatic filings earn R by NAME, never by commitment**, and stay on their own
@@ -150,6 +158,14 @@ pub(crate) const PALW_FILER_MAX_SENDS_V1: u8 = 3;
 /// against a receipt window of 600 DAA.
 pub(crate) const PALW_FILER_COMMIT_DEPTH_DAA_V1: u64 = 2;
 
+/// **The filings one lane hands this filer for one offence** (the integration of P2-8b/8c with P2-8):
+/// the first, and one more once the first left the book unconvicted (`Stalled` or `Expired`, or a
+/// conviction a reorg took back after the book let it go) — the same "two carriers, one lost
+/// forgiven" P2-8b's lane had, now counted in filings, each of which sends each object at most
+/// [`PALW_FILER_MAX_SENDS_V1`] times. The lanes count it (the book forgets a finished filing); the
+/// book's own key is the "never twice at once" half.
+pub(crate) const PALW_FILER_HAND_OFFS_PER_OFFENCE_V1: u8 = 2;
+
 /// **The live filings one book holds.** Four times a bond's open commitments
 /// (`PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1`): a node with more convictions in flight than that
 /// is being flooded, and a filing refused here is logged, never silently dropped.
@@ -208,10 +224,14 @@ pub(crate) enum PalwFilingOriginV1 {
     /// J1 auto: a held capture reproduces the claim's committed root under another job. Handed back
     /// expired: the claim's probes are released.
     BorrowedRoot = 1,
-    /// Another lane's evidence routed through the filer (P2-8b's and P2-8c's builders, at the
-    /// integration of the three Phase 2 lanes). Handed back with its `fallback`, if it gave one.
-    #[allow(dead_code)]
-    Other = 2,
+    /// P2-8c's `PanelFalseValidV2` against one `Valid` signer (`palw_filer_false_valid`). Nothing is
+    /// handed back: that lane reads the key leaving this book as "no longer in flight" and asks the
+    /// chain again at its next walk (a filing that ended unconvicted is handed to the filer once more,
+    /// [`PALW_FILER_HAND_OFFS_PER_OFFENCE_V1`]).
+    FalseValid = 2,
+    /// P2-8b's `ExecutorRefuted` from a replay bisection (`palw_filer_replay`). Handed back as
+    /// [`Self::FalseValid`]: that lane hands it once more while the claim's duty stands.
+    Replay = 3,
 }
 
 /// **One conviction this node files — the filer's whole input.** Built by
@@ -508,6 +528,27 @@ impl PalwReporterFilerV1 {
         self.entries.get(offence_key)
     }
 
+    /// **Whether a filing under `offence_key` is live in the book** — in flight, whichever lane filed
+    /// it: the other lanes neither hand it again nor replay its claim while it is.
+    pub(crate) fn holds(&self, offence_key: &Hash64) -> bool {
+        self.entries.contains_key(offence_key)
+    }
+
+    /// **A second finder's fallback, adopted by the filing already in the book** (the integration of
+    /// P2-8 with P2-8b): when the capture arm proves a fault whose kind-4 key P2-8b's replay filer
+    /// already filed, its one-move court accusation becomes that filing's `fallback` (if it has none),
+    /// so a stall of the replay's filing still hands the proven fault to the court — F3's guarantee
+    /// whichever lane filed first. Returns whether it was adopted.
+    pub(crate) fn adopt_fallback_v1(&mut self, offence_key: &Hash64, fallback: Option<(Hash64, PalwConsensusObjectV2)>) -> bool {
+        let Some(entry) = self.entries.get_mut(offence_key) else { return false };
+        if entry.fallback.is_some() || fallback.is_none() {
+            return false;
+        }
+        entry.fallback = fallback;
+        self.dirty = true;
+        true
+    }
+
     /// **The entry point: take one filing into the book.** `read` is the chain's read of it WITH the
     /// gate's verdict on its evidence (the caller asked for it with the commitment `salt` makes);
     /// `sign` signs the commitment with this node's bond key. Commits only where R-3 is live and the
@@ -717,9 +758,11 @@ impl PalwReporterFilerV1 {
     /// carrier and the filer never reads them). `Expired` or `Stalled` (F3): a proven fault must not
     /// go unfiled because kind 4 did not land, so its `fallback` — the capture arm's one-move
     /// accusation — is queued if the gate admits it now; if there is none, or the gate refuses it,
-    /// the claim leaves the seat's `accused` set so the named-leaf pursuit (ADR-0111 Decision 6) may
-    /// still file. A J1 filing that expired releases its claim's probes (a stalled one keeps them:
-    /// the fold drops what the gate admits, and probing again would only file it again).
+    /// the capture arm's claim leaves the seat's `accused` set so the named-leaf pursuit (ADR-0111
+    /// Decision 6) may still file. A J1 filing that expired releases its claim's probes (a stalled one
+    /// keeps them: the fold drops what the gate admits, and probing again would only file it again).
+    /// P2-8b's and P2-8c's filings need nothing here: their lanes read the key's leaving as the end
+    /// of the flight and ask the chain again ([`PALW_FILER_HAND_OFFS_PER_OFFENCE_V1`]).
     fn hand_back_v1(
         &mut self,
         entry: &PalwFilerEntryV1,
@@ -759,7 +802,12 @@ impl PalwReporterFilerV1 {
                 }
             });
         match entry.origin {
+            // The capture arm's own filing, or another lane's that adopted its accusation
+            // ([`Self::adopt_fallback_v1`]): the claim is the capture arm's to let go of.
             PalwFilingOriginV1::CaptureArm if !fallback_queued => {
+                accused.remove(&entry.claim_id);
+            }
+            _ if entry.fallback.is_some() && !fallback_queued => {
                 accused.remove(&entry.claim_id);
             }
             PalwFilingOriginV1::BorrowedRoot if end == PalwFilerEndV1::Expired => self.release_claim_probes_v1(&entry.claim_id),
@@ -876,7 +924,164 @@ pub(crate) fn palw_capture_arm_filing_v1(
     PalwConvictionFilingV1::of_offence(object, claim_id, Some(palw_filer_file_by_v1(receipt_deadline)), PalwFilingOriginV1::CaptureArm)
 }
 
+/// **The door the other lanes file through** (the integration of P2-8b and P2-8c with P2-8): the
+/// two questions a lane asks of the reporter filer, and nothing else — so a lane's book is tested
+/// against the filer's real rule ([`PalwReporterFilerV1::file`]) without a node, and the panel's door
+/// ([`PalwPanelConvictionDoorV1`]) is the one place a lane's filing meets this node's bond, salt and
+/// signer.
+pub(crate) trait PalwConvictionDoorV1 {
+    /// Whether the book holds a filing under `offence_key` — in flight, whichever lane filed it.
+    fn holds(&self, offence_key: &Hash64) -> bool;
+    /// Hand `filing` to the filer: committed over this node's bond, filed, revealed — or refused
+    /// ([`PalwFileOutcomeV1`]: already in the book, already convicted, this node's own bond, not
+    /// admitted by the gate, a full book, no tip state).
+    fn file(&mut self, filing: PalwConvictionFilingV1) -> PalwFileOutcomeV1;
+}
+
+/// **The panel's door**: the book in the panel loop, this node's bond and domain, and
+/// [`PalwPanelService::reporter_filer_file_v1`] (a fresh salt, the chain's read with the gate on the
+/// evidence, the commitment signed with the bond key, the book persisted).
+pub(crate) struct PalwPanelConvictionDoorV1<'a> {
+    service: &'a PalwPanelService,
+    session: &'a kaspa_consensusmanager::ConsensusProxy,
+    filer: &'a mut PalwReporterFilerV1,
+    reporter: PalwBondKeyV2,
+    network_domain: Hash64,
+}
+
+impl PalwConvictionDoorV1 for PalwPanelConvictionDoorV1<'_> {
+    fn holds(&self, offence_key: &Hash64) -> bool {
+        self.filer.holds(offence_key)
+    }
+
+    fn file(&mut self, filing: PalwConvictionFilingV1) -> PalwFileOutcomeV1 {
+        self.service.reporter_filer_file_v1(self.session, self.filer, filing, self.reporter, &self.network_domain)
+    }
+}
+
+/// **A door over a REAL book with a stubbed chain**, for the lanes' tests: the book's own rule
+/// ([`PalwReporterFilerV1::file`]: one filing an offence at a time, never this node's bond, the gate's
+/// word) at `read`, a fixed salt and signer; every hand-off logged with its outcome.
+#[cfg(test)]
+pub(crate) struct PalwBookDoorV1 {
+    pub book: PalwReporterFilerV1,
+    pub reporter: PalwBondKeyV2,
+    /// The chain's read of every filing, the gate's verdict on its evidence included.
+    pub read: PalwReporterFilingReadV1,
+    /// Every filing handed, with the book's answer, in order.
+    pub handed: Vec<(PalwConvictionFilingV1, PalwFileOutcomeV1)>,
+}
+
+#[cfg(test)]
+impl PalwBookDoorV1 {
+    /// An empty book for `reporter` at `now_daa`: R-3 live, room to commit, nothing rooted or
+    /// convicted, the gate admitting.
+    pub(crate) fn new(reporter: PalwBondKeyV2, now_daa: u64) -> Self {
+        let read = PalwReporterFilingReadV1 {
+            now_daa,
+            rcore_plus: true,
+            window_court: 3_000,
+            reporter_may_commit: true,
+            committed_daa: None,
+            consumed: None,
+            pending: None,
+            awarded: None,
+            object_gate: Some(Ok(())),
+        };
+        Self { book: PalwReporterFilerV1::default(), reporter, read, handed: Vec::new() }
+    }
+
+    /// The offence keys handed and taken (`Queued`), in order.
+    pub(crate) fn queued(&self) -> Vec<Hash64> {
+        self.handed
+            .iter()
+            .filter(|(_, outcome)| matches!(outcome, PalwFileOutcomeV1::Queued { .. }))
+            .map(|(filing, _)| filing.offence_key)
+            .collect()
+    }
+
+    /// **Every live filing ends unconvicted**: the book ticked past its court window, as the real
+    /// tick ends one (`Expired`), its leftovers pruned. Returns how many ended.
+    pub(crate) fn expire_all(&mut self) -> usize {
+        let past = PalwReporterFilingReadV1 { now_daa: self.read.now_daa + self.read.window_court + 1, ..self.read.clone() };
+        let ended = self.book.tick(&mut Vec::new(), &mut HashMap::new(), &mut HashSet::new(), |_, _| Some(past.clone()));
+        assert!(ended.iter().all(|(_, end)| *end == PalwFilerEndV1::Expired));
+        ended.len()
+    }
+}
+
+#[cfg(test)]
+impl PalwConvictionDoorV1 for PalwBookDoorV1 {
+    fn holds(&self, offence_key: &Hash64) -> bool {
+        self.book.holds(offence_key)
+    }
+
+    fn file(&mut self, filing: PalwConvictionFilingV1) -> PalwFileOutcomeV1 {
+        let signer = |message: &[u8], context: &[u8]| {
+            Some(blake2b_simd::Params::new().hash_length(64).key(context).hash(message).as_bytes().to_vec())
+        };
+        let outcome = self.book.file(filing.clone(), self.reporter, &self.read, &Hash64::from_u64_word(0xD0), [7; 32], signer);
+        self.handed.push((filing, outcome.clone()));
+        outcome
+    }
+}
+
+/// **A real step refutation on the floor** — leaf 0 of a floor run, with its rows and the network's
+/// Merkle prompt carriage: what the capture sampler holds at `FaultAt`. For the lanes' tests, so
+/// the evidence they hand the book is keyed exactly as the chain keys it (an execution-proving kind
+/// 3 or kind 4). Built once per test binary.
+#[cfg(test)]
+pub(crate) fn palw_floor_step_refutation_v1()
+-> &'static (PalwExecutionStepRefutationV1, Vec<PalwArtifactOpeningV1>, Option<PalwPromptIdsOpeningV1>) {
+    static REFUTATION: std::sync::OnceLock<(
+        PalwExecutionStepRefutationV1,
+        Vec<PalwArtifactOpeningV1>,
+        Option<PalwPromptIdsOpeningV1>,
+    )> = std::sync::OnceLock::new();
+    REFUTATION.get_or_init(|| {
+        use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("court");
+        let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("floor");
+        let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("root");
+        let backend =
+            misaka_palw_base0::backend::Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("resolves"))
+                .with_step_ladder_cap(court.max_step_leaf_count())
+                .with_prompt_ids_form(kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1);
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x5A_4D)).expect("job");
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, true);
+        let run = backend.execute(&job, &prompt).expect("a run");
+        let refutation = backend.refutation_for_index(&run.material, 0).expect("leaf 0 opens");
+        let openings = backend.operand_openings_for(&refutation).expect("its rows");
+        let (refutation, prompt_opening) = kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            refutation,
+        )
+        .expect("the prover's list is the job's");
+        (refutation, openings, prompt_opening)
+    })
+}
+
+/// **The lanes' `file_by` for an `ExecutorRefuted`** — the capture arm's own ([`palw_filer_file_by_v1`]
+/// of the duty's receipt deadline, which is never later than the chain's per-claim one), so kind 4
+/// from a replay waits on its commitment no longer than kind 4 from a capture sample does.
+pub(crate) fn palw_executor_refuted_file_by_v1(duty: &PalwSeatDutyV2) -> Option<u64> {
+    Some(palw_filer_file_by_v1(duty.receipt_deadline))
+}
+
 impl PalwPanelService {
+    /// **The panel's [`PalwConvictionDoorV1`]** over the loop's book, for this node's `reporter` bond.
+    pub(crate) fn conviction_door_v1<'a>(
+        &'a self,
+        session: &'a kaspa_consensusmanager::ConsensusProxy,
+        filer: &'a mut PalwReporterFilerV1,
+        reporter: PalwBondKeyV2,
+        network_domain: Hash64,
+    ) -> PalwPanelConvictionDoorV1<'a> {
+        PalwPanelConvictionDoorV1 { service: self, session, filer, reporter, network_domain }
+    }
+
     /// **The filer's entry point on the panel**: a fresh salt, the chain's read of the filing with
     /// the gate's verdict on its evidence, and the book's decision ([`PalwReporterFilerV1::file`]),
     /// the commitment signed with this node's bond key.
@@ -996,8 +1201,12 @@ impl PalwPanelService {
             return;
         }
         if let Some(filing) = refuted {
+            let key = filing.offence_key;
             match self.reporter_filer_file_v1(session, filer, filing.with_fallback(court.clone()), bond_key, network_domain) {
                 PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled | PalwFileOutcomeV1::AlreadyConvicted => {
+                    // Filed first by P2-8b's replay (one kind-4 key a claim): its filing keeps this
+                    // accusation as its fallback, so a stall still reaches the court.
+                    filer.adopt_fallback_v1(&key, court);
                     accused.insert(duty.claim_id);
                     return;
                 }
@@ -1345,7 +1554,7 @@ mod tests {
     /// lanes, V3S-03), and never a fold-recorded kind.
     #[test]
     fn only_commit_reveal_filings_take_the_filer() {
-        assert!(PalwConvictionFilingV1::of_offence(filing(9, None).object, h(9), None, PalwFilingOriginV1::Other).is_some());
+        assert!(PalwConvictionFilingV1::of_offence(filing(9, None).object, h(9), None, PalwFilingOriginV1::Replay).is_some());
         let restated = kaspa_consensus_core::palw_offence_attribution_v1::PalwPanelFalseValidEvidenceV2 {
             version: kaspa_consensus_core::palw_offence_attribution_v1::PALW_PANEL_FALSE_VALID_VERSION_V2,
             claim_id: h(9),
@@ -1370,16 +1579,16 @@ mod tests {
             evidence,
         };
         let kind3 = offence(PalwOffenceKindV1::PanelFalseValidV2, borsh::to_vec(&restated).unwrap());
-        assert!(PalwConvictionFilingV1::of_offence(kind3, h(9), None, PalwFilingOriginV1::Other).is_none(), "a restated CourtFraud");
+        assert!(PalwConvictionFilingV1::of_offence(kind3, h(9), None, PalwFilingOriginV1::Replay).is_none(), "a restated CourtFraud");
         for kind in [PalwOffenceKindV1::DaDefault, PalwOffenceKindV1::CourtConviction, PalwOffenceKindV1::PanelFalseValid] {
             assert!(
-                PalwConvictionFilingV1::of_offence(offence(kind, vec![1]), h(9), None, PalwFilingOriginV1::Other).is_none(),
+                PalwConvictionFilingV1::of_offence(offence(kind, vec![1]), h(9), None, PalwFilingOriginV1::Replay).is_none(),
                 "{kind:?}"
             );
         }
         let named =
             PalwConsensusObjectV2::DefaultAccused { claim: h(9), missing_event_index: 0, accuser: bond(ME), signature: vec![1] };
-        assert!(PalwConvictionFilingV1::of_offence(named, h(9), None, PalwFilingOriginV1::Other).is_none());
+        assert!(PalwConvictionFilingV1::of_offence(named, h(9), None, PalwFilingOriginV1::Replay).is_none());
     }
 
     /// **A restart with a reveal pending reveals.** The book is written, read back into a fresh
@@ -1461,6 +1670,58 @@ mod tests {
 
     /// Only this filer's objects on its rounds are its queue entries — never a court move, a P2-6
     /// accusation, or a P2-7 answer whose folded round happens to land on one of its rounds.
+    /// **One offence key, whichever lane files first** (the integration of P2-8 with P2-8b/8c). A
+    /// replay's kind 4 is in the book; the capture arm's kind 4 of the same claim is `AlreadyFiled`
+    /// (one filing an offence), and its court accusation is ADOPTED as the replay filing's fallback —
+    /// so when that filing stalls, the court still carries the proven fault if the gate admits it, and
+    /// otherwise the claim leaves `accused` for the named-leaf pursuit (F3's guarantee across lanes).
+    /// A fallback already set is never replaced, and a P2-8c filing is keyed per seat, apart.
+    #[test]
+    fn a_second_lanes_filing_of_one_offence_is_already_filed_and_its_fallback_is_adopted() {
+        let court_key = h(0xC0_2B);
+        let accusation =
+            PalwConsensusObjectV2::DefaultAccused { claim: h(24), missing_event_index: 0, accuser: bond(ME), signature: vec![2] };
+        let rooted = PalwReporterFilingReadV1 { committed_daa: Some(101), ..chain(160) };
+        for admitted in [true, false] {
+            let mut book = PalwReporterFilerV1::default();
+            let replay = PalwConvictionFilingV1 { origin: PalwFilingOriginV1::Replay, ..filing(24, None) };
+            let entry = filed(&mut book, replay, &chain(100));
+            let capture_arm = filing(24, None).with_fallback(Some((court_key, accusation.clone())));
+            assert_eq!(capture_arm.offence_key, entry.offence_key, "one kind-4 key a claim");
+            assert_eq!(
+                book.file(capture_arm.clone(), bond(ME), &chain(100), &h(DOMAIN), [8; 32], signer),
+                PalwFileOutcomeV1::AlreadyFiled
+            );
+            assert!(book.adopt_fallback_v1(&entry.offence_key, capture_arm.fallback.clone()));
+            assert!(!book.adopt_fallback_v1(&entry.offence_key, Some((h(1), accusation.clone()))), "never replaced");
+            assert_eq!(book.len(), 1);
+            let live = book.entries.get_mut(&entry.offence_key).unwrap();
+            (live.evidence_sent, live.evidence_sends) = (Some(150), PALW_FILER_MAX_SENDS_V1);
+            let (mut queue, mut accused) = (Vec::new(), HashSet::from([entry.claim_id]));
+            let ended = book.tick(&mut queue, &mut HashMap::new(), &mut accused, |_, gated| {
+                let object_gate = gated.map(|_| if admitted { Ok(()) } else { Err("the claim is final".to_string()) });
+                Some(PalwReporterFilingReadV1 { object_gate, ..rooted.clone() })
+            });
+            assert_eq!(
+                ended.iter().map(|(entry, end)| (entry.origin, *end)).collect::<Vec<_>>(),
+                vec![(PalwFilingOriginV1::Replay, PalwFilerEndV1::Stalled)]
+            );
+            if admitted {
+                assert_eq!(queue, vec![(court_key, 0, false, accusation.clone())], "the court carries the fault");
+                assert!(accused.contains(&entry.claim_id));
+            } else {
+                assert!(queue.is_empty() && !accused.contains(&entry.claim_id), "refused: the pursuit may file");
+            }
+        }
+        // A replay filing no capture arm backed hands nothing back to `accused`.
+        let mut book = PalwReporterFilerV1::default();
+        let entry = filed(&mut book, PalwConvictionFilingV1 { origin: PalwFilingOriginV1::Replay, ..filing(25, None) }, &chain(100));
+        book.entries.get_mut(&entry.offence_key).unwrap().evidence_sends = PALW_FILER_MAX_SENDS_V1;
+        let mut accused = HashSet::from([entry.claim_id]);
+        book.tick(&mut Vec::new(), &mut HashMap::new(), &mut accused, |_, _| Some(rooted.clone()));
+        assert!(accused.contains(&entry.claim_id) && book.len() == 0, "its lane re-hands it; the capture arm's set is untouched");
+    }
+
     #[test]
     fn the_filers_queue_entries_are_its_own() {
         let reveal = PalwConsensusObjectV2::ReporterRevealed { offence_key: h(1), reporter: bond(ME), salt: [0; 32] };

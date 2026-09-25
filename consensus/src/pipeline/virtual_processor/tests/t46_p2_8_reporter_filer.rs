@@ -23,17 +23,18 @@ use kaspa_consensus_core::palw_vesting_v1::palw_reporter_payout_key_v1;
 const SEAT: usize = PANEL[0];
 
 /// One filing as the node's filer holds it: the evidence object, the key it is consumed under, its
-/// evidence id and the salt of its commitment.
-struct Filing {
-    object: Obj,
-    key: Hash64,
-    evidence_id: Hash64,
+/// evidence id and the salt of its commitment. Shared with the sibling suites of the other two lanes
+/// (T54d's P2-8c, T54f's P2-8b), whose filings take this same road since the integration.
+pub(super) struct Filing {
+    pub(super) object: Obj,
+    pub(super) key: Hash64,
+    pub(super) evidence_id: Hash64,
     salt: [u8; 32],
 }
 
 impl Filing {
     /// The filer's own reading of `object`, which must take a commitment.
-    fn of(object: Obj, salt: [u8; 32]) -> Self {
+    pub(super) fn of(object: Obj, salt: [u8; 32]) -> Self {
         let Obj::ObjectiveOffence { kind, accused, evidence_id, evidence } = &object else { panic!("an objective offence") };
         let key = palw_filed_offence_commit_key_v1(*kind, &accused.0, evidence_id, evidence).expect("a commit-reveal filing");
         let evidence_id = *evidence_id;
@@ -119,17 +120,81 @@ fn reveal_refused(h: &H, walk: &Walk, reveal: &Obj) -> &'static str {
 /// **The filer's order up to the conviction**: the commitment (the seat's), rooted; one more block
 /// (the filer's two-DAA depth); the evidence. Returns the state the conviction folded from and the
 /// commitment's DAA.
-fn commit_then_file(h: &H, walk: &mut Walk, filing: &Filing, card: usize) -> (PalwChainStateV2, u64) {
-    let read = filing.read(h, walk, card, true);
-    assert!(read.rcore_plus && read.reporter_may_commit, "R-3 is live and the seat may commit");
-    assert_eq!((read.committed_daa, read.consumed.is_some()), (None, false));
-    assert_eq!(read.object_gate, Some(Ok(())), "the gate admits the evidence before anything is spent");
-    h.carry(walk, vec![filing.commit(h, card)]);
+pub(super) fn commit_then_file(h: &H, walk: &mut Walk, filing: &Filing, card: usize) -> (PalwChainStateV2, u64) {
+    commit_then_file_all(h, walk, std::slice::from_ref(filing), card)
+}
+
+/// [`commit_then_file`] for every filing one tick hands the filer (P2-8c files one per liable
+/// signer): each asked of the gate first, every commitment in one block, then every evidence in one
+/// block two DAA later.
+pub(super) fn commit_then_file_all(h: &H, walk: &mut Walk, filings: &[Filing], card: usize) -> (PalwChainStateV2, u64) {
+    for filing in filings {
+        let read = filing.read(h, walk, card, true);
+        assert!(read.rcore_plus && read.reporter_may_commit, "R-3 is live and the seat may commit");
+        assert_eq!((read.committed_daa, read.consumed.is_some()), (None, false));
+        assert_eq!(read.object_gate, Some(Ok(())), "the gate admits the evidence before anything is spent");
+    }
+    h.carry(walk, filings.iter().map(|filing| filing.commit(h, card)).collect());
     let committed_at = walk.daa;
-    assert_eq!(filing.read(h, walk, card, false).committed_daa, Some(committed_at), "the commitment is a row");
+    for filing in filings {
+        assert_eq!(filing.read(h, walk, card, false).committed_daa, Some(committed_at), "the commitment is a row");
+    }
     empty(h, walk);
-    let (before, _) = h.carry(walk, vec![filing.object.clone()]);
+    let (before, _) = h.carry(walk, filings.iter().map(|filing| filing.object.clone()).collect());
     (before, committed_at)
+}
+
+/// **R-3 / R-4's tail, as the filer runs it, for every filing convicted in the last block**: each
+/// conviction consumed its key on THIS evidence with `card`'s commitment rooted strictly before it
+/// (at `committed_at`), and its reward pends for `window_receipt`, positive and within R-1's bound
+/// `r · collected` (the exact amount is the fold's: a kind-3 conviction of a licensed claim's seat
+/// deducts its share of the extraction, X); `card` reveals them all in one block and leads each; the node's state survives a reload
+/// and a restart; the window closes, step 3d moves each award to `card`'s payout in the same block,
+/// and the next coinbase drains it. Returns the amounts paid, in `filings`' order.
+pub(super) fn reveal_and_paid(h: &H, walk: &mut Walk, filings: &[Filing], card: usize, committed_at: u64) -> Vec<u64> {
+    let mut amounts = Vec::new();
+    let mut until = 0;
+    for filing in filings {
+        let record = walk.state.consumed_offence(&filing.key).expect("the conviction's record").clone();
+        let read = filing.read(h, walk, card, false);
+        assert!(read.committed_daa.is_some_and(|at| at == committed_at && at < record.accepted_daa), "R-3's strict order");
+        let pending = read.pending.expect("R-4: the reward pends");
+        assert_eq!(
+            (pending.evidence_id, pending.reveal_until, pending.best),
+            (filing.evidence_id, record.accepted_daa + h.sp().window_receipt(), None),
+            "on the consumed evidence (N12), for window_receipt, unrevealed"
+        );
+        assert!(
+            pending.amount > 0 && pending.amount <= palw_reporter_reward_amount_v1(record.collected, 0),
+            "R-1: positive, and at most r over the collected debit"
+        );
+        until = until.max(pending.reveal_until);
+        amounts.push(pending.amount);
+    }
+    h.carry(walk, filings.iter().map(|filing| filing.reveal(h, card)).collect());
+    for filing in filings {
+        let best = filing.read(h, walk, card, false).pending.and_then(|p| p.best).expect("the reveal leads");
+        assert_eq!((best.reporter, best.committed_daa), (h.cards[card], committed_at));
+    }
+    h.reloads(&walk.state);
+    h.restarts(walk.next().block, &walk.state);
+    // The window closes; step 3d moves each award in the same block, and the next coinbase drains it.
+    let point = walk.at(until + 1);
+    let next = h.fold(&walk.state, &point, &[]).expect("the sweep's block folds");
+    walk.advance(&point, next);
+    let payload = walk.state.bond(&h.cards[card]).unwrap().payout_payload;
+    for (filing, amount) in filings.iter().zip(&amounts) {
+        let read = filing.read(h, walk, card, false);
+        assert!(read.pending.is_none() && read.consumed.is_some(), "swept; the conviction stands");
+        let queued = walk.state.pending_payout(&palw_reporter_payout_key_v1(&filing.key)).copied().expect("moved by step 3d");
+        assert_eq!((queued.payload, queued.amount), (payload, *amount), "to the reporter's payout");
+    }
+    h.reloads(&walk.state);
+    empty(h, walk);
+    for filing in filings {
+        assert!(walk.state.pending_payout(&palw_reporter_payout_key_v1(&filing.key)).is_none(), "drained into the next coinbase");
+    }
+    amounts
 }
 
 /// **T18 (node half) + T54c + T39 (node half), at processor level: a capture-arm fault becomes a
@@ -167,37 +232,13 @@ async fn t18_t54c_a_capture_arm_fault_is_committed_filed_revealed_and_paid() {
     assert!(walk.state.palw_execution_root_is_forfeited_v1(&root), "a proven-false execution's root is forfeit");
 
     let record = walk.state.consumed_offence(&filing.key).expect("the kind-4 record").clone();
-    let read = filing.read(&h, &walk, SEAT, false);
-    assert!(read.committed_daa.is_some_and(|at| at == committed_at && at < record.accepted_daa), "R-3's strict order");
-    let pending = read.pending.expect("R-4: the reward pends");
-    assert_eq!(
-        (pending.evidence_id, pending.reveal_until, pending.best, pending.amount),
-        (filing.evidence_id, daa + h.sp().window_receipt(), None, palw_reporter_reward_amount_v1(record.collected, 0)),
-        "on the consumed evidence, for window_receipt, R-1's amount over the collected debit"
-    );
-    assert!(pending.amount > 0);
+    assert_eq!(record.accepted_daa, daa);
+    let pending = filing.read(&h, &walk, SEAT, false).pending.expect("R-4: the reward pends");
+    assert_eq!(pending.amount, palw_reporter_reward_amount_v1(record.collected, 0), "R-1 over the collected debit, X = 0 on kind 4");
     assert_eq!(filing.read(&h, &walk, copier, false).committed_daa, Some(daa), "the copier's row is the conviction's DAA");
     assert_eq!(reveal_refused(&h, &walk, &filing.reveal(&h, copier)), "the commitment was made at or after the conviction");
-
-    h.carry(&mut walk, vec![filing.reveal(&h, SEAT)]);
-    let best = filing.read(&h, &walk, SEAT, false).pending.and_then(|p| p.best).expect("the seat's reveal leads");
-    assert_eq!((best.reporter, best.committed_daa), (h.cards[SEAT], committed_at));
-    h.reloads(&walk.state);
-    h.restarts(walk.next().block, &walk.state);
-
-    // The window closes; step 3d moves the award in the same block, and the next coinbase drains it.
-    let point = walk.at(pending.reveal_until + 1);
-    let next = h.fold(&walk.state, &point, &[]).expect("the sweep's block folds");
-    walk.advance(&point, next);
-    let read = filing.read(&h, &walk, SEAT, false);
-    assert!(read.pending.is_none() && read.consumed.is_some(), "swept; the conviction stands");
-    let row = palw_reporter_payout_key_v1(&filing.key);
-    let queued = walk.state.pending_payout(&row).copied().expect("moved into the payout queue by step 3d");
-    let payload = walk.state.bond(&h.cards[SEAT]).unwrap().payout_payload;
-    assert_eq!((queued.payload, queued.amount), (payload, pending.amount), "to the seat's payout");
-    h.reloads(&walk.state);
-    empty(&h, &mut walk);
-    assert!(walk.state.pending_payout(&row).is_none(), "drained into the next coinbase");
+    // The seat's reveal wins, survives a restart, and the award reaches its payout.
+    reveal_and_paid(&h, &mut walk, std::slice::from_ref(&filing), SEAT, committed_at);
 }
 
 /// **T39 (node half): the reporter is never the accused, and a missing reveal forfeits R only.**

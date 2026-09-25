@@ -12,8 +12,10 @@
 //! What each test proves:
 //! * **T54f** — the replaying seat bisects the served garbage trace against its own replay to the
 //!   divergent step in at most `1 + ⌈log₂ n⌉` reserved rungs; the builder's `ExecutorRefuted` is the
-//!   very object the suite convicts with, and it folds with S2's charge; the filer's refuted session
-//!   is refunded (V3S-06: net ≥ 0). Its fence-off twin (`palw_rcore_plus` off) folds the same bytes
+//!   very object the suite convicts with, and it takes P2-8's reporter-filer road (commit, root, file,
+//!   reveal — P2-8's `Filing`, `commit_then_file` and `reveal_and_paid`) and folds with S2's charge;
+//!   the filer's refuted session is refunded (V3S-06: net ≥ 0) and its reward R arrives after the
+//!   reveal. Its fence-off twin (`palw_rcore_plus` off) folds the same bytes
 //!   with the pre-R-core charge — and kaspad's filer never runs there (`palw_replay_filer_armed_v1`).
 //! * **F1c** — garbage logits on an honest step tree: the producer's capture fails every seat's rule
 //!   (SEAT-0's head rule is the lie) yet carries the claim's binding, and the builder files
@@ -27,7 +29,8 @@
 //! * **Liveness** — an honest claim yields nothing, and a seat whose own replay is WRONG never
 //!   convicts an honest producer: the proof it builds from the served capture holds.
 //!
-//! kaspad's half — the book, the budgets, the ledger, the seam and the carrier lane — is
+//! kaspad's half — the book, the budgets, the ledger, the door to the reporter filer and the carrier
+//! lane — is
 //! `kaspad::palw_panel::palw_filer_replay`'s tests; a node e2e on a devnet preset is a POST-LAUNCH
 //! item (the operator moved every drill and node launch after the t12 launch, 2026-09-24).
 use super::*;
@@ -41,6 +44,8 @@ use kaspa_consensus_core::palw_replay_refute_v1::{
     palw_replay_contradiction_v1, palw_replay_executor_refuted_object_v1,
 };
 use kaspa_consensus_core::palw_state_v2::palw_accuser_exposure_v1;
+
+use super::t46_p2_8_reporter_filer::{Filing, commit_then_file, reveal_and_paid};
 
 /// The roots every seat arm checks a served capture against — the claim's, the block's anchor and
 /// draw rule — as kaspad's filer builds them from its seat duty.
@@ -142,8 +147,9 @@ fn producer_answers_row_0(h: &H, claim: &RealClaim) -> Obj {
 /// `StepArithmetic`, which the fold's own kind-4 adjudicator convicts. The object it encodes is byte
 /// for byte the one this suite convicts with (`H::refuted`), and it takes the whole road: the claim
 /// voids `CourtFraud`, the executor pays S2 (the forfeit and `min(10% · C, 3 G)`), and the seat's held
-/// exposure returns in the conviction's block, so its net is 0 (plus R once P2-8's commit–reveal
-/// routes the filing).
+/// exposure returns in the conviction's block, so its net is 0 — plus R: the node hands the filing to
+/// P2-8's reporter filer, so the seat committed before the evidence folded, reveals after it, and the
+/// reward arrives at its payout when the window closes.
 #[tokio::test]
 async fn t54f_a_garbage_trace_is_bisected_to_its_step_and_its_executor_refuted_s2() {
     let h = harness(true);
@@ -178,13 +184,19 @@ async fn t54f_a_garbage_trace_is_bisected_to_its_step_and_its_executor_refuted_s
         built.offence_id,
         kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(&h.cards[EXECUTOR].0, &id)
     );
-    let (before, _) = h.carry(&mut walk, vec![built.object]);
+    // The reporter filer's road (R-3): keyed as the chain keys it, committed, rooted, filed.
+    let (offence_id, evidence_id) = (built.offence_id, built.evidence_id);
+    let filing = Filing::of(built.object, [0x8B; 32]);
+    assert_eq!((filing.key, filing.evidence_id), (offence_id, evidence_id), "the filer keys it as the chain does");
+    let (before, committed_at) = commit_then_file(&h, &mut walk, &filing, seat);
     assert_refuted_before_final(&h, &before, &walk.state, id, walk.daa, claim.envelope.attempt.execution_root);
     // V3S-06: the filer's refuted cost comes back in the conviction's block.
     assert!(walk.state.da_claim(&id).unwrap().refuted_held.is_empty(), "refunded (DA-6)");
     assert_eq!(palw_accuser_exposure_v1(&walk.state, &h.cards[seat]), 0);
     assert_eq!(walk.state.bond(&h.cards[seat]).unwrap().collateral, collateral, "the filer nets 0 — never less");
-    h.reloads(&walk.state);
+    // ... plus R, after the reveal.
+    let paid = reveal_and_paid(&h, &mut walk, std::slice::from_ref(&filing), seat, committed_at);
+    assert!(paid[0] > 0, "the replaying seat is paid for the conviction it filed");
 }
 
 /// **T54f's fence-off twin: below `palw_rcore_plus` the same builder finds the same step and its

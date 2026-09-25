@@ -4135,8 +4135,11 @@ impl PalwPanelService {
                         Ok(()) => {
                             if palw_da_accusation_queued_v1(round, mine_is_responder, &object) {
                                 info!("[{PALW_PANEL}] submitted this seat's DefaultAccused of claim {session_id} in tx {txid} (P2-6)");
-                            } else if crate::palw_filer_false_valid::palw_false_valid_queued_v1(round, mine_is_responder, &object) {
-                                info!("[{PALW_PANEL}] submitted PanelFalseValidV2 offence {session_id} in tx {txid} (P2-8c)");
+                            } else if reporter_filer::palw_filer_queued_v1(round, mine_is_responder, &object) {
+                                info!(
+                                    "[{PALW_PANEL}] submitted {} for offence {session_id} in tx {txid} (the reporter filer, R-3)",
+                                    object_name(&object)
+                                );
                             } else {
                                 info!(
                                     "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
@@ -9063,30 +9066,45 @@ impl PalwPanelService {
             //
             // ADR-0152 SR-8, §3.9's garbage row, J-6, DA-3: a claim this seat's replay refuted, or on
             // which a fault finder recorded a fault, is bisected off the loop against the claim's served
-            // capture; the first divergent step is filed as `ExecutorRefuted` (or demanded as a
-            // `StepLeaf` the served material cannot open) onto the court queue, which the priority
-            // lane carries below.
-            self.replay_filer_tick_v1(
-                &session,
-                &mut replay_filer,
-                current_daa,
-                network_domain,
-                bond_key,
-                &duties,
-                &replay_refuted,
-                &materials,
-                &mut court_pending,
-                &mut court_moved,
-            )
-            .await;
+            // capture; the first divergent step is handed to the reporter filer as `ExecutorRefuted`
+            // (or demanded as a `StepLeaf` the served material cannot open, onto the court queue the
+            // priority lane carries below).
+            let replay_made = self
+                .replay_filer_tick_v1(
+                    &session,
+                    &mut replay_filer,
+                    &mut reporter_filer,
+                    current_daa,
+                    network_domain,
+                    bond_key,
+                    &duties,
+                    &replay_refuted,
+                    &materials,
+                    &mut court_pending,
+                    &mut court_moved,
+                )
+                .await;
+            // P2-8c (N10): the replay's contradiction proves the claim's liable `Valid` signers false too.
+            if let Some((refuted, bound_daa)) = &replay_made {
+                false_valid.note_executor_refuted_v1(
+                    crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                        &self.consensus_config.params,
+                        self.config.fee_outpoint.is_some(),
+                        current_daa,
+                    ),
+                    &refuted.object,
+                    Some(*bound_daa),
+                    current_daa,
+                );
+            }
 
             // --- P2-8c: this node's automatic PanelFalseValidV2 filings ---
             //
             // ADR-0152 v3.1 N10: a proof the capture arm or a court close noted above is filed against
             // every `Valid` signer of the claim the audit's liability rule reaches, once a licence
             // names them — off the tick, one claim a tick, each filing asked of the chain first and
-            // queued once through the module's seam (`palw_filer_false_valid.rs`). Below
-            // `palw_rcore_plus`, and on a node that carries nothing, the book is emptied.
+            // handed to the reporter filer below through the panel's door (`palw_filer_false_valid.rs`).
+            // Below `palw_rcore_plus`, and on a node that carries nothing, the book is emptied.
             if crate::palw_filer_false_valid::palw_false_valid_armed_v1(
                 &self.consensus_config.params,
                 self.config.fee_outpoint.is_some(),
@@ -9097,8 +9115,7 @@ impl PalwPanelService {
                     &session,
                     bond_key,
                     current_daa,
-                    &mut court_pending,
-                    &mut court_moved,
+                    &mut self.conviction_door_v1(&session, &mut reporter_filer, bond_key, network_domain),
                 )
                 .await;
             } else {

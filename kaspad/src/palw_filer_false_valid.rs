@@ -4,8 +4,9 @@
 //!
 //! When this node's own work proves a claim false — the free-prompt capture arm's sample of a leaf
 //! that does not recompute (ADR-0098 Decision 2), the refutation its court close filed as the
-//! challenger with the executor found guilty, and (at integration) P2-8b's replay-mismatch
-//! contradiction — the proof is noted here ([`PalwFalseValidFilerV1::note_proof_v1`]). From then on,
+//! challenger with the executor found guilty, and P2-8b's replay-mismatch contradiction (the
+//! `ExecutorRefuted` its replay filer made, [`PalwFalseValidFilerV1::note_executor_refuted_v1`]) —
+//! the proof is noted here ([`PalwFalseValidFilerV1::note_proof_v1`]). From then on,
 //! off the panel tick and a bounded number of claims a tick, the filer:
 //!
 //! 1. **reads the licence off the chain, keeping only what the chain relied on** — every accepted
@@ -27,15 +28,18 @@
 //!    segment — the conviction is S-4's funnel, pre-`Final` a void and post-`Final` the reversal and
 //!    the row's burn, whichever the fold's target resolves to, and this node never pays a carrier
 //!    for an object the fold refuses;
-//! 3. **files each conviction once** through ONE seam, [`false_valid_file_seam_v1`], which queues it
-//!    on the panel's court queue under a stable per-(seat, claim) key and records what P2-8's
-//!    reporter filer needs (the offence key, the `evidence_id`, the accused).
+//! 3. **files each conviction through P2-8's reporter filer** — ONE door,
+//!    [`palw_false_valid_conviction_filing_v1`] handed to `PalwConvictionDoorV1::file`: committed
+//!    over this node's bond and the offence's per-(seat, claim) key and `evidence_id` (R-3, N12),
+//!    rooted, then the evidence, then the reveal — the same filer, and the same dedup by offence
+//!    key, as every other conviction this node files.
 //!
 //! # What settles a seat, and what does not
 //!
 //! A seat is done with for the proof's life only when nothing the chain later does can change the
 //! answer: node policy declined it (this node's own claim), a conviction of it stands past the
-//! finality depth, or [`PALW_FALSE_VALID_MAX_SENDS_V1`] carriers did not land. Everything else is
+//! finality depth, or `PALW_FILER_HAND_OFFS_PER_OFFENCE_V1` filings left the reporter filer
+//! unconvicted. Everything else is
 //! asked again (the P2-8c review's high finding: a first answer that settled a seat let one junk
 //! carrier shield it): a receipt the liability rule does not reach is recorded BY RECEIPT, so a
 //! new receipt of the seat is asked afresh; a refusal, an unrelied receipt, a dormant read or an
@@ -51,11 +55,13 @@
 //!   alike (`PALW_FALSE_VALID_HELD_NAMES_PARTIALS_V1`: the operator's held-attention decision binds
 //!   no partial seat through a dissection or a DA default, and the adjudicator already refuses
 //!   both; a located step fault inside a partial seat's own segment is what it signed).
-//! * **File twice for one offence.** One queue entry per (seat, claim) key; a filing sent is not asked
-//!   about again for [`PALW_FALSE_VALID_REFILE_DAA_V1`], after which the CHAIN decides — convicted
-//!   (watched), or still convictable (the carrier was lost: sent again, at most
-//!   [`PALW_FALSE_VALID_MAX_SENDS_V1`] times). The ledger's key is the consensus half of the same
-//!   rule: a second object for one (seat, claim) folds as a no-op.
+//! * **File twice for one offence.** The reporter filer holds one filing an offence key (the per-
+//!   (seat, claim) `palw_false_valid_offence_id_v2`), and while it holds one the seat is not asked
+//!   about at all; once the filing leaves the filer's book the CHAIN decides — convicted (watched),
+//!   or still convictable (the filing ended unconvicted: handed once more, at most
+//!   `PALW_FILER_HAND_OFFS_PER_OFFENCE_V1` filings, each of which sends each object at most
+//!   `PALW_FILER_MAX_SENDS_V1` times). The ledger's key is the consensus half of the same rule: a
+//!   second object for one (seat, claim) folds as a no-op.
 //! * **Replay, bisect or re-make a capture.** The proof arrives built (the capture arm and the court
 //!   reserved their replay bytes through `reserve_replay_v1` when they ran); what runs here is a
 //!   chain walk, a signature check per receipt admitted and the adjudicator's own check of one step,
@@ -63,22 +69,27 @@
 //!
 //! # What a restart loses
 //!
-//! The book lives in the panel loop's memory, as P2-6's accusation book does: a restart forgets the
-//! proofs held, the sends and the seam's records, and `court_moved` with them. A capture sample or
-//! court close noted before the restart is not re-noted (its duty is gone), so its filings that had
-//! not landed are not made; and a filing whose carrier was still in the mempool can be queued again
-//! from a proof noted after the restart — the gate drops the second copy once the first lands, so
-//! the cost is one carrier fee. Persisting the book (or re-deriving proofs from the chain's accepted
-//! `CourtClosed` objects) is a later change; no conviction is ever wrong because of it.
+//! This book lives in the panel loop's memory, as P2-6's accusation book does: a restart forgets the
+//! proofs held and the hand-off counts. A filing already handed to the reporter filer is NOT lost —
+//! that book is persisted (`palw-reporter-filer.v1`), so it still commits, files and reveals after a
+//! restart. What is lost is a proof whose licence had not yet named its signers: a capture sample or
+//! court close noted before the restart is not re-noted (its duty is gone), so those filings are not
+//! made. Persisting this book (or re-deriving proofs from the chain's accepted `CourtClosed` objects)
+//! is a later change; no conviction is ever wrong because of it.
 //!
-//! # The seam (P2-8)
+//! # Through the reporter filer (P2-8, R-3)
 //!
-//! P2-8's commit–reveal reporter filer is written in parallel. Until it lands, the seam queues the
-//! object directly — a conviction without a commitment still lands; only its reporter reward goes
-//! unclaimed (R-3). At integration the seam routes the same record through `PalwConvictionFilingV1`:
-//! commit over the offence key and the `evidence_id`, wait for acceptance, file, reveal.
+//! Every filing is handed to P2-8's filer, which commits over the offence key, the `evidence_id` and
+//! this node's bond, waits until the commitment is two DAA deep, files the evidence and reveals once
+//! the conviction consumed it — so the reporter reward R is this node's, and a mempool copier of the
+//! evidence commits too late (the filer's module doc says what a copier can still take). Nothing here
+//! queues a carrier: the filer's gate is asked before every send, so a filing the chain has since
+//! refused (another carrier convicted the seat, a court opened on the claim) waits or ends in the
+//! filer, never costs a fee here. A kind-3 conviction has no deadline shorter than the filer's court
+//! window (the seat is charged pre- or post-`Final` alike), so the filing is handed with no
+//! `file_by`: its evidence waits only for its commitment to root.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use kaspa_consensus_core::palw_false_valid_filing_v1::{
@@ -86,23 +97,15 @@ use kaspa_consensus_core::palw_false_valid_filing_v1::{
     palw_false_valid_filings_v1,
 };
 use kaspa_consensus_core::palw_offence_attribution_v1::{PalwFalseValidReceiptV1, palw_false_valid_receipts_of_licence_v1};
-use kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1;
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_core::{debug, info, warn};
 use kaspa_hashes::Hash64;
 
+use crate::palw_panel::reporter_filer::{
+    PALW_FILER_HAND_OFFS_PER_OFFENCE_V1, PalwConvictionDoorV1, PalwConvictionFilingV1, PalwFileOutcomeV1, PalwFilingOriginV1,
+};
+
 const PALW_PANEL: &str = "palw-panel";
-
-/// The panel's court queue: `(key, round, responder, object)`, drained by `carry_priority_v1` on the
-/// priority lane of P2-6's one scheduler.
-pub(crate) type PalwCourtQueueV1 = Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>;
-
-/// **The round a P2-8c filing is queued under** — a value no court move (small rounds), no
-/// data-availability accusation (`u32::MAX`, P2-6), none of P2-8's reporter filer's three rounds
-/// (`u32::MAX - 3 ..= u32::MAX - 1`, whose tick drops a kind-3 `ObjectiveOffence` on its reveal
-/// round that its book does not hold) and no answer uses. With the offence key as the entry's id
-/// the key is unique on its own; the round marks whose entry it is.
-pub(crate) const PALW_FALSE_VALID_QUEUE_ROUND_V1: u32 = u32::MAX - 4;
 
 /// The most proofs held at once. A proof is one contradiction (at most one carrier's bytes,
 /// `PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES`), so the book stays under ~8 MB; the oldest leaves first.
@@ -120,14 +123,11 @@ pub(crate) const PALW_FALSE_VALID_REWALK_DAA_V1: u64 = 100;
 /// How soon a signer behind an open court is asked again.
 pub(crate) const PALW_FALSE_VALID_WAIT_RECHECK_DAA_V1: u64 = 25;
 
-/// **How long a queued or sent filing is left alone before the chain is asked about it again** — six
-/// of the court queue's re-plans (`COURT_MOVE_REPLAN_DAA` = 10): long enough that a carrier still in
-/// the mempool is not doubled, short enough that a lost one is sent again inside the claim's life.
+/// **How soon a claim is scanned again after a filing was handed** — six of the court queue's
+/// re-plans (`COURT_MOVE_REPLAN_DAA` = 10). The filed seat itself is skipped while the reporter filer
+/// holds its filing; the rescan asks the claim's other seats (a supplementary licence) and, once the
+/// filing has left the filer's book, the chain about the filed one.
 pub(crate) const PALW_FALSE_VALID_REFILE_DAA_V1: u64 = 60;
-
-/// A filing the chain still does not hold after this many carriers is given up (logged): a carrier
-/// that keeps vanishing is a node problem no fourth fee fixes.
-pub(crate) const PALW_FALSE_VALID_MAX_SENDS_V1: u32 = 3;
 
 /// How far below the last walk's DAA the next walk starts, so a reorg that replaced the last blocks
 /// walked is walked again.
@@ -135,18 +135,6 @@ pub(crate) const PALW_FALSE_VALID_REORG_MARGIN_DAA_V1: u64 = 64;
 
 /// The most chain blocks one walk reads (the court's own walk bound, `attn_root_filings_from_chain_v1`).
 pub(crate) const PALW_FALSE_VALID_MAX_WALK_BLOCKS_V1: u64 = 1 << 16;
-
-/// **The court queue's key of the filing against `offence_id`** — one per (seat, claim), stable across
-/// ticks (`court_moved` keys the carrier's send by it).
-pub(crate) fn palw_false_valid_queue_key_v1(offence_id: Hash64) -> (Hash64, u32, bool) {
-    (offence_id, PALW_FALSE_VALID_QUEUE_ROUND_V1, false)
-}
-
-/// Whether a court-queue entry is one of this filer's ([`palw_false_valid_queue_key_v1`]).
-pub(crate) fn palw_false_valid_queued_v1(round: u32, responder: bool, object: &PalwConsensusObjectV2) -> bool {
-    (round, responder) == (PALW_FALSE_VALID_QUEUE_ROUND_V1, false)
-        && matches!(object, PalwConsensusObjectV2::ObjectiveOffence { kind: PalwOffenceKindV1::PanelFalseValidV2, .. })
-}
 
 /// **Whether the filer runs at `daa`**: past `palw_rcore_plus` (everything Phase 2 adds lives past it;
 /// the fence requires `palw_offence_attribution`, so kind 3 exists), and on a node that carries
@@ -164,54 +152,25 @@ pub(crate) enum PalwFalseValidSourceV1 {
     /// This node closed a court on the claim as its challenger, and the chain read the close as
     /// `ExecutorGuilty`: the close's refutation of this leaf, which this node's own replay built.
     CourtClose { leaf: u64 },
+    /// This node's replay filer (P2-8b) bisected the claim's served capture against its own replay:
+    /// the contradiction of the `ExecutorRefuted` it made (5 or 12).
+    Replay,
 }
 
-/// **What the seam hands P2-8's reporter filer** — and the book keeps, per filing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PalwFalseValidSeamRecordV1 {
-    /// `palw_false_valid_offence_id_v2(accused, claim)`: the ledger key the conviction is written
-    /// under and a reporter commitment is keyed to (R-3).
-    pub offence_key: Hash64,
-    /// The `ObjectiveOffence`'s digest of its evidence bytes — what the commitment binds (N12).
-    pub evidence_id: Hash64,
-    pub accused: PalwBondKeyV2,
-    pub claim_id: Hash64,
-    pub queued_daa: u64,
-}
-
-/// **P2-8 seam: routed through the reporter filer (PalwConvictionFilingV1) at integration.**
-///
-/// The ONE place a P2-8c conviction leaves this module: `filing`'s object is pushed onto the panel's
-/// court queue (the priority lane, `carry_priority_v1`) under its stable per-(seat, claim) key —
-/// once: an entry already queued under the key is left as it is — and the record returned is what
-/// the reporter filer will need (the offence key, the evidence id, the accused). `None` when the
-/// filing does not file (the chain or node policy declined it) or is queued already.
-///
-/// Until integration the object goes out with no commitment before it, so no reporter reward is
-/// claimed for it (R-3 pays only a commitment made strictly before the conviction's block,
-/// `apply_reporter_revealed`). A watcher that copies the evidence out of the mempool can commit
-/// only in a block after it saw the carrier, so it wins the reward only if the carrier then waits
-/// at least one more block — the conviction itself lands either way.
-pub(crate) fn false_valid_file_seam_v1(
-    court_pending: &mut PalwCourtQueueV1,
-    filing: &PalwFalseValidFilingV1,
-    current_daa: u64,
-) -> Option<PalwFalseValidSeamRecordV1> {
+/// **The ONE door a P2-8c conviction leaves this module through** (it replaced the pre-integration
+/// seam that queued the object bare): the filing, as P2-8's reporter filer takes it — the object
+/// unchanged, keyed by the filer's own reading of it (`palw_filed_offence_commit_key_v1`, which for an
+/// execution- or claim-proving kind 3 is exactly the adjudicator's `palw_false_valid_offence_id_v2`,
+/// the key this filing was asked under), origin [`PalwFilingOriginV1::FalseValid`], no `file_by` (the
+/// module's "Through the reporter filer"). `None` when the filing does not file, or when the filer's
+/// key is not the chain's (a contradiction whose conviction opens no commit–reveal reward: nothing
+/// P2-8c builds — its proofs are step refutations — and never filed bare past the integration).
+pub(crate) fn palw_false_valid_conviction_filing_v1(filing: &PalwFalseValidFilingV1) -> Option<PalwConvictionFilingV1> {
     if !filing.files() {
         return None;
     }
-    let key = palw_false_valid_queue_key_v1(filing.offence_id);
-    if court_pending.iter().any(|(id, round, responder, _)| (*id, *round, *responder) == key) {
-        return None;
-    }
-    court_pending.push((key.0, key.1, key.2, filing.object.clone()));
-    Some(PalwFalseValidSeamRecordV1 {
-        offence_key: filing.offence_id,
-        evidence_id: filing.evidence_id,
-        accused: filing.accused,
-        claim_id: filing.claim_id,
-        queued_daa: current_daa,
-    })
+    PalwConvictionFilingV1::of_offence(filing.object.clone(), filing.claim_id, None, PalwFilingOriginV1::FalseValid)
+        .filter(|conviction| conviction.offence_key == filing.offence_id && conviction.evidence_id == filing.evidence_id)
 }
 
 /// One claim this node holds a proof against.
@@ -228,15 +187,16 @@ struct PalwFalseValidCaseV1 {
     walked_daa: Option<u64>,
     next_daa: u64,
     /// Seats done with for the proof's life: node policy declined, convicted past the finality
-    /// depth, or given up after `MAX_SENDS` carriers.
+    /// depth, or given up after `PALW_FILER_HAND_OFFS_PER_OFFENCE_V1` filings ended unconvicted.
     settled: BTreeSet<PalwBondKeyV2>,
     /// The `evidence_id`s of receipts the liability rule does not reach — per receipt, never per
     /// seat, so a new receipt of the seat is asked afresh.
     not_liable: BTreeSet<Hash64>,
     /// Convictions seen and not yet final: the seat and the DAA of the conviction's block.
     convicted: BTreeMap<PalwBondKeyV2, u64>,
-    /// Signers whose filing this node queued: the DAA it was last queued and how many times.
-    sent: BTreeMap<PalwBondKeyV2, (u64, u32)>,
+    /// Signers whose filing this node handed the reporter filer: the DAA it was last handed and how
+    /// many times ([`PALW_FILER_HAND_OFFS_PER_OFFENCE_V1`]).
+    sent: BTreeMap<PalwBondKeyV2, (u64, u8)>,
 }
 
 /// **One scan's input**, handed to a blocking thread.
@@ -248,7 +208,7 @@ pub(crate) struct PalwFalseValidScanV1 {
     pub receipts: Vec<PalwFalseValidReceiptV1>,
     /// Walk the chain down to this DAA for licence receipts.
     pub walk_from_daa: u64,
-    /// Signers not to ask about: settled, or queued/sent less than a re-file ago.
+    /// Signers not to ask about: settled, or whose filing the reporter filer holds (in flight).
     pub skip: BTreeSet<PalwBondKeyV2>,
     /// Receipts not to ask about again: answered `NotLiable`.
     pub not_liable: BTreeSet<Hash64>,
@@ -271,8 +231,6 @@ pub(crate) struct PalwFalseValidScanOutcomeV1 {
 #[derive(Clone, Debug)]
 pub(crate) struct PalwFalseValidFilerV1 {
     cases: BTreeMap<Hash64, PalwFalseValidCaseV1>,
-    /// The seam's records, by offence key, pruned with their cases.
-    records: BTreeMap<Hash64, PalwFalseValidSeamRecordV1>,
     ttl_daa: u64,
     lookback_daa: u64,
     /// How deep a conviction's block must be before the seat is settled (the ruleset's finality
@@ -282,7 +240,7 @@ pub(crate) struct PalwFalseValidFilerV1 {
 
 impl PalwFalseValidFilerV1 {
     pub(crate) fn new(ttl_daa: u64, lookback_daa: u64, conviction_depth_daa: u64) -> Self {
-        Self { cases: BTreeMap::new(), records: BTreeMap::new(), ttl_daa, lookback_daa, conviction_depth_daa }
+        Self { cases: BTreeMap::new(), ttl_daa, lookback_daa, conviction_depth_daa }
     }
 
     /// **Sized from the ruleset's windows.** A licence precedes a court's close by at most the
@@ -305,7 +263,6 @@ impl PalwFalseValidFilerV1 {
     /// Forget everything (the fence is down, or this node carries nothing).
     pub(crate) fn clear(&mut self) {
         self.cases.clear();
-        self.records.clear();
     }
 
     pub(crate) fn holds(&self, claim: &Hash64) -> bool {
@@ -314,13 +271,6 @@ impl PalwFalseValidFilerV1 {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.cases.is_empty()
-    }
-
-    /// The seam's records — what P2-8's reporter filer reads at integration (until then only the
-    /// tests read them; the tick prunes `court_moved` by them).
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn records(&self) -> impl Iterator<Item = &PalwFalseValidSeamRecordV1> {
-        self.records.values()
     }
 
     /// **Note a proof against `proof.claim_id`** — the first proof of a claim is kept (one is enough:
@@ -407,16 +357,53 @@ impl PalwFalseValidFilerV1 {
         self.note_proof_v1(proof, PalwFalseValidSourceV1::CourtClose { leaf }, None, current_daa)
     }
 
+    /// **P2-8b's proof, noted here too** (the integration of the Phase 2 lanes): the contradiction a
+    /// replay bisection filed as `ExecutorRefuted` proves every liable `Valid` signer of the claim
+    /// false as well (N10). Read back from the kind-4 object the replay filer built, so the proof is
+    /// exactly the bytes the fold adjudicates for the executor — nothing is re-derived. Nothing is
+    /// noted unless `armed` and the object is a kind 4 that decodes, and a claim's first proof is kept.
+    pub(crate) fn note_executor_refuted_v1(
+        &mut self,
+        armed: bool,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        bound_daa: Option<u64>,
+        current_daa: u64,
+    ) -> bool {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        let Obj::ObjectiveOffence {
+            kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted, evidence, ..
+        } = object
+        else {
+            return false;
+        };
+        if !armed {
+            return false;
+        }
+        let Ok(payload) =
+            borsh::from_slice::<kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1>(evidence)
+        else {
+            return false;
+        };
+        if self.holds(&payload.claim_id) {
+            return false;
+        }
+        let proof = PalwFalseValidProofV1 {
+            claim_id: payload.claim_id,
+            contradiction: payload.contradiction,
+            prompt_ids_opening: payload.prompt_ids_opening,
+        };
+        self.note_proof_v1(proof, PalwFalseValidSourceV1::Replay, bound_daa, current_daa)
+    }
+
     fn forget(&mut self, claim: &Hash64) {
         self.cases.remove(claim);
-        self.records.retain(|_, record| record.claim_id != *claim);
     }
 
     /// **The scans due at `current_daa`** — at most [`PALW_FALSE_VALID_CASES_PER_TICK_V1`], earliest
     /// first; expired proofs are forgotten here. A signer is skipped while it is settled, or while
-    /// its filing was queued or sent less than [`PALW_FALSE_VALID_REFILE_DAA_V1`] ago (`sent_at`: the
-    /// court queue's `court_moved` DAA of its key), so a carrier in flight is never doubled.
-    pub(crate) fn due_v1(&mut self, current_daa: u64, sent_at: impl Fn(&Hash64) -> Option<u64>) -> Vec<PalwFalseValidScanV1> {
+    /// the reporter filer holds its filing (`in_flight` of its offence key: whichever lane filed it),
+    /// so a filing in flight is never doubled and costs no adjudication.
+    pub(crate) fn due_v1(&mut self, current_daa: u64, in_flight: impl Fn(&Hash64) -> bool) -> Vec<PalwFalseValidScanV1> {
         let expired: Vec<Hash64> =
             self.cases.iter().filter(|(_, case)| current_daa > case.expires_daa).map(|(claim, _)| *claim).collect();
         for claim in expired {
@@ -428,12 +415,17 @@ impl PalwFalseValidFilerV1 {
         due.into_iter()
             .take(PALW_FALSE_VALID_CASES_PER_TICK_V1)
             .map(|(claim, case)| {
-                let fresh = |at: u64| current_daa < at.saturating_add(PALW_FALSE_VALID_REFILE_DAA_V1);
                 let mut skip = case.settled.clone();
-                for (seat, (queued, _)) in &case.sent {
-                    let key = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(&seat.0, claim);
-                    if fresh(*queued) || sent_at(&key).is_some_and(fresh) {
-                        skip.insert(*seat);
+                // Every seat this case may ask about — handed by this book, or held by the reporter
+                // filer from before a restart of this one (the filer's book is persisted).
+                let seats = case.sent.keys().copied().chain(case.receipts.iter().map(|receipt| receipt.inner().seat_bond));
+                for seat in seats {
+                    if !skip.contains(&seat)
+                        && in_flight(&kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(
+                            &seat.0, claim,
+                        ))
+                    {
+                        skip.insert(seat);
                     }
                 }
                 PalwFalseValidScanV1 {
@@ -450,17 +442,19 @@ impl PalwFalseValidFilerV1 {
             .collect()
     }
 
-    /// **Take a scan's result**: keep the receipts, file what files through the seam, record what
-    /// cannot change for that receipt or seat, and schedule the claim's next scan. What settles and
-    /// what is asked again is the module's "What settles a seat" rule. A queued filing whose signer
-    /// the chain now answers otherwise (convicted by another carrier, refused, behind a court that
-    /// opened) leaves the queue unsent. Returns the seam's records of what was queued now.
+    /// **Take a scan's result**: keep the receipts, hand what files to the reporter filer through
+    /// `door` ([`palw_false_valid_conviction_filing_v1`]), record what cannot change for that receipt
+    /// or seat, and schedule the claim's next scan. What settles and what is asked again is the
+    /// module's "What settles a seat" rule. A filing the filer already holds is in flight and is left
+    /// to it — including one whose signer the chain now answers otherwise (convicted by another
+    /// carrier, behind a court that opened): the filer asks the gate before every send and ends a
+    /// filing its conviction read ends. Returns the offence keys handed now.
     pub(crate) fn apply_v1(
         &mut self,
         outcome: PalwFalseValidScanOutcomeV1,
         current_daa: u64,
-        court_pending: &mut PalwCourtQueueV1,
-    ) -> Vec<PalwFalseValidSeamRecordV1> {
+        door: &mut impl PalwConvictionDoorV1,
+    ) -> Vec<Hash64> {
         let depth = self.conviction_depth_daa;
         let Some(case) = self.cases.get_mut(&outcome.claim_id) else { return Vec::new() };
         if !outcome.walked {
@@ -482,8 +476,6 @@ impl PalwFalseValidFilerV1 {
                     );
                 }
             }
-            let key = palw_false_valid_queue_key_v1(filing.offence_id);
-            let in_queue = court_pending.iter().any(|(id, round, responder, _)| (*id, *round, *responder) == key);
             if filing.files() {
                 filed = true;
                 if let Some(at) = case.convicted.remove(&seat) {
@@ -494,34 +486,55 @@ impl PalwFalseValidFilerV1 {
                     );
                     case.sent.remove(&seat);
                 }
-                if in_queue {
+                // In flight: the reporter filer holds this offence (it commits, files and reveals).
+                if door.holds(&filing.offence_id) {
                     continue;
                 }
-                let sends = case.sent.get(&seat).map_or(0, |(_, n)| *n);
-                if sends >= PALW_FALSE_VALID_MAX_SENDS_V1 {
+                let handed = case.sent.get(&seat).map_or(0, |(_, n)| *n);
+                if handed >= PALW_FILER_HAND_OFFS_PER_OFFENCE_V1 {
                     warn!(
-                        "[{PALW_PANEL}] claim {}: the false-Valid filing against {seat:?} is still convictable after {sends} \
-                         carriers — given up (P2-8c)",
+                        "[{PALW_PANEL}] claim {}: the false-Valid filing against {seat:?} is still convictable after {handed} \
+                         filings left the reporter filer unconvicted — given up (P2-8c)",
                         filing.claim_id
                     );
                     case.settled.insert(seat);
                     continue;
                 }
-                if let Some(record) = false_valid_file_seam_v1(court_pending, filing, current_daa) {
-                    info!(
-                        "[{PALW_PANEL}] claim {}: filing PanelFalseValidV2 against the Valid signer {seat:?} ({:?} proof; offence {}, \
-                         evidence {}) — ADR-0152 N10, P2-8c",
-                        filing.claim_id, case.source, record.offence_key, record.evidence_id
+                let Some(conviction) = palw_false_valid_conviction_filing_v1(filing) else {
+                    warn!(
+                        "[{PALW_PANEL}] claim {}: the filing against {seat:?} takes no commitment under its offence key — not filed \
+                         (P2-8c)",
+                        filing.claim_id
                     );
-                    case.sent.insert(seat, (current_daa, sends + 1));
-                    self.records.insert(record.offence_key, record.clone());
-                    queued_now.push(record);
+                    case.settled.insert(seat);
+                    continue;
+                };
+                match door.file(conviction) {
+                    PalwFileOutcomeV1::Queued { .. } | PalwFileOutcomeV1::AlreadyFiled => {
+                        info!(
+                            "[{PALW_PANEL}] claim {}: filing PanelFalseValidV2 against the Valid signer {seat:?} through the reporter \
+                             filer ({:?} proof; offence {}, evidence {}) — ADR-0152 N10, R-3, P2-8c",
+                            filing.claim_id, case.source, filing.offence_id, filing.evidence_id
+                        );
+                        case.sent.insert(seat, (current_daa, handed + 1));
+                        queued_now.push(filing.offence_id);
+                    }
+                    // The chain consumed the key meanwhile: the next walk reads `ConvictedBefore`.
+                    PalwFileOutcomeV1::AlreadyConvicted => waiting = true,
+                    // Never this node's own bond: the adjudicator's policy already declines it.
+                    PalwFileOutcomeV1::OwnBond => {
+                        case.settled.insert(seat);
+                    }
+                    // The gate at the filer's read, a full book, no tip: nothing spent, asked again soon.
+                    refused @ (PalwFileOutcomeV1::NotAdmitted(_) | PalwFileOutcomeV1::Full | PalwFileOutcomeV1::Unreadable) => {
+                        debug!(
+                            "[{PALW_PANEL}] claim {}: the reporter filer does not take {seat:?}'s filing now — {refused:?} (P2-8c)",
+                            filing.claim_id
+                        );
+                        waiting = true;
+                    }
                 }
                 continue;
-            }
-            // Not (or no longer) a filing: whatever of it is still queued leaves the queue unsent.
-            if in_queue {
-                court_pending.retain(|(id, round, responder, _)| (*id, *round, *responder) != key);
             }
             match &filing.check {
                 PalwFalseValidFilingCheckV1::ConvictedBefore { accepted_daa, .. } => {
@@ -610,49 +623,42 @@ pub(crate) fn palw_false_valid_scan_v1(
     PalwFalseValidScanOutcomeV1 { claim_id, receipts, filings, walked: true }
 }
 
-/// **The tick's step** (called by the panel once a tick, past the fence, on a node that carries): the
-/// due scans run off the tick, and their filings go through the seam onto `court_pending`, which the
-/// priority lane drains. `court_moved` is the queue's record of what was sent when; this filer's
-/// entries leave it with their records (nothing else prunes it, as P2-6's accusations found).
+/// **The tick's step** (called by the panel once a tick, past the fence, on a node that carries,
+/// before the reporter filer's own tick — so a filing handed here commits in the same tick): the
+/// due scans run off the tick, and their filings are handed to the reporter filer through `door`
+/// (the panel's `PalwPanelConvictionDoorV1`). Nothing here touches the court queue or `court_moved`:
+/// the filer queues, and prunes, its own.
 pub(crate) async fn palw_false_valid_tick_v1(
     filer: &mut PalwFalseValidFilerV1,
     session: &kaspa_consensusmanager::ConsensusProxy,
     own: PalwBondKeyV2,
     current_daa: u64,
-    court_pending: &mut PalwCourtQueueV1,
-    court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
+    door: &mut impl PalwConvictionDoorV1,
 ) {
-    if !filer.is_empty() {
-        let scans = filer.due_v1(current_daa, |offence| court_moved.get(&palw_false_valid_queue_key_v1(*offence)).copied());
-        for scan in scans {
-            let outcome = session.clone().spawn_blocking(move |c| palw_false_valid_scan_v1(c, scan, own, current_daa)).await;
-            filer.apply_v1(outcome, current_daa, court_pending);
-        }
+    if filer.is_empty() {
+        return;
     }
-    court_moved.retain(|key, _| key.1 != PALW_FALSE_VALID_QUEUE_ROUND_V1 || key.2 || filer.records.contains_key(&key.0));
-}
-
-/// The offence keys of this filer's entries in `court_pending`.
-#[cfg(test)]
-pub(crate) fn palw_false_valid_queued_keys_v1(court_pending: &PalwCourtQueueV1) -> std::collections::HashSet<Hash64> {
-    court_pending
-        .iter()
-        .filter(|(_, round, responder, object)| palw_false_valid_queued_v1(*round, *responder, object))
-        .map(|(id, _, _, _)| *id)
-        .collect()
+    let scans = filer.due_v1(current_daa, |offence| door.holds(offence));
+    for scan in scans {
+        let outcome = session.clone().spawn_blocking(move |c| palw_false_valid_scan_v1(c, scan, own, current_daa)).await;
+        filer.apply_v1(outcome, current_daa, door);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palw_panel::reporter_filer::{PALW_FILER_ROUND_COMMIT_V1, PalwBookDoorV1, palw_filer_queued_v1};
     use kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidPolicyV1;
     use kaspa_consensus_core::palw_offence_attribution_v1::{
         PalwFaultSiteV1, PalwPanelFalseValidEvidenceV2, palw_false_valid_offence_id_v2,
     };
-    use kaspa_consensus_core::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1};
+    use kaspa_consensus_core::palw_offence_v1::{PalwOffenceKindV1, PalwOffenceVerifyError};
     use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3};
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
     use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use std::collections::HashMap;
 
     const CLAIM: u64 = 0xC1A1;
     const DEPTH: u64 = 600;
@@ -665,12 +671,16 @@ mod tests {
         Hash64::from_u64_word(CLAIM)
     }
 
+    /// The capture arm's proof: a real floor step refutation (the reporter filer keys a kind 3 by
+    /// its contradiction, so a stand-in that is not execution-proving would take no commitment).
     fn proof() -> PalwFalseValidProofV1 {
-        PalwFalseValidProofV1 {
-            claim_id: claim(),
-            contradiction: PalwPanelContradictionV1::CourtFraud { voided_daa: 9 },
-            prompt_ids_opening: None,
-        }
+        let (refutation, openings, prompt) = crate::palw_panel::reporter_filer::palw_floor_step_refutation_v1();
+        PalwFalseValidProofV1::step_arithmetic_v1(claim(), refutation, openings, prompt.as_ref())
+    }
+
+    /// This node's reporter filer, with the chain stubbed: the book's own rule at a read that admits.
+    fn door() -> PalwBookDoorV1 {
+        PalwBookDoorV1::new(bond(99), 0)
     }
 
     fn receipt_at(seat: u64, mask: u32, signed_daa: u64) -> PalwFalseValidReceiptV1 {
@@ -723,15 +733,15 @@ mod tests {
 
     /// The scan the filer asks at `daa` (exactly one is due), with the chain answering `answer` per
     /// receipt — `palw_false_valid_filings_v1` over the scan's own skips, as `palw_false_valid_scan_v1`
-    /// runs it — applied back. Returns (the receipts asked, what was queued).
+    /// runs it — applied back through `door`. Returns (the receipts asked, the offence keys handed).
     fn scan_and_apply(
         filer: &mut PalwFalseValidFilerV1,
         daa: u64,
         receipts: &[PalwFalseValidReceiptV1],
-        queue: &mut PalwCourtQueueV1,
+        door: &mut PalwBookDoorV1,
         answer: impl Fn(&PalwFalseValidReceiptV1) -> PalwFalseValidFilingCheckV1,
-    ) -> (Vec<PalwFalseValidReceiptV1>, Vec<PalwFalseValidSeamRecordV1>) {
-        let scans = filer.due_v1(daa, |_| None);
+    ) -> (Vec<PalwFalseValidReceiptV1>, Vec<Hash64>) {
+        let scans = filer.due_v1(daa, |key| door.holds(key));
         assert_eq!(scans.len(), 1, "a scan is due at {daa}");
         let scan = &scans[0];
         let mut asked = Vec::new();
@@ -751,95 +761,118 @@ mod tests {
         let queued = filer.apply_v1(
             PalwFalseValidScanOutcomeV1 { claim_id: claim(), receipts: receipts.to_vec(), filings, walked: true },
             daa,
-            queue,
+            door,
         );
         (asked, queued)
     }
 
-    /// **The seam**: the object queued under the (seat, claim) key with this filer's round, once; the
-    /// record is what the reporter filer needs — the offence key, the evidence id of exactly the bytes
-    /// queued, the accused.
+    /// **The door that replaced the seam**: a filing is handed to P2-8's reporter filer as the filer
+    /// keys it — the object unchanged, under the adjudicator's per-(seat, claim) key and the digest of
+    /// exactly those bytes (N12), origin `FalseValid`, no `file_by` — and the filer COMMITS first (its
+    /// tick queues `ReporterCommitted`, never the bare evidence). Handed once: a second hand-off of the
+    /// same offence is the filer's `AlreadyFiled`; a signer the rule does not reach is never handed.
     #[test]
-    fn the_seam_queues_once_under_the_offence_key_and_records_what_the_reporter_needs() {
+    fn the_door_hands_the_filing_to_the_reporter_filer_once_and_it_commits_first() {
         let filing = filing(1, file());
-        let mut queue: PalwCourtQueueV1 = Vec::new();
-        let record = false_valid_file_seam_v1(&mut queue, &filing, 100).expect("queued");
-        assert_eq!(record.offence_key, palw_false_valid_offence_id_v2(&bond(1).0, &claim()));
-        assert_eq!((record.accused, record.claim_id, record.queued_daa), (bond(1), claim(), 100));
-        let (id, round, responder, object) = &queue[0].clone();
-        assert_eq!((*id, *round, *responder), palw_false_valid_queue_key_v1(record.offence_key));
-        assert!(palw_false_valid_queued_v1(*round, *responder, object));
-        let PalwConsensusObjectV2::ObjectiveOffence { evidence_id, evidence, accused, .. } = object else { panic!("kind 3") };
-        assert_eq!(*evidence_id, record.evidence_id);
+        let conviction = palw_false_valid_conviction_filing_v1(&filing).expect("an execution-proving kind 3 takes a commitment");
+        let key = palw_false_valid_offence_id_v2(&bond(1).0, &claim());
+        assert_eq!((conviction.offence_key, conviction.evidence_id), (key, filing.evidence_id));
+        assert_eq!((conviction.accused, conviction.claim_id, conviction.file_by_daa), (bond(1), claim(), None));
+        assert_eq!((conviction.origin, conviction.fallback.clone()), (PalwFilingOriginV1::FalseValid, None));
+        assert_eq!(conviction.object, filing.object, "the object unchanged");
+        let PalwConsensusObjectV2::ObjectiveOffence { kind, evidence_id, evidence, accused } = &conviction.object else { panic!() };
+        assert_eq!((*kind, *accused), (PalwOffenceKindV1::PanelFalseValidV2, bond(1)));
         assert_eq!(*evidence_id, kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence));
-        assert_eq!(*accused, bond(1));
         let payload: PalwPanelFalseValidEvidenceV2 = borsh::from_slice(evidence).unwrap();
         assert!(payload.reporter_reveal.is_empty(), "F7's slot stays empty: R-3 files through 53/54");
-        assert_eq!(false_valid_file_seam_v1(&mut queue, &filing, 101), None, "never twice for one offence");
-        assert_eq!(queue.len(), 1);
         let declined = self::filing(2, PalwFalseValidFilingCheckV1::NotLiable(PalwOffenceVerifyError::SiteNotAttested));
-        assert_eq!(false_valid_file_seam_v1(&mut queue, &declined, 101), None, "a signer the rule does not reach is never queued");
-        assert_eq!(palw_false_valid_queued_keys_v1(&queue), std::collections::HashSet::from([record.offence_key]));
-        // P2-6's accusation marker and a court move are not this filer's.
-        assert!(!palw_false_valid_queued_v1(u32::MAX, false, object));
-        assert!(!palw_false_valid_queued_v1(PALW_FALSE_VALID_QUEUE_ROUND_V1, true, object));
+        assert_eq!(palw_false_valid_conviction_filing_v1(&declined), None, "a signer the rule does not reach is never handed");
+
+        let mut filer = filer_with_proof(100);
+        let mut door = door();
+        filer.due_v1(100, |k| door.holds(k));
+        assert_eq!(filer.apply_v1(outcome(vec![filing.clone(), declined]), 100, &mut door), vec![key]);
+        assert_eq!(door.handed.len(), 1);
+        assert!(door.holds(&key));
+        assert_eq!(door.book.entry(&key).expect("in the book").reporter, bond(99), "this node's bond is the reporter");
+        // The filer's tick: the commitment goes first, under the offence key; the evidence waits.
+        let mut queue = Vec::new();
+        let read = door.read.clone();
+        door.book.tick(&mut queue, &mut HashMap::new(), &mut std::collections::HashSet::new(), |_, _| Some(read.clone()));
+        assert_eq!(queue.len(), 1);
+        let (id, round, responder, object) = &queue[0];
+        assert_eq!((*id, *round, *responder), (key, PALW_FILER_ROUND_COMMIT_V1, false));
+        assert!(palw_filer_queued_v1(*round, *responder, object));
+        assert!(matches!(object, PalwConsensusObjectV2::ReporterCommitted { .. }), "committed before the evidence is public");
+        // Never twice: the book holds it (and the scan skips the seat while it does).
+        assert_eq!(door.file(conviction), PalwFileOutcomeV1::AlreadyFiled);
+        let scans = filer.due_v1(100 + PALW_FALSE_VALID_REFILE_DAA_V1, |k| door.holds(k));
+        assert!(scans[0].skip.contains(&bond(1)), "in flight: not asked");
     }
 
-    /// **Dedup across ticks**: a filed signer is skipped while its carrier is plausibly in flight
-    /// (queued, or sent per `court_moved`, less than a re-file ago); after that the chain decides —
-    /// convicted is watched, still convictable re-queues it, at most `MAX_SENDS` times.
+    /// **Dedup across ticks**: a handed signer is skipped while the reporter filer holds its filing;
+    /// once the filing leaves the book the chain decides — still convictable hands it once more (a
+    /// filing that ended unconvicted), convicted is watched and settled past the finality depth.
     #[test]
     fn a_filed_signer_is_left_alone_while_in_flight_and_then_the_chain_decides() {
         let mut filer = filer_with_proof(100);
-        let mut queue: PalwCourtQueueV1 = Vec::new();
-        let scans = filer.due_v1(100, |_| None);
+        let mut door = door();
+        let scans = filer.due_v1(100, |k| door.holds(k));
         assert_eq!(scans.len(), 1);
         assert_eq!(scans[0].walk_from_daa, 40, "the first walk starts at the claim's bind");
         assert!(scans[0].skip.is_empty());
-        let queued = filer.apply_v1(outcome(vec![filing(1, file())]), 100, &mut queue);
+        let queued = filer.apply_v1(outcome(vec![filing(1, file())]), 100, &mut door);
         assert_eq!(queued.len(), 1);
-        assert_eq!(filer.records().count(), 1);
-        let key = queued[0].offence_key;
-        assert!(filer.due_v1(100 + PALW_FALSE_VALID_REFILE_DAA_V1 - 1, |_| None).is_empty(), "not due before the re-file");
-        // The carrier went out at 130: still in flight at 160 by `court_moved`.
-        queue.clear();
-        let scans = filer.due_v1(100 + PALW_FALSE_VALID_REFILE_DAA_V1, |k| (*k == key).then_some(130));
-        assert!(scans[0].skip.contains(&bond(1)), "sent 30 DAA ago: skipped");
+        let key = queued[0];
+        assert!(filer.due_v1(100 + PALW_FALSE_VALID_REFILE_DAA_V1 - 1, |k| door.holds(k)).is_empty(), "not due before the re-file");
+        let scans = filer.due_v1(100 + PALW_FALSE_VALID_REFILE_DAA_V1, |k| door.holds(k));
+        assert!(scans[0].skip.contains(&bond(1)), "the filer holds it: skipped");
         assert!(scans[0].walk_from_daa >= 40 && scans[0].walk_from_daa <= 100, "incremental, with the reorg margin");
-        // Past the re-file: asked; still convictable → queued again (a lost carrier).
-        let later = 130 + PALW_FALSE_VALID_REFILE_DAA_V1;
-        let scans = filer.due_v1(later, |k| (*k == key).then_some(130));
+        // The filing ends unconvicted (Expired): asked again; still convictable → handed once more.
+        assert_eq!(door.expire_all(), 1);
+        let later = 100 + 2 * PALW_FALSE_VALID_REFILE_DAA_V1;
+        let scans = filer.due_v1(later, |k| door.holds(k));
         assert!(!scans[0].skip.contains(&bond(1)));
-        assert_eq!(filer.apply_v1(outcome(vec![filing(1, file())]), later, &mut queue).len(), 1, "re-sent");
-        // Convicted on chain: watched (asked again), and settled once past the finality depth.
-        queue.clear();
+        assert_eq!(filer.apply_v1(outcome(vec![filing(1, file())]), later, &mut door), vec![key], "handed again");
+        assert_eq!(door.queued(), vec![key, key]);
+        // Convicted on chain (the filer let it go at its sweep): watched, and settled once final.
+        door.expire_all();
         let at = later + PALW_FALSE_VALID_REFILE_DAA_V1;
-        filer.due_v1(at, |_| None);
-        assert!(filer.apply_v1(outcome(vec![filing(1, convicted(at - 5))]), at, &mut queue).is_empty());
+        filer.due_v1(at, |k| door.holds(k));
+        assert!(filer.apply_v1(outcome(vec![filing(1, convicted(at - 5))]), at, &mut door).is_empty());
         let rewalk = at + PALW_FALSE_VALID_REWALK_DAA_V1;
-        let scans = filer.due_v1(rewalk, |_| None);
+        let scans = filer.due_v1(rewalk, |k| door.holds(k));
         assert!(!scans[0].skip.contains(&bond(1)), "a conviction above the finality depth is watched");
-        filer.apply_v1(outcome(vec![filing(1, convicted(at - 5))]), at + DEPTH, &mut queue);
-        let scans = filer.due_v1(at + DEPTH + PALW_FALSE_VALID_REWALK_DAA_V1, |_| None);
+        filer.apply_v1(outcome(vec![filing(1, convicted(at - 5))]), at + DEPTH, &mut door);
+        let scans = filer.due_v1(at + DEPTH + PALW_FALSE_VALID_REWALK_DAA_V1, |k| door.holds(k));
         assert!(scans[0].skip.contains(&bond(1)), "settled past the finality depth");
+        assert_eq!(door.handed.len(), 2, "never handed while held, never after the conviction");
     }
 
-    /// A carrier that keeps vanishing is given up after `MAX_SENDS`.
+    /// A filing that keeps ending unconvicted is given up after `PALW_FILER_HAND_OFFS_PER_OFFENCE_V1`
+    /// hand-offs (each of which the filer sends at most `PALW_FILER_MAX_SENDS_V1` times); a
+    /// refusal by the filer (a full book, the gate at its read) costs no hand-off.
     #[test]
-    fn a_filing_is_sent_at_most_max_sends_times() {
+    fn a_filing_is_handed_to_the_reporter_filer_a_bounded_number_of_times() {
         let mut filer = filer_with_proof(0);
+        let mut door = door();
         let mut daa = 0;
-        let mut sent = 0;
-        for _ in 0..(PALW_FALSE_VALID_MAX_SENDS_V1 + 2) {
-            let mut queue: PalwCourtQueueV1 = Vec::new();
-            if filer.due_v1(daa, |_| None).is_empty() {
-                daa += PALW_FALSE_VALID_REFILE_DAA_V1;
+        // The filer's gate refuses at its read: nothing handed, nothing counted.
+        door.read.object_gate = Some(Err("a court is open on the claim".into()));
+        filer.due_v1(daa, |k| door.holds(k));
+        assert!(filer.apply_v1(outcome(vec![filing(1, file())]), daa, &mut door).is_empty());
+        door.read.object_gate = Some(Ok(()));
+        let mut handed = 0;
+        for _ in 0..(PALW_FILER_HAND_OFFS_PER_OFFENCE_V1 + 3) {
+            daa += PALW_FALSE_VALID_REWALK_DAA_V1;
+            if filer.due_v1(daa, |k| door.holds(k)).is_empty() {
                 continue;
             }
-            sent += filer.apply_v1(outcome(vec![filing(1, file())]), daa, &mut queue).len() as u32;
-            daa += PALW_FALSE_VALID_REFILE_DAA_V1;
+            handed += filer.apply_v1(outcome(vec![filing(1, file())]), daa, &mut door).len() as u8;
+            door.expire_all();
         }
-        assert_eq!(sent, PALW_FALSE_VALID_MAX_SENDS_V1);
+        assert_eq!(handed, PALW_FILER_HAND_OFFS_PER_OFFENCE_V1);
+        assert_eq!(door.queued().len(), PALW_FILER_HAND_OFFS_PER_OFFENCE_V1 as usize);
     }
 
     /// **The review's high finding, the book half (K1)**: no chain answer but a node-policy decline,
@@ -850,13 +883,13 @@ mod tests {
     #[test]
     fn no_answer_but_a_decline_a_final_conviction_or_the_send_budget_settles_a_seat() {
         let mut filer = filer_with_proof(100);
-        let mut queue: PalwCourtQueueV1 = Vec::new();
+        let mut door = door();
         let old = receipt_at(2, 0b0001, 7);
         let new = receipt_at(2, 0b1111, 150);
         // First scan: seat 1 is refused (its lock is not in state yet), seat 3 unrelied (junk), seat
         // 2's receipt is not liable.
         let first = [receipt(1, 0b1111), old.clone(), receipt(3, 0b0100)];
-        let (asked, queued) = scan_and_apply(&mut filer, 100, &first, &mut queue, |r| match r.inner().seat_bond {
+        let (asked, queued) = scan_and_apply(&mut filer, 100, &first, &mut door, |r| match r.inner().seat_bond {
             s if s == bond(1) => PalwFalseValidFilingCheckV1::Refused("the accused holds no Valid lock".into()),
             s if s == bond(2) => PalwFalseValidFilingCheckV1::NotLiable(PalwOffenceVerifyError::SiteNotAttested),
             _ => PalwFalseValidFilingCheckV1::Unrelied("the receipt's signature does not verify".into()),
@@ -867,71 +900,108 @@ mod tests {
         // receipt is not asked again, its new one files.
         let mut filed: BTreeSet<PalwBondKeyV2> = BTreeSet::new();
         let later = [receipt(1, 0b1111), old.clone(), new.clone(), receipt(3, 0b0100)];
-        let (asked, queued) = scan_and_apply(&mut filer, 100 + PALW_FALSE_VALID_REWALK_DAA_V1, &later, &mut queue, |_| file());
+        let (asked, queued) = scan_and_apply(&mut filer, 100 + PALW_FALSE_VALID_REWALK_DAA_V1, &later, &mut door, |_| file());
         assert!(!asked.contains(&old), "a receipt answered not liable is not asked again");
         assert!(asked.contains(&new), "the seat's new receipt is");
-        filed.extend(queued.iter().map(|r| r.accused));
+        filed.extend(door.handed.iter().filter(|(f, _)| queued.contains(&f.offence_key)).map(|(f, _)| f.accused));
         assert_eq!(filed, BTreeSet::from([bond(1), bond(2), bond(3)]), "every seat files once the chain convicts");
         // A node-policy decline is the one chain-side answer that settles.
         let mut filer = filer_with_proof(0);
         let mut declined = filing(4, file());
         declined.policy = Some(PalwFalseValidPolicyV1::OwnClaim);
-        filer.due_v1(0, |_| None);
-        filer.apply_v1(outcome(vec![declined]), 0, &mut queue);
-        assert!(filer.due_v1(PALW_FALSE_VALID_REWALK_DAA_V1, |_| None)[0].skip.contains(&bond(4)));
+        filer.due_v1(0, |k| door.holds(k));
+        filer.apply_v1(outcome(vec![declined]), 0, &mut door);
+        assert!(filer.due_v1(PALW_FALSE_VALID_REWALK_DAA_V1, |k| door.holds(k))[0].skip.contains(&bond(4)));
     }
 
     /// **The review's reorg finding**: a conviction seen is watched until its block is past the
-    /// finality depth. A reorg that takes it away (the chain answers `File` again) re-queues the
-    /// filing with a fresh send budget, even after `MAX_SENDS` carriers.
+    /// finality depth. A reorg that takes it away (the chain answers `File` again) hands the filing
+    /// to the reporter filer again with a fresh budget, even after every hand-off was spent.
     #[test]
     fn a_conviction_is_watched_until_final_and_a_reorg_that_takes_it_is_filed_again() {
         let mut filer = filer_with_proof(0);
-        let mut queue: PalwCourtQueueV1 = Vec::new();
+        let mut door = door();
         let mut daa = 0;
-        for _ in 0..PALW_FALSE_VALID_MAX_SENDS_V1 {
-            filer.due_v1(daa, |_| None);
-            assert_eq!(filer.apply_v1(outcome(vec![filing(1, file())]), daa, &mut queue).len(), 1);
-            queue.clear();
+        for _ in 0..PALW_FILER_HAND_OFFS_PER_OFFENCE_V1 {
+            filer.due_v1(daa, |k| door.holds(k));
+            assert_eq!(filer.apply_v1(outcome(vec![filing(1, file())]), daa, &mut door).len(), 1);
+            door.expire_all();
             daa += PALW_FALSE_VALID_REFILE_DAA_V1;
         }
-        // The third carrier landed at `daa - 10`.
-        filer.due_v1(daa, |_| None);
-        filer.apply_v1(outcome(vec![filing(1, convicted(daa - 10))]), daa, &mut queue);
-        // A reorg took the block away: the chain convicts again and the filer sends again.
+        // The last filing's evidence landed at `daa - 10`.
+        filer.due_v1(daa, |k| door.holds(k));
+        filer.apply_v1(outcome(vec![filing(1, convicted(daa - 10))]), daa, &mut door);
+        // A reorg took the block away: the chain convicts again and the filer is handed it again.
         daa += PALW_FALSE_VALID_REWALK_DAA_V1;
-        let scans = filer.due_v1(daa, |_| None);
+        let scans = filer.due_v1(daa, |k| door.holds(k));
         assert!(!scans[0].skip.contains(&bond(1)));
-        let queued = filer.apply_v1(outcome(vec![filing(1, file())]), daa, &mut queue);
-        assert_eq!(queued.len(), 1, "a conviction a reorg took away is filed again, whatever was sent before");
+        let queued = filer.apply_v1(outcome(vec![filing(1, file())]), daa, &mut door);
+        assert_eq!(queued.len(), 1, "a conviction a reorg took away is filed again, whatever was handed before");
     }
 
-    /// A queued filing the chain no longer convicts (another carrier convicted the seat, or a court
-    /// opened) leaves the queue unsent; an open court is asked again soon; a policy decline settles
-    /// its seat; a conviction above the finality depth and a liability refusal do not settle theirs.
+    /// A filing the reporter filer holds is LEFT to it when the chain now answers otherwise (another
+    /// carrier convicted the seat, a court opened): the filer asks the gate before every send and ends
+    /// on the conviction it reads, so nothing is withdrawn or handed here. Once it has left the book,
+    /// an open court is asked again soon; a policy decline settles its seat; a conviction above the
+    /// finality depth and a liability refusal do not settle theirs.
     #[test]
-    fn a_queued_filing_the_chain_now_refuses_leaves_the_queue() {
+    fn a_filing_the_chain_now_refuses_is_left_to_the_filer_and_then_the_chain_decides() {
         let mut filer = filer_with_proof(0);
-        let mut queue: PalwCourtQueueV1 = Vec::new();
-        filer.due_v1(0, |_| None);
-        filer.apply_v1(outcome(vec![filing(1, file()), filing(2, file())]), 0, &mut queue);
-        assert_eq!(queue.len(), 2);
+        let mut door = door();
+        filer.due_v1(0, |k| door.holds(k));
+        filer.apply_v1(outcome(vec![filing(1, file()), filing(2, file())]), 0, &mut door);
+        assert_eq!(door.book.len(), 2);
         let at = PALW_FALSE_VALID_REFILE_DAA_V1;
-        filer.due_v1(at, |_| None);
-        let wait = filing(1, PalwFalseValidFilingCheckV1::Wait(PalwOffenceVerifyError::ClaimUnderSession));
-        let convicted = filing(2, convicted(at - 1));
-        let mut held = filing(3, file());
-        held.policy = Some(PalwFalseValidPolicyV1::HeldPartial);
-        let not_liable = filing(4, PalwFalseValidFilingCheckV1::NotLiable(PalwOffenceVerifyError::SiteNotAttested));
-        assert!(filer.apply_v1(outcome(vec![wait, convicted, held, not_liable]), at, &mut queue).is_empty());
-        assert!(queue.is_empty(), "both queued entries left unsent");
-        let scans = filer.due_v1(at + PALW_FALSE_VALID_WAIT_RECHECK_DAA_V1, |_| None);
+        filer.due_v1(at, |k| door.holds(k));
+        let wait = || filing(1, PalwFalseValidFilingCheckV1::Wait(PalwOffenceVerifyError::ClaimUnderSession));
+        let convicted_ = || filing(2, convicted(at - 1));
+        let held = || {
+            let mut held = filing(3, file());
+            held.policy = Some(PalwFalseValidPolicyV1::HeldPartial);
+            held
+        };
+        let not_liable = || filing(4, PalwFalseValidFilingCheckV1::NotLiable(PalwOffenceVerifyError::SiteNotAttested));
+        assert!(filer.apply_v1(outcome(vec![wait(), convicted_(), held(), not_liable()]), at, &mut door).is_empty());
+        assert_eq!((door.book.len(), door.handed.len()), (2, 2), "left to the filer; nothing more handed");
+        let scans = filer.due_v1(at + PALW_FALSE_VALID_WAIT_RECHECK_DAA_V1, |k| door.holds(k));
+        assert!(scans[0].skip.contains(&bond(1)), "in flight while the filer holds it");
+        door.expire_all();
+        let at = at + PALW_FALSE_VALID_WAIT_RECHECK_DAA_V1;
+        filer.apply_v1(outcome(vec![wait(), convicted_(), held(), not_liable()]), at, &mut door);
+        let scans = filer.due_v1(at + PALW_FALSE_VALID_WAIT_RECHECK_DAA_V1, |k| door.holds(k));
         assert_eq!(scans.len(), 1, "an open court is asked again soon");
         assert!(!scans[0].skip.contains(&bond(1)));
         assert!(scans[0].skip.contains(&bond(3)), "a policy decline settles");
         assert!(!scans[0].skip.contains(&bond(2)), "a conviction above the finality depth is watched");
         assert!(!scans[0].skip.contains(&bond(4)), "a liability refusal is per receipt");
         assert_eq!(scans[0].not_liable.len(), 1);
+    }
+
+    /// **P2-8b's proof, noted for P2-8c** (the integration): the replay filer's kind 4 is read back
+    /// into a proof — its contradiction and prompt tile, byte for byte — sourced `Replay`, walked from
+    /// the claim's bind; a claim's first proof is kept; nothing is noted unarmed, or from another kind.
+    #[test]
+    fn a_replay_filers_executor_refuted_is_noted_as_the_claims_proof() {
+        let (refutation, openings, prompt) = crate::palw_panel::reporter_filer::palw_floor_step_refutation_v1();
+        let contradiction = kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StepArithmetic {
+            refutation: refutation.clone(),
+            operand_openings: openings.clone(),
+        };
+        let kind4 = kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_object_v1(
+            bond(0),
+            claim(),
+            contradiction.clone(),
+            prompt.clone(),
+        );
+        let mut filer = PalwFalseValidFilerV1::new(10_000, 500, DEPTH);
+        assert!(!filer.note_executor_refuted_v1(false, &kind4, Some(40), 100), "unarmed: nothing");
+        assert!(!filer.note_executor_refuted_v1(true, &filing(1, file()).object, Some(40), 100), "a kind 3 is not P2-8b's");
+        assert!(filer.note_executor_refuted_v1(true, &kind4, Some(40), 100));
+        let case = &filer.cases[&claim()];
+        assert_eq!((case.proof.contradiction.clone(), case.proof.prompt_ids_opening.clone()), (contradiction, prompt.clone()));
+        assert_eq!((case.source, case.not_before_daa), (PalwFalseValidSourceV1::Replay, 40));
+        assert_eq!(*case.proof, proof(), "the capture arm's proof of the same leaf is the same proof");
+        assert!(!filer.note_executor_refuted_v1(true, &kind4, Some(40), 101), "the first proof of a claim is kept");
     }
 
     /// Bounded: one proof a claim (the first kept), at most `MAX_CASES` (the oldest forgotten), one
@@ -951,8 +1021,8 @@ mod tests {
         again.claim_id = Hash64::from_u64_word(0xA000 + 5);
         assert!(!filer.note_proof_v1(again, source, None, 10), "the first proof of a claim is kept");
         assert_eq!(filer.cases[&Hash64::from_u64_word(0xA000 + 5)].not_before_daa, 0, "the look-back, floored at 0");
-        assert_eq!(filer.due_v1(100, |_| None).len(), PALW_FALSE_VALID_CASES_PER_TICK_V1);
-        assert!(filer.due_v1(2_000, |_| None).is_empty() && filer.is_empty(), "past the TTL, forgotten");
+        assert_eq!(filer.due_v1(100, |_| false).len(), PALW_FALSE_VALID_CASES_PER_TICK_V1);
+        assert!(filer.due_v1(2_000, |_| false).is_empty() && filer.is_empty(), "past the TTL, forgotten");
     }
 
     /// The fence and the funding: below `palw_rcore_plus` nothing runs; a receipts-only node never
@@ -1114,35 +1184,35 @@ mod tests {
 
         let mut filer = PalwFalseValidFilerV1::new(10_000, 500, DEPTH);
         assert!(filer.note_proof_v1(proof(), PalwFalseValidSourceV1::CaptureSample { leaf: 3 }, Some(5), 40));
-        let mut queue: PalwCourtQueueV1 = Vec::new();
-        let scan = filer.due_v1(40, |_| None).remove(0);
+        let mut door = door();
+        let scan = filer.due_v1(40, |k| door.holds(k)).remove(0);
         let outcome = palw_false_valid_scan_v1(&chain, scan, bond(99), 40);
         assert!(outcome.walked);
         let mut kept = outcome.receipts.clone();
         kept.sort_by_key(|r| r.inner().seat_bond);
         assert_eq!(kept, genuine, "the genuine five kept, none of the 37 junk");
         assert!(chain.asked.lock().unwrap().iter().all(|r| genuine.contains(r)), "no junk receipt is ever asked about");
-        let queued = filer.apply_v1(outcome, 40, &mut queue);
-        let filed: BTreeSet<PalwBondKeyV2> = queued.iter().map(|r| r.accused).collect();
+        let queued = filer.apply_v1(outcome, 40, &mut door);
+        let filed: BTreeSet<PalwBondKeyV2> = door.handed.iter().map(|(filing, _)| filing.accused).collect();
         assert_eq!(filed, BTreeSet::from([bond(4), bond(5)]), "both liable seats filed");
-        assert_eq!(queue.len(), 2);
+        assert_eq!((queued.len(), door.book.len()), (2, 2), "each through the reporter filer");
 
         // A reorg takes seat 1's licence away: at the next scan its receipt leaves the book.
         chain.relied.lock().unwrap().retain(|r| r.inner().seat_bond != bond(1));
         let at = 40 + PALW_FALSE_VALID_REFILE_DAA_V1;
-        let scan = filer.due_v1(at, |_| None).remove(0);
+        let scan = filer.due_v1(at, |k| door.holds(k)).remove(0);
         let outcome = palw_false_valid_scan_v1(&chain, scan, bond(99), at);
         assert!(outcome.receipts.iter().all(|r| r.inner().seat_bond != bond(1)), "an unrelied receipt leaves");
-        filer.apply_v1(outcome, at, &mut queue);
+        filer.apply_v1(outcome, at, &mut door);
 
         // No tip state: nothing walked, nothing lost.
         chain.dormant = true;
         let held = filer.cases[&claim()].receipts.clone();
         let at = at + PALW_FALSE_VALID_REWALK_DAA_V1;
-        let scan = filer.due_v1(at, |_| None).remove(0);
+        let scan = filer.due_v1(at, |k| door.holds(k)).remove(0);
         let outcome = palw_false_valid_scan_v1(&chain, scan, bond(99), at);
         assert!(!outcome.walked && outcome.filings.is_empty());
-        filer.apply_v1(outcome, at, &mut queue);
+        filer.apply_v1(outcome, at, &mut door);
         assert_eq!(filer.cases[&claim()].receipts, held, "the book keeps what it held");
         assert_eq!(filer.cases[&claim()].walked_daa, Some(40 + PALW_FALSE_VALID_REFILE_DAA_V1), "and the walk mark stays");
     }
@@ -1151,8 +1221,9 @@ mod tests {
     /// arm notes its refutation right after recording the fault and before its one-move accusation
     /// takes the refutation; a court close notes its proof only as the challenger of an
     /// `ExecutorGuilty` close; every note and the tick's step are gated by the one arming predicate;
-    /// the step runs after P2-6's accusations and before the submitter, so a filing queued this tick
-    /// rides this tick's priority slot; and the submitter logs the filer's entries by their marker.
+    /// the step runs after P2-6's accusations and BEFORE the reporter filer's tick, through the panel's
+    /// door over that filer's book, so a filing handed this tick commits this tick; and nothing of this
+    /// lane is queued or logged by the carrier lane itself (the filer's objects are the filer's).
     #[test]
     fn the_panel_notes_proofs_and_runs_the_step_where_it_should() {
         let whole = include_str!("palw_panel.rs");
@@ -1168,15 +1239,31 @@ mod tests {
         let guard = source[..close]
             .rfind("if verdict == kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty && !duty.i_am_responder {");
         assert!(guard.is_some_and(|g| close - g < 200), "only the challenger's ExecutorGuilty close");
-        assert_eq!(source.matches("crate::palw_filer_false_valid::palw_false_valid_armed_v1(").count(), 3, "every site is gated");
+        assert_eq!(source.matches("crate::palw_filer_false_valid::palw_false_valid_armed_v1(").count(), 4, "every site is gated");
+        // P2-8b's proof: the replay filer's kind 4 of this tick, noted right after its tick.
+        let replay = source.find(".replay_filer_tick_v1(").expect("the replay filer's tick");
+        let noted_replay = source.find("false_valid.note_executor_refuted_v1(").expect("the replay's proof is noted");
+        assert!(replay < noted_replay && source[replay..noted_replay].contains("if let Some((refuted, bound_daa)) = &replay_made {"));
+        assert!(source[noted_replay..noted_replay + 400].contains("&refuted.object,\n                    Some(*bound_daa),"));
         let p2_6 = source.find("// --- P2-6: this seat's accusations of withholding ---").expect("P2-6's step");
         let step = source.find("crate::palw_filer_false_valid::palw_false_valid_tick_v1(").expect("the step");
         let submitter = source.find("// --- the collector + submitter's half ---").expect("the submitter");
         assert!(p2_6 < step && step < submitter);
+        assert!(noted_replay < step, "a replay's proof is scanned for in the same tick");
         assert!(source[step..submitter].contains("false_valid.clear();"), "the book is emptied when unarmed");
+        let call = &source[step..step + source[step..].find(".await;").expect("awaited")];
         assert!(
-            source
-                .contains("} else if crate::palw_filer_false_valid::palw_false_valid_queued_v1(round, mine_is_responder, &object) {")
+            call.contains("&mut self.conviction_door_v1(&session, &mut reporter_filer, bond_key, network_domain),"),
+            "through the panel's door over the reporter filer's book: {call}"
+        );
+        let filer_tick = source.find("self.reporter_filer_tick_v1(").expect("the reporter filer's tick");
+        assert!(step < filer_tick && filer_tick < submitter, "handed before the filer ticks");
+        assert!(!source.contains("palw_false_valid_queued_v1"), "the lane queues nothing of its own");
+        let this = include_str!("palw_filer_false_valid.rs");
+        let body = &this[..this.find("#[cfg(test)]\nmod tests {").expect("the tests")];
+        assert!(
+            !body.contains("court_pending:") && !body.contains("court_pending.") && !body.contains("court_moved:"),
+            "the lane never touches the court queue"
         );
     }
 }
