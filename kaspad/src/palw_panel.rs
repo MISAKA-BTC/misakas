@@ -10429,6 +10429,16 @@ impl PalwPanelService {
                         self.config.fee_outpoint.as_deref().unwrap_or("unset")
                     );
                 }
+                // **V04: a waiting proof holds the receipts for ITS tick, never longer** (the pre-t12
+                // drill of 2026-09-25). `readiness_waiting` was set where a proof found no slot and
+                // cleared only where one was carried, so a proof that stopped being due while it
+                // waited — its last copy landed and the row went fresh — left it set until the NEXT
+                // proof was carried, half a row's age later: m6 waited at 19:21:22 and then carried 26
+                // reporter carriers and not one licence, supplementary set or own receipt until
+                // 19:46:38. Last tick's wait still asks for the duties again at once (the thirty-second
+                // read throttle); from here on the flag is this tick's own, and a proof still due takes
+                // the slot at its own site, ahead of the licences, exactly as before.
+                let proof_waited_last_tick = std::mem::replace(&mut readiness_waiting, false);
                 // **P2-6: the priority lane first — the court's moves, data-availability accusations
                 // and answers, convictions — except on the licences' turn** (the slot right after a
                 // priority carrier, `palw_carrier_licence_turn_v1`), when it goes behind the
@@ -10442,7 +10452,7 @@ impl PalwPanelService {
                 // ahead of it (`ReadinessEscalated`: one a tick, never two slots running). Elsewhere
                 // they are read at the Own site, where they always were.
                 let mut readiness = if self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
-                    Some(self.readiness_duties_for_tick(&session, current_daa, readiness_waiting).await)
+                    Some(self.readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick).await)
                 } else {
                     None
                 };
@@ -10674,7 +10684,7 @@ impl PalwPanelService {
                 // — read here, or before the court queue past R-core+ (M1, above).
                 let duties = match readiness.take() {
                     Some(duties) => duties,
-                    None => self.readiness_duties_for_tick(&session, current_daa, readiness_waiting).await,
+                    None => self.readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick).await,
                 };
                 for duty in duties {
                     // **A due proof behind a LOST carrier of ours replaces it** (the pre-t12 drill of

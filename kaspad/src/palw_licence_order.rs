@@ -452,4 +452,29 @@ mod tests {
         assert!(walk.contains("std::hash::BuildHasher::hash_one(&licence_spread, claim)"), "on this process's own key");
         assert!(production.contains("let licence_spread = std::collections::hash_map::RandomState::new();"));
     }
+
+    /// **A possession proof's wait holds the receipts for its own tick, never longer** (V04's second
+    /// node-side cause: m6 carried no licence for 25 minutes after one proof waited once).
+    #[test]
+    fn the_proof_wait_is_not_a_latch() {
+        let production = production_panel();
+        let licences = production.find("slots.at(PalwCarrierSiteV1::Licences, inflight);").expect("the Licences site");
+        let reset =
+            production.find("let proof_waited_last_tick = std::mem::replace(&mut readiness_waiting, false);").expect("the reset");
+        let first_read =
+            production.find("self.readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick)").expect("M1's read");
+        assert!(reset < first_read && first_read < licences, "the wait is reset each tick, before any proof is read");
+        assert_eq!(
+            production.matches("readiness_duties_for_tick(&session, current_daa, proof_waited_last_tick)").count(),
+            2,
+            "both reads — M1's and the Own site's — are cued by last tick's wait"
+        );
+        assert!(
+            !production.contains("readiness_duties_for_tick(&session, current_daa, readiness_waiting)"),
+            "no read is cued by the latch"
+        );
+        // Between the reset and the Licences site, the flag is set only where a proof of THIS tick waits.
+        let tick = &production[reset..licences];
+        assert!(tick.matches("readiness_waiting = true;").count() == 2, "a failed replacement, and a proof with no slot");
+    }
 }
