@@ -35,6 +35,13 @@
 //!   new lottery win (a new execution commitment).
 //! * `t3b_…` — FLIPPED: the anchor block's producer grinding identities for its own claim or a victim's
 //!   finds one panel per claim, and no coalition quorum it did not draw honestly.
+//! * `t3c_…` — lane A (`Params::palw_operator_anchor`, [`t12_f1_op`]: armed with F1 at one common
+//!   height over the eight genesis bonds): what F1 leaves open — a new panel per junk lottery win — is
+//!   gone for a non-operator. None of 4,096 fresh junk wins may anchor (the processor's own predicate,
+//!   `PalwOperatorAnchorRuleV1::admits_anchor_v1`, on each win's header; every one could below the
+//!   fence), an operator's outpoint under the attacker's key may not either, the attacker's attempt at
+//!   the slot binds and voids nothing, and the claim binds at the next operator attempt on ONE panel
+//!   the attacker's wins do not move.
 //! * `t4_…` — 1,000 claim → anchor-void → claim cycles on one bond: nothing accumulates.
 //! * `t5_…` — after the void the reservation (a 13,000 MSK bond's K = 2) and the 2M lane (cap 1) are
 //!   free in the very next block.
@@ -57,7 +64,7 @@ use kaspa_consensus_core::palw_attempt_v2::{
 use kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1;
 use kaspa_consensus_core::palw_panel_v2::{
     PalwAnchorFactV2, PalwPanelDrawPolicyV1, PalwPanelIndependenceV1, PalwPanelStakeDrawV1, derive_panel_v2_with_policy,
-    palw_bond_maturity_window_v2, palw_panel_anchor_execution_v1, palw_panel_draw_seed_v1, palw_seat_maturity_floor_v1,
+    palw_bond_maturity_window_v2, palw_panel_anchor_execution_v1, palw_seat_maturity_floor_v1,
 };
 use kaspa_consensus_core::palw_reward_v2::{PalwRewardStatusV2, palw_reward_status_v2};
 use kaspa_consensus_core::palw_state_v2::{
@@ -108,6 +115,54 @@ fn seed_rule_armed(anchor_daa: u64) -> bool {
 
 fn floor_id(p: &Params) -> Hash64 {
     genesis_classes(p)[0].0
+}
+
+/// **Lane A's fence height in these runs** — the same as [`F1_AT`]: the recommended rollout arms every
+/// post-launch fence at one common height.
+const OP_AT: u64 = F1_AT;
+
+/// **[`t12_f1`] with lane A armed at [`OP_AT`] over testnet-12's eight genesis bonds** — the ruleset a
+/// node runs once the operator arms both post-launch fences at one height. Validated.
+fn t12_f1_op() -> Params {
+    let mut p = t12_f1();
+    assert_eq!(p.palw_operator_anchor, None, "the release ships lane A dormant");
+    p.palw_operator_anchor = p.palw_operator_anchor_of_genesis_bonds_v1(kaspa_consensus_core::config::params::ForkActivation::new(OP_AT));
+    p.validate_palw_v2().expect("testnet-12 with lanes F1 and A armed is a runnable ruleset");
+    assert_eq!(p.palw_operator_anchor.as_ref().map(|v| v.operators.len()), Some(8), "the eight genesis cards");
+    p
+}
+
+/// **An attempt-lane header at `daa` carrying `att`** — the three fields the anchor predicate reads
+/// (algorithm id, DAA score, envelope); the header stage's signature check is not this layer's.
+fn header_of(p: &Params, att: &Att, daa: u64) -> Header {
+    let mut header = Header::from_precomputed_hash(identity(0x4EAD_0000 + daa), vec![]);
+    header.pow_algo_id = p.palw_attempt_lane_at(daa).attempt_algo_id();
+    header.daa_score = daa;
+    header.palw_commitment = att.0.encode_wire();
+    header
+}
+
+/// **Step 4c's lane answer for a block at `daa` carrying `att`**, exactly as the processor resolves it
+/// under lane A (`palw_sw8_anchor_delay_for` → `palw_block_may_anchor_a_panel_v1`): an attempt block
+/// past R-core+ may anchor iff the operator rule admits its header.
+fn lane_of(p: &Params, att: &Att, daa: u64) -> Option<u64> {
+    let rule = p.palw_operator_anchor_rule_v1();
+    kaspa_consensus_core::palw_operator_anchor_v1::palw_operator_anchor_admits_v1(rule.as_ref(), &header_of(p, att, daa))
+        .then(|| anchor_delay(p))
+}
+
+/// **A floor attempt by testnet-12's first genesis card (an operator)**, under its registered key and
+/// operator id — `(envelope, execution key, job anchor)`, as [`Run::next_attempt`] makes one for a
+/// fixture bond.
+fn operator_attempt_of(c: &Chain, seed: u64) -> Att {
+    let (bond, pubkey, operator_pubkey) = floor_producer(&c.p);
+    let floor = floor_id(&c.p);
+    let pwu = c.floor_pwu(c.daa + 1);
+    let (mut env, _, _) = junk_attempt(floor, bond, pubkey, &operator_pubkey, pwu, seed, 0x10C0 + seed);
+    env.attempt.artifact_root = c.s.class(&floor).expect("the floor").artifact_root;
+    let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(h(NET), h(0x10C0 + seed), floor, &bond.0, 7);
+    let key = execution_commitment_v3(&env.attempt, anchor);
+    (env, key, floor_job_anchor(&c.p, bond, 0x10C0 + seed))
 }
 
 // =================================================================================================
@@ -941,6 +996,87 @@ fn t3b_the_anchor_producer_cannot_pick_the_panel_for_its_own_claim_or_a_victims(
     assert!(own_hits == 0 || own_hits == TRIES, "the identity grind cannot move the outcome");
     assert!(victim_hits == 0 || victim_hits == TRIES, "the identity grind cannot move the outcome");
     assert!(sybil_seatings > 0, "the Sybils are seat-eligible: the draw still reaches them at their weight");
+}
+
+/// **Lane A closes what F1 leaves open.** F1 makes a new panel cost a new lottery win; while P0-10 is
+/// open a win is junk. Past lane A's fence the attacker's wins are not anchors at all: the chain's
+/// predicate refuses every one, so the attacker's choice set for its claim's panel is empty and the claim
+/// gets the one draw the next operator attempt keys.
+#[test]
+fn t3c_past_the_operator_fence_a_non_operator_s_junk_wins_anchor_nothing() {
+    let p = t12_f1_op();
+    let ad = anchor_delay(&p);
+    let quorum = kaspa_consensus_core::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as usize;
+    let rule = p.palw_operator_anchor_rule_v1().expect("lane A reaches the processor");
+    let (mut run, coalition) = coalition_run(&p);
+    let captured = |seats: &[PalwPanelSeatV2]| seats.iter().filter(|s| coalition.contains(&s.bond)).count() >= quorum;
+
+    // The attacker's claim: its own attempt block (not an anchor-lane block under lane A either).
+    let d1 = run.daa() + 1;
+    let first = run.next_attempt(ATT);
+    let own = attempt_id_v2(&first.0.attempt);
+    assert_eq!(lane_of(&p, &first, d1), None, "past the fence the attacker's attempt block is not an anchor-lane block");
+    run.push(h(0xC1A7), d1, vec![], Some(first), T12_BLOCK_SUBSIDY_SOMPI, None).expect("the attacker's attempt folds");
+    let slot = run.s().claim(&own).expect("the attacker's claim").bind_base_daa() + ad;
+    run.beat_to(slot);
+    let base = pre_object_base(&run.c, run.s(), identity(5), slot);
+
+    // (a) The grind: fresh junk wins at the slot. Under F1 alone each one is an anchor and a new panel
+    // (the residual); under lane A the chain's predicate admits none of them.
+    const WINS: u64 = 4_096;
+    let (mut admitted, mut admitted_below, mut f1_hits) = (0u64, 0u64, 0u64);
+    let mut f1_panels: BTreeSet<Vec<PalwBondKeyV2>> = BTreeSet::new();
+    for w in 0..WINS {
+        let win = run.next_attempt(ATT);
+        admitted += u64::from(rule.admits_anchor_v1(&header_of(&p, &win, slot)));
+        admitted_below += u64::from(rule.admits_anchor_v1(&header_of(&p, &win, OP_AT - 1)));
+        let seats = derive_at(&run.c, &base, slot, chain_seed(identity(0x3C00_0000 + w), slot, &win, &own), &own).unwrap();
+        f1_hits += u64::from(captured(&seats));
+        f1_panels.insert(seats.iter().map(|s| s.bond).collect());
+    }
+    // An operator's outpoint under the attacker's key: the header stage verified the attacker's own
+    // signature, so it is well-formed — and not the operator's production.
+    let mut impersonation = run.next_attempt(ATT);
+    let (op_bond, _, _) = floor_producer(&p);
+    impersonation.0.attempt.executor_bond = op_bond.0;
+    let impersonated = rule.admits_anchor_v1(&header_of(&p, &impersonation, slot));
+
+    // (b) The attacker's attempt block AT the slot: step 4c's lane answer is None — it binds and voids
+    // nothing; the claim waits for an operator.
+    let at_slot = run.next_attempt(ATT);
+    assert_eq!(lane_of(&p, &at_slot, slot), None);
+    let skips = run.push(h(0xA7_0003), slot, vec![], Some(at_slot), T12_BLOCK_SUBSIDY_SOMPI, None).expect("folds");
+    assert!(skips.is_empty(), "{skips:?}");
+    assert_eq!(run.s().claim(&own).unwrap().phase, PalwClaimPhaseV2::Provisional, "no anchor, no bind, no void");
+
+    // (c) The next operator attempt anchors: ONE seed, H(operator's execution ‖ claim), which none of the
+    // attacker's wins entered.
+    let op = operator_attempt_of(&run.c, 0x0B01);
+    let op_daa = slot + 1;
+    assert_eq!(rule.operator_of_v1(&header_of(&p, &op, op_daa)), Some(op_bond), "the genesis card's attempt is an operator's");
+    assert_eq!(lane_of(&p, &op, op_daa), Some(ad));
+    let base_op = pre_object_base(&run.c, run.s(), h(0x0B_0001), op_daa);
+    let seed = chain_seed(h(0x0B_0001), op_daa, &op, &own);
+    let seats = derive_at(&run.c, &base_op, op_daa, seed, &own).expect("the operator's anchor draws");
+    let skips = run.push(h(0x0B_0001), op_daa, vec![bound_obj(own, seed, &seats)], Some(op), T12_BLOCK_SUBSIDY_SOMPI, Some(ad)).expect("folds");
+    assert!(skips.is_empty(), "{skips:?}");
+    assert_eq!(run.s().panel(&own).map(|x| (x.anchor, x.seats.clone())), Some((seed, seats.clone())), "bound at the operator's anchor");
+
+    println!("=== T3c (lane A): a non-operator's junk wins against the operator-anchor fence ===");
+    println!(
+        "{WINS} fresh junk lottery wins by the attacker at its claim's slot: {admitted} may anchor past the fence ({admitted_below} below it); under F1 alone they would have been {} distinct panels with a coalition quorum in {f1_hits} ({:.5} per win)",
+        f1_panels.len(),
+        f1_hits as f64 / WINS as f64
+    );
+    println!("an operator's outpoint under the attacker's key may anchor: {impersonated}");
+    println!(
+        "the attacker's attempt at the slot bound nothing and voided nothing; the operator's attempt one DAA later bound the claim on ONE panel {} (a fair draw: the attacker's reachable alternatives are 0)",
+        seats_label(&seats, &coalition)
+    );
+    assert_eq!(admitted, 0, "past the fence no junk win of a non-operator is an anchor");
+    assert_eq!(admitted_below, WINS, "below the fence every one would be (the released lane rule)");
+    assert!(!impersonated, "an operator's outpoint under another key is not an operator's attempt");
+    assert!(f1_panels.len() as u64 > WINS / 2, "the residual lane A closes: under F1 alone each win is a new panel");
 }
 
 // =================================================================================================

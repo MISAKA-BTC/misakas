@@ -16348,6 +16348,10 @@ mod t12_stake_draw_integration;
 // Lane F1 (post-launch): a testnet-12 chain crossing the panel-seed fence — the block below it, the
 // anchor attempt's execution commitment past it, and a second node that agrees.
 mod t12_panel_seed_fence;
+// Lane A (post-launch): a testnet-12 chain crossing the operator-anchor fence — below it the released
+// chain, past it only an operator's attempt anchors a panel, and a slot only non-operators reach voids at
+// the bind window's backstop.
+mod t12_operator_anchor_fence;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;

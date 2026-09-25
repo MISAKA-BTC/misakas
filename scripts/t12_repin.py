@@ -251,6 +251,7 @@ HORIZON = "consensus/core/tests/palw_readiness_horizon_is_t12_only.rs"
 MATURITY = "consensus/core/tests/palw_exec_maturity_is_t12_only.rs"
 CAP = "consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs"
 SEED = "consensus/core/tests/palw_panel_seed_execution_is_t12_only.rs"
+OPANCHOR = "consensus/core/tests/palw_operator_anchor_is_t12_only.rs"
 MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
@@ -421,6 +422,9 @@ def registry() -> list[Pin]:
     # Lane F1 (the panel-seed fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
     pins += _triple("seed.T12_RELEASE", "t12", SEED, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{SEED}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # Lane A (the operator-anchor fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
+    pins += _triple("opanchor.T12_RELEASE", "t12", OPANCHOR, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{OPANCHOR}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # The mainnet values (2026-09-25): testnet-12 with the three values set back (and the later fences taken away).
     pins += _triple("mnv.PARENT_WITHOUT_THE_ATTRIBUTION", "t12", MNV, "const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
                     "twin.mnv_parent", (f"{MNV}::the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",))

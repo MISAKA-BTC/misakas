@@ -632,6 +632,13 @@ mod tests {
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
             "palw_panel_seed_execution" => params.palw_panel_seed_execution = Some(at),
+            // Lane A (the operator anchor, post-launch): the height over every genesis bond (the RC probe
+            // base is ConsensusV2); refused without R-core+ at or below it by `validate_palw_v2`, which the
+            // probe does not run — it asks only the hashers and the schedule.
+            "palw_operator_anchor" => {
+                let rule = params.palw_operator_anchor_of_genesis_bonds_v1(at).expect("the RC probe base is ConsensusV2");
+                params.palw_operator_anchor = Some(rule);
+            }
             // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
             // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
             // hashers and the schedule.

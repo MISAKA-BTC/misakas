@@ -138,6 +138,10 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // Lane F1 (the panel seed, post-launch): a bare height; `validate_palw_v2` refuses it without
         // R-core+ at or below it.
         "palw_panel_seed_execution" => params.palw_panel_seed_execution = Some(at),
+        // Lane A (the operator anchor, post-launch): the height over every bond the genesis registers
+        // (testnet-12's eight operator cards); `validate_palw_v2` refuses it without R-core+ at or below it
+        // and off ConsensusV2.
+        "palw_operator_anchor" => params.palw_operator_anchor = params.palw_operator_anchor_of_genesis_bonds_v1(at),
         // ADR-0152-adjacent (Activation Pool): genesis-only (R1 and R2 change how every class is
         // reclaimed and stepped), so a height is refused here by name. At genesis the terms this preset
         // carries are kept, and a preset that carries none takes the user's illustrative scale — the
