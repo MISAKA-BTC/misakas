@@ -2129,6 +2129,29 @@ pub struct Params {
     /// `validate_palw_v2` unless `palw_model_market` is armed at or before it and the EVM lane is
     /// active. Read through `palw_model_evm_fence` only.
     pub palw_model_evm: Option<ForkActivation>,
+    // ---- lane sink (post-launch, 2026-09-26): a model sink is block-valid only bound ------------
+    /// **Lane sink: the model sink binding** (the 2026-09-25 Position review's #1, post-launch fence).
+    /// In a block whose DAA score is at or past it, every `OP_RETURN "MSKMDL01" <line>` output must
+    /// be the one its lifecycle carrier's `ModelBuy` or `ModelSeed` names — its index, its line, its
+    /// value — on a carrier that pays a P2PKH-ML-DSA-87 output a refused buy or seed can be paid back
+    /// to ([`crate::palw_model_market_v1::palw_model_sink_binding_refusal_v1`]); a transaction with
+    /// any other sink is invalid in the header context (`TxRuleError::ModelSinkUnbound`), and so is a
+    /// block carrying one. Below it a sink no object binds is a valid output whose MSK leaves
+    /// circulation with nothing recorded (no reserve, no burn row, no P-B1 refund) — the rule
+    /// testnet-12 launched with, byte for byte.
+    ///
+    /// Keyed on the containing block's own DAA score (the header context already threads it for
+    /// ADR-0087 Decision 6), so reorg, IBD and a pruning-proof sync agree; the mempool and the
+    /// template ask it at the virtual's DAA. Refused by `validate_palw_v2` off ConsensusV2, without
+    /// `palw_model_market` declared (there is no sink form to bind) and without
+    /// `palw_audit_2026_09_23` (the P-B1 refund route its payee rule serves) armed at or below it.
+    /// Dormant (`None`) on every shipped preset, testnet-12 included, until the operator arms the
+    /// common post-launch height; hashed Some-only in every writer with the `never()` collapse, so a
+    /// build that carries the field fingerprints and peers exactly as one that does not until it is
+    /// armed. The node refuses such a sink as mempool standardness wherever the market is declared,
+    /// with or without this fence.
+    pub palw_model_sink_bound: Option<ForkActivation>,
+    // ---- end lane sink ---------------------------------------------------------------------------
     /// **ADR-0075 Decision 14 — only a chunk that can complete a group may spend the block's
     /// certification cap.** `None` on every shipped preset, so the behaviour is byte-identical to
     /// not having the field.
@@ -3354,6 +3377,8 @@ impl Params {
                 return Err(crate::palw_mode_v2::PalwModeV2Error::ModelEvmOnInertLane);
             }
         }
+        // Lane sink (the model sink binding, post-launch): over the market and the P-B1 refund route.
+        self.validate_palw_model_sink_bound_v1()?;
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
         // **ADR-0093 Decision 8 needs the court it is a move of.** A root claim is a dissection's
         // first move; a fence armed where the k-ary court is not has no dissection to anchor. Asked
@@ -5335,6 +5360,12 @@ impl Params {
         if self.palw_model_evm == Some(ForkActivation::never()) {
             self.palw_model_evm = None;
         }
+        // Lane sink (the model sink binding, post-launch): Some-only hashed, so the same collapse —
+        // without it a build that schedules the fence and one that does not would refuse each other
+        // on deploy day over a height neither has reached.
+        if self.palw_model_sink_bound == Some(ForkActivation::never()) {
+            self.palw_model_sink_bound = None;
+        }
         // ADR-0075 D14, a bare fence: the D2 collapse, for the D2 reason.
         if self.palw_chunk_cap_charge == Some(ForkActivation::never()) {
             self.palw_chunk_cap_charge = None;
@@ -6660,6 +6691,58 @@ impl Params {
         matches!(self.palw_model_evm_fence(), Some(fence) if fence.is_active(daa_score))
     }
 
+    // ---- lane sink (post-launch, 2026-09-26): a model sink is block-valid only bound ------------
+
+    /// **Lane sink's fence** ([`Self::palw_model_sink_bound`]), resolved off a ConsensusV2 ruleset with
+    /// `never()` read as absence. `None` on every shipped preset until the operator arms it.
+    pub fn palw_model_sink_bound_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_model_sink_bound) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a transaction in a block at `daa_score` must bind every model sink it pays. `false`
+    /// on every shipped preset: the fence is dormant until an operator arms it.
+    pub fn palw_model_sink_bound_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_sink_bound_fence().is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **What lane sink's fence refuses.** Called by `validate_palw_v2`, public so a test can name
+    /// each refusal. The binding is a rule about the market's `MSKMDL01` sink on a V2 lifecycle
+    /// carrier, so it needs a ConsensusV2 ruleset that declares `palw_model_market` (at any height:
+    /// below the market the header-context door refuses the form outright, so refusing an unbound
+    /// one there too changes nothing). Its payee rule exists for the P-B1 refund of a refused buy or
+    /// seed, which `palw_audit_2026_09_23` arms, so that fence must be armed at or below it. Any
+    /// height is legal otherwise — genesis included, and on a live testnet-12 the common
+    /// post-launch height the operator picks away from every scheduled one.
+    pub fn validate_palw_model_sink_bound_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_model_sink_bound.filter(|fence| *fence != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid(
+                "palw_model_sink_bound is armed on a network that is not ConsensusV2: the model market's sink is a V2 \
+                 lifecycle carrier's output",
+            ));
+        }
+        if !self.palw_model_market.is_some_and(|market| market != ForkActivation::never()) {
+            return Err(Invalid(
+                "palw_model_sink_bound is armed without palw_model_market declared: there is no model sink form to bind",
+            ));
+        }
+        if !self.palw_audit_2026_09_23.is_some_and(|audit| audit != ForkActivation::never() && audit.daa_score() <= fence.daa_score())
+        {
+            return Err(Invalid(
+                "palw_model_sink_bound is armed without palw_audit_2026_09_23 at or below it: its payee rule exists for the \
+                 P-B1 refund of a refused carrier buy or seed, which that fence arms",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane sink ---------------------------------------------------------------------------
+
     /// ADR-0089: the three fences the executor reads, resolved at one DAA.
     pub fn palw_evm_market_fences_at(&self, daa_score: u64) -> crate::evm::model_market::PalwEvmMarketFencesV1 {
         crate::evm::model_market::PalwEvmMarketFencesV1 {
@@ -7274,6 +7357,8 @@ impl Params {
             palw_model_leg_v2,
             palw_model_seed_v2,
             palw_model_evm,
+            // Lane sink (the model sink binding, post-launch).
+            palw_model_sink_bound,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -7433,6 +7518,9 @@ impl Params {
             ("palw_model_leg_v2", *palw_model_leg_v2),
             ("palw_model_seed_v2", *palw_model_seed_v2),
             ("palw_model_evm", *palw_model_evm),
+            // Lane sink (the model sink binding, post-launch): a top-level fence an un-upgraded peer
+            // does not implement, so it is on the schedule and gates the fork id like every other.
+            ("palw_model_sink_bound", *palw_model_sink_bound),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
             ("palw_kary_court", *palw_kary_court),
@@ -7854,6 +7942,13 @@ impl Params {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane sink (the model sink binding, post-launch), NAMED and Some-only: it changes which
+        // transactions a block may carry past its height, so an operator reading the schedule must
+        // see it, and a preset that leaves it `None` prints the id of a build without the field.
+        if let Some(activation) = self.palw_model_sink_bound {
+            h.write(b"palw_model_sink_bound");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
         // at the tail, for the reason its siblings are: it is genesis-only, so an operator reading
         // the schedule sees a rule in force from block one rather than a height to cross.
@@ -8013,6 +8108,8 @@ impl Params {
             palw_model_leg_v2,
             palw_model_seed_v2,
             palw_model_evm,
+            // Lane sink (the model sink binding, post-launch).
+            palw_model_sink_bound,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -8492,6 +8589,12 @@ impl Params {
                 absent = u64::MAX;
                 visit(&mut absent);
             }
+        }
+        // Lane sink (the model sink binding, post-launch): SOME-ONLY, unlike its market siblings
+        // above — a `None` visited through the sentinel would move every preset's schedule id — and
+        // its `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_model_sink_bound.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0069 Decision 7. A pure fence with no payload, so visiting it is safe — the same
         // shape as D2 beside it.
@@ -8979,6 +9082,8 @@ impl Params {
             palw_model_leg_v2,
             palw_model_seed_v2,
             palw_model_evm,
+            // Lane sink (the model sink binding, post-launch).
+            palw_model_sink_bound,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -9497,6 +9602,13 @@ impl Params {
         // ADR-0089 Decision 9: the same contract.
         if let Some(activation) = palw_model_evm {
             h.write(b"palw_model_evm");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane sink (the model sink binding, post-launch): the height, Some-only (and collapsed from
+        // `Some(never())` for the identity), so a build that leaves it dormant fingerprints
+        // byte-identically to one without the field.
+        if let Some(activation) = palw_model_sink_bound {
+            h.write(b"palw_model_sink_bound");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0075 D14, Some-only like its siblings: an unset fence writes nothing, so every
@@ -10160,6 +10272,9 @@ impl Params {
             palw_model_leg_v2: self.palw_model_leg_v2,
             palw_model_seed_v2: self.palw_model_seed_v2,
             palw_model_evm: self.palw_model_evm,
+            // Lane sink (the model sink binding, post-launch): CARRIED with the market it binds and
+            // the audit fence it needs, both carried too.
+            palw_model_sink_bound: self.palw_model_sink_bound,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
@@ -11194,6 +11309,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
     palw_model_evm: None,
+    palw_model_sink_bound: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -11425,6 +11541,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
     palw_model_evm: None,
+    palw_model_sink_bound: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -11638,6 +11755,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
     palw_model_evm: None,
+    palw_model_sink_bound: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -18083,6 +18201,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
     palw_model_evm: None,
+    palw_model_sink_bound: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
     // bytes against a one-carrier budget of 83,333, so the Merkle form buys nothing and arming it
