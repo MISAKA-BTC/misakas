@@ -882,3 +882,119 @@ async fn hb_probe_e_a_final_anchor_after_x_refuses_the_heavier_private_branch() 
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// lane: rcore/f1-forkchoice-attacks — the dormant fence `palw_reorg_strict_economic_win`, exercised
+// through the real pipeline. Two things a unit test cannot see (the `a-flag-day-needs-a-drill-that-
+// crosses-it` lesson: fork-choice/colouring fences have frozen the DAA clock before while every unit
+// test was green): (1) a chain that CROSSES the armed fence must keep ticking the DAA, and (2) the
+// fence must actually change a reorg outcome end to end — the tie both `hb_probe_b_*` probes above
+// measure being Allowed on the shipped rule is Refused once it is armed, and X stands.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// [`duel`], with `palw_reorg_strict_economic_win` armed at `fence_daa`. Nothing else moves; the
+/// genesis, premine and every window are testnet-12's, and the ruleset is re-validated.
+fn duel_armed(fence_daa: u64) -> Duel {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let mut params = config.params.clone();
+    params.palw_reorg_strict_economic_win = Some(ForkActivation::new(fence_daa));
+    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    config.params.validate_palw_v2().expect("arming the reorg fence is a runnable testnet-12 ruleset");
+    assert_eq!(
+        config.params.palw_reorg_strict_economic_win,
+        Some(ForkActivation::new(fence_daa)),
+        "the fence is armed at {fence_daa}"
+    );
+    let victim = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let attacker = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let pay = |to: ScriptPublicKey| {
+        let (outpoint, entry) = floats[1].clone();
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(entry.amount - 300_000, to)],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        sign_spend(&mut tx, entry, 1, config.params.storage_mass_parameter);
+        tx
+    };
+    let x = pay(card_payout_spk(5));
+    let y = pay(card_payout_spk(6));
+    Duel { config, victim, attacker, x, y, nonce: 1 << 40, floats }
+}
+
+/// **The flag-day drill: a chain crosses the armed fence and the DAA keeps advancing.** Armed at a
+/// LOW height so the drill passes THROUGH it (arrival is not the test — a fence that retires the
+/// only clock freezes the DAA at exactly the height it fires). Honest heartbeat slots are mined from
+/// genesis to well past the fence; each slot must tick the DAA by one, and every block must stay
+/// UTXO-valid and the sink (`honest_slot`/`heartbeat` assert the sink). The fence changes only the
+/// deep-reorg comparator, so forward progress must be untouched — this proves it.
+#[tokio::test]
+async fn hb_probe_fence_the_armed_fence_is_crossed_with_the_daa_advancing() {
+    kaspa_core::log::try_init_logger("warn");
+    const FENCE_AT: u64 = 5;
+    let mut d = duel_armed(FENCE_AT);
+    assert!(d.config.params.palw_reorg_strict_economic_win.unwrap().is_active(FENCE_AT), "active at the fence height");
+    let mut last = d.victim.daa_of(d.victim.sink());
+    let mut crossed = false;
+    for slot in 0..(FENCE_AT + 6) {
+        honest_slot(&mut d.victim, if slot == 0 { vec![d.x.clone()] } else { Vec::new() }).await;
+        let daa = d.victim.daa_of(d.victim.sink());
+        assert_eq!(daa, last + 1, "slot {slot}: the DAA advances by one across the fence — it is not frozen at {FENCE_AT}");
+        if daa > FENCE_AT {
+            crossed = true;
+        }
+        last = daa;
+    }
+    assert!(crossed, "the chain advanced past the armed fence at {FENCE_AT}");
+    // The blocks below and above the fence are all real chain: X is still in the UTXO set.
+    let x_out = TransactionOutpoint::new(d.x.id(), 0);
+    assert!(has_utxo(&d.victim, x_out), "X is accepted and the chain keeps producing across the fence");
+    eprintln!(
+        "[hb-probe fence-drill] armed at DAA {FENCE_AT}: mined {} slots, sink DAA {} — the clock crossed the fence and never stalled",
+        FENCE_AT + 6,
+        last
+    );
+}
+
+/// **The fence changes the reorg outcome end to end.** The same heartbeat-only economic tie that
+/// `hb_probe_b_sibling_beats_outweigh_a_heartbeat_only_chain` (m = 2) lets flip on the shipped rule —
+/// the private branch is heavier on blue work, both sides read `{frontier 0, safe 0, live 0}`, and
+/// `decide_deep_reorg_v2` Allows on the candidate hash — is REFUSED once the fence is armed: the
+/// private branch is still offered (heavier blue work tops the heap), but the deep-reorg gate keeps
+/// the incumbent on the all-economic tie, so the double spend does NOT land and X stands.
+#[tokio::test]
+async fn hb_probe_fence_refuses_the_tied_reorg_the_shipped_rule_allows() {
+    kaspa_core::log::try_init_logger("warn");
+    // Armed at DAA 1 — active by the time the fork forms (the incumbent sits well past it).
+    let mut d = duel_armed(1);
+    for _ in 0..3 {
+        honest_slot_mirrored(&mut d).await;
+    }
+    let fork = d.victim.sink();
+    honest_slot(&mut d.victim, vec![d.x.clone()]).await;
+    for _ in 0..9 {
+        honest_slot(&mut d.victim, Vec::new()).await;
+    }
+    let mut private = private_slot(&mut d.attacker, &mut d.nonce, 2, vec![d.y.clone()]).await;
+    for _ in 0..9 {
+        private.extend(private_slot(&mut d.attacker, &mut d.nonce, 2, Vec::new()).await);
+    }
+    let r = release("fence m=2", &mut d.victim, &private, fork, &mut d.nonce, 8).await;
+    assert!(r.refused.is_empty(), "every private beat is a valid block");
+    assert!(r.private_bw_max > r.public_bw, "the private branch is heavier on blue work (offered), as in hb_probe_b m=2");
+    assert!(r.offered_at.is_some(), "and it does reach the top of the heap — the fence acts at the reorg gate, not the heap");
+    let depth = bs(&d.victim, d.victim.sink()) - bs(&d.victim, fork);
+    assert!(depth < d.config.params.finality_depth(), "inside the finality depth, so only the reorg gate can refuse it ({depth})");
+    let (x, y) = payments("fence m=2", &d);
+    assert!(!r.flipped(), "the armed fence keeps the incumbent on the all-economic tie: no flip");
+    assert!(x && !y, "X stands — the double spend hb_probe_b lands on the shipped rule does not land past the fence");
+    eprintln!(
+        "[hb-probe fence m=2] private heavier (+{} vs +{} blue work), offered at {:?}, flipped {:?}: the fence refused the tied reorg and X stands",
+        r.private_bw_max, r.public_bw, r.offered_at, r.flipped_at
+    );
+}
