@@ -3647,6 +3647,20 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         crate::inventory::a16_readiness_material_streamed_v1(&self.artifact, &self.profile, draw).map_err(|e| format!("{e:?}"))
     }
 
+    fn artifact_readiness_material_streamed_v1(
+        &self,
+        draw: &[u32],
+        on_leaf: &mut dyn FnMut(kaspa_consensus_core::Hash64),
+    ) -> Option<
+        Result<(kaspa_consensus_core::Hash64, u32, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), String>,
+    > {
+        // The same one walk as `artifact_readiness_material`, the leaf vector left to the caller's sink.
+        Some(
+            crate::inventory::a16_readiness_leaves_streamed_v1(&self.artifact, &self.profile, draw, on_leaf)
+                .map_err(|e| format!("{e:?}")),
+        )
+    }
+
     fn artifact_row_opening(&self, index: u32) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1, String> {
         // The digest roots the path; a second pass copies the bytes of the named leaf alone — the
         // inventory is never materialised to open one row of it (ADR-0135). Reuse the process

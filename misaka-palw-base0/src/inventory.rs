@@ -191,8 +191,9 @@ pub fn a16_inventory_root_and_count_v1(
             return Ok(*hit);
         }
     }
-    let (root, leaves, _) = a16_readiness_material_streamed_v1(artifact, profile, &[])?;
-    let count = leaves.len() as u32;
+    // Counted as the walk passes, never collected: the vector of every leaf hash was 64 bytes a
+    // leaf of nobody's reservation, just to learn its length (the pre-t12 drill of 2026-09-25).
+    let (root, count, _) = a16_readiness_leaves_streamed_v1(artifact, profile, &[], &mut |_| {})?;
     if let Ok(mut cache) = a16_inventory_root_cache_v1().lock() {
         cache.insert(key, (root, count));
     }
@@ -225,10 +226,26 @@ pub fn a16_readiness_material_streamed_v1(
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
     draw: &[u32],
 ) -> Result<(Hash64, Vec<Hash64>, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), InventoryBuildError> {
+    let mut leaves: Vec<Hash64> = Vec::new();
+    let (root, _, opened) = a16_readiness_leaves_streamed_v1(artifact, profile, draw, &mut |leaf| leaves.push(leaf))?;
+    Ok((root, leaves, opened))
+}
+
+/// [`a16_readiness_material_streamed_v1`] with the leaf vector left to the caller: every leaf hash
+/// goes to `on_leaf` in inventory order, and `(root, leaf_count, drawn operands in the draw's order)`
+/// comes back. What a prover that folds the proof as a stream calls (the pre-t12 drill of
+/// 2026-09-25, `PalwArtifactMultiproofStreamV1`): the walk holds one row at a time and the drawn
+/// rows' bytes, nothing that grows with the inventory.
+pub fn a16_readiness_leaves_streamed_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    draw: &[u32],
+    on_leaf: &mut dyn FnMut(Hash64),
+) -> Result<(Hash64, u32, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), InventoryBuildError> {
     use kaspa_consensus_core::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_parts_v1};
     let groups = a16_inventory_groups_v1(artifact, profile)?;
     let wanted: std::collections::BTreeSet<u32> = draw.iter().copied().collect();
-    let mut leaves: Vec<Hash64> = Vec::new();
+    let mut count: u32 = 0;
     let mut kept: std::collections::BTreeMap<u32, PalwArtifactOperandV1> = std::collections::BTreeMap::new();
     let mut frontier = kaspa_consensus_core::palw_artifact::PalwArtifactMerkleFrontierV1::new();
     let mut checker = kaspa_consensus_core::palw_artifact::PalwInventoryLayoutCheckerV1::new();
@@ -239,9 +256,10 @@ pub fn a16_readiness_material_streamed_v1(
             if layout.is_ok() {
                 layout = checker.push(n, l, start, bytes.len() as u32);
             }
-            let position = leaves.len() as u32;
+            let position = count;
+            count = count.saturating_add(1);
             let leaf = artifact_leaf_parts_v1(n, l, start, &bytes);
-            leaves.push(leaf);
+            on_leaf(leaf);
             frontier.push(leaf);
             if wanted.contains(&position) {
                 kept.insert(position, PalwArtifactOperandV1 { tensor_name: n.to_string(), layer: l, row_start: start, bytes });
@@ -251,7 +269,7 @@ pub fn a16_readiness_material_streamed_v1(
     }
     layout.map_err(InventoryBuildError::NotCanonical)?;
     checker.finish().map_err(InventoryBuildError::NotCanonical)?;
-    let leaf_count = leaves.len() as u32;
+    let leaf_count = count;
     if let Some(&out) = wanted.iter().find(|i| **i >= leaf_count) {
         return Err(InventoryBuildError::Operand(OperandError::UnknownTensor {
             name: format!("leaf {out} is outside an inventory of {leaf_count}"),
@@ -261,7 +279,7 @@ pub fn a16_readiness_material_streamed_v1(
         .root()
         .ok_or(InventoryBuildError::NotCanonical(kaspa_consensus_core::palw_artifact::PalwInventoryError::Empty))?;
     let opened = draw.iter().map(|i| (*i, kept.remove(i).expect("every drawn position was kept"))).collect();
-    Ok((root, leaves, opened))
+    Ok((root, leaf_count, opened))
 }
 
 /// **Per-leaf openings for a draw, from the streamed material** — `opening_v1`'s fold generalised

@@ -375,6 +375,147 @@ pub fn palw_artifact_multiproof_v1(leaves: &[Hash64], opened: &[(u32, PalwArtifa
     Some(PalwArtifactMultiproofV1 { leaf_count: leaf_count as u32, opened: sorted, siblings })
 }
 
+/// **A multiproof built from a leaf STREAM** (the pre-t12 drill of 2026-09-25): the same proof
+/// [`palw_artifact_multiproof_v1`] builds, without the vector of every leaf hash it folds from.
+///
+/// The prover is told the leaf count and the leaves it MAY open (the challenge's draw) before the
+/// walk; each leaf hash is pushed in inventory order as the walk reaches it, the tree is folded as a
+/// stream — one pending left node per level, an odd last node promoted, exactly as
+/// [`artifact_root_v1`] folds — and only the nodes a proof over any subset of the draw can need are
+/// kept: each drawn leaf's own hash (to check its operand) and the sibling of its path at every
+/// level. [`Self::finish`] then assembles the proof for the leaves actually opened with the
+/// builder's own walk, so the siblings come out in the builder's order.
+///
+/// Memory: `O(k · log n)` hashes — sixteen draws at a 2M context are a few hundred — where the vector
+/// was 64 bytes a leaf plus the level copies (≈ 100 MiB for the 8k class's 649,480 leaves, held
+/// while a 3.5 GiB seat's replay held the rest of its share). Node-side proving only: the verifier
+/// is [`verify_artifact_multiproof_v1`], untouched.
+#[derive(Clone, Debug)]
+pub struct PalwArtifactMultiproofStreamV1 {
+    leaf_count: u64,
+    widths: Vec<u64>,
+    drawn: std::collections::BTreeSet<u64>,
+    wanted: std::collections::BTreeSet<(usize, u64)>,
+    kept: std::collections::BTreeMap<(usize, u64), Hash64>,
+    pending: Vec<Option<Hash64>>,
+    next: Vec<u64>,
+    pushed: u64,
+}
+
+impl PalwArtifactMultiproofStreamV1 {
+    /// A stream over `leaf_count` leaves of which any of `draw` may be opened. `None` for an empty
+    /// inventory or a draw outside it.
+    pub fn new(leaf_count: u32, draw: &[u32]) -> Option<Self> {
+        let leaf_count = leaf_count as u64;
+        if leaf_count == 0 || draw.iter().any(|index| *index as u64 >= leaf_count) {
+            return None;
+        }
+        let widths = level_widths_v1(leaf_count);
+        let mut wanted = std::collections::BTreeSet::new();
+        for index in draw {
+            let mut at = *index as u64;
+            wanted.insert((0, at));
+            for (level, width) in widths.iter().enumerate() {
+                // The builder's walk: the last node of an odd level is promoted and needs no sibling.
+                if !(at == width - 1 && width % 2 == 1) {
+                    wanted.insert((level, at ^ 1));
+                }
+                at /= 2;
+            }
+        }
+        let levels = widths.len() + 1;
+        Some(Self {
+            leaf_count,
+            widths,
+            drawn: draw.iter().map(|index| *index as u64).collect(),
+            wanted,
+            kept: std::collections::BTreeMap::new(),
+            pending: vec![None; levels],
+            next: vec![0; levels],
+            pushed: 0,
+        })
+    }
+
+    /// The next leaf hash, in inventory order. Leaves past `leaf_count` are ignored (and make
+    /// [`Self::finish`] refuse).
+    pub fn push(&mut self, leaf: Hash64) {
+        self.pushed += 1;
+        if self.pushed > self.leaf_count {
+            return;
+        }
+        let mut level = 0usize;
+        let mut hash = leaf;
+        loop {
+            let index = self.next[level];
+            self.next[level] += 1;
+            if self.wanted.contains(&(level, index)) {
+                self.kept.insert((level, index), hash);
+            }
+            let Some(&width) = self.widths.get(level) else { return }; // the root
+            if index % 2 == 0 {
+                if index == width - 1 {
+                    level += 1; // promoted, not duplicated
+                    continue;
+                }
+                self.pending[level] = Some(hash);
+                return;
+            }
+            // An odd index always follows its left sibling; a stream that broke that cannot be
+            // proved from, and `finish` then finds a node missing rather than the node panicking.
+            let Some(left) = self.pending[level].take() else { return };
+            hash = node(&left, &hash);
+            level += 1;
+        }
+    }
+
+    /// **The proof over the leaves actually opened** — a subset of the draw, in any order; the same
+    /// value [`palw_artifact_multiproof_v1`] returns over the full leaf vector. `None` when the stream
+    /// was not exactly `leaf_count` leaves, an opened index was not drawn or repeats, or an operand is
+    /// not the leaf the stream carried.
+    pub fn finish(self, opened: &[(u32, PalwArtifactOperandV1)]) -> Option<PalwArtifactMultiproofV1> {
+        if self.pushed != self.leaf_count || opened.is_empty() {
+            return None;
+        }
+        let mut sorted: Vec<(u32, PalwArtifactOperandV1)> = opened.to_vec();
+        sorted.sort_by_key(|(index, _)| *index);
+        for window in sorted.windows(2) {
+            if window[0].0 == window[1].0 {
+                return None;
+            }
+        }
+        for (index, operand) in &sorted {
+            if !self.drawn.contains(&(*index as u64)) || self.kept.get(&(0, *index as u64)) != Some(&artifact_leaf_v1(operand)) {
+                return None;
+            }
+        }
+        let mut known: Vec<u64> = sorted.iter().map(|(index, _)| *index as u64).collect();
+        let mut siblings = Vec::new();
+        for (level, width) in self.widths.iter().copied().enumerate() {
+            let mut next_known: Vec<u64> = Vec::with_capacity(known.len());
+            let mut i = 0;
+            while i < known.len() {
+                let index = known[i];
+                if index == width - 1 && width % 2 == 1 {
+                    next_known.push(index / 2);
+                    i += 1;
+                    continue;
+                }
+                let partner = index ^ 1;
+                if known.get(i + 1).copied() == Some(partner) {
+                    i += 2;
+                } else {
+                    siblings.push(*self.kept.get(&(level, partner))?);
+                    i += 1;
+                }
+                next_known.push(index / 2);
+            }
+            next_known.dedup();
+            known = next_known;
+        }
+        Some(PalwArtifactMultiproofV1 { leaf_count: self.leaf_count as u32, opened: sorted, siblings })
+    }
+}
+
 /// **Verify a multiproof against the registered root.** Every opened leaf is recomputed from its
 /// operand; the walk consumes the supplied siblings in the order the builder produced them.
 pub fn verify_artifact_multiproof_v1(proof: &PalwArtifactMultiproofV1, registered_root: Hash64) -> Result<(), PalwArtifactError> {
@@ -1259,6 +1400,65 @@ mod multiproof_tests {
             }
         }
         assert!(palw_artifact_multiproof_v1(&[], &[(0, operand(0))]).is_none(), "an empty inventory has no proof");
+    }
+
+    /// **The streamed prover builds the builder's proof, byte for byte** (the pre-t12 drill of
+    /// 2026-09-25): for every tree shape — odd widths and their promotions included — and for any
+    /// subset of the draw a byte budget leaves opened, [`PalwArtifactMultiproofStreamV1`] fed the
+    /// leaves one at a time returns exactly what [`palw_artifact_multiproof_v1`] returns over the
+    /// whole vector, and it verifies. A stream that is short, long, or carries another leaf where an
+    /// opened one should be, and an opening outside the draw, prove nothing.
+    #[test]
+    fn the_streamed_multiproof_is_the_builders_for_every_shape_and_every_opened_subset() {
+        for n in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 13, 16, 17, 31, 33, 64, 100, 257, 1_000, 4_097] {
+            let (operands, leaves, root) = inventory(n);
+            // Sixteen draws, the readiness V2 shape: scattered, with the last leaf and neighbours.
+            let mut draw: Vec<u32> = (0..16u32).map(|i| (i.wrapping_mul(2_654_435_761) % n.max(1)) as u32).collect();
+            draw.push(n - 1);
+            draw.sort_unstable();
+            draw.dedup();
+            // Every prefix of the draw in DRAW order is a subset a byte budget can leave opened.
+            let mut in_draw_order = draw.clone();
+            in_draw_order.reverse();
+            for take in 1..=in_draw_order.len() {
+                let opened: Vec<(u32, PalwArtifactOperandV1)> =
+                    in_draw_order[..take].iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+                let mut stream = PalwArtifactMultiproofStreamV1::new(n, &draw).expect("a draw inside the inventory");
+                for leaf in &leaves {
+                    stream.push(*leaf);
+                }
+                let streamed = stream.finish(&opened).unwrap_or_else(|| panic!("n={n} take={take}: the stream proves"));
+                let built = palw_artifact_multiproof_v1(&leaves, &opened).expect("the builder proves");
+                assert_eq!(streamed, built, "n={n} take={take}: the same proof");
+                verify_artifact_multiproof_v1(&streamed, root).unwrap_or_else(|e| panic!("n={n} take={take}: {e}"));
+            }
+            let one = vec![(draw[0], operands[draw[0] as usize].clone())];
+            // Short and long streams refuse.
+            let mut short = PalwArtifactMultiproofStreamV1::new(n, &draw).unwrap();
+            for leaf in &leaves[..leaves.len() - 1] {
+                short.push(*leaf);
+            }
+            assert!(short.finish(&one).is_none(), "n={n}: a stream one leaf short");
+            let mut long = PalwArtifactMultiproofStreamV1::new(n, &draw).unwrap();
+            for leaf in leaves.iter().chain(std::iter::once(&leaves[0])) {
+                long.push(*leaf);
+            }
+            assert!(long.finish(&one).is_none(), "n={n}: a stream one leaf long");
+            // An operand that is not the leaf the stream carried.
+            let mut full = PalwArtifactMultiproofStreamV1::new(n, &draw).unwrap();
+            for leaf in &leaves {
+                full.push(*leaf);
+            }
+            let mut forged = operands[draw[0] as usize].clone();
+            forged.bytes[0] ^= 0xFF;
+            assert!(full.clone().finish(&[(draw[0], forged)]).is_none(), "n={n}: another leaf's bytes");
+            // An opening the draw never named (when one exists).
+            if let Some(outside) = (0..n).find(|i| !draw.contains(i)) {
+                assert!(full.finish(&[(outside, operands[outside as usize].clone())]).is_none(), "n={n}: outside the draw");
+            }
+        }
+        assert!(PalwArtifactMultiproofStreamV1::new(0, &[]).is_none(), "an empty inventory");
+        assert!(PalwArtifactMultiproofStreamV1::new(4, &[4]).is_none(), "a draw past the inventory");
     }
 
     #[test]

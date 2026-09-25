@@ -557,8 +557,8 @@ impl PalwHeldFilerHostV1 for FilerHost {
 }
 
 /// **What the panel's claim rows say the claim's phase ends at** (`palw_claim_rows_v1`, the RPC's
-/// read) — the date P2-8e used to be due by, which reads `window_challenge` where the fold reads
-/// `window_challenge_at` (the review's MED-2).
+/// read) — the date P2-8e used to be due by, which read `window_challenge` where the fold reads
+/// `window_challenge_at` (the review's MED-2) until F3 of the pre-t12 drill made it the fold's floor.
 fn row_deadline(state: &PalwChainStateV2, claim: &Hash64) -> Option<u64> {
     let (rows, _) = kaspa_consensus_core::palw_producer_v2::palw_claim_rows_v1(
         state,
@@ -1447,7 +1447,9 @@ async fn t54g_the_opening_is_due_by_the_folds_final_on_testnet_12s_windows() {
     let final_daa = s103.deadline_of(&claim).expect("the licence's Final");
     let short = kaspa_consensus_core::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1;
     assert_eq!(final_daa, 103 + short, "the fold: window_challenge_at");
-    assert_eq!(row_deadline(&s103, &claim), Some(103 + 1_200), "the claim rows: window_challenge");
+    // F3 of the pre-t12 drill (2026-09-25): the claim rows now read the fold's own `Final` floor —
+    // they said `103 + 1,200`, the base window, where the fold finalizes at `103 + 120`.
+    assert_eq!(row_deadline(&s103, &claim), Some(final_daa), "the claim rows: the fold's Final floor");
     assert_eq!(queue.held_step(&mut filer, &s103, 104), 1);
     let key = (queue.pending[0].0, queue.pending[0].1, queue.pending[0].2);
     let margin = PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1;
