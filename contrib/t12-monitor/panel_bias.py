@@ -1,52 +1,68 @@
 #!/usr/bin/env python3
 """panel_bias.py - read-only testnet-12 panel-seating monitor (panel-seed stopgap, lane C).
 
-Who gets seated on which claim's panel, under which anchor producer, compared with what a fair
-stake-weighted draw would give. Stdlib only, one file: it runs from the Mac or from cron on a
-fleet host with nothing installed. It sends read calls only (getBlockDagInfo, getPalwNodeStatus,
+Who gets seated on which claim's panel, under which anchor producer, compared first with what the
+OTHER anchor producers' panels seat at the same time, and second with what a fair stake-weighted
+draw would give. Stdlib only, one file: it runs from the Mac or from cron on a fleet host with
+nothing installed. It sends read calls only (getBlockDagInfo, getPalwNodeStatus,
 getPalwModelRegistry, getPalwPanelSeats, getPalwClaims, getPalwPanelAssignments,
 getVirtualChainFromBlock, getBlocks, getBlock). Nothing it sends changes node state.
 
 What it records, per claim (kept in a state file so the evidence accumulates across runs and
 survives the claims' retirement from the node's state):
   claim id, class, producer bond, anchor block, the anchor's producer bond, panel seats (genesis
-  bonds named by host), each seat's receipt status, and the licence / void outcome.
+  bonds named by host), each seat's receipt status, and the licence / void outcome. A claim that is
+  redrawn and binds a second panel keeps its first panel as a separate record ("<claim>#<boundDaa>").
 
 The anchor. Past R-core+ (testnet-12 arms it at genesis) a claim's panel is drawn from its anchor
 block: the FIRST selected-chain attempt block (algo 6 or 9) whose DAA is at or past
 bind_base + anchor_delay, where bind_base = reboundDaa, else acceptedDaa (processor.rs
 palw_v2_anchor_fact_of_candidate, palw_block_may_anchor_a_panel_v1). The panel binds IN that
-block (SW-8), so the anchor's DAA equals the claim's boundDaa; the monitor checks that for every
-bound claim and reports any mismatch. The anchor's producer is the executor bond in its header's
-PAV2 attempt envelope.
+block (SW-8), so a bound claim's anchor is the first such block at its boundDaa. The monitor
+reads the anchor off boundDaa and checks that the slot rule leads there:
+  - a redrawn claim (reboundDaa set) is checked from reboundDaa; the panel it still shows before it
+    rebinds is its first panel, checked from acceptedDaa;
+  - past the registry-resilience fence (--resilience-from) a claim no capable panel could take is
+    re-based on its anchor block and retried one anchor_delay on, and binds with reboundDaa reset
+    to None (rcore/f1-registry-resilience); the check follows those retries;
+  - past the operator-anchor stopgap (--stopgap-from, lane A) only the genesis bonds' attempts may
+    anchor; a bound claim whose boundDaa holds only other producers' attempts is an ALERT.
+Anything else is a mismatch and makes the run DEGRADED. The anchor's producer is the executor bond
+in its header's PAV2 attempt envelope.
 
-The null model. A panel of k seats is a successive (exponential-race) sample without replacement
-from the claim's population, weighted by each bond's posted collateral in whole MSK capped at
---weight-cap-msk (ADR-0152 SW-2/SW-3; on testnet-12 one operator is one bond). The population is
-modelled at the first observation after the bind: bonds capable of the class, Active, not the
-executor; for a class with seat rows only the rows that are ready; for a base class (the floor)
-every capable bond at or above --seat-floor-msk; a non-genesis bond only once the maturity rule
-admits it; every bond actually seated is in its own claim's population. The transient Valid-lock
-filter (a seat whose free stake cannot post the bind's lock) is not visible over RPC after the
-fact, so a saturated seat is modelled as eligible; the pooled row of the report shows such
-population-wide effects, which hit every anchor producer alike.
+The tests (H0 = "the panel draw does not depend on who produced the anchor block"):
+  relative cells   for every (anchor producer A, seat bond b): the number of A's claims seating b,
+           against the other anchor producers' claims of the same class and executor in the same
+           --stratum-daa slice of anchor DAA. Given each stratum's seat totals this count is an
+           exact sum of hypergeometric variables (Fisher's exact test, stratified); two-sided,
+           exact while cheap, continuity-corrected normal beyond. Holm-Bonferroni over every cell
+           of every window at family-wise --alpha.
+  relative omnibus per anchor producer: the generalized Cochran-Mantel-Haenszel statistic of A's
+           seat-count vector against the same strata (Q = D' V+ D, chi-square with rank(V) df).
+           Bonferroni over anchor producers and windows at --alpha.
+  windows  every test runs on all recorded claims AND on the claims anchored in each of the last
+           --windows DAA (default 50, 100, 200, 400, 800: geometric, so the window that starts
+           nearest a change of behaviour is within a factor 2 of it), so a producer that turns
+           after a long honest history is still caught within hours; the corrections above span
+           the windows. With exactly two producers sharing strata, A-vs-B and B-vs-A are one
+           hypothesis and are counted once.
+  So one run raises a false bias alert with probability <= 2 * alpha (1e-4 each by default).
+  Because the comparison is between anchor producers at the same time, an effect that hits the
+  whole population alike (a seat saturated by the Valid lock, a readiness row gone stale, a
+  bond the model missed) does not raise a bias alert.
+  model notes (not alerts)  the per-cell exact Poisson-binomial test and the Rao-Scott omnibus
+           against the stake-weighted successive-sampling model of each claim's population
+           (ADR-0152 SW-2/SW-3: collateral in whole MSK capped at --weight-cap-msk). They show a
+           population-wide effect ("population note"), and in a bias alert they tell which side of
+           the pair deviates from the model. Claims whose population is uncertain (a readiness row
+           re-proved after the anchor) are left out of them.
 
-The tests, and their false-alarm rate (both under H0 = "every panel is the fair draw above"):
-  cells    for every (anchor producer, seat bond): the count of that producer's claims seating
-           that bond is an exact Poisson-binomial variable (one Bernoulli per claim, probability
-           the bond's inclusion probability in that claim's draw). Two-sided exact p-value;
-           Holm-Bonferroni over every cell of the run at family-wise --alpha.
-  omnibus  per anchor producer: Pearson X2 of observed vs expected seat counts, with the
-           Rao-Scott second-order (Satterthwaite) correction for the without-replacement,
-           unequal-population design; Bonferroni over anchor producers at --alpha. Evaluated
-           only when every expected count is at least --min-expected.
-  So one run raises a false bias alert with probability <= 2 * alpha (1e-4 each by default,
-  <= 2e-4 per run; <= 0.5% per day hourly by the union bound, less in practice because
-  consecutive runs share data).
-
-Other alerts: a panel seating a non-genesis bond, and a claim anchored by a non-genesis producer
-(each alerted once, when first seen; --realert repeats them). An anchor that does not match the
-claim's boundDaa, or data the node would not give, makes the run DEGRADED.
+Other alerts: the first panel seating each non-genesis bond (once per bond; the relative cells
+catch over-seating), and past --stopgap-from any claim anchored by a non-genesis producer (before
+that height they are reported, not alerted). DEGRADED: an anchor that does not follow the rule,
+a bound claim the chain read does not cover, a chain read that stops short of the sink, a claim
+list whose newest 500 rows no longer reach back to the last run, an unreadable node, or a
+consensus fingerprint other than --expect-fp.
 
 Output: a human report on stdout, then ONE machine line `PANEL_BIAS {json}` (with --quiet only
 that line). Exit 0 = OK, 1 = ALERT, 2 = DEGRADED / could not evaluate (an alert wins over
@@ -89,6 +105,7 @@ DEFAULT_ROSTER = {
 CLASS_LABELS = {"ebf44d0a": "8k", "f1c5635c": "floor", "74c67e63": "2M"}
 ATTEMPT_ALGOS = (6, 9)          # is_palw_attempt_algo_id: the only lanes that may anchor past R-core+
 ANCHOR_DELAY = 20               # the RC lattice's anchor_delay (live check: acceptedDaa 19 -> bound 39)
+WINDOW_BIND = 600               # the RC lattice's window_bind: at most (600 - 20) / 20 = 29 NoCapablePanel retries
 WEIGHT_CAP_MSK = 1_000_000      # SW-2's weight_cap_msk
 SEAT_FLOOR_MSK = 130_000        # the t12 seat floor (palw_draw_operator_weight_msk_v1's doc)
 MATURITY_ACTIVATION = 1_000     # PALW_T12_BOND_MATURITY_WINDOW_DAA: activation and window
@@ -96,6 +113,11 @@ MATURITY_WINDOW = 1_000
 SOMPI_PER_MSK = 100_000_000
 TERMINAL_PHASES = ("final", "voided")
 PAV2_MAGIC = b"PAV2"
+STATE_VERSION = 2
+# anchorCheck values that need no further chain reading (re-checked only while within --recheck-daa).
+SETTLED = ("ok", "mismatch", "unbound", "void-elsewhere")
+# anchorCheck values that are final: the chain the node serves cannot resolve them.
+UNRESOLVABLE = ("below-range", "too-old")
 
 
 # ------------------------------------------------------------------ statistics (pure; unit-tested)
@@ -197,6 +219,34 @@ def _convolve(a, b):
     return out
 
 
+def _norm_sf(z):
+    return 0.5 * math.erfc(z / math.sqrt(2.0))
+
+
+def _skewed_sf(z, g):
+    """P(Z >= z) for a standardized variable of skewness g: the Cornish-Fisher shift of the normal
+    quantile, held monotone beyond z = 1.5 / |g| (the correction only matters within a few sd)."""
+    if g:
+        zc = min(z, 1.5 / abs(g))
+        z = z - g * (zc * zc - 1.0) / 6.0
+    return _norm_sf(z)
+
+
+def normal_test(observed, mean, var, k3=0.0):
+    """Two-sided test of an integer count by the continuity-corrected normal approximation with a
+    Cornish-Fisher skewness correction (k3 = the third central moment). Returns (p_two_sided,
+    p_upper = P(X >= obs), p_lower = P(X <= obs))."""
+    if var <= 0.0:
+        pu = 1.0 if observed <= mean + 1e-9 else 0.0
+        pl = 1.0 if observed >= mean - 1e-9 else 0.0
+    else:
+        sd = math.sqrt(var)
+        g = k3 / (var * sd)
+        pu = min(1.0, _skewed_sf((observed - 0.5 - mean) / sd, g))
+        pl = min(1.0, _skewed_sf((mean - observed - 0.5) / sd, -g))
+    return min(1.0, 2.0 * min(pu, pl)), pu, pl
+
+
 def poisson_binomial_pmf(ps):
     """P(sum of independent Bernoulli(p_i) = x) for x = 0..len(ps). Exact: equal p's are grouped
     into binomials (a claim population's inclusion probability takes few distinct values), which
@@ -208,15 +258,65 @@ def poisson_binomial_pmf(ps):
     return pmf
 
 
-def poisson_binomial_test(ps, observed):
+def poisson_binomial_test(ps, observed, exact_max=0):
     """Exact two-sided test of `observed` successes against Poisson-binomial(ps):
-    p = min(1, 2 * min(P(X >= obs), P(X <= obs))). Returns (p_two_sided, p_upper, p_lower)."""
+    p = min(1, 2 * min(P(X >= obs), P(X <= obs))). Returns (p_two_sided, p_upper, p_lower).
+    With exact_max > 0 and more than exact_max trials, the continuity-corrected normal
+    approximation (the exact convolution is quadratic in the number of trials)."""
+    if observed < 0 or observed > len(ps):
+        raise ValueError(f"observed {observed} outside 0..{len(ps)}")
+    if exact_max and len(ps) > exact_max:
+        return normal_test(observed, sum(ps), sum(p * (1.0 - p) for p in ps), sum(p * (1.0 - p) * (1.0 - 2.0 * p) for p in ps))
     pmf = poisson_binomial_pmf(ps)
-    if observed < 0 or observed >= len(pmf):
-        raise ValueError(f"observed {observed} outside 0..{len(pmf) - 1}")
     upper = min(1.0, sum(pmf[observed:]))
     lower = min(1.0, sum(pmf[:observed + 1]))
     return min(1.0, 2.0 * min(upper, lower)), upper, lower
+
+
+def _log_comb(n, k):
+    return math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
+
+
+def hypergeom_pmf(N, K, n):
+    """X = successes in n draws without replacement from N items of which K are successes.
+    Returns (lo, [P(X = lo), ..., P(X = hi)])."""
+    lo, hi = max(0, n + K - N), min(n, K)
+    base = _log_comb(N, n)
+    return lo, [math.exp(_log_comb(K, x) + _log_comb(N - K, n - x) - base) for x in range(lo, hi + 1)]
+
+
+def stratified_hypergeom_test(strata, observed, max_cost=250_000):
+    """Two-sided test of `observed` = the sum over strata (N, K, n) of independent
+    Hypergeometric(N, K, n) counts: the stratified Fisher exact test. Exact by convolution while
+    that is cheap (it costs about width^2 / 2 for a total support width), the continuity- and
+    skewness-corrected normal beyond. Returns (p_two_sided, p_upper, p_lower, mean, var)."""
+    fixed, mean, var, k3, parts = 0, 0.0, 0.0, 0.0, []
+    for N, K, n in strata:
+        lo, hi = max(0, n + K - N), min(n, K)
+        if hi <= lo:
+            fixed += lo
+            continue
+        mean += n * K / N
+        var += n * (K / N) * (1.0 - K / N) * (N - n) / (N - 1)
+        if N > 2:
+            k3 += n * K * (N - K) * (N - n) * (N - 2 * K) * (N - 2 * n) / (N ** 3 * (N - 1) * (N - 2))
+        parts.append((N, K, n, hi - lo))
+    mean += fixed
+    width = sum(p[3] for p in parts)
+    if width * width > 2 * max_cost:
+        p2, pu, pl = normal_test(observed, mean, var, k3)
+        return p2, pu, pl, mean, var
+    pmf, offset = [1.0], fixed
+    for N, K, n, _ in parts:
+        lo, h = hypergeom_pmf(N, K, n)
+        pmf = _convolve(pmf, h)
+        offset += lo
+    x = observed - offset
+    if x < 0 or x >= len(pmf):
+        raise ValueError(f"observed {observed} outside {offset}..{offset + len(pmf) - 1}")
+    upper = min(1.0, sum(pmf[x:]))
+    lower = min(1.0, sum(pmf[:x + 1]))
+    return min(1.0, 2.0 * min(upper, lower)), upper, lower, mean, var
 
 
 def holm(pvals, alpha):
@@ -293,6 +393,51 @@ def rao_scott_chi2(observed, expected, cov):
     return x2, g, h, chi2_sf(x2 / g, h)
 
 
+def sym_eig(a, sweeps=100):
+    """Eigenvalues and eigenvectors (columns of the returned matrix) of a small symmetric matrix,
+    by cyclic Jacobi rotations."""
+    n = len(a)
+    a = [list(map(float, row)) for row in a]
+    v = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    for _ in range(sweeps):
+        off = sum(a[i][j] ** 2 for i in range(n) for j in range(n) if i != j)
+        diag = sum(a[i][i] ** 2 for i in range(n))
+        if off <= 1e-26 * max(diag, 1e-300):
+            break
+        for p in range(n - 1):
+            for q in range(p + 1, n):
+                if a[p][q] == 0.0:
+                    continue
+                theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q])
+                t = (1.0 if theta >= 0 else -1.0) / (abs(theta) + math.sqrt(theta * theta + 1.0))
+                c = 1.0 / math.sqrt(t * t + 1.0)
+                s = t * c
+                for k in range(n):
+                    akp, akq = a[k][p], a[k][q]
+                    a[k][p], a[k][q] = c * akp - s * akq, s * akp + c * akq
+                for k in range(n):
+                    apk, aqk = a[p][k], a[q][k]
+                    a[p][k], a[q][k] = c * apk - s * aqk, s * apk + c * aqk
+                for k in range(n):
+                    vkp, vkq = v[k][p], v[k][q]
+                    v[k][p], v[k][q] = c * vkp - s * vkq, s * vkp + c * vkq
+    return [a[i][i] for i in range(n)], v
+
+
+def pinv_quadratic(d, cov, rel_tol=1e-9):
+    """d' V+ d and rank(V) for a symmetric positive semi-definite V (the Moore-Penrose inverse
+    over the eigenvalues above rel_tol x the largest)."""
+    vals, vecs = sym_eig(cov)
+    top = max((abs(x) for x in vals), default=0.0)
+    q, rank = 0.0, 0
+    for i, lam in enumerate(vals):
+        if top > 0.0 and lam > rel_tol * top:
+            proj = sum(vecs[j][i] * d[j] for j in range(len(d)))
+            q += proj * proj / lam
+            rank += 1
+    return q, rank
+
+
 # ------------------------------------------------------------------ chain facts
 def to_bytes(v):
     if isinstance(v, list):
@@ -332,19 +477,98 @@ def header_summary(h):
             "bond": att["bond"] if att else None, "cls": att["class"] if att else None}
 
 
-def resolve_anchor(rec, chain, daas, anchor_delay):
-    """The first chain block at or past the claim's slot whose lane may anchor. Returns
-    (hash, header-summary) or (None, reason)."""
-    base = rec["reb"] if rec.get("reb") is not None else rec["acc"]
-    slot = base + anchor_delay
-    if not chain or daas[0] >= slot:
-        return None, "below-range"
-    i = bisect.bisect_left(daas, slot)
-    while i < len(chain) and chain[i][1]["algo"] not in ATTEMPT_ALGOS:
+def anchor_rule(names=None, stopgap_from=None):
+    """The predicate "may this chain block anchor a panel": an attempt lane, and past the
+    operator-anchor stopgap (lane A, keyed on the block's own DAA) a genesis bond's attempt."""
+    def admits(hs):
+        if hs["algo"] not in ATTEMPT_ALGOS:
+            return False
+        if stopgap_from is not None and hs["daa"] >= stopgap_from:
+            return names is not None and names.is_genesis(hs["bond"])
+        return True
+    admits.stopgap_from = stopgap_from
+    return admits
+
+
+def _first_admitted(chain, daas, frm, admits):
+    i = bisect.bisect_left(daas, frm)
+    while i < len(chain) and not admits(chain[i][1]):
         i += 1
+    return i
+
+
+def check_base(rec, anchor_delay):
+    """The DAA the slot rule starts from. A bound claim with a reboundDaa that its panel is past was
+    redrawn and rebound: from reboundDaa. A bound claim whose reboundDaa lies past its panel still
+    shows its first panel (redrawn, not yet rebound): from acceptedDaa. An unbound claim: its
+    bind base (reboundDaa, else acceptedDaa)."""
+    reb, acc, bound = rec.get("reb"), int(rec.get("acc") or 0), rec.get("bound")
+    if bound is not None:
+        return reb if reb is not None and reb + anchor_delay <= bound else acc
+    return reb if reb is not None else acc
+
+
+def resolve_anchor(rec, chain, daas, anchor_delay, admits=None, resilience_from=None,
+                   max_retries=(WINDOW_BIND - ANCHOR_DELAY) // ANCHOR_DELAY + 1):
+    """The claim's anchor block on `chain` ([(hash, header summary)] in chain order, DAA
+    non-decreasing). Returns {check, anchor, hs, retries, slot, breach}.
+
+    check: ok (bound, and the slot rule leads to the first admitted attempt at its boundDaa),
+    mismatch (bound, and it does not), pending (the anchor lies past the chain read),
+    below-range (the slot lies below the chain read), unbound (voided by step 4c at its anchor
+    block without a panel), void-elsewhere (voided, but not at this block), unbound-pending (at its
+    anchor, the bind not folded yet). breach: the claim bound at a DAA holding only attempts the
+    operator-anchor stopgap does not admit (a consensus failure)."""
+    admits = admits or anchor_rule()
+    bound = rec.get("bound")
+    base = check_base(rec, anchor_delay)
+    slot = base + anchor_delay
+    out = {"check": None, "anchor": None, "hs": None, "retries": 0, "slot": slot, "breach": False}
+    if not chain or daas[0] >= slot:
+        out["check"] = "below-range"
+        return out
+    i = _first_admitted(chain, daas, slot, admits)
+    if bound is None:
+        if i >= len(chain):
+            out["check"] = "pending"
+            return out
+        hs = chain[i][1]
+        if rec.get("phase") == "voided" and rec.get("phaseDaa") != hs["daa"]:
+            out["check"] = "void-elsewhere"
+            return out
+        out.update(anchor=chain[i][0], hs=hs, check="unbound" if rec.get("phase") == "voided" else "unbound-pending")
+        return out
+    acc = int(rec.get("acc") or 0)
+    while i < len(chain):
+        hs = chain[i][1]
+        if hs["daa"] == bound:
+            out.update(check="ok", anchor=chain[i][0], hs=hs)
+            return out
+        # Not bound at this anchor: only a NoCapablePanel retry (past the registry-resilience fence,
+        # for a claim that never held a panel) re-bases it on this block and draws one delay on.
+        if not (hs["daa"] < bound and base == acc and resilience_from is not None
+                and hs["daa"] >= resilience_from and out["retries"] < max_retries):
+            break
+        out["retries"] += 1
+        i = _first_admitted(chain, daas, hs["daa"] + anchor_delay, admits)
+    # The slot rule did not lead to boundDaa. Past the operator-anchor stopgap, a bind at a DAA that
+    # holds only attempts the stopgap does not admit is the consensus failure the stopgap forbids.
+    stopgap = getattr(admits, "stopgap_from", None)
+    if stopgap is not None and bound >= stopgap:
+        j, at = bisect.bisect_left(daas, bound), []
+        while j < len(chain) and daas[j] == bound:
+            at.append(j)
+            j += 1
+        if not any(admits(chain[k][1]) for k in at):
+            ext = next((k for k in at if chain[k][1]["algo"] in ATTEMPT_ALGOS), None)
+            if ext is not None:
+                out.update(check="ok", anchor=chain[ext][0], hs=chain[ext][1], breach=True)
+                return out
     if i >= len(chain):
-        return None, "pending"
-    return chain[i][0], chain[i][1]
+        out["check"] = "pending"
+        return out
+    out.update(check="mismatch", anchor=chain[i][0], hs=chain[i][1])
+    return out
 
 
 # ------------------------------------------------------------------ JSON wRPC (ws:// and wss://)
@@ -515,8 +739,9 @@ def class_label(cls):
 
 # ------------------------------------------------------------------ state
 def new_state():
-    return {"version": 1, "claims": {}, "bonds": {}, "checkpoints": [], "alerted": {"external_seat": [], "external_anchor": []},
-            "runs": 0, "last_run": None, "network": {}}
+    return {"version": STATE_VERSION, "claims": {}, "bonds": {}, "checkpoints": [], "lists": {},
+            "alerted": {"external_seat_bonds": [], "external_anchor": []},
+            "runs": 0, "last_run": None, "last_tip": None, "network": {}}
 
 
 # On disk a genesis bond is "g<i>" and a class id an index into `class_table`: a claim record is
@@ -546,6 +771,14 @@ def load_state(path):
         disk = json.load(f)
     st = new_state()
     st.update(disk)
+    if int(disk.get("version") or 1) < STATE_VERSION:
+        # v1 kept checkpoints under their bucket key rather than their block's DAA, and alerted
+        # external seats per claim: neither carries over.
+        st["checkpoints"] = []
+        st["alerted"] = new_state()["alerted"]
+        st["version"] = STATE_VERSION
+    for k, v in new_state()["alerted"].items():
+        st["alerted"].setdefault(k, v)
     txid = disk.get("genesis_txid", "")
     table = disk.get("class_table", [])
 
@@ -585,21 +818,34 @@ def save_state(path, st, genesis_txid):
     os.replace(tmp, path)
 
 
-def prune_state(st, tip, retain_daa):
-    """Drop retired claims anchored (or accepted) more than retain_daa below the tip."""
+def prune_state(st, tip, retain_daa, now=None):
+    """Drop claims the node no longer shows (retired, or out of its newest-500 lists) anchored (or
+    accepted) more than retain_daa below the tip; drop alerted ids no record carries any more."""
     if not retain_daa or tip is None:
         return 0
     floor = tip - retain_daa
-    old = [cid for cid, r in st["claims"].items() if r.get("gone") and (r.get("anchorDaa") or r.get("acc") or 0) < floor]
+    old = [cid for cid, r in st["claims"].items()
+           if (r.get("gone") or (now is not None and r.get("last") != now)) and (r.get("anchorDaa") or r.get("acc") or 0) < floor]
     for cid in old:
         del st["claims"][cid]
+    st["alerted"]["external_anchor"] = [c for c in st["alerted"].get("external_anchor", []) if c in st["claims"]]
     return len(old)
 
 
 # ------------------------------------------------------------------ collection
+def scan_slot(rec, anchor_delay):
+    return check_base(rec, anchor_delay) + anchor_delay
+
+
+def _key_daa(rec, anchor_delay):
+    if rec.get("bound") is not None:
+        return rec["bound"]
+    return rec.get("anchorDaa") or scan_slot(rec, anchor_delay)
+
+
 def collect(rpc, st, cfg, now):
     """Read the node and fold what it says into `st`. Returns run facts (tip, errors, counts)."""
-    run = {"errors": [], "degraded": [], "new_claims": 0, "newly_bound": 0, "calls": 0}
+    run = {"errors": [], "degraded": [], "notes": [], "new_claims": 0, "newly_bound": 0, "calls": 0}
     status = rpc.call("getPalwNodeStatus")
     dag = rpc.call("getBlockDagInfo")
     genesis = status.get("genesisHash", "")
@@ -609,7 +855,8 @@ def collect(rpc, st, cfg, now):
     run.update(tip=tip, sink=dag.get("sink", ""), network=dag.get("network", ""), fp=status.get("consensusParamsId", ""),
                genesis=genesis, pruning=dag.get("pruningPointHash", ""))
     if cfg.expect_fp and run["fp"] != cfg.expect_fp:
-        run["degraded"].append(f"consensus params fp {run['fp'][:16]} is not the shipped {cfg.expect_fp[:16]} (a fence armed? check the population rules)")
+        run["degraded"].append(f"consensus params fp {run['fp'][:16]} is not the shipped {cfg.expect_fp[:16]} (a fence armed? "
+                               f"check the population rules, pass --fence-daa, then --expect-fp)")
     st["network"] = {"genesis": genesis, "fp": run["fp"], "network": run["network"]}
 
     base_classes, seats = set(), []
@@ -634,7 +881,9 @@ def collect(rpc, st, cfg, now):
         bonds.add(rec.get("exe") or "")
     bonds.discard("")
 
-    claim_rows = {}
+    claim_rows, vesting_rows = {}, {}
+    cover = {}                 # (bond, role) -> None (the whole list) or the acceptedDaa its newest rows reach down to
+    truncated_lists = []
 
     def fetch_claims(bond, role):
         try:
@@ -642,18 +891,32 @@ def collect(rpc, st, cfg, now):
         except RpcError as e:
             run["errors"].append(str(e)[:200])
             return
-        if r.get("truncated"):
-            run["degraded"].append(f"getPalwClaims truncated for {names.short(bond)} ({role})")
+        rows_ = r.get("claims") or []
+        key = f"{role}:{bond}"
+        if r.get("truncated") and rows_:
+            # The node returns a bond's newest 500 rows (by acceptedDaa). That is the normal case on
+            # testnet-12 (claims stay 3,000 DAA after they end); it is a gap only when those rows no
+            # longer reach back to what the last run read.
+            cutoff = min(int(c.get("acceptedDaa") or 0) for c in rows_)
+            cover[(bond, role)] = cutoff
+            truncated_lists.append(f"{names.short(bond)} ({role}) from DAA {cutoff}")
+            prev = st["lists"].get(key)
+            if prev is not None and cutoff >= prev - cfg.recheck_daa:
+                run["degraded"].append(f"getPalwClaims for {names.short(bond)} ({role}): the newest {len(rows_)} rows reach "
+                                       f"back only to DAA {cutoff}, the last run read to DAA {prev}: claims in between may be missing")
+        else:
+            cover[(bond, role)] = None
+        st["lists"][key] = tip
         if r.get("bondKnown") is not None:
             st["bonds"][bond] = {"known": bool(r.get("bondKnown")), "coll": int(r.get("bondCollateral") or 0),
                                  "slashed": int(r.get("bondSlashed") or 0), "reg": int(r.get("bondRegisteredDaa") or 0),
                                  "retiring": r.get("bondRetiringSinceDaa"), "classes": r.get("bondCapableClasses") or [],
                                  "seen": st["bonds"].get(bond, {}).get("seen", now)}
-        for c in r.get("claims") or []:
+        for c in rows_:
             claim_rows[c["claimId"]] = c
         for c in r.get("vestingOnlyRows") or []:
             if c.get("claimId") in st["claims"]:
-                claim_rows.setdefault(c["claimId"], c)
+                vesting_rows.setdefault(c["claimId"], c)
 
     queried = set()
     seated = {s for rec in st["claims"].values() for s in rec.get("seats") or []}
@@ -671,6 +934,7 @@ def collect(rpc, st, cfg, now):
             bonds.update(c.get("seats") or [])
             seated.update(c.get("seats") or [])
         bonds.discard("")
+    run["truncated_lists"] = truncated_lists
 
     # Assignments: the receipt status of each seat.
     assignments = {}
@@ -688,16 +952,25 @@ def collect(rpc, st, cfg, now):
         run["errors"].append(str(e)[:200])
 
     # Fold claim rows into records.
-    visible = set(claim_rows)
     for cid, c in claim_rows.items():
         rec = st["claims"].get(cid)
         if rec is None:
             rec = st["claims"][cid] = {"first": now}
             run["new_claims"] += 1
+        new_bound = c.get("boundDaa")
+        if c.get("seats") and rec.get("seats") and rec.get("bound") is not None and new_bound is not None \
+                and int(new_bound) != rec["bound"]:
+            # Redrawn and bound again: the first panel is its own piece of evidence.
+            arch = dict(rec)
+            arch.update(gone=True, archived=True)
+            st["claims"][f"{cid}#{rec['bound']}"] = arch
+            for f in ("anchor", "anchorDaa", "anchorBond", "anchorAlgo", "anchorCheck", "retries", "breach",
+                      "pop", "popUncertain", "popLag", "verdicts", "full", "lic"):
+                rec.pop(f, None)
         was_bound = bool(rec.get("seats"))
         rec.update(cls=c.get("classId"), exe=c.get("executorBond"), fp=bool(c.get("isFreePrompt")), phase=c.get("phase"),
                    void=c.get("voidReason") or "", acc=int(c.get("acceptedDaa") or 0), accBlk=(c.get("acceptedBlock") or "")[:32],
-                   reb=c.get("reboundDaa"), bound=c.get("boundDaa"), phaseDaa=c.get("phaseDaa"), last=now, gone=False)
+                   reb=c.get("reboundDaa"), bound=new_bound, phaseDaa=c.get("phaseDaa"), last=now, gone=False)
         if c.get("seats"):
             rec["seats"] = list(c["seats"])
             if not was_bound:
@@ -707,59 +980,106 @@ def collect(rpc, st, cfg, now):
             rec["lic"] = asg.get("licensedState")
             rec["full"] = asg.get("fullSeat")
             rec["verdicts"] = {s["seatId"]: s.get("receiptStatus") for s in asg.get("seats") or []}
+    for cid, c in vesting_rows.items():
+        if cid in claim_rows:
+            continue
+        # A retired claim whose reward still vests: the row carries its outcome, not its bind facts.
+        rec = st["claims"][cid]
+        rec.update(phase="final", phaseDaa=c.get("phaseDaa"), last=now, gone=False)
+    visible = set(claim_rows) | set(vesting_rows)
     for cid, rec in st["claims"].items():
-        if cid not in visible and not rec.get("gone"):
+        if cid in visible or rec.get("gone"):
+            continue
+        # Gone only when a list that would show it was read whole down to its acceptedDaa; a claim
+        # that merely fell out of a newest-500 list is still live, just not refreshed this run.
+        keys = [(rec.get("exe"), "executor")] + [(s, "seat") for s in rec.get("seats") or []]
+        if any(k in cover and (cover[k] is None or int(rec.get("acc") or 0) > cover[k]) for k in keys):
             rec["gone"] = True    # retired from the node's state (or on a reorged-out branch)
 
-    # The chain, from a checkpoint below the lowest slot still to resolve.
-    settled = ("ok", "unbound", "void-elsewhere", "below-range")
-    need = [r for r in st["claims"].values() if not r.get("gone") and
-            not (r.get("phase") in TERMINAL_PHASES and r.get("anchorCheck") in settled)]
-    # A slot below the oldest block the node still serves stays unresolved; it must not drag every
-    # later run back to the pruning point.
-    slots = [(r["reb"] if r.get("reb") is not None else r["acc"]) + cfg.anchor_delay for r in need if r.get("anchorCheck") != "below-range"]
-    if need and slots:
-        min_slot = min(slots)
+    # The chain, from a checkpoint below the lowest slot still to resolve. Only claims seen this run
+    # whose anchor is still open (or was resolved within --recheck-daa of the tip, for reorgs) set it.
+    horizon = tip - cfg.max_scan_daa
+    need, too_old = [], 0
+    for cid in visible:
+        r = st["claims"][cid]
+        chk = r.get("anchorCheck")
+        if chk in UNRESOLVABLE or (cid in vesting_rows and cid not in claim_rows):
+            continue
+        if chk in SETTLED and _key_daa(r, cfg.anchor_delay) < tip - cfg.recheck_daa:
+            continue
+        if chk not in SETTLED and scan_slot(r, cfg.anchor_delay) < horizon:
+            r["anchorCheck"] = "too-old"
+            too_old += bool(r.get("seats"))
+            continue
+        need.append(r)
+    if too_old:
+        (run["degraded"] if st.get("runs") else run["notes"]).append(
+            f"{too_old} bound claim(s) with a slot more than --max-scan-daa {cfg.max_scan_daa} below the tip were left unresolved"
+            + ("" if st.get("runs") else " (first run: the monitor starts from here)"))
+    admits = anchor_rule(names, cfg.stopgap_from)
+    run["chain_blocks"] = 0
+    if need:
+        min_slot = min(scan_slot(r, cfg.anchor_delay) for r in need)
         chain = fetch_chain(rpc, st, run, min_slot, cfg)
         daas = [h["daa"] for _, h in chain]
         for _, h in chain:
-            if h["bond"]:
-                if h["bond"] not in st["bonds"]:
-                    st["bonds"].setdefault(h["bond"], {"known": None, "coll": 0, "reg": 0, "retiring": None, "classes": [], "seen": now})
+            if h["bond"] and h["bond"] not in st["bonds"]:
+                st["bonds"].setdefault(h["bond"], {"known": None, "coll": 0, "reg": 0, "retiring": None, "classes": [], "seen": now})
         for rec in need:
-            anchor, hs = resolve_anchor(rec, chain, daas, cfg.anchor_delay)
-            if anchor is None:
-                if hs == "below-range" and rec.get("anchor"):
-                    continue                  # keep what an earlier run resolved
-                rec["anchorCheck"] = hs
+            res = resolve_anchor(rec, chain, daas, cfg.anchor_delay, admits, cfg.resilience_from)
+            chk = res["check"]
+            if chk == "below-range" and rec.get("anchor"):
+                continue                  # keep what an earlier run resolved
+            if res["anchor"] is None:
+                rec.update(anchor=None, anchorDaa=None, anchorBond=None, anchorAlgo=None, anchorCheck=chk)
                 continue
-            if rec.get("bound") is None and rec.get("phase") == "voided" and rec.get("phaseDaa") != hs["daa"]:
-                # Voided without a panel, but not by step 4c at this block: the block is not its anchor.
-                rec.update(anchor=None, anchorDaa=None, anchorBond=None, anchorAlgo=None, anchorCheck="void-elsewhere")
+            hs = res["hs"]
+            rec.update(anchor=res["anchor"], anchorDaa=hs["daa"], anchorBond=hs["bond"], anchorAlgo=hs["algo"], anchorCheck=chk)
+            if res["retries"]:
+                rec["retries"] = res["retries"]
+            if res["breach"]:
+                rec["breach"] = True
+        for rec in need:
+            if not rec.get("seats"):
                 continue
-            rec.update(anchor=anchor, anchorDaa=hs["daa"], anchorBond=hs["bond"], anchorAlgo=hs["algo"])
-            if rec.get("bound") is not None:
-                rec["anchorCheck"] = "ok" if hs["daa"] == rec["bound"] else "mismatch"
-            elif rec.get("phase") == "voided":
-                rec["anchorCheck"] = "unbound"   # voided by step 4c at its anchor block, without a panel
-            else:
-                rec["anchorCheck"] = "unbound-pending"   # at its slot, the chain has not folded the bind yet
+            chk = rec.get("anchorCheck")
+            if chk == "pending":
+                run.setdefault("bound_pending", 0)
+                run["bound_pending"] += 1
+            elif chk == "below-range" and run.get("chain_from") == "checkpoint":
+                run.setdefault("bound_below", 0)
+                run["bound_below"] += 1
+    if run.get("bound_pending"):
+        run["degraded"].append(f"{run['bound_pending']} bound claim(s) whose anchor block lies past the chain read: their panels are not tested")
+    if run.get("bound_below"):
+        run["degraded"].append(f"{run['bound_below']} bound claim(s) whose slot lies below the scan's checkpoint start")
+    now_visible = [st["claims"][cid] for cid in visible]
+    mism = [r for r in now_visible if r.get("anchorCheck") == "mismatch"]
+    if mism:
+        run["degraded"].append(f"{len(mism)} bound claim(s) whose slot rule does not lead to the first admitted attempt at their "
+                               f"boundDaa (e.g. bound {mism[0].get('bound')}, slot rule reached DAA {mism[0].get('anchorDaa')}): "
+                               f"the anchor rule the monitor models does not hold (fences armed? pass --fence-daa)")
+    blind = [r for r in now_visible if r.get("seats") and r.get("anchorCheck") == "ok" and not r.get("anchorBond")]
+    if blind:
+        run["degraded"].append(f"{len(blind)} bound claim(s) whose anchor header's attempt envelope does not decode: "
+                               f"the anchor producer is unknown and the panels are not tested")
     # Populations are modelled once, at the first run that sees the claim bound with its anchor.
-    for rec in st["claims"].values():
+    for rec in now_visible:
         if rec.get("seats") and rec.get("anchorCheck") == "ok" and "pop" not in rec and base_classes:
-            rec["pop"] = population_for(rec, st, rows, base_classes, cfg)
+            rec["pop"], rec["popUncertain"] = population_for(rec, st, rows, base_classes, cfg, tip)
+            rec["popLag"] = tip - int(rec.get("anchorDaa") or 0)
     run["calls"] = rpc.calls
     return run
 
 
 def fetch_chain(rpc, st, run, min_slot, cfg):
     """[(hash, header summary)] of the selected chain from the best checkpoint below min_slot to
-    the sink, in chain order."""
-    starts = [h for d, h in sorted(st["checkpoints"], reverse=True) if d < min_slot]
-    starts.append(run["pruning"] or run["genesis"])
-    chain_hashes = None
-    start_errors = []
-    for start in starts:
+    the sink, in chain order. getVirtualChainFromBlock answers at most 10 x mergeset_size_limit
+    (1,800 on testnet-12) added chain blocks per call, so it is paged until it answers nothing new."""
+    starts = [(d, h) for d, h in sorted(st["checkpoints"], reverse=True) if d < min_slot]
+    starts.append((None, run["pruning"] or run["genesis"]))
+    chain_hashes, last_added, start_errors = None, [], []
+    for d, start in starts:
         try:
             vc = rpc.call("getVirtualChainFromBlock", {"startHash": start, "includeAcceptedTransactionIds": False})
         except RpcError as e:
@@ -767,12 +1087,39 @@ def fetch_chain(rpc, st, run, min_slot, cfg):
             continue
         if vc.get("removedChainBlockHashes"):
             continue                                          # the checkpoint left the chain: try an older one
-        chain_hashes = [start] + list(vc.get("addedChainBlockHashes") or [])
+        last_added = list(vc.get("addedChainBlockHashes") or [])
+        chain_hashes = [start] + last_added
+        run["chain_from"] = "checkpoint" if d is not None else "pruning point"
         break
     if chain_hashes is None:
         run["errors"].extend(start_errors[-2:])
         run["degraded"].append("could not read the selected chain")
         return []
+    pages, reached = 1, not last_added
+    while not reached and pages < cfg.max_chain_pages:
+        try:
+            vc = rpc.call("getVirtualChainFromBlock", {"startHash": chain_hashes[-1], "includeAcceptedTransactionIds": False})
+        except RpcError as e:
+            run["errors"].append(str(e)[:200])
+            break
+        pages += 1
+        removed = vc.get("removedChainBlockHashes") or []
+        added = vc.get("addedChainBlockHashes") or []
+        if removed:                                           # the chain moved under the read: drop the tail it left
+            left = set(removed)
+            while len(chain_hashes) > 1 and chain_hashes[-1] in left:
+                chain_hashes.pop()
+            if chain_hashes[-1] in left:
+                run["degraded"].append("the selected chain reorganised below the scan's start during the read")
+                return []
+        elif not added:
+            reached = True
+            break
+        chain_hashes.extend(added)
+    run["chain_pages"] = pages
+    if not reached:
+        run["degraded"].append(f"the chain read stopped after {pages} getVirtualChainFromBlock page(s) ({len(chain_hashes)} blocks) "
+                               f"short of the sink: later anchors are not resolved (raise --max-chain-pages?)")
     headers = {}
     chain_set = set(chain_hashes)
     low = chain_hashes[0]
@@ -807,28 +1154,48 @@ def fetch_chain(rpc, st, run, min_slot, cfg):
         # A gap would move "the first attempt block at or past the slot": keep only the unbroken prefix.
         first_gap = next(i for i, x in enumerate(chain_hashes) if x not in headers)
         chain = [(x, headers[x]) for x in chain_hashes[:first_gap]]
-    # Checkpoints: one chain block per `checkpoint_every` DAA, kept for the next run.
+    # Checkpoints: the first chain block of every `checkpoint_every` DAA, kept under its OWN DAA.
+    cps = {d - d % cfg.checkpoint_every: (d, h) for d, h in st["checkpoints"]}
     fresh_cps = {}
     for x, hs in chain:
-        fresh_cps.setdefault(hs["daa"] - hs["daa"] % cfg.checkpoint_every, x)   # the bucket's first chain block
-    cps = {d: h for d, h in st["checkpoints"]}
+        fresh_cps.setdefault(hs["daa"] - hs["daa"] % cfg.checkpoint_every, (hs["daa"], x))
     cps.update(fresh_cps)                                     # today's chain replaces a reorged-out checkpoint
-    st["checkpoints"] = sorted([d, h] for d, h in cps.items())[-cfg.keep_checkpoints:]
+    st["checkpoints"] = sorted([d, h] for d, h in cps.values())[-cfg.keep_checkpoints:]
     run["chain_blocks"] = len(chain)
     return chain
 
 
-def population_for(rec, st, rows, base_classes, cfg):
-    """{bond: weight_msk} the claim's panel is modelled as drawn from (executor excluded).
+def ready_at(row, daa):
+    """Was this readiness row's bond ready at `daa`? True/False when the row's current proof decides
+    it, None when the row was re-proved after `daa` (the earlier proof is not visible)."""
+    if "readinessProvedDaa" not in row and "readinessExpiresDaa" not in row:
+        return None
+    proved = int(row.get("readinessProvedDaa") or 0)
+    expires = int(row.get("readinessExpiresDaa") or 0)
+    if proved == 0 and expires == 0:
+        return False
+    if proved <= daa < expires:
+        return True
+    if expires <= daa:
+        return False
+    return None
 
-    palw_bond_may_judge_class_v4: a non-base class seats the bonds with a fresh readiness row
-    (getPalwPanelSeats `ready`); the base class seats the bonds that declared it. Both need an
-    Active bond at the panel floor, and past the maturity fence a registration older than the
-    window (genesis bonds are registered at 0)."""
+
+def population_for(rec, st, rows, base_classes, cfg, tip=None):
+    """({bond: weight_msk} the claim's panel is modelled as drawn from (executor excluded), whether
+    that population is uncertain).
+
+    palw_bond_may_judge_class_v4: a non-base class seats the bonds with a fresh readiness row at
+    the anchor (getPalwPanelSeats readinessProvedDaa..readinessExpiresDaa); the base class seats
+    the bonds that declared it. Both need an Active bond at the panel floor, and past the maturity
+    fence a registration older than the window (genesis bonds are registered at 0). A readiness row
+    re-proved after the anchor, or one read long after it without proof dates, makes the
+    population uncertain; the model notes leave such claims out."""
     cls = rec["cls"]
     names = cfg.names
     anchor_daa = rec.get("anchorDaa") or 0
-    out = {}
+    lag = (tip - anchor_daa) if tip is not None else 0
+    out, uncertain = {}, False
     for bond, info in st["bonds"].items():
         if bond == rec.get("exe") or not info.get("known") or info.get("retiring") is not None:
             continue
@@ -837,7 +1204,13 @@ def population_for(rec, st, rows, base_classes, cfg):
             continue
         if cls not in base_classes:
             row = rows.get(cls, {}).get(bond)
-            if row is None or not row.get("ready"):
+            if row is None:
+                continue
+            ready = ready_at(row, anchor_daa)
+            if ready is None:
+                ready = bool(row.get("ready"))
+                uncertain = uncertain or "readinessProvedDaa" in row or lag > cfg.pop_fresh_daa
+            if not ready:
                 continue
         elif cls not in (info.get("classes") or []):
             continue
@@ -849,7 +1222,7 @@ def population_for(rec, st, rows, base_classes, cfg):
         if bond not in out:
             info = st["bonds"].get(bond, {})
             out[bond] = draw_weight(int(info.get("coll") or 0) // SOMPI_PER_MSK, cfg.weight_cap_msk)
-    return out
+    return out, uncertain
 
 
 def draw_weight(coll_msk, cap):
@@ -857,9 +1230,119 @@ def draw_weight(coll_msk, cap):
 
 
 # ------------------------------------------------------------------ analysis
-def analyse(records, names, alpha=1e-4, min_expected=5.0, window_from=None):
-    """The seat-draw distribution per anchor producer against the stake-weighted expectation.
-    `records` are the state's claim records; returns a dict the report and the summary read."""
+def relative_tests(used, stratum_daa, min_expected):
+    """Each anchor producer against the other anchor producers: strata are (class, executor, panel
+    size, anchor DAA // stratum_daa); only strata where some other producer anchored too carry
+    information. Returns (anchors, cells, omnibus)."""
+    strata = {}
+    for _cid, r in used:
+        seats = r["seats"]
+        key = (r.get("cls"), r.get("exe"), len(seats), int(r.get("anchorDaa") or 0) // max(1, stratum_daa))
+        s = strata.get(key)
+        if s is None:
+            s = strata[key] = {"N": 0, "T": collections.Counter(), "P": collections.Counter(), "A": {}}
+        s["N"] += 1
+        s["T"].update(seats)
+        for b in seats:
+            for c in seats:
+                s["P"][(b, c)] += 1
+        a = s["A"].get(r["anchorBond"])
+        if a is None:
+            a = s["A"][r["anchorBond"]] = [0, collections.Counter()]
+        a[0] += 1
+        a[1].update(seats)
+    anchors = sorted({A for s in strata.values() for A in s["A"]})
+    cells, omnibus = [], []
+    for A in anchors:
+        mine = [s for s in strata.values() if A in s["A"]]
+        comp = [s for s in mine if s["A"][A][0] < s["N"]]
+        n_all = sum(s["A"][A][0] for s in mine)
+        n_comp = sum(s["A"][A][0] for s in comp)
+        rest = sum(s["N"] - s["A"][A][0] for s in comp)
+        bonds = sorted({b for s in comp for b in s["T"]})
+        E = {b: 0.0 for b in bonds}
+        R = {b: 0.0 for b in bonds}
+        O = {b: 0 for b in bonds}
+        cov = {b: {c: 0.0 for c in bonds} for b in bonds}
+        for s in comp:
+            N, n = s["N"], s["A"][A][0]
+            f = n * (N - n) / (N - 1)
+            items = list(s["T"].items())
+            for b, t in items:
+                E[b] += n * t / N
+                R[b] += (N - n) * t / N
+                O[b] += s["A"][A][1][b]
+                for c, u in items:
+                    cov[b][c] += f * (s["P"][(b, c)] / N - t * u / (N * N))
+        for b in bonds:
+            if cov[b][b] <= 1e-12:
+                continue
+            p2, pu, pl, _, _ = stratified_hypergeom_test([(s["N"], s["T"][b], s["A"][A][0]) for s in comp], O[b])
+            cells.append({"anchor": A, "seat": b, "n": n_comp, "obs": O[b], "exp": E[b], "var": cov[b][b],
+                          "p": p2, "p_upper": pu, "p_lower": pl})
+        keep = [b for b in bonds if cov[b][b] > 1e-12 and min(E[b], R[b], n_comp - E[b], rest - R[b]) >= min_expected]
+        row = {"anchor": A, "claims": n_all, "comparable": n_comp, "bonds": len(keep), "evaluated": False}
+        if not comp:
+            row["reason"] = "no stratum shared with another anchor producer"
+        elif len(keep) < 2:
+            row["reason"] = f"too few comparable claims ({n_comp}; expected counts < {min_expected:g})"
+        else:
+            q, rank = pinv_quadratic([O[b] - E[b] for b in keep], [[cov[b][c] for c in keep] for b in keep])
+            if rank < 1:
+                row["reason"] = "no variation"
+            else:
+                row.update(evaluated=True, q=q, df=rank, p=chi2_sf(q, rank))
+        omnibus.append(row)
+    return anchors, cells, omnibus
+
+
+def model_tests(used, min_expected, probs, exact_max):
+    """Each anchor producer (and all of them pooled, anchor "*") against the stake-weighted model of
+    each claim's population: exact Poisson-binomial cells, Rao-Scott omnibus. Notes, not alerts."""
+    per = collections.defaultdict(lambda: {"claims": 0, "obs": collections.Counter(), "ps": collections.defaultdict(list),
+                                           "cov": collections.defaultdict(float)})
+    for _cid, r in used:
+        if not r.get("pop") or r.get("popUncertain"):
+            continue
+        pop = dict(r["pop"])
+        pop.pop(r.get("exe"), None)
+        for s in r["seats"]:
+            pop.setdefault(s, 1)
+        bonds, pi, pij = probs(pop, len(r["seats"]))
+        for A in (r["anchorBond"], "*"):
+            cell = per[A]
+            cell["claims"] += 1
+            cell["obs"].update(r["seats"])
+            for b in bonds:
+                cell["ps"][b].append(pi[b])
+                for c in bonds:
+                    cell["cov"][(b, c)] += pij[(b, c)] - pi[b] * pi[c]
+    cells, omnibus = [], []
+    for A in sorted(a for a in per if a != "*") + (["*"] if "*" in per else []):
+        P = per[A]
+        for b in sorted(P["ps"]):
+            ps = P["ps"][b]
+            p2, pu, pl = poisson_binomial_test(ps, P["obs"][b], exact_max)
+            cells.append({"anchor": A, "seat": b, "n": len(ps), "obs": P["obs"][b], "exp": sum(ps), "p": p2, "p_upper": pu, "p_lower": pl})
+        bonds = sorted(P["ps"])
+        exp = [sum(P["ps"][b]) for b in bonds]
+        obs = [P["obs"][b] for b in bonds]
+        keep = [i for i, e in enumerate(exp) if e > 1e-12]
+        row = {"anchor": A, "claims": P["claims"], "bonds": len(keep), "min_exp": min((exp[i] for i in keep), default=0.0), "evaluated": False}
+        if len(keep) < 2 or row["min_exp"] < min_expected:
+            row["reason"] = f"min expected {row['min_exp']:.1f} < {min_expected:g}" if len(keep) >= 2 else "fewer than 2 bonds"
+        else:
+            cov = [[P["cov"][(bonds[i], bonds[j])] for j in keep] for i in keep]
+            x2, g, h, p = rao_scott_chi2([obs[i] for i in keep], [exp[i] for i in keep], cov)
+            row.update(evaluated=True, x2=x2, g=g, h=h, p=p)
+        omnibus.append(row)
+    return cells, omnibus
+
+
+def analyse(records, names, alpha=1e-4, min_expected=5.0, windows=(), tip=None, stratum_daa=25, exact_max=2000):
+    """The seat draws per anchor producer against the other anchor producers (relative: the
+    alerts) and against the stake-weighted model (notes), on all recorded claims and on each recent
+    window. `records` are the state's claim records; returns a dict the report and the summary read."""
     cache = {}
 
     def probs(pop, k):
@@ -871,89 +1354,102 @@ def analyse(records, names, alpha=1e-4, min_expected=5.0, window_from=None):
                           {(bonds[i], bonds[j]): pij[i][j] for i in range(len(bonds)) for j in range(len(bonds))})
         return cache[key]
 
-    used = []
-    for cid, r in records.items():
-        if not r.get("seats") or r.get("anchorCheck") != "ok" or not r.get("pop") or not r.get("anchorBond"):
-            continue
-        if window_from is not None and (r.get("anchorDaa") or 0) < window_from:
-            continue
-        used.append((cid, r))
-
-    per = collections.defaultdict(lambda: {"claims": 0, "obs": collections.Counter(), "ps": collections.defaultdict(list),
-                                           "cov": collections.defaultdict(float)})
-    for cid, r in used:
-        pop = dict(r["pop"])
-        pop.pop(r.get("exe"), None)
-        for s in r["seats"]:
-            pop.setdefault(s, 1)
-        k = len(r["seats"])
-        bonds, pi, pij = probs(pop, k)
-        for A in (r["anchorBond"], "*"):
-            cell = per[A]
-            cell["claims"] += 1
-            for s in r["seats"]:
-                cell["obs"][s] += 1
-            for b in bonds:
-                cell["ps"][b].append(pi[b])
-                for c in bonds:
-                    cell["cov"][(b, c)] += pij[(b, c)] - pi[b] * pi[c]
-
-    anchors = sorted(a for a in per if a != "*")
-    cells = []
-    for A in anchors + ["*"]:
-        P = per[A]
-        for b in sorted(P["ps"]):
-            ps = P["ps"][b]
-            o = P["obs"][b]
-            e = sum(ps)
-            p2, pu, pl = poisson_binomial_test(ps, o)
-            cells.append({"anchor": A, "seat": b, "n": len(ps), "obs": o, "exp": e, "p": p2, "p_upper": pu, "p_lower": pl})
-    tested = [c for c in cells if c["anchor"] != "*"]
-    for c, rej in zip(tested, holm([c["p"] for c in tested], alpha)):
+    used_all = sorted(((cid, r) for cid, r in records.items()
+                       if r.get("seats") and r.get("anchorCheck") == "ok" and r.get("anchorBond")), key=lambda kv: kv[0])
+    ref = tip if tip is not None else max((int(r.get("anchorDaa") or 0) for _, r in used_all), default=0)
+    out = []
+    for w in [None] + sorted({int(x) for x in windows if x and int(x) > 0}, reverse=True):
+        used = used_all if w is None else [(c, r) for c, r in used_all if int(r.get("anchorDaa") or 0) > ref - w]
+        if w is not None and (len(used) == len(out[-1]["_n"]) or not used):
+            continue                  # the window holds nothing the wider one did not: no second test of it
+        anchors, rel_cells, rel_omni = relative_tests(used, stratum_daa, min_expected)
+        # With exactly two producers sharing strata, B against A is A against B turned over: one
+        # hypothesis, reported under both names but counted once in the corrections.
+        active = [o["anchor"] for o in rel_omni if o["comparable"] > 0]
+        twin = {active[0]: active[1], active[1]: active[0]} if len(active) == 2 else {}
+        for row in rel_cells + rel_omni:
+            row["mirror"] = bool(twin) and row["anchor"] == active[1]
+        mod_cells, mod_omni = model_tests(used, min_expected, probs, exact_max)
+        out.append({"name": "all" if w is None else f"last {w}", "from": None if w is None else ref - w, "claims": len(used),
+                    "anchors": anchors, "rel_cells": rel_cells, "rel_omnibus": rel_omni, "twin": twin,
+                    "model_cells": mod_cells, "model_omnibus": mod_omni, "_n": used})
+    rel = [c for w in out for c in w["rel_cells"] if not c["mirror"]]
+    for c, rej in zip(rel, holm([c["p"] for c in rel], alpha)):
         c["significant"] = rej
-    pooled = [c for c in cells if c["anchor"] == "*"]
-    for c, rej in zip(pooled, holm([c["p"] for c in pooled], alpha)):
+    omni = [o for w in out for o in w["rel_omnibus"] if o["evaluated"] and not o["mirror"]]
+    for w in out:
+        for o in w["rel_omnibus"]:
+            if not o["mirror"]:
+                o["significant"] = bool(o["evaluated"] and o["p"] <= alpha / max(1, len(omni)))
+        orig = {(c["anchor"], c["seat"]): c for c in w["rel_cells"] if not c["mirror"]}
+        orig_o = {o["anchor"]: o for o in w["rel_omnibus"] if not o["mirror"]}
+        for c in w["rel_cells"]:
+            if c["mirror"]:
+                c["significant"] = bool(orig.get((w["twin"][c["anchor"]], c["seat"]), {}).get("significant"))
+        for o in w["rel_omnibus"]:
+            if o["mirror"]:
+                o["significant"] = bool(orig_o.get(w["twin"][o["anchor"]], {}).get("significant"))
+    mcells = [c for w in out for c in w["model_cells"]]
+    for c, rej in zip(mcells, holm([c["p"] for c in mcells], alpha)):
         c["significant"] = rej
-
-    omnibus = []
-    for A in anchors:
-        P = per[A]
-        bonds = sorted(P["ps"])
-        exp = [sum(P["ps"][b]) for b in bonds]
-        obs = [P["obs"][b] for b in bonds]
-        keep = [i for i, e in enumerate(exp) if e > 1e-12]
-        row = {"anchor": A, "claims": P["claims"], "bonds": len(keep), "min_exp": min((exp[i] for i in keep), default=0.0)}
-        if len(keep) < 2 or row["min_exp"] < min_expected:
-            row.update(evaluated=False, reason=f"min expected {row['min_exp']:.1f} < {min_expected:g}" if len(keep) >= 2 else "fewer than 2 bonds")
-        else:
-            cov = [[P["cov"][(bonds[i], bonds[j])] for j in keep] for i in keep]
-            x2, g, h, p = rao_scott_chi2([obs[i] for i in keep], [exp[i] for i in keep], cov)
-            row.update(evaluated=True, x2=x2, g=g, h=h, p=p)
-        omnibus.append(row)
-    n_omni = sum(1 for r in omnibus if r["evaluated"])
-    for r in omnibus:
-        r["significant"] = bool(r["evaluated"] and r["p"] <= alpha / max(1, n_omni))
-
+    momni = [o for w in out for o in w["model_omnibus"] if o["evaluated"]]
+    for w in out:
+        for o in w["model_omnibus"]:
+            o["significant"] = bool(o["evaluated"] and o["p"] <= alpha / max(1, len(momni)))
+    for w in out:
+        del w["_n"]
     hosts = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0.0]))
-    for c in cells:
+    for c in (out[0]["model_cells"] if out else []):
         slot = hosts[c["anchor"]][names.host(c["seat"])]
         slot[0] += c["obs"]
         slot[1] += c["exp"]
-    return {"claims_used": len(used), "anchors": anchors, "cells": cells, "omnibus": omnibus,
+    first = out[0] if out else {"anchors": [], "rel_omnibus": []}
+    return {"claims_used": len(used_all), "windows": out, "anchors": first["anchors"], "ref": ref,
+            "comparable": sum(o["comparable"] for o in first["rel_omnibus"]),
             "hosts": {a: {h: tuple(v) for h, v in hs.items()} for a, hs in hosts.items()},
-            "alpha": alpha, "cells_tested": len(tested), "omnibus_tested": n_omni}
+            "alpha": alpha, "cells_tested": len(rel), "omnibus_tested": len(omni), "stratum_daa": stratum_daa}
 
 
-def find_external(records, names, alerted, realert):
-    ext_seat, ext_anchor = [], []
+def bias_findings(res):
+    """Significant relative cells, one per (anchor, seat) at its smallest p over the windows, each
+    with the same window's model cell; significant relative omnibus rows."""
+    best = {}
+    for w in res["windows"]:
+        model = {(c["anchor"], c["seat"]): c for c in w["model_cells"]}
+        for c in w["rel_cells"]:
+            if c.get("significant"):
+                key = (c["anchor"], c["seat"])
+                if key not in best or c["p"] < best[key][0]["p"]:
+                    best[key] = (c, w["name"], model.get(key))
+    cells = sorted(best.values(), key=lambda t: ((t[2] or {}).get("p", 1.0), t[0]["p"]))
+    omni = {}
+    for w in res["windows"]:
+        for o in w["rel_omnibus"]:
+            if o.get("significant") and (o["anchor"] not in omni or o["p"] < omni[o["anchor"]][0]["p"]):
+                omni[o["anchor"]] = (o, w["name"])
+    return cells, sorted(omni.values(), key=lambda t: t[0]["p"])
+
+
+def find_external(records, names, alerted, realert, stopgap_from=None):
+    """Non-genesis bonds seated (alerted once per bond) and claims anchored by a non-genesis
+    producer (alerted, once per claim, only at or past the stopgap height)."""
+    seat_claims = collections.defaultdict(list)
+    pre, post = [], []
     for cid, r in records.items():
-        if any(not names.is_genesis(s) for s in r.get("seats") or []):
-            ext_seat.append(cid)
+        for s in r.get("seats") or []:
+            if not names.is_genesis(s):
+                seat_claims[s].append(cid)
         if r.get("anchorBond") and r.get("anchorCheck") in ("ok", "unbound") and not names.is_genesis(r["anchorBond"]):
-            ext_anchor.append(cid)
-    new_seat = [c for c in ext_seat if realert or c not in set(alerted.get("external_seat", []))]
-    new_anchor = [c for c in ext_anchor if realert or c not in set(alerted.get("external_anchor", []))]
-    return ext_seat, ext_anchor, new_seat, new_anchor
+            if stopgap_from is not None and int(r.get("anchorDaa") or 0) >= stopgap_from:
+                post.append(cid)
+            else:
+                pre.append(cid)
+    known = set(alerted.get("external_seat_bonds", []))
+    done = set(alerted.get("external_anchor", []))
+    return {"seat_claims": dict(seat_claims),
+            "new_bonds": sorted(b for b in seat_claims if realert or b not in known),
+            "pre": sorted(pre), "post": sorted(post),
+            "new_post": sorted(c for c in post if realert or c not in done)}
 
 
 # ------------------------------------------------------------------ report
@@ -972,15 +1468,27 @@ def claim_line(cid, r, names):
     outcome = r.get("phase") or "?"
     if r.get("void"):
         outcome += f" ({r['void']})"
+    if r.get("archived"):
+        outcome += " [first panel, redrawn]"
     anchor = f"{(r.get('anchor') or '')[:12]}@{r.get('anchorDaa')}" if r.get("anchor") else (r.get("anchorCheck") or "-")
     if r.get("anchorCheck") == "mismatch":
         anchor += " MISMATCH"
+    if r.get("retries"):
+        anchor += f" r{r['retries']}"
+    if r.get("breach"):
+        anchor += " BREACH"
     return (f"{cid[:16]}  {class_label(r.get('cls')):<5}  {names.short(r.get('exe')):<5} {r.get('acc', ''):>5}  "
             f"{anchor:<20} {names.short(r.get('anchorBond')) if r.get('anchorBond') else '-':<5}  "
             f"{' '.join(seats) if seats else '-':<28}  {outcome}")
 
 
-def report(st, run, res, alerts, cfg, names, out):
+def _table(w, rows, seats, names, head):
+    w(f"{'anchor':<18}{head:>12}  " + "".join(f"{names.short(b):>11}" for b in seats) + "\n")
+    for label, n, cells in rows:
+        w(f"{label:<18}{n:>12}  " + "".join(f"{cells.get(b, '-'):>11}" for b in seats) + "\n")
+
+
+def report(st, run, res, alerts, ext, cfg, names, out):
     w = out.write
     ts = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S JST")
     recs = st["claims"]
@@ -990,17 +1498,27 @@ def report(st, run, res, alerts, cfg, names, out):
         w(f"offline analysis of {cfg.state}\n")
     elif run.get("tip") is not None:
         w(f"endpoint {cfg.url} | network {run.get('network')} | fp {run.get('fp', '')[:12]} | genesis {run.get('genesis', '')[:12]} | "
-          f"tip DAA {run.get('tip')} | sink {run.get('sink', '')[:12]} | {run.get('calls')} read calls\n")
+          f"tip DAA {run.get('tip')} | sink {run.get('sink', '')[:12]} | {run.get('calls')} read calls | "
+          f"chain {run.get('chain_blocks', 0)} blocks in {run.get('chain_pages', 0)} page(s) from the {run.get('chain_from', '-')}\n")
+    fences = []
+    if cfg.stopgap_from is not None:
+        fences.append(f"operator-anchor stopgap from DAA {cfg.stopgap_from}")
+    if cfg.resilience_from is not None:
+        fences.append(f"registry resilience from DAA {cfg.resilience_from}")
+    w(f"fences modelled: {', '.join(fences) if fences else 'none (the shipped t12 rules)'}\n")
     checks = collections.Counter(r.get("anchorCheck") for r in recs.values() if r.get("seats"))
     w(f"records: {len(recs)} claims ({', '.join(f'{k} {v}' for k, v in sorted(phases.items(), key=lambda kv: str(kv[0])))}); "
       f"bound {sum(1 for r in recs.values() if r.get('seats'))}, anchors {dict(checks)}; "
-      f"this run +{run.get('new_claims', 0) if run else 0} new, +{run.get('newly_bound', 0) if run else 0} newly bound\n\n")
+      f"this run +{run.get('new_claims', 0) if run else 0} new, +{run.get('newly_bound', 0) if run else 0} newly bound\n")
+    if run.get("truncated_lists"):
+        w(f"claim lists capped at the newest 500 rows: {len(run['truncated_lists'])} (normal on testnet-12; a gap would be DEGRADED)\n")
+    w("\n")
 
     anchored = [(cid, r) for cid, r in recs.items() if r.get("seats") or r.get("anchorCheck") == "unbound"]
     newest = sorted(anchored, key=lambda kv: (kv[1].get("anchorDaa") or kv[1].get("bound") or 0, kv[1].get("acc") or 0, kv[0]),
                     reverse=True)[:cfg.show]
     w(f"Recent panels (newest {len(newest)} of {len(anchored)} anchored claims; seat verdict V valid . pending - none ? unknown; "
-      f"* full seat)\n")
+      f"* full seat; rN = N NoCapablePanel retries)\n")
     w(f"{'claim':<16}  {'class':<5}  {'prod':<5} {'accDAA':>5}  {'anchor@DAA':<20} {'by':<5}  {'seats':<28}  outcome\n")
     for cid, r in newest:
         w(claim_line(cid, r, names) + "\n")
@@ -1014,50 +1532,59 @@ def report(st, run, res, alerts, cfg, names, out):
     if voids:
         w(f"  + voided without a panel: {', '.join(f'{k} {v}' for k, v in sorted(voids.items()))}\n")
 
-    w(f"\nSeat draws per anchor producer: observed/expected (stake-weighted), {res['claims_used']} bound claims with a resolved anchor\n")
-    seats = sorted({c["seat"] for c in res["cells"]}, key=lambda b: (not names.is_genesis(b), names.short(b)))
-    w(f"{'anchor':<18}{'claims':>7}  " + "".join(f"{names.short(b):>11}" for b in seats) + "\n")
-    by = {(c["anchor"], c["seat"]): c for c in res["cells"]}
-    for A in res["anchors"] + ["*"]:
-        n = next((o["claims"] for o in res["omnibus"] if o["anchor"] == A), None)
-        if A == "*":
-            n = res["claims_used"]
-        label = "all (pooled)" if A == "*" else f"{names.short(A)} {names.host(A)}"
-        cells = []
-        for b in seats:
-            c = by.get((A, b))
-            cells.append(f"{c['obs']}/{c['exp']:.1f}{'!' if c.get('significant') else ''}" if c else "-")
-        w(f"{label:<18}{n:>7}  " + "".join(f"{x:>11}" for x in cells) + "\n")
-    w("\nBy host: observed/expected seats\n")
+    wins = res["windows"]
+    first = wins[0] if wins else {"rel_cells": [], "rel_omnibus": [], "model_cells": [], "anchors": []}
+    sig_any = {(c["anchor"], c["seat"]) for win in wins for c in win["rel_cells"] if c.get("significant")}
+    seats = sorted({c["seat"] for c in first["rel_cells"]} | {c["seat"] for c in first["model_cells"]},
+                   key=lambda b: (not names.is_genesis(b), names.short(b)))
+    w(f"\nSeat draws per anchor producer against the OTHER anchor producers (all {res['claims_used']} tested claims; "
+      f"strata: class x executor x {res['stratum_daa']}-DAA slice; ! = significant in some window)\n")
+    rows = []
+    for o in first["rel_omnibus"]:
+        cells = {c["seat"]: f"{c['obs']}/{c['exp']:.1f}{'!' if (c['anchor'], c['seat']) in sig_any else ''}"
+                 for c in first["rel_cells"] if c["anchor"] == o["anchor"]}
+        rows.append((f"{names.short(o['anchor'])} {names.host(o['anchor'])}", f"{o['comparable']}/{o['claims']}", cells))
+    _table(w, rows, seats, names, "comp/claims")
+    w("\nSeat draws against the stake-weighted model (population notes, not alerts; ~ = significant)\n")
+    rows = []
+    for o in first.get("model_omnibus", []):
+        cells = {c["seat"]: f"{c['obs']}/{c['exp']:.1f}{'~' if c.get('significant') else ''}"
+                 for c in first["model_cells"] if c["anchor"] == o["anchor"]}
+        label = "all (pooled)" if o["anchor"] == "*" else f"{names.short(o['anchor'])} {names.host(o['anchor'])}"
+        rows.append((label, str(o["claims"]), cells))
+    _table(w, rows, seats, names, "claims")
+    w("\nBy host, against the model: observed/expected seats\n")
     hosts = sorted({h for hs in res["hosts"].values() for h in hs})
     w(f"{'anchor':<18}" + "".join(f"{h:>14}" for h in hosts) + "\n")
-    for A in res["anchors"] + ["*"]:
+    for A in sorted(a for a in res["hosts"] if a != "*") + (["*"] if "*" in res["hosts"] else []):
         label = "all (pooled)" if A == "*" else f"{names.short(A)} {names.host(A)}"
         hs = res["hosts"].get(A, {})
         w(f"{label:<18}" + "".join(f"{(str(hs[h][0]) + '/' + format(hs[h][1], '.1f')) if h in hs else '-':>14}" for h in hosts) + "\n")
 
-    w(f"\nTests (H0: each panel is a stake-weighted successive sample of its modelled population; family-wise alpha {res['alpha']:g} each)\n")
-    tested = [c for c in res["cells"] if c["anchor"] != "*"]
-    sig = [c for c in tested if c.get("significant")]
-    if tested:
-        low = min(tested, key=lambda c: c["p"])
-        w(f"  cells: exact two-sided Poisson-binomial, Holm over {len(tested)} cells -> {len(sig)} significant; "
-          f"smallest p {fmt_p(low['p'])} ({names.short(low['anchor'])} anchors -> {names.short(low['seat'])} seated {low['obs']}/{low['exp']:.1f})\n")
-    else:
-        w("  cells: nothing to test yet (no bound claim with a resolved anchor and population)\n")
-    for c in sig:
-        direction = "OVER" if c["obs"] > c["exp"] else "UNDER"
-        w(f"    ! {names.short(c['anchor'])} anchors seat {names.long(c['seat'])} {direction}: {c['obs']}/{c['exp']:.1f} over {c['n']} claims, p {fmt_p(c['p'])}\n")
-    for o in res["omnibus"]:
-        if o["evaluated"]:
-            w(f"  omnibus {names.short(o['anchor'])}: Rao-Scott X2 {o['x2']:.2f} (g {o['g']:.2f}, df {o['h']:.2f}) p {fmt_p(o['p'])}"
-              f" over {o['claims']} claims, {o['bonds']} bonds{' SIGNIFICANT' if o['significant'] else ''}\n")
-        else:
-            w(f"  omnibus {names.short(o['anchor'])}: not evaluated ({o['reason']}) over {o['claims']} claims\n")
-    pooled_sig = [c for c in res["cells"] if c["anchor"] == "*" and c.get("significant")]
-    for c in pooled_sig:
-        w(f"  population note: {names.short(c['seat'])} is seated {c['obs']}/{c['exp']:.1f} over all anchors (p {fmt_p(c['p'])}) - "
-          f"a population-wide effect (eligibility, saturation, readiness), not by itself an anchor bias\n")
+    w(f"\nTests (H0: the draw does not depend on the anchor producer; family-wise alpha {res['alpha']:g} for the cells and "
+      f"for the omnibus, Holm/Bonferroni over {res['cells_tested']} cells and {res['omnibus_tested']} omnibus rows in {len(wins)} window(s))\n")
+    for win in wins:
+        cells = win["rel_cells"]
+        low = min(cells, key=lambda c: c["p"]) if cells else None
+        w(f"  window {win['name']} ({win['claims']} claims"
+          + (f", anchored after DAA {win['from']}" if win["from"] is not None else "") + "): "
+          + (f"{len(cells)} cells, {sum(1 for c in cells if c.get('significant'))} significant, smallest p {fmt_p(low['p'])} "
+             f"({names.short(low['anchor'])} -> {names.short(low['seat'])} {low['obs']}/{low['exp']:.1f})" if low else "no comparable claims")
+          + "\n")
+        for o in win["rel_omnibus"]:
+            if o["evaluated"]:
+                w(f"    omnibus {names.short(o['anchor'])}: CMH Q {o['q']:.2f} df {o['df']} p {fmt_p(o['p'])} over {o['comparable']} "
+                  f"comparable claims{' SIGNIFICANT' if o['significant'] else ''}\n")
+            else:
+                w(f"    omnibus {names.short(o['anchor'])}: not evaluated ({o['reason']})\n")
+        for c in win["model_cells"]:
+            if c.get("significant"):
+                who = "all anchors" if c["anchor"] == "*" else f"{names.short(c['anchor'])}'s panels"
+                w(f"    population note: {names.short(c['seat'])} seated {c['obs']}/{c['exp']:.1f} on {who} against the model "
+                  f"(p {fmt_p(c['p'])}): eligibility, saturation, readiness or a model gap, not by itself an anchor bias\n")
+    w(f"\nExternal bonds: {len(ext['seat_claims'])} seated ("
+      + ", ".join(f"{names.short(b)} on {len(v)}" for b, v in sorted(ext["seat_claims"].items())) + "); "
+      f"external anchors {len(ext['pre'])} before the stopgap, {len(ext['post'])} past it\n")
 
     w("\nAlerts\n")
     if not alerts and not (run or {}).get("degraded") and not (run or {}).get("errors"):
@@ -1068,9 +1595,15 @@ def report(st, run, res, alerts, cfg, names, out):
         w(f"  DEGRADED {d}\n")
     for e in (run or {}).get("errors", [])[:10]:
         w(f"  ERROR {e}\n")
+    for n in (run or {}).get("notes", []):
+        w(f"  note {n}\n")
 
 
 # ------------------------------------------------------------------ main
+def _windows(s):
+    return [int(x) for x in str(s).replace(" ", "").split(",") if x and int(x) > 0]
+
+
 def parse_args(argv):
     ap = argparse.ArgumentParser(description="read-only testnet-12 panel-seating monitor (see the module doc)")
     ap.add_argument("--url", default="wss://misakascan.com/kaspa", help="JSON wRPC endpoint (ws:// or wss://)")
@@ -1078,13 +1611,21 @@ def parse_args(argv):
                     help="state file (claim records, checkpoints, alerted ids); '' = none")
     ap.add_argument("--offline", action="store_true", help="analyse the state file only; no RPC")
     ap.add_argument("--alpha", type=float, default=1e-4, help="family-wise false-alarm rate of each test family per run")
-    ap.add_argument("--min-expected", type=float, default=5.0, help="omnibus needs every expected count >= this")
-    ap.add_argument("--window-daa", type=int, default=0, help="test only claims anchored in the last N DAA (0 = all recorded)")
+    ap.add_argument("--min-expected", type=float, default=5.0, help="an omnibus seat needs expected counts >= this")
+    ap.add_argument("--windows", type=_windows, default=[50, 100, 200, 400, 800],
+                    help="recent windows (DAA, comma-separated) tested besides all recorded claims ('' = none)")
+    ap.add_argument("--stratum-daa", type=int, default=25, help="anchor-DAA slice the relative tests compare producers within")
+    ap.add_argument("--fence-daa", type=int, default=None,
+                    help="the common post-launch fence height once armed: sets --stopgap-from and --resilience-from")
+    ap.add_argument("--stopgap-from", type=int, default=None, help="operator-anchor stopgap (lane A) height, if armed")
+    ap.add_argument("--resilience-from", type=int, default=None, help="registry-resilience (NoCapablePanel retry) height, if armed")
     ap.add_argument("--anchor-delay", type=int, default=ANCHOR_DELAY)
     ap.add_argument("--weight-cap-msk", type=int, default=WEIGHT_CAP_MSK)
     ap.add_argument("--seat-floor-msk", type=int, default=SEAT_FLOOR_MSK)
     ap.add_argument("--maturity-activation", type=int, default=MATURITY_ACTIVATION)
     ap.add_argument("--maturity-window", type=int, default=MATURITY_WINDOW)
+    ap.add_argument("--pop-fresh-daa", type=int, default=24,
+                    help="a readiness row read more than this after the anchor without proof dates makes the population uncertain")
     ap.add_argument("--genesis-txid", default=T12_PREMINE, help="the premine txid whose outputs are the genesis bonds")
     ap.add_argument("--roster", default="", help="JSON {index: {host, name}} overriding the genesis-bond names")
     ap.add_argument("--expect-genesis", default=T12_GENESIS, help="refuse another network ('' = any)")
@@ -1092,16 +1633,24 @@ def parse_args(argv):
     ap.add_argument("--realert", action="store_true", help="repeat external-seat/anchor alerts already raised")
     ap.add_argument("--show", type=int, default=25, help="recent panels listed in the report")
     ap.add_argument("--retain-daa", type=int, default=20_000,
-                    help="forget retired claims anchored more than this many DAA below the tip (0 = keep all)")
+                    help="forget claims the node no longer shows anchored more than this many DAA below the tip (0 = keep all)")
+    ap.add_argument("--recheck-daa", type=int, default=30, help="re-resolve anchors this close to the tip (reorgs)")
+    ap.add_argument("--max-scan-daa", type=int, default=2_000, help="never read the chain further back than this below the tip")
     ap.add_argument("--json", default="", help="also write the full result (records + analysis) to this file")
     ap.add_argument("--quiet", action="store_true", help="print only the machine summary line")
     ap.add_argument("--timeout", type=float, default=60)
     ap.add_argument("--checkpoint-every", type=int, default=25)
     ap.add_argument("--keep-checkpoints", type=int, default=400)
+    ap.add_argument("--max-chain-pages", type=int, default=60, help="getVirtualChainFromBlock pages (1,800 chain blocks each)")
     ap.add_argument("--max-block-pages", type=int, default=400)
     ap.add_argument("--max-block-calls", type=int, default=300)
     ap.add_argument("--max-assignment-calls", type=int, default=200)
-    return ap.parse_args(argv)
+    cfg = ap.parse_args(argv)
+    if cfg.stopgap_from is None:
+        cfg.stopgap_from = cfg.fence_daa
+    if cfg.resilience_from is None:
+        cfg.resilience_from = cfg.fence_daa
+    return cfg
 
 
 def main(argv=None):
@@ -1110,7 +1659,7 @@ def main(argv=None):
     names = cfg.names
     now = int(time.time())
     st = load_state(cfg.state)
-    run = {"errors": [], "degraded": []}
+    run = {"errors": [], "degraded": [], "notes": []}
     fatal = None
     if not cfg.offline:
         rpc = WsRpc(cfg.url, cfg.timeout)
@@ -1118,58 +1667,63 @@ def main(argv=None):
             run = collect(rpc, st, cfg, now)
         except Exception as e:                      # noqa: BLE001 - an unreadable node is DEGRADED, never a crash
             fatal = f"{type(e).__name__}: {e}"[:300]
-            run = {"errors": [fatal], "degraded": [], "calls": rpc.calls}
+            run = {"errors": [fatal], "degraded": [], "notes": [], "calls": rpc.calls}
         finally:
             rpc.close()
     records = st["claims"]
-    window_from = None
-    if cfg.window_daa and run.get("tip"):
-        window_from = run["tip"] - cfg.window_daa
-    res = analyse(records, names, cfg.alpha, cfg.min_expected, window_from)
-    ext_seat, ext_anchor, new_seat, new_anchor = find_external(records, names, st["alerted"], cfg.realert)
+    res = analyse(records, names, cfg.alpha, cfg.min_expected, cfg.windows, run.get("tip"), cfg.stratum_daa)
+    ext = find_external(records, names, st["alerted"], cfg.realert, cfg.stopgap_from)
 
     alerts = []
-    for c in res["cells"]:
-        if c["anchor"] != "*" and c.get("significant"):
-            alerts.append(f"bias: {names.short(c['anchor'])} anchors seat {names.short(c['seat'])} "
-                          f"{'over' if c['obs'] > c['exp'] else 'under'} ({c['obs']}/{c['exp']:.1f}, n {c['n']}, p {fmt_p(c['p'])})")
-    for o in res["omnibus"]:
-        if o.get("significant"):
-            alerts.append(f"bias: {names.short(o['anchor'])}'s panels differ from the stake-weighted draw (Rao-Scott p {fmt_p(o['p'])}, {o['claims']} claims)")
-    for cid in new_seat:
+    cells, omni = bias_findings(res)
+    for c, win, m in cells:
+        model = f"; against the model {m['obs']}/{m['exp']:.1f} p {fmt_p(m['p'])}" if m else "; no model"
+        alerts.append(f"bias: {names.short(c['anchor'])} seats {names.short(c['seat'])} {'OVER' if c['obs'] > c['exp'] else 'UNDER'} "
+                      f"the other anchor producers ({c['obs']}/{c['exp']:.1f} over {c['n']} comparable claims, p {fmt_p(c['p'])}, "
+                      f"window {win}){model}")
+    for o, win in omni:
+        alerts.append(f"bias: {names.short(o['anchor'])}'s panels differ from the other anchor producers' "
+                      f"(CMH Q {o['q']:.1f} df {o['df']} p {fmt_p(o['p'])}, {o['comparable']} comparable claims, window {win})")
+    for b in ext["new_bonds"]:
+        first = min(ext["seat_claims"][b], key=lambda cid: (records[cid].get("anchorDaa") or 0, cid))
+        r = records[first]
+        alerts.append(f"external seat: {names.long(b)} is seated for the first time (claim {first[:16]}, {class_label(r.get('cls'))}, "
+                      f"anchor by {names.short(r.get('anchorBond'))} at DAA {r.get('anchorDaa')}; {len(ext['seat_claims'][b])} panel(s) so far)")
+    for cid in ext["new_post"]:
         r = records[cid]
-        ext = [names.short(s) for s in r["seats"] if not names.is_genesis(s)]
-        alerts.append(f"external seat: claim {cid[:16]} ({class_label(r.get('cls'))}, anchor by {names.short(r.get('anchorBond'))}) seats {' '.join(ext)}")
-    for cid in new_anchor:
-        r = records[cid]
-        alerts.append(f"external anchor: claim {cid[:16]} ({class_label(r.get('cls'))}) anchored at DAA {r.get('anchorDaa')} by {names.long(r.get('anchorBond'))}")
-    mismatches = [cid for cid, r in records.items() if r.get("anchorCheck") == "mismatch" and not r.get("gone")]
-    if mismatches:
-        run.setdefault("degraded", []).append(f"{len(mismatches)} bound claim(s) whose resolved anchor DAA != boundDaa "
-                                              f"(e.g. {mismatches[0][:16]}): the anchor rule the monitor models no longer holds")
+        alerts.append(f"external anchor past the stopgap: claim {cid[:16]} ({class_label(r.get('cls'))}) anchored at DAA {r.get('anchorDaa')} "
+                      f"by {names.long(r.get('anchorBond'))}{' (bound in a block the stopgap does not admit)' if r.get('breach') else ''}")
     if not cfg.offline and fatal is None:
-        st["alerted"]["external_seat"] = sorted(set(st["alerted"].get("external_seat", [])) | set(ext_seat))
-        st["alerted"]["external_anchor"] = sorted(set(st["alerted"].get("external_anchor", [])) | set(ext_anchor))
+        st["alerted"]["external_seat_bonds"] = sorted(set(st["alerted"].get("external_seat_bonds", [])) | set(ext["seat_claims"]))
+        st["alerted"]["external_anchor"] = sorted(set(st["alerted"].get("external_anchor", [])) | set(ext["post"]))
         st["runs"] = st.get("runs", 0) + 1
         st["last_run"] = now
-        run["pruned"] = prune_state(st, run.get("tip"), cfg.retain_daa)
+        st["last_tip"] = run.get("tip")
+        run["pruned"] = prune_state(st, run.get("tip"), cfg.retain_daa, now)
         save_state(cfg.state, st, cfg.genesis_txid)
 
     degraded = bool(fatal or run.get("degraded") or run.get("errors"))
     status = "ALERT" if alerts else ("DEGRADED" if degraded else "OK")
-    by_anchor = collections.Counter(names.short(r["anchorBond"]) for r in records.values()
-                                    if r.get("seats") and r.get("anchorCheck") == "ok" and r.get("anchorBond"))
-    min_cell = min((c["p"] for c in res["cells"] if c["anchor"] != "*"), default=None)
-    min_omni = min((o["p"] for o in res["omnibus"] if o["evaluated"]), default=None)
+    tested = [r for r in records.values() if r.get("seats") and r.get("anchorCheck") == "ok" and r.get("anchorBond")]
+    by_anchor = collections.Counter(names.short(r["anchorBond"]) for r in tested)
+    rel = [c for w in res["windows"] for c in w["rel_cells"]]
+    min_cell = min((c["p"] for c in rel), default=None)
+    min_omni = min((o["p"] for w in res["windows"] for o in w["rel_omnibus"] if o["evaluated"]), default=None)
+    unresolved = collections.Counter(r.get("anchorCheck") for r in records.values()
+                                     if r.get("seats") and r.get("anchorCheck") in ("pending", "below-range", "too-old", "mismatch", None))
     summary = {"status": status, "time": now, "tip": run.get("tip"), "fp": (run.get("fp") or "")[:16],
                "claims": len(records), "bound": sum(1 for r in records.values() if r.get("seats")),
-               "tested": res["claims_used"], "anchors": dict(sorted(by_anchor.items())),
-               "ext_seat": len(ext_seat), "ext_anchor": len(ext_anchor), "bias_cells": sum(1 for c in res["cells"] if c["anchor"] != "*" and c.get("significant")),
-               "min_cell_p": None if min_cell is None else float(f"{min_cell:.3g}"),
+               "tested": res["claims_used"], "comparable": res["comparable"], "anchors": dict(sorted(by_anchor.items())),
+               "windows": [w["name"] for w in res["windows"]],
+               "ext_seat": sum(len(v) for v in ext["seat_claims"].values()), "ext_seat_bonds": len(ext["seat_claims"]),
+               "ext_anchor": len(ext["pre"]) + len(ext["post"]), "ext_anchor_post_stopgap": len(ext["post"]),
+               "bias_cells": len(cells), "min_cell_p": None if min_cell is None else float(f"{min_cell:.3g}"),
                "min_omnibus_p": None if min_omni is None else float(f"{min_omni:.3g}"),
+               "model_notes": sum(1 for w in res["windows"] for c in w["model_cells"] if c.get("significant")),
+               "unresolved": {str(k): v for k, v in sorted(unresolved.items(), key=lambda kv: str(kv[0]))},
                "alpha": cfg.alpha, "alerts": alerts, "degraded": (run.get("degraded") or []) + (run.get("errors") or [])[:5]}
     if not cfg.quiet:
-        report(st, run, res, alerts, cfg, names, sys.stdout)
+        report(st, run, res, alerts, ext, cfg, names, sys.stdout)
         sys.stdout.write("\n")
     sys.stdout.write("PANEL_BIAS " + json.dumps(summary, separators=(",", ":")) + "\n")
     if cfg.json:
