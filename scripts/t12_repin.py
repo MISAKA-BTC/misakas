@@ -845,6 +845,9 @@ def reason_line(pin: Pin, file: str, body: str, inside_code_block: bool) -> str 
     return None
 
 
+REPIN_COMMENT = re.compile(r"[ \t]*(?://|#) re-pin \d{4}-\d{2}-\d{2} @[0-9a-f]+: [^\n]*\n")
+
+
 def apply(rows: list[Row], reason: str, head: str) -> list[str]:
     """Rewrite each moving pin's literal in place, and put one reason comment above the line of each
     group's last anchor (a table row, a tuple const, a genesis field, a `want` array)."""
@@ -865,12 +868,17 @@ def apply(rows: list[Row], reason: str, head: str) -> list[str]:
             in_code = file.endswith(".md") and text.count("```", 0, line_at) % 2 == 1
             olds = ", ".join(r.pinned[:8] + "…" for r in sorted(grp, key=lambda r: r.span[0]))
             line = reason_line(grp[0].pin, file, f"re-pin {today} @{head}: {reason} (was {olds})", in_code)
-            above = text[text.rfind("\n", 0, max(line_at - 1, 0)) + 1:line_at]
+            above_at = text.rfind("\n", 0, max(line_at - 1, 0)) + 1
+            above = text[above_at:line_at]
             if line and f"re-pin {today} @{head}: {reason}" in above:
                 line = None  # this run already explained this group (an earlier round)
             if line:
                 indent = re.match(r"[ \t]*", text[line_at:]).group(0)
-                edits.append((line_at, line_at, indent + line + "\n"))
+                if REPIN_COMMENT.fullmatch(above):
+                    # An earlier run's reason for this same group: the new one replaces it (git keeps the old).
+                    edits.append((above_at, line_at, indent + line + "\n"))
+                else:
+                    edits.append((line_at, line_at, indent + line + "\n"))
         # Apply from the end so every offset stays valid; an insert at a line start sorts after the
         # literal edits that begin at the same offset (none do: a literal never starts a line here).
         for s, e, rep in sorted(edits, key=lambda x: (x[0], x[1]), reverse=True):
