@@ -3550,7 +3550,20 @@ impl PalwPanelService {
         // P3: how often a `Candidate` meets its admission jury, in spans — the fold's period.
         let audit_period =
             crate::palw_candidate_proof_timing::palw_candidate_audit_period_spans_v1(&self.consensus_config.params, read.span_daa);
-        let mut candidate_sends: Vec<Hash64> = Vec::new();
+        let mut candidate_sends: Vec<(Hash64, crate::palw_candidate_proof_timing::PalwCandidateProofRankV1)> = Vec::new();
+        // P3: this bond's `Candidate` classes — the ones it has a row for — to count how many share an audit.
+        let candidates_held: Vec<Hash64> = read
+            .classes
+            .iter()
+            .filter(|c| {
+                !c.is_base_class
+                    && c.row.as_ref().is_some_and(|lifecycle| {
+                        matches!(lifecycle.state, kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1::Candidate)
+                    })
+                    && read.readiness.iter().any(|r| r.bond == bond_key && r.class_id == c.class_id)
+            })
+            .map(|c| c.class_id)
+            .collect();
         let mut out = Vec::new();
         for class in read.classes.iter().filter(|c| !c.is_base_class) {
             // **Node-local capacity, never consensus** (the operator's rule): a host without the
@@ -3622,15 +3635,32 @@ impl PalwPanelService {
                         audit_period,
                     )
                 },
+                |audit_span| crate::palw_candidate_proof_timing::palw_candidate_stagger_v1(&bond_bytes, &class.class_id, audit_span),
+                |audit_span| {
+                    crate::palw_candidate_proof_timing::palw_candidate_sharing_v1(
+                        &class.class_id,
+                        &candidates_held,
+                        audit_span,
+                        |id, span| {
+                            crate::palw_candidate_proof_timing::palw_candidate_audit_due_v1(
+                                &self.consensus_config.params,
+                                id,
+                                span,
+                                audit_period,
+                            )
+                        },
+                    )
+                },
             );
             let urgency = match candidate {
                 crate::palw_candidate_proof_timing::PalwCandidateProofPlanV1::Hold { .. } => {
                     self.readiness_note(class.class_id, candidate.note());
                     continue;
                 }
-                // The Own site, never M1's escalated one: that site is the counted rows' guarantee.
-                crate::palw_candidate_proof_timing::PalwCandidateProofPlanV1::Send { .. } => {
-                    candidate_sends.push(class.class_id);
+                // The Own site, never M1's escalated one — and behind every proof of a class that is
+                // not `Candidate` (a needed hand-off behind every one M1 hurries): the counted rows' guarantee.
+                crate::palw_candidate_proof_timing::PalwCandidateProofPlanV1::Send { rank, .. } => {
+                    candidate_sends.push((class.class_id, rank));
                     None
                 }
                 crate::palw_candidate_proof_timing::PalwCandidateProofPlanV1::Today if today_holds => continue,
@@ -3823,11 +3853,11 @@ impl PalwPanelService {
                 urgency,
             });
         }
-        // P3: a Candidate's proof takes the Own site behind every proof M1 hurries and ahead of the
-        // unhurried ones after them — never ahead of a lapsing counted row (`palw_candidate_own_order_v1`).
+        // P3: a Candidate's proofs take the Own site behind every other proof, in their rank's order —
+        // save a hand-off its row needs, behind every proof M1 hurries (`palw_candidate_own_order_v1`).
         crate::palw_candidate_proof_timing::palw_candidate_own_order_v1(
             out,
-            |duty| duty.class_id().is_some_and(|class_id| candidate_sends.contains(&class_id)),
+            |duty| duty.class_id().and_then(|class_id| candidate_sends.iter().find(|(id, _)| *id == class_id).map(|(_, rank)| *rank)),
             |duty| duty.escalates(),
         )
     }
