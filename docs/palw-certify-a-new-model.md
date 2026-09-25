@@ -23,9 +23,21 @@ family covered it: it could register only weightless and never carry a free-prom
 
 ## Steps
 
+**Never start a second `kaspad` with a bond that a node already runs.** Since 2026-09-25 a node's
+duties have no off switch. A `kaspad` given a bond's key and outpoint runs that bond's seat duties
+and its execution-lane round blocks, even when it was started only to register. Two such processes
+at once sign the same round permit twice, and the chain slashes the bond
+(`RoundPermitEquivocated`). Register in one of these ways:
+
+* through the running node, with `misaka model add` (RPC only, no second process);
+* by restarting that node itself with the flag, and removing the flag once the class is on the
+  chain (`docs/palw-add-a-model-runbook.md` §5);
+* with a bond that no process runs yet. The registration run then stays that bond's node.
+
 ```bash
 # 1. Register the class. Weightless (0‰) if no certified family covers it yet; at the floor
-#    share if one does — the node prices it from the chain's own certified set.
+#    share if one does — the node prices it from the chain's own certified set. THIS is the node
+#    that runs the bond (see above): never a second process beside it.
 kaspad ... --palw-register-class "<model id>" --palw-producer-bond <txid>:<index> ...
 
 # 2. Post the drill of the family that covers the model's kernels (once per family per lane).

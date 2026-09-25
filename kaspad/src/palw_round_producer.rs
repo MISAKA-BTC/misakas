@@ -105,6 +105,12 @@ impl PalwRoundProducerService {
         Self { config, consensus_manager, mining_manager, flow_context, key, bond, shutdown: Default::default() }
     }
 
+    /// Whether the bond's key and outpoint loaded — the worker produces nothing otherwise, and the
+    /// daemon says so in one `PALW duties NOT as planned` line (`crate::palw_duties`).
+    pub fn bond_identity_loaded(&self) -> bool {
+        self.key.is_some() && self.bond.is_some()
+    }
+
     async fn tick(&self, period: std::time::Duration) -> bool {
         tokio::select! {
             _ = tokio::time::sleep(period) => true,

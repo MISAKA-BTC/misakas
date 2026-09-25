@@ -6314,6 +6314,12 @@ impl PalwPanelService {
         }
     }
 
+    /// Whether the seat identity loaded (the key file and the bond outpoint) — [`Self::worker`] declines
+    /// otherwise, and the daemon says so in one `PALW duties NOT as planned` line (`crate::palw_duties`).
+    pub fn seat_identity_loaded(&self) -> bool {
+        self.bond.is_some() && self.keypair.is_some()
+    }
+
     pub async fn worker(self: &Arc<Self>) {
         let (Some(bond), true) = (self.bond, self.keypair.is_some()) else {
             info!("[{PALW_PANEL}] not running (see the startup warning above)");

@@ -231,15 +231,48 @@ Equivalent manual shape:
 ```bash
 kaspad --testnet --netsuffix=12 --appdir=~/.t12 \
   --listen=0.0.0.0:26311 --rpclisten-borsh=default --utxoindex \
-  --palw-produce --palw-round-lane --palw-panel \
+  --palw-produce \
   --palw-producer-key=~/.misaka/miner.seed \
   --palw-producer-bond=<registered-bond-txid>:<index> \
   --palw-fee-outpoint=<mature-non-bond-txid>:<index>
 ```
 
 For the floor, leave out `--palw-producer-class` and `--palw-class-artifact`. The floor is minted from
-a seed on every node. `--palw-round-lane` produces the execution-lane round blocks that the chain's
-permits grant this bond. `mining start` passes it for a miner.
+a seed on every node.
+
+**The seat duties and the execution lane need no flag** (since 2026-09-25). A node that holds
+`--palw-producer-key` and `--palw-producer-bond` always runs the panel's seat duties (receipts,
+replays, readiness proofs, data-availability answers, the automatic filers and, with
+`--palw-fee-outpoint`, the carriers) and the execution-lane round blocks that the chain's permits
+grant this bond. No flag turns them off. `--palw-produce` is the only choice: whether this node also
+opens attempt claims. The node prints one line at startup, `PALW duties (on by construction; …)`, that
+names each duty and, for one that is idle, why. `--palw-panel` and `--palw-round-lane` are still
+accepted. They do nothing and log one warning each.
+
+Without `--palw-fee-outpoint` the seat duties still run, but the seat carries nothing on chain: no
+data-availability answers, no filers, no carriers. The startup line then reads `panel seat duties ON
+as bond … (receipts only: …)`. The fee outpoint is your consent to spend, so it stays a flag.
+
+If the key file does not load or the bond does not parse, the node logs a second line after the
+services start: `PALW duties NOT as planned: …`. That line names the duty that is not running.
+`getPalwNodeStatus.panelRunning` also tells you whether the panel actually started.
+
+**Run each bond in exactly one process at a time, and keep that process's app dir.** Because the
+duties have no off switch, every `kaspad` started with a bond's key and outpoint runs that bond's
+duties. This includes the execution lane's round blocks. Two such processes at the same moment sign
+the same round permit over two different blocks, and the chain slashes the whole bond
+(`RoundPermitEquivocated`). The following all count as a second process:
+
+* a standby node or a copy of the node on another host;
+* a `kaspad --palw-register-class …` run started next to the running node. It does not exit once
+  the class lands. Register through the running node instead: use `misaka model add`, or restart
+  that node with the flag (see `docs/palw-add-a-model-runbook.md` §5);
+* the same node started again in a fresh app dir while the old one still runs.
+
+The app dir also holds the record of the last round this bond signed (`palw-round-last-signed`).
+If you wipe it and re-sync, the node can sign an unmerged permit a second time. Move or restore the
+app dir instead of deleting it. The node prints this rule at startup (`PALW bond …: run it in exactly
+ONE process …`). It prints it as a warning on a `--palw-register-class` run.
 
 ### The 8k model row (`Qwen/Qwen2.5-1.5B/graph-v7@8192`, class `ebf44d0a…`)
 
@@ -270,10 +303,12 @@ permits grant this bond. `mining start` passes it for a miner.
    to start on a mismatch. That costs about 135 s per artifact at 2M, and less at 8k.
 4. **A class that is registered after your build.** The genesis rows are in this build's tables.
    Serving a class that was registered permissionlessly and that this build has never heard of needs
-   the chain-registered-class arm, **`--palw-chain-classes`**. On testnet-12 it is **on by default**
-   (the permissionless model registry is in force from genesis there); testnet-11 keeps it off. With
-   it the node executes from the registered profile, and the panel's readiness proofs resolve through
-   the chain's registration. Pass `--palw-chain-classes=false` to turn it off.
+   the chain-registered-class arm. On testnet-12 it is **always on** (the permissionless model registry
+   is in force from genesis there), so pass no flag for it. `--palw-chain-classes` is deprecated on
+   testnet-12, and `=false` no longer turns it off. testnet-11 keeps the arm off unless the operator
+   passes `--palw-chain-classes`. With the arm, the node executes from the registered profile, and the
+   panel's readiness proofs resolve through the chain's registration. A class is served only if its
+   artifact is loaded.
 
 **A producer refuses to start for a class it cannot produce.** For example, when no loaded artifact
 matches the registered root, the node prints `--palw-producer-class: … This node will not start as a

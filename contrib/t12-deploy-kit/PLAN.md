@@ -44,10 +44,12 @@
 | 95.111.236.186 | — | `misaka-dnsseeder-t12` のみ | 変更なし | seeder3（seeder は 4 台とも変更不要 — `SEEDERS.md`） | | — |
 
 - producer: floor 2 本（ibm b1・.113 b6）、8k 1 本（ibm b0）。5.104 b2 は 09-24 の計画では 8k producer だったが、release-prep review
-  の指摘で seat のみにした（§2.3。自分の DA 応答が attempt と seat の空きを待つ構造だったため）。全 node が `--palw-round-lane`。
+  の指摘で seat のみにした（§2.3。自分の DA 応答が attempt と seat の空きを待つ構造だったため）。全 node が round lane を動かす
+  （09-25 から flag ではなく **duty**: bond を持つ node では常に動く。§14）。
 - share と MemoryMax は「share / MemoryMax」。MemoryMax は crash guard で host の分割ではない（§2.1）。
 - fee float は `$PREMINE_TXID:(41+N)`（card 7 → 48）、bond は `$PREMINE_TXID:N`。producer の支払先は各 bond 鍵自身のアドレス（既定、§10 Q10）。
-- **R-core+ が node に足した仕事（どれも flag は無い。`--palw-panel` と `--palw-fee-outpoint` を持つ node で自動で動き、§2 の ledger に予約を取る）**:
+- **R-core+ が node に足した仕事（どれも flag は無い。bond（`--palw-producer-key` ＋ `--palw-producer-bond`）と `--palw-fee-outpoint` を持つ node で
+  自動で動き、§2 の ledger に予約を取る。09-25 から panel 自体も flag ではなく duty — §14）**:
   - SEAT-R: seat は replay した場合だけ Valid に署名する（whole-job の full seat、または S1 の partial segment）。
   - P2-7: DA session への応答（producer は自分の claim、Valid signer は lock が覆う claim を `MaterialDisclosedV2` で答える）と、
     R-core の court がまだ求め得る capture の保持（retention janitor。disk の話で memory ではない）。
@@ -171,7 +173,8 @@ DA 応答は attempt と seat の空きを待つ（旧 R-2）。
     実装の lane の仕事（この kit は production code を変えない）。checklist §7 に open item として載せた。
   - 入らなければ **既知リスクとして公開**し、O-7 で監視する: journal の `da-answer` の ledger 拒否（`memory ledger cannot cover` と
     "Asked again next tick"）が自分の claim で続く時間、DA session の期限までの残り。期限の半分（600 DAA）を超えて答えていなければ
-    実装の lane に上げる。`--palw-panel` を外すのは解決にならない（DA の応答も panel の仕事なので、応答ごと止まる）。
+    実装の lane に上げる。panel を止めるのは解決にならない（DA の応答も panel の仕事なので、応答ごと止まる。09-25 から panel は
+    duty で、止める flag 自体が無い — §14）。
 - **R-3（seat のみの node の直列化）**: 3,584 MiB の seat は仕事を 1 本ずつしかできず、仕事の間は readiness proof も出ない（full seat の額の
   `can_reserve` が通らない）。8k の replay 時間 × 同時に振られる claim 数が receipt の期限を超えると Withheld / missing、readiness が
   readiness age（8 span）を越えて途切れると 8k の ready 7 を割る。公開後に O-2 の door histogram・replay 時間・readiness の `no proof`
@@ -226,10 +229,12 @@ gRPC は .113 以外 `--nogrpc`（同一 host 2 node で既定ポートが衝突
    貼る。`SEEDER_SHA256` は既定 `KEEP`（§10 Q9）。genesis が a27f8f44 から動いた場合は a27f8f44 を `FORBIDDEN_GENESIS` に足す（c8652a97 の
    build はそれを走らせる）。公開後の drill は salt ごとに genesis が変わるので、drill を始める前に
    `./probe-identity-local.sh --drill-salt <salt>` が出す `DRILL_GENESES+=…` を足す。
-5. 各 node の launch script は起動のたびに binary の sha256、「渡す flag を binary が全部知っているか」、drill の flag・`KASPAD_*` 環境変数・
+5. 各 node の launch script は起動のたびに binary の sha256、「渡す flag を binary が全部知っているか」、「panel・round lane・chain classes を
+   binary が always-on の duty として動かすか」（`--help` の `ALWAYS-ON DUTY` 表示、§14）、drill の flag・`KASPAD_*` 環境変数・
    drill marker が無いことを確認し、違えば **exit 78**（`RestartPreventExitStatus=78` なので crash loop しない。09-23 に ibm の公開 node が
    108 回 loop した事故の再発防止）。switch は node ごとに journal の `Consensus params fingerprint:` を `EXPECT_FP` と照合し、
-   "PALW DRILL" を名乗れば止め、RPC で `EXPECT_GENESIS` を確かめ、違えばその node を止めて後続を起動しない。
+   "PALW DRILL" を名乗れば止め、起動直後の `PALW duties` の 1 行で panel と round lane が ON であることを確かめ（idle なら警告）、
+   RPC で `EXPECT_GENESIS` を確かめ、違えばその node を止めて後続を起動しない。
 
 **8270cf03 での暫定値（出荷値ではない）**（`scripts/t12-repin.sh` が build から計算した値。`--apply` が値とこの表示の commit を、出荷 commit での `--apply --shipping` が表示を出荷値に書き換える。経緯は checklist §3）:
 `EXPECT_FP=99eae89db05887c0ee21e451d5a78bd296533db59eb818edb3a4a320565c0ba3`、
@@ -335,7 +340,7 @@ host ごとに逆順（5.104 → .113 → ibm）: `./install-<host>.sh rollback`
 | file | どこで | 何をする |
 |---|---|---|
 | `fleet.env.example` → `fleet.env` | 全部 | release 値（placeholder）、禁止 genesis（全桁 6 本）と `DRILL_GENESES`、定数、8k artifact の sha。`fleet.env` は gitignore（`*.env`）なので Mac で写して埋める |
-| `lib.sh` | host | 共通: launch script/unit 生成（sha・flag 自己検査・drill flag / `KASPAD_*` 環境 / drill marker の拒否、exit 78）、preflight、stage、switch（fp・"PALW DRILL"・genesis の確認）、check、rollback、purge |
+| `lib.sh` | host | 共通: launch script/unit 生成（sha・flag 自己検査・duty 検査・drill flag / `KASPAD_*` 環境 / drill marker の拒否、exit 78）、preflight、stage、switch（fp・"PALW DRILL"・`PALW duties`・genesis の確認）、check、rollback、purge |
 | `install-ibm.sh` / `install-113.sh` / `install-5104.sh` | 各 host | node 表（share は §2）・旧 appdir・host 固有の拒否条件（.113 は explorer-apply/rollback も） |
 | `probe-identity-local.sh` | Mac | 出荷 commit の kaspad を隔離して起動し、`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID`（＋schedule id・rule manifest digest）を読み、genesis の class（id・artifact bytes・root）と bond outpoint を kit の写しと比べる（不一致は exit 4）。`--layout` で `t12_deploy_kit_constants`（premine の index 配置・class id・explorer の表）と 8k sidecar の sha も。`--drill-salt` で drill genesis も出す。リモートに触れない |
 | `SEEDERS.md`・`seeders/` | Mac | seeder 専用の手順と script（変更なし）。`fleet.env` の `SEEDER_SHA256`・`EXPECT_FP` を読む |
@@ -401,7 +406,8 @@ drill marker・未知 flag（接頭辞 `--palw-produc`）・sha 不一致がそ�
 ## 11. R-core+ に合わせた kit の変更（2026-09-25、`rcore/release-prep`）
 
 - **flag**: kit が渡す flag はすべて a0af3c92 の `kaspad --help` にある（`--palw-chain-classes` は t12 では既定で ON になったが、
-  flag 検査のために明示のまま）。消した flag は無い。P2-9（carrier の relay）は flag を足していない。P2-12 の
+  flag 検査のために明示のまま）。消した flag は無い。**→ 09-25 に改訂: `--palw-panel`・`--palw-round-lane`・`--palw-chain-classes` は
+  kit から消した（duty になった。§14）。**P2-9（carrier の relay）は flag を足していない。P2-12 の
   `--palw-drill-genesis-salt` とその他の `--palw-drill-*` は公開 kit に **一度も現れない**。launch script はそれらを見つけると exit 78。
 - **bond / fee float の txid** は `fleet.env` の `PREMINE_TXID` に一本化した（旧 sentinel txid `6d697361…` は残っていない）。
   `build_args` は `<128 hex>:<index>` 以外を拒否する。
@@ -498,3 +504,53 @@ probe が終わったら `colima stop` で元の Stopped に戻す。
 
 **運用者の判断（任意）**: container probe を速くするなら colima を Rosetta で動かす（`colima stop && colima start --vz-rosetta`。
 colima.yaml の `rosetta` が true になる = 設定の変更。Rosetta はこの Mac に入っている）。変えなくても probe は通る（遅いだけ）。
+
+## 14. node の duty は起動 option によらず on（2026-09-25、`rcore/duties-always-on`）
+
+ユーザー方針: protocol に参加するために node が **しなければならない** ことは operator の flag ではなく、off にする手段も無い。
+
+- **規則**（`kaspad/src/palw_duties.rs`）: duty は (a) その network の params が該当 fence を持ち（`Params` の accessor で読む。network の
+  列挙はしない）、(b) node がその duty に要る identity を持つとき、常に動く。fence が現在の DAA で発火しているかは各 service が自分の
+  loop で見る（round producer は round ごとに lane の status を読み、panel の各仕事は `palw_rcore_plus_active_at` などで gate される）。
+  identity が無い node（seat の無い relay、鍵の無い公開 node、鍵だけで bond の無い node）は何も起動せず、**INFO 1 行**で理由を言う。panic しない。
+- **always-on になった duty**:
+  | duty | 条件（params） | identity |
+  |---|---|---|
+  | panel の seat 業務（receipt・SEAT-R replay・readiness proof・DA 応答・自動 filer・fee outpoint があれば carrier） | ConsensusV2 | `--palw-producer-key` ＋ `--palw-producer-bond`（初回 bond 登録なら鍵＋`--palw-register-bond`） |
+  | execution lane の round block（ADR-0125） | `palw_execution_lane` fence が設定されている | `--palw-producer-key` ＋ `--palw-producer-bond` |
+  | chain-registered class の arm（ADR-0067） | model registry が genesis から有効（t12） | — |
+- **旧 flag**: `--palw-panel`・`--palw-round-lane`（と環境変数 `KASPAD_PALW_PANEL`・`KASPAD_PALW_ROUND_LANE`、config file の同名 key）、
+  t12 での `--palw-chain-classes`（`=false` 含む）は **受け付けるが何もしない**。名指しされた flag ごとに WARN 1 行
+  （`… is deprecated and does nothing …`、`false` なら「値は無視、duty は切れない」）。t11・mainnet（registry が genesis からでない＝fence）では
+  `--palw-chain-classes` は従来どおり operator の opt-in。
+- **起動時の 1 行**: `PALW duties (on by construction; no flag turns one off): panel seat duties ON as bond … | execution-lane round blocks ON
+  as bond … | chain-registered classes armed (…)`。idle の duty はそこに理由が出る。
+- **CLI の選択のまま残るもの**: identity と resource（鍵・bond・支払先/heartbeat 先・fee outpoint・artifact・memory share/budget・cache）、
+  **生産するか**（`--palw-produce`・`--palw-producer-class`・`--palw-canonical-claims`）、heartbeat miner（address が要る）、自発的な監視役
+  `--palw-challenge`（紛争ごとに bond を賭ける）、`*-devnet`・`--palw-drill-*`。
+- **kit の変更**: `build_args` は 3 つの duty flag を渡さない（渡そうとすると stage で die）。旧 binary 互換のために残す案は採らない: kit は
+  release ごとに binary の sha を固定し、launch script が新しい **duty 検査** で「`--help` が `--palw-panel`・`--palw-round-lane`・
+  `--palw-chain-classes` を `ALWAYS-ON DUTY` と表示する binary」以外を exit 78 で拒否するので、flag を落としても duty が消える組み合わせ
+  （新 script × 旧 binary）は起動しない。rolling の途中でも、旧 script は旧 binary、新 script は新 binary を名指しする（各 script は自分の
+  release の `bin/kaspad` を sha 付きで指す）。`switch` は RPC が答えた後（＝全 service が組まれた後）に最後の `PALW duties` 行を読み、
+  panel と round lane が ON であることを確かめ、さらに `getPalwNodeStatus.panelRunning` が true になるのを待つ（`t12check.py --expect-panel`、
+  警告のみで止めない）。`check` も `--expect-panel` を渡し、`panel idle`・`execution lane idle`・`deprecated and does nothing`・
+  `round lane is not produced`・`panel service disabled`・`NOT as planned`・`receipts only` を拾う。
+- **計画と実際（review 後の修正）**: 起動時の `PALW duties` 行は service を組む前の**計画**。鍵ファイルが読めない・bond が parse できないなどで
+  計画上 ON の duty が起動しなかったときは、service を組んだ直後に `PALW duties NOT as planned: …` の WARN を duty ごとに 1 行出す。kit は
+  最後の `PALW duties` 行を読むので、この訂正を拾う。gossip inbox の取り合いのように worker 起動時にしか分からない失敗は `panelRunning` で拾う。
+- **fee outpoint**: `--palw-fee-outpoint` は支払いへの持ち主の同意なので flag のまま（未確定として報告）。無い seat も duty は動くが chain に
+  何も運ばない（DA 応答・filer・carrier なし）。起動時の行は `panel seat duties ON as bond … (receipts only: …)` になり、`switch` は警告する。
+  kit の node は全て fee outpoint を持つ。
+- **1 つの bond は同時に 1 つの process だけ（review の high）**: duty に off が無いので、bond の鍵と outpoint を渡した process はすべてその bond の
+  seat 業務と round block を担う。同じ bond の process が 2 つ同時にあると同じ round permit に別の block で署名し、chain は bond ごと slash する
+  （`RoundPermitEquivocated`）。standby・`--palw-register-class` の登録用 process・別 host の複製・appdir を消して再同期した node（旧 process が
+  まだ動いている場合）はすべて「2 つ目」にあたる。round の署名記録（`palw-round-last-signed`）は appdir にあるので、appdir は消さずに移す。
+  node は起動時に `PALW bond …: run it in exactly ONE process …` を出す（通常は INFO、`--palw-register-class` のときは WARN）。登録は
+  `misaka model add`（稼働中の node の RPC に送るだけ）か、稼働中の node 自身に flag を足して再起動する形にする
+  （`docs/palw-add-a-model-runbook.md` §5・`docs/palw-certify-a-new-model.md`・`docs/model-requests.md` を直した）。kit は 1 bond 1 node。
+- **drill**（`scripts/misaka-palw-t12-rcore-drill.sh`）: seat の起動から `--palw-panel` を外し、header に「round lane も常に動く・1 bond 1 process」、
+  d6（heartbeat だけの区間）に「permit が切れるまで待つか bond 鍵なしで再起動」、d7 の fresh node に「bond 鍵を持たない relay で」と書いた。
+- ローカルで確認: 生成した launch script の `--check` が新 binary で OK、`ALWAYS-ON DUTY` を持たない binary（旧 binary の模擬）で
+  `does not run --palw-panel as an always-on duty … refusing (exit 78)`。
+- **pre-t12**（`MISAKA-wt-b/pret12/lib.sh`）はまだ 3 つの flag を渡している。新 binary でも起動する（名指しした flag ごとに WARN が 1 行出るだけで、duty は flag によらず動く）。

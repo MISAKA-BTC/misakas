@@ -40,7 +40,9 @@ palw-class inspect --artifact qwen36-2m.palwq36
 ```
 
 Register only after the held-context fence, naming the catalog id so the 512 siblings are
-not ambiguous:
+not ambiguous. Add these to the node that already runs the bond (or use `misaka model add`). Never
+add them to a second `kaspad` started beside that node: it would run the same bond's round lane and
+double-sign its permits (`docs/palw-add-a-model-runbook.md` §5).
 
 ```text
 --palw-register-class Qwen3.6-35B-A3B/graph-v7@2097152
