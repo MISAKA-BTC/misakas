@@ -673,6 +673,7 @@ mod tests {
             "palw_court_ladder" => params.palw_court_ladder = Some(at),
             "palw_fp_da_pins" => params.palw_fp_da_pins = Some(at),
             "palw_validator_payout_bounds" => params.palw_validator_payout_bounds = Some(at),
+            "palw_slashing_evidence_utxo_genuine" => params.palw_slashing_evidence_utxo_genuine = Some(at),
             "palw_epoch_boundary_budget" => params.palw_epoch_boundary_budget = Some(at),
             "palw_epoch_budget_release" => params.palw_epoch_budget_release = Some(at),
             "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),

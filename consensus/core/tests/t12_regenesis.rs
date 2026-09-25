@@ -244,6 +244,13 @@ fn every_rule_is_in_force_from_genesis() {
     assert!(p.palw_fp_decode_rules.is_none(), "this build carries neither half of ADR-0082 D10/D11");
     assert!(p.palw_fp_decode_constraint.is_none(), "this build carries no constraint automaton");
     assert!(p.palw_shard_licensing.is_none(), "refused beside palw_admission_independence (ADR-0147)");
+    // MSK-26A (2026-09 pre-freeze security review): the slashing-evidence UTXO genuineness fence is
+    // DORMANT on this branch — the integrator arms it at the post-launch fence (DAA 500), so every
+    // shipped pin stays unchanged here. Asserted so "left dormant on purpose" and "forgotten" differ.
+    assert!(
+        p.palw_slashing_evidence_utxo_genuine.is_none(),
+        "the slashing-evidence UTXO genuineness fence is armed by the integrator at the post-launch fence, not on this branch"
+    );
     // A ConsensusV2 network activates no V1 PALW proof-of-work.
     assert_eq!(p.pow_palw_activation, ForkActivation::never());
     assert_eq!(p.pow_palw_ollama_activation, ForkActivation::never());

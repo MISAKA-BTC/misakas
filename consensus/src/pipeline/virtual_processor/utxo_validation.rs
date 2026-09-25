@@ -616,6 +616,28 @@ impl VirtualStateProcessor {
             security_reserve_bps,
             victim_epoch_pool_bps,
         );
+        // **MSK-26A (2026-09 pre-freeze security review): the UTXO side-effect obeys the same
+        // genuineness rule the bond-REGISTRY mutation already does.** `resolve_slashing_side_effects`
+        // verifies no signature — it slashes any accepted evidence whose bond resolves Active — so a
+        // forged slashing / precommit evidence riding in a MERGE-blue block (which the own-body
+        // `check_slashing_evidence_genuine` block rule never sees, and which the registry path drops
+        // via `proved_slash_targets`) removes an honest validator's staked output-0 and mints its
+        // author a reward. Past `palw_slashing_evidence_utxo_genuine`, keep only the effects whose
+        // bond is `proved_slash_targets` — the same signatures, freshness and status the registry
+        // path re-checks over this block's whole accepted set — so a slash reaches the UTXO set only
+        // on evidence the accused validator actually signed. `None`/dormant on every shipped preset,
+        // so the effects (and the utxo_commitment) are byte-identical to before the field existed;
+        // construction and validation read the same fence, so they compute one commitment.
+        if self.palw_slashing_evidence_utxo_genuine.is_some_and(|fence| fence.is_active(pov_daa_score)) {
+            let proved = proved_slash_targets(
+                &accepted_txs,
+                selected_parent_bond_view,
+                self.genesis.hash,
+                pov_daa_score,
+                dns_params.evidence_window_blocks,
+            );
+            effects.retain(|effect| proved.contains(&effect.bond_outpoint));
+        }
         // ADR-0018 "本格版" (PoS-v2) victim compensation: for each slashed bond with a victim pool,
         // recompute the slashed validator's epoch's honest (non-slashed) included set from the
         // selected-parent window and build the victim outputs. Inert when fenced (pool = 0 ⇒ skip) —

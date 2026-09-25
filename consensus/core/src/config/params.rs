@@ -1909,6 +1909,29 @@ pub struct Params {
     /// Read through [`Self::palw_validator_payout_bounds_fence`] only.
     pub palw_validator_payout_bounds: Option<ForkActivation>,
 
+    /// **MSK-26A (2026-09 pre-freeze security review): the UTXO side-effect of a DNS slash obeys the
+    /// same genuineness rule the bond-registry mutation already does.**
+    ///
+    /// The bond-REGISTRY path (`dns_bond_mutations_from_txs`) filters a chain block's accepted
+    /// slashing / precommit evidence through `proved_slash_targets`, which re-verifies both
+    /// attestation signatures against the accused bond's registered validator key — so evidence
+    /// riding in a MERGE-blue block (which the own-body `check_slashing_evidence_genuine` block rule
+    /// never sees) can no longer flip a bond to `Slashed`. But the UTXO SIDE-EFFECT path
+    /// (`apply_slashing_side_effects` -> `resolve_slashing_side_effects`) removes the accused bond's
+    /// locked output-0 UTXO and mints the reporter reward WITHOUT that filter and without any
+    /// signature check, so a forged evidence merged into a block burns an honest validator's stake
+    /// and pays its author a reward while the registry still reads the bond `Active`. Past this
+    /// fence, `apply_slashing_side_effects` keeps only the effects whose bond is `proved_slash_targets`
+    /// — the same signatures, freshness and status the registry path checks — so a slash reaches the
+    /// UTXO set only on evidence the accused validator actually signed.
+    ///
+    /// **A bare fence with no companion value**, and `None` on every shipped preset — a `None` writes
+    /// nothing into `consensus_params_id` / `consensus_schedule_id`, so the fingerprint does not move
+    /// and the behaviour is byte-identical to not having the field at all. testnet-12 arms it at the
+    /// post-launch fence; a card arms it from genesis (no history to fork). Read through
+    /// [`Self::palw_slashing_evidence_utxo_genuine_at`] only.
+    pub palw_slashing_evidence_utxo_genuine: Option<ForkActivation>,
+
     /// **ADR-0045 Decision 2's boundary sentence, made real — the crossing block derives its own
     /// epoch's budget from the parent state** (mainnet audit 2026-09-06, M-2). `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
@@ -5242,6 +5265,10 @@ impl Params {
         if self.palw_validator_payout_bounds == Some(ForkActivation::never()) {
             self.palw_validator_payout_bounds = None;
         }
+        // MSK-26A: the slashing-evidence UTXO genuineness fence — a bare fence, `never()` is absence.
+        if self.palw_slashing_evidence_utxo_genuine == Some(ForkActivation::never()) {
+            self.palw_slashing_evidence_utxo_genuine = None;
+        }
         // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps (mainnet audit
         // 2026-09-06, M-2 and L-2): bare fences, same collapse, same reason.
         if self.palw_epoch_boundary_budget == Some(ForkActivation::never()) {
@@ -6215,6 +6242,16 @@ impl Params {
         self.palw_validator_payout_bounds_fence().is_some()
     }
 
+    /// **MSK-26A: is the slashing-evidence UTXO genuineness rule armed at `daa_score`?** — past it
+    /// the DNS slashing UTXO side-effect (`apply_slashing_side_effects`) removes an accused bond's
+    /// stake only for evidence proved genuine (`proved_slash_targets`), closing the merge-blue
+    /// forgery that burns an honest bond's stake. `None`/dormant on every shipped preset, so the
+    /// side-effect is byte-identical to before the field existed. The construction and validation
+    /// paths read this one function, so both compute one UTXO commitment for the same block.
+    pub fn palw_slashing_evidence_utxo_genuine_at(&self, daa_score: u64) -> bool {
+        self.palw_slashing_evidence_utxo_genuine.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// ADR-0087 Decision 6's fence with the mode condition folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it. The ONE place the model market is decided.
     pub fn palw_model_market_fence(&self) -> Option<ForkActivation> {
@@ -6861,6 +6898,7 @@ impl Params {
             palw_court_ladder,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
+            palw_slashing_evidence_utxo_genuine,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
             palw_panel_economy,
@@ -6968,6 +7006,7 @@ impl Params {
             ("palw_court_ladder", *palw_court_ladder),
             ("palw_fp_da_pins", *palw_fp_da_pins),
             ("palw_validator_payout_bounds", *palw_validator_payout_bounds),
+            ("palw_slashing_evidence_utxo_genuine", *palw_slashing_evidence_utxo_genuine),
             ("palw_epoch_boundary_budget", *palw_epoch_boundary_budget),
             ("palw_epoch_budget_release", *palw_epoch_budget_release),
             ("palw_panel_economy", *palw_panel_economy),
@@ -7376,6 +7415,12 @@ impl Params {
             h.write(b"palw_validator_payout_bounds");
             h.write(bounds.daa_score().to_le_bytes());
         }
+        // MSK-26A: the slashing-evidence UTXO genuineness fence. Some-only, for its siblings'
+        // reason: a preset that leaves it `None` writes nothing, so the schedule id does not move.
+        if let Some(genuine) = self.palw_slashing_evidence_utxo_genuine {
+            h.write(b"palw_slashing_evidence_utxo_genuine");
+            h.write(genuine.daa_score().to_le_bytes());
+        }
         // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps. Some-only, at the
         // tail, for the reason their siblings are: a preset that leaves them `None` prints the
         // schedule id of a build from before the fields existed.
@@ -7600,6 +7645,7 @@ impl Params {
             palw_signature_contexts_v2,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
+            palw_slashing_evidence_utxo_genuine,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
             palw_panel_economy,
@@ -8181,6 +8227,10 @@ impl Params {
         if let Some(activation) = palw_validator_payout_bounds.as_mut() {
             fork(activation, visit);
         }
+        // MSK-26A: the slashing-evidence UTXO genuineness fence. Some-only, like its siblings.
+        if let Some(activation) = palw_slashing_evidence_utxo_genuine.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps. Some-only and at the
         // tail, for their siblings' reason: a `u64::MAX`-for-absence arm would put eight bytes
         // into every preset that leaves them `None`.
@@ -8522,6 +8572,7 @@ impl Params {
             palw_signature_contexts_v2,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
+            palw_slashing_evidence_utxo_genuine,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
             palw_panel_economy,
@@ -9154,6 +9205,11 @@ impl Params {
             h.write(b"palw_validator_payout_bounds");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // MSK-26A: the slashing-evidence UTXO genuineness fence. Some-only, for its siblings' reason.
+        if let Some(activation) = palw_slashing_evidence_utxo_genuine {
+            h.write(b"palw_slashing_evidence_utxo_genuine");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps (mainnet audit
         // 2026-09-06, M-2 and L-2). Some-only, at the tail, for the ADR-0065 D4 reason: every
         // shipped preset leaves them `None` and fingerprints byte-identically to a build from
@@ -9656,6 +9712,7 @@ impl Params {
             palw_signature_contexts_v2: self.palw_signature_contexts_v2,
             palw_fp_da_pins: self.palw_fp_da_pins,
             palw_validator_payout_bounds: self.palw_validator_payout_bounds,
+            palw_slashing_evidence_utxo_genuine: self.palw_slashing_evidence_utxo_genuine,
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
             palw_epoch_budget_release: self.palw_epoch_budget_release,
             palw_panel_economy: self.palw_panel_economy,
@@ -10682,6 +10739,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_slashing_evidence_utxo_genuine: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
@@ -10907,6 +10965,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_slashing_evidence_utxo_genuine: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
@@ -11114,6 +11173,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_slashing_evidence_utxo_genuine: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
@@ -17516,6 +17576,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_slashing_evidence_utxo_genuine: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
     palw_panel_economy: None,

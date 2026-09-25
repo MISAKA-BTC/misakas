@@ -248,6 +248,16 @@ pub enum TxRuleError {
     /// the carrier would land in, so the fold still judges what slips through.
     #[error("an H-1 lifecycle carrier the fold would refuse: {0}")]
     PalwH1CarrierRefused(String),
+
+    /// **MSK-26A (2026-09 pre-freeze security review): a DNS slashing / precommit evidence whose
+    /// attestation signatures do not verify against the accused bond's registered validator key at
+    /// this node's tip.** A NODE policy, not a consensus rule: the block-validity own-body genuineness
+    /// rule already rejects such evidence in a block's own body, but this fleet must never relay or
+    /// mine it either — a forged evidence merged into a block slashes an honest validator's staked
+    /// UTXO until `palw_slashing_evidence_utxo_genuine` is armed. Refused at mempool admission and
+    /// again whenever this node builds a template, so the fleet is never the carrier.
+    #[error("a DNS slashing/precommit evidence that is not genuine at this node's tip: {0}")]
+    PalwSlashingEvidenceNotGenuine(String),
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;
