@@ -789,7 +789,86 @@ pub struct PalwModelRegistryFoldV1 {
     /// this copy is for the readers that hold only the fold — the registry read the RPC serves
     /// (`readySeatsNow`, each seat's `fresh`), so they judge a row the way the fold counts it.
     pub readiness_v2_active: bool,
+    /// **Lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 where the registry counts a bond**
+    /// — `Some` only where `Params::palw_bond_maturity_early` is active at the fold's DAA
+    /// ([`palw_bond_maturity_fold_v1`]). Past it a non-genesis bond is not a ready seat (the ready
+    /// count, the panel room, the `NoCapablePanel` test, the Activation Pool's (a)) and not in an
+    /// admission jury's population until its own window has run, by the draw's own arithmetic. `None`
+    /// — every shipped preset, testnet-12 included, and every DAA below the fence — is the registry
+    /// byte for byte as released. Carried on the fold rather than on the extras beside it so the
+    /// readers that hold only the fold (the RPC's `readySeatsNow`, op 186's room) ask the one
+    /// predicate ([`palw_seat_not_ready_reason_net_v1`]) the chain asks.
+    pub bond_maturity: Option<PalwBondMaturityFoldV1>,
 }
+
+// ---- lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on the registry and the jury ------
+/// **ADR-0065 D1 as the registry reads it** (lane maturity-ext, user decision 2026-09-26: "apply it
+/// under the same DAA-500 fence"). Lane maturity (`Params::palw_bond_maturity_early`) brought D1
+/// forward for the PANEL DRAW; a bond the draw may not seat was still counted as a ready seat
+/// toward a class's `ready ≥ k` thresholds, and still drawn onto ADR-0147's admission jury (whose
+/// only cutoff was "registered before the seeding span"). A seat that registered minutes ago could
+/// hold a class out of `Held`, or vote a `Candidate` in.
+///
+/// Past the same fence this is the draw's rule, asked at the EVALUATING block's DAA (the lifecycle
+/// step's and the jury's `ctx.daa_score` — the block the answer is folded in, the way the draw asks
+/// it at the anchor it is a function of): `palw_bond_maturity`'s window, widened by the second
+/// clock exactly as the processor's `palw_bond_maturity_window_at` widens it, one subtraction. A
+/// genesis bond (registered at the genesis DAA, 0 on every shipped genesis) is mature at every DAA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwBondMaturityFoldV1 {
+    /// `Params::palw_bond_maturity`'s window (1,000 DAA on testnet-12) — the one window; the fence
+    /// has none of its own.
+    pub window_daa: u64,
+    /// The second clock's RAW depth at the fold's DAA (`Params::palw_settled_anchor_depth` where
+    /// `palw_audit_2026_09_23` is active, else `None`) — the processor's `palw_settled_anchor_depth_at`,
+    /// before the liveness escape, which [`Self::registered_by_daa`] applies on the state it judges.
+    pub settled_anchor_depth: Option<u64>,
+}
+
+impl PalwBondMaturityFoldV1 {
+    /// **The latest registration DAA that counts at `now_daa`** — the draw's floor
+    /// (`palw_seat_maturity_floor_v1` over `palw_bond_maturity_window_v2`) with `now_daa` as the
+    /// anchor: `now_daa − window`, the window widened so the floor is no later than the second
+    /// clock's (`palw_settled_anchor_floor_daa_v1` at the escaped depth), saturating at 0.
+    pub fn registered_by_daa(&self, state: &crate::palw_state_v2::PalwChainStateV2, window_court: u64, now_daa: u64) -> u64 {
+        let depth =
+            crate::palw_state_v2::palw_second_clock_depth_v1(self.settled_anchor_depth, state.recent_anchor_daas(), now_daa, window_court);
+        let settled = depth.and_then(|depth| crate::palw_panel_v2::palw_settled_anchor_floor_daa_v1(state, now_daa, depth));
+        let window = crate::palw_panel_v2::palw_bond_maturity_window_v2(now_daa, self.window_daa, settled);
+        crate::palw_panel_v2::palw_seat_maturity_floor_v1(now_daa, Some(window)).unwrap_or(0)
+    }
+
+    /// Whether `bond` counts at `now_daa`: registered at or before [`Self::registered_by_daa`] — the
+    /// draw's `registered_daa <= by`.
+    pub fn admits(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        window_court: u64,
+        bond: &crate::palw_state_v2::PalwBondStateV2,
+        now_daa: u64,
+    ) -> bool {
+        bond.registered_daa <= self.registered_by_daa(state, window_court, now_daa)
+    }
+}
+
+/// **[`PalwModelRegistryFoldV1::bond_maturity`] at `daa`, resolved in one place** for the processor
+/// (`palw_model_registry_fold_at`) and `Params` ([`crate::config::params::Params::palw_bond_maturity_registry_fold_at`]):
+/// `Some` iff lane maturity's fence (`early`, mode-folded, `never()` already dropped) is active at
+/// `daa` AND `palw_bond_maturity` is scheduled (whose window it reads; `validate_palw_v2` refuses the
+/// fence without it). Keyed on the early fence ALONE, not on `palw_bond_maturity`'s own height: the
+/// release never applied D1 to the registry, so testnet-12 as shipped keeps its registry past 1,000
+/// byte for byte, and armed the rule holds from the fence on, across 1,000, with one window.
+pub fn palw_bond_maturity_fold_v1(
+    maturity: Option<crate::config::params::PalwBondMaturityV1>,
+    early: Option<crate::config::params::ForkActivation>,
+    settled_anchor_depth: Option<u64>,
+    daa: u64,
+) -> Option<PalwBondMaturityFoldV1> {
+    let maturity = maturity?;
+    early.filter(|fence| fence.is_active(daa))?;
+    Some(PalwBondMaturityFoldV1 { window_daa: maturity.window_daa, settled_anchor_depth })
+}
+// ---- end lane maturity-ext ------------------------------------------------------------------------
 
 impl PalwModelRegistryFoldV1 {
     /// Whether the registry governs (steps rows, judges by evidence) at `daa_score`.
@@ -1402,9 +1481,16 @@ pub struct PalwSeatReadinessReadV1 {
     pub row: PalwSeatReadinessRowV1,
     pub fresh: bool,
     /// Why the seat does not count as ready now, if it does not: `stale`, `bond inactive`,
-    /// `below floor`, `collateral short`; empty while it counts.
+    /// `below floor`, `collateral short` — and, past lane maturity's fence, `immature`
+    /// ([`PALW_SEAT_NOT_READY_IMMATURE_V1`]); empty while it counts.
     pub not_ready_reason: String,
 }
+
+/// **Lane maturity-ext (post-launch, 2026-09-26): the not-ready reason of a bond ADR-0065 D1 does not
+/// count yet** — past `Params::palw_bond_maturity_early`, registered after
+/// [`PalwBondMaturityFoldV1::registered_by_daa`] at the evaluating DAA. The panel view maps it to
+/// `BOND_IMMATURE`.
+pub const PALW_SEAT_NOT_READY_IMMATURE_V1: &str = "immature";
 
 /// Why a seat with a proof does not count as ready for a class now, or `None` while it does —
 /// under the fold's own freshness rule ([`PalwModelRegistryFoldV1::readiness_v2_active`]).
@@ -1426,6 +1512,10 @@ pub fn palw_seat_not_ready_reason_v1(
 /// ready-seat count and ADR-0147's jury) is `row present && this is None`, with `readiness_v2` from
 /// its extras; the RPC's `readySeatsNow` and each seat's reason are this with the fold's copy — so
 /// the chain and the RPC cannot count two different numbers of ready seats again.
+///
+/// Past lane maturity's fence (`PalwModelRegistryFoldV1::bond_maturity`, 2026-09-26) a sixth clause
+/// sits after the floor: the bond is mature by ADR-0065 D1 at `now_daa` (`immature` otherwise). It
+/// rides the fold, so every reader above asks it without a new argument.
 pub fn palw_seat_not_ready_reason_under_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
     params: &crate::palw_state_v2::PalwStateParamsV2,
@@ -1461,6 +1551,14 @@ pub fn palw_seat_not_ready_reason_net_v1(
     }
     if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor) {
         return Some("below floor");
+    }
+    // Lane maturity-ext (post-launch, 2026-09-26): past `palw_bond_maturity_early` a bond the draw
+    // may not seat yet is not a ready seat either — ADR-0065 D1 at the evaluating DAA. `None` below
+    // the fence and on every shipped preset: the clause is not asked.
+    if let Some(maturity) = fold.bond_maturity
+        && !maturity.admits(state, params.window_court(), bond, now_daa)
+    {
+        return Some(PALW_SEAT_NOT_READY_IMMATURE_V1);
     }
     if !palw_readiness_row_is_fresh_v1(row, now_daa, fold.span_daa, &fold.globals, readiness_v2) {
         return Some("stale");
@@ -2344,6 +2442,7 @@ mod tests {
             grace_until_daa: 0,
             admission_audit_period_daa: None,
             readiness_v2_active,
+            bond_maturity: None,
         };
         let base = Hash64::from_u64_word(1);
         for fold_v2 in [false, true] {
@@ -2407,6 +2506,7 @@ mod tests {
                 grace_until_daa: 0,
                 admission_audit_period_daa: None,
                 readiness_v2_active: true,
+                bond_maturity: None,
             };
             let policy = PalwReadinessPolicyV1::at(&fold, now, base, true);
             assert_eq!(fold.readiness_max_age_daa(), age);

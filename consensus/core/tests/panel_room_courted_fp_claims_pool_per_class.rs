@@ -194,6 +194,7 @@ fn courts_on_licensed_one_quantum_claims_charge_the_one_job_the_claims_pool_to()
         grace_until_daa: 0,
         admission_audit_period_daa: p.palw_admission_audit_period_daa,
         readiness_v2_active: p.palw_readiness_v2_at(0),
+        bond_maturity: None,
     };
     let extras = PalwTransitionExtrasV1 {
         audit_2026_09_11_deep_active: true,
@@ -356,6 +357,7 @@ fn two_courts_on_one_licensed_claim_charge_it_once() {
         grace_until_daa: 0,
         admission_audit_period_daa: p.palw_admission_audit_period_daa,
         readiness_v2_active: p.palw_readiness_v2_at(0),
+        bond_maturity: None,
     };
     let extras = PalwTransitionExtrasV1 {
         audit_2026_09_11_deep_active: true,

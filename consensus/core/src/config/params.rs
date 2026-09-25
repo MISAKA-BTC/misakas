@@ -2591,6 +2591,19 @@ pub struct Params {
     /// `palw_t12_arm_every_rule_from_genesis`'s pass 2, which would zero it); hashed Some-only and
     /// collapsed from `Some(never())`, so a build that carries the field fingerprints and peers
     /// exactly as one that does not until the fence is armed.
+    ///
+    /// **Lane maturity-ext (user decision 2026-09-26: "under the same DAA-500 fence").** The same
+    /// fence also applies D1 wherever the MODEL REGISTRY counts a bond: from it a non-genesis bond is
+    /// neither a ready seat toward a class's `ready ≥ k` thresholds (the lifecycle's ready count, the
+    /// panel room, `NoCapablePanel`, the Activation Pool's (a)) nor in an ADR-0147 admission jury's
+    /// population until `registered_daa + window` — the draw's own floor (both clocks), asked at the
+    /// EVALUATING block's DAA ([`Self::palw_bond_maturity_registry_fold_at`],
+    /// `PalwModelRegistryFoldV1::bond_maturity`). One field rather than two because it is one rule:
+    /// "a bond counts once D1 says it is mature", with one window and one exemption (genesis bonds),
+    /// and two fences could be armed apart — a jury or a ready count built of seats the draw refuses
+    /// (or the reverse), the second answer to one question the registry's one-predicate rule exists
+    /// to forbid. Keyed on this fence alone, not on `palw_bond_maturity`'s own height: the release
+    /// never applied D1 to the registry, so unarmed testnet-12 keeps its registry past 1,000 too.
     pub palw_bond_maturity_early: Option<ForkActivation>,
     // ---- end lane maturity -------------------------------------------------------------------
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
@@ -6126,6 +6139,25 @@ impl Params {
     /// processor's `palw_bond_maturity_at` answers, through the same free function.
     pub fn palw_bond_maturity_window_at(&self, anchor_daa: u64) -> Option<u64> {
         palw_bond_maturity_window_in_force_v1(self.palw_bond_maturity, self.palw_bond_maturity_early_fence(), anchor_daa)
+    }
+
+    /// **Lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on the model registry at `daa`** —
+    /// what the processor's `palw_model_registry_fold_at` carries as
+    /// `PalwModelRegistryFoldV1::bond_maturity`, through the same free function
+    /// ([`crate::palw_model_registry_v1::palw_bond_maturity_fold_v1`]): `Some` from this fence on
+    /// (its window `palw_bond_maturity`'s, the second clock's raw depth at `daa`), `None` below it and
+    /// wherever it is dormant — every shipped preset. Unlike [`Self::palw_bond_maturity_window_at`]
+    /// it is NOT in force from `palw_bond_maturity`'s own height alone: the release never applied D1
+    /// to the ready count or the admission jury, so an unarmed testnet-12 keeps that registry past
+    /// 1,000 byte for byte.
+    pub fn palw_bond_maturity_registry_fold_at(&self, daa: u64) -> Option<crate::palw_model_registry_v1::PalwBondMaturityFoldV1> {
+        let depth = if self.palw_audit_2026_09_23_active_at(daa) { self.palw_settled_anchor_depth } else { None };
+        crate::palw_model_registry_v1::palw_bond_maturity_fold_v1(
+            self.palw_bond_maturity,
+            self.palw_bond_maturity_early_fence(),
+            depth,
+            daa,
+        )
     }
 
     /// **What lane maturity's fence refuses.** Called by `validate_palw_v2` on both paths, and public

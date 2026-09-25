@@ -262,6 +262,7 @@ fn on_testnet12_a_row_at_age_24_is_fresh_and_at_25_it_is_not() {
         grace_until_daa: 0,
         admission_audit_period_daa: t12.palw_admission_audit_period_daa,
         readiness_v2_active: true,
+        bond_maturity: None,
     };
     let now = 10_000u64;
     let row = |age: u64| PalwSeatReadinessRowV1 { proved_daa: now - age, proved_span: now - age, leaf_index: 0, proof_version: 2, chunks: 16 };

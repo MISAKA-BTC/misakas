@@ -196,6 +196,7 @@ fn walk(ladder: bool, c7_window: bool, rcore: bool) -> Owed {
         grace_until_daa: 0,
         admission_audit_period_daa: p.palw_admission_audit_period_daa,
         readiness_v2_active: p.palw_readiness_v2_at(0),
+        bond_maturity: None,
     };
     let extras = PalwTransitionExtrasV1 {
         model_registry: Some(registry.clone()),

@@ -11804,6 +11804,16 @@ impl VirtualStateProcessor {
             // Which freshness rule a readiness row is judged by at this DAA — the same resolution
             // the fold's extras carry (`readiness_v2_active`), for the readers holding only the fold.
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
+            // Lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on the ready count and the
+            // admission jury, from lane maturity's fence (MODE-folded) on — `palw_bond_maturity`'s
+            // window and the second clock's raw depth at this DAA, the pair `palw_bond_maturity_window_at`
+            // reads for the draw. `None` below the fence and on every shipped preset.
+            bond_maturity: kaspa_consensus_core::palw_model_registry_v1::palw_bond_maturity_fold_v1(
+                self.palw_bond_maturity,
+                self.palw_bond_maturity_early,
+                self.palw_settled_anchor_depth_at(daa_score),
+                daa_score,
+            ),
         })
     }
 
