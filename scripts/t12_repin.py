@@ -90,6 +90,7 @@ HARVEST_TARGETS = [
     "palw_offence_attribution_t11_verdicts",
     "palw_same_fingerprint_same_verdict",
     "palw_readiness_horizon_is_t12_only",
+    "palw_exec_maturity_is_t12_only",
 ]
 HARVEST_FILTERS = [
     "print_every_value_the_pins_hold",
@@ -102,6 +103,7 @@ HARVEST_FILTERS = [
     "t11_the_v1_fold_is_the_fold_it_was",
     "the_stored_corpus_gets_the_verdicts_this_build_pinned",
     "the_horizon_moves_testnet12s_fingerprint_and_nothing_else_did",
+    "the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did",
 ]
 # The one lib test whose value is only visible in its own failure message (or, when it passes, is
 # the pin itself): run alone, so its result line is unambiguous.
@@ -134,6 +136,10 @@ HARVEST_LINES = [
     (r'testnet-12 with the horizon \("(\w+)", "(\w+)", "(\w+)"\) / without \("(\w+)", "(\w+)", "(\w+)"\)',
      ["twin.with_horizon.params_id", "twin.with_horizon.identity_id", "twin.with_horizon.schedule_id",
       "twin.no_horizon.params_id", "twin.no_horizon.identity_id", "twin.no_horizon.schedule_id"]),
+    # `palw_exec_maturity_is_t12_only` likewise (the execution-quantum maturity, user decision 2026-09-25).
+    (r'testnet-12 with the maturity \("(\w+)", "(\w+)", "(\w+)"\) / without the maturity \("(\w+)", "(\w+)", "(\w+)"\)',
+     ["twin.with_maturity.params_id", "twin.with_maturity.identity_id", "twin.with_maturity.schedule_id",
+      "twin.no_maturity.params_id", "twin.no_maturity.identity_id", "twin.no_maturity.schedule_id"]),
 ]
 T41_RECORD = re.compile(r"T41 record (\w+)[^:\n]*: ([0-9a-f]{64})")
 REPIN_LINE = re.compile(r"REPIN (\S+) (\S+)")
@@ -233,6 +239,7 @@ ATTR = "consensus/core/tests/palw_offence_attribution_is_t12_only.rs"
 DEADLINE = "consensus/core/tests/palw_class_verify_deadline_is_t12_only.rs"
 POOL = "consensus/core/tests/palw_activation_pool_is_t12_only.rs"
 HORIZON = "consensus/core/tests/palw_readiness_horizon_is_t12_only.rs"
+MATURITY = "consensus/core/tests/palw_exec_maturity_is_t12_only.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 PARAMS = "consensus/core/src/config/params.rs"
@@ -339,6 +346,8 @@ def registry() -> list[Pin]:
                   (f"{POOL}::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_pool",))
     pins += _rows("horizon.BEFORE_THE_HORIZON", _net_scope, HORIZON, "const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[",
                   _shipped, (f"{HORIZON}::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_horizon",))
+    pins += _rows("maturity.UNMOVED", _net_scope, MATURITY, "const UNMOVED: &[(&str, &str, &str, &str)] = &[",
+                  _shipped, (f"{MATURITY}::testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_maturity",))
     rel = (f"{RELEASE}::the_shipped_release_fingerprint_did_not_move",)
     for const, what in [("T11_CONSENSUS_PARAMS_ID", "params_id"), ("T11_CONSENSUS_IDENTITY_ID", "identity_id"),
                         ("T11_CONSENSUS_SCHEDULE_ID", "schedule_id")]:
@@ -381,6 +390,12 @@ def registry() -> list[Pin]:
                     "twin.no_horizon", horizon_twin)
     pins += _triple("horizon.T12_WITH_THE_HORIZON", "t12", HORIZON, "const T12_WITH_THE_HORIZON: (&str, &str, &str) = (",
                     "shipped.testnet-12", horizon_twin)
+    # The execution-quantum maturity (user decision 2026-09-25): its twin, and testnet-12's full ids again.
+    maturity_twin = (f"{MATURITY}::the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did",)
+    pins += _triple("maturity.T12_WITHOUT_THE_MATURITY", "t12", MATURITY, "const T12_WITHOUT_THE_MATURITY: (&str, &str, &str) = (",
+                    "twin.no_maturity", maturity_twin)
+    pins += _triple("maturity.T12_WITH_THE_MATURITY", "t12", MATURITY, "const T12_WITH_THE_MATURITY: (&str, &str, &str) = (",
+                    "shipped.testnet-12", maturity_twin)
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)
@@ -1091,23 +1106,27 @@ def selftest(log_dir: str) -> int:
                                     "attribution.BEFORE_THE_ATTRIBUTION.testnet-11.params_id",
                                     "deadline.BEFORE_THE_DEADLINE.testnet-11.params_id", "release.T11_CONSENSUS_PARAMS_ID",
                                     "params.shipped_presets.testnet-11", "pool.BEFORE_THE_POOL.testnet-11.params_id",
-                                    "horizon.BEFORE_THE_HORIZON.testnet-11.params_id"]}),
+                                    "horizon.BEFORE_THE_HORIZON.testnet-11.params_id", "maturity.UNMOVED.testnet-11.params_id"]}),
         ("devnet's identity moved", change((rep_line("shipped.devnet.identity_id"),)), {},
          {k: "refuse" for k in ["rcore.AT_V22.devnet.identity_id", "floor.BEFORE_THE_FLOOR.devnet.identity_id",
                                 "attribution.BEFORE_THE_ATTRIBUTION.devnet.identity_id", "deadline.BEFORE_THE_DEADLINE.devnet.identity_id",
-                                "pool.BEFORE_THE_POOL.devnet.identity_id", "horizon.BEFORE_THE_HORIZON.devnet.identity_id"]}),
+                                "pool.BEFORE_THE_POOL.devnet.identity_id", "horizon.BEFORE_THE_HORIZON.devnet.identity_id",
+                                "maturity.UNMOVED.devnet.identity_id"]}),
         ("mainnet's ruleset moved", change((rep_line("shipped.mainnet.params_id"),), (rep_line("const.mainnet.params_id"),),
                                            (rep_line("preset_net.mainnet.params_id"),)), {},
          {k: "move" for k in ["rcore.AT_V22.mainnet.params_id", "rcore.AT_V21.mainnet.params_id", "floor.BEFORE_THE_FLOOR.mainnet.params_id",
                               "attribution.BEFORE_THE_ATTRIBUTION.mainnet.params_id", "deadline.BEFORE_THE_DEADLINE.mainnet.params_id",
                               "release.MAINNET_CONSENSUS_PARAMS_ID", "params.shipped_presets.mainnet",
-                              "pool.BEFORE_THE_POOL.mainnet.params_id", "horizon.BEFORE_THE_HORIZON.mainnet.params_id"]}),
+                              "pool.BEFORE_THE_POOL.mainnet.params_id", "horizon.BEFORE_THE_HORIZON.mainnet.params_id",
+                              "maturity.UNMOVED.mainnet.params_id"]}),
         ("testnet-12's fingerprint and a twin moved", change((rep_line("from.testnet-12.params_id"),),
                                                              (r"testnet-12 without the fence: params ",)), {},
          {k: "move" for k in ["checklist.EXPECT_FP", "plan.EXPECT_FP", "scan_deploy.fp", "attribution.T12_BEFORE_THE_ATTRIBUTION.params_id"]}),
         ("testnet-12's shipped params moved (the horizon's full-ids pin)", change((rep_line("shipped.testnet-12.params_id"),)), {},
-         {"horizon.T12_WITH_THE_HORIZON.params_id": "move"}),
+         {"horizon.T12_WITH_THE_HORIZON.params_id": "move", "maturity.T12_WITH_THE_MATURITY.params_id": "move"}),
         ("the horizon's twin moved", change((r'/ without \("',)), {}, {"horizon.T12_BEFORE_THE_HORIZON.params_id": "move"}),
+        ("the maturity's twin moved", change((r'/ without the maturity \("',)), {},
+         {"maturity.T12_WITHOUT_THE_MATURITY.params_id": "move"}),
         ("testnet-12's genesis moved", change((rep_line("genesis.testnet-12.hash"),), (rep_line("genesis.testnet-12.utxo_commitment"),)),
          {}, {k: "move" for k in ["genesis.testnet-12.hash", "genesis.testnet-12.utxo_commitment", "checklist.EXPECT_GENESIS",
                                   "plan.EXPECT_GENESIS", "regen_doc.genesis_hash", "regen_doc.utxo_commitment", "join_doc.genesis",
@@ -1126,6 +1145,7 @@ def selftest(log_dir: str) -> int:
          {"CHECK": "FAILED (checklist §5, item 4)"}),
     ]
     requires = {"testnet-12's shipped params moved (the horizon's full-ids pin)": HORIZON, "the horizon's twin moved": HORIZON,
+                "the maturity's twin moved": MATURITY,
                 "an A-held gate failed": ("gate", gate)}
     failures = skipped = 0
     for name, mutate, opts, want in scenarios:

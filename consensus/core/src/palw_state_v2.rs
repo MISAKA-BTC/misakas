@@ -12870,9 +12870,10 @@ impl PalwFoldReadV1<'_> {
             counted
         };
         let quanta = counted.saturating_add(1);
+        // The maturity the snapshot is delayed by (`rotate_round_lane`), from the same field.
         crate::palw_economic_safety_v1::palw_realizable_before_maturity_v1(
             quanta,
-            self.params.window_challenge(),
+            safety.maturity_daa,
             self.params.window_court,
             safety.target_time_per_block_ms,
             crate::palw_economic_safety_v1::palw_permit_value_sompi_v1(safety.permit_value_sompi),
@@ -19414,9 +19415,9 @@ impl<'a> TransitionBuilder<'a> {
         // **ADR-0151: what a conviction has taken back, and how long a fresh right waits.**
         //
         // The forfeiture set is derived from the convictions themselves, so a Final whose execution was
-        // convicted mints nothing at any of the three stages a right can sit in. The maturity is the
-        // challenge window converted to rounds — a ticket occupies a round, not a DAA — and it is what
-        // keeps every right of a Final unused for as long as a conviction can still take it.
+        // convicted mints nothing at any of the three stages a right can sit in. The maturity keeps
+        // every right of a Final unused for that long after it, and the rights a conviction could
+        // still take past it are the residual the lock prices (`realizable_rights_of_v1`).
         //
         // Both are inert where `Params::palw_economic_safety` is dormant, which is every preset but
         // testnet-12: an empty set and a zero maturity make the mint below the one every other network
@@ -19435,14 +19436,13 @@ impl<'a> TransitionBuilder<'a> {
         // every ticket past its span even with no maturity at all). The right still waits out the
         // whole window, the mint still drops any execution convicted meanwhile, and the ticket lives
         // in the schedule its round is judged by.
+        //
+        // **The maturity is the one the fold was handed** (`PalwEconomicSafetyFoldV1::maturity_daa`,
+        // `Params::palw_exec_quantum_maturity_v1`): on testnet-12 the challenge window the network
+        // APPLIES, 120 DAA (user decision 2026-09-25), not the unshortened lattice window of 1,200 —
+        // and the lock prices the gap from the same field.
         let (maturity_daa, forfeited) = match self.extras.economic_safety {
-            Some(_) => (
-                crate::palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1(
-                    self.params.window_challenge(),
-                    self.params.window_court,
-                ),
-                self.state.palw_forfeited_execution_roots_v1(),
-            ),
+            Some(safety) => (safety.maturity_daa, self.state.palw_forfeited_execution_roots_v1()),
             None => (0, std::collections::BTreeSet::new()),
         };
         let maturity_spans = maturity_daa.div_ceil(span_daa.max(1));
@@ -29467,10 +29467,11 @@ fn worker_carve_v2(params: &PalwStateParamsV2, subsidy: u64, escrow_carve: Optio
 /// **ADR-0151's economic-safety fold** — what the block hands the transition so it can price the
 /// rights a fraudulent Final would realize before a conviction could take them.
 ///
-/// Two quantities, and neither is a chain fact the state already holds: the lane's cadence (a
-/// `Params` value, and the transition sees only `PalwStateParamsV2`) and the declared value of one
+/// Three quantities, and none is a chain fact the state already holds: the lane's cadence (a
+/// `Params` value, and the transition sees only `PalwStateParamsV2`), the declared value of one
 /// stolen round (`palw_economic_safety_v1::palw_permit_value_sompi_v1` — consensus bounds a block's
-/// mass and never its fee per unit of mass, so this is the one input an operator declares).
+/// mass and never its fee per unit of mass, so this is the one input an operator declares), and the
+/// maturity the network serves (`Params::palw_exec_quantum_maturity_v1`).
 ///
 /// `None` where `Params::palw_economic_safety` is dormant, which is every preset but testnet-12 —
 /// and then every path below is byte-identical to what it was.
@@ -29480,6 +29481,14 @@ pub struct PalwEconomicSafetyFoldV1 {
     pub target_time_per_block_ms: u64,
     /// What one stolen algo-10 round is declared to be worth, in sompi.
     pub permit_value_sompi: u64,
+    /// **How long after its Final an execution quantum may not be spent, in DAA** —
+    /// `Params::palw_exec_quantum_maturity_v1`: the stated `Params::palw_exec_quantum_maturity_daa`
+    /// (testnet-12: 120, the challenge window it applies — user decision 2026-09-25), else the
+    /// lattice challenge window (`palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1`). The
+    /// ONE value both halves read: `rotate_round_lane` delays a Final's snapshot by it and
+    /// `realizable_rights_of_v1` prices the gap it leaves to `window_court`, so the lock and the mint
+    /// cannot disagree about when a right becomes spendable.
+    pub maturity_daa: u64,
 }
 
 /// **A carrier-borne market move this block refused, and the payer its MSK goes back to** (the
@@ -40597,7 +40606,11 @@ pub(crate) mod tests {
         let p = params().with_worker_carve_permille(620).unwrap();
         assert_eq!(p.window_challenge(), 20, "one span of maturity at a 100-DAA span");
         let safety = |open_round: u64, uses: Vec<PalwExecPermitUseV1>| PalwTransitionExtrasV1 {
-            economic_safety: Some(PalwEconomicSafetyFoldV1 { target_time_per_block_ms: 1_000, permit_value_sompi: 1 }),
+            economic_safety: Some(PalwEconomicSafetyFoldV1 {
+                target_time_per_block_ms: 1_000,
+                permit_value_sompi: 1,
+                maturity_daa: p.window_challenge(),
+            }),
             ..round_extras_quanta(100, 10, open_round, uses)
         };
         let (s5, claim_id) = round_final_in_span_1(&p);

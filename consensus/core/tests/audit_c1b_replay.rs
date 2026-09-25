@@ -404,7 +404,10 @@ fn audit_c1b_no_execution_quantum_on_t12_is_ever_reachable() {
     let st = &bundle.state;
     let lane = p.palw_execution_lane.expect("armed on t12");
     let rpd = palw_rounds_per_daa_v1(p.target_time_per_block);
-    let maturity_daa = palw_exec_quantum_maturity_daa_v1(st.window_challenge(), st.window_court());
+    // testnet-12 states its maturity (user decision 2026-09-25): the 120-DAA challenge window it
+    // applies, where this was measured at the lattice `None` rule's 1,200.
+    assert_eq!(palw_exec_quantum_maturity_daa_v1(st.window_challenge(), st.window_court()), 1_200, "the None rule");
+    let maturity_daa = p.palw_exec_quantum_maturity_v1();
     let maturity_rounds = maturity_daa * rpd;
     let schedule_life_rounds = 2 * lane.schedule_span_daa * rpd;
 

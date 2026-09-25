@@ -537,7 +537,7 @@ struct AtTheTargetSpan {
 
 /// **Stages 1–7 on testnet-12, every window as shipped**: card 0's floor attempt → its claim → the
 /// panel the chain derives → a quorum's `Valid` receipts on a 0x4b carrier funded by card 0's genesis
-/// float → `Final` → the snapshot one span later, for `span + 1 + maturity` → 1,200 spans of
+/// float → `Final` → the snapshot one span later, for `span + 1 + maturity` → 120 spans of
 /// heartbeats → card 1's attempt block in the span before the target (the seed anchor) → the
 /// target span's first block, which seeds the schedule.
 ///
@@ -560,10 +560,11 @@ async fn a_floor_final_scheduled(draw: SeedDraw) -> AtTheTargetSpan {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let lane = config.params.palw_execution_lane.expect("t12 opens the execution lane");
     let ttpb = config.params.target_time_per_block();
-    let maturity_daa = kaspa_consensus_core::palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1(
-        bundle.state.window_challenge(),
-        bundle.state.window_court(),
-    );
+    // testnet-12's maturity is the challenge window it applies (user decision 2026-09-25): 120 DAA,
+    // the short window every licence here gets from DAA 0 — not the lattice's unshortened 1,200.
+    let maturity_daa = config.params.palw_exec_quantum_maturity_v1();
+    assert_eq!(maturity_daa, 120, "testnet-12 states the maturity it serves");
+    assert_eq!(maturity_daa, bundle.state.window_challenge_at(0), "and it is the challenge window it applies");
     eprintln!(
         "[t12-e2e {draw:?}] testnet-12: target time {ttpb} ms; span {} DAA ({} rounds); anchor delay {}; receipt window {}; \
          challenge window {} (short {} at DAA 0); court window {}; quanta maturity {maturity_daa} DAA; seats {}/quorum {}; \
@@ -716,7 +717,15 @@ async fn a_floor_final_scheduled(draw: SeedDraw) -> AtTheTargetSpan {
     let snap_span = palw_execution_span_v1(chain.sink_daa(), span_daa);
     let maturity_spans = maturity_daa.div_ceil(span_daa.max(1));
     assert_eq!(target, snap_span + 1 + maturity_spans, "past ADR-0151's bundle the maturity delays the snapshot, not the tickets");
-    eprintln!("[t12-e2e {draw:?}] 5. snapshotted at span {snap_span} for span {target} ({maturity_spans} spans of maturity)");
+    assert_eq!(maturity_spans, 120, "one-DAA spans: the 120-DAA maturity is 120 spans");
+    assert!(
+        target > final_span + maturity_spans && target <= final_span + 2 + maturity_spans + 1,
+        "the first permit's span follows the Final by the maturity plus the snapshot's span rounding: final {final_span}, target {target}"
+    );
+    eprintln!(
+        "[t12-e2e {draw:?}] 5. snapshotted at span {snap_span} for span {target} ({maturity_spans} spans of maturity; {} DAA after Final)",
+        target * span_daa - final_daa
+    );
 
     // ---- 6. the maturity runs; an attempt block in the span before the target records the anchor --
     chain
@@ -932,7 +941,8 @@ async fn merge_the_round_block(
 /// The seed anchor is drawn so the floor Final mints its ticket (see [`a_floor_final_scheduled`]);
 /// everything else is the chain doing what testnet-12 does. Asserted along the way: the claim binds
 /// a full panel at `accepted + anchor_delay`, is licensed by a carried quorum, is `Final` after the
-/// short challenge window, is a credit in its span, is snapshotted for `span + 1 + 1,200`, and the
+/// short challenge window, is a credit in its span, is snapshotted for `span + 1 + 120` (the maturity is
+/// that same short window), and the
 /// target span's first block seeds a schedule whose tickets sit on that span's own rounds
 /// (`[open + 3, open + 3 + 120)`). Then a round block signed for the first ticket's round, anchored
 /// at the opening block: `palw_round_verdicts_v1` permits it and names the permit, the merging block

@@ -249,11 +249,17 @@ fn the_quantum_maturity_and_the_liability_horizon_read_different_clocks() {
     // The held 2M row's mint, as palw_economic_safety_v1's own test records it.
     let quanta: u32 = 270_029;
 
-    let maturity_daa = palw_exec_quantum_maturity_daa_v1(window_challenge, window_court);
+    // **testnet-12's maturity is the challenge window it applies, 120 DAA** (user decision
+    // 2026-09-25), not the lattice's 1,200 — which is what closes this finding: the gap grows to
+    // 2,880 DAA = 345,600 rounds, more than the mint, so the price is the whole mint and no slower
+    // clock can realize a right it did not price.
+    assert_eq!(palw_exec_quantum_maturity_daa_v1(window_challenge, window_court), 1_200, "the None rule");
+    let maturity_daa = p.palw_exec_quantum_maturity_v1();
+    assert_eq!(maturity_daa, 120);
     let maturity_rounds = maturity_daa * rpd;
     let priced_gap_daa = window_court - maturity_daa;
     let priced_rounds = priced_gap_daa * rpd;
-    let priced = palw_realizable_before_maturity_v1(quanta, window_challenge, window_court, cadence_ms, PALW_T12_PERMIT_FEE_CEILING_SOMPI);
+    let priced = palw_realizable_before_maturity_v1(quanta, maturity_daa, window_court, cadence_ms, PALW_T12_PERMIT_FEE_CEILING_SOMPI);
 
     println!("=== H2-4: two clocks under one inequality ===");
     println!("maturity (DAA)                   = {maturity_daa}");
@@ -263,7 +269,7 @@ fn the_quantum_maturity_and_the_liability_horizon_read_different_clocks() {
     println!("priced gap                       = {priced_gap_daa} DAA -> {priced_rounds} rounds");
     println!("quanta one held-2M Final mints   = {quanta}");
     println!("realizable priced into the lock  = {priced} sompi (= min({quanta},{priced_rounds}) x {PALW_T12_PERMIT_FEE_CEILING_SOMPI})");
-    assert_eq!(priced, u128::from(priced_rounds) * u128::from(PALW_T12_PERMIT_FEE_CEILING_SOMPI), "the rounds bind, not the mint");
+    assert_eq!(priced, u128::from(quanta) * u128::from(PALW_T12_PERMIT_FEE_CEILING_SOMPI), "the mint binds, not the rounds");
 
     // Now let the DAA clock run slower than 120 s per tick. Nothing forbids it: the cursor sets a
     // MINIMUM interval between beats, never a maximum, and a heartbeat that is not mined is a DAA
@@ -283,12 +289,17 @@ fn the_quantum_maturity_and_the_liability_horizon_read_different_clocks() {
     let full = first_full.expect("some slowdown makes every quantum realizable");
     println!("every minted quantum is realizable once the clock is at {full} ms/DAA");
     println!("  -- that is {:.2}x the cadence the pricing assumes", full as f64 / cadence_ms as f64);
+    assert_eq!(full, cadence_ms, "at the 120-DAA maturity the cadence itself already realizes the whole mint");
 
-    // And the seat lock the fold demands is computed from the PRICED figure.
+    // And the seat lock the fold demands is computed from the PRICED figure — which is now the worst
+    // case. (At the 1,200-DAA maturity it was 216,000 of 270,029: 20.0 % short.)
     let worst = u128::from(quanta) * u128::from(PALW_T12_PERMIT_FEE_CEILING_SOMPI);
     println!("worst-case realizable (all quanta) = {worst} sompi");
-    println!("shortfall vs priced                = {} sompi ({:.1} %)", worst - priced, (worst - priced) as f64 * 100.0 / priced as f64);
-    assert!(worst > priced, "the pricing is not the worst case");
+    println!("shortfall vs priced                = {} sompi", worst - priced);
+    assert_eq!(worst, priced, "the pricing IS the worst case: a slower DAA clock realizes nothing unpriced");
+    let at_lattice =
+        palw_realizable_before_maturity_v1(quanta, window_challenge, window_court, cadence_ms, PALW_T12_PERMIT_FEE_CEILING_SOMPI);
+    assert!(worst > at_lattice, "and at the unshortened 1,200 it was not");
     let _ = palw_seat_lock_required_v2(0, PALW_PANEL_COLLUDING_QUORUM_V1);
     let _ = palw_exec_quantum_matures_at_v1(0, window_challenge, window_court);
     let _ = palw_execution_round_v1(1, 0);
@@ -304,12 +315,12 @@ fn the_quantum_maturity_and_the_liability_horizon_read_different_clocks() {
 #[test]
 fn the_maturity_outlives_the_schedule_row_that_holds_it() {
     let p = t12();
-    let b = bundle(&p);
     let lane = p.palw_execution_lane.expect("testnet-12 arms the execution lane at 0");
     let span_daa = lane.schedule_span_daa_at(0);
     let cadence_ms = p.target_time_per_block();
     let rpd = palw_rounds_per_daa_v1(cadence_ms);
-    let maturity_daa = palw_exec_quantum_maturity_daa_v1(b.state.window_challenge(), b.state.window_court());
+    // testnet-12's maturity (user decision 2026-09-25): 120 DAA, the challenge window it applies.
+    let maturity_daa = p.palw_exec_quantum_maturity_v1();
     let maturity_rounds = maturity_daa * rpd;
 
     // A schedule for span S is kept while span_now < S + 2 (keep_from = span_now - 1 drops

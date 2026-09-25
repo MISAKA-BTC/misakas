@@ -61,8 +61,9 @@
 //! At `maturity == window_court` an honest Final's execution permits become spendable
 //! `window_court` DAA after it finalizes — 3,000 DAA on the RC windows, and on a network whose clock
 //! is one heartbeat every 120 s that is about **100 hours of wall clock**. That is the cost of
-//! "recoverable", and it is a knob: [`PALW_EXEC_QUANTUM_MATURITY_DAA`] is the only constant to move,
-//! and moving it cannot open a hole because the residual is priced.
+//! "recoverable", and it is a knob: `Params::palw_exec_quantum_maturity_daa` is the one value to
+//! move (`None` is [`palw_exec_quantum_maturity_daa_v1`]'s rule), and moving it cannot open a hole
+//! because the residual is priced.
 
 use crate::Hash64;
 
@@ -97,12 +98,23 @@ pub const fn palw_rounds_per_daa_v1(target_time_per_block_ms: u64) -> u64 {
 /// becomes the continuous thing it should be — longer maturity, more recoverable, less collateral;
 /// shorter maturity, faster permits, more collateral — and mainnet picks its point from what t12
 /// measures instead of inheriting a hundred-hour freeze.
+///
+/// **This is the rule `Params::palw_exec_quantum_maturity_daa = None` states — the UNSHORTENED
+/// lattice window.** testnet-12 applies ADR-0132 §7.6's short challenge window (120 DAA) to every
+/// licence from genesis, and since the user's decision of 2026-09-25 its maturity is that window too:
+/// the params state `Some(PALW_SHORT_CHALLENGE_WINDOW_DAA_V1)`, the first permit follows a Final by
+/// ~120 DAA instead of ~1,200, and the gap grows to 2,880 DAA. What that costs is priced below and in
+/// this module's tests: nothing on testnet-12's fold, where the 2026-09-23 audit's C-2 cap (65,537
+/// quanta a Final) binds before the gap at any maturity up to 2,453 DAA.
 pub const PALW_EXEC_QUANTUM_MATURITY_IS_THE_CHALLENGE_WINDOW: bool = true;
 
-/// The maturity this network applies, in DAA: the challenge window on testnet-12.
+/// The maturity a network applies when its params state none (`Params::palw_exec_quantum_maturity_daa
+/// = None`), in DAA: the lattice challenge window.
 ///
 /// Takes both windows because the choice is between them, and returning the shorter one is the whole
-/// decision — a caller that passed only one could not express it.
+/// decision — a caller that passed only one could not express it. The maturity the fold serves and
+/// prices is `Params::palw_exec_quantum_maturity_v1`, which answers the stated value where there is one
+/// (testnet-12's 120) and this rule otherwise.
 pub const fn palw_exec_quantum_maturity_daa_v1(window_challenge_daa: u64, window_court_daa: u64) -> u64 {
     if PALW_EXEC_QUANTUM_MATURITY_IS_THE_CHALLENGE_WINDOW { window_challenge_daa } else { window_court_daa }
 }
@@ -122,17 +134,22 @@ pub const fn palw_exec_quantum_matures_at_v1(final_daa: u64, window_challenge_da
 /// realizable = min(quanta_minted, rounds_in(window_court − maturity)) × value_of_one_permit
 /// ```
 ///
-/// Zero when the maturity reaches the horizon, which is the shipped setting. Saturating throughout:
-/// a network that somehow priced a permit at `u64::MAX` should refuse to seat a panel, not wrap.
+/// Zero when the maturity reaches the horizon. Saturating throughout: a network that somehow priced
+/// a permit at `u64::MAX` should refuse to seat a panel, not wrap.
+///
+/// `maturity_daa` is the maturity the network SERVES — `Params::palw_exec_quantum_maturity_v1`, which
+/// the fold carries as `PalwEconomicSafetyFoldV1::maturity_daa` and reads for both the snapshot delay
+/// and this price, so the lock and the mint cannot disagree about it. A caller that passes the lattice
+/// challenge window here prices [`palw_exec_quantum_maturity_daa_v1`]'s rule (the `None` spelling),
+/// which is what every caller before 2026-09-25 did.
 pub fn palw_realizable_before_maturity_v1(
     quanta_minted: u32,
-    window_challenge_daa: u64,
+    maturity_daa: u64,
     window_court_daa: u64,
     target_time_per_block_ms: u64,
     permit_value_sompi: u64,
 ) -> u128 {
-    let maturity = palw_exec_quantum_maturity_daa_v1(window_challenge_daa, window_court_daa);
-    let gap_daa = window_court_daa.saturating_sub(maturity);
+    let gap_daa = window_court_daa.saturating_sub(maturity_daa);
     if gap_daa == 0 || quanta_minted == 0 || permit_value_sompi == 0 {
         return 0;
     }
@@ -171,11 +188,14 @@ pub const fn palw_permit_value_sompi_v1(permit_fee_ceiling_sompi: u64) -> u64 {
 /// silently tracked one would change with it.
 ///
 /// **This is the figure testnet-12 exists to replace.** The residual is
-/// `min(quanta, rounds_in_gap) × this`, and on the held 2M row the binding term is 216,000 rounds —
-/// so the whole collateral requirement is linear in a number nobody has measured. At 0.01 MSK the
-/// residual is ~2,160 MSK against a 2,703 MSK claim gain, which is affordable; ten times that and it
-/// is not, and the maturity would have to lengthen. Measuring the lane's real fee flow is the reason
-/// ADR-0151 runs the SHORT maturity on this network at all.
+/// `min(quanta, rounds_in_gap) × this`. At testnet-12's maturity of 120 DAA (user decision
+/// 2026-09-25) the gap is 2,880 DAA = 345,600 rounds, so the binding term is the MINT: past the
+/// 2026-09-23 audit's C-2 cap a Final prices at most 65,537 quanta, 655.37 MSK on the held 2M row —
+/// the same figure the 1,200-DAA maturity priced, because its 216,000-round gap already exceeded
+/// the cap. The collateral requirement is still linear in this number nobody has measured: ten times
+/// it is 6,553.7 MSK a 2M Final, and a maturity can no longer buy that down unless it rises past
+/// 2,453 DAA. Measuring the lane's real fee flow is the reason ADR-0151 runs the SHORT maturity on
+/// this network at all.
 pub const PALW_T12_PERMIT_FEE_CEILING_SOMPI: u64 = 1_000_000;
 
 /// **Whether a Final's rights are forfeit** — the revocation half of the bundle.
@@ -294,11 +314,18 @@ mod tests {
     const WINDOW_CHALLENGE: u64 = 1_200;
     const WINDOW_COURT: u64 = 3_000;
     const CADENCE_MS: u64 = 120_000;
+    /// **testnet-12's maturity since the user's decision of 2026-09-25: the challenge window it
+    /// APPLIES** — ADR-0132 §7.6's short window, 120 DAA, not the lattice's 1,200.
+    const T12_MATURITY: u64 = crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1;
     /// **The quanta one held-2M Final mints: 270,029, not 2,963.** Execution quanta mint from the
     /// UNCLAMPED CanonicalWork scalar ("a heavier verified job earns more spend-once tickets"), so
     /// the work-price unit that clamps the lottery does not clamp this. The first reading applied
     /// that clamp and under-counted by 91x.
     const QUANTA: u32 = 270_029;
+    /// **The quanta the testnet-12 fold PRICES a Final at, at most**: the 2026-09-23 audit's C-2 cap
+    /// (`PALW_EXEC_MAX_QUANTA_PER_SPAN_V1`, 2^16) plus the fractional ceiling
+    /// (`realizable_rights_of_v1`: `min(count, 2^16) + 1`). Every held-2M claim prices here.
+    const QUANTA_CAPPED: u32 = crate::palw_execution_quanta_v1::PALW_EXEC_MAX_QUANTA_PER_SPAN_V1 as u32 + 1;
     const PERMIT: u64 = PALW_T12_PERMIT_FEE_CEILING_SOMPI;
 
     fn facts(extra: u128) -> PalwClaimFraudFactsV1 {
@@ -311,8 +338,13 @@ mod tests {
         }
     }
 
+    fn residual_at(quanta: u32, maturity: u64) -> u128 {
+        palw_realizable_before_maturity_v1(quanta, maturity, WINDOW_COURT, CADENCE_MS, palw_permit_value_sompi_v1(PERMIT))
+    }
+
+    /// The uncapped mint's residual at testnet-12's maturity.
     fn residual() -> u128 {
-        palw_realizable_before_maturity_v1(QUANTA, WINDOW_CHALLENGE, WINDOW_COURT, CADENCE_MS, palw_permit_value_sompi_v1(PERMIT))
+        residual_at(QUANTA, T12_MATURITY)
     }
 
     /// **The defect, reproduced.** With the rights priced at zero the colluding quorum out-values the
@@ -324,21 +356,49 @@ mod tests {
         assert_eq!(seat.saturating_mul(u128::from(PALW_PANEL_COLLUDING_QUORUM_V1)) - gain, 2, "the whole margin");
     }
 
-    /// **testnet-12 runs the SHORT maturity, so the residual is real and priced.**
+    /// **testnet-12 runs the SHORT maturity, so the residual is real and priced — and at 120 DAA it
+    /// is every quantum the Final mints.**
     ///
-    /// 1,200 DAA of maturity against a 3,000-DAA liability horizon leaves 1,800 DAA in which a right
-    /// is both spendable and still convictable. At 120 rounds a DAA that is 216,000 rounds, against a
-    /// mint of 270,029 quanta — so the GAP is what binds, and lengthening the maturity is what
-    /// shrinks the bill.
+    /// 120 DAA of maturity against a 3,000-DAA liability horizon leaves 2,880 DAA in which a right is
+    /// both spendable and still convictable. At 120 rounds a DAA that is 345,600 rounds, against a
+    /// mint of 270,029 quanta — so the MINT binds, not the gap: the lock prices every right the Final
+    /// has, and no slower heartbeat clock can make more of them realizable than it priced. (At the
+    /// lattice's 1,200 DAA, the `None` rule, the gap was 1,800 DAA = 216,000 rounds and bound instead.)
     #[test]
     fn the_short_maturity_prices_every_quantum() {
+        // The `None` rule is still the lattice window, and a quantum's earliest DAA under it.
         assert_eq!(palw_exec_quantum_maturity_daa_v1(WINDOW_CHALLENGE, WINDOW_COURT), WINDOW_CHALLENGE);
         assert_eq!(palw_exec_quantum_matures_at_v1(10_000, WINDOW_CHALLENGE, WINDOW_COURT), 11_200);
+        assert_eq!(T12_MATURITY, 120, "testnet-12 matures at the challenge window it applies");
         assert_eq!(palw_rounds_per_daa_v1(CADENCE_MS), 120);
-        // 1,800 DAA x 120 rounds = 216,000 rounds, against 270,029 quanta: the GAP binds, not the
-        // mint. That is the term a longer maturity shrinks, and the reason the knob works at all.
-        assert_eq!(residual(), 216_000 * u128::from(PERMIT), "the rounds in the gap are the binding cap");
+        // 2,880 DAA x 120 rounds = 345,600 rounds, against 270,029 quanta: the MINT binds.
+        assert_eq!(residual(), u128::from(QUANTA) * u128::from(PERMIT), "every minted quantum is priced");
+        assert_eq!(residual(), 270_029_000_000, "2,700.29 MSK on the uncapped 2M mint");
+        // At 1,200 the gap bound instead: 216,000 rounds, 2,160 MSK.
+        assert_eq!(residual_at(QUANTA, WINDOW_CHALLENGE), 216_000 * u128::from(PERMIT), "the rounds in the gap bound at 1,200");
         assert!(residual() > 0, "the point of the short maturity is that this path is REACHED");
+    }
+
+    /// **1,200 → 120 on the quanta the testnet-12 fold actually prices: no figure moves.**
+    ///
+    /// Past the 2026-09-23 audit (armed on testnet-12 from genesis) a Final prices at most
+    /// `2^16 + 1` = 65,537 quanta, and both gaps — 216,000 rounds at 1,200, 345,600 at 120 — exceed
+    /// it, so the residual is the whole capped mint, 655.37 MSK, at either maturity: `max_fraud_gain`
+    /// and every lock read from it are unchanged. The gap binds the capped mint only past
+    /// `3,000 − ⌈65,537 / 120⌉` = 2,453 DAA of maturity, so every maturity testnet-12 could pick from
+    /// its two challenge windows prices the same.
+    #[test]
+    fn on_the_capped_mint_the_short_maturity_moves_no_figure() {
+        assert_eq!(QUANTA_CAPPED, 65_537);
+        let at_1200 = residual_at(QUANTA_CAPPED, WINDOW_CHALLENGE);
+        let at_120 = residual_at(QUANTA_CAPPED, T12_MATURITY);
+        assert_eq!(at_1200, 65_537_000_000, "655.37 MSK at the lattice window");
+        assert_eq!(at_120, at_1200, "and the same 655.37 MSK at the short window");
+        // The last maturity at which the capped mint is still wholly priced, and the first past it.
+        assert_eq!(residual_at(QUANTA_CAPPED, 2_453), at_120, "2,453 DAA: 547 x 120 = 65,640 rounds >= 65,537");
+        assert!(residual_at(QUANTA_CAPPED, 2_454) < at_120, "2,454 DAA: 546 x 120 = 65,520 rounds < 65,537");
+        // The gain and the three-colluder lock follow the residual, so they do not move either.
+        assert_eq!(palw_max_fraud_gain_v1(&facts(at_120)), palw_max_fraud_gain_v1(&facts(at_1200)));
     }
 
     /// **The tradeoff is continuous, which is the property mainnet needs.** Longer maturity, less
@@ -355,7 +415,7 @@ mod tests {
         assert!(at(0) >= at(WINDOW_CHALLENGE), "and no maturity prices the most");
         // The knob is monotone, so an operator can trade latency for collateral without a cliff.
         let mut previous = u128::MAX;
-        for maturity in [0u64, 600, 1_200, 1_800, 2_400, 3_000] {
+        for maturity in [0u64, T12_MATURITY, 600, 1_200, 1_800, 2_400, 3_000] {
             let now = at(maturity);
             assert!(now <= previous, "the residual must not grow with maturity at {maturity}");
             previous = now;

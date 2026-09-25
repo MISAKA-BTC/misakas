@@ -121,6 +121,7 @@ pub fn extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
         economic_safety: p.palw_economic_safety.is_some_and(|f| f.is_active(daa)).then(|| PalwEconomicSafetyFoldV1 {
             target_time_per_block_ms: p.target_time_per_block(),
             permit_value_sompi: kaspa_consensus_core::palw_economic_safety_v1::PALW_T12_PERMIT_FEE_CEILING_SOMPI,
+            maturity_daa: p.palw_exec_quantum_maturity_v1(),
         }),
         escrow_carve: kaspa_consensus_core::config::params::palw_overlay_escrow_carve_at_v1(p.palw_overlay_carve, daa, daa),
         artifact_root_ownership_active: p.palw_artifact_root_ownership_at(daa),

@@ -39,9 +39,14 @@ fn the_folds_mint_puts_every_ticket_inside_the_span_its_schedule_is_judged_at() 
 
     let span_daa = lane.schedule_span_daa;
     let rounds_per_daa = palw_rounds_per_daa_v1(ttpb);
-    // rotate_round_lane reads `self.params.window_challenge()` — the UNSHORTENED window, not
-    // `window_challenge_at`, which on t12 returns the 120-DAA short window from DAA 0.
-    let maturity_daa = palw_exec_quantum_maturity_daa_v1(bundle.state.window_challenge(), bundle.state.window_court());
+    // rotate_round_lane read `self.params.window_challenge()` — the UNSHORTENED window, not
+    // `window_challenge_at`, which on t12 returns the 120-DAA short window from DAA 0. Since the
+    // user's decision of 2026-09-25 it reads the maturity the network states
+    // (`PalwEconomicSafetyFoldV1::maturity_daa` <- `Params::palw_exec_quantum_maturity_v1`): that
+    // same 120. The unshortened figure is the `None` rule.
+    assert_eq!(palw_exec_quantum_maturity_daa_v1(bundle.state.window_challenge(), bundle.state.window_court()), 1_200);
+    let maturity_daa = params.palw_exec_quantum_maturity_v1();
+    assert_eq!(maturity_daa, bundle.state.window_challenge_at(0), "the challenge window testnet-12 applies");
     let maturity_rounds = maturity_daa.saturating_mul(rounds_per_daa);
 
     println!("\n=== t12 lane geometry ===");
