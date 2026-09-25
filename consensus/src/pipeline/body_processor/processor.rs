@@ -218,7 +218,24 @@ impl BlockBodyProcessor {
                 // transactions that fits the merkle root.
                 // PrunedBlock - PrunedBlock is an error that rejects a block body and
                 // not the block as a whole, so we shouldn't mark it as invalid.
-                if !matches!(e, RuleError::BadMerkleRoot(_, _) | RuleError::MissingParents(_) | RuleError::PrunedBlock) {
+                // Bridge audit BR-1 (node-only) — the EVM payload twins of BadMerkleRoot: a
+                // payload that misses the header's commitment (a v2 hash mismatch; any payload,
+                // or non-zero hash-invisible EVM header fields, on a pre-v2 block) says nothing
+                // about the block id, which does not commit to those bytes. Whoever relays the
+                // body first chooses them, so persisting StatusInvalid here let one peer condemn a
+                // valid block and every descendant, permanently. The body is refused (the flow
+                // blames the peer) and the header stays re-fetchable. A payload the id DOES commit
+                // to is still judged in full and poisons as before (EvmPayloadTooLarge — checked
+                // after the hash —, TooManyEvmSystemOps, EvmPayloadTxInadmissible).
+                if !matches!(
+                    e,
+                    RuleError::BadMerkleRoot(_, _)
+                        | RuleError::MissingParents(_)
+                        | RuleError::PrunedBlock
+                        | RuleError::EvmPayloadHashMismatch
+                        | RuleError::NonEmptyEvmPayloadBeforeActivation
+                        | RuleError::NonZeroEvmHeaderFieldsBeforeActivation
+                ) {
                     self.statuses_store.write().set(block.hash(), BlockStatus::StatusInvalid).unwrap();
                 }
                 return Err(e);

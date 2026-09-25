@@ -727,6 +727,23 @@ pub fn payload_hash_of_bytes(bytes: &[u8]) -> Hash64 {
     blake2b_512_keyed(MISAKA_EVM_PAYLOAD_HASH_CONTEXT, bytes)
 }
 
+/// **Bridge audit BR-1 (2026-09-25; node-only): is a delivered EVM payload the one the block id
+/// commits to?** The block id is the header hash. A v2+ header commits to its payload only through
+/// `evm_payload_hash`; a pre-v2 header commits to "no payload", and its two EVM header fields are
+/// outside its hash preimage, so they must be zero (`NonZeroEvmHeaderFieldsBeforeActivation`).
+///
+/// A body that fails this is a bad DELIVERY of the block, not a verdict on the block id: whoever
+/// relays a body first chooses these bytes. P2P relay, IBD body download and RPC `submitBlock`
+/// refuse such a delivery before consensus (the peer is blamed), and the body processor never
+/// persists `StatusInvalid` for the matching rule errors. It is exactly the check
+/// `check_evm_payload` runs first, so it accepts every body consensus accepts.
+pub fn evm_payload_matches_header(header: &crate::header::Header, payload: &EvmExecutionPayload) -> bool {
+    if header.version < crate::constants::EVM_HEADER_VERSION {
+        return payload.is_empty() && header.evm_payload_hash == Hash64::default() && header.evm_commitment_root == Hash64::default();
+    }
+    header.evm_payload_hash == payload.payload_hash()
+}
+
 impl MemSizeEstimator for EvmExecutionPayload {
     fn estimate_mem_bytes(&self) -> usize {
         size_of::<Self>()
@@ -1560,6 +1577,34 @@ mod adr0139_gas_cap_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bridge audit BR-1: the ingress predicate accepts exactly the payload the block id commits
+    /// to — the empty payload with zero (hash-invisible) EVM fields on a pre-v2 header, the hashed
+    /// payload on v2 — and the block id itself never moves with the payload.
+    #[test]
+    fn br1_evm_payload_matches_header_is_the_id_commitment() {
+        let v1 = crate::header::Header::from_precomputed_hash(Hash64::from_u64_word(1), vec![]);
+        assert!(v1.version < crate::constants::EVM_HEADER_VERSION);
+        let empty = EvmExecutionPayload::default();
+        let foreign = EvmExecutionPayload { extra_data: vec![1], ..Default::default() };
+        assert!(evm_payload_matches_header(&v1, &empty));
+        assert!(!evm_payload_matches_header(&v1, &foreign), "v1: any payload is a delivery fault");
+        let mut v1_fields = v1.clone();
+        v1_fields.evm_commitment_root = Hash64::from_bytes([3; 64]);
+        assert!(!evm_payload_matches_header(&v1_fields, &empty), "v1: hash-invisible EVM fields must be zero");
+        let mut v1_fields = v1.clone();
+        v1_fields.evm_payload_hash = empty.payload_hash();
+        assert!(!evm_payload_matches_header(&v1_fields, &empty), "v1: even the empty payload's hash is a stray field");
+
+        let mut v2 = v1.clone();
+        v2.version = crate::constants::EVM_HEADER_VERSION;
+        let v2 = v2.with_evm_payload_hash(foreign.payload_hash());
+        assert!(evm_payload_matches_header(&v2, &foreign));
+        assert!(!evm_payload_matches_header(&v2, &empty), "v2: a payload that misses the hash is a delivery fault");
+        let v2_empty = v2.clone().with_evm_payload_hash(empty.payload_hash());
+        assert!(evm_payload_matches_header(&v2_empty, &empty));
+        assert_ne!(v2.hash, v2_empty.hash, "v2: the payload hash is in the id, so the id names one payload");
+    }
 
     /// PREA P0-1: the F003 ML-DSA-87 signing contexts must be domain-separated from
     /// the UTXO address-payload key and every other ML-DSA-87 context, or a
