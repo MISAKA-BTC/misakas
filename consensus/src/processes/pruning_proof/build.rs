@@ -600,8 +600,6 @@ impl PruningProofManager {
             self.palw_heartbeat_transparent,
             // ADR-0125: and the round lane's rule.
             self.palw_round_lane,
-            // lane: rcore/hf-pptake: the attempt-lane proof-weight rule, building as validating.
-            self.palw_attempt_proof_weight,
         );
 
         // No need to initialize origin since we have a single root

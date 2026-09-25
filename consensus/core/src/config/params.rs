@@ -1142,41 +1142,6 @@ pub struct Params {
     /// coordinate.
     pub palw_frontier_provenance: Option<ForkActivation>,
 
-    // ─── lane: rcore/hf-pptake — attempt headers weigh ε toward the pruning proof ───
-    /// **A pruning-point takeover via unbonded attempt headers: past this fence an attempt-lane
-    /// header contributes only heartbeat-level ε toward the PRUNING PROOF, not the 2²⁰ chain-weight
-    /// constant.** `None` on every shipped preset — dormant on testnet-12, armed only in this
-    /// lane's tests.
-    ///
-    /// [`crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2`] is 2²⁰, and `palw_lane_blue_work_v1` (the
-    /// one weight function live GHOSTDAG and the pruning-proof managers share) returns it for EVERY
-    /// attempt header — a pure function of the header, blind to the class-ticket lottery and the
-    /// bond, which are chain state. On testnet-12 an attempt header is free to author (the attempt
-    /// lane's Layer-0 target is the ambient maximum `PALW_V2_ATTEMPT_BITS`, its tag arm consumes
-    /// `Expand(commitment_root)` rather than an inference, and the single lottery admits the digest
-    /// unconditionally — one ML-DSA-87 signature and nothing else). Live fork choice re-derives the
-    /// lottery and the bond in the virtual processor and marks a losing attempt
-    /// `StatusDisqualifiedFromChain`, so it never becomes a sink; the PRUNING-PROOF path
-    /// (`ProofContext::from_proof`, `compare_proofs_inner`) runs no such gate and weighs a level
-    /// chain by exactly this figure. So a headers-only fork of free losing/unbonded attempts, each
-    /// carrying 2²⁰, out-weighs the honest hash-priced heartbeat backbone (ε, 2²⁴ hashes each) a
-    /// million-to-one and a bootstrapping node choosing by proof blue work adopts the attacker's
-    /// pruning point.
-    ///
-    /// Past the fence the attempt lane weighs ε in the pruning-proof managers alone
-    /// (`GhostdagManager::with_level`, whose only callers are the proof's build and validate) — the
-    /// receipt lane's "a re-rollable digest buys no chain position in the proof" doctrine, one
-    /// lane over. Live GHOSTDAG (`GhostdagManager::new`) is handed `None` and is byte-identical
-    /// below and above the fence, so `header.blue_work`, the sink search and every live comparison
-    /// do not move. It **composes** with the fork-choice lane's `palw_reorg_strict_economic_win`
-    /// (live deep reorgs decided on economics, not a hash tie) and the HB-transparency fence
-    /// (`palw_heartbeat_transparent`), and — because it repriced the sampled level chains but not
-    /// the proof headers' self-declared `blue_work` (the pruning-period term) — its armed rollout
-    /// is coordinated: see this field's note in `docs`/the handoff for the arming prerequisite. **A
-    /// bare fence with no companion value**, the [`Self::palw_frontier_provenance`] rule for its
-    /// reason.
-    pub palw_attempt_proof_weight: Option<ForkActivation>,
-
     /// **ADR-0066 Decision 1 — the heartbeat lane.** `None` on every shipped preset.
     ///
     /// Replaces `palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED`, a `const bool` that changed block
@@ -4971,13 +4936,6 @@ impl Params {
         if self.palw_frontier_provenance == Some(ForkActivation::never()) {
             self.palw_frontier_provenance = None;
         }
-        // lane: rcore/hf-pptake, a bare fence: same collapse, same reason. Without this a scheduled
-        // `never()` writes "palw_attempt_proof_weight" + u64::MAX into consensus_params_id while a
-        // build that never armed it writes nothing, and the two identities split — the Some-only
-        // fingerprint below is only safe with this collapse.
-        if self.palw_attempt_proof_weight == Some(ForkActivation::never()) {
-            self.palw_attempt_proof_weight = None;
-        }
         // ADR-0066 Decisions 1 and 4. Both carry a value beside the fence, so both take the whole
         // option — the D1 rule, for the D1 reason. The value does not vanish: ADR-0066 SA-4 folds
         // it into [`Self::consensus_schedule_id`], which is reported and not gated, so the
@@ -6857,7 +6815,6 @@ impl Params {
             palw_unavailable_abstains,
             palw_bond_maturity,
             palw_frontier_provenance,
-            palw_attempt_proof_weight,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -6968,8 +6925,6 @@ impl Params {
             ("palw_unavailable_abstains", *palw_unavailable_abstains),
             ("palw_bond_maturity", palw_bond_maturity.map(|f| f.activation)),
             ("palw_frontier_provenance", *palw_frontier_provenance),
-            // lane: rcore/hf-pptake — feeds fork_id_gate_fences_v1 automatically.
-            ("palw_attempt_proof_weight", *palw_attempt_proof_weight),
             ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
             ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
             ("palw_attempt_activation", *palw_attempt_activation),
@@ -7563,7 +7518,6 @@ impl Params {
             palw_unavailable_abstains,
             palw_bond_maturity,
             palw_frontier_provenance,
-            palw_attempt_proof_weight,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -7739,14 +7693,6 @@ impl Params {
         }
         // ADR-0065 D2. A pure fence with no payload, so visiting it is safe.
         match palw_frontier_provenance.as_mut() {
-            Some(activation) => fork(activation, visit),
-            None => {
-                absent = u64::MAX;
-                visit(&mut absent);
-            }
-        }
-        // lane: rcore/hf-pptake. A bare fence with no payload, same as D2 above.
-        match palw_attempt_proof_weight.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -8499,7 +8445,6 @@ impl Params {
             palw_unavailable_abstains,
             palw_bond_maturity,
             palw_frontier_provenance,
-            palw_attempt_proof_weight,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -8727,12 +8672,6 @@ impl Params {
         // ADR-0065 D2, Some-only like its siblings.
         if let Some(activation) = palw_frontier_provenance {
             h.write(b"palw_frontier_provenance");
-            h.write(activation.daa_score().to_le_bytes());
-        }
-        // lane: rcore/hf-pptake. Some-only, so a build that never arms it writes nothing and the
-        // normalize collapse above keeps a scheduled `never()` from writing either.
-        if let Some(activation) = palw_attempt_proof_weight {
-            h.write(b"palw_attempt_proof_weight");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0071 SA-1..SA-4, Some-only for the ADR-0065 D4 reason: an unset fence writes
@@ -9619,7 +9558,6 @@ impl Params {
             palw_unavailable_abstains: self.palw_unavailable_abstains,
             palw_bond_maturity: self.palw_bond_maturity,
             palw_frontier_provenance: self.palw_frontier_provenance,
-            palw_attempt_proof_weight: self.palw_attempt_proof_weight, // lane: rcore/hf-pptake
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_attempt_activation: self.palw_attempt_activation,
@@ -10661,7 +10599,6 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
-    palw_attempt_proof_weight: None, // lane: rcore/hf-pptake
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -10887,7 +10824,6 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
-    palw_attempt_proof_weight: None, // lane: rcore/hf-pptake
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -11095,7 +11031,6 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
-    palw_attempt_proof_weight: None, // lane: rcore/hf-pptake
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -17448,7 +17383,6 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
-    palw_attempt_proof_weight: None, // lane: rcore/hf-pptake
     // **ADR-0068 Phase 1, armed on the drill network and nowhere else.** Devnet is the network
     // these fences exist to be drilled on: the heartbeat lane (fixed 2^24-hash price, width-bounded
     // mergesets) and the attempt lane's constant blue work, both live from genesis. Every other

@@ -56,13 +56,7 @@ const T11_CONSENSUS_IDENTITY_ID: &str = "44cb8fd729e9575a6e3b1e72c466b8abce4b9ec
 ///
 /// This id is explicitly NOT a gate — it exists so a mismatch can be reported precisely — which is
 /// why a new dormant fence may move it and why re-pinning is the whole remedy.
-///
-/// **Re-pinned 2026-09-26 for rcore/hf-pptake's `palw_attempt_proof_weight`**, the same case: a new
-/// bare fence, `None` on every shipped preset, visited by `for_each_fence` through the `u64::MAX`
-/// sentinel — so this report id moves on every preset while `consensus_params_id` and
-/// `consensus_identity_id` (both asserted below and both UNCHANGED) do not. Dormant, not armed.
-/// Previous: `5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64`.
-const T11_CONSENSUS_SCHEDULE_ID: &str = "69c28e758bcd764101ac74d9f1c70a44d87a56147920da3f8749c2e3171e3c08";
+const T11_CONSENSUS_SCHEDULE_ID: &str = "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64";
 /// **Re-pinned 2026-09-25: mainnet's DNS set moved to testnet-12's numbers** (6 validators x 20M MSK,
 /// 120M MSK active stake, the 600-DAA coinbase long maturity; user decision). Previous: `badaa8e9…`.
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5";

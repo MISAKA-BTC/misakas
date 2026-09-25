@@ -69,17 +69,6 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
     /// a round block at most one, and — after GHOSTDAG — that every round parent's anchor lies on the
     /// block's selected chain.
     round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
-
-    /// **lane: rcore/hf-pptake — `Params::palw_attempt_proof_weight`, set ONLY by
-    /// [`Self::with_level`] (the pruning proof's build and validate).** Past it an attempt-lane
-    /// header weighs the heartbeat ε rather than the 2²⁰ chain-weight constant, so a headers-only
-    /// fork of free losing/unbonded attempts cannot out-weigh the hash-priced backbone in a pruning
-    /// proof. `None` in [`Self::new`] (live GHOSTDAG) always, so live fork choice and
-    /// `header.blue_work` are byte-identical below and above the fence; `None` on every shipped
-    /// preset, so the whole rule is dormant. A constructor parameter for the same reason as the two
-    /// fences above — no site that computes a proof's GHOSTDAG can forget it and weigh differently
-    /// from the site that built the proof it validates.
-    attempt_proof_weight: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 /// **ADR-0105's fence, with the one number its coloring rule needs beside it.**
@@ -162,10 +151,6 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             attempt_work_lane,
             heartbeat_transparent,
             round_lane,
-            // lane: rcore/hf-pptake — the pruning-proof attempt-weight rule is proof-only. Live
-            // GHOSTDAG never reprices the attempt lane, so `header.blue_work` and the sink search do
-            // not move when the fence is armed.
-            attempt_proof_weight: None,
         }
     }
 
@@ -190,10 +175,6 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         // ADR-0125: and the round lane's rule. Round blocks derive no level, so above level 0 it is
         // inert by construction as well.
         round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
-        // lane: rcore/hf-pptake: past it an attempt header weighs ε in the proof — build and
-        // validate must be handed the SAME fence or a syncing node would color a level's weight
-        // differently from the node that built the proof.
-        attempt_proof_weight: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         Self {
             genesis_hash,
@@ -207,7 +188,6 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             attempt_work_lane,
             heartbeat_transparent,
             round_lane,
-            attempt_proof_weight,
         }
     }
 
@@ -370,7 +350,6 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
                     self.heartbeat_lane,
                     self.attempt_work_lane,
                     self.level_work,
-                    self.attempt_proof_weight,
                 )
             })
             .sum();
@@ -597,17 +576,12 @@ enum ColoringState {
 /// **What one merged block adds to blue work** (ADR-0044 Decision 6, ADR-0060 Decision 1.2,
 /// ADR-0068 F2 / ADR-0066 Decision 3).
 ///
-/// A free function over the values the rule reads, so the rule is reachable by a test. It used
+/// A free function over the six values the rule reads, so the rule is reachable by a test. It used
 /// to live inside a closure inside `ghostdag`, where reaching it meant standing up four stores —
 /// and the defect it grew was a stale id list (`== POW_ALGO_ID_PALW_COMMITTED_V2`) that ADR-0072's
 /// fence walked straight past, silently re-pricing fork-choice weight at one height. `level_work`
 /// is `0` for ordinary GHOSTDAG and non-zero only under `GhostdagManager::with_level`, whose only
 /// callers are the pruning proof's build and validate.
-///
-/// **lane: rcore/hf-pptake — `attempt_proof_weight`** is `Some` only in the pruning-proof managers
-/// (it is `None` in `GhostdagManager::new`), and only when `Params::palw_attempt_proof_weight` is
-/// armed. Where it is active the attempt arm returns the heartbeat ε instead of the 2²⁰ constant,
-/// so a proof cannot be won by free losing/unbonded attempt headers.
 fn palw_lane_blue_work_v1(
     pow_algo_id: u8,
     bits: u32,
@@ -615,7 +589,6 @@ fn palw_lane_blue_work_v1(
     heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     level_work: BlueWorkType,
-    attempt_proof_weight: Option<kaspa_consensus_core::config::params::ForkActivation>,
 ) -> BlueWorkType {
     // **A receipt block's work is zero** (ADR-0044 Decision 6, extended).
     //
@@ -694,18 +667,6 @@ fn palw_lane_blue_work_v1(
     if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
         && attempt_work_lane.is_some_and(|fence| fence.is_active(daa_score))
     {
-        // **lane: rcore/hf-pptake — an attempt header's 2²⁰ is not honoured toward the pruning
-        // proof.** `attempt_proof_weight` is `Some` only in `GhostdagManager::with_level` (the
-        // proof's build and validate), never in live GHOSTDAG. The 2²⁰ constant is sound where the
-        // virtual processor re-derives the class lottery and the bond and disqualifies a losing
-        // attempt from the chain (`StatusDisqualifiedFromChain`); the proof runs no such gate, so a
-        // free losing/unbonded attempt header there is exactly the receipt lane's "a re-rollable
-        // digest that buys a chain position out of one signature" — and it is priced the same as a
-        // heartbeat, the ε the honest hash-priced backbone carries. `None` on every shipped preset,
-        // so this is byte-identical to the line below it until the fence is armed.
-        if attempt_proof_weight.is_some_and(|fence| fence.is_active(daa_score)) {
-            return BlueWorkType::from(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_BLUE_WORK_EPSILON);
-        }
         return BlueWorkType::from(1u64 << kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2);
     }
     calc_work(bits).max(level_work)
@@ -790,7 +751,7 @@ mod lane_weight_tests {
         for (lane, daa) in [(PalwAttemptLaneV1::LegacyArm, FENCE - 1), (PalwAttemptLaneV1::ExecutionArm, FENCE)] {
             let algo_id = lane.attempt_algo_id();
             assert_eq!(
-                palw_lane_blue_work_v1(algo_id, BITS, daa, None, attempt_work, BlueWorkType::from(0u64), None),
+                palw_lane_blue_work_v1(algo_id, BITS, daa, None, attempt_work, BlueWorkType::from(0u64)),
                 epsilon,
                 "{lane:?} carries algo-{algo_id} and an attempt block's weight is the constant at every height"
             );
@@ -799,36 +760,34 @@ mod lane_weight_tests {
         // The negative side: with the attempt-work fence unset, both ids price by bits — so the
         // test above is measuring the fence and not the id list.
         for lane in [PalwAttemptLaneV1::LegacyArm, PalwAttemptLaneV1::ExecutionArm] {
-            assert_eq!(palw_lane_blue_work_v1(lane.attempt_algo_id(), BITS, FENCE, None, None, BlueWorkType::from(0u64), None), hash_priced);
+            assert_eq!(palw_lane_blue_work_v1(lane.attempt_algo_id(), BITS, FENCE, None, None, BlueWorkType::from(0u64)), hash_priced);
         }
     }
 
-    /// **rcore/hf-pptake, the finding reproduced at the weight function: an attempt header carries
-    /// the full 2²⁰ blue-work constant whether or not it won a (bonded) lottery, at EVERY level —
-    /// including the pruning-proof levels (`level_work != 0`) — because the function is a pure
-    /// function of the HEADER, and the class-ticket lottery and the bond are chain state it never
-    /// sees.**
+    /// **rcore/hf-pptake — what an attempt header weighs toward the pruning proof, as shipped.**
     ///
-    /// This is the escalation of the fork-choice lane's verdict 1 (a losing attempt still earns
-    /// 2²⁰) into the pruning proof. `palw_lane_blue_work_v1` is the ONE weight function both live
-    /// GHOSTDAG (`GhostdagManager::new`, `level_work == 0`) and the pruning-proof managers
-    /// (`GhostdagManager::with_level`, `level_work != 0`) call. The live path re-derives the
-    /// lottery/bond in the virtual processor and marks a losing attempt `StatusDisqualifiedFromChain`,
-    /// so it never becomes a sink; the pruning-proof path (`ProofContext::from_proof`,
-    /// `compare_proofs_inner`) runs no such gate — it weighs a level chain by exactly this figure.
-    /// So a fork of unbonded / losing attempt headers, each free to author on testnet-12 (the
-    /// attempt lane's Layer-0 target is `PALW_V2_ATTEMPT_BITS`, the ambient maximum, the tag arm
-    /// consumes `Expand(commitment_root)` rather than an inference, and the single lottery admits
-    /// the digest unconditionally — one ML-DSA-87 signature per header and nothing else), carries
-    /// 2²⁰ per block toward the pruning point, a million times a heartbeat's hash-priced ε.
+    /// `palw_lane_blue_work_v1` is a pure function of the header: the class-ticket lottery and the
+    /// bond are chain state it never sees, so a lottery winner and a free, unbonded attempt header
+    /// (one ML-DSA-87 signature on testnet-12) both weigh the 2²⁰ constant — live and at every proof
+    /// level — while a heartbeat weighs ε.
+    ///
+    /// **Why this lane does NOT reprice it inside the proof** (the withdrawn `palw_attempt_proof_weight`
+    /// fence did, keyed on each proof header's own peer-declared `daa_score`): the proof comparison
+    /// adds each side's pruning-period span, `relay.blue_work - pp.blue_work`, which the header sync
+    /// that follows the proof verifies with LIVE GHOSTDAG — where a free attempt weighs 2²⁰ — and an
+    /// attacker's pruning point must sit a full pruning depth below its sink anyway, so its free
+    /// attempts simply land after its pruning point. Repricing the level chains moves no decision;
+    /// it only breaks the one exact check the proof can make: at level 0 `level_work` is `0`, so a
+    /// level-0 proof rooted at genesis recomputes every header's `blue_work` with the same weights
+    /// the header pipeline used, and `ProofContext::from_proof` now holds the declared figures to
+    /// that recomputation (see `pruning_proof::validate`).
     #[test]
     fn pptake_a_losing_or_unbonded_attempt_header_carries_2_20_toward_the_pruning_proof() {
         use super::palw_lane_blue_work_v1;
-        use kaspa_consensus_core::palw_heartbeat_v1::{HEARTBEAT_BLUE_WORK_EPSILON, PALW_HEARTBEAT_ALGO_ID};
+        use kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
         use kaspa_consensus_core::pow_layer0::{PALW_V2_ATTEMPT_BITS, PalwAttemptLaneV1};
 
-        // testnet-12 as shipped arms both lanes at genesis (`palw_t12_arm_every_rule_from_genesis`),
-        // so the arms below are the rules a live node runs, read off the shipped constructor.
+        // testnet-12 as shipped arms both lanes at genesis, so these are the rules a live node runs.
         let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
         let attempt_work = t12.palw_attempt_work.map(|w| w.activation);
         let heartbeat = t12.palw_heartbeat.map(|h| h.activation);
@@ -838,88 +797,25 @@ mod lane_weight_tests {
         let attempt_id = PalwAttemptLaneV1::ExecutionArm.attempt_algo_id();
         let epsilon = BlueWorkType::from(HEARTBEAT_BLUE_WORK_EPSILON);
         let two_20 = BlueWorkType::from(1u64 << PALW_ATTEMPT_BLUE_WORK_LOG2);
-
-        // The bits an attacker's free header carries: the ambient V2 maximum, so the Layer-0
-        // comparison is trivially satisfied and no hashing gates the header.
         let bits = PALW_V2_ATTEMPT_BITS;
 
-        // At the live level (`level_work == 0`) and at EVERY proof level — `level_work` climbs
-        // exponentially in the leading zeros — the attempt arm returns the same 2²⁰. There is no
-        // input to this function that could carry the lottery outcome or the bond, so a lottery
-        // WINNER and a lottery LOSER, a bonded card and an unregistered key, are byte-identical here.
-        // The last argument is `None`: the attempt-proof-weight fence is dormant on testnet-12 as
-        // shipped, which is what makes the finding live today.
-        let dormant = t12.palw_attempt_proof_weight;
-        assert!(dormant.is_none(), "testnet-12 ships the attempt-proof-weight fence dormant, so the finding is live");
-        let max_level: u8 = 225;
+        // Live (`level_work == 0`) and at every proof level: the same 2²⁰, whatever DAA the header
+        // declares — no input here could carry the lottery outcome or the bond.
         for level in [0u8, 1, 8, 20, 64] {
-            let lw = level_work(level, max_level);
-            assert_eq!(
-                palw_lane_blue_work_v1(attempt_id, bits, 5_000, heartbeat, attempt_work, lw, dormant),
-                two_20,
-                "an attempt header weighs 2^20 at proof level {level} — lottery/bond invisible here"
-            );
+            for daa in [0u64, 499, 500, 5_000] {
+                assert_eq!(
+                    palw_lane_blue_work_v1(attempt_id, bits, daa, heartbeat, attempt_work, level_work(level, 225)),
+                    two_20,
+                    "an attempt header weighs 2^20 at proof level {level}, declared DAA {daa}"
+                );
+            }
         }
+        // Level 0 of the proof is priced exactly as live GHOSTDAG prices the chain — the property the
+        // proof's declared-work check stands on.
+        assert_eq!(level_work(0, 225), BlueWorkType::from(0u64), "level 0 of the proof carries no level shift");
 
-        // The comparison the takeover exploits: one free, lottery-losing attempt header outweighs a
-        // heartbeat — the only hash-priced liveness block on a V2 network, 2^24 hashes each — by 2^20.
-        let hb = palw_lane_blue_work_v1(PALW_HEARTBEAT_ALGO_ID, bits, 5_000, heartbeat, attempt_work, BlueWorkType::from(0u64), None);
+        let hb = palw_lane_blue_work_v1(PALW_HEARTBEAT_ALGO_ID, bits, 5_000, heartbeat, attempt_work, BlueWorkType::from(0u64));
         assert_eq!(hb, epsilon, "a heartbeat weighs ε = 1");
-        assert_eq!(two_20 / hb, BlueWorkType::from(1u64 << PALW_ATTEMPT_BLUE_WORK_LOG2), "the free attempt outweighs the costly heartbeat 2^20:1 in the proof");
-    }
-
-    /// **rcore/hf-pptake, the fix: armed, `palw_attempt_proof_weight` reprices the attempt lane to
-    /// the heartbeat ε in the pruning-proof managers, and touches nothing live.**
-    ///
-    /// The fence is a constructor parameter (`None` in [`GhostdagManager::new`], threaded from
-    /// params through [`GhostdagManager::with_level`]), so the change is confined to the proof by
-    /// construction. Here it is measured on the weight function directly: with the fence armed the
-    /// attempt arm returns ε, with it `None` (the live managers, and every dormant preset) it
-    /// returns the 2²⁰ constant unchanged. A heartbeat, a receipt and a bits-priced hash block are
-    /// unaffected either way — the fence names the attempt lane alone.
-    #[test]
-    fn pptake_fix_the_fence_reprices_attempts_to_epsilon_in_the_proof_and_nothing_else() {
-        use super::palw_lane_blue_work_v1;
-        use kaspa_consensus_core::config::params::ForkActivation;
-        use kaspa_consensus_core::palw_heartbeat_v1::{HEARTBEAT_BLUE_WORK_EPSILON, PALW_HEARTBEAT_ALGO_ID};
-        use kaspa_consensus_core::pow_layer0::{PALW_V2_ATTEMPT_BITS, PalwAttemptLaneV1, POW_ALGO_ID_PALW_RECEIPT_V3};
-
-        let armed = Some(ForkActivation::new(500));
-        let attempt_work = Some(ForkActivation::always());
-        let heartbeat = Some(ForkActivation::always());
-        let epsilon = BlueWorkType::from(HEARTBEAT_BLUE_WORK_EPSILON);
-        let two_20 = BlueWorkType::from(1u64 << PALW_ATTEMPT_BLUE_WORK_LOG2);
-        let attempt_id = PalwAttemptLaneV1::ExecutionArm.attempt_algo_id();
-
-        // Below the fence height an attempt still weighs the full constant (dormant history is
-        // untouched); at and above it, ε.
-        assert_eq!(
-            palw_lane_blue_work_v1(attempt_id, PALW_V2_ATTEMPT_BITS, 499, heartbeat, attempt_work, BlueWorkType::from(0u64), armed),
-            two_20,
-            "below the fence the attempt lane is unchanged"
-        );
-        assert_eq!(
-            palw_lane_blue_work_v1(attempt_id, PALW_V2_ATTEMPT_BITS, 500, heartbeat, attempt_work, BlueWorkType::from(0u64), armed),
-            epsilon,
-            "at the fence a proof attempt header weighs ε — a free losing attempt can no longer out-weigh the hash-priced backbone"
-        );
-        // The live managers pass `None` here: the same call is the 2²⁰ constant regardless of DAA.
-        assert_eq!(
-            palw_lane_blue_work_v1(attempt_id, PALW_V2_ATTEMPT_BITS, 5_000, heartbeat, attempt_work, BlueWorkType::from(0u64), None),
-            two_20,
-            "live GHOSTDAG (fence None) is byte-identical: header.blue_work and the sink search do not move"
-        );
-
-        // Every other lane is untouched at and above the fence: the fence names the attempt lane.
-        assert_eq!(
-            palw_lane_blue_work_v1(PALW_HEARTBEAT_ALGO_ID, PALW_V2_ATTEMPT_BITS, 500, heartbeat, attempt_work, BlueWorkType::from(0u64), armed),
-            epsilon,
-            "a heartbeat is still ε"
-        );
-        assert_eq!(
-            palw_lane_blue_work_v1(POW_ALGO_ID_PALW_RECEIPT_V3, PALW_V2_ATTEMPT_BITS, 500, heartbeat, attempt_work, BlueWorkType::from(0u64), armed),
-            BlueWorkType::from(0u64),
-            "a receipt still buys no chain position"
-        );
+        assert_eq!(two_20 / hb, two_20, "a free attempt header outweighs a heartbeat 2^20:1, live and in the proof alike");
     }
 }

@@ -249,9 +249,6 @@ impl ConsensusServices {
             // ADR-0132 S (H-1 of the 2026-09-18 audit): a proof's post-fence attempt headers carry
             // no Layer-0 work, so the proof's PoW check reads the same fence the pipeline does.
             params.palw_single_lottery,
-            // lane: rcore/hf-pptake: past it a proof's attempt headers weigh ε, not 2^20 — dormant
-            // on every shipped preset, so this is byte-identical to not having the field until armed.
-            params.palw_attempt_proof_weight,
             is_consensus_exiting,
         ));
 

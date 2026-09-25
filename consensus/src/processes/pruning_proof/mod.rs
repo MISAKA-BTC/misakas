@@ -158,12 +158,6 @@ pub struct PruningProofManager {
     /// checked with the same rule the header pipeline uses — checking them with the fence off made a
     /// proof fail its own PoW and no new node could join by a pruned sync.
     palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// **lane: rcore/hf-pptake — `Params::palw_attempt_proof_weight`.** Past it a proof's
-    /// attempt-lane headers weigh the heartbeat ε rather than the 2²⁰ chain-weight constant, so a
-    /// pruning proof cannot be won by free losing/unbonded attempt headers. Threaded to every
-    /// proof-level GHOSTDAG (build and validate alike) so the two color a level's weight
-    /// identically. `None` on every shipped preset (dormant) and never read by live GHOSTDAG.
-    palw_attempt_proof_weight: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -197,7 +191,6 @@ impl PruningProofManager {
         palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
         palw_round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
-        palw_attempt_proof_weight: Option<kaspa_consensus_core::config::params::ForkActivation>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -245,7 +238,6 @@ impl PruningProofManager {
             palw_heartbeat_transparent,
             palw_round_lane,
             palw_single_lottery,
-            palw_attempt_proof_weight,
 
             is_consensus_exiting,
         }
