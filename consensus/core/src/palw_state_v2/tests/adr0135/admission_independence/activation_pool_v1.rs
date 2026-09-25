@@ -65,12 +65,18 @@ impl ToAudit {
 /// sompi topped up at 111, every one of `holders` proving possession two spans before the audit,
 /// and a floor attempt in the span before it — the jury's anchor.
 fn to_audit(funded: u64, holders: &[u64]) -> ToAudit {
+    to_audit_among(funded, holders, &[])
+}
+
+/// [`to_audit`] on a network that also holds `crowd` (bonds registered beside the contested network).
+fn to_audit_among(funded: u64, holders: &[u64], crowd: &[PalwConsensusObjectV2]) -> ToAudit {
     let (operands, root) = inventory();
     let f = fold(kimi_work());
     let period = crate::palw_model_registry_v1::palw_admission_audit_period_spans_v2(params().epoch_length, SPAN, None);
     let audit = (15u64..).find(|span| palw_admission_audit_due_staggered_v1(&kimi_id(), *span, period)).unwrap();
-    let s1 =
-        step_checked(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &contested_network(root, false), None, &pooled(None)).unwrap();
+    let mut network = contested_network(root, false);
+    network.extend_from_slice(crowd);
+    let s1 = step_checked(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &network, None, &pooled(None)).unwrap();
     let opened = s1.activation_pool(&kimi_id()).cloned().expect("a bought class's pool opens with its registration");
     assert_eq!(opened, PalwActivationPoolV1::opened_at(100), "empty, its ramp from the registration");
     let s2 = step_checked(&s1, &ctx(2, 110, 2), &[], None, &pooled(Some(f.clone()))).unwrap();
@@ -84,8 +90,8 @@ fn to_audit(funded: u64, holders: &[u64]) -> ToAudit {
     ToAudit { before, audit, next: 6 }
 }
 
-/// The jury Kimi's audit draws, recomputed from outside the fold (ADR-0147's population rule), as
-/// bond numbers in draw order.
+/// The jury Kimi's audit draws, recomputed from outside the fold (ADR-0147's population rule, at the
+/// PANEL floor past the pool's fence — P2), as bond numbers in draw order.
 fn drawn(t: &ToAudit) -> Vec<u64> {
     // Past the pool's fence the jury's seed leaves the anchor's block hash out (the fix round's F2).
     use crate::palw_model_registry_v1::palw_admission_jury_seed_v2;
@@ -97,7 +103,7 @@ fn drawn(t: &ToAudit) -> Vec<u64> {
         .bonds_iter()
         .filter(|(key, bond)| {
             matches!(bond.status, PalwBondStatusV2::Active)
-                && bond.collateral >= 100
+                && bond.collateral >= 1_000
                 && bond.capable_classes.contains(&h64(1))
                 && bond.registered_daa < cutoff
                 && **key != bond_key(9)
@@ -256,17 +262,22 @@ fn a_prepared_juror_is_paid_when_the_quorum_fails() {
 }
 
 /// **(a) pays capacity that can serve, proven before the seed existed** (the review's C3/A2-i and M6,
-/// and the review's P2 / the fix round's F4): a ready juror below the panel floor is not paid, and
-/// neither is one whose proof NAMES `S − 2` — as the landing window lets it — but LANDED in `S − 1`,
-/// after the anchor that seeds the audit (a block of the span before, here the seeding block). Both
-/// still count toward the jury's verdict, which is readiness and not pay.
+/// and the review's P2 / the fix round's F4): a ready bond below the panel floor is not paid — past
+/// the pool's P2 it is not even drawn, and the jury is the next operator's — and neither is a juror
+/// whose proof NAMES `S − 2` — as the landing window lets it — but LANDED in `S − 1`, after the anchor
+/// that seeds the audit (a block of the span before, here the seeding block). The late juror still
+/// counts toward the jury's verdict, which is readiness and not pay.
 #[test]
 fn a_juror_below_the_panel_floor_or_whose_proof_landed_after_s_minus_2_is_not_paid() {
     let all: Vec<u64> = SYBILS.chain(HONEST).collect();
     let mut t = to_audit(1_000 * MSK, &all);
+    let first = drawn(&t);
+    // First juror: ready, but 600 sompi — above the readiness bar (3 × 100), below the panel floor
+    // (1,000). Past P2 the audit's population leaves it out, and the draw moves to the next operator.
+    t.before.bonds.get_mut(&bond_key(first[0])).unwrap().collateral = 600;
     let jury = drawn(&t);
-    // Juror 0: ready, but 600 sompi — above the readiness bar (3 × 100), below the panel floor (1,000).
-    t.before.bonds.get_mut(&bond_key(jury[0])).unwrap().collateral = 600;
+    assert!(!jury.contains(&first[0]), "below the panel floor: not in the jury's population (P2)");
+    assert_eq!(&jury[..4], &first[1..], "the rest of the draw keeps its order; the sixth operator joins");
     // Juror 1: a fresh proof naming S − 2, landed in a block of S − 1 AFTER the seeding block.
     let (operands, _) = inventory();
     let late = proof(&operands, bond_key(jury[1]), t.audit - 2);
@@ -288,20 +299,97 @@ fn a_juror_below_the_panel_floor_or_whose_proof_landed_after_s_minus_2_is_not_pa
         Some(PalwModelLifecycleV1::Prefetching),
         "all five ready: seated"
     );
-    assert_eq!(payout_of(&audit, jury[0]), None, "below the panel floor: no panel can draw it");
+    assert_eq!(payout_of(&audit, first[0]), None, "below the panel floor: no panel can draw it, and no jury does");
     assert_eq!(payout_of(&audit, jury[1]), None, "landed after S − 2: built with the seed in hand, whatever span it names");
     assert!(
         audit.activation_readiness_landed(&kimi_id(), &bond_key(jury[2])).is_none(),
         "seated: the class's landing records leave with its Candidate state"
     );
     let pool = audit.activation_pool(&kimi_id()).cloned().unwrap();
-    assert_eq!(pool.prep_paid.len(), 3, "the other three, whatever the verdict");
+    assert_eq!(pool.prep_paid.len(), 4, "the other four, whatever the verdict");
     assert!(pool.prep_paid.iter().all(|op| *op != op_id(29)), "never the registrant's operator (the population excludes it)");
     // Seated: the class is past Candidate, so (a) has no payee left and prep is bonus now.
     let a = palw_activation_prep_cap_v1(&terms(), t.audit * SPAN - 100);
     assert_eq!(pool.prep_sompi, 0, "prep moves to bonus at seating");
-    assert_eq!(pool.bonus_sompi, 1_000 * MSK - 3 * a);
+    assert_eq!(pool.bonus_sompi, 1_000 * MSK - 4 * a);
     assert!(pool.is_balanced());
+}
+
+/// A bond that serves the floor at `collateral` sompi: at or above the network floor (100) and, for
+/// the crowd below, under the panel floor (1,000) — it can never be ready for Kimi.
+fn floor_bond(n: u64, collateral: u64) -> PalwConsensusObjectV2 {
+    match bond(n, collateral) {
+        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature, .. } => {
+            PalwConsensusObjectV2::BondRegistered {
+                bond,
+                pubkey,
+                operator_pubkey,
+                collateral,
+                payout_payload,
+                capable_classes: [h64(1)].into_iter().collect(),
+                signature,
+            }
+        }
+        _ => unreachable!("`bond` builds a BondRegistered"),
+    }
+}
+
+/// **P2 (user decision 2026-09-25): past the pool's fence the admission jury is drawn from bonds at
+/// the panel floor.** A crowd of 150 floor bonds — serving the floor, at five network floors, under
+/// the panel floor and so never ready — joins the contested network. Past the fence Kimi's jury is
+/// five of the twenty-seven panel-floor operators, every one of them ready, and it seats. The
+/// fence-off twin — ADR-0147 alone, the same network and the same readiness, walked to its own audit
+/// at span 100 — still draws from the network floor, as it always did: the crowd fills its jury and
+/// the class stays a Candidate.
+#[test]
+fn p2_past_the_pool_fence_the_jury_is_drawn_at_the_panel_floor_and_a_floor_crowd_cannot_block_it() {
+    let crowd: Vec<PalwConsensusObjectV2> = (40..=189u64).map(|n| floor_bond(n, 500)).collect();
+    let all: Vec<u64> = SYBILS.chain(HONEST).collect();
+    let f = fold(kimi_work());
+
+    // Past the fence: seated by a jury of panel-floor operators.
+    let t = to_audit_among(0, &all, &crowd);
+    assert_eq!(t.before.bonds_iter().filter(|(_, bond)| bond.collateral == 500).count(), 150, "the crowd is registered");
+    let jury = drawn(&t);
+    assert_eq!(jury.len(), 5);
+    assert!(jury.iter().all(|n| all.contains(n)), "no floor bond is drawn: {jury:?}");
+    let seated = step_checked(&t.before, &t.ctx_at(t.audit), &[], None, &pooled(Some(f.clone()))).unwrap();
+    assert_eq!(
+        seated.model_lifecycle(&kimi_id()).map(|row| row.state),
+        Some(PalwModelLifecycleV1::Prefetching),
+        "five ready jurors: seated, whatever the crowd"
+    );
+
+    // The fence-off twin: ADR-0147's own walk (`to_first_audit`'s blocks) on the same network.
+    let p = params();
+    let (operands, root) = inventory();
+    let mut network = contested_network(root, false);
+    network.extend(crowd.iter().cloned());
+    let (s1, _) = fold_step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network, None, &armed(None)).unwrap();
+    let proofs: Vec<PalwConsensusObjectV2> = all.iter().map(|n| proof(&operands, bond_key(*n), 98)).collect();
+    let (s2, _) = fold_step(&s1, &p, &ctx(2, 985, 2), &proofs, None, &armed(Some(f.clone()))).unwrap();
+    let s3 = seeding_attempt(&s2, &ctx(3, 995, 3), &armed(Some(f.clone())));
+    let anchor = s3.round_seed_anchor().expect("span 99 recorded a seed anchor");
+    let seed = crate::palw_model_registry_v1::palw_admission_jury_seed_v1(&kimi_id(), 100, &anchor.block, &anchor.execution_key);
+    let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = s3
+        .bonds_iter()
+        .filter(|(key, bond)| {
+            matches!(bond.status, PalwBondStatusV2::Active)
+                && bond.collateral >= 100
+                && bond.capable_classes.contains(&h64(1))
+                && bond.registered_daa < 990
+                && **key != bond_key(9)
+        })
+        .collect();
+    let old_jury = crate::palw_panel_v2::palw_admission_jury_v1(&seed, &population, 5);
+    let from_the_crowd = old_jury.iter().filter(|op| (40..=189u64).any(|n| op_id(20 + n) == **op)).count();
+    assert!(from_the_crowd >= 3, "below the fence the network floor's crowd fills the jury: {from_the_crowd} of 5");
+    let (s4, _) = fold_step(&s3, &p, &ctx(4, 1_000, 4), &[], None, &armed(Some(f))).unwrap();
+    assert_eq!(
+        s4.model_lifecycle(&kimi_id()).map(|row| row.state),
+        Some(PalwModelLifecycleV1::Candidate),
+        "the old rule, unchanged: a jury of never-ready floor bonds does not seat"
+    );
 }
 
 /// **Per audit at most `seat_count × a`; the waiting bonus ramps `A_MAX` from `A0` to `3·A0`; and a

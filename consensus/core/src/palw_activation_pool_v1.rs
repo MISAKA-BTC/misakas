@@ -4,7 +4,7 @@
 //! A registration is a long-lived, asynchronous LISTING: nothing between a class's registration and
 //! its first panel may be a deadline, and whoever objectively proves they prepared the model is paid
 //! for it — never for the yes or no they then vote. `Params::palw_activation_pool` (`Some(0)` on
-//! testnet-12 alone, genesis-only) arms three rules at once:
+//! testnet-12 alone, genesis-only) arms these rules at once:
 //!
 //! * **R1 (the P1 fix):** silence reclamation (`apply_class_reclamation`) never reclaims a class
 //!   whose registry row exists and does not admit claims — a `Candidate`, `Registered`,
@@ -13,6 +13,10 @@
 //! * **R2 (the review's M2):** the registry's span step skips the rows of `Dormant` and `Frozen`
 //!   classes, and a `Candidate` row reads its ready seats and its jury only at its OWN staggered
 //!   audit span, so the per-span cost of a listing does not grow with the listings nobody audits;
+//! * **P2 (user decision 2026-09-25):** ADR-0147's admission jury is drawn from the bonds at the
+//!   PANEL floor (ten network floors, 130,000 MSK on testnet-12) — the bonds a panel can draw —
+//!   not the network floor: a bond below the readiness bar can never be ready, so drawing one was a
+//!   structural NO vote;
 //! * **the pool itself** (the later sections).
 //!
 //! Below the fence — every network but testnet-12 — nothing here is reached, and every fold is

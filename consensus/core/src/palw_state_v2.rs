@@ -17558,7 +17558,17 @@ impl<'a> TransitionBuilder<'a> {
         };
         let cutoff = span_now.saturating_sub(1).saturating_mul(fold.span_daa.max(1));
         let base = self.params.base_class_id;
-        let floor = self.params.min_collateral_sompi();
+        // **P2 (ADR-0152-adjacent: Activation Pool, user decision 2026-09-25): past the pool's fence
+        // the jury is drawn from the bonds a panel can draw** — collateral at the panel floor (ten
+        // network floors, 130,000 MSK on testnet-12), the predicate the panel draw and (a)'s payee
+        // test read. Below it a bond between the network floor and the readiness bar (three floors
+        // free) was drawable and could never be ready — a structural NO vote, so a Candidate on a
+        // network of floor bonds almost never seated. Below the fence: the network floor, as before.
+        let floor = if self.extras.activation_pool.is_some() {
+            crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi())
+        } else {
+            self.params.min_collateral_sompi()
+        };
         let registrant = self.state.classes.get(class_id).and_then(|record| record.registrant_bond);
         let registrant_operator = registrant.and_then(|key| self.state.bonds.get(&key)).map(|bond| bond.operator_id);
         let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = self
