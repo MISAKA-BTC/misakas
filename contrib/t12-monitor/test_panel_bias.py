@@ -314,6 +314,112 @@ class StateFile(unittest.TestCase):
         self.assertEqual(len(st["claims"]), 25)
 
 
+class FakeNode:
+    """A canned JSON wRPC node: a selected chain of 2 blocks per DAA (every third an attempt block
+    by g1 or g6), floor claims by g1/g6 whose panels bind at their anchor. Read calls only."""
+
+    def __init__(self, n_blocks, claims_at, rng, bad_bound=None):
+        self.calls, self.starts = 0, []
+        self.chain = []
+        for i in range(n_blocks):
+            h = f"{i:08x}" + "b" * 120
+            algo = 6 if i % 3 == 0 else 8
+            env = ChainFacts.envelope(FLOOR, TX, 1 if i % 2 else 6, "55" * 64) if algo == 6 else b""
+            self.chain.append({"hash": h, "daaScore": i // 2, "powAlgoId": algo, "palwCommitment": list(env)})
+        self.claims = []
+        for n, acc in enumerate(claims_at):
+            exe = G[1] if n % 2 else G[6]
+            slot = acc + 20
+            anchor = next((b for b in self.chain if b["daaScore"] >= slot and b["powAlgoId"] == 6), None)
+            seats = race({b: W_GENESIS for b in G if b != exe}, 5, rng) if anchor else []
+            bound = anchor["daaScore"] if anchor else None
+            if bad_bound is not None and n == bad_bound:
+                bound += 1
+            self.claims.append({"claimId": f"{n:04x}" + "d" * 124, "classId": FLOOR, "executorBond": exe, "isFreePrompt": False,
+                                "phase": "panel_bound" if anchor else "provisional", "voidReason": "", "acceptedDaa": acc,
+                                "acceptedBlock": "e" * 128, "reboundDaa": None, "boundDaa": bound, "phaseDaa": bound or 0,
+                                "seats": seats})
+
+    def call(self, method, params=None):
+        self.calls += 1
+        params = params or {}
+        tip = self.chain[-1]["daaScore"]
+        if method == "getPalwNodeStatus":
+            return {"genesisHash": pb.T12_GENESIS, "consensusParamsId": pb.T12_FP}
+        if method == "getBlockDagInfo":
+            return {"virtualDaaScore": tip, "sink": self.chain[-1]["hash"], "network": "testnet-12",
+                    "pruningPointHash": self.chain[0]["hash"]}
+        if method == "getPalwModelRegistry":
+            return {"classes": [{"classId": FLOOR, "isBaseClass": True}]}
+        if method == "getPalwPanelSeats":
+            return {"seats": []}
+        if method == "getPalwClaims":
+            b, role = params["bond"], params["role"]
+            rows = [c for c in self.claims if (c["executorBond"] == b if role == "executor" else b in c["seats"])]
+            return {"bondKnown": b in G, "bondCollateral": 93_906_321_001_040 if b in G else 0, "bondRegisteredDaa": 0,
+                    "bondRetiringSinceDaa": None, "bondCapableClasses": [FLOOR] if b in G else [], "claims": rows, "truncated": False}
+        if method == "getPalwPanelAssignments":
+            return {"assignments": [{"claimId": c["claimId"], "licensedState": "panelBound", "fullSeat": c["seats"][0],
+                                     "seats": [{"seatId": x, "receiptStatus": "pending"} for x in c["seats"]]}
+                                    for c in self.claims if c["seats"]], "truncated": False}
+        hashes = [b["hash"] for b in self.chain]
+        if method == "getVirtualChainFromBlock":
+            self.starts.append(params["startHash"])
+            return {"addedChainBlockHashes": hashes[hashes.index(params["startHash"]) + 1:], "removedChainBlockHashes": []}
+        if method == "getBlocks":
+            i = hashes.index(params["lowHash"])
+            page = self.chain[i:i + 50]
+            return {"blockHashes": [b["hash"] for b in page], "blocks": [{"header": b, "verboseData": {"isChainBlock": True}} for b in page]}
+        raise AssertionError(method)
+
+
+def collect_cfg():
+    cfg = pb.parse_args(["--state", ""])
+    cfg.names = NAMES
+    return cfg
+
+
+class Collect(unittest.TestCase):
+    def test_anchors_populations_and_checkpoints_from_a_fake_node(self):
+        node = FakeNode(160, [2, 5, 9, 14, 20, 33, 70], random.Random(21))
+        st = pb.new_state()
+        run = pb.collect(node, st, collect_cfg(), 1)
+        self.assertEqual(run["degraded"], [])
+        self.assertEqual(run["new_claims"], 7)
+        recs = st["claims"]
+        bound = [r for r in recs.values() if r.get("seats")]
+        self.assertEqual(len(bound), 6)                                  # the DAA-70 claim's slot (90) is past the tip (79)
+        for r in bound:
+            self.assertEqual(r["anchorCheck"], "ok")
+            self.assertEqual(r["anchorDaa"], r["bound"])
+            self.assertIn(r["anchorBond"], (G[1], G[6]))
+            self.assertEqual(len(r["pop"]), 7)
+            self.assertNotIn(r["exe"], r["pop"])
+            self.assertEqual(set(r["verdicts"].values()), {"pending"})
+        self.assertEqual([r["anchorCheck"] for r in recs.values() if not r.get("seats")], ["pending"])
+        self.assertEqual(node.starts, [node.chain[0]["hash"]])
+        self.assertTrue(st["checkpoints"])
+        # The next run starts from a checkpoint below the lowest slot still open (the DAA-33 claim's,
+        # 53, once the older ones are Final), not from the pruning point.
+        node.chain += FakeNode(200, [], random.Random(0)).chain[160:]
+        for c in node.claims:
+            if c["acceptedDaa"] < 30:
+                c["phase"] = "final"
+        pb.collect(node, st, collect_cfg(), 2)
+        start = next(b for b in node.chain if b["hash"] == node.starts[-1])
+        self.assertEqual(start["daaScore"], 50)
+        self.assertTrue(all(r["anchorCheck"] == "ok" for r in st["claims"].values() if r.get("seats")))
+
+    def test_a_bound_daa_the_anchor_rule_does_not_give_is_a_mismatch(self):
+        node = FakeNode(120, [2, 5, 9], random.Random(22), bad_bound=1)
+        st = pb.new_state()
+        pb.collect(node, st, collect_cfg(), 1)
+        checks = sorted(r["anchorCheck"] for r in st["claims"].values())
+        self.assertEqual(checks, ["mismatch", "ok", "ok"])
+        res = pb.analyse(st["claims"], NAMES)
+        self.assertEqual(res["claims_used"], 2)
+
+
 class OfflineRun(unittest.TestCase):
     def run_main(self, st, *extra):
         with tempfile.TemporaryDirectory() as d:

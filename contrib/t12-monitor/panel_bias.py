@@ -656,6 +656,7 @@ def collect(rpc, st, cfg, now):
                 claim_rows.setdefault(c["claimId"], c)
 
     queried = set()
+    seated = {s for rec in st["claims"].values() for s in rec.get("seats") or []}
     for _round in range(3):   # new bonds show up as seats and executors of claims just read
         todo = sorted(b for b in bonds if b not in queried)
         if not todo:
@@ -663,11 +664,12 @@ def collect(rpc, st, cfg, now):
         for b in todo:
             queried.add(b)
             fetch_claims(b, "executor")
-            if names.is_genesis(b) or any(b in rows[c] for c in rows):
+            if names.is_genesis(b) or b in seated or any(b in rows[c] for c in rows):
                 fetch_claims(b, "seat")
         for c in claim_rows.values():
             bonds.add(c.get("executorBond") or "")
             bonds.update(c.get("seats") or [])
+            seated.update(c.get("seats") or [])
         bonds.discard("")
 
     # Assignments: the receipt status of each seat.
@@ -710,10 +712,14 @@ def collect(rpc, st, cfg, now):
             rec["gone"] = True    # retired from the node's state (or on a reorged-out branch)
 
     # The chain, from a checkpoint below the lowest slot still to resolve.
+    settled = ("ok", "unbound", "void-elsewhere", "below-range")
     need = [r for r in st["claims"].values() if not r.get("gone") and
-            (r.get("phase") not in TERMINAL_PHASES or not r.get("anchor") or r.get("anchorCheck") not in ("ok", "unbound"))]
-    if need:
-        min_slot = min((r["reb"] if r.get("reb") is not None else r["acc"]) + cfg.anchor_delay for r in need)
+            not (r.get("phase") in TERMINAL_PHASES and r.get("anchorCheck") in settled)]
+    # A slot below the oldest block the node still serves stays unresolved; it must not drag every
+    # later run back to the pruning point.
+    slots = [(r["reb"] if r.get("reb") is not None else r["acc"]) + cfg.anchor_delay for r in need if r.get("anchorCheck") != "below-range"]
+    if need and slots:
+        min_slot = min(slots)
         chain = fetch_chain(rpc, st, run, min_slot, cfg)
         daas = [h["daa"] for _, h in chain]
         for _, h in chain:
@@ -752,17 +758,19 @@ def fetch_chain(rpc, st, run, min_slot, cfg):
     starts = [h for d, h in sorted(st["checkpoints"], reverse=True) if d < min_slot]
     starts.append(run["pruning"] or run["genesis"])
     chain_hashes = None
+    start_errors = []
     for start in starts:
         try:
             vc = rpc.call("getVirtualChainFromBlock", {"startHash": start, "includeAcceptedTransactionIds": False})
         except RpcError as e:
-            run["errors"].append(str(e)[:200])
+            start_errors.append(str(e)[:200])            # e.g. a checkpoint below the pruning point
             continue
         if vc.get("removedChainBlockHashes"):
             continue                                          # the checkpoint left the chain: try an older one
         chain_hashes = [start] + list(vc.get("addedChainBlockHashes") or [])
         break
     if chain_hashes is None:
+        run["errors"].extend(start_errors[-2:])
         run["degraded"].append("could not read the selected chain")
         return []
     headers = {}
@@ -800,9 +808,11 @@ def fetch_chain(rpc, st, run, min_slot, cfg):
         first_gap = next(i for i, x in enumerate(chain_hashes) if x not in headers)
         chain = [(x, headers[x]) for x in chain_hashes[:first_gap]]
     # Checkpoints: one chain block per `checkpoint_every` DAA, kept for the next run.
-    cps = {d: h for d, h in st["checkpoints"]}
+    fresh_cps = {}
     for x, hs in chain:
-        cps.setdefault(hs["daa"] - hs["daa"] % cfg.checkpoint_every, x)   # the bucket's first chain block
+        fresh_cps.setdefault(hs["daa"] - hs["daa"] % cfg.checkpoint_every, x)   # the bucket's first chain block
+    cps = {d: h for d, h in st["checkpoints"]}
+    cps.update(fresh_cps)                                     # today's chain replaces a reorged-out checkpoint
     st["checkpoints"] = sorted([d, h] for d, h in cps.items())[-cfg.keep_checkpoints:]
     run["chain_blocks"] = len(chain)
     return chain
