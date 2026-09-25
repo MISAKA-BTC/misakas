@@ -53,6 +53,9 @@ fn extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
         model_seed_v2_active: p.palw_model_seed_v2_active_at(daa),
         artifact_root_ownership_active: p.palw_artifact_root_ownership_at(daa),
         audit_2026_09_23_active: p.palw_audit_2026_09_23_active_at(daa),
+        // ADR-0152-adjacent (Activation Pool): resolved as the processor resolves it, so a top-up
+        // carrier folds (testnet-12) or is refused as dormant (testnet-11).
+        activation_pool: p.palw_activation_pool_at(daa),
         ..Default::default()
     }
 }
@@ -249,4 +252,62 @@ fn the_refund_goes_to_the_change_the_payer_signed_and_not_to_the_holder() {
     assert_eq!(palw_model_carrier_refund_v1(&bare, &gift), None);
     // Only a market move owes anything.
     assert_eq!(palw_model_carrier_refund_v1(&tx, &Obj::ModelLineRetired { line_id: line, signature: vec![1] }), None);
+}
+
+/// A top-up carrier as `misaka palw model-sponsor` builds it: the change back to the payer at output
+/// 0, the class's activation sink at output 1, `ActivationPoolFunded` in the payload.
+fn top_up_carrier(class: Hash64, payer: Hash64, amount: u64, nonce: u32) -> Transaction {
+    let object = Obj::ActivationPoolFunded { class_id: class, amount, sink_index: 1 };
+    let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();
+    Transaction::new(
+        0,
+        vec![TransactionInput::new(TransactionOutpoint::new(h(0xF00D), nonce), vec![], 0, 1)],
+        vec![
+            TransactionOutput::new(3 * MSK, p2pkh_mldsa87_spk(&payer.as_bytes())),
+            TransactionOutput::new(amount, kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_spk_v1(&class)),
+        ],
+        0,
+        SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    )
+}
+
+/// **ADR-0152-adjacent (Activation Pool): a top-up the fold refuses is paid back through P-B1, one
+/// it folds is the pool's** — on testnet-12's own genesis. A top-up of a class the chain does not
+/// hold, and one under the least top-up, are refused and owed back whole to the change their payers
+/// signed; a top-up of a genesis class opens its pool (all bonus: no Candidate audit can pay it) and
+/// is owed nothing. Every sompi a sink took is either in a pool or owed back.
+#[test]
+fn a_refused_top_up_is_paid_back_and_a_folded_one_is_the_pools() {
+    let mut c = Chain::t12(true);
+    assert!(c.p.palw_activation_pool_at(1).is_some(), "testnet-12 arms the pool");
+    let floor = c.sp.base_class_id();
+    let genesis_class =
+        *c.state.classes_iter().map(|(id, _)| id).find(|id| **id != floor).expect("testnet-12 registers its models at genesis");
+    let (payer_a, payer_b, payer_c, payer_d) = (h(0xA0A), h(0xB0B), h(0xC0C), h(0xD0D));
+    let missing = top_up_carrier(h(0xDEAD), payer_a, 50 * MSK, 1);
+    let dust = top_up_carrier(genesis_class, payer_b, MSK - 1, 2);
+    let kept = top_up_carrier(genesis_class, payer_c, 50 * MSK, 3);
+    let on_floor = top_up_carrier(floor, payer_d, 50 * MSK, 4);
+    let refunds = c.block(&[missing.clone(), dust.clone(), kept.clone(), on_floor.clone()]);
+    println!("[pool] refunds {:?}", refunds.iter().map(|r| (r.payee, r.amount)).collect::<Vec<_>>());
+    assert_eq!(c.owed(&missing), Some((payer_a, 50 * MSK)), "a top-up of no class is paid back whole");
+    assert_eq!(c.owed(&dust), Some((payer_b, MSK - 1)), "a top-up under the least is paid back whole");
+    assert_eq!(c.owed(&on_floor), Some((payer_d, 50 * MSK)), "a top-up of the floor is paid back whole (F3)");
+    assert!(c.state.activation_pool(&floor).is_none(), "and the floor has no pool");
+    assert_eq!(c.owed(&kept), None, "a folded top-up is a donation");
+    let pool = c.state.activation_pool(&genesis_class).cloned().expect("the genesis class's pool opened");
+    assert_eq!((pool.funded_sompi, pool.bonus_sompi, pool.prep_sompi), (50 * MSK, 50 * MSK, 0));
+}
+
+/// **testnet-11 does not arm the pool: a top-up carrier there is refused as dormant** — and, with
+/// no P-B1 below the audit fence, keeps what it paid, exactly as any refused market carrier does
+/// there. (On testnet-11 no activation sink is a legal output at all: its validator refuses the
+/// form at isolation, so this block can only be a rehearsal.)
+#[test]
+fn on_testnet_11_a_top_up_folds_nothing() {
+    let p = network(11);
+    assert!(p.palw_activation_pool_at(u64::MAX - 1).is_none());
+    assert!(extras(&p, 1).activation_pool.is_none());
 }

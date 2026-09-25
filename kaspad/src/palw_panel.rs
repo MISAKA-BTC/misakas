@@ -11166,6 +11166,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ModelEvaluationPosted { .. } => "ModelEvaluationPosted",
         // ADR-0090 — the seed that opens a line's market.
         PalwConsensusObjectV2::ModelSeed { .. } => "ModelSeed",
+        // ADR-0152-adjacent: a sink-bound top-up of a class's Activation Pool (tag 58).
+        PalwConsensusObjectV2::ActivationPoolFunded { .. } => "ActivationPoolFunded",
         PalwConsensusObjectV2::ShardCourtAccused { .. } => "ShardCourtAccused",
         PalwConsensusObjectV2::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
         PalwConsensusObjectV2::BondShardsDeclared { .. } => "BondShardsDeclared",

@@ -31,6 +31,7 @@ impl TransactionValidator {
         self.check_transaction_inputs_in_isolation(tx)?;
         self.check_transaction_outputs_in_isolation(tx)?;
         self.check_transaction_pq_output_classes(tx)?;
+        self.check_activation_sink_outputs_in_isolation(tx)?;
         self.check_coinbase_in_isolation(tx)?;
 
         check_transaction_output_value_ranges(tx)?;
@@ -109,11 +110,37 @@ impl TransactionValidator {
             {
                 continue;
             }
+            // ADR-0152-adjacent (Activation Pool): the activation sink is the same unspendable form
+            // with its own tag, legal only on a ruleset that declares the pool — and there only when
+            // bound (`check_activation_sink_outputs_in_isolation`, below).
+            if self.palw_activation_pool_fence.is_some()
+                && kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_class_v1(&output.script_public_key).is_some()
+            {
+                continue;
+            }
             if !class.is_pq_standard() {
                 return Err(TxRuleError::NonPqStandardOutputClass(i));
             }
         }
         Ok(())
+    }
+
+    /// **ADR-0152-adjacent (Activation Pool; the review's A8): an activation sink is block-valid only
+    /// bound.** On a ruleset that declares the pool, every `OP_RETURN "MSKACT01" <class>` output must
+    /// be the one its lifecycle carrier's `ActivationPoolFunded` names, with the value it declares and
+    /// the class it names — so MSK can never enter an activation sink without a pool to credit
+    /// (the defect the model market's `MSKMDL01` sink still has, memory 2026-09-24). A block carrying
+    /// an unbound one is invalid here, at isolation, not merely dropped at a mempool. Context-free
+    /// (the transaction alone); the height is the header-context door's. Inert where the pool is not
+    /// declared: the output class rule above refuses the form on a PQ network as it always did.
+    fn check_activation_sink_outputs_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        if self.palw_activation_pool_fence.is_none() {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_binding_refusal_v1(tx) {
+            Some((index, why)) => Err(TxRuleError::ActivationSinkUnbound(index, why)),
+            None => Ok(()),
+        }
     }
 
     fn check_transaction_inputs_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
@@ -1024,6 +1051,72 @@ mod pq_output_class_enforcement_tests {
     /// ADR-0087 Decision 3, as the devnet drill found it: the market's sink output (`OP_RETURN
     /// "MSKMDL01" <line id>`) is consensus-legal ONLY on a network that declares the market; a
     /// dormant network refuses it exactly as before, and no other `OP_RETURN` form rides along.
+    /// **ADR-0152-adjacent (Activation Pool; the review's A8): an activation sink is block-valid only
+    /// bound, only where the ruleset declares the pool, and only from the pool's height.** The whole
+    /// isolation door (`validate_tx_in_isolation`) and the header-context door, on one carrier:
+    /// bound it passes; with no object, a mis-named index, amount or class, or on a non-lifecycle
+    /// transaction it is refused by name — so no activation sink can burn MSK silently. A ruleset
+    /// without the pool refuses the form as the PQ output rule always did; one that schedules it
+    /// refuses it below the height.
+    #[test]
+    fn an_activation_sink_is_valid_only_bound_and_only_where_the_pool_is_declared() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_spk_v1;
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+        let class = kaspa_consensus_core::Hash64::from_u64_word(0xC1A5);
+        let carrier = |object: Option<PalwConsensusObjectV2>, subnet| {
+            let mut tx = tx_with_output(pq_p2pkh_spk(), subnet);
+            tx.outputs.push(TransactionOutput { value: 700_000_000, script_public_key: palw_activation_sink_spk_v1(&class) });
+            tx.payload = object
+                .map(|object| borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap())
+                .unwrap_or_default();
+            tx.finalize();
+            tx
+        };
+        let funded = |amount, sink_index, class_id| Some(PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, sink_index });
+        let armed = |fence: Option<ForkActivation>| validator(PqEnforcementMode::Consensus).with_activation_pool_fence(fence);
+        let pool = armed(Some(ForkActivation::always()));
+        let isolation = |tv: &TransactionValidator, tx: &Transaction| -> Result<(), TxRuleError> {
+            tv.check_transaction_pq_output_classes(tx)?;
+            tv.check_activation_sink_outputs_in_isolation(tx)
+        };
+        let bound = carrier(funded(700_000_000, 1, class), SUBNETWORK_ID_PALW_LIFECYCLE);
+        assert_eq!(isolation(&pool, &bound), Ok(()), "a bound sink is a legal output on a pool ruleset");
+        assert_eq!(pool.validate_tx_in_header_context(&bound, LockTimeArg::Finalized, 0), Ok(()));
+        for (tx, why) in [
+            (carrier(None, SUBNETWORK_ID_NATIVE), "rides only a lifecycle carrier"),
+            (carrier(None, SUBNETWORK_ID_PALW_LIFECYCLE), "carries no ActivationPoolFunded"),
+            (carrier(funded(700_000_000, 0, class), SUBNETWORK_ID_PALW_LIFECYCLE), "is not the output"),
+            (carrier(funded(1, 1, class), SUBNETWORK_ID_PALW_LIFECYCLE), "another amount"),
+            (
+                carrier(funded(700_000_000, 1, kaspa_consensus_core::Hash64::from_u64_word(9)), SUBNETWORK_ID_PALW_LIFECYCLE),
+                "another class",
+            ),
+        ] {
+            match isolation(&pool, &tx) {
+                Err(TxRuleError::ActivationSinkUnbound(1, reason)) => assert!(reason.contains(why), "{why}: {reason}"),
+                other => panic!("{why}: expected an unbound sink at output 1, got {other:?}"),
+            }
+        }
+        // No pool on the ruleset: the output class rule refuses the form, as it always did.
+        assert_eq!(isolation(&armed(None), &bound), Err(TxRuleError::NonPqStandardOutputClass(1)));
+        assert_eq!(armed(Some(ForkActivation::never())).palw_activation_pool_fence, None, "never is absence");
+        // Scheduled: isolation admits the form, header context refuses it below the height.
+        let scheduled = armed(Some(ForkActivation::new(9_000_000)));
+        assert_eq!(isolation(&scheduled, &bound), Ok(()));
+        assert_eq!(
+            scheduled.validate_tx_in_header_context(&bound, LockTimeArg::Finalized, 8_999_999),
+            Err(TxRuleError::ActivationSinkBeforePoolActivation(1, 8_999_999))
+        );
+        assert_eq!(scheduled.validate_tx_in_header_context(&bound, LockTimeArg::Finalized, 9_000_000), Ok(()));
+        // An ordinary transaction is untouched on every ruleset.
+        let plain = tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE);
+        assert_eq!(isolation(&pool, &plain), Ok(()));
+    }
+
     #[test]
     fn consensus_mode_admits_the_model_sink_only_where_the_market_is_declared() {
         use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;

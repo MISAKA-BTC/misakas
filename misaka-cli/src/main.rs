@@ -33,6 +33,7 @@ mod node;
 /// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
 mod operator;
 /// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
+mod palw_activation_pool;
 mod palw_claim;
 mod palw_court;
 mod palw_da;
@@ -585,6 +586,8 @@ enum ModelCmd {
         #[arg(long)]
         no_wait: bool,
         #[command(flatten)]
+        sponsor: palw_activation_pool::ListingSponsorArgs,
+        #[command(flatten)]
         profile: ProfileArgs,
     },
     /// Local inspection of an artifact: class id, roots, graph, ctx, CanonicalWork, fit walls. No submit.
@@ -944,6 +947,9 @@ enum ExtensionCmd {
         yes: bool,
         #[arg(long)]
         json: bool,
+        /// A class registration's sponsor (the Activation Pool's P4).
+        #[command(flatten)]
+        sponsor: palw_activation_pool::ListingSponsorArgs,
     },
     /// One receipt: its canonical form, its id, its signature, and the ruleset it was made on
     /// against this build's (SA-3). With --manifest, it must be about that manifest.
@@ -1413,6 +1419,28 @@ enum PalwCmd {
         /// Actually broadcast (otherwise a dry-run preview)
         #[arg(long)]
         yes: bool,
+    },
+    /// **ADR-0152-adjacent: sponsor a model's listing** — top its class's Activation Pool up with
+    /// MSK paid into the class's activation sink. Anyone may, its registrant included; a donation,
+    /// never refunded once folded. While the class is a Candidate 40 % funds the preparation reward
+    /// its prepared jurors are paid at its audit, the rest the activation bonus paid at
+    /// `Probation → ActiveLimited` to the operators its probe Finals credited.
+    ModelSponsor {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id (or 8+ hex of one)
+        class: String,
+        /// MSK to add (e.g. `100`, or `10000000000sompi`); at least the chain's least top-up
+        msk: String,
+        /// Actually broadcast (otherwise a dry-run preview)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// ADR-0152-adjacent: a model's Activation Pool — its budgets, who was paid, the operators
+    /// credited toward its activation bonus, the terms, and the sink a sponsor pays into.
+    ModelPool {
+        /// 128-hex class id (or 8+ hex of one)
+        class: String,
     },
     /// ADR-0090 from the EVM: seed a line's market with the call's value (at least 100,000 MSK)
     /// through the ModelWriter; settled in the next chain block. [needs --features evm-send]
@@ -2552,14 +2580,23 @@ async fn main() -> std::process::ExitCode {
             seat_ms_per_position,
             yes,
             no_wait,
+            sponsor,
             profile: args,
-        }) => match profile(&args) {
-            Ok(p) => {
-                let a =
-                    operator::model_add::ModelAddArgs { model, artifact, manifest, prompt_lane, seat_ms_per_position, yes, no_wait };
+        }) => match (profile(&args), sponsor.resolve()) {
+            (Ok(p), Ok(sponsor)) => {
+                let a = operator::model_add::ModelAddArgs {
+                    model,
+                    artifact,
+                    manifest,
+                    prompt_lane,
+                    seat_ms_per_position,
+                    yes,
+                    no_wait,
+                    sponsor,
+                };
                 operator::model_add::run(&ctx, p, a).await
             }
-            Err(e) => Err(e),
+            (Err(e), _) | (_, Err(e)) => Err(e),
         },
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
             Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
@@ -2645,9 +2682,10 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
             palw_extension::preflight(&ctx, &manifest, json).await
         }
-        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json })) => {
-            palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json).await
-        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json, sponsor })) => match sponsor.resolve() {
+            Ok(sponsor) => palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json, sponsor).await,
+            Err(e) => Err(e),
+        },
         Command::Palw(PalwCmd::Extension(ExtensionCmd::ReceiptVerify { receipt, manifest, json })) => {
             palw_extension::receipt_verify(&ctx, &receipt, manifest.as_deref(), json)
         }
@@ -2717,6 +2755,10 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::ModelEvmPosition { line, address }) => eth::model_evm_position(&ctx, &line, &address),
         Command::Palw(PalwCmd::ModelSeed { key, line, msk, yes }) => palw_model::seed(&ctx, &key.source(), &line, &msk, yes).await,
+        Command::Palw(PalwCmd::ModelSponsor { key, class, msk, yes }) => {
+            palw_activation_pool::sponsor(&ctx, &key.source(), &class, &msk, yes).await
+        }
+        Command::Palw(PalwCmd::ModelPool { class }) => palw_activation_pool::pool(&ctx, &class).await,
         #[cfg(feature = "evm-send")]
         Command::Palw(PalwCmd::ModelEvmSeed { key, line, msk, gas_limit, max_fee, nonce, yes, wait }) => {
             evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait)

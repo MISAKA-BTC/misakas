@@ -2376,6 +2376,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_model_registry_v1_impl()
     }
 
+    fn palw_activation_pool_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_activation_pool_v1::PalwActivationPoolReadV1> {
+        self.virtual_processor.palw_activation_pool_v1_impl(class_id)
+    }
+
     fn palw_panel_network_view_v1(&self) -> Option<kaspa_consensus_core::palw_panel_view_v1::PalwPanelNetworkViewV1> {
         self.virtual_processor.palw_panel_network_view_v1_impl()
     }

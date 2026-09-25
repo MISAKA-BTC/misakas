@@ -1114,6 +1114,15 @@ pub trait ConsensusApi: Send + Sync {
 
     /// Panel observability: class status, bonded seats, and per-claim assignments as the tip holds
     /// them. `None` off `ConsensusV2`. Seat counts stay distinct — bonded / ready / selected / valid.
+    /// **ADR-0152-adjacent (Activation Pool): one class's pool at the tip** (`getPalwActivationPool`,
+    /// op 200). `None` off ConsensusV2 or before the first state.
+    fn palw_activation_pool_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<crate::palw_activation_pool_v1::PalwActivationPoolReadV1> {
+        None
+    }
+
     fn palw_panel_network_view_v1(&self) -> Option<crate::palw_panel_view_v1::PalwPanelNetworkViewV1> {
         None
     }

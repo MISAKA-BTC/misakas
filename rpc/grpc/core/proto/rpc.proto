@@ -2153,6 +2153,8 @@ message RpcPalwModelLifecycle {
   uint32 artifactPrefetchSpans = 11;
   uint32 maxInflightClaims = 12;
   uint32 requiredReadySeats = 13;
+  // DEPRECATED — NOT A PRICE (2026-09-25): the registry's derived bond, never charged (refund 0).
+  // Meaning unchanged for old readers; present recommendedPoolSompi (38) instead.
   uint64 registrationBondSompi = 14;
   uint64 admissionClaimsPerSpanMilli = 15;
   uint32 probesPassed = 16;
@@ -2180,6 +2182,9 @@ message RpcPalwModelLifecycle {
   uint32 finalWorkShare10Permille = 36;
   uint32 finalWorkShare100Permille = 37;
   string reason = 27;
+  // NON-BINDING recommended Activation Pool (2026-09-25): 16 · A_MAX / α of the terms in force; 0
+  // where the pool is not armed and for the floor.
+  uint64 recommendedPoolSompi = 38;
 }
 
 message RpcPalwSeatReadiness {
@@ -2762,5 +2767,54 @@ message GetPalwVestingResponseMessage {
   string claimStage = 39;
   uint64 lockLiveRows = 40;
   optional uint64 lockLiveLastExpiryDaa = 41;
+  RPCError error = 1000;
+}
+
+// ADR-0152-adjacent (user decision 2026-09-25): one class's Activation Pool (op 200).
+message GetPalwActivationPoolRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwActivationPoolResponseMessage {
+  bool available = 1;
+  bool poolArmed = 2;
+  uint64 tipDaa = 3;
+  bool classFound = 4;
+  string classId = 5;
+  string classStatus = 6;
+  string lifecycle = 7;
+  bool hasPool = 8;
+  uint64 prepSompi = 9;
+  uint64 bonusSompi = 10;
+  uint64 fundedSompi = 11;
+  uint64 paidSompi = 12;
+  uint64 withheldSompi = 13;
+  uint64 openedDaa = 14;
+  repeated string prepPaid = 15;
+  repeated string bonusPaid = 16;
+  repeated string probeCredited = 17;
+  string registrantOperator = 18;
+  uint64 prepRewardNowSompi = 19;
+  uint64 prepCapNowSompi = 20;
+  uint64 nextAuditSpan = 21;
+  uint64 spanDaa = 22;
+  string sinkScript = 23;
+  uint64 minTopupSompi = 24;
+  uint64 prepBaseSompi = 25;
+  uint32 prepSharePermille = 26;
+  uint32 bonusSharePermille = 27;
+  uint64 rampDaa = 28;
+  uint32 prepPayeeCap = 29;
+  uint32 bonusPayeeCap = 30;
+  uint64 totalFundedSompi = 31;
+  uint64 totalPaidSompi = 32;
+  uint64 totalWithheldSompi = 33;
+  uint64 totalAvailableSompi = 34;
+  uint64 scheduledSompi = 35;
+  bool classIsFloor = 36;
+  // NON-BINDING recommended pool (user decision 2026-09-25): 16 · A_MAX / α of the terms in force.
+  uint64 recommendedPoolSompi = 37;
+  // b_cap (P1): the most (b) pays one operator.
+  uint64 bonusCapSompi = 38;
   RPCError error = 1000;
 }

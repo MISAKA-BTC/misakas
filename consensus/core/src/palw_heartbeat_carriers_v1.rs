@@ -134,7 +134,10 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ReceiptLicensedV2 { .. }
         | O::SeatReadinessProvedV2 { .. }
         | O::OptimisticLicensed { .. }
-        | O::PanelUnavailableQuorum { .. } => false,
+        | O::PanelUnavailableQuorum { .. }
+        // ADR-0152-adjacent (Activation Pool, tag 58): a sponsor's top-up is market traffic, not a
+        // conviction a halt must let through — it stays in the fee market.
+        | O::ActivationPoolFunded { .. } => false,
     }
 }
 

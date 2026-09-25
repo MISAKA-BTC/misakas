@@ -302,7 +302,7 @@ pub(crate) const PALW_CARRIER_MAX_INPUTS: usize = 15;
 
 /// The multi-input twin of [`build_move_carrier`], priced the same way: build once to measure the
 /// compute mass, then rebuild at the fee that mass earns.
-fn build_move_carrier_multi(
+pub(crate) fn build_move_carrier_multi(
     key: &kaspa_pq_validator_core::ValidatorKey,
     nv: &crate::wallet::NodeView,
     object: &PalwConsensusObjectV2,
@@ -531,7 +531,7 @@ fn refused_is_refunded(nv: &crate::wallet::NodeView) -> bool {
 
 /// **What a refused carrier costs on this chain**, printed before anything is signed, because a
 /// floor is only as safe as its refusal.
-fn refusal_line(nv: &crate::wallet::NodeView, amount: u64, change_to: &impl std::fmt::Display) -> String {
+pub(crate) fn refusal_line(nv: &crate::wallet::NodeView, amount: u64, change_to: &impl std::fmt::Display) -> String {
     if refused_is_refunded(nv) {
         format!(
             "  if refused     {} is paid back to {change_to} through the coinbase (a node will not relay or mine this carrier \

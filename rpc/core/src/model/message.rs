@@ -5588,6 +5588,11 @@ pub struct RpcPalwModelLifecycle {
     pub artifact_prefetch_spans: u32,
     pub max_inflight_claims: u32,
     pub required_ready_seats: u32,
+    /// **DEPRECATED — NOT A PRICE** (user decision 2026-09-25). The registry profile's derived
+    /// `bond_per_span × verification_window_spans` (2,799,000 MSK for the 2M class): never charged,
+    /// never reserved, refunded as 0 — a registration costs its 1 MSK burn and a carrier fee. Kept on
+    /// the wire, with its meaning unchanged, for readers built before `recommended_pool_sompi`;
+    /// present that field instead.
     pub registration_bond_sompi: u64,
     pub admission_claims_per_span_milli: u64,
     pub probes_passed: u32,
@@ -5618,11 +5623,18 @@ pub struct RpcPalwModelLifecycle {
     pub no_capable_panel_voids: u32,
     /// Why the row is where it is, from its last reading — a HELD by the rule reads as one.
     pub reason: String,
+    /// **The NON-BINDING recommended Activation Pool of the listing** (user decision 2026-09-25;
+    /// wire version 2): `16 · A_MAX / α` of the pool's terms in force
+    /// (`palw_activation_recommended_pool_sompi_v1`, 2,400 MSK at the terms of 2026-09-25) — what a
+    /// sponsor is told pays the class's preparers in full. Nothing enforces it; 0 where the pool is
+    /// not armed, for the floor (which takes no top-up), and from a node that serves version 1.
+    pub recommended_pool_sompi: u64,
 }
 
 impl Serializer for RpcPalwModelLifecycle {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        // Version 2 appends `recommended_pool_sompi` (the Activation Pool's P4, 2026-09-25).
+        store!(u16, &2, writer)?;
         store!(String, &self.class_id, writer)?;
         store!(String, &self.artifact_root, writer)?;
         store!(bool, &self.is_base_class, writer)?;
@@ -5659,13 +5671,14 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(u64, &self.panel_room, writer)?;
         store!(u16, &self.final_work_share_10_permille, writer)?;
         store!(u16, &self.final_work_share_100_permille, writer)?;
+        store!(u64, &self.recommended_pool_sompi, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for RpcPalwModelLifecycle {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         Ok(Self {
             class_id: load!(String, reader)?,
             artifact_root: load!(String, reader)?,
@@ -5703,6 +5716,8 @@ impl Deserializer for RpcPalwModelLifecycle {
             panel_room: load!(u64, reader)?,
             final_work_share_10_permille: load!(u16, reader)?,
             final_work_share_100_permille: load!(u16, reader)?,
+            // Version 1 (a node before the Activation Pool's P4) has no recommendation: 0.
+            recommended_pool_sompi: if version >= 2 { load!(u64, reader)? } else { 0 },
         })
     }
 }
@@ -11246,6 +11261,190 @@ mod palw_derived_artifacts_wire_tests {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0152-adjacent: the Activation Pool (op 200; user decision 2026-09-25)
+// ---------------------------------------------------------------------------------------------
+
+/// **`getPalwActivationPool` (op 200)**: one class's Activation Pool as the tip state holds it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwActivationPoolRequest {
+    /// A class id (128 hex), or 8+ hex of one, or `base`.
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwActivationPoolRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwActivationPoolRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+/// One class's pool, its terms and the chain-wide counters. Every amount in sompi.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwActivationPoolResponse {
+    /// The node answered from a V2 state (`false` off ConsensusV2 or before the first state).
+    pub available: bool,
+    /// `Params::palw_activation_pool` is in force at the tip (testnet-12 alone).
+    pub pool_armed: bool,
+    pub tip_daa: u64,
+    /// The state holds the class.
+    pub class_found: bool,
+    pub class_id: String,
+    /// `active`, `dormant`, `frozen` or `registered` (the class record's status).
+    pub class_status: String,
+    /// The registry row's state (`Candidate`, `Probation { probes_passed: 3 }`, …); empty without a row.
+    pub lifecycle: String,
+    /// The class has a pool row (a bought class from its registration, any class from its first top-up).
+    pub has_pool: bool,
+    pub prep_sompi: u64,
+    pub bonus_sompi: u64,
+    pub funded_sompi: u64,
+    pub paid_sompi: u64,
+    pub withheld_sompi: u64,
+    pub opened_daa: u64,
+    /// Operators paid (a), sorted, hex.
+    pub prep_paid: Vec<String>,
+    /// Operators paid (b), sorted, hex.
+    pub bonus_paid: Vec<String>,
+    /// Operators credited on the class's probe Finals in its current probation run (paid (b) at `Probation → ActiveLimited`).
+    pub probe_credited: Vec<String>,
+    /// The registrant's operator id, excluded from (a) and (b); empty for a genesis class.
+    pub registrant_operator: String,
+    /// (a)'s per-payee amount were this Candidate's audit now: `min(A_MAX(age), ⌊prep/10⌋)`; 0 outside Candidate.
+    pub prep_reward_now_sompi: u64,
+    /// `A_MAX(age)` now — `A0` at opening, `3·A0` after the ramp.
+    pub prep_cap_now_sompi: u64,
+    /// The span this Candidate next meets its jury at (R2's stagger); 0 for any other class.
+    pub next_audit_span: u64,
+    pub span_daa: u64,
+    /// The script a top-up pays into (`OP_RETURN OP_DATA8 "MSKACT01" OP_DATA64 <class>`), hex.
+    pub sink_script: String,
+    pub min_topup_sompi: u64,
+    pub prep_base_sompi: u64,
+    pub prep_share_permille: u32,
+    pub bonus_share_permille: u32,
+    pub ramp_daa: u64,
+    pub prep_payee_cap: u32,
+    pub bonus_payee_cap: u32,
+    pub total_funded_sompi: u64,
+    pub total_paid_sompi: u64,
+    pub total_withheld_sompi: u64,
+    /// Chain-wide `prep + bonus` over every pool (the counters, saturated to u64).
+    pub total_available_sompi: u64,
+    /// Decided and owed, not yet flushed into the payout queue (the fix round's F5).
+    pub scheduled_sompi: u64,
+    /// The class is the network's floor, which takes no top-up (F3).
+    pub class_is_floor: bool,
+    /// **The NON-BINDING recommended pool** (user decision 2026-09-25): `16 · A_MAX / α` of the terms
+    /// in force (`palw_activation_recommended_pool_sompi_v1`) — what pays a listing's preparers in
+    /// full. Nothing enforces it; 0 where the pool is not armed or the class is the floor.
+    pub recommended_pool_sompi: u64,
+    /// `b_cap`: the most (b) pays one operator (the pool's P1) — the per-Final seat pay at the
+    /// heaviest class; 0 where the pool is not armed.
+    pub bonus_cap_sompi: u64,
+}
+
+impl Serializer for GetPalwActivationPoolResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(bool, &self.pool_armed, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.class_found, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.class_status, writer)?;
+        store!(String, &self.lifecycle, writer)?;
+        store!(bool, &self.has_pool, writer)?;
+        store!(u64, &self.prep_sompi, writer)?;
+        store!(u64, &self.bonus_sompi, writer)?;
+        store!(u64, &self.funded_sompi, writer)?;
+        store!(u64, &self.paid_sompi, writer)?;
+        store!(u64, &self.withheld_sompi, writer)?;
+        store!(u64, &self.opened_daa, writer)?;
+        store!(Vec<String>, &self.prep_paid, writer)?;
+        store!(Vec<String>, &self.bonus_paid, writer)?;
+        store!(Vec<String>, &self.probe_credited, writer)?;
+        store!(String, &self.registrant_operator, writer)?;
+        store!(u64, &self.prep_reward_now_sompi, writer)?;
+        store!(u64, &self.prep_cap_now_sompi, writer)?;
+        store!(u64, &self.next_audit_span, writer)?;
+        store!(u64, &self.span_daa, writer)?;
+        store!(String, &self.sink_script, writer)?;
+        store!(u64, &self.min_topup_sompi, writer)?;
+        store!(u64, &self.prep_base_sompi, writer)?;
+        store!(u32, &self.prep_share_permille, writer)?;
+        store!(u32, &self.bonus_share_permille, writer)?;
+        store!(u64, &self.ramp_daa, writer)?;
+        store!(u32, &self.prep_payee_cap, writer)?;
+        store!(u32, &self.bonus_payee_cap, writer)?;
+        store!(u64, &self.total_funded_sompi, writer)?;
+        store!(u64, &self.total_paid_sompi, writer)?;
+        store!(u64, &self.total_withheld_sompi, writer)?;
+        store!(u64, &self.total_available_sompi, writer)?;
+        store!(u64, &self.scheduled_sompi, writer)?;
+        store!(bool, &self.class_is_floor, writer)?;
+        store!(u64, &self.recommended_pool_sompi, writer)?;
+        store!(u64, &self.bonus_cap_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwActivationPoolResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            pool_armed: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            class_found: load!(bool, reader)?,
+            class_id: load!(String, reader)?,
+            class_status: load!(String, reader)?,
+            lifecycle: load!(String, reader)?,
+            has_pool: load!(bool, reader)?,
+            prep_sompi: load!(u64, reader)?,
+            bonus_sompi: load!(u64, reader)?,
+            funded_sompi: load!(u64, reader)?,
+            paid_sompi: load!(u64, reader)?,
+            withheld_sompi: load!(u64, reader)?,
+            opened_daa: load!(u64, reader)?,
+            prep_paid: load!(Vec<String>, reader)?,
+            bonus_paid: load!(Vec<String>, reader)?,
+            probe_credited: load!(Vec<String>, reader)?,
+            registrant_operator: load!(String, reader)?,
+            prep_reward_now_sompi: load!(u64, reader)?,
+            prep_cap_now_sompi: load!(u64, reader)?,
+            next_audit_span: load!(u64, reader)?,
+            span_daa: load!(u64, reader)?,
+            sink_script: load!(String, reader)?,
+            min_topup_sompi: load!(u64, reader)?,
+            prep_base_sompi: load!(u64, reader)?,
+            prep_share_permille: load!(u32, reader)?,
+            bonus_share_permille: load!(u32, reader)?,
+            ramp_daa: load!(u64, reader)?,
+            prep_payee_cap: load!(u32, reader)?,
+            bonus_payee_cap: load!(u32, reader)?,
+            total_funded_sompi: load!(u64, reader)?,
+            total_paid_sompi: load!(u64, reader)?,
+            total_withheld_sompi: load!(u64, reader)?,
+            total_available_sompi: load!(u64, reader)?,
+            scheduled_sompi: load!(u64, reader)?,
+            class_is_floor: load!(bool, reader)?,
+            recommended_pool_sompi: load!(u64, reader)?,
+            bonus_cap_sompi: load!(u64, reader)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod palw_model_market_wire_tests {
     use super::*;
@@ -11296,6 +11495,31 @@ mod palw_model_market_wire_tests {
         let back = <GetPalwModelMarketResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
         assert!(back.class_lifecycle.is_empty() && back.market_refusal.is_empty());
         assert_eq!((back.burn_permille, back.leg_permille, back.leg_v2_activation_daa), (50, 50, 3_500));
+    }
+
+    /// **The Activation Pool's P4 on the registry's wire**: a class row is version 2 and carries the
+    /// non-binding `recommended_pool_sompi` after every version-1 field; a version-1 peer's row — the
+    /// same bytes without it — reads as no recommendation, and the deprecated
+    /// `registration_bond_sompi` keeps its bytes and its meaning.
+    #[test]
+    fn a_version_1_registry_row_reads_as_no_recommended_pool() {
+        let row = RpcPalwModelLifecycle {
+            class_id: "ab".repeat(64),
+            registration_bond_sompi: 279_900_000_000_000,
+            recommended_pool_sompi: 240_000_000_000,
+            reason: "candidate".to_string(),
+            ..Default::default()
+        };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&row, &mut bytes).unwrap();
+        assert_eq!(&bytes[..2], &2u16.to_le_bytes());
+        let back = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!((back.registration_bond_sompi, back.recommended_pool_sompi), (279_900_000_000_000, 240_000_000_000));
+        assert_eq!(&bytes[bytes.len() - 8..], &240_000_000_000u64.to_le_bytes());
+        bytes.truncate(bytes.len() - 8);
+        bytes[..2].copy_from_slice(&1u16.to_le_bytes());
+        let v1 = <RpcPalwModelLifecycle as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(format!("{v1:?}"), format!("{:?}", RpcPalwModelLifecycle { recommended_pool_sompi: 0, ..row }));
     }
 }
 

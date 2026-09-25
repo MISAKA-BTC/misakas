@@ -1943,6 +1943,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Ok(GetPalwModelRegistryResponse::default());
         };
         let globals = read.globals;
+        // The Activation Pool's P4 (user decision 2026-09-25): the figure a reader is shown is the
+        // non-binding recommended pool of the terms in force, not the registry's derived bond.
+        let recommended_pool_sompi = self
+            .config
+            .params
+            .palw_activation_pool_at(read.tip_daa)
+            .map(|terms| kaspa_consensus_core::palw_activation_pool_v1::palw_activation_recommended_pool_sompi_v1(&terms))
+            .unwrap_or(0);
         let classes = read
             .classes
             .iter()
@@ -1985,6 +1993,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     share_permille: class.share_permille.unwrap_or(0),
                     no_capable_panel_voids: class.no_capable_panel_voids,
                     reason: class.reason.clone(),
+                    // The floor takes no top-up (F3), so nothing is recommended for it.
+                    recommended_pool_sompi: if class.is_base_class { 0 } else { recommended_pool_sompi },
                 }
             })
             .collect();
@@ -2018,8 +2028,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             probation_claims: globals.map(|g| g.probation_claims).unwrap_or(0),
             stable_epochs: globals.map(|g| g.stable_epochs).unwrap_or(0),
             // The age a row is JUDGED by now (the readiness-age sweep, 2026-09-24): readiness V2's
-            // eight spans past its fence, the globals' thirty before it — what `readySeatsNow`
-            // counts by, not the globals' V1 constant a reader would otherwise print.
+            // horizon past its fence (eight spans; 24 on testnet-12, `Params::palw_readiness_v2_max_age_spans`),
+            // the globals' thirty before it — what `readySeatsNow` counts by, not the globals' V1
+            // constant a reader would otherwise print.
             readiness_probe_max_age_spans: (read.readiness_max_age_daa / read.span_daa.max(1)).min(u32::MAX as u64) as u32,
             readiness_collateral_multiple: globals.map(|g| g.readiness_collateral_multiple).unwrap_or(0),
             classes,
@@ -2635,7 +2646,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let class = read.classes.iter().find(|c| c.class_id == class_id);
         // A proof expires one readiness age after it was dated — the age the registry judges by
-        // (the readiness-age sweep: V2's eight spans past its fence, not the V1 thirty).
+        // (the readiness-age sweep: V2's horizon past its fence — eight spans, 24 on testnet-12 —
+        // not the V1 thirty).
         let max_age = read.readiness_max_age_daa;
         let seats = read
             .readiness
@@ -2745,6 +2757,77 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             class_id: class_id.to_string(),
             end_to_end_certified,
             families,
+        })
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ADR-0152-adjacent — the Activation Pool (op 200; user decision 2026-09-25)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_activation_pool_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwActivationPoolRequest,
+    ) -> RpcResult<GetPalwActivationPoolResponse> {
+        // A malformed class id is an error before any state is read, on every network.
+        let class_id = parse_class_id_or_alias(&request.class_id)?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwActivationPoolResponse { class_id: class_id.to_string(), ..Default::default() });
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(read) = session.spawn_blocking(move |c| c.palw_activation_pool_v1(class_id)).await else {
+            return Ok(GetPalwActivationPoolResponse { class_id: class_id.to_string(), ..Default::default() });
+        };
+        let pool = read.pool.clone().unwrap_or_default();
+        let terms = read.terms.unwrap_or_default();
+        let armed = read.terms.is_some();
+        let saturated = |sompi: u128| sompi.min(u64::MAX as u128) as u64;
+        let hex_ids = |ids: &[kaspa_hashes::Hash64]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        let sink = kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_spk_v1(&class_id);
+        Ok(GetPalwActivationPoolResponse {
+            available: true,
+            pool_armed: armed,
+            tip_daa: read.now_daa,
+            class_found: read.class_found,
+            class_id: class_id.to_string(),
+            class_status: read.class_status.to_string(),
+            lifecycle: read.lifecycle.clone().unwrap_or_default(),
+            has_pool: read.pool.is_some(),
+            prep_sompi: pool.prep_sompi,
+            bonus_sompi: pool.bonus_sompi,
+            funded_sompi: pool.funded_sompi,
+            paid_sompi: pool.paid_sompi,
+            withheld_sompi: pool.withheld_sompi,
+            opened_daa: pool.opened_daa,
+            prep_paid: hex_ids(&pool.prep_paid),
+            bonus_paid: hex_ids(&pool.bonus_paid),
+            probe_credited: pool.probe_credited.iter().map(|credit| credit.operator.to_string()).collect(),
+            registrant_operator: read.registrant_operator.map(|id| id.to_string()).unwrap_or_default(),
+            prep_reward_now_sompi: read.prep_reward_now_sompi,
+            prep_cap_now_sompi: read.prep_cap_now_sompi,
+            next_audit_span: read.next_audit_span.unwrap_or(0),
+            span_daa: read.span_daa,
+            sink_script: faster_hex::hex_string(sink.script()),
+            min_topup_sompi: if armed { terms.min_topup_sompi } else { 0 },
+            prep_base_sompi: if armed { terms.prep_base_sompi } else { 0 },
+            prep_share_permille: if armed { terms.prep_share_permille as u32 } else { 0 },
+            bonus_share_permille: if armed { terms.bonus_share_permille as u32 } else { 0 },
+            ramp_daa: if armed { terms.ramp_daa } else { 0 },
+            prep_payee_cap: if armed { terms.prep_payee_cap as u32 } else { 0 },
+            bonus_payee_cap: if armed { terms.bonus_payee_cap as u32 } else { 0 },
+            bonus_cap_sompi: if armed { terms.bonus_cap_sompi } else { 0 },
+            total_funded_sompi: saturated(read.counters.funded_sompi),
+            total_paid_sompi: saturated(read.counters.paid_sompi),
+            total_withheld_sompi: saturated(read.counters.withheld_sompi),
+            total_available_sompi: saturated(read.counters.prep_sompi.saturating_add(read.counters.bonus_sompi)),
+            scheduled_sompi: pool.scheduled_sompi,
+            class_is_floor: read.class_is_floor,
+            recommended_pool_sompi: match read.terms {
+                Some(terms) if !read.class_is_floor => {
+                    kaspa_consensus_core::palw_activation_pool_v1::palw_activation_recommended_pool_sompi_v1(&terms)
+                }
+                _ => 0,
+            },
         })
     }
 

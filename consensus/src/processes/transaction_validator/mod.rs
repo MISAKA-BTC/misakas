@@ -91,6 +91,15 @@ pub struct TransactionValidator {
     /// `PALW_EXEC_MAX_BONDS_PER_MERGESET_V1` of them, so the isolation cap widens by that where the
     /// lane exists — a size guard fails wide, and the exact-hash coinbase rule decides correctness.
     palw_round_lane_declared: bool,
+
+    /// **ADR-0152-adjacent (Activation Pool): `Params::palw_activation_pool_fence()`'s height**
+    /// (`never()` read as absence). Isolation derives the height-free question from `.is_some()`: an
+    /// activation sink (`OP_RETURN "MSKACT01" <class>`) is a consensus-legal output class only on a
+    /// ruleset that declares the pool, and there EVERY activation sink must be bound to its
+    /// carrier's `ActivationPoolFunded` (the review's A8) — so no activation sink can burn silently.
+    /// The header-context door refuses the form below the height. `None` on every preset but
+    /// testnet-12, which keeps every other network's transaction validity byte for byte.
+    palw_activation_pool_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl TransactionValidator {
@@ -144,7 +153,17 @@ impl TransactionValidator {
             palw_held_context_fence: palw_held_context_fence
                 .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never()),
             palw_round_lane_declared: false,
+            palw_activation_pool_fence: None,
         }
+    }
+
+    /// ADR-0152-adjacent (Activation Pool): declare the pool's fence
+    /// (`Params::palw_activation_pool_fence().map(|pool| pool.activation)`), which admits the
+    /// activation sink at isolation — bound, and from the fence's height.
+    pub fn with_activation_pool_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_activation_pool_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
     }
 
     /// ADR-0125: declare the execution lane (`Params::palw_execution_lane_fence().is_some()`), which
@@ -194,6 +213,8 @@ impl TransactionValidator {
             palw_held_context_fence: None,
             // Every shipped preset's door: no execution lane, no payee outputs.
             palw_round_lane_declared: false,
+            // Every shipped preset's door but testnet-12's: no pool, no activation sink.
+            palw_activation_pool_fence: None,
         }
     }
 
