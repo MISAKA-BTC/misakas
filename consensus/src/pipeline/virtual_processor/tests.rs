@@ -13398,6 +13398,9 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     // production source declares them. Every one of them reaches its tip read before it looks at
     // its arguments, so the values here only have to be well-formed.
     let _ = vp.palw_disputable_claims_v2_impl(&mine);
+    // Lane B (2026-09-26): the operator's non-seat filer's read, once a DAA on every operator node.
+    let _ = vp.palw_operator_da_candidates_v1_impl(&mine);
+    let _ = vp.palw_operator_da_standing_v1_impl(&mine[0]);
     let _ = vp.palw_court_duties_v2_impl(&mine);
     let _ = vp.palw_da_duties_v2_impl(&mine);
     let _ = vp.palw_claim_readers_v2_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1));
