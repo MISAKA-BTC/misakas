@@ -393,6 +393,13 @@ impl<'a> A16RecomputeKernelsV1<'a> {
         Ok(Self { engine, plan, cache, vocab: artifact.shape.vocab })
     }
 
+    /// DRILL ONLY (ADR-0152 §4-ter N5): these kernels, walking through the drill's attention lie —
+    /// the state a run that followed its lie committed. Never memoized beside an honest walk.
+    pub fn with_drill_attn_lie_v1(mut self, lie: crate::engine_a16::A16DrillAttnLieV1) -> Self {
+        self.engine = self.engine.with_drill_attn_lie_v1(Some(lie));
+        self
+    }
+
     /// The rows the walk has run.
     fn rows(&self) -> usize {
         self.cache.rows()

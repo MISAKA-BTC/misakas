@@ -554,6 +554,66 @@ pub fn palw_state_top_leaves_v4(
         .collect()
 }
 
+/// **ADR-0152 §4-ter C2: every slice's sub-root of a held checkpoint, in slice order** — from its
+/// chunk leaves already hashed, in the flat order (`palw_state_chunk_leaves_for_map_v1`). What a
+/// held root claim files (`CourtAttnRootClaimedHeld::slice_sub_roots`) and what the fold folds back.
+pub fn palw_state_slice_sub_roots_v4(
+    layout: &PalwStateLayoutV4,
+    leaves: &[Hash64],
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    use crate::palw_step_leg::PalwStepLegError;
+    if leaves.len() as u64 != layout.chunk_count() {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: leaves.len(), max: layout.chunk_count() as usize });
+    }
+    (0..layout.slice_count())
+        .map(|slice| {
+            let blocks = layout.block_count(slice).unwrap_or(0);
+            let hashes: Vec<Hash64> =
+                (0..blocks).map(|block| leaves[layout.flat_index(slice, block).expect("in range by construction") as usize]).collect();
+            crate::palw_step_leg::state_slice_root_v4(&hashes)
+        })
+        .collect()
+}
+
+/// **ADR-0152 §4-ter C2 (H3): the held top root from slice sub-roots** — `state_top_leaf_v4` of each
+/// slice, folded by `state_top_root_v4`. The fold's check that a held root claim's sub-roots are the
+/// anchor's own: equal to the anchor's `state_chunks_root` or refused.
+pub fn palw_state_top_root_from_sub_roots_v4(
+    layout: &PalwStateLayoutV4,
+    sub_roots: &[Hash64],
+) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
+    crate::palw_step_leg::state_top_root_v4(&palw_state_top_leaves_from_sub_roots_v4(layout, sub_roots)?)
+}
+
+/// **ADR-0152 §4-ter N2: the top half of a chunk's held path, from filed sub-roots** — the path of
+/// `slice` through the top tree over `state_top_leaf_v4(s, blocks, sub_roots[s])`. A challenger whose
+/// own execution disagrees with the accused's in OTHER slices (the anchor after a lie followed
+/// downstream) appends this to its own block path for slice `(K|V, ℓ)`.
+pub fn palw_state_top_path_from_sub_roots_v4(
+    layout: &PalwStateLayoutV4,
+    sub_roots: &[Hash64],
+    slice: u32,
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    crate::palw_step_leg::state_top_path_v4(&palw_state_top_leaves_from_sub_roots_v4(layout, sub_roots)?, slice as usize)
+}
+
+fn palw_state_top_leaves_from_sub_roots_v4(
+    layout: &PalwStateLayoutV4,
+    sub_roots: &[Hash64],
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    use crate::palw_step_leg::PalwStepLegError;
+    if sub_roots.len() != layout.slice_count() as usize {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: sub_roots.len(), max: layout.slice_count() as usize });
+    }
+    Ok(sub_roots
+        .iter()
+        .enumerate()
+        .map(|(slice, sub_root)| {
+            crate::palw_step_leg::state_top_leaf_v4(slice as u32, layout.block_count(slice as u32).unwrap_or(0), sub_root)
+        })
+        .collect())
+}
+
 /// **The state root from leaves already hashed under the class's map** (the flat order).
 pub fn palw_state_root_from_leaves_for_map_v1(
     profile: &PalwShapeProfileV3,

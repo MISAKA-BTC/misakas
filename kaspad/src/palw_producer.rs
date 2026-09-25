@@ -742,25 +742,18 @@ impl PalwProducerService {
         // what the config said, while the panel's half worked. The two halves must agree, and the
         // agreement is this constructor.
         let net = self.config.network_id.as_bytes().to_vec();
-        // ADR-0152 v3.1 J-5: the attempt rule this network runs (`CoreV1` where
-        // `palw_offence_attribution` is armed), on every backend the registry resolves.
-        let rules = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(&self.consensus_config.params);
-        let registry = if self.config.chain_classes {
-            crate::palw_backends::PalwBackendRegistry::new_with_chain_classes(
-                self.config.court,
-                self.config.prompt_ids_form,
-                self.class_holdings.clone(),
-                net,
-            )
-        } else {
-            crate::palw_backends::PalwBackendRegistry::new(
-                self.config.court,
-                self.config.prompt_ids_form,
-                self.class_holdings.clone(),
-                net,
-            )
-        };
-        registry.with_attempt_rules_v1(rules)
+        // ADR-0152 v3.1 J-5 and §4-ter N4: the attempt rule this network runs (`CoreV1` where
+        // `palw_offence_attribution` is armed) and the held-answerability turn, on every backend the
+        // registry resolves — through the one node constructor the panel's registry takes too, so
+        // past the fence the guard below reads a held-aware `supports_dissection`.
+        crate::palw_backends::PalwBackendRegistry::for_node_v1(
+            &self.consensus_config.params,
+            self.config.court,
+            self.config.prompt_ids_form,
+            self.class_holdings.clone(),
+            net,
+            self.config.chain_classes,
+        )
     }
 
     /// Takes the ALREADY-ENCODED material rather than the run: the encoding is the backend's,
@@ -1252,21 +1245,16 @@ impl PalwProducerService {
                 ));
             }
         }
-        // **ADR-0093 as built: the same refusal for the dissection's turn.** A claim of a class with
-        // a fused attention site can be disputed down to a fused leaf, where the responder owes a
-        // root claim and — with `palw_court_responder_coverage` retired, unarmed on every preset —
-        // silence is a conviction. A backend that cannot dissect its class (a fused tile wider than
-        // a head, or a family with no evidence verb) would be underwriting a claim it can never
-        // defend there; on a chain whose k-ary court is armed that is a refusal, as the DA court's is.
-        if backend.has_fused_site()
-            && !backend.supports_dissection()
-            && self.consensus_config.params.palw_kary_court_active_at(template.block.header.daa_score)
-        {
-            return Err(format!(
-                "this node will not produce for class {}: its fused attention site cannot be dissected by this build, and a \
-                 claim disputed down to that leaf is convicted by the silence it could not answer (ADR-0093)",
-                facts.class_id
-            ));
+        // **ADR-0093 as built: the same refusal for the dissection's turn** — and, past
+        // `palw_offence_attribution`, for a held class this build cannot answer inside the court's
+        // turn (ADR-0152 §4-ter N4). See [`palw_dissection_refusal_v1`].
+        if let Some(refusal) = palw_dissection_refusal_v1(
+            backend.as_ref(),
+            &self.consensus_config.params,
+            template.block.header.daa_score,
+            facts.class_id,
+        ) {
+            return Err(refusal);
         }
         // **Through the seam.** The backend is the class's execution path; this
         // function no longer knows which family it is producing for, which is what lets a second
@@ -1504,6 +1492,44 @@ impl AsyncService for PalwProducerService {
             Ok(())
         })
     }
+}
+
+/// **May this node underwrite a claim of the backend's class at a fused leaf's turn?** `Some(why)`
+/// when it may not (ADR-0093 as built; ADR-0152 §4-ter N4).
+///
+/// A claim of a class with a fused attention site can be disputed down to a fused leaf, where the
+/// responder owes a root claim and — with `palw_court_responder_coverage` retired, unarmed on every
+/// preset — silence is a conviction. A backend that cannot dissect its class (a fused tile wider than
+/// a head, or a family with no evidence verb) would be underwriting a claim it can never defend
+/// there; on a chain whose k-ary court is armed that is a refusal, as the DA court's is.
+///
+/// **Past `palw_offence_attribution` the same question is held-aware** (N4, the A-held launch gate):
+/// the node's registry makes every backend held-aware (`Params::palw_held_answerability_v1`, see
+/// `PalwBackendRegistry::for_node_v1`), and a held class's `supports_dissection` is then `true` only
+/// where the family has the windowed builders (N1 and N2) AND the class is answerable
+/// (`palw_held_class_unanswerable_v1`: the context bound, a recurrent layer, a compute turn — `m = 2`
+/// reference replays — past the cap). So on testnet-12 the node refuses the 2M row and any held
+/// hybrid, and produces the 8k row, whose held dissection it answers (the panel's held route). Below
+/// the fence, and on every network that does not arm it, the PRODUCER's refusal is what it was; the
+/// panel's canonical claim asks it too, which is new there (node policy, no consensus effect).
+pub(crate) fn palw_dissection_refusal_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    params: &kaspa_consensus_core::config::params::Params,
+    daa_score: u64,
+    class_id: kaspa_consensus_core::Hash64,
+) -> Option<String> {
+    (backend.has_fused_site() && !backend.supports_dissection() && params.palw_kary_court_active_at(daa_score)).then(|| {
+        format!(
+            "this node will not produce for class {class_id}: its fused attention site cannot be dissected by this build, and a \
+             claim disputed down to that leaf is convicted by the silence it could not answer (ADR-0093){}",
+            if params.palw_held_answerability_v1() {
+                "; past palw_offence_attribution a held class is dissected only where its family has the windowed builders and \
+                 its compute turn fits the cap (ADR-0152 §4-ter N4)"
+            } else {
+                ""
+            }
+        )
+    })
 }
 
 /// **Can this producer build on the lane the template declares?**

@@ -4636,6 +4636,47 @@ pub fn check_execution_step_refutation_opened_capped_v1(
     } else {
         binding.job_context.declared_prefill_tokens as u64 + out_coord.call_index as u64
     };
+    let (prompt_ids, generated) = check_refutation_id_carriage_v1(refutation, prompt_ids_opening)?;
+    let (recomputed_row, row_offset) =
+        run_program(program, node, layer, &binding.shape_profile, &inputs, weights, kv_len, (&out_coord, prompt_ids, generated))?;
+
+    // 4) Compare the challenged tile's slice, exact bits.
+    let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
+    let committed: Vec<u32> =
+        refutation.output_preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])).collect();
+    // `run_program` says where its slice starts, so a kernel that recomputed only the tile is not
+    // sliced a second time (ADR-0049 Decision B). Whole-row kernels report 0 and behave as before.
+    let local_start = tile_start.checked_sub(row_offset).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    let recomputed = recomputed_row
+        .get(local_start..local_start + committed.len())
+        .ok_or(PalwStepRefuteError::InputSetNotCanonical("recomputed row is shorter than the tile claims"))?;
+    if let Some(i) = recomputed.iter().zip(committed.iter()).position(|(a, b)| a != b) {
+        let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
+        return Ok(PalwStepRefutationVerdictV1 {
+            fault,
+            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+                &binding.committed_execution_root,
+                5,
+                refutation.output_opening.leaf_index,
+                fault,
+            ),
+        });
+    }
+    Err(PalwStepRefuteError::NoFaultFound)
+}
+
+/// **The two id carriages, checked against the binding alone** — the prompt ids (the whole list
+/// against a flat `prompt_token_ids_hash`, or one tile against a Merkle one, never both) and the
+/// decode pin (against the trace root the class committed). Neither reads a step tree or a row, so
+/// both are checkable wherever the binding is: the opened check runs this at its fixed place, and
+/// the bound one-move verdict (`palw_one_move_verdict_bound_v2`) runs it at a fused site, where
+/// the recomputation it would feed is the dissection's.
+pub fn check_refutation_id_carriage_v1<'a>(
+    refutation: &'a PalwExecutionStepRefutationV1,
+    prompt_ids_opening: Option<&'a crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+) -> Result<(crate::palw_prompt_ids_v1::PalwPromptIdWindowV1<'a>, &'a [u32]), PalwStepRefuteError> {
+    let binding = &refutation.binding;
+    let context_hash = binding.job_context.context_hash();
     // **G5d: the carried ids are checked BEFORE any of them is read.** Unchecked, a challenger
     // would name whatever ids convict an honest producer — the ids are the whole basis on which a
     // gather's "correct" output is decided. An empty list is legal (the refutation addresses no
@@ -4706,32 +4747,7 @@ pub fn check_execution_step_refutation_opened_capped_v1(
         }
         _ => return Err(PalwStepRefuteError::InputSetNotCanonical("the decode-token pin does not speak the class's lane")),
     };
-    let (recomputed_row, row_offset) =
-        run_program(program, node, layer, &binding.shape_profile, &inputs, weights, kv_len, (&out_coord, prompt_ids, generated))?;
-
-    // 4) Compare the challenged tile's slice, exact bits.
-    let tile_start = out_coord.tile_index as usize * node.tile_len as usize;
-    let committed: Vec<u32> =
-        refutation.output_preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])).collect();
-    // `run_program` says where its slice starts, so a kernel that recomputed only the tile is not
-    // sliced a second time (ADR-0049 Decision B). Whole-row kernels report 0 and behave as before.
-    let local_start = tile_start.checked_sub(row_offset).ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let recomputed = recomputed_row
-        .get(local_start..local_start + committed.len())
-        .ok_or(PalwStepRefuteError::InputSetNotCanonical("recomputed row is shorter than the tile claims"))?;
-    if let Some(i) = recomputed.iter().zip(committed.iter()).position(|(a, b)| a != b) {
-        let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
-        return Ok(PalwStepRefutationVerdictV1 {
-            fault,
-            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
-                &binding.committed_execution_root,
-                5,
-                refutation.output_opening.leaf_index,
-                fault,
-            ),
-        });
-    }
-    Err(PalwStepRefuteError::NoFaultFound)
+    Ok((prompt_ids, generated))
 }
 
 // ---------------------------------------------------------------------------------------------

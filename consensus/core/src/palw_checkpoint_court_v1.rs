@@ -503,6 +503,47 @@ pub(crate) mod tests {
             self.binding.shape_profile.shape_profile_id()
         }
 
+        /// **The same execution with a real tile committed at `coord`** — every other leaf as it
+        /// was, the step root and the execution root re-derived, so an opening of that leaf walks
+        /// to the claim's root. `value_count` and the bytes are the caller's: a canonical tile or a
+        /// malformed one the executor committed.
+        pub(crate) fn with_committed_tile(mut self, coord: PalwStepCoordinateV1, value_count: u32, values_le: Vec<u8>) -> Self {
+            let context_hash = self.binding.job_context.context_hash();
+            let profile_hash = self.binding.shape_profile.shape_profile_id();
+            let index = canonical_step_leaf_index(&self.binding.shape_profile, &self.binding.job_context, &coord)
+                .expect("a committed coordinate");
+            let leaf = PalwStepTileLeafV1 { version: 1, coord, value_count, values_le };
+            self.leaves[index as usize] = step_tile_leaf_hash_v1(&context_hash, &profile_hash, &leaf);
+            self.preimages.insert(index, leaf);
+            let b = &mut self.binding;
+            b.step_merkle_root = step_merkle_root_v1(&self.leaves).expect("a step root");
+            b.committed_execution_root = execution_commitment_root_v2(
+                &context_hash,
+                &b.full_logits_trace_root,
+                &b.activation_leg_root,
+                &checkpoint_leg_root_v2(
+                    &context_hash,
+                    &b.checkpoint_profile.profile_hash(),
+                    &b.state_chunk_map_id,
+                    b.job_context.exact_decode_tokens.saturating_sub(1),
+                    b.checkpoint_count,
+                    &b.checkpoint_merkle_root,
+                ),
+                &step_leg_root_v1(&context_hash, &profile_hash, b.step_leaf_count, &b.step_merkle_root),
+            );
+            verify_binding_v1(b).expect("the re-derived binding authenticates");
+            self
+        }
+
+        /// The committed opening of leaf `index`: its path through the fixture's own tree.
+        pub(crate) fn opening(&self, index: u64) -> PalwStepOpeningV1 {
+            PalwStepOpeningV1 {
+                leaf_index: index,
+                leaf_hash: self.leaves[index as usize],
+                siblings: step_merkle_path_v1(&self.leaves, index as usize).expect("a path"),
+            }
+        }
+
         /// The accusation of `(kind, layer, position)` read out of checkpoint `c`.
         pub(crate) fn accusation(&self, c: u32, kind: u8, layer: u16, position: u32) -> PalwCheckpointAccusationV1 {
             let profile = &self.binding.shape_profile;
