@@ -16,7 +16,7 @@ RUN_DIR="$ROOT_DIR/run"
 STATE_DIR="$ROOT_DIR/state"
 HOME_DIR="$ROOT_DIR/home"
 VALIDATOR_DIR="$ROOT_DIR/validator"
-SUPPORT_DIR="$ROOT_DIR/support"
+SUPPORT_DIR="$ROOT_DIR/diagnostics"
 VALIDATOR_KEY="$VALIDATOR_DIR/validator.seed"
 VALIDATOR_DB="$VALIDATOR_DIR/validator.state"
 STATE_FILE="$STATE_DIR/state.env"
@@ -77,8 +77,10 @@ Commands:
   restart-node      Restart local kaspad
   status            Show process state and node doctor
   doctor            Run detailed local diagnostics
+  collect-diagnostic-log
+                    Create a redacted diagnostic bundle under MISAKA desktop home
   collect-support-log
-                    Create a redacted support bundle under MISAKA desktop home
+                    Compatibility alias for collect-diagnostic-log
   wait-sync         Poll node doctor until Synced true
   logs              Tail local logs
   node-logs         Tail node logs only
@@ -729,13 +731,13 @@ collect_support_log() {
   mkdirs
   local stamp
   stamp="$(date -u '+%Y%m%dT%H%M%SZ')"
-  local bundle_dir="$SUPPORT_DIR/misaka-support-$stamp"
-  local archive="$SUPPORT_DIR/misaka-support-$stamp.tar.gz"
+  local bundle_dir="$SUPPORT_DIR/misaka-diagnostics-$stamp"
+  local archive="$SUPPORT_DIR/misaka-diagnostics-$stamp.tar.gz"
 
   mkdir -p "$bundle_dir"
   chmod 700 "$SUPPORT_DIR" "$bundle_dir" 2>/dev/null || true
 
-  say "collect support log"
+  say "collect diagnostic log"
   printf 'bundle_dir: %s\n' "$bundle_dir"
 
   NO_COLOR=1 doctor 2>&1 | redact_stream > "$bundle_dir/doctor.txt"
@@ -767,35 +769,36 @@ collect_support_log() {
   } 2>&1 | redact_stream > "$bundle_dir/runtime.txt"
   chmod 600 "$bundle_dir"/* 2>/dev/null || true
 
-  local support_artifact="$bundle_dir"
+  local diagnostic_artifact="$bundle_dir"
   if command -v tar >/dev/null 2>&1; then
     (
       cd "$SUPPORT_DIR"
       tar -czf "$(basename "$archive")" "$(basename "$bundle_dir")"
     )
     chmod 600 "$archive" 2>/dev/null || true
-    support_artifact="$archive"
-    printf 'support_archive: %s\n' "$archive"
+    diagnostic_artifact="$archive"
+    printf 'diagnostic_archive: %s\n' "$archive"
   else
-    warn "tar is missing; support bundle directory was created but not archived"
-    printf 'support_dir: %s\n' "$bundle_dir"
+    warn "tar is missing; diagnostic bundle directory was created but not archived"
+    printf 'diagnostic_dir: %s\n' "$bundle_dir"
   fi
 
   if is_linux && grep -qi microsoft /proc/version 2>/dev/null && command -v wslpath >/dev/null 2>&1; then
     local windows_artifact
-    windows_artifact="$(wslpath -w "$support_artifact" 2>/dev/null || true)"
+    windows_artifact="$(wslpath -w "$diagnostic_artifact" 2>/dev/null || true)"
     if [ -n "$windows_artifact" ]; then
-      printf 'support_windows_path: %s\n' "$windows_artifact"
+      printf 'diagnostic_windows_path: %s\n' "$windows_artifact"
     fi
   fi
 
   cat <<EOF
 
-Share this support artifact with the project maintainer:
-  ${support_artifact}
+Diagnostic artifact created locally:
+  ${diagnostic_artifact}
 
 It should not contain validator.seed or private key material. The command also
 redacts common token/seed/key patterns from logs before writing the bundle.
+Nothing is sent automatically.
 EOF
 }
 
@@ -1049,7 +1052,7 @@ case "$cmd" in
   restart-node) stop_pid "caffeinate" "$CAFFEINATE_PID"; stop_pid "kaspad" "$KASPAD_PID"; start_node ;;
   status) status ;;
   doctor) doctor ;;
-  collect-support-log) collect_support_log ;;
+  collect-diagnostic-log|collect-support-log) collect_support_log ;;
   wait-sync) wait_sync ;;
   logs) logs ;;
   node-logs) node_logs ;;
