@@ -11,8 +11,8 @@
 use super::t12_round_lane_e2e::{stamp_harness_time, t12_with_harness_cards, t12_with_harness_cards_and_evm};
 use super::{OnetimeTxSelector, TestContext, new_miner_data};
 use crate::consensus::test_consensus::TestConsensus;
+use crate::model::stores::ghostdag::GhostdagStoreReader;
 use crate::model::stores::headers::HeaderStoreReader;
-use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::{Block, MutableBlock, TemplateBuildMode};
 use kaspa_consensus_core::blockstatus::BlockStatus;
@@ -21,7 +21,10 @@ use kaspa_consensus_core::errors::block::RuleError;
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_heartbeat_v1::{HEARTBEAT_RECOVERY_INTERVAL_MS as I, HeartbeatYieldHintV1};
+use kaspa_consensus_core::pruning::PruningProofMetadata;
+use kaspa_consensus_core::trusted::TrustedBlock;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
+use kaspa_consensus_core::{BlockHash, BlockHashSet};
 use kaspa_muhash::MuHash;
 
 /// A testnet-12 chain at genesis, the premine imported as a node imports it. `floor = false` is the
@@ -174,7 +177,8 @@ async fn t12_a_beat_before_its_slot_is_refused_and_was_admitted_without_the_floo
 /// The rule's margin below the slot is zero, and that is safe because of who stamps: the adapter
 /// stamps `max(the miner's clock, the slot)`, and the slot is a function of the beat's own parents,
 /// so no honest node ever builds a beat below it whatever its clock says. A slow clock stamps the
-/// slot itself — its own future, by its skew, which peers accept up to the 132 s drift tolerance —
+/// slot itself — its own future, by its skew, which peers accept up to the drift tolerance (1,620 s,
+/// mainnet's, since the user's 2026-09-25 decision; 132 s before) —
 /// and a fast one stamps its own reading. Here thirty slots are mined by miners whose clocks read
 /// from a minute behind to a minute ahead, and every slot ticks exactly once, one interval or more
 /// after the last.
@@ -216,9 +220,9 @@ async fn t12_a_slow_clock_still_beats_and_the_chain_keeps_ticking_under_skew() {
 /// **H5, acceleration: a step stamped before the slot it consumed is refused — and without the floor
 /// it was admitted and opened the next slot two seconds after the last.**
 ///
-/// The drift tolerance (132 s) is longer than the interval (120 s), so a beat stamped for the slot is
-/// admissible the moment the reference exists; the block that merges it, stamped "now", became the
-/// next reference. Nothing floored the spacing between two ticks.
+/// The drift tolerance (1,620 s; 132 s before 2026-09-25) is longer than the interval (120 s), so a
+/// beat stamped for the slot is admissible the moment the reference exists; the block that merges it,
+/// stamped "now", became the next reference. Nothing floored the spacing between two ticks.
 #[tokio::test]
 async fn t12_a_step_cannot_open_the_next_slot_early_and_could_without_the_floor() {
     kaspa_core::log::try_init_logger("info");
@@ -333,7 +337,7 @@ fn own_beat(ctx: &TestContext, nonce: u64) -> (MutableBlock, u64, Header) {
 /// first slot the adapter had to stamp ahead of the node's clock:
 ///
 /// * **the beat that claims a slot opening two minutes from now is stamped AT the slot by the
-///   adapter** — its own future, inside the 132 s drift tolerance — and must still be a valid block.
+///   adapter** — its own future, inside the drift tolerance — and must still be a valid block.
 ///   With the EVM lane active that stamp moves `evm_commitment_root` (the lane executes against the
 ///   header's timestamp, in whole seconds), and the adapter used to move the stamp without the
 ///   commitment: the node's own beat was disqualified from the chain. Found while diagnosing the
@@ -406,4 +410,304 @@ async fn t12_the_node_s_own_beats_tick_from_genesis_with_the_evm_lane_as_shipped
     let step = ctx.consensus.get_sink();
     let step_ts = ctx.consensus.virtual_processor().headers_store.get_timestamp(step).unwrap();
     assert_eq!(taken_until(&ctx, step_ts + 1), Some(step_ts + I), "and the next slot is one interval after the last step");
+}
+
+/// **The drift budget at mainnet's tolerance: a producer runs the DAA clock up to `T` ahead of wall
+/// time — about 13 slots at testnet-12's 1,620 s, about 1 at the 132 s it ran before** (user decision
+/// 2026-09-25: testnet-12 runs mainnet's numbers).
+///
+/// The clock is paced by header stamps, and a stamp is bounded above only by
+/// `unix_now() + timestamp_deviation_tolerance`. So a miner whose clock claims every slot the moment
+/// it opens — the holder and the step both stamped AT the slot, which the floor admits — ticks one DAA
+/// per slot until the next slot opens past that bound, and there it stops: the header is refused
+/// `TimeTooFarIntoTheFuture` and the chain waits for wall time. The lead is a one-time offset in
+/// STAMPS — every tick is still exactly one interval after the last (the floor's spacing) — but not
+/// in wall time: the ticks below are minted in well under a second, so one producer advances the DAA
+/// by up to `⌊T / I⌋ + 1` = 14 with no other block between (2 at 132 s), and every DAA-denominated
+/// window loses that much wall time (what that does to a readiness row:
+/// `t12_run_ahead_burst_vs_readiness`, the 2026-09-25 review's HIGH, open for the user). Measured
+/// against the node's real clock (the future bound reads `unix_now`, and the refusal reports it):
+/// at the refusal the last tick's stamp leads the node's clock by more than `T − I` and at most `T`
+/// — `(1,500 s, 1,620 s]`, 12.5–13.5 slots, at 1,620 s; `(12 s, 132 s]` at 132 s.
+#[tokio::test]
+async fn t12_a_producer_runs_the_clock_at_most_the_drift_budget_ahead() {
+    kaspa_core::log::try_init_logger("info");
+    let (shipped, _bundle, premine, _floats) = t12_with_harness_cards();
+    assert_eq!(shipped.params.timestamp_deviation_tolerance, 1_620, "testnet-12 runs mainnet's tolerance: 27 samples x 120 s / 2");
+    for tolerance in [1_620u64, 132] {
+        let config = if tolerance == shipped.params.timestamp_deviation_tolerance {
+            shipped.clone()
+        } else {
+            let mut params = shipped.params.clone();
+            params.timestamp_deviation_tolerance = tolerance;
+            ConfigBuilder::new(params).skip_proof_of_work().build()
+        };
+        let budget_ms = tolerance * 1_000;
+        let mut ctx = t12_at_genesis(&config, &premine);
+        // Genesis is three weeks behind the wall clock: an honest slot mined from "now" brings the
+        // reference to about wall time (`honest_slot` waits for a taken slot on the simulated clock,
+        // so the reference may already sit up to one interval ahead — the lead below is measured
+        // against the node's clock, not against it).
+        ctx.simulated_time = kaspa_core::time::unix_now();
+        let mut step = honest_slot(&mut ctx, 1).await;
+        let at_wall_time = daa_of(&ctx, step.header.hash);
+        let mut ticks = 0u64;
+        let mut nonce = 2_000u64;
+        let node_clock_at_refusal = loop {
+            assert!(ticks * I <= budget_ms + I, "T = {tolerance} s: the clock ran {ticks} slots ahead, past the budget");
+            let slot = step.header.timestamp + I;
+            // A miner whose clock reads the slot the moment it opens: the holder...
+            let (built, _) = beat(&ctx, nonce, slot);
+            assert_eq!(built.header.timestamp, slot, "stamped at the slot");
+            match submit(&mut ctx, built).await {
+                Ok(_) => {}
+                Err(RuleError::TimeTooFarIntoTheFuture(stamped, bound)) => {
+                    assert!(stamped > bound && stamped == slot, "T = {tolerance} s: refused for the future bound alone");
+                    break bound - budget_ms;
+                }
+                Err(e) => panic!("T = {tolerance} s: the run-ahead holder after {ticks} ticks was refused for {e}"),
+            }
+            // ...and the step over it, which the adapter stamps at the slot it consumes.
+            let (built, _) = beat(&ctx, nonce + 1, slot);
+            nonce += 2;
+            let next = accepted(&mut ctx, built, "a run-ahead step").await;
+            assert_eq!(next.header.timestamp, slot, "the step is stamped at its slot");
+            assert_eq!(daa_of(&ctx, next.header.hash), daa_of(&ctx, step.header.hash) + 1, "one tick a slot");
+            step = next;
+            ticks += 1;
+        };
+        let lead_ms = step.header.timestamp.saturating_sub(node_clock_at_refusal);
+        eprintln!(
+            "[t12-drift-budget] T = {tolerance} s: the last tick leads the node's clock by {:.1} s = {:.2} slots ({ticks} run-ahead \
+             ticks, DAA {at_wall_time} -> {})",
+            lead_ms as f64 / 1_000.0,
+            lead_ms as f64 / I as f64,
+            daa_of(&ctx, step.header.hash)
+        );
+        assert!(lead_ms <= budget_ms, "T = {tolerance} s: no tick is ever stamped past the future bound");
+        assert!(lead_ms + I > budget_ms, "T = {tolerance} s: and a producer gets within one interval of it");
+    }
+    // The two tolerances' budgets in whole slots: 13 at mainnet's, 1 at the hash lineage's.
+    assert_eq!((1_620 * 1_000 / I, 132 * 1_000 / I), (13, 1));
+}
+
+/// **Mainnet's block-level ceiling on testnet-12 (225, user decision 2026-09-25): every block is level
+/// 0, a header lists parents at level 0 alone, and the pruning proof is `225 + 1` levels.**
+///
+/// On a hash lineage the ceiling places blocks in the pruning proof's hierarchy (`calc_level_from_pow`
+/// = ceiling − bits(pow)). Here no block buys a level: a heartbeat derives none, a receipt none, and
+/// an attempt header none past the single lottery, which testnet-12 arms from genesis. So the ceiling
+/// sets only the genesis level, the proof's level count and with it the proof's header budget — the
+/// chain's headers are the same at 225 as at 250. Checked on the pipeline's own stores, over the
+/// honest heartbeat slots `to_a_taken_slot` mines, and on the proof the node would serve.
+#[tokio::test]
+async fn t12_blocks_are_level_zero_under_mainnet_s_ceiling() {
+    kaspa_core::log::try_init_logger("info");
+    let (mut ctx, config) = t12_clock(true);
+    assert_eq!(config.params.max_block_level, 225, "testnet-12 runs mainnet's ceiling");
+    assert!(config.params.palw_single_lottery_at(0), "an attempt header derives no level from genesis");
+    let genesis = config.params.genesis.hash;
+    let headers = ctx.consensus.virtual_processor().headers_store.clone();
+    assert_eq!(headers.get_header_with_block_level(genesis).unwrap().block_level, 225, "genesis sits at the ceiling");
+    let mut checked = 0;
+    for n in 0..6u64 {
+        let step = honest_slot(&mut ctx, 100 + 10 * n).await;
+        for hash in std::iter::once(step.header.hash).chain(step.header.direct_parents().iter().copied()) {
+            if hash == genesis {
+                continue;
+            }
+            let h = headers.get_header_with_block_level(hash).unwrap();
+            assert_eq!(h.block_level, 0, "block {hash}: a heartbeat buys no level");
+            assert_eq!(
+                h.header.parents_by_level.expanded_len(),
+                1,
+                "block {hash}: parents at level 0 only — above it every level is genesis"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 12, "both beats of every slot were checked ({checked})");
+    let proof = ctx.consensus.get_pruning_point_proof();
+    assert_eq!(proof.len(), 225 + 1, "one proof level per block level, the ceiling included");
+    assert!(
+        proof.iter().all(|level| level.len() == 1 && level[0].hash == genesis),
+        "at genesis's pruning point every level is genesis"
+    );
+}
+
+/// The part of the trusted set `apply_pruning_proof` reads for `pp`, as the IBD server sends it:
+/// the pruning point and its anticone from `sink`'s point of view, as full blocks with their GHOSTDAG
+/// data, in blue-work order. (The server's `get_pruning_point_anticone_and_trusted_data` answers only
+/// for the node's own pruning point and only while its virtual is deep above it; the DAA and
+/// GHOSTDAG windows it adds are what the blocks ABOVE the point are validated with, which this test
+/// does not process.)
+fn t12_trusted_set(source: &TestConsensus, pp: BlockHash, sink: BlockHash) -> Vec<TrustedBlock> {
+    let mut hashes = vec![pp];
+    hashes.extend(source.dag_traversal_manager().anticone(pp, std::iter::once(sink), None).expect("the anticone from the sink"));
+    let mut blocks: Vec<TrustedBlock> = hashes
+        .into_iter()
+        .map(|hash| {
+            let block = source.get_block(hash).expect("a block the source holds in full");
+            let ghostdag = source.ghostdag_store().get_data(hash).expect("its GHOSTDAG data");
+            TrustedBlock::new(block, ghostdag.as_ref().into())
+        })
+        .collect();
+    blocks.sort_by(|a, b| a.block.header.blue_work.cmp(&b.block.header.blue_work));
+    blocks
+}
+
+/// **Mainnet's ceiling on testnet-12 past genesis: a pruning point that MOVED, its proof built at
+/// 225, validated by a node at genesis and applied by a staging node** (the 2026-09-25
+/// mainnet-values review, LOW: the test above sees only the trivial proof of a genesis pruning
+/// point, and every other pruning-proof test runs a hash lineage's params).
+///
+/// testnet-12's ruleset, with three depths shrunk so a pruning point is due inside a test — finality
+/// 20, pruning 50 (`50 mod 20 = 10`, inside `(k, finality − k)` at k = 1) and the proof's `m` 10 —
+/// and heartbeats mined as honest slots until the headers declare one. Measured, not assumed:
+///
+/// * **on heartbeats alone the node's pruning point does not move at all**: past a V2 bundle it is
+///   capped by the PALW safe frontier (the deepest `Final` claim), and a chain that matured no work
+///   has none. Until testnet-12's first claim is `Final` its nodes serve the genesis proof the test
+///   above checks. The point the headers declare is then installed the way a header-syncing node
+///   installs it (`intrusive_pruning_point_update`), standing in for the `Final` that would allow it;
+/// * every level above 0 is genesis alone, and a level's root must lie in the past of the block `m`
+///   deep on the level above — genesis — so **the level-0 proof is the whole history below the
+///   pruning point**, every header of it, not the `2m` window a hash lineage's proof keeps. A
+///   testnet-12 proof therefore grows with the chain until it meets the header budget
+///   `(max_block_level + 1) × 2 × m`: 452,000 at 225 and m = 1,000, about 314 days of two-block
+///   heartbeat slots below the pruning point (which trails the sink by the pruning depth, 74,920
+///   DAA ≈ 104 days), 502,000 and about 348 days at 250 — sooner with every other block the chain
+///   carries. Owed at either ceiling; 225 brings it about 34 days nearer;
+/// * a node at genesis validates the proof (`validate_pruning_proof`, which derives each header's
+///   level with the single lottery);
+/// * a staging node applies it with the trusted set, then the pruning points (`apply_pruning_proof`,
+///   `import_pruning_points`, which derive levels WITHOUT the single lottery — a heartbeat derives
+///   none either way, so every stored level is 0 here), and builds the same proof back (the IBD
+///   flow's sanity check).
+#[tokio::test]
+async fn t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225() {
+    kaspa_core::log::try_init_logger("info");
+    let (shipped, _bundle, premine, _floats) = t12_with_harness_cards();
+    assert_eq!(shipped.params.max_block_level, 225, "testnet-12 runs mainnet's ceiling");
+    // Shrunk AFTER the build: `validate_palw_v2` rightly refuses a pruning depth under the DNS BFT
+    // gate's 5,274-blue-score walk (and under the claim lattice), and neither is what this test is
+    // about — no claim is made and no stake moves, and the source keeps every block (archival) so
+    // nothing the shrunk depth would prune is missing from what it serves.
+    let mut config = shipped.clone();
+    config.params.blockrate.finality_depth = 20;
+    config.params.blockrate.pruning_depth = 50;
+    config.params.pruning_proof_m = 10;
+    config.is_archival = true;
+    let m = config.params.pruning_proof_m;
+    let genesis = config.params.genesis.hash;
+    let mut ctx = t12_at_genesis(&config, &premine);
+    let headers = ctx.consensus.virtual_processor().headers_store.clone();
+    // Heartbeats until the headers DECLARE a pruning point (`header.pruning_point` is a function of
+    // GHOSTDAG and the depths alone) at least `6m` deep — so a proof that kept only the `2m` window
+    // would be told apart from one that keeps the whole history — and already
+    // `anticone_finalization_depth` under the sink.
+    let settle = config.params.anticone_finalization_depth() + 4;
+    let mut slots = 0u64;
+    let pp = loop {
+        honest_slot(&mut ctx, 10_000 + 4 * slots).await;
+        slots += 1;
+        let sink = headers.get_header(ctx.consensus.get_sink()).unwrap();
+        let declared_bs = headers.get_blue_score(sink.pruning_point).unwrap();
+        if declared_bs >= 6 * m && sink.blue_score >= declared_bs + settle {
+            break sink.pruning_point;
+        }
+        assert!(slots < 300, "no header declared a settled pruning point {} deep in {slots} slots", 6 * m);
+    };
+    // **The node does not move there on heartbeats alone.** Past a V2 bundle the pruning point is
+    // capped by the PALW safe frontier — the deepest `Final` claim's blue score — and a chain that
+    // matured no work has none (`palw_pruning_point_allowed_v2`, the pruning processor's Unit D gate).
+    // So a testnet-12 node serves the genesis proof of the test above until its first claim is Final;
+    // the proof asked about here is the one it serves after that.
+    assert_eq!(ctx.consensus.pruning_point(), genesis, "heartbeats alone mature no work, so the frontier holds the pruning point");
+    let sink = ctx.consensus.get_sink();
+    let relay = headers.get_header(sink).unwrap();
+    let trusted = t12_trusted_set(&ctx.consensus, pp, sink);
+    assert_eq!(trusted.first().map(|tb| tb.block.hash()), Some(pp), "the trusted set starts at the pruning point");
+    // Moved as a node syncing headers moves it (the IBD catch-up's `intrusive_pruning_point_update`,
+    // which checks the point is a pruning sample, deep enough under the sink and on its chain) — the
+    // one step a claim's `Final` would otherwise take.
+    ctx.consensus
+        .intrusive_pruning_point_update(pp, sink)
+        .unwrap_or_else(|e| panic!("the declared pruning point {pp} is not a pruning point: {e}"));
+    assert_eq!(ctx.consensus.pruning_point(), pp);
+    let pp_header = headers.get_header_with_block_level(pp).unwrap();
+    assert_eq!(pp_header.block_level, 0, "the pruning point is a heartbeat and buys no level");
+
+    let proof = ctx.consensus.get_pruning_point_proof();
+    assert_eq!(proof.len(), 225 + 1, "one proof level per block level");
+    assert!(proof[1..].iter().all(|level| level.len() == 1 && level[0].hash == genesis), "above level 0 every level is genesis");
+    // past(pp) ∪ {pp}, walked from the headers the source stored.
+    let mut past = BlockHashSet::default();
+    let mut stack = vec![pp];
+    while let Some(hash) = stack.pop() {
+        if past.insert(hash) && hash != genesis {
+            stack.extend(headers.get_header(hash).unwrap().direct_parents().iter().copied());
+        }
+    }
+    let level0: BlockHashSet = proof[0].iter().map(|h| h.hash).collect();
+    assert_eq!(level0.len(), proof[0].len(), "no header twice");
+    assert_eq!(level0, past, "the level-0 proof is the whole history below the pruning point");
+    assert!(proof[0].len() as u64 > 3 * (2 * m), "…three times the 2m window a hash lineage's proof keeps and more");
+    let total: usize = proof.iter().map(|level| level.len()).sum();
+    let budget = (config.params.max_block_level as u64 + 1) * 2 * m;
+    assert!((total as u64) <= budget, "inside the header budget here ({total} of {budget})");
+    // Headers a slot below the pruning point: each DAA tick is one slot of `I`.
+    let per_slot = (proof[0].len() - 1) as f64 / pp_header.header.daa_score as f64;
+    let days = |ceiling: u64| {
+        ((ceiling + 1) * 2 * shipped.params.pruning_proof_m - ceiling) as f64 / per_slot * (I as f64 / 1_000.0) / 86_400.0
+    };
+    let days_at_two = |ceiling: u64| ((ceiling + 1) * 2 * shipped.params.pruning_proof_m - ceiling) as f64 / 2.0 * 120.0 / 86_400.0;
+    eprintln!(
+        "[t12-proof-225] declared after {slots} slots: pruning point at blue score {}, DAA {}; proof {total} headers, {} at level 0 = \
+         past(pp) ({per_slot:.2} a slot here); at testnet-12's m = {} the budget ((mbl + 1) x 2 x m) is {} headers = {:.0} days of \
+         two-block slots below the pruning point ({:.0} at this test's rate); at 250: {} headers = {:.0} days ({:.0})",
+        pp_header.header.blue_score,
+        pp_header.header.daa_score,
+        proof[0].len(),
+        shipped.params.pruning_proof_m,
+        (225u64 + 1) * 2 * shipped.params.pruning_proof_m,
+        days_at_two(225),
+        days(225),
+        (250u64 + 1) * 2 * shipped.params.pruning_proof_m,
+        days_at_two(250),
+        days(250)
+    );
+
+    // A node at genesis validates it against the source's sink.
+    let fresh = t12_at_genesis(&config, &premine);
+    fresh
+        .consensus
+        .validate_pruning_proof(&proof, &PruningProofMetadata::new(relay.blue_work))
+        .unwrap_or_else(|e| panic!("a node at genesis refused the proof: {e}"));
+
+    // A staging node applies it and the pruning points, as the IBD flow does before it processes the
+    // trusted set (which, at these shrunk depths, would send the DNS gate's walk below the pruning
+    // point — a property of the test's depths, not of the proof).
+    let mut staging_config = config.clone();
+    staging_config.process_genesis = false;
+    staging_config.is_archival = false;
+    let staging = TestContext::new(TestConsensus::new(&staging_config));
+    staging.consensus.apply_pruning_proof((*proof).clone(), &trusted).unwrap_or_else(|e| panic!("the proof did not apply: {e}"));
+    staging
+        .consensus
+        .import_pruning_points(ctx.consensus.pruning_point_headers())
+        .unwrap_or_else(|e| panic!("the pruning points: {e}"));
+    let staged = staging.consensus.virtual_processor().headers_store.clone();
+    for header in proof[0].iter().filter(|h| h.hash != genesis) {
+        assert_eq!(staged.get_header_with_block_level(header.hash).unwrap().block_level, 0, "{}: applied at level 0", header.hash);
+    }
+    assert_eq!(staging.consensus.pruning_point(), pp, "the staging node stands at the source's pruning point");
+    let rebuilt = staging.consensus.get_pruning_point_proof();
+    for (level, (sent, built)) in proof.iter().zip(rebuilt.iter()).enumerate() {
+        assert_eq!(
+            sent.iter().map(|h| h.hash).collect::<BlockHashSet>(),
+            built.iter().map(|h| h.hash).collect::<BlockHashSet>(),
+            "level {level}: the staging node builds the proof it was sent"
+        );
+    }
 }

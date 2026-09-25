@@ -682,8 +682,9 @@ pub fn palw_overlay_escrow_carve_at_v1(
 /// beside the height in `consensus_schedule_id`, invisible to the fence visitor. Answered only on a
 /// `ConsensusV2` network ([`Params::palw_panel_exposure_floor_fence`]), and refused by
 /// [`Params::validate_palw_v2`] without the panel economy it floors, below that economy's height, at
-/// zero, and past [`crate::palw_panel_economy_v1::PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1`]. `None`
-/// on every shipped preset, and stated by no card: `λ` for a mainnet is the operator's open decision.
+/// zero, and past [`crate::palw_panel_economy_v1::PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1`]. Armed on
+/// testnet-12 alone, at `λ = 5` (the user's 2026-09-25 mainnet value, from ADR-0130 D1's 5–10);
+/// `None` on testnet-11, devnet and mainnet, and not yet stated by the mainnet card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwPanelExposureFloorV1 {
     /// When a seat's reservation starts being floored.
@@ -9804,8 +9805,9 @@ pub const FOURTEEN_DAYS_BLOCKS_10BPS: u64 = 14 * 86_400 * 10; // 12_096_000
 /// kaspa-pq production (mainnet + testnet) DNS-finality overlay params. Differs from the
 /// shared [`GENESIS_ACTIVE_DNS_PARAMS`] (used by devnet/simnet) in the economically
 /// load-bearing knobs:
-///   * `min_active_stake_sompi = 20_000_000 KAS` — the network does not reach the `Active`
-///     rollout stage until at least 20M KAS of stake is bonded (user decision 2026-06-01).
+///   * `min_active_stake_sompi = 120,000,000 MSK` (6 validators x a 20M MSK bond, user decision
+///     2026-09-25) — the network does not reach the `Active` rollout stage until that much stake
+///     is bonded by at least that many validators.
 ///   * `unbonding_period_blocks = 14 days` (+ the reorg horizon, to keep the ADR-0009
 ///     §"Long-range bound" invariant `U ≥ R + E`). A withdrawal request only releases the
 ///     locked stake after this window; the stake stays slashable the entire time.
@@ -9819,11 +9821,11 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     dns_activation_daa_score: 0,
     // Production: the overlay reaches the Active stage once this much stake is bonded.
     //
-    // **20M -> 600M (2026-08-30), then -> 120,000 with the bond floor below.** The two gates are
-    // ANDed, so the stake gate must state their product or it is a dead constant reading as a
-    // second, weaker floor. It moves whenever either half does, which
-    // `the_active_stake_gate_is_the_product_of_the_two_floors` holds: 12 x 10,000 MSK.
-    min_active_stake_sompi: 120_000 * SOMPI_PER_KASPA,
+    // **20M -> 600M (2026-08-30), then -> 120,000 with the bond floor below, then -> 120,000,000
+    // (2026-09-25).** The two gates are ANDed, so the stake gate must state their product or it is
+    // a dead constant reading as a second, weaker floor. It moves whenever either half does, which
+    // `the_active_stake_gate_is_the_product_of_the_two_floors` holds: 6 x 20,000,000 MSK.
+    min_active_stake_sompi: 6 * 20_000_000 * SOMPI_PER_KASPA,
     // audit H-11 (Kaspa-diff): the DNS Active stage must NOT be drivable by a single key. A
     // multi-operator floor is the mainnet default so finality does not hinge on one operator's
     // key/availability/honesty (the safety floor is BOTH the `min_active_stake_sompi` AND this
@@ -9839,8 +9841,13 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // every operator who is not the treasury, and concentration is the risk this floor exists to
     // prevent. 24 is the next step once that many distinct operators are actually seated; going
     // there before they exist would stall the overlay at `Bootstrapping` instead of securing it.
-    min_active_validators: 12,
-    // Production: every individual validator must bond >= 10,000 MSK; a smaller StakeBond is
+    //
+    // **12 -> 6 (user decision 2026-09-25: testnet-12 runs mainnet's numbers, and mainnet's are the
+    // ones the user set on 2026-09-24 — "DNS validator は最低 6 台・最低 20M MSK").** With the bond
+    // at 20M below, corrupting a 2/3 quorum is `ceil(2·6/3) = 4` bonds = 80M MSK, 1,000x the
+    // 80,000 MSK the 12 x 10,000 set priced it at.
+    min_active_validators: 6,
+    // Production: every individual validator must bond >= 20,000,000 MSK; a smaller StakeBond is
     // rejected at acceptance and can never attest.
     //
     // **50M -> 10,000 MSK (2026-08-30, operator decision): ONE floor for what it costs to be a
@@ -9858,7 +9865,13 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // the settlement value a finality vote can reverse**; ADR-0061's 10,000 was sized for a PALW
     // seat's slashable exposure, not for reversing a confirmed anchor, and the two are different
     // questions that now share an answer.
-    min_bond_amount_sompi: 10_000 * SOMPI_PER_KASPA,
+    //
+    // **10,000 -> 20,000,000 MSK (user decision 2026-09-25, the 2026-09-24 mainnet assumption).**
+    // That re-derivation is what separated the two floors again: a PALW seat's floor stays the
+    // 13,000 MSK producer floor (`PALW_MAINNET_MIN_COLLATERAL_SOMPI`), and a DNS validator — whose
+    // vote can reverse a confirmed anchor — bonds 20M. testnet-12 runs this set unchanged
+    // (`PALW_T12_DNS_PARAMS`).
+    min_bond_amount_sompi: 20_000_000 * SOMPI_PER_KASPA,
     epoch_length_blocks: 100,
     // audit H-02 (true WorkDepth, Option A): a DNS-confirmed anchor must be buried by at least this
     // much ACCUMULATED blue work SINCE it became the canonical lagged anchor (anchor-relative
@@ -10031,9 +10044,18 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // validator-outage recovery, Active↔Stale boundary, overwhelming-work reorg) has been run by
     // the regression harness. Testnet overrides to 2 and soaks it first. See the field doc.
     stake_preference_max_work_deficit_multiplier: 0,
-    // DNS-accelerated coinbase settlement: OFF on mainnet until testnet has soaked the policy
-    // layer through at least one full anchor-live / anchor-dead cycle. See the field doc.
-    coinbase_settlement_long_maturity_daa: 0,
+    // DNS-accelerated coinbase settlement: **600 DAA, the user's Mainnet Decision A (`1827850e`;
+    // made mainnet's 2026-09-25)** — a coinbase is spendable by DAA maturity alone, at this long
+    // fallback, or earlier once a DNS-confirmed anchor passes its block. It was 0 here "until
+    // testnet has soaked the policy layer"; testnet-10/11 ran 600 and testnet-12 is that soak.
+    //
+    // The count is sized for the CARDED cadence, which is the only one a mainnet launches at
+    // (`with_two_minute_cadence` converts the windows and leaves this): 600 > the 360-block gate
+    // horizon + the 120-DAA veto TTL, the field's sizing rule. On the bundle-free 10 bps preset it
+    // is inert — its base `coinbase_maturity` is 1,000 blocks, above 600, and
+    // `coinbase_spend_settled` never undercuts the base floor — so that preset's spend rule is
+    // exactly what 0 gave it.
+    coinbase_settlement_long_maturity_daa: 600,
     // Consensus enforcement fence: NEVER in this build — the per-chain-block anchor fold is not
     // wired; the fence exists so the fold-carrying build announces itself via the fingerprint.
     coinbase_settlement_consensus_activation_daa_score: u64::MAX,
@@ -10153,35 +10175,28 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// fleet's update window, and every validator/miner binary inside the fleet BEFORE it.
 pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = 0;
 
-/// **testnet-12's DNS-finality set: mainnet-assumed validators** (user decision, 2026-09-24).
+/// **testnet-12's DNS-finality set: mainnet's own** (user decisions 2026-09-24 and 2026-09-25).
 ///
-/// Derived from [`PRODUCTION_DNS_PARAMS`] — the mainnet set, which is left untouched because
-/// mainnet's params hash it — through [`DnsParams::at_two_minute_cadence`], the same conversion that
-/// gives testnet-11 its 120 s windows (so, e.g., `unbonding_period_blocks` is 14 days at t12's
-/// 120 s blocks plus the reorg horizon: 10,083 blocks, not 14 days of 10 bps blocks), and then:
+/// [`PRODUCTION_DNS_PARAMS`] — the mainnet set — through [`DnsParams::at_two_minute_cadence`], the
+/// same conversion that gives testnet-11 its 120 s windows and a carded mainnet its own (so, e.g.,
+/// `unbonding_period_blocks` is 14 days at t12's 120 s blocks plus the reorg horizon: 10,083 blocks,
+/// not 14 days of 10 bps blocks), with ONE substitution:
 ///
-/// * **`min_active_validators` = 6** (production: 12);
-/// * **`min_bond_amount_sompi` = 20,000,000 MSK**;
-/// * **`min_active_stake_sompi` = 6 × 20,000,000 = 120,000,000 MSK** — production's
-///   validators × bond relation, kept;
-/// * **`coinbase_settlement_long_maturity_daa` = testnet-11's 600 DAA** — production's 0 would drop
-///   the long fallback, and the user's Decision A makes coinbase spendability exactly that
-///   DAA-based maturity (or DNS-final early release);
 /// * **`required_work_depth` = testnet-11's**, the one testnet-only value the chain needs to stay
 ///   coherent: production's is a 10 bps kHeavyHash blue-work depth that a PALW chain at the easiest
-///   header target would take years to accumulate, so DNS confirmation could never flip.
+///   header target would take years to accumulate, so DNS confirmation could never flip. (The same
+///   retune is owed on the mainnet side before a card launches.)
 ///
-/// Everything else is production's: `required_stake_depth` (ten epochs at full participation —
-/// what production calibrates for a 20M-scale set), `min_anchor_attesters` = 2, the reward params,
-/// the stake preference off, and the compute overlay inert (`VltParams::INERT`; ADR-0134 retired
-/// it). `validate_palw_v2` and the v3 anchor invariants accept the set (pinned in
+/// Everything else is production's, and since 2026-09-25 production carries the numbers this set
+/// used to override: **6 validators, a 20,000,000 MSK bond, 120,000,000 MSK of active stake**
+/// (validators x bond) and **Decision A's 600-DAA coinbase long maturity**. So the set testnet-12
+/// runs did not move when those overrides were dropped — only mainnet's did. Also production's:
+/// `required_stake_depth` (ten epochs at full participation), `min_anchor_attesters` = 2, the reward
+/// params, the stake preference off, and the compute overlay inert (`VltParams::INERT`; ADR-0134
+/// retired it). `validate_palw_v2` and the v3 anchor invariants accept the set (pinned in
 /// `the_testnet_12_dns_set_is_mainnet_assumed_and_nobody_elses_moved`).
 pub const PALW_T12_DNS_PARAMS: DnsParams = {
     let mut dns = PRODUCTION_DNS_PARAMS.at_two_minute_cadence();
-    dns.min_active_validators = 6;
-    dns.min_bond_amount_sompi = 20_000_000 * SOMPI_PER_KASPA;
-    dns.min_active_stake_sompi = 6 * 20_000_000 * SOMPI_PER_KASPA;
-    dns.coinbase_settlement_long_maturity_daa = TESTNET_DNS_PARAMS.coinbase_settlement_long_maturity_daa;
     dns.required_work_depth = TESTNET_DNS_PARAMS.required_work_depth;
     dns
 };
@@ -15222,6 +15237,15 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     // have never held exposure cannot start holding it retroactively.
     base.palw_panel_economy = Some(ForkActivation::always());
     base.palw_work_priced_reward = Some(ForkActivation::always());
+    // **ADR-0126's carve, stated from a card's genesis** (user decision 2026-09-25: mainnet takes
+    // the numbers testnet-12 runs). The validator pool's subsidy share drops from the overlay's full
+    // split, 30%, to 20%, and the tenth it gives up is escrowed for PALW: a claim's escrow is 720‰
+    // of its block's subsidy, not the bundle's 620‰ — 3,200.85 MSK a claim at a 120 s block, the G
+    // every ADR-0152 tier, the seat lock and the genesis-seat sizing are built on. The worker base
+    // the lowered split leaves is 72%, which the carve fills exactly (ADR-0126 Decision 4, checked
+    // by `validate_palw_v2`). testnet-11 reaches it by its 6,001 flag day; testnet-12 from genesis.
+    base.palw_overlay_carve =
+        Some(PalwOverlayCarveV1 { activation: ForkActivation::always(), subsidy_validator_bps: 2_000, worker_carve_permille: 720 });
     base
 }
 
@@ -16393,6 +16417,41 @@ pub fn palw_t12_base_params() -> Params {
     // Mainnet-assumed DNS-finality validators (user decision 2026-09-24) — before the arming walk,
     // exactly where testnet-11's table sat, so the walk treats both the same.
     params.dns_params = Some(PALW_T12_DNS_PARAMS);
+    // **Mainnet's future-time tolerance, derived as a card derives it** (user decision 2026-09-25:
+    // testnet-12 runs mainnet's numbers; mainnet audit 2026-09-06 L-1). The 27-sample median window
+    // at one 120 s block a sample models 1,620 s, not the hash lineage's 132 s, and testnet-12 is a
+    // re-mint, so it takes the value a card takes rather than the pinned gap testnet-11 and devnet
+    // keep. **The effect, stated:** testnet-12's heartbeat clock is paced by header stamps, and a
+    // stamp is bounded above only by this tolerance, so a producer that stamps every beat at its
+    // slot can run the DAA clock up to 1,620 s — about 13 slots — ahead of wall time (about 1 slot at
+    // 132 s). The lead is a one-time offset in STAMPS (the clock floor still spaces two stamps at
+    // least one interval apart, `t12_a_producer_runs_the_clock_at_most_the_drift_budget_ahead`), but
+    // not in wall time: those ticks can be minted at once, so one producer can advance the DAA by
+    // `⌊T / I⌋ + 1` = 14 with no other block in between (2 at 132 s) — every DAA-denominated window
+    // is shortened by that much wall time, and a burst that outlasts a readiness row's remaining age
+    // lapses the row with no proof able to land (the 2026-09-25 mainnet-values review, HIGH; measured
+    // on the lifecycle fold by `t12_a_run_ahead_burst_outlasts_a_readiness_row`). **Open, for the
+    // user's decision before launch** — cap the clock-stepping beat's stamp near the receiver's clock,
+    // re-prove far enough ahead of the horizon, or keep 132 s here.
+    params.timestamp_deviation_tolerance = palw_v2_timestamp_deviation_tolerance_v1(
+        params.past_median_time_window_size,
+        BlockrateParams::new_two_minute_bps().past_median_time_sample_rate,
+        BlockrateParams::new_two_minute_bps().target_time_per_block,
+    );
+    // **Mainnet's block-level ceiling, 225** (user decision 2026-09-25). No block on this network
+    // derives a level above 0 whichever ceiling it runs — the single lottery gives an attempt header
+    // none, and heartbeat, receipt and round blocks derive none — so the ceiling sets only the genesis
+    // level and the number of (genesis-only) pruning-proof levels above 0, and with them the proof's
+    // header budget, `(225 + 1) x 2 x m` = 452,000 slots (502,000 at 250). Headers are unchanged: a
+    // header lists parents only up to the first genesis-only level. **Owed at either ceiling, not
+    // caused by this one:** with every block at level 0 the level-0 proof is the whole history below
+    // the pruning point, so that budget, not the level pyramid, is what eventually bounds a proof —
+    // about 314 days of two-block heartbeat slots below the pruning point at 225 (348 at 250). And
+    // the pruning point itself does not leave genesis until the first claim is `Final` (the PALW
+    // safe frontier caps it). Both measured at 225 on a moved pruning point — built, validated by a
+    // node at genesis, applied by a staging node — by
+    // `t12_a_moved_pruning_point_s_proof_builds_validates_and_applies_at_225`.
+    params.max_block_level = MAINNET_PARAMS.max_block_level;
     palw_t12_arm_every_rule_from_genesis(&mut params);
     params
 }
@@ -16437,8 +16496,8 @@ pub fn palw_t12_base_params() -> Params {
 /// 2026-09-22: `palw_context_ladder` (the 512 rows — see [`palw_t12_shipped_params`]),
 /// `palw_artifact_root_ownership` (ADR-0143, with the 2026-09-19 audit's `(class_id, root)` keying,
 /// which is what lets one artifact carry `@512` and `@2048`), and `palw_panel_exposure_floor`
-/// (ADR-0130's λ = 2, affordable here because the collateral is re-derived from the dearest
-/// registered class rather than left at the 10,000 MSK carve).
+/// (ADR-0130's λ, 5 since the user's 2026-09-25 mainnet-values decision, affordable here because the
+/// collateral is re-derived from the registered classes rather than left at the 10,000 MSK carve).
 pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     let at = ForkActivation::always();
 
@@ -16553,8 +16612,17 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // ADR-0123: a spent class budget borrows the epoch slots nobody else is filling — the rule that
     // stops the measured 14× stall (t11, 2026-09-12: one seat's 367/367 budget and no floor exit).
     params.palw_epoch_budget_release = Some(at);
-    // ADR-0130: the seat exposure floor, λ = 2 — a seat reserves twice the most it can be paid.
-    params.palw_panel_exposure_floor = Some(PalwPanelExposureFloorV1 { activation: at, reward_multiple_permille: 2_000 });
+    // ADR-0130: the seat exposure floor, **λ = 5** — a seat reserves five times the most it can be
+    // paid (user decision 2026-09-25: testnet-12 runs mainnet's numbers, and ADR-0130 D1's mainnet
+    // statement is "λ = 5–10 under consideration"; the user took 5). Not the fence sweep's 2
+    // (`fork_id_v1`'s table), which prices a hypothetical arming, not this network. Under R-core+ it
+    // is L-4's λ-term, `5 × (E × 200‰ / 5 seats)` = 640.17 MSK a claim (256.07 at λ = 2): it now
+    // binds the floor AND the 8k duty (the 8k row bound on `lock_2` at λ = 2), just under the
+    // `⌊(w + E) / 5⌋` cap, and the 2M duty stays the cap, 12,588.76.
+    // The genesis seats do not re-derive: option A sizes the claims a seat PRODUCES
+    // (`palw_v2_collateral_for_class_set_v1` reads no λ), and a seat's judging duty is released at
+    // the claim's Final or void.
+    params.palw_panel_exposure_floor = Some(PalwPanelExposureFloorV1 { activation: at, reward_multiple_permille: 5_000 });
     // ADR-0143 with the 2026-09-19 audit's remedy applied: an artifact root has one owner per CLASS,
     // and the index is bounded. Keyed `(class_id, root)` — global keying would refuse the second of
     // `@512` and `@2048` over one artifact, which is exactly the ladder this net registers.
@@ -17585,12 +17653,13 @@ mod consensus_params_id_tests {
     #[test]
     fn the_active_stake_gate_is_the_product_of_the_two_floors() {
         let dns = PRODUCTION_DNS_PARAMS;
+        // 2026-09-25 (user decision, the 2026-09-24 mainnet assumption): 6 validators x 20M MSK.
         assert_eq!(
             dns.min_bond_amount_sompi,
-            10_000 * SOMPI_PER_KASPA,
-            "per-validator collateral — the same floor a PALW genesis seat posts"
+            20_000_000 * SOMPI_PER_KASPA,
+            "per-validator collateral — a DNS vote's own floor, apart from the PALW producer floor again"
         );
-        assert_eq!(dns.min_active_validators, 12, "the count is the term that carries this floor");
+        assert_eq!(dns.min_active_validators, 6, "at least six validators, each bonded 20M");
         // The two gates are ANDed, so the stake gate must state their product or it is dead
         // weight that reads as a second, weaker floor.
         assert_eq!(
@@ -20770,12 +20839,14 @@ mod consensus_params_id_tests {
         assert!(t12.palw_audit_2026_09_23_active_at(0), "testnet-12 arms it from genesis");
     }
 
-    /// **testnet-12's DNS-finality set is the mainnet-assumed one, and nobody else's moved** (user
-    /// decision, 2026-09-24): ≥ 6 validators, a 20,000,000 MSK bond each and 120,000,000 MSK of active
-    /// stake (production's validators × bond relation), the windows at t12's own 120 s cadence
-    /// (fourteen days of unbonding in wall time, not fourteen days of 10 bps blocks), testnet-11's
-    /// 600-DAA coinbase long maturity kept, and a set `validate_palw_v2` and the v3 anchor invariants
-    /// accept. `PRODUCTION_DNS_PARAMS` (hashed by mainnet) and testnet-11's table are unchanged.
+    /// **testnet-12's DNS-finality set is mainnet's own, and testnet-11's did not move** (user
+    /// decisions 2026-09-24 and 2026-09-25): ≥ 6 validators, a 20,000,000 MSK bond each and
+    /// 120,000,000 MSK of active stake (production's validators × bond relation), the windows at t12's
+    /// own 120 s cadence (fourteen days of unbonding in wall time, not fourteen days of 10 bps blocks),
+    /// Decision A's 600-DAA coinbase long maturity, and a set `validate_palw_v2` and the v3 anchor
+    /// invariants accept. Since 2026-09-25 those four numbers ARE `PRODUCTION_DNS_PARAMS`' (mainnet
+    /// moved to them; its fingerprint re-pinned), so testnet-12 derives from production with only the
+    /// work depth substituted, and its set is the same one it was before the move.
     #[test]
     fn the_testnet_12_dns_set_is_mainnet_assumed_and_nobody_elses_moved() {
         use crate::constants::SOMPI_PER_KASPA;
@@ -20815,11 +20886,19 @@ mod consensus_params_id_tests {
         assert!(dns.dns_v3_params_consistent(), "the v3 anchor invariants hold");
         t12.validate_palw_v2().expect("testnet-12's ruleset, DNS set included, validates");
 
-        // Nobody else moved: mainnet hashes PRODUCTION as it was; testnet-11 keeps its table.
-        assert_eq!(PRODUCTION_DNS_PARAMS.min_active_validators, 12);
-        assert_eq!(PRODUCTION_DNS_PARAMS.min_bond_amount_sompi, 10_000 * SOMPI_PER_KASPA);
-        assert_eq!(PRODUCTION_DNS_PARAMS.min_active_stake_sompi, 120_000 * SOMPI_PER_KASPA);
+        // Mainnet carries the same four numbers (2026-09-25), and testnet-12 is production at the
+        // two-minute cadence with ONE substitution, the reachable work depth.
+        assert_eq!(PRODUCTION_DNS_PARAMS.min_active_validators, 6);
+        assert_eq!(PRODUCTION_DNS_PARAMS.min_bond_amount_sompi, 20_000_000 * SOMPI_PER_KASPA);
+        assert_eq!(PRODUCTION_DNS_PARAMS.min_active_stake_sompi, 120_000_000 * SOMPI_PER_KASPA);
+        assert_eq!(PRODUCTION_DNS_PARAMS.coinbase_settlement_long_maturity_daa, 600, "Decision A on mainnet too");
+        assert_eq!(
+            PALW_T12_DNS_PARAMS,
+            crate::dns_finality::DnsParams { required_work_depth: TESTNET_DNS_PARAMS.required_work_depth, ..cadence },
+            "testnet-12 = production at 120 s, the work depth alone substituted"
+        );
         assert_eq!(Params::from(NetworkId::new(NetworkType::Mainnet)).dns_params, Some(PRODUCTION_DNS_PARAMS));
+        // Nobody else moved: testnet-11 keeps its table.
         let t11 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
         // (The materialized table carries the registered models' VLT cost table, which
         // `with_registered_models` attaches; every other field is the const's.)
@@ -21435,7 +21514,12 @@ mod consensus_params_id_tests {
             // Legal exactly because MAINNET HAS NOT LAUNCHED: no live node holds the old value, so
             // there is nothing to re-mint and no partition to cause. The same edit after launch
             // would need an activation fence rather than a bare constant (audit M1-6).
-            ("mainnet", MAINNET_PARAMS, "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1"),
+            // **Re-pinned 2026-09-25, MAINNET ONLY: mainnet takes testnet-12's DNS numbers** (user
+            // decision) — `min_active_validators` 12 -> 6, `min_bond_amount_sompi` 10,000 -> 20,000,000
+            // MSK, `min_active_stake_sompi` 120,000 -> 120,000,000 MSK, `coinbase_settlement_long_maturity_daa`
+            // 0 -> 600 (Decision A). `dns_params` is hashed whole; testnet keeps `TESTNET_DNS_PARAMS`,
+            // which overrides all four, so its pin is unchanged. Previous: badaa8e9….
+            ("mainnet", MAINNET_PARAMS, "eb866c61ca1a8ab58108be6cd1f39f951b582123472545575a5c7dbe0f1e5aa5"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,
@@ -22427,8 +22511,8 @@ mod consensus_params_id_tests {
         // The mainnet economics came along rather than being replaced by the RC's.
         assert_eq!(
             params.dns_params.as_ref().expect("mainnet carries the overlay").min_bond_amount_sompi,
-            10_000 * SOMPI_PER_KASPA,
-            "the production DNS overlay and its bond floor survive the assembly"
+            20_000_000 * SOMPI_PER_KASPA,
+            "the production DNS overlay and its bond floor (20M MSK since 2026-09-25) survive the assembly"
         );
 
         // 5. And D1 is armable here — the property the shipped six-bond registry refuses.
@@ -22489,6 +22573,49 @@ mod consensus_params_id_tests {
             utxos,
         )
         .expect("a mainnet card assembles")
+    }
+
+    /// **The mainnet card states testnet-12's carve, and a card that states another fails here**
+    /// (user decision 2026-09-25, ADR-0126). The 2026-09-25 mainnet-values review (LOW) found that
+    /// nothing read the card's carve: `worker_carve_permille` 720 → 620 left every consensus-core
+    /// test green. Validators 20 %, the worker base the lowered split leaves 72 %, and a claim's
+    /// escrow 720‰ of a 120 s block — 3,200.85 MSK, the G every ADR-0152 tier and the genesis-seat
+    /// sizing are built on — each exactly testnet-12's.
+    #[test]
+    fn the_mainnet_card_states_testnet_12_s_carve_and_escrows_3_200_85_msk_a_claim() {
+        let card = mainnet_card_fixture_v1(false);
+        let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let carve = card.palw_overlay_carve;
+        assert_eq!(
+            carve,
+            Some(PalwOverlayCarveV1 {
+                activation: ForkActivation::always(),
+                subsidy_validator_bps: 2_000,
+                worker_carve_permille: 720
+            }),
+            "the card states the carve from genesis: validators 20 %, escrow 720‰"
+        );
+        assert_eq!(carve, t12.palw_overlay_carve, "testnet-12's carve, field for field");
+        let carve = carve.unwrap();
+        let dns = card.dns_params.as_ref().expect("a card runs the overlay");
+        let lowered =
+            palw_overlay_fee_split_at_v1(dns, Some(carve), dns.full_reward_split_daa_score).expect("the full split is staged");
+        assert_eq!(
+            (lowered.subsidy_validator_bps, lowered.subsidy_worker_base_bps),
+            (2_000, 7_200),
+            "the validator pool's subsidy share is 20 % and the worker base the lowered split leaves is 72 %"
+        );
+        let subsidy = palw_genesis_block_subsidy_sompi(&card);
+        assert_eq!(subsidy, PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI, "a card's 120 s block pays what testnet-12's first block pays");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &card.palw_consensus_mode else {
+            panic!("a mainnet card is ConsensusV2")
+        };
+        assert_eq!(bundle.state.worker_carve_at(subsidy, carve.escrow_carve()), 320_084_650_080, "3,200.85 MSK a claim");
+        assert_eq!(
+            bundle.state.worker_carve_at(subsidy, None),
+            275_628_448_680,
+            "without the card's carve the bundle would escrow its own 620‰: 2,756.28 MSK"
+        );
     }
 
     /// **Every ConsensusV2 ruleset this tree can assemble is minted at its own ambient target.**
@@ -22726,11 +22853,13 @@ mod consensus_params_id_tests {
         // * `palw_prefill_draw` (ADR-0117) is armed on testnet-11 on the audit's flag day and stated
         //   by no card: which job a draw runs is a class decision a card makes with its classes,
         //   after the one-forward job has run on a live chain.
-        // * `dns_bft_gate`, `palw_execution_lane` and `palw_overlay_carve` are testnet-11's 6,001 flag
-        //   day (ADR-0128, ADR-0125, ADR-0126) and no card states them yet: a card's gate numbers (its
-        //   leak period at its own cadence), its lane's width and stage table, and its validators'
-        //   share are genesis decisions the operator has not taken — and a card that wants a fifth
-        //   for its validators mints that split rather than scheduling a carve.
+        // * `dns_bft_gate` and `palw_execution_lane` are testnet-11's 6,001 flag day (ADR-0128,
+        //   ADR-0125) and no card states them yet: a card's gate numbers (its leak period at its own
+        //   cadence) and its lane's width and stage table are genesis decisions the operator has not
+        //   taken. (`palw_overlay_carve`, ADR-0126, rode the same day and left this list on
+        //   2026-09-25: the user took testnet-12's numbers for mainnet, so a card states the 20 %
+        //   validator share and the 720‰ escrow from genesis, as testnet-12 does, rather than
+        //   minting a split the shared bundle builder would carry to every network.)
         // * `palw_held_context` and the one-move court `palw_shard_court` (ADR-0103, ADR-0100) are
         //   testnet-11's held regime, scheduled at `PALW_RC_HELD_FENCE_DAA` by ADR-0118. A mainnet
         //   that wants the regime MINTS it — `palw_held_context_mint_v1`, V4 and the tiled ids from
@@ -22774,7 +22903,6 @@ mod consensus_params_id_tests {
                 "palw_execution_quanta",
                 "palw_execution_lane",
                 "palw_execution_lane_span_short",
-                "palw_overlay_carve",
                 "palw_model_market",
                 "palw_model_lines",
                 "palw_model_benefits",
@@ -22792,13 +22920,13 @@ mod consensus_params_id_tests {
         // **And one exception that shows up in neither list, because neither side arms it.**
         // ADR-0130's `palw_panel_exposure_floor` is dormant on testnet-11 (the operator's direction
         // of 2026-09-17: `λ` stays OFF at the 6,001 flag day, and the shadow read that measures what
-        // it would require is node-local) and stated by no card: the multiple a mainnet seat must
-        // reserve against its reward — 5× to 10× is the range under discussion — is the operator's
-        // open decision, and a card that picked one would mint an economics constant nobody has
-        // chosen. Named here so a card that ever states it has to change this sentence.
+        // it would require is node-local) and stated by no card yet. The user chose mainnet's λ on
+        // 2026-09-25 — 5, from the 5×–10× range ADR-0130 recorded — and testnet-12 arms it; a card
+        // states it together with the R-core+ duty that reads it, which no card carries today.
+        // Named here so a card that ever states it has to change this sentence.
         assert!(
             carded.palw_panel_exposure_floor.is_none() && rc.palw_panel_exposure_floor.is_none(),
-            "ADR-0130's seat exposure floor is stated by neither testnet-11 nor a card: λ is the operator's open decision"
+            "ADR-0130's seat exposure floor is stated by neither testnet-11 nor a card (testnet-12 arms λ = 5)"
         );
         for name in ["palw_model_market", "palw_model_lines", "palw_model_evm"] {
             assert!(
@@ -22834,6 +22962,9 @@ mod consensus_params_id_tests {
             "palw_fp_da_pins",
             "palw_fp_ruleset_caps",
             "palw_heartbeat",
+            // ADR-0126 (user decision 2026-09-25): a card is born with the 20 % validator share and
+            // the 720‰ escrow testnet-12 runs; testnet-11 reaches it by its 6,001 flag day.
+            "palw_overlay_carve",
             "palw_panel_da",
             // ADR-0124: a card is born paying its panel out of the claim's reward, its seats
             // holding exposure, and its claims priced by the compute they certify; testnet-11

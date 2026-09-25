@@ -443,11 +443,13 @@ fn t15_every_door_locks_l1s_price_with_the_attested_mask() {
 
 /// **T77: `duty_bind` per class and the ≤ 1 bound** — the duty the bind writes is L-4's
 /// `min(max(λ, lock_2), commitment / 5)`, and `5 · duty ≤ commitment` on every class. This line has
-/// the vesting rows, so `lock_2` is the residual at the buyback cap and each class binds on ADR §2's
-/// term: the floor on λ, the 8k row on `lock_2`, the 2M row on the cap (a build without rows priced
-/// the whole gain, `lock_2 > commitment / 5` everywhere, and the cap bound every class). ADR §2's
-/// residual duties at `s = 0` — the floor 256.07 MSK, the 8k row 459.12, the 2M row 12,588.76 — are
-/// pinned through the same formula (processor extras, L1).
+/// the vesting rows, so `lock_2` is the residual at the buyback cap. **At λ = 5** (testnet-12 since the
+/// user's 2026-09-25 mainnet-values decision; ADR §2's table was written at λ = 2) the λ-term is
+/// 640.17 MSK and it binds the floor AND the 8k row (whose `lock_2`, ~539 at the cap and 459.12 at
+/// `s = 0`, bound at λ = 2), just under their `commitment / 5` caps (640.19 and 739.03); the 2M row
+/// still binds on the cap. The residual duties at `s = 0` — the floor 640.17 MSK (256.07 at λ = 2), the
+/// 8k row 640.17 (459.12), the 2M row 12,588.76 (unchanged) — are pinned through the same formula
+/// (processor extras, L1).
 #[test]
 fn t77_duty_bind_per_class_and_the_amplification_bound() {
     // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
@@ -480,16 +482,17 @@ fn t77_duty_bind_per_class_and_the_amplification_bound() {
         assert!(PALW_RCORE_VESTING_ROWS_LANDED_V1, "the vesting rows are on this line");
         assert_eq!(prices.lock_2, palw_rcore_lock_vested_at_cap_v1(prices.g_res, claim.escrowed_reward, 0, 2), "{name}: lock_2 at the cap");
         let binds_now = match name {
-            "floor" => prices.lambda_term,
-            "8k" => prices.lock_2,
+            // λ = 5: the λ-term binds the 8k row too (it was `lock_2` at λ = 2).
+            "floor" | "8k" => prices.lambda_term,
             _ => prices.commitment / 5,
         };
         assert_eq!(duty, binds_now, "{name}: L-4 binds on the ADR's term");
         let residual_lock_2 = palw_rcore_lock_vested_v1(prices.g_res, claim.escrowed_reward, 0, 2);
         let residual = palw_rcore_duty_bind_v1(prices.lambda_term, residual_lock_2, prices.commitment, 5);
         let (adr, binds) = match name {
-            "floor" => (256.07, prices.lambda_term),
-            "8k" => (459.12, residual_lock_2),
+            // λ = 5 (2026-09-25): 640.17 on both; ADR §2's λ = 2 figures were 256.07 and 459.12.
+            "floor" => (640.17, prices.lambda_term),
+            "8k" => (640.17, prices.lambda_term),
             _ => (12_588.76, prices.commitment / 5),
         };
         assert_eq!(residual, binds, "{name}: the ADR's binding term at s = 0");
@@ -577,8 +580,8 @@ fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
 
 /// **The S re-review's N1, closed by the residual price: on the floor and the 8k row a licence needs
 /// no top-up, so it is never inert for want of room.** With the vesting rows in, L-1's `lock_3` and
-/// `lock_2` sit within the duty the bind already reserved (the floor's duty is λ, the 8k row's is
-/// `lock_2`), so `max(duty, lock) − duty = 0` for every door: a seat whose room the bind used up to
+/// `lock_2` sit within the duty the bind already reserved (λ binds both duties at testnet-12's λ = 5;
+/// at λ = 2 the 8k row's was `lock_2`), so `max(duty, lock) − duty = 0` for every door: a seat whose room the bind used up to
 /// the last sompi is still backed. Five `Valid`s license through the V1 door — every seat locked,
 /// credited and served — on both classes. (SR-6's unbacked path bites where the lock tops the duty
 /// up: the 2M row, T33.)
@@ -635,8 +638,8 @@ fn n1_on_the_floor_and_the_8k_row_the_licence_needs_no_top_up_and_five_valids_li
 /// inert on both doors (today's all-or-nothing rule).
 ///
 /// **Past the fence the armed cases run on the 2M row.** With the vesting rows in, L-1 prices the
-/// residual, which on the floor and the 8k row sits within the seat's duty (λ, resp. `lock_2`, binds
-/// it): the licence needs no top-up there, so every seat is backed whatever its room — a seat cannot
+/// residual, which on the floor and the 8k row sits within the seat's duty (λ binds both at λ = 5;
+/// `lock_2` bound the 8k row at λ = 2): the licence needs no top-up there, so every seat is backed whatever its room — a seat cannot
 /// be unbacked on those classes. The 2M row's duty is capped below its lock, so its licence takes the
 /// top-up from the seat's room, and that is where SR-6 bites. The fence-off twin keeps the floor.
 ///

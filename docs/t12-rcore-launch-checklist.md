@@ -398,6 +398,9 @@ manifest は同じ）。deadline＋P-1 の merge（a66509f9、t12 の pruning de
 
 drill salt `5353…53`（例示用。実際の drill の salt ではない）の drill genesis は `1678f353…70349`（`probe-identity-local.sh --drill-salt` が
 出す値。tool が t12 の genesis と一緒に計算して書き換える）。
+**2026-09-25 の mainnet 値の commit（`rcore/mainnet-values` befb59dfe・c6ffd812: λ 5・tolerance 1,620 s・max_block_level 225）も t12 を動かした**:
+8270cf03 からの測定で params id `99eae89d…` → `1870bc1f…`、identity `195a98c3…` → `6e193d30…`、schedule `5f53b691…` → `79563f51…`。
+`EXPECT_FP` は出荷 commit の probe で取り直す（§5 の再 pin）。
 
 ---
 
@@ -460,9 +463,11 @@ manifest を JSON として読んだ値（`class_manifest_const_v1` の転記 te
    - `consensus/core/tests/palw_offence_attribution_is_t12_only.rs` — `T12_BEFORE_THE_ATTRIBUTION`（fence を外した t12 の params / identity /
      schedule id）。t12 の他の params が動くと動く。
    - `consensus/core/tests/evm_bridge_ledger_is_t12_only.rs` — `T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION`（ledger と attribution を外した t12）。
+   - `consensus/core/tests/t12_mainnet_values_moved_only_these.rs` — 2026-09-25 の mainnet 値（λ 5、tolerance 1,620 s、max_block_level 225）を
+     戻すと `8270cf03` の t12 に一致すること（`PARENT_WITHOUT_THE_ATTRIBUTION`）。
    - これらは「その fence だけが t12 を動かした」ことの pin。新しい merge が t12 を動かしたら、何が動かしたかを書いて値を更新する。
 3. **t11 / devnet / mainnet が動いていないことの pin**（動いたら出荷しない。動かすべき理由があるときだけ更新）
-   - `consensus/core/src/config/params.rs` の `shipped_presets_have_pinned_fingerprints`（mainnet `badaa8e9…`、testnet、testnet-11 `bd633ce9…`、
+   - `consensus/core/src/config/params.rs` の `shipped_presets_have_pinned_fingerprints`（mainnet `eb866c61…`（2026-09-25 に mainnet の DNS 値を t12 と同じにして `badaa8e9…` から移動）、testnet、testnet-11 `bd633ce9…`、
      simnet、devnet `7a27f341…`）と `the_pinned_testnet_fingerprint_is_the_one_a_node_announces`。
    - `consensus/core/tests/palw_rcore_plus_is_t12_only.rs`（`AT_V21`・`AT_V22`）、`palw_clock_floor_is_t12_only.rs`、
      `palw_offence_attribution_is_t12_only.rs`（t11 / devnet / mainnet の 3 つ組）、`palw_the_release_did_not_move.rs`（`T11_CONSENSUS_*`、
@@ -658,6 +663,13 @@ O-13 の計数。**X10（M6）**: `palw_rcore_attributed_charging` は M1〜M5 �
 
 ## 7. 運用者・監査に残っている判断
 
+- **ユーザー（公開前）: 1,620 s の tolerance による DAA の burst**（2026-09-25 の mainnet 値 review の HIGH）。1 producer が他の block を
+  挟まずに DAA を 14 進められ（132 s では 2）、readiness row が失効して model class が HELD → Probation{0} に戻る。int-3 の horizon 24 でも
+  閉じない（`consensus/core/tests/t12_run_ahead_burst_vs_readiness.rs` が fold 上で測定）。案: (a) clock を進める beat の stamp だけを受信側
+  時計 + 1 interval で上限にする consensus 規則、(b) node の再証明を row の年齢 > horizon − 16 に早める（24 なら 9 DAA ごと、proof 約 1.4 倍）、
+  (c) t12 だけ 132 s に戻す。詳細は `docs/testnet-12-regenesis-2026-09-23.md` の「open」。
+- **ユーザー（公開前）: λ = 5 の DoS の強さ**。junk floor claim 1,200 本の flood で honest 担保の上限の 99.70 % が拘束され、公開時に開いている
+  floor lane が 6 DAA、2M lane が 970 / 3,650 DAA 止まる（λ = 2 ではどちらも 0）。攻撃者は拘束額以上を没収される（`dos_l5_6_composite`）。
 - **運用者**: `HB_ADDR` の確認（card 0 の payout address を全桁で入れた。旧 kit の `qf6hf5v0…` と同じ。PLAN R3）／公開後の drill ホスト 4 台以上（PLAN R4）／
   5.104 b2 を seat のみにしたこと（kit の既定。8k producer は ibm b0 の 1 本。PLAN §2.3）の了承／MemoryMax を crash guard として上げた値
   （b0 20G・b1 16G・b6 17G・5.104 の seat 9G）で残すか、cache の蓄積で cgroup 項が share を下回ったら `-`（MemoryMax=infinity）にするか
@@ -686,3 +698,7 @@ O-13 の計数。**X10（M6）**: `palw_rcore_attributed_charging` は M1〜M5 �
   (UNVERIFIED)」とした行は T06 の model で走らせた: executor の bond が上限にあるとき動くのは free redraw だけ（floor 7.15M → **6.63M**
   （51、k = 6）、8k と 2M 7.02M → **6.63M**（51、k = 6））。P2 with filing（12.74M / 12.61M）、30% offline（9.88M / 9.75M）、P3（5.72M）、
   P5（25.61M / 25.35M）は動かない（どれも race が縛る）。ADR の表の該当 cell を埋める。
+- **実装（別作業として記録）**: pruning proof の apply（`consensus/src/processes/pruning_proof/apply.rs` の `batched_block_levels`）と
+  pruning point の import（`mod.rs` の `import_pruning_points`）は single lottery を渡さずに `calc_block_level_layer0` で level を出し、
+  validate（`validate.rs`、`palw_single_lottery_at` を渡す）と食い違う。apply 側で attempt header が level ≥ 1 になる確率は 225 で約 2⁻³²、250 なら 1/128 なので、
+  225 はこのずれを見えにくくする方向に働く（直してはいない）。heartbeat・receipt・round は両方とも level 0。

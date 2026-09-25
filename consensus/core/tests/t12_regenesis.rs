@@ -580,3 +580,37 @@ fn t12_shares_no_premine_outpoint_or_genesis_with_the_sentinel_chains() {
     assert_ne!(p.genesis.timestamp, Params::from(t11).genesis.timestamp, "not the shared reference timestamp");
     assert_ne!(p.genesis.hash, Params::from(t11).genesis.hash);
 }
+
+/// **testnet-12 runs mainnet's future-time tolerance and block-level ceiling** (user decision
+/// 2026-09-25: t12's numbers are mainnet's). The tolerance is the one a card derives — the 27-sample
+/// median window at one 120 s block a sample models 1,620 s, not the hash lineage's 132 s — and the
+/// ceiling is `MAINNET_PARAMS`' 225. Neither is a genesis input: the genesis block is unchanged.
+///
+/// 225 changes no header here: no block on this network derives a level above 0 (the single lottery
+/// is in force from genesis, so an attempt header derives none, and heartbeat, receipt and round
+/// blocks never do), so the ceiling sets only the genesis level and how many genesis-only pruning-proof
+/// levels sit above level 0 — with them the proof's header budget, `(225 + 1) x 2 x m`.
+#[test]
+fn t12_runs_mainnet_s_tolerance_and_level_ceiling() {
+    let p = Params::from(t12());
+    let modelled = palw_v2_timestamp_deviation_tolerance_v1(
+        p.past_median_time_window_size,
+        p.past_median_time_sample_rate(),
+        p.target_time_per_block(),
+    );
+    assert_eq!(p.timestamp_deviation_tolerance, 1_620, "27 samples x 1 x 120 s / 2");
+    assert_eq!(p.timestamp_deviation_tolerance, modelled, "the tolerance the median window actually models");
+    assert_eq!(
+        p.past_median_time_window_size,
+        ((2 * p.timestamp_deviation_tolerance - 1) as usize)
+            .div_ceil((p.past_median_time_sample_rate() * p.target_time_per_block() / 1000) as usize),
+        "a window FOR its own tolerance, as a card's is"
+    );
+    assert_eq!(p.max_block_level, 225);
+    assert_eq!(p.max_block_level, MAINNET_PARAMS.max_block_level, "mainnet's ceiling");
+    assert!(p.palw_single_lottery_at(0), "an attempt header derives no block level from genesis");
+    assert_eq!(p.pruning_proof_m, 1_000);
+    // testnet-11 keeps both, the pinned gap its own test names.
+    let t11 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+    assert_eq!((t11.timestamp_deviation_tolerance, t11.max_block_level), (132, 250), "testnet-11 did not move");
+}

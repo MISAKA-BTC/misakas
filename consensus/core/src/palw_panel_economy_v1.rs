@@ -20,7 +20,7 @@
 //!   while its free collateral covers the reservation ([`palw_seat_has_headroom_v1`]), and the
 //!   collateral a bond must hold to be drawn at all is [`PALW_PANEL_COLLATERAL_MULTIPLE_V1`]
 //!   producer floors ([`palw_panel_collateral_floor_v1`]) — on a mainnet card whose producer floor
-//!   is 10,000 MSK that is the operator's 100,000 MSK.
+//!   is 13,000 MSK (`a3c5db22`, 2026-09-24; it was 10,000) that is 130,000 MSK.
 //!
 //! * **The price of work.** The escrow a block withheld is the schedule's full carve; at `Final`
 //!   the claim is paid the fraction of it that its class's canonical inference is of the heaviest
@@ -62,8 +62,8 @@ pub const PALW_PANEL_POOL_PERMILLE_V1: u64 = 200;
 pub const PALW_SEAT_EXPOSURE_MULTIPLE_V1: u128 = 3;
 
 /// The collateral a bond must hold to be drawn as a seat, as a multiple of the network's producer
-/// floor — ADR-0124 Decision 4. One rule, and the operator's mainnet numbers (a 10,000 MSK
-/// producer, a 100,000 MSK panel operator) fall out of it.
+/// floor — ADR-0124 Decision 4. One rule, and the operator's mainnet numbers (a 13,000 MSK
+/// producer, a 130,000 MSK panel operator, since `a3c5db22`; 10,000 / 100,000 before) fall out of it.
 pub const PALW_PANEL_COLLATERAL_MULTIPLE_V1: u64 = 10;
 
 /// The collateral a bond must hold to be drawn as a seat: ten producer floors, saturating.
@@ -340,10 +340,11 @@ mod tests {
         assert_eq!(palw_seat_exposure_v1(100), 300);
         assert_eq!(palw_seat_exposure_v1(u128::MAX), u128::MAX);
         assert_eq!(palw_panel_collateral_floor_v1(400_000), 4_000_000);
-        // The operator's mainnet numbers: a 10,000 MSK producer floor is a 100,000 MSK panel floor.
+        // The operator's mainnet numbers (`a3c5db22`, 2026-09-24): a 13,000 MSK producer floor is a
+        // 130,000 MSK panel floor.
         assert_eq!(
-            palw_panel_collateral_floor_v1(10_000 * crate::constants::SOMPI_PER_KASPA),
-            100_000 * crate::constants::SOMPI_PER_KASPA
+            palw_panel_collateral_floor_v1(13_000 * crate::constants::SOMPI_PER_KASPA),
+            130_000 * crate::constants::SOMPI_PER_KASPA
         );
         assert_eq!(palw_panel_collateral_floor_v1(u64::MAX), u64::MAX);
     }

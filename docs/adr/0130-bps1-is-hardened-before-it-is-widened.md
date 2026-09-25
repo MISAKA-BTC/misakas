@@ -59,9 +59,11 @@ Past it a seat reserves `max(3 × claim.reserved, λ × max_seat_reward)`, where
 per-seat share of the pool the claim's escrow holds (work pricing only lowers it) — resolved at the claim's
 anchor with the rest of the draw policy, used by the eligibility headroom and by the reservation alike, and
 stored on the seat's duty so release and the dissent slash move exactly what was reserved. The panel floor
-(ten producer floors: 100,000 MSK on a mainnet card) stays a separate participation floor. `None` on every
-preset; not stated on a mainnet card (λ = 5–10 is under consideration there). §3 is why testnet-11 does not
-arm it at 6,001.
+(ten producer floors: 130,000 MSK on a mainnet card since `a3c5db22`, 2026-09-24; 100,000 before) stays a
+separate participation floor. Mainnet's λ is **5** (the user's 2026-09-25 decision, from the 5–10 this
+paragraph recorded as under consideration): testnet-12 arms it at `reward_multiple_permille = 5_000` from
+genesis; the mainnet card does not state it yet, and testnet-11 and devnet keep `None`. §3 is why
+testnet-11 does not arm it at 6,001.
 
 **Decision 2 — one entry per operator.** Past `palw_panel_economy` the draw groups the eligible bonds by
 operator; an operator's candidate is its eligible bond with the lowest bond ticket, and the operator draws

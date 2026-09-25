@@ -37,7 +37,8 @@ subsidy pays them.
 activation, subsidy_validator_bps, worker_carve_permille }>`, a top-level fence hashed Some-only into
 the params id and the schedule id with its two numbers beside the height, visited as a fence, named to
 the fork-id gate as `palw_overlay_carve`, answered only on a `ConsensusV2` network that runs an
-overlay. `None` on every shipped preset but testnet-11 (§6).
+overlay. Armed on testnet-11 at a height and on testnet-12 from genesis (§6), and stated from genesis by
+a mainnet card (§6a); `None` on every other shipped preset.
 
 **Decision 2 — the overlay's split, from the height.** Where the full split is in force
 (`DnsParams::reward_fee_split` at the block's DAA), past the fence the split's `subsidy_validator_bps`
@@ -129,6 +130,16 @@ worker base 72 %, inclusion 8 %, validator 20 %, service 0. At testnet-11's 4,44
 escrow grows from 2,756.28 to 3,200.85 MSK. Scheduled in the preset on 2026-09-17 (`d6c46f25`, at DAA
 ≈5,773) with ADR-0124, ADR-0125 and ADR-0128 at the same height; fingerprint `4787b92a…`, re-pinned to
 `ab4e7b9c…` when ADR-0130 joined the height the same day.
+
+## 6a. testnet-12 and mainnet
+
+testnet-12 arms the same `{ 2,000 bps, 720‰ }` from genesis (its arming walk moves testnet-11's height to
+0). **Mainnet takes it too** (the user's 2026-09-25 decision that testnet-12 and mainnet run one set of
+numbers): a mainnet card states `palw_overlay_carve = { always, 2,000, 720 }` beside ADR-0124's economy,
+so a carded mainnet's validator pool is 20 % of the subsidy, not the production split's 30 %, and a
+claim's escrow is 720‰ of its block's subsidy (3,200.85 MSK at 120 s), not the bundle's 620‰
+(2,756.28 MSK). The bundle-free mainnet preset (`MAINNET_PARAMS`) carries no PALW and is unchanged:
+`PRODUCTION_DNS_PARAMS`' `fee_split` stays 30 %, because testnet-10 and testnet-11 inherit it.
 
 ## 7. Tests
 

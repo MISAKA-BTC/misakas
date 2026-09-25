@@ -915,7 +915,7 @@ What the implementation settled that the decisions above left open, and where it
   * **A bond below the network's minimum is skipped silently by consensus.** It never becomes
     available and never attests, so setup refuses such an amount before anything is signed. The
     runbook's minimum for mainnet (20,000,000) disagrees with the code's (10,000 MSK); the code is
-    what setup reads.
+    what setup reads. (Since 2026-09-25 the code's mainnet minimum is 20,000,000 MSK as well.)
   * **Consensus clamps the unbonding period up to the network's floor** (10,083 blocks on testnet
     and devnet). Setup signs the enforced period and shows it, where the sidecar's default of 700
     only looked shorter.

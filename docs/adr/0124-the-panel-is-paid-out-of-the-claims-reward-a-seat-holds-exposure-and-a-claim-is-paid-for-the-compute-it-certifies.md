@@ -71,6 +71,9 @@ the escrow the accepting block already withheld. Below the fences nothing change
 > 小さいモデルと大きいモデルで同じ 1 claim 1 ブロックだと圧倒的に小さいモデルが有利な点を改善する。
 > … MSK / canonical compute を揃えられます。
 
+*(2026-09-24, `a3c5db22`: the user raised the two mainnet figures to Miner 13,000 MSK and panel
+130,000 MSK. Decision 4 and §9 state the current values.)*
+
 Two further parts of the operator's design — a Panel share derived from verification cost
 (10–30 %) and a Panel reward proportional to a per-model verification cost — are recorded in §9 as
 not decided here. The execution-lane roadmap the operator brought in the same message (1 BPS →
@@ -177,8 +180,8 @@ covers the reservation.** `PALW_PANEL_COLLATERAL_MULTIPLE_V1 = 10`; the seat flo
 — the same ceiling every other reservation on the bond lives under, so the collateral behind a claim
 a bond produces cannot double as the collateral behind a claim it judges ("reserved collateral は
 同時 job 間で共有不可"). One rule, and the operator's mainnet numbers fall out of it: a card whose
-producer floor is 10,000 MSK draws seats from bonds holding 100,000 MSK (§9 records what the card's
-producer floor is today). `palw_seatable_operators_v1` — the operator warning — counts against the
+producer floor is 13,000 MSK draws seats from bonds holding 130,000 MSK (10,000 / 100,000 until
+`a3c5db22`, 2026-09-24; §9 records what the card's producer floor is today). `palw_seatable_operators_v1` — the operator warning — counts against the
 same floor, so the warning cannot drift from the draw.
 
 **Decision 5 — past the panel-economy fence every eligible bond draws one ticket.** The deep
@@ -362,10 +365,11 @@ past it are under Decisions 2–5.
 * **Equivocation by name** (SA-3) and **the stratified draw** (SA-6).
 
 The mainnet card's producer floor IS decided, as a bundle value rather than a consensus rule: a
-card's bundle states `PALW_MAINNET_MIN_COLLATERAL_SOMPI` (10,000 MSK) as its `min_collateral_sompi`
-(`palw_fp_bundle_with_windows_and_floor_v3`, chosen by network type where the windows are), so
-Decision 4 yields the operator's 100,000 MSK seat floor; its genesis bonds already declare
-`max(derived, 10,000 MSK)` (ADR-0061's carve), so every bond the card seats meets it. testnet-11
+card's bundle states `PALW_MAINNET_MIN_COLLATERAL_SOMPI` (13,000 MSK since `a3c5db22`, 2026-09-24;
+10,000 before) as its `min_collateral_sompi` (`palw_fp_bundle_with_windows_and_floor_v3`, chosen by
+network type where the windows are), so Decision 4 yields the operator's 130,000 MSK seat floor. Its
+genesis bonds declare `max(derived, 13,000 MSK)` (`genesis_bond_collateral_for`); testnet-12 sizes
+its genesis seats by ADR-0151 D1 instead (939,063.21 MSK each). testnet-11
 and devnet keep the 0.004 MSK policy floor, and their bundles and fingerprints are byte-identical
 (`adr0124_the_panel_economy_and_the_work_price_are_dormant_everywhere_and_stated_on_a_card` pins
 both floors). Mainnet has not launched, so its ruleset id may move.
@@ -390,7 +394,7 @@ both floors). Mainnet has not launched, so its ruleset id may move.
 * `config/params.rs`: the two fences at every site a fence is spelled (the list, the identity
   visitor, the schedule id, the Some-only fingerprint write, `override_params`, the four presets),
   `palw_panel_economy_fence` / `palw_work_priced_reward_fence` / `palw_seat_economy_at`; the card
-  arms both and states the 10,000 MSK producer floor (`palw_fp_devnet_v3.rs`:
+  arms both and states the 10,000 MSK producer floor (13,000 since `a3c5db22`) (`palw_fp_devnet_v3.rs`:
   `PALW_MAINNET_MIN_COLLATERAL_SOMPI`, `palw_fp_bundle_with_windows_and_floor_v3`); `fork_id_v1.rs`
   and the extension's fence map name both fences.
 * `consensus/src`: the processor resolves both at the block's DAA into the extras and the draw
