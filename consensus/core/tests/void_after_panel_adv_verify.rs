@@ -22,6 +22,12 @@
 //!   only the timestamp or the nonce inside its bucket): every header names one execution commitment
 //!   and one seed.
 //! * `a4_…` — the 8k class (readied seats only): one panel over 4,000 identities, no pair.
+//! * `a5_…` — lane A (`Params::palw_operator_anchor`, armed with F1 at one common height over the eight
+//!   genesis bonds: [`t12_f1_op`]) closes a1's residual for a non-operator: none of 1,000 fresh junk
+//!   wins may anchor (the processor's predicate on each win's header), the pair panel a win finds under
+//!   F1 alone is refused by the gate against the operator's anchor, and the claim gets ONE fair draw —
+//!   whose pair rate over fresh operator executions is printed as the per-CLAIM residual (a claim, not
+//!   a free re-roll, per try).
 //!
 //! Run: CARGO_BUILD_JOBS=2 cargo test -p kaspa-consensus-core --test void_after_panel_adv_verify -- --nocapture --test-threads=1
 #![allow(dead_code, clippy::too_many_arguments)]
@@ -74,6 +80,25 @@ fn t12_f1() -> Params {
 
 fn seed_rule_armed(anchor_daa: u64) -> bool {
     anchor_daa >= F1_AT
+}
+
+/// [`t12_f1`] with lane A armed at the same height over testnet-12's eight genesis bonds (the
+/// recommended rollout: one common post-launch height). Validated.
+fn t12_f1_op() -> Params {
+    let mut p = t12_f1();
+    assert_eq!(p.palw_operator_anchor, None, "the release ships lane A dormant");
+    p.palw_operator_anchor = p.palw_operator_anchor_of_genesis_bonds_v1(kaspa_consensus_core::config::params::ForkActivation::new(F1_AT));
+    p.validate_palw_v2().expect("testnet-12 with lanes F1 and A armed is a runnable ruleset");
+    p
+}
+
+/// An attempt-lane header at `daa` carrying `env` — what the anchor predicate reads.
+fn header_of(p: &Params, env: &PalwAttemptEnvelopeV2, daa: u64) -> Header {
+    let mut header = Header::from_precomputed_hash(identity(0x4EAD_0000 + daa), vec![]);
+    header.pow_algo_id = p.palw_attempt_lane_at(daa).attempt_algo_id();
+    header.daa_score = daa;
+    header.palw_commitment = env.encode_wire();
+    header
 }
 
 fn identity(i: u64) -> Hash64 {
@@ -248,7 +273,11 @@ fn sybil_objs(p: &Params, sybils: &[u64], class: Hash64) -> Vec<PalwConsensusObj
 /// capable of the floor; stepped past bond maturity; the attacker's floor claim accepted; stepped to
 /// its slot. Returns `(chain, claim, slot, parent-at-slot)`.
 fn floor_setup(sybils: &[u64]) -> (Chain, Hash64, u64) {
-    let p = t12_f1();
+    floor_setup_on(t12_f1(), sybils)
+}
+
+/// [`floor_setup`] on the ruleset `p`.
+fn floor_setup_on(p: Params, sybils: &[u64]) -> (Chain, Hash64, u64) {
     let floor = genesis_classes(&p)[0].0;
     let mut c = Chain::new(p.clone());
     c.attribution = true;
@@ -591,4 +620,80 @@ fn a4_the_8k_class_one_panel_per_anchor_attempt() {
     assert_eq!(panels.len(), 1, "one anchor attempt, one 8k panel");
     assert_eq!((pair0, any), (0, 0), "the identity grind captures no coverage pair on the 8k class");
     assert!(q3 == 0 || q3 == TRIES);
+}
+
+/// **Lane A: a non-operator's wins are not anchors, so the attacker's claim gets one fair draw.**
+#[test]
+fn a5_past_the_operator_fence_no_junk_win_anchors_and_the_claim_gets_one_fair_draw() {
+    const WINS: u64 = 1_000;
+    const FAIR: u64 = 1_000;
+    println!("=== A5 (lane A): a non-operator's junk wins against the operator-anchor fence (floor, 2–3 Sybils) ===");
+    for sybils in [vec![0x5C1u64, 0x5C2], vec![0x5C1, 0x5C2, 0x5C3]] {
+        let p = t12_f1_op();
+        let rule = p.palw_operator_anchor_rule_v1().expect("lane A reaches the processor");
+        let (c, claim, slot) = floor_setup_on(p.clone(), &sybils);
+        let coalition: BTreeSet<PalwBondKeyV2> = sybils.iter().map(|n| bond_key(*n)).collect();
+        let base = pre_object_base(&c, &c.s, identity(0), slot);
+        let pair0_of = |seed: Hash64, seats: &[PalwPanelSeatV2]| {
+            let (f, p0, _, _) = pair_of(seed, claim, seats, 0);
+            coalition.contains(&f) && coalition.contains(&p0)
+        };
+
+        // The attacker's fresh junk wins at the slot: F1 alone makes each an anchor and a panel; lane A
+        // admits none.
+        let (mut admitted, mut f1_pairs) = (0u64, 0u64);
+        for w in 0..WINS {
+            let (env, key, _) = floor_attempt_of(&c, ATT, 0xA500_0000 + w);
+            admitted += u64::from(rule.admits_anchor_v1(&header_of(&p, &env, slot)));
+            let seed = chain_seed(identity(0), slot, key, &claim);
+            let seats = derive_at(&c, &base, slot, seed, &claim).expect("draws");
+            f1_pairs += u64::from(pair0_of(seed, &seats));
+        }
+        // A win that WOULD capture under F1 alone (the attacker keeps drawing until it has one) …
+        let mut tries = 0u64;
+        let (ground_env, ground_seed, ground) = loop {
+            tries += 1;
+            let (env, key, _) = floor_attempt_of(&c, ATT, 0xA600_0000 + tries);
+            let seed = chain_seed(identity(0), slot, key, &claim);
+            let seats = derive_at(&c, &base, slot, seed, &claim).expect("draws");
+            if pair0_of(seed, &seats) {
+                break (env, seed, seats);
+            }
+            assert!(tries < 100_000, "a pair within 100,000 wins");
+        };
+        // … is not an anchor, and the gate — handed the walk's anchor under lane A, the operator's
+        // attempt — refuses the panel it keyed.
+        assert!(!rule.admits_anchor_v1(&header_of(&p, &ground_env, slot)), "the capturing win may not anchor");
+        let (op_bond, op_pubkey, op_operator) = floor_producer(&c.p);
+        let floor = genesis_classes(&c.p)[0].0;
+        let (mut op_env, _, _) = junk_attempt(floor, op_bond, op_pubkey, &op_operator, c.floor_pwu(slot), 0x0B01, 0x10C0 + 0x0B01);
+        op_env.attempt.artifact_root = c.s.class(&floor).expect("the floor").artifact_root;
+        assert_eq!(rule.operator_of_v1(&header_of(&p, &op_env, slot)), Some(op_bond), "the genesis card's attempt is an operator's");
+        let op_key = execution_commitment_v3(
+            &op_env.attempt,
+            execution_anchor_v3(h(NET), h(0x10C0 + 0x0B01), floor, &op_bond.0, 7),
+        );
+        let fact = anchor_fact(h(0x0B_0001), slot, op_key);
+        let op_seed = fact.panel_seed(&claim);
+        let op_seats = derive_at(&c, &base, slot, op_seed, &claim).expect("the operator's anchor draws");
+        let refused = gate(&c, &base, slot, &fact, &claim, ground_seed, &ground);
+        let accepted = gate(&c, &base, slot, &fact, &claim, op_seed, &op_seats);
+        // The per-CLAIM residual: the pair rate of the one fair draw a claim gets (over fresh operator
+        // executions the attacker does not choose).
+        let mut fair_pairs = 0u64;
+        for i in 0..FAIR {
+            let seed = chain_seed(h(0x0B_0001), slot, identity(0xFA1A_0000 + i), &claim);
+            let seats = derive_at(&c, &base, slot, seed, &claim).expect("draws");
+            fair_pairs += u64::from(pair0_of(seed, &seats));
+        }
+        println!(
+            "{} Sybil(s): {WINS} fresh junk wins -> {admitted} may anchor (F1 alone: a segment-0 pair in {f1_pairs}); the capturing win found after {tries} draws is not an anchor and its panel meets the gate on the operator's anchor as {refused:?}; the operator's panel {accepted:?}, pair: {}; the one fair draw's pair rate {fair_pairs}/{FAIR} = {:.4} per claim",
+            sybils.len(),
+            pair0_of(op_seed, &op_seats),
+            fair_pairs as f64 / FAIR as f64
+        );
+        assert_eq!(admitted, 0, "{} Sybil(s): no junk win of a non-operator is an anchor past the fence", sybils.len());
+        assert!(refused.is_err(), "the attacker's capturing panel is refused against the operator's anchor");
+        assert_eq!(accepted, Ok(()), "build = accept on the operator's anchor");
+    }
 }

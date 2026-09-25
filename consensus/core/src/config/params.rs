@@ -2690,6 +2690,34 @@ pub struct Params {
     /// exactly as one that does not until the fence is armed.
     pub palw_bond_maturity_early: Option<ForkActivation>,
     // ---- end lane maturity -------------------------------------------------------------------
+    // ---- lane A (post-launch, 2026-09-26): only an operator's attempt anchors a panel ----------
+    /// **Lane A, the operator-anchored panel (testnet-12's post-launch stopgap for the panel-seed
+    /// CRITICAL, user decision 2026-09-26).** Past `activation` — resolved at the candidate anchor
+    /// block's OWN DAA score, the key lane F1 resolves the seed rule at — a block may anchor a claim's
+    /// panel only if it is an attempt produced by one of `operators` (its envelope names the bond as
+    /// executor under the bond's genesis-registered key): the anchor is the first such attempt on the
+    /// selected chain at or past the claim's slot, and a slot none reaches before the bind window
+    /// lapses voids `BindTimeout` at the backstop (S0). See [`crate::palw_operator_anchor_v1`].
+    ///
+    /// Why: while audit P0-10 is open a lottery win is ~279 junk BLAKE2b draws, so whoever may produce
+    /// the anchor re-rolls the panel of any claim by drawing fresh wins (lane F1 prices a re-roll at a
+    /// win, not an inference). Past this fence the attacker cannot hold the anchor position; the
+    /// operator's future execution commitment is not its to pick or predict, so a claim id fixed before
+    /// the slot buys one fair draw. The cost is operator trust in the draw until an inference-bound
+    /// ticket exists.
+    ///
+    /// The seed (lane F1's execution-commitment seed, which lane A requires at or below itself) is read
+    /// off the EARLIEST operator attempt at or past the slot in the anchor's past, so an operator
+    /// attempt displaced from the selected chain by a heavier sibling still keys the draw.
+    ///
+    /// `operators` is sorted, distinct and a subset of the genesis registry (`validate_palw_v2`); on
+    /// testnet-12 it is all eight genesis bonds ([`crate::palw_operator_anchor_v1::PalwOperatorAnchorV1::of_genesis_bonds_v1`]).
+    /// Refused without `palw_rcore_plus` and `palw_panel_seed_execution` at or below the activation. Dormant (`None`) on every
+    /// shipped preset, testnet-12 included; hashed Some-only (the height, the rule's domain and the
+    /// operator outpoints) and collapsed from `Some(never())` with the other fences, so a build that
+    /// carries the field fingerprints and peers exactly as one that does not until it is armed.
+    pub palw_operator_anchor: Option<crate::palw_operator_anchor_v1::PalwOperatorAnchorV1>,
+    // ---- end lane A ----------------------------------------------------------------------------
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -4145,7 +4173,9 @@ impl Params {
             self.validate_palw_rcore_plus_v1()?;
             self.validate_palw_exec_quantum_maturity_v1()?;
             // Lane F1 (the panel seed, post-launch): over R-core+, which names its own refusals first.
-            return self.validate_palw_panel_seed_execution_v1();
+            self.validate_palw_panel_seed_execution_v1()?;
+            // Lane A (the operator anchor, post-launch): over R-core+, likewise.
+            return self.validate_palw_operator_anchor_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -4987,7 +5017,9 @@ impl Params {
         // Over its bundle's fence, inside the liability horizon, and never the `None` rule twice.
         self.validate_palw_exec_quantum_maturity_v1()?;
         // Lane F1 (the panel seed, post-launch): over R-core+, which names its own refusals first.
-        self.validate_palw_panel_seed_execution_v1()
+        self.validate_palw_panel_seed_execution_v1()?;
+        // Lane A (the operator anchor, post-launch): over R-core+, likewise.
+        self.validate_palw_operator_anchor_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -5257,6 +5289,12 @@ impl Params {
         // day over a height neither has reached.
         if self.palw_panel_seed_execution == Some(ForkActivation::never()) {
             self.palw_panel_seed_execution = None;
+        }
+        // Lane A (the operator anchor, post-launch): Some-only hashed (with its operator list), so the
+        // same collapse — the list goes with the height, or a build that schedules the fence and one
+        // that does not would refuse each other over a height neither has reached.
+        if self.palw_operator_anchor.as_ref().is_some_and(|rule| rule.activation == ForkActivation::never()) {
+            self.palw_operator_anchor = None;
         }
         // ADR-0152 §4-quater's class-verify-deadline fence: Some-only hashed, so the same collapse.
         if self.palw_class_verify_deadline == Some(ForkActivation::never()) {
@@ -7127,6 +7165,73 @@ impl Params {
     }
     // ---- end lane F1 ------------------------------------------------------------------------
 
+    // ---- lane A (post-launch, 2026-09-26): only an operator's attempt anchors a panel -----------
+
+    /// **Lane A's rule** ([`Self::palw_operator_anchor`]) resolved off a ConsensusV2 ruleset: the
+    /// fence and each operator bond's genesis-registered key — what the processor's anchor predicate
+    /// reads. `None` where the fence is absent, `never()`, or the network is not ConsensusV2.
+    pub fn palw_operator_anchor_rule_v1(&self) -> Option<crate::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1> {
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return None };
+        let value = self.palw_operator_anchor.as_ref().filter(|rule| rule.activation != ForkActivation::never())?;
+        Some(value.rule_v1(&bundle.genesis_objects))
+    }
+
+    /// Whether a candidate anchor block at `anchor_daa` is under lane A's rule. `false` on every
+    /// shipped preset: the fence is dormant until an operator arms it.
+    pub fn palw_operator_anchor_active_at(&self, anchor_daa: u64) -> bool {
+        matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+            && self.palw_operator_anchor.as_ref().is_some_and(|rule| rule.activation.is_active(anchor_daa))
+    }
+
+    /// **Lane A armed at `activation` over every genesis bond** — testnet-12's post-launch value (its
+    /// genesis registers exactly the operator's eight cards). `None` off ConsensusV2.
+    pub fn palw_operator_anchor_of_genesis_bonds_v1(
+        &self,
+        activation: ForkActivation,
+    ) -> Option<crate::palw_operator_anchor_v1::PalwOperatorAnchorV1> {
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return None };
+        Some(crate::palw_operator_anchor_v1::PalwOperatorAnchorV1::of_genesis_bonds_v1(activation, &bundle.genesis_objects))
+    }
+
+    /// **What lane A's fence refuses**: arming it off ConsensusV2 (there is no V2 panel to anchor);
+    /// without `palw_rcore_plus` at or below it (below R-core+ a heartbeat may anchor a panel, and the
+    /// rule is written over the attempt-only lane rule R-core+ installs); without lane F1
+    /// (`palw_panel_seed_execution`) at or below it (the displacement-proof seed is an execution
+    /// commitment read off the earliest operator attempt, which only F1's seed rule carries); and a value
+    /// [`crate::palw_operator_anchor_v1::PalwOperatorAnchorV1::refusal_v1`] refuses — an empty operator
+    /// list, one not sorted and distinct, or one naming a bond the genesis does not register. Any
+    /// height is legal otherwise; on a live testnet-12 the operator picks one post-launch height for
+    /// every post-launch fence, away from every scheduled one (never 1,000, `palw_bond_maturity`'s).
+    pub fn validate_palw_operator_anchor_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(value) = self.palw_operator_anchor.as_ref().filter(|rule| rule.activation != ForkActivation::never()) else {
+            return Ok(());
+        };
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
+            return Err(Invalid("palw_operator_anchor is armed on a network that is not ConsensusV2: there is no V2 panel to anchor"));
+        };
+        if !self.palw_rcore_plus.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= value.activation.daa_score()) {
+            return Err(Invalid(
+                "palw_operator_anchor is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat may anchor a \
+                 panel, and the operator rule narrows R-core+'s attempt-only anchor lane",
+            ));
+        }
+        if !self.palw_panel_seed_execution.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= value.activation.daa_score())
+        {
+            return Err(Invalid(
+                "palw_operator_anchor is armed without palw_panel_seed_execution (lane F1) at or below it: past lane A the seed is \
+                 read off the earliest operator attempt at or past the slot as an execution commitment, so a displaced operator \
+                 attempt still keys the draw — without F1 the seed would be the binding block's identity, and displacing the \
+                 anchor would re-roll the panel",
+            ));
+        }
+        if let Some(why) = value.refusal_v1(&bundle.genesis_objects) {
+            return Err(Invalid(why));
+        }
+        Ok(())
+    }
+    // ---- end lane A ------------------------------------------------------------------------
+
     /// ADR-0152 §4-quater's class-verify-deadline fence, resolved off a ConsensusV2 ruleset.
     pub fn palw_class_verify_deadline_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_class_verify_deadline) {
@@ -7319,6 +7424,8 @@ impl Params {
             palw_rcore_plus,
             // Lane F1 (the panel seed, post-launch).
             palw_panel_seed_execution,
+            // Lane A (the operator anchor, post-launch).
+            palw_operator_anchor,
             palw_rcore_conservative_classes: _,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
@@ -7442,6 +7549,9 @@ impl Params {
             // Lane F1 (the panel seed, post-launch): a top-level fence an un-upgraded peer does not
             // implement, so it is on the schedule and gates the fork id like every other.
             ("palw_panel_seed_execution", *palw_panel_seed_execution),
+            // Lane A (the operator anchor, post-launch): the height only — on the schedule and the
+            // fork-id gate like every top-level fence an un-upgraded peer does not implement.
+            ("palw_operator_anchor", palw_operator_anchor.as_ref().map(|rule| rule.activation)),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
             ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
             ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
@@ -7838,6 +7948,12 @@ impl Params {
             h.write(b"palw_panel_seed_execution");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane A (the operator anchor, post-launch), NAMED for the same reason and Some-only: it changes
+        // which block anchors a claim past it, so an operator reading the schedule must see it.
+        if let Some(rule) = &self.palw_operator_anchor {
+            h.write(b"palw_operator_anchor");
+            h.write(rule.activation.daa_score().to_le_bytes());
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence, NAMED for the same reason and Some-only: it
         // changes which claims a block may carry and when a licensed claim may Final.
         if let Some(activation) = self.palw_class_verify_deadline {
@@ -8080,6 +8196,8 @@ impl Params {
             palw_rcore_plus,
             // Lane F1 (the panel seed, post-launch).
             palw_panel_seed_execution,
+            // Lane A (the operator anchor, post-launch).
+            palw_operator_anchor,
             palw_rcore_conservative_classes: _,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
@@ -8431,6 +8549,11 @@ impl Params {
         // `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
         if let Some(activation) = palw_panel_seed_execution.as_mut() {
             fork(activation, visit);
+        }
+        // Lane A (the operator anchor, post-launch): the height only, SOME-ONLY, for the floor's reason;
+        // its `Some(never())` collapses (list and all) in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(rule) = palw_operator_anchor.as_mut() {
+            fork(&mut rule.activation, visit);
         }
         // ADR-0152 §4-quater's class-verify-deadline fence: SOME-ONLY, as the floor above and for its
         // reason.
@@ -9054,6 +9177,8 @@ impl Params {
             palw_rcore_plus,
             // Lane F1 (the panel seed, post-launch).
             palw_panel_seed_execution,
+            // Lane A (the operator anchor, post-launch).
+            palw_operator_anchor,
             palw_rcore_conservative_classes,
             palw_class_verify_deadline,
             palw_class_verify_rows,
@@ -9384,6 +9509,23 @@ impl Params {
             h.write(b"palw_panel_seed_execution");
             h.write(activation.daa_score().to_le_bytes());
             h.write(crate::palw_panel_v2::PALW_PANEL_V2_DOMAIN_DRAW_SEED_V1);
+        }
+        // Lane A (the operator anchor, post-launch): the height, the rule's domain beside it (the rule's
+        // version rides its fence) and the operator bonds it trusts, as listed (`validate_palw_v2` holds
+        // the list sorted and distinct, so one set has one spelling) — two builds trusting different
+        // operators at one height announce different rulesets. The keys are not written: each is its
+        // genesis registration's, already inside the ruleset id. Some-only (and collapsed from
+        // `Some(never())` for the identity), so a build that leaves it dormant fingerprints
+        // byte-identically to one without the field.
+        if let Some(rule) = palw_operator_anchor {
+            h.write(b"palw_operator_anchor");
+            h.write(rule.activation.daa_score().to_le_bytes());
+            h.write(crate::palw_operator_anchor_v1::PALW_OPERATOR_ANCHOR_DOMAIN_V1);
+            h.write((rule.operators.len() as u64).to_le_bytes());
+            for bond in rule.operators.iter() {
+                h.write(bond.0.transaction_id.as_byte_slice());
+                h.write(bond.0.index.to_le_bytes());
+            }
         }
         if !palw_rcore_conservative_classes.is_empty() {
             h.write(b"palw_rcore_conservative_classes");
@@ -10233,6 +10375,8 @@ impl Params {
             // Lane F1 (the panel seed, post-launch): CARRIED beside its one prerequisite, which is
             // carried too.
             palw_panel_seed_execution: self.palw_panel_seed_execution,
+            // Lane A (the operator anchor, post-launch): CARRIED beside its one prerequisite.
+            palw_operator_anchor: self.palw_operator_anchor.clone(),
             palw_rcore_conservative_classes: self.palw_rcore_conservative_classes,
             // ADR-0152 §4-quater: CARRIED like R-core+, never reset — an overridden testnet-12 then fails
             // `validate_palw_v2` on a prerequisite the override dropped instead of silently reopening
@@ -11278,6 +11422,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_panel_seed_execution: None,
+    palw_operator_anchor: None,
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
@@ -11510,6 +11655,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_panel_seed_execution: None,
+    palw_operator_anchor: None,
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
@@ -11724,6 +11870,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_panel_seed_execution: None,
+    palw_operator_anchor: None,
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
@@ -18151,6 +18298,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_panel_seed_execution: None,
+    palw_operator_anchor: None,
     palw_rcore_conservative_classes: &[],
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],

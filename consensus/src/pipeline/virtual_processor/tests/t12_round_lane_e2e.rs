@@ -327,7 +327,8 @@ impl T12Chain {
     }
 
     /// [`Self::attempt`]'s block, built and not inserted — so two can be built on the same parents,
-    /// or one submitted that the node is expected to refuse.
+    /// or one submitted that the node is expected to refuse. `pub(super)` for lane A's displacement
+    /// test (`t12_operator_anchor_fence`), which races two.
     pub(super) fn build_attempt(
         &mut self,
         card: usize,
