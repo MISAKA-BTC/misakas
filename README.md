@@ -9,7 +9,7 @@ inference** (PALW) rather than by hashing alone.
 
 [misakaoptions.com](https://misakaoptions.com) · [misakascan.com](https://misakascan.com) (explorer) ·
 [wallet.misakascan.com](https://wallet.misakascan.com) · [Mainnet readiness](docs/mainnet-readiness.md) ·
-[Join testnet-12](docs/testnet12-join-mining.md) · [Docs](docs/README.md) · [ADRs](docs/adr/README.md)
+[Architecture](docs/architecture/overview.md) · [Join testnet-12](docs/testnet12-join-mining.md) · [Docs](docs/README.md) · [ADRs](docs/adr/README.md)
 
 ## Release status
 
@@ -128,6 +128,10 @@ interval shorter than the work it certifies is a chain that certifies nothing.
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is
 a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet /
 `misakadev…` devnet), and project branding are MISAKA.
+
+**How it fits together** — each part of the protocol, the ADRs that govern it today, and the code
+that implements it, with the 94 crates sorted into core, PALW, operator, application and
+development groups: **[docs/architecture/overview.md](docs/architecture/overview.md)**.
 
 ## The stack: one chain, one app
 

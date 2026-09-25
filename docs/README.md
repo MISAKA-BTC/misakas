@@ -4,6 +4,7 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 ## Current Testnet-12 documents
 
+- [Architecture overview](architecture/overview.md) — the protocol as it is now, topic by topic, with the ADRs that govern each part and where its code lives
 - [Mainnet readiness](mainnet-readiness.md) — what is done, partly done and not done before a mainnet genesis, with the evidence for each
 - [Release process](release-process.md) — how a release is cut, signed and verified
 - [testnet-12 launch note (2026-09-25)](t12-launch-2026-09-25.md) — the release, its known issues and when a payment is final

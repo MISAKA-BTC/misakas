@@ -36,6 +36,7 @@ add more rules.
 | **PARTIAL** | Launch gate (ADR-0152 §8.3) | [t12-rcore-launch-checklist.md](t12-rcore-launch-checklist.md) §1.0 recorded the gate as not met on 2026-09-25; testnet-12 launched with the gaps listed in [the launch note §2](t12-launch-2026-09-25.md) |
 | **TODO** | **Consensus rules frozen** | testnet-12's two CRITICAL fixes (heartbeat transparency, panel-seed grinding) land as post-launch fences, and more are scheduled (launch note §2.5–2.7) |
 | **TODO** | Mainnet genesis and parameters final | the `mainnet` parameter set is defined, but it is not declared final and no mainnet card is minted ([palw-mainnet-audit-2026-09-06.md](palw-mainnet-audit-2026-09-06.md) lists what must be true first) |
+| **TODO** | The running ruleset's design is on record | testnet-12 runs R-core+ (ADR-0152 v3.1), which is cited throughout the code but not committed to `docs/adr/`; the [architecture overview](architecture/overview.md) is the current map until it is |
 | **TODO** | Consensus differential testing | no second implementation or reference model is run against the node's consensus in CI |
 
 ## 2. Security
