@@ -46,21 +46,24 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
-/// testnet-12 with the horizon taken away (its mirror synced) — testnet-12 as the parent `99247983`
-/// (the readiness line's merge of `rcore/int-3` 3692c7e9 into the Activation Pool line: §4-quater's
-/// deadline fence and the pool both armed) fingerprints it, measured by building that tree, not
-/// derived. The horizon is the only thing this change moved.
+/// testnet-12 with the horizon taken away (its mirror synced), on the integrated line (`95f6ce6d`:
+/// the Activation Pool f92f34a7 with P1's hashed `b_cap`, rcore/int-3 f7350af9 with aheld-node
+/// 2f92228f). The horizon is the only thing this pin and the next differ by. Taken from this test's
+/// own output on that tree; the integration owner's final re-pin moves both together. When the
+/// horizon landed (`3e9ae4ba`, over `99247983`) the pre-horizon value was MEASURED by building the
+/// parent tree — `75437d29…` / `b1350b15…` / `24d71100…` — and matched this twin exactly.
 const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
-    "75437d296100e57d39c9ae6b2645e866e8dd57def8ebc5b9edac053f0055734b",
-    "b1350b1565429b638d28019ba9aa6798294452118237a4bc79e6ba9b89f3062a",
-    "24d71100697d5a7d34177cddabede8ae5ed62ebc8096b73c3877c79216e1bf4a",
+    "fd7353c013b7042d3351cabd584ecf8aefec9253ba6c32b1e8f99d7719743210",
+    "a7fe561c8c5e33e3076d48a03f2c1e4cfda0bfa8c401e2faf08e1ae355ea9461",
+    "28d866f1cda8c727f48d2ef162616161ef65a101b0f400dd3279415c0b5447eb",
 );
 
-/// testnet-12 with the horizon, as this change fingerprints it.
+/// testnet-12 with the horizon, on the same tree (at `3e9ae4ba`, before the pool and int-3 merges:
+/// `55579322…` / `19d4c764…` / `7980d47a…`).
 const T12_WITH_THE_HORIZON: (&str, &str, &str) = (
-    "55579322a4a8b9d57982bbae6c82ee14286fb42827fae809bcb51593a403e5ca",
-    "19d4c76444ecb19032f2ee48ca3ac9180ab8e5d7442a5a11894e1e79a4159e32",
-    "7980d47a9a2d2c4cc139207f0af9ea2bcd1efa87d04e662b205cf5cc781d4c96",
+    "4d38b3f141fb8c9951aea77422859126d4607b31149519d14a4fea90ea8226a9",
+    "2477a803c03119809dc3f19058e53b4c933f3cb7ea3a50504da4e2da44dbb006",
+    "06dd55668b8fb1249a3d8e975a93d08dd2ed5ef7d8d37298eeeb8d168c0619d6",
 );
 
 fn shipped(name: &str) -> Params {
