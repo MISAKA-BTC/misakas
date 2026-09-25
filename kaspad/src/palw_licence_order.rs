@@ -473,8 +473,18 @@ mod tests {
             !production.contains("readiness_duties_for_tick(&session, current_daa, readiness_waiting)"),
             "no read is cued by the latch"
         );
-        // Between the reset and the Licences site, the flag is set only where a proof of THIS tick waits.
+        // Between the reset and the Licences site, the flag is set only where a proof of THIS tick waits: a
+        // proof with no slot, and a failed replacement whose proof the readiness lane did not take either
+        // (V07 on the declined arm, the int-4 audit of 2026-09-26). Every other write clears it.
         let tick = &production[reset..licences];
-        assert!(tick.matches("readiness_waiting = true;").count() == 2, "a failed replacement, and a proof with no slot");
+        assert_eq!(tick.matches("readiness_waiting = true;").count(), 1, "a proof with no slot");
+        let declined = "readiness_waiting =\n                            \
+                        !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;";
+        assert_eq!(tick.matches(declined).count(), 1, "a failed replacement whose proof the lane refused too");
+        assert_eq!(
+            tick.matches("readiness_waiting =").count(),
+            tick.matches("readiness_waiting = false;").count() + 2,
+            "no other write sets it"
+        );
     }
 }

@@ -10890,7 +10890,17 @@ impl PalwPanelService {
                         // The late carrier still holds the slot: nothing went out at this site.
                         inflight = MAX_INFLIGHT_CARRIERS;
                         slots.rewind_v1(inflight);
-                        readiness_waiting = true;
+                        // V07: a declined replacement is a proof the main slot cannot take this tick — our
+                        // court move or data-availability answer keeps its turn until LOST
+                        // (`palw_carrier_keeps_its_turn_v1`), a carrier that moves money or registers is
+                        // never replaced — so the lane is offered it, as the branch below offers it. The
+                        // duty left the tick's list above and the Own site never sees it: without this the
+                        // ordinary proofs rode the lane while the one about to lapse waited (the int-4
+                        // audit of 2026-09-26, the n1 x n2 composition).
+                        let main: Vec<TransactionOutpoint> =
+                            funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();
+                        readiness_waiting =
+                            !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;
                     }
                 } else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, inflight)
                     && funding.is_some()
@@ -20492,6 +20502,22 @@ mod readiness_memory_and_stuck_carrier_tests {
         let asked = open.find("palw_carrier_keeps_its_turn_v1(&late.tx, unconfirmed_daa)").expect("asked by the opening");
         assert!(asked < open.find("session.get_virtual_utxo_entry(input)?").expect("the input"), "before the input");
         assert!(asked < open.find("*self.carrier_replacement.lock().unwrap() =").expect("the arming"), "before it arms");
+        // A move that keeps its turn declines the escalated site's replacement — and the escalated proof
+        // it declined still rides the readiness lane (V07, rcore/n1-carrier), which the escalated site
+        // offers only when nothing is being replaced: the declined arm offers it the removed duty
+        // (the int-4 audit, n1 x n2), so the ordinary proofs never ride the lane ahead of it.
+        let tick = &source[source.find("let mut held = inflight >= MAX_INFLIGHT_CARRIERS;").expect("the held tick")..];
+        let site = tick
+            .find("if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight).await {")
+            .expect("the escalated site's replacement");
+        let site = &tick[site..];
+        let site =
+            &site[..site.find("} else if slots.offers(PalwCarrierSiteV1::ReadinessEscalated, inflight)").expect("the next arm")];
+        let declined = &site[site.find("} else {").expect("the declined arm")..];
+        assert!(
+            declined.contains("!self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;"),
+            "a declined escalated replacement offers the lane: {declined}"
+        );
     }
 
     /// A replacement that did not go out leaves the site it entered with nothing sent.
@@ -20673,6 +20699,25 @@ mod readiness_memory_and_stuck_carrier_tests {
             .expect("the escalated site's lane");
         let priority = tick.find("slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);").unwrap();
         assert!(main_escalated < lane_escalated && lane_escalated < priority, "after the main slot's offer, before the court");
+        // A declined replacement of our late tip is a proof the main slot cannot take either (the int-4
+        // audit, n1 x n2): the escalated duty it removed from the tick's list is offered to the lane on
+        // the declined arm, and the proof waits only when the lane does not take it.
+        let replace_escalated = tick
+            .find("if self.replace_late_carrier_v1(&session, &duty, stuck, late, current_daa, &mut funding, &mut inflight).await {")
+            .expect("the escalated site's replacement");
+        assert!(replace_escalated < main_escalated, "the escalated site's replacement comes first");
+        let declined = &tick[replace_escalated..main_escalated];
+        let declined = &declined[declined.find("} else {").expect("the declined arm")..];
+        let lane_declined = declined
+            .find("readiness_waiting =\n                            !self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await;")
+            .expect("the declined replacement offers the removed duty to the lane");
+        assert!(declined[..lane_declined].contains("slots.rewind_v1(inflight);"), "after the site is rewound");
+        assert!(
+            declined[..lane_declined]
+                .contains("funding.iter().chain(chained_funding.iter()).map(|(outpoint, _)| *outpoint).collect();"),
+            "the lane's funding excludes the main chain's, as at the other sites"
+        );
+        assert!(!declined.contains("readiness_waiting = true;"), "the proof waits only when the lane refuses it too");
         let lane_own = tick
             .find("&& self.carry_on_readiness_lane_v1(&session, &duty, current_daa, &mut readiness_lane, &main).await")
             .expect("the Own site's lane");
