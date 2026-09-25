@@ -57,6 +57,7 @@ fn the_ledger_is_the_only_thing_that_moved_testnet12() {
     println!("testnet-12 at the parent (the ledger and the deadline fence taken away): {:?}", ids(&parent));
     parent.palw_offence_attribution = None;
     let now = ids(&parent);
+    println!("testnet-12 at the parent without the attribution: params {} identity {} schedule {}", now.0, now.1, now.2);
     assert_eq!((now.0.as_str(), now.1.as_str(), now.2.as_str()), T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION);
 }
 

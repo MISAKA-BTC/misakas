@@ -320,9 +320,33 @@ fn run(p: &Params, force_audit_off: bool) -> String {
 const PARENT_DUMP_BLAKE2B_256: &str = "d86c2852606fe96e0f14487286090e3eca1b682d099e36ca7f28bc847d33e99f";
 const PARENT_DUMP_BYTES: usize = 686_879;
 const PARENT_DUMP_LINES: usize = 1_953;
+/// **The same dump with every printed state root masked** (`genesis root <root>`, `  root <root>`), as
+/// its BLAKE2b-256: everything testnet-11 folds, reads and refuses here, and none of the roots. A v22
+/// layout change (every re-pin of [`PARENT_DUMP_BLAKE2B_256`] above) moves only the roots, so it leaves
+/// this digest, the length and the line count where they are; a change to what testnet-11 DOES moves
+/// this one. It is never re-pinned for a layout change — `scripts/t12-repin.sh` re-pins the raw digest
+/// only when this one held (and refuses otherwise). Taken at `rcore/int-3` 8270cf03, where the raw
+/// digest above is current.
+const PARENT_DUMP_ROOTS_MASKED_BLAKE2B_256: &str = "4b02852c31942b9572ec029ada54f1a86f1278382b0de4f4d9bebb35c503665d";
 
 fn digest(s: &str) -> String {
     blake2b_simd::Params::new().hash_length(32).hash(s.as_bytes()).to_hex().to_string()
+}
+
+/// `dump` with the value of every root line replaced by `<root>` (a fixed-width 128-hex root only).
+fn roots_masked(dump: &str) -> String {
+    let mut out = String::with_capacity(dump.len());
+    for line in dump.split_inclusive('\n') {
+        let (body, end) = line.strip_suffix('\n').map_or((line, ""), |b| (b, "\n"));
+        let masked = ["genesis root ", "  root "].iter().find_map(|prefix| {
+            body.strip_prefix(prefix)
+                .filter(|root| root.len() == 128 && root.bytes().all(|b| b.is_ascii_hexdigit()))
+                .map(|_| format!("{prefix}<root>"))
+        });
+        out.push_str(masked.as_deref().unwrap_or(body));
+        out.push_str(end);
+    }
+    out
 }
 
 #[test]
@@ -330,6 +354,7 @@ fn below_the_audit_fence_the_panel_room_folds_as_the_parent_did() {
     let p = t11();
     let dump = run(&p, false);
     println!("t11 dump: {} bytes, {} lines, BLAKE2b-256 {}", dump.len(), dump.lines().count(), digest(&dump));
+    println!("t11 dump roots masked: BLAKE2b-256 {}", digest(&roots_masked(&dump)));
     if let Ok(path) = std::env::var("PARITY_DUMP") {
         std::fs::write(&path, &dump).expect("write the dump");
         println!("written to {path}");
@@ -338,5 +363,10 @@ fn below_the_audit_fence_the_panel_room_folds_as_the_parent_did() {
     // room, claims licensed, and the lifecycle held a class (the dormant defect, verbatim).
     assert!(dump.contains("attempt refused"), "the budget filled at least once");
     assert_eq!((dump.len(), dump.lines().count()), (PARENT_DUMP_BYTES, PARENT_DUMP_LINES), "the parent's dump, line for line");
+    assert_eq!(
+        digest(&roots_masked(&dump)),
+        PARENT_DUMP_ROOTS_MASKED_BLAKE2B_256,
+        "the parent's dump apart from its state roots: what testnet-11 folds, reads and refuses moved"
+    );
     assert_eq!(digest(&dump), PARENT_DUMP_BLAKE2B_256, "the parent's dump, byte for byte");
 }

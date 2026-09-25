@@ -216,10 +216,10 @@ gRPC は .113 以外 `--nogrpc`（同一 host 2 node で既定ポートが衝突
    108 回 loop した事故の再発防止）。switch は node ごとに journal の `Consensus params fingerprint:` を `EXPECT_FP` と照合し、
    "PALW DRILL" を名乗れば止め、RPC で `EXPECT_GENESIS` を確かめ、違えばその node を止めて後続を起動しない。
 
-**a0af3c92 での暫定値**（2026-09-25 に Mac の dev build で probe。出荷値ではない — 上の R1 の merge で動く）:
-`EXPECT_FP=8a4810231e4f54e7d62b57ef0c4bc7973b23ebb87b1943b6541c05190b2d5ee6`、
+**8270cf03 での暫定値**（2026-09-25、`scripts/t12-repin.sh` が build から計算。a0af3c92 の probe 値からは deadline＋P-1 の merge で fingerprint と schedule id が動いた。出荷値ではない — 上の R1 の merge で動く。出荷 commit では `t12-repin.sh --apply` がこの行を書き換える）:
+`EXPECT_FP=99eae89db05887c0ee21e451d5a78bd296533db59eb818edb3a4a320565c0ba3`、
 `EXPECT_GENESIS=a27f8f44fe4d91a5…a8ca1f23`（全桁は checklist §3）、`PREMINE_TXID=5e0d5f1b37a71288…e55e2669`、
-schedule id `8b0ee13c…`、rule manifest digest `9def81a1…`。
+schedule id `5f53b691…`、rule manifest digest `9def81a1…`。
 
 ## 5. 手順（誰が・どの順で）
 
