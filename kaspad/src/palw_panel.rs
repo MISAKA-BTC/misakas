@@ -6595,7 +6595,7 @@ impl PalwPanelService {
         let mut replay_filer = palw_filer_replay::PalwReplayFilerV1::default();
         // Lane B (panel-seed stopgap (B)): the operator's non-seat accusations; armed by identity alone.
         let mut operator_da =
-            palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_bonds_v1(&self.consensus_config.params));
+            palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(&self.consensus_config.params));
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -10314,16 +10314,19 @@ impl PalwPanelService {
             // --- lane B: the operator's non-seat accusations (`palw_operator_da`) ---
             //
             // The panel-seed stopgap (B), 2026-09-26: a node holding one of the operator's bonds (the
-            // genesis registrations) accuses every claim licensed by a `Valid` signer outside the
-            // operator's set — as a non-seat, exactly one node a claim by the claim's rank turns — so
-            // a junk claim meets an honest accuser even behind a captured panel. At most one item on
-            // the court queue, dated after every seat's filing. Identity arms it; no flag does.
+            // genesis registrations) checks every claim licensed by a `Valid` signer outside the
+            // operator's set — as a non-seat, one owner at a time by the claim's rank turns. A claim
+            // it can replay is replayed first and accused only if the replay refutes it; one no
+            // operator can judge is accused blind within a budget. The replay yields to the seat's
+            // own slots; at most one item on the court queue, dated after every seat's filing.
+            // Identity arms it; no flag does.
             self.operator_da_tick_v1(
                 &session,
                 &mut operator_da,
                 current_daa,
                 network_domain,
                 bond_key,
+                seat_replays.has_room(false),
                 &mut court_pending,
                 &mut court_due,
                 &mut court_moved,

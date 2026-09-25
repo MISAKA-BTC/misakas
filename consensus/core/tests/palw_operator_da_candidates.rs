@@ -25,7 +25,7 @@
 mod common;
 use common::*;
 use kaspa_consensus_core::palw_da_rcore_v1::PalwDaStageV1;
-use kaspa_consensus_core::palw_operator_da_v1::palw_operator_da_candidates_v1;
+use kaspa_consensus_core::palw_operator_da_v1::{palw_operator_da_candidates_v1, palw_operator_da_standing_v1};
 use kaspa_consensus_core::palw_producer_v2::{PalwDaAccusationCheckV1, palw_da_accusation_check_v1};
 use kaspa_consensus_core::palw_state_v2::{PalwVoidReasonV2, palw_accuser_exposure_v1};
 
@@ -85,6 +85,36 @@ fn a_claim_licensed_by_outside_signers_meets_the_operators_accusation_and_the_ju
     assert_eq!(cand.outside_signers, signers, "every coverage signer holds a lock, and none is an operator's");
     assert!(cand.operator_accusers.is_empty());
     assert_eq!(cand.accuse_until_daa, c.claim(&id).trace_retention_daa - c.sp.window_challenge());
+    // The replay gate's inputs: the claim record's own block, class, roots and lane.
+    let record = c.claim(&id).clone();
+    assert_eq!(
+        (cand.job.accepted_block, cand.job.class_id, cand.job.execution_root, cand.job.trace_root, cand.job.output_root),
+        (record.accepted_block, record.class_id, record.execution_root, record.trace_root, record.output_root)
+    );
+    assert_eq!(cand.job.artifact_root, c.s.class(&record.class_id).map(|class| class.artifact_root));
+    assert!(cand.job.artifact_root.is_some() && !cand.job.free_prompt && !cand.job.held_to_final, "a floor attempt: replayable");
+    let declared: Vec<PalwBondKeyV2> =
+        operators.iter().copied().filter(|b| c.s.bond(b).is_some_and(|r| r.capable_classes.contains(&record.class_id))).collect();
+    assert_eq!(cand.capable, declared, "the operator bonds that declared the floor");
+    assert!(!cand.capable.is_empty(), "the genesis bonds declare the floor");
+
+    // The accuser's standing before it accuses: nothing held, A-6's room the Accuser gate's.
+    let before = palw_operator_da_standing_v1(&c.s, &c.sp, &g[6], now, None).expect("a genesis bond");
+    assert_eq!(before.da_held, 0);
+    assert_eq!(before.collateral, c.s.bond(&g[6]).unwrap().collateral);
+    assert_eq!(
+        before.accuser_room,
+        kaspa_consensus_core::palw_state_v2::palw_rcore_gate_room_v1(
+            &c.s,
+            &c.sp,
+            &g[6],
+            now,
+            None,
+            kaspa_consensus_core::palw_state_v2::PalwRcoreGateV1::Accuser
+        )
+    );
+    assert!(before.accuser_room > 0 && before.accuser_room <= u128::from(before.collateral) / 2, "the free half at most");
+    assert!(palw_operator_da_standing_v1(&c.s, &c.sp, &PalwBondKeyV2(Default::default()), now, None).is_none(), "no such bond");
 
     // Not offered: the operator's own claim; a licence carried by operator signers alone.
     assert!(palw_operator_da_candidates_v1(&c.s, &c.sp, &g, now).is_empty(), "the producer is an operator's");
@@ -108,6 +138,9 @@ fn a_claim_licensed_by_outside_signers_meets_the_operators_accusation_and_the_ju
     assert!(!session.accuser_is_seat);
     assert!(c.s.deadline_of(&id).is_some(), "a non-seat session does not pause the claim (DA-5)");
     assert_eq!(palw_accuser_exposure_v1(&c.s, &accuser), exposure, "the exposure sits on the accuser's free half");
+    let during = palw_operator_da_standing_v1(&c.s, &c.sp, &accuser, c.daa + 1, None).unwrap();
+    assert_eq!(during.da_held, exposure, "the standing names the open session's exposure");
+    assert_eq!(during.accuser_room + exposure, before.accuser_room, "and A-6's room shrinks by it");
     let offered = palw_operator_da_candidates_v1(&c.s, &c.sp, &operators, c.daa + 1);
     assert_eq!(offered[0].operator_accusers, vec![accuser], "every other operator node now backs off");
     assert_eq!(offered[0].open_non_seat, 1);
@@ -124,6 +157,8 @@ fn a_claim_licensed_by_outside_signers_meets_the_operators_accusation_and_the_ju
         "one DaDefault record under (producer, claim)"
     );
     assert_eq!(palw_accuser_exposure_v1(&c.s, &accuser), 0, "the accuser's exposure is returned at a conviction");
+    let after = palw_operator_da_standing_v1(&c.s, &c.sp, &accuser, c.daa + 1, None).unwrap();
+    assert_eq!((after.da_held, after.collateral), (0, before.collateral), "nothing held, nothing burned off the accuser");
     assert!(palw_operator_da_candidates_v1(&c.s, &c.sp, &operators, c.daa + 1).is_empty(), "a voided claim is no one's to accuse");
 }
 

@@ -256,6 +256,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_operator_da_candidates_v1(operators)
     }
 
+    /// Lane B: one operator bond's standing (collateral net of slashes, A-6's room, DA exposure held).
+    pub fn palw_operator_da_standing_v1(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaStandingV1> {
+        self.consensus.palw_operator_da_standing_v1(bond)
+    }
+
     /// ADR-0152 R-3/R-4 (P2-8): the reporter filer's read of one filing, and the gate on one object.
     pub fn palw_reporter_filing_read_v1(
         &self,

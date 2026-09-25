@@ -948,6 +948,18 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **Lane B: one operator bond's standing** at the tip, for the DAA the virtual's next block folds
+    /// at ([`crate::palw_operator_da_v1::palw_operator_da_standing_v1`]: its collateral net of slashes,
+    /// A-6's room on its free half, the DA exposure it holds) — what the node's seat reserve and its
+    /// blind-accusation budget read. A read for node policy; `None` off `ConsensusV2`, with no tip
+    /// state, or for a bond the state does not hold.
+    fn palw_operator_da_standing_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<crate::palw_operator_da_v1::PalwOperatorDaStandingV1> {
+        None
+    }
+
     /// **ADR-0152 R-3/R-4 (Phase 2, P2-8): what the reporter's filer reads of one filing** at the
     /// tip, for the DAA the virtual's next block folds at — its commitment's row, the conviction and
     /// the reward under `offence_key` ([`crate::palw_state_v2::palw_reporter_filing_read_v1`]) — and,

@@ -35,6 +35,17 @@
 //! an accusation at. Whether a session opens is still asked of the fold per claim
 //! (`palw_producer_v2::palw_da_accusation_check_v1`, A-6's room included) before a carrier is paid for.
 //!
+//! **The replay gate's inputs** (the lane B review, 2026-09-26, findings 1–2). An accusation of an
+//! HONEST claim is refuted and its exposure is burned off a genesis bond for good; a garbage trace
+//! answers the accusation just the same. So the node judges a claim by replaying it first and
+//! accuses only what its replay refutes: each candidate carries the claim's replay inputs
+//! ([`PalwOperatorDaJobV1`]: its block, class, roots and lane — the facts a seat's duty carries) and
+//! the operator bonds that declared its class capable (`capable`: who can be the claim's judge).
+//!
+//! **The bond's standing** ([`palw_operator_da_standing_v1`], findings 2–3): the collateral left
+//! after slashes, A-6's room on the free half, and the DA exposure the bond holds — what the node's
+//! reserve for its own seat duties and its budget on blind accusations are measured against.
+//!
 //! **Consensus-inert.** Nothing here is read by a block rule, the fold or any id; it moves no
 //! fingerprint. Empty below `palw_rcore_plus` (the DA court is dormant there).
 
@@ -42,6 +53,43 @@ use crate::Hash64;
 use crate::palw_da_rcore_v1::PalwDaStageV1;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwStateParamsV2};
 use std::collections::BTreeSet;
+
+/// **What an operator node replays to judge a claim** (the replay gate) — the claim record's own
+/// facts, as a seat's duty carries them (`palw_producer_v2::PalwSeatDutyV2`): the block the claim was
+/// accepted on (an attempt's job is derived from its header, never served), the class and its
+/// registered artifact root, the committed roots, the priced work, and the lane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwOperatorDaJobV1 {
+    pub accepted_block: Hash64,
+    pub class_id: Hash64,
+    /// The class's registered artifact root; `None` when the class is gone from the registry (no
+    /// one can judge the claim).
+    pub artifact_root: Option<Hash64>,
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    pub output_root: Hash64,
+    /// The leaf count a free-prompt claim was priced at; zero on an attempt.
+    pub work_leaves: u64,
+    /// A free-prompt claim: its job is its caller's, served, never derived from the chain.
+    pub free_prompt: bool,
+    /// The panel room holds the class to `Final` (C7, `palw_panel_held_to_final_v1` over the class's
+    /// registry row; `false` with no row) — a heavy replay.
+    pub held_to_final: bool,
+}
+
+/// **One operator bond's standing, as lane B budgets against it** ([`palw_operator_da_standing_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwOperatorDaStandingV1 {
+    /// The collateral the bond still has: posted, net of every slash (a refuted exposure's burn
+    /// included) — what the burn leaves of a genesis bond.
+    pub collateral: u64,
+    /// A-6's room on the free half: `C − max(committed, 500‰·C) − accuser` (the Accuser gate every
+    /// court, held dissection and DA session is admitted against).
+    pub accuser_room: u128,
+    /// The data-availability exposure the bond holds as an accuser: its open sessions' and its
+    /// refuted exposures still held (burned when their claim records retire).
+    pub da_held: u128,
+}
 
 /// **One claim an operator's non-seat filer may accuse** ([`palw_operator_da_candidates_v1`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +115,11 @@ pub struct PalwOperatorDaCandidateV1 {
     pub opened_non_seat_total: u16,
     /// The last DAA an accusation still folds at: `trace_retention_daa − W_disclose`.
     pub accuse_until_daa: u64,
+    /// What an operator node replays to judge the claim before it accuses (the replay gate).
+    pub job: PalwOperatorDaJobV1,
+    /// The operator bonds whose declared `capable_classes` hold the claim's class, in bond order —
+    /// the pool the claim's judges are drawn from (node policy ranks and cuts it).
+    pub capable: Vec<PalwBondKeyV2>,
 }
 
 /// **The facts one claim is judged on** — what [`palw_operator_da_candidates_v1`] gathers off the
@@ -89,6 +142,8 @@ pub struct PalwOperatorDaClaimFactsV1 {
     pub accusers: Vec<PalwBondKeyV2>,
     pub open_non_seat: u8,
     pub opened_non_seat_total: u16,
+    /// The claim's replay inputs.
+    pub job: PalwOperatorDaJobV1,
 }
 
 /// **The selection rule** (the module's "Which claims"): the candidate `facts` make, or `None`.
@@ -130,6 +185,8 @@ pub fn palw_operator_da_select_v1(
         open_non_seat: facts.open_non_seat,
         opened_non_seat_total: facts.opened_non_seat_total,
         accuse_until_daa,
+        job: facts.job.clone(),
+        capable: Vec::new(),
     })
 }
 
@@ -161,6 +218,19 @@ pub fn palw_operator_da_claim_facts_v1(state: &PalwChainStateV2, claim_id: &Hash
         accusers: accusers.into_iter().collect(),
         open_non_seat: record.map(|r| r.open_other_sessions).unwrap_or(0),
         opened_non_seat_total: record.map(|r| r.opened_non_seat_total).unwrap_or(0),
+        job: PalwOperatorDaJobV1 {
+            accepted_block: claim.accepted_block,
+            class_id: claim.class_id,
+            artifact_root: state.class(&claim.class_id).map(|class| class.artifact_root),
+            execution_root: claim.execution_root,
+            trace_root: claim.trace_root,
+            output_root: claim.output_root,
+            work_leaves: claim.work_leaves,
+            free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+            held_to_final: state
+                .model_lifecycle(&claim.class_id)
+                .is_some_and(crate::palw_work_target_v1::palw_panel_held_to_final_v1),
+        },
     })
 }
 
@@ -188,8 +258,48 @@ pub fn palw_operator_da_candidates_v1(
         .filter_map(|(claim_id, _)| palw_operator_da_claim_facts_v1(state, claim_id))
         .filter_map(|facts| palw_operator_da_select_v1(&facts, &operators, disclose_window, now_daa))
         .collect();
+    for candidate in &mut out {
+        candidate.capable = operators
+            .iter()
+            .copied()
+            .filter(|bond| state.bond(bond).is_some_and(|record| record.capable_classes.contains(&candidate.job.class_id)))
+            .collect();
+    }
     out.sort_by(|a, b| (a.stage_daa, a.claim_id).cmp(&(b.stage_daa, b.claim_id)));
     out
+}
+
+/// **One bond's standing at `now_daa`** ([`PalwOperatorDaStandingV1`]), `raw_depth` the second clock's
+/// RAW depth as the processor resolves it for the next block (the escape is computed inside, as
+/// every gate read does). `None` for a bond the state does not hold. A read for node policy: the
+/// fold still decides every accusation with its own gate (`palw_da_accusation_check_v1`).
+pub fn palw_operator_da_standing_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+) -> Option<PalwOperatorDaStandingV1> {
+    let record = state.bond(bond)?;
+    let collateral =
+        if params.bond_collateral_is_net_v1() { record.collateral } else { record.collateral.saturating_sub(record.slashed) };
+    let accuser_room =
+        crate::palw_state_v2::palw_rcore_gate_room_v1(state, params, bond, now_daa, raw_depth, crate::palw_state_v2::PalwRcoreGateV1::Accuser);
+    let open = state
+        .da_sessions_iter()
+        .filter(|((_, accuser), _)| accuser == bond)
+        .map(|(_, session)| session.exposure)
+        .fold(0u128, u128::saturating_add);
+    // A claim's DA record lives until the claim record retires (its refuted exposures burn then), so
+    // every held exposure sits on a claim the state still holds.
+    let held = state
+        .claims_iter()
+        .filter_map(|(claim_id, _)| state.da_claim(claim_id))
+        .flat_map(|record| record.refuted_held.iter())
+        .filter(|(accuser, _)| accuser == bond)
+        .map(|(_, amount)| *amount)
+        .fold(0u128, u128::saturating_add);
+    Some(PalwOperatorDaStandingV1 { collateral, accuser_room, da_held: open.saturating_add(held) })
 }
 
 #[cfg(test)]
@@ -213,6 +323,17 @@ mod tests {
             accusers: vec![],
             open_non_seat: 0,
             opened_non_seat_total: 0,
+            job: PalwOperatorDaJobV1 {
+                accepted_block: Hash64::from_u64_word(0xB10C),
+                class_id: Hash64::from_u64_word(0xF1),
+                artifact_root: Some(Hash64::from_u64_word(0xA7)),
+                execution_root: Hash64::from_u64_word(0xE1),
+                trace_root: Hash64::from_u64_word(0x71),
+                output_root: Hash64::from_u64_word(0x01),
+                work_leaves: 0,
+                free_prompt: false,
+                held_to_final: false,
+            },
         }
     }
 
@@ -231,6 +352,8 @@ mod tests {
         let ops = operators();
         let c = palw_operator_da_select_v1(&facts(), &ops, W, 1_501).expect("an outside claim, outside signers");
         assert_eq!((c.stage, c.stage_daa), (PalwDaStageV1::Licensed, 1_500));
+        assert_eq!(c.job, facts().job, "the claim's replay inputs ride along");
+        assert!(c.capable.is_empty(), "capability is the state read's to fill");
         assert_eq!(c.outside_signers, vec![bond(21), bond(22)], "only the outside signers, in bond order");
         assert_eq!(c.accuse_until_daa, 1_500 + 4_400 - W);
         assert!(c.operator_accusers.is_empty());

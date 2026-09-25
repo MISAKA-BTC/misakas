@@ -2252,6 +2252,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_operator_da_candidates_v1_impl(&operators)
     }
 
+    fn palw_operator_da_standing_v1(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaStandingV1> {
+        self.virtual_processor.palw_operator_da_standing_v1_impl(&bond)
+    }
+
     fn palw_reporter_filing_read_v1(
         &self,
         offence_key: kaspa_consensus_core::Hash64,
