@@ -3,6 +3,9 @@
 #
 #   b0  misaka-t12-node0 (NEW unit)      0.0.0.0:26311  borsh 26313  json 26314   8k producer + 8k seat + HEARTBEAT
 #   b1  misaka-t12-node1 (drop-in)       0.0.0.0:26321  borsh 26323  json 26324   floor producer + 8k seat
+# Shares (R-core+, PLAN.md §2): b0 10,496 MiB = 8k attempt 3,456 + its own DA answer 3,456 + one 8k seat
+# duty 3,493 (+ 91 margin); b1 8,192 MiB = floor attempt 2,228 + its own floor DA answer 2,228 + one 8k
+# seat duty 3,493 (+ 243). Each with room for the duties it must not queue behind each other.
 #
 # b0 takes the ports the host's other services already point at and that nothing serves today:
 #   misaka-dnsseeder-t12  --node-wrpc-borsh 127.0.0.1:26313   (dead since t11 node0 failed)
@@ -14,13 +17,13 @@
 . "$(dirname "$0")/lib.sh"
 
 HOST_NAME_EXPECTED=vmi3450148
-RESERVE_MIB=2048              # ollama, journald, seeder, faucet, tunnel: 0.3 GiB measured; the rest is margin
+RESERVE_MIB=2048              # ollama, journald, seeder, faucet, tunnel: 0.3 GiB measured; the rest is margin (PLAN.md §2: 20,736 of 24,033 MiB)
 START_GAP=20
 BINARIES=(kaspad misaka palw-class)
 # id|unit|mode|listen|borsh|json|grpc|evm|share_mib|memmax_gib|produce|heartbeat|seat8k|peers
 NODES=(
-  "0|misaka-t12-node0|new|0.0.0.0:26311|26313|26314|-|-|7168|10|8k|1|1|127.0.0.1:26321,169.58.232.113:26311"
-  "1|misaka-t12-node1|dropin|0.0.0.0:26321|26323|26324|-|-|6144|9|floor|0|1|127.0.0.1:26311,169.58.232.113:26311"
+  "0|misaka-t12-node0|new|0.0.0.0:26311|26313|26314|-|-|10496|14|8k|1|1|127.0.0.1:26321,169.58.232.113:26311"
+  "1|misaka-t12-node1|dropin|0.0.0.0:26321|26323|26324|-|-|8192|11|floor|0|1|127.0.0.1:26311,169.58.232.113:26311"
 )
 # old chain data: .t12 = the old node0 appdir (1.6 GB, unused since t11 node0 failed), .t12b = node1's
 OLD_APPDIRS=(/root/.t12 /root/.t12b)

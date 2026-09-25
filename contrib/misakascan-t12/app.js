@@ -2940,14 +2940,18 @@ function fmtDur(sec){ sec=Math.max(0,Math.floor(sec)); const m=Math.floor(sec/60
 const PANEL_DRAW = 5;
 const PANEL_QUORUM = 3;
 // **The verifier-seat roster** — which live panel seats HOLD which class artifact. Deployment
-// overlay, not the admission count. Bonds are the on-chain identity — the same `6d69…:N` the
+// overlay, not the admission count. Bonds are the on-chain identity — the same `<txid>:N` the
 // receipt rows show. Ready seats DERIVE from getPalwModelRegistry (`readySeatsNow` /
 // SeatReadinessProved), never from this table.
-const PANEL_BOND_TX = "6d6973616b612d7072656d696e650000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-// testnet-12 roster (the 2026-09-23 regenesis): eight genesis bonds, every one a verifier seat that
+// testnet-12's OWN premine txid (premine_txid_for(testnet-12), salted per network since 2026-09-24;
+// the shared sentinel `6d697361…` is gone from this chain). Read by the deploy kit's probe
+// (contrib/t12-deploy-kit/probe-identity-local.sh → PREMINE_TXID); re-check it against fleet.env at the
+// shipping commit before staging this file (DEPLOY.md §9).
+const PANEL_BOND_TX = "5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669";
+// testnet-12 roster (the R-core+ regenesis): eight genesis bonds, every one a verifier seat that
 // holds the dense 8k artifact. Card 7 was re-keyed for testnet-12 (its old key was on no host). No
-// seat holds the 2M artifact: one ready 2M seat needs ~12 GiB and the class needs seven, so the 2M
-// row stays in Prefetching by design. Deployment truth, updated with the fleet.
+// seat holds the 2M artifact: 2M is CLOSED at launch (ADR-0152 §8.3 item 7 / O-11: every 2M attempt
+// and FP claim is refused until 2M's flag day). Deployment truth, updated with the fleet.
 const PANEL_SEATS = [
   { ix:0, host:"seat 0 · ibm (node0)",                       holds:["PALW-BASE-0","QWEN25-A16-8K"] },
   { ix:1, host:"seat 1 · ibm public node (node1)",           holds:["PALW-BASE-0","QWEN25-A16-8K"] },
@@ -2985,7 +2989,7 @@ const LLM_CLASSES = [
   { id:"ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
     name:"QWEN25-A16-8K", model:"Qwen/Qwen2.5-1.5B/graph-v7@8192 · W8A16 static PTQ, 8k held context (genesis)", tag:"llm" },
   { id:"74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
-    name:"QWEN25-A16-2M", model:"Qwen/Qwen2.5-1.5B/graph-v7@2097152 · W8A16 static PTQ, 2M held context (genesis)", tag:"llm" },
+    name:"QWEN25-A16-2M", model:"Qwen/Qwen2.5-1.5B/graph-v7@2097152 · W8A16 static PTQ, 2M held context (genesis row; closed at launch until its flag day)", tag:"llm" },
   // testnet-12 registers no hybrid row at genesis (the held map's GDN convolution gather is wrong for
   // Qwen3.6-35B-A3B's 16/32 key/value heads). A permissionless registration appears here by its
   // class id from getPalwModelRegistry; name it in this table when it registers.

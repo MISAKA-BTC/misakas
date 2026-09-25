@@ -11,6 +11,7 @@ Nothing it sends changes node state.
 
 usage: t12check.py --port 26314 --expect-fp <64 hex> --expect-genesis <128 hex> [--registry] [--json]
        t12check.py --port 26994 --probe      # a FRESH isolated node: print its fingerprint and genesis
+       t12check.py --port 26994 --premine    # the txid the genesis bonds sit on (getPalwPanelSeats)
 """
 import argparse, base64, json, os, socket, struct, sys, time
 
@@ -118,6 +119,8 @@ def main():
     ap.add_argument("--expect-genesis", default="")
     ap.add_argument("--probe", action="store_true",
                     help="fresh isolated node: print FP=… and GENESIS=… (its pruning point is the genesis)")
+    ap.add_argument("--premine", action="store_true",
+                    help="print PREMINE_TXID=… — the one txid every genesis seat's bond outpoint names (getPalwPanelSeats)")
     ap.add_argument("--registry", action="store_true")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--timeout", type=float, default=20)
@@ -133,6 +136,20 @@ def main():
         print(f"GENESIS={pick(dag, 'pruningPointHash', default='')}")
         print(f"BLOCKS={pick(dag, 'blockCount', default='?')} NETWORK={pick(dag, 'network', default='?')}")
         return 0
+    if a.premine:
+        try:
+            res = call_all(a.port, [("getPalwPanelSeats", {"classId": ""})], a.timeout)
+        except Exception as e:  # noqa: BLE001
+            print(f"UNREACHABLE {e}")
+            return 2
+        seats = pick(res.get("getPalwPanelSeats") or {}, "seats", default=[]) or []
+        txids = sorted({str(pick(s, "bondOutpoint", default="")).split(":")[0] for s in seats if pick(s, "bondOutpoint")})
+        print(f"SEATS={len(seats)} TXIDS={len(txids)}")
+        if len(txids) == 1:
+            print(f"PREMINE_TXID={txids[0]}")
+            return 0
+        print("PREMINE_TXID=")  # none, or the genesis seats do not share one txid: the operator reads it by hand
+        return 1
     if not (a.expect_fp and a.expect_genesis):
         ap.error("--expect-fp and --expect-genesis are required unless --probe")
 

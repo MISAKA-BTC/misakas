@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# misakascan -> the new testnet-12 genesis (f6cc9576…). PREPARED, NEVER RUN. Read DEPLOY.md first.
+# misakascan -> the R-core+ testnet-12 genesis (fleet.env EXPECT_GENESIS). PREPARED, NEVER RUN. Read DEPLOY.md first.
 #
 #   ./deploy.sh plan                 print what would happen (no remote writes)
 #   ./deploy.sh preflight            read-only checks, local + .113
@@ -24,12 +24,25 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATE="$HERE/.last-deploy-ts"
 SITE_URL=${SITE_URL:-https://misakascan.com}
 
-# The chain. GENESIS is PALW_T12_GENESIS at 5a559459 (consensus/core/src/config/genesis.rs; the config
-# tree is identical at b38356fe, which is what the private t12 on 5.104 runs). EXPECT_FP is the
-# release build's `Consensus params fingerprint:` boot line — it is NOT known yet (the private t12
-# prints 41b4c74a… from b38356fe; a 5a559459+ release will print its own). Required by `all`.
-GENESIS=${GENESIS:-f6cc957686f7047dc9fe6c9619d8f487237574b0596573af9d337c8f1f1980151b26256967a9a81f7ae31a5a352e249dd5426c0ce9144f75eb26a3ca3a963a30}
+# The chain: the release the fleet runs, read from the deploy kit's fleet.env (EXPECT_GENESIS /
+# EXPECT_FP, pinned from the SHIPPING commit's probe — docs/t12-rcore-launch-checklist.md §4) unless
+# GENESIS / EXPECT_FP are given. There is no default genesis any more: the one this script used to
+# default to (f6cc9576…, the private t12's) is in FORBIDDEN_GENESIS, and so is every retired or drill
+# genesis — the script refuses them.
+FLEET_ENV=${FLEET_ENV:-$HERE/../t12-deploy-kit/fleet.env}
+FORBIDDEN_GENESIS=""; DRILL_GENESES=""
+if [ -f "$FLEET_ENV" ]; then
+  # shellcheck source=../t12-deploy-kit/fleet.env.example
+  FLEET_GENESIS=$(. "$FLEET_ENV" && echo "$EXPECT_GENESIS"); FLEET_FP=$(. "$FLEET_ENV" && echo "$EXPECT_FP")
+  FORBIDDEN_GENESIS=$(. "$FLEET_ENV" && echo "$FORBIDDEN_GENESIS"); DRILL_GENESES=$(. "$FLEET_ENV" && echo "${DRILL_GENESES:-}")
+  GENESIS=${GENESIS:-$FLEET_GENESIS}; EXPECT_FP=${EXPECT_FP:-$FLEET_FP}
+elif [ -f "$HERE/../t12-deploy-kit/fleet.env.example" ]; then   # the forbidden list only; no genesis from a template
+  FORBIDDEN_GENESIS=$(. "$HERE/../t12-deploy-kit/fleet.env.example" && echo "$FORBIDDEN_GENESIS")
+fi
+GENESIS=${GENESIS:-}
 EXPECT_FP=${EXPECT_FP:-}
+[ "$GENESIS" != __FILL_ME__ ] || GENESIS=""
+[ "$EXPECT_FP" != __FILL_ME__ ] || EXPECT_FP=""
 
 # The node the explorer reads. Default: the public node on .113 itself (misaka-t12-node:
 # gRPC 26312, JSON wRPC 26314, EVM 8545) — which must already be ON the new genesis. To keep reading
@@ -42,7 +55,7 @@ NODE_EVM=${NODE_EVM:-127.0.0.1:8545}
 # node answers JSON on 26324, so 28014 is dead. Default: the same node as /kaspa. Set HUB_JSON=127.0.0.1:28014
 # only after ibm's /etc/misaka-explorer/vantage-tunnel.env says REMOTE_RPC_PORT=<its t12 JSON port>.
 HUB_JSON=${HUB_JSON:-$NODE_JSON}
-NODE_LOG=${NODE_LOG:-/root/.t12/misaka-testnet-12/logs/rusty-kaspa.log}
+NODE_LOG=${NODE_LOG:-/root/.t12r-b6/misaka-testnet-12/logs/rusty-kaspa.log}   # the deploy kit's b6 appdir (APPDIR_PREFIX /root/.t12r-b)
 
 # One deploy = one TS. `backup` / `all` mint it and record "TS BUSTER" in .last-deploy-ts; every
 # later step run on its own reuses that record, so backups, drop-ins and rollback all name one deploy.
@@ -74,7 +87,8 @@ remote_env(){
 }
 remote(){ "${SSH[@]}" "$(remote_env) bash -s"; }   # script on stdin
 case "$NEW_DB" in *[!a-z0-9_]*|"") die "NEW_DB must be [a-z0-9_]+";; esac
-[[ "$GENESIS" =~ ^[0-9a-f]{128}$ ]] || die "GENESIS must be 128 hex"
+[[ "$GENESIS" =~ ^[0-9a-f]{128}$ ]] || die "GENESIS must be 128 hex (fill the deploy kit's fleet.env EXPECT_GENESIS, or pass GENESIS=)"
+for g in $FORBIDDEN_GENESIS $DRILL_GENESES; do [ "$GENESIS" != "$g" ] || die "GENESIS ${GENESIS:0:16}… is a retired/private/drill genesis (fleet.env FORBIDDEN_GENESIS / DRILL_GENESES)"; done
 [[ -z "$EXPECT_FP" || "$EXPECT_FP" =~ ^[0-9a-f]{64}$ ]] || die "EXPECT_FP must be 64 hex"
 
 plan(){

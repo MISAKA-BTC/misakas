@@ -1,5 +1,8 @@
 # misakascan を新しい testnet-12 genesis に載せ替える手順（未実行）
 
+> **2026-09-25 更新（R-core+、branch `rcore/release-prep`）— 先に §9 を読む。** 下の §0〜§8 は 09-23 の調査記録で、
+> genesis `f6cc9576…` の記述は古い（その genesis は私設 t12 のもので、いまは `FORBIDDEN_GENESIS` に入っている）。
+
 対象: `misakascan.com`（169.58.232.113 の `/var/www/misaka-explorer` と、その背後の indexer/REST）。
 用意したもの: この `DEPLOY.md`、`deploy.sh`（未実行）、`app.js` / `index.html`（scratch 上の改訂版）、`probe.mjs`（読むだけの wRPC プローブ）。
 .113 は 2026-09-23 15:28–15:45 CEST に **読むだけ**で調べた（cat / ls / systemctl / journalctl / ss / psql の select と `\d`）。何も書いていない。
@@ -138,3 +141,22 @@ EXPECT_FP=<64hex> ./deploy.sh all           # 下の 1–6 を順に。途中で
 6. **MTP** を t12 で続けるか（pin の書き換えと台帳の退避は `chain.pin` のコメントどおり）。
 7. index.html に t12 の告知を載せるか（載せないなら既定で告知ブロックを外す）。
 8. 混在 DB `kaspa_t11` を規則どおり `kaspa_t11_old_ad30b5cb_<date>` へ改名するか（MTP の cron が参照しているので、MTP を決めてから）。
+
+
+## 9. R-core+ での変更と未決（2026-09-25）
+
+- **genesis と fp は deploy kit の `fleet.env` から読む**（`EXPECT_GENESIS` / `EXPECT_FP`、出荷 commit の probe で固定。
+  `docs/t12-rcore-launch-checklist.md` §4）。`deploy.sh` の既定 genesis（`f6cc9576…`）は削除し、`FORBIDDEN_GENESIS` と
+  `DRILL_GENESES` にある genesis は拒否する。a0af3c92 での暫定値は genesis `a27f8f44…`、fp `8a481023…`（出荷値ではない）。
+- **`app.js` の `PANEL_BOND_TX`** を t12 固有の premine txid `5e0d5f1b…` にした（旧値は共有 sentinel `6d697361…` で、t12 の bond
+  outpoint と一致しないため座席表の bond 列と receipt の突合が外れていた）。出荷 commit の probe の `PREMINE_TXID` と照合してから stage する。
+- 2M は公開時点で閉じる（ADR-0152 §8.3 item 7、O-11）。`LLM_CLASSES` の 2M 行の説明にそう書いた。class id 3 本は a0af3c92 でも同じ
+  （`palw_t12_genesis_held_class_ids_v1` と `PALW_T12_RCORE_CONSERVATIVE_CLASSES`）。
+- `NODE_LOG` の既定を deploy kit の b6 appdir（`/root/.t12r-b6/…`）にした。
+- **未決（運用者）: explorer の配線が 2 系統ある。** deploy kit の `install-113.sh explorer-apply`（nginx 3 行、filler/REST の
+  `zz-t12r.conf`、DB `kaspa_t12r`、cursor は seed しない）と、この `deploy.sh`（`t12g.conf`、DB `kaspa_t12`、cursor を genesis に
+  seed、app.js / index.html の stage と verify）。同じ unit と vhost を触るので **どちらか一方**にする。推奨は `deploy.sh` 一本
+  （genesis から索引し、files と verify も持つ）で、`explorer-apply` は使わない。決まるまで §4 の `all` も `explorer-apply` も
+  実行しない。どちらも **公開サイトを書き換えるので実行前にユーザーの確認**が要る。
+- **R-core+ の表示が未対応**: vesting 行（`getPalwVesting`、op 199）、DA session、reporter の commit–reveal、stake 加重の panel 抽選は
+  explorer に出ていない。公開後の観測 O-2 / O-5 は `misaka palw vesting` と analyzer で読む。explorer への追加は公開後の作業。

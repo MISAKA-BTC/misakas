@@ -5,6 +5,8 @@
 #
 #   b6  misaka-t12-node (drop-in)  0.0.0.0:26311  gRPC 26312  borsh 26313  json 26314  EVM 8545
 #       floor producer + 8k seat + HEARTBEAT
+#       share 8,192 MiB (R-core+, PLAN.md §2) = floor attempt 2,228 + its own floor DA answer 2,228 + one
+#       8k seat duty 3,493 (+ 243)
 #   gRPC 26312 → kaspa-t11-db-filler / kaspa-t11-rest-server; borsh 26313 → seeder (and the t11
 #   validators' --node-wrpc-borsh); json 26314 → nginx upstream misaka_json and wallet.misakascan.com
 #   /kaspa; EVM 8545 → nginx /evm.
@@ -16,11 +18,11 @@
 . "$(dirname "$0")/lib.sh"
 
 HOST_NAME_EXPECTED=vmi3527497
-RESERVE_MIB=4096             # non-kaspad RSS 1.3 GiB measured 09-23 + postgres cache + margin
+RESERVE_MIB=4096             # non-kaspad RSS 1.3 GiB measured 09-23 + postgres cache + margin (PLAN.md §2: 12,288 of 24,033 MiB)
 START_GAP=10
 BINARIES=(kaspad misaka palw-class)
 NODES=(
-  "6|misaka-t12-node|dropin|0.0.0.0:26311|26313|26314|26312|8545|6144|9|floor|1|1|169.58.39.220:26311,169.58.39.220:26321"
+  "6|misaka-t12-node|dropin|0.0.0.0:26311|26313|26314|26312|8545|8192|11|floor|1|1|169.58.39.220:26311,169.58.39.220:26321"
 )
 OLD_APPDIRS=(/root/.t12)
 EXPLORER_DB=${EXPLORER_DB:-kaspa_t12r}

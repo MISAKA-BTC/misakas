@@ -8,6 +8,10 @@
 #   b5  misaka-t12-seat5 (drop-in)  127.0.0.1:26341  borsh 26343  json 26344   8k seat
 #   b7  misaka-t12-seat7 (NEW unit) 127.0.0.1:26351  borsh 26353  json 26354   8k seat (card 7, re-keyed here 09-23)
 # borsh 26313 is what misaka-dnsseeder-t12 here already asks for peers.
+# Shares (R-core+, PLAN.md §2): five nodes on 24,033 MiB leave no room for the ideal, so this host keeps
+# the MINIMUM that runs every duty, one at a time: b2 7,168 MiB = 8k attempt 3,456 + one 8k seat duty
+# 3,493 (+ 219) — its own DA answers wait for a free window (PLAN.md §2, risk R-2); the seats 3,584 MiB =
+# one 8k seat duty 3,493 (+ 91) — the second replay slot and a covering signer's DA answer queue behind it.
 #
 # The route-matrix session (5bd46c14) runs the OLD live chain's floor seats (misaka-t12f-b2..b5,
 # /root/t12-live) and a PRIVATE t12 (misaka-t12p-0..7, -scan, -scan-tunnel, /root/t12-private,

@@ -55,12 +55,17 @@ echo "$COMMIT" > "$OUT/REV"
 cat "$OUT/SHA256SUMS"
 
 # ---- identity probe: the release's own fingerprint and genesis, read from a node that can reach
-# nobody (loopback listener, no DNS seed, no peers, fresh throwaway appdir, no PALW flags) ----
+# nobody (loopback listener, no DNS seed, no peers, fresh throwaway appdir, no PALW flags). `env -i` and a
+# throwaway HOME: kaspad writes ~/.misaka/testnet-12/endpoints.json on start, and root's is the live
+# node's registry (the drill kit's 09-24 finding) — the probe must not rewrite it. The same probe runs
+# on the Mac as probe-identity-local.sh. ----
 for p in 26991 26994; do [ -z "$(ss -ltnH "sport = :$p")" ] || die "probe port $p is in use"; done
 PROBE_DIR=$(mktemp -d /root/t12-rel/probe-XXXXXX)
 say "identity probe in $PROBE_DIR (isolated: 127.0.0.1:26991, json 26994, no peers)"
-"$OUT/kaspad" --testnet --netsuffix=12 --appdir="$PROBE_DIR" --yes --listen=127.0.0.1:26991 \
-    --rpclisten-json=127.0.0.1:26994 --nogrpc --nodnsseed --disable-upnp > "$OUT/probe.log" 2>&1 &
+mkdir -p "$PROBE_DIR/home"
+env -i PATH="$PATH" HOME="$PROBE_DIR/home" "$OUT/kaspad" --testnet --netsuffix=12 --appdir="$PROBE_DIR/app" --yes \
+    --listen=127.0.0.1:26991 --rpclisten-json=127.0.0.1:26994 --nogrpc --nodnsseed --disable-upnp --outpeers=0 \
+    > "$OUT/probe.log" 2>&1 &
 PID=$!
 FP=""; GEN=""
 for _ in $(seq 1 60); do
@@ -69,14 +74,16 @@ for _ in $(seq 1 60); do
     FP=$(sed -n 's/^FP=//p' <<<"$out"); GEN=$(sed -n 's/^GENESIS=//p' <<<"$out")
     [ -n "$FP" ] && [ -n "$GEN" ] && break
 done
+PREMINE=$(python3 "$(dirname "$0")/t12check.py" --port 26994 --premine 2>/dev/null | sed -n 's/^PREMINE_TXID=//p' || true)
 kill -INT "$PID" 2>/dev/null || true
 for _ in $(seq 1 30); do kill -0 "$PID" 2>/dev/null || break; sleep 2; done
 kill -9 "$PID" 2>/dev/null || true
 LOGFP=$(grep -oE 'Consensus params fingerprint: [0-9a-f]{64}' "$OUT/probe.log" | head -1 | awk '{print $4}')
 rm -rf --one-file-system "$PROBE_DIR"
 [ -n "$FP" ] && [ "$FP" = "$LOGFP" ] || die "probe failed or disagrees (rpc '$FP' vs log '$LOGFP') — see $OUT/probe.log"
-printf 'EXPECT_FP=%s\nEXPECT_GENESIS=%s\n' "$FP" "$GEN" > "$OUT/IDENTITY"
-for g in $FORBIDDEN_GENESIS; do [ "$GEN" = "$g" ] && say "WARNING: this release's genesis ${GEN:0:16}… is FORBIDDEN (PLAN.md §7 Q1) — install-*.sh will refuse it"; done
+grep -q 'PALW DRILL' "$OUT/probe.log" && die "the release probe announced a PALW DRILL chain — this is not a public build"
+printf 'EXPECT_FP=%s\nEXPECT_GENESIS=%s\nPREMINE_TXID=%s\n' "$FP" "$GEN" "${PREMINE:-__FILL_ME__}" > "$OUT/IDENTITY"
+for g in $FORBIDDEN_GENESIS ${DRILL_GENESES:-}; do [ "$GEN" = "$g" ] && say "WARNING: this release's genesis ${GEN:0:16}… is FORBIDDEN (fleet.env FORBIDDEN_GENESIS / DRILL_GENESES) — install-*.sh will refuse it"; done
 cat <<EOF
 
 Fill deploy-t12/fleet.env on the Mac:
@@ -87,5 +94,7 @@ Fill deploy-t12/fleet.env on the Mac:
   SEEDER_SHA256=KEEP   # or $(grep ' misaka-dnsseeder$' "$OUT/SHA256SUMS" | cut -d' ' -f1) to swap seeders
   EXPECT_FP=$FP
   EXPECT_GENESIS=$GEN
-(also in $OUT/IDENTITY; every install-*.sh switch re-checks each node's own fingerprint line)
+  PREMINE_TXID=${PREMINE:-__FILL_ME__}
+(also in $OUT/IDENTITY; every install-*.sh switch re-checks each node's own fingerprint line and genesis.
+ Compare with probe-identity-local.sh on the Mac for the same commit: the three values must be equal.)
 EOF

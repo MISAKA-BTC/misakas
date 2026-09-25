@@ -1,8 +1,11 @@
-# testnet-12 再 genesis — 4 ホスト配備計画（新 genesis）
+# testnet-12 再 genesis（R-core+）— 4 ホスト配備計画
 
-作成: 2026-09-23（5a559459 時点・リモートは読み取りのみで調査）。**この kit はまだ何も実行していない。**
-リリース固有値（binary sha256・fingerprint・genesis）は DoS 修正の merge 後に確定するため `fleet.env` では
-`__FILL_ME__`。これが残っている限り `stage` / `switch` は動かない。
+作成: 2026-09-23（5a559459 時点）。**2026-09-25 に R-core+（ADR-0152 v3.1）向けに更新**: 基準は統合線 `rcore/int-3`
+@ `a0af3c92`、この kit は branch `rcore/release-prep`。**この kit はまだ何も実行していない。リモートには一切触れていない**
+（この更新で実行したのは Mac 上の `bash -n`・launch script の生成と `--check`・`probe-identity-local.sh` だけ）。
+リリース固有値（binary sha256・fingerprint・genesis・premine txid）は **出荷する commit からだけ** 取る。`fleet.env`
+（`fleet.env.example` の写し。`*.env` は gitignore）では `__FILL_ME__` で、これが残っている限り `stage` / `switch` は動かない。
+公開までの順序・gate の証拠・再 pin の手順は `docs/t12-rcore-launch-checklist.md`（この kit と同じ commit）。
 
 ---
 
@@ -10,51 +13,101 @@
 
 | # | 何か | 誰が |
 |---|---|---|
-| **B1** | **新 genesis が PRIVATE t12 と同一**。5a559459 の t12 genesis は `f6cc9576…`（b791b460 で確定、5a559459 は genesis を動かさない）。5.104 の route-matrix session の private chain（b38356fe、`misaka-t12p-*`）も p0.log の `Importing the UTXO set of the pruning point f6cc9576…` で**同じ genesis**。鍵（bond 0–7）も premine も network 名も同じ。PALW の署名 domain は `network名 ‖ genesis`（`palw_network_domain_v2_for`）なので private chain 上の署名済み object（receipt・登録・readiness 等）はすべて公開 chain で有効。さらに premine を使った取引（panel が quorum 提出で使う fee float `premine:41..48`、第三者 bond への送金）は**そのまま再放送できる**。private chain は 09-23 14:50 から misakascan.com で公開中。`fleet.env` の `FORBIDDEN_GENESIS` にこの値を入れてあり、install は拒否する。 | **ユーザー判断**（§7 Q1） |
-| B2 | DoS 修正（別 session の #1–#4・#5 没収・#6–#8・#11–#14）が未 merge → release binary・sha・fingerprint 未確定 | 別 session → ユーザー |
-| B3 | 5.104 で別 session の node が稼働中（旧 live の floor seat 4 本 + private chain 8 本 + scan + daa-obs、RSS 合計 ~25 GB、23 GiB の host）。新 chain と同じ鍵 | 別 session が停止 |
-| B4 | 8k artifact が ibm と .113 に無い（どちらも 13:59 に止まった `.part` だけ）。7 ready seat には 8 bond 全部が 8k を持つ必要がある（余裕 1） | ユーザーが `distribute-from-mac.sh artifact` |
-| B5 | ibm の `misaka-t11-node0` が **enabled**（failed 状態）。再起動時に 26311/26313 を取り b0 と衝突 | ユーザー判断（`DISABLE_T11_NODE0=1`） |
-| B6 | misakascan は現在 private chain を表示中（nginx 3 行・filler/REST drop-in・app.js）。`install-113.sh explorer-apply` で新 chain + 新 DB へ | ユーザー（app.js は §7 Q8） |
+| **R1** | **出荷する commit がまだ無い**。統合線 a0af3c92 に、監査の deadline＋P-1（4-quater: `palw_class_verify_deadline`、pruning depth ≈ 74,920 DAA、2M を規則で閉じる）、A-held（`feat/t12-aheld` ＋ `feat/t12-aheld-node`: object 57 の自動応答・N4）、Activation Pool（`feat/t12-activation-pool`）、P2-8 の自動 filer（`rcore/p2-file`）が未 merge。どれも t12 の params を動かし、genesis を動かし得る。→ `EXPECT_FP` / `EXPECT_GENESIS` / `PREMINE_TXID` は出荷 commit の probe で固定する（§4）。a0af3c92 での値は **暫定**（checklist §3） | 実装・監査 → ユーザー |
+| **R2** | ADR §8.3 の launch gate（item 1〜9、IA-14 の ship 条件）が出荷 commit で未充足。項目と証拠は checklist §1〜§2 | 実装・監査 |
+| R3 | `HB_ADDR`（heartbeat の支払先）の全桁が手元に無い。旧 kit の `fleet.env` は未追跡で失われ、文書には `misakatest:qf6hf5v0…` と先頭しか無い。§10 Q10 | **運用者** |
+| R4 | 公開後の drill ホストが無い。公開後は ibm・.113・5.104 のすべてが公開 t12 node を動かすので、drill kit はこの 3 台を拒否する（ADR §8.3 item 3「公開 node のあるホストで drill しない」）。95.111 は seeder ホスト（11 GiB、egress 制限）で、rcore drill script の host guard も拒否する | **運用者**（公開後の drill 用に 4 台以上を用意） |
+| B3 | 5.104 で別 session の node が動いていれば `install-5104.sh switch` は拒否する（旧 live の floor seat・private chain・scan・daa-obs） | 別 session が停止 |
+| B5 | ibm の `misaka-t11-node0` が enabled。`DISABLE_T11_NODE0=1` で switch（§10 Q5 決定済み） | ユーザー |
+| B6 | misakascan は現在 private chain / 旧 chain を表示。`install-113.sh explorer-apply` で新 chain＋新 DB へ | ユーザー |
 
----
+旧 B1（genesis 衝突）は 09-24 に (a) で決定済み（§10）: t12 の premine txid は t12 固有の `5e0d5f1b…`、genesis は a0af3c92 で
+`a27f8f44…`。f6cc9576… 以下の旧・私設・drill の genesis はすべて `FORBIDDEN_GENESIS` に全桁で入れてあり、install は拒否する。
+旧 B2（DoS 修正未 merge）は統合線に入った。旧 B4（8k artifact）は 09-24 に解消済み（§10）。
 
 ## 1. 配置と役割
 
 8 bond 全部が 8k（class `ebf44d0a…`、Qwen2.5-1.5B graph-v7@8192）の panel seat。class の lifecycle は ready 7 seat が要るので余裕は 1。
-2M class（`74c67e63…`）は設計どおり **誰も持たない**＝Prefetching のまま。
+2M class（`74c67e63…`）は **公開時点で閉じている**（ADR §8.3 item 7 の IA-12 修正、U-D1、O-11）: どの node も 2M の artifact を持たず、
+2M の producer にもならない。kit は 2M の class を producer / artifact に指定した node を stage の時点で拒否する（`lib.sh` `build_args`）。
 
-| host | bond | unit | 種別 | 役割 | heartbeat |
-|---|---|---|---|---|---|
-| ibm 169.58.39.220 | 0 | `misaka-t12-node0` | **新規 unit** | 8k producer + 8k seat + panel + round lane | ✔ |
-| ibm | 1 | `misaka-t12-node1` | drop-in | floor producer + 8k seat + panel + round lane | |
-| .113 169.58.232.113 | 6 | `misaka-t12-node` | drop-in | floor producer + 8k seat + panel + round lane + explorer backend | ✔ |
-| 5.104.81.23 | 2 | `misaka-t12-seat2` | drop-in | 8k producer + 8k seat + panel + round lane | |
-| 5.104 | 3 | `misaka-t12-seat3` | drop-in | 8k seat + panel + round lane | |
-| 5.104 | 4 | `misaka-t12-seat4` | drop-in | 同上 | |
-| 5.104 | 5 | `misaka-t12-seat5` | drop-in | 同上 | |
-| 5.104 | 7 | `misaka-t12-seat7` | **新規 unit** | 同上（card 7 は 09-23 に 5.104 で再鍵、鍵はこの host にしか無い） | |
-| 95.111.236.186 | — | `misaka-dnsseeder-t12` のみ | 変更なし | seeder3（seeder は 4 台とも変更不要 — `SEEDERS.md`） | |
+| host | bond | unit | 種別 | 役割 | heartbeat | share（§2） |
+|---|---|---|---|---|---|---|
+| ibm 169.58.39.220 | 0 | `misaka-t12-node0` | **新規 unit** | 8k producer + 8k seat + panel + round lane | ✔ | 10,496 MiB |
+| ibm | 1 | `misaka-t12-node1` | drop-in | floor producer + 8k seat + panel + round lane | | 8,192 MiB |
+| .113 169.58.232.113 | 6 | `misaka-t12-node` | drop-in | floor producer + 8k seat + panel + round lane + explorer backend | ✔ | 8,192 MiB |
+| 5.104.81.23 | 2 | `misaka-t12-seat2` | drop-in | 8k producer + 8k seat + panel + round lane | | 7,168 MiB |
+| 5.104 | 3 | `misaka-t12-seat3` | drop-in | 8k seat + panel + round lane | | 3,584 MiB |
+| 5.104 | 4 | `misaka-t12-seat4` | drop-in | 同上 | | 3,584 MiB |
+| 5.104 | 5 | `misaka-t12-seat5` | drop-in | 同上 | | 3,584 MiB |
+| 5.104 | 7 | `misaka-t12-seat7` | **新規 unit** | 同上（card 7 は 09-23 に 5.104 で再鍵、鍵はこの host にしか無い） | | 3,584 MiB |
+| 95.111.236.186 | — | `misaka-dnsseeder-t12` のみ | 変更なし | seeder3（seeder は 4 台とも変更不要 — `SEEDERS.md`） | | — |
 
 - producer: floor 2 本（ibm b1・.113 b6）、8k 2 本（ibm b0・5.104 b2）。全 node が `--palw-round-lane`（permit を取りこぼさない）。
-- fee float は `premine:(41+N)`（card 7 → 48）。producer の支払先は各 bond 鍵自身のアドレス（`--palw-producer-pay-address` 省略時の既定）。heartbeat の支払先は従来どおり `misakatest:qf6hf5v0…`。
+- fee float は `$PREMINE_TXID:(41+N)`（card 7 → 48）、bond は `$PREMINE_TXID:N`。producer の支払先は各 bond 鍵自身のアドレス（既定、§10 Q10）。
+- **R-core+ が node に足した仕事（どれも flag は無い。`--palw-panel` と `--palw-fee-outpoint` を持つ node で自動で動き、§2 の ledger に予約を取る）**:
+  - SEAT-R: seat は replay した場合だけ Valid に署名する（whole-job の full seat、または S1 の partial segment）。
+  - P2-7: DA session への応答（producer は自分の claim、Valid signer は lock が覆う claim を `MaterialDisclosedV2` で答える）と、
+    R-core の court がまだ求め得る capture の保持（retention janitor。disk の話で memory ではない）。
+  - P2-9: heartbeat block が lifecycle carrier（有罪・reveal）を運ぶ。heartbeat miner の既定動作。
+  - P6 / U2: producer は ledger と producer floor（13,000 MSK）を見てから掘る。genesis bond は ~939k MSK なので通る。
+  - P2-8 の自動 filer（DefaultAccused / PanelFalseValidV2 / ExecutorRefuted）は `rcore/p2-file` にあり **a0af3c92 に未 merge**。
+    merge 後も flag は無い（fee outpoint を持つ node で動く）。その replay 用 ledger 予約は §2。
+- 公開 node に drill の flag は絶対に載らない（ADR §8.2）。`--palw-drill-genesis-salt` と他の `--palw-drill-*` は launch script が
+  exit 78 で拒否し、`KASPAD_*` 環境変数も拒否し、drop-in は継承した `Environment=` / `EnvironmentFile=` を空にする。drill の marker が
+  ある appdir も拒否する。`switch` は "PALW DRILL" を名乗る node を止め、同じホストで drill が動いていれば切替自体を拒否する。
 - `--enable-unsynced-mining` は使わない。heartbeat は peer さえあれば古い genesis timestamp でも打つ（`palw_heartbeat_miner.rs`、`should_mine` を通らない）ので、b0 が b1 を見た瞬間に時計が進み、producer の sync 判定も通る。
 - 5.104 は ufw で INPUT DROP、全 node が 127.0.0.1 listen で .113/ibm に外向き接続（従来どおり）。
 
-## 2. メモリ予算
+## 2. メモリ予算（R-core+ の resource profile から再導出、2026-09-25）
 
-実測（5.104 の private t12、09-23）: **8k full-seat replay 3.37 GiB**、**8k attempt 3.37 GiB**、**floor attempt 2.18 GiB**。
-private の p1（floor producer + 8k seat、share 3.5 GiB）は readiness を **53 回中 49 回拒否**された（`less 2.18 GiB already reserved by producer of class f1c5635c…`）。
-→ seat のみ ≥ 3.5 GiB、floor producer + seat ≥ 5.55 → **6 GiB**、8k producer + seat ≥ 6.74 → **7 GiB**（p0 は 7 GiB で両方通った）。
+**規則**（`kaspad/src/palw_memory_ledger.rs`）: node は仕事ごとに「holding（artifact file の bytes）＋ role の resource profile の
+working set」を 1 つの ledger に予約し、`need ≤ min(share, MemAvailable − 1 GiB) − 既予約` のときだけ始める。足りなければ待つ
+（ブロックは拒否しない）。`--palw-host-memory-share` は node ごとの上限で、`--ram-scale` もここから導かれる（0.0375/GiB）。
+共有される page cache の artifact を予約ごとに数えるので、ledger は物理 RSS より保守的。
 
-| host | MemTotal | node の share（`--palw-host-memory-share`） | share 計 | 予備 | 合計 | unit MemoryMax | 補足 |
-|---|---|---|---|---|---|---|---|
-| ibm | 23.47 GiB | b0 7 GiB / b1 6 GiB | 13 GiB | 2 GiB | 15 GiB | 10G / 9G | kaspad 以外の RSS 0.3 GiB。**disk 16 GB 空き（95 %）** |
-| .113 | 23.47 GiB | b6 6 GiB | 6 GiB | 4 GiB | 10 GiB | 9G | kaspad 以外 1.3 GiB + postgres cache。いまの公開 node は RssAnon **15.0 GiB**（旧 binary・2M class 保持） |
-| 5.104 | 23.47 GiB | b2 7 / b3・b4・b5・b7 3.5 GiB | 21 GiB | 1.5 GiB | 22.5 GiB | 10G / 6G×4 | 宣言は余裕 1 GiB。物理は下回る: artifact 1.68 GiB は page cache で 5 process 共有、private seat の RSS 実測 ~2.6 GiB（共有 file 込み） |
-| 95.111 | 11 GiB | — | — | — | — | — | seeder のみ |
+**一つの仕事の予約額**（a0af3c92。`palw_resource_profile_v1` を t12 genesis の 8k 行・canonical (1023, 2)・A16-KV-i16（出荷値
+`KV_STORAGE_SHIPPED_V1`）・8 thread・prefill run 64 で評価した値。8k artifact は 1,799,359,436 B = 1,716 MiB）:
 
-MemoryMax は share + 3 GiB 前後。暴走した node は自分の cgroup 内で落ち、公開 node を道連れにしない（09-23 の ibm OOM の教訓）。
+| 仕事（ledger の role 名） | 導出 | MiB |
+|---|---|---|
+| 8k producer の attempt（`producer`） | 1,716 + working set 1,740（K/V 28 + trace scratch 1,707 + fold 3 + …） | **3,456** |
+| 8k full seat の replay（SEAT-R `full-seat`）、court（`court`）、DA の応答（P2-7 `da-answer`、full seat の額） | 1,716 + 1,740 | **3,456** |
+| 8k partial seat の segment（S1 `partial-seat`、5 seat の最悪 segment 3） | 1,716 + profile 3,590 のうち capture を streamed fold（~0.4 MiB）に置き換えた 1,777（`palw_partial_seat_streamed_need_v1`） | **3,493** |
+| floor（BASE-0）の attempt / replay / DA 応答 | BASE-0 は resource profile を持たない → holding ＋ 512 MiB の推定。8k を持つ node では holding が 8k file になる（09-23 実測 2.18 GiB と一致） | **2,228** |
+| P2-8b の replay filer（未 merge） | dense の whole capture を予約する。8k の canonical capture は 105,518,224 leaves でホストの上限 2^26 を超えるので **8k では走らない**（streamed routes の仕事）。floor では小さい | floor で ≤ 2,228 |
+| 2M（閉じている） | 参考: 2.67 GiB の artifact ＋ producer / full seat の working set 9,980 MiB。partial seat は streamed fold でも K/V と opening で 1.75〜17.5 GiB | 使わない |
+
+seat の replay は同時に 2 本まで（`PalwSeatReplaysV1::IN_FLIGHT`）。DA の応答は ledger が空くまで毎 tick 再試行する（preempt は無い）。
+
+**node ごとの share**（「同時に走らせたい仕事の和 ＋ 端数」。最小 = producer の attempt と seat の仕事 1 本が同時に走れる額）:
+
+| node | 同時に走らせる仕事 | 和 | share | MemoryMax | 最小（参考） |
+|---|---|---|---|---|---|
+| ibm b0（8k producer + seat） | attempt 3,456 ＋ 自分の claim の DA 応答 3,456 ＋ seat の仕事 3,493 | 10,405 | **10,496** | 14G | 6,949（旧 7,168） |
+| ibm b1（floor producer + 8k seat） | attempt 2,228 ＋ 自分の floor claim の DA 応答 2,228 ＋ seat 3,493 | 7,949 | **8,192** | 11G | 5,721（旧 6,144） |
+| .113 b6（同上） | 同上 | 7,949 | **8,192** | 11G | 5,721（旧 6,144） |
+| 5.104 b2（8k producer + seat） | attempt 3,456 ＋ seat 3,493（DA 応答は空き待ち） | 6,949 | **7,168**（据え置き） | 10G | 6,949 |
+| 5.104 b3 b4 b5 b7（seat のみ） | seat の仕事 1 本 3,493（2 本目の replay と covering signer の DA 応答は待つ） | 3,493 | **3,584**（据え置き） | 6G | 3,493 |
+
+**host ごとの算術**（MemTotal 23.47 GiB = 24,033 MiB、3 台とも同じ）:
+
+- ibm: 10,496 + 8,192 + reserve 2,048 = **20,736 MiB**（残り 3,297 MiB）。kaspad 以外の RSS は 0.3 GiB（09-23 実測）。
+- .113: 8,192 + reserve 4,096 = **12,288 MiB**（残り 11,745 MiB）。kaspad 以外 1.3 GiB ＋ postgres の cache。
+- 5.104: 7,168 + 4 × 3,584 + reserve 1,536 = **23,040 MiB**（残り 993 MiB）。5 node あるので理想額（b2 10,496、seat は replay 2 本分
+  6,986）は入らない（最低でも 38 GiB 要る）→ **最小額のまま**。物理的には 8k artifact 1.68 GiB が page cache で 5 process に共有される。
+
+**残るリスク（運用者の判断）**:
+- **R-2（5.104 b2 の DA 応答）**: 5.104 b2 は attempt と seat の仕事で share を使い切るので、自分の 8k claim への DA 応答は両方が空いた
+  窓を待つ。応答の期限は session の 1,200 DAA（≈ 40 時間）で、producer は attempt ごとに予約を返すので窓は来るはずだが、保証は無い。
+  答えられなければ正直な producer でも期限で S1 になる（IA-14 の「producer の V2 DA responder」が守ろうとしている点）。
+  選択肢: (a) このまま（O-7 で観測）、(b) 8k producer を ibm b0 の 1 本にし 5.104 b2 を seat のみ（3,584）にする、(c) 5.104 の seat を 1 本減らす（8k の ready 7 を割るので不可）。**推奨は (b)**（§10 Q4 の再確認）。
+- **R-3（seat のみの node の直列化）**: 3,584 MiB の seat は仕事を 1 本ずつしかできない。8k の replay 時間 × 同時に振られる claim 数が
+  receipt の期限を超えると Withheld / missing になる。公開後に O-2 の door histogram と replay 時間で確認する。
+- 数字は a0af3c92 の profile。A-held（object 57 の応答・held dissection）が merge されると 8k の court / DA の予約額が変わり得る。
+  出荷 commit で `probe-identity-local.sh` と同じ場所に `misaka-palw-base0` の profile を再評価し（checklist §4 step 6）、この表を直す。
+- ibm の disk（空き 16 GB）: P2-7 の retention janitor は `max(8 GiB, 5 %)` の空きを守るために、足りなければ attempt capture、次に
+  foreign copy を消す（court に答える材料が減る）。§10 Q12 の旧モデル削除（ユーザー）を切替の前に。
 
 ## 3. ポート
 
@@ -71,41 +124,67 @@ gRPC は .113 以外 `--nogrpc`（同一 host 2 node で既定ポートが衝突
 
 ## 4. リリース値の埋め方（`fleet.env`）
 
-1. DoS 修正 merge 後の commit を origin に push。
-2. 5.104 で `build-release-5104.sh <commit>` — `/root/t12-rel/src`（blobless clone。`/root/misakas` とその worktree は触らない）→ `/root/t12-rel/incoming/<rev12>/`。最後に**隔離 probe**（127.0.0.1:26991/26994、peer 無し、使い捨て appdir、PALW flag 無し）で release 自身の fingerprint と genesis を読み、`IDENTITY` と貼り付け用の行を出す。genesis が `FORBIDDEN_GENESIS` なら警告。
-3. Mac の `fleet.env` に `REV`・`KASPAD_SHA256`・`MISAKA_SHA256`・`PALW_CLASS_SHA256`・`EXPECT_FP`・`EXPECT_GENESIS` を貼る。`SEEDER_SHA256` は既定 `KEEP`（§7 Q9）。
-4. 各 node の launch script は起動のたびに binary の sha256 と「渡す flag を binary が全部知っているか」を確認し、違えば **exit 78**（`RestartPreventExitStatus=78` なので crash loop しない。09-23 に ibm の公開 node が 108 回 loop した事故の再発防止）。switch は node ごとに journal の `Consensus params fingerprint:` を `EXPECT_FP` と照合し、違えばその node を止めて後続を起動しない。
+0. Mac で一度だけ `cp fleet.env.example fleet.env`。`FORBIDDEN_GENESIS`（retired・私設・drill 1/2 の 6 本、全桁）と 8k artifact の値は
+   記入済み。`HB_ADDR` は運用者が全桁を入れる（R3）。
+1. 出荷する commit（checklist §4 の step 1〜8 を終えたもの）を origin に push（**ユーザー**）。
+2. **Mac で先に identity を読む**: `./probe-identity-local.sh --build`（または `--kaspad <path>`）。隔離した node（127.0.0.1 のみ、
+   peer 無し、DNS 無し、使い捨て appdir と HOME、`env -i`、PALW flag 無し）を起動して `EXPECT_FP`・`EXPECT_GENESIS`・
+   `PREMINE_TXID` を読み、止める。値は profile や CPU に依らない（params と genesis の関数）。
+3. 5.104 で `build-release-5104.sh <commit>` — `/root/t12-rel/src`（blobless clone）→ `/root/t12-rel/incoming/<rev12>/`。最後に同じ
+   隔離 probe（`env -i`・使い捨て HOME: root の `~/.misaka/testnet-12/endpoints.json` は live node のものなので書き換えない）で
+   `IDENTITY` を出す。**Mac の probe と 3 値が一致しなければ止める**。**（ユーザー確認: 5.104 でのビルド開始）**
+4. Mac の `fleet.env` に `REV`・`KASPAD_SHA256`・`MISAKA_SHA256`・`PALW_CLASS_SHA256`・`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID` を
+   貼る。`SEEDER_SHA256` は既定 `KEEP`（§10 Q9）。genesis が a27f8f44 から動いた場合は a27f8f44 を `FORBIDDEN_GENESIS` に足す（c8652a97 の
+   build はそれを走らせる）。公開後の drill は salt ごとに genesis が変わるので、drill を始める前に
+   `./probe-identity-local.sh --drill-salt <salt>` が出す `DRILL_GENESES+=…` を足す。
+5. 各 node の launch script は起動のたびに binary の sha256、「渡す flag を binary が全部知っているか」、drill の flag・`KASPAD_*` 環境変数・
+   drill marker が無いことを確認し、違えば **exit 78**（`RestartPreventExitStatus=78` なので crash loop しない。09-23 に ibm の公開 node が
+   108 回 loop した事故の再発防止）。switch は node ごとに journal の `Consensus params fingerprint:` を `EXPECT_FP` と照合し、
+   "PALW DRILL" を名乗れば止め、RPC で `EXPECT_GENESIS` を確かめ、違えばその node を止めて後続を起動しない。
+
+**a0af3c92 での暫定値**（2026-09-25 に Mac の dev build で probe。出荷値ではない — 上の R1 の merge で動く）:
+`EXPECT_FP=8a4810231e4f54e7d62b57ef0c4bc7973b23ebb87b1943b6541c05190b2d5ee6`、
+`EXPECT_GENESIS=a27f8f44fe4d91a5…a8ca1f23`（全桁は checklist §3）、`PREMINE_TXID=5e0d5f1b37a71288…e55e2669`、
+schedule id `8b0ee13c…`、rule manifest digest `9def81a1…`。
 
 ## 5. 手順（誰が・どの順で）
+
+**【確認】** の付いた step は、実行の前に **ユーザーの明示の確認** を取る（公開 node の停止・置換、配備、告知、premine や運用者の鍵
+を使う操作、公開ホストでの長いビルド）。kit のどの script もリモートで勝手には走らない。全体の順序（gate → 再 pin → battery 2 回 →
+release build → fleet.env → 確認 → 配備 → explorer → seeder → 公開後の観測）は `docs/t12-rcore-launch-checklist.md` §4。
 
 ### Phase A — 準備（公開 chain は止まらない）
 | step | 誰 | 何を |
 |---|---|---|
-| A0 | **ユーザー** | §7 Q1（genesis 衝突）を決める。genesis を変えるなら A1 の commit に含める |
-| A1 | 別 session → ユーザー | DoS 修正を merge・push |
-| A2 | ユーザー（Mac） | `./distribute-from-mac.sh kit`（4 host の `/root/t12-rel/kit` に kit を置く） |
-| A3 | ユーザー or 別 session（5.104） | `cd /root/t12-rel/kit && ./build-release-5104.sh <commit>`（~21 分。MemAvailable ≥ 10 GiB が条件、今は 17 GiB） |
-| A4 | ユーザー（Mac） | `fleet.env` を埋める → もう一度 `kit` → `binaries` → `artifact`（8k 1.8 GB を ibm・.113 へ `.incoming` として。既存の `.part` は触らない） |
-| A5 | ユーザー（各 host） | `./install-<host>.sh preflight` → `./install-<host>.sh stage`（binary・artifact を sha 検証して `/root/t12-rel/<REV>/` に置き、launch script と unit を**その下に**書くだけ。/etc も稼働中 service も触らない） |
+| A0 | 実装・監査 → **ユーザー** | 出荷 commit を決める（checklist §4 step 1〜8: 未 merge の 4 本、再 pin、battery 2 回）。push は **【確認】** |
+| A1 | ユーザー（Mac） | `./probe-identity-local.sh --build` で出荷 commit の identity を読む（リモートに触れない） |
+| A2 | ユーザー（Mac） | `cp fleet.env.example fleet.env`（初回のみ）、`HB_ADDR` を記入 → `./distribute-from-mac.sh kit`（3 host の `/root/t12-rel/kit` に kit を置く）**【確認】** |
+| A3 | ユーザー（5.104） | `cd /root/t12-rel/kit && ./build-release-5104.sh <commit>`（~21 分。MemAvailable ≥ 10 GiB が条件）**【確認】**。`IDENTITY` が A1 の 3 値と一致すること |
+| A4 | ユーザー（Mac） | `fleet.env` を埋める → もう一度 `kit` → `binaries` → `artifact`（8k は 09-24 に配置済みなら skip）**【確認】** |
+| A5 | ユーザー（各 host） | `./install-<host>.sh preflight` → `./install-<host>.sh stage`（binary・artifact を sha 検証して `/root/t12-rel/<REV>/` に置き、launch script と unit を**その下に**書き、各 launch script の `--check` を通すだけ。/etc も稼働中 service も触らない）。preflight は drill node がホストで動いていれば NOT OK |
 
-### Phase B — 切替（公開 chain の停止は ~10 分）
+### Phase B — 切替（公開 chain の停止は ~10 分）— **B1〜B4 は公開 node を止めて置き換える: それぞれ【確認】**
 | step | 誰 | 何を |
 |---|---|---|
-| B0 | **別 session** | 5.104 の `misaka-t12f-b2..b5`・`misaka-t12p-0..7`・`misaka-t12p-scan`・`misaka-t12p-scan-tunnel`・daa-obs node と `collect.py` を停止。できれば `/root/t12-private/keys`（ibm/.113 から複製した bond 0/1/6 の鍵）を削除。`install-5104.sh switch` はこれらが 1 つでも動いていれば拒否する |
-| B1 | ユーザー（ibm） | `DISABLE_T11_NODE0=1 ./install-ibm.sh switch` — 旧 node1 停止 → drop-in/新 unit → `.t12`・`.t12b` 退避 → b0 起動（fp 確認）→ 20 s → b1。b0 と b1 が互いを見た時点で heartbeat 開始 |
-| B2 | ユーザー（.113） | `./install-113.sh switch` — 公開 node 停止 → b6（ibm と peer、heartbeat 2 本目） |
-| B3 | ユーザー（5.104） | `./install-5104.sh switch` — b2, b3, b4, b5, b7 を 30 s 間隔（各 node が 8k manifest を再導出） |
-| B4 | ユーザー（.113） | `./install-113.sh explorer-apply` — b6 が check を通ることを確認してから nginx 3 行（36314→26314、36314→28014、36545→8545）、filler/REST に `zz-t12r.conf`（gRPC 26312・新 DB `kaspa_t12r`、DB URI は unit 自身の値から導出＝kit にパスワードを持たない）、`createdb`、再起動。別 session の `t12p.conf` は消さずに上書き |
-| B5 | ユーザー（Mac） | `./check-fleet.sh`（全 node の fp・genesis・peer・lane mix・memory、seeder の応答、外からの 26311/26321 疎通）。1〜2 DAA 後に `CHECK_REGISTRY=1 ./check-fleet.sh` で 8k が `readySeatsNow ≥ 7` → Probation |
-| B6 | ユーザー（Mac） | seeder は触らない（`SEEDERS.md` §1: binary は genesis に依存しない）。切替後に `seeders/40-verify.sh`、続けて `CONFIRM=yes seeders/60-join-check.sh <5.104 上の release kaspad>`（DNS だけで新 chain に届くかの e2e）。ibm の b0 が 0.0.0.0:26311 に立つので、今は死んでいる ibm の anchor も生き返る（`SEEDERS.md` §6 Q1 の「移す場合」） |
-| B7 | **ユーザー** | 告知は B5・B6 が合格してから |
+| B0 | **別 session** | 5.104 の `misaka-t12f-b2..b5`・`misaka-t12p-0..7`・`misaka-t12p-scan`・`misaka-t12p-scan-tunnel`・daa-obs node と `collect.py` を停止。`install-5104.sh switch` はこれらが 1 つでも動いていれば拒否する。鍵の削除はユーザー（rm コマンドを渡すだけ） |
+| B1 | ユーザー（ibm）**【確認】** | `DISABLE_T11_NODE0=1 ./install-ibm.sh switch` — 旧 node1 停止 → drop-in/新 unit → `.t12`・`.t12b` 退避 → b0 起動（fp・"PALW DRILL" 無し・genesis を確認）→ 20 s → b1。b0 と b1 が互いを見た時点で heartbeat 開始 |
+| B2 | ユーザー（.113）**【確認】** | 先に `systemctl stop misaka-validator misaka-validator-2`（§10 Q7）。`./install-113.sh switch` — 公開 node 停止 → b6（ibm と peer、heartbeat 2 本目） |
+| B3 | ユーザー（5.104）**【確認】** | `./install-5104.sh switch` — b2, b3, b4, b5, b7 を 30 s 間隔（各 node が 8k manifest を再導出） |
+| B4 | ユーザー（.113）**【確認】** | `./install-113.sh explorer-apply` — b6 が check を通ることを確認してから nginx 3 行、filler/REST に `zz-t12r.conf`（gRPC 26312・新 DB `kaspa_t12r`）、`createdb`、再起動。app.js は `../misakascan-t12/DEPLOY.md` |
+| B5 | ユーザー（Mac） | `./check-fleet.sh`（読み取りのみ: 全 node の fp・genesis・peer・lane mix・memory、seeder の応答、外からの 26311/26321 疎通）。1〜2 DAA 後に `CHECK_REGISTRY=1 ./check-fleet.sh` で 8k が `readySeatsNow ≥ 7` → Probation。2M は `ClassDeadlineUnmeasured`（4-quater が入っていれば）で閉じていること（O-11） |
+| B6 | ユーザー（Mac） | seeder は触らない（`SEEDERS.md` §1）。切替後に `seeders/40-verify.sh`、続けて `CONFIRM=yes seeders/60-join-check.sh <5.104 上の release kaspad>` **【確認】**（5.104 で使い捨て node を 240 s 動かす） |
+| B7 | **ユーザー【確認】** | 告知は B5・B6 が合格してから。「t12 は O-5 が合格するまで価値を持たない」（ADR §8.4）を含める |
 
-合格条件: 8 node すべて fp 一致・genesis 保持・NRestarts 0、5.104 の各 node の peer ≥ 3、DAA が heartbeat で進む、30 分以内に lane mix の `attempt>0` と `receipt>0`（floor）、floor Final 後に `round>0`、8k が Probation に入り 8k attempt が出る、各 node の reserved ≤ share。
+合格条件: 8 node すべて fp 一致・genesis 保持・NRestarts 0・"PALW DRILL" 無し、5.104 の各 node の peer ≥ 3、DAA が heartbeat で進む、
+30 分以内に lane mix の `attempt>0` と `receipt>0`（floor）、floor Final 後に `round>0` と vesting 行（`misaka palw vesting`）、8k が
+Probation に入り 8k attempt が出る、各 node の reserved ≤ share、journal に `memory ledger cannot cover` が続かない。
 
 ### Phase C — 受入れ後
-- C1 **告知はユーザー**（旧 genesis の外部 node は handshake で `WrongGenesis` として拒否される — `flow_context.rs:1944`）。
-- C2 `CONFIRM_PURGE=yes ./install-<host>.sh purge-old` で退避した旧 chain を削除（ibm の disk のため。ただし以後 rollback 不可）。
+- C1 **告知はユーザー【確認】**（旧 genesis の外部 node は handshake で `WrongGenesis` として拒否される — `flow_context.rs:1944`）。
+- C2 `CONFIRM_PURGE=yes ./install-<host>.sh purge-old` で退避した旧 chain を削除 **【確認】**（ibm の disk のため。以後 rollback 不可）。
 - C3 別 session が自分の t12f/t12p unit・`t12p.conf`・tunnel 鍵を片付ける。
+- C4 DNS validator 6 × 20M MSK と faucet の資金は **運用者が premine の主ウォレットから**（§10、ユーザー決定。kit は鍵を持たない）**【確認】**。
+- C5 公開後の観測 O-1〜O-13 と、後回しにした drill（`../t12-drill-kit/README.md`）。drill は公開 node の無いホストでだけ（R4）。
 
 ## 6. Rollback
 
@@ -113,7 +192,7 @@ host ごとに逆順（5.104 → .113 → ibm）: `./install-<host>.sh rollback`
 - drop-in を消す／新規 unit を disable+削除 → daemon-reload → 新 chain の appdir は `.rolledback-<ts>` として残す → **旧 appdir（`OLD_APPDIRS` だけ）を元の名前に戻す** → switch で disable した unit（ibm の t11 node0）を enable に戻す → **最初の switch 前に active だった unit だけ**起動（.113・ibm の公開 node。5.104 の旧 seat は failed のままにする — 旧 `c-seatN.sh` は旧 binary で crash loop するため）。
 - 旧 script・旧 binary は一度も書き換えていないので、戻る先は切替直前の旧 chain（`fb1074b0…`、heartbeat のみの chain）そのもの。
 
-## 7. ユーザーへの質問
+## 7. ユーザーへの質問（09-23 時点の質問。回答は §10、R-core+ で新しく出た判断は §0 の R3・R4 と §2 の R-2）
 
 - **Q1（B1・最重要）genesis 衝突**: 新公開 chain の genesis が private chain（`f6cc9576…`、同じ鍵・同じ premine、misakascan で公開済み）と同じになる。選択肢:
   (a) release で t12 genesis を変える（genesis header の timestamp／nonce、または premine の salt。fingerprint はどのみち変わるので告知コストは同じ）。**推奨**。
@@ -165,18 +244,23 @@ host ごとに逆順（5.104 → .113 → ibm）: `./install-<host>.sh rollback`
 
 | file | どこで | 何をする |
 |---|---|---|
-| `fleet.env` | 全部 | release 値（placeholder）、禁止 genesis、定数、8k artifact の sha |
-| `lib.sh` | host | 共通: launch script/unit 生成（sha・flag 自己検査、exit 78）、preflight、stage、switch、check、rollback、purge、seeder |
-| `install-ibm.sh` / `install-113.sh` / `install-5104.sh` | 各 host | node 表・旧 appdir・host 固有の拒否条件（.113 は explorer-apply/rollback も）。seeder は `seeder-status`（読み取り）だけ |
-| `SEEDERS.md`・`seeders/` | Mac | **別 agent が並行して書いた seeder 専用の手順と script**（読むだけで、この kit からは変更していない）。seeder の swap/rollback/検証はこちらに一本化し、node kit 側の重複（swap 機能と 95.111 用 script）は削除した。`fleet.env` の `SEEDER_SHA256`・`EXPECT_FP` を読む |
-| `t12check.py` | host | stdlib だけの JSON wRPC checker（fp・genesis・peer・lane mix・producer・memory・registry）。`--probe` は隔離 node の fp/genesis を読む。旧 build の node で動作確認済み |
-| `build-release-5104.sh` | 5.104 | 独自 clone で release build → `incoming/<rev12>` + SHA256SUMS + 隔離 probe で IDENTITY |
+| `fleet.env.example` → `fleet.env` | 全部 | release 値（placeholder）、禁止 genesis（全桁 6 本）と `DRILL_GENESES`、定数、8k artifact の sha。`fleet.env` は gitignore（`*.env`）なので Mac で写して埋める |
+| `lib.sh` | host | 共通: launch script/unit 生成（sha・flag 自己検査・drill flag / `KASPAD_*` 環境 / drill marker の拒否、exit 78）、preflight、stage、switch（fp・"PALW DRILL"・genesis の確認）、check、rollback、purge |
+| `install-ibm.sh` / `install-113.sh` / `install-5104.sh` | 各 host | node 表（share は §2）・旧 appdir・host 固有の拒否条件（.113 は explorer-apply/rollback も） |
+| `probe-identity-local.sh` | Mac | 出荷 commit の kaspad を隔離して起動し、`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID`（＋schedule id・rule manifest digest）を読む。`--drill-salt` で drill genesis も出す。リモートに触れない |
+| `SEEDERS.md`・`seeders/` | Mac | seeder 専用の手順と script（変更なし）。`fleet.env` の `SEEDER_SHA256`・`EXPECT_FP` を読む |
+| `t12check.py` | host / Mac | stdlib だけの JSON wRPC checker（fp・genesis・peer・lane mix・producer・memory・registry）。`--probe` は隔離 node の fp/genesis、`--premine` は genesis bond の txid |
+| `build-release-5104.sh` | 5.104 | 独自 clone で release build → `incoming/<rev12>` + SHA256SUMS + 隔離 probe（`env -i`・使い捨て HOME）で IDENTITY |
 | `distribute-from-mac.sh` | Mac | kit / binary / 8k artifact を Mac 経由で配布（host 間に鍵を足さない）、各段で sha 検証 |
 | `check-fleet.sh` | Mac | 読み取りのみ: 全 host の check、`seeders/40-verify.sh`、公開 DNS、外からの P2P 疎通 |
 
-ローカルで確認したこと: 全 script の `bash -n`、launch script 生成と `--check`（Mac の kaspad で 8 node 分の flag が全部既知）、未知 flag と sha 不一致で exit 78、flag 照合が接頭辞で誤爆しないこと（`--palw-produc` は未知扱い）、`t12check.py` を隔離した Mac の node に当てて fp・genesis・registry が読めること。リモートでは何も実行していない。
+2026-09-25 にローカルで確認したこと: 全 script の `bash -n`（Mac の bash 3.2。shellcheck は未導入）、launch script 8 本の生成と
+`--check`（a0af3c92 の dev build の kaspad で全 flag が既知）、drill salt（argv・ARGS への書き込み）・`KASPAD_PALW_DRILL_*`/`KASPAD_*` 環境・
+drill marker・未知 flag（接頭辞 `--palw-produc`）・sha 不一致がそれぞれ exit 78、`require_release` が禁止 genesis・`DRILL_GENESES`・
+短い fp・placeholder を拒否、2M の producer class / artifact を stage で拒否、`probe-identity-local.sh` の実走（§4 の暫定値）。
+リモートでは何も実行していない。
 
-## 9. 2026-09-24 決定と §7 の回答（オーケストレータ追記）
+## 10. 2026-09-24 決定と §7 の回答（オーケストレータ追記）
 
 - **Q1 genesis 衝突 → (a)**。公開 t12 の premine txid をネットワークと genesis から導出して t12 固有にし、genesis の timestamp も変える。実装は wt-t12 の統合エージェント（item 12）。完了後に `FORBIDDEN_GENESIS` は f6cc9576 のまま、`EXPECT_GENESIS` に新しい値を入れる。
   - 旧 live chain（c746f07c）の `premine:41` は、切り替えで旧 chain を退役させるまで手数料だけで再放送できる。資金は bond 0 のアドレスに留まる。
@@ -218,3 +302,19 @@ host ごとに逆順（5.104 → .113 → ibm）: `./install-<host>.sh rollback`
   - `FORBIDDEN_GENESIS` は f6cc9576 のまま。`EXPECT_GENESIS` には d73dbf44… の全桁を入れる。
   - 新 fence `palw_clock_floor`（H3/H5）が入って t12 の fingerprint も変わる。最終値は battery と R-core+ の merge の後に確定する。
   - 新しい担保モデル R-core+（ADR-0152）を genesis から有効にする。その実装が入ってから release をビルドする。
+
+## 11. R-core+ に合わせた kit の変更（2026-09-25、`rcore/release-prep`）
+
+- **flag**: kit が渡す flag はすべて a0af3c92 の `kaspad --help` にある（`--palw-chain-classes` は t12 では既定で ON になったが、
+  flag 検査のために明示のまま）。消した flag は無い。P2-9（carrier の relay）は flag を足していない。P2-12 の
+  `--palw-drill-genesis-salt` とその他の `--palw-drill-*` は公開 kit に **一度も現れない**。launch script はそれらを見つけると exit 78。
+- **bond / fee float の txid** は `fleet.env` の `PREMINE_TXID` に一本化した（旧 sentinel txid `6d697361…` は残っていない）。
+  `build_args` は `<128 hex>:<index>` 以外を拒否する。
+- **環境**: drop-in は `Environment=` と `EnvironmentFile=` を空にし、launch script は `KASPAD_*`・`MISAKA_PALW_*`・`PALW_*` の
+  環境変数を拒否する（kaspad は ~100 個の `KASPAD_*` を読む。drill の knob の多くに環境の双子がある）。
+- **genesis**: `FORBIDDEN_GENESIS` を全桁 6 本にし、`DRILL_GENESES`（公開後の drill の salt ごと）を足した。
+  `ALLOW_PRIVATE_GENESIS_REPLAY` の抜け道は削除（§10 Q1 で決定済み）。`switch` は RPC で genesis も確認する。
+- **memory**: §2 の算術に置き換えた（ibm b0 10,496・b1 8,192、.113 b6 8,192、5.104 は据え置き）。
+- **2M**: 公開時点で閉じる。2M の class / artifact を指定した node は stage で拒否。
+- **probe**: `probe-identity-local.sh`（Mac）を追加。`build-release-5104.sh` の probe も `env -i`・使い捨て HOME・`--outpeers=0`・
+  `PREMINE_TXID` の出力・"PALW DRILL" の拒否を足した。

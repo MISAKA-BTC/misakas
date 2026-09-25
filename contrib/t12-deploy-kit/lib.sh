@@ -10,11 +10,17 @@
 #  * old chain data is MOVED ASIDE (never deleted by switch); key files are never read, moved or
 #    written — only `test -f` / `ls -l`;
 #  * scripts are replaced by write-temp + rename, never overwritten in place (bash reads a running
-#    script lazily).
+#    script lazily);
+#  * (R-core+, ADR-0152 §8.2) a PUBLIC node never carries a drill flag: `--palw-drill-genesis-salt`
+#    and every other `--palw-drill-*` flag (and their KASPAD_PALW_DRILL_* environment twins) make the
+#    launch script exit 78, the unit drop-in resets the inherited environment so no KASPAD_* variable
+#    can add a flag the script does not show, an app dir carrying the drill marker is refused, and a
+#    node that announces a drill chain ("PALW DRILL") is stopped by `switch`.
 set -euo pipefail
 
 KIT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=fleet.env
+[ -f "$KIT_DIR/fleet.env" ] || { echo "ABORT: $KIT_DIR/fleet.env missing — cp fleet.env.example fleet.env and fill it (PLAN.md §4)" >&2; exit 1; }
+# shellcheck source=fleet.env.example
 . "$KIT_DIR/fleet.env"
 
 TS=$(date +%Y%m%dT%H%M%S)
@@ -23,22 +29,37 @@ warn() { printf '[%s] WARNING: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die()  { printf '[%s] ABORT: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; exit 1; }
 
 REL=""   # set by require_release
+# genesis_refusal <128-hex genesis> — prints why a public node must not run it, or nothing
+genesis_refusal() {
+    local g=$1 f
+    for f in $FORBIDDEN_GENESIS; do
+        [ "$g" = "$f" ] || continue
+        case "$f" in
+            f6cc9576*) echo "the PRIVATE t12's genesis f6cc9576… (same card keys, same premine: every private signature and premine spend replays) — PLAN.md §7 Q1, decided (a)";;
+            1eaa6c0f*|32a665d6*) echo "a pre-drill's SALTED genesis ${f:0:8}… (a drill chain, never a public one)";;
+            *) echo "a retired t12 genesis ${f:0:8}… (fb1074b0 = the live chain being retired, a8cabac4 = 09-23, d73dbf44 = before the 100M row)";;
+        esac
+        return 0
+    done
+    for f in ${DRILL_GENESES:-}; do
+        [ "$g" = "$f" ] && { echo "a post-launch drill's salted genesis ${f:0:8}… (DRILL_GENESES)"; return 0; }
+    done
+    return 0
+}
+
 require_release() {
     local v bad=0
-    for v in REV KASPAD_SHA256 MISAKA_SHA256 PALW_CLASS_SHA256 EXPECT_FP EXPECT_GENESIS; do
-        if [ "${!v}" = "__FILL_ME__" ] || [ -z "${!v}" ]; then warn "fleet.env: $v is still a placeholder"; bad=1; fi
+    for v in REV KASPAD_SHA256 MISAKA_SHA256 PALW_CLASS_SHA256 EXPECT_FP EXPECT_GENESIS PREMINE_TXID HB_ADDR; do
+        if [ "${!v:-}" = "__FILL_ME__" ] || [ -z "${!v:-}" ]; then warn "fleet.env: $v is still a placeholder"; bad=1; fi
     done
-    [ "$bad" = 0 ] || die "fill fleet.env from the release build first (see PLAN.md §4)"
+    [ "$bad" = 0 ] || die "fill fleet.env from the SHIPPING commit's release build first (PLAN.md §4; docs/t12-rcore-launch-checklist.md §4)"
+    [[ "$EXPECT_FP" =~ ^[0-9a-f]{64}$ ]] || die "fleet.env: EXPECT_FP must be 64 lowercase hex (the \"Consensus params fingerprint:\" line)"
+    [[ "$EXPECT_GENESIS" =~ ^[0-9a-f]{128}$ ]] || die "fleet.env: EXPECT_GENESIS must be the full 128-hex genesis hash"
+    [[ "$PREMINE_TXID" =~ ^[0-9a-f]{128}$ ]] || die "fleet.env: PREMINE_TXID must be the full 128-hex t12 premine txid"
+    [[ "$HB_ADDR" =~ ^misakatest: ]] || die "fleet.env: HB_ADDR must be a misakatest: address"
     REL="$REL_ROOT/$REV"
-    local g
-    for g in $FORBIDDEN_GENESIS; do
-        if [ "$EXPECT_GENESIS" = "$g" ]; then
-            case "$g" in
-                f6cc9576*) [ "$ALLOW_PRIVATE_GENESIS_REPLAY" = 1 ] || die "EXPECT_GENESIS is the PRIVATE chain's genesis f6cc9576… (same keys, same premine): every private-chain signature and premine spend replays on the public chain. See PLAN.md §7 Q1. Override: ALLOW_PRIVATE_GENESIS_REPLAY=1 in fleet.env (operator decision only)." ;;
-                *) die "EXPECT_GENESIS ${g:0:8}… is an OLD t12 genesis (fb1074b0 = today's live chain, a8cabac4 = the first deploy) — this is not a regenesis build" ;;
-            esac
-        fi
-    done
+    local why; why=$(genesis_refusal "$EXPECT_GENESIS")
+    [ -z "$why" ] || die "EXPECT_GENESIS ${EXPECT_GENESIS:0:8}… is $why — this is not the R-core+ regenesis build"
 }
 
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
@@ -64,6 +85,11 @@ parse_node() {
     N_LAUNCH="$REL/launch/b${N_ID}.sh"
 }
 
+# The 2M genesis row (graph-v7@2097152, class 74c67e63…) is CLOSED at launch (ADR-0152 §8.3 item 7 as
+# amended by IA-12/U-D1, O-11): no fleet node holds its artifact or produces for it. The kit refuses to
+# stage a node that would.
+CLASS_2M_PREFIX=74c67e63
+
 build_args() { # fills ARGS from the parsed node
     ARGS=(--testnet --netsuffix=12 "--appdir=$N_APPDIR" --yes
           "--listen=$N_LISTEN" "--rpclisten-borsh=127.0.0.1:$N_BORSH" "--rpclisten-json=127.0.0.1:$N_JSON")
@@ -73,6 +99,13 @@ build_args() { # fills ARGS from the parsed node
     local p
     IFS=',' read -r -a _peers <<<"$N_PEERS"
     for p in "${_peers[@]}"; do [ -n "$p" ] && ARGS+=("--addpeer=$p"); done
+    # Every bond is a panel seat with the round lane. Under R-core+ (ADR-0152) the seat's SEAT-R
+    # replays, the DA answers of P2-7 (a covering signer's and the producer's own), the automatic
+    # filers (P2-8, when merged) and the heartbeat carriers of P2-9 need no flag of their own: they
+    # run on every node that has --palw-panel and a fee outpoint to carry with, and each reserves its
+    # figure on the one memory ledger this node's --palw-host-memory-share bounds (PLAN.md §2).
+    # --palw-chain-classes is testnet-12's default since a5bef8cd; it stays explicit so the flag
+    # check below keeps proving the binary knows it.
     ARGS+=(--palw-panel --palw-chain-classes --palw-round-lane
            "--palw-producer-key=$N_KEY"
            "--palw-producer-bond=$PREMINE_TXID:$N_ID"
@@ -84,9 +117,19 @@ build_args() { # fills ARGS from the parsed node
         floor) ARGS+=(--palw-produce) ;;
         8k) [ "$N_SEAT8K" = 1 ] || die "b$N_ID: an 8k producer needs the 8k artifact (seat8k=1)"
             ARGS+=(--palw-produce "--palw-producer-class=$CLASS_8K") ;;
-        *) die "b$N_ID: produce must be none|floor|8k, got $N_PRODUCE" ;;
+        *) die "b$N_ID: produce must be none|floor|8k (2M is closed at launch), got $N_PRODUCE" ;;
     esac
     if [ "$N_HB" = 1 ]; then ARGS+=("--palw-heartbeat-miner-address=$HB_ADDR"); fi
+    local a
+    for a in "${ARGS[@]}"; do
+        case "$a" in
+            --palw-drill*) die "b$N_ID: $a is a DRILL flag — a public testnet-12 node never carries one (ADR-0152 §8.2)" ;;
+            --palw-producer-class=${CLASS_2M_PREFIX}*|--palw-class-artifact=*2m*|--palw-class-artifact=*2M*)
+                die "b$N_ID: $a — the 2M row is closed at launch (§8.3 item 7, O-11)" ;;
+            --palw-producer-bond=*|--palw-fee-outpoint=*)
+                [[ "${a#*=}" =~ ^[0-9a-f]{128}:[0-9]+$ ]] || die "b$N_ID: $a is not <128-hex premine txid>:<index>" ;;
+        esac
+    done
 }
 
 atomic_write() { # path mode  (content on stdin)
@@ -102,9 +145,9 @@ write_launch() {
     mkdir -p "$REL/launch"
     atomic_write "$N_LAUNCH" 0755 <<EOF
 #!/bin/bash
-# testnet-12 regenesis — bond $N_ID ($N_UNIT), release $REV. GENERATED by deploy-t12/lib.sh on $TS.
+# testnet-12 regenesis (R-core+) — bond $N_ID ($N_UNIT), release $REV. GENERATED by deploy-t12/lib.sh on $TS.
 # Do not edit in place: regenerate with \`install-<host>.sh stage\`. \`$N_LAUNCH --check\` validates
-# the binary and every flag without starting anything.
+# the binary, every flag and the drill refusal without starting anything.
 set -u
 BIN=$REL/bin/kaspad
 EXPECT_SHA=$KASPAD_SHA256
@@ -113,18 +156,32 @@ if [ "\$got" != "\$EXPECT_SHA" ]; then echo "[launch b$N_ID] binary \$BIN sha256
 [ -f "$N_KEY" ] || { echo "[launch b$N_ID] bond key $N_KEY missing — refusing (exit 78)"; exit 78; }
 ARGS=(
 $q)
+# ADR-0152 §8.2: a public node never carries a drill flag, from the command line or the environment
+# (the salt has no environment twin; the other drill knobs do). The unit's drop-in resets the
+# inherited environment, so any KASPAD_* seen here was put back by something after it.
+for a in "\$@" "\${ARGS[@]}"; do
+  case "\$a" in --palw-drill*) echo "[launch b$N_ID] \$a is a DRILL flag — a public testnet-12 node never carries one — refusing (exit 78)"; exit 78 ;; esac
+done
+envbad=\$(env | grep -oE '^(KASPAD|MISAKA_PALW|PALW)_[A-Z0-9_]*' | tr '\\n' ' ')
+if [ -n "\$envbad" ]; then echo "[launch b$N_ID] environment carries \$envbad— the command line above is this node's whole configuration — refusing (exit 78)"; exit 78; fi
+if [ -e "$N_APPDIR/misaka-testnet-12/palw-drill-genesis" ]; then echo "[launch b$N_ID] $N_APPDIR holds a DRILL chain (palw-drill-genesis marker) — refusing (exit 78)"; exit 78; fi
 HELP=\$("\$BIN" --help 2>&1)
 for a in "\${ARGS[@]}"; do
   f=\${a%%=*}
   case "\$f" in --*) grep -qE -- "(^|[[:space:],])\${f}([[:space:]=,<\\[]|\$)" <<<"\$HELP" || { echo "[launch b$N_ID] \$BIN does not know \$f — refusing (exit 78)"; exit 78; } ;; esac
 done
-if [ "\${1:-}" = "--check" ]; then echo "[launch b$N_ID] OK: sha \${got:0:16}…, \${#ARGS[@]} args, every flag known"; exit 0; fi
+if [ "\${1:-}" = "--check" ]; then echo "[launch b$N_ID] OK: sha \${got:0:16}…, \${#ARGS[@]} args, every flag known, no drill flag"; exit 0; fi
 exec "\$BIN" "\${ARGS[@]}"
 EOF
 }
 
 unit_body_service() { # the [Service] lines both modes share
+    # `Environment=` / `EnvironmentFile=` with no value RESET what the base unit (or an earlier drop-in)
+    # set: kaspad reads ~100 KASPAD_* variables, and one left on an old unit (a KASPAD_PALW_PRODUCE, a
+    # KASPAD_PALW_DRILL_TAMPER_LEAF) would add a flag the launch script does not show.
     cat <<EOF
+Environment=
+EnvironmentFile=
 WorkingDirectory=$REL
 ExecStart=
 ExecStart=$N_LAUNCH
@@ -173,6 +230,12 @@ EOF
 unit_dropin_path() { echo "/etc/systemd/system/$N_UNIT.service.d/zz-t12-regenesis.conf"; }
 unit_file_path()   { echo "/etc/systemd/system/$N_UNIT.service"; }
 
+# drill_processes_here — every process on this host that runs a testnet-12 DRILL (the salt on its
+# command line, or the rcore drill script). Printed one per line; empty when there is none.
+drill_processes_here() {
+    { pgrep -af -- '--palw-drill-genesis-salt|misaka-palw-t12-rcore-drill\.sh|t12-drill-kit/' 2>/dev/null || true; } | cut -c1-160
+}
+
 # ---------------------------------------------------------------------------------------------
 # preflight (read-only)
 # ---------------------------------------------------------------------------------------------
@@ -186,11 +249,14 @@ preflight_common() { # $1 = MiB this host keeps for everything that is not a t12
         parse_node "$spec"
         total_share=$((total_share + N_SHARE))
         if [ -f "$N_KEY" ]; then say "  b$N_ID key present: $(ls -l "$N_KEY" | awk '{print $1, $5"B", $9}')"; else warn "b$N_ID key $N_KEY MISSING"; ok=0; fi
+        [ -e "$N_APPDIR/misaka-testnet-12/palw-drill-genesis" ] && { warn "b$N_ID: $N_APPDIR carries a DRILL marker — switch moves it aside, never runs it"; }
         for port in "${N_LISTEN##*:}" "$N_BORSH" "$N_JSON" $( [ "$N_GRPC" != - ] && echo "$N_GRPC" ) $( [ "$N_EVM" != - ] && echo "$N_EVM" ); do
             holder=$(ss -ltnpH "sport = :$port" 2>/dev/null | grep -oE 'users:\(\("[^"]+",pid=[0-9]+' | head -1 || true)
             [ -n "$holder" ] && say "  port $port (b$N_ID) is held now by ${holder#users:((} — switch stops the old unit first; it must be free after that"
         done
     done
+    local drills; drills=$(drill_processes_here)
+    [ -z "$drills" ] || { warn "a DRILL node runs on this host (ADR-0152 §8.3: never beside a public t12 node) — switch will refuse:"; echo "$drills" >&2; ok=0; }
     memtotal_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
     local memtotal_mib=$((memtotal_kb / 1024))
     say "  declared shares: ${total_share} MiB + ${reserve} MiB reserve vs MemTotal ${memtotal_mib} MiB"
@@ -316,6 +382,11 @@ wait_fingerprint() { # unit since-epoch
         systemctl is-failed --quiet "$u" && break
         sleep 3
     done
+    if journalctl -u "$u" --since "@$since" --no-pager 2>/dev/null | grep -q 'PALW DRILL'; then
+        warn "$u announces a PALW DRILL chain — a public unit must never run one; stopping it"
+        systemctl stop "$u" || true
+        return 1
+    fi
     if [ "$got" = "$EXPECT_FP" ]; then say "  $u fingerprint OK ${got:0:16}…"; return 0; fi
     warn "$u fingerprint ${got:-<none>} != EXPECT_FP ${EXPECT_FP:0:16}… — stopping it"
     journalctl -u "$u" --since "@$since" --no-pager | tail -25 >&2
@@ -332,11 +403,30 @@ start_node() { # parsed node
         [ -z "$holder" ] || die "b$N_ID: port $port is still held (${holder}) — not starting into a bind failure"
     done
     systemctl daemon-reload
+    # the drop-in resets Environment=/EnvironmentFile=; anything still here came from a unit file or
+    # drop-in that sorts after ours — refuse before the process can read it
+    local envs; envs=$(systemctl show -p Environment,EnvironmentFiles --value "$N_UNIT" 2>/dev/null | tr '\n' ' ')
+    case "$envs" in *[![:space:]]*) die "b$N_ID: $N_UNIT still carries an environment after the reset (${envs:0:160}) — a drop-in sorting after zz-t12-regenesis.conf sets it; remove it first" ;; esac
     [ "$N_MODE" = new ] && systemctl enable "$N_UNIT" >/dev/null 2>&1 && record_state "ENABLED $N_UNIT"
     say "  starting $N_UNIT (bond $N_ID, share ${N_SHARE} MiB, produce=$N_PRODUCE hb=$N_HB seat8k=$N_SEAT8K)"
     systemctl reset-failed "$N_UNIT" 2>/dev/null || true   # 5.104's seats sit in 'failed' since 09-23 00:30
     systemctl start "$N_UNIT"
-    wait_fingerprint "$N_UNIT" "$since"
+    wait_fingerprint "$N_UNIT" "$since" || return 1
+    wait_genesis "$N_UNIT"
+}
+
+wait_genesis() { # unit — the node's own RPC names EXPECT_GENESIS (a fresh node's pruning point IS its genesis)
+    local u=$1 i
+    for i in $(seq 1 20); do
+        if python3 "$KIT_DIR/t12check.py" --port "$N_JSON" --expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS" >/dev/null 2>&1; then
+            say "  $u genesis OK ${EXPECT_GENESIS:0:16}… (json 127.0.0.1:$N_JSON)"; return 0
+        fi
+        sleep 3
+    done
+    warn "$u does not answer with genesis ${EXPECT_GENESIS:0:16}… on 127.0.0.1:$N_JSON — stopping it"
+    python3 "$KIT_DIR/t12check.py" --port "$N_JSON" --expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS" >&2 || true
+    systemctl stop "$u" || true
+    return 1
 }
 
 switch_node() { # parsed node: record prior state, stop, install unit, start
@@ -359,7 +449,7 @@ check_nodes() {
         python3 "$KIT_DIR/t12check.py" --port "$N_JSON" --expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS" \
             ${CHECK_REGISTRY:+--registry} || rc=1
         journalctl -u "$N_UNIT" --since "-15min" --no-pager -o cat 2>/dev/null \
-            | grep -E 'WrongGenesis|WrongConsensusParams|panicked|ERROR|class manifest|does not know|refusing \(exit 78\)' \
+            | grep -E 'WrongGenesis|WrongConsensusParams|panicked|ERROR|class manifest|does not know|refusing \(exit 78\)|PALW DRILL|memory ledger cannot cover|does not configure the execution lane' \
             | sed -E 's/^[0-9-]+ [0-9:.+]+ //' | cut -c1-200 | sort | uniq -c | sort -rn | head -6 || true
     done
     return $rc
@@ -421,6 +511,8 @@ switch_host() { # $1 = seconds between node starts
         else [ -f "$REL/units/$N_UNIT.service" ] || die "staged unit $N_UNIT missing"; fi
     done
     for d in "${OLD_APPDIRS[@]}"; do aside_ok "$d"; done       # refuse BEFORE anything is stopped
+    local drills; drills=$(drill_processes_here)
+    [ -z "$drills" ] || { echo "$drills" >&2; die "a testnet-12 DRILL runs on this host — a public node never runs beside one (ADR-0152 §8.3 item 3). Stop the drill first."; }
     say "1/3 stop every old unit and install its new ExecStart (script + binary switch together)"
     for spec in "${NODES[@]}"; do parse_node "$spec"; switch_node; done
     systemctl daemon-reload
