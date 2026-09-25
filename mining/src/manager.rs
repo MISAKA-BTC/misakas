@@ -1152,7 +1152,13 @@ impl MiningManager {
         // problem of the internal implementation and unrelated to the caller
 
         // write lock on mempool
-        let unorphaned_transactions = self.mempool.write().handle_new_block_transactions(block_daa_score, block_transactions)?;
+        let unorphaned_transactions = {
+            let mut mempool = self.mempool.write();
+            let unorphaned = mempool.handle_new_block_transactions(block_daa_score, block_transactions)?;
+            // M1: the DAA moved and rows renewed — re-ask the tip which possession proofs escalate.
+            mempool.refresh_palw_readiness(consensus);
+            unorphaned
+        };
 
         // alternate no & write lock on mempool
         let accepted_transactions = self.validate_and_insert_unorphaned_transactions(consensus, unorphaned_transactions);

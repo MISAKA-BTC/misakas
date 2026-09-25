@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MISAKAScan — Misaka testnet</title>
+<meta name="description" content="MISAKAScan block explorer for the Misaka (post-quantum) testnet — blocks, transactions, PoS/DNS finality, and the EVM execution lane." />
+<link rel="icon" href="/misaka-favicon-64.png" />
+<meta name="theme-color" content="#0b0a12" />
+<link rel="stylesheet" href="/style.css?v=m15" />
+<link rel="stylesheet" href="/readability.css?v=20260913-1" />
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/">
+    <img src="/misaka-logo.svg" alt="" class="brand-logo" onerror="this.style.display='none'"/>
+    <span class="brand-name">MISAKA<b>Scan</b></span>
+    <span class="brand-tag">Misaka testnet</span>
+  </a>
+  <form class="search" id="searchForm" autocomplete="off">
+    <input id="searchInput" type="text" aria-label="Search blocks, transactions, addresses or MTP IDs" placeholder="Search blocks, transactions, addresses or MTP IDs…" />
+    <button type="submit" aria-label="search">Search</button>
+  </form>
+  <span class="conn" id="conn" title="node connection"><i></i><span id="connText">connecting…</span></span>
+</header>
+
+<details class="upgrade-note" id="upgradeNote">
+  <summary>Node operator notice <span>2026-09-19 release · expand details</span></summary>
+  <div class="upgrade-body">
+  <b>Node operators &mdash; the fleet moved to a new build on 2026-09-19.</b> A node started from
+  today's <span class="mono">main</span> prints params fingerprint
+  <span class="mono">c3a5e91d&hellip;</span> and this fence schedule:
+  <span class="mono">1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301</span>.
+  If your node prints anything else &mdash; <span class="mono">060e3597&hellip;</span> and a schedule
+  ending <span class="mono">6900, 7000</span> is the build this notice used to describe &mdash; it is
+  the older one.
+  <br/><br/>
+  <b>What is still ahead, and the one height to act before.</b> Everything at or below
+  <span class="mono">6,900</span> is identical in both builds, so the two interoperate today. They
+  part at <span class="mono">DAA&nbsp;7,000</span>: only the OLDER build schedules a fence there, and
+  from that height it judges blocks by a rule the new build does not apply until
+  <span class="mono">7,100</span>. <b>Upgrade before 7,000</b> or your node will follow a chain the
+  fleet is not on. After that, <span class="mono">7,101</span> arms the PALW upgrade bundle
+  (execution lane, panel economy, DNS stake gate, model registry) and <span class="mono">7,200</span>
+  verification V2.
+  <br/><br/>
+  Keep your appdir &mdash; the genesis did not move. Rebuild from <span class="mono">main</span>;
+  details in <span class="mono">docs/testnet11-6701-upgrade-announcement.md</span>.
+  </div>
+</details>
+
+<main id="view"><div class="loading">Loading…</div></main>
+
+<footer class="footer">
+  <span>MISAKAScan · Misaka Layer-0 PoW testnet</span>
+  <span id="footNet">—</span>
+</footer>
+
+<script src="/sha3.min.js?v=080"></script>
+<script src="/app.js?v=t12regenesis1"></script>
+</body>
+</html>

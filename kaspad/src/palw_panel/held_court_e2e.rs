@@ -2267,8 +2267,19 @@ fn the_seats_court_filings_are_dated_in_the_priority_lane() {
             && named.contains("palw_seat_court_filing_due_v1(deadline, earliest_final,"),
         "the named leaf's pursuit is dated before the earliest Final"
     );
-    let accusation = before("court_pending.push((session_id, 0, false, object));");
-    assert!(accusation.contains("court_due.insert((session_id, 0, false), current_daa);"), "the one-move accusation is due now");
+    // The one-move accusation is queued by the capture arm's filer (P2-8, int-3); the panel dates it
+    // now, right after, and reads the filer's own dates after the filer's pass.
+    let at = source.find("let court_key = court.as_ref().map(|(session_id, _)| (*session_id, 0u32, false));").expect("the court key");
+    let after = &source[at..(at + 2_000).min(source.len())];
+    assert!(
+        after.contains("self.capture_arm_files_v1(") && after.contains("court_due.entry(key).or_insert(current_daa);"),
+        "the one-move accusation is due now"
+    );
+    let tick = source.find("self.reporter_filer_tick_v1(&session, &mut reporter_filer,").expect("the filer's pass");
+    assert!(
+        source[tick..(tick + 400).min(source.len())].contains("court_due.extend(reporter_filer.queued_dues_v1());"),
+        "the filer's items carry the filer's dates"
+    );
 }
 
 /// **The third review's MEDIUM, through the node and the fold: a non-seat's demand that PREDATES the
