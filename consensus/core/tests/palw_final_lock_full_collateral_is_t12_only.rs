@@ -110,7 +110,9 @@ fn arming_the_split_moves_the_params_and_schedule_ids_but_not_the_identity() {
         assert!(seen.insert(p.clone()), "armed at {height}: the height is in the params id");
         assert_eq!(armed.palw_final_lock_full_collateral_fence(), Some(ForkActivation::new(height)));
         assert_eq!(mirror(&armed), Some(height), "the bundle's mirror carries the height");
-        assert!(armed.palw_final_lock_full_collateral_active_at(height) && !armed.palw_final_lock_full_collateral_active_at(height - 1));
+        assert!(
+            armed.palw_final_lock_full_collateral_active_at(height) && !armed.palw_final_lock_full_collateral_active_at(height - 1)
+        );
     }
     let mut never = shipped.clone();
     never.palw_final_lock_full_collateral = Some(ForkActivation::never());
@@ -140,8 +142,14 @@ fn an_armed_build_below_the_split_handshakes_with_the_shipped_build() {
             let (a, s) = (fork_id_v1(&armed, daa), fork_id_v1(&shipped, daa));
             let armed_sees = evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next);
             let shipped_sees = evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next);
-            assert!(!armed_sees.refuses(), "armed at {height}, both at DAA {daa}: the armed node keeps the shipped one ({armed_sees:?})");
-            assert!(!shipped_sees.refuses(), "armed at {height}, both at DAA {daa}: the shipped node keeps the armed one ({shipped_sees:?})");
+            assert!(
+                !armed_sees.refuses(),
+                "armed at {height}, both at DAA {daa}: the armed node keeps the shipped one ({armed_sees:?})"
+            );
+            assert!(
+                !shipped_sees.refuses(),
+                "armed at {height}, both at DAA {daa}: the shipped node keeps the armed one ({shipped_sees:?})"
+            );
         }
         let s = fork_id_v1(&shipped, height);
         let past = evaluate_fork_id_v1(&armed, height, s.fired.as_bytes().as_slice(), s.next);
@@ -176,7 +184,9 @@ fn the_split_needs_rcore_plus_and_a_synced_mirror() {
     early.palw_rcore_plus = Some(ForkActivation::new(501));
     early.sync_palw_rcore_plus();
     assert!(
-        early.validate_palw_final_lock_full_collateral_v1().is_err_and(|e| format!("{e:?}").contains("without palw_rcore_plus at or below it"))
+        early
+            .validate_palw_final_lock_full_collateral_v1()
+            .is_err_and(|e| format!("{e:?}").contains("without palw_rcore_plus at or below it"))
     );
     let mut none = armed_at(500);
     none.palw_rcore_plus = None;

@@ -20,20 +20,20 @@ mod common;
 use common::*;
 
 use kaspa_consensus_core::config::params::ForkActivation;
+use kaspa_consensus_core::palw_admission_v2::{PalwAdmissionV2Error, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2};
 use kaspa_consensus_core::palw_offence_v1::{
     PALW_PANEL_FALSE_VALID_VERSION_V1, PalwOffenceKindV1, PalwPanelContradictionV1, PalwPanelFalseValidEvidenceV1,
     palw_offence_evidence_digest_v1,
 };
+use kaspa_consensus_core::palw_panel_v2::{PalwPanelValidLockV1, PalwRcoreSeatFilterV1};
 use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
+use kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v4;
 use kaspa_consensus_core::palw_state_v2::{
     PalwRcoreGateV1, PalwStateV2Error, palw_accuser_exposure_v1, palw_bond_committed_raw_v1, palw_bond_off_ceiling_raw_v1,
     palw_bond_resolved_locks_v1, palw_rcore_bind_prices_v1, palw_rcore_gate_room_of_v1, palw_rcore_gate_room_split_of_v1,
     palw_rcore_gate_room_v1, palw_second_clock_depth_v1,
 };
 use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
-use kaspa_consensus_core::palw_admission_v2::{PalwAdmissionV2Error, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2};
-use kaspa_consensus_core::palw_panel_v2::{PalwPanelValidLockV1, PalwRcoreSeatFilterV1};
-use kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v4;
 
 const MSK: u128 = 100_000_000;
 
@@ -121,7 +121,13 @@ fn licence_and_finalize(c: &mut Chain, id: Hash64, bound: u64) {
 /// `s` with one RETIRED claim's lock of `amount[i]` on each `seats[i]` (the accumulated post-Final
 /// locks of many claims, written through the carriage as a Final leaves them once its row is gone):
 /// its expiry `expiry_daa`, its second clock at the state's settled count.
-fn with_retired_locks(sp: &PalwStateParamsV2, s: &PalwChainStateV2, claim: Hash64, locks: &[(PalwBondKeyV2, u128)], expiry_daa: u64) -> PalwChainStateV2 {
+fn with_retired_locks(
+    sp: &PalwStateParamsV2,
+    s: &PalwChainStateV2,
+    claim: Hash64,
+    locks: &[(PalwBondKeyV2, u128)],
+    expiry_daa: u64,
+) -> PalwChainStateV2 {
     assert!(s.claim(&claim).is_none(), "a retired claim");
     let settled = s.settled_attempt_finals();
     edited(sp, s, |carriage| {
@@ -146,8 +152,9 @@ fn with_retired_locks(sp: &PalwStateParamsV2, s: &PalwChainStateV2, claim: Hash6
 /// it registered, which convicts the execution every `Valid` signer vouched for.
 fn false_valid(p: &Params, claim_id: Hash64, accused: PalwBondKeyV2) -> PalwConsensusObjectV2 {
     let (executor, executor_pubkey, _) = floor_producer(p);
-    let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
-        .expect("the floor profile");
+    let profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor profile");
     let attestation = |root: u64| kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
         version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V3,
         executor_id: h(0x1),
@@ -214,7 +221,11 @@ fn v02_the_split_room_keeps_the_one_invariant_and_only_widens_work() {
                     palw_rcore_gate_room_of_v1(c, 500, committed, accuser, Accuser),
                     "the accuser gate does not move"
                 );
-                assert_eq!(palw_rcore_gate_room_split_of_v1(c, 500, committed, 0, accuser, Work), plain, "off = 0 is the shipped room");
+                assert_eq!(
+                    palw_rcore_gate_room_split_of_v1(c, 500, committed, 0, accuser, Work),
+                    plain,
+                    "off = 0 is the shipped room"
+                );
             }
         }
     }
@@ -245,7 +256,11 @@ fn v02_a_finals_lock_is_the_resolved_term_and_the_fence_reads_it_at_the_gates_da
     let lock = c.s.slashable_lock(seat, id).expect("the Valid seat locked at the licence").amount;
     let duty_before = c.reserved(&seat);
     let depth = |c: &Chain, daa| palw_second_clock_depth_v1(raw_depth(c, daa), c.s.recent_anchor_daas(), daa, c.sp.window_court());
-    assert_eq!(palw_bond_resolved_locks_v1(&c.s, &seat, licensed, depth(&c, licensed), c.sp.window_court()), 0, "a live claim's lock is work");
+    assert_eq!(
+        palw_bond_resolved_locks_v1(&c.s, &seat, licensed, depth(&c, licensed), c.sp.window_court()),
+        0,
+        "a live claim's lock is work"
+    );
     assert_eq!(committed(&c, &seat, licensed), duty_before.max(lock), "max(duty, lock) while the claim lives");
     c.finalize(id);
     let final_daa = c.daa;
@@ -258,7 +273,11 @@ fn v02_a_finals_lock_is_the_resolved_term_and_the_fence_reads_it_at_the_gates_da
         assert_eq!(palw_bond_off_ceiling_raw_v1(&c.s, &c.sp, &seat, daa, raw_depth(&c, daa)), 0, "below the height: 0 at {daa}");
     }
     for daa in [fence, fence + 1_000] {
-        assert_eq!(palw_bond_off_ceiling_raw_v1(&c.s, &c.sp, &seat, daa, raw_depth(&c, daa)), lock, "from the height: the lock at {daa}");
+        assert_eq!(
+            palw_bond_off_ceiling_raw_v1(&c.s, &c.sp, &seat, daa, raw_depth(&c, daa)),
+            lock,
+            "from the height: the lock at {daa}"
+        );
     }
     let twin = chain_on(t12(), c.s.clone(), c.daa);
     assert_eq!(palw_bond_off_ceiling_raw_v1(&twin.s, &twin.sp, &seat, fence, raw_depth(&twin, fence)), 0, "the launch build: never");
@@ -363,7 +382,11 @@ fn v02_binds_continue_past_the_fence_once_locks_fill_the_ceiling_and_a_convictio
     let taken = before - collateral(&c, &accused);
     assert!(taken >= lock, "the conviction takes at least the lock ({} ≥ {})", msk(taken), msk(lock));
     assert!(c.s.slashable_lock(accused, claim1).is_none(), "the lock is consumed");
-    assert_eq!(twin_after.bond(&accused).unwrap().collateral, c.s.bond(&accused).unwrap().collateral, "the same slash as the launch build");
+    assert_eq!(
+        twin_after.bond(&accused).unwrap().collateral,
+        c.s.bond(&accused).unwrap().collateral,
+        "the same slash as the launch build"
+    );
     println!("[v02] conviction past the fence: seat {accused:?} lock {:.2} MSK, collateral taken {:.2} MSK", msk(lock), msk(taken));
 
     // The whole collateral still bounds a lock-full seat: resolved locks up to C − eligibility/2 refuse the bind.
@@ -427,7 +450,12 @@ fn v02_the_producer_seat_admission_the_fold_the_facts_and_the_draw_agree_on_each
         let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(h(NET), h(0x10C0 + t), floor, &producer.0, 7);
         let key = kaspa_consensus_core::palw_attempt_v2::execution_commitment_v3(&env.attempt, anchor);
         let id = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&env.attempt);
-        let ctx_t = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: h(0x0800_0000 + t), daa_score: t, blue_score: t, subsidy: 0 };
+        let ctx_t = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: h(0x0800_0000 + t),
+            daa_score: t,
+            blue_score: t,
+            subsidy: 0,
+        };
         let adm = check_palw_attempt_admission_v2(&chain.s, &chain.sp, &b.admission, &ctx_t, &env, admission_fences(&chain.p, t));
         let (next, _, skips) = chain.try_fold(&chain.s, &ctx_t, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands");
         let facts = palw_producer_facts_v4(

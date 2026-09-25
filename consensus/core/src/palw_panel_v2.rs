@@ -238,7 +238,13 @@ impl PalwPanelValidLockV1 {
             // Lane V02: past `palw_final_lock_full_collateral` the resolved locks leave the ceiling,
             // exactly as the bind's `gate_room` reads them (same DAA, same escaped depth).
             let off_ceiling = if filter.resolved_locks_off_ceiling {
-                crate::palw_state_v2::palw_bond_resolved_locks_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court)
+                crate::palw_state_v2::palw_bond_resolved_locks_v1(
+                    state,
+                    bond,
+                    self.now_daa,
+                    self.settled_anchor_depth,
+                    self.window_court,
+                )
             } else {
                 0
             };

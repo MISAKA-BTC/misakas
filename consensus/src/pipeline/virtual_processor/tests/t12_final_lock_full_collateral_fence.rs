@@ -92,7 +92,8 @@ async fn claim_and_anchor(chain: &mut T12Chain, from: u64) -> (Hash64, BlockHash
     beat_to(chain, from).await;
     let ttpb = chain.config.params.target_time_per_block();
     let (_, claim_id) = chain.attempt(0, ttpb, Vec::new(), &|_| true).await;
-    let slot = chain.tip_state().1.claim(&claim_id).expect("the attempt made its claim").bind_base_daa() + chain.bundle.panel.anchor_delay();
+    let slot =
+        chain.tip_state().1.claim(&claim_id).expect("the attempt made its claim").bind_base_daa() + chain.bundle.panel.anchor_delay();
     beat_to(chain, slot).await;
     let (_, parent) = chain.tip_state();
     assert_eq!(parent.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional, "unbound until its anchor block");
@@ -131,7 +132,14 @@ fn with_post_final_locks(chain: &T12Chain, s: &PalwChainStateV2, daa: u64, retir
     for (seat, amount) in fills {
         carriage.slashable_locks.insert(
             (seat, retired),
-            PalwSlashableLockV1 { claim: retired, amount, expiry_daa: expiry, settled_at_final: settled, attested: PalwSegmentMaskV2::NONE, segments: 0 },
+            PalwSlashableLockV1 {
+                claim: retired,
+                amount,
+                expiry_daa: expiry,
+                settled_at_final: settled,
+                attested: PalwSegmentMaskV2::NONE,
+                segments: 0,
+            },
         );
     }
     let loaded = carriage
@@ -181,7 +189,10 @@ async fn v02_lock_heavy_seats_bind_from_the_fence_and_void_below_it() {
     assert!(point_a.daa_score < FENCE, "the premise: claim A's anchor block is below the fence ({})", point_a.daa_score);
     assert_eq!(vp.palw_sw8_anchor_delay_for(&point_a), Some(chain.bundle.panel.anchor_delay()), "an anchor block");
     // On the chain as it is (no locks) the processor bound it: the derivation is live.
-    assert!(matches!(chain.tip_state().1.claim(&claim_a).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the clean chain binds A");
+    assert!(
+        matches!(chain.tip_state().1.claim(&claim_a).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
+        "the clean chain binds A"
+    );
     let heavy_a = with_post_final_locks(&chain, &parent_a, point_a.daa_score, Hash64::from_u64_word(0x0E_7A00));
     let derived_a = vp.palw_v2_derived_panel_bindings_for_tests(&heavy_a, anchor_a, point_a.daa_score);
     assert!(
@@ -207,7 +218,11 @@ async fn v02_lock_heavy_seats_bind_from_the_fence_and_void_below_it() {
     };
     assert_eq!(seats.len(), chain.bundle.panel.seat_count() as usize, "a full jury");
     let bound = vp.palw_v2_fold_accepted_for_tests(&heavy_b, &armed_sp, &point_b, &derived_b).expect("the anchor block folds");
-    assert_eq!(bound.claim(&claim_b).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa: point_b.daa_score }, "bound at its anchor");
+    assert_eq!(
+        bound.claim(&claim_b).unwrap().phase,
+        PalwClaimPhaseV2::PanelBound { bound_daa: point_b.daa_score },
+        "bound at its anchor"
+    );
     for seat in &seats {
         let k = seat.bond;
         let c = committed(&chain, &bound, &k, point_b.daa_score);
