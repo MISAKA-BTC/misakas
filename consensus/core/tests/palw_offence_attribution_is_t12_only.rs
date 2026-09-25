@@ -80,10 +80,15 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// tolerance 132 -> 1,620 s, `max_block_level` 250 -> 225; all three hashed, λ also beside its height
 /// in the schedule id). `t12_mainnet_values_moved_only_these` pins that setting the three back returns
 /// exactly the previous value: `f5b564f3…` / `8eaabe3e…` / `b758ee80…`.
+///
+/// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, the mainnet-values review's
+/// HIGH): armed from genesis on testnet-12 and hashed Some-only into all three ids;
+/// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
+/// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "05173205b4f4761de42b61264e385612549b804b7d41f7fd6a84c9111b8d0227",
-    "df02039d413517c70103c93186e4422e23dd6cf86bae4c235bbf55f1a2fb9fd8",
-    "beeaa0a807f25c9f69d049bc2f1b7205313e132c47008de27b5e0d7e6e4515e1",
+    "937c60e803d6be5d211be4f93a5291ca89fe09913659cef0b0c9a48bbf820106",
+    "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
+    "f19448fb847caab08af0f858eab4acbfb59ff4be5b24a45fcdbad7d95a4da1a1",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -95,10 +100,13 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for testnet-12's mainnet values** (λ
 /// 5,000 ‰, the 1,620 s tolerance, `max_block_level` 225). Previous: `ea2e5a18…` / `ad43854c…` /
 /// `9ebe1dcc…`.
+///
+/// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
+/// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "2343195d60d6f58151acd6af788d40430d211d3c5d4e0f461a73e4cb7910dd10",
-    "1e06025def2ec66693f126eb074de2e0b953dc01c8f3ce7f3dbc04067d9d026c",
-    "b08b25bd39a04cd6ea43543c7b5878bbcda1b39b8acfea79226b2ca2f2bad406",
+    "dc03241310fa50c9db9655aa26c3cd26b1b17f8f2481b898ad744e2d267ac460",
+    "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
+    "4791135724c1427dc1d73e7ad26a5d6639fda6cc4f529c9b927e49aff17b22aa",
 );
 
 fn shipped(name: &str) -> Params {

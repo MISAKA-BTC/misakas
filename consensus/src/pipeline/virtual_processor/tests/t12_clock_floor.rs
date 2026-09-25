@@ -174,9 +174,9 @@ async fn t12_a_beat_before_its_slot_is_refused_and_was_admitted_without_the_floo
 /// The rule's margin below the slot is zero, and that is safe because of who stamps: the adapter
 /// stamps `max(the miner's clock, the slot)`, and the slot is a function of the beat's own parents,
 /// so no honest node ever builds a beat below it whatever its clock says. A slow clock stamps the
-/// slot itself — its own future, by its skew, which peers accept up to the drift tolerance (1,620 s,
-/// mainnet's, since the user's 2026-09-25 decision; 132 s before) —
-/// and a fast one stamps its own reading. Here thirty slots are mined by miners whose clocks read
+/// slot itself — its own future, by its skew, which peers accept up to 132 s: the lead cap
+/// (`palw_clock_lead_cap`) holds a beat and a step to that however far the drift tolerance reaches
+/// (1,620 s, mainnet's, since the user's 2026-09-25 decision) — and a fast one stamps its own reading. Here thirty slots are mined by miners whose clocks read
 /// from a minute behind to a minute ahead, and every slot ticks exactly once, one interval or more
 /// after the last.
 #[tokio::test]
@@ -306,6 +306,198 @@ async fn t12_a_future_stamped_sibling_step_cannot_delay_the_slot_and_could_witho
     }
 }
 
+/// A chain whose clock last stepped at exactly `reference` (a wall-clock time in the past): honest
+/// slots an hour back, then a holder one second before `reference` and the step at it — the lowest
+/// blue score at its DAA score, so the next slot opens at `reference + I`.
+async fn stepped_at(ctx: &mut TestContext, reference: u64, nonce: u64) -> Block {
+    ctx.simulated_time = reference - 3_600_000;
+    honest_slot(ctx, nonce).await;
+    let (built, _) = beat(ctx, nonce + 10, reference - 1_000);
+    let holder = accepted(ctx, built, "a holder a second before the reference").await;
+    let (built, _) = beat(ctx, nonce + 11, reference);
+    let step = accepted(ctx, built, "the step at the reference").await;
+    assert_eq!(daa_of(ctx, step.header.hash), daa_of(ctx, holder.header.hash) + 1, "it steps the clock");
+    assert_eq!(taken_until(ctx, reference + 1), Some(reference + I), "and is the next slot's reference");
+    step
+}
+
+/// **The lead cap (the 2026-09-25 mainnet-values review's HIGH): at mainnet's 1,620 s tolerance one
+/// producer's burst advances the DAA by 2 — and by 14 without the cap.**
+///
+/// The burst the review measured, from a chain in step with wall time: the clock last stepped 114 s
+/// ago, so the next slot opens 6 s from now. A producer then mints the holder and the step of every
+/// slot the moment it can, each stamped AT its slot, with no other block in between. Without the cap
+/// it stops only where a slot opens past `now + 1,620 s` — slots at `now + 6 s + 120 k`, 14 of them
+/// (`⌊T / I⌋ + 1`); with it, the first beat stamped more than 132 s past the node's clock is refused
+/// `ClockLeadTooFarAhead` — 2 slots (`⌊132 / I⌋ + 1`), the readiness escalation's 2-DAA margin.
+/// Measured against the node's real clock, which is what both bounds read. (A chain that MISSED
+/// slots can be caught up by one tick a missed interval, stamped in the past and above the median,
+/// exactly as at the 132 s tolerance before 2026-09-25; the cap bounds the lead, not the backlog.)
+#[tokio::test]
+async fn t12_the_lead_cap_bounds_a_run_ahead_burst_to_two_ticks() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    kaspa_core::log::try_init_logger("info");
+    let (shipped, _bundle, premine, _floats) = t12_with_harness_cards();
+    assert_eq!(shipped.params.timestamp_deviation_tolerance, 1_620, "testnet-12 runs mainnet's tolerance");
+    assert_eq!(shipped.params.palw_clock_lead_cap, Some(ForkActivation::always()), "and arms the cap from genesis");
+    for capped in [true, false] {
+        let config = if capped {
+            shipped.clone()
+        } else {
+            let mut params = shipped.params.clone();
+            params.palw_clock_lead_cap = None;
+            ConfigBuilder::new(params).skip_proof_of_work().build()
+        };
+        let mut ctx = t12_at_genesis(&config, &premine);
+        let mut step = stepped_at(&mut ctx, kaspa_core::time::unix_now() - I + 6_000, 1).await;
+        let start = daa_of(&ctx, step.header.hash);
+        let begun = std::time::Instant::now();
+        let mut nonce = 3_000u64;
+        let refusal = loop {
+            assert!(daa_of(&ctx, step.header.hash) - start <= 16, "capped={capped}: the burst ran past any budget");
+            let slot = step.header.timestamp + I;
+            let (built, _) = beat(&ctx, nonce, slot);
+            assert_eq!(built.header.timestamp, slot, "the holder is stamped at its slot");
+            if let Err(refusal) = submit(&mut ctx, built).await {
+                break refusal;
+            }
+            let (built, _) = beat(&ctx, nonce + 1, slot);
+            nonce += 2;
+            match submit(&mut ctx, built).await {
+                Ok(next) => {
+                    assert_eq!(daa_of(&ctx, next.header.hash), daa_of(&ctx, step.header.hash) + 1, "one tick a slot");
+                    step = next;
+                }
+                Err(refusal) => break refusal,
+            }
+        };
+        let ticks = daa_of(&ctx, step.header.hash) - start;
+        eprintln!(
+            "[t12-lead-cap] capped={capped}: one producer advanced the DAA by {ticks} in {:?} ({start} -> {}), then: {refusal}",
+            begun.elapsed(),
+            start + ticks
+        );
+        if capped {
+            assert!(
+                matches!(refusal, RuleError::ClockLeadTooFarAhead(..)),
+                "capped: refused by the cap, not the tolerance: {refusal}"
+            );
+            assert_eq!(ticks, 2, "capped: a burst is two ticks");
+        } else {
+            assert!(matches!(refusal, RuleError::TimeTooFarIntoTheFuture(..)), "uncapped: refused by the tolerance alone: {refusal}");
+            assert_eq!(ticks, 14, "uncapped: the burst the review measured");
+        }
+    }
+}
+
+/// **A refused step is not a verdict: it is not stored, not `StatusInvalid`, and the same block is
+/// admitted once the node's clock reaches its stamp less 132 s** — the local-clock contract of
+/// `TimeTooFarIntoTheFuture`, which the cap shares (the header stage caches only post-PoW errors).
+#[tokio::test]
+async fn t12_a_step_past_the_lead_cap_is_not_invalid_and_is_admitted_once_the_clock_catches_up() {
+    use kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS as CAP;
+    kaspa_core::log::try_init_logger("info");
+    let (mut ctx, _config) = t12_clock(true);
+    let step = stepped_at(&mut ctx, kaspa_core::time::unix_now() - 100_000, 1).await;
+    let slot = step.header.timestamp + I;
+    let (built, _) = beat(&ctx, 900, slot);
+    let holder = accepted(&mut ctx, built, "the beat that holds the slot, 20 s ahead: inside the cap").await;
+    // The step over it, stamped 1.5 s past the cap — well inside the 1,620 s tolerance.
+    let ahead = kaspa_core::time::unix_now() + CAP + 1_500;
+    assert!(ahead >= slot, "stamped at or past the slot, so the floor admits it");
+    let (built, _) = beat(&ctx, 901, ahead);
+    assert_eq!(built.header.timestamp, ahead);
+    let hash = built.header.hash;
+    match submit(&mut ctx, built.clone()).await {
+        Err(RuleError::ClockLeadTooFarAhead(h, stamped, latest)) => {
+            assert_eq!((h, stamped), (hash, ahead), "refused for its own stamp");
+            assert!(latest < ahead && ahead - latest <= 1_500, "the bound is the node's clock plus 132 s");
+        }
+        other => panic!("a step 1.5 s past the cap answered {other:?}"),
+    }
+    assert_eq!(ctx.consensus.get_block_status(hash), None, "not stored, and above all not StatusInvalid");
+    assert_eq!(daa_of(&ctx, ctx.consensus.get_sink()), daa_of(&ctx, holder.header.hash), "the clock did not tick");
+    // Wall time catches up; the SAME block is admitted and ticks.
+    let wait = (ahead - CAP).saturating_sub(kaspa_core::time::unix_now()) + 250;
+    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+    let admitted = accepted(&mut ctx, built, "the same step once the clock caught up").await;
+    assert_eq!(admitted.header.hash, hash);
+    assert_eq!(daa_of(&ctx, hash), daa_of(&ctx, holder.header.hash) + 1, "and it ticks the clock");
+}
+
+/// **What a past-median time held ahead of wall time does under the cap: the clock stalls, it does
+/// not run — and a block that moves no clock keeps the full tolerance.**
+///
+/// A producer that is not bounded by the cap is one whose blocks move no clock: here eight cards'
+/// attempt blocks, each stamped 1,000 s past the node's clock (between the cap and the tolerance),
+/// merging nothing a beat was granted on. Every one is ADMITTED (the cap does not reach them), and
+/// enough of them hold the past-median time more than 132 s ahead. Then the next heartbeat — the node's
+/// own template, which a block must stamp above the median — is refused `ClockLeadTooFarAhead` and
+/// the DAA score does not move: every DAA-denominated window (a readiness row's age among them) keeps
+/// its wall length and waits with the clock, so no row lapses for want of a block. The stall ends when
+/// wall time reaches the median less 132 s — at most the tolerance less the cap after the last push.
+/// Before the cap the same push ran the DAA clock ahead instead (a step is stamped above the median
+/// and was admitted up to 1,620 s out).
+#[tokio::test]
+async fn t12_a_median_pushed_ahead_stalls_the_clock_and_lapses_no_row() {
+    use kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS as CAP;
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let tolerance_ms = config.params.timestamp_deviation_tolerance * 1_000;
+    let mut chain = super::t12_round_lane_e2e::t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+    // Honest beats until the next block would step nothing: the tip is a step, not a holder.
+    let steps_nothing = |chain: &super::t12_round_lane_e2e::T12Chain| {
+        let parents: Vec<BlockHash> = chain.ctx.consensus.get_virtual_parents().into_iter().collect();
+        !chain.vp().palw_clock_step_for_parents(&parents).expect("a clock for the virtual").granted
+    };
+    for _ in 0..8 {
+        chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    for _ in 0..4 {
+        if steps_nothing(&chain) {
+            break;
+        }
+        chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    assert!(steps_nothing(&chain), "the tip is a step");
+    let daa = chain.daa_of(chain.sink());
+
+    let push_to = kaspa_core::time::unix_now() + 1_000_000;
+    chain.ctx.simulated_time = push_to;
+    let mut pushed = 0usize;
+    while chain.ctx.consensus.get_virtual_past_median_time() <= kaspa_core::time::unix_now() + CAP {
+        assert!(pushed < 40, "the median did not move in {pushed} blocks");
+        let (block, _) = chain.attempt(pushed % 8, 1, Vec::new(), &|_| true).await;
+        let lead = block.header.timestamp - kaspa_core::time::unix_now();
+        assert!(lead > CAP && lead <= tolerance_ms, "attempt {pushed}: stamped {lead} ms ahead — between the cap and the tolerance");
+        assert_eq!(chain.daa_of(block.header.hash), daa, "attempt {pushed}: admitted, and it moves no clock");
+        pushed += 1;
+    }
+    eprintln!(
+        "[t12-lead-cap] {pushed} attempt blocks stamped ~1,000 s ahead hold the past-median time {} ms past the node's clock",
+        chain.ctx.consensus.get_virtual_past_median_time() - kaspa_core::time::unix_now()
+    );
+
+    // The node's own heartbeat: its template is stamped above the median, and nothing else.
+    let t = chain
+        .ctx
+        .consensus
+        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Vec::new())), TemplateBuildMode::Standard)
+        .expect("a template that steps nothing is built at any stamp the tolerance admits");
+    assert!(t.block.header.timestamp > kaspa_core::time::unix_now() + CAP, "the template is stamped above the median");
+    let (t, earliest) = chain.vp().heartbeat_adapt_block_template(t).expect("the heartbeat lane is open");
+    assert!(earliest > kaspa_core::time::unix_now() + CAP, "the H1 miner, which mints nothing past its own clock, would wait");
+    let beat = t.block.to_immutable();
+    let hash = beat.header.hash;
+    match chain.ctx.consensus.validate_and_insert_block(beat).virtual_state_task.await {
+        Err(RuleError::ClockLeadTooFarAhead(h, ..)) => assert_eq!(h, hash),
+        other => panic!("a beat above a pushed median answered {other:?}"),
+    }
+    assert_eq!(chain.ctx.consensus.get_block_status(hash), None, "refused for now, not invalid");
+    assert_eq!(chain.daa_of(chain.sink()), daa, "the clock stalls: no DAA-denominated window moved, so no row lapsed");
+}
+
 /// The node's own beat, as the H1 miner builds it: the node's template — stamped by the builder from
 /// this host's clock, every commitment executed against that stamp — then the lane's adapter and a
 /// nonce. Nothing is re-stamped. Returns the block, the adapter's `earliest` and the header the
@@ -428,13 +620,13 @@ async fn t12_a_producer_runs_the_clock_at_most_the_drift_budget_ahead() {
     let (shipped, _bundle, premine, _floats) = t12_with_harness_cards();
     assert_eq!(shipped.params.timestamp_deviation_tolerance, 1_620, "testnet-12 runs mainnet's tolerance: 27 samples x 120 s / 2");
     for tolerance in [1_620u64, 132] {
-        let config = if tolerance == shipped.params.timestamp_deviation_tolerance {
-            shipped.clone()
-        } else {
-            let mut params = shipped.params.clone();
-            params.timestamp_deviation_tolerance = tolerance;
-            ConfigBuilder::new(params).skip_proof_of_work().build()
-        };
+        // The tolerance ALONE: past `palw_clock_lead_cap` (testnet-12 arms it) a clock-moving header
+        // is refused 132 s past the node's clock whatever the tolerance, so this is the budget the cap
+        // takes away (`t12_the_lead_cap_bounds_a_run_ahead_burst_to_two_ticks`).
+        let mut params = shipped.params.clone();
+        params.timestamp_deviation_tolerance = tolerance;
+        params.palw_clock_lead_cap = None;
+        let config = ConfigBuilder::new(params).skip_proof_of_work().build();
         let budget_ms = tolerance * 1_000;
         let mut ctx = t12_at_genesis(&config, &premine);
         // Genesis is three weeks behind the wall clock: an honest slot mined from "now" brings the

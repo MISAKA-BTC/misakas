@@ -618,6 +618,8 @@ mod tests {
             // The clock floor (H3/H5) refines the cursor; `validate_palw_v2` wants the cursor at or
             // below it, which the probe does not run — it asks only the hashers and the schedule.
             "palw_clock_floor" => params.palw_clock_floor = Some(at),
+            // The lead cap: no prerequisite; the probe asks only the hashers and the schedule.
+            "palw_clock_lead_cap" => params.palw_clock_lead_cap = Some(at),
             // ADR-0152 v2 F2: genesis-only and refused without four other fences by
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
