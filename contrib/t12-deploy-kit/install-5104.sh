@@ -25,6 +25,8 @@
 # host, and the private chain shares this chain's keys.
 #
 # Run as root on 5.104 from $REL_ROOT/kit:  ./install-5104.sh preflight | stage | switch | check | rollback
+# The chain is LIVE (09-25): a new binary under it is  ./install-5104.sh stage && ./install-5104.sh upgrade  (PLAN.md §15),
+# undone by  ./install-5104.sh upgrade-rollback  — never by `rollback` (that retires the chain).
 . "$(dirname "$0")/lib.sh"
 
 HOST_NAME_EXPECTED=vmi3272359
@@ -33,6 +35,9 @@ FIXTURE_PATTERN=misakas-stale-consensus-diagnosis   # that node's command line (
 START_GAP=30                 # each node re-derives the 8k manifest root (--palw-verify-class-manifest) and maps 1.7 GB
 BINARIES=(kaspad misaka palw-class)
 PUB="169.58.232.113:26311,169.58.39.220:26311,169.58.39.220:26321"
+# upgrade: before each seat here stops, the three public nodes (b6, b0, b1) must take a TCP connection — five
+# seats here plus a public node down at once would leave the 8k class under its 7 ready seats (PLAN.md §15)
+UPGRADE_REQUIRE_UP=(169.58.232.113:26311 169.58.39.220:26311 169.58.39.220:26321)
 NODES=(
   "2|misaka-t12-seat2|dropin|127.0.0.1:26311|26313|26314|-|-|3584|9|none|0|1|127.0.0.1:26321,127.0.0.1:26331,127.0.0.1:26341,127.0.0.1:26351,$PUB"
   "3|misaka-t12-seat3|dropin|127.0.0.1:26321|26323|26324|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26331,127.0.0.1:26341,127.0.0.1:26351,$PUB"
@@ -53,7 +58,9 @@ host_preflight() {
     local o; o=$(other_session_running)
     if [ -n "$o" ]; then warn "the route-matrix session's nodes are still running here (switch will refuse):"; echo "$o" >&2; fi
     say "  old seat units: $(for n in 2 3 4 5; do printf 'seat%s=%s/%s ' $n "$(systemctl show -p ActiveState --value misaka-t12-seat$n)" "$(systemctl is-enabled misaka-t12-seat$n 2>/dev/null)"; done)"
-    local fx_kb; fx_kb=$(pgrep -f "$FIXTURE_PATTERN" 2>/dev/null | while read -r p; do awk '/VmRSS/{print $2}' "/proc/$p/status" 2>/dev/null; done | awk '{s+=$1} END{print s+0}')
+    # pgrep exits 1 when the fixture node is not running: under `set -euo pipefail` that alone would end the
+    # script with no message (preflight, stage and upgrade all run this hook)
+    local fx_kb; fx_kb=$({ pgrep -f "$FIXTURE_PATTERN" 2>/dev/null || true; } | while read -r p; do awk '/VmRSS/{print $2}' "/proc/$p/status" 2>/dev/null || true; done | awk '{s+=$1} END{print s+0}')
     say "  t11 fixture node (/root/$FIXTURE_PATTERN, not ours, left running): RSS $((fx_kb / 1024)) MiB — counted in RESERVE_MIB ($RESERVE_MIB)"
     [ $((fx_kb / 1024)) -le $((RESERVE_MIB - 1536)) ] || warn "the fixture node's RSS leaves under 1.5 GiB of RESERVE_MIB for the rest of the host — ask its owner to stop it before switch, or raise RESERVE_MIB (PLAN.md §2)"
     ls -l /root/palw-class/qwen25-1.5b-a16-8k.palwart* 2>/dev/null | sed 's/^/  /' || true

@@ -15,6 +15,9 @@
 #    the same step that stops the old process and starts the new one;
 #  * old chain data is MOVED ASIDE (never deleted by switch); key files are never read, moved or
 #    written — only `test -f` / `ls -l`;
+#  * (09-26) the chain is LIVE: a new binary under it is `upgrade` (appdirs kept, its own state
+#    upgrade-$REV*, undone by `upgrade-rollback`); `switch` and `rollback` are the REGENESIS pair and need
+#    CONFIRM_REGENESIS=yes / CONFIRM_REGENESIS_ROLLBACK=yes, and `rollback` refuses a REV that was an upgrade;
 #  * scripts are replaced by write-temp + rename, never overwritten in place (bash reads a running
 #    script lazily);
 #  * (R-core+, ADR-0152 §8.2) a PUBLIC node never carries a drill flag: `--palw-drill-genesis-salt`
@@ -387,10 +390,13 @@ stage_nodes() {
 record_state() { mkdir -p "$STATE_DIR"; echo "$*" >> "$STATE_DIR/switch-$REV.log"; }
 
 stop_unit() { # unit
-    local u=$1
+    local u=$1 res
     if systemctl is-active --quiet "$u"; then
         say "  stopping $u (SIGINT, up to 180 s)"
         systemctl stop "$u"
+        # read before any reset-failed erases it: past TimeoutStopSec systemd SIGKILLs the process (KillMode=mixed)
+        res=$(systemctl show -p Result --value "$u" 2>/dev/null || true)
+        [ "$res" != timeout ] || warn "$u did not exit within TimeoutStopSec — systemd SIGKILLed it (Result=timeout): its databases recover on the next start; keep its journal"
     fi
     systemctl is-active --quiet "$u" && die "$u still active after stop"
     return 0
@@ -490,13 +496,13 @@ wait_duties() {
     esac
     t12check_expect
     for j in $(seq 1 10); do
-        if python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" --expect-panel >/dev/null 2>&1; then
+        if python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ID_ARGS[@]}" --expect-panel >/dev/null 2>&1; then
             say "  $u duties (running): panel worker started (getPalwNodeStatus.panelRunning)"; return 0
         fi
         sleep 3
     done
     warn "$u: getPalwNodeStatus says the panel is NOT running although the node holds bond $N_ID — see 'panel service disabled' in its journal"
-    python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" --expect-panel >&2 || true
+    python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ID_ARGS[@]}" --expect-panel >&2 || true
     return 0
 }
 
@@ -505,8 +511,9 @@ wait_duties() {
 # row's prefix) — a merge that moved one of them fails the switch gate here instead of idling a producer later.
 # (ART_8K_BYTES is the FILE's size and is pinned to the committed sidecar by t12_deploy_kit_constants; the
 # registry's artifactBytes is the work derivation's figure — 2,620,391,424 for both dense rows — not the file.)
-t12check_expect() { # sets EXPECT_ARGS
-    EXPECT_ARGS=(--expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS"
+t12check_expect() { # sets EXPECT_ARGS (identity + the kit's chain facts) and EXPECT_ID_ARGS (identity only)
+    EXPECT_ID_ARGS=(--expect-fp "$EXPECT_FP" --expect-genesis "$EXPECT_GENESIS")
+    EXPECT_ARGS=("${EXPECT_ID_ARGS[@]}"
                  --expect-premine "$PREMINE_TXID" --expect-class "$CLASS_8K" --expect-class-prefix "$CLASS_2M_PREFIX")
 }
 
@@ -571,9 +578,25 @@ check_nodes() {
 # ---------------------------------------------------------------------------------------------
 # rollback (reads the state log switch wrote)
 # ---------------------------------------------------------------------------------------------
+# `rollback` undoes a REGENESIS switch: every node here stops, the chain in ${APPDIR_PREFIX}* moves aside and
+# the units that ran before the switch start again on the OLD chain's data. Since t12 went public (09-25)
+# that retires the live chain, so it needs CONFIRM_REGENESIS_ROLLBACK=yes; and it is refused for a REV that
+# was an in-place `upgrade` here (undo that with `upgrade-rollback`) and for a log with no ASIDE line (no
+# regenesis switch of this REV moved an old chain aside — there is nothing to go back to).
 rollback_host() {
-    local log="$STATE_DIR/switch-$REV.log" spec line kind a b
+    local log="$STATE_DIR/switch-$REV.log" spec line kind a b d ups=""
+    if [ -e "$STATE_DIR/upgrade-$REV" ] || [ -e "$STATE_DIR/upgrade-$REV.log" ]; then
+        die "REV=$REV was an in-place UPGRADE on this host ($STATE_DIR/upgrade-$REV): undo it with \`upgrade-rollback\`. \`rollback\` undoes a REGENESIS switch — it would stop every node here, move the live chain's appdirs aside and restart the retired chain"
+    fi
     [ -f "$log" ] || die "no $log — nothing was switched with REV=$REV here"
+    grep -q '^ASIDE ' "$log" || die "$log records no ASIDE line — no regenesis switch of REV=$REV moved an old chain aside here, so \`rollback\` has nothing to go back to (an upgrade is undone by \`upgrade-rollback\`)"
+    for d in "$STATE_DIR"/upgrade-*; do if [ -d "$d" ]; then ups+=" ${d##*/upgrade-}"; fi; done
+    if [ "${CONFIRM_REGENESIS_ROLLBACK:-}" != yes ]; then
+        local upmsg=""
+        [ -z "$ups" ] || upmsg=" The chain on this host was upgraded in place since (REV$ups): an upgrade is undone by REV=<that rev> \`upgrade-rollback\`, never by this."
+        die "\`rollback\` RETIRES the chain these nodes run: it stops every node on this host, moves ${APPDIR_PREFIX}* aside and restarts the units that ran before the switch of $REV on the OLD chain's data.$upmsg Only to undo the regenesis itself: CONFIRM_REGENESIS_ROLLBACK=yes"
+    fi
+    [ -z "$ups" ] || warn "this host's chain was upgraded in place (REV$ups) — CONFIRM_REGENESIS_ROLLBACK=yes: retiring it anyway"
     for spec in "${NODES[@]}"; do
         parse_node "$spec"
         stop_unit "$N_UNIT" || true
@@ -624,6 +647,15 @@ switch_host() { # $1 = seconds between node starts
         else [ -f "$REL/units/$N_UNIT.service" ] || die "staged unit $N_UNIT missing"; fi
     done
     for d in "${OLD_APPDIRS[@]}"; do aside_ok "$d"; done       # refuse BEFORE anything is stopped
+    # switch starts a NEW chain from genesis: start_node moves an existing appdir aside (a previous attempt of
+    # this kit). Once the chain is live, that appdir IS the live chain, and moving it takes the bond's
+    # round-signature record (palw-panel/state/palw-round-last-signed) with it — a binary change of the
+    # running chain is `upgrade`.
+    local live=""
+    for spec in "${NODES[@]}"; do parse_node "$spec"; if [ -e "$N_APPDIR" ]; then live+=" $N_APPDIR"; fi; done
+    if [ -n "$live" ] && [ "${CONFIRM_REGENESIS:-}" != yes ]; then
+        die "a chain already lives in$live — \`switch\` would move it aside and start these nodes from genesis. A new binary under the RUNNING chain is \`upgrade\` (PLAN.md §15). A deliberate regenesis / a retry of a failed switch: CONFIRM_REGENESIS=yes"
+    fi
     local drills; drills=$(drill_processes_here)
     [ -z "$drills" ] || { echo "$drills" >&2; die "a testnet-12 DRILL runs on this host — a public node never runs beside one (ADR-0152 §8.3 item 3). Stop the drill first."; }
     say "1/3 stop every old unit and install its new ExecStart (script + binary switch together)"
@@ -663,22 +695,396 @@ usage_common() {
 usage: $0 <command>
   preflight        read-only: resources, keys (ls -l), ports, artifact, conflicting units
   stage            copy + verify binaries/artifact, write launch scripts and units under $REL_ROOT (no service touched)
-  switch           stop old units, install the new ExecStart, move old chain data aside, start new nodes, check
+  switch           REGENESIS: stop old units, install the new ExecStart, move old chain data aside, start new nodes from
+                   genesis, check (CONFIRM_REGENESIS=yes when a node already has an appdir — a running chain is 'upgrade')
   check            read-only post-start checks (fingerprint, genesis, peers, lane mix, memory); CHECK_REGISTRY=1 adds classes
-  rollback         undo switch for this REV (old scripts/binaries were never modified)
+  rollback         undo a REGENESIS switch of this REV: retires the chain these nodes run (CONFIRM_REGENESIS_ROLLBACK=yes;
+                   refused for a REV that was an upgrade — NEVER use it to undo an upgrade)
+  upgrade          ROLLING in-place binary upgrade of the RUNNING chain: appdirs kept; node by node stop -> this REV's
+                   unit -> start -> fingerprint/genesis/database/duties -> synced + a new block (PLAN.md §15).
+                   DRY_RUN=1 prints every step; UPGRADE_SYNC_TIMEOUT=600; UPGRADE_UNHEALTHY_OK=1; UPGRADE_ARGS_CHANGE_OK=1
+  upgrade-rollback put back the unit each node had before 'upgrade' with this REV (appdirs never moved; DRY_RUN=1)
   purge-old        delete the old chain data switch moved aside (CONFIRM_PURGE=yes; rollback impossible after)
   seeder-status    read-only (swap/rollback of a seeder: seeders/30-swap.sh, 50-rollback.sh from the Mac)
 EOF2
 }
 
 # ---------------------------------------------------------------------------------------------
-# dispatcher: host scripts define NODES, OLD_APPDIRS, RESERVE_MIB, BINARIES,
-# HOST_NAME_EXPECTED, START_GAP and the hooks host_preflight / host_guard_switch / host_cmd
+# upgrade — a ROLLING binary upgrade of the chain that is RUNNING (same genesis, same EXPECT_FP)
+# ---------------------------------------------------------------------------------------------
+# Node by node: stop the unit, put this REV's staged unit/drop-in in place (it names this REV's launch
+# script), start it on its EXISTING appdir, and gate it before the next node. It never moves an appdir
+# aside and never calls start_node (which does, for a regenesis). Its state is its OWN —
+# $STATE_DIR/upgrade-$REV.log and $STATE_DIR/upgrade-$REV/<unit>.{dropin,unit}.before (the file each node
+# had before) — and never switch-$REV.log, which is what `rollback` (the REGENESIS rollback) reads.
+# An upgrade is undone by `upgrade-rollback` with the same REV. NEVER by `rollback` (PLAN.md §15).
+#
+# Before anything on this host is stopped, for every node (read-only):
+#  * this REV's launch script passes --check and passes the same ARGS block as the script the node runs
+#    now (a node-only hotfix changes BIN and EXPECT_SHA; UPGRADE_ARGS_CHANGE_OK=1 accepts a difference);
+#  * the current unit / drop-in is the kit's (its header) and its ExecStart is a kit launch script that
+#    still exists (upgrade-rollback puts that file back, so it must be runnable);
+#  * the RUNNING node answers EXPECT_FP and holds EXPECT_GENESIS — this release is for the chain on this
+#    appdir — and is synced with ≥ 1 peer (UPGRADE_UNHEALTHY_OK=1 lets a stopped or unsynced node through;
+#    it then gets the regression checks only);
+#  * every UPGRADE_REQUIRE_UP host:port (the other hosts' nodes, from the host script) takes a TCP
+#    connection — asked again before each node stops. One host at a time (PLAN.md §15).
+# After each restart, in order (a failure stops the rollout; the nodes after it keep their old release):
+#  * wait_fingerprint (a wrong fingerprint is stopped: not this chain's params), and the unit's main
+#    process is $REL/bin/kaspad (not some other drop-in's ExecStart);
+#  * the RPC answers EXPECT_FP and EXPECT_GENESIS (and the kit's chain facts, if the running node passed
+#    them) — a node that no longer holds EXPECT_GENESIS is stopped;
+#  * the database survived: the sentinel put in its datadir before the stop is still there, the journal
+#    shows no database deletion, and virtualDaaScore ≥ the pre-stop value. kaspad's `--yes` answers its
+#    own "delete the database?" (genesis not in the DB, another DB version) and prints nothing when it
+#    does — only these checks see it;
+#  * wait_duties (warns);
+#  * synced, ≥ 1 peer and virtualDaaScore > the pre-stop value — it accepted a NEW block from the
+#    network — within UPGRADE_SYNC_TIMEOUT s (600).
+# Those after-restart failures leave a node that holds this chain RUNNING (only a wrong fingerprint or
+# genesis is stopped). Re-running `upgrade` does not restart a node that already runs this REV on this
+# chain; it waits for it to be synced and goes on.
+# DRY_RUN=1 runs every read-only check above for real and prints each state-changing step instead of
+# running it (no systemctl stop/start/daemon-reload, no install/cp/touch/rm, no state written).
+DRY_RUN=${DRY_RUN:-0}
+UPGRADE_SYNC_TIMEOUT=${UPGRADE_SYNC_TIMEOUT:-600}
+run() { # a state-changing step of upgrade / upgrade-rollback
+    if [ "$DRY_RUN" = 1 ]; then say "  DRY-RUN: $*"; return 0; fi
+    "$@"
+}
+upgrade_log() {
+    if [ "$DRY_RUN" = 1 ]; then say "  DRY-RUN: log to upgrade-$REV.log: $*"; return 0; fi
+    mkdir -p "$STATE_DIR"; echo "$* at=$(date -u +%FT%TZ)" >> "$STATE_DIR/upgrade-$REV.log"
+}
+upgrade_saved_path()  { echo "$STATE_DIR/upgrade-$REV/$N_UNIT.$([ "$N_MODE" = dropin ] && echo dropin || echo unit).before"; }
+upgrade_cur_path()    { if [ "$N_MODE" = dropin ]; then unit_dropin_path; else unit_file_path; fi; }
+upgrade_staged_path() { if [ "$N_MODE" = dropin ]; then echo "$REL/units/$N_UNIT.zz-t12-regenesis.conf"; else echo "$REL/units/$N_UNIT.service"; fi; }
+upgrade_db_dir()      { echo "$N_APPDIR/misaka-testnet-12/datadir"; }   # kaspad: <appdir>/<network prefixed>/datadir
+unit_launch_of()      { sed -n 's/^ExecStart=\(..*\)$/\1/p' "$1" | tail -1; }   # the last non-empty ExecStart=
+launch_args_block()   { sed -n '/^ARGS=($/,/^)$/p' "$1"; }
+main_exe_of() { # unit — the binary its main process runs
+    local pid; pid=$(systemctl show -p MainPID --value "$1" 2>/dev/null || true)
+    [ -n "$pid" ] && [ "$pid" != 0 ] && readlink "/proc/$pid/exe" 2>/dev/null || true
+}
+
+# node_state [t12check args…] — the node on $N_JSON as one line (t12check --state-line):
+#   STATE fp=OK|BAD genesis=OK|BAD facts=OK|BAD|- synced=… peers=… daa=… blocks=… ready=…   or   STATE unreachable
+node_state() {
+    local st
+    st=$(python3 "$KIT_DIR/t12check.py" --port "$N_JSON" --timeout 10 --state-line "$@" 2>/dev/null | grep '^STATE ' | tail -1 || true)
+    echo "${st:-STATE unreachable}"
+}
+st_get() { sed -n "s/.* $2=\([^ ]*\).*/\1/p" <<<" $1"; }   # <STATE line> <key>
+
+tcp_open() { # host:port — a TCP connect within 5 s; nothing is sent
+    timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "${1%:*}" "${1##*:}" 2>/dev/null
+}
+require_other_hosts_up() { # $1 = when
+    local hp down=""
+    for hp in ${UPGRADE_REQUIRE_UP[@]+"${UPGRADE_REQUIRE_UP[@]}"}; do
+        if ! tcp_open "$hp"; then down+=" $hp"; fi
+    done
+    if [ -n "$down" ]; then
+        die "$1: the other hosts' nodes at$down do not take a connection — is another host's upgrade (or a restart) running? Upgrade ONE host at a time, each only after the previous host's \`check\` shows its nodes synced and daa advancing (PLAN.md §15): ibm b0 and .113 b6 are the only heartbeat miners, b0 the only 8k producer, and the 8k class keeps 7 of 8 seats ready with a margin of one"
+    fi
+    return 0
+}
+
+# upgrade_baseline — read the RUNNING node before it is stopped. Sets N_PRE_STATE, N_PRE_DAA ('' = none),
+# N_PRE_HEALTHY (1 = synced with a peer: the after-restart gate asks for synced + a new block), N_GATE_FACTS.
+# Dies (nothing stopped) when the running node is not on this release's chain.
+upgrade_baseline() {
+    local s p i
+    N_PRE_STATE="STATE unreachable"; N_PRE_DAA=""; N_PRE_HEALTHY=0; N_GATE_FACTS=1
+    t12check_expect
+    if systemctl is-active --quiet "$N_UNIT"; then
+        for i in 1 2 3 4 5; do   # '?' = a call got no answer in time (t12check --state-line): ask again
+            N_PRE_STATE=$(node_state "${EXPECT_ARGS[@]}")
+            case "$N_PRE_STATE" in *"fp=?"*|*"genesis=?"*|*"facts=?"*|*"synced=?"*|*"daa=?"*|"STATE unreachable") sleep 3 ;; *) break ;; esac
+        done
+    fi
+    if [ "$N_PRE_STATE" = "STATE unreachable" ]; then
+        [ "${UPGRADE_UNHEALTHY_OK:-0}" = 1 ] || die "b$N_ID ($N_UNIT, json 127.0.0.1:$N_JSON) is not running or does not answer — upgrade reads the running node's chain before it stops it. Start it on its current release first, or UPGRADE_UNHEALTHY_OK=1 (no baseline: fingerprint, genesis, the database sentinel and the journal are still gated)"
+        warn "b$N_ID has no running baseline (UPGRADE_UNHEALTHY_OK=1)"
+        return 0
+    fi
+    case "$(st_get "$N_PRE_STATE" fp) $(st_get "$N_PRE_STATE" genesis)" in *"?"*)
+        die "b$N_ID: the running node does not answer its fingerprint / genesis in time (${N_PRE_STATE#STATE }) — nothing was stopped; retry when it answers" ;; esac
+    [ "$(st_get "$N_PRE_STATE" fp)" = OK ] || die "b$N_ID: the RUNNING node's fingerprint is not EXPECT_FP ${EXPECT_FP:0:16}… (${N_PRE_STATE#STATE }) — this release's fleet.env is not for the chain it runs; nothing was stopped"
+    [ "$(st_get "$N_PRE_STATE" genesis)" = OK ] || die "b$N_ID: the RUNNING node does not hold EXPECT_GENESIS ${EXPECT_GENESIS:0:16}… (${N_PRE_STATE#STATE }) — this release is for another chain; nothing was stopped"
+    if [ "$(st_get "$N_PRE_STATE" facts)" = "?" ]; then
+        N_GATE_FACTS=0
+        warn "b$N_ID: the running node did not answer getPalwPanelSeats / getPalwModelRegistry in time — the kit's chain facts are dropped from b$N_ID's after-restart gate (fingerprint and genesis stay)"
+    elif [ "$(st_get "$N_PRE_STATE" facts)" != OK ]; then
+        N_GATE_FACTS=0
+        warn "b$N_ID: the running node already fails the kit's chain-fact copies (the genesis bonds on PREMINE_TXID:0..7 / CLASS_8K / the 2M prefix — a bond retired or was removed, a class moved: chain state, not the binary). That part is dropped from b$N_ID's after-restart gate:"
+        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" 2>&1 | grep -E 'genesis bonds|class |RESULT' | sed 's/^/    /' >&2 || true
+    fi
+    N_PRE_DAA=$(st_get "$N_PRE_STATE" daa); [[ "$N_PRE_DAA" =~ ^[0-9]+$ ]] || N_PRE_DAA=""
+    s=$(st_get "$N_PRE_STATE" synced); p=$(st_get "$N_PRE_STATE" peers)
+    if [ "$s" = true ] && [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ -n "$N_PRE_DAA" ]; then
+        N_PRE_HEALTHY=1
+    else
+        [ "${UPGRADE_UNHEALTHY_OK:-0}" = 1 ] || die "b$N_ID is not synced with a peer now (${N_PRE_STATE#STATE }) — the after-restart gate (synced, a peer, a new block) needs a healthy node to compare with. Upgrade a healthy fleet, or UPGRADE_UNHEALTHY_OK=1 (b$N_ID then gets the regression checks only)"
+        warn "b$N_ID is not synced with a peer (UPGRADE_UNHEALTHY_OK=1): after its restart only fingerprint, genesis, the database and daa ≥ ${N_PRE_DAA:-?} are gated"
+    fi
+    return 0
+}
+
+upgrade_preflight_node() { # parsed node — read-only; dies before anything on this host is stopped
+    local cur staged old saved envs eff
+    cur=$(upgrade_cur_path); staged=$(upgrade_staged_path); saved=$(upgrade_saved_path)
+    "$N_LAUNCH" --check || die "b$N_ID: this REV's launch check failed — nothing was upgraded"
+    [ -f "$staged" ] || die "b$N_ID: staged $staged missing — run \`stage\` first"
+    [ -d "$(upgrade_db_dir)" ] || die "b$N_ID: $(upgrade_db_dir) does not exist — upgrade keeps a RUNNING chain's data (a new chain is \`switch\`)"
+    [ -f "$cur" ] || die "b$N_ID: $cur does not exist — this node was not put in place by the kit's switch; nothing was upgraded"
+    if [ "$N_MODE" = dropin ]; then
+        grep -q '^# deploy-t12 drop-in' "$cur" || die "b$N_ID: $cur is not the kit's drop-in — nothing was upgraded"
+    else
+        grep -q '^# deploy-t12 unit' "$cur" || die "b$N_ID: $cur exists and is not the kit's unit — nothing was upgraded"
+    fi
+    old=$(unit_launch_of "$cur")
+    case "$old" in
+        "$REL_ROOT"/*/launch/b"$N_ID".sh) ;;
+        *) die "b$N_ID: $cur runs '${old:-<no ExecStart>}', not a kit launch script $REL_ROOT/<rev>/launch/b$N_ID.sh — nothing was upgraded" ;;
+    esac
+    [ -x "$old" ] || die "b$N_ID: its current launch script $old is missing — upgrade-rollback could not run it again; nothing was upgraded"
+    if [ "$old" = "$N_LAUNCH" ]; then
+        [ -f "$saved" ] || die "b$N_ID: $cur already names this REV's launch script, but no pre-upgrade copy is saved ($saved) — upgrade-rollback could not restore it; fix by hand"
+    elif ! diff <(launch_args_block "$old") <(launch_args_block "$N_LAUNCH") >/dev/null; then
+        diff <(launch_args_block "$old") <(launch_args_block "$N_LAUNCH") | sed 's/^/    /' >&2 || true
+        [ "${UPGRADE_ARGS_CHANGE_OK:-0}" = 1 ] || die "b$N_ID: $N_LAUNCH passes other arguments than $old (diff above) — a binary upgrade changes BIN and EXPECT_SHA only. Re-stage from the fleet.env / node table the node runs, or UPGRADE_ARGS_CHANGE_OK=1 if the change is meant"
+        warn "b$N_ID: its arguments change (UPGRADE_ARGS_CHANGE_OK=1)"
+    fi
+    eff=$(systemctl show -p ExecStart --value "$N_UNIT" 2>/dev/null || true)
+    case "$eff" in *"path=$old "*) ;; *) warn "b$N_ID: systemd's ExecStart for $N_UNIT does not name $old (${eff:0:160}) — a drop-in sorting after the kit's may override it; the main-process check after the restart refuses a node that does not run $REL/bin/kaspad" ;; esac
+    envs=$(systemctl show -p Environment,EnvironmentFiles --value "$N_UNIT" 2>/dev/null | tr '\n' ' ')
+    case "$envs" in *[![:space:]]*) die "b$N_ID: $N_UNIT carries an environment (${envs:0:160}) that the kit's drop-in resets — a drop-in sorting after it sets it; remove it first" ;; esac
+    if [ "$old" = "$N_LAUNCH" ]; then
+        # a re-run: this node already names this REV. It is not restarted if it answers this chain (upgrade_node);
+        # here only its chain is asked, not its health (a previous run may have stopped at its sync gate)
+        t12check_expect
+        N_PRE_STATE=$(node_state "${EXPECT_ID_ARGS[@]}")
+        case "$N_PRE_STATE" in *"fp=BAD"*|*"genesis=BAD"*) die "b$N_ID runs $REV but not on EXPECT_FP / EXPECT_GENESIS (${N_PRE_STATE#STATE }) — nothing was changed; read \`check\`, undo with \`upgrade-rollback\`" ;; esac
+        say "  b$N_ID ($N_UNIT) already on $REV: ${N_PRE_STATE#STATE }  exe $(main_exe_of "$N_UNIT")"
+        return 0
+    fi
+    upgrade_baseline
+    say "  b$N_ID ($N_UNIT) now: ${N_PRE_STATE#STATE }  launch $old  exe $(main_exe_of "$N_UNIT")"
+}
+
+upgrade_stop_unit() { # unit
+    local res
+    if [ "$DRY_RUN" = 1 ]; then say "  DRY-RUN: systemctl stop $1   (SIGINT, up to 180 s)"; return 0; fi
+    stop_unit "$1"
+    res=$(systemctl show -p Result --value "$1" 2>/dev/null || true)
+    upgrade_log "STOPPED $1 result=${res:-?}"
+}
+
+upgrade_install_unit() { # parsed node — this REV's staged file over the current one (logged to upgrade-$REV.log only)
+    run install -m 0644 "$(upgrade_staged_path)" "$(upgrade_cur_path)"
+    upgrade_log "INSTALLED $N_UNIT $(upgrade_cur_path) from $(upgrade_staged_path)"
+}
+
+# upgrade_wait_synced <pre-stop daa or ''> <die|warn> — synced, ≥ 1 peer and (with a daa) a NEW block
+upgrade_wait_synced() {
+    local pre=$1 mode=$2 deadline st s p d msg
+    deadline=$(( $(date +%s) + UPGRADE_SYNC_TIMEOUT ))
+    say "  b$N_ID: waiting ≤ ${UPGRADE_SYNC_TIMEOUT}s for synced, ≥ 1 peer${pre:+ and a new block from the network (virtualDaaScore > $pre)}"
+    while :; do
+        st=$(node_state "${EXPECT_ID_ARGS[@]}")
+        s=$(st_get "$st" synced); p=$(st_get "$st" peers); d=$(st_get "$st" daa)
+        if [ "$s" = true ] && [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ]; then
+            if [ -z "$pre" ] || { [[ "$d" =~ ^[0-9]+$ ]] && [ "$d" -gt "$pre" ]; }; then say "  b$N_ID synced: ${st#STATE }"; return 0; fi
+        fi
+        if ! systemctl is-active --quiet "$N_UNIT"; then
+            journalctl -u "$N_UNIT" -n 30 --no-pager -o cat >&2 || true
+            msg="b$N_ID exited while it was syncing"; break
+        fi
+        if [ "$(date +%s)" -ge "$deadline" ]; then msg="b$N_ID is not synced with a peer${pre:+ and past daa $pre} after ${UPGRADE_SYNC_TIMEOUT}s (${st#STATE })"; break; fi
+        sleep 10
+    done
+    python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ID_ARGS[@]}" >&2 || true
+    if [ "$mode" = die ]; then die "$msg — the nodes after it were NOT upgraded. Watch \`check\`; once it is synced, re-run \`upgrade\` (a node already on $REV is not restarted), or undo with \`upgrade-rollback\`"; fi
+    warn "$msg"
+    return 1
+}
+
+upgrade_gate_node() { # parsed node; $1 = start epoch, $2 = sentinel — dies on failure
+    local since=$1 sentinel=$2 st="STATE unreachable" i exe daa blocks pre_blocks jl wiped=""
+    wait_fingerprint "$N_UNIT" "$since" || die "b$N_ID did not come up on EXPECT_FP (it was stopped) — the nodes after it were NOT upgraded; \`upgrade-rollback\` restores b$N_ID"
+    exe=$(main_exe_of "$N_UNIT")
+    [ "$exe" = "$REL/bin/kaspad" ] || die "b$N_ID's main process runs '${exe:-?}', not $REL/bin/kaspad — it was NOT upgraded (another drop-in's ExecStart?); left running; later nodes NOT upgraded"
+    t12check_expect
+    for i in $(seq 1 100); do   # ~300 s: a node with a day of chain opens its databases before the RPC answers
+        if [ "$N_GATE_FACTS" = 1 ]; then st=$(node_state "${EXPECT_ARGS[@]}"); else st=$(node_state "${EXPECT_ID_ARGS[@]}"); fi
+        if [ "$(st_get "$st" fp)" = OK ] && [ "$(st_get "$st" genesis)" = OK ]; then
+            if [ "$N_GATE_FACTS" = 0 ] || [ "$(st_get "$st" facts)" = OK ]; then break; fi
+        fi
+        # a fingerprint is a constant of the binary: BAD is final. A genesis answer can be an early error, so it
+        # is asked again until the end of the wait (switch's wait_genesis does the same for 60 s)
+        if [ "$(st_get "$st" fp)" = BAD ]; then break; fi
+        systemctl is-active --quiet "$N_UNIT" || break
+        sleep 3
+    done
+    if [ "$(st_get "$st" genesis)" = BAD ] || [ "$(st_get "$st" fp)" = BAD ]; then
+        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ID_ARGS[@]}" >&2 || true
+        warn "b$N_ID answers another fingerprint/genesis after the restart — stopping it"
+        systemctl stop "$N_UNIT" || true
+        die "b$N_ID is not on this chain after the restart (stopped) — the nodes after it were NOT upgraded; \`upgrade-rollback\` restores b$N_ID"
+    fi
+    if [ "$(st_get "$st" fp)" != OK ] || [ "$(st_get "$st" genesis)" != OK ] || { [ "$N_GATE_FACTS" = 1 ] && [ "$(st_get "$st" facts)" != OK ]; }; then
+        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" >&2 || true
+        die "b$N_ID does not answer EXPECT_FP / EXPECT_GENESIS$([ "$N_GATE_FACTS" = 1 ] && echo ' / the chain facts it answered before the stop') within ~300 s (${st#STATE }) — left running; the nodes after it were NOT upgraded. Read \`check\`; undo with \`upgrade-rollback\`"
+    fi
+    say "  b$N_ID answers: ${st#STATE }"
+    [ -e "$sentinel" ] || wiped="$sentinel is gone"
+    jl=$(journalctl -u "$N_UNIT" --since "@$since" --no-pager -o cat 2>/dev/null | grep -E 'Deleting databases|Genesis not found|different Kaspad \*DB\* version|this build requires version' | head -3 | tr '\n' ' ' || true)
+    [ -z "$jl" ] || wiped+="${wiped:+; }journal: ${jl:0:300}"
+    [ -z "$wiped" ] || die "b$N_ID DELETED its database on start ($wiped) — kaspad's --yes answered its own question. Left running (it re-syncs this chain from its peers; the round-signature record sits outside the datadir); the nodes after it were NOT upgraded — find out why (DB version? genesis?) before going on"
+    daa=$(st_get "$st" daa); blocks=$(st_get "$st" blocks); pre_blocks=$(st_get "$N_PRE_STATE" blocks)
+    for i in 1 2 3 4 5; do   # getBlockDagInfo may miss --timeout once; a missing daa is not a regression
+        if [[ "$daa" =~ ^[0-9]+$ ]]; then break; fi
+        sleep 3; st=$(node_state "${EXPECT_ID_ARGS[@]}"); daa=$(st_get "$st" daa); blocks=$(st_get "$st" blocks)
+    done
+    [[ "$daa" =~ ^[0-9]+$ ]] || die "b$N_ID does not answer its virtualDaaScore (${st#STATE }) — left running; the nodes after it were NOT upgraded"
+    if [ -n "$N_PRE_DAA" ]; then
+        if [ "$daa" -lt "$N_PRE_DAA" ]; then
+            die "b$N_ID came back at virtualDaaScore ${daa:-?} < $N_PRE_DAA before the stop — its chain state went BACKWARDS (database replaced?). Left running; the nodes after it were NOT upgraded"
+        fi
+        # blockCount = virtual daa − retention-root daa: it can fall when the retention root moves, so it only warns
+        if [[ "$blocks" =~ ^[0-9]+$ ]] && [[ "$pre_blocks" =~ ^[0-9]+$ ]] && [ "$blocks" -lt "$pre_blocks" ]; then
+            warn "b$N_ID blockCount $blocks < $pre_blocks before the stop (daa did not fall: the retention root moved?)"
+        fi
+    fi
+    wait_duties "$N_UNIT" "$since"
+    if [ "$N_PRE_HEALTHY" = 1 ]; then
+        upgrade_wait_synced "$N_PRE_DAA" die
+    else
+        warn "b$N_ID had no healthy baseline — NOT gated on synced / a new block: \`check\` it before the next node or host"
+    fi
+}
+
+upgrade_node() { # parsed node; $1 = seconds to wait after it
+    local gap=$1 cur saved old st sentinel since rd
+    cur=$(upgrade_cur_path); saved=$(upgrade_saved_path); old=$(unit_launch_of "$cur")
+    t12check_expect
+    if [ "$old" = "$N_LAUNCH" ] && cmp -s "$(upgrade_staged_path)" "$cur" && systemctl is-active --quiet "$N_UNIT" \
+       && [ "$(main_exe_of "$N_UNIT")" = "$REL/bin/kaspad" ]; then
+        st=$(node_state "${EXPECT_ID_ARGS[@]}")
+        if [ "$(st_get "$st" fp)" = OK ] && [ "$(st_get "$st" genesis)" = OK ]; then
+            say "b$N_ID ($N_UNIT): already runs $REV on this chain — not restarted"
+            if [ "$DRY_RUN" != 1 ]; then upgrade_wait_synced "" die; rm -f "$(upgrade_db_dir)/.deploy-t12-upgrade-$REV"; fi
+            return 0
+        fi
+    fi
+    require_other_hosts_up "before stopping b$N_ID"
+    upgrade_baseline
+    rd=$(st_get "$N_PRE_STATE" ready)
+    if [ "$N_SEAT8K" = 1 ] && [[ "$rd" =~ ^([0-9]+)/([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ]; then
+        warn "8k class ready seats now $rd: while b$N_ID restarts the class is below its requirement (margin of one — PLAN.md §1)"
+    fi
+    say "b$N_ID ($N_UNIT): upgrading in place to $REV — appdir $N_APPDIR kept; before the stop: ${N_PRE_STATE#STATE }"
+    if [ ! -f "$saved" ]; then run cp -p "$cur" "$saved"; fi
+    sentinel="$(upgrade_db_dir)/.deploy-t12-upgrade-$REV"
+    run touch "$sentinel"
+    upgrade_log "PRIOR $N_UNIT launch=$old daa=${N_PRE_DAA:-?} healthy=$N_PRE_HEALTHY facts_gated=$N_GATE_FACTS"
+    upgrade_stop_unit "$N_UNIT"
+    upgrade_install_unit
+    run systemctl daemon-reload
+    run systemctl reset-failed "$N_UNIT" 2>/dev/null || true
+    since=$(date +%s)
+    run systemctl start "$N_UNIT"
+    if [ "$DRY_RUN" = 1 ]; then
+        say "  DRY-RUN: then gate b$N_ID — fingerprint, main process $REL/bin/kaspad, RPC fp/genesis$([ "$N_GATE_FACTS" = 1 ] && echo '/facts'), no database deletion, daa ≥ ${N_PRE_DAA:-?}, duties$([ "$N_PRE_HEALTHY" = 1 ] && echo ", synced + peer + daa > $N_PRE_DAA within ${UPGRADE_SYNC_TIMEOUT}s"); then ${gap}s"
+        return 0
+    fi
+    upgrade_gate_node "$since" "$sentinel"
+    rm -f "$sentinel"
+    upgrade_log "UPGRADED $N_UNIT rev=$REV"
+    sleep "$gap"
+    systemctl is-active --quiet "$N_UNIT" || { journalctl -u "$N_UNIT" -n 30 --no-pager -o cat >&2; die "b$N_ID exited within ${gap}s — the nodes after it were NOT upgraded; \`upgrade-rollback\`"; }
+}
+
+upgrade_host() { # $1 = seconds between nodes
+    local gap=$1 spec drills
+    [ -d "$REL/launch" ] || die "$REL/launch missing — run \`stage\` first"
+    if [ "$DRY_RUN" = 1 ]; then say "DRY_RUN=1: every read-only check runs for real; nothing is stopped, installed, started or written"; fi
+    say "upgrade $(hostname) to $REV — pre-flight of every node (nothing stops until all pass)"
+    for spec in "${NODES[@]}"; do parse_node "$spec"; upgrade_preflight_node; done
+    drills=$(drill_processes_here)
+    [ -z "$drills" ] || { echo "$drills" >&2; die "a testnet-12 DRILL runs on this host — stop it first"; }
+    require_other_hosts_up "pre-flight"
+    run mkdir -p "$STATE_DIR/upgrade-$REV"
+    for spec in "${NODES[@]}"; do parse_node "$spec"; upgrade_node "$gap"; done
+    if [ "$DRY_RUN" = 1 ]; then say "DRY-RUN done — nothing on $(hostname) was changed"; return 0; fi
+    say "upgrade done on $(hostname); running checks"
+    check_nodes || warn "a check failed — read the lines above"
+    say "next host only now (PLAN.md §15): one host at a time, and only after this host's nodes are synced and daa advances"
+}
+
+upgrade_rollback_host() { # $1 = seconds between nodes — puts back the unit/drop-in each node had before `upgrade`
+    local gap=$1 spec saved cur old restored=0 since got i
+    [ -d "$STATE_DIR/upgrade-$REV" ] || die "no $STATE_DIR/upgrade-$REV — nothing was upgraded with REV=$REV here (REV must be the UPGRADE's rev, the one fleet.env named when \`upgrade\` ran)"
+    if [ "$DRY_RUN" = 1 ]; then say "DRY_RUN=1: nothing is stopped, installed, started or written"; fi
+    for spec in "${NODES[@]}"; do   # read-only: every file we would put back runs
+        parse_node "$spec"; saved=$(upgrade_saved_path)
+        [ -f "$saved" ] || continue
+        old=$(unit_launch_of "$saved")
+        [ -x "$old" ] || die "b$N_ID: its pre-upgrade unit ($saved) runs $old, which is gone — nothing was rolled back"
+    done
+    for spec in "${NODES[@]}"; do
+        parse_node "$spec"
+        saved=$(upgrade_saved_path); cur=$(upgrade_cur_path); old=$(unit_launch_of "$saved" 2>/dev/null || true)
+        if [ ! -f "$saved" ]; then say "b$N_ID: not upgraded with REV=$REV here — left alone"; continue; fi
+        if cmp -s "$saved" "$cur" && systemctl is-active --quiet "$N_UNIT"; then say "b$N_ID: already on its pre-upgrade unit and running — left alone"; continue; fi
+        say "b$N_ID ($N_UNIT): back to its pre-upgrade unit ($old), appdir untouched"
+        upgrade_stop_unit "$N_UNIT"
+        run install -m 0644 "$saved" "$cur"
+        run systemctl daemon-reload
+        run systemctl reset-failed "$N_UNIT" 2>/dev/null || true
+        since=$(date +%s)
+        run systemctl start "$N_UNIT"
+        upgrade_log "ROLLEDBACK $N_UNIT to $old"
+        restored=$((restored + 1))
+        [ "$DRY_RUN" = 1 ] && continue
+        # `systemctl start` returns once the process forks: ask the node itself (warns, never stops it)
+        t12check_expect
+        got=""
+        for i in $(seq 1 60); do
+            got=$(journalctl -u "$N_UNIT" --since "@$since" --no-pager 2>/dev/null | grep -oE 'Consensus params fingerprint: [0-9a-f]{64}' | tail -1 | awk '{print $4}' || true)
+            [ -n "$got" ] && break
+            systemctl is-active --quiet "$N_UNIT" || break
+            sleep 3
+        done
+        if [ "$got" != "$EXPECT_FP" ] || ! systemctl is-active --quiet "$N_UNIT"; then
+            warn "b$N_ID did not come back on EXPECT_FP after the rollback (fingerprint ${got:-<none>}, $(systemctl show -p ActiveState,Result --value "$N_UNIT" | tr '\n' ' ')) — journal:"
+            journalctl -u "$N_UNIT" --since "@$since" -n 30 --no-pager -o cat >&2 || true
+        else
+            say "  b$N_ID fingerprint OK, main process $(main_exe_of "$N_UNIT")"
+            upgrade_wait_synced "" warn || true
+        fi
+        sleep "$gap"
+    done
+    if [ "$DRY_RUN" = 1 ]; then say "DRY-RUN done — nothing on $(hostname) was changed"; return 0; fi
+    say "upgrade-rollback done ($restored node(s) put back); chain data was never moved"
+    check_nodes || warn "a check failed — read the lines above"
+}
+
+# ---------------------------------------------------------------------------------------------
+# dispatcher: host scripts define NODES, OLD_APPDIRS, RESERVE_MIB, BINARIES, HOST_NAME_EXPECTED,
+# START_GAP, UPGRADE_REQUIRE_UP and the hooks host_preflight / host_guard_switch / host_cmd
 # ---------------------------------------------------------------------------------------------
 main_dispatch() {
     [ "$(id -u)" = 0 ] || die "run as root"
     [ "$(hostname)" = "$HOST_NAME_EXPECTED" ] || die "this is $(hostname), not $HOST_NAME_EXPECTED — wrong host for $0"
     local cmd=${1:-help}
+    if [ "$DRY_RUN" = 1 ]; then
+        case "$cmd" in
+            upgrade|upgrade-rollback|preflight|check|seeder-status|help|-h|--help) ;;
+            *) die "DRY_RUN=1 is implemented for upgrade and upgrade-rollback only — '$cmd' would run for real" ;;
+        esac
+    fi
     case "$cmd" in
         preflight) REL="$REL_ROOT/${REV}"; preflight_common "$RESERVE_MIB"; host_preflight ;;
         stage)     require_release; host_preflight
@@ -686,6 +1092,8 @@ main_dispatch() {
                    say "stage done — nothing running was touched" ;;
         switch)    require_release; host_guard_switch; switch_host "$START_GAP" ;;
         check)     require_release; check_nodes; seeder_status ;;
+        upgrade)   require_release; host_preflight; upgrade_host "$START_GAP" ;;
+        upgrade-rollback) require_release; upgrade_rollback_host "$START_GAP" ;;
         rollback)  require_release; rollback_host ;;
         purge-old) require_release; purge_old ;;
         seeder-status)   seeder_status ;;
