@@ -28,7 +28,7 @@ use std::{fmt, str::FromStr, sync::Arc};
 use kaspa_hashes::Hash64;
 use serde::{Deserialize, Serialize};
 
-use crate::header::Header;
+use crate::{api::ConsensusApi, header::Header};
 
 /// A block of the live chain: "the selected chain at `daa_score` is `block_hash`".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -43,8 +43,22 @@ pub struct IbdCheckpoint {
 pub const IBD_CHECKPOINT_PLACEHOLDER: &str = "__FILL_ME__";
 
 /// **OPERATOR FILL — testnet-12 (genesis a27f8f44…).** `"<daa-score>:<128-hex block hash>"` pairs
-/// of the LIVE public chain, read from a synced fleet node (`getBlock` / the explorer) at the
-/// release build. Replace the `__FILL_ME__` entry; add as many lines as wanted, any order.
+/// of the LIVE public chain, read from a synced fleet node at the release build. Replace the
+/// `__FILL_ME__` entry; add as many lines as wanted, any order.
+///
+/// **Every entry must be a SELECTED-CHAIN block, and final.** On MISAKA many blocks share one DAA
+/// score (the attempt, receipt and round lanes do not advance it), so "the block at DAA X" read off
+/// the explorer is easily a merged block or a round block — and round blocks are never selected
+/// parents. Such an entry is on NO honest chain, and every node enforcing it refuses (and, when
+/// fresh, bans) every honest peer. So, for each entry:
+/// 1. take it from the sink's selected chain (`getBlock` → `verboseData.isChainBlock == true`, or a
+///    hash listed by `getVirtualChainFromBlock`), with its own header's `daaScore`;
+/// 2. at least the finality depth (`params.finality_depth`, 600 blue score on t12) below the sink,
+///    so no reorg can take it out;
+/// 3. verify it on EVERY synced fleet node before the release build: kaspad's startup and post-IBD
+///    self-check logs an ERROR naming any checkpoint the node's own chain covers but does not pass
+///    through ([`checkpoints_contradicted_by_own_chain`]), and a node whose own chain contradicts an
+///    entry refuses peers on that chain without banning them.
 ///
 /// Keep every entry above the network's pruning point minus the proof window: a checkpoint the
 /// honest pruning point has passed by more than the pruning proof's level-0 window can no longer
@@ -196,6 +210,40 @@ pub fn unreached_checkpoint(checkpoints: &[IbdCheckpoint], local_daa_score: u64,
         .min_by_key(|cp| cp.daa_score)
 }
 
+/// **The self-check — a wrong entry must be caught on the fleet, not by fresh nodes.** The
+/// checkpoints a node's OWN selected chain covers (from its pruning point at `floor_daa_score` to
+/// its sink at `sink_daa_score`) but does not pass through (`on_chain` false). On a synced node a
+/// non-empty answer means the entry is wrong — a merged or round block, a block reorged out, a typo
+/// — or the node itself is on the wrong chain. Either way a peer on the same chain as this node is
+/// not misbehaving by this node's own evidence, so it is refused without a ban, and kaspad logs an
+/// ERROR at startup and after every IBD.
+pub fn checkpoints_contradicted_by_own_chain(
+    checkpoints: &[IbdCheckpoint],
+    floor_daa_score: u64,
+    sink_daa_score: u64,
+    mut on_chain: impl FnMut(&IbdCheckpoint) -> bool,
+) -> Vec<IbdCheckpoint> {
+    covered_checkpoints(checkpoints, floor_daa_score, sink_daa_score).into_iter().filter(|cp| !on_chain(cp)).collect()
+}
+
+/// [`checkpoints_contradicted_by_own_chain`] read off a consensus: its pruning point is the floor,
+/// its sink the top, and a checkpoint is passed through when its header sits at its score and it is
+/// a chain ancestor of the sink. Empty when there are no checkpoints or the headers cannot be read
+/// (no evidence either way).
+pub fn own_chain_contradictions(checkpoints: &[IbdCheckpoint], consensus: &dyn ConsensusApi) -> Vec<IbdCheckpoint> {
+    if checkpoints.is_empty() {
+        return Vec::new();
+    }
+    let sink = consensus.get_sink();
+    let (Ok(sink_header), Ok(floor_header)) = (consensus.get_header(sink), consensus.get_header(consensus.pruning_point())) else {
+        return Vec::new();
+    };
+    checkpoints_contradicted_by_own_chain(checkpoints, floor_header.daa_score, sink_header.daa_score, |cp| {
+        consensus.get_header(cp.block_hash).is_ok_and(|h| h.daa_score == cp.daa_score)
+            && consensus.is_chain_ancestor_of(cp.block_hash, sink).unwrap_or(false)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +366,23 @@ mod tests {
         // A node already past every checkpoint is never refused on reach.
         assert_eq!(unreached_checkpoint(&cps, 500, 470), None);
         assert_eq!(unreached_checkpoint(&[], 0, 0), None);
+    }
+
+    #[test]
+    fn a_synced_node_names_the_checkpoints_its_own_chain_contradicts() {
+        let honest = chain(10, 500);
+        let good = IbdCheckpoint { daa_score: 300, block_hash: honest[300].1 };
+        // A merged / round block sharing DAA 350 with the chain block: on no honest chain.
+        let off_chain = IbdCheckpoint { daa_score: 350, block_hash: h(250) };
+        // The chain block at 400, but written with the wrong DAA score.
+        let misplaced = IbdCheckpoint { daa_score: 401, block_hash: honest[400].1 };
+        let above = IbdCheckpoint { daa_score: 900, block_hash: h(251) };
+        let cps = [good, off_chain, misplaced, above];
+        assert_eq!(checkpoints_contradicted_by_own_chain(&cps, 0, 499, on(&honest)), vec![off_chain, misplaced]);
+        // Beyond the node's sink, or below its pruning point, it has no evidence either way.
+        assert!(checkpoints_contradicted_by_own_chain(&cps, 0, 299, on(&honest)).is_empty());
+        assert!(checkpoints_contradicted_by_own_chain(&cps, 402, 499, on(&honest)).is_empty());
+        // A fresh node (sink = genesis) contradicts nothing, so it still bans a peer that skips a checkpoint.
+        assert!(checkpoints_contradicted_by_own_chain(&cps, 0, 0, on(&honest)).is_empty());
     }
 }

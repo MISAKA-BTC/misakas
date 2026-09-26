@@ -20,14 +20,14 @@ use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType,
     api::BlockValidationFuture,
     block::Block,
-    config::ibd_checkpoint::{self, IbdCheckpointViolation},
+    config::ibd_checkpoint::{self, IbdCheckpoint, IbdCheckpointViolation},
     header::Header,
     pruning::{PruningPointProof, PruningPointsList, PruningProofMetadata},
     trusted::TrustedBlock,
     tx::Transaction,
 };
 use kaspa_consensusmanager::{ConsensusProxy, StagingConsensus, spawn_blocking};
-use kaspa_core::{debug, info, time::unix_now, warn};
+use kaspa_core::{debug, error, info, time::unix_now, warn};
 use kaspa_muhash::MuHash;
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
@@ -324,6 +324,9 @@ impl IbdFlow {
                 match outcome {
                     Ok(_) => {
                         info!("IBD with peer {} completed successfully", self.router);
+                        // A wrong checkpoint is caught here on a synced node, not by fresh nodes
+                        // banning every honest peer (kaspad runs the same self-check at startup).
+                        self.report_checkpoints_contradicted_by_own_chain().await;
                         // An IBD moves this node's score the furthest at once — the explorer node went
                         // from DAA 0 to 3,158 in one — past the fence of every peer it kept on a
                         // fork-id warning at the start (2026-09-10).
@@ -2294,7 +2297,11 @@ impl IbdFlow {
     /// 2. A node that has not yet reached a checkpoint is not moved onto a chain that stops short of
     ///    it: a chain of free attempts can end just below the checkpoint's DAA score, cover nothing,
     ///    and still outweigh the honest chain. Not misbehaviour (an honest peer may simply be behind),
-    ///    so no ban — this peer is just not the one to sync from.
+    ///    so no ban — this peer is just not the one to sync from. `ibd()` fetches the bodies of BOTH
+    ///    the syncer sink's past and the relay block's past, so the rule reads the LOWER of the two
+    ///    tops: a relayed fork that branches off below a checkpoint and stays below its DAA score
+    ///    (attempt-lane blocks do not advance it) covers nothing, and must not ride in beside an
+    ///    honest syncer sink. Honest relay and handoff headers are recent tips, above every checkpoint.
     async fn check_synced_chain_against_checkpoints(
         &self,
         consensus: &ConsensusProxy,
@@ -2307,17 +2314,20 @@ impl IbdFlow {
         }
         let floor_daa_score = consensus.async_get_header(consensus.async_pruning_point().await).await?.daa_score;
         self.check_chain_checkpoints(consensus, syncer_sink, floor_daa_score, "synced header chain").await?;
+        let mut top_daa_score = consensus.async_get_header(syncer_sink).await?.daa_score;
         if relay_header.hash != syncer_sink && consensus.async_get_block_status(relay_header.hash).await.is_some() {
             self.check_chain_checkpoints(consensus, relay_header.hash, floor_daa_score, "relay block's header chain").await?;
+            // Its bodies are fetched too, so its top is one the reach rule must judge.
+            top_daa_score = top_daa_score.min(consensus.async_get_header(relay_header.hash).await?.daa_score);
         }
         // The ACTIVE consensus's sink, unguarded: the caller may hold a guarded session on it already.
         let local_daa_score = self.ctx.consensus().unguarded_session().async_get_sink_daa_score_timestamp().await.daa_score;
-        let top_daa_score = consensus.async_get_header(syncer_sink).await?.daa_score;
         if let Some(cp) = ibd_checkpoint::unreached_checkpoint(checkpoints, local_daa_score, top_daa_score) {
             return Err(ProtocolError::OtherOwned(format!(
-                "not syncing from {}: its chain ends at DAA {} below checkpoint {} that this node (sink DAA {}) has not reached \
-                 yet; a chain that stops short of a checkpoint cannot be told from a free-attempt fork",
-                self.router, top_daa_score, cp, local_daa_score
+                "not syncing from {}: the chain it offers (syncer sink {}, relay block {}) ends at DAA {} below checkpoint {} \
+                 that this node (sink DAA {}) has not reached yet; a chain that stops short of a checkpoint cannot be told \
+                 from a free-attempt fork",
+                self.router, syncer_sink, relay_header.hash, top_daa_score, cp, local_daa_score
             )));
         }
         Ok(())
@@ -2353,16 +2363,62 @@ impl IbdFlow {
 
     /// Ban the peer and build the refusal. The ban goes through the connection manager, which skips
     /// a permanent (`--connect` / `--addpeer`) peer — the operator named that one.
+    ///
+    /// **Unless this node's own chain contradicts the same checkpoint.** A wrong entry (a merged or
+    /// round block, a block reorged out, a typo) is on no honest chain, and a ban is persisted and
+    /// outlives the fix — so a node whose OWN selected chain covers the checkpoint without passing
+    /// through it has no evidence the peer misbehaved: it refuses the chain, logs an ERROR, and
+    /// bans nobody. A fresh node (sink = genesis) contradicts nothing and still bans.
     async fn refuse_checkpoint_violation(&self, what: &str, violation: IbdCheckpointViolation) -> ProtocolError {
+        if self.checkpoints_contradicted_by_own_chain().await.contains(&violation.checkpoint) {
+            error!(
+                "IBD: refusing the {} from peer {} WITHOUT banning it: {}. This node's OWN selected chain covers checkpoint {} \
+                 and does not pass through it either, so the checkpoint is wrong (a merged or round block, a reorged-out \
+                 block, a typo) or this node is on the wrong chain. Fix --checkpoint / PALW_T12_IBD_CHECKPOINTS.",
+                what, self.router, violation, violation.checkpoint
+            );
+            return ProtocolError::OtherOwned(format!(
+                "the {what} violates node-side IBD checkpoint {}, which this node's own chain contradicts too",
+                violation.checkpoint
+            ));
+        }
         warn!(
-            "IBD: refusing the {} from peer {}: {}. Banning the peer. (Node-side checkpoint: if the checkpoint itself is wrong, \
-             fix --checkpoint / PALW_T12_IBD_CHECKPOINTS.)",
+            "IBD: refusing the {} from peer {}: {}. Banning the peer's IP; the ban is persisted and survives a restart. \
+             (Node-side checkpoint: if the checkpoint itself is wrong, fix --checkpoint / PALW_T12_IBD_CHECKPOINTS, then \
+             lift the bans with the unban RPC — or, on a fresh node, restart from an empty datadir.)",
             what, self.router, violation
         );
         if let Some(connection_manager) = self.ctx.connection_manager() {
             connection_manager.ban(self.router.net_address().ip()).await;
         }
         ProtocolError::MisbehavingPeer(format!("the {what} violates a node-side IBD checkpoint: {violation}"))
+    }
+
+    /// The checkpoints the ACTIVE consensus's own selected chain covers but does not pass through
+    /// (`ibd_checkpoint::own_chain_contradictions`). Unguarded: the caller may hold a guarded
+    /// session on it already.
+    async fn checkpoints_contradicted_by_own_chain(&self) -> Vec<IbdCheckpoint> {
+        let checkpoints = self.ctx.config.ibd_checkpoints.clone();
+        if checkpoints.is_empty() {
+            return Vec::new();
+        }
+        self.ctx
+            .consensus()
+            .unguarded_session()
+            .spawn_blocking(move |c| ibd_checkpoint::own_chain_contradictions(&checkpoints, c))
+            .await
+    }
+
+    /// One ERROR per checkpoint this node's own chain contradicts.
+    async fn report_checkpoints_contradicted_by_own_chain(&self) {
+        for cp in self.checkpoints_contradicted_by_own_chain().await {
+            error!(
+                "IBD checkpoint {} is contradicted by this node's OWN selected chain (it covers DAA {} but does not pass \
+                 through that block there): the entry is wrong or this node is on the wrong chain. Peers on this chain \
+                 are refused but not banned; fix --checkpoint / PALW_T12_IBD_CHECKPOINTS.",
+                cp, cp.daa_score
+            );
+        }
     }
 
     async fn sync_new_utxo_set(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {

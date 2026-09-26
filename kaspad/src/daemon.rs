@@ -1187,6 +1187,23 @@ Do you confirm? (y/n)";
         cache_budget,
     ));
     let consensus_manager = Arc::new(ConsensusManager::new(consensus_factory));
+    // Node-side IBD checkpoints, the startup self-check: a checkpoint this node's OWN selected chain
+    // covers but does not pass through is a wrong entry (a merged or round block, a reorged-out block,
+    // a typo) or a node on the wrong chain. Caught here, on the synced fleet at the upgrade, before
+    // fresh nodes refuse and ban every honest peer over it. Logged, not fatal: a public node that
+    // refused to start would crash-loop the fleet over a node-policy list.
+    for cp in kaspa_consensus_core::config::ibd_checkpoint::own_chain_contradictions(
+        &config.ibd_checkpoints,
+        &*consensus_manager.consensus().unguarded_session_blocking(),
+    ) {
+        kaspa_core::error!(
+            "IBD checkpoint {} is contradicted by this node's OWN selected chain (it covers DAA {} but does not pass through \
+             that block there): the entry is wrong or this node is on the wrong chain. Peers on this chain are refused but \
+             not banned; fix --checkpoint / PALW_T12_IBD_CHECKPOINTS.",
+            cp,
+            cp.daa_score
+        );
+    }
     // ADR-0132: the node's per-class counters — the producer and the panel report into them, op 185
     // reads them.
     let palw_telemetry = Arc::new(crate::palw_economics::PalwNodeTelemetryV1::default());
