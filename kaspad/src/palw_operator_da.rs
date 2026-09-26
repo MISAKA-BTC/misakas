@@ -322,6 +322,47 @@ pub(crate) fn palw_deferred_audit_selects_v1(secret: &[u8; 32], claim: &Hash64, 
     draw < fraction_permille as u64
 }
 
+/// **One deferred auditor's filing slot**, in DAA, past the public judges' turns: long
+/// enough for a carrier to land and be read back (a DAA or two; the pre-t12 drill's slowest took ~3),
+/// so the next auditor finds the first one's session and backs off.
+pub(crate) const PALW_DEFERRED_AUDIT_STAGGER_DAA_V1: u64 = 6;
+
+/// **Whether this node may file its refutation of `claim` now, and by when it must land** (ADR-0160
+/// V3, measured by `deferred_audit_q_per_strategy`):
+/// * a public judge of rank `r` from its first turn, `stage + r × turn`, landing within a turn — as
+///   before the audit, since a judge replays only on its turn and files at once;
+/// * a deferred auditor (any other eligible operator, whose private draw had it replay early) only
+///   once every public judge's turn has passed, and then only in its own slot: past
+///   `J = stage + judges × turn`, slots of [`PALW_DEFERRED_AUDIT_STAGGER_DAA_V1`] cycle through the
+///   non-judges in the claim's rank order (one owner at a time, as the turn rule's), landing by the
+///   slot's end.
+///
+/// Without it every auditor whose draw selected a lie filed at once: at `a = 1` eight sessions a lie —
+/// each an exposure a garbage trace burns, each a slot of the lane's per-DAA filing budget — so only
+/// 45% of the lies were accused within 400 DAA; with it, one session a lie.
+pub(crate) fn palw_operator_da_refuted_may_file_v1(
+    claim: &PalwOperatorDaCandidateV1,
+    me: &PalwBondKeyV2,
+    operators: &[PalwBondKeyV2],
+    now_daa: u64,
+) -> Option<u64> {
+    let judges = palw_operator_da_judges_v1(claim, operators);
+    if let Some(rank) = judges.iter().position(|bond| bond == me) {
+        let from = claim.stage_daa.saturating_add((rank as u64).saturating_mul(PALW_OPERATOR_DA_TURN_DAA_V1));
+        return (now_daa >= from).then(|| now_daa.saturating_add(PALW_OPERATOR_DA_TURN_DAA_V1).min(claim.accuse_until_daa));
+    }
+    let others: Vec<PalwBondKeyV2> = palw_operator_da_order_v1(claim, operators).into_iter().filter(|bond| !judges.contains(bond)).collect();
+    let k = others.iter().position(|bond| bond == me)? as u64;
+    let judged_until = claim.stage_daa.saturating_add((judges.len() as u64).saturating_mul(PALW_OPERATOR_DA_TURN_DAA_V1));
+    if now_daa < judged_until {
+        return None;
+    }
+    let slot = (now_daa - judged_until) / PALW_DEFERRED_AUDIT_STAGGER_DAA_V1;
+    (slot % others.len() as u64 == k).then(|| {
+        judged_until.saturating_add((slot + 1).saturating_mul(PALW_DEFERRED_AUDIT_STAGGER_DAA_V1)).min(claim.accuse_until_daa)
+    })
+}
+
 /// **The turn rule with the deferred audit** (ADR-0160 V3): [`palw_operator_da_plan_v1`], and where
 /// that leaves this node out of a REPLAYABLE claim's judging — not one of its public judges, or not its
 /// turn yet — but its private draw selects the claim (`audit_selected`) and its bond declared the
@@ -582,7 +623,9 @@ impl PalwOperatorDaBookV1 {
 
     /// **What this node does next, if anything** — the first candidate (oldest stage first) it has not
     /// settled, deferred, or sent too recently or too often, as:
-    /// * [`PalwOperatorDaActionV1::FileRefuted`] — its replay refuted the claim (any turn);
+    /// * [`PalwOperatorDaActionV1::FileRefuted`] — its replay refuted the claim: a public judge at once
+    ///   (any of its turns), a deferred auditor in its filing slot
+    ///   ([`palw_operator_da_refuted_may_file_v1`]);
     /// * [`PalwOperatorDaActionV1::Replay`] — its judge's turn and no verdict yet, while `may_replay`;
     /// * [`PalwOperatorDaActionV1::FileBlind`] — its blind turn.
     ///
@@ -612,12 +655,10 @@ impl PalwOperatorDaBookV1 {
             let plan = self.plan(claim, me, now_daa);
             match (self.verdicts.get(&id), plan) {
                 (_, PalwOperatorDaPlanV1::Skip(_)) => None,
-                (Some(PalwOperatorDaVerdictV1::Refuted), _) => may_file.then_some((
-                    id,
-                    PalwOperatorDaActionV1::FileRefuted {
-                        due: now_daa.saturating_add(PALW_OPERATOR_DA_TURN_DAA_V1).min(claim.accuse_until_daa),
-                    },
-                )),
+                (Some(PalwOperatorDaVerdictV1::Refuted), _) => may_file
+                    .then(|| palw_operator_da_refuted_may_file_v1(claim, me, &self.operators, now_daa))
+                    .flatten()
+                    .map(|due| (id, PalwOperatorDaActionV1::FileRefuted { due })),
                 (Some(_), _) => None,
                 (None, PalwOperatorDaPlanV1::Judge { rank, of }) => (may_replay
                     && self.replaying.is_none_or(|(claim, _)| claim != id))
@@ -1723,6 +1764,147 @@ mod tests {
         let b: Vec<bool> = (0..2_000).map(|i| palw_deferred_audit_selects_v1(&[2u8; 32], &claim(i), 300)).collect();
         let both = a.iter().zip(&b).filter(|(x, y)| **x && **y).count() as f64 / 2_000.0;
         assert!((both - 0.09).abs() < 0.03, "independent draws overlap at a² ≈ 0.09: {both}");
+    }
+
+    /// **ADR-0160 V3: the deferred audit's q per strategy** (§7.4 V4's measurement), on the fleet as
+    /// simulated by the turn rule and the book: eight operator nodes, each with its own private key
+    /// at `a` ∈ {0.1, 0.3, 1.0}; external claims on a CAPTURED panel (five outside seats, so every
+    /// operator is a non-seat) of the three P0-10 strategies plus honest controls. Each node's replay
+    /// of a lie refutes it (every lie's roots differ from the claim's own job's); what the court makes
+    /// of the lane's filing — a row-0 `DefaultAccused` — is the strategy's:
+    /// * **naive** (junk roots, nothing behind them): the producer cannot answer — S1, convicted;
+    /// * **garbage** (a self-consistent false trace) and **borrowed** (another job's real trace under
+    ///   this claim's roots): row 0 opens against the claim's own roots, the session is answered, the
+    ///   accuser's exposure (320.10 MSK on the floor) is held and burned — detected, NOT convicted.
+    ///
+    /// Two fleets: every node up (the public judges replay every candidate), and each claim's public
+    /// judges down (only the private draws of the five other operators remain). Measured, and pinned:
+    /// * detection is `1` with the judges up, `1 − (1 − a)^5` with them down, for every strategy;
+    /// * conviction through this lane is detection for naive and **0** for garbage and borrowed — the
+    ///   deferred audit raises q only for naive; garbage and borrowed need a non-seat kind-4 or
+    ///   `StepLeaf` filing built from the claim's capture (P2-8b/8d for non-seats), which no operator
+    ///   lane builds today (ADR-0160 §4.5's q for them is the seats' until it does);
+    /// * no honest claim is ever accused, and an honest claim's replays grow with `a` (the audit's
+    ///   cost): ≤ judges + `a` × the other operators.
+    #[test]
+    fn deferred_audit_q_per_strategy() {
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
+        enum Strategy {
+            Honest,
+            Naive,
+            Garbage,
+            Borrowed,
+        }
+        let ops = operators();
+        let per_strategy = 240u64;
+        let exposure_floor = 32_009_500_000u128; // 10% of the floor's 3,200.95 MSK commitment
+        for judges_down in [false, true] {
+            for a in [100u16, 300, 1_000] {
+                let claims: Vec<(PalwOperatorDaCandidateV1, Strategy)> = (0..per_strategy * 4)
+                    .map(|n| {
+                        let strategy = [Strategy::Honest, Strategy::Naive, Strategy::Garbage, Strategy::Borrowed][(n % 4) as usize];
+                        let seats = (1..=5).map(outsider).collect();
+                        (judged(0xA0D1_0000 + n, 2_000 + n / 4, seats), strategy)
+                    })
+                    .collect();
+                let strategy: BTreeMap<Hash64, Strategy> = claims.iter().map(|(c, s)| (c.claim_id, *s)).collect();
+                let down: BTreeMap<Hash64, Vec<PalwBondKeyV2>> = claims
+                    .iter()
+                    .map(|(c, _)| (c.claim_id, if judges_down { palw_operator_da_judges_v1(c, &ops) } else { Vec::new() }))
+                    .collect();
+                let mut books: Vec<PalwOperatorDaBookV1> = ops
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| PalwOperatorDaBookV1::new(registrations()).with_audit(Some(([0xA0u8 ^ (i as u8).wrapping_mul(37); 32], a))))
+                    .collect();
+                let mut accused: BTreeMap<Hash64, Vec<PalwBondKeyV2>> = Default::default();
+                let mut detected: std::collections::BTreeSet<Hash64> = Default::default();
+                let mut replays: BTreeMap<Hash64, usize> = Default::default();
+                let mut in_flight: Vec<(Hash64, PalwBondKeyV2, u64)> = Vec::new();
+                let last_stage = 2_000 + per_strategy;
+                for now in 2_000..last_stage + 240 {
+                    in_flight.retain(|(claim, accuser, lands)| {
+                        if *lands <= now {
+                            accused.entry(*claim).or_default().push(*accuser);
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    let chain: Vec<PalwOperatorDaCandidateV1> = claims
+                        .iter()
+                        .filter(|(c, _)| c.stage_daa <= now)
+                        .map(|(c, _)| PalwOperatorDaCandidateV1 {
+                            operator_accusers: accused.get(&c.claim_id).cloned().unwrap_or_default(),
+                            ..c.clone()
+                        })
+                        .collect();
+                    for (me, book) in ops.iter().zip(books.iter_mut()) {
+                        book.refresh(chain.clone(), Some(fresh()), now);
+                        for _ in 0..8 {
+                            let queued = in_flight.iter().any(|(_, accuser, _)| accuser == me);
+                            let Some((claim, action)) = book.next(me, now, queued, true) else { break };
+                            if down[&claim].contains(me) {
+                                book.settle(claim);
+                                continue;
+                            }
+                            match action {
+                                PalwOperatorDaActionV1::Replay { .. } => {
+                                    *replays.entry(claim).or_default() += 1;
+                                    let verdict = if strategy[&claim] == Strategy::Honest {
+                                        PalwOperatorDaVerdictV1::Reproduces
+                                    } else {
+                                        detected.insert(claim);
+                                        PalwOperatorDaVerdictV1::Refuted
+                                    };
+                                    book.judge(claim, verdict);
+                                }
+                                PalwOperatorDaActionV1::FileRefuted { .. } | PalwOperatorDaActionV1::FileBlind { .. } => {
+                                    book.queued(claim, 1, now);
+                                    in_flight.push((claim, *me, now + 1));
+                                }
+                            }
+                        }
+                    }
+                }
+                let n_other = (ops.len() - PALW_OPERATOR_DA_JUDGES_V1) as i32;
+                let expect_detect = if judges_down { 1.0 - (1.0 - a as f64 / 1_000.0).powi(n_other) } else { 1.0 };
+                for s in [Strategy::Honest, Strategy::Naive, Strategy::Garbage, Strategy::Borrowed] {
+                    let ids: Vec<Hash64> = claims.iter().filter(|(_, x)| *x == s).map(|(c, _)| c.claim_id).collect();
+                    let n = ids.len() as f64;
+                    let det = ids.iter().filter(|c| detected.contains(*c)).count() as f64 / n;
+                    let acc = ids.iter().filter(|c| accused.contains_key(*c)).count() as f64 / n;
+                    // The court: a naive claim cannot answer row 0 (S1); garbage and borrowed answer it.
+                    let conv = if s == Strategy::Naive { acc } else { 0.0 };
+                    let burned = if matches!(s, Strategy::Garbage | Strategy::Borrowed) {
+                        ids.iter().filter(|c| accused.contains_key(*c)).count() as u128 * exposure_floor
+                    } else {
+                        0
+                    };
+                    let mean_replays = ids.iter().map(|c| replays.get(c).copied().unwrap_or(0)).sum::<usize>() as f64 / n;
+                    println!(
+                        "ADR-0160 V3 q: judges_down={judges_down} a={a}‰ {s:?}: detected {det:.3} (expect {:.3}), accused {acc:.3}, \
+                         convicted q = {conv:.3}, auditors' exposure burned {} MSK over {} claims, {mean_replays:.2} replays a claim",
+                        if s == Strategy::Honest { 0.0 } else { expect_detect },
+                        burned / MSK,
+                        ids.len()
+                    );
+                    match s {
+                        Strategy::Honest => {
+                            assert_eq!(acc, 0.0, "an honest claim is never accused");
+                            let bound = PALW_OPERATOR_DA_JUDGES_V1 as f64 + a as f64 / 1_000.0 * n_other as f64;
+                            assert!(mean_replays <= bound + 0.35, "honest replays {mean_replays} vs judges + a × others = {bound}");
+                        }
+                        _ => {
+                            assert!((det - expect_detect).abs() < 0.07, "{s:?} a={a} judges_down={judges_down}: detected {det} vs {expect_detect}");
+                            assert_eq!(acc, det, "every detected lie is accused once it is refuted");
+                            let sessions = ids.iter().map(|c| accused.get(c).map(Vec::len).unwrap_or(0)).max().unwrap_or(0);
+                            assert!(sessions <= 1, "{s:?} a={a}: one operator session a lie, not one an auditor ({sessions})");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// **ADR-0160 V3: the audit only adds replays where the turn rule left this node out** — never
