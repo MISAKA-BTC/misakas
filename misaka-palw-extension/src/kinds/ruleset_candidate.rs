@@ -56,6 +56,9 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // lane rcore/f1-forkchoice-attacks (post-launch): a bare height — a deep reorg needs a strict
         // economic win past it.
         "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
+        // rcore/hf-pptake2 (post-launch): a bare height — a pruning-proof / IBD staging commit needs a
+        // strict economic win past it, read at the incumbent's DAA.
+        "palw_pruning_proof_strict_economic_win" => params.palw_pruning_proof_strict_economic_win = Some(at),
         "palw_heartbeat" => {
             companion(&mut params.palw_heartbeat, name, "work_log2 and the mergeset bound", at, |f, at| f.activation = at)?
         }
@@ -159,6 +162,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_final_lock_full_collateral" => {
             params.palw_final_lock_full_collateral = Some(at);
             params.sync_palw_final_lock_full_collateral();
+        }
+        // Lane V02 (the shortened post-Final lock life, post-launch): the V2 bundle mirrors the height and
+        // `validate_palw_v2` refuses the two apart — set together; refused below R-core+.
+        "palw_final_lock_life" => {
+            params.palw_final_lock_life = Some(at);
+            params.sync_palw_final_lock_life();
         }
         // ADR-0152-adjacent (Activation Pool): genesis-only (R1 and R2 change how every class is
         // reclaimed and stepped), so a height is refused here by name. At genesis the terms this preset
