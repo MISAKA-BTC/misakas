@@ -1347,6 +1347,16 @@ pub struct PalwStateParamsV2 {
     /// copy disagrees with it.
     #[borsh(skip)]
     escrow_backed_exposure_from_daa: Option<u64>,
+    /// **ADR-0160 F-W (lane cap-weight): `Params::palw_capacity_weight_cap`'s height**, mirrored here
+    /// by `Params::sync_palw_capacity_weight_cap` because the ledger's re-derivation at load
+    /// (`assert_internal_consistency_v3`) and the admission / producer views hold no transition
+    /// extras. Decided at the CLAIM's `accepted_daa` ([`Self::capacity_weight_cap_applies_at`]), so a
+    /// claim accepted below it keeps today's accounting for its whole life. `None` on every shipped
+    /// preset. Skipped by borsh for `short_challenge_window_from_daa`'s reason — the fence is what
+    /// `Params::consensus_params_id` hashes (Some-only), and `validate_palw_v2` refuses a bundle whose
+    /// copy disagrees with it.
+    #[borsh(skip)]
+    capacity_weight_cap_from_daa: Option<u64>,
     /// **ADR-0152 v3.1 §6 (IMPL-6, row 26): `Params::palw_rcore_plus`'s height**, mirrored here by
     /// `Params::sync_palw_rcore_plus` because the fold's load-time re-derivations (and every view
     /// the processor and kaspad call without transition extras) must read the fence from the
@@ -1566,6 +1576,7 @@ impl PalwStateParamsV2 {
             fp_decode_rules_daa: None,
             class_receipt_window: None,
             escrow_backed_exposure_from_daa: None,
+            capacity_weight_cap_from_daa: None,
             rcore_plus_from_daa: None,
             withdrawal_delay_daa: 0,
             rcore_conservative_classes: Vec::new(),
@@ -2078,6 +2089,24 @@ impl PalwStateParamsV2 {
     pub fn with_escrow_backed_exposure_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.escrow_backed_exposure_from_daa = from_daa;
         self
+    }
+
+    /// ADR-0160 F-W: `Params::palw_capacity_weight_cap`'s height, if the network arms it (the mirror).
+    pub fn capacity_weight_cap_from_daa(&self) -> Option<u64> {
+        self.capacity_weight_cap_from_daa
+    }
+
+    /// ADR-0160 F-W: sets that height — the V2 bundle's copy of `Params::palw_capacity_weight_cap`,
+    /// written by `Params::sync_palw_capacity_weight_cap`.
+    pub fn with_capacity_weight_cap_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.capacity_weight_cap_from_daa = from_daa;
+        self
+    }
+
+    /// ADR-0160 F-W: is a claim ACCEPTED at `accepted_daa` accounted under the weight cap? `false` on
+    /// every network but a testnet-12 that armed the fence, and for every claim accepted below it.
+    pub fn capacity_weight_cap_applies_at(&self, accepted_daa: u64) -> bool {
+        self.capacity_weight_cap_from_daa.is_some_and(|from| accepted_daa >= from)
     }
 
     /// ADR-0152 R-core+: `Params::palw_rcore_plus`'s height, if the network arms it (the mirror).
@@ -8762,6 +8791,12 @@ pub struct PalwChainStateV2 {
     /// refuted exposure** — what [`palw_accuser_exposure_v1`] and B-3's accuser clause read in
     /// `O(log n)`. Maintained by the two DA writers, rebuilt from the two maps, never hashed.
     da_by_accuser: BTreeSet<(PalwBondKeyV2, Hash64)>,
+    /// **ADR-0160 F-W (lane cap-weight): per bond, the staged weight and the weight reservation of its
+    /// live new-rule claims** ([`crate::palw_weight_cap_v1::PalwBondWeightIndexV1`]). Maintained by
+    /// `write_claim` and `write_bond`, rebuilt from the claims by every load and delta path
+    /// (`rebuild_capacity_weight_index_v1`), checked by `assert_internal_consistency_v3`, never
+    /// hashed. Empty wherever the fence's mirror is `None` — every shipped preset.
+    capacity_weight_index: crate::palw_weight_cap_v1::PalwBondWeightIndexV1,
 }
 
 impl PalwChainStateV2 {
@@ -8866,6 +8901,7 @@ impl PalwChainStateV2 {
             vesting_payees: BTreeSet::new(),
             da_deadlines: BTreeSet::new(),
             da_by_accuser: BTreeSet::new(),
+            capacity_weight_index: Default::default(),
         }
     }
 
@@ -9046,6 +9082,11 @@ impl PalwChainStateV2 {
 
     pub fn receipt_epoch_counter(&self, class_id: &Hash64) -> Option<&PalwEpochCounterV2> {
         self.receipt_epoch_counters.get(class_id)
+    }
+
+    /// ADR-0160 F-W: the per-bond weight index (derived; empty below the fence).
+    pub fn capacity_weight_index(&self) -> &crate::palw_weight_cap_v1::PalwBondWeightIndexV1 {
+        &self.capacity_weight_index
     }
 
     /// Every claim this state holds, in canonical order — what a fold over the lattice reads
@@ -10987,9 +11028,12 @@ impl PalwChainStateV2 {
                         let canonical = self.palw_claim_canonical_weight_v1(claim, canonical_work_daa);
                         let contribution =
                             palw_claim_safe_contribution_v3(&self.class_shares, claim, uncertified_weightless, canonical);
-                        safe = safe.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        // ADR-0160 F-W (D-3): both sums under the C7 ceiling, as `finalize_claim` and
+                        // `retire_claim` price a new-rule claim (the identity on every other).
+                        let final_safe = |c: u128| crate::palw_weight_cap_v1::palw_weight_final_safe_v1(params, claim, c);
+                        safe = safe.checked_add(final_safe(contribution)).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                         safe_ceiling = safe_ceiling
-                            .checked_add(canonical.unwrap_or(claim.pwu as u128))
+                            .checked_add(final_safe(canonical.unwrap_or(claim.pwu as u128)))
                             .ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                     }
                     // A free-prompt Final licenses; only SPENT quanta weighed blocks.
@@ -11025,8 +11069,12 @@ impl PalwChainStateV2 {
                     }
                 }
                 _ => {
-                    immature =
-                        immature.checked_add(claim.immature_contribution).ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
+                    // ADR-0160 F-W: a new-rule claim weighs through its bond's capped term, summed below.
+                    if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(params, claim) {
+                        immature = immature
+                            .checked_add(claim.immature_contribution)
+                            .ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
+                    }
                     let entry = exposure.entry(claim.bond).or_insert(0);
                     // The claim's commitment (ADR-0152 SR-1): its whole reservation — option A's
                     // escrow term is 0 below its height, the receipt rights 0 for anything but a
@@ -11168,7 +11216,21 @@ impl PalwChainStateV2 {
                 )));
             }
         }
-        if exposure != self.reserved_exposure {
+        // **ADR-0160 F-W: where the fence's mirror is set, a zero row and an absent row are one fact.**
+        // A capped reservation can be 0 (a claim past its bond's `R_budget`), so a live claim may commit
+        // nothing — and the ledger's writers drop a row that reaches 0 (`release_for_claim`,
+        // `move_commitment`) while this re-derivation opens one for every live claim. Below the fence
+        // every attempt commits `reserved > 0`, the two never differ by a zero row, and the comparison
+        // is the exact one it always was.
+        let exposure_matches = if params.capacity_weight_cap_from_daa().is_some() {
+            let nonzero = |ledger: &BTreeMap<PalwBondKeyV2, u128>| -> BTreeMap<PalwBondKeyV2, u128> {
+                ledger.iter().filter(|(_, held)| **held != 0).map(|(bond, held)| (*bond, *held)).collect()
+            };
+            nonzero(&exposure) == nonzero(&self.reserved_exposure)
+        } else {
+            exposure == self.reserved_exposure
+        };
+        if !exposure_matches {
             return Err(PalwStateV2Error::CarriageInconsistent("reserved_exposure differs from the claims it summarizes".into()));
         }
         // **ADR-0056 Decision 3, the same property for the registry's own ledger.** Two
@@ -11247,6 +11309,15 @@ impl PalwChainStateV2 {
                 self.safe_weight
             )));
         }
+        // **ADR-0160 F-W (W-I3): the new-rule half, from the claims and the bonds alone** — the per-bond
+        // index re-derived and compared (it is carried like `unresolved`), and each bond's staged sum
+        // under its cap. Both are empty below the fence, so every dormant state loads as before.
+        let weight_index = crate::palw_weight_cap_v1::PalwBondWeightIndexV1::of(params, self.claims.values());
+        if weight_index != self.capacity_weight_index {
+            return Err(PalwStateV2Error::CarriageInconsistent("the capacity weight index differs from the claims".into()));
+        }
+        let immature =
+            immature.checked_add(weight_index.capped_total(self)).ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
         if immature != self.bounded_immature {
             return Err(PalwStateV2Error::CarriageInconsistent(format!(
                 "bounded_immature {} differs from the immature claims' sum {immature}",
@@ -14469,11 +14540,56 @@ impl<'a> TransitionBuilder<'a> {
     // Every write goes through one of these, so the delta cannot miss a change.
 
     fn write_bond(&mut self, key: PalwBondKeyV2, new: Option<PalwBondStateV2>) {
+        // ADR-0160 F-W: the bond's cap is a function of its collateral, so every collateral move — a
+        // slash lowers it, a refund restores it — re-caps the bond's provisional term HERE, the one
+        // site all of them pass (the "recap" of ADR-0160 §7.1).
+        let before = self.weight_cap_term(&key);
         let old = match &new {
             Some(record) => self.state.bonds.insert(key, record.clone()),
             None => self.state.bonds.remove(&key),
         };
+        self.weight_cap_retotal(before, self.weight_cap_term(&key));
         self.entries.push(PalwDeltaEntryV2::Bond { key, old, new });
+    }
+
+    // ---- ADR-0160 F-W (lane cap-weight): the per-bond weight cap's two maintenance moves ----
+
+    /// `min(X_b, W_cap(C_b))`, the bond's share of `bounded_immature` at this instant.
+    fn weight_cap_term(&self, bond: &PalwBondKeyV2) -> u128 {
+        self.state.capacity_weight_index.term(bond, self.state.bonds.get(bond).map(|record| record.collateral))
+    }
+
+    /// Move `bounded_immature` from a bond's old capped term to its new one. Exact: the running value
+    /// is `Σ old-rule raw + Σ_b term(b)` after every write, so `before` is inside it (W-I6); the
+    /// saturation is a guard the load-time re-derivation would refuse, never a path an honest fold takes.
+    fn weight_cap_retotal(&mut self, before: u128, after: u128) {
+        if before == after {
+            return;
+        }
+        debug_assert!(self.state.bounded_immature >= before, "W-I6: the bond's term is inside bounded_immature");
+        self.state.bounded_immature = self.state.bounded_immature.saturating_sub(before).saturating_add(after);
+    }
+
+    /// **The claim half: every phase door passes `write_claim`** — acceptance, bind, licence, an S2
+    /// upgrade, a redraw, a DA accusation and its end, `Final`, a void, retirement — so the bond's
+    /// staged sum, its held reservation and its capped term follow the record here and nowhere else.
+    /// A no-op wherever the fence's mirror is `None` (every shipped preset) and for every old-rule claim.
+    fn weight_cap_on_write(&mut self, old: Option<&PalwClaimStateV2>, new: Option<&PalwClaimStateV2>) {
+        if self.params.capacity_weight_cap_from_daa().is_none() {
+            return;
+        }
+        let applies = |claim: &&PalwClaimStateV2| crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(self.params, claim);
+        let (old, new) = (old.filter(applies), new.filter(applies));
+        let Some(bond) = old.or(new).map(|claim| claim.bond) else { return };
+        debug_assert!(old.is_none_or(|o| new.is_none_or(|n| o.bond == n.bond)), "a claim never changes bond");
+        let before = self.weight_cap_term(&bond);
+        if let Some(claim) = old {
+            self.state.capacity_weight_index.note(self.params, claim, false);
+        }
+        if let Some(claim) = new {
+            self.state.capacity_weight_index.note(self.params, claim, true);
+        }
+        self.weight_cap_retotal(before, self.weight_cap_term(&bond));
     }
 
     fn write_exposure(&mut self, key: PalwBondKeyV2, new: Option<u128>) {
@@ -14775,6 +14891,8 @@ impl<'a> TransitionBuilder<'a> {
             Some(record) => self.state.claims.insert(key, record.clone()),
             None => self.state.claims.remove(&key),
         };
+        // ADR-0160 F-W: the bond's staged weight, held reservation and capped term follow the record.
+        self.weight_cap_on_write(old.as_ref(), new.as_ref());
         // Audit #13b: the registry's in-flight index, where this fold has built it, moves with
         // the claim — the old record out, the new one in, each only while non-terminal.
         if let Some(index) = self.inflight_index.get_mut().as_mut() {
@@ -20779,11 +20897,14 @@ impl<'a> TransitionBuilder<'a> {
             .and_then(|held| current.checked_add(held))
             .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         self.write_exposure(claim.bond, Some(next));
-        self.state.bounded_immature = self
-            .state
-            .bounded_immature
-            .checked_add(claim.immature_contribution)
-            .ok_or(PalwStateV2Error::Overflow("bounded_immature"))?;
+        // ADR-0160 F-W: a new-rule claim's weight enters through its bond's capped term (`write_claim`).
+        if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(self.params, claim) {
+            self.state.bounded_immature = self
+                .state
+                .bounded_immature
+                .checked_add(claim.immature_contribution)
+                .ok_or(PalwStateV2Error::Overflow("bounded_immature"))?;
+        }
         Ok(())
     }
 
@@ -20800,11 +20921,14 @@ impl<'a> TransitionBuilder<'a> {
         let held = palw_claim_commitment_v1(self.params, claim, now_daa).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         let next = current.checked_sub(held).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
         self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
-        self.state.bounded_immature = self
-            .state
-            .bounded_immature
-            .checked_sub(claim.immature_contribution)
-            .ok_or(PalwStateV2Error::Overflow("bounded_immature underflow"))?;
+        // ADR-0160 F-W: a new-rule claim's weight leaves through its bond's capped term (`write_claim`).
+        if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(self.params, claim) {
+            self.state.bounded_immature = self
+                .state
+                .bounded_immature
+                .checked_sub(claim.immature_contribution)
+                .ok_or(PalwStateV2Error::Overflow("bounded_immature underflow"))?;
+        }
         Ok(())
     }
 
@@ -21330,6 +21454,9 @@ impl<'a> TransitionBuilder<'a> {
             let canonical = self.canonical_claim_weight(claim);
             let contribution =
                 palw_claim_safe_contribution_v3(&self.state.class_shares, claim, self.uncertified_weightless, canonical);
+            // ADR-0160 F-W (D-3): a new-rule claim's Final weight under the C7 ceiling — the identity on
+            // every attributable class and every old-rule claim.
+            let contribution = crate::palw_weight_cap_v1::palw_weight_final_safe_v1(self.params, claim, contribution);
             self.state.safe_weight =
                 self.state.safe_weight.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
         }
@@ -21555,11 +21682,14 @@ impl<'a> TransitionBuilder<'a> {
         // live weight the instant it is voided, which is W5, and the hold is about admission
         // headroom alone.
         if palw_claim_is_on_abandon_hold_v2(&voided, self.params, voided_daa) {
-            self.state.bounded_immature = self
-                .state
-                .bounded_immature
-                .checked_sub(claim.immature_contribution)
-                .ok_or(PalwStateV2Error::Overflow("bounded_immature underflow"))?;
+            // ADR-0160 F-W: a new-rule claim's weight leaves through `write_claim` below.
+            if !crate::palw_weight_cap_v1::palw_weight_cap_applies_v1(self.params, claim) {
+                self.state.bounded_immature = self
+                    .state
+                    .bounded_immature
+                    .checked_sub(claim.immature_contribution)
+                    .ok_or(PalwStateV2Error::Overflow("bounded_immature underflow"))?;
+            }
             self.write_claim(id, Some(voided));
             // The deadline is re-armed rather than disarmed: the sweep's terminal arm releases
             // the hold when it fires. Deriving it from the record (`voided_daa + hold`) is what
@@ -21673,9 +21803,13 @@ impl<'a> TransitionBuilder<'a> {
         // the fence would book step leaves against a total that received MAC-equivalents, and the
         // difference would be permanent in exactly the way this comment warns about.
         let retiring: Option<u128> = match (&claim.phase, &claim.source) {
-            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::Attempt) => {
-                Some(self.canonical_claim_weight(claim).unwrap_or(claim.pwu as u128))
-            }
+            // ADR-0160 F-W (D-3): under the C7 ceiling where the claim is new-rule — the same pure
+            // function of the record `finalize_claim` priced it with, so nothing strands.
+            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::Attempt) => Some(crate::palw_weight_cap_v1::palw_weight_final_safe_v1(
+                self.params,
+                claim,
+                self.canonical_claim_weight(claim).unwrap_or(claim.pwu as u128),
+            )),
             (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::FreePrompt { quanta, spent }) if self.uncertified_weightless => {
                 // `quanta == 0` is unrepresentable (`ZeroQuanta` at creation, and the consistency
                 // check refuses it in every phase), so the `unwrap_or(0)` is a division guard and
@@ -23246,6 +23380,20 @@ pub fn apply_palw_transition_v7(
         let close: BTreeSet<(u64, (Hash64, PalwCourtSideV1))> =
             builder.state.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
         debug_assert_eq!(close, builder.state.court_close_deadlines, "the close-group deadline index drifted");
+        // ADR-0160 F-W (W-I3): the weight index and `bounded_immature` are their re-derivations after
+        // every block, wherever the fence's mirror is set.
+        if builder.params.capacity_weight_cap_from_daa().is_some() {
+            debug_assert_eq!(
+                crate::palw_weight_cap_v1::PalwBondWeightIndexV1::of(builder.params, builder.state.claims.values()),
+                builder.state.capacity_weight_index,
+                "the capacity weight index drifted from the claims"
+            );
+            debug_assert_eq!(
+                crate::palw_weight_cap_v1::palw_bounded_immature_v2(&builder.state, builder.params),
+                builder.state.bounded_immature,
+                "W-I3: bounded_immature drifted from its re-derivation"
+            );
+        }
         if builder.params.rcore_plus_active_at(ctx.daa_score) {
             let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
             for (id, claim) in &builder.state.claims {
@@ -31306,6 +31454,12 @@ fn apply_attempt(
         .checked_mul(class.slash_value_per_pwu as u128)
         .and_then(|sompi| sompi.checked_mul(attempts as u128))
         .ok_or(PalwStateV2Error::Overflow("reserve"))?;
+    // **ADR-0160 F-W (J-1): past the fence the consensus reservation is `min(w, R_budget − held)`** —
+    // the bond buys at most `R_budget` of weight reservation across its live claims at any price, so a
+    // 2M claim's 59,742.94 MSK falls to ≤ 0.215 MSK on a 13k bond. The one expression admission and the
+    // producer's headroom read (SR-7). Below the fence (every shipped preset), `reserved` unchanged.
+    let reserved =
+        crate::palw_weight_cap_v1::palw_claim_weight_reservation_v1(&builder.state, builder.params, &bond_key, reserved, ctx.daa_score);
     let claim = PalwClaimStateV2 {
         source: PalwClaimSourceV2::Attempt,
         class_id: attempt.class_id,
@@ -31490,6 +31644,7 @@ pub fn apply_delta_v2(
     }
     rebuild_deadline_free_indices(&mut state);
     rebuild_deadline_index_v2(&mut state, params)?;
+    rebuild_capacity_weight_index_v1(&mut state, params);
     Ok(state)
 }
 
@@ -31506,6 +31661,7 @@ pub fn revert_delta_v2(
     }
     rebuild_deadline_free_indices(&mut state);
     rebuild_deadline_index_v2(&mut state, params)?;
+    rebuild_capacity_weight_index_v1(&mut state, params);
     Ok(state)
 }
 
@@ -31787,6 +31943,12 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
     }
     Ok(())
+}
+
+/// **ADR-0160 F-W: rebuild the per-bond weight index from the claims** — every load and delta path,
+/// beside the deadline index (it needs the params' mirror for the same reason). Empty below the fence.
+fn rebuild_capacity_weight_index_v1(state: &mut PalwChainStateV2, params: &PalwStateParamsV2) {
+    state.capacity_weight_index = crate::palw_weight_cap_v1::PalwBondWeightIndexV1::of(params, state.claims.values());
 }
 
 /// Rebuild the indices that delta entries do not carry (they are derivable). The deadline index
@@ -32975,9 +33137,11 @@ impl PalwStateCarriageV2 {
             vesting_payees: BTreeSet::new(),
             da_deadlines: BTreeSet::new(),
             da_by_accuser: BTreeSet::new(),
+            capacity_weight_index: Default::default(),
         };
         rebuild_deadline_free_indices(&mut state);
         rebuild_deadline_index_v2(&mut state, params)?;
+        rebuild_capacity_weight_index_v1(&mut state, params);
         // ADR-0152 V-3 / phase2-plan I-7: the vesting rows' derived indexes are rebuilt on import.
         state.rebuild_vesting_indices();
         state.assert_internal_consistency_v3(params, uncertified_weightless, canonical_work_daa)?;
@@ -61101,6 +61265,8 @@ pub(crate) mod tests {
     mod vesting_fold_v1;
     // ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): R1 on the real cards.
     mod activation_pool_r1_v1;
+    // ADR-0160 F-W (lane cap-weight): staged weight and the per-bond weight cap through the fold.
+    mod capacity_weight_cap_v1;
 
     /// **ADR-0152 §4-ter.3 step 6 (the forger's race): the held forfeits' layout** — one Some-only
     /// root block and one carriage tail (`0xB6`), delta entry 80 (76–79 the Activation Pool's

@@ -467,15 +467,24 @@ pub fn palw_producer_facts_v4(
             // disagrees with the rule that refuses it.
             // ADR-0149: the admission's own expression (`palw_exposure_pwu_v3`), which below the
             // fence is `palw_exposure_pwu_v1` of the claimed pwu byte for byte.
-            claim_exposure: (exposure_pwu as u128)
-                .saturating_mul(class.slash_value_per_pwu as u128)
-                .saturating_mul(if audit_2026_09_23_active {
-                    crate::palw_pwu::palw_claim_attempts_v1(pwu, derived_draw.map(|work| work.min(u64::MAX as u128) as u64)) as u128
-                } else {
-                    1
-                })
-                // Option A: the escrow term, outside the attempts factor, exactly as the ceiling adds it.
-                .saturating_add(state_params.claim_escrow_reservation_v1(daa_score, claim_escrow)),
+            // ADR-0160 F-W (SR-7): the weight term through the one capped reading the fold and the
+            // admission ceiling share — `min(w, R_budget − held)` past the fence, `w` below it.
+            claim_exposure: crate::palw_weight_cap_v1::palw_claim_weight_reservation_v1(
+                state,
+                state_params,
+                key,
+                (exposure_pwu as u128).saturating_mul(class.slash_value_per_pwu as u128).saturating_mul(
+                    if audit_2026_09_23_active {
+                        crate::palw_pwu::palw_claim_attempts_v1(pwu, derived_draw.map(|work| work.min(u64::MAX as u128) as u64))
+                            as u128
+                    } else {
+                        1
+                    },
+                ),
+                daa_score,
+            )
+            // Option A: the escrow term, outside the attempts factor, exactly as the ceiling adds it.
+            .saturating_add(state_params.claim_escrow_reservation_v1(daa_score, claim_escrow)),
             committed: if state_params.rcore_plus_active_at(daa_score) {
                 crate::palw_state_v2::palw_bond_committed_raw_v1(state, state_params, key, daa_score, raw_depth)
             } else {

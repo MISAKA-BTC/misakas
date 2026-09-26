@@ -1021,6 +1021,8 @@ mod tests {
             "under a live transparency rule"
         );
         assert_eq!(moved.palw_reorg_strict_economic_win, Some(ForkActivation::new(40)), "the strict-economic-win reorg rule");
+        assert!(moved.palw_capacity_weight_cap_active_at(40) && !moved.palw_capacity_weight_cap_active_at(39), "the weight cap");
+        assert_eq!(bundle.state.capacity_weight_cap_from_daa(), Some(40), "and its fold mirror follows");
         assert_eq!(
             (moved.palw_bond_maturity_window_at(39), moved.palw_bond_maturity_window_at(40)),
             (None, Some(1_000)),

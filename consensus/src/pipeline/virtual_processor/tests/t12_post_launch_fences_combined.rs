@@ -44,7 +44,9 @@ type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
 const H: u64 = 60;
 
 /// testnet-12 with harness cards, and — when `armed` — every fence of the release's list set to `H`
-/// through its own entry, nothing else touched (the bundle does not move).
+/// through its own entry, nothing else touched (the bundle's panel does not move; its state carries the
+/// fold's mirrors of the fences that have one — lane cap-weight's F-W reads its mirror at every load, so
+/// the chain loads its tip under the ARMED bundle, as a node does from its own params).
 fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
@@ -69,6 +71,7 @@ fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine)
     let config = ConfigBuilder::new(params).skip_proof_of_work().build();
     let PalwConsensusMode::ConsensusV2(armed_bundle) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
     assert_eq!(armed_bundle.panel, bundle.panel, "the fences are Params fields: the panel shape does not move");
+    let bundle = armed_bundle.clone();
     (config, bundle, premine, floats)
 }
 
@@ -208,6 +211,23 @@ async fn every_post_launch_fence_at_one_height_is_crossed_with_the_clock_running
     assert!(below >= 1, "a claim was bound below the fence");
     assert!(past >= 2, "claims were bound past the fence");
     assert!(straddling >= 1, "a claim whose slot is below the fence was bound past it");
+    // Lane cap-weight (ADR-0160 F-W) is live past the height too: a claim accepted at or past it is staged
+    // under its bond's cap, one accepted below it keeps today's raw weight, and the tip's weight is the
+    // capped re-derivation under the armed bundle a node loads with (W-I3 at the processor).
+    {
+        use kaspa_consensus_core::palw_weight_cap_v1::{palw_bounded_immature_v2, palw_weight_cap_applies_v1};
+        let armed_state = &armed.chain.bundle.state;
+        assert_eq!(armed_state.capacity_weight_cap_from_daa(), Some(H), "the fold's mirror of F-W is the height");
+        let (new_rule, old_rule): (Vec<_>, Vec<_>) = state.claims_iter().partition(|(_, c)| palw_weight_cap_applies_v1(armed_state, c));
+        assert!(new_rule.len() >= 2 && !old_rule.is_empty(), "claims on both sides of F-W ({} / {})", old_rule.len(), new_rule.len());
+        assert_eq!(palw_bounded_immature_v2(&state, armed_state), state.bounded_immature(), "W-I3: the tip's weight is the re-derivation");
+        eprintln!(
+            "[t12-post-launch] F-W: {} claims past it (staged, capped), {} below it (raw); bounded_immature {}",
+            new_rule.len(),
+            old_rule.len(),
+            state.bounded_immature()
+        );
+    }
 
     // ---- 4: below the fence an armed node is a released node -------------------------------------------
     let (config, bundle, premine, floats) = t12_release(false);

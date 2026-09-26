@@ -1833,3 +1833,105 @@ async fn hb_probe_verdict1_a_losing_lottery_attempt_still_earns_2_20_blue_work()
     assert!(l_blue, "merged beside an honest heartbeat, the losing attempt is coloured blue");
     assert_eq!(over_honest, 1 << 20, "and the merging block weighs exactly 2^20 more for it");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// lane: rcore/cap-weight — ADR-0160 F-W (`palw_capacity_weight_cap`, dormant), W-T6 through the real
+// pipeline: a private branch piling junk attempts. The fold-level probe
+// (`palw_state_v2::tests::capacity_weight_cap_v1::w_t6_…`) measures the arithmetic at K = 1,000 and
+// with self-licensed junk; this one proves the capped weight is what the victim's deep-reorg gate reads.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// [`duel`], with the strict-economic-win reorg rule at `strict` and F-W at `cap` (field and the fold's
+/// mirror, set as the post-launch list sets them), and both nodes loading under the ARMED bundle.
+fn duel_capacity_armed(strict: Option<u64>, cap: Option<u64>) -> Duel {
+    let (config, _, premine, floats) = t12_with_harness_cards();
+    let mut params = config.params.clone();
+    params.palw_reorg_strict_economic_win = strict.map(ForkActivation::new);
+    params.palw_capacity_weight_cap = cap.map(ForkActivation::new);
+    params.sync_palw_capacity_weight_cap();
+    let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    config.params.validate_palw_v2().expect("a runnable testnet-12 ruleset");
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
+        unreachable!("ConsensusV2")
+    };
+    assert_eq!(bundle.state.capacity_weight_cap_from_daa(), cap, "the fold's mirror follows the fence");
+    let bundle = bundle.clone();
+    let victim = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let attacker = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let pay = |to: ScriptPublicKey| {
+        let (outpoint, entry) = floats[1].clone();
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(entry.amount - 300_000, to)],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        sign_spend(&mut tx, entry, 1, config.params.storage_mass_parameter);
+        tx
+    };
+    let x = pay(card_payout_spk(5));
+    let y = pay(card_payout_spk(6));
+    Duel { config, victim, attacker, x, y, nonce: 1 << 40, floats }
+}
+
+/// **W-T6 (A1) at the processor: K junk attempts on a private branch buy no fork-choice weight past F-W.**
+///
+/// Public: X, then card 1's one floor attempt, then eight honest slots. Private: Y, then K attempts by
+/// the attacker's card 2 (each a claim, each 2^20 of blue work), then eight two-sibling slots — heavier
+/// on blue work, so it tops the victim's heap and only the deep-reorg gate can keep X. Nothing binds
+/// inside the window (the anchor delay), so every claim on both sides is `Created`.
+///
+/// * testnet-12 as shipped, and with strict-win alone: the K claims weigh K floor claims in the
+///   victim's PALW keys against the public one — `live` decides, the reorg is allowed, Y lands.
+/// * strict-win + F-W: a `Created` claim weighs 0 on both sides, whatever K — the keys tie, strict-win
+///   keeps the incumbent, and X stands. The same at K = 2 and K = 5: claims × K is not power × K.
+///
+/// (F-W without strict-win is refused by `validate_palw_v2`: that tie would fall to the hash.)
+#[tokio::test]
+async fn capacity_probe_w_t6_private_junk_attempts_buy_no_weight_past_the_cap() {
+    kaspa_core::log::try_init_logger("warn");
+    for (label, strict, cap) in [("shipped", None, None), ("strict-win", Some(1), None), ("strict-win + F-W", Some(1), Some(1))] {
+        for k in [2usize, 5] {
+            let tag = format!("cap-weight {label} K={k}");
+            let mut d = duel_capacity_armed(strict, cap);
+            for _ in 0..3 {
+                honest_slot_mirrored(&mut d).await;
+            }
+            let fork = d.victim.sink();
+            d.victim.heartbeat(1_000, vec![d.x.clone()]).await;
+            d.victim.attempt(1, 1_000, Vec::new(), &|_| true).await;
+            for _ in 0..8 {
+                honest_slot(&mut d.victim, Vec::new()).await;
+            }
+            // The PALW keys the victim's deep-reorg gate reads for each tip — each read on the node that
+            // made the tip its sink (the fold is deterministic, and a node holds a PALW state for its own
+            // chain blocks only).
+            let public = d.victim.vp().palw_candidate_order_v2(d.victim.sink()).expect("the public tip is weighed");
+            let clock = d.attacker.ctx.simulated_time + 1_000;
+            let mut private = layer(&mut d.attacker, &mut d.nonce, 1, clock, vec![d.y.clone()]).await.expect("the private holder");
+            for _ in 0..k {
+                let (a, _) = d.attacker.attempt(2, 1_000, Vec::new(), &|_| true).await;
+                private.push(a);
+            }
+            for _ in 0..8 {
+                private.extend(private_slot(&mut d.attacker, &mut d.nonce, 2, Vec::new()).await);
+            }
+            let private_order = d.attacker.vp().palw_candidate_order_v2(d.attacker.sink()).expect("the private tip is weighed");
+            let r = release(&tag, &mut d.victim, &private, fork, &mut d.nonce, 0).await;
+            assert!(r.refused.is_empty(), "{tag}: every private block is valid");
+            assert!(r.private_bw_max > r.public_bw && r.offered_at.is_some(), "{tag}: the private branch is heavier and offered");
+            let (x, y) = payments(&tag, &d);
+            eprintln!("[{tag}] victim's PALW keys: public {public:?} private {private_order:?}; flipped {:?}", r.flipped_at);
+            if cap.is_none() {
+                assert_eq!(private_order.live_total, k as u128 * public.live_total, "{tag}: K junk claims weigh K floor claims");
+                assert!(r.flipped() && y && !x, "{tag}: the heavier junk wins the reorg — the double spend lands");
+            } else {
+                assert_eq!((public.live_total, private_order.live_total), (0, 0), "{tag}: a Created claim weighs nothing, whatever K");
+                assert!(!r.flipped() && x && !y, "{tag}: strict-win keeps the incumbent on the tie — X stands");
+            }
+        }
+    }
+}

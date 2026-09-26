@@ -576,6 +576,12 @@ mod tests {
             "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
             // lane: rcore/f1-forkchoice-attacks
             "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
+            // lane: rcore/cap-weight (ADR-0160 F-W): refused without R-core+ and strict-win at or below it
+            // by `validate_palw_v2`, which the probe does not run — it asks only the hashers and the schedule.
+            "palw_capacity_weight_cap" => {
+                params.palw_capacity_weight_cap = Some(at);
+                params.sync_palw_capacity_weight_cap();
+            }
             "palw_heartbeat" => {
                 let hb = params.palw_heartbeat.as_mut().expect("the RC probe base carries the heartbeat lane");
                 hb.activation = at;

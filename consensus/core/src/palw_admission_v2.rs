@@ -660,12 +660,22 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         .checked_mul(class.slash_value_per_pwu as u128)
         .and_then(|sompi| sompi.checked_mul(attempts as u128))
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;
+    // **ADR-0160 F-W (SR-7): the weight reservation the fold will record** — `min(w, R_budget − held)`
+    // past the fence, `claim_exposure` itself below it. The ceiling reads this; item 9's escrow backing
+    // below keeps reading the uncapped `claim_exposure` (it prices the class, not the bond's budget).
+    let claim_weight_reservation = crate::palw_weight_cap_v1::palw_claim_weight_reservation_of_v1(
+        state_params,
+        bond.collateral,
+        state.capacity_weight_index().bond(&bond_key).reserved_w,
+        claim_exposure,
+        ctx.daa_score,
+    );
     // **Option A: the ceiling holds the claim's ESCROW as well as its weight**, past the height the
     // bundle carries — priced from the SAME expression the fold stores as `escrowed_reward` (this
     // block's subsidy, the carve resolved at this block's DAA) and read through the same reservation
     // the ledger reserves, so the gate admits exactly what the ledger can record. Outside H-1's
     // `x attempts`: the escrow is one claim's cash, not a per-draw quantity.
-    let claim_reservation = claim_exposure
+    let claim_reservation = claim_weight_reservation
         .checked_add(state_params.claim_escrow_reservation_v1(
             ctx.daa_score,
             crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve),

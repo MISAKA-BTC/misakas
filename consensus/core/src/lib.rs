@@ -446,6 +446,8 @@ pub mod palw_verification_v2;
 pub mod palw_vesting_read_v1;
 pub mod palw_vesting_v1;
 pub mod palw_weight;
+/// ADR-0160 F-W (lane cap-weight): staged claim weight and the per-bond weight cap (J-1).
+pub mod palw_weight_cap_v1;
 pub mod palw_work_target_v1;
 /// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
 /// helpers (see docs/adr/0007-layered-pow.md). Self-contained; the
