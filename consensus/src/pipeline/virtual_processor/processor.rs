@@ -628,6 +628,12 @@ pub struct VirtualStateProcessor {
     /// economic win, keeping the incumbent on an all-economic tie rather than the candidate hash.
     pub(super) palw_reorg_strict_economic_win: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
+    /// lane: rcore/cap-weight — ADR-0160 F-W (`Params::palw_capacity_weight_cap`), mode folded in and
+    /// `None` on every shipped preset. Past it (read at the incumbent's DAA, as strict-win is)
+    /// `dns_reorg_outcome` decides an all-economic tie in a SHALLOW reorg by GHOSTDAG's own order
+    /// instead of keeping the incumbent — see [`Self::palw_capacity_shallow_ghostdag_win_v1`].
+    pub(super) palw_capacity_weight_cap: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
     /// **ADR-0018 §E's payout bounds** (mainnet audit 2026-09-06 — H-2/H-3/M-1), mode folded in.
     /// `None` on testnet-11, devnet and simnet; `always()` on a card. Resolved at the BLOCK's DAA
     /// on both the coinbase construction and the validation path — they must agree, or every node
@@ -1117,6 +1123,7 @@ impl VirtualStateProcessor {
             palw_exec_quantum_maturity_daa: params.palw_exec_quantum_maturity_v1(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_reorg_strict_economic_win: params.palw_reorg_strict_economic_win,
+            palw_capacity_weight_cap: params.palw_capacity_weight_cap_fence(),
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
@@ -14184,6 +14191,64 @@ impl VirtualStateProcessor {
         (contributions, epoch_anchor_daa)
     }
 
+    /// **lane: rcore/cap-weight — ADR-0160 F-W: may GHOSTDAG decide this all-economic tie?** `true`
+    /// exactly when (1) `candidate` is heavier than `prev_sink` in GHOSTDAG's own order — blue work,
+    /// then hash, the [`SortableBlock`] order the sink search pops in — and (2) the reorg is SHALLOW:
+    /// the incumbent's selected chain above its common chain ancestor with `candidate` spans at most
+    /// [`PALW_CAPACITY_SHALLOW_REORG_DAA_V1`] DAA ticks (`incumbent_daa − daa(ancestor) ≤ D`).
+    ///
+    /// **Why a depth, and why on the incumbent's side.** A rule that keeps the incumbent on a tie
+    /// is a rule about arrival order, so two honest nodes racing a slot keep different sinks; a
+    /// rule that hands every tie to GHOSTDAG hands it to whoever piles more blue work in private,
+    /// which is the heartbeat double spend `palw_reorg_strict_economic_win` closed. Honest races
+    /// are resolved within a propagation delay — well inside one slot, two ticks with the lead
+    /// cap's burst — while a double spend must reverse a payment someone has watched confirm. The
+    /// depth is read on the INCUMBENT's own chain (this node's history since the fork), which a
+    /// challenger cannot shorten: blocks it gets merged into that chain only lengthen it. So a
+    /// shallow tie is decided the way every honest node decides it, and a payment deeper than `D`
+    /// ticks keeps strict-win's protection whatever blue work is piled against it.
+    ///
+    /// Conservative on every read it cannot make — an unreadable header or GHOSTDAG row, a
+    /// reachability miss, a chain that runs past [`PALW_CAPACITY_SHALLOW_REORG_WALK_V1`] blocks
+    /// before leaving the depth — is `false` (the tie keeps the incumbent, strict-win's answer).
+    /// Reads only this node's committed stores, so every node holding the same DAG answers the same.
+    ///
+    /// [`PALW_CAPACITY_SHALLOW_REORG_DAA_V1`]: kaspa_consensus_core::palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1
+    /// [`PALW_CAPACITY_SHALLOW_REORG_WALK_V1`]: kaspa_consensus_core::palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_WALK_V1
+    pub(crate) fn palw_capacity_shallow_ghostdag_win_v1(
+        &self,
+        candidate: BlockHash,
+        prev_sink: BlockHash,
+        incumbent_daa: u64,
+    ) -> bool {
+        use kaspa_consensus_core::palw_weight_cap_v1::{PALW_CAPACITY_SHALLOW_REORG_DAA_V1, PALW_CAPACITY_SHALLOW_REORG_WALK_V1};
+        let heavier = match (self.ghostdag_store.get_blue_work(candidate), self.ghostdag_store.get_blue_work(prev_sink)) {
+            (Ok(c), Ok(p)) => SortableBlock::new(candidate, c) > SortableBlock::new(prev_sink, p),
+            _ => false,
+        };
+        if !heavier {
+            return false;
+        }
+        let floor = incumbent_daa.saturating_sub(PALW_CAPACITY_SHALLOW_REORG_DAA_V1);
+        let mut block = prev_sink;
+        for _ in 0..PALW_CAPACITY_SHALLOW_REORG_WALK_V1 {
+            let Ok(daa) = self.headers_store.get_daa_score(block) else { return false };
+            if daa < floor {
+                return false;
+            }
+            match self.reachability_service.try_is_chain_ancestor_of(block, candidate) {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(_) => return false,
+            }
+            match self.ghostdag_store.get_selected_parent(block) {
+                Ok(parent) if parent != block && parent != kaspa_consensus_core::blockhash::ORIGIN => block = parent,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     /// kaspa-pq Phase 10/13 (ADR-0009 §"Decision" / ADR-0018 §H): the DNS finality reorg
     /// gate. Returns `true` (candidate sink allowed) unless the overlay is configured, in
     /// the `Active` rollout stage, has a confirmed anchor, and `candidate` would abandon
@@ -14263,8 +14328,28 @@ impl VirtualStateProcessor {
                     // — a candidate's own score is attacker-chosen — exactly as the confirmed-anchor
                     // TTL and `palw_frontier_provenance_outcome` read it. Below the fence this is
                     // byte-identical to `decide_deep_reorg_v2`.
+                    //
+                    // **lane: rcore/cap-weight — past ADR-0160 F-W, a SHALLOW tie is GHOSTDAG's.** This
+                    // gate judges every non-extension sink move, a one-block sibling switch included, and
+                    // "a tie keeps the incumbent" is a rule about arrival order: two honest nodes that saw
+                    // sibling tips in different orders each keep their own, and the refused sibling
+                    // leaves the virtual's parents, so neither merges the other's tip and the split
+                    // outlives every later block that ties (the lane's verify finding 2, measured by
+                    // `capacity_probe_honest_sibling_forks_converge_past_the_cap`). F-W makes such ties
+                    // the rule rather than the exception — a `Created` attempt weighs 0, so a sibling
+                    // attempt no longer breaks one — so past F-W an all-economic tie is decided by
+                    // GHOSTDAG's own order (blue work, then hash; the order this search pops in) when
+                    // the incumbent's chain above the fork point spans at most
+                    // `PALW_CAPACITY_SHALLOW_REORG_DAA_V1` DAA ticks, and still keeps the incumbent
+                    // deeper, where strict-win's protection is. It only ever ALLOWS a reorg strict-win
+                    // refuses (a shallow tie), never refuses one it allows. F-W requires strict-win at or
+                    // below it, so both are read at the same incumbent DAA.
                     let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
-                    let decision = if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
+                    let decision = if self.palw_capacity_weight_cap.is_some_and(|f| f.is_active(incumbent_daa)) {
+                        kaspa_consensus_core::palw_fork_authority_v2::palw_deep_reorg_capacity_v1(&incumbent, &challenger, || {
+                            self.palw_capacity_shallow_ghostdag_win_v1(candidate, prev_sink, incumbent_daa)
+                        })
+                    } else if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
                         kaspa_consensus_core::palw_fork_authority_v2::palw_deep_reorg_strict_economic_v1(&incumbent, &challenger)
                     } else {
                         kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger)

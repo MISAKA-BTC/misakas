@@ -1873,6 +1873,19 @@ fn post_launch_entry(name: &str) -> &'static kaspa_consensus_core::config::param
         .unwrap_or_else(|| panic!("{name} is listed"))
 }
 
+/// **The release's fence set**: every entry of `PALW_T12_POST_LAUNCH_FENCES_V1` set to `at` through its
+/// own `set`, as the release sets them — without F-W's entry where `cap` is false (the DAA-500 release
+/// does not carry it), with it where true (the capacity release on top).
+fn duel_release_set(at: u64, cap: bool) -> Duel {
+    duel_on(|params| {
+        for fence in kaspa_consensus_core::config::params::PALW_T12_POST_LAUNCH_FENCES_V1 {
+            if cap || fence.name != "palw_capacity_weight_cap" {
+                (fence.set)(params, Some(ForkActivation::new(at)));
+            }
+        }
+    })
+}
+
 /// Two nodes on testnet-12 with harness cards and whatever fences `arm` sets, both loading under the
 /// ARMED bundle, and the two payments that spend card 1's float.
 fn duel_on(arm: impl FnOnce(&mut kaspa_consensus_core::config::params::Params)) -> Duel {
@@ -1918,8 +1931,9 @@ fn duel_on(arm: impl FnOnce(&mut kaspa_consensus_core::config::params::Params)) 
 /// * testnet-12 as shipped, and with strict-win alone: the K claims weigh K floor claims in the
 ///   victim's PALW keys against the public one — `live` decides, the reorg is allowed, Y lands.
 /// * strict-win + lane A + F-W: a `Created` claim weighs 0 on both sides, whatever K — the keys tie,
-///   strict-win keeps the incumbent, and X stands. The same at K = 2 and K = 5: claims × K is not
-///   power × K.
+///   the reorg is eight slots deep (past `PALW_CAPACITY_SHALLOW_REORG_DAA_V1`, so the tie is not
+///   GHOSTDAG's), strict-win keeps the incumbent, and X stands. The same at K = 2 and K = 5: claims × K
+///   is not power × K.
 /// * The ADR-0160 §8 A1 matrix: each of those with F1's same-chain heartbeat rule armed as well — it
 ///   changes GHOSTDAG colouring, never `bounded_immature`, so the verdicts are the same.
 ///
@@ -2124,6 +2138,191 @@ async fn capacity_probe_w_t6b_a_licence_only_the_private_branch_carries_wins_pas
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// lane: rcore/cap-weight — the lane's verify finding 2: honest sibling forks under strict-win and F-W.
+//
+// `dns_reorg_outcome` judges every non-extension sink move, a one-block sibling switch included. Past
+// `palw_reorg_strict_economic_win` an all-economic tie keeps the incumbent — a rule about ARRIVAL ORDER —
+// and the refused sibling leaves the virtual's parents, so two honest nodes that saw sibling tips in
+// different orders keep different sinks, and every later block that ties keeps them apart. F-W makes
+// such ties the rule (a `Created` attempt weighs 0), so past F-W a SHALLOW tie is decided by GHOSTDAG's
+// own order (`palw_deep_reorg_capacity_v1`, `palw_capacity_shallow_ghostdag_win_v1`); a deeper one still
+// keeps the incumbent, which is strict-win's protection against a private branch's blue-work pile.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// Whether the two nodes' sinks agree, printed with both nodes' PALW keys.
+fn sinks_agree(tag: &str, step: &str, d: &Duel) -> bool {
+    let keys =
+        |c: &T12Chain| c.vp().palw_candidate_order_v2(c.sink()).map(|o| (o.safe_frontier_blue_score, o.safe_weight, o.live_total));
+    let (vs, os) = (d.victim.sink(), d.attacker.sink());
+    eprintln!(
+        "[{tag}] {step}: node A sink {vs} (DAA {}) keys {:?} / node B sink {os} (DAA {}) keys {:?} — {}",
+        d.victim.daa_of(vs),
+        keys(&d.victim),
+        d.attacker.daa_of(os),
+        keys(&d.attacker),
+        if vs == os { "AGREE" } else { "SPLIT" }
+    );
+    vs == os
+}
+
+/// **Two HONEST nodes race, no attacker anywhere** (the verifier's scenario, generalised). After three
+/// shared slots: (1) each mines an attempt on the common tip — card 1 on node A, card 2 on node B, a
+/// natural sibling fork — and each then receives the other's; (2) node A mines an attempt (card 3) while
+/// node B mines a heartbeat, exchanged; (3) five rounds of sibling heartbeats, each node mining one on
+/// its own virtual (distinct nonces), exchanged. Returns whether the sinks agreed after each of the seven
+/// exchanges.
+async fn honest_sibling_race(tag: &str, d: &mut Duel) -> Vec<bool> {
+    for _ in 0..3 {
+        honest_slot_mirrored(d).await;
+    }
+    let mut agreed = Vec::new();
+    let (a1, _) = d.victim.attempt(1, 1_000, Vec::new(), &|_| true).await;
+    let (b1, _) = d.attacker.attempt(2, 1_000, Vec::new(), &|_| true).await;
+    mirror(&mut d.victim, &b1).await;
+    mirror(&mut d.attacker, &a1).await;
+    agreed.push(sinks_agree(tag, "(1) sibling attempts", d));
+    let (a2, _) = d.victim.attempt(3, 1_000, Vec::new(), &|_| true).await;
+    let b2 = d.attacker.heartbeat(1_000, Vec::new()).await;
+    mirror(&mut d.victim, &b2).await;
+    mirror(&mut d.attacker, &a2).await;
+    agreed.push(sinks_agree(tag, "(2) an attempt against a heartbeat", d));
+    for round in 0..5 {
+        let clock = d.victim.ctx.simulated_time + 1_000;
+        let a = layer(&mut d.victim, &mut d.nonce, 1, clock, Vec::new()).await.expect("node A's heartbeat").remove(0);
+        let clock = d.attacker.ctx.simulated_time + 1_000;
+        let b = layer(&mut d.attacker, &mut d.nonce, 1, clock, Vec::new()).await.expect("node B's heartbeat").remove(0);
+        mirror(&mut d.victim, &b).await;
+        mirror(&mut d.attacker, &a).await;
+        agreed.push(sinks_agree(tag, &format!("(3) sibling heartbeats, round {round}"), d));
+    }
+    agreed
+}
+
+/// **Honest nodes converge past F-W; under strict-win alone they do not** (the lane's verify finding 2).
+///
+/// * testnet-12 as shipped — printed for comparison, not asserted: an economic tie falls to the
+///   candidate hash, which both nodes read alike, but where the economic order and GHOSTDAG's order
+///   disagree (an attempt sibling against a heartbeat sibling) the node holding the GHOSTDAG-heavier
+///   one never weighs the other, and the two re-converge only once a later block merges both. The
+///   harness's block hashes differ run to run (the attempt signatures), so whether a given exchange
+///   splits does too: measured both ways, `[T; 7]` and `[T, F, F, F, T, T, T]`.
+/// * strict-win alone (`palw_reorg_strict_economic_win`, the DAA-500 release's fence): the sibling
+///   attempts tie (one `Created` floor claim each), each node keeps the sibling it saw first, and the
+///   two sinks SPLIT at the first exchange. **Pinned as the finding, routed to the DAA-500 release's
+///   owner** — if this assertion fails, strict-win has been fixed there, and F-W's shallow rule
+///   (`palw_deep_reorg_capacity_v1`) should be reconciled with that fix when rcore/cap-int merges.
+/// * strict-win + lane A + F-W: every claim here is `Created` (nothing binds inside the anchor delay),
+///   so every exchange is an all-economic tie, and every tie is shallow (a slot race): GHOSTDAG's order
+///   decides it on both nodes alike, whatever the hashes — they agree after every exchange.
+///
+/// Both assertions are hash-independent: the strict-win split needs only the two sibling attempts'
+/// equal weight (one floor claim each), and the F-W agreement only the tie.
+#[tokio::test]
+async fn capacity_probe_honest_sibling_forks_converge_past_the_cap() {
+    kaspa_core::log::try_init_logger("warn");
+    for (label, strict, cap) in
+        [("shipped", None, None), ("strict-win", Some(1), None), ("strict-win + lane A + F-W", Some(1), Some(1))]
+    {
+        let tag = format!("cap-weight honest race, {label}");
+        let mut d = duel_capacity_armed(strict, cap);
+        let agreed = honest_sibling_race(&tag, &mut d).await;
+        eprintln!("[{tag}] agreed after each exchange: {agreed:?}");
+        match (strict, cap) {
+            (None, _) => {} // the shipped rule: printed for comparison (see above)
+            (Some(_), None) => assert!(
+                !agreed[0],
+                "{tag}: the verify finding, pinned — strict-win keeps each node on the sibling it saw first. If this now \
+                 agrees, the DAA-500 release fixed strict-win: reconcile F-W's shallow rule with that fix"
+            ),
+            (Some(_), Some(_)) => {
+                assert!(agreed.iter().all(|a| *a), "{tag}: two honest nodes agree after every exchange: {agreed:?}")
+            }
+        }
+    }
+}
+
+/// **The same race under the release's whole fence set** (every entry of `PALW_T12_POST_LAUNCH_FENCES_V1`
+/// set to one height through its own `set`, as the release sets them): without F-W (the DAA-500
+/// release) the first exchange splits — the finding, as it would run on testnet-12 past DAA 500 — and
+/// with F-W on top (the capacity release) every exchange agrees.
+#[tokio::test]
+async fn capacity_probe_the_release_set_converges_on_honest_siblings_with_the_cap() {
+    kaspa_core::log::try_init_logger("warn");
+    for cap in [false, true] {
+        let tag = format!("cap-weight honest race, release set{}", if cap { " + F-W" } else { "" });
+        let mut d = duel_release_set(1, cap);
+        let agreed = honest_sibling_race(&tag, &mut d).await;
+        eprintln!("[{tag}] agreed after each exchange: {agreed:?}");
+        if cap {
+            assert!(agreed.iter().all(|a| *a), "{tag}: two honest nodes agree after every exchange: {agreed:?}");
+        } else {
+            assert!(!agreed[0], "{tag}: the verify finding, pinned on the DAA-500 release's own fence set (see above)");
+        }
+    }
+}
+
+/// **Where GHOSTDAG may decide a tie, and where it may not: the depth boundary, measured.** A private
+/// heartbeat branch ties the public one on every economic key (no claim anywhere: `{0, 0, 0}` on both
+/// sides) and is heavier on blue work (two-sibling layers and a merging holder), at the same DAA as the
+/// public tip. The public tip is `k` DAA ticks above the fork, X in its first slot, Y in the private one.
+///
+/// * strict-win alone: every `k` is refused — the tie keeps the incumbent (the probe of the strict-win
+///   lane, `hb_probe_fence_refuses_…`, at ten slots).
+/// * strict-win + lane A + F-W: `k ≤ PALW_CAPACITY_SHALLOW_REORG_DAA_V1` is a slot race GHOSTDAG decides —
+///   the heavier private branch wins and Y lands; that is the price of convergence, stated and bounded:
+///   a payment with at most `D` ticks of confirmation. At `D + 1` the tie keeps the incumbent and X
+///   stands, as it does at every depth beyond.
+#[tokio::test]
+async fn capacity_probe_a_shallow_tie_is_ghostdags_and_a_deep_tie_keeps_the_incumbent() {
+    use kaspa_consensus_core::palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1 as D;
+    kaspa_core::log::try_init_logger("warn");
+    for (label, cap) in [("strict-win", None), ("strict-win + lane A + F-W", Some(1))] {
+        for k in 1..=D + 1 {
+            let tag = format!("cap-weight tie depth, {label}, k={k}");
+            let mut d = duel_capacity_armed(Some(1), cap);
+            for _ in 0..3 {
+                honest_slot_mirrored(&mut d).await;
+            }
+            let fork = d.victim.sink();
+            honest_slot(&mut d.victim, vec![d.x.clone()]).await;
+            for _ in 1..k {
+                honest_slot(&mut d.victim, Vec::new()).await;
+            }
+            assert_eq!(
+                d.victim.daa_of(d.victim.sink()) - d.victim.daa_of(fork),
+                k,
+                "{tag}: the public tip is {k} ticks above the fork"
+            );
+            let mut private = private_slot(&mut d.attacker, &mut d.nonce, 2, vec![d.y.clone()]).await;
+            for _ in 1..k {
+                private.extend(private_slot(&mut d.attacker, &mut d.nonce, 2, Vec::new()).await);
+            }
+            let clock = d.attacker.ctx.simulated_time + 1_000;
+            private.extend(layer(&mut d.attacker, &mut d.nonce, 1, clock, Vec::new()).await.expect("the merging holder"));
+            assert_eq!(
+                d.attacker.daa_of(d.attacker.sink()),
+                d.victim.daa_of(d.victim.sink()),
+                "{tag}: the private tip sits at the public tip's DAA (no lead)"
+            );
+            let economic = |c: &T12Chain| {
+                c.vp().palw_candidate_order_v2(c.sink()).map(|o| (o.safe_frontier_blue_score, o.safe_weight, o.live_total))
+            };
+            let (public, private_keys) = (economic(&d.victim), economic(&d.attacker));
+            assert_eq!(public, private_keys, "{tag}: an all-economic tie");
+            let r = release(&tag, &mut d.victim, &private, fork, &mut d.nonce, 0).await;
+            assert!(r.refused.is_empty(), "{tag}: every private block is valid");
+            assert!(r.private_bw_max > r.public_bw && r.offered_at.is_some(), "{tag}: the private branch is heavier and offered");
+            let (x, y) = payments(&tag, &d);
+            if cap.is_some() && k <= D {
+                assert!(r.flipped() && y && !x, "{tag}: a shallow tie is GHOSTDAG's — the heavier branch wins (the stated window)");
+            } else {
+                assert!(!r.flipped() && x && !y, "{tag}: a tie {k} ticks deep keeps the incumbent — X stands");
+            }
+        }
+    }
+}
+
 /// The genesis cards' bonds in registration order (card `i` is the `i`-th `BondRegistered`).
 fn genesis_card_bonds(
     params: &kaspa_consensus_core::config::params::Params,
@@ -2226,6 +2425,7 @@ async fn capacity_probe_w_t6c_lane_a_keeps_a_non_operators_private_claims_create
              {} private blocks, public {depth} ticks above the fork",
             private.len()
         );
+        assert!(depth > kaspa_consensus_core::palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1, "{tag}: a deep reorg");
         assert_eq!(public.live_total, 0, "{tag}: the public branch stages nothing");
         let r = release(&tag, &mut d.victim, &private, fork, &mut d.nonce, 0).await;
         assert!(r.refused.is_empty(), "{tag}: every private block is valid");

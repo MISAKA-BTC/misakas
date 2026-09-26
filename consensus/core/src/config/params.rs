@@ -1211,6 +1211,15 @@ pub struct Params {
     /// strict-win gate would ALLOW the deep reorg (ADR-0160 §8 A1). Until the structural P0-10 fix
     /// retires the stopgap, F-W does not arm without it. The fold reads it through the V2 bundle's
     /// mirror (`Self::sync_palw_capacity_weight_cap`). A bare fence.
+    ///
+    /// **It also sets how the deep-reorg gate breaks a tie** (the processor reads it at the incumbent's
+    /// DAA, as it reads strict-win): past it an all-economic tie in a reorg at most
+    /// `palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1` ticks deep on the incumbent's side is
+    /// decided by GHOSTDAG's own order (blue work, then hash), and a deeper one keeps the incumbent
+    /// (`palw_fork_authority_v2::palw_deep_reorg_capacity_v1`). Strict-win alone keeps the incumbent on
+    /// EVERY tie, so two honest nodes racing a slot keep the siblings they saw first — a split staged
+    /// weight would make permanent, since a `Created` attempt no longer breaks the tie (the lane's
+    /// verify finding 2).
     pub palw_capacity_weight_cap: Option<ForkActivation>,
 
     /// **ADR-0066 Decision 1 — the heartbeat lane.** `None` on every shipped preset.

@@ -120,6 +120,42 @@ pub fn palw_deep_reorg_strict_economic_v1(incumbent: &PalwCandidateOrderV1, chal
     if economic(challenger) > economic(incumbent) { PalwDeepReorgV2::Allow } else { PalwDeepReorgV2::Refuse }
 }
 
+/// **lane: rcore/cap-weight — ADR-0160 F-W: strict-win, with a SHALLOW tie decided by GHOSTDAG** (the
+/// lane's verify finding 2).
+///
+/// [`palw_deep_reorg_strict_economic_v1`] keeps the incumbent on every all-economic tie, and the gate
+/// that calls it judges every non-extension sink move, a one-block sibling switch included. "The
+/// incumbent" is whichever sibling a node saw first, so two honest nodes racing a slot keep different
+/// sinks — and since the refused sibling leaves the virtual's parents, neither merges the other's tip
+/// and every later block that ties keeps them apart. F-W makes such ties the rule (a `Created` claim
+/// weighs 0, so a sibling attempt no longer breaks one). Past F-W:
+///
+/// * a strict economic win allows and a strict economic loss refuses — exactly strict-win;
+/// * an all-economic tie allows iff `shallow_ghostdag_win()` — the caller's statement that the reorg is
+///   SHALLOW (the incumbent's selected chain above its common chain ancestor with the challenger spans
+///   at most [`crate::palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1`] DAA ticks) and that the
+///   challenger is heavier in GHOSTDAG's own order (blue work, then hash). Asked only on a tie.
+///
+/// So it allows everything strict-win allows, and refuses everything strict-win refuses except a
+/// shallow tie GHOSTDAG awards the challenger — which every node reads alike, so honest races converge.
+/// A tie deeper than the bound still keeps the incumbent, so a private branch's blue-work pile against
+/// a payment older than the bound is refused exactly as strict-win refuses it. Pure: the depth and the
+/// GHOSTDAG order are the caller's reads of its own stores (the processor's
+/// `palw_capacity_shallow_ghostdag_win_v1`).
+pub fn palw_deep_reorg_capacity_v1(
+    incumbent: &PalwCandidateOrderV1,
+    challenger: &PalwCandidateOrderV1,
+    shallow_ghostdag_win: impl FnOnce() -> bool,
+) -> PalwDeepReorgV2 {
+    let economic = |o: &PalwCandidateOrderV1| (o.safe_frontier_blue_score, o.safe_weight, o.live_total);
+    match economic(challenger).cmp(&economic(incumbent)) {
+        Ordering::Greater => PalwDeepReorgV2::Allow,
+        Ordering::Less => PalwDeepReorgV2::Refuse,
+        Ordering::Equal if shallow_ghostdag_win() => PalwDeepReorgV2::Allow,
+        Ordering::Equal => PalwDeepReorgV2::Refuse,
+    }
+}
+
 /// Convenience for sites that hold `(block, order)` pairs: the selected block hash.
 pub fn select_palw_tip_hash_v2(candidates: impl IntoIterator<Item = (BlockHash, PalwCandidateOrderV1)>) -> Option<BlockHash> {
     candidates.into_iter().max_by(|a, b| compare_palw_candidates_v1(&a.1, &b.1)).map(|(hash, _)| hash)
@@ -213,6 +249,42 @@ mod tests {
                 let chal = order(fc, sc, lc, 9);
                 if palw_deep_reorg_strict_economic_v1(&inc, &chal) == PalwDeepReorgV2::Allow {
                     assert_eq!(decide_deep_reorg_v2(&inc, &chal), PalwDeepReorgV2::Allow, "fenced Allow implies unfenced Allow");
+                }
+            }
+        }
+    }
+
+    /// **lane: rcore/cap-weight — past F-W a shallow tie is GHOSTDAG's, and nothing else moves.** The
+    /// caller's "shallow and GHOSTDAG-heavier" is asked on an all-economic tie and nowhere else; with it
+    /// `false` the rule IS strict-win, and with it `true` the only reorg it adds is that tie.
+    #[test]
+    fn capacity_reorg_is_strict_win_but_a_shallow_tie_goes_to_ghostdag() {
+        let never = || -> bool { panic!("the depth and the GHOSTDAG order are asked only on an all-economic tie") };
+        // The tie itself: GHOSTDAG's answer, whatever the PALW candidate hashes say.
+        let incumbent = order(0, 0, 0, 9);
+        let lower_hash = order(0, 0, 0, 1);
+        assert_eq!(palw_deep_reorg_capacity_v1(&incumbent, &lower_hash, || true), PalwDeepReorgV2::Allow, "shallow, GHOSTDAG-heavier");
+        assert_eq!(
+            palw_deep_reorg_capacity_v1(&incumbent, &lower_hash, || false),
+            PalwDeepReorgV2::Refuse,
+            "deep, or GHOSTDAG-lighter"
+        );
+        // A strict economic win or loss never asks — and never differs from strict-win.
+        assert_eq!(palw_deep_reorg_capacity_v1(&order(0, 0, 0, 1), &order(1, 0, 0, 0), never), PalwDeepReorgV2::Allow);
+        assert_eq!(palw_deep_reorg_capacity_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0), never), PalwDeepReorgV2::Allow);
+        assert_eq!(palw_deep_reorg_capacity_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0), never), PalwDeepReorgV2::Allow);
+        assert_eq!(palw_deep_reorg_capacity_v1(&order(5, 3, 2, 1), &order(5, 3, 1, 9), never), PalwDeepReorgV2::Refuse);
+        assert_eq!(palw_deep_reorg_capacity_v1(&order(6, 0, 0, 1), &order(5, 9, 9, 9), never), PalwDeepReorgV2::Refuse);
+        // Over a grid: `false` is strict-win exactly; `true` differs from it only on an economic tie.
+        for (fi, si, li) in [(0u64, 0u128, 0u128), (5, 3, 2)] {
+            for (fc, sc, lc) in [(0u64, 0u128, 0u128), (5, 3, 2), (6, 0, 0), (5, 4, 0), (5, 3, 1), (4, 9, 9)] {
+                for (hi, hc) in [(1u64, 9u64), (9, 1)] {
+                    let (inc, chal) = (order(fi, si, li, hi), order(fc, sc, lc, hc));
+                    let strict = palw_deep_reorg_strict_economic_v1(&inc, &chal);
+                    assert_eq!(palw_deep_reorg_capacity_v1(&inc, &chal, || false), strict, "not shallow: strict-win itself");
+                    let tie = (fi, si, li) == (fc, sc, lc);
+                    let shallow = palw_deep_reorg_capacity_v1(&inc, &chal, || true);
+                    assert_eq!(shallow, if tie { PalwDeepReorgV2::Allow } else { strict }, "shallow: only the tie moves");
                 }
             }
         }

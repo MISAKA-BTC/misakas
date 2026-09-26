@@ -47,6 +47,23 @@
 //!
 //! Tests: `w_t6_…` and `w_t6b_…` (fold), `capacity_probe_w_t6_…` and `capacity_probe_w_t6b_…` (processor).
 //!
+//! # Fork choice past the fence: a SHALLOW tie is GHOSTDAG's (the lane's verify finding 2)
+//!
+//! The deep-reorg gate (`dns_reorg_outcome`) judges every non-extension sink move, a one-block
+//! sibling switch included, and past `palw_reorg_strict_economic_win` an all-economic tie keeps the
+//! incumbent. "The incumbent" is whichever sibling a node saw first, and the refused sibling leaves
+//! the virtual's parents: two honest nodes racing a slot keep different sinks, neither merges the
+//! other's tip, and every later block that ties keeps them apart — their virtual chains (acceptance
+//! order, PALW state, DAA) diverge over one shared DAG. Staged weight makes such ties the rule: a
+//! `Created` attempt weighs 0, so a sibling attempt no longer breaks one. So past the fence the gate
+//! runs `palw_fork_authority_v2::palw_deep_reorg_capacity_v1`: strict-win, except that a tie in a
+//! reorg at most [`PALW_CAPACITY_SHALLOW_REORG_DAA_V1`] DAA ticks deep on the incumbent's side is
+//! decided by GHOSTDAG's own order (blue work, then hash), which every node reads alike. A payment
+//! deeper than that keeps strict-win's protection; one within it can be reversed by a heavier tying
+//! branch, the stated price of convergence. The DAA-500 release's strict-win alone still splits honest
+//! siblings — pinned by `capacity_probe_honest_sibling_forks_converge_past_the_cap` and routed to that
+//! release — and this rule should be reconciled with whatever fix it takes.
+//!
 //! # Invariants (ADR-0160 §7.1), each pinned by a test in `palw_state_v2/tests/capacity_weight_cap_v1.rs`
 //!
 //! * **W-I1** — `bounded_immature − Σ old-rule raw ≤ Σ_b W_cap(b)`, at any claim count.
@@ -104,6 +121,29 @@ pub const PALW_CAPACITY_S2_PERMILLE_V1: u16 = 250;
 /// `reverse_convicted_final`, the load-time re-derivation), but a change such a fence must re-derive this
 /// constant for (ADR-0160 §10 D-3).
 pub const PALW_CAPACITY_C7_WEIGHT_CEILING_V1: u128 = 138_892_697_241;
+
+/// **The depth, in DAA ticks, within which an all-economic tie is GHOSTDAG's** (the lane's verify
+/// finding 2; `crate::palw_fork_authority_v2::palw_deep_reorg_capacity_v1`). Past F-W the deep-reorg
+/// gate hands a tie to GHOSTDAG's own order (blue work, then hash) when the incumbent's selected chain
+/// above its common chain ancestor with the challenger spans at most this many ticks, and keeps the
+/// incumbent — strict-win — beyond.
+///
+/// **Why 2.** testnet-12's DAA is its heartbeat clock: one tick a slot. Two honest nodes racing a slot
+/// each extend their own tip by a holder and a step — one tick — before they hear each other, and the
+/// lead cap (`palw_clock_lead_cap`) lets a producer run the clock at most two ticks in one burst, so an
+/// honest race spans at most two ticks when it is decided. A private branch that ties the economic keys
+/// and out-piles the public chain in blue work can therefore reverse a payment only while it has at most
+/// two ticks of confirmation (about four minutes); deeper, strict-win keeps the incumbent whatever blue
+/// work is piled against it. Neither number reaches the published merchant rule (finality, or a `Final`
+/// settlement anchor), which does not count ticks at all.
+pub const PALW_CAPACITY_SHALLOW_REORG_DAA_V1: u64 = 2;
+
+/// The most selected-chain blocks the processor walks back from the incumbent looking for the common
+/// chain ancestor within [`PALW_CAPACITY_SHALLOW_REORG_DAA_V1`] ticks. An honest chain carries a few
+/// blocks a tick (a holder, a step, the attempts of the slot); a chain that has not left the depth
+/// after this many blocks is treated as deep — the tie keeps the incumbent, strict-win's answer — so
+/// the walk is bounded however many blocks a tick holds.
+pub const PALW_CAPACITY_SHALLOW_REORG_WALK_V1: usize = 64;
 
 /// **A claim's weight stage** (ADR-0160 §4.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,5 +443,13 @@ mod tests {
         assert_eq!(palw_capped_weight_reservation_v1(10_752_660, 21_505_320, u128::MAX), 0, "never negative");
         // The ceiling is 8k's raw weight, 229.86 FCW.
         assert_eq!(PALW_CAPACITY_C7_WEIGHT_CEILING_V1 * 100 / PALW_CAPACITY_FCW_V1, 22_985);
+    }
+
+    /// The shallow-tie depth is a slot race with the lead cap's burst (two ticks), and the walk that
+    /// finds it covers any honest chain's blocks in that many ticks many times over.
+    #[test]
+    fn the_shallow_tie_depth_is_a_slot_race() {
+        assert_eq!(PALW_CAPACITY_SHALLOW_REORG_DAA_V1, 2);
+        assert!(PALW_CAPACITY_SHALLOW_REORG_WALK_V1 as u64 >= 8 * (PALW_CAPACITY_SHALLOW_REORG_DAA_V1 + 1));
     }
 }
