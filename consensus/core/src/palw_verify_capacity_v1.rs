@@ -30,14 +30,15 @@
 //!   bond holds one, the posted fraction under contention, none for a frozen bond (V-I5; lane liab's
 //!   `palw_bond_is_frozen_v1` is the predicate at cap-int — [`palw_verify_bond_is_frozen_v1`] stands in
 //!   for it here) — is GUARANTEED: the others' claims past their own shares never take it;
-//! * the **rounding slack** `room − Σ shares` (less than one claim per active bond) is shared first
-//!   come, so the room is fully usable ([`palw_bond_room_cap_v1`]).
+//! * the **rounding slack** `room − Σ shares` (less than one claim per active bond) is shared one
+//!   unit a bond, first come ([`palw_bond_room_cap_v1`]): an attacker of stake fraction `s` holds at
+//!   most `⌊s·room⌋ + 1`.
 //!
 //! **Deviation from ADR-0160 §7.4's `max(1, ⌈room × C_b / ΣC⌉)`, measured and deliberate.** A ceiling
 //! with a floor of one gives every piece of a split one claim: 76 pieces of 13,000 MSK (988k) take 76
 //! claims of a 58-claim room against an honest 1M bond, which then holds none (V-T4 / A4 fail). With
 //! the floored share the pieces' shares sum to at most the whole bond's (`Σ⌊x_i⌋ ≤ ⌊Σx_i⌋`), a split
-//! gains only the rounding slack it can win first (≤ one unit per active bond, V-I4), and an honest
+//! gains only the rounding slack it can win first (one unit per active piece, V-I4), and an honest
 //! bond of stake fraction `s` always reaches `⌊s × room⌋` (A4). The price: a bond whose stake fraction
 //! is below `1/room` holds only slack under contention.
 //!
@@ -180,11 +181,18 @@ pub struct PalwRoomHolderV1 {
 }
 
 /// **ADR-0160 V2: how many claims `holders[me]` may hold now** — its guaranteed share
-/// ([`palw_bond_room_share_v1`] over every other holder's collateral) or what it holds if more, plus
-/// the rounding slack no holder has taken yet: `room − Σ shares − Σ (held − share)⁺`. A bond may take
-/// one more claim iff `held + 1 ≤ cap`. `holders` are the active holders, the asking bond included
-/// (with `held = 0` if it holds none). A frozen holder's share is zero, so what it still holds is
-/// counted against the slack; it may take nothing.
+/// ([`palw_bond_room_share_v1`] over every other holder's collateral) plus at most ONE unit of the
+/// rounding slack no holder has taken yet (`room − Σ shares − Σ (held − share)⁺`): `share + 1` while
+/// a unit is free or already its own, `share` otherwise. A bond may take one more claim iff
+/// `held + 1 ≤ cap`. `holders` are the active holders, the asking bond included (with `held = 0` if it
+/// holds none). A frozen holder's share is zero, so what it still holds is counted against the slack;
+/// it may take nothing.
+///
+/// **One slack unit a bond** (V-T4, measured): with the slack first come, a 988k bond that filled
+/// first beside an honest 1M bond and a 939k card took both free units — 21 claims of a 58-claim room
+/// at a stake fraction of 0.3375 (s·room + 1.4), past §7.4's `≤ s·room + 1`. With one unit a bond an
+/// attacker of stake fraction `s` holds at most `⌊s·room⌋ + 1`; the room left idle is at most the
+/// slack no second bond wants (fewer units than active bonds).
 pub fn palw_bond_room_cap_v1(room: u64, me: usize, holders: &[PalwRoomHolderV1]) -> u64 {
     let Some(mine) = holders.get(me) else { return 0 };
     if mine.frozen {
@@ -199,7 +207,10 @@ pub fn palw_bond_room_cap_v1(room: u64, me: usize, holders: &[PalwRoomHolderV1])
     let shares: u64 = live().map(share_of).fold(0u64, u64::saturating_add);
     let excess: u64 = live().map(|h| h.held.saturating_sub(share_of(h))).fold(0u64, u64::saturating_add);
     let slack_free = live_room.saturating_sub(shares).saturating_sub(excess);
-    share_of(mine).max(mine.held).saturating_add(slack_free)
+    let my_share = share_of(mine);
+    // Its one unit: already taken (it holds past its share), or free to take.
+    let my_unit = if mine.held > my_share { 1 } else { slack_free.min(1) };
+    my_share.saturating_add(my_unit)
 }
 
 /// **Lane liab's freeze, as this lane reads it** (ADR-0160 AG-3: the first conviction freezes a
@@ -326,8 +337,9 @@ mod tests {
     }
 
     /// The cap: an honest bond of stake fraction s always reaches ⌊s·room⌋ whatever the others hold
-    /// past their shares, the slack is shared first come, the room is never exceeded, and a split
-    /// gains at most the slack (≤ one unit per holder) — V-T4's arithmetic (76 × 13k vs an honest 1M).
+    /// past their shares, the slack is shared one unit a bond, the room is never exceeded, a split
+    /// gains at most the slack (≤ one unit per holder), and a whole attacker holds ≤ ⌊s·room⌋ + 1 —
+    /// V-T4's arithmetic (76 × 13k, and one 988k bond, vs an honest 1M and a card).
     #[test]
     fn the_cap_guarantees_every_share_and_shares_only_the_slack() {
         let room = 58u64;
@@ -362,6 +374,22 @@ mod tests {
         let whole_cap = palw_bond_room_cap_v1(room, 1, &whole);
         assert!(pieces_hold <= whole_cap + 76, "V-I4: the split gains at most one unit per piece");
         assert!(pieces_hold <= room - honest_share, "the pieces never take the honest share");
+        // The whole attacker fills first beside the honest bond and a card (each holding one): at
+        // most ⌊s·room⌋ + 1, however much slack the flooring left (two units here).
+        let mut three = vec![h(1_000_000, 1), h(939_063, 1), h(988_000, 0)];
+        while three[2].held < palw_bond_room_cap_v1(room, 2, &three) {
+            three[2].held += 1;
+        }
+        let s_room = room as f64 * 988_000.0 / (1_000_000.0 + 939_063.0 + 988_000.0);
+        assert_eq!(three[2].held, s_room as u64 + 1, "the attacker: its share and one slack unit ({s_room:.2})");
+        assert!(three[2].held as f64 <= s_room + 1.0, "A4/V-T4: ≤ s·room + 1");
+        for i in 0..2 {
+            while three[i].held < palw_bond_room_cap_v1(room, i, &three) {
+                three[i].held += 1;
+            }
+        }
+        assert!(three.iter().map(|h| h.held).sum::<u64>() <= room);
+        assert_eq!(three[0].held, palw_bond_room_share_v1(room, 1_000_000, 939_063 + 988_000, false) + 1, "the honest bond: its share and the other unit");
         // A frozen holder takes nothing, and what it holds is charged to the slack.
         let frozen = vec![h(1_000_000, 0), PalwRoomHolderV1 { collateral: 1_000_000, held: 10, frozen: true }];
         assert_eq!(palw_bond_room_cap_v1(room, 1, &frozen), 0);
