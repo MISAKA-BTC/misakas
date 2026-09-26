@@ -210,6 +210,14 @@ pub fn palw_verify_bond_is_frozen_v1(_state: &PalwChainStateV2, _bond: &PalwBond
     false
 }
 
+/// **ADR-0160 V2 (J-6): the own claims each seat keeps room for before its room counts as slots** —
+/// measured need: the seats anchor the panels (past `palw_operator_anchor` they alone do), and a seat
+/// whose work room the flood's duties filled fails the ceiling on its own attempt (V-T5: the card's
+/// anchor block was disqualified at admission once the seats saturated). Eight genesis cards rotating
+/// one anchor a DAA each hold ≈ 3 own claims at a time until their licences release the escrow; four
+/// is that with one to spare (≈ 12,800 MSK a seat today, 2.7% of a genesis seat's work room).
+pub const PALW_FLOOR_ROOM_ANCHOR_RESERVE_V1: u32 = 4;
+
 /// **ADR-0160 V2 (J-6): the floor's seat-capital room**, as the fold reads it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwFloorRoomV1 {

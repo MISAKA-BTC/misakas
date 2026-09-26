@@ -1138,10 +1138,21 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
     let mut honest: Vec<Hash64> = Vec::new();
     let mut flood_accepted = 0u64;
     let mut refusals: BTreeMap<String, u64> = BTreeMap::new();
+    let mut anchors_missed = 0u64;
     for rel in 0..daa_len {
-        let card = (rel % 8) as usize;
-        let txs = s.take_carriers();
-        s.attempt(Who::Card(card), base, txs).await;
+        // The anchor: the first card (rotating) whose producer facts admit an attempt — a producer
+        // holds, as the node's own does, rather than mine a block admission refuses.
+        let mut anchored = false;
+        for k in 0..8 {
+            let card = ((rel + k) % 8) as usize;
+            if s.ready(Who::Card(card), base).is_ok() {
+                let txs = s.take_carriers();
+                s.attempt(Who::Card(card), base, txs).await;
+                anchored = true;
+                break;
+            }
+        }
+        anchors_missed += (!anchored) as u64;
         match s.ready(Who::Planted(9), base) {
             Ok(()) => {
                 let (claim, created) = s.attempt(Who::Planted(9), base, Vec::new()).await;
@@ -1202,10 +1213,12 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
         *fates.entry(fate).or_default() += 1;
     }
     let bind_timeouts: u64 = fates.iter().filter(|(k, _)| k.contains("BindTimeout")).map(|(_, v)| *v).sum();
+    let flood_voids = st.claims_iter().filter(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::Voided { .. })).count() as u64;
     out_line(format!(
-        "{{\"run\":\"{run}\",\"daa\":{daa_len},\"flood_accepted\":{flood_accepted},\"honest\":{},\"honest_fates\":{:?},\"refusals\":{:?},\"elapsed_s\":{}}}",
+        "{{\"run\":\"{run}\",\"daa\":{daa_len},\"flood_accepted\":{flood_accepted},\"honest\":{},\"honest_fates\":{:?},\"flood_voids\":{},\"anchors_missed\":{anchors_missed},\"refusals\":{:?},\"elapsed_s\":{}}}",
         honest.len(),
         fates,
+        flood_voids,
         refusals,
         started.elapsed().as_secs()
     ));

@@ -13642,6 +13642,13 @@ impl PalwFoldReadV1<'_> {
             .map(|fold| fold.globals.seat_count as u64)
             .unwrap_or(crate::palw_verification_profile_v1::PALW_SEAT_COUNT_V1 as u64);
         let eligibility = self.rcore_bind_prices(claim_id, claim, seat_count as usize, now_daa).eligibility;
+        // Every seat keeps room for its own next claims before any is counted as a slot: the seats
+        // are the network's anchors (past `palw_operator_anchor`, its only ones), and a seat whose
+        // work room the flood's duties filled cannot make the attempt that binds the flood — its own
+        // attempt fails the ceiling, no anchor comes, and the claims the room admitted void unbound.
+        let anchor_reserve = palw_claim_commitment_v1(self.params, claim, now_daa)
+            .unwrap_or(u128::MAX)
+            .saturating_mul(crate::palw_verify_capacity_v1::PALW_FLOOR_ROOM_ANCHOR_RESERVE_V1 as u128);
         let floor = if self.extras.panel_economy_active {
             crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi)
         } else {
@@ -13663,6 +13670,7 @@ impl PalwFoldReadV1<'_> {
                     self.accuser_ledger_v1(key, now_daa),
                     PalwRcoreGateV1::Work,
                 )
+                .saturating_sub(anchor_reserve)
             });
         let mut waiting: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
         for (_, key) in self.state.unresolved.iter() {
