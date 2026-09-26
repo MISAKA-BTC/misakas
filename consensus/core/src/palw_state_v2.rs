@@ -61715,7 +61715,9 @@ pub(crate) mod tests {
         #[test]
         fn the_bond_freeze_entry_applies_reverts_and_refuses_a_stranger() {
             let p = params();
-            let base = m02_populated_state();
+            // The derived indices rebuilt once, as apply and revert rebuild them.
+            let base = apply_delta_v2(&m02_populated_state(), &PalwStateDeltaV2 { point: ctx(0x5B, 200, 200), entries: Vec::new() }, &p)
+                .unwrap();
             let point = ctx(0x5C, 201, 201);
             let delta = PalwStateDeltaV2 {
                 point,
@@ -61855,7 +61857,15 @@ pub(crate) mod tests {
                         assert_eq!(b.state.bonds[&producer].collateral, 10_000_000, "{what}: a tier freeze takes nothing itself");
                         assert!(ids.iter().all(|id| !b.state.claims[id].phase.is_terminal()), "{what}: voids nothing");
                     }
-                    let delta = PalwStateDeltaV2 { point: ctx(9, 180, 9), entries: b.entries.clone() };
+                    // The transition journals the weights once, at its end (a void releases immature weight).
+                    let mut entries = b.entries.clone();
+                    if (s.safe_weight, s.bounded_immature) != (b.state.safe_weight, b.state.bounded_immature) {
+                        entries.push(PalwDeltaEntryV2::Weights {
+                            old: (s.safe_weight, s.bounded_immature),
+                            new: (b.state.safe_weight, b.state.bounded_immature),
+                        });
+                    }
+                    let delta = PalwStateDeltaV2 { point: ctx(9, 180, 9), entries };
                     assert_eq!(revert_delta_v2(&b.state, &delta, &p).unwrap(), s, "{what}: the delta reverts");
                 }
             }
@@ -62021,7 +62031,9 @@ pub(crate) mod tests {
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::NotReplayBacked).unwrap(), vec![6]);
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtDefault).unwrap(), vec![7]);
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtHeldVerdict).unwrap(), vec![8]);
-            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[9]).is_err(), "no tenth reason");
+            // ADR-0160 lane liab (AG-2): the forfeiture's void, appended as the tenth.
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::AggregateForfeit).unwrap(), vec![9]);
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[10]).is_err(), "no eleventh reason");
             assert_eq!(
                 crate::palw_economics_ledger_v1::palw_void_reason_name_v1(&PalwVoidReasonV2::CourtHeldVerdict),
                 "court_held_verdict"
