@@ -148,11 +148,17 @@ fn pow_batch_end(start: usize, len: usize, batch: usize, gated_ok: impl Fn(usize
 }
 
 impl ProofContext {
-    /// Build the full context from the proof
+    /// Build the full context from the proof.
+    ///
+    /// `peer_supplied` is `true` for a proof a peer sent (the challenger, in either entry point) and
+    /// `false` for one this node built itself (the defender, local revalidation). A peer's proof is
+    /// logged as it is validated and held to its own declared work (see `declared_work_is_exact`
+    /// below); this node's own proof is neither — it is `expect`ed by its callers, and a refusal
+    /// there would be a panic, not a verdict.
     fn from_proof(
         ppm: &PruningProofManager,
         proof: &PruningPointProof,
-        log_validating: bool,
+        peer_supplied: bool,
     ) -> Result<ControlFlow<(), ProofContext>, PruningImportError> {
         if proof.len() != ppm.max_block_level as usize + 1 {
             return Err(PruningImportError::ProofNotEnoughLevels(ppm.max_block_level as usize + 1));
@@ -240,6 +246,31 @@ impl ProofContext {
         let proof_pp_level = calc_block_level_layer0(&proof_pp_header, &ppm.network_id, ppm.max_block_level);
         let proof_pp = proof_pp_header.hash;
 
+        // **A peer's level 0 rooted at genesis is held to its own declared work** (lane
+        // rcore/hf-pptake; node-only — it decides which proof this node accepts, never a block).
+        //
+        // Every figure a proof's comparison and its adoption read as an ABSOLUTE is a header
+        // declaration: the pruning point's `blue_work` (the pruning-period cut, `apply_proof`'s
+        // stored GHOSTDAG data, the staged tip work `decide_commit` weighs, a candidate's verified
+        // work) and, through it, the relay's. The header sync that follows the proof verifies only
+        // work RELATIVE to the pruning point, so a proof re-emitting an honest history with every
+        // `blue_work` raised by the same amount was adopted as that much heavier (probe B of the
+        // pptake review: +2^40, no extra history, beat the defender's own proof).
+        //
+        // Where the level-0 proof is rooted at genesis the declaration is checkable exactly: the
+        // level holds `future(genesis) ∩ past(pp)`, i.e. every block in the pruning point's past with
+        // all of its parents, and `level_work(0) == 0`, so the proof's level-0 GHOSTDAG is the header
+        // pipeline's GHOSTDAG over the same DAG with the same lane rules (both are built from the same
+        // `Params`: the heartbeat, attempt-work, transparency and round-lane fences) — every honest
+        // header's declared `blue_work` and `blue_score` IS the recomputation. On testnet-12 that is
+        // every proof a peer can send: heartbeats, receipts and round blocks derive no level, and an
+        // attempt header derives none past the single lottery, which testnet-12 arms from genesis —
+        // so every level above 0 is genesis alone, the block `m` deep on level 1 is genesis, and the
+        // level-0 proof must start there (`t12_blocks_are_level_zero_under_mainnet_s_ceiling`). A
+        // proof rooted elsewhere (a hash lineage past its first `m` level-1 blocks) is not exactly
+        // checkable and is bounded in the comparison instead (`bounded_same_span_pruning_period_works`).
+        let declared_work_is_exact = peer_supplied && proof[0].first().is_some_and(|root| root.hash == ppm.genesis_hash);
+
         //
         // Populate stores
         //
@@ -251,7 +282,7 @@ impl ProofContext {
                 return Ok(ControlFlow::Break(()));
             }
 
-            if log_validating {
+            if peer_supplied {
                 info!("Validating level {level} from the pruning point proof ({} headers)", proof[level as usize].len());
             }
             let level_idx = level as usize;
@@ -358,6 +389,15 @@ impl ProofContext {
 
                 relations_stores[level_idx].insert(header.hash, parents.clone()).unwrap();
                 let ghostdag_data = Arc::new(ghostdag_managers[level_idx].ghostdag(&parents));
+                // lane rcore/hf-pptake: see `declared_work_is_exact`. Genesis itself is pinned by its
+                // hash and is the level's root (index 0), so it is not re-derived here.
+                if declared_work_is_exact
+                    && level == 0
+                    && i != 0
+                    && (ghostdag_data.blue_work != header.blue_work || ghostdag_data.blue_score != header.blue_score)
+                {
+                    return Err(PruningImportError::PruningProofInconsistentBlueWork(header.hash, level));
+                }
                 ghostdag_stores[level_idx].insert(header.hash, ghostdag_data.clone()).unwrap();
 
                 // Update the selected tip
@@ -526,9 +566,28 @@ impl PruningProofManager {
         // than local"). The challenger's span beyond its proven pruning point stays
         // a CLAIM — verified after acceptance, exactly as before — and ties still
         // favor the defender below, so the conservative bias direction is intact.
+        //
+        // **lane rcore/hf-pptake: the same-span cut is kept only where it is needed, and only for
+        // work this node can vouch for.** The cut is the lower pruning point's ABSOLUTE blue work,
+        // and when that is the defender's, the challenger's term becomes
+        // `(relay - own pp) + (own pp - defender pp)`: the first part is verified by the header sync
+        // that follows (it is work relative to the challenger's pruning point), the second is
+        // nothing but the challenger's own header saying so. Re-emitting an honest history with every
+        // declared `blue_work` raised by C won the comparison by C (probe B of the pptake review).
+        // So:
+        //
+        // * at LEVEL 0 the level chain is not sampled — `level_work(0) == 0`, every block carries
+        //   its own work — so the shared history the cut exists to credit is already counted
+        //   exactly by the level diff, and the cut only double-counts the higher pruning point's
+        //   span (at a defender standing at genesis: the challenger's whole pre-pruning-point history,
+        //   a 2x discount). Level 0 compares each side from its OWN pruning point, as upstream does —
+        //   nothing unverified enters. On testnet-12 every comparison is decided here (the level-0
+        //   proof is rooted at genesis on both sides, so the common ancestor is found at level 0).
+        // * at a SAMPLED level (the testnet-10 regime above) the cut stays, but the challenger is
+        //   credited the span between the cut and its pruning point only as far as a block on its
+        //   selected chain that THIS node holds a validated header for — history it demonstrably
+        //   shares, read from this node's own store rather than from the challenger's header.
         let period_cut = defender.pp_header.blue_work.min(challenger.pp_header.blue_work);
-        let (defender_pruning_period_work, challenger_claimed_pruning_period_work) =
-            same_span_pruning_period_works(period_cut, defender_relay_blue_work, challenger_relay_blue_work);
 
         for level in 0..=self.max_block_level {
             // Init level ctxs
@@ -547,6 +606,22 @@ impl PruningProofManager {
             // to the challenger's selected tip, plus its pruning-period work, is strictly
             // greater than the corresponding defender value.
             if let Some(common_ancestor) = ProofLevelContext::find_common_ancestor(&challenger_level_ctx, &defender_level_ctx) {
+                let (defender_pruning_period_work, challenger_claimed_pruning_period_work) = if level == 0 {
+                    own_span_pruning_period_works(
+                        defender.pp_header.blue_work,
+                        challenger.pp_header.blue_work,
+                        defender_relay_blue_work,
+                        challenger_relay_blue_work,
+                    )
+                } else {
+                    bounded_same_span_pruning_period_works(
+                        period_cut,
+                        challenger.pp_header.blue_work,
+                        self.locally_held_work_above(&challenger_level_ctx, period_cut),
+                        defender_relay_blue_work,
+                        challenger_relay_blue_work,
+                    )
+                };
                 if defender_level_ctx.blue_work_diff(common_ancestor).saturating_add(defender_pruning_period_work)
                     >= challenger_level_ctx.blue_work_diff(common_ancestor).saturating_add(challenger_claimed_pruning_period_work)
                 {
@@ -560,7 +635,20 @@ impl PruningProofManager {
         if defender.pp_header.hash == self.genesis_hash {
             // If the challenger has better tips and the defender's pruning point is still
             // genesis, we consider the challenger to be better.
-            return Ok(());
+            //
+            // lane rcore/hf-pptake: "better tips" is now asked rather than assumed. No challenger
+            // level reached 2M, so no level was compared, and this used to accept any structurally
+            // valid proof at a defender standing at genesis — which is every testnet-12 node today.
+            // The question left is the one the level-0 comparison asks there: does the challenger's
+            // tip claim more work than this node's own header tip? The claim is the relay's
+            // `blue_work`, which the header sync after the proof verifies relative to the pruning
+            // point, and a genesis-rooted proof's pruning point is held to its declared work in
+            // `from_proof` — so on testnet-12 the figure is verified before anything is committed.
+            // Ties keep the defender, as everywhere in this function.
+            if challenger_relay_blue_work > defender_relay_blue_work {
+                return Ok(());
+            }
+            return Err(ProofWeakness::InsufficientBlueWork);
         }
 
         // If we got here it means there's no level with shared blocks
@@ -580,6 +668,29 @@ impl PruningProofManager {
         drop(defender);
 
         Err(ProofWeakness::NotEnoughHeaders)
+    }
+
+    /// **lane rcore/hf-pptake: how far above `cut` the challenger's history at this level is history
+    /// THIS node holds.** Walks the challenger's selected chain at the level from its tip down and
+    /// returns the first (so the highest) block whose header this node's own store holds, as its
+    /// LOCAL `blue_work` minus `cut` — a figure the header pipeline validated here, not one the
+    /// challenger declared (a held hash is a held header: the hash commits to the whole header).
+    /// Zero when nothing on that chain is held above the cut. Bounded by the level's chain length,
+    /// which the proof's header budget bounds.
+    fn locally_held_work_above(&self, challenger_level_ctx: &ProofLevelContext<'_>, cut: BlueWorkType) -> BlueWorkType {
+        let mut current = challenger_level_ctx.selected_tip;
+        loop {
+            if current.is_origin() {
+                return BlueWorkType::from_u64(0);
+            }
+            if let Ok(held) = self.headers_store.get_header(current) {
+                return held.blue_work.saturating_sub(cut);
+            }
+            match challenger_level_ctx.ghostdag_store.get_compact_data(current) {
+                Ok(data) => current = data.selected_parent,
+                Err(_) => return BlueWorkType::from_u64(0),
+            }
+        }
     }
 
     /// Compares two MLS pruning proofs and determines whether the challenger supersedes the defender.
@@ -616,6 +727,46 @@ fn same_span_pruning_period_works(
     challenger_relay_blue_work: BlueWorkType,
 ) -> (BlueWorkType, BlueWorkType) {
     (defender_relay_blue_work.saturating_sub(period_cut), challenger_relay_blue_work.saturating_sub(period_cut))
+}
+
+/// **lane rcore/hf-pptake — the level-0 pruning-period terms: each side from its OWN pruning
+/// point** (upstream's rule). At level 0 the level diff already counts every block between the
+/// common ancestor and each pruning point exactly, so each side adds only the span above its own
+/// pruning point — `relay - pp`, which for the challenger is the work its header sync will have to
+/// reproduce. No absolute declaration enters: raising every declared `blue_work` by the same
+/// amount moves neither term.
+fn own_span_pruning_period_works(
+    defender_pp_blue_work: BlueWorkType,
+    challenger_pp_blue_work: BlueWorkType,
+    defender_relay_blue_work: BlueWorkType,
+    challenger_relay_blue_work: BlueWorkType,
+) -> (BlueWorkType, BlueWorkType) {
+    (defender_relay_blue_work.saturating_sub(defender_pp_blue_work), challenger_relay_blue_work.saturating_sub(challenger_pp_blue_work))
+}
+
+/// **lane rcore/hf-pptake — the sampled-level terms: the same-span cut, with the challenger's
+/// pre-pruning-point part bounded by what this node holds.**
+///
+/// [`same_span_pruning_period_works`] credits the challenger `(relay - own pp) + (own pp - cut)`.
+/// The first part is re-derived by the header sync that follows; the second is the challenger's
+/// declaration alone. It is credited here only up to `challenger_span_held_locally` — the span above
+/// the cut that this node's own validated headers show the challenger shares
+/// ([`PruningProofManager::locally_held_work_above`]) — which is exactly the testnet-10 case the cut
+/// exists for (the stale defender holds the shared heavy segment itself). Never more than the
+/// unbounded same-span term, and equal to it whenever the held span covers the claim.
+fn bounded_same_span_pruning_period_works(
+    period_cut: BlueWorkType,
+    challenger_pp_blue_work: BlueWorkType,
+    challenger_span_held_locally: BlueWorkType,
+    defender_relay_blue_work: BlueWorkType,
+    challenger_relay_blue_work: BlueWorkType,
+) -> (BlueWorkType, BlueWorkType) {
+    let (defender, unbounded) = same_span_pruning_period_works(period_cut, defender_relay_blue_work, challenger_relay_blue_work);
+    let claimed_below_pp = challenger_pp_blue_work.saturating_sub(period_cut);
+    let bounded = challenger_relay_blue_work
+        .saturating_sub(challenger_pp_blue_work)
+        .saturating_add(claimed_below_pp.min(challenger_span_held_locally));
+    (defender, unbounded.min(bounded))
 }
 
 #[cfg(test)]
@@ -747,6 +898,76 @@ mod period_window_tests {
         let cut = def_pp.min(chal_pp);
         let (d, c) = same_span_pruning_period_works(cut, bw(1_003_000), bw(1_001_300));
         assert!(d > c, "the heavier defender still wins under the common cut");
+    }
+
+    /// **lane rcore/hf-pptake, probe B at the arithmetic.** An honest history re-emitted with every
+    /// declared `blue_work` raised by C — the pruning point's and the relay's alike, no extra history
+    /// — won the unbounded same-span comparison by exactly C. Measured from each side's own pruning
+    /// point (level 0) the inflation cancels; at a sampled level it is credited only as far as this
+    /// node holds the history (here: nothing above the cut), so it cancels there too.
+    #[test]
+    fn a_uniformly_inflated_declaration_buys_nothing() {
+        let (pp, relay) = (bw(1_000_000), bw(1_000_500));
+        let c = bw(1 << 40);
+        let (forged_pp, forged_relay) = (pp.saturating_add(c), relay.saturating_add(c));
+        let cut = pp.min(forged_pp);
+
+        // The unbounded same-span terms: the forger's is larger by exactly C.
+        let (d, forged) = same_span_pruning_period_works(cut, relay, forged_relay);
+        assert_eq!(forged.saturating_sub(d), c, "the unbounded cut credits the declaration in full");
+
+        // Level 0: each side from its own pruning point.
+        let (d0, c0) = own_span_pruning_period_works(pp, forged_pp, relay, forged_relay);
+        assert_eq!(d0, c0, "the inflation cancels; a tie keeps the defender");
+
+        // A sampled level, nothing of the challenger's chain held above the cut.
+        let (ds, cs) = bounded_same_span_pruning_period_works(cut, forged_pp, bw(0), relay, forged_relay);
+        assert_eq!(ds, cs, "unheld history is not credited; a tie keeps the defender");
+    }
+
+    /// **The testnet-10 case survives the bound**: the stale defender holds the shared heavy segment
+    /// itself, so the span it holds covers the challenger's claim and the bounded term equals the
+    /// unbounded one — the strictly heavier challenger still wins by the true post-fork difference.
+    #[test]
+    fn the_stale_defender_case_is_unchanged_when_the_shared_history_is_held() {
+        let def_pp = bw(1_000);
+        let chal_pp = bw(1_000_000);
+        let def_tip = bw(1_000 + 1_000_000 + 300);
+        let chal_tip = bw(1_000 + 1_000_000 + 3_000);
+        let cut = def_pp.min(chal_pp);
+        // The defender holds its whole window, the challenger's pruning point included.
+        let held = chal_pp.saturating_sub(cut);
+        let (d, c) = bounded_same_span_pruning_period_works(cut, chal_pp, held, def_tip, chal_tip);
+        assert_eq!((d, c), same_span_pruning_period_works(cut, def_tip, chal_tip), "fully held: the testnet-10 rule, unchanged");
+        assert_eq!(c.saturating_sub(d), bw(2_700), "decided by the true post-fork difference");
+
+        // Held only part of the way (the highest held block on the challenger's chain sits below its
+        // pruning point): credited that far and no further, never more than the unbounded term.
+        let partly = bw(600_000);
+        let (d2, c2) = bounded_same_span_pruning_period_works(cut, chal_pp, partly, def_tip, chal_tip);
+        assert_eq!(d2, d);
+        assert_eq!(c2, chal_tip.saturating_sub(chal_pp).saturating_add(partly));
+        assert!(c2 <= c, "the bound never credits more than the same-span cut did");
+    }
+
+    /// The bound is never looser than the rule it bounds, even for self-inconsistent declarations
+    /// (a relay below its own pruning point), and never overflows on attacker-sized numbers.
+    #[test]
+    fn the_bound_never_exceeds_the_same_span_term_and_saturates() {
+        let max = BlueWorkType::MAX;
+        for (cut, pp, held, relay) in [
+            (bw(10), bw(100), bw(1_000), bw(50)),
+            (bw(10), bw(100), bw(0), bw(50)),
+            (bw(0), max, max, max),
+            (bw(0), bw(1), max, max),
+            (max, max, max, max),
+        ] {
+            let (_, unbounded) = same_span_pruning_period_works(cut, bw(0), relay);
+            let (_, bounded) = bounded_same_span_pruning_period_works(cut, pp, held, bw(0), relay);
+            assert!(bounded <= unbounded, "cut={cut} pp={pp} held={held} relay={relay}");
+        }
+        let (d, c) = own_span_pruning_period_works(max, bw(0), bw(0), max);
+        assert_eq!((d, c), (bw(0), max));
     }
 }
 
