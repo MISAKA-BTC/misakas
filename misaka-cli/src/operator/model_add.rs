@@ -888,42 +888,40 @@ async fn register(
     // **A mined carrier the processor dropped is a verdict, not a wait** (testnet-12 lifecycle audit
     // T12-030): this loop waited for `included`, which a dropped registration never reaches, so the
     // CLI sat there until Ctrl-C while the node's log said why — and every re-run paid again. The
-    // node now names a mined carrier with no row `REGISTRATION_DROPPED` (with the processor's reason),
-    // and a carrier that is neither pooled nor mined `REGISTRATION_NOT_INCLUDED`; either, read on
-    // three polls running (so a block landing between two reads is not mistaken for one), stops
-    // here with the reason.
-    let settled_miss = std::cell::Cell::new(0u32);
+    // node now names a mined carrier with no row `REGISTRATION_DROPPED` (with the processor's reason);
+    // read on three polls running, that stops here with the reason.
+    //
+    // **`REGISTRATION_NOT_INCLUDED` is not a verdict here, and never stops the wait** (review of
+    // T12-030). A carrier leaves the mempool when the block that carries it is ADDED, and its row is
+    // written only when the next CHAIN block accepts that block and folds it — one block interval
+    // later, about 120 s on testnet-12 — so every registration that succeeds reads
+    // `REGISTRATION_NOT_INCLUDED` for that interval (and the node only says `REGISTRATION_DROPPED`
+    // from two DAA past the carrier's acceptance). Three 5 s polls of it stopped every successful
+    // `model add` with "left the mempool without being mined" and told the operator to re-run —
+    // which, inside that interval, paid a second carrier for a duplicate the chain drops. A carrier
+    // that really was evicted is waited out to the deadline, as before.
+    let settled_drop = std::cell::Cell::new(0u32);
     walk.wait_for(flow, "the registration to be mined", 20, || async {
         let now = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
         if now.folded {
             return Ok(true);
         }
         let dropped = now.reject_code == kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationDropped.code();
-        let missing = now.reject_code
-            == kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded.code();
-        if !(dropped || missing) {
-            settled_miss.set(0);
+        if !dropped {
+            settled_drop.set(0);
             return Ok(false);
         }
-        settled_miss.set(settled_miss.get() + 1);
-        if settled_miss.get() < 3 {
+        settled_drop.set(settled_drop.get() + 1);
+        if settled_drop.get() < 3 {
             return Ok(false);
         }
         crate::palw_model_ops::print_pipeline(&now);
-        Err(Halt::Blocked(if dropped {
+        Err(Halt::Blocked(
             Finding::error("E-MODEL-REGISTRATION-DROPPED", exit::MODEL, "The registration was mined and the chain dropped it")
                 .reason("the carrier's fee is spent and no class row was written; sending the same registration again pays again for the same drop")
                 .current(if now.drop_reason.is_empty() { now.processor_verdict.clone() } else { now.drop_reason.clone() })
-                .fix("misaka model add   (lists which catalog rows this chain registers)")
-        } else {
-            Finding::error("E-OBJECT-REFUSED", exit::NOT_READY, "The registration left the mempool without being mined")
-                .reason(
-                    "this node's pool no longer holds it and it does not find it mined — evicted, or mined with its change already \
-                     spent; no class row was written either way",
-                )
-                .current(now.reject_code.clone())
-                .fix(format!("misaka model registration {txid}   (re-reads it), then re-run this command to resubmit"))
-        }))
+                .fix("misaka model add   (lists which catalog rows this chain registers)"),
+        ))
     })
     .await?;
     let included = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
