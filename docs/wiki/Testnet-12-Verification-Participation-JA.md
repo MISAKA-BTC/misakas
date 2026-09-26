@@ -7,8 +7,8 @@
 ## testnet-11 からの主な変更
 
 - **seat の bond は 130,000 MSK 以上**(producer floor 13,000 MSK の 10 倍)。testnet-11 の少額 bond は使えません。
-- **S1 / S2 / S3 は DAA 0 から有効です。** testnet-11 のように DAA 7,200 / 8,600 / 8,700 で切り替わることはありません。fence schedule は `1000` だけです(bond maturity window)。
-- **DAA 1,000 以降、bond は登録から 1,000 DAA(約 33 時間)経つまで判定に使えません**(ADR-0065 D1)。
+- **S1 / S2 / S3 は DAA 0 から有効です。** testnet-11 のように DAA 7,200 / 8,600 / 8,700 で切り替わることはありません。fence schedule は `750, 1000` です(750 は post-launch fence 13 本、1000 は bond maturity window)。
+- **DAA 750 以降、genesis 以外の bond は登録から 1,000 DAA(約 33 時間)経つまで panel の抽選と ready seat の数に入りません**(ADR-0065 D1、`palw_bond_maturity_early`)。DAA 750 より前に登録した bond も登録 DAA から数えるので、DAA 750 でいったん外れ、登録 DAA + 1,000 で戻ります。
 - **seat の義務は常に on です。** `--palw-panel` は受け付けますが何もせず、警告を 1 行出すだけです。
 - **1 つの bond は 1 つの process だけで動かします。** producer の node は同じ bond の seat の義務をすでに実行しているので、同じ bond で verifier を別に起動してはいけません。
 
@@ -30,6 +30,7 @@
 ```bash
 git switch main
 git pull --ff-only
+git checkout c3dbaee3c
 cargo build --release -p kaspad -p misaka-cli
 ```
 
@@ -112,7 +113,7 @@ misaka --network testnet-12 verifier start --detach
 - Bond が class の capability を宣言している(Floor の場合)。model class の場合は、新しい readiness(possession)証明がある。証明は artifact を持った panel が自動で提出します。
 - seat の 500‰ ceiling の下に、bind される panel 1 つにつき約 640.17 MSK の空きがある(floor と 8k)。満たせない bond は、選ばれてから失敗するのではなく、最初から抽選で外されます。
 - model class の readiness には、空き collateral が 39,000 MSK(producer floor の 3 倍)必要です。
-- DAA 1,000 以降は、bond の登録から 1,000 DAA 経っている。
+- DAA 750 以降は、bond の登録から 1,000 DAA 経っている(genesis の bond を除く)。
 
 ## S1 / S2 / S3
 

@@ -126,9 +126,10 @@ PLAN.md §15 の表は ibm → .113 → 5.104 の順だが、今回は .113 → 
 - 同時に、750 以降の block は新規則（panel seed・operator anchor・lock・sink 等）で fold される。どの block で最初に分かれるかは
   どの規則が最初に効くか次第だが、PALW の state commitment が旧規則の計算と合わなくなった時点で、旧 node はその block を受け入れ
   られない。旧 node は止まる（自分で掘らない限り）か、旧 node 同士で別の枝を伸ばす。
-- **戻り方**: 新しい release に更新すれば、同じ genesis・同じ identity なので datadir をそのまま使える（`upgrade` と同じ）。
-  750 以降に旧 node が自分で block を掘って別の枝に乗っていた場合は、更新後も自分の枝を持ち続けることがあるので、datadir を
-  消して再同期する（その場合は IBD 修正入りの build が必須）。
+- **戻り方**: DAA 750 より前に更新すれば、同じ genesis・同じ identity なので datadir をそのまま使える（`upgrade` と同じ）。
+  旧 build のまま DAA 750 を越えた node は、750 以降の block を旧規則で無効・失格として DB に記録しうるので、更新後も datadir を
+  そのままでは使えないことがある: `<appdir>/misaka-testnet-12/datadir` を退避して再同期する（IBD 修正入りの build が必須）。
+  round の署名記録は `<appdir>/misaka-testnet-12/palw-panel/` にあり、datadir の退避では失われない。
 - DNS seeder は anchor（更新済みの fleet）だけを配るので、旧 node が DNS で新たにつながる先も更新済みの fleet で、750 以降は拒否される。
 
 ## 9. 入金確定の公開文言（main の launch note §3）— strict-win は浅い同点規則つきで 750 に武装する

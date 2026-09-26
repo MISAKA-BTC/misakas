@@ -186,8 +186,8 @@ post-launch fence release: 13 fences activate at DAA 750 (about 2026-09-27 07:00
 `virtualDaaScore`), so from DAA 750 on an older node is refused at the handshake and falls off the network.
 Upgrading keeps your datadir (same genesis and identity); a node that crossed DAA 750 on an older build
 must move its datadir aside and resync. It also fixes IBD (since DAA 316 a fresh node could not finish
-syncing). What it contains is in [launch note §00](docs/t12-launch-2026-09-25.md). The public fleet runs
-the x86_64 Linux release build of that commit (glibc 2.39 floor, `contrib/t12-deploy-kit/build-release-local.sh
+syncing). What it contains is in [launch note §00](docs/t12-launch-2026-09-25.md). The public fleet moves to
+the x86_64 Linux release build of that commit before DAA 750 (glibc 2.39 floor, `contrib/t12-deploy-kit/build-release-local.sh
 c3dbaee3c`); its sha256, to compare a build of your own against:
 
 | binary | sha256 |

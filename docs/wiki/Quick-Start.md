@@ -15,7 +15,7 @@ cargo build --release -p kaspad -p misaka-cli
 
 `misaka-cli` から作られるバイナリは `target/release/misaka` です。以下では `target/release` を PATH に加えた前提で書きます。加えない場合は `./target/release/kaspad` と `./target/release/misaka` と読み替えてください。
 
-公開 fleet は 2026-09-26 からこの commit の x86_64 Linux release build を動かしています(kaspad の sha256 は `07cba17406c486e0e31d4d46e107b2998cf70229125e804513f59099051c903b`)。公開時の `0e8ec984e` と consensus は同じですが、`0e8ec984e` で producer を動かすノードは自分だけ chain から外れることがあるので入れ替えてください(公開ノート §0)。
+公開 fleet は DAA 750 より前に `c3dbaee3c` の x86_64 Linux release build へ入れ替えます(kaspad の sha256 は `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571`)。DAA 750 で 13 本の fence が有効になり、`0e8ec984e`・`8a0810992` のノードは DAA 750 から handshake で拒否されます。DAA 750 より前に入れ替えてください。古いビルドのまま DAA 750 を越えたノードは `<appdir>/misaka-testnet-12/datadir` を退避して同期し直します(公開ノート §00)。
 
 > 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドします。
 

@@ -41,7 +41,7 @@
 | Explorer | [misakascan.com](https://misakascan.com/)(testnet-12 を表示) |
 | Faucet | **未定**(testnet-12 の資金はまだ入っていない) |
 
-testnet-12 のルールは、DAA 1,000 の bond maturity window(ADR-0065 D1)を除き、**すべて DAA 0 から有効**です。testnet-11 のように途中の DAA で規則が切り替わる fence はありません。
+testnet-12 のルールは、DAA 750 で有効になる 13 本の post-launch fence(`c3dbaee3c`、公開ノート §00)と DAA 1,000 の bond maturity window(ADR-0065 D1)を除き、**DAA 0 から有効**です。DAA 750 で規則が切り替わるので、それより前に `c3dbaee3c` に入れ替えてください。
 
 ## 重要な区別
 
