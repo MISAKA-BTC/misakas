@@ -252,6 +252,7 @@ MATURITY = "consensus/core/tests/palw_exec_maturity_is_t12_only.rs"
 CAP = "consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs"
 MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
+V02LIFE = "consensus/core/tests/palw_final_lock_life_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 PARAMS = "consensus/core/src/config/params.rs"
 GOLDEN = "consensus/core/tests/rcore_m5_v22_golden.rs"
@@ -420,6 +421,10 @@ def registry() -> list[Pin]:
     # The mainnet values (2026-09-25): testnet-12 with the three values set back (and the later fences taken away).
     pins += _triple("mnv.PARENT_WITHOUT_THE_ATTRIBUTION", "t12", MNV, "const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
                     "twin.mnv_parent", (f"{MNV}::the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",))
+    # Lane V02 (the shortened post-Final lock life, post-launch, dormant): testnet-12 as shipped, which
+    # the dormant fence must not move.
+    pins += _triple("v02life.T12_RELEASE", "t12", V02LIFE, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{V02LIFE}::the_shortening_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)
