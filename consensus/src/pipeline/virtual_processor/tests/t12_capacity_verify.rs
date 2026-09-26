@@ -32,10 +32,12 @@
 //! * **V-T4** (one slack unit a bond): a whole 988k attacker holds 20 beside an honest 1M bond's 20
 //!   and a card (s·room = 19.6); split into 76 × 13k it holds 2 and the honest bond 29.
 //! * **V-T5** (a 10M bond flooding 64 floor attempts a DAA beside a 13k producer): armed, 90 DAA —
-//!   the flood held at 1,049 by the seats' capital, no claim voided, the honest producer's 8 claims 7
-//!   licensed and 1 bound, no `BindTimeout`; released, 60 DAA — the flood 3,840 accepted and 1,455
-//!   voided `BindTimeout` (their escrow destroyed), the honest producer's 6 claims: 2 licensed, 2 voided
-//!   `BindTimeout`, 2 still waiting.
+//!   the flood held at 1,047 by the seats' capital, no claim voided, the honest producer's 5 claims all
+//!   licensed, no `BindTimeout` (8 claims, 7 licensed + 1 bound, while the slack was first come: one
+//!   slack unit a bond leaves a 13k bond one waiting floor claim beside a 10M flooder, its stake
+//!   share being 0.0013); released, 60 DAA — the flood 3,840 accepted and 1,455 voided `BindTimeout`
+//!   (their escrow destroyed), the honest producer's 6 claims: 2 licensed, 2 voided `BindTimeout`, 2
+//!   still waiting.
 //! * **V4:** the attempt lane made 20 / 36 / 68 / 85 claims a DAA at 4 / 8 / 16 / 32 parallel
 //!   producers (four merge rounds a DAA; a merge takes ≈ 21 at most); binding 100 and 1,000 claims in
 //!   one anchor block took 135 ms and 1,870 ms (1.35 / 1.87 ms a bind).
