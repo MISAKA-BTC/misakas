@@ -21,8 +21,8 @@ mod common;
 use common::*;
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_BOND_MATURITY_WINDOW_DAA, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params,
-    palw_rc_shipped_params, palw_t12_shipped_params,
+    ForkActivation, PALW_T12_BOND_MATURITY_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCE_DAA, SIMNET_PARAMS, TESTNET_PARAMS,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
 use kaspa_consensus_core::palw_model_registry_v1::{
@@ -38,8 +38,11 @@ const NEWCOMER: u64 = 0x5EA7;
 /// past the registry's activation grace (DAA 30: rows are stepped from it).
 const STEPS: [u64; 14] = [31, 40, 59, 60, 61, 200, 500, 999, 1_000, 1_012, 1_013, 1_014, 1_100, 2_000];
 
+/// The LAUNCH ruleset (`palw_t12_launch_params_v1`: the post-launch release's list dormant) with lane
+/// maturity's fence alone at `height` — the fence judged against the build it replaces; testnet-12 as
+/// shipped arms it at DAA 750 with the rest of the release (asserted below).
 fn armed_at(height: u64) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_launch_params_v1();
     p.palw_bond_maturity_early = Some(ForkActivation::new(height));
     p
 }
@@ -47,7 +50,7 @@ fn armed_at(height: u64) -> Params {
 #[test]
 fn the_registry_rule_is_dormant_as_shipped_and_the_early_fences_alone_when_armed() {
     for (name, p) in [
-        ("testnet-12", palw_t12_shipped_params()),
+        ("testnet-12 as launched", palw_t12_launch_params_v1()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
         ("mainnet", mainnet_shipped_params()),
@@ -58,9 +61,21 @@ fn the_registry_rule_is_dormant_as_shipped_and_the_early_fences_alone_when_armed
             assert_eq!(p.palw_bond_maturity_registry_fold_at(daa), None, "{name} at {daa}: the released registry");
         }
     }
-    // testnet-12 as shipped applies D1 to the DRAW from 1,000 and never to the registry.
+    // testnet-12 as launched applies D1 to the DRAW from 1,000 and never to the registry; as shipped (the
+    // post-launch release) the registry rule is in force from DAA 750, with D1's window and the second clock.
+    let launched = palw_t12_launch_params_v1();
+    assert_eq!(launched.palw_bond_maturity_window_at(1_000), Some(PALW_T12_BOND_MATURITY_WINDOW_DAA));
     let shipped = palw_t12_shipped_params();
-    assert_eq!(shipped.palw_bond_maturity_window_at(1_000), Some(PALW_T12_BOND_MATURITY_WINDOW_DAA));
+    let at = PALW_T12_POST_LAUNCH_FENCE_DAA;
+    assert_eq!(shipped.palw_bond_maturity_registry_fold_at(at - 1), None, "shipped: nothing below 750");
+    assert_eq!(
+        shipped.palw_bond_maturity_registry_fold_at(at),
+        Some(PalwBondMaturityFoldV1 {
+            window_daa: PALW_T12_BOND_MATURITY_WINDOW_DAA,
+            settled_anchor_depth: Some(shipped.palw_settled_anchor_depth.expect("testnet-12 runs the second clock")),
+        }),
+        "shipped: from 750"
+    );
     for height in [FENCE, 500, 999] {
         let armed = armed_at(height);
         armed.validate_palw_v2().expect("armed on a copy");

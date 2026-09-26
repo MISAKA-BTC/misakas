@@ -5,10 +5,11 @@
 公開 node の DAA。
 
 > **暫定値の注意（最重要）**: 13 本目の fence `palw_lane_accept_parents_first`（branch `rcore/f1-lane-accept-order`、
-> 未 merge）が同じ DAA 750 のリリースに入る。merge して 750 に武装し `scripts/t12-repin.sh --apply --shipping` をやり直すと、
-> **下の fingerprint と schedule id は変わる**（identity・genesis・premine は変わらない見込み — 将来の高さの fence は identity に
-> 入らない）。§2 の値はすべて「13 本目の fence が入ったら再 pin する」値として扱い、**再 pin 前の値で release build・fleet.env・
-> 告知をしない**。
+> 未 merge）が同じ DAA 750 のリリースに入り、strict-win には浅い同点規則（branch `rcore/f1-strictwin-tie`、未 merge、§9）が
+> 付く。どちらも merge して 750 に武装し `scripts/t12-repin.sh --apply --shipping` をやり直すと、**下の fingerprint と
+> schedule id は変わる**（identity・genesis・premine は変わらない見込み — 将来の高さの fence は identity に入らない）。§2 の値は
+> すべて「13 本目の fence（と strict-win の同点規則）が入ったら再 pin する」値として扱い、**再 pin 前の値で release build・
+> fleet.env・告知をしない**。
 
 ## 1. このリリースに入っているもの
 
@@ -16,6 +17,7 @@
 |---|---|---|
 | post-launch fence ×12（DAA 750、`PALW_T12_POST_LAUNCH_FENCE_DAA`） | `palw_registry_resilience`・`palw_panel_seed_execution`・`palw_heartbeat_transparent_same_chain`・`palw_reorg_strict_economic_win`・`palw_bond_maturity_early`・`palw_model_sink_bound`・`palw_operator_anchor`・`palw_final_lock_full_collateral`・`palw_final_lock_life`・`palw_anchor_at_ceiling`・`palw_slashing_evidence_utxo_genuine`・`palw_pruning_proof_strict_economic_win` | **はい**（750 から） |
 | （予定）13 本目 | `palw_lane_accept_parents_first` — 別 agent が dormant で実装中、merge 後に 750 へ | はい（750 から） |
+| （予定）strict-win の浅い同点規則 | `rcore/f1-strictwin-tie`: 深さ 2 DAA tick 以下の同点は GHOSTDAG 順。間に合わなければ `palw_reorg_strict_economic_win` を 750 で武装しない（§9） | はい |
 | IBD checkpoint | `PALW_T12_IBD_CHECKPOINTS` = DAA 100 / 200 / 300 の chain block（§7） | いいえ（node policy） |
 | IBD 順序の修正 | `426c32c05`（int-4 では `a067f490d`）: round lane の block を parents-first で渡す。DAA 316 以降、新規 node の IBD と、lane をまたいで IBD に落ちた node が `missing parents` で止まる不具合 | いいえ（node only） |
 | lifecycle UX | `rcore/n7-lifecycle-ux`（T12-030/046/049/058）: node・CLI・RPC・docs | いいえ |
@@ -130,9 +132,29 @@ PLAN.md §15 の表は ibm → .113 → 5.104 の順だが、今回は .113 → 
   消して再同期する（その場合は IBD 修正入りの build が必須）。
 - DNS seeder は anchor（更新済みの fleet）だけを配るので、旧 node が DNS で新たにつながる先も更新済みの fleet で、750 以降は拒否される。
 
-## 9. 既知の未解決・注意
+## 9. 入金確定の公開文言（main の launch note §3）— strict-win を 750 で武装する場合
 
-- 13 本目の fence（`palw_lane_accept_parents_first`）が未 merge — §2 の値は暫定。
+`palw_reorg_strict_economic_win` は、全項目が経済的に同点（all-economic tie）の深い reorg で incumbent を保つ。容量 lane の試験
+（`rcore/cap-weight` の `3aa4abec4`）で、12 本の fence を武装した状態では honest な兄弟 chain が分かれることが 8/8 回で測られた。
+ユーザー決定（2026-09-26）: strict-win は **浅い同点規則**（深さ 2 DAA tick 以下の同点は GHOSTDAG の順で決める、branch
+`rcore/f1-strictwin-tie`）と一緒に 750 で武装する。間に合わず検証できなければ strict-win は 750 で武装しない。
+
+武装する場合、main の `docs/t12-launch-2026-09-25.md` §3「入金を確定とみなす基準」（と、それを写した README・wiki・告知）に、
+**「経済的に同点の reorg は、2 DAA tick（約 4 分）より深く埋まった取引を覆せない」**を加える。これは同点の reorg についての
+下限であって、既存の基準（少額: blue score 30 以上上の blue attempt、高額: finality depth 600 blue か Final anchor、
+heartbeat しか出ていない期間は確定とみなさない）を置き換えない。武装しない場合はこの文言を入れない。
+
+strict-win を武装しない fallback で一緒に dormant にしなければならない fence は **無い**: `validate_palw_v2` の前提関係で
+strict-win（`palw_reorg_strict_economic_win`・`palw_pruning_proof_strict_economic_win` のどちらも）を「その高さ以下に要求する」
+fence は 12 本の中に無く、strict-win 自身も他の fence を要求しない。読む場所も、reorg 側は virtual processor の深い reorg の
+判定だけ、IBD 側は IBD flow の staging commit の判定だけで、互いにも独立している。
+
+## 10. 既知の未解決・注意
+
+- 13 本目の fence（`palw_lane_accept_parents_first`）と strict-win の同点規則（`rcore/f1-strictwin-tie`）が未 merge — §2 の値は暫定。
+  strict-win を 750 で武装しない fallback にする場合は、`palw_t12_arm_post_launch_fences_v1` がその entry を飛ばすようにし、
+  `post_launch_fence_arming_tests`・lane の pin file・drill の「一覧の全 fence が 750」の assert を合わせて直す（§9: 他の fence は
+  dormant にしなくてよい）。
 - `scripts/t12-repin.sh --selftest` が 17/22: selftest の期待値が cap / resilience lane の pin 追加より古い（このリリースとは無関係）。
 - drill の ruleset もこのリリースの高さ（750）を持つ（drill は公開 ruleset と同じ組立てを通る設計）。`--palw-drill-fence-at` は
   それを低い高さへ動かす（MOVED と表示される）。

@@ -105,7 +105,9 @@ fn a_mirror_that_disagrees_with_its_rows_is_refused_at_startup() {
 #[test]
 fn the_mirror_follows_the_fence_and_moves_no_id() {
     let t12 = palw_t12_shipped_params();
-    let mut never = t12.clone();
+    // The fence-off twin takes R-core+ away, so it is built on the LAUNCH ruleset: the post-launch
+    // release's fences (DAA 750) stand on R-core+ themselves.
+    let mut never = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
     never.palw_offence_attribution = Some(ForkActivation::never());
     never.palw_rcore_plus = None;
     never.palw_rcore_conservative_classes = &[];

@@ -17,7 +17,8 @@
 //! * `r1`: the deadlock itself on the released rule (the fence dormant): one producer fills its
 //!   ceiling with `Provisional` claims; past their slot its attempt block is disqualified from the
 //!   chain, so nothing binds; the claims void `BindTimeout` at the backstop, unpaid.
-//! * `f1`: the fix across its fence — below `palw_anchor_at_ceiling` the at-ceiling attempt is still
+//! * `f1`: the fix across its fence (armed as the release arms it: with lane A over every genesis card
+//!   and lane F1 at the same height) — below `palw_anchor_at_ceiling` the at-ceiling attempt is still
 //!   disqualified; from it the same producer's attempt is a BINDER: it anchors and binds every claim
 //!   due at it, carries no claim of its own (the fold's finding-17 skip) and is paid no worker carve
 //!   (on testnet-12 the carve is the whole worker share, so a binder is paid nothing but its fees);
@@ -54,13 +55,22 @@ fn card_pubkey(card: usize) -> Vec<u8> {
     TestConsensus::palw_v2_registry_keypair(card as u64).verification_key.as_ref().to_vec()
 }
 
-/// testnet-12 with harness cards, the post-launch fence at `fence` (`None` = the released rule).
+/// testnet-12 with harness cards, the post-launch fence at `fence` (`None` = the released rule) — with
+/// lane A over EVERY genesis card and its prerequisite lane F1 at the same height, each through its
+/// release entry, as the post-launch release arms them: `validate_palw_v2` refuses the binder without
+/// lane A at or below it (the int-4 audit's LOW), and under lane A over all eight cards card 7 is an
+/// operator, so its own at-ceiling attempt is the binder (`f2` is lane A over cards 0–5 only).
 fn t12_at(fence: Option<u64>) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1};
     let (config, bundle, premine, floats) = t12_with_harness_cards();
-    assert_eq!(config.params.palw_anchor_at_ceiling, None, "the fence is dormant on testnet-12 as shipped");
+    assert_eq!(config.params.palw_anchor_at_ceiling, None, "the fence is dormant on testnet-12 as launched (the harness's ruleset)");
     let Some(at) = fence else { return (config, bundle, premine, floats) };
     let mut params = config.params.clone();
-    params.palw_anchor_at_ceiling = Some(kaspa_consensus_core::config::params::ForkActivation::new(at));
+    for name in ["palw_panel_seed_execution", "palw_operator_anchor"] {
+        let entry = PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("a release entry");
+        (entry.set)(&mut params, Some(ForkActivation::new(at)));
+    }
+    params.palw_anchor_at_ceiling = Some(ForkActivation::new(at));
     let config = ConfigBuilder::new(params).skip_proof_of_work().build();
     config.params.validate_palw_v2().expect("testnet-12 with the fence armed is a runnable ruleset");
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
