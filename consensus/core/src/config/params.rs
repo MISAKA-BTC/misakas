@@ -7733,13 +7733,16 @@ impl Params {
                 visit(&mut absent);
             }
         }
-        // lane: rcore/hf-pptake2. A bare fence with no payload, same as D2 above.
-        match palw_pruning_proof_strict_economic_win.as_mut() {
-            Some(activation) => fork(activation, visit),
-            None => {
-                absent = u64::MAX;
-                visit(&mut absent);
-            }
+        // lane: rcore/hf-pptake2. A bare fence with no payload — visited SOME-ONLY, the sibling
+        // rule of palw_reorg_strict_economic_win. A `u64::MAX`-for-absence arm would put eight
+        // bytes into consensus_schedule_id on every preset that leaves the field None, so a build
+        // carrying this dormant fence would print a different schedule id from the launch release
+        // (which has no such field at all) for schedules that are identical — inverting the "these
+        // schedules agree" signal the id exists to give, and breaking the discipline that a dormant
+        // fence changes nothing an operator can observe. Absence cannot alias a present value:
+        // consensus_params_id writes this fence again under its own NAME when it is Some.
+        if let Some(activation) = palw_pruning_proof_strict_economic_win.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0066 Decisions 1 and 4. **Only the activation is visited.** `work_log2` and
         // `t_leak_daa` are a price and a duration; normalising either to `0`/`u64::MAX` would make
