@@ -8,9 +8,10 @@
 //!
 //! * **E-1.** The bond never reserves `E`. The escrow slot of the one ledger
 //!   ([`crate::palw_state_v2::PalwStateParamsV2::claim_escrow_term_v2`]) holds `m_c`
-//!   ([`palw_monetary_prelicense_risk_v1`]) instead, so the commitment, SR-1's release at a counted
-//!   licence, the seat duty at bind (capped by the commitment), the admission ceiling, the producer's
-//!   headroom, the forfeit and the load re-derivation all follow from that one function.
+//!   ([`palw_escrow_term_v2`], priced by [`palw_monetary_prelicense_risk_v2`]) instead, so the
+//!   commitment, SR-1's release at a counted licence, the seat duty at bind (capped by the commitment),
+//!   the admission ceiling, the producer's headroom, the forfeit and the load re-derivation all follow
+//!   from that one function.
 //! * **E-2.** The reward stays withheld and is the escrow: nothing is minted before `Final` plus the
 //!   vesting row's maturity (V-4). No new field or object — the ledger simply stops counting `E` twice.
 //! * **E-3.** `m_c` is released at a counted licence under SR-1's conditions, unchanged.
@@ -24,8 +25,43 @@
 //! (lane liab, F-L); the per-bond weight cap that makes `reserved` small is F-W (lane weight). This
 //! module reads the step through ONE accessor,
 //! [`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_credit_at_v1`] — ADR-0160 §7.2's named
-//! cross-lane line, wired to liab's mirror on `rcore/cap-int`. Without a step the term is `E` (no
-//! credit, `q = 0`), so F-E alone changes only E-4.
+//! cross-lane line, wired to liab's mirror on `rcore/cap-int` (with the three lines listed below).
+//! Without a step the term is `E` (no credit, `q = 0`), so F-E alone changes only E-4.
+//!
+//! **Two guards the verification of this lane added** (a testnet-12 claim whose slot is `E` is priced
+//! and bound exactly as option A):
+//!
+//! * **The seat side (finding 1).** A credit lowers the commitment `w + m_c`, and L-4 caps the seat
+//!   duty at `commitment / seats`, so past a credit the duty falls under `lock_2` while the lock does
+//!   not (lane liab's AS-2 divides it by `ρ` only at `q_credit ≥ q_seat`). A seat then binds more
+//!   panels than it can back at licence, and under load an honest claim is voided S0′ at RT#2. So the
+//!   credit applies only at `q_credit ≥ q_seat` ([`palw_escrow_credit_applies_v1`], where AS-2 re-prices
+//!   the lock by the same `ρ` on `rcore/cap-int`), and a seat bound to an attributable attempt past
+//!   F-E reserves the eligibility `max(duty_bind, lock_2)` rather than `duty_bind` — the duty itself
+//!   wherever no credit cut it ([`palw_escrow_bind_reserves_the_lock_v1`]): a drawn seat can always
+//!   back its `Valid`.
+//! * **The conviction side (finding 2).** `L = 3E` holds only where every conviction route forfeits the
+//!   whole bond and burns its unmatured rewards (the freeze that makes one claim the binding case).
+//!   Where a route charges the claim's own forfeit plus at most a capped tier and burns nothing else,
+//!   each claim prices alone and the bond's free half bounds what the tiers of a campaign collect, so
+//!   the term is priced by [`palw_escrow_m_star_v2`] on the floor the params name
+//!   ([`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_conviction_floor_at_v1`]).
+//!
+//! **What `rcore/cap-int` rewires, and nothing else** (every line here reads the claim's
+//! `accepted_daa`, so the load re-derivation stays exact):
+//!
+//! 1. [`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_credit_at_v1`] → liab's
+//!    `capacity_step_at`; the stand-in `capacity_escrow_credits` and its setter go.
+//! 2. [`palw_escrow_credit_applies_v1`] → liab's `palw_seat_credit_applies_v1(step)`, so the escrow
+//!    credit and AS-2's lock cut read one threshold.
+//! 3. [`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_conviction_floor_at_v1`] → the floor
+//!    F-L gives the claim: `Tier(`[`palw_escrow_tier_at_min_bond_v1`]`)` while any producer route stays
+//!    tier-capped (D-5 not taken), [`PalwEscrowConvictionFloorV1::WholeBond`] only once every producer
+//!    route is in F-L's intent class.
+//! 4. [`palw_escrow_bind_reserves_the_lock_v1`] → also true where F-L's step is in force at the claim's
+//!    `accepted_daa` (AS-1 divides the duty by `ρ` at every step while AS-2 keeps the lock below
+//!    `q_seat`), unless `validate_palw_v2` holds F-L and F-E to one height: a claim accepted between
+//!    the two would otherwise bind under `lock_2` exactly as finding 1 did.
 
 use crate::palw_state_v2::{
     PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwStateParamsV2, PalwStateV2Error, PalwVoidReasonV2,
@@ -119,6 +155,12 @@ pub fn palw_escrow_q_needed_permille_v1(e_sompi: u128, rho: u32, l_sompi: u128) 
 ///
 /// X-I5: C7 → `E`. X-I6: `m_c ≥ ⌈E/ρ⌉ ≥ 1` sompi for `E > 0`, and `m_c = E` at `q_credit = 0`. Never
 /// above `E`: the escrow slot never holds more than option A did.
+///
+/// **`L = 3E` with one claim binding is sound only where every producer conviction route forfeits the
+/// whole bond and burns its unmatured rewards** (ADR-0160 AG-2/AG-3 with D-5,
+/// [`PalwEscrowConvictionFloorV1::WholeBond`]). The fold prices through
+/// [`palw_monetary_prelicense_risk_v2`] on the floor the params name; on a tier route this formula
+/// leaves a full bond's campaign profitable (the lane's verification, finding 2).
 pub fn palw_monetary_prelicense_risk_v1(e_sompi: u64, credit: Option<PalwEscrowCreditV1>, attributable: bool) -> u128 {
     let e = u128::from(e_sompi);
     if e == 0 {
@@ -128,6 +170,135 @@ pub fn palw_monetary_prelicense_risk_v1(e_sompi: u64, credit: Option<PalwEscrowC
     let floor = e.div_ceil(u128::from(credit.rho.max(1)));
     let l = PALW_ESCROW_CONVICTION_MULTIPLE_V1.saturating_mul(e);
     palw_escrow_m_star_v1(e, credit.q_credit_permille, l, PALW_ESCROW_P_STAR_PERMILLE_V1).max(floor).min(e)
+}
+
+/// **`q_seat`: the credited attribution below which the escrow credit does not apply**, in permille —
+/// lane liab's `PALW_CAPACITY_Q_SEAT_PERMILLE_V1` (ADR-0160 AS-2, `E/(E + 3G) ≤ 1/4`), the rate at
+/// which AS-2 divides the seat lock by the step's `ρ`. The escrow credit lowers the commitment L-4
+/// caps the duty by; below this rate the lock is not lowered with it, so the duty would fall under
+/// `lock_2` and a seat could bind panels it cannot back (finding 1). `rcore/cap-int` replaces the
+/// comparison in [`palw_escrow_credit_applies_v1`] with liab's `palw_seat_credit_applies_v1(step)`, so
+/// the two sides can never read two thresholds. A constant: changing it is a new fence.
+pub const PALW_ESCROW_Q_SEAT_PERMILLE_V1: u16 = 250;
+
+/// **Does a ramp step's credit lower the escrow slot at all?** Only at `q_credit ≥ q_seat`
+/// ([`PALW_ESCROW_Q_SEAT_PERMILLE_V1`]): the escrow and the seat lock are divided by the same `ρ` or
+/// neither is. Below it the slot stays `E`, which is option A's slot and option A's seat backing.
+pub fn palw_escrow_credit_applies_v1(credit: &PalwEscrowCreditV1) -> bool {
+    credit.q_credit_permille >= PALW_ESCROW_Q_SEAT_PERMILLE_V1
+}
+
+/// **What one conviction of a claim can be counted on to collect, beyond the claim's own forfeit**
+/// (finding 2) — the conviction routes' floor the escrow credit is priced against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwEscrowConvictionFloorV1 {
+    /// **Some producer route collects the claim's forfeit `w + m_c` plus at most `tier` sompi, and burns
+    /// no other reward of the bond** — the freeze does not reach the bond's other claims, so a campaign
+    /// is priced claim by claim, and the tiers of many convictions are paid from the bond's free half
+    /// (see [`palw_escrow_m_star_v2`]). `tier = 0` where a route charges the forfeit alone.
+    Tier(u128),
+    /// **Every producer route forfeits the whole bond and burns every unmatured reward** (ADR-0160 AG-2 /
+    /// AG-3 with D-5): one claim is the binding case (Bernoulli), `L = 3E`
+    /// ([`palw_monetary_prelicense_risk_v1`]).
+    WholeBond,
+}
+
+/// **`m*` against a route that burns nothing beyond the convicted claim** (finding 2): the smallest `m`
+/// with `EV(1) = (1−q)·[P*·E − (1−P*)·m] − q·(m + x(m)) ≤ 0`, in integer permille arithmetic, rounded
+/// UP, where `x(m) = min(tier, f·m)` is the action tier one conviction is sure to collect and
+/// `f = (1000 − κ)/κ` with `κ` the work gate's ceiling in permille (500‰ on testnet-12, `f = 1`).
+///
+/// **Why `f·m` caps the tier.** Without a whole-bond burn each claim of a campaign stands alone, so
+/// `EV(K) = K·EV(1)` only while every conviction really collects its `L`. A bond of collateral `C`
+/// holding `N` claims has `N·(w + m) ≤ κ·C` (the ceiling), and whatever the realized convictions `X ≤ N`
+/// and the charges of the claims that failed, the tiers are paid from at least `C − N·(w + m) ≥
+/// (1 − κ)·C`; so the tiers collected are at least `X·min(tier, (1 − κ)·C / N) ≥ X·min(tier, f·(w + m))`.
+/// The forfeit `w + m` is reserved under the ceiling and always collected; `w` is left out of both
+/// terms (it only adds to `L`), so the bound is conservative. At testnet-12's 13,000 MSK floor bond the
+/// tier `min(100‰·C, 3G)` is 1,300 MSK — and ten convictions of 13k pieces would ask for the whole
+/// bond, which is why the naive `L = w + m + 1,300` does not hold at the concurrency a credit enables.
+///
+/// ```text
+/// case x = f·m:   m ≥ (1−q)·P·E / [(1−q)(1−P) + q·(1+f)]
+/// case x = tier:  m ≥ [(1−q)·P·E − q·tier] / [(1−q)(1−P) + q]
+/// ```
+///
+/// `q = 1000‰` needs nothing. `P*` is clamped below 1000‰ and `κ` into `1..=1000‰` (`κ = 1000‰` leaves
+/// no free half: `x = 0`). Saturating.
+pub fn palw_escrow_m_star_v2(e_sompi: u128, q_permille: u16, tier_sompi: u128, p_star_permille: u16, ceiling_permille: u32) -> u128 {
+    let q = u128::from(q_permille.min(1000));
+    if q == 1000 {
+        return 0;
+    }
+    let p = u128::from(p_star_permille.min(999));
+    let k = u128::from(ceiling_permille.clamp(1, 1000));
+    // Scaled by 10⁶·κ: (1−q)·P·E → (1000−q)·P·E·κ; (1−q)(1−P) + q·(1+f) = (1−q)(1−P) + q/κ.
+    let gain = (1000 - q).saturating_mul(p).saturating_mul(e_sompi);
+    let m_free_half =
+        gain.saturating_mul(k).div_ceil((1000 - q).saturating_mul(1000 - p).saturating_mul(k).saturating_add(q.saturating_mul(1_000_000)));
+    if (1000 - k).saturating_mul(m_free_half) <= k.saturating_mul(tier_sompi) {
+        return m_free_half;
+    }
+    // Past the tier: each conviction collects `m + tier` (scaled by 10⁶).
+    let loss = q.saturating_mul(1000).saturating_mul(tier_sompi);
+    if loss >= gain {
+        return 0;
+    }
+    (gain - loss).div_ceil((1000 - q).saturating_mul(1000 - p).saturating_add(q.saturating_mul(1000)))
+}
+
+/// **The `q` a ramp step needs so that `⌈E/ρ⌉` binds against `floor`**, in permille, rounded UP to the
+/// first permille that satisfies it; `1000` if only certainty does. [`palw_escrow_q_needed_permille_v1`]
+/// for [`PalwEscrowConvictionFloorV1::WholeBond`] (at `L = 3E`), [`palw_escrow_m_star_v2`] otherwise.
+/// Never below `q_seat`: under it the credit does not apply at all.
+pub fn palw_escrow_q_needed_permille_v2(e_sompi: u128, rho: u32, floor: PalwEscrowConvictionFloorV1, ceiling_permille: u32) -> u16 {
+    let target = e_sompi.div_ceil(u128::from(rho.max(1)));
+    let needed = match floor {
+        PalwEscrowConvictionFloorV1::WholeBond => {
+            palw_escrow_q_needed_permille_v1(e_sompi, rho, PALW_ESCROW_CONVICTION_MULTIPLE_V1.saturating_mul(e_sompi))
+        }
+        PalwEscrowConvictionFloorV1::Tier(tier) => (0..=1000u16)
+            .find(|q| palw_escrow_m_star_v2(e_sompi, *q, tier, PALW_ESCROW_P_STAR_PERMILLE_V1, ceiling_permille) <= target)
+            .unwrap_or(1000),
+    };
+    needed.max(PALW_ESCROW_Q_SEAT_PERMILLE_V1)
+}
+
+/// **`m_c` against the conviction floor the params name** (finding 2): `0` for `E = 0`; `E` for C7 or
+/// without a credit; otherwise `min(E, max(m*, ⌈E/ρ⌉))` with `m*` from
+/// [`palw_monetary_prelicense_risk_v1`]'s `L = 3E` on [`PalwEscrowConvictionFloorV1::WholeBond`] and
+/// from [`palw_escrow_m_star_v2`] on a [`PalwEscrowConvictionFloorV1::Tier`]. The `q_seat` gate is the
+/// fold's ([`palw_escrow_term_v2`]), not this formula's. X-I5, X-I6 and `≤ E` as in `_v1`.
+pub fn palw_monetary_prelicense_risk_v2(
+    e_sompi: u64,
+    credit: Option<PalwEscrowCreditV1>,
+    attributable: bool,
+    floor: PalwEscrowConvictionFloorV1,
+    ceiling_permille: u32,
+) -> u128 {
+    let e = u128::from(e_sompi);
+    match floor {
+        PalwEscrowConvictionFloorV1::WholeBond => palw_monetary_prelicense_risk_v1(e_sompi, credit, attributable),
+        PalwEscrowConvictionFloorV1::Tier(tier) => {
+            if e == 0 {
+                return 0;
+            }
+            let Some(credit) = credit.filter(|_| attributable) else { return e };
+            let ramp = e.div_ceil(u128::from(credit.rho.max(1)));
+            palw_escrow_m_star_v2(e, credit.q_credit_permille, tier, PALW_ESCROW_P_STAR_PERMILLE_V1, ceiling_permille).max(ramp).min(e)
+        }
+    }
+}
+
+/// **The action tier every producer conviction of a claim is sure to add at the smallest bond that can
+/// hold it** — S1/S2's `min(100‰ · C_min, 3E)` (`palw_rcore_s1s2_action_v1` at `C₀ = C_min`, with `G`
+/// read as `E`, its lower bound). 1,300 MSK on testnet-12. What [`PalwEscrowConvictionFloorV1::Tier`]
+/// carries on `rcore/cap-int` where F-L puts S1 in the intent class and D-5 has not yet put kinds 5
+/// and 12 there; on this branch alone the floor is `Tier(0)` (see
+/// [`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_conviction_floor_at_v1`]).
+pub fn palw_escrow_tier_at_min_bond_v1(min_collateral_sompi: u64, e_sompi: u128) -> u128 {
+    let share = u128::from(min_collateral_sompi).saturating_mul(u128::from(crate::palw_state_v2::PALW_RCORE_S1S2_ACTION_PERMILLE_V1)) / 1000;
+    share.min(e_sompi.saturating_mul(PALW_ESCROW_CONVICTION_MULTIPLE_V1))
 }
 
 /// **Does class `class_id` have a conviction route the credit may price?** (ADR-0160 §4.5.) `false`
@@ -150,14 +321,60 @@ pub fn palw_claim_class_attributable_v1(params: &PalwStateParamsV2, class_id: &H
 /// `accepted_daa`, and never above option A's term (so a ruleset that armed F-E without the
 /// escrow-backed exposure could not ADD a reservation — `validate_palw_v2` refuses that ruleset too).
 /// Called through [`PalwStateParamsV2::claim_escrow_term_v2`], which dispatches here past the fence.
+///
+/// The credit counts only at `q_credit ≥ q_seat` ([`palw_escrow_credit_applies_v1`], finding 1), and
+/// is priced against the conviction floor of the claim's `accepted_daa`
+/// ([`PalwStateParamsV2::capacity_escrow_conviction_floor_at_v1`], finding 2) under the work gate's
+/// ceiling. Every input is the record's or the params', so the load re-derivation returns the same slot.
 pub fn palw_escrow_term_v2(params: &PalwStateParamsV2, accepted_daa: u64, escrowed_reward: u64, class_id: &Hash64) -> u128 {
     let option_a = params.claim_escrow_reservation_v1(accepted_daa, escrowed_reward);
-    palw_monetary_prelicense_risk_v1(
+    palw_monetary_prelicense_risk_v2(
         escrowed_reward,
-        params.capacity_escrow_credit_at_v1(accepted_daa),
+        params.capacity_escrow_credit_at_v1(accepted_daa).filter(palw_escrow_credit_applies_v1),
         palw_claim_class_attributable_v1(params, class_id),
+        params.capacity_escrow_conviction_floor_at_v1(accepted_daa, u128::from(escrowed_reward)),
+        params.fp_max_exposure_ratio_permille(),
     )
     .min(option_a)
+}
+
+/// **Does a seat bound to `claim` reserve its eligibility `max(duty_bind, lock_2)` rather than
+/// `duty_bind`?** (finding 1.) For every ATTEMPT claim accepted past F-E whose class is attributable
+/// (not C7) and whose escrow is not 0 — the claims a credit can price below option A.
+///
+/// L-4 caps the duty at `commitment / seats` so that a withholder never pins more of its panel than it
+/// forfeits (F14), and L-4b draws only a seat with room for `max(duty_bind, lock_2)`; while `lock_2 ≤
+/// duty` (floor and 8k at option A's `w + E`) a counted `Valid` is backed by construction. A credit
+/// cuts the commitment by up to `ρ` and the duty with it, but not the lock: `duty_bind` then falls
+/// under `lock_2`, the draw's eligibility is no longer what the bind reserved, and a seat can sit on
+/// more panels than its room can back at licence — under load an honest claim binds, cannot license,
+/// and is voided S0′ at RT#2 (the verifier's saturation probe: 320 honest claims charged at ρ = 10).
+/// Reserving the eligibility at bind makes the draw's check and the reservation one amount, so a seat
+/// that was drawn can always lock its `Valid` (A-1 counts `max(duty, lock)` and the lock is at most
+/// `lock_2`) and a saturated seat is refused at the draw — a `BindTimeout` / `NoCapablePanel` void,
+/// uncharged — never at the licence.
+///
+/// * **Without a credit it is `duty_bind`, byte for byte, on every testnet-12 class it reaches**: the
+///   floor's and the 8k row's `lock_2` is at most their duty at `w + E` (the floor's: 240.13 against
+///   640.17 MSK), so the maximum is the duty (`v_t5_saturated_seats_never_charge_an_honest_producer`'s F-E-armed,
+///   uncredited run binds and reserves exactly as option A).
+/// * **Keyed on the claim, not on the credit**, so it also covers a duty cut by anything else that
+///   leaves the lock alone — on `rcore/cap-int`, lane liab's AS-1, which divides `λ` and `lock_2` by
+///   `ρ` in the duty at every step while AS-2 divides the lock only from `q_seat`. There the
+///   commitment is still `w + E` (this lane credits nothing below `q_seat`), so the lock reserved is
+///   within F14. From `q_seat`, AS-2 lowers the lock by the same `ρ` and `lock_2 ≤ duty_bind` again on
+///   floor and 8k (`5 · ⌈lock_2/ρ⌉ ≤ ⌈E/ρ⌉`): the two amounts coincide and F14 holds as AS-1 states it.
+/// * **Where they still differ** (this branch alone with a credit, where no AS-2 exists; or a class
+///   whose `seats · lock_2` exceeds its commitment) backing is chosen over F14: the panel pins at most
+///   `seats · lock_2` against a forfeit of `w + m_c` (3.75× at ρ = 10 here), so the residual falls on
+///   seat capital and never on an honest producer.
+/// * **C7 and the free-prompt lane keep ADR-0152 L-4b's accepted residual** (their lock exceeds the
+///   duty by design — 2M's `lock_2` would pin 2.65× its forfeit — and neither is ever credited).
+pub fn palw_escrow_bind_reserves_the_lock_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
+    params.capacity_escrow_active_at(claim.accepted_daa)
+        && matches!(claim.source, PalwClaimSourceV2::Attempt)
+        && claim.escrowed_reward > 0
+        && palw_claim_class_attributable_v1(params, &claim.class_id)
 }
 
 /// **Does a void for `reason` keep the claim's obligation for `h_obl`?** (E-4.) Every reason the
@@ -358,6 +575,170 @@ mod tests {
         for (k, want) in [(1, -20.0), (2, -193.0), (5, -1_317.0), (10, -4_006.0), (100, -12_999.0), (1000, -13_000.0)] {
             assert!((ev(k) - want).abs() < 1.0, "EV({k}) = {} vs {want}", ev(k));
         }
+    }
+
+    /// testnet-12's floor `w` (0.1075266 MSK).
+    const W_FLOOR: u128 = 10_752_660;
+    /// The tier S1/S2 adds at a 13,000 MSK bond: `min(100‰ · 13,000, 3E)` = 1,300 MSK.
+    const TIER_13K: u128 = 1_300 * MSK;
+    /// testnet-12's work-gate ceiling.
+    const KAPPA: u32 = 500;
+
+    /// The fold's slot for a claim of escrow `E` at `(ρ, q)` on `floor` — the q_seat gate included.
+    fn m_c(rho: u32, q: u16, floor: PalwEscrowConvictionFloorV1) -> u128 {
+        let credit = Some(PalwEscrowCreditV1 { rho, q_credit_permille: q }).filter(palw_escrow_credit_applies_v1);
+        palw_monetary_prelicense_risk_v2(E as u64, credit, true, floor, KAPPA)
+    }
+
+    /// `E[f(X)]` for `X ~ Binomial(n, q)`, in log space (so `n` in the thousands neither underflows nor
+    /// overflows).
+    fn binomial_expectation(n: u64, q: f64, f: impl Fn(u64) -> f64) -> f64 {
+        if q <= 0.0 {
+            return f(0);
+        }
+        if q >= 1.0 {
+            return f(n);
+        }
+        let (lq, lp) = (q.ln(), (1.0 - q).ln());
+        let mut log_choose = 0.0f64;
+        let mut sum = 0.0f64;
+        for x in 0..=n {
+            if x > 0 {
+                log_choose += ((n - x + 1) as f64).ln() - (x as f64).ln();
+            }
+            sum += (log_choose + x as f64 * lq + (n - x) as f64 * lp).exp() * f(x);
+        }
+        sum
+    }
+
+    /// **A full bond's campaign on a route that burns nothing beyond the convicted claim** (finding 2's
+    /// setting), in MSK. `n` fraudulent claims of slot `m` on a bond of `c`: each is convicted with
+    /// probability `q` (forfeit `w + m`, plus its tier while the bond's free part lasts), else licenses
+    /// with probability `p` (gains `E`) or fails and is charged `w + m` (S0′). The tiers are paid from
+    /// what is left after EVERY claim's forfeit (`c − n·(w + m)`, the least the free part can be), so the
+    /// defender's collection is never overstated.
+    fn campaign_ev(c: f64, n: u64, m: f64, w: f64, e: f64, q: f64, p: f64, tier: f64) -> f64 {
+        let free = (c - n as f64 * (w + m)).max(0.0);
+        binomial_expectation(n, q, |x| {
+            let rest = (n - x) as f64;
+            rest * (p * e - (1.0 - p) * (w + m)) - x as f64 * (w + m) - (x as f64 * tier).min(free)
+        })
+    }
+
+    /// **Finding 2's closed forms**: on `Tier(0)` (this branch: S1's first strikes charge the forfeit
+    /// alone) `m* = (1−q)E/(1+q)`; on `Tier(1,300)` below the tier `m* = (1−q)E/(1+3q)`; `q = 1000‰` is
+    /// 0; and the `q` each ramp step needs on each floor — never below `q_seat`.
+    #[test]
+    fn m_star_v2_is_the_closed_form_and_the_q_each_step_needs() {
+        let e = E as f64;
+        for q in [0u16, 100, 250, 500, 800, 950] {
+            let qf = f64::from(q) / 1000.0;
+            let at_0 = palw_escrow_m_star_v2(E, q, 0, PALW_ESCROW_P_STAR_PERMILLE_V1, KAPPA);
+            assert!((msk(at_0) - (1.0 - qf) * e / (1.0 + qf) / 1e8).abs() < 1e-6, "Tier(0), q {q}: {}", msk(at_0));
+            let at_t = palw_escrow_m_star_v2(E, q, TIER_13K, PALW_ESCROW_P_STAR_PERMILLE_V1, KAPPA);
+            let below = (1.0 - qf) * e / (1.0 + 3.0 * qf);
+            let above = ((1.0 - qf) * 0.5 * e - qf * TIER_13K as f64) / ((1.0 - qf) * 0.5 + qf);
+            let want = if below <= TIER_13K as f64 { below } else { above.max(0.0) };
+            assert!((msk(at_t) - want / 1e8).abs() < 1e-6, "Tier(1,300), q {q}: {} vs {}", msk(at_t), want / 1e8);
+            println!("q = {q}‰: m*(Tier 0) = {:.2} MSK, m*(Tier 1,300) = {:.2} MSK", msk(at_0), msk(at_t));
+        }
+        assert_eq!(palw_escrow_m_star_v2(E, 1000, 0, 500, KAPPA), 0, "certain attribution: nothing");
+        assert_eq!(palw_escrow_m_star_v2(E, 0, TIER_13K, 500, KAPPA), E, "no attribution: the whole escrow");
+        // κ = 1000‰ leaves no free half: the tier is never counted.
+        assert_eq!(palw_escrow_m_star_v2(E, 500, TIER_13K, 500, 1000), palw_escrow_m_star_v2(E, 500, 0, 500, KAPPA));
+        let mut rows = Vec::new();
+        for rho in [10u32, 25, 50, 100, 1000] {
+            let t0 = palw_escrow_q_needed_permille_v2(E, rho, PalwEscrowConvictionFloorV1::Tier(0), KAPPA);
+            let t1 = palw_escrow_q_needed_permille_v2(E, rho, PalwEscrowConvictionFloorV1::Tier(TIER_13K), KAPPA);
+            let wb = palw_escrow_q_needed_permille_v2(E, rho, PalwEscrowConvictionFloorV1::WholeBond, KAPPA);
+            println!("rho = {rho}: q_needed = {t0}‰ (Tier 0), {t1}‰ (Tier 1,300), {wb}‰ (whole bond, q_seat-gated)");
+            assert!(t0 >= t1 && t1 >= wb && wb == PALW_ESCROW_Q_SEAT_PERMILLE_V1, "rho {rho}");
+            rows.push((rho, t0, t1));
+        }
+        assert_eq!(rows, vec![(10, 819, 693), (25, 924, 858), (50, 961, 925), (100, 981, 962), (1000, 999, 997)]);
+    }
+
+    /// **Finding 1's gate**: no credit below `q_seat`, whatever the floor — the slot is `E`, option A's,
+    /// so the seat side is option A's too; at and past it the credit counts. Monotone in `q` and `ρ`.
+    #[test]
+    fn the_credit_counts_only_from_q_seat_and_never_rises() {
+        for floor in [PalwEscrowConvictionFloorV1::Tier(0), PalwEscrowConvictionFloorV1::Tier(TIER_13K), PalwEscrowConvictionFloorV1::WholeBond] {
+            for rho in [1u32, 10, 100, 1000] {
+                assert_eq!(m_c(rho, PALW_ESCROW_Q_SEAT_PERMILLE_V1 - 1, floor), E, "{floor:?} rho {rho}: below q_seat");
+                let mut last = u128::MAX;
+                for q in (0..=1000u16).step_by(9).chain([1000]) {
+                    let m = m_c(rho, q, floor);
+                    assert!(m <= E && m <= last && m >= E.div_ceil(u128::from(rho)), "{floor:?} rho {rho} q {q}");
+                    last = m;
+                }
+                assert_eq!(m_c(rho, 1000, floor), E.div_ceil(u128::from(rho)), "certainty: the ramp floor");
+            }
+        }
+        assert!(m_c(10, 250, PalwEscrowConvictionFloorV1::WholeBond) == E.div_ceil(10), "whole bond at q_seat: E/ρ binds");
+        assert!(m_c(10, 250, PalwEscrowConvictionFloorV1::Tier(0)) > E / 2, "Tier(0) at q_seat: m* = 0.6E");
+    }
+
+    /// **Finding 2, the fix: on a tier route the priced `m_c` keeps EV ≤ 0 for one claim AND for a full
+    /// bond's campaign** — 13,000 and 100,000 MSK bonds, every `N` up to the ceiling, `P ∈ {0, ¼, ½}`,
+    /// every ramp step `ρ` and a grid of `q` (below `q_seat` too, where the slot is `E`), on `Tier(0)`
+    /// (this branch) and `Tier(1,300)` (`rcore/cap-int` before D-5; the floor tier at `C_min`, which a
+    /// larger bond's own tier only exceeds), with the tiers paid from the bond's free part only
+    /// (`campaign_ev`).
+    #[test]
+    fn a_tier_route_campaign_is_unprofitable_at_the_priced_slot() {
+        let (e, w) = (E as f64 / 1e8, W_FLOOR as f64 / 1e8);
+        for c in [13_000.0f64, 100_000.0] {
+            for (tier, floor) in [(0.0f64, PalwEscrowConvictionFloorV1::Tier(0)), (1_300.0f64, PalwEscrowConvictionFloorV1::Tier(TIER_13K))] {
+                for rho in [10u32, 25, 50, 100, 1000] {
+                    for q in (0..=1000u16).step_by(25) {
+                        let m = msk(m_c(rho, q, floor));
+                        let qf = f64::from(q) / 1000.0;
+                        let n_max = ((c * f64::from(KAPPA) / 1000.0) / (w + m)).floor() as u64;
+                        for p in [0.0, 0.25, 0.5] {
+                            let one = (1.0 - qf) * (p * e - (1.0 - p) * m) - qf * (m + tier.min(m));
+                            assert!(one <= 1e-6, "{c} {floor:?} rho {rho} q {q} P {p}: EV(1) = {one}");
+                            for n in [1, n_max / 2, n_max].into_iter().filter(|n| *n >= 1) {
+                                let ev = campaign_ev(c, n, m, w, e, qf, p, tier);
+                                assert!(ev <= 1e-6, "{c} {floor:?} rho {rho} q {q} P {p} N {n}: EV = {ev} MSK");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// **Finding 2, the defect it closes**: on a tier route (1,300 MSK at 13k) the Bernoulli price
+    /// `L = 3E` (the lane's first `m_c`: `⌈E/10⌉` from 131‰) and the naive `L = w + m + 1,300` (whose
+    /// ρ = 10 need is ≈ 470‰) both leave a full 13k bond's campaign profitable: twenty claims ask their
+    /// convictions for more tiers than the bond's free half holds.
+    #[test]
+    fn the_bernoulli_and_the_naive_tier_price_are_profitable_on_a_tier_route() {
+        let (e, w, c) = (E as f64 / 1e8, W_FLOOR as f64 / 1e8, 13_000.0f64);
+        let bernoulli = msk(palw_monetary_prelicense_risk_v1(E as u64, Some(PalwEscrowCreditV1 { rho: 10, q_credit_permille: 150 }), true));
+        assert!((bernoulli - 320.08).abs() < 0.01);
+        let n = ((c / 2.0) / (w + bernoulli)).floor() as u64;
+        assert_eq!(n, 20);
+        let at_150 = campaign_ev(c, n, bernoulli, w, e, 0.15, 0.5, 1_300.0);
+        let at_470 = campaign_ev(c, n, bernoulli, w, e, 0.47, 0.5, 1_300.0);
+        println!("20 claims at m = {bernoulli:.2} MSK on a 13k bond: EV = {at_150:.0} MSK at q = 0.15, {at_470:.0} MSK at q = 0.47");
+        assert!(at_150 > 10_000.0 && at_470 > 3_000.0, "the defect: fraud pays");
+        // The one-claim test the lane shipped cannot see it: EV(1) at L = 3E is negative.
+        assert!(0.85 * (0.5 * e - 0.5 * bernoulli) - 0.15 * 3.0 * e < 0.0);
+        // At the same q the fix prices the slot out of it.
+        for q in [150u16, 470] {
+            let m = msk(m_c(10, q, PalwEscrowConvictionFloorV1::Tier(TIER_13K)));
+            let n = ((c / 2.0) / (w + m)).floor() as u64;
+            assert!(campaign_ev(c, n, m, w, e, f64::from(q) / 1000.0, 0.5, 1_300.0) <= 0.0, "q {q}: m {m:.2}, N {n}");
+        }
+    }
+
+    /// The tier at the smallest bond: 1,300 MSK at testnet-12's 13,000 MSK floor; `3E` past 96k.
+    #[test]
+    fn the_tier_at_the_minimum_bond_is_ten_percent_capped_at_3e() {
+        assert_eq!(palw_escrow_tier_at_min_bond_v1((13_000 * MSK) as u64, E), TIER_13K);
+        assert_eq!(palw_escrow_tier_at_min_bond_v1((1_000_000 * MSK) as u64, E), 3 * E);
+        assert_eq!(palw_escrow_tier_at_min_bond_v1(0, E), 0);
     }
 
     /// The stand-in schedule is found by `from_daa`, last step wins, nothing before the first.

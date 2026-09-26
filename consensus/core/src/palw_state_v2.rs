@@ -2141,9 +2141,30 @@ impl PalwStateParamsV2 {
     /// On `rcore/cap-escrow` alone it reads the stand-in schedule (empty on every ruleset: no credit).
     /// `rcore/cap-int` replaces the body with lane liab's accessor over F-L's mirror —
     /// `self.capacity_step_at(accepted_daa).map(|step| PalwEscrowCreditV1 { rho: step.rho,
-    /// q_credit_permille: step.q_credit_permille })` — and nothing else in this lane moves.
+    /// q_credit_permille: step.q_credit_permille })` — beside the three other lines the module doc of
+    /// [`crate::palw_escrow_funding_v2`] lists (the `q_seat` gate, the conviction floor, the bind guard).
     pub fn capacity_escrow_credit_at_v1(&self, accepted_daa: u64) -> Option<crate::palw_escrow_funding_v2::PalwEscrowCreditV1> {
         crate::palw_escrow_funding_v2::palw_escrow_credit_in_force_v1(&self.capacity_escrow_credits, accepted_daa)
+    }
+
+    /// **The conviction floor a credit is priced against, for a claim accepted at `accepted_daa` with
+    /// escrow `e_sompi`** (finding 2 of this lane's verification; ADR-0160 §4.5's `L`).
+    ///
+    /// On `rcore/cap-escrow` alone there is no aggregate funnel (F-L), so no conviction burns any other
+    /// reward of the bond, and the cheapest producer route charges the claim's forfeit alone: S1
+    /// (`ProducerWithholding`, the DA default a root with no material behind it ends in) adds its action
+    /// tier only on X11's third strike, and strikes are counted one per aligned 1,000-DAA epoch, so a
+    /// campaign inside one epoch never escalates. The floor is therefore `Tier(0)`: `L = m`, and the
+    /// credit needs `q ≥ 819‰` for `ρ = 10` ([`crate::palw_escrow_funding_v2::palw_escrow_m_star_v2`]).
+    ///
+    /// `rcore/cap-int` replaces the body, keyed on F-L at `accepted_daa`: with S1 in F-L's intent class
+    /// and kinds 5 / 12 still tier-capped (D-5 not taken), `Tier(palw_escrow_tier_at_min_bond_v1(
+    /// self.min_collateral_sompi(), e_sompi))` (1,300 MSK); once D-5 puts every producer route in the
+    /// intent class, `WholeBond` (`L = 3E`, one claim binds). Which of these the ramp may credit is the
+    /// user's decision (this lane's report).
+    pub fn capacity_escrow_conviction_floor_at_v1(&self, accepted_daa: u64, e_sompi: u128) -> crate::palw_escrow_funding_v2::PalwEscrowConvictionFloorV1 {
+        let _ = (accepted_daa, e_sompi);
+        crate::palw_escrow_funding_v2::PalwEscrowConvictionFloorV1::Tier(0)
     }
 
     /// **ADR-0160 lane escrow: the credit schedule's stand-in, for fixtures** (see the field). Sorted by
@@ -3260,7 +3281,9 @@ pub fn palw_rcore_duty_bind_v1(lambda_term: u128, lock_2: u128, commitment_at_bi
 
 /// **L-4b, generalized: what a seat must have room for to be drawn and bound** — `max(duty_bind,
 /// lock_2)`. On floor and 8k attempts that is the duty (`lock_2 ≤ duty`); on 2M and on the FP lane
-/// (`lock_2` prices `rr`) it is `lock_2`, so a counted `Valid` is backed by construction.
+/// (`lock_2` prices `rr`) it is `lock_2`, so a counted `Valid` is backed by construction. Past ADR-0160
+/// F-E a credit can cut a floor or 8k claim's duty under `lock_2`; the bind of an attributable attempt
+/// then reserves this amount itself (`crate::palw_escrow_funding_v2::palw_escrow_bind_reserves_the_lock_v1`).
 pub fn palw_rcore_seat_eligibility_v1(duty_bind: u128, lock_2: u128) -> u128 {
     duty_bind.max(lock_2)
 }
@@ -13640,7 +13663,8 @@ impl PalwFoldReadV1<'_> {
 }
 
 /// **ADR-0152 L-4 / L-4b: one claim's bind-time prices** (S-SPEC §3.3), as the fold that binds it
-/// computes them. `duty_bind` is what each seat reserves (the `seat_exposure` of the duty row);
+/// computes them. `duty_bind` is what each seat reserves (the `seat_exposure` of the duty row; past
+/// ADR-0160 F-E, `eligibility` for an attributable attempt — `palw_escrow_bind_reserves_the_lock_v1`);
 /// `eligibility` is what a seat must have room for under the 500‰ ceiling to be drawn and bound
 /// (`max(duty_bind, lock_2)`); `lock_2` is the price of a `Valid` on a set recounted to 2.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -20024,9 +20048,18 @@ impl<'a> TransitionBuilder<'a> {
         // bounds the share a seat can actually be paid. **ADR-0152 L-4 / A-4: past `palw_rcore_plus`
         // the duty is `duty_bind`** — `min(max(λ-term, lock_2), commitment / seats)`, so `seats ×
         // duty` never exceeds what the claim forfeits (F14) — and the `3 × claim.reserved` term is
-        // retired.
+        // retired. **ADR-0160 lane escrow: past F-E an attributable attempt's seat reserves the
+        // eligibility `max(duty_bind, lock_2)` the draw priced** — a credit cuts the commitment the
+        // duty is capped by but not the lock, and a seat must never sit on more panels than it can
+        // back at licence (`palw_escrow_bind_reserves_the_lock_v1`). Without a credit, on every
+        // testnet-12 class, the two are `duty_bind`, byte for byte.
         let seat_exposure = if self.params.rcore_plus_active_at(now_daa) {
-            self.read().rcore_bind_prices(&claim_id, claim, on_duty.len(), now_daa).duty_bind
+            let prices = self.read().rcore_bind_prices(&claim_id, claim, on_duty.len(), now_daa);
+            if crate::palw_escrow_funding_v2::palw_escrow_bind_reserves_the_lock_v1(self.params, claim) {
+                prices.eligibility
+            } else {
+                prices.duty_bind
+            }
         } else {
             crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1(
                 claim.reserved,

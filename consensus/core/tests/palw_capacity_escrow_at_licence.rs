@@ -11,7 +11,10 @@
 //! **The credit.** F-L (lane liab) carries the ramp's `(ρ, q_credit)`; this branch has no F-L, so the
 //! fixtures set the escrow lane's stand-in schedule on the bundle
 //! (`PalwStateParamsV2::with_capacity_escrow_credits_v1`) — the one accessor `rcore/cap-int` rewires.
-//! Without a step the term is `E` (see `f_e_alone_without_a_credit_changes_only_the_hold`).
+//! Without a step the term is `E` (see `f_e_alone_without_a_credit_changes_only_the_hold`); below
+//! `q_seat` (250‰) a step credits nothing (finding 1); at and past it `m_c` is priced against this
+//! branch's conviction floor `Tier(0)` (finding 2). A seat bound to a credited claim reserves its
+//! eligibility `max(duty_bind, lock_2)` (finding 1; `v_t5_saturated_seats_never_charge_an_honest_producer`).
 //!
 //! **Measured here, not in the pipeline harness.** E-T3's `N_instant` is counted by the fold's own
 //! ceiling (`apply_attempt`'s finding-17 check: the admission ceiling on the state the claim joins),
@@ -33,8 +36,13 @@ use kaspa_consensus_core::palw_state_v2::{PalwStateV2Error, PalwVoidReasonV2};
 const MSK: u64 = 100_000_000;
 /// testnet-12's escrow `E` at the full subsidy: 720‰ of 4,445.62014 MSK.
 const E: u128 = 320_084_650_080;
-/// The credited attribution the lifecycle fixtures use: past every ramp step's need (143‰ at L = 3E).
-const Q: u16 = 150;
+/// **The credited attribution the ramp fixtures use: certainty**, so that `⌈E/ρ⌉` binds at every step
+/// and these tests measure the ramp's arithmetic. It is not a rate a step could credit: on this branch
+/// the credit is priced against `Tier(0)` (S1's first strikes charge the forfeit alone, and no F-L burns
+/// the bond's other rewards) and counts only from `q_seat` (250‰), so ρ = 10 needs 819‰ and ρ = 100
+/// 981‰ (`palw_escrow_q_needed_permille_v2`; the verification's findings 1 and 2).
+/// `e_t3_n_instant_at_13k_by_credited_q` measures the rates below certainty.
+const Q: u16 = 1_000;
 
 /// testnet-12 with F-E at `at` and the stand-in credit schedule `(from_daa, ρ, q‰)`.
 fn armed(at: u64, credits: &[(u64, u32, u16)]) -> Params {
@@ -936,4 +944,145 @@ fn x_i5_c7_keeps_the_whole_escrow_and_an_unlisted_long_window_class_is_refused()
             assert!(got.is_ok_and(|(_, _, skips)| skips.is_empty()), "F-E off: the gate is today's");
         }
     }
+}
+
+// =============================================================================================
+// The verification's findings 1 and 2 on the fold: what a credit below certainty is worth, and a
+// saturated panel never charging an honest producer.
+// =============================================================================================
+
+/// **`N_instant` at 13,000 MSK and ρ = 10 by credited `q`** (findings 1 and 2): below `q_seat` (250‰)
+/// the step credits nothing (the lane's old fixture rate, 150‰, is option A's two claims); from it
+/// `m_c = max(m*(q), ⌈E/ρ⌉)` against this branch's conviction floor `Tier(0)` — `(1−q)E/(1+q)` —
+/// so 250‰ holds 3 claims, 500‰ holds 6, and `⌈E/10⌉` binds only from 819‰ (20). The fold's count is
+/// the formula's and the producer's facts predict each refusal (`n_instant`).
+#[test]
+fn e_t3_n_instant_at_13k_by_credited_q() {
+    use kaspa_consensus_core::palw_escrow_funding_v2::{PALW_ESCROW_P_STAR_PERMILLE_V1, PALW_ESCROW_Q_SEAT_PERMILLE_V1, palw_escrow_m_star_v2};
+    let bond_13k = 13_000 * MSK;
+    let mut rows = Vec::new();
+    for (q, want) in [(150u16, 2usize), (249, 2), (250, 3), (500, 6), (818, 20), (819, 20), (1_000, 20)] {
+        let (n, _, next, w) = n_instant(armed(1_000, &[(0, 10, q)]), bond_13k, 2_100);
+        let m = next - w;
+        let priced = if q < PALW_ESCROW_Q_SEAT_PERMILLE_V1 {
+            E
+        } else {
+            palw_escrow_m_star_v2(E, q, 0, PALW_ESCROW_P_STAR_PERMILLE_V1, 500).max(E.div_ceil(10)).min(E)
+        };
+        println!("13k rho 10 at q = {q:>4}‰: m_c = {:>9.2} MSK, N = {n}", msk(m));
+        assert_eq!(m, priced, "q {q}: the fold's slot is the priced m_c");
+        assert_eq!(n, want, "q {q}");
+        rows.push((q, n, m));
+    }
+    assert!(rows[4].2 > E.div_ceil(10) && rows[5].2 == E.div_ceil(10), "⌈E/10⌉ binds from 819‰, not 818‰: {rows:?}");
+}
+
+/// **V-T5 / E-T5b: seats at saturation never turn into an honest producer's S0′** (finding 1; the
+/// verifier's `probe_seat_backing_at_saturation`, with assertions). Five 130,000 MSK seats (65,000 of
+/// room each) are offered 600 floor claims of one honest 5,000,000 MSK producer, forty binds a block,
+/// then every bound claim is licensed by all five `Valid`s.
+///
+/// * F-E off: the duty is `≥ lock_2`, the seats bind what they can back, every bound claim licenses.
+/// * F-E armed without a credit: the seat reserves `max(duty_bind, lock_2)`, which on the floor IS the
+///   duty — the same binds, the same amount a seat, the same licences as F-E off.
+/// * The verifier's configuration, ρ = 10 at 150‰: below `q_seat` the step credits nothing, so it is
+///   option A's run. At `q_seat` (250‰, this branch's `Tier(0)`: `m_c = 0.6E`) the duty (384 MSK) is
+///   still above `lock_2`, so the seat reserves the duty.
+/// * Every ramp step with a credit that cuts the duty under `lock_2` (`q_credit = 1000‰`, `m_c =
+///   ⌈E/ρ⌉`, ρ = 10 … 1000): the seat reserves the eligibility `max(duty_bind, lock_2)` at bind (not
+///   the duty capped at `(w + m_c)/5`), so again every claim the seats bind licenses on its first
+///   panel. Before the fix, at ρ = 10 and 150‰, the seats bound all 600 and 324 of them could not
+///   license; 320 were voided S0′ at RT#2 and the producer was charged 102,461.50 MSK. On this branch
+///   the seat side past a credit is bounded by the lock whatever `ρ` is — dividing it is AS-2's
+///   (lane liab).
+///
+/// In every run the claims the seats could not take stay unbound and void `BindTimeout` — uncharged —
+/// and the producer's `slashed` never moves.
+#[test]
+fn v_t5_saturated_seats_never_charge_an_honest_producer() {
+    use kaspa_consensus_core::palw_escrow_funding_v2::palw_escrow_bind_reserves_the_lock_v1;
+    use kaspa_consensus_core::palw_state_v2::{palw_bond_committed_v1, palw_operator_id_v2};
+    // `(label, params, whether the credit cut the duty under lock_2)`.
+    let mut cases: Vec<(String, Params, bool)> = vec![
+        ("F-E off".into(), t12(), false),
+        ("F-E, no credit".into(), armed(1_000, &[]), false),
+        ("rho 10, q 150".into(), armed(1_000, &[(0, 10, 150)]), false),
+        ("rho 10, q 250".into(), armed(1_000, &[(0, 10, 250)]), false),
+    ];
+    for rho in [10u32, 25, 50, 100, 1_000] {
+        cases.push((format!("rho {rho}, q {Q}"), armed(1_000, &[(0, rho, Q)]), true));
+    }
+    let mut runs = Vec::new();
+    for (label, p, credited) in cases {
+        let mut t = tape_on(p);
+        let seat_ns = [81u64, 82, 83, 84, 85];
+        let mut objs: Vec<PalwConsensusObjectV2> = seat_ns.iter().map(|n| bond_obj(*n, 130_000 * MSK)).collect();
+        objs.push(bond_obj(96, 5_000_000 * MSK));
+        t.step(objs);
+        let seats: Vec<(PalwBondKeyV2, Hash64)> =
+            seat_ns.iter().map(|n| (bond_key(*n), palw_operator_id_v2(&operator_pubkey_of(*n)))).collect();
+        let (_, slashed_at_start) = bond_of(&t.c.s, 96);
+        let ids: Vec<Hash64> = (0..600u64).map(|i| t.attempt(Some(96), 0x5EA7_0000 + i)).collect();
+        for chunk in ids.chunks(40) {
+            let anchor = h(0xAC_0000 + t.c.daa);
+            t.step(chunk.iter().map(|id| PalwConsensusObjectV2::PanelBound { claim: *id, anchor, seats: seats_of(&seats) }).collect());
+        }
+        let bound: Vec<Hash64> =
+            ids.iter().copied().filter(|id| matches!(t.c.s.claim(id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. })).collect();
+        assert!(!bound.is_empty() && bound.len() < ids.len(), "{label}: the seats saturate ({} bound)", bound.len());
+        let committed = palw_bond_committed_v1(&t.c.s, &bond_key(81), t.c.daa, None, t.c.sp.window_court());
+        assert!(committed <= u128::from(65_000 * MSK), "{label}: the seat's work half holds");
+        // What each seat reserved: the eligibility where the credit lowered the slot, the duty elsewhere.
+        let claim = t.c.s.claim(&bound[0]).unwrap().clone();
+        let stage = claim.reserved + slot(&t.c.sp, &claim);
+        let per_seat = t.c.s.panel_duty_row_of(&bound[0]).expect("a duty row").seat_exposure;
+        assert_eq!(palw_escrow_bind_reserves_the_lock_v1(&t.c.sp, &claim), label != "F-E off", "{label}");
+        if credited {
+            assert!(per_seat > stage / 5, "{label}: the seat reserves its lock, not the duty capped at (w + m_c)/5");
+        } else {
+            assert!(per_seat <= stage / 5, "{label}: option A's duty, capped by w + E (F14)");
+        }
+        for chunk in bound.chunks(40) {
+            let objs = chunk
+                .iter()
+                .map(|id| {
+                    let b = t.c.s.panel(id).expect("bound").bound_daa;
+                    v1(*id, &seats, &[0, 1, 2, 3, 4], &[], b)
+                })
+                .collect();
+            t.step(objs);
+        }
+        let licensed =
+            bound.iter().filter(|id| matches!(t.c.s.claim(id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. })).count();
+        println!(
+            "{label}: 600 claims, {} bound, {licensed} licensed; each seat reserved {:.2} MSK a claim against a stage of {:.2} (pins {:.2}x); seat 81 committed {:.2} of 65,000 MSK",
+            bound.len(),
+            msk(per_seat),
+            msk(stage),
+            (5 * per_seat) as f64 / stage as f64,
+            msk(committed)
+        );
+        assert_eq!(licensed, bound.len(), "{label}: every claim a seat was bound to is licensed — a drawn seat backs its Valid");
+        // Past every bind and receipt window: the unbound void uncharged; no S0′ anywhere.
+        let last = ids.iter().map(|id| t.c.s.claim(id).unwrap().accepted_daa).max().unwrap();
+        t.at(last + t.c.sp.window_bind() + 2 * t.c.sp.window_receipt() + 3, vec![]);
+        for id in &ids {
+            let phase = &t.c.s.claim(id).unwrap().phase;
+            assert!(
+                !matches!(phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. })
+                    && !matches!(phase, PalwClaimPhaseV2::PanelBound { .. }),
+                "{label}: no claim of the honest producer is left bound or voided S0′: {phase:?}"
+            );
+        }
+        assert_eq!(bond_of(&t.c.s, 96).1, slashed_at_start, "{label}: the honest producer is never charged");
+        runs.push((bound.len(), per_seat));
+        restart_every(&t, 97);
+    }
+    println!("bound by the saturated seats, and what each seat reserved a claim (off, no credit, 150‰, 250‰, then rho 10 … 1000 at 1000‰): {runs:?}");
+    assert_eq!(runs[1], runs[0], "without a credit F-E binds and reserves exactly as option A");
+    assert_eq!(runs[2], runs[0], "the probe's 150‰ is below q_seat: option A's binds and reservation");
+    let credited = &runs[4..];
+    assert!(runs[3].0 > runs[0].0 && runs[3].1 > credited[0].1, "at q_seat the duty still binds, above the lock: {runs:?}");
+    assert!(credited.iter().all(|run| *run == credited[0]), "past a cutting credit the lock, not rho, bounds the seat side: {credited:?}");
+    assert!(credited[0].0 > runs[3].0, "the credit's cheaper claims still fill the seats only as far as they can back");
 }

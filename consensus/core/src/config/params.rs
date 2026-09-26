@@ -2899,10 +2899,13 @@ pub struct Params {
     ///
     /// Past this fence — keyed on a claim's own `accepted_daa`, so a claim accepted below it keeps
     /// `w + E` for its whole life — the escrow slot of a claim's bond commitment holds `m_c`
-    /// (`crate::palw_escrow_funding_v2::palw_monetary_prelicense_risk_v1`: `E` for C7 or without a
-    /// credit, `max(m*(q_credit), ⌈E/ρ⌉)` otherwise) instead of the withheld reward `E`, which stays
-    /// withheld to `Final` plus the vesting row's maturity and is burned on a void or a conviction; and
-    /// an attempt claim voided for a reason nobody is convicted under keeps its commitment for
+    /// (`crate::palw_escrow_funding_v2::palw_escrow_term_v2`: `E` for C7, without a credit or below
+    /// `q_seat` = 250‰; otherwise `max(m*, ⌈E/ρ⌉)` with `m*` priced against the conviction floor of
+    /// the claim's `accepted_daa` — `palw_monetary_prelicense_risk_v2`) instead of the withheld reward
+    /// `E`, which stays withheld to `Final` plus the vesting row's maturity and is burned on a void or a
+    /// conviction; a seat bound to an attributable attempt reserves its eligibility `max(duty_bind,
+    /// lock_2)` — its duty wherever no credit cut it (`palw_escrow_bind_reserves_the_lock_v1`); and an
+    /// attempt claim voided for a reason nobody is convicted under keeps its commitment for
     /// `window_receipt` past the void (E-4, the withdrawal principle). Mirrored into the V2 bundle by
     /// [`Self::sync_palw_capacity_escrow`].
     ///
