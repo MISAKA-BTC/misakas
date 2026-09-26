@@ -706,6 +706,10 @@ mod tests {
             // Lane sink (the model sink binding, post-launch): refused without the market and the
             // 2026-09-23 audit fence at or below it by `validate_palw_v2`, which the probe does not run.
             "palw_model_sink_bound" => params.palw_model_sink_bound = Some(at),
+            // ADR-0160 lane verify (F-B, F-R): bare heights; `validate_palw_v2` (not run by the probe)
+            // refuses them without R-core+, the audit and attribution fences and their mirrors.
+            "palw_capacity_batch_licence" => params.palw_capacity_batch_licence = Some(at),
+            "palw_capacity_verify_room" => params.palw_capacity_verify_room = Some(at),
             "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
             "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
             "palw_kary_court" => params.palw_kary_court = Some(at),

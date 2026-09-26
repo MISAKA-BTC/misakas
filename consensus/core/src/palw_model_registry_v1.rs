@@ -1779,8 +1779,12 @@ pub fn palw_model_registry_read_v2(
     // of one span, so `panel_inflight_replay / (per_span × panel_horizon_spans)` stays the
     // utilization it always meant, and no class's window stands in for another's.
     let rate_rule = count_free_prompts;
+    // ADR-0160 F-R: past `palw_capacity_verify_room` the fold prices the panel's replay at `k = 2`
+    // and the measured speed; this read prices it the same way so op 186 shows the room the gate reads.
+    let room_v2 = params.capacity_room_active_at(tip_daa);
+    let pricing = crate::palw_verify_capacity_v1::palw_replay_pricing_v1(room_v2, &g);
     let (owed, terms) = if rate_rule {
-        crate::palw_state_v2::palw_panel_demand_read_v1(state, params, g.seat_count as u32)
+        crate::palw_state_v2::palw_panel_demand_read_v1(state, params, pricing.replicas.min(u32::MAX as u128) as u32)
     } else {
         Default::default()
     };
@@ -1806,15 +1810,18 @@ pub fn palw_model_registry_read_v2(
             } else {
                 // ADR-0152 SW-9: the fold's room count — `ready_eff` past `palw_rcore_plus` outside C7.
                 let ready = fold.map(|f| palw_model_registry_room_ready_v1(state, params, class_id, tip_daa, f)).unwrap_or(0) as u128;
-                let per_span =
-                    ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
+                let per_span = if room_v2 {
+                    ready.saturating_mul(pricing.per_seat_per_span)
+                } else {
+                    ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000
+                };
                 if rate_rule {
                     crate::palw_state_v2::palw_panel_room_read_v1(
                         state,
                         params,
                         class_id,
                         per_span,
-                        ccu_of(class_id).saturating_mul(seat_count),
+                        ccu_of(class_id).saturating_mul(if room_v2 { pricing.replicas } else { seat_count }),
                         &owed,
                         &terms,
                     )

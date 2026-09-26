@@ -169,6 +169,9 @@ pub mod palw_base0;
 pub mod palw_base0_a16;
 pub mod palw_base0_ops;
 pub mod palw_base0_profile;
+/// ADR-0160 lane verify V1: the batch licence (F-B, `Params::palw_capacity_batch_licence`) — one
+/// signature per seat window, a Merkle path per claim, the coverage funnel unchanged.
+pub mod palw_batch_licence_v1;
 /// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
 /// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
 /// rung deadlines, attributable no-show offenses, log-bounded convergence to the terminal
@@ -442,6 +445,9 @@ pub mod palw_transcendental;
 pub mod palw_v2;
 pub mod palw_verification_profile_v1;
 pub mod palw_verification_v2;
+/// ADR-0160 lane verify V2: room v2 (F-R, `Params::palw_capacity_verify_room`) — the measured `k = 2`
+/// capacity, the stake-proportional bond share, the floor's seat-capital room.
+pub mod palw_verify_capacity_v1;
 /// ADR-0152 V-1…V-8, read side: `getPalwVesting` (op 199) and claim row v3 (phase2-plan P2-10).
 pub mod palw_vesting_read_v1;
 pub mod palw_vesting_v1;

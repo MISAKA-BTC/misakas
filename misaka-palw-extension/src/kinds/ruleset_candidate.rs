@@ -94,6 +94,15 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // Lane sink (the model sink binding, post-launch): a bare height; `validate_palw_v2` refuses it
         // without the market and the 2026-09-23 audit fence at or below it.
         "palw_model_sink_bound" => params.palw_model_sink_bound = Some(at),
+        // ADR-0160 lane verify (F-B, F-R): bare heights with the fold's mirrors.
+        "palw_capacity_batch_licence" => {
+            params.palw_capacity_batch_licence = Some(at);
+            params.sync_palw_capacity_verify();
+        }
+        "palw_capacity_verify_room" => {
+            params.palw_capacity_verify_room = Some(at);
+            params.sync_palw_capacity_verify();
+        }
         "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
         "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
         "palw_kary_court" => params.palw_kary_court = Some(at),

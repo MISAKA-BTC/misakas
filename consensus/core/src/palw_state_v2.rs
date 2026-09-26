@@ -1368,6 +1368,19 @@ pub struct PalwStateParamsV2 {
     /// Unread by the fold until S-2.
     #[borsh(skip)]
     rcore_conservative_classes: Vec<Hash64>,
+    /// **ADR-0160 F-R: `Params::palw_capacity_verify_room`'s height** (lane verify V2), mirrored here
+    /// by `Params::sync_palw_capacity_verify` because the room is read by the fold, by the producer's
+    /// pre-check and by op 186 — readers holding only these params. `None` on every shipped preset.
+    /// Skipped by borsh for `short_challenge_window_from_daa`'s reason: the fence is what
+    /// `Params::consensus_params_id` hashes (Some-only), and `validate_palw_v2` refuses a bundle whose
+    /// copy disagrees with it.
+    #[borsh(skip)]
+    capacity_room_from_daa: Option<u64>,
+    /// **ADR-0160 F-B: `Params::palw_capacity_batch_licence`'s height** (lane verify V1), mirrored by
+    /// the same setter for the same reason (the fold's batch arm and the kind-3 adjudicator's
+    /// `Windowed` receipt read it). `None` on every shipped preset; borsh-skipped likewise.
+    #[borsh(skip)]
+    capacity_batch_from_daa: Option<u64>,
     /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
     /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
     /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
@@ -1569,6 +1582,8 @@ impl PalwStateParamsV2 {
             rcore_plus_from_daa: None,
             withdrawal_delay_daa: 0,
             rcore_conservative_classes: Vec::new(),
+            capacity_room_from_daa: None,
+            capacity_batch_from_daa: None,
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
@@ -2116,6 +2131,37 @@ impl PalwStateParamsV2 {
         self.withdrawal_delay_daa = withdrawal_delay_daa;
         self.rcore_conservative_classes = conservative_classes;
         self
+    }
+
+    /// **ADR-0160 lane verify: F-R's and F-B's mirrors**, written by `Params::sync_palw_capacity_verify`
+    /// and by nothing else (and by fixtures); `None` where a fence is not armed.
+    pub fn with_capacity_verify_mirrors(mut self, room_from_daa: Option<u64>, batch_from_daa: Option<u64>) -> Self {
+        self.capacity_room_from_daa = room_from_daa;
+        self.capacity_batch_from_daa = batch_from_daa;
+        self
+    }
+
+    /// ADR-0160 F-R: `Params::palw_capacity_verify_room`'s height, if armed (the mirror).
+    pub fn capacity_room_from_daa(&self) -> Option<u64> {
+        self.capacity_room_from_daa
+    }
+
+    /// ADR-0160 F-B: `Params::palw_capacity_batch_licence`'s height, if armed (the mirror).
+    pub fn capacity_batch_from_daa(&self) -> Option<u64> {
+        self.capacity_batch_from_daa
+    }
+
+    /// **ADR-0160 F-R: does room v2 judge a block at `daa_score`?** — the measured `k = 2` capacity,
+    /// the stake-proportional share in place of T-2(a), and the floor room
+    /// ([`crate::palw_verify_capacity_v1`]). `false` on every shipped preset.
+    pub fn capacity_room_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_room_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **ADR-0160 F-B: may a block at `daa_score` carry a batch licence** (and a kind-3 filing a
+    /// `Windowed` receipt, [`crate::palw_batch_licence_v1`])? `false` on every shipped preset.
+    pub fn capacity_batch_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_batch_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn (the
@@ -6290,6 +6336,19 @@ pub enum PalwConsensusObjectV2 {
         amount: u64,
         sink_index: u32,
     },
+    // ---- ADR-0160 lane verify: tag 59, the next free after the Activation Pool's 58. ----
+    /// **ADR-0160 F-B: a batch licence** (tag 59): each seat's window root once, signed over
+    /// [`crate::palw_batch_licence_v1::palw_receipt_window_message_v1`], and per claim each seat's V3
+    /// receipt as a leaf and a Merkle path into its root — one signature per (seat, window) instead
+    /// of per (seat, claim). Each live entry is judged by the single `ReceiptLicensedV2`'s own
+    /// validator and folded through its own arm ([`crate::palw_batch_licence_v1`]); an entry on a
+    /// claim no longer licensable is inert. Accepted only past `Params::palw_capacity_batch_licence`;
+    /// refused by name below it by the acceptance layer and the fold, so every other network and
+    /// testnet-12 before the fence fold exactly as before this variant existed.
+    ReceiptLicensedBatchV1 {
+        roots: Vec<crate::palw_batch_licence_v1::PalwSeatWindowRootV1>,
+        entries: Vec<crate::palw_batch_licence_v1::PalwBatchLicenceEntryV1>,
+    },
 }
 
 /// **The name of a v22-skeleton object (ADR-0152 v3.1 §6 row 24, tags 53–56)**, or `None` for
@@ -6325,6 +6384,15 @@ pub fn palw_object_sampled_receipt_v1(object: &PalwConsensusObjectV2) -> Option<
         PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts }
         | PalwConsensusObjectV2::OptimisticLicensed { claim, receipts }
         | PalwConsensusObjectV2::PanelUnavailableQuorum { claim, receipts } => first_v3(*claim, receipts),
+        // ADR-0160 F-B: a batched receipt's seat is its root's (the root must be the seat's).
+        PalwConsensusObjectV2::ReceiptLicensedBatchV1 { roots, entries } => entries.iter().find_map(|entry| {
+            entry
+                .seats
+                .iter()
+                .find(|seat| matches!(seat.verdict, Sampled))
+                .and_then(|seat| roots.get(seat.root_index as usize))
+                .map(|root| (entry.claim, root.seat_bond))
+        }),
         _ => None,
     }
 }
@@ -8115,6 +8183,19 @@ pub enum PalwStateV2Error {
         "bond {bond:?} holds {unlicensed} unlicensed claims of class {class}, its share of the class is {share} (ADR-0152 T-2(a))"
     )]
     BondClassShareExceeded { bond: PalwBondKeyV2, class: Hash64, unlicensed: u32, share: u64 },
+    /// **ADR-0160 F-B: a batch licence (tag 59) below `Params::palw_capacity_batch_licence`.** The
+    /// acceptance layer refuses it first; the block stands and nothing folds.
+    #[error("a batch licence below palw_capacity_batch_licence (ADR-0160 F-B)")]
+    CapacityBatchLicenceDormant,
+    /// **ADR-0160 F-R (J-6): the floor's seat capital is spoken for.** Past
+    /// `Params::palw_capacity_verify_room`, a floor claim is admitted only while the seats' free
+    /// capital can bind every floor claim not yet bound plus this one
+    /// ([`crate::palw_verify_capacity_v1::palw_floor_room_v1`]): `pending` claims await a bind, the
+    /// seats can bind `slots`. Non-fatal for the block's own attempt (step 4 skips it; the block still
+    /// anchors), skipped for merged work — so a flood is refused at acceptance instead of voiding
+    /// honest claims `BindTimeout` twenty DAA later.
+    #[error("the floor's seat capital binds {slots} more claims and {pending} already wait for a bind (ADR-0160 J-6)")]
+    FloorRoomExhausted { pending: u64, slots: u64 },
     /// **ADR-0152 v3.1 R-3 (S-7): a `ReporterCommitted` (tag 53) the fold does not take** — the
     /// reporter is unknown, not `Active`, below the floor, or already holds
     /// `PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1` open commitments; or the commitment is zero or
@@ -13327,22 +13408,35 @@ impl PalwFoldReadV1<'_> {
         extra: Option<(Hash64, PalwGatedClaimV1)>,
     ) -> PalwPanelRateV1 {
         let g = &fold.globals;
-        let seat_count = g.seat_count as u128;
+        // **ADR-0160 F-R: past `palw_capacity_verify_room` the panel's replay is priced as
+        // Verification V2 costs it** — `k = 2` whole replays a claim at the measured speed
+        // ([`crate::palw_verify_capacity_v1::palw_replay_pricing_v1`]) — for this class's capacity
+        // and every other class's term alike. Below it: `seat_count` full replays at the reference,
+        // the expression below byte for byte.
+        let room_v2 = self.params.capacity_room_active_at(now_daa);
+        let replicas = if room_v2 {
+            crate::palw_verify_capacity_v1::palw_replay_pricing_v1(true, g).replicas
+        } else {
+            g.seat_count as u128
+        };
         let (owed, terms) = self.with_inflight_index(|index| {
             let owed = palw_panel_owed_v1(self.state, self.params, index, self.own_attempt_class, extra);
-            let terms = palw_panel_terms_v1(self.state, seat_count, &owed);
+            let terms = palw_panel_terms_v1(self.state, replicas, &owed);
             (owed, terms)
         });
         // ADR-0152 SW-9 (T-2(a) amended): past `palw_rcore_plus`, a class outside C7 counts
         // effective ready operators over capped weights — the capacity the stake draw leaves it.
         let ready = self.model_registry_room_ready_v1(class_id, row, now_daa, fold) as u128;
-        let per_span =
-            ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
+        let per_span = if room_v2 {
+            ready.saturating_mul(crate::palw_verify_capacity_v1::palw_replay_pricing_v1(true, g).per_seat_per_span)
+        } else {
+            ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000
+        };
         PalwPanelRateV1::read(
             class_id,
             per_span,
             row.profile.verification_window_spans as u64,
-            row.work.economic_ccu_per_claim.saturating_mul(seat_count),
+            row.work.economic_ccu_per_claim.saturating_mul(replicas),
             &owed,
             &terms,
         )
@@ -13449,15 +13543,152 @@ impl PalwFoldReadV1<'_> {
         if *class_id == self.params.base_class_id() || !(self.extras.work_target_active && fold.governs_at(now_daa)) {
             return None;
         }
+        Some(self.class_capacity_v1(class_id, now_daa)?.div_ceil(2))
+    }
+
+    /// **`c_class`, the room T-2(a) and ADR-0160's share divide** — the class's static cap for a C7
+    /// class, otherwise the claims its ready seats' replay holds over its window with no other class
+    /// beside it (`palw_panel_capacity_by_rate_v1(per_span, 0, window, cost)`, read from the very
+    /// [`PalwPanelRateV1`] the room reads). Past `Params::palw_capacity_verify_room` the claim's cost
+    /// is `k = 2` replays (`panel_rate_v1` prices `per_span` at the measured speed there), so this is
+    /// [`crate::palw_verify_capacity_v1::palw_panel_capacity_v2`]. `None` where the share is no rule
+    /// ([`Self::bond_class_share_v1`]'s conditions).
+    fn class_capacity_v1(&self, class_id: &Hash64, now_daa: u64) -> Option<u64> {
+        if !self.params.rcore_plus_active_at(now_daa) {
+            return None;
+        }
+        let fold = self.extras.model_registry.as_ref()?;
+        if *class_id == self.params.base_class_id() || !(self.extras.work_target_active && fold.governs_at(now_daa)) {
+            return None;
+        }
         let row = self.state.model_lifecycles.get(class_id)?;
-        let c_class = if palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
+        Some(if palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
             row.profile.max_inflight_claims as u64
         } else {
             let rate = self.panel_rate_v1(class_id, row, fold, now_daa, None);
-            let cost = row.work.economic_ccu_per_claim.saturating_mul(fold.globals.seat_count as u128);
+            let replicas = if self.params.capacity_room_active_at(now_daa) {
+                crate::palw_verify_capacity_v1::palw_replay_pricing_v1(true, &fold.globals).replicas
+            } else {
+                fold.globals.seat_count as u128
+            };
+            let cost = row.work.economic_ccu_per_claim.saturating_mul(replicas);
             crate::palw_work_target_v1::palw_panel_capacity_by_rate_v1(rate.per_span, 0, rate.window, cost)
+        })
+    }
+
+    /// **The share `bond` may hold of `class_id`'s unlicensed claims**: T-2(a)'s `⌈c/2⌉` below
+    /// `Params::palw_capacity_verify_room`, and past it ADR-0160's cap over the same `c_class`
+    /// ([`crate::palw_verify_capacity_v1::palw_bond_room_cap_v1`]): the bond's stake-proportional share
+    /// of the room among the active holders (every bond holding an unlicensed claim of the class, and
+    /// this one) — the whole room when it holds alone — guaranteed against the others, plus whatever
+    /// rounding slack no holder has taken; none for a frozen bond. C7 keeps its static cap as the room
+    /// (V-I6: c_2M = 1).
+    fn bond_class_share_for_v1(&self, class_id: &Hash64, bond: &PalwBondKeyV2, now_daa: u64) -> Option<u64> {
+        if !self.params.capacity_room_active_at(now_daa) {
+            return self.bond_class_share_v1(class_id, now_daa);
+        }
+        let room = self.class_capacity_v1(class_id, now_daa)?;
+        let held: BTreeMap<PalwBondKeyV2, u64> = self.with_inflight_index(|index| {
+            index
+                .get(class_id)
+                .map(|tally| tally.unlicensed_by_bond.iter().map(|(holder, n)| (*holder, *n as u64)).collect())
+                .unwrap_or_default()
+        });
+        Some(self.room_cap_v1(room, bond, &held))
+    }
+
+    /// [`crate::palw_verify_capacity_v1::palw_bond_room_cap_v1`] for `bond` over the holders `held`
+    /// (bond → claims held against `room`), `bond` counted with what it holds (none if absent).
+    fn room_cap_v1(&self, room: u64, bond: &PalwBondKeyV2, held: &BTreeMap<PalwBondKeyV2, u64>) -> u64 {
+        let holder = |key: &PalwBondKeyV2, n: u64| crate::palw_verify_capacity_v1::PalwRoomHolderV1 {
+            collateral: self.state.bonds.get(key).map(|record| record.collateral).unwrap_or(0),
+            held: n,
+            frozen: crate::palw_verify_capacity_v1::palw_verify_bond_is_frozen_v1(self.state, key),
         };
-        Some(c_class.div_ceil(2))
+        let mut holders = vec![holder(bond, held.get(bond).copied().unwrap_or(0))];
+        holders.extend(held.iter().filter(|(key, _)| *key != bond).map(|(key, n)| holder(key, *n)));
+        crate::palw_verify_capacity_v1::palw_bond_room_cap_v1(room, 0, &holders)
+    }
+
+    /// **ADR-0160 F-R (J-6): may one more floor claim — `claim`, about to be accepted on `bond` —
+    /// enter?** `Ok` below `Params::palw_capacity_verify_room` and for every other class. Past it:
+    ///
+    /// 1. the floor room ([`crate::palw_verify_capacity_v1::palw_floor_room_v1`]): the eligible
+    ///    seats' free work room, in whole seat-slots of this claim's bind eligibility
+    ///    (`max(duty_bind, lock_2)`, what a seat must have room for to be drawn), over the panel's
+    ///    seat count, must exceed the floor claims still waiting for a bind — `FloorRoomExhausted`;
+    /// 2. the bond's cap on that pipeline ([`crate::palw_verify_capacity_v1::palw_bond_room_cap_v1`]
+    ///    over the bonds with a floor claim waiting): its waiting floor claims plus this one within
+    ///    its stake share and the free rounding slack — `BondClassShareExceeded` on the base class.
+    ///
+    /// The eligible seats are the draw's structural population for the floor: `Active` at the
+    /// panel's floor and able to judge the base class. Both refusals are skips for the block's own
+    /// attempt (step 4), so the block stands and still anchors.
+    fn check_floor_room_v1(
+        &self,
+        bond: &PalwBondKeyV2,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let base = self.params.base_class_id();
+        if !self.params.capacity_room_active_at(now_daa) || claim.class_id != base {
+            return Ok(());
+        }
+        let seat_count = self
+            .extras
+            .model_registry
+            .as_ref()
+            .map(|fold| fold.globals.seat_count as u64)
+            .unwrap_or(crate::palw_verification_profile_v1::PALW_SEAT_COUNT_V1 as u64);
+        let eligibility = self.rcore_bind_prices(claim_id, claim, seat_count as usize, now_daa).eligibility;
+        let floor = if self.extras.panel_economy_active {
+            crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi)
+        } else {
+            self.params.min_collateral_sompi
+        };
+        let escaped = self.second_clock_depth(now_daa);
+        let rooms = self
+            .state
+            .bonds
+            .iter()
+            .filter(|(key, record)| {
+                palw_bond_may_take_work_v2(record, floor) && palw_bond_may_judge_class_v4(self.state, key, record, &base, false, None)
+            })
+            .map(|(key, record)| {
+                palw_rcore_gate_room_of_v1(
+                    record.collateral,
+                    self.params.fp_max_exposure_ratio_permille,
+                    palw_bond_committed_v1(self.state, key, now_daa, escaped, self.params.window_court),
+                    self.accuser_ledger_v1(key, now_daa),
+                    PalwRcoreGateV1::Work,
+                )
+            });
+        let mut waiting: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+        for (_, key) in self.state.unresolved.iter() {
+            if let Some(live) = self.state.claims.get(key)
+                && live.class_id == base
+                && matches!(live.phase, PalwClaimPhaseV2::Provisional)
+            {
+                *waiting.entry(live.bond).or_default() += 1;
+            }
+        }
+        let pending: u64 = waiting.values().sum();
+        let room = crate::palw_verify_capacity_v1::palw_floor_room_v1(rooms, eligibility, seat_count, pending);
+        if !room.admits_one() {
+            return Err(PalwStateV2Error::FloorRoomExhausted { pending, slots: room.slots });
+        }
+        let own_waiting = waiting.get(bond).copied().unwrap_or(0);
+        let share = self.room_cap_v1(room.capacity(), bond, &waiting);
+        if own_waiting.saturating_add(1) > share {
+            return Err(PalwStateV2Error::BondClassShareExceeded {
+                bond: *bond,
+                class: base,
+                unlicensed: own_waiting.min(u32::MAX as u64) as u32,
+                share,
+            });
+        }
+        Ok(())
     }
 
     /// **ADR-0152 v3.1 T-2(a): no bond holds more than `⌈c_class / 2⌉` unlicensed claims of a
@@ -13478,7 +13709,9 @@ impl PalwFoldReadV1<'_> {
     /// with the fence off) [`Self::bond_class_share_v1`] is `None` and this is `Ok` without
     /// reading anything.
     fn check_bond_class_share(&self, bond: &PalwBondKeyV2, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
-        let Some(share) = self.bond_class_share_v1(class_id, now_daa) else { return Ok(()) };
+        // ADR-0160 F-R: past `palw_capacity_verify_room` the stake-proportional share replaces
+        // T-2(a)'s `⌈c/2⌉` (`bond_class_share_for_v1`); below it this is T-2(a) byte for byte.
+        let Some(share) = self.bond_class_share_for_v1(class_id, bond, now_daa) else { return Ok(()) };
         let unlicensed = self.bond_class_unlicensed(class_id, bond);
         if (unlicensed as u64).saturating_add(1) > share {
             return Err(PalwStateV2Error::BondClassShareExceeded { bond: *bond, class: *class_id, unlicensed, share });
@@ -13689,7 +13922,58 @@ pub fn palw_bond_class_share_read_v1(
     now_daa: u64,
 ) -> Option<(u64, u32)> {
     let read = PalwFoldReadV1::outside(state, params, extras);
-    read.bond_class_share_v1(class_id, now_daa).map(|share| (share, read.bond_class_unlicensed(class_id, bond)))
+    read.bond_class_share_for_v1(class_id, bond, now_daa).map(|share| (share, read.bond_class_unlicensed(class_id, bond)))
+}
+
+/// **ADR-0160 F-R (J-6): would the fold at a block with these `extras` take one more floor claim of
+/// `bond`, reserving `reserved` and escrowing `escrowed_reward`?** The fold's own floor gate
+/// (`check_floor_room_v1`) over a template of the claim, for a producer's pre-check. `Ok` below
+/// `Params::palw_capacity_verify_room`.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_floor_room_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    bond: &PalwBondKeyV2,
+    reserved: u128,
+    escrowed_reward: u64,
+    now_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    if !params.capacity_room_active_at(now_daa) {
+        return Ok(());
+    }
+    let template = palw_claim_template_v1(params.base_class_id(), *bond, now_daa, reserved, escrowed_reward);
+    PalwFoldReadV1::outside(state, params, extras).check_floor_room_v1(bond, &Hash64::default(), &template, now_daa)
+}
+
+/// **A `Provisional` attempt claim with only the fields a price reads** — the class, the bond, the
+/// acceptance DAA, the weight reservation and the escrow — for readers that price a claim before it
+/// exists (ADR-0160's floor gate pre-check).
+pub fn palw_claim_template_v1(class_id: Hash64, bond: PalwBondKeyV2, now_daa: u64, reserved: u128, escrowed_reward: u64) -> PalwClaimStateV2 {
+    PalwClaimStateV2 {
+        source: PalwClaimSourceV2::Attempt,
+        class_id,
+        bond,
+        pwu: 0,
+        accepted_daa: now_daa,
+        rebound_daa: None,
+        accepted_blue_score: now_daa,
+        accepted_block: Default::default(),
+        trace_root: Hash64::default(),
+        output_root: Hash64::default(),
+        execution_root: Hash64::default(),
+        trace_chunk_count: 0,
+        trace_retention_daa: 0,
+        reserved,
+        immature_contribution: 0,
+        escrowed_reward,
+        work_leaves: 0,
+        work_id: None,
+        phase: PalwClaimPhaseV2::Provisional,
+        rights_reserved: 0,
+        job_identity: Hash64::default(),
+        rcore: Default::default(),
+    }
 }
 
 /// **Would the fold at a block with these `extras` take a seed or a buy on a line of `class_id`, as
@@ -17284,6 +17568,16 @@ impl<'a> TransitionBuilder<'a> {
             ));
         }
         self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence)?;
+        // ADR-0160 F-B: a batched receipt (`Windowed`) convicts only past the batch fence, as the
+        // gate refuses it below (the form did not decode before the fence existed).
+        if !self.params.capacity_batch_active_at(ctx.daa_score)
+            && crate::palw_offence_attribution_v1::palw_false_valid_evidence_is_windowed_v1(evidence)
+        {
+            return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                evidence_id,
+                "a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".into(),
+            ));
+        }
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
         let finding = palw_check_panel_false_valid_v2(
             &self.state,
@@ -18990,6 +19284,17 @@ impl<'a> TransitionBuilder<'a> {
     /// [`PalwFoldReadV1::check_bond_class_share`].
     fn check_bond_class_share(&self, bond: &PalwBondKeyV2, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
         self.read().check_bond_class_share(bond, class_id, now_daa)
+    }
+
+    /// ADR-0160 F-R's floor room (J-6) — see [`PalwFoldReadV1::check_floor_room_v1`].
+    fn check_floor_room_v1(
+        &self,
+        bond: &PalwBondKeyV2,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        self.read().check_floor_room_v1(bond, claim_id, claim, now_daa)
     }
 
     /// Why a bind window closed: under the registry, a rowed class whose ready seats cannot fill a
@@ -23003,7 +23308,11 @@ pub fn apply_palw_transition_v7(
                 Err(
                     refused @ (PalwStateV2Error::AttemptExposureCeiling { .. }
                     | PalwStateV2Error::ProducerBelowFloor { .. }
-                    | PalwStateV2Error::BondClassShareExceeded { .. }),
+                    | PalwStateV2Error::BondClassShareExceeded { .. }
+                    // ADR-0160 F-R (J-6): the floor room, for the share's reason — this block's own
+                    // objects move the seats' capital under the producer — and checked, like it,
+                    // before `apply_attempt`'s first write. Unreachable below the fence.
+                    | PalwStateV2Error::FloorRoomExhausted { .. }),
                 ) => {
                     merged_skips.push((ctx.block, refused.to_string()));
                 }
@@ -26360,6 +26669,69 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
     Ok(())
 }
 
+/// **The `ReceiptLicensedV2` arm of [`apply_object`]** (ADR-0133 Verification V2), as a function so
+/// ADR-0160's batch licence (`ReceiptLicensedBatchV1`) folds each live entry through exactly this
+/// code — one licensing rule, two carriages (ADR-0160 V-I1). Moved verbatim from the arm.
+fn apply_receipt_licensed_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: &Hash64,
+    receipts: &[crate::palw_panel_v2::PalwSeatReceiptV3],
+) -> Result<(), PalwStateV2Error> {
+    // ADR-0133 Verification V2: the acceptance layer proved the coverage; the fold licenses
+    // exactly as it does for a V1 quorum, over the receipts inside the masks.
+    if !builder.extras.verification_v2_active {
+        return Err(PalwStateV2Error::VerificationV2Dormant);
+    }
+    let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
+    // **ADR-0152 SR-10: the V3 supplementary door.** Past `Params::palw_rcore_plus` the same
+    // object on a claim already licensed is a supplementary set (no new tag; §6 row 24): it
+    // moves no phase and licenses nothing ([`TransitionBuilder::credit_supplementary_receipts_v3`]).
+    // Below the fence a licensed claim refuses it as the wrong phase, as it always did.
+    if builder.params.rcore_plus_active_at(ctx.daa_score) && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+        return builder.credit_supplementary_receipts_v3(*claim_id, &claim, receipts, ctx);
+    }
+    let PalwClaimPhaseV2::PanelBound { .. } = claim.phase else {
+        return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptLicensedV2" });
+    };
+    if builder.claim_licenses_by_parts(claim_id) {
+        return Err(PalwStateV2Error::LicensedByParts(*claim_id));
+    }
+    // ADR-0152 S-SPEC §3.4: past `palw_rcore_plus` the licence is the backed subset's, each
+    // receipt with the mask it attests (no strip).
+    if builder.params.rcore_plus_active_at(ctx.daa_score) {
+        let carried: Vec<_> = receipts.iter().map(|r| (r.receipt.clone(), Some(r.segments))).collect();
+        return builder.license_rcore_v1(*claim_id, &claim, PalwLicenceDoorV1::Coverage, &carried, ctx.daa_score);
+    }
+    let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
+    if builder.extras.audit_2026_09_23_active
+        && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)
+    {
+        return Ok(());
+    }
+    let verdicts = palw_seat_verdicts_of_v2(&inner);
+    // ADR-0147: the coverage licence is a licence, and it takes the outsider's `Valid`
+    // exactly as the V1 quorum does. Before this rule the V2 arm carried no independence
+    // check of any kind, so a network arming Verification V2 beside the bundle would have
+    // licensed a bought class through the one door the rule never looked at.
+    palw_licence_names_its_outsider_v1(
+        &builder.state,
+        claim_id,
+        &claim,
+        &verdicts,
+        builder.extras.admission_independence_daa,
+    )?;
+    builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
+    builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
+    builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
+    builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)?;
+    // ADR-0152 S-SPEC §3.4: the set's R-core+ record, each receipt with the mask it attests.
+    let carried: Vec<_> = receipts.iter().map(|r| (&r.receipt, Some(r.segments))).collect();
+    let staged = builder.staged_licence_v1(*claim_id, &claim, PalwLicenceDoorV1::Coverage, &carried, ctx.daa_score);
+    builder.license_claim(*claim_id, staged, ctx.daa_score)?;
+    Ok(())
+}
+
 fn apply_object(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -28338,57 +28710,31 @@ fn apply_object(
             builder.apply_class_manifest(ctx, class_id, *artifact_bytes, registrant_bond)?;
         }
         PalwConsensusObjectV2::ReceiptLicensedV2 { claim: claim_id, receipts } => {
-            // ADR-0133 Verification V2: the acceptance layer proved the coverage; the fold licenses
-            // exactly as it does for a V1 quorum, over the receipts inside the masks.
-            if !builder.extras.verification_v2_active {
-                return Err(PalwStateV2Error::VerificationV2Dormant);
+            apply_receipt_licensed_v2(builder, ctx, claim_id, receipts)?;
+        }
+        // **ADR-0160 F-B: the batch licence** (tag 59). Past `Params::palw_capacity_batch_licence`
+        // only (the state params' mirror); refused by name below it, as the acceptance layer refuses
+        // it. The acceptance layer verified each root's signature once and each live entry's paths
+        // and coverage through the single object's own validator
+        // ([`crate::palw_batch_licence_v1::palw_validate_batch_licence_v1`]); the fold routes each
+        // entry by the one predicate acceptance used, on the state it folds, and feeds a live one's
+        // receipts to the single object's arm — no licensing rule is restated (ADR-0160 V-I1).
+        PalwConsensusObjectV2::ReceiptLicensedBatchV1 { roots: _, entries } => {
+            if !builder.params.capacity_batch_active_at(ctx.daa_score) {
+                return Err(PalwStateV2Error::CapacityBatchLicenceDormant);
             }
-            let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
-            // **ADR-0152 SR-10: the V3 supplementary door.** Past `Params::palw_rcore_plus` the same
-            // object on a claim already licensed is a supplementary set (no new tag; §6 row 24): it
-            // moves no phase and licenses nothing ([`TransitionBuilder::credit_supplementary_receipts_v3`]).
-            // Below the fence a licensed claim refuses it as the wrong phase, as it always did.
-            if builder.params.rcore_plus_active_at(ctx.daa_score) && matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
-                return builder.credit_supplementary_receipts_v3(*claim_id, &claim, receipts, ctx);
+            for entry in entries {
+                if crate::palw_batch_licence_v1::palw_batch_entry_route_v1(&builder.state, builder.params, ctx.daa_score, entry)
+                    == crate::palw_batch_licence_v1::PalwBatchEntryRouteV1::Inert
+                {
+                    continue;
+                }
+                let seats: Vec<PalwBondKeyV2> =
+                    builder.state.panels.get(&entry.claim).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
+                let receipts = crate::palw_batch_licence_v1::palw_batch_entry_receipts_v1(entry, &seats)
+                    .ok_or(PalwStateV2Error::WrongPhase { claim: entry.claim, edge: "ReceiptLicensedBatchV1" })?;
+                apply_receipt_licensed_v2(builder, ctx, &entry.claim, &receipts)?;
             }
-            let PalwClaimPhaseV2::PanelBound { .. } = claim.phase else {
-                return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptLicensedV2" });
-            };
-            if builder.claim_licenses_by_parts(claim_id) {
-                return Err(PalwStateV2Error::LicensedByParts(*claim_id));
-            }
-            // ADR-0152 S-SPEC §3.4: past `palw_rcore_plus` the licence is the backed subset's, each
-            // receipt with the mask it attests (no strip).
-            if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                let carried: Vec<_> = receipts.iter().map(|r| (r.receipt.clone(), Some(r.segments))).collect();
-                return builder.license_rcore_v1(*claim_id, &claim, PalwLicenceDoorV1::Coverage, &carried, ctx.daa_score);
-            }
-            let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
-            if builder.extras.audit_2026_09_23_active
-                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)
-            {
-                return Ok(());
-            }
-            let verdicts = palw_seat_verdicts_of_v2(&inner);
-            // ADR-0147: the coverage licence is a licence, and it takes the outsider's `Valid`
-            // exactly as the V1 quorum does. Before this rule the V2 arm carried no independence
-            // check of any kind, so a network arming Verification V2 beside the bundle would have
-            // licensed a bought class through the one door the rule never looked at.
-            palw_licence_names_its_outsider_v1(
-                &builder.state,
-                claim_id,
-                &claim,
-                &verdicts,
-                builder.extras.admission_independence_daa,
-            )?;
-            builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
-            builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
-            builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
-            builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)?;
-            // ADR-0152 S-SPEC §3.4: the set's R-core+ record, each receipt with the mask it attests.
-            let carried: Vec<_> = receipts.iter().map(|r| (&r.receipt, Some(r.segments))).collect();
-            let staged = builder.staged_licence_v1(*claim_id, &claim, PalwLicenceDoorV1::Coverage, &carried, ctx.daa_score);
-            builder.license_claim(*claim_id, staged, ctx.daa_score)?;
         }
         // **ADR-0152 v3.1 R-3 (S-7): a reporter's commitment (tag 53).** Past
         // `Params::palw_rcore_plus` only; below it (every network but testnet-12, and testnet-12
@@ -31400,6 +31746,11 @@ fn apply_attempt(
     //
     // **It stays ahead of every write in this function**: step 4 skips an own attempt on this error
     // without restoring anything, which is only sound while nothing above has touched the builder.
+    //
+    // **ADR-0160 F-R (J-6): and a floor claim fits the seats' capital** — before the ceiling, and
+    // like it before every write: past `Params::palw_capacity_verify_room` only (below it `Ok`
+    // without reading anything), priced at this claim's own bind eligibility.
+    builder.check_floor_room_v1(&bond_key, &claim_id, &claim, ctx.daa_score)?;
     if builder.extras.audit_2026_09_23_active {
         let bond_record = builder.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
         // ADR-0152 SR-7: past `palw_rcore_plus` the ceiling reads the one committed ledger at this

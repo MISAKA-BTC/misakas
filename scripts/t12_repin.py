@@ -259,6 +259,8 @@ REORG = "consensus/core/tests/reorg_strict_win_fence.rs"
 MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 SINK = "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs"
+CAPROOM = "consensus/core/tests/palw_capacity_verify_room_is_t12_only.rs"
+CAPBATCH = "consensus/core/tests/palw_capacity_batch_licence_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 PARAMS = "consensus/core/src/config/params.rs"
 GOLDEN = "consensus/core/tests/rcore_m5_v22_golden.rs"
@@ -458,6 +460,12 @@ def registry() -> list[Pin]:
     # Lane sink (the model sink binding, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
     pins += _triple("sink.T12_RELEASE", "t12", SINK, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{SINK}::the_binding_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # ADR-0160 lane verify (F-R room v2, F-B batch licence; post-launch, later than DAA 500, dormant): testnet-12 as
+    # shipped, which the dormant fences must not move.
+    pins += _triple("caproom.T12_RELEASE", "t12", CAPROOM, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{CAPROOM}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    pins += _triple("capbatch.T12_RELEASE", "t12", CAPBATCH, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{CAPBATCH}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)

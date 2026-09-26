@@ -2469,6 +2469,15 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_v2_receipt_coverage_assemble_impl(claim, &candidates)
     }
 
+    fn palw_v2_batch_licence_assemble(
+        &self,
+        windows: Vec<kaspa_consensus_core::palw_batch_licence_v1::PalwSeatWindowV1>,
+        due: Vec<kaspa_hashes::Hash64>,
+        max_bytes: usize,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.virtual_processor.palw_v2_batch_licence_assemble_impl(&windows, &due, max_bytes)
+    }
+
     fn palw_v2_optimistic_assemble(
         &self,
         claim: kaspa_hashes::Hash64,

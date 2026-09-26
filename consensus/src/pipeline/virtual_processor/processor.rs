@@ -5573,6 +5573,33 @@ impl VirtualStateProcessor {
             .err()
             .map(|refusal| refusal.to_string());
         }
+        // **ADR-0160 F-R (J-6): and, on the floor, the seats' capital and the bond's share of it**,
+        // which the fold asks before the ceiling and skips the block's own attempt on — priced over a
+        // template of the claim this block would carry (its weight term and its escrow, the facts'
+        // own numbers). Past `palw_capacity_verify_room` only; below it this reads `Ok`.
+        if facts.class_admission_refusal.is_none()
+            && facts.is_base_class
+            && state_params.capacity_room_active_at(candidate_daa)
+            && let (Some(outpoint), Some(bond_facts)) = (bond, facts.bond.as_ref())
+        {
+            let escrow = kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                self.coinbase_manager.calc_block_subsidy(candidate_daa),
+                budget_fences.escrow_carve,
+            );
+            let weight = bond_facts.claim_exposure.saturating_sub(state_params.claim_escrow_reservation_v1(candidate_daa, escrow));
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_floor_room_admits_v1(
+                &state,
+                state_params,
+                &extras,
+                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                weight,
+                escrow,
+                candidate_daa,
+            )
+            .err()
+            .map(|refusal| refusal.to_string());
+        }
         // The share and the tip's count beside the refusal — a read the producer adds its own
         // unmerged attempts to (node policy; the fold's question above is unchanged).
         facts.bond_class_share = bond.and_then(|outpoint| {
@@ -8111,6 +8138,88 @@ impl VirtualStateProcessor {
         self.palw_v2_receipt_coverage_assemble_on_v1(&state, state_params, panel_params, &point, claim, candidates)
     }
 
+    /// **ADR-0160 F-B: a collector's batch licence** (node policy): the due claims of `due`, in the
+    /// order given (oldest bind first), licensed together over the pooled seats' `windows` —
+    /// `palw_assemble_batch_licence_v1` on the tip, each window's root verified here first (a window
+    /// that does not verify is left out), each entry kept only where acceptance would take it and the
+    /// fold of the equivalent single licence licenses its claim, the object within `max_bytes`. `None`
+    /// below `palw_capacity_batch_licence` (at the virtual's DAA) or when nothing is kept.
+    pub fn palw_v2_batch_licence_assemble_impl(
+        &self,
+        windows: &[kaspa_consensus_core::palw_batch_licence_v1::PalwSeatWindowV1],
+        due: &[kaspa_hashes::Hash64],
+        max_bytes: usize,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let panel_params = self.palw_panel_params_v2.as_ref()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        if !state_params.capacity_batch_active_at(virtual_state.daa_score) || !self.palw_verification_v2_at(virtual_state.daa_score) {
+            return None;
+        }
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        self.palw_v2_batch_licence_assemble_on_v1(&state, state_params, panel_params, &point, windows, due, max_bytes)
+    }
+
+    /// [`Self::palw_v2_batch_licence_assemble_impl`] on a given state and point (the tests fold their
+    /// own). The caller has checked the fences.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn palw_v2_batch_licence_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        windows: &[kaspa_consensus_core::palw_batch_licence_v1::PalwSeatWindowV1],
+        due: &[kaspa_hashes::Hash64],
+        max_bytes: usize,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_batch_licence_v1 as batch;
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let verified: Vec<batch::PalwSeatWindowV1> = windows
+            .iter()
+            .filter(|window| {
+                batch::palw_batch_licence_verify_roots_v1(
+                    state,
+                    network_domain,
+                    std::slice::from_ref(&window.root),
+                    Self::verify_mldsa87_with_context_bool,
+                )
+                .is_ok()
+            })
+            .cloned()
+            .collect();
+        let (roots, entries) = batch::palw_assemble_batch_licence_v1(
+            state,
+            panel_params,
+            state_params,
+            point,
+            network_domain,
+            &verified,
+            due,
+            max_bytes,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_admission_independence_daa(),
+            |claim, receipts| {
+                self.palw_v2_offered_licence_licenses_v1(
+                    state,
+                    state_params,
+                    point,
+                    &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim: *claim, receipts: receipts.to_vec() },
+                )
+            },
+        )?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedBatchV1 { roots, entries })
+    }
+
     /// [`Self::palw_v2_receipt_coverage_assemble_impl`] on a given state and point — the tests fold
     /// their own (ADR-0152 X22). The caller has checked the Verification V2 fence.
     pub(crate) fn palw_v2_receipt_coverage_assemble_on_v1(
@@ -9845,6 +9954,15 @@ impl VirtualStateProcessor {
                                 if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
                                     return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
                                 }
+                                // ADR-0160 F-B: a batched receipt convicts only past the batch fence
+                                // (the fold asks the same predicate).
+                                if !state_params.capacity_batch_active_at(point.daa_score)
+                                    && kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_evidence_is_windowed_v1(
+                                        evidence,
+                                    )
+                                {
+                                    return Err("a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".to_string());
+                                }
                                 let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_v2(
                                     state,
                                     accused,
@@ -10043,6 +10161,35 @@ impl VirtualStateProcessor {
                             return Err(format!("claim {claim}: supplementary receipts ride the V1 object"));
                         }
                     }
+                }
+                // **ADR-0160 F-B: the batch licence** (tag 59). Past `palw_capacity_batch_licence`
+                // only: every root's signature once, then each live entry through the single
+                // licence's own validator with its paths standing for the signatures
+                // (`palw_validate_batch_licence_v1`). An inert entry is skipped here and in the fold
+                // by one predicate; any other fault drops the object, the block standing.
+                Obj::ReceiptLicensedBatchV1 { roots, entries } => {
+                    // The fence through the bundle's mirror (`Params::sync_palw_capacity_verify`), which
+                    // `validate_palw_v2` holds equal to it: the fold reads the same copy.
+                    if !state_params.capacity_batch_active_at(point.daa_score) {
+                        return Err(kaspa_consensus_core::palw_batch_licence_v1::PalwBatchLicenceErrorV1::Dormant.to_string());
+                    }
+                    kaspa_consensus_core::palw_batch_licence_v1::palw_validate_batch_licence_v1(
+                        state,
+                        panel_params,
+                        state_params,
+                        point,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        self.palw_verification_v2_at(point.daa_score),
+                        roots,
+                        entries,
+                        Self::verify_mldsa87_with_context_bool,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                        self.palw_admission_independence_daa(),
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
                 Obj::OptimisticLicensed { claim, receipts } => {
                     if !self.palw_verification_s2_at(point.daa_score) {
@@ -17476,6 +17623,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::SeatReadinessProved { .. } => "SeatReadinessProved",
         O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
+        O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",

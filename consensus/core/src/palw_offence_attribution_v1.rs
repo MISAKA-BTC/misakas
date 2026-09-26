@@ -119,6 +119,13 @@ pub enum PalwFalseValidReceiptV1 {
     Full(PalwSeatReceiptV2) = 0,
     /// A segment-scoped attestation, signed over `palw_receipt_message_v3` with its mask.
     Segmented(PalwSeatReceiptV3) = 1,
+    /// **ADR-0160 F-B: a segment-scoped attestation inside a signed window root** — the leaf, its
+    /// path and the window; what the seat signed is the window message over the root the leaf folds
+    /// to ([`crate::palw_batch_licence_v1::PalwWindowedReceiptV1::signed_message_v1`]). Accepted by the
+    /// gate and the fold only past `Params::palw_capacity_batch_licence`
+    /// ([`palw_false_valid_evidence_is_windowed_v1`]); below it the evidence is refused, as it was
+    /// when this form did not decode.
+    Windowed(crate::palw_batch_licence_v1::PalwWindowedReceiptV1) = 2,
 }
 
 impl PalwFalseValidReceiptV1 {
@@ -127,6 +134,17 @@ impl PalwFalseValidReceiptV1 {
         match self {
             Self::Full(receipt) => receipt,
             Self::Segmented(signed) => &signed.receipt,
+            Self::Windowed(windowed) => &windowed.receipt.receipt,
+        }
+    }
+
+    /// The mask the receipt attests: the full cut for `Full` (`None`: the caller knows the cut), the
+    /// signed mask otherwise.
+    pub fn attested_mask(&self) -> Option<PalwSegmentMaskV2> {
+        match self {
+            Self::Full(_) => None,
+            Self::Segmented(signed) => Some(signed.segments),
+            Self::Windowed(windowed) => Some(windowed.receipt.segments),
         }
     }
 
@@ -150,8 +168,20 @@ impl PalwFalseValidReceiptV1 {
                 ),
                 crate::palw_panel_v2::PALW_RECEIPT_V3_MLDSA87_CONTEXT,
             ),
+            Self::Windowed(windowed) => {
+                (windowed.signed_message_v1(chain_domain), crate::palw_batch_licence_v1::PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT)
+            }
         }
     }
+}
+
+/// **ADR-0160 F-B: does this kind-3 evidence carry a `Windowed` receipt?** — the one question the
+/// gate and the fold ask before the adjudicator, so a batched receipt convicts only past
+/// `Params::palw_capacity_batch_licence` (below it the evidence is refused as it was before the form
+/// existed: every block folds as under `0e8ec984e`). `false` for evidence that does not decode.
+pub fn palw_false_valid_evidence_is_windowed_v1(evidence: &[u8]) -> bool {
+    borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence)
+        .is_ok_and(|payload| matches!(payload.receipt, PalwFalseValidReceiptV1::Windowed(_)))
 }
 
 /// **A panel seat signed `Valid`, and an objective contradiction pinned to the claim's committed
@@ -248,6 +278,36 @@ pub fn palw_false_valid_receipts_of_licence_v1(
             receipts.iter().filter(|r| valid(&r.receipt, claim)).cloned().map(PalwFalseValidReceiptV1::Segmented).collect(),
         )),
         _ => None,
+    }
+}
+
+/// **[`palw_false_valid_receipts_of_licence_v1`] for one claim, batch licences included** (ADR-0160
+/// F-B): the `Valid` receipts `object` carried for `claim_id` in the form they were licensed in — a
+/// batch entry's as [`PalwFalseValidReceiptV1::Windowed`], each with its root's signature, its window
+/// and its path (the seat is its root's, which acceptance held to the panel's seat). `None` when the
+/// object is no licence of `claim_id`.
+pub fn palw_false_valid_receipts_of_licence_for_v1(
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+    claim_id: &Hash64,
+) -> Option<Vec<PalwFalseValidReceiptV1>> {
+    use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    match object {
+        Obj::ReceiptLicensedBatchV1 { roots, entries } => {
+            let entry = entries.iter().find(|entry| entry.claim == *claim_id)?;
+            Some(
+                entry
+                    .seats
+                    .iter()
+                    .filter(|seat| seat.verdict == PalwReceiptVerdictV2::Valid)
+                    .filter_map(|seat| {
+                        let root = roots.get(seat.root_index as usize)?;
+                        crate::palw_batch_licence_v1::PalwWindowedReceiptV1::of_batch_entry(roots, entry, seat.seat_index, root.seat_bond)
+                    })
+                    .map(PalwFalseValidReceiptV1::Windowed)
+                    .collect(),
+            )
+        }
+        other => palw_false_valid_receipts_of_licence_v1(other).filter(|(claim, _)| claim == claim_id).map(|(_, found)| found),
     }
 }
 
@@ -857,6 +917,8 @@ pub fn palw_false_valid_liable_v1(
     let mask = match receipt {
         PalwFalseValidReceiptV1::Full(_) => return Ok(()),
         PalwFalseValidReceiptV1::Segmented(signed) => signed.segments,
+        // ADR-0160 F-B: a batched receipt attests its mask exactly as a segmented one does.
+        PalwFalseValidReceiptV1::Windowed(windowed) => windowed.receipt.segments,
     };
     if mask == PalwSegmentMaskV2::NONE {
         return Err(PalwOffenceVerifyError::SiteNotAttested);
@@ -2584,6 +2646,9 @@ mod tests {
                     ),
                     crate::palw_panel_v2::PALW_RECEIPT_V3_MLDSA87_CONTEXT,
                 ),
+                PalwFalseValidReceiptV1::Windowed(windowed) => {
+                    (windowed.signed_message_v1(domain), crate::palw_batch_licence_v1::PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT)
+                }
             };
             assert_eq!(seen.borrow().as_slice(), &[(expected.0.as_byte_slice().to_vec(), expected.1.to_vec())]);
             // A receipt signed for another network verifies against nothing here.

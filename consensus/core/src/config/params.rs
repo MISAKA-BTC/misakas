@@ -2152,6 +2152,46 @@ pub struct Params {
     /// with or without this fence.
     pub palw_model_sink_bound: Option<ForkActivation>,
     // ---- end lane sink ---------------------------------------------------------------------------
+    // ---- ADR-0160 lane verify (capacity, post-launch, later than DAA 500): F-B and F-R -------------
+    /// **ADR-0160 F-B: the batch licence** (lane verify V1, testnet-12 only, post-launch). In a block
+    /// whose DAA score is at or past it a lifecycle carrier may carry
+    /// `PalwConsensusObjectV2::ReceiptLicensedBatchV1` — one ML-DSA-87 signature per seat over a
+    /// window root of that seat's V3 receipts ([`crate::palw_batch_licence_v1`]) and, per claim, each
+    /// seat's receipt as a leaf and a Merkle path. Each entry licenses exactly as a
+    /// `ReceiptLicensedV2` of the same receipts would (the same acceptance check, the same fold arm,
+    /// ADR-0160 V-I1), and each leaf binds the claim's panel anchor, so a receipt cannot be imported
+    /// across forks. Below it the object is refused by name by the acceptance layer and by the fold,
+    /// and a `Windowed` false-Valid receipt is refused too: every block validates as under
+    /// `0e8ec984e`.
+    ///
+    /// Keyed on the carrying block's DAA score. Refused by `validate_palw_v2` off ConsensusV2 and
+    /// without `palw_rcore_plus` and `palw_verification_v2` armed at or below it (the funnel it feeds
+    /// is R-core+'s coverage door). Mirrored for the fold by [`Self::sync_palw_capacity_verify`].
+    /// Dormant (`None`) on every shipped preset, testnet-12 included; hashed Some-only in every writer
+    /// with the `never()` collapse.
+    pub palw_capacity_batch_licence: Option<ForkActivation>,
+    /// **ADR-0160 F-R: room v2** (lane verify V2, testnet-12 only, post-launch). Past it, at the block's
+    /// DAA score:
+    ///
+    /// * a model class's panel capacity counts what verification actually costs — `k = 2`
+    ///   attestations per segment (Verification V2's coverage) instead of five full replays, at the
+    ///   measured replay speed ([`crate::palw_verify_capacity_v1::PALW_CAPACITY_REPLAY_SPEED_PERMILLE_V1`])
+    ///   instead of the 2.4e12 reference ([`crate::palw_verify_capacity_v1::palw_panel_capacity_v2`]);
+    /// * T-2(a)'s per-bond `⌈c/2⌉` is replaced by the stake-proportional cap
+    ///   ([`crate::palw_verify_capacity_v1::palw_bond_room_cap_v1`]: the whole room uncontended, a
+    ///   guaranteed `⌊room · C_b / ΣC⌋` under contention plus the rounding slack first come — a split
+    ///   gains at most the slack);
+    /// * the floor (the base class, ungated below it) is gated by the seats' capital
+    ///   ([`crate::palw_verify_capacity_v1::palw_floor_room_v1`], J-6), with the same share.
+    ///
+    /// Refused by `validate_palw_v2` off ConsensusV2 and without `palw_rcore_plus`,
+    /// `palw_audit_2026_09_23` and `palw_offence_attribution` armed at or below it (ADR-0160 §6.1
+    /// also requires lane liab's `palw_capacity_aggregate_liability`, which `rcore/cap-int` adds to
+    /// this check when the two lanes merge). Mirrored for the fold by
+    /// [`Self::sync_palw_capacity_verify`]. Dormant (`None`) on every shipped preset; hashed Some-only
+    /// with the `never()` collapse.
+    pub palw_capacity_verify_room: Option<ForkActivation>,
+    // ---- end ADR-0160 lane verify -------------------------------------------------------------------
     /// **ADR-0075 Decision 14 — only a chunk that can complete a group may spend the block's
     /// certification cap.** `None` on every shipped preset, so the behaviour is byte-identical to
     /// not having the field.
@@ -3407,6 +3447,8 @@ impl Params {
         }
         // Lane sink (the model sink binding, post-launch): over the market and the P-B1 refund route.
         self.validate_palw_model_sink_bound_v1()?;
+        // ADR-0160 lane verify (F-B, F-R): over R-core+'s funnel, the audit fence and their mirrors.
+        self.validate_palw_capacity_verify_v1()?;
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
         // **ADR-0093 Decision 8 needs the court it is a move of.** A root claim is a dissection's
         // first move; a fence armed where the k-ary court is not has no dissection to anchor. Asked
@@ -5404,6 +5446,13 @@ impl Params {
         if self.palw_model_sink_bound == Some(ForkActivation::never()) {
             self.palw_model_sink_bound = None;
         }
+        // ADR-0160 lane verify (F-B, F-R): Some-only hashed, so the same collapse, each.
+        if self.palw_capacity_batch_licence == Some(ForkActivation::never()) {
+            self.palw_capacity_batch_licence = None;
+        }
+        if self.palw_capacity_verify_room == Some(ForkActivation::never()) {
+            self.palw_capacity_verify_room = None;
+        }
         // ADR-0075 D14, a bare fence: the D2 collapse, for the D2 reason.
         if self.palw_chunk_cap_charge == Some(ForkActivation::never()) {
             self.palw_chunk_cap_charge = None;
@@ -6781,6 +6830,121 @@ impl Params {
     }
     // ---- end lane sink ---------------------------------------------------------------------------
 
+    // ---- ADR-0160 lane verify (capacity, post-launch): F-B the batch licence, F-R room v2 ----------
+
+    /// **F-B's fence** ([`Self::palw_capacity_batch_licence`]), resolved off a ConsensusV2 ruleset with
+    /// `never()` read as absence. `None` on every shipped preset.
+    pub fn palw_capacity_batch_licence_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capacity_batch_licence) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a block at `daa_score` may carry a batch licence (and a false-Valid filing a
+    /// `Windowed` receipt). `false` on every shipped preset.
+    pub fn palw_capacity_batch_licence_active_at(&self, daa_score: u64) -> bool {
+        self.palw_capacity_batch_licence_fence().is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **F-R's fence** ([`Self::palw_capacity_verify_room`]), resolved like F-B's.
+    pub fn palw_capacity_verify_room_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capacity_verify_room) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether room v2 (the measured k = 2 capacity, the stake share, the floor room) judges a block
+    /// at `daa_score`. `false` on every shipped preset.
+    pub fn palw_capacity_verify_room_active_at(&self, daa_score: u64) -> bool {
+        self.palw_capacity_verify_room_fence().is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **The fold's mirrors of F-B and F-R** (ADR-0160 §6.2): the `#[borsh(skip)]` copies on
+    /// `PalwStateParamsV2` the fold, its load-time re-derivations and every outside reader take
+    /// (`capacity_batch_active_at`, `capacity_room_active_at`). Written here and nowhere else; `None`
+    /// where a fence is not armed. Call it wherever either fence is set on an assembled ruleset;
+    /// `validate_palw_v2` refuses a ruleset whose copies disagree.
+    pub fn sync_palw_capacity_verify(&mut self) {
+        let at = |fence: Option<ForkActivation>| fence.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        let (batch, room) = (at(self.palw_capacity_batch_licence), at(self.palw_capacity_verify_room));
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_capacity_verify_mirrors(room, batch);
+        }
+    }
+
+    /// **What F-B and F-R refuse** (ADR-0160 §6.1). Called by `validate_palw_v2`, public so a test can
+    /// name each refusal. Below both fences it checks only that the bundle's mirrors are `None`.
+    ///
+    /// * F-B: ConsensusV2; `palw_rcore_plus` and `palw_verification_v2` at or below it (a batch entry
+    ///   is fed to R-core+'s coverage funnel); the mirror equal to the height.
+    /// * F-R: ConsensusV2; `palw_rcore_plus` (T-2(a), which the share replaces, is R-core+'s),
+    ///   `palw_audit_2026_09_23` (the rate room it re-prices) and `palw_offence_attribution` (the
+    ///   convictions whose freeze bounds the junk-DoS the share opens) at or below it; the mirror equal
+    ///   to the height. ADR-0160 also names lane liab's `palw_capacity_aggregate_liability` here; that
+    ///   field does not exist on this lane's base, and `rcore/cap-int` adds the clause when it merges.
+    ///
+    /// Any height is admissible otherwise — genesis included, and on the live testnet-12 the one common
+    /// capacity height `H_cap` the operator picks away from every scheduled one.
+    pub fn validate_palw_capacity_verify_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirrors = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                Some((bundle.state.capacity_batch_from_daa(), bundle.state.capacity_room_from_daa()))
+            }
+            _ => None,
+        };
+        let armed = |fence: Option<ForkActivation>| fence.filter(|fence| *fence != ForkActivation::never());
+        let (batch, room) = (armed(self.palw_capacity_batch_licence), armed(self.palw_capacity_verify_room));
+        if batch.is_none() && room.is_none() {
+            if mirrors.is_some_and(|(b, r)| b.is_some() || r.is_some()) {
+                return Err(Invalid(
+                    "the V2 bundle carries an ADR-0160 verify height without palw_capacity_batch_licence or \
+                     palw_capacity_verify_room armed: mirror them with Params::sync_palw_capacity_verify after the bundle is \
+                     assembled",
+                ));
+            }
+            return Ok(());
+        }
+        let Some((batch_mirror, room_mirror)) = mirrors else {
+            return Err(Invalid(
+                "palw_capacity_batch_licence or palw_capacity_verify_room is armed on a network that is not ConsensusV2: the \
+                 licences and the room they change are the V2 panel's",
+            ));
+        };
+        let at_or_below =
+            |f: Option<ForkActivation>, h: ForkActivation| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= h.daa_score());
+        if let Some(fence) = batch {
+            if !(at_or_below(self.palw_rcore_plus, fence) && at_or_below(self.palw_verification_v2, fence)) {
+                return Err(Invalid(
+                    "palw_capacity_batch_licence is armed without palw_rcore_plus and palw_verification_v2 both at or below it: \
+                     a batch entry is R-core+'s coverage licence, fed to the same funnel",
+                ));
+            }
+        }
+        if let Some(fence) = room {
+            if !(at_or_below(self.palw_rcore_plus, fence)
+                && at_or_below(self.palw_audit_2026_09_23, fence)
+                && at_or_below(self.palw_offence_attribution, fence))
+            {
+                return Err(Invalid(
+                    "palw_capacity_verify_room is armed without palw_rcore_plus, palw_audit_2026_09_23 and \
+                     palw_offence_attribution all at or below it: the share replaces R-core+'s T-2(a), the capacity re-prices \
+                     the audit's rate room, and the junk-DoS bound needs the convictions that freeze a flooding bond",
+                ));
+            }
+        }
+        if batch_mirror != batch.map(|f| f.daa_score()) || room_mirror != room.map(|f| f.daa_score()) {
+            return Err(Invalid(
+                "palw_capacity_batch_licence or palw_capacity_verify_room disagrees with the V2 bundle's mirror: mirror them \
+                 with Params::sync_palw_capacity_verify after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end ADR-0160 lane verify -------------------------------------------------------------------
+
     /// ADR-0089: the three fences the executor reads, resolved at one DAA.
     pub fn palw_evm_market_fences_at(&self, daa_score: u64) -> crate::evm::model_market::PalwEvmMarketFencesV1 {
         crate::evm::model_market::PalwEvmMarketFencesV1 {
@@ -7466,6 +7630,9 @@ impl Params {
             palw_model_evm,
             // Lane sink (the model sink binding, post-launch).
             palw_model_sink_bound,
+            // ADR-0160 lane verify (F-B, F-R).
+            palw_capacity_batch_licence,
+            palw_capacity_verify_room,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -7631,6 +7798,9 @@ impl Params {
             // Lane sink (the model sink binding, post-launch): a top-level fence an un-upgraded peer
             // does not implement, so it is on the schedule and gates the fork id like every other.
             ("palw_model_sink_bound", *palw_model_sink_bound),
+            // ADR-0160 lane verify (F-B, F-R): top-level fences an un-upgraded peer does not implement.
+            ("palw_capacity_batch_licence", *palw_capacity_batch_licence),
+            ("palw_capacity_verify_room", *palw_capacity_verify_room),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
             ("palw_kary_court", *palw_kary_court),
@@ -8065,6 +8235,16 @@ impl Params {
             h.write(b"palw_model_sink_bound");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0160 lane verify (F-B, F-R), NAMED and Some-only for lane sink's reason: each changes what
+        // a block may carry or admit past its height.
+        if let Some(activation) = self.palw_capacity_batch_licence {
+            h.write(b"palw_capacity_batch_licence");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_capacity_verify_room {
+            h.write(b"palw_capacity_verify_room");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
         // at the tail, for the reason its siblings are: it is genesis-only, so an operator reading
         // the schedule sees a rule in force from block one rather than a height to cross.
@@ -8228,6 +8408,9 @@ impl Params {
             palw_model_evm,
             // Lane sink (the model sink binding, post-launch).
             palw_model_sink_bound,
+            // ADR-0160 lane verify (F-B, F-R).
+            palw_capacity_batch_licence,
+            palw_capacity_verify_room,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -8717,6 +8900,14 @@ impl Params {
         // above — a `None` visited through the sentinel would move every preset's schedule id — and
         // its `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
         if let Some(activation) = palw_model_sink_bound.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0160 lane verify (F-B, F-R): SOME-ONLY, for lane sink's reason, each collapsed from
+        // `Some(never())` in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_capacity_batch_licence.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_capacity_verify_room.as_mut() {
             fork(activation, visit);
         }
         // ADR-0069 Decision 7. A pure fence with no payload, so visiting it is safe — the same
@@ -9209,6 +9400,9 @@ impl Params {
             palw_model_evm,
             // Lane sink (the model sink binding, post-launch).
             palw_model_sink_bound,
+            // ADR-0160 lane verify (F-B, F-R).
+            palw_capacity_batch_licence,
+            palw_capacity_verify_room,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -9751,6 +9945,16 @@ impl Params {
         // byte-identically to one without the field.
         if let Some(activation) = palw_model_sink_bound {
             h.write(b"palw_model_sink_bound");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0160 lane verify (F-B, F-R): the heights, Some-only and collapsed from `Some(never())`, so
+        // a build that leaves them dormant fingerprints byte-identically to one without the fields.
+        if let Some(activation) = palw_capacity_batch_licence {
+            h.write(b"palw_capacity_batch_licence");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_capacity_verify_room {
+            h.write(b"palw_capacity_verify_room");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0075 D14, Some-only like its siblings: an unset fence writes nothing, so every
@@ -10419,6 +10623,10 @@ impl Params {
             // Lane sink (the model sink binding, post-launch): CARRIED with the market it binds and
             // the audit fence it needs, both carried too.
             palw_model_sink_bound: self.palw_model_sink_bound,
+            // ADR-0160 lane verify (F-B, F-R): CARRIED with the R-core+, audit and attribution fences
+            // they need (carried too); the bundle's mirrors ride the carried bundle.
+            palw_capacity_batch_licence: self.palw_capacity_batch_licence,
+            palw_capacity_verify_room: self.palw_capacity_verify_room,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
@@ -11455,6 +11663,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_seed_v2: None,
     palw_model_evm: None,
     palw_model_sink_bound: None,
+    palw_capacity_batch_licence: None,
+    palw_capacity_verify_room: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -11688,6 +11898,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_seed_v2: None,
     palw_model_evm: None,
     palw_model_sink_bound: None,
+    palw_capacity_batch_licence: None,
+    palw_capacity_verify_room: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -11903,6 +12115,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_seed_v2: None,
     palw_model_evm: None,
     palw_model_sink_bound: None,
+    palw_capacity_batch_licence: None,
+    palw_capacity_verify_room: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -16954,6 +17168,22 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PalwPostLaunchFenceV1 { name: "palw_bond_maturity_early", set: |params, at| params.palw_bond_maturity_early = at },
     // Lane sink (Position #1): a model sink is block-valid only bound: a bare height.
     PalwPostLaunchFenceV1 { name: "palw_model_sink_bound", set: |params, at| params.palw_model_sink_bound = at },
+    // ADR-0160 lane verify (capacity; NOT the DAA-500 release — joins the release's list on
+    // rcore/cap-int): F-B the batch licence and F-R room v2, bare heights with the fold's mirrors.
+    PalwPostLaunchFenceV1 {
+        name: "palw_capacity_batch_licence",
+        set: |params, at| {
+            params.palw_capacity_batch_licence = at;
+            params.sync_palw_capacity_verify();
+        },
+    },
+    PalwPostLaunchFenceV1 {
+        name: "palw_capacity_verify_room",
+        set: |params, at| {
+            params.palw_capacity_verify_room = at;
+            params.sync_palw_capacity_verify();
+        },
+    },
     // Lane A, the operator-anchored panel (the panel-seed CRITICAL's stopgap): the height over every
     // bond the genesis registers (testnet-12's eight operator cards), testnet-12's armed value. Needs an
     // assembled ConsensusV2 ruleset (see the list's doc); requires F1's seed at or below it.
@@ -18190,6 +18420,9 @@ pub fn palw_v2_params_on_base(
     // `palw_t12_base_params`'s pass 2) had its mirror written into no bundle, and `validate_palw_v2`
     // below refused the ruleset — the int-4 phase-1 audit's LOW. Re-mirrored here, it follows.
     params.sync_palw_registry_resilience();
+    // ADR-0160 lane verify (F-B, F-R), for the registry-resilience reason: a base that set either
+    // fence before it had a bundle has its mirrors written here.
+    params.sync_palw_capacity_verify();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -18396,6 +18629,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_seed_v2: None,
     palw_model_evm: None,
     palw_model_sink_bound: None,
+    palw_capacity_batch_licence: None,
+    palw_capacity_verify_room: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
     // bytes against a one-carrier budget of 83,333, so the Merkle form buys nothing and arming it

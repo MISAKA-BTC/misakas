@@ -132,6 +132,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::SeatReadinessProved { .. }
         | O::ClassManifestV2 { .. }
         | O::ReceiptLicensedV2 { .. }
+        // ADR-0160 F-B (tag 59): a batch licence is a licence, as the single one beside it.
+        | O::ReceiptLicensedBatchV1 { .. }
         | O::SeatReadinessProvedV2 { .. }
         | O::OptimisticLicensed { .. }
         | O::PanelUnavailableQuorum { .. }
