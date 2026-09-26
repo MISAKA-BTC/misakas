@@ -262,6 +262,7 @@ SINK = "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs"
 V02 = "consensus/core/tests/palw_final_lock_full_collateral_is_t12_only.rs"
 V02LIFE = "consensus/core/tests/palw_final_lock_life_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
+BINDER = "consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs"
 PARAMS = "consensus/core/src/config/params.rs"
 GOLDEN = "consensus/core/tests/rcore_m5_v22_golden.rs"
 STATE = "consensus/core/src/palw_state_v2.rs"
@@ -468,6 +469,10 @@ def registry() -> list[Pin]:
     # the dormant fence must not move.
     pins += _triple("v02life.T12_RELEASE", "t12", V02LIFE, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{V02LIFE}::the_shortening_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # Lane bind-deadlock (the anchor-at-ceiling fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must
+    # not move.
+    pins += _triple("binder.T12_RELEASE", "t12", BINDER, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{BINDER}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)
