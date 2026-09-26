@@ -643,6 +643,10 @@ pub struct VirtualStateProcessor {
     /// closing the merge-blue forgery that burns an honest bond. `None`/dormant on every shipped
     /// preset — the side-effect is byte-identical to before the field existed.
     pub(super) palw_slashing_evidence_utxo_genuine: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **Lane accept-order** (`Params::palw_lane_accept_parents_first_fence`): past it a merging block
+    /// applies its mergeset parents-first ([`Self::acceptance_ordered_mergeset_without_selected_parent`]).
+    /// `None` on every shipped preset — every order below is the consensus order, byte for byte.
+    pub(super) palw_lane_accept_parents_first: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0138: `Params::palw_anchor_clock` and ADR-0083's receipt fence — the heartbeat miner's
@@ -1130,6 +1134,7 @@ impl VirtualStateProcessor {
             palw_reorg_strict_economic_win: params.palw_reorg_strict_economic_win,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             palw_slashing_evidence_utxo_genuine: params.palw_slashing_evidence_utxo_genuine,
+            palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
@@ -2722,8 +2727,8 @@ impl VirtualStateProcessor {
             None => {
                 // AcceptedEvmTxs(B) source: the consensus-ordered mergeset (selected
                 // parent first, then ascending blue work — §3.1 canonical order).
-                let sorted_mergeset: Vec<BlockHash> =
-                    ctx.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
+                // Lane accept-order: past its fence, parents-first at this block's DAA score.
+                let sorted_mergeset: Vec<BlockHash> = self.acceptance_ordered_mergeset(&ctx.ghostdag_data, header.daa_score);
                 // ADR-0139: this chain block's accepted-user-gas cap — one round budget per DISTINCT
                 // permitted round among the round blocks it merges, from the round indices their
                 // envelopes carry; the base where the execution lane is not in force.
@@ -3088,6 +3093,7 @@ impl VirtualStateProcessor {
             self.evm_bridge_ledger_activation_daa_score,
             self.evm_f003_mldsa_verify_activation_daa_score,
             self.evm_typed_receipt_root_activation_daa_score,
+            self.palw_lane_accept_parents_first,
         ))
     }
 
@@ -3310,8 +3316,8 @@ impl VirtualStateProcessor {
             }
             payload
         };
-        let sorted_mergeset: Vec<BlockHash> =
-            virtual_state.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
+        // Lane accept-order: the order validation will apply at this template's DAA score.
+        let sorted_mergeset: Vec<BlockHash> = self.acceptance_ordered_mergeset(&virtual_state.ghostdag_data, virtual_state.daa_score);
         let selected_parent = virtual_state.ghostdag_data.selected_parent;
         // C-01 S9/S9b: the producer must seed the SAME parent state the verifier later seeds from
         // (so the mined block reproduces evm_commitment_root). When flat-authoritative, seed from the
@@ -11263,6 +11269,38 @@ impl VirtualStateProcessor {
         )
     }
 
+    /// **Lane accept-order**: whether a merging block at `daa_score` applies its mergeset parents-first.
+    pub(super) fn palw_lane_accept_parents_first_at(&self, daa_score: u64) -> bool {
+        self.palw_lane_accept_parents_first.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **The order a merging block at `daa_score` applies its mergeset in** (without the selected
+    /// parent): the consensus order, made parents-first past lane accept-order's fence. The ONE order
+    /// every consumer that applies a mergeset reads — UTXO acceptance, the fold's merged works, the EVM
+    /// lane — so construction and validation, and every node, apply one order at one DAA score.
+    pub(super) fn acceptance_ordered_mergeset_without_selected_parent(
+        &self,
+        ghostdag_data: &GhostdagData,
+        daa_score: u64,
+    ) -> Vec<BlockHash> {
+        ghostdag_data.acceptance_ordered_mergeset_without_selected_parent(
+            self.ghostdag_store.as_ref(),
+            self.headers_store.as_ref(),
+            self.palw_lane_accept_parents_first_at(daa_score),
+        )
+    }
+
+    /// [`Self::acceptance_ordered_mergeset_without_selected_parent`] behind the selected parent (the EVM
+    /// lane's `sorted_mergeset`; its readers are `evm`-only).
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
+    pub(super) fn acceptance_ordered_mergeset(&self, ghostdag_data: &GhostdagData, daa_score: u64) -> Vec<BlockHash> {
+        ghostdag_data.acceptance_ordered_mergeset(
+            self.ghostdag_store.as_ref(),
+            self.headers_store.as_ref(),
+            self.palw_lane_accept_parents_first_at(daa_score),
+        )
+    }
+
     /// ADR-0125: the execution lane's shape where it is open at `daa_score`.
     pub(super) fn palw_execution_lane_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1> {
         self.palw_execution_lane.filter(|lane| lane.activation.is_active(daa_score))
@@ -12856,8 +12894,8 @@ impl VirtualStateProcessor {
             return (works, skips);
         }
         let non_daa = mergeset_non_daa;
-        let merged: Vec<BlockHash> =
-            ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.as_ref()).collect();
+        // Lane accept-order: past its fence, parents-first at the accepting block's DAA score.
+        let merged: Vec<BlockHash> = self.acceptance_ordered_mergeset_without_selected_parent(ghostdag_data, point.daa_score);
         for blue in merged.iter() {
             if non_daa.contains(blue) {
                 continue;

@@ -218,6 +218,9 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // Lane bind-deadlock (post-launch): a bare height; `validate_palw_v2` refuses it without
         // R-core+ and lane A (`palw_operator_anchor`) at or below it.
         "palw_anchor_at_ceiling" => params.palw_anchor_at_ceiling = Some(at),
+        // Lane accept-order (post-launch): a bare height; `validate_palw_v2` refuses it off ConsensusV2 or
+        // without the execution lane at or below it.
+        "palw_lane_accept_parents_first" => params.palw_lane_accept_parents_first = Some(at),
         "palw_execution_quanta" => params.palw_execution_quanta = Some(at),
         "palw_public_model_source_required" => {
             params.palw_public_model_source_required =

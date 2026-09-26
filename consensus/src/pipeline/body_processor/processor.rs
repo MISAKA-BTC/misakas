@@ -65,6 +65,9 @@ pub struct BlockBodyProcessor {
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0125: the round lane's fence — a round block declares zero subsidy past it.
     pub(super) palw_round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **Lane accept-order** (`Params::palw_lane_accept_parents_first_fence`): from it a round block's
+    /// body may not carry an EVM payload. `None` on every shipped preset.
+    pub(super) palw_lane_accept_parents_first: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     // Stores
     pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
@@ -129,6 +132,7 @@ impl BlockBodyProcessor {
             _ghostdag_k: params.ghostdag_k(),
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_round_lane: params.palw_execution_lane_fence().map(|lane| lane.activation),
+            palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
 
             statuses_store: storage.statuses_store.clone(),
             _ghostdag_store: storage.ghostdag_store.clone(),

@@ -2662,6 +2662,9 @@ impl EvmPipeline {
         bridge_ledger_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        // Lane accept-order (`Params::palw_lane_accept_parents_first_fence`): the worker orders each
+        // mergeset exactly as the inline path would at the block's DAA score.
+        lane_accept_parents_first: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> EvmPipeline {
         use crate::model::stores::evm::EvmPayloadStoreReader;
         use crate::model::stores::ghostdag::GhostdagStoreReader;
@@ -2684,8 +2687,12 @@ impl EvmPipeline {
                     let step = (|| -> Result<EvmStaged, driver::EvmValidateError> {
                         let header = headers_store.get_header(item.block).map_err(driver::EvmValidateError::Store)?;
                         let ghostdag = ghostdag_store.get_data(item.block).map_err(driver::EvmValidateError::Store)?;
-                        let sorted_mergeset: Vec<kaspa_consensus_core::BlockHash> =
-                            ghostdag.consensus_ordered_mergeset(ghostdag_store.as_ref()).collect();
+                        // Lane accept-order: the order the inline path applies at this block's DAA score.
+                        let sorted_mergeset: Vec<kaspa_consensus_core::BlockHash> = ghostdag.acceptance_ordered_mergeset(
+                            ghostdag_store.as_ref(),
+                            headers_store.as_ref(),
+                            lane_accept_parents_first.is_some_and(|fence| fence.is_active(header.daa_score)),
+                        );
                         let payload = match evm_payload_store.get(item.block) {
                             Ok(p) => p,
                             Err(StoreError::KeyNotFound(_)) => Default::default(),
