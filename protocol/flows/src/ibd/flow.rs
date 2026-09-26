@@ -1976,9 +1976,15 @@ impl IbdFlow {
         }
         // And an incumbent standing at genesis defends nothing. On a young network every joining
         // node is in exactly that position, so refusing there is refusing to bootstrap.
-        if consensus.async_get_sink().await == self.ctx.config.genesis.hash {
+        let incumbent_sink = consensus.async_get_sink().await;
+        if incumbent_sink == self.ctx.config.genesis.hash {
             return Ok(());
         }
+        // **lane: rcore/hf-pptake2 — the fence height, read at the INCUMBENT's DAA.** A challenger's
+        // own DAA score is attacker-chosen, so the fence is keyed on this node's own confirmed sink,
+        // exactly as the deep-reorg fence reads it at the incumbent's DAA. `Ok(0)` on a missing
+        // header falls to the unfenced rule below rather than failing the sync.
+        let incumbent_daa = consensus.async_get_header(incumbent_sink).await.map(|h| h.daa_score).unwrap_or(0);
         let incumbent = consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
         let challenger = staging_consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
         // **Fail CLOSED.** This used to be a let-else returning `Ok(())`, and the challenger was
@@ -2000,7 +2006,21 @@ impl IbdFlow {
                 ));
             }
         };
-        match kaspa_consensus_core::palw_fork_authority_v2::decide_ibd_commit_v2(&incumbent, &challenger) {
+        // **lane: rcore/hf-pptake2 — past the fence the commit needs a STRICT economic win.**
+        // `decide_ibd_commit_v2`'s comparator tie-breaks on the candidate hash, so a staged chain
+        // that ties the incumbent on all three economic keys — a headers-only fork of unbonded /
+        // losing attempt headers, which matured no work and reads `{frontier 0, safe 0, live 0}`
+        // against an honest chain whose own first floor claim is still short of `Final` — commits by
+        // grinding a higher-hash tip: the pruning-proof takeover. Past the fence an all-economic tie
+        // keeps the incumbent (`palw_ibd_commit_strict_economic_v1`); an honestly-superior chain, one
+        // that genuinely matured a deeper frontier / more safe / more live, still commits with any
+        // hash. Below the fence this is byte-identical to `decide_ibd_commit_v2`.
+        let commit = if self.ctx.config.params.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
+            kaspa_consensus_core::palw_fork_authority_v2::palw_ibd_commit_strict_economic_v1(&incumbent, &challenger)
+        } else {
+            kaspa_consensus_core::palw_fork_authority_v2::decide_ibd_commit_v2(&incumbent, &challenger)
+        };
+        match commit {
             kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::Commit => Ok(()),
             kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::KeepIncumbent => Err(ProtocolError::OtherOwned(format!(
                 "the staged chain does not win the PALW fork-choice order (staged frontier {} weight {}, local frontier {}                      weight {}); keeping the local chain",
