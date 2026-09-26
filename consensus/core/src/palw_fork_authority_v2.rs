@@ -63,6 +63,39 @@ pub fn decide_ibd_commit_v2(incumbent: &PalwCandidateOrderV1, challenger: &PalwC
     }
 }
 
+/// **lane: rcore/hf-pptake2 — an IBD/pruning-proof adoption earned on ECONOMICS, not on a hash tie.**
+///
+/// The IBD staging-commit sibling of `palw_deep_reorg_strict_economic_v1` (rcore/f1-forkchoice-attacks),
+/// for the pruning-proof takeover. [`decide_ibd_commit_v2`] commits a challenger that is `Greater`
+/// under [`compare_palw_candidates_v1`], whose LAST tie-break key is the candidate hash — so a
+/// staged chain that ties the incumbent on all three economic keys (safe-frontier blue score, safe
+/// weight, live total) wins the commit on hash alone. A permissionless peer serving a node a
+/// pruning-proof IBD a headers-only fork of unbonded / lottery-losing attempt headers is exactly
+/// that tie: each such header carries the 2²⁰ attempt constant (`palw_lane_blue_work_v1` is blind to
+/// the bond and the lottery, which are chain state), so the proof outweighs the honest chain on raw
+/// accumulated blue work and is adopted (`compare_proofs_inner`); but that chain matured NO work — no
+/// bond, no lottery win, no inference, so no `Final` claim — and its imported, root-verified PALW
+/// carriage therefore reads `{frontier 0, safe 0, live 0}`, the same order an honest chain reads
+/// while its own first floor claim is still short of `Final`. On that all-economic tie the
+/// hash-tie-breaking commit rule lets the attacker grind a higher candidate hash and take the
+/// history over through IBD.
+///
+/// This variant commits only when the challenger STRICTLY exceeds the incumbent on some economic
+/// key; an all-economic tie keeps the incumbent (the confirmed history). It reads no clock and no
+/// live-weight rule, so it is independent of the two unconfirmed synthesis choices; and it only ever
+/// turns a `Commit` into a `KeepIncumbent` (the hash-only tie), never the reverse — strictly the
+/// more conservative of the two, so it can never refuse an honestly-superior chain: a challenger
+/// that genuinely matured deeper (a real `Final` frontier, more safe weight, more live total) still
+/// commits, with any hash. Used only where `Params::palw_pruning_proof_strict_economic_win` is armed
+/// (dormant on every shipped preset), read at the INCUMBENT's DAA — a challenger's own score is
+/// attacker-chosen.
+pub fn palw_ibd_commit_strict_economic_v1(incumbent: &PalwCandidateOrderV1, challenger: &PalwCandidateOrderV1) -> PalwIbdCommitV2 {
+    // The economic prefix of the order — everything before the candidate-hash tie-break, exactly the
+    // keys `palw_deep_reorg_strict_economic_v1` compares.
+    let economic = |o: &PalwCandidateOrderV1| (o.safe_frontier_blue_score, o.safe_weight, o.live_total);
+    if economic(challenger) > economic(incumbent) { PalwIbdCommitV2::Commit } else { PalwIbdCommitV2::KeepIncumbent }
+}
+
 /// The highest blue score pruning may reach on the selected chain: the safe frontier. Everything
 /// at or below it is resolved (`Final`/`Voided`) and travels summarized in the state carriage
 /// (ADR-0043 §4); everything above it may still be evidence — an unresolved claim's history, an
@@ -148,6 +181,51 @@ mod tests {
         assert_eq!(decide_ibd_commit_v2(&incumbent, &order(101, 1, 0, 2)), PalwIbdCommitV2::Commit, "a deeper frontier commits");
         assert_eq!(decide_ibd_commit_v2(&incumbent, &order(100, 10, 0, 1)), PalwIbdCommitV2::KeepIncumbent, "equal keeps");
         assert_eq!(decide_ibd_commit_v2(&incumbent, &order(99, 999, 999, 2)), PalwIbdCommitV2::KeepIncumbent, "a heavier pile loses");
+    }
+
+    /// **lane: rcore/hf-pptake2 — the pruning-proof takeover, and its close.** The strict-economic
+    /// commit refuses a hash-only win the unfenced commit rule takes, and commits every genuine
+    /// economic win — the IBD-commit analog of the deep-reorg fence's test.
+    #[test]
+    fn pruning_proof_adoption_keeps_the_incumbent_on_an_all_economic_tie() {
+        // The attack shape: an unbonded/losing-attempt headers-only fork matured no work, so its
+        // imported, root-verified PALW carriage reads `{frontier 0, safe 0, live 0}` — the same order
+        // the honest chain reads while its own first floor claim is still short of `Final`. The
+        // attacker grinds a higher candidate hash. The unfenced commit rule COMMITS (its last key is
+        // the hash); the strict-economic rule KEEPS the incumbent.
+        let incumbent = order(0, 0, 0, 1);
+        let higher_hash = order(0, 0, 0, 9);
+        assert_eq!(decide_ibd_commit_v2(&incumbent, &higher_hash), PalwIbdCommitV2::Commit, "unfenced: the hash decides the commit");
+        assert_eq!(
+            palw_ibd_commit_strict_economic_v1(&incumbent, &higher_hash),
+            PalwIbdCommitV2::KeepIncumbent,
+            "fenced: an all-economic tie keeps the incumbent, whatever the hash"
+        );
+        // A free-attempt pile is refused even when its raw blue work is enormous — that weight never
+        // enters the economic order (frontier/safe/live), which is the whole point.
+        assert_eq!(
+            palw_ibd_commit_strict_economic_v1(&incumbent, &order(0, 0, 0, u64::MAX)),
+            PalwIbdCommitV2::KeepIncumbent,
+            "the highest possible hash still does not commit on a frontier tie"
+        );
+        // It must not become a veto on legitimate syncs: a strict win on ANY economic key — frontier,
+        // then safe weight, then live total — still commits, even with a LOWER hash.
+        assert_eq!(palw_ibd_commit_strict_economic_v1(&incumbent, &order(1, 0, 0, 0)), PalwIbdCommitV2::Commit, "a deeper frontier commits");
+        assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0)), PalwIbdCommitV2::Commit, "more safe weight commits");
+        assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0)), PalwIbdCommitV2::Commit, "more live total commits");
+        // A challenger economically WORSE is kept out by both.
+        assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 3, 2, 1), &order(5, 3, 1, 9)), PalwIbdCommitV2::KeepIncumbent);
+        // The fenced rule never commits a chain the unfenced rule would not: it only ever converts a
+        // Commit into a KeepIncumbent (the hash-only tie), never the reverse.
+        for (fi, si, li) in [(0u64, 0u128, 0u128), (5, 3, 2)] {
+            for (fc, sc, lc) in [(0u64, 0u128, 0u128), (5, 3, 2), (6, 0, 0), (5, 4, 0)] {
+                let inc = order(fi, si, li, 1);
+                let chal = order(fc, sc, lc, 9);
+                if palw_ibd_commit_strict_economic_v1(&inc, &chal) == PalwIbdCommitV2::Commit {
+                    assert_eq!(decide_ibd_commit_v2(&inc, &chal), PalwIbdCommitV2::Commit, "fenced Commit implies unfenced Commit");
+                }
+            }
+        }
     }
 
     #[test]

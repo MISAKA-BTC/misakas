@@ -763,4 +763,76 @@ mod lane_weight_tests {
             assert_eq!(palw_lane_blue_work_v1(lane.attempt_algo_id(), BITS, FENCE, None, None, BlueWorkType::from(0u64)), hash_priced);
         }
     }
+
+    /// **lane: rcore/hf-pptake2 — the pruning-proof takeover reproduced at the weight function
+    /// `compare_proofs_inner` compares chains with.**
+    ///
+    /// `compare_proofs_inner` ranks two pruning proofs by accumulated blue work, and that blue work
+    /// is the sum of `palw_lane_blue_work_v1` over the level chains (via `GhostdagManager::with_level`,
+    /// whose only callers are the proof's build and validate) plus the declared pruning-period span.
+    /// `palw_lane_blue_work_v1` is a pure function of the header — the bond and the class-ticket
+    /// lottery are chain state it never sees — so a lottery-LOSING, UNBONDED attempt header (one
+    /// ML-DSA-87 signature on testnet-12, whose attempt lane sits at the ambient PoW target) carries
+    /// the SAME 2²⁰ constant a genuine bonded winner does, at every proof level, while the honest
+    /// clock — the heartbeat — carries only ε = 1. So a headers-only fork of a HANDFUL of free
+    /// attempts outweighs an honest heartbeat chain of ANY practical length, and the proof
+    /// comparison adopts it (the takeover this lane fences at the adoption gate).
+    ///
+    /// This measures that asymmetry on the shipped testnet-12 rules; the takeover's completion (the
+    /// adoption commit that then ties on `{frontier 0, safe 0, live 0}` and is decided by the
+    /// candidate hash) and its close are in `palw_fork_authority_v2::tests::
+    /// pruning_proof_adoption_keeps_the_incumbent_on_an_all_economic_tie`.
+    #[test]
+    fn pptake2_a_free_attempt_proof_outranks_an_honest_heartbeat_chain_of_any_length() {
+        use super::palw_lane_blue_work_v1;
+        use kaspa_consensus_core::config::params::palw_t12_shipped_params;
+        use kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
+        use kaspa_consensus_core::pow_layer0::{PALW_V2_ATTEMPT_BITS, PalwAttemptLaneV1};
+
+        // testnet-12 as shipped arms both lanes at genesis, so these are the rules a live node runs.
+        let t12 = palw_t12_shipped_params();
+        let heartbeat = t12.palw_heartbeat.map(|h| h.activation);
+        let attempt_work = t12.palw_attempt_work.map(|w| w.activation);
+        assert!(heartbeat.is_some_and(|f| f.is_active(0)), "t12 arms the heartbeat lane at genesis");
+        assert!(attempt_work.is_some_and(|f| f.is_active(0)), "t12 arms the attempt-work constant at genesis");
+
+        let attempt_id = PalwAttemptLaneV1::ExecutionArm.attempt_algo_id();
+        let epsilon = BlueWorkType::from(HEARTBEAT_BLUE_WORK_EPSILON);
+        let two_20 = BlueWorkType::from(1u64 << PALW_ATTEMPT_BLUE_WORK_LOG2);
+
+        // One heartbeat weighs ε; one free, unbonded attempt weighs 2²⁰ — at every proof level (the
+        // attempt lane earns NO level-sized weight, so `level_work` never lifts it above the
+        // constant), whatever DAA the header declares. The lottery outcome and the bond cannot enter
+        // here; there is no input that carries them.
+        let hb = palw_lane_blue_work_v1(PALW_HEARTBEAT_ALGO_ID, PALW_V2_ATTEMPT_BITS, 5_000, heartbeat, attempt_work, BlueWorkType::from(0u64));
+        assert_eq!(hb, epsilon, "a heartbeat weighs ε = 1");
+        for level in [0u8, 1, 8, 64] {
+            for daa in [0u64, 499, 500, 50_000] {
+                assert_eq!(
+                    palw_lane_blue_work_v1(attempt_id, PALW_V2_ATTEMPT_BITS, daa, heartbeat, attempt_work, level_work(level, 225)),
+                    two_20,
+                    "a free attempt header weighs 2^20 at proof level {level}, declared DAA {daa} — bond/lottery-blind"
+                );
+            }
+        }
+
+        // The takeover arithmetic, on `compare_proofs_inner`'s own metric. Take an honest heartbeat
+        // chain of a MILLION blocks (far more than testnet-12 has near DAA 500): its whole accumulated
+        // proof weight is 1,000,000·ε. A single free attempt already outweighs it, and any honest
+        // chain length is outweighed by ⌈honest·ε / 2^20⌉ + 1 free signatures — no bond, no lottery
+        // win, no inference.
+        let honest_blocks: u64 = 1_000_000;
+        let honest_weight = epsilon * BlueWorkType::from(honest_blocks);
+        assert!(two_20 > honest_weight, "one free attempt (2^20) already outranks a million honest heartbeats");
+        // And with a still-larger honest chain, a small constant number of free attempts suffices.
+        let big_honest: u64 = 100_000_000;
+        let big_weight = epsilon * BlueWorkType::from(big_honest);
+        let attempts_needed = big_weight / two_20 + BlueWorkType::from(1u64);
+        assert!(
+            two_20 * attempts_needed > big_weight,
+            "a headers-only fork of {attempts_needed} free attempts outranks {big_honest} honest heartbeats"
+        );
+        // ε : 2^20 is the exchange rate the proof pays a free signature.
+        assert_eq!(two_20 / hb, two_20, "a free attempt header outweighs a heartbeat 2^20 : 1, live and in the proof alike");
+    }
 }
