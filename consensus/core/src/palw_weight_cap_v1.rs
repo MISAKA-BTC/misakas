@@ -27,6 +27,26 @@
 //! slash lowers the cap and a refund restores it), and checked against its re-derivation at load and
 //! after every block in debug builds ([`palw_bounded_immature_v2`]).
 //!
+//! # What bounds a private fork (ADR-0160 §8 A1), and what does not
+//!
+//! J-1 bounds a private branch's gain to `live_A − live_public ≤ Σ W_cap(C_A)` at any claim count — but
+//! bounded is not refused. Past the fence the public branch's gain that a private branch cannot import
+//! is nil inside a lead shorter than `anchor_delay`: its post-fork claims weigh 0 until bound, a
+//! saturated bond gains nothing from further licences, and its licences of pre-fork claims are
+//! lifecycle objects the private branch carries verbatim. So ANY positive staging only the private
+//! branch holds wins `palw_reorg_strict_economic_win`:
+//!
+//! * a bind on the private branch — which lane A (`Params::palw_operator_anchor`) denies past its
+//!   fence, since no operator attempt is on that branch; `validate_palw_v2` therefore refuses F-W without
+//!   lane A at or below it (until the structural P0-10 fix replaces the stopgap);
+//! * a licence only the private branch carries, of a claim bound before the fork at an operator's
+//!   anchor — lane A does not stop it. It needs the attacker's seats to hold the quorum of that claim's
+//!   FAIRLY drawn panel (the panel-security bound itself: such an attacker licenses junk on the public
+//!   chain too), and it is still `≤ Σ W_cap(C_A)`. Below the fence the same attacker wins with Created
+//!   junk alone, which costs only collateral.
+//!
+//! Tests: `w_t6_…` and `w_t6b_…` (fold), `capacity_probe_w_t6_…` and `capacity_probe_w_t6b_…` (processor).
+//!
 //! # Invariants (ADR-0160 §7.1), each pinned by a test in `palw_state_v2/tests/capacity_weight_cap_v1.rs`
 //!
 //! * **W-I1** — `bounded_immature − Σ old-rule raw ≤ Σ_b W_cap(b)`, at any claim count.
@@ -68,11 +88,21 @@ pub const PALW_CAPACITY_S2_PERMILLE_V1: u16 = 250;
 /// **The C7 ceiling (ADR-0160 D-3): a claim's full weight never exceeds the raw weight of the heaviest
 /// ATTRIBUTABLE class, 8k** (229.86 FCW) — until ADR-0153 gives the 2M class a conviction route.
 ///
-/// Applied class-blind, deliberately: every attributable class weighs at most this by the ceiling's own
-/// definition, so the ceiling moves nothing for them, and a class-blind rule keeps [`palw_weight_full_v1`]
-/// a pure function of the claim record — the C7 predicate (`palw_rcore_class_is_c7_v1`) also reads
-/// `model_lifecycles`, which moves after a claim is accepted, and a weight that changes under a live
-/// claim is one the re-derivation cannot reproduce.
+/// Applied class-blind, deliberately: a class-blind rule keeps [`palw_weight_full_v1`] a pure function of
+/// the claim record — the C7 predicate (`palw_rcore_class_is_c7_v1`) also reads `model_lifecycles`, which
+/// moves after a claim is accepted, and a weight that changes under a live claim is one the
+/// re-derivation cannot reproduce.
+///
+/// **It moves nothing for an attributable claim whose raw weight is at or below it — which is a fact
+/// about the work floor, not a guarantee.** A model class's pwu is `expected_attempts × derived`, with
+/// the attempts `≈ W₀ / CCU` (`palw_effective_class_target_v1` → `palw_work_ticket_target_v1(ccu, W₀)`),
+/// so 8k's raw weight scales with `W₀ = escrow · 10⁹ / rate`; this constant IS 8k's raw weight at
+/// testnet-12's launch `W₀`, and `W₀` only falls from there with the subsidy schedule. A later change
+/// that RAISES `W₀` — a larger worker carve, a lower rate, a slower block rate that raises the per-block
+/// subsidy — puts 8k above the constant and clips its `Final` as well: the conservative direction for
+/// fork choice, and consistent at all four sites that price a `Final` (`finalize_claim`, `retire_claim`,
+/// `reverse_convicted_final`, the load-time re-derivation), but a change such a fence must re-derive this
+/// constant for (ADR-0160 §10 D-3).
 pub const PALW_CAPACITY_C7_WEIGHT_CEILING_V1: u128 = 138_892_697_241;
 
 /// **A claim's weight stage** (ADR-0160 §4.2).
@@ -110,7 +140,8 @@ fn stage_of_phase(claim: &PalwClaimStateV2, phase: &PalwClaimPhaseV2) -> PalwWei
         PalwClaimPhaseV2::ReceiptLicensed { .. } => {
             // `palw_rcore_counts_licensed_v1` reads `claim.phase`; the licence record (`rcore`) is the
             // claim's whatever phase a dispute parked it in, so the recount is asked of the record.
-            let counted = claim.rcore.licence_door.is_none() || claim.rcore.basis_k >= crate::palw_state_v2::PALW_RCORE_FINAL_BASIS_K_V1;
+            let counted =
+                claim.rcore.licence_door.is_none() || claim.rcore.basis_k >= crate::palw_state_v2::PALW_RCORE_FINAL_BASIS_K_V1;
             PalwWeightStageV1::Licensed { permille: if counted { 1000 } else { PALW_CAPACITY_S2_PERMILLE_V1 } }
         }
         // **An open DA accusation keeps the stage the claim held** (`resumed`, the phase it restores
@@ -221,9 +252,13 @@ pub fn palw_claim_weight_reservation_of_v1(
 /// **The `safe_weight` a `Final` claim contributes, under the C7 ceiling (ADR-0160 D-3).** `contribution`
 /// is today's (`palw_claim_safe_contribution_v3`: its pwu or derived work, D7-gated); a new-rule claim
 /// whose raw weight passed the ceiling contributes the same fraction of it that its full weight is of
-/// its raw weight, so the ceiling holds in whichever unit `safe_weight` is kept. Every attributable
-/// class, and every old-rule claim, is returned `contribution` unchanged. A pure function of the claim
-/// record and the mirror, so `finalize_claim`, `retire_claim` and the load-time re-derivation agree.
+/// its raw weight, so the ceiling holds in whichever unit `safe_weight` is kept. A claim at or under the
+/// ceiling (every attributable class at the launch work floor), and every old-rule claim, is returned
+/// `contribution` unchanged. A pure function of the claim record and the mirror, so the FOUR sites that
+/// move a `Final`'s weight agree: `finalize_claim` adds it, `retire_claim` moves it to the retired
+/// total, `reverse_convicted_final` (a DA-7 default at `FinalRow`, a post-`Final` conviction) takes it
+/// back, and the load-time re-derivation sums it. A site that priced it any other way would strand the
+/// difference in `safe_weight` — or, subtracting the unscaled amount, saturate it to zero.
 pub fn palw_weight_final_safe_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, contribution: u128) -> u128 {
     let raw = claim.immature_contribution;
     let full = palw_weight_full_v1(params, claim);
@@ -348,9 +383,13 @@ mod tests {
     fn the_cap_and_the_budget_are_the_adrs_numbers() {
         const MSK: u64 = 100_000_000;
         assert_eq!(PALW_CAPACITY_FCW_V1, 279 * 21_657_728 / 10, "FCW = ⌊0.1 × 279 × 21,657,728⌋");
-        for (collateral_msk, fcw, budget) in
-            [(6_499, 0, 0), (6_500, 1, 10_752_660), (13_000, 2, 21_505_320), (100_000, 15, 161_289_900), (1_000_000, 153, 1_645_156_980)]
-        {
+        for (collateral_msk, fcw, budget) in [
+            (6_499, 0, 0),
+            (6_500, 1, 10_752_660),
+            (13_000, 2, 21_505_320),
+            (100_000, 15, 161_289_900),
+            (1_000_000, 153, 1_645_156_980),
+        ] {
             assert_eq!(palw_bond_weight_cap_v1(collateral_msk * MSK), fcw * PALW_CAPACITY_FCW_V1, "{collateral_msk} MSK");
             assert_eq!(palw_bond_weight_budget_sompi_v1(collateral_msk * MSK), budget, "{collateral_msk} MSK");
         }

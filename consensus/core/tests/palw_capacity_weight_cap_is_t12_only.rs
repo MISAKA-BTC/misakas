@@ -12,8 +12,10 @@
 //!   Some-only fence needs);
 //! * the fork id names the height: below it an armed build and the shipped build keep each other, from
 //!   it the armed build refuses the shipped one;
-//! * `validate_palw_v2` refuses it off ConsensusV2, without `palw_rcore_plus` or
-//!   `palw_reorg_strict_economic_win` at or below it, and with the bundle's mirror apart from the field;
+//! * `validate_palw_v2` refuses it off ConsensusV2, without `palw_rcore_plus`,
+//!   `palw_reorg_strict_economic_win` or `palw_operator_anchor` (lane A — ADR-0160 §8 A1: the anchor is
+//!   what keeps a private branch from staging claims the public branch cannot match) at or below it,
+//!   and with the bundle's mirror apart from the field;
 //! * it is an entry of `PALW_T12_POST_LAUNCH_FENCES_V1`, whose `set` moves the field and the mirror
 //!   together, so `--palw-drill-fence-at` crosses it with every other entry.
 //!
@@ -50,17 +52,28 @@ fn mirror(p: &Params) -> Option<u64> {
     }
 }
 
-/// testnet-12 with the strict-economic-win reorg rule at `height` — F-W's prerequisite, and the
-/// baseline F-W's own id moves are measured against.
-fn strict_at(height: u64) -> Params {
+/// F-W's prerequisites from the post-launch list, each set the way the list sets it: the
+/// strict-economic-win reorg rule, lane A's operator anchor, and lane F1's execution seed (lane A's own
+/// prerequisite).
+const PREREQUISITES: [&str; 3] = ["palw_reorg_strict_economic_win", "palw_panel_seed_execution", "palw_operator_anchor"];
+
+fn set(p: &mut Params, name: &str, at: Option<ForkActivation>) {
+    (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name} is listed")).set)(p, at);
+}
+
+/// testnet-12 with F-W's prerequisites at `height` — the baseline F-W's own id moves are measured
+/// against.
+fn prerequisites_at(height: u64) -> Params {
     let mut p = palw_t12_shipped_params();
-    p.palw_reorg_strict_economic_win = Some(ForkActivation::new(height));
+    for name in PREREQUISITES {
+        set(&mut p, name, Some(ForkActivation::new(height)));
+    }
     p
 }
 
 /// …and F-W at the same height, set the way the post-launch list sets it (the field and the mirror).
 fn armed_at(height: u64) -> Params {
-    let mut p = strict_at(height);
+    let mut p = prerequisites_at(height);
     p.palw_capacity_weight_cap = Some(ForkActivation::new(height));
     p.sync_palw_capacity_weight_cap();
     p
@@ -100,19 +113,19 @@ fn the_weight_cap_is_dormant_on_every_shipped_preset_and_testnet12_is_the_releas
 }
 
 /// **Armed at a future height: the ruleset and the schedule name it, the identity does not** — measured
-/// against the same ruleset with only its prerequisite (strict-win) at that height, so the move is
-/// F-W's own. A `Some(never())` is absence; at genesis the identity separates.
+/// against the same ruleset with only its prerequisites (strict-win, lane A and its seed) at that height,
+/// so the move is F-W's own. A `Some(never())` is absence; at genesis the identity separates.
 #[test]
 fn arming_the_weight_cap_moves_the_params_and_schedule_ids_but_not_the_identity() {
     let shipped = palw_t12_shipped_params();
     let (_, identity_id, _) = ids(&shipped);
     let mut seen = std::collections::BTreeSet::new();
     for height in HEIGHTS {
-        let base = strict_at(height);
+        let base = prerequisites_at(height);
         let armed = armed_at(height);
         armed.validate_palw_v2().unwrap_or_else(|e| panic!("armed at {height}: a runnable ruleset: {e:?}"));
         let ((bp, bi, bs), (p, i, s)) = (ids(&base), ids(&armed));
-        println!("testnet-12 with strict-win and the weight cap at {height}: params {p} identity {i} schedule {s}");
+        println!("testnet-12 with F-W's prerequisites and the weight cap at {height}: params {p} identity {i} schedule {s}");
         assert_ne!(p, bp, "armed at {height}: the ruleset a node announces names the fence");
         assert_ne!(s, bs, "armed at {height}: the schedule the operator log names it");
         assert_eq!((i.as_str(), bi.as_str()), (identity_id.as_str(), identity_id.as_str()), "armed at {height}: the two builds peer");
@@ -150,8 +163,14 @@ fn an_armed_build_below_the_weight_cap_handshakes_with_the_shipped_build() {
         assert!(!shipped_gate.contains(&height), "armed at {height}: an independent height");
         for daa in [0, 1, height / 2, height - 1] {
             let (a, s) = (fork_id_v1(&armed, daa), fork_id_v1(&shipped, daa));
-            assert!(!evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(), "armed at {height}, DAA {daa}");
-            assert!(!evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(), "armed at {height}, DAA {daa}");
+            assert!(
+                !evaluate_fork_id_v1(&armed, daa, s.fired.as_bytes().as_slice(), s.next).refuses(),
+                "armed at {height}, DAA {daa}"
+            );
+            assert!(
+                !evaluate_fork_id_v1(&shipped, daa, a.fired.as_bytes().as_slice(), a.next).refuses(),
+                "armed at {height}, DAA {daa}"
+            );
         }
         let s = fork_id_v1(&shipped, height);
         assert!(
@@ -161,10 +180,11 @@ fn an_armed_build_below_the_weight_cap_handshakes_with_the_shipped_build() {
     }
 }
 
-/// **What `validate_palw_v2` refuses**, each by name: off ConsensusV2; without R-core+ or strict-win at
-/// or below it; a field the mirror disagrees with; a mirror with no field. Same height is at or below.
+/// **What `validate_palw_v2` refuses**, each by name: off ConsensusV2; without R-core+, strict-win or
+/// lane A's operator anchor at or below it; a field the mirror disagrees with; a mirror with no field.
+/// Same height is at or below.
 #[test]
-fn the_weight_cap_needs_rcore_plus_and_strict_win_at_or_below_it_and_its_mirror() {
+fn the_weight_cap_needs_rcore_plus_strict_win_and_the_operator_anchor_at_or_below_it_and_its_mirror() {
     let refused = |mut p: Params, needle: &str| {
         let why = p.validate_palw_capacity_weight_cap_v1().expect_err(needle);
         assert!(format!("{why:?}").contains(needle), "expected a refusal naming {needle:?}, got {why:?}");
@@ -178,11 +198,20 @@ fn the_weight_cap_needs_rcore_plus_and_strict_win_at_or_below_it_and_its_mirror(
     let mut late_strict = armed_at(2_345);
     late_strict.palw_reorg_strict_economic_win = Some(ForkActivation::new(2_346));
     refused(late_strict, "without palw_reorg_strict_economic_win at or below it");
+    // ADR-0160 §8 A1: without the anchor a private branch anchors (and grinds) its own panels, stages its
+    // claims to its bonds' caps, and wins strict-win against a public branch whose own post-fork claims
+    // weigh 0 until bound (`capacity_weight_cap_v1::w_t6b_…`).
+    let mut no_anchor = armed_at(2_345);
+    set(&mut no_anchor, "palw_operator_anchor", None);
+    refused(no_anchor, "without palw_operator_anchor at or below it");
+    let mut late_anchor = armed_at(2_345);
+    set(&mut late_anchor, "palw_operator_anchor", Some(ForkActivation::new(2_346)));
+    refused(late_anchor, "without palw_operator_anchor at or below it");
     let mut late_rcore = armed_at(2_345);
     late_rcore.palw_rcore_plus = Some(ForkActivation::new(2_346));
     let why = late_rcore.validate_palw_capacity_weight_cap_v1().expect_err("R-core+ above it");
     assert!(format!("{why:?}").contains("without palw_rcore_plus at or below it"), "{why:?}");
-    let mut unmirrored = strict_at(2_345);
+    let mut unmirrored = prerequisites_at(2_345);
     unmirrored.palw_capacity_weight_cap = Some(ForkActivation::new(2_345));
     refused(unmirrored, "disagrees with the V2 bundle's mirror");
     let mut orphan = palw_t12_shipped_params();
@@ -199,17 +228,19 @@ fn the_weight_cap_needs_rcore_plus_and_strict_win_at_or_below_it_and_its_mirror(
         p.palw_capacity_weight_cap = Some(ForkActivation::never());
         assert_eq!(p.validate_palw_capacity_weight_cap_v1(), Ok(()), "{name}: never() is dormant");
     }
-    armed_at(2_345).validate_palw_v2().expect("strict-win at the same height is at or below it");
+    armed_at(2_345).validate_palw_v2().expect("the prerequisites at the same height are at or below it");
 }
 
 /// **The post-launch list carries F-W**, and its `set` moves the field and the fold's mirror together;
 /// the whole list armed at one height (the drill's `--palw-drill-fence-at`; below 1,000, where lane
-/// maturity's entry must sit) validates — strict-win is on the list at the same height — and setting it
-/// back is the release byte for byte.
+/// maturity's entry must sit) validates — strict-win and lane A are on the list at the same height — and
+/// setting it back is the release byte for byte.
 #[test]
 fn the_post_launch_list_sets_the_weight_cap_and_its_mirror_together() {
     let entry = PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == "palw_capacity_weight_cap").expect("F-W is listed");
-    assert!(PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|f| f.name == "palw_reorg_strict_economic_win"), "and so is its prerequisite");
+    for name in PREREQUISITES {
+        assert!(PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|f| f.name == name), "and so is its prerequisite {name}");
+    }
     let release = palw_t12_shipped_params();
     let mut armed = release.clone();
     for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {

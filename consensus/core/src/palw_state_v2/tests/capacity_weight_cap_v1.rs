@@ -133,7 +133,8 @@ struct World {
 
 impl World {
     fn new(p: PalwStateParamsV2, bonds: &[(u64, u64)], heavy: bool) -> Self {
-        let mut world = World { p, extras: PalwTransitionExtrasV1::default(), s: PalwChainStateV2::genesis(), blue: 0, nonce: 0, heavy };
+        let mut world =
+            World { p, extras: PalwTransitionExtrasV1::default(), s: PalwChainStateV2::genesis(), blue: 0, nonce: 0, heavy };
         world.step(100, genesis_objects(bonds), None).unwrap();
         world
     }
@@ -148,7 +149,12 @@ impl World {
         apply_palw_transition_v2_with_extras(&self.s, &self.p, &c, &objects, att, false, false, false, false, &self.extras)
     }
 
-    fn step(&mut self, daa: u64, objects: Vec<PalwConsensusObjectV2>, att: Option<&PalwAttemptEnvelopeV2>) -> Result<PalwStateDeltaV2, PalwStateV2Error> {
+    fn step(
+        &mut self,
+        daa: u64,
+        objects: Vec<PalwConsensusObjectV2>,
+        att: Option<&PalwAttemptEnvelopeV2>,
+    ) -> Result<PalwStateDeltaV2, PalwStateV2Error> {
         let (child, delta) = self.try_step(daa, objects, att)?;
         if self.heavy {
             checked(&self.s, &child, &delta, &self.p);
@@ -619,7 +625,9 @@ fn w_t3_a_random_lattice_on_three_bonds_keeps_every_invariant() {
                 Ok(ok) => ok,
                 // A bind of a claim this very block's sweep voided, say: the fixture's objects are not
                 // admission-checked. Drop the objects and retry the block once.
-                Err(_) => world.try_step(daa, vec![], att.as_ref().map(|a| &a.3)).unwrap_or_else(|e| panic!("seed {seed} block {block}: {e:?}")),
+                Err(_) => world
+                    .try_step(daa, vec![], att.as_ref().map(|a| &a.3))
+                    .unwrap_or_else(|e| panic!("seed {seed} block {block}: {e:?}")),
             };
             // W-I3 + the delta and revert paths; the carriage import every eighth block.
             if block % 8 == 0 {
@@ -634,10 +642,16 @@ fn w_t3_a_random_lattice_on_three_bonds_keeps_every_invariant() {
                 assert_eq!(back.bounded_immature(), parent.bounded_immature());
             }
             // W-I1: each bond's staged sum is held under its cap in the total.
-            let capped: u128 =
-                bonds.iter().map(|(b, _)| child.capacity_weight_index().term(&bond_key(*b), child.bond(&bond_key(*b)).map(|r| r.collateral))).sum();
+            let capped: u128 = bonds
+                .iter()
+                .map(|(b, _)| child.capacity_weight_index().term(&bond_key(*b), child.bond(&bond_key(*b)).map(|r| r.collateral)))
+                .sum();
             let caps: u128 = bonds.iter().map(|(b, _)| palw_bond_weight_cap_v1(child.bond(&bond_key(*b)).unwrap().collateral)).sum();
-            assert_eq!(child.bounded_immature(), capped, "seed {seed} block {block}: every claim is new-rule, so the total is the capped sum");
+            assert_eq!(
+                child.bounded_immature(),
+                capped,
+                "seed {seed} block {block}: every claim is new-rule, so the total is the capped sum"
+            );
             assert!(capped <= caps, "W-I1");
             // W-I4 at acceptance. The fold reads the bond AFTER this block's sweep and objects (step 4
             // follows steps 2 and 3), so the parent's reading — admission's and the producer's — is
@@ -661,9 +675,9 @@ fn w_t3_a_random_lattice_on_three_bonds_keeps_every_invariant() {
                 );
             }
             // W-I2: live weight falls only where a claim voided, was redrawn, or a bond was slashed.
-            let slashed = bonds.iter().any(|(b, _)| {
-                child.bond(&bond_key(*b)).unwrap().collateral < parent.bond(&bond_key(*b)).unwrap().collateral
-            });
+            let slashed = bonds
+                .iter()
+                .any(|(b, _)| child.bond(&bond_key(*b)).unwrap().collateral < parent.bond(&bond_key(*b)).unwrap().collateral);
             let voided_or_redrawn = parent.claims_iter().any(|(id, before)| {
                 let after = child.claim(id);
                 (!before.phase.is_terminal() && after.is_some_and(|a| matches!(a.phase, PalwClaimPhaseV2::Voided { .. })))
@@ -673,13 +687,18 @@ fn w_t3_a_random_lattice_on_three_bonds_keeps_every_invariant() {
             slashes += usize::from(slashed);
             if live(&child) < live(&parent) {
                 falls += 1;
-                assert!(slashed || voided_or_redrawn, "seed {seed} block {block}: W-I2 — live weight fell with no void, redraw or slash");
+                assert!(
+                    slashed || voided_or_redrawn,
+                    "seed {seed} block {block}: W-I2 — live weight fell with no void, redraw or slash"
+                );
             }
             world.s = child;
             world.blue += 1;
         }
     }
-    println!("W-T3: 10 seeds × 120 blocks, {slashes} blocks slashed a producer, {falls} blocks lowered live weight (each by a void, redraw or slash)");
+    println!(
+        "W-T3: 10 seeds × 120 blocks, {slashes} blocks slashed a producer, {falls} blocks lowered live weight (each by a void, redraw or slash)"
+    );
     assert!(slashes > 0, "the property run exercised the slash recap");
 }
 
@@ -688,13 +707,20 @@ fn w_t3_a_random_lattice_on_three_bonds_keeps_every_invariant() {
 /// **W-T6 (A1) at the fold**: an attacker holding `m` 13,000 MSK bonds forks off the public chain and
 /// piles `K` 2M junk claims (the heaviest class) on its private branch, self-licensing them through its
 /// own seat where no operator anchor stops it. The honest public branch carries two licensed floor
-/// claims on its own 13k bond.
+/// claims on its own 13k bond. The strict-win deep-reorg decision is asserted in EVERY configuration:
 ///
-/// * Fence dormant (today): ONE junk claim outweighs the public branch by ~555,609 FCW and the deep
-///   reorg is allowed — the hole.
+/// * Fence dormant (today): ONE junk claim outweighs the public branch by ~555,609 FCW — Created or
+///   licensed — and the deep reorg is allowed under both gates: the hole.
 /// * Fence armed: `live_A − live_public ≤ Σ W_cap(C_A)` = `2m` FCW, the same at K = 10, 100 and 1,000.
-/// * Operator anchor armed (the stopgap: a non-operator's claims never bind): the junk stays Created,
-///   weighs 0, and with strict-win the incumbent is kept (a tie is not a win).
+///   **That bound is not a refusal.** Self-licensed (the private branch anchored its own panels: only
+///   possible WITHOUT lane A's operator anchor), the junk weighs exactly `Σ W_cap(C_A)`, and strict-win
+///   ALLOWS the reorg whenever that exceeds the public branch's live weight — here at m = 3 (6 FCW
+///   against 2); at m = 1 it ties (2 against 2) and is refused. This is why `validate_palw_v2` refuses
+///   F-W without the operator anchor at or below it; [`w_t6b_the_public_gain_a_private_branch_cannot_import_is_nil`]
+///   shows the public side cannot outgrow it.
+/// * Operator anchor armed (the stopgap: past it no block on the private branch may anchor a panel, so
+///   its post-fork claims never bind): the junk stays Created, weighs 0, and with strict-win the
+///   incumbent is kept (a tie is not a win).
 ///
 /// The GHOSTDAG half (heartbeat transparency, blue work) is independent of staged weight — it touches
 /// no `bounded_immature` — and is the processor's (`hb_fork_choice_probe`), not re-run here.
@@ -732,12 +758,21 @@ fn w_t6_a_private_weight_burst_is_bounded_by_the_attackers_cap_whatever_its_clai
                     }
                     let private = world.s.candidate_order(h64(0xFFFF));
                     let gain = private.live_total.saturating_sub(public.live_total);
+                    let strict = palw_deep_reorg_strict_economic_v1(&public, &private);
                     match fence {
                         None if self_licence => {
                             assert!(gain > fcw(555_000), "dormant: the junk outweighs the public branch by 555k FCW per claim");
                             assert_eq!(decide_deep_reorg_v2(&public, &private), PalwDeepReorgV2::Allow, "today: the reorg is allowed");
+                            assert_eq!(
+                                strict,
+                                PalwDeepReorgV2::Allow,
+                                "and strict-win allows it too: the junk is a strict economic win"
+                            );
                         }
-                        None => assert_eq!(gain, u128::from(k) * raw_of(M2) - 2 * raw_of(FLOOR), "dormant: even Created junk weighs raw"),
+                        None => {
+                            assert_eq!(gain, u128::from(k) * raw_of(M2) - 2 * raw_of(FLOOR), "dormant: even Created junk weighs raw");
+                            assert_eq!(strict, PalwDeepReorgV2::Allow, "dormant: Created junk alone is a strict economic win");
+                        }
                         Some(_) => {
                             let cap = fcw(2 * m as u128);
                             assert!(
@@ -745,7 +780,18 @@ fn w_t6_a_private_weight_burst_is_bounded_by_the_attackers_cap_whatever_its_clai
                                 "fence, m = {m}, K = {k}: live_A − live_public ≤ Σ W_cap(C_A) = {cap} (gain {gain})"
                             );
                             if self_licence {
-                                assert_eq!(private.live_total, cap, "self-licensed junk saturates the attacker's cap exactly, whatever K");
+                                assert_eq!(
+                                    private.live_total, cap,
+                                    "self-licensed junk saturates the attacker's cap exactly, whatever K"
+                                );
+                                // The residual, stated as the gate decides it: bounded is not refused.
+                                assert_eq!(public.live_total, fcw(2));
+                                assert_eq!(
+                                    strict,
+                                    if m == 1 { PalwDeepReorgV2::Refuse } else { PalwDeepReorgV2::Allow },
+                                    "fence, m = {m}, K = {k}: without the operator anchor strict-win allows the reorg exactly when \
+                                     Σ W_cap(C_A) exceeds the public live weight (a tie at m = 1 keeps the incumbent)"
+                                );
                             } else {
                                 assert_eq!(private.live_total, 0, "Created junk (the operator anchor's case) weighs nothing");
                                 assert_eq!(
@@ -758,12 +804,180 @@ fn w_t6_a_private_weight_burst_is_bounded_by_the_attackers_cap_whatever_its_clai
                     }
                     if fence.is_some() && k == 1_000 {
                         println!(
-                            "W-T6 m={m} self_licence={self_licence}: live_A − live_public = {:.2} FCW at K = 10, 100 and 1,000 (cap {} FCW)",
-                            gain as f64 / PALW_CAPACITY_FCW_V1 as f64 - 0.0,
+                            "W-T6 m={m} self_licence={self_licence}: live_A − live_public = {:.2} FCW at K = 10, 100 and 1,000 (cap {} FCW); \
+                             strict-win {strict:?}",
+                            gain as f64 / PALW_CAPACITY_FCW_V1 as f64,
                             2 * m
                         );
                     }
                 }
+            }
+        }
+    }
+}
+
+/// **W-T6b (A1, the lane's verify finding 3): past F-W the public branch's live gain that a private
+/// branch cannot import is nil inside the lead — so any positive private staging is a strict win, and
+/// lane A's operator anchor is what must stop the staging.**
+///
+/// Past the fence weight arrives at bind and licence, not at acceptance. The public branch's post-fork
+/// claims weigh 0 until bound (≥ `anchor_delay` = 20 DAA after acceptance, longer than A1's lead of 1 or
+/// 13 DAA — this harness binds with no delay, which only flatters the public side); a saturated honest
+/// bond gains nothing from further licences (its term is `min(X_b, cap)`: one licensed 8k claim saturates
+/// any bond below ≈ 1.49M MSK); and the licences the public branch carries for claims bound before the
+/// fork are lifecycle objects the private branch imports verbatim. Each script runs dormant and armed.
+///
+/// 1. **A saturated honest bond** (the verifier's probe): a 13k honest bond holds a licensed 8k claim at
+///    the fork, and the public branch then accepts, binds and licenses five more honest floor claims on it
+///    — armed, a gain of exactly 0. The private branch binds ONE floor junk claim on a fresh 13k attacker
+///    bond (Anchored, 10‰ of an FCW): armed, that alone is a strict win — ALLOW. That needs the private
+///    branch to anchor a panel, which lane A denies past its fence (no operator attempt is on the private
+///    branch); with the junk left Created — REFUSE. Dormant, the five honest claims weigh raw from
+///    acceptance — REFUSE.
+/// 2. **Importable licences**: an unsaturated honest 100k bond with three floor claims bound before the
+///    fork, licensed on the public branch; the private branch carries the SAME three licences, so armed
+///    the honest gain is matched exactly — REFUSE on the tie. Add a private-only licence of a junk claim the
+///    attacker got bound BEFORE the fork (at an operator's anchor, which lane A does not stop) — ALLOW
+///    armed, REFUSE dormant (a licence moves no weight there). That residual needs the attacker's seats to
+///    hold a quorum of a FAIRLY drawn panel — lane A makes the draw fair, the anchor's execution commitment
+///    not being the attacker's to grind — which is the panel-security bound itself: such an attacker
+///    licenses junk on the public chain as well.
+/// 3. The public gain counts only where it is NOT imported: the private branch licensing its junk without
+///    importing the three honest licences — REFUSE armed (≈ 3 FCW against ≈ 1).
+#[test]
+fn w_t6b_the_public_gain_a_private_branch_cannot_import_is_nil() {
+    use PalwDeepReorgV2::{Allow, Refuse};
+    let (honest, attacker) = (0x21u64, 0x51u64);
+    // 1. The saturated honest bond.
+    let saturated = |fence: Option<u64>, bind_junk: bool| {
+        let mut world = World::new(cp(fence), &[(honest, 13_000 * MSK), (attacker, 13_000 * MSK)], false);
+        let k = world.claim(101, K8, honest);
+        world.step(102, vec![bind(k)], None).unwrap();
+        world.step(103, vec![licence(k)], None).unwrap();
+        let (fork, fork_blue, at_fork) = (world.s.clone(), world.blue, live(&world.s));
+        let hs: Vec<Hash64> = (0..5).map(|_| world.claim(104, FLOOR, honest)).collect();
+        world.step(105, hs.iter().map(|id| bind(*id)).collect(), None).unwrap();
+        world.step(106, hs.iter().map(|id| licence(*id)).collect(), None).unwrap();
+        let public = world.s.candidate_order(h64(0x1));
+        world.s = fork;
+        world.blue = fork_blue;
+        let junk = world.claim(104, FLOOR, attacker);
+        world.step(105, if bind_junk { vec![bind(junk)] } else { vec![] }, None).unwrap();
+        world.step(106, vec![], None).unwrap();
+        let private = world.s.candidate_order(h64(0xFFFF));
+        (at_fork, public, private)
+    };
+    let (at_fork, public, private) = saturated(Some(0), true);
+    assert_eq!((at_fork, public.live_total), (fcw(2), fcw(2)), "armed: five honest licences on a saturated bond gain nothing");
+    assert_eq!(private.live_total, fcw(2) + raw_of(FLOOR) / 100, "armed: one anchored junk claim is 10‰ of an FCW over the fork");
+    assert_eq!(palw_deep_reorg_strict_economic_v1(&public, &private), Allow, "armed, junk anchored on the private branch: ALLOW");
+    let (_, public, private) = saturated(Some(0), false);
+    assert_eq!(public.live_total, private.live_total, "armed, the junk Created (lane A: nothing anchors it there): a tie");
+    assert_eq!(palw_deep_reorg_strict_economic_v1(&public, &private), Refuse, "armed with the operator anchor: REFUSE");
+    let (_, public, private) = saturated(None, true);
+    assert_eq!(public.live_total - private.live_total, 4 * raw_of(FLOOR), "dormant: five honest claims against one junk, raw");
+    assert_eq!(palw_deep_reorg_strict_economic_v1(&public, &private), Refuse, "dormant: REFUSE");
+    // 2 and 3. Licences of claims bound before the fork.
+    let imported = |fence: Option<u64>, import: bool, junk_licensed: bool| {
+        let mut world = World::new(cp(fence), &[(honest, 100_000 * MSK), (attacker, 13_000 * MSK)], false);
+        let hs: Vec<Hash64> = (0..3).map(|_| world.claim(101, FLOOR, honest)).collect();
+        let junk = world.claim(101, FLOOR, attacker);
+        world.step(102, hs.iter().chain([&junk]).map(|id| bind(*id)).collect(), None).unwrap();
+        let (fork, fork_blue) = (world.s.clone(), world.blue);
+        world.step(103, hs.iter().map(|id| licence(*id)).collect(), None).unwrap();
+        let public = world.s.candidate_order(h64(0x1));
+        world.s = fork;
+        world.blue = fork_blue;
+        let mut objects: Vec<PalwConsensusObjectV2> = if import { hs.iter().map(|id| licence(*id)).collect() } else { Vec::new() };
+        if junk_licensed {
+            objects.push(licence(junk));
+        }
+        world.step(103, objects, None).unwrap();
+        let private = world.s.candidate_order(h64(0xFFFF));
+        (public, private)
+    };
+    let (public, private) = imported(Some(0), true, false);
+    assert_eq!(public.live_total, fcw(3) + raw_of(FLOOR) / 100, "armed: three honest licences on an unsaturated bond gain 3 FCW");
+    assert_eq!(private.live_total, public.live_total, "armed: the private branch imports them — the honest gain is matched exactly");
+    assert_eq!(palw_deep_reorg_strict_economic_v1(&public, &private), Refuse, "armed, imported only: the tie keeps the incumbent");
+    let (public, private) = imported(Some(0), true, true);
+    assert_eq!(
+        private.live_total - public.live_total,
+        fcw(1) - raw_of(FLOOR) / 100,
+        "armed: the private-only licence is the whole gain"
+    );
+    assert_eq!(
+        palw_deep_reorg_strict_economic_v1(&public, &private),
+        Allow,
+        "armed, imported + a pre-fork-bound junk licensed: ALLOW"
+    );
+    let (public, private) = imported(None, true, true);
+    assert_eq!(public.live_total, private.live_total, "dormant: a licence moves no weight");
+    assert_eq!(palw_deep_reorg_strict_economic_v1(&public, &private), Refuse, "dormant: REFUSE");
+    let (public, private) = imported(Some(0), false, true);
+    assert!(public.live_total > private.live_total, "armed, not imported: the public licences outweigh the junk");
+    assert_eq!(palw_deep_reorg_strict_economic_v1(&public, &private), Refuse, "armed, not imported: REFUSE");
+    println!(
+        "W-T6b: saturated honest bond — armed public gain 0, one anchored private junk ALLOW, Created junk REFUSE, dormant REFUSE; \
+         imported licences — armed tie REFUSE, + a pre-fork-bound junk licence ALLOW (needs a Sybil quorum on a fair panel), dormant REFUSE"
+    );
+}
+
+// ---- W-T5b: a reversed Final takes back what it added --------------------------------------------
+
+/// **W-T5b (the lane's verify finding 1): reversing a new-rule `Final` takes back exactly what its
+/// `Final` added.** `reverse_convicted_final` — reached by a DA-7 default at `FinalRow`
+/// (`ProducerWithholding`) and by a post-`Final` conviction (#8, `CourtFraud`; the court's arm too) —
+/// subtracted the UNSCALED `canonical.unwrap_or(pwu)`, while `finalize_claim` had added the claim's
+/// contribution under the C7 ceiling (D-3): for a 2M-scale claim ≈ 2,400× more, which saturated
+/// `safe_weight` to zero and took every other `Final` out of fork choice with it, and an equality-mode
+/// reload refused the tip. Ten floor `Final`s and one 2M `Final`, the 2M one reversed under each reason,
+/// dormant and armed: the reversal removes exactly what the `Final` added, the ten stay, and the
+/// equality-mode reload (this harness runs ADR-0069 D7 dormant, so the check is `safe == retired + Σ
+/// Final`) accepts the result.
+#[test]
+fn w_t5b_reversing_a_new_rule_final_takes_back_exactly_what_it_added() {
+    for fence in [None, Some(0)] {
+        for reason in [PalwVoidReasonV2::ProducerWithholding, PalwVoidReasonV2::CourtFraud] {
+            let p = cp(fence);
+            let mut world = World::new(p.clone(), &[(0x21, 13_000 * MSK), (0x31, 13_000 * MSK)], true);
+            let floors: Vec<Hash64> = (0..10).map(|_| world.claim(101, FLOOR, 0x31)).collect();
+            let big = world.claim(101, M2, 0x21);
+            let all: Vec<Hash64> = floors.iter().copied().chain([big]).collect();
+            world.step(102, all.iter().map(|id| bind(*id)).collect(), None).unwrap();
+            world.step(103, all.iter().map(|id| licence(*id)).collect(), None).unwrap();
+            let before_final = world.s.safe_weight();
+            world.step(124, vec![], None).unwrap();
+            assert!(
+                all.iter().all(|id| matches!(world.s.claim(id).unwrap().phase, PalwClaimPhaseV2::Final { .. })),
+                "all eleven Final"
+            );
+            let floor_safe = 10 * u128::from(class_row(FLOOR).2);
+            let pwu_2m = u128::from(class_row(M2).2);
+            let added = world.s.safe_weight() - before_final - floor_safe;
+            let expected = if fence.is_some() { pwu_2m * PALW_CAPACITY_C7_WEIGHT_CEILING_V1 / raw_of(M2) } else { pwu_2m };
+            assert_eq!(added, expected, "fence {fence:?}: the 2M Final added its pwu, under the C7 ceiling where armed");
+            let extras = PalwTransitionExtrasV1::default();
+            let mut builder = TransitionBuilder::new(&world.s, &p, false, false, false, false, &extras);
+            builder.reverse_convicted_final(&ctx(0x30_0000, 125, world.blue + 1), big, reason).unwrap();
+            assert_eq!(
+                builder.state.safe_weight,
+                before_final + floor_safe,
+                "fence {fence:?}, {reason:?}: the reversal removes exactly what the Final added — the ten floor Finals stay"
+            );
+            assert!(
+                matches!(&builder.state.claims[&big].phase, PalwClaimPhaseV2::Voided { reason: r, .. } if *r == reason),
+                "the reversed claim is voided for the caller's reason"
+            );
+            builder.state.assert_internal_consistency(&p).unwrap_or_else(|e| {
+                panic!("fence {fence:?}, {reason:?}: the equality-mode reload accepts the reversal (safe == retired + Σ Final): {e}")
+            });
+            if fence.is_some() && reason == PalwVoidReasonV2::CourtFraud {
+                println!(
+                    "W-T5b: the 2M Final added {added} (pwu {pwu_2m} under the C7 ceiling); its reversal removed {} — safe_weight {} = the ten floor Finals",
+                    world.s.safe_weight() - builder.state.safe_weight,
+                    builder.state.safe_weight
+                );
             }
         }
     }

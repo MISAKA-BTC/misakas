@@ -1200,9 +1200,16 @@ pub struct Params {
     ///   budget `⌊C/6,500 MSK⌋ × w_floor`.
     ///
     /// Keyed on the claim's `accepted_daa` (the ADR-0145 precedent), so a claim accepted below the
-    /// height keeps today's accounting for its whole life. Requires `palw_rcore_plus` and
-    /// `palw_reorg_strict_economic_win` at or below it (staged weight makes economic ties common;
-    /// without strict-win a tie would fall to the hash). The fold reads it through the V2 bundle's
+    /// height keeps today's accounting for its whole life. Requires `palw_rcore_plus`,
+    /// `palw_reorg_strict_economic_win` (staged weight makes economic ties common; without
+    /// strict-win a tie would fall to the hash) and `palw_operator_anchor` (lane A) at or below it.
+    /// The operator anchor is what keeps a private branch's post-fork claims at Created (weight 0):
+    /// staged weight moves the weight a claim buys from its acceptance to its bind and licence, and a
+    /// private branch that may anchor its own panels (the P0-10 seed-grinding hole the anchor stops)
+    /// self-licenses up to `Σ W_cap` of its bonds' caps that the public branch cannot match — its
+    /// own post-fork claims weigh 0 until bound, and its pre-fork licences are importable — so the
+    /// strict-win gate would ALLOW the deep reorg (ADR-0160 §8 A1). Until the structural P0-10 fix
+    /// retires the stopgap, F-W does not arm without it. The fold reads it through the V2 bundle's
     /// mirror (`Self::sync_palw_capacity_weight_cap`). A bare fence.
     pub palw_capacity_weight_cap: Option<ForkActivation>,
 
@@ -6792,9 +6799,11 @@ impl Params {
     /// below it (the staged weight reads R-core+'s licence record, and J-1 caps what R-core+'s
     /// reservation prices); `palw_reorg_strict_economic_win` at or below it (staged weight lowers every
     /// candidate's live total, so all-economic ties become common, and without strict-win a tie is
-    /// decided by the hash — the grinding hole that fence closes); the mirror equal to the height. Any
-    /// height is legal otherwise — the rule is keyed on each claim's `accepted_daa`, written to be
-    /// crossed on a live chain.
+    /// decided by the hash — the grinding hole that fence closes); `palw_operator_anchor` (lane A) at or
+    /// below it (a private branch that anchors its own panels self-licenses up to its bonds' caps, a
+    /// staging the public branch cannot match inside the lead — ADR-0160 §8 A1); the mirror equal to the
+    /// height. Any height is legal otherwise — the rule is keyed on each claim's `accepted_daa`, written
+    /// to be crossed on a live chain.
     pub fn validate_palw_capacity_weight_cap_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         use crate::palw_mode_v2::PalwModeV2Error::Invalid;
         let mirror = match &self.palw_consensus_mode {
@@ -6827,6 +6836,19 @@ impl Params {
             return Err(Invalid(
                 "palw_capacity_weight_cap is armed without palw_reorg_strict_economic_win at or below it: staged weight makes \
                  all-economic ties common, and without strict-win a deep reorg on a tie is decided by the hash (ADR-0160 §4.2)",
+            ));
+        }
+        // ADR-0160 §8 A1 (the lane's verify finding 3): past F-W a private branch gains live weight only by
+        // STAGING claims (bind, licence) the public branch has not staged, and the public branch's own
+        // post-fork claims weigh 0 until bound (≥ anchor_delay later) while its licences of pre-fork claims
+        // can be imported — so the honest chain's un-importable gain inside a short lead is ~0, and any
+        // positive private staging wins strict-win. The operator anchor is what stops a private branch
+        // anchoring (and grinding) its own panels. Required until the structural P0-10 fix replaces it.
+        if !at_or_below(self.palw_operator_anchor.as_ref().map(|rule| rule.activation)) {
+            return Err(Invalid(
+                "palw_capacity_weight_cap is armed without palw_operator_anchor at or below it: staged weight lets a private \
+                 branch that anchors its own panels self-license up to its bonds' caps, which the public branch cannot \
+                 match inside the lead, so strict-win would allow the deep reorg (ADR-0160 §8 A1)",
             ));
         }
         if mirror != Some(fence.daa_score()) {
@@ -17081,7 +17103,8 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PalwPostLaunchFenceV1 { name: "palw_reorg_strict_economic_win", set: |params, at| params.palw_reorg_strict_economic_win = at },
     // Lane cap-weight (ADR-0160 F-W, the capacity release — NOT the DAA-500 release): the per-bond
     // weight cap (J-1): the field and the V2 bundle's mirror the fold reads. Requires R-core+ (armed at
-    // 0) and the strict-economic-win reorg rule at or below it, which this list arms at the same height.
+    // 0), the strict-economic-win reorg rule and lane A's operator anchor at or below it, which this list
+    // arms at the same height.
     PalwPostLaunchFenceV1 {
         name: "palw_capacity_weight_cap",
         set: |params, at| {
@@ -26983,22 +27006,17 @@ mod post_launch_fence_arming_tests {
         }
         let release = palw_t12_shipped_params();
         let at = Some(ForkActivation::new(500));
-        // Lane cap-weight (ADR-0160 F-W) requires another entry of this list, the strict-win reorg rule,
-        // at or below it — so it is set over that prerequisite on both sides (the release arms the two
-        // at one height).
-        let prerequisite = |params: &mut Params, name: &str| {
-            if name == "palw_capacity_weight_cap" {
-                params.palw_reorg_strict_economic_win = at;
-            }
-        };
-        for fence in PALW_T12_POST_LAUNCH_FENCES_V1.iter().filter(|f| f.name != "palw_operator_anchor") {
+        // Lane cap-weight (ADR-0160 F-W) requires lane A at or below it (and strict-win), and lane A needs
+        // the assembled registry — so F-W, like lane A, is set on the ASSEMBLED ruleset only (the release
+        // does exactly that). Set on a base, it reaches the assembly and is refused there by lane A's name,
+        // loudly (checked below), never left silently dormant.
+        let assembled_only = |name: &str| name == "palw_operator_anchor" || name == "palw_capacity_weight_cap";
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1.iter().filter(|f| !assembled_only(f.name)) {
             let mut base = palw_t12_base_params();
-            prerequisite(&mut base, fence.name);
             (fence.set)(&mut base, at);
             let set_before = palw_t12_public_params_over_v1(base);
             set_before.validate_palw_v2().unwrap_or_else(|e| panic!("{}: set after pass 2, assembled: {e}", fence.name));
             let mut set_after = release.clone();
-            prerequisite(&mut set_after, fence.name);
             (fence.set)(&mut set_after, at);
             assert_eq!(height(&set_before, fence.name), at, "{}: the assembly keeps the height", fence.name);
             assert_eq!(
@@ -27024,6 +27042,17 @@ mod post_launch_fence_arming_tests {
         let mut base = palw_t12_base_params();
         (lane_a.set)(&mut base, None);
         assert_eq!(base.palw_operator_anchor, None, "setting it dormant needs no registry");
+
+        let weight_cap = entry("palw_capacity_weight_cap");
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut base = palw_t12_base_params();
+            base.palw_reorg_strict_economic_win = at;
+            (weight_cap.set)(&mut base, at);
+            palw_t12_public_params_over_v1(base)
+        }));
+        let why = refused.expect_err("F-W set on a base without lane A: the assembly's validate refuses it");
+        let why = why.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(why.contains("without palw_operator_anchor at or below it"), "refused by lane A's name: {why}");
     }
 
     /// **Every post-launch fence at DAA 500 on the shipped ruleset** — the release's own arming: it

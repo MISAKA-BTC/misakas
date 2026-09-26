@@ -17959,8 +17959,10 @@ impl<'a> TransitionBuilder<'a> {
     /// * **Weight.** An attempt's `Final` added its contribution; a free-prompt `Final` added
     ///   nothing and each spend added `per_quantum`. The amount subtracted is the one
     ///   `retire_claim` would have moved to `retired_safe_weight` — `canonical.unwrap_or(pwu)` for
-    ///   an attempt, `per_quantum × |spent|` for a free-prompt claim — i.e. the claim's half of the
-    ///   CEILING `assert_internal_consistency_v3` re-derives. That is exact wherever ADR-0069
+    ///   an attempt (under ADR-0160 F-W's C7 ceiling where the claim is new-rule, through the same
+    ///   `palw_weight_final_safe_v1` `finalize_claim` and `retire_claim` price it with — the identity
+    ///   everywhere else), `per_quantum × |spent|` for a free-prompt claim — i.e. the claim's half of
+    ///   the CEILING `assert_internal_consistency_v3` re-derives. That is exact wherever ADR-0069
     ///   Decision 7 is dormant (contribution == ceiling). Where it is armed the contribution the
     ///   `Final` actually added may have been zero (a weightless class) and is recorded nowhere, so
     ///   subtracting the CEILING is the only choice that provably keeps `safe_weight <= ceiling`:
@@ -17998,7 +18000,17 @@ impl<'a> TransitionBuilder<'a> {
         let Some(claim) = self.state.claims.get(&id).cloned() else { return Ok(()) };
         let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { return Ok(()) };
         let weight = match &claim.source {
-            PalwClaimSourceV2::Attempt => self.canonical_claim_weight(&claim).unwrap_or(claim.pwu as u128),
+            // ADR-0160 F-W (D-3): a new-rule claim's `Final` added its weight under the C7 ceiling
+            // (`finalize_claim`), so the reversal takes back that same scaled amount — the expression
+            // `retire_claim` moves to `retired_safe_weight`. Subtracting the unscaled
+            // `canonical.unwrap_or(pwu)` here removed ~2,400× what a 2M-scale `Final` had added and
+            // saturated `safe_weight` to zero, stripping every other `Final` from fork choice. The
+            // identity on every old-rule claim and every claim under the ceiling.
+            PalwClaimSourceV2::Attempt => crate::palw_weight_cap_v1::palw_weight_final_safe_v1(
+                self.params,
+                &claim,
+                self.canonical_claim_weight(&claim).unwrap_or(claim.pwu as u128),
+            ),
             PalwClaimSourceV2::FreePrompt { quanta, spent } => {
                 let per_quantum = palw_fp_spend_weight_v1(&self.state, &claim, *quanta, &self.fp_pricing());
                 per_quantum.checked_mul(spent.len() as u128).ok_or(PalwStateV2Error::Overflow("convicted free-prompt weight"))?
