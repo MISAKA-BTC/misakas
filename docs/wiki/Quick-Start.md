@@ -1,6 +1,6 @@
 # Quick Start — testnet-12
 
-対象は現行 `main`(release commit `0e8ec984e`)と公開テストネット `testnet-12` です。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
+対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-26 の node 更新 `8a0810992` です(公開時の release commit `0e8ec984e` と consensus は同じ)。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
 
 ## 1. Build
 
@@ -9,12 +9,13 @@ git clone https://github.com/MISAKA-BTC/misakas.git
 cd misakas
 git switch main
 git pull --ff-only
+git checkout 8a0810992
 cargo build --release -p kaspad -p misaka-cli
 ```
 
 `misaka-cli` から作られるバイナリは `target/release/misaka` です。以下では `target/release` を PATH に加えた前提で書きます。加えない場合は `./target/release/kaspad` と `./target/release/misaka` と読み替えてください。
 
-公開 fleet は `0e8ec984e` の x86_64 Linux release build を動かしています(kaspad の sha256 は `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149`)。
+公開 fleet は 2026-09-26 からこの commit の x86_64 Linux release build を動かしています(kaspad の sha256 は `07cba17406c486e0e31d4d46e107b2998cf70229125e804513f59099051c903b`)。公開時の `0e8ec984e` と consensus は同じですが、`0e8ec984e` で producer を動かすノードは自分だけ chain から外れることがあるので入れ替えてください(公開ノート §0)。
 
 > 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドします。
 

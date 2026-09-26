@@ -6,7 +6,7 @@ ADR only when you need the reasoning behind a rule. Each topic below links **onl
 currently govern it**. Superseded ones are named once, so you can recognise them when older
 documents cite them.
 
-"Now" means **testnet-12** at release commit `0e8ec984e` (see [Release status](../../README.md#release-status)).
+"Now" means **testnet-12** at release commit `0e8ec984e` and its node-only update `8a0810992` of 2026-09-26, same consensus (see [Release status](../../README.md#release-status)).
 testnet-12 arms every consensus rule this binary knows at DAA 0 (`palw_t12_arm_every_rule_from_genesis`
 in `consensus/core/src/config/params.rs`). The exceptions are one rule that arms at DAA 1,000 (bond
 maturity) and six that stay dormant because consensus refuses them or they cannot be built

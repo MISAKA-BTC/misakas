@@ -1,7 +1,8 @@
 # Joining Testnet-12 as a PALW producer
 
-**testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`, now
-`main`). The identity values below were checked against that release. Read
+**testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`). On
+2026-09-26 the public fleet moved to the node-only update `8a0810992` (same identity; see launch note
+§0) — **build `8a0810992`**. The identity values below were checked against that release. Read
 [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists what the release contains, the
 known issues (two CRITICAL ones are fixed by post-launch activation fences) and when a payment may be
 treated as final.
@@ -44,8 +45,16 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 1. Build
 
-Use the testnet-12 release commit `0e8ec984e` (current `main`). The public fleet runs the x86_64 Linux
-release build of that commit (kaspad sha256 `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149`).
+Use commit `8a0810992` — the node-only update of the launch commit `0e8ec984e` that the public fleet
+runs since 2026-09-26 (kaspad sha256 of the fleet's x86_64 Linux release build
+`07cba17406c486e0e31d4d46e107b2998cf70229125e804513f59099051c903b`). A node on `0e8ec984e` that
+runs a producer can fork itself off the network (launch note §0): replace it.
+
+```bash
+git checkout 8a0810992
+```
+
+The docs inside that checkout are the older copies; keep following this page on `main`.
 
 ```bash
 cargo build --release -p kaspad -p misaka-cli

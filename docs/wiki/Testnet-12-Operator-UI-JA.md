@@ -1,6 +1,6 @@
 # Testnet-12 Operator UI(ADR-0122)
 
-`misaka` は mining、Bond、work、reward、model、verifier、validator を 1 つの入口から扱います。対象は現行 `main`(`0e8ec984e`)と testnet-12 です。`misaka` はネットワークを指定しなければ testnet-12 を使いますが、このページの例では `--network testnet-12` を明示しています。
+`misaka` は mining、Bond、work、reward、model、verifier、validator を 1 つの入口から扱います。対象は testnet-12 と、その現行ビルド `8a0810992`(2026-09-26 の node 更新。公開時の `0e8ec984e` と consensus は同じ)です。`misaka` はネットワークを指定しなければ testnet-12 を使いますが、このページの例では `--network testnet-12` を明示しています。
 
 ## セットアップ
 

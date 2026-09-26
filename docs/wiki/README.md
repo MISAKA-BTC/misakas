@@ -13,5 +13,5 @@ git am /path/to/misakas/docs/wiki/wiki-t12-sync.patch   # or: cp /path/to/misaka
 git push origin master
 ```
 
-The patch applies on wiki commit `bd205c8`. Once the wiki carries these pages, this directory can
+The patch applies on wiki commit `bd205c8`. It predates the 2026-09-26 node update: `Home.md`, `Quick-Start.md`, `Operations-Notes.md`, `Testnet-12-Operator-UI-JA.md`, `Testnet-12-Verification-Participation-JA.md` and `PALW-Roles-and-Network-Scope-JA.md` here were updated afterwards to name `8a0810992`, so publish with the `cp` form (or apply the patch, then copy those pages). Once the wiki carries these pages, this directory can
 be deleted.

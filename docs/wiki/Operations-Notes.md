@@ -32,7 +32,16 @@ Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbe
 Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
 ```
 
-release バイナリ(`0e8ec984e`、x86_64 Linux、glibc 2.39 floor)の sha256:
+2026-09-26 からの release バイナリ(`8a0810992`、x86_64 Linux、glibc 2.39 floor)の sha256:
+
+| binary | sha256 |
+|---|---|
+| kaspad | `07cba17406c486e0e31d4d46e107b2998cf70229125e804513f59099051c903b` |
+| misaka | `bf847721df14b7646b284cc89de21fe998315b83141b618c0fc08ba178ffb901` |
+| palw-class | `0a3346be3616eb727a59f4c89e35036280a5eaa82720d6484a9e8106f89c23b1` |
+| misaka-dnsseeder | `de36ec0053247c24d61e0e1924792c52d1103454265f9a91f108078730f7dfe3`(公開 fleet の DNS seeder はこの更新で入れ替えていない) |
+
+公開時の release バイナリ(`0e8ec984e`、x86_64 Linux、glibc 2.39 floor)の sha256:
 
 | binary | sha256 |
 |---|---|

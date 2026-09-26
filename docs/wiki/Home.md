@@ -25,7 +25,7 @@
 | 項目 | 値 |
 |---|---|
 | network | `testnet-12`(R-core+) |
-| release commit | `0e8ec984e`(現行 `main`) |
+| release commit | `8a0810992`(2026-09-26 の node 更新。公開時の `0e8ec984e` と consensus は同じ。今からビルドするならこちら) |
 | consensus params fingerprint | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` |
 | fence schedule | `1000`(schedule id `93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd`) |
 | genesis | `a27f8f44fe4d91a5…`(全体は公開ノートに記載) |
