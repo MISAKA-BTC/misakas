@@ -790,6 +790,19 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     for line in crate::palw_drill::palw_drill_fence_lines_v1(&config) {
         warn!("{line}");
     }
+    // Node-side IBD checkpoints (node policy, not consensus): say which are in force, and whether the
+    // built-in list for this genesis is still the operator placeholder.
+    match config.ibd_checkpoints.iter().map(|cp| cp.to_string()).collect::<Vec<_>>() {
+        list if list.is_empty() => info!("IBD checkpoints: none"),
+        list => info!("IBD checkpoints ({}): {}", list.len(), list.join(", ")),
+    }
+    let unfilled = kaspa_consensus_core::config::ibd_checkpoint::builtin_ibd_checkpoints_unfilled(config.genesis.hash);
+    if unfilled > 0 {
+        warn!(
+            "the built-in IBD checkpoint list for this network still has {unfilled} __FILL_ME__ placeholder(s) \
+             (PALW_T12_IBD_CHECKPOINTS); a fresh node relies on --checkpoint=<daa>:<hash> alone"
+        );
+    }
     // **The node's protocol duties, decided once from the params and the identity alone** (user
     // decision 2026-09-25, `crate::palw_duties`): the panel's seat duties, the execution lane and — where
     // the registry is in force from genesis — the chain-registered-class arm run on every node that can
@@ -1179,6 +1192,23 @@ Do you confirm? (y/n)";
         cache_budget,
     ));
     let consensus_manager = Arc::new(ConsensusManager::new(consensus_factory));
+    // Node-side IBD checkpoints, the startup self-check: a checkpoint this node's OWN selected chain
+    // covers but does not pass through is a wrong entry (a merged or round block, a reorged-out block,
+    // a typo) or a node on the wrong chain. Caught here, on the synced fleet at the upgrade, before
+    // fresh nodes refuse and ban every honest peer over it. Logged, not fatal: a public node that
+    // refused to start would crash-loop the fleet over a node-policy list.
+    for cp in kaspa_consensus_core::config::ibd_checkpoint::own_chain_contradictions(
+        &config.ibd_checkpoints,
+        &*consensus_manager.consensus().unguarded_session_blocking(),
+    ) {
+        kaspa_core::error!(
+            "IBD checkpoint {} is contradicted by this node's OWN selected chain (it covers DAA {} but does not pass through \
+             that block there): the entry is wrong or this node is on the wrong chain. Peers on this chain are refused but \
+             not banned; fix --checkpoint / PALW_T12_IBD_CHECKPOINTS.",
+            cp,
+            cp.daa_score
+        );
+    }
     // ADR-0132: the node's per-class counters — the producer and the panel report into them, op 185
     // reads them.
     let palw_telemetry = Arc::new(crate::palw_economics::PalwNodeTelemetryV1::default());
