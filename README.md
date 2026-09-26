@@ -17,10 +17,10 @@ inference** (PALW) rather than by hashing alone.
 |---|---|
 | **Stage** | Public testnet. **Not** a mainnet release candidate yet — see [Mainnet readiness](docs/mainnet-readiness.md) |
 | **Network** | `testnet-12` (R-core+, ADR-0152 v3.1), launched 2026-09-25/26 JST |
-| **Release** | launch commit **`0e8ec984e`**, node update **`8a0810992`** deployed 2026-09-26 (node-only, same fingerprint) — **build `8a0810992`**; no tag yet |
-| **Consensus** | **Not frozen.** Two CRITICAL fixes arrive as post-launch activation fences ([launch note §2](docs/t12-launch-2026-09-25.md)) |
-| **Consensus params fingerprint** | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` |
-| **Genesis** | `a27f8f44fe4d91a5…` · schedule id `93da24cc60f7a77e…` |
+| **Release** | launch commit **`0e8ec984e`** → node update `8a0810992` (2026-09-26) → **post-launch fence release `c3dbaee3c`** (13 fences activate at **DAA 750**, 2026-09-27) — **build `c3dbaee3c` and run it before DAA 750**; no tag yet |
+| **Consensus** | **Not frozen.** The post-launch fixes activate as 13 fences at DAA 750 ([launch note §00](docs/t12-launch-2026-09-25.md)) |
+| **Consensus params fingerprint** | `dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9` (release `c3dbaee3c`; the launch build and `8a0810992` print `b8564b88…`) |
+| **Genesis** | `a27f8f44fe4d91a5…` · fence schedule `750, 1000` · schedule id `7c652212ab5337bd…` |
 | **Mainnet** | parameter set defined; **not launched, not endorsed** — do not run `--mainnet` expecting a live network |
 
 Your own node prints the fingerprint and the fence schedule on startup; those two lines, not this
@@ -181,22 +181,21 @@ Authoritative design & spec live under [`docs/`](docs/):
 
 ## Prebuilt binaries
 
-**testnet-12 has no GitHub release yet: build from `8a0810992`.** Since 2026-09-26 15:45 JST the
-public fleet runs the x86_64 Linux release build of that commit, a node-only update of the launch
-commit `0e8ec984e` (same consensus params fingerprint; glibc 2.39 floor, built with
-`contrib/t12-deploy-kit/build-release-local.sh 8a0810992`). It fixes a remote node crash, hardens
-pruning-proof IBD and fixes the stale coinbase id behind the 2026-09-26 split at DAA 198 — a node
-still on `0e8ec984e` that runs a producer can fork itself off the network, so replace it. What the
-update contains and how to tell whether your node forked are in
-[launch note §0](docs/t12-launch-2026-09-25.md). The sha256 of the fleet's build, to compare a build
-of your own against:
+**testnet-12 has no GitHub release yet: build from `c3dbaee3c`, and run it before DAA 750.** It is the
+post-launch fence release: 13 fences activate at DAA 750 (about 2026-09-27 07:00 JST; read your node's
+`virtualDaaScore`), so from DAA 750 on an older node is refused at the handshake and falls off the network.
+Upgrading keeps your datadir (same genesis and identity); a node that crossed DAA 750 on an older build
+must move its datadir aside and resync. It also fixes IBD (since DAA 316 a fresh node could not finish
+syncing). What it contains is in [launch note §00](docs/t12-launch-2026-09-25.md). The public fleet runs
+the x86_64 Linux release build of that commit (glibc 2.39 floor, `contrib/t12-deploy-kit/build-release-local.sh
+c3dbaee3c`); its sha256, to compare a build of your own against:
 
 | binary | sha256 |
 |---|---|
-| `kaspad` | `07cba17406c486e0e31d4d46e107b2998cf70229125e804513f59099051c903b` |
-| `misaka` | `bf847721df14b7646b284cc89de21fe998315b83141b618c0fc08ba178ffb901` |
+| `kaspad` | `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571` |
+| `misaka` | `00e75b4125844a9e06e758cae15486a1bc0373fb7c2a3bc3a06512ecaf6c4ff2` |
 
-The launch build's (`0e8ec984e`) sha256 are in the launch note's identity section.
+The earlier builds' sha256 (`0e8ec984e`, `8a0810992`) are in the launch note.
 
 Everything on the [Releases](https://github.com/MISAKA-BTC/misakas/releases) page is a testnet-11 or
 earlier build, and testnet-12 refuses it at the handshake. Whatever you run, the check is never the
@@ -417,7 +416,7 @@ cargo run --release --bin kaspad -- --testnet --netsuffix=12 --utxoindex --rpcli
 
 `--netsuffix=12` is required: bare `--testnet` still means `testnet-10`, which is stopped. The
 startup log must show the fingerprint in [Release status](#release-status) and
-`Consensus fence schedule: 1000 (schedule id 93da24cc…)`; the full walkthrough is
+`Consensus fence schedule: 750, 1000 (schedule id 7c652212…)`; the full walkthrough is
 [docs/testnet12-join-mining.md](docs/testnet12-join-mining.md).
 
 `=default` resolves to the network's standard loopback port, so you never have to memorize the

@@ -1,8 +1,9 @@
 # Joining Testnet-12 as a PALW producer
 
 **testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`). On
-2026-09-26 the public fleet moved to the node-only update `8a0810992` (same identity; see launch note
-§0) — **build `8a0810992`**. The identity values below were checked against that release. Read
+2026-09-26 the public fleet moved to the node-only update `8a0810992`, and on 2026-09-27 to the post-launch
+fence release `c3dbaee3c` (13 fences activate at DAA 750; launch note §00) — **build `c3dbaee3c` and run it
+before DAA 750**. The identity values below were checked against that release. Read
 [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists what the release contains, the
 known issues (two CRITICAL ones are fixed by post-launch activation fences) and when a payment may be
 treated as final.
@@ -45,13 +46,13 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 1. Build
 
-Use commit `8a0810992` — the node-only update of the launch commit `0e8ec984e` that the public fleet
-runs since 2026-09-26 (kaspad sha256 of the fleet's x86_64 Linux release build
-`07cba17406c486e0e31d4d46e107b2998cf70229125e804513f59099051c903b`). A node on `0e8ec984e` that
-runs a producer can fork itself off the network (launch note §0): replace it.
+Use commit `c3dbaee3c` — the post-launch fence release the public fleet runs from 2026-09-27 (kaspad sha256 of
+the fleet's x86_64 Linux release build `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571`). It must be running
+before DAA 750, where its 13 fences activate: from DAA 750 an older node is refused at the handshake. It
+also fixes IBD, which a fresh node could not finish between DAA 316 and this release.
 
 ```bash
-git checkout 8a0810992
+git checkout c3dbaee3c
 ```
 
 The docs inside that checkout are the older copies; keep following this page on `main`.
@@ -99,8 +100,8 @@ The node bootstraps from the built-in DNS seeders. `--addpeer` takes IP addresse
 Check the startup log for these lines:
 
 ```text
-Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f (network testnet-12)
-Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
+Consensus params fingerprint: dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9 (network testnet-12)
+Consensus fence schedule: 750, 1000 (schedule id 7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a

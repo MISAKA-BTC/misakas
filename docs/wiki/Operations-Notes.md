@@ -28,11 +28,20 @@ DNS seeder で peer が見つからない場合は `--addpeer=169.58.232.113:263
 起動ログの次の 2 行を確認します。
 
 ```text
-Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f (network testnet-12)
-Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
+Consensus params fingerprint: dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9 (network testnet-12)
+Consensus fence schedule: 750, 1000 (schedule id 7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397)
 ```
 
-2026-09-26 からの release バイナリ(`8a0810992`、x86_64 Linux、glibc 2.39 floor)の sha256:
+2026-09-27 からの release バイナリ(`c3dbaee3c`、x86_64 Linux、glibc 2.39 floor)の sha256:
+
+| binary | sha256 |
+|---|---|
+| kaspad | `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571` |
+| misaka | `00e75b4125844a9e06e758cae15486a1bc0373fb7c2a3bc3a06512ecaf6c4ff2` |
+| palw-class | `1e3db7b72a099cfd633b5df6052be7fd4202a98a2143649200effa88968780d4` |
+| misaka-dnsseeder | `fa76fa856191fd6f78887ad4d2cec104c4ce44610a2ad6133c787a52874e771e`(公開 fleet の DNS seeder は入れ替えていない) |
+
+2026-09-26 の node 更新(`8a0810992`、x86_64 Linux、glibc 2.39 floor)の sha256:
 
 | binary | sha256 |
 |---|---|

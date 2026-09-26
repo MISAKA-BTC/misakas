@@ -2,7 +2,7 @@
 
 このページは、testnet-12 に PALW の検証席(panel seat / verifier)として参加する手順です。検証席は、他の参加者が出した PALW claim を再実行し、その結果(receipt)をチェーンに提出します。検証席は block を採掘しませんが、claim を Final に進めるのに欠かせない役割です。
 
-対象は **testnet-12 と、その現行ビルド `8a0810992`**(2026-09-26 の node 更新。公開時の release commit `0e8ec984e` と consensus は同じ)です。network id や consensus fingerprint が違う node は参加できません。
+対象は **testnet-12 と、その現行ビルド `c3dbaee3c`**(2026-09-27 の post-launch fence release。13 本の fence が DAA 750 で有効になる)です。network id や consensus fingerprint が違う node は参加できません。
 
 ## testnet-11 からの主な変更
 
@@ -51,8 +51,8 @@ DNS seeder で peer が見つからない場合は、公開エントリポイン
 起動ログで fingerprint と fence schedule を確認します。
 
 ```text
-Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f (network testnet-12)
-Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
+Consensus params fingerprint: dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9 (network testnet-12)
+Consensus fence schedule: 750, 1000 (schedule id 7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397)
 ```
 
 ### 4. 検証席をセットアップする

@@ -1,6 +1,6 @@
 # Quick Start — testnet-12
 
-対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-26 の node 更新 `8a0810992` です(公開時の release commit `0e8ec984e` と consensus は同じ)。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
+対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の post-launch fence release `c3dbaee3c` です。13 本の fence が DAA 750 で有効になるので、DAA 750 より前に動かしてください。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
 
 ## 1. Build
 
@@ -9,7 +9,7 @@ git clone https://github.com/MISAKA-BTC/misakas.git
 cd misakas
 git switch main
 git pull --ff-only
-git checkout 8a0810992
+git checkout c3dbaee3c
 cargo build --release -p kaspad -p misaka-cli
 ```
 
@@ -45,8 +45,8 @@ kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default \
 起動ログに次の 2 行が出ることを確認します。
 
 ```text
-Consensus params fingerprint: b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f (network testnet-12)
-Consensus fence schedule: 1000 (schedule id 93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd)
+Consensus params fingerprint: dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9 (network testnet-12)
+Consensus fence schedule: 750, 1000 (schedule id 7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397)
 ```
 
 最初の testnet-12(genesis `a8cabac4…`)の datadir を使うと、起動時に genesis mismatch で拒否されます。その datadir は削除せずに別名へ退避し、新しい node には使わないでください。

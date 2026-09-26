@@ -25,9 +25,9 @@
 | 項目 | 値 |
 |---|---|
 | network | `testnet-12`(R-core+) |
-| release commit | `8a0810992`(2026-09-26 の node 更新。公開時の `0e8ec984e` と consensus は同じ。今からビルドするならこちら) |
-| consensus params fingerprint | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` |
-| fence schedule | `1000`(schedule id `93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd`) |
+| release commit | `c3dbaee3c`(2026-09-27 の post-launch fence release。13 本の fence が DAA 750 で有効になる。DAA 750 より前に動かしておくこと) |
+| consensus params fingerprint | `dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9`(`c3dbaee3c`。それ以前のビルドは `b8564b88…`) |
+| fence schedule | `750, 1000`(schedule id `7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397`) |
 | genesis | `a27f8f44fe4d91a5…`(全体は公開ノートに記載) |
 | premine txid | `5e0d5f1b37a71288…`(genesis の bond と fee float はこの txid の上にある) |
 | node の起動 | `kaspad --testnet --netsuffix=12` |
