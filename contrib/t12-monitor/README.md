@@ -118,7 +118,7 @@ posted collateral を MSK 単位で 1,000,000 MSK cap）でモデル化し、正
   それより前の external anchor は report と summary に数えるだけで alert にしない。
 
 **DEGRADED**（exit 2）: RPC 失敗、chain が sink まで読めない、bound claim の anchor が読んだ範囲外、anchor 規則の不一致、
-anchor producer が読めない、claim 一覧の取りこぼし（上記）、consensus params fp が出荷値（`1274ac12…`、DAA 750 の post-launch release）と違う。
+anchor producer が読めない、claim 一覧の取りこぼし（上記）、consensus params fp が出荷値（`dbbc9104…`、DAA 750 の post-launch release）と違う。
 alert は DEGRADED より優先する。
 
 ## post-launch fence を武装したら
@@ -136,7 +136,7 @@ python3 contrib/t12-monitor/panel_bias.py --fence-daa H --expect-fp <新 fp>
 人間向けの report を stdout に出し、最後の 1 行に machine 用の summary を出す。
 
 ```
-PANEL_BIAS {"status":"OK","time":...,"tip":70,"fp":"1274ac128a774828","claims":191,"bound":139,"tested":139,"comparable":135,
+PANEL_BIAS {"status":"OK","time":...,"tip":70,"fp":"dbbc9104a2ee754f","claims":191,"bound":139,"tested":139,"comparable":135,
             "anchors":{"g1":97,"g6":42},"windows":["all"],"ext_seat":0,"ext_seat_bonds":0,"ext_anchor":0,
             "ext_anchor_post_stopgap":0,"bias_cells":0,"min_cell_p":0.167,"min_omnibus_p":0.426,"model_notes":0,
             "unresolved":{},"alpha":0.0001,"alerts":[],"degraded":[]}

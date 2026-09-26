@@ -40,11 +40,11 @@ fn at_the_parent(mut p: Params) -> Params {
 
 /// `palw_offence_attribution_is_t12_only`'s `T12_BEFORE_THE_ATTRIBUTION` at `8270cf03` (testnet-12
 /// with the attribution fence taken away), before this change moved it.
-// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was 89337fb7…, e36f26a9…)
+// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was 06baa608…, ab173d08…)
 const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "06baa6089627e228545c434ac6229c25b0a31e60ed213c9ed97d17e5c940190f",
+    "46610e45d4ce2bf2dceaa91ed4b919b6f7639e467ec6b91b4875971f49d8fa9b",
     "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
-    "ab173d08858410d32ce70809c1755665430315a1ad4763f27beeb8b03ea2cd4c",
+    "c14beafab3abbda97f456eb2507f3a2357533941dae62d1fe16e4d4dae1757c5",
 );
 
 #[test]

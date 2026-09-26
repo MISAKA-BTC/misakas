@@ -4,19 +4,18 @@
 .113 の `/etc/misaka-mtp/chain.pin`（`cat` のみ）、IBD checkpoint の候補（explorer の node と ibm の node への `getBlock`）、
 公開 node の DAA。
 
-> **暫定値の注意（最重要）**: 13 本目の fence `palw_lane_accept_parents_first`（branch `rcore/f1-lane-accept-order`、
-> 未 merge）が同じ DAA 750 のリリースに入り、strict-win には浅い同点規則（branch `rcore/f1-strictwin-tie`、未 merge、§9）が
-> 付く。どちらも merge して 750 に武装し `scripts/t12-repin.sh --apply --shipping` をやり直すと、**下の fingerprint と
-> schedule id は変わる**（identity・genesis・premine は変わらない見込み — 将来の高さの fence は identity に入らない）。§2 の値は
-> すべて「13 本目の fence（と strict-win の同点規則）が入ったら再 pin する」値として扱い、**再 pin 前の値で release build・
-> fleet.env・告知をしない**。
+> **暫定値の注意（最重要）**: 13 本目の fence `palw_lane_accept_parents_first` は merge 済み（`e370a8f14`）で、§2 の値は
+> それを含む再 pin の値。ただし strict-win の浅い同点規則（branch `rcore/f1-strictwin-tie`、**未 merge**、§9）が入るか、
+> fallback で strict-win を 750 から外すと、`scripts/t12-repin.sh --apply --shipping` をもう一度やり直し、**fingerprint と
+> schedule id はまた変わる**（identity・genesis・premine は変わらない見込み — 将来の高さの fence は identity に入らない）。
+> §2 の値は「strict-win の扱いが決まったら再 pin する」値として扱い、**最後の再 pin 前の値で release build・fleet.env・
+> 告知をしない**。
 
 ## 1. このリリースに入っているもの
 
 | 種類 | 中身 | consensus か |
 |---|---|---|
-| post-launch fence ×12（DAA 750、`PALW_T12_POST_LAUNCH_FENCE_DAA`） | `palw_registry_resilience`・`palw_panel_seed_execution`・`palw_heartbeat_transparent_same_chain`・`palw_reorg_strict_economic_win`・`palw_bond_maturity_early`・`palw_model_sink_bound`・`palw_operator_anchor`・`palw_final_lock_full_collateral`・`palw_final_lock_life`・`palw_anchor_at_ceiling`・`palw_slashing_evidence_utxo_genuine`・`palw_pruning_proof_strict_economic_win` | **はい**（750 から） |
-| （予定）13 本目 | `palw_lane_accept_parents_first` — 別 agent が dormant で実装中、merge 後に 750 へ | はい（750 から） |
+| post-launch fence ×13（DAA 750、`PALW_T12_POST_LAUNCH_FENCE_DAA`） | `palw_registry_resilience`・`palw_panel_seed_execution`・`palw_heartbeat_transparent_same_chain`・`palw_reorg_strict_economic_win`・`palw_bond_maturity_early`・`palw_model_sink_bound`・`palw_operator_anchor`・`palw_final_lock_full_collateral`・`palw_final_lock_life`・`palw_anchor_at_ceiling`・`palw_slashing_evidence_utxo_genuine`・`palw_pruning_proof_strict_economic_win`・`palw_lane_accept_parents_first`（13 本目、`e370a8f14` で merge: fence 以降、merging chain block が同点の round lane を parents-first で受理し、round block は EVM payload を持てない） | **はい**（750 から） |
 | （予定）strict-win の浅い同点規則 | `rcore/f1-strictwin-tie`: 深さ 2 DAA tick 以下の同点は GHOSTDAG 順。間に合わなければ `palw_reorg_strict_economic_win` を 750 で武装しない（§9） | はい |
 | IBD checkpoint | `PALW_T12_IBD_CHECKPOINTS` = DAA 100 / 200 / 300 の chain block（§7） | いいえ（node policy） |
 | IBD 順序の修正 | `426c32c05`（int-4 では `a067f490d`）: round lane の block を parents-first で渡す。DAA 316 以降、新規 node の IBD と、lane をまたいで IBD に落ちた node が `missing parents` で止まる不具合 | いいえ（node only） |
@@ -26,15 +25,17 @@
 でなければ DAA 316 以降の lane を越えられない。fleet の更新は **必ず `upgrade`（in-place、appdir 維持）で行い、`switch` は使わない**
 （`switch` は regenesis: appdir を退避して genesis から同期し直すので、この修正の有無に関係なく危険で、round 署名記録も一緒に動く）。
 
-## 2. identity（旧 → 新）— 13 本目の fence が入ったら再 pin する暫定値
+## 2. identity（旧 → 新）— strict-win の扱いが決まったら再 pin する暫定値
 
-`scripts/t12-repin.sh --apply --shipping`（`a1b1c4491`）が build から計算した値。確認の dry run: 253 ok・drift なし・未登録 literal なし。
+`scripts/t12-repin.sh --apply --shipping` が build から計算した値（12 本での再 pin `a1b1c4491` の後、13 本目を入れて再 pin）。
+確認の dry run: 256 ok・drift なし・未登録 literal なし、pin test 全 pass。
 
 | 項目 | launch release（`0e8ec984e`、現在の fleet） | このリリース（**暫定**） |
 |---|---|---|
-| `consensus_params_id`（fingerprint、`EXPECT_FP`） | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` | `1274ac128a77482840d8785bf86487d7632cbfa6751140d1091d78cf2d4657f7` ※再 pin で変わる |
-| `consensus_schedule_id` | `93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd` | `ae8cc4b7615fbbb7fa3cbf809bb8b867740afe98731c2f9c3bd8ab768095a300` ※再 pin で変わる |
+| `consensus_params_id`（fingerprint、`EXPECT_FP`） | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` | `dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9` ※strict-win 次第で再 pin |
+| `consensus_schedule_id` | `93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd` | `7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397` ※strict-win 次第で再 pin |
 | fence schedule（起動ログ） | `1000` | `750, 1000` |
+| （参考）12 本だけの再 pin（`a1b1c4491`） | — | params `1274ac12…`、schedule `ae8cc4b7…`（使わない） |
 | `consensus_identity_id` | `5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5` | 同じ（変わらない） |
 | genesis（`EXPECT_GENESIS`） | `a27f8f44…a8ca1f23` | 同じ |
 | premine txid（`PREMINE_TXID`） | `5e0d5f1b…e55e2669` | 同じ |
@@ -151,7 +152,7 @@ fence は 12 本の中に無く、strict-win 自身も他の fence を要求し�
 
 ## 10. 既知の未解決・注意
 
-- 13 本目の fence（`palw_lane_accept_parents_first`）と strict-win の同点規則（`rcore/f1-strictwin-tie`）が未 merge — §2 の値は暫定。
+- strict-win の同点規則（`rcore/f1-strictwin-tie`）が未 merge — §2 の値は暫定（13 本目は merge・再 pin 済み）。
   strict-win を 750 で武装しない fallback にする場合は、`palw_t12_arm_post_launch_fences_v1` がその entry を飛ばすようにし、
   `post_launch_fence_arming_tests`・lane の pin file・drill の「一覧の全 fence が 750」の assert を合わせて直す（§9: 他の fence は
   dormant にしなくてよい）。

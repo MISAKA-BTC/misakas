@@ -85,11 +85,11 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// HIGH): armed from genesis on testnet-12 and hashed Some-only into all three ids;
 /// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
 /// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
-// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was 937c60e8…, f19448fb…)
+// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was c4b06529…, c9fa230b…)
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "c4b06529313ec8c10c9310203bf0ebf3f48b82cedfdd39e1c5be42f334389936",
+    "5e6607f296fd4a8e6fe4305a7b01b5dd7751b6a11ed8fed907366cc516c4c9ea",
     "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
-    "c9fa230b7ed2ba0fd196797b4cd4bd235adab259723260a5000b71722457040b",
+    "048e9ed2b619f1fc1215645fe54722a173cd5f1d85540d17925145b005a2fafa",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -104,11 +104,11 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 ///
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
 /// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
-// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was dc032413…, 47911357…)
+// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was 122345b7…, acff74b1…)
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "122345b7d20286bb12bc91dc1bbf8a0c6b68ff8d90af2dd770c5718e05c37ed5",
+    "f518ba661c5bb3220e97eb86d54feb4d7e290481d922ace0c3a880509e79c647",
     "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
-    "acff74b1dfcdc749b9c43f599d24219ba981024d3626aa099b9d685198850a56",
+    "83cd5f3694dc470cbe18f027ffc21fe0d1403ad80d26f1b5eee247825b348ca1",
 );
 
 fn shipped(name: &str) -> Params {
