@@ -1035,6 +1035,11 @@ upgrade_host() { # $1 = seconds between nodes
 
 upgrade_rollback_host() { # $1 = seconds between nodes — puts back the unit/drop-in each node had before `upgrade`
     local gap=$1 spec saved cur old restored=0 since got i
+    # A rolled-back node runs the PREVIOUS release again, so every check below (the fingerprint read after
+    # the restart, t12check_expect, upgrade_wait_synced) must expect that release's fingerprint: for a fence
+    # release that is UPGRADE_FROM_FP, not the new EXPECT_FP (the 750-release review, B-kit). `local` shadows
+    # the global for every function this one calls (bash scoping), so nothing else changes.
+    local EXPECT_FP=${UPGRADE_FROM_FP:-$EXPECT_FP}
     [ -d "$STATE_DIR/upgrade-$REV" ] || die "no $STATE_DIR/upgrade-$REV — nothing was upgraded with REV=$REV here (REV must be the UPGRADE's rev, the one fleet.env named when \`upgrade\` ran)"
     if [ "$DRY_RUN" = 1 ]; then say "DRY_RUN=1: nothing is stopped, installed, started or written"; fi
     for spec in "${NODES[@]}"; do   # read-only: every file we would put back runs
@@ -1068,7 +1073,7 @@ upgrade_rollback_host() { # $1 = seconds between nodes — puts back the unit/dr
             sleep 3
         done
         if [ "$got" != "$EXPECT_FP" ] || ! systemctl is-active --quiet "$N_UNIT"; then
-            warn "b$N_ID did not come back on EXPECT_FP after the rollback (fingerprint ${got:-<none>}, $(systemctl show -p ActiveState,Result --value "$N_UNIT" | tr '\n' ' ')) — journal:"
+            warn "b$N_ID did not come back on the previous release's fingerprint ($EXPECT_FP) after the rollback (fingerprint ${got:-<none>}, $(systemctl show -p ActiveState,Result --value "$N_UNIT" | tr '\n' ' ')) — journal:"
             journalctl -u "$N_UNIT" --since "@$since" -n 30 --no-pager -o cat >&2 || true
         else
             say "  b$N_ID fingerprint OK, main process $(main_exe_of "$N_UNIT")"
