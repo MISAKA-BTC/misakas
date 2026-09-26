@@ -1175,11 +1175,25 @@ pub struct Params {
     /// alone. The fork-choice attack probes on this branch measure exactly that: with no `Final`
     /// or immature claim on either side both candidates read `{frontier 0, safe 0, live 0}` and
     /// `decide_deep_reorg_v2` Allows, so a heartbeat / junk-attempt private branch double-spends
-    /// inside the finality depth by grinding a higher-hash tip. Past the fence a deep reorg is
-    /// allowed only on a STRICT economic win (`palw_deep_reorg_strict_economic_v1`); an
-    /// all-economic tie keeps the incumbent — the confirmed history — which is strictly more
-    /// conservative, reads no clock and touches no live-weight rule (so it is independent of the
-    /// two unconfirmed synthesis choices), and it fires only on actual reorgs, so forward progress
+    /// inside the finality depth by grinding a higher-hash tip. Past the fence a reorg is allowed
+    /// on a STRICT economic win and refused on a strict economic loss, and an all-economic tie keeps
+    /// the incumbent — the confirmed history — **unless the reorg is SHALLOW** (lane
+    /// rcore/f1-strictwin-tie): a tie whose incumbent side (the incumbent's selected chain above its
+    /// common chain ancestor with the challenger) spans at most
+    /// `palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1` = 2 DAA ticks is decided by GHOSTDAG's
+    /// own order, blue work then hash (`palw_fork_authority_v2::palw_reorg_strict_economic_win_v1`;
+    /// the processor reads the depth and the order, `palw_reorg_shallow_ghostdag_win_v1`). Keeping
+    /// the incumbent on EVERY tie was a rule about arrival order: the gate judges every non-extension
+    /// sink move, one-block sibling switches included, so two honest nodes racing a slot kept the
+    /// siblings they saw first and their virtual chains diverged over one DAG (measured through the
+    /// pipeline, rcore/cap-weight 3aa4abec4: split at the first exchange in 8/8 runs). The price,
+    /// stated: a tying branch heavier on blue work can reverse a payment with at most two ticks (~4
+    /// min) of confirmation however releases are chained (a shallow tie never LOWERS the sink's DAA,
+    /// so the window cannot be walked back — without that two chained releases reversed three ticks,
+    /// measured); deeper, the tie keeps the
+    /// incumbent. The rule is keyed as before (read at the INCUMBENT's DAA), reads no clock and touches no
+    /// live-weight rule (so it is independent of the two unconfirmed synthesis choices), and it fires
+    /// only on actual reorgs, so forward progress
     /// on GHOSTDAG blue work is byte-identical below and above it. A **bare fence with no companion
     /// value**, the [`Self::palw_frontier_provenance`] rule for its reason.
     pub palw_reorg_strict_economic_win: Option<ForkActivation>,
@@ -17676,8 +17690,9 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
         name: "palw_heartbeat_transparent_same_chain",
         set: |params, at| params.palw_heartbeat_transparent_same_chain = at,
     },
-    // Fork choice (HIGH): a deep reorg needs a strict economic win, a tie keeps the incumbent: a bare
-    // height.
+    // Fork choice (HIGH): a deep reorg needs a strict economic win, a tie keeps the incumbent — unless
+    // it is at most two DAA ticks deep on the incumbent's side, where GHOSTDAG's order decides it so
+    // honest slot races converge (rcore/f1-strictwin-tie): a bare height.
     PalwPostLaunchFenceV1 { name: "palw_reorg_strict_economic_win", set: |params, at| params.palw_reorg_strict_economic_win = at },
     // Lane maturity (HIGH): ADR-0065 D1 before 1,000 for non-genesis bonds: a bare height, below
     // `palw_bond_maturity`'s 1,000 (never at it).

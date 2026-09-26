@@ -630,7 +630,10 @@ pub struct VirtualStateProcessor {
 
     /// lane: rcore/f1-forkchoice-attacks — the deep-reorg strict-economic-win fence, `None` on
     /// every shipped preset. Past it `dns_reorg_outcome` allows a deep reorg only on a strict
-    /// economic win, keeping the incumbent on an all-economic tie rather than the candidate hash.
+    /// economic win, keeping the incumbent on an all-economic tie rather than the candidate hash —
+    /// except a SHALLOW tie (lane rcore/f1-strictwin-tie: at most `PALW_REORG_SHALLOW_TIE_DAA_V1` DAA
+    /// ticks on the incumbent's side), which GHOSTDAG's own order decides
+    /// ([`Self::palw_reorg_shallow_ghostdag_win_v1`]), so honest slot races converge.
     pub(super) palw_reorg_strict_economic_win: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// **ADR-0018 §E's payout bounds** (mainnet audit 2026-09-06 — H-2/H-3/M-1), mode folded in.
@@ -14529,9 +14532,27 @@ impl VirtualStateProcessor {
                     // — a candidate's own score is attacker-chosen — exactly as the confirmed-anchor
                     // TTL and `palw_frontier_provenance_outcome` read it. Below the fence this is
                     // byte-identical to `decide_deep_reorg_v2`.
+                    //
+                    // **lane: rcore/f1-strictwin-tie — past the fence a SHALLOW tie is GHOSTDAG's.**
+                    // This gate judges every non-extension sink move, a one-block sibling switch
+                    // included, and "a tie keeps the incumbent" is a rule about arrival order: two
+                    // honest nodes that saw sibling tips in different orders each kept their own, the
+                    // refused sibling left the virtual's parents, so neither merged the other's tip and
+                    // the split outlived every later block that tied (measured through the pipeline:
+                    // `strict_win_honest_race`, and rcore/cap-weight 3aa4abec4 before it). So the
+                    // fence's rule is `palw_reorg_strict_economic_win_v1`: a strict economic win or
+                    // loss exactly as before, and an all-economic tie decided by GHOSTDAG's own order
+                    // (blue work, then hash — the order this search pops in) when the incumbent's chain
+                    // above the fork point spans at most `PALW_REORG_SHALLOW_TIE_DAA_V1` DAA ticks, the
+                    // incumbent kept deeper. The depth walk runs only on a tie, keyed as the fence is
+                    // (the incumbent's DAA), and answers `false` on any read it cannot make.
                     let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
                     let decision = if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
-                        kaspa_consensus_core::palw_fork_authority_v2::palw_deep_reorg_strict_economic_v1(&incumbent, &challenger)
+                        kaspa_consensus_core::palw_fork_authority_v2::palw_reorg_strict_economic_win_v1(
+                            &incumbent,
+                            &challenger,
+                            || self.palw_reorg_shallow_ghostdag_win_v1(candidate, prev_sink, incumbent_daa),
+                        )
                     } else {
                         kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger)
                     };
@@ -14736,6 +14757,82 @@ impl VirtualStateProcessor {
             );
         }
         outcome
+    }
+
+    /// **lane: rcore/f1-strictwin-tie — may GHOSTDAG decide this all-economic tie past
+    /// `palw_reorg_strict_economic_win`?** `true` exactly when (1) `candidate` is heavier than
+    /// `prev_sink` in GHOSTDAG's own order — blue work, then hash, the [`SortableBlock`] order the sink
+    /// search pops in — (2) `candidate` does not LOWER the sink's DAA (`daa(candidate) ≥
+    /// incumbent_daa`), and (3) the reorg is SHALLOW: the incumbent's selected chain above its common
+    /// chain ancestor with `candidate` spans at most [`PALW_REORG_SHALLOW_TIE_DAA_V1`] DAA ticks
+    /// (`incumbent_daa − daa(ancestor) ≤ D`). The question `palw_reorg_strict_economic_win_v1` asks,
+    /// and only on an all-economic tie.
+    ///
+    /// **Why a depth, and why on the incumbent's side.** A rule that keeps the incumbent on a tie is a
+    /// rule about arrival order, so two honest nodes racing a slot keep different sinks; a rule that
+    /// hands every tie to GHOSTDAG hands it to whoever piles more blue work in private, which is the
+    /// heartbeat double spend the fence closed. Honest races are resolved within a propagation delay —
+    /// well inside one slot, two ticks with the lead cap's burst — while a double spend must reverse a
+    /// payment someone has watched confirm. The depth is read on the INCUMBENT's own chain (this node's
+    /// history since the fork), which a challenger cannot shorten: blocks it gets merged into that
+    /// chain only lengthen it. So a shallow tie is decided the way every honest node decides it, and a
+    /// payment deeper than `D` ticks under this node's sink keeps the fence's protection whatever blue
+    /// work is piled against it in one release. The depth alone does not pin the sink's DAA — a denser
+    /// tying branch that still holds the payment could move the sink one tick DOWN first, and a second
+    /// release reach under the lowered window (measured: three ticks, and a branch weighted without
+    /// ticks would not stop there) — which is what (2) is for: a tie never lowers the sink's DAA, so no
+    /// chain of releases reaches deeper than `D` ticks under the highest sink a tie produced
+    /// (`a_shallow_tie_never_lowers_the_sink_so_chained_releases_stop_at_two`).
+    ///
+    /// Conservative on every read it cannot make — an unreadable header or GHOSTDAG row, a reachability
+    /// miss, a chain that runs past [`PALW_REORG_SHALLOW_TIE_WALK_V1`] blocks before leaving the depth —
+    /// is `false` (the tie keeps the incumbent, the strict answer). Reads only this node's committed
+    /// stores, so every node holding the same DAG answers the same.
+    ///
+    /// **Shared with the capacity lane.** rcore/cap-weight (3aa4abec4) carries this exact body as
+    /// `palw_capacity_shallow_ghostdag_win_v1`, over its own copies of the two constants, for F-W — which
+    /// requires this fence at or below it, so past F-W this function already answers. rcore/cap-int
+    /// keeps this one and drops that copy (see `palw_fork_authority_v2::palw_reorg_strict_economic_win_v1`).
+    ///
+    /// [`PALW_REORG_SHALLOW_TIE_DAA_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1
+    /// [`PALW_REORG_SHALLOW_TIE_WALK_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_WALK_V1
+    pub(crate) fn palw_reorg_shallow_ghostdag_win_v1(&self, candidate: BlockHash, prev_sink: BlockHash, incumbent_daa: u64) -> bool {
+        use kaspa_consensus_core::palw_fork_authority_v2::{PALW_REORG_SHALLOW_TIE_DAA_V1, PALW_REORG_SHALLOW_TIE_WALK_V1};
+        let heavier = match (self.ghostdag_store.get_blue_work(candidate), self.ghostdag_store.get_blue_work(prev_sink)) {
+            (Ok(c), Ok(p)) => SortableBlock::new(candidate, c) > SortableBlock::new(prev_sink, p),
+            _ => false,
+        };
+        if !heavier {
+            return false;
+        }
+        // **A shallow tie never LOWERS the sink's DAA** (the ratchet `strict_win_honest_race` measured:
+        // two chained releases reversed three ticks without this). The window is read at the incumbent's
+        // DAA, so a tie-flip onto a tying branch with FEWER ticks would move the window itself down and a
+        // second release could reach under it; keeping the incumbent there pins the window to the highest
+        // DAA a tie ever moved the sink to. Siblings on one parent set share one DAA, so an honest slot
+        // race moves the sink sideways, never back.
+        let Ok(candidate_daa) = self.headers_store.get_daa_score(candidate) else { return false };
+        if candidate_daa < incumbent_daa {
+            return false;
+        }
+        let floor = incumbent_daa.saturating_sub(PALW_REORG_SHALLOW_TIE_DAA_V1);
+        let mut block = prev_sink;
+        for _ in 0..PALW_REORG_SHALLOW_TIE_WALK_V1 {
+            let Ok(daa) = self.headers_store.get_daa_score(block) else { return false };
+            if daa < floor {
+                return false;
+            }
+            match self.reachability_service.try_is_chain_ancestor_of(block, candidate) {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(_) => return false,
+            }
+            match self.ghostdag_store.get_selected_parent(block) {
+                Ok(parent) if parent != block && parent != kaspa_consensus_core::blockhash::ORIGIN => block = parent,
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will
