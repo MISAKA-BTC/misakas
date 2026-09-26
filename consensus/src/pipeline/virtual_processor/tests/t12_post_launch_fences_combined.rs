@@ -5,7 +5,8 @@
 //! Each lane drilled its own fence across a crossing; none drilled them together, and the release
 //! arms them together (the int-4 phase-1 audit: "no combined crossing exists"). Fences that are each
 //! fine alone can freeze the clock or refuse the chain only in combination — the operator anchor
-//! over the execution-commitment seed over seat maturity over the same-chain heartbeat rule — so this
+//! over the execution-commitment seed over seat maturity over the same-chain heartbeat rule, V02's
+//! two lock fences, the at-ceiling binder, the slash side-effect and the IBD commit rule — so this
 //! runs testnet-12 (with harness cards) with every listed fence set through its own entry's `set` to
 //! the same height `H`, exactly as the release will set them at 500 (every mirror follows; lane A
 //! trusts every genesis bond, testnet-12's armed value), and:
@@ -28,7 +29,7 @@ use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::Block;
-use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1};
+use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1, Params};
 use kaspa_consensus_core::config::{Config, ConfigBuilder};
 use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
@@ -66,9 +67,26 @@ fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine)
     }
     let operators = params.palw_operator_anchor.as_ref().expect("lane A is listed").operators.len();
     assert_eq!(operators, 8, "lane A trusts every genesis bond, testnet-12's armed value");
+    // Phase 2b's five are live from `H` and not below it too — V02's two lock fences with the fold's
+    // mirrors, bind-deadlock, MSK-26A's slash side-effect and pptake2's IBD commit — so the chain below
+    // crosses all twelve at once.
+    for (name, live_at) in [
+        ("palw_final_lock_full_collateral", Params::palw_final_lock_full_collateral_active_at as fn(&Params, u64) -> bool),
+        ("palw_final_lock_life", Params::palw_final_lock_life_active_at),
+        ("palw_anchor_at_ceiling", Params::palw_anchor_at_ceiling_active_at),
+        ("palw_slashing_evidence_utxo_genuine", Params::palw_slashing_evidence_utxo_genuine_at),
+    ] {
+        assert!(live_at(&params, H) && !live_at(&params, H - 1), "{name} is live from {H}, not below");
+    }
+    assert!(params.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(H) && !f.is_active(H - 1)));
     let config = ConfigBuilder::new(params).skip_proof_of_work().build();
     let PalwConsensusMode::ConsensusV2(armed_bundle) = &config.params.palw_consensus_mode else { unreachable!("ConsensusV2") };
     assert_eq!(armed_bundle.panel, bundle.panel, "the fences are Params fields: the panel shape does not move");
+    assert_eq!(
+        (armed_bundle.state.final_lock_full_collateral_from_daa(), armed_bundle.state.final_lock_life_from_daa()),
+        (Some(H), Some(H)),
+        "V02's two lock fences are mirrored into the bundle the fold reads"
+    );
     (config, bundle, premine, floats)
 }
 

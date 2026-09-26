@@ -1028,6 +1028,16 @@ mod tests {
         );
         assert!(moved.palw_model_sink_bound_active_at(40) && !moved.palw_model_sink_bound_active_at(39));
         assert!(moved.palw_operator_anchor_active_at(40) && !moved.palw_operator_anchor_active_at(39));
+        assert!(moved.palw_final_lock_full_collateral_active_at(40) && !moved.palw_final_lock_full_collateral_active_at(39));
+        assert!(moved.palw_final_lock_life_active_at(40) && !moved.palw_final_lock_life_active_at(39));
+        assert_eq!(
+            (bundle.state.final_lock_full_collateral_from_daa(), bundle.state.final_lock_life_from_daa()),
+            (Some(40), Some(40)),
+            "V02's two mirrors follow"
+        );
+        assert!(moved.palw_anchor_at_ceiling_active_at(40) && !moved.palw_anchor_at_ceiling_active_at(39));
+        assert!(moved.palw_slashing_evidence_utxo_genuine_at(40) && !moved.palw_slashing_evidence_utxo_genuine_at(39));
+        assert!(moved.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(40) && !f.is_active(39)));
         assert_eq!(
             moved.palw_operator_anchor.as_ref().map(|rule| rule.operators.len()),
             Some(8),

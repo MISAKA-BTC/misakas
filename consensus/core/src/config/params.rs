@@ -17479,7 +17479,9 @@ impl std::fmt::Debug for PalwPostLaunchFenceV1 {
 
 /// **The fences testnet-12's post-launch release arms at one post-launch height** (DAA 500, the
 /// user's decision of 2026-09-26) — the ONE list of them. Each lane that puts a fix behind the
-/// release's fence adds its entry here and nowhere else (V02's lock budget joins as it merges):
+/// release's fence adds its entry here and nowhere else (int-4 phase 2b: twelve entries — F1's three,
+/// fork choice, maturity, sink, lane A, V02's two lock fences, bind-deadlock, MSK-26A's slash and
+/// pptake2's IBD commit):
 ///
 /// * the drill's `--palw-drill-fence-at=<DAA>` moves exactly these to a low height on a salted drill
 ///   chain, so a drill crosses the release's flag day with the shipping binary
@@ -17540,6 +17542,41 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
             });
             params.palw_operator_anchor = rule;
         },
+    },
+    // Lane V02 option (a) (HIGH): a resolved claim's lock is carried by the whole collateral with the
+    // 4-floor accuser reserve: the field and the V2 bundle's mirror the fold reads.
+    PalwPostLaunchFenceV1 {
+        name: "palw_final_lock_full_collateral",
+        set: |params, at| {
+            params.palw_final_lock_full_collateral = at;
+            params.sync_palw_final_lock_full_collateral();
+        },
+    },
+    // Lane V02 lock life (HIGH): a resolved Valid seat's lock lives F + 1,000 and stops being slashable
+    // when it stops being committed: the field and the V2 bundle's mirror the fold reads. Independent
+    // of the entry above; both compose at one height (each is its own mirror on the state params).
+    PalwPostLaunchFenceV1 {
+        name: "palw_final_lock_life",
+        set: |params, at| {
+            params.palw_final_lock_life = at;
+            params.sync_palw_final_lock_life();
+        },
+    },
+    // Lane bind-deadlock (HIGH): an operator's own attempt at its bond's exposure ceiling still anchors
+    // the claims due at it: a bare height, at or above lane A's (`palw_operator_anchor`) — its binder
+    // reads lane A's anchor rule past that fence, and the release sets both to one height.
+    PalwPostLaunchFenceV1 { name: "palw_anchor_at_ceiling", set: |params, at| params.palw_anchor_at_ceiling = at },
+    // MSK-26A (audit Critical, hf-slash): the UTXO side-effect of a DNS slash obeys the genuineness
+    // rule the registry path does: a bare height.
+    PalwPostLaunchFenceV1 {
+        name: "palw_slashing_evidence_utxo_genuine",
+        set: |params, at| params.palw_slashing_evidence_utxo_genuine = at,
+    },
+    // hf-pptake2 (audit Critical): a pruning-proof / IBD staging commit needs a strict economic win,
+    // read at the incumbent's DAA: a bare height.
+    PalwPostLaunchFenceV1 {
+        name: "palw_pruning_proof_strict_economic_win",
+        set: |params, at| params.palw_pruning_proof_strict_economic_win = at,
     },
 ];
 
@@ -27473,6 +27510,8 @@ mod post_launch_fence_arming_tests {
         }
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else { panic!("V2") };
         assert_eq!(bundle.state.registry_resilience_from_daa(), Some(500), "registry resilience's mirror");
+        assert_eq!(bundle.state.final_lock_full_collateral_from_daa(), Some(500), "V02 option (a)'s mirror");
+        assert_eq!(bundle.state.final_lock_life_from_daa(), Some(500), "V02 lock life's mirror");
         assert!(armed.palw_panel_seed_execution_active_at(500) && !armed.palw_panel_seed_execution_active_at(499));
         assert!(armed.palw_operator_anchor_active_at(500) && !armed.palw_operator_anchor_active_at(499));
         assert!(armed.palw_model_sink_bound_active_at(500) && !armed.palw_model_sink_bound_active_at(499));
@@ -27483,6 +27522,13 @@ mod post_launch_fence_arming_tests {
             (None, Some(PALW_T12_BOND_MATURITY_WINDOW_DAA)),
             "D1's window from 500, not below"
         );
+        // Phase 2b's five: V02's two lock fences (with their bundle mirrors), bind-deadlock, MSK-26A's
+        // slash side-effect and pptake2's IBD commit.
+        assert!(armed.palw_final_lock_full_collateral_active_at(500) && !armed.palw_final_lock_full_collateral_active_at(499));
+        assert!(armed.palw_final_lock_life_active_at(500) && !armed.palw_final_lock_life_active_at(499));
+        assert!(armed.palw_anchor_at_ceiling_active_at(500) && !armed.palw_anchor_at_ceiling_active_at(499));
+        assert!(armed.palw_slashing_evidence_utxo_genuine_at(500) && !armed.palw_slashing_evidence_utxo_genuine_at(499));
+        assert!(armed.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(500) && !f.is_active(499)));
         let genesis_bonds: Vec<_> = bundle
             .genesis_objects
             .iter()
