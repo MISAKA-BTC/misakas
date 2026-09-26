@@ -4766,8 +4766,9 @@ impl PalwPanelService {
             // the money moved.
             warn!(
                 "[{PALW_PANEL}] --palw-bond-collateral {collateral} is below the {sized} sompi that a claim of class \
-                 {class_id} needs on this chain for its whole life (exposure is released at Final, not at bind, so \
-                 the ceiling has to hold every claim in flight at once); this bond will register and its producer \
+                 {class_id} needs on this chain for its whole life (a claim's weight is released at Final and its escrow \
+                 at licence, never at bind, so the ceiling has to hold every claim in flight at once); this bond will \
+                 register and its producer \
                  may then hold forever with 'the bond's exposure ceiling leaves no room for another claim'"
             );
         } else if self.config.bond_collateral.is_none() {

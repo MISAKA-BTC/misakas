@@ -24,7 +24,9 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
   fee floats 41–48); a command line that named `<sentinel>:<index>` must name the new txid.
 * **Collateral backs the whole fraud gain.** Every claim reserves its escrow plus its weight against
   the bond, and at the current subsidy that is about 3,200.85 MSK per claim (§5). One bond holds only
-  as many claims at once as its collateral covers.
+  as many claims at once as its collateral covers. The escrow part is released when the claim is
+  **licensed** (its receipt quorum lands); the small weight part stays until the claim is `Final`
+  (measured on the release build, 2026-09-26).
 * **`--palw-register-bond` works on testnet-12 again.** testnet-12 requires an operator-possession
   signature from DAA 0. Before `5a559459` the node's registration carried one signature, so every
   carrier was mined and its bond was dropped. It now carries both signatures.
@@ -114,7 +116,7 @@ What each role needs, from §5:
 
 | role | bond collateral | also |
 |---|---|---|
-| panel seat on the floor only (`misaka verifier`) | **at least 130,000 MSK** (the seat floor); a seat must also hold the floor claim's `Valid` lock free (about 112.56 MSK) for each panel it sits on | a fee float at the key's address (≥ 0.1 MSK) |
+| panel seat on the floor only (`misaka verifier`) | **at least 130,000 MSK** (the seat floor); a seat must also hold the floor claim's `Valid` lock free (about **640.17 MSK**, measured on the release build: 15 locks = 9,602.54 MSK) for each panel it signs `Valid` on — and each lock stays live about `window_court` (3,000 DAA) past that claim's `Final` | a fee float at the key's address (≥ 0.1 MSK) |
 | floor producer | **at least 13,000 MSK** (the producer floor), and **about 6,402 MSK for each floor claim held at once**: 13,000 MSK holds 2, 100,000 MSK holds 15 | the fee float |
 | `Qwen2.5 graph-v7@8192` producer | **about 6,452 MSK for each 8k claim held at once** | the artifact, and memory (§6) |
 | `Qwen2.5 graph-v7@2097152` producer | **about 125,888 MSK for each claim held at once** | about 11.6 GiB per attempt, and a week of CPU per attempt on a fleet host |
@@ -157,7 +159,10 @@ room               = collateral x 500 permille - everything the bond already bac
 
 A bond therefore holds `collateral × 0.5 ÷ (escrow + weight)` claims at once. For the floor that is
 one claim per ≈ 6,401.69 MSK. When the room is full the producer holds with `the bond's exposure
-ceiling leaves no room for another claim` until one of its claims reaches `Final` or is voided.
+ceiling leaves no room for another claim` until room frees: a claim's **escrow** part is released
+when the claim is **licensed** (its receipt quorum lands, about 20 DAA after acceptance on the
+lifecycle drill), and its **weight** part when it reaches `Final` or is voided. `getPalwClaims`
+reports the weight as `reservedSompi` and the whole current reservation as `committedSompi`.
 Registration and each declared class also reserve small fixed amounts on the bond.
 
 **Pass `--palw-bond-collateral` explicitly (in sompi).** Without it the node locks its own derived
@@ -193,8 +198,10 @@ kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default \
 * Funding must be a mature, non-coinbase output that holds the collateral plus the carrier fee and
   change. Registration spends one input.
 * Add `--palw-producer-class=<id>` to size the default for a model class instead of the floor.
-* The node prints the bond outpoint and stops. Keep that outpoint. `misaka bond status --key-file …`
-  should now show it `REGISTERED`.
+* The node prints the bond outpoint and then **keeps running** as a node (it does not exit; the flag is a
+  no-op once the key holds a bond). Keep that outpoint; restart without `--palw-register-bond` and with
+  `--palw-producer-bond=<outpoint>` to mine with it. `misaka bond status --key-file …` should now show it
+  `REGISTERED`.
 
 ### Declare what the bond judges
 
@@ -424,6 +431,18 @@ forfeit weight + escrow (≈ 3,200.85 MSK per floor claim), the same amount a pr
 This happens whether the producer withheld on purpose or its node was simply down.
 `BindTimeout` and `NoCapablePanel` are not charged. `--force` is for emergencies only and can abandon
 these duties.
+
+### Retiring a bond
+
+`misaka bond retire` asks the chain to move the bond to `Retiring`; the collateral moves only after the
+withdrawal delay (12,900 DAA on testnet-12) and after every vesting row the bond is payee of has
+matured (`misaka wallet utxo list` shows the B-3 lock). **A seat cannot even start retiring while it
+holds a live `Valid` lock**: each panel it signed `Valid` on locks about 640.17 MSK until about
+`window_court` (3,000 DAA) after that claim's `Final`, and the chain drops a retirement while any lock
+is live — after its carrier is mined and its fee paid. `misaka bond status --bond <txid>:<index>`
+lists the live locks and the DAA the last one releases at, and `bond retire` refuses (before paying)
+until then. After a retirement folds, `bond retire` prints the `Retiring` DAA and the earliest DAA the
+collateral can move.
 
 ## 10. Epoch budgets
 
