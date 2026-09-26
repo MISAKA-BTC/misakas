@@ -237,6 +237,10 @@ pub mod palw_economic_safety_v1;
 pub mod palw_economic_locus_v1;
 pub mod palw_economic_payout_v1;
 pub mod palw_economics_ledger_v1;
+/// ADR-0160 lane escrow (testnet-12, post-launch): past `Params::palw_capacity_escrow_at_licence` the
+/// bond holds `m_c` in a claim's escrow slot instead of `E`, and an unconvicted void keeps the claim's
+/// commitment for `h_obl`. Consensus-inert while the fence is `None` (every shipped preset).
+pub mod palw_escrow_funding_v2;
 /// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
 /// permits) as pure functions; consensus-inert until the lane that reads them is built.
 pub mod palw_execution_lane_v1;

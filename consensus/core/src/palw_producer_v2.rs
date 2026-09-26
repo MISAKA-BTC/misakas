@@ -474,8 +474,9 @@ pub fn palw_producer_facts_v4(
                 } else {
                     1
                 })
-                // Option A: the escrow term, outside the attempts factor, exactly as the ceiling adds it.
-                .saturating_add(state_params.claim_escrow_reservation_v1(daa_score, claim_escrow)),
+                // Option A: the escrow term, outside the attempts factor, exactly as the ceiling adds it
+                // (ADR-0160: `m_c` past `palw_capacity_escrow_at_licence`).
+                .saturating_add(state_params.claim_escrow_term_v2(daa_score, claim_escrow, &class_id)),
             committed: if state_params.rcore_plus_active_at(daa_score) {
                 crate::palw_state_v2::palw_bond_committed_raw_v1(state, state_params, key, daa_score, raw_depth)
             } else {

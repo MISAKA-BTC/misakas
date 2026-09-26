@@ -1362,6 +1362,24 @@ pub struct PalwStateParamsV2 {
     /// setter, borsh-skipped for the same reason, 0 where `palw_rcore_plus` is not armed. Unread.
     #[borsh(skip)]
     withdrawal_delay_daa: u64,
+    /// **ADR-0160 lane escrow (F-E): `Params::palw_capacity_escrow_at_licence`'s height**, mirrored here
+    /// by `Params::sync_palw_capacity_escrow` because the escrow slot is read by the ledger's load-time
+    /// re-derivation and by every view that holds no transition extras. Keyed on a claim's
+    /// `accepted_daa` ([`Self::capacity_escrow_active_at`]). `None` on every shipped preset. Skipped by
+    /// borsh for `short_challenge_window_from_daa`'s reason: the fence is what
+    /// `Params::consensus_params_id` hashes (Some-only), and `validate_palw_v2` refuses a bundle whose
+    /// copy disagrees with it.
+    #[borsh(skip)]
+    capacity_escrow_from_daa: Option<u64>,
+    /// **ADR-0160 lane escrow: the credit schedule's STAND-IN** (`ρ`, `q_credit` by `from_daa`), sorted.
+    /// The schedule is lane liab's value (`palw_capacity_aggregate_liability`, F-L); on `rcore/cap-escrow`
+    /// alone there is no F-L, so this is written only by fixtures
+    /// ([`Self::with_capacity_escrow_credits_v1`]) and read only by
+    /// [`Self::capacity_escrow_credit_at_v1`] — the ONE line `rcore/cap-int` rewires to liab's mirror
+    /// (ADR-0160 §7.2). Empty on every ruleset: no credit, so past F-E the escrow term is `E`. Skipped
+    /// by borsh; never hashed.
+    #[borsh(skip)]
+    capacity_escrow_credits: Vec<crate::palw_escrow_funding_v2::PalwEscrowCreditStepV1>,
     /// **C7's list** (`Params::palw_rcore_conservative_classes`, new in the S spec): the classes the
     /// fold holds to Final beside the window rule (SR-1 condition 4, the 2M hold). Mirrored by the
     /// same setter, borsh-skipped for the same reason; empty where `palw_rcore_plus` is not armed.
@@ -1568,6 +1586,8 @@ impl PalwStateParamsV2 {
             escrow_backed_exposure_from_daa: None,
             rcore_plus_from_daa: None,
             withdrawal_delay_daa: 0,
+            capacity_escrow_from_daa: None,
+            capacity_escrow_credits: Vec::new(),
             rcore_conservative_classes: Vec::new(),
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
@@ -2097,6 +2117,45 @@ impl PalwStateParamsV2 {
         self.withdrawal_delay_daa
     }
 
+    /// **ADR-0160 lane escrow (F-E): the mirror's setter**, written by `Params::sync_palw_capacity_escrow`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_capacity_escrow_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.capacity_escrow_from_daa = from_daa;
+        self
+    }
+
+    /// ADR-0160 lane escrow: `Params::palw_capacity_escrow_at_licence`'s height, if armed (the mirror).
+    pub fn capacity_escrow_from_daa(&self) -> Option<u64> {
+        self.capacity_escrow_from_daa
+    }
+
+    /// **ADR-0160 lane escrow: is a claim accepted at `accepted_daa` under F-E?** Keyed on the CLAIM's
+    /// acceptance (the ADR-0145 precedent), never on the current block's: a claim accepted below the
+    /// height keeps `w + E` for its whole life, and a re-derivation at any height returns the same
+    /// number. `false` on every shipped preset.
+    pub fn capacity_escrow_active_at(&self, accepted_daa: u64) -> bool {
+        self.capacity_escrow_from_daa.is_some_and(|from| accepted_daa >= from)
+    }
+
+    /// **ADR-0160 §7.2's one cross-lane line: the credit step in force at a claim's `accepted_daa`.**
+    /// On `rcore/cap-escrow` alone it reads the stand-in schedule (empty on every ruleset: no credit).
+    /// `rcore/cap-int` replaces the body with lane liab's accessor over F-L's mirror —
+    /// `self.capacity_step_at(accepted_daa).map(|step| PalwEscrowCreditV1 { rho: step.rho,
+    /// q_credit_permille: step.q_credit_permille })` — and nothing else in this lane moves.
+    pub fn capacity_escrow_credit_at_v1(&self, accepted_daa: u64) -> Option<crate::palw_escrow_funding_v2::PalwEscrowCreditV1> {
+        crate::palw_escrow_funding_v2::palw_escrow_credit_in_force_v1(&self.capacity_escrow_credits, accepted_daa)
+    }
+
+    /// **ADR-0160 lane escrow: the credit schedule's stand-in, for fixtures** (see the field). Sorted by
+    /// `from_daa`, one step per height (the last given wins).
+    pub fn with_capacity_escrow_credits_v1(mut self, mut steps: Vec<crate::palw_escrow_funding_v2::PalwEscrowCreditStepV1>) -> Self {
+        steps.reverse();
+        steps.sort_by_key(|step| step.from_daa);
+        steps.dedup_by_key(|step| step.from_daa);
+        self.capacity_escrow_credits = steps;
+        self
+    }
+
     /// ADR-0152 R-core+: C7's list (the mirror; empty where the fence is not armed).
     pub fn rcore_conservative_classes(&self) -> &[Hash64] {
         &self.rcore_conservative_classes
@@ -2150,15 +2209,32 @@ impl PalwStateParamsV2 {
         self.escrow_backed_exposure_from_daa.is_some()
     }
 
-    /// **The escrow term a claim accepted at `accepted_daa` holds on its producer's bond** — its
-    /// `escrowed_reward` past the height, nothing before it. The ONE reading the ledger's reserve and
-    /// release, its re-derivation at load, the admission ceiling and the producer's headroom share,
-    /// so the gate can never admit a claim the ledger cannot record, or release what it never held.
+    /// **Option A's escrow term: the claim's `escrowed_reward` past the height, nothing before it** — the
+    /// escrow GAIN a claim reaches for. Below `palw_capacity_escrow_at_licence` it is also what the bond
+    /// holds, and the ledger reads it through [`Self::claim_escrow_term_v2`]; past that fence the bond
+    /// holds `m_c` instead and this remains only the gain (the Eq cap's `G_eq`).
     pub fn claim_escrow_reservation_v1(&self, accepted_daa: u64, escrowed_reward: u64) -> u128 {
         match self.escrow_backed_exposure_from_daa {
             Some(from) if accepted_daa >= from => escrowed_reward as u128,
             _ => 0,
         }
+    }
+
+    /// **The escrow slot a claim of `class_id` accepted at `accepted_daa` holds on its producer's
+    /// bond** — option A's term ([`Self::claim_escrow_reservation_v1`]) below
+    /// `palw_capacity_escrow_at_licence`, and past it (keyed on `accepted_daa`) `m_c`
+    /// ([`crate::palw_escrow_funding_v2::palw_escrow_term_v2`], ADR-0160 E-1). The ONE reading the
+    /// ledger's reserve and release, its re-derivation at load, SR-1's licence release, the seat duty at
+    /// bind, the forfeit, the admission ceiling and the producer's headroom share, so the gate can never
+    /// admit a claim the ledger cannot record, or release what it never held.
+    ///
+    /// `class_id` is the signature's one addition (ADR-0160 §7.2 left it to the lane): C7 keeps
+    /// `m = E` (X-I5), and every caller holds the claim's class — the record or the attempt.
+    pub fn claim_escrow_term_v2(&self, accepted_daa: u64, escrowed_reward: u64, class_id: &Hash64) -> u128 {
+        if self.capacity_escrow_active_at(accepted_daa) {
+            return crate::palw_escrow_funding_v2::palw_escrow_term_v2(self, accepted_daa, escrowed_reward, class_id);
+        }
+        self.claim_escrow_reservation_v1(accepted_daa, escrowed_reward)
     }
 
     /// The per-session court budget (see the field's doc).
@@ -2728,20 +2804,26 @@ pub fn palw_bond_registration_floor_v1(min_collateral_sompi: u64, _audit_2026_09
 /// |---|---|
 /// | `Provisional`, `PanelBound`, `ReceiptLicensed`, `DefaultDisputed` | `full − esc` if `claim.rcore.escrow_released`, else `full` |
 /// | `Voided`, a free-prompt `BindTimeout` on its abandon hold at `now_daa` | `full` |
+/// | `Voided`, an attempt on its ADR-0160 E-4 obligation hold at `now_daa` | as the live row |
 /// | `Final`, every other `Voided` | `0` |
 ///
 /// `full` is [`palw_claim_bond_reservation_v1`] (`w + esc + rr`, kept: it is also the forfeit) and
-/// `esc` is [`PalwStateParamsV2::claim_escrow_reservation_v1`]. `DefaultDisputed` stays in the
-/// live row until M3 retires that phase past the fence (DA-2). Below the fence `escrow_released` is
-/// never set, so this is today's ledger term on every path: exactly what `reserve_for_claim` adds,
-/// what `release_for_claim` / `release_abandon_hold` give back, and what the load re-derivation
-/// sums. `None` on arithmetic overflow, as the reservation it wraps.
+/// `esc` is [`PalwStateParamsV2::claim_escrow_term_v2`] — option A's `E` below
+/// `palw_capacity_escrow_at_licence`, `m_c` past it (keyed on the claim's `accepted_daa`).
+/// `DefaultDisputed` stays in the live row until M3 retires that phase past the fence (DA-2). Below
+/// the fence `escrow_released` is never set, so this is today's ledger term on every path: exactly
+/// what `reserve_for_claim` adds, what `release_for_claim` / `release_abandon_hold` give back, and
+/// what the load re-derivation sums. A held `Voided` claim commits what it committed live
+/// ([`palw_claim_held_commitment_v1`]): the void moves nothing on the bond until the hold's sweep.
+/// `None` on arithmetic overflow, as the reservation it wraps.
 pub fn palw_claim_commitment_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, now_daa: u64) -> Option<u128> {
     match &claim.phase {
         PalwClaimPhaseV2::Final { .. } => Some(0),
         PalwClaimPhaseV2::Voided { .. } => {
-            if palw_claim_is_on_abandon_hold_v2(claim, params, now_daa) {
-                palw_claim_bond_reservation_v1(params, claim)
+            if palw_claim_is_on_abandon_hold_v2(claim, params, now_daa)
+                || crate::palw_escrow_funding_v2::palw_claim_obligation_hold_v1(claim, params, now_daa)
+            {
+                palw_claim_held_commitment_v1(params, claim)
             } else {
                 Some(0)
             }
@@ -2749,14 +2831,20 @@ pub fn palw_claim_commitment_v1(params: &PalwStateParamsV2, claim: &PalwClaimSta
         PalwClaimPhaseV2::Provisional
         | PalwClaimPhaseV2::PanelBound { .. }
         | PalwClaimPhaseV2::ReceiptLicensed { .. }
-        | PalwClaimPhaseV2::DefaultDisputed { .. } => {
-            let full = palw_claim_bond_reservation_v1(params, claim)?;
-            if claim.rcore.escrow_released {
-                full.checked_sub(params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
-            } else {
-                Some(full)
-            }
-        }
+        | PalwClaimPhaseV2::DefaultDisputed { .. } => palw_claim_held_commitment_v1(params, claim),
+    }
+}
+
+/// **What a claim commits while it is live — and, on a hold, after its void**: `full`, less the escrow
+/// slot once a licence released it (SR-1). A pure function of the record and the params. A free-prompt
+/// abandon hold is a `BindTimeout` (never licensed, never released), so there it is `full`, as it
+/// always was; an E-4 hold keeps exactly what the void found on the bond.
+pub fn palw_claim_held_commitment_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<u128> {
+    let full = palw_claim_bond_reservation_v1(params, claim)?;
+    if claim.rcore.escrow_released {
+        full.checked_sub(params.claim_escrow_term_v2(claim.accepted_daa, claim.escrowed_reward, &claim.class_id))
+    } else {
+        Some(full)
     }
 }
 
@@ -3689,7 +3777,10 @@ pub fn palw_rcore_deadline_v1(
 /// **DL-1's terminal DA rows (M3, DA-5):** none while any session is open on the claim, and the
 /// retirement re-armed no earlier than one DAA after the last close. The one terminal deadline a
 /// record's claim can own is its retirement: the abandon hold is a free-prompt `BindTimeout`'s, and
-/// such a claim never bound the panel an accusation needs.
+/// such a claim never bound the panel an accusation needs. ADR-0160 E-4's obligation hold can sit on a
+/// claim with a record (an S0′ void), but the void closed every session at `voided_daa`
+/// (`da_release_all_v1`, past `palw_rcore_plus`, which F-E requires) and a voided claim opens none
+/// (`WrongPhase`), so the hold's `voided_daa + h_obl` is never moved here.
 fn palw_da_terminal_deadline_v1(at: Option<u64>, da: Option<&crate::palw_da_rcore_v1::PalwDaClaimV1>) -> Option<u64> {
     let Some(record) = da else { return at };
     if record.open_sessions() > 0 {
@@ -4647,13 +4738,15 @@ struct PalwRcoreBackedSetV1 {
     g_res: u128,
 }
 
-/// **What a claim holds on its bond**: its weight (`reserved`), option A's escrow term past its
-/// height, and a free-prompt claim's priced receipt rights. ONE expression for every site that
-/// reserves, releases or re-derives it, so the ledger cannot disagree with itself about a claim.
+/// **What a claim holds on its bond**: its weight (`reserved`), its escrow slot (option A's `E` past
+/// its height; ADR-0160's `m_c` past `palw_capacity_escrow_at_licence`,
+/// [`PalwStateParamsV2::claim_escrow_term_v2`]), and a free-prompt claim's priced receipt rights. ONE
+/// expression for every site that reserves, releases or re-derives it, so the ledger cannot disagree
+/// with itself about a claim.
 pub fn palw_claim_bond_reservation_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<u128> {
     claim
         .reserved
-        .checked_add(params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
+        .checked_add(params.claim_escrow_term_v2(claim.accepted_daa, claim.escrowed_reward, &claim.class_id))
         .and_then(|held| held.checked_add(claim.rights_reserved))
 }
 
@@ -11013,8 +11106,11 @@ impl PalwChainStateV2 {
                 // than a transaction fee. Recomputed here from the record and the current point,
                 // never from a stored flag, so the accumulator and the record cannot disagree.
                 PalwClaimPhaseV2::Voided { .. } => {
+                    // ADR-0160 E-4: an attempt claim accepted past `palw_capacity_escrow_at_licence`
+                    // holds its commitment for `h_obl` past an unconvicted void, from the record alike.
                     if let Some(point) = &self.last_point
-                        && palw_claim_is_on_abandon_hold_v2(claim, params, point.daa_score)
+                        && (palw_claim_is_on_abandon_hold_v2(claim, params, point.daa_score)
+                            || crate::palw_escrow_funding_v2::palw_claim_obligation_hold_v1(claim, params, point.daa_score))
                     {
                         let entry = exposure.entry(claim.bond).or_insert(0);
                         // ADR-0152 SR-1/SR-3: the claim's commitment at the last point, which on its
@@ -11348,7 +11444,14 @@ impl PalwChainStateV2 {
         let holdable = if params.claim_retirement_daa > 0 {
             self.claims.values().filter(|c| c.phase.is_terminal()).count()
         } else {
-            self.claims.values().filter(|c| abandon_hold_may_hold_a_deadline(c)).count()
+            // ADR-0160 E-4: an attempt's obligation hold owns a terminal deadline too.
+            self.claims
+                .values()
+                .filter(|c| {
+                    abandon_hold_may_hold_a_deadline(c)
+                        || crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(c, params).is_some()
+                })
+                .count()
         };
         let low = expected_deadlines.len();
         let high = low + holdable;
@@ -11796,6 +11899,13 @@ fn terminal_deadline_at_v1(
         if last_daa.is_none_or(|daa| daa <= release_at) {
             return Ok(Some(release_at));
         }
+    }
+    // ADR-0160 E-4: an attempt claim voided past `palw_capacity_escrow_at_licence` owns its obligation
+    // hold's release first, then its retirement (`validate_palw_v2` keeps the retirement past the hold).
+    if let Some(release_at) = crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(claim, params)
+        && last_daa.is_none_or(|daa| daa <= release_at)
+    {
+        return Ok(Some(release_at));
     }
     if params.claim_retirement_daa == 0 {
         return Ok(None);
@@ -12669,8 +12779,10 @@ impl PalwFoldReadV1<'_> {
     }
 
     /// **§3.6 `G_eq` (D6, S-4): what a FRESH attempt of `class_id` would put at stake at this block**
-    /// — `E + w + R`: the escrow reservation at this block's subsidy (the admission ceiling's own
-    /// expression), the weight reservation `apply_attempt` would write for it (at the pwu the producer's
+    /// — `E + w + R`: option A's escrow term at this block's subsidy (the GAIN,
+    /// [`PalwStateParamsV2::claim_escrow_reservation_v1`] — past `palw_capacity_escrow_at_licence` the
+    /// admission ceiling reads `m_c` instead, and Eq keeps its cap on the gain, ADR-0160 AG-2), the
+    /// weight reservation `apply_attempt` would write for it (at the pwu the producer's
     /// facts derive: `palw_attempt_derived_pwu_v1` past the canonical-work height, the class's rule
     /// before it; `× attempts` past the 2026-09-23 audit), and that claim's realizable rights. A
     /// `class_id` that is not a registered class prices the base class. A class the chain cannot price
@@ -13118,6 +13230,15 @@ impl PalwFoldReadV1<'_> {
     /// ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`]), the rule below the fence, and
     /// the cap before the registry governs count it as its whole claims.
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: PalwGatedClaimV1) -> Result<(), PalwStateV2Error> {
+        // ADR-0160 X-I5: past `palw_capacity_escrow_at_licence` no attempt of a class C7 by its window
+        // but absent from C7's list — its escrow term would be priced as attributable.
+        crate::palw_escrow_funding_v2::palw_escrow_class_gate_v1(
+            self.params,
+            self.state,
+            class_id,
+            now_daa,
+            incoming == PalwGatedClaimV1::Attempt,
+        )?;
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
         let whole = incoming.whole_claims(self.params.fp_quanta_per_canonical_job as u64);
         if let Some(state) = self.class_lifecycle_refusal(class_id) {
@@ -21002,9 +21123,13 @@ impl<'a> TransitionBuilder<'a> {
             PalwVoidReasonV2::BindTimeout | PalwVoidReasonV2::NoCapablePanel => false,
         };
         // A free-prompt claim's receipt rights (#5) are its fraud gain as the escrow is an attempt's,
-        // so they go on the same reasons.
+        // so they go on the same reasons. The escrow slot is the ledger's (ADR-0160 E-5): past
+        // `palw_capacity_escrow_at_licence` it is `m_c`, so an S0′ charge is the stage commitment and
+        // the withheld `E` itself is burned by the void (never minted), not debited from the bond.
         let escrow = if escrow_forfeit {
-            self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward).saturating_add(claim.rights_reserved)
+            self.params
+                .claim_escrow_term_v2(claim.accepted_daa, claim.escrowed_reward, &claim.class_id)
+                .saturating_add(claim.rights_reserved)
         } else {
             0
         };
@@ -21554,7 +21679,14 @@ impl<'a> TransitionBuilder<'a> {
         // Immature weight is released either way and immediately: a voided claim contributes no
         // live weight the instant it is voided, which is W5, and the hold is about admission
         // headroom alone.
-        if palw_claim_is_on_abandon_hold_v2(&voided, self.params, voided_daa) {
+        //
+        // **ADR-0160 E-4: the obligation survives the void.** An attempt claim accepted past
+        // `palw_capacity_escrow_at_licence` and voided for a reason nobody was convicted under
+        // (`palw_void_reason_keeps_obligation_v1`) takes the same road: its commitment stays on the
+        // bond for `h_obl = window_receipt` past the void, so a withheld bind, an abandoned panel or a
+        // starved licence never frees the bond's capacity at once (the withdrawal principle, T1–T8).
+        let obligation_release = crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(&voided, self.params);
+        if palw_claim_is_on_abandon_hold_v2(&voided, self.params, voided_daa) || obligation_release.is_some() {
             self.state.bounded_immature = self
                 .state
                 .bounded_immature
@@ -21565,8 +21697,10 @@ impl<'a> TransitionBuilder<'a> {
             // the hold when it fires. Deriving it from the record (`voided_daa + hold`) is what
             // keeps the index rebuildable, which `assert_deadline_consistency` checks.
             self.disarm_deadline(id);
-            let release_at =
-                voided_daa.checked_add(self.params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
+            let release_at = match obligation_release {
+                Some(release_at) => release_at,
+                None => voided_daa.checked_add(self.params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?,
+            };
             self.arm_deadline(release_at, id);
             return Ok(());
         }
@@ -21735,7 +21869,10 @@ impl<'a> TransitionBuilder<'a> {
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
         // The whole reservation, as `release_for_claim` — a held free-prompt claim's receipt rights
         // come back with its weight (its escrow term is zero), and one expression keeps the sites one.
-        let held = palw_claim_bond_reservation_v1(self.params, claim).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        // ADR-0160 E-4: an attempt's obligation hold gives back what the void found held — the same
+        // expression the ledger's re-derivation sums (`palw_claim_held_commitment_v1`; `full` on a
+        // free-prompt `BindTimeout`, which no licence ever released).
+        let held = palw_claim_held_commitment_v1(self.params, claim).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         let next = current.checked_sub(held).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
         self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
         Ok(())
@@ -26344,6 +26481,20 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 // The hold is over; the record now owes its retirement entry, which is strictly
                 // later (`with_claim_retirement_daa` enforces the ordering) so this loop still
                 // terminates. A no-op on a network that does not retire.
+                builder.arm_retirement(claim_id, &claim)?;
+            }
+            // **ADR-0160 E-4: an attempt's obligation hold expires here**, guarded on WHICH deadline
+            // fired exactly as the free-prompt arm above is (the retirement entry follows it and must
+            // not re-enter): the terminal release is the same one, then the retirement is armed
+            // (`validate_palw_v2` keeps `claim_retirement_daa` past `h_obl`).
+            PalwClaimPhaseV2::Voided { .. }
+                if crate::palw_escrow_funding_v2::palw_claim_obligation_release_at_v1(&claim, builder.params) == Some(deadline) =>
+            {
+                debug_assert!(
+                    !crate::palw_escrow_funding_v2::palw_claim_obligation_hold_v1(&claim, builder.params, ctx.daa_score),
+                    "the obligation hold's own deadline fired while the record still says it is held"
+                );
+                builder.release_abandon_hold(&claim)?;
                 builder.arm_retirement(claim_id, &claim)?;
             }
             PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } if builder.params.claim_retirement_daa > 0 => {

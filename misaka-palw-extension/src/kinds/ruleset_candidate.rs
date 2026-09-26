@@ -117,6 +117,8 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
         // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency).
         "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
+        // ADR-0160 lane escrow (post-launch): a bare height.
+        "palw_capacity_escrow_at_licence" => params.palw_capacity_escrow_at_licence = Some(at),
         "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
         "palw_model_registry" => params.palw_model_registry = Some(at),
         "palw_economic_payout" => {

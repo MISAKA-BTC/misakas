@@ -1028,6 +1028,9 @@ mod tests {
         );
         assert!(moved.palw_model_sink_bound_active_at(40) && !moved.palw_model_sink_bound_active_at(39));
         assert!(moved.palw_operator_anchor_active_at(40) && !moved.palw_operator_anchor_active_at(39));
+        // ADR-0160 lane escrow: live for claims accepted from 40, and the fold's mirror follows.
+        assert!(moved.palw_capacity_escrow_active_at(40) && !moved.palw_capacity_escrow_active_at(39));
+        assert_eq!(bundle.state.capacity_escrow_from_daa(), Some(40), "the escrow lane's mirror follows");
         assert_eq!(
             moved.palw_operator_anchor.as_ref().map(|rule| rule.operators.len()),
             Some(8),

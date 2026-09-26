@@ -253,6 +253,7 @@ CAP = "consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs"
 SEED = "consensus/core/tests/palw_panel_seed_execution_is_t12_only.rs"
 RESIL = "consensus/core/tests/palw_registry_resilience_is_t12_only.rs"
 HBSC = "consensus/core/tests/palw_hb_transparency_same_chain_fence.rs"
+CAPESC = "consensus/core/tests/palw_capacity_escrow_at_licence_is_t12_only.rs"
 SEATMAT = "consensus/core/tests/palw_bond_maturity_early_is_t12_only.rs"
 OPANCHOR = "consensus/core/tests/palw_operator_anchor_is_t12_only.rs"
 REORG = "consensus/core/tests/reorg_strict_win_fence.rs"
@@ -442,6 +443,9 @@ def registry() -> list[Pin]:
     # F1 heartbeat transparency (the same-chain fence, post-launch, dormant): testnet-12 as shipped.
     pins += _triple("hbsc.T12_RELEASED", "t12", HBSC, "const T12_RELEASED: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{HBSC}::the_same_chain_fence_is_dormant_on_every_preset_and_t12_is_the_release",))
+    # ADR-0160 lane escrow (F-E, the capacity release's escrow funding point, dormant): testnet-12 as shipped.
+    pins += _triple("capesc.T12_RELEASE", "t12", CAPESC, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{CAPESC}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # Lane maturity (ADR-0065 D1 brought forward to the post-launch fence, dormant): testnet-12 as shipped,
     # which the dormant fence must not move.
     pins += _triple("seatmat.T12_RELEASE", "t12", SEATMAT, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",

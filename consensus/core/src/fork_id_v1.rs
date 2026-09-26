@@ -732,6 +732,9 @@ mod tests {
             // fence above; `validate_palw_v2` wants that one at or below it, which the probe does not
             // run — it asks only the hashers and the schedule.
             "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
+            // ADR-0160 lane escrow (post-launch): a bare height; its prerequisites are `validate_palw_v2`'s,
+            // which the probe does not run.
+            "palw_capacity_escrow_at_licence" => params.palw_capacity_escrow_at_licence = Some(at),
             "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
             "palw_panel_economy" => params.palw_panel_economy = Some(at),
             "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),

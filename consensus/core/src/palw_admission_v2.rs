@@ -664,11 +664,13 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     // bundle carries — priced from the SAME expression the fold stores as `escrowed_reward` (this
     // block's subsidy, the carve resolved at this block's DAA) and read through the same reservation
     // the ledger reserves, so the gate admits exactly what the ledger can record. Outside H-1's
-    // `x attempts`: the escrow is one claim's cash, not a per-draw quantity.
+    // `x attempts`: the escrow is one claim's cash, not a per-draw quantity. Past ADR-0160's
+    // `palw_capacity_escrow_at_licence` the slot is `m_c` (the claim is accepted at this block's DAA).
     let claim_reservation = claim_exposure
-        .checked_add(state_params.claim_escrow_reservation_v1(
+        .checked_add(state_params.claim_escrow_term_v2(
             ctx.daa_score,
             crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve),
+            &attempt.class_id,
         ))
         .ok_or(PalwAdmissionV2Error::Overflow("claim reservation"))?;
     let ceiling = if rcore {

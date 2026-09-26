@@ -2892,6 +2892,29 @@ pub struct Params {
     /// [`Self::palw_heartbeat_transparent_same_chain_fence`] only.
     pub palw_heartbeat_transparent_same_chain: Option<ForkActivation>,
     // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+    // ---- ADR-0160 lane escrow (post-launch, rcore/cap-escrow) ----
+    /// **ADR-0160 F-E — the escrow is the reward itself: `E` leaves the bond.** `None` on every shipped
+    /// preset, testnet-12 included, so no fingerprint, identity, schedule or fork id moves until a
+    /// post-launch flag day arms it at a height.
+    ///
+    /// Past this fence — keyed on a claim's own `accepted_daa`, so a claim accepted below it keeps
+    /// `w + E` for its whole life — the escrow slot of a claim's bond commitment holds `m_c`
+    /// (`crate::palw_escrow_funding_v2::palw_monetary_prelicense_risk_v1`: `E` for C7 or without a
+    /// credit, `max(m*(q_credit), ⌈E/ρ⌉)` otherwise) instead of the withheld reward `E`, which stays
+    /// withheld to `Final` plus the vesting row's maturity and is burned on a void or a conviction; and
+    /// an attempt claim voided for a reason nobody is convicted under keeps its commitment for
+    /// `window_receipt` past the void (E-4, the withdrawal principle). Mirrored into the V2 bundle by
+    /// [`Self::sync_palw_capacity_escrow`].
+    ///
+    /// `validate_palw_v2` refuses it off ConsensusV2; without `palw_audit_2026_09_23` (the escrow slot
+    /// itself), `palw_rcore_plus` (SR-1's ledger) and `palw_offence_attribution` (a void closes its
+    /// courts) at or below it; with the bundle's mirror unsynced; and where a retiring network would
+    /// retire a claim before its obligation hold ends. ADR-0160 also requires F-W
+    /// (`palw_capacity_weight_cap`) and F-L (`palw_capacity_aggregate_liability`) at or below it — an
+    /// `m` below `E` is safe only with J-1's cap and the aggregate freeze; those fields land with their
+    /// lanes and the two refusals are wired on `rcore/cap-int`. Hashed Some-only in every writer.
+    pub palw_capacity_escrow_at_licence: Option<ForkActivation>,
+    // ---- end ADR-0160 lane escrow ----
     /// **ADR-0107: a class's cadence share grows only on work that reached `Final`.**
     ///
     /// The growth rule (ADR-0054, `derive_class_share_growth_v1`) reads the closed epoch's
@@ -3986,6 +4009,8 @@ impl Params {
             ));
         }
         // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // ADR-0160 lane escrow (post-launch): over option A's slot, R-core+'s ledger and F2's void, mirrored.
+        self.validate_palw_capacity_escrow_v1()?;
         // **ADR-0107 reads the closed epoch's finals off the claim records, so it must not be
         // armable where those records are gone before the boundary reads them** — or on a network
         // with no V2 lane at all, where there are no claims and the fence would hash and not fire.
@@ -5574,6 +5599,10 @@ impl Params {
             self.palw_heartbeat_transparent_same_chain = None;
         }
         // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // ADR-0160 lane escrow, a bare Some-only fence: the same collapse (a-some-only-fence).
+        if self.palw_capacity_escrow_at_licence == Some(ForkActivation::never()) {
+            self.palw_capacity_escrow_at_licence = None;
+        }
         // ADR-0107, a bare fence: the same collapse for the same reason.
         if self.palw_share_growth_final == Some(ForkActivation::never()) {
             self.palw_share_growth_final = None;
@@ -5658,6 +5687,101 @@ impl Params {
         self.palw_heartbeat_transparent_fence().and(self.palw_heartbeat_transparent_same_chain)
     }
     // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+
+    // ---- ADR-0160 lane escrow (post-launch, rcore/cap-escrow): the mirror and what F-E refuses ----
+
+    /// **ADR-0160 F-E, resolved**: `Some` only on a ConsensusV2 network that arms it (and never for a
+    /// `never()`).
+    pub fn palw_capacity_escrow_at_licence_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capacity_escrow_at_licence) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a claim accepted at `accepted_daa` is under F-E. `false` on every shipped preset.
+    pub fn palw_capacity_escrow_active_at(&self, accepted_daa: u64) -> bool {
+        self.palw_capacity_escrow_at_licence_fence().is_some_and(|fence| fence.is_active(accepted_daa))
+    }
+
+    /// **F-E's mirror**: the `#[borsh(skip)]` copy on `PalwStateParamsV2` the fold reads
+    /// (`capacity_escrow_active_at`, keyed on a claim's `accepted_daa`) — the ledger's load-time
+    /// re-derivation and every view have no transition extras, only the params they are handed.
+    /// Written here and nowhere else; `None` where the fence is not armed. Call it wherever the fence
+    /// is set on an assembled ruleset (the post-launch list's entry does); `validate_palw_v2` refuses a
+    /// ruleset whose copy disagrees, so a missed call is a startup refusal, not a fold on the old rules.
+    pub fn sync_palw_capacity_escrow(&mut self) {
+        let from_daa =
+            self.palw_capacity_escrow_at_licence.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_capacity_escrow_from_daa(from_daa);
+        }
+    }
+
+    /// **What F-E refuses** (ADR-0160 §6.1). Called by `validate_palw_v2`, public so a test can name each
+    /// refusal. Below the fence it checks only that the bundle's mirror is `None`. Past it:
+    /// * ConsensusV2 only (there is no V2 claim ledger elsewhere);
+    /// * `palw_audit_2026_09_23` at or below it — the escrow slot the fence re-prices is option A's,
+    ///   which that fence opens (below it the slot is 0, and `m_c` would ADD a reservation);
+    /// * `palw_rcore_plus` at or below it — SR-1's committed ledger, its licence release and C7's list;
+    /// * `palw_offence_attribution` at or below it — a void closes the claim's courts neutrally, so an
+    ///   obligation hold is never pinned open by a session (C3);
+    /// * the bundle's mirror equal to the height;
+    /// * on a network that retires claims, `claim_retirement_daa > window_receipt` — a claim's E-4 hold
+    ///   (`voided + window_receipt`) must end before its retirement is due.
+    ///
+    /// **Wired on `rcore/cap-int` (ADR-0160 §6.1):** F-W (`palw_capacity_weight_cap`) and F-L
+    /// (`palw_capacity_aggregate_liability`) at or below it. Those fields land with their lanes; until
+    /// then no credit exists, `m_c = E`, and F-E alone changes only E-4.
+    pub fn validate_palw_capacity_escrow_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.capacity_escrow_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_capacity_escrow_at_licence.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a capacity-escrow height without palw_capacity_escrow_at_licence armed: mirror the \
+                     fence with Params::sync_palw_capacity_escrow after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
+            return Err(Invalid(
+                "palw_capacity_escrow_at_licence is armed on a network that is not ConsensusV2: there is no V2 claim ledger whose \
+                 escrow slot it re-prices (ADR-0160)",
+            ));
+        };
+        let at_or_below =
+            |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score());
+        if !(at_or_below(self.palw_audit_2026_09_23)
+            && at_or_below(self.palw_rcore_plus)
+            && at_or_below(self.palw_offence_attribution))
+        {
+            return Err(Invalid(
+                "palw_capacity_escrow_at_licence is armed without palw_audit_2026_09_23, palw_rcore_plus and \
+                 palw_offence_attribution all at or below it: the escrow slot it re-prices is option A's, released by SR-1's \
+                 ledger, and a void must close its courts before an obligation hold may outlive it (ADR-0160 §6.1)",
+            ));
+        }
+        if mirror.flatten() != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_capacity_escrow_at_licence disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_capacity_escrow after the bundle is assembled",
+            ));
+        }
+        let retirement = bundle.state.claim_retirement_daa();
+        if retirement > 0 && retirement <= bundle.state.window_receipt() {
+            return Err(Invalid(
+                "palw_capacity_escrow_at_licence is armed where claims retire no later than window_receipt after their void: \
+                 an E-4 obligation hold (voided + window_receipt) must end before the claim's retirement (ADR-0160 E-4)",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end ADR-0160 lane escrow ----
 
     /// **ADR-0107's share-growth rule, read in ONE place** — `Some` only on a `ConsensusV2`
     /// network that has armed it, for [`Self::palw_fp_da_pins_fence`]'s reason. The transition
@@ -7499,6 +7623,8 @@ impl Params {
             palw_heartbeat_transparent,
             // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
             palw_heartbeat_transparent_same_chain,
+            // ADR-0160 lane escrow (post-launch)
+            palw_capacity_escrow_at_licence,
             palw_share_growth_final,
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation: _,
@@ -7656,6 +7782,9 @@ impl Params {
             ("palw_heartbeat_transparent", *palw_heartbeat_transparent),
             // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
             ("palw_heartbeat_transparent_same_chain", *palw_heartbeat_transparent_same_chain),
+            // ADR-0160 lane escrow (post-launch): a top-level fence an un-upgraded peer does not
+            // implement, so it is on the schedule and gates the fork id like every other.
+            ("palw_capacity_escrow_at_licence", *palw_capacity_escrow_at_licence),
             ("palw_share_growth_final", *palw_share_growth_final),
         ]
     }
@@ -8088,6 +8217,12 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // ADR-0160 lane escrow: NAMED and Some-only — it changes what a claim holds on its bond past
+        // its height, so an operator reading the schedule must see it; `None` prints the id it printed.
+        if let Some(activation) = self.palw_capacity_escrow_at_licence {
+            h.write(b"palw_capacity_escrow_at_licence");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0107. Some-only, at the tail: it changes which epochs grow a class's share past its
         // height, so the schedule must show the height, and a preset that leaves it `None` prints
         // the id of a build from before the field existed.
@@ -8271,6 +8406,8 @@ impl Params {
             palw_heartbeat_transparent,
             // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
             palw_heartbeat_transparent_same_chain,
+            // ADR-0160 lane escrow (post-launch)
+            palw_capacity_escrow_at_licence,
             palw_share_growth_final,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
@@ -8939,6 +9076,11 @@ impl Params {
             fork(activation, visit);
         }
         // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // ADR-0160 lane escrow: SOME-ONLY, for the reason above; its `Some(never())` collapses in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_capacity_escrow_at_licence.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0107. Some-only and at the tail, for the same reason as the fence above it.
         if let Some(activation) = palw_share_growth_final.as_mut() {
             fork(activation, visit);
@@ -9247,6 +9389,8 @@ impl Params {
             palw_heartbeat_transparent,
             // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
             palw_heartbeat_transparent_same_chain,
+            // ADR-0160 lane escrow (post-launch)
+            palw_capacity_escrow_at_licence,
             palw_share_growth_final,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
@@ -10019,6 +10163,12 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // ADR-0160 lane escrow: WRITTEN, Some-only — every preset leaves it `None` and fingerprints
+        // byte-identically to a build without the field.
+        if let Some(activation) = palw_capacity_escrow_at_licence {
+            h.write(b"palw_capacity_escrow_at_licence");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0107. Some-only, like every fence above it: every preset leaves it `None` and
         // fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_share_growth_final {
@@ -10459,6 +10609,8 @@ impl Params {
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
             // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
             palw_heartbeat_transparent_same_chain: self.palw_heartbeat_transparent_same_chain,
+            // ADR-0160 lane escrow (post-launch)
+            palw_capacity_escrow_at_licence: self.palw_capacity_escrow_at_licence,
             palw_share_growth_final: self.palw_share_growth_final,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
@@ -11494,6 +11646,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_heartbeat_transparent: None,
     // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
     palw_heartbeat_transparent_same_chain: None,
+    palw_capacity_escrow_at_licence: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -11727,6 +11880,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_heartbeat_transparent: None,
     // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
     palw_heartbeat_transparent_same_chain: None,
+    palw_capacity_escrow_at_licence: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -11942,6 +12096,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_heartbeat_transparent: None,
     // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
     palw_heartbeat_transparent_same_chain: None,
+    palw_capacity_escrow_at_licence: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -16946,6 +17101,15 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
         name: "palw_heartbeat_transparent_same_chain",
         set: |params, at| params.palw_heartbeat_transparent_same_chain = at,
     },
+    // ADR-0160 lane escrow (capacity, post-launch; joins the list on rcore/cap-int, never the DAA-500
+    // release): the field and the V2 bundle's mirror the fold reads.
+    PalwPostLaunchFenceV1 {
+        name: "palw_capacity_escrow_at_licence",
+        set: |params, at| {
+            params.palw_capacity_escrow_at_licence = at;
+            params.sync_palw_capacity_escrow();
+        },
+    },
     // Fork choice (HIGH): a deep reorg needs a strict economic win, a tie keeps the incumbent: a bare
     // height.
     PalwPostLaunchFenceV1 { name: "palw_reorg_strict_economic_win", set: |params, at| params.palw_reorg_strict_economic_win = at },
@@ -18176,6 +18340,9 @@ pub fn palw_v2_params_on_base(
     // Option A (2026-09-23 audit U2), for the same reason and in the same place: the height from which
     // a claim's escrow is reserved on its bond is `palw_audit_2026_09_23`'s, mirrored.
     params.sync_palw_escrow_backed_exposure();
+    // ADR-0160 lane escrow, for the same reason and in the same place: F-E's height, mirrored onto the
+    // bundle this function built (a base that set the fence before the bundle existed follows).
+    params.sync_palw_capacity_escrow();
     // ADR-0152 R-core+, for the same reason and in the same place: the fence's height, the
     // processor's withdrawal delay and C7's list, mirrored onto the bundle this function built.
     params.sync_palw_rcore_plus();
@@ -18453,6 +18620,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_heartbeat_transparent: None,
     // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
     palw_heartbeat_transparent_same_chain: None,
+    palw_capacity_escrow_at_licence: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
