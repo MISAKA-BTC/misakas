@@ -1473,25 +1473,20 @@ pub struct Params {
     /// `window_court`, so the conviction path (court, DA default, held dissection, equivocation) still
     /// FIRES through `F + window_court` and the fraudulent mint stays recoverable.
     ///
-    /// **The cost is a per-collateral DOUBLE-COMMIT of the seat's residual coverage, NOT a withdrawal
-    /// escape** (the fence's safety note, corrected 2026-09-26 after review). At `F + 1,000` the lock
-    /// is `is_live`-dead, so `slashable_available` releases its collateral for NEW work — while the
-    /// lock ROW stays present and convictable to `F + window_court` (it prunes only with the liability
-    /// record, `sweep_panel_obligations`, and the conviction reads the row, not `is_live`). A seat can
-    /// therefore back a fresh `Valid` lock against collateral that still answers an unconvicted prior
-    /// `Valid`: one unit of collateral covering two overlapping responsibilities, so a conviction of
-    /// one drains it ([`crate::palw_state_v2`]'s `slash_bond` clamps at the current collateral) and
-    /// leaves the other's residual short. This is reachable at `F + 1,000` with NO withdrawal —
-    /// testnet-12's `withdrawal_delay_daa` (≈ 12,900) is far longer than `window_court`, so a retire
-    /// started here cannot release the bond until long past `F + window_court`. It touches ONLY the
-    /// seat-side residual `G_res = G − E` the lock prices (~160 MSK/seat, ~800 MSK per five-seat
-    /// quorum), bounded per seat by its whole collateral and NOT additive to the mint: `E` stays on
-    /// the `window_court` clock in the vesting rows and is clawed back by the conviction funnel
-    /// regardless of the seat lock, so no uncovered MINT opens, and each colluding fraud already loses
-    /// `E`, so the residual gap is not a profitable path (claim-collateral design bar). Accepted as
-    /// the cost of returning seat capital ~3× sooner (user decision 2026-09-26 "both"); the tests
-    /// `a_conviction_past_f_plus_one_thousand_still_slashes_the_unpruned_lock` and
-    /// `the_freed_collateral_is_double_committed_in_the_gap` pin the reachable behaviour.
+    /// **Past the height the lock also stops being SLASHABLE when it stops being COMMITTED** (the
+    /// user's decision 2026-09-26, closing the per-collateral double-commit the review found: at
+    /// `F + 1,000` `slashable_available` released the lock's collateral for new work while both
+    /// false-`Valid` conviction routes still took the lock ROW, which stays present to
+    /// `F + window_court` and prunes only with the liability record). A conviction in a block past the
+    /// height takes a seat's lock only while
+    /// [`crate::palw_state_v2::palw_false_valid_lock_slashable_v1`] holds — the per-lock term of
+    /// `palw_bond_committed_v1`, both clocks at the escaped depth — keyed on the CONVICTING block's DAA
+    /// as the life is keyed on the dating block's. An expired lock is left alone (no S4, no reporter
+    /// extraction from it); the rest of the conviction runs unchanged — the `Final` reversed, `E`
+    /// burned from its vesting row on the `window_court` clock, the producer's S3. So free + reserved
+    /// ≤ posted at every DAA, no uncovered MINT opens, and the seat-side deterrent of a resolved
+    /// `Valid` ends at `F + 1,000` (plus the second clock) by design. Below the height every
+    /// conviction reads the row exactly as before.
     ///
     /// Keyed on the DATING block's DAA, so a lock stamped below the height keeps the long life when
     /// read past it (the stored `expiry_daa` is what `is_live` reads) and one stamped past it gets the
