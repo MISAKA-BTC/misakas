@@ -4,19 +4,18 @@
 .113 の `/etc/misaka-mtp/chain.pin`（`cat` のみ）、IBD checkpoint の候補（explorer の node と ibm の node への `getBlock`）、
 公開 node の DAA。
 
-> **暫定値の注意（最重要）**: 13 本目の fence `palw_lane_accept_parents_first` は merge 済み（`e370a8f14`）で、§2 の値は
-> それを含む再 pin の値。ただし strict-win の浅い同点規則（branch `rcore/f1-strictwin-tie`、**未 merge**、§9）が入るか、
-> fallback で strict-win を 750 から外すと、`scripts/t12-repin.sh --apply --shipping` をもう一度やり直し、**fingerprint と
-> schedule id はまた変わる**（identity・genesis・premine は変わらない見込み — 将来の高さの fence は identity に入らない）。
-> §2 の値は「strict-win の扱いが決まったら再 pin する」値として扱い、**最後の再 pin 前の値で release build・fleet.env・
-> 告知をしない**。
+> **FINAL（2026-09-26）**: この文書を FINAL にした commit の tree が、build・drill するリリース。13 本の fence（DAA 750）、
+> strict-win の浅い同点規則（`19e732712`、fence の追加なし）、IBD checkpoint、IBD 順序の修正、lifecycle UX（n7）、
+> verifier setup（n8）が入っている。§2 の値が最終値（strict-win の同点規則は params.rs のコメントしか変えず、再 pin の dry run は
+> drift なし・256 ok）。これより後に consensus・params を変える commit を足したら、`scripts/t12-repin.sh` をやり直すこと。
 
 ## 1. このリリースに入っているもの
 
 | 種類 | 中身 | consensus か |
 |---|---|---|
 | post-launch fence ×13（DAA 750、`PALW_T12_POST_LAUNCH_FENCE_DAA`） | `palw_registry_resilience`・`palw_panel_seed_execution`・`palw_heartbeat_transparent_same_chain`・`palw_reorg_strict_economic_win`・`palw_bond_maturity_early`・`palw_model_sink_bound`・`palw_operator_anchor`・`palw_final_lock_full_collateral`・`palw_final_lock_life`・`palw_anchor_at_ceiling`・`palw_slashing_evidence_utxo_genuine`・`palw_pruning_proof_strict_economic_win`・`palw_lane_accept_parents_first`（13 本目、`e370a8f14` で merge: fence 以降、merging chain block が同点の round lane を parents-first で受理し、round block は EVM payload を持てない） | **はい**（750 から） |
-| （予定）strict-win の浅い同点規則 | `rcore/f1-strictwin-tie`: 深さ 2 DAA tick 以下の同点は GHOSTDAG 順。間に合わなければ `palw_reorg_strict_economic_win` を 750 で武装しない（§9） | はい |
+| strict-win の浅い同点規則 | `rcore/f1-strictwin-tie-nodaa`（`19e732712` で merge）: `palw_reorg_strict_economic_win` の後、incumbent 側の深さ 2 DAA tick 以下の all-economic tie は GHOSTDAG 順（blue work、次に hash）で決め、sink の DAA を下げる切替はしない。それより深い同点は incumbent を保つ（§9） | はい（750 から、同じ fence） |
+| verifier setup（n8） | `rcore/n8-verifier-setup`（`45b8cad6f` まで fast-forward）: `misaka verifier setup` が chain の seat floor（t12 は 130,000 MSK）で座席を作り、`--palw-bond-collateral` を明示し、floor 未満を拒否する。join guide §5 | いいえ（CLI・docs） |
 | IBD checkpoint | `PALW_T12_IBD_CHECKPOINTS` = DAA 100 / 200 / 300 の chain block（§7） | いいえ（node policy） |
 | IBD 順序の修正 | `426c32c05`（int-4 では `a067f490d`）: round lane の block を parents-first で渡す。DAA 316 以降、新規 node の IBD と、lane をまたいで IBD に落ちた node が `missing parents` で止まる不具合 | いいえ（node only） |
 | lifecycle UX | `rcore/n7-lifecycle-ux`（T12-030/046/049/058）: node・CLI・RPC・docs | いいえ |
@@ -25,15 +24,15 @@
 でなければ DAA 316 以降の lane を越えられない。fleet の更新は **必ず `upgrade`（in-place、appdir 維持）で行い、`switch` は使わない**
 （`switch` は regenesis: appdir を退避して genesis から同期し直すので、この修正の有無に関係なく危険で、round 署名記録も一緒に動く）。
 
-## 2. identity（旧 → 新）— strict-win の扱いが決まったら再 pin する暫定値
+## 2. identity（旧 → 新）— 最終値
 
-`scripts/t12-repin.sh --apply --shipping` が build から計算した値（12 本での再 pin `a1b1c4491` の後、13 本目を入れて再 pin）。
-確認の dry run: 256 ok・drift なし・未登録 literal なし、pin test 全 pass。
+`scripts/t12-repin.sh --apply --shipping` が build から計算した値（12 本での再 pin `a1b1c4491` の後、13 本目を入れて再 pin
+`cbcec4cb5`）。strict-win の同点規則と n8 を merge した後の dry run も drift なし（256 ok・未登録 literal なし）。
 
-| 項目 | launch release（`0e8ec984e`、現在の fleet） | このリリース（**暫定**） |
+| 項目 | launch release（`0e8ec984e`、現在の fleet） | このリリース（**最終**） |
 |---|---|---|
-| `consensus_params_id`（fingerprint、`EXPECT_FP`） | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` | `dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9` ※strict-win 次第で再 pin |
-| `consensus_schedule_id` | `93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd` | `7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397` ※strict-win 次第で再 pin |
+| `consensus_params_id`（fingerprint、`EXPECT_FP`） | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` | `dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9` |
+| `consensus_schedule_id` | `93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd` | `7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397` |
 | fence schedule（起動ログ） | `1000` | `750, 1000` |
 | （参考）12 本だけの再 pin（`a1b1c4491`） | — | params `1274ac12…`、schedule `ae8cc4b7…`（使わない） |
 | `consensus_identity_id` | `5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5` | 同じ（変わらない） |
@@ -71,8 +70,7 @@ handshake が一致を求めるのは `consensus_identity_id`（変わらない�
 **前提**: この文書の kit（`lib.sh` の `UPGRADE_FROM_FP` 対応）を配ってから行う。対応前の `upgrade` は、稼働中の node の fp が
 `EXPECT_FP` と違うことを理由に**何も止めずに拒否する**（fp が変わる fence release を想定していなかった）。
 
-0. **13 本目の fence を merge → 750 に武装 → `t12-repin.sh --apply --shipping` → suites** を通した int-4 の commit を確定する
-   （この文書の §2 の値はそこで置き換わる）。
+0. build する commit は、この文書を FINAL にした `rcore/int-4` の commit（§2 の値）。
 1. Mac: `./build-release-local.sh <その commit>`（`PROBE_IMAGE=rust:latest NATIVE_PROBE=1`）。出力の `IDENTITY` の `EXPECT_FP` が
    再 pin 後の checklist §3 と一致し、`EXPECT_GENESIS`・`PREMINE_TXID` が今の fleet.env と一致すること。
 2. Mac: `fleet.env` を更新 — `REV`・`KASPAD_SHA256`・`MISAKA_SHA256`・`PALW_CLASS_SHA256`・`EXPECT_FP`（新）・
@@ -133,29 +131,28 @@ PLAN.md §15 の表は ibm → .113 → 5.104 の順だが、今回は .113 → 
   消して再同期する（その場合は IBD 修正入りの build が必須）。
 - DNS seeder は anchor（更新済みの fleet）だけを配るので、旧 node が DNS で新たにつながる先も更新済みの fleet で、750 以降は拒否される。
 
-## 9. 入金確定の公開文言（main の launch note §3）— strict-win を 750 で武装する場合
+## 9. 入金確定の公開文言（main の launch note §3）— strict-win は浅い同点規則つきで 750 に武装する
 
-`palw_reorg_strict_economic_win` は、全項目が経済的に同点（all-economic tie）の深い reorg で incumbent を保つ。容量 lane の試験
+`palw_reorg_strict_economic_win` は、全項目が経済的に同点（all-economic tie）の reorg で incumbent を保つ。容量 lane の試験
 （`rcore/cap-weight` の `3aa4abec4`）で、12 本の fence を武装した状態では honest な兄弟 chain が分かれることが 8/8 回で測られた。
-ユーザー決定（2026-09-26）: strict-win は **浅い同点規則**（深さ 2 DAA tick 以下の同点は GHOSTDAG の順で決める、branch
-`rcore/f1-strictwin-tie`）と一緒に 750 で武装する。間に合わず検証できなければ strict-win は 750 で武装しない。
+ユーザー決定（2026-09-26）どおり、strict-win は **浅い同点規則**（incumbent 側の深さ 2 DAA tick 以下の同点は GHOSTDAG の順で
+決める。sink の DAA を下げる切替はしないので、同点の切替を連ねても 2 tick より深くは戻らない）と一緒に 750 で武装する（`19e732712`）。
 
-武装する場合、main の `docs/t12-launch-2026-09-25.md` §3「入金を確定とみなす基準」（と、それを写した README・wiki・告知）に、
-**「経済的に同点の reorg は、2 DAA tick（約 4 分）より深く埋まった取引を覆せない」**を加える。これは同点の reorg についての
+main の `docs/t12-launch-2026-09-25.md` §3「入金を確定とみなす基準」（と、それを写した README・wiki・告知）に、fleet 切替と同時に
+**「経済的に同点の reorg は、2 DAA tick（約 4〜5 分）より深く埋まった取引を覆せない」**を加える。これは同点の reorg についての
 下限であって、既存の基準（少額: blue score 30 以上上の blue attempt、高額: finality depth 600 blue か Final anchor、
-heartbeat しか出ていない期間は確定とみなさない）を置き換えない。武装しない場合はこの文言を入れない。
+heartbeat しか出ていない期間は確定とみなさない）を置き換えない。
 
-strict-win を武装しない fallback で一緒に dormant にしなければならない fence は **無い**: `validate_palw_v2` の前提関係で
+（参考: strict-win を武装しない fallback を選んだ場合でも、一緒に dormant にしなければならない fence は **無い**: `validate_palw_v2` の前提関係で
 strict-win（`palw_reorg_strict_economic_win`・`palw_pruning_proof_strict_economic_win` のどちらも）を「その高さ以下に要求する」
 fence は 12 本の中に無く、strict-win 自身も他の fence を要求しない。読む場所も、reorg 側は virtual processor の深い reorg の
-判定だけ、IBD 側は IBD flow の staging commit の判定だけで、互いにも独立している。
+判定だけ、IBD 側は IBD flow の staging commit の判定だけで、互いにも独立している。）
 
 ## 10. 既知の未解決・注意
 
-- strict-win の同点規則（`rcore/f1-strictwin-tie`）が未 merge — §2 の値は暫定（13 本目は merge・再 pin 済み）。
-  strict-win を 750 で武装しない fallback にする場合は、`palw_t12_arm_post_launch_fences_v1` がその entry を飛ばすようにし、
-  `post_launch_fence_arming_tests`・lane の pin file・drill の「一覧の全 fence が 750」の assert を合わせて直す（§9: 他の fence は
-  dormant にしなくてよい）。
+- `t12_bind_deadlock_f1_…`（processor test）: release の lane A（全 genesis card）の下では、fence 前に挿した card 7 の失格 attempt が
+  fence 後の heartbeat に merge されると lane A 経由で claim を bind してしまい、binder の検査が偶然に左右された（2/3・1/4 などで
+  失敗）。fence 前の検査を別の chain（同じ ruleset・同じ手順）で行うようにした（`fcdca691a`）。規則の問題ではなく test fixture の問題。
 - `scripts/t12-repin.sh --selftest` が 17/22: selftest の期待値が cap / resilience lane の pin 追加より古い（このリリースとは無関係）。
 - drill の ruleset もこのリリースの高さ（750）を持つ（drill は公開 ruleset と同じ組立てを通る設計）。`--palw-drill-fence-at` は
   それを低い高さへ動かす（MOVED と表示される）。
