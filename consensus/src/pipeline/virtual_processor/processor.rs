@@ -14720,7 +14720,8 @@ impl VirtualStateProcessor {
     /// **lane: rcore/f1-strictwin-tie — may GHOSTDAG decide this all-economic tie past
     /// `palw_reorg_strict_economic_win`?** `true` exactly when (1) `candidate` is heavier than
     /// `prev_sink` in GHOSTDAG's own order — blue work, then hash, the [`SortableBlock`] order the sink
-    /// search pops in — and (2) the reorg is SHALLOW: the incumbent's selected chain above its common
+    /// search pops in — (2) `candidate` does not LOWER the sink's DAA (`daa(candidate) ≥
+    /// incumbent_daa`), and (3) the reorg is SHALLOW: the incumbent's selected chain above its common
     /// chain ancestor with `candidate` spans at most [`PALW_REORG_SHALLOW_TIE_DAA_V1`] DAA ticks
     /// (`incumbent_daa − daa(ancestor) ≤ D`). The question `palw_reorg_strict_economic_win_v1` asks,
     /// and only on an all-economic tie.
@@ -14734,10 +14735,12 @@ impl VirtualStateProcessor {
     /// history since the fork), which a challenger cannot shorten: blocks it gets merged into that
     /// chain only lengthen it. So a shallow tie is decided the way every honest node decides it, and a
     /// payment deeper than `D` ticks under this node's sink keeps the fence's protection whatever blue
-    /// work is piled against it in one release. (What the depth does NOT pin is the sink's DAA itself:
-    /// a denser tying branch that still holds the payment can move the sink one tick down first, so
-    /// two chained releases reach `D + 1` ticks under the public tip — measured,
-    /// `two_chained_shallow_ties_reverse_three_ticks`.)
+    /// work is piled against it in one release. The depth alone does not pin the sink's DAA — a denser
+    /// tying branch that still holds the payment could move the sink one tick DOWN first, and a second
+    /// release reach under the lowered window (measured: three ticks, and a branch weighted without
+    /// ticks would not stop there) — which is what (2) is for: a tie never lowers the sink's DAA, so no
+    /// chain of releases reaches deeper than `D` ticks under the highest sink a tie produced
+    /// (`a_shallow_tie_never_lowers_the_sink_so_chained_releases_stop_at_two`).
     ///
     /// Conservative on every read it cannot make — an unreadable header or GHOSTDAG row, a reachability
     /// miss, a chain that runs past [`PALW_REORG_SHALLOW_TIE_WALK_V1`] blocks before leaving the depth —
@@ -14758,6 +14761,16 @@ impl VirtualStateProcessor {
             _ => false,
         };
         if !heavier {
+            return false;
+        }
+        // **A shallow tie never LOWERS the sink's DAA** (the ratchet `strict_win_honest_race` measured:
+        // two chained releases reversed three ticks without this). The window is read at the incumbent's
+        // DAA, so a tie-flip onto a tying branch with FEWER ticks would move the window itself down and a
+        // second release could reach under it; keeping the incumbent there pins the window to the highest
+        // DAA a tie ever moved the sink to. Siblings on one parent set share one DAA, so an honest slot
+        // race moves the sink sideways, never back.
+        let Ok(candidate_daa) = self.headers_store.get_daa_score(candidate) else { return false };
+        if candidate_daa < incumbent_daa {
             return false;
         }
         let floor = incumbent_daa.saturating_sub(PALW_REORG_SHALLOW_TIE_DAA_V1);

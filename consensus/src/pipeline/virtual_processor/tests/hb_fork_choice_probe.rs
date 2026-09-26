@@ -2125,36 +2125,26 @@ mod strict_win_honest_race {
         (r1.flipped(), r2.flipped(), x, y)
     }
 
-    /// **The residual, measured and pinned: two chained releases reverse a payment with `D + 1` = 3
-    /// ticks of public confirmation.** One release never reverses more than `D` ticks
-    /// ([`a_shallow_tie_is_ghostdags_and_a_deep_tie_keeps_the_incumbent`]), but the window is read at
-    /// the incumbent's DAA, and a heartbeat branch can be heavier with fewer ticks: Q (one private slot
-    /// of two siblings and a merging holder, forked one tick above P, holding X) out-weighs the public
-    /// chain's last two ticks with one (blue work +5 against +4) and moves the victim's sink from DAA
-    /// `F + 3` to `F + 2`; S (Y, two private slots, forked at P) is then two ticks under that sink,
-    /// ties it, out-weighs it (+8 against +7), and lands Y. Measured the same with four siblings a layer
-    /// (the colouring keeps the same +5 blue) and under the release's twelve fences.
-    ///
-    /// Why it stops at three with heartbeats alone (analysis, not a probe): a round lowers the sink's DAA
-    /// only by out-weighing two ticks of chain with one, and after the first round those two ticks hold
-    /// the attacker's own densest slot (+5), which no one-tick branch out-weighs — so a second round
-    /// cannot lower it again. Weight WITHOUT ticks is another matter (analysis, not measured here): a
-    /// winning attempt adds `live` on int-4, so a branch of them is a strict economic win at any depth
-    /// (the capacity lane's W-T6, which F-W closes) rather than a tie; but an attempt header that makes
-    /// no claim — a losing lottery draw, which `hb_probe_verdict1_…` measures carrying 2²⁰ when merged
-    /// beside a heartbeat — would tie while out-weighing any number of heartbeat ticks. **Not closed
-    /// here** (the rule is the one specified: a tie within `PALW_REORG_SHALLOW_TIE_DAA_V1` of the
-    /// incumbent's DAA is GHOSTDAG's); if this assertion ever fails, the rule was hardened (e.g. a
-    /// shallow tie that would LOWER the sink's DAA keeps the incumbent) — flip it then.
+    /// **A shallow tie never LOWERS the sink's DAA, so chained releases stop at `D`** (the hardening of
+    /// rcore/f1-strictwin-tie-nodaa, on top of the specified rule). The ratchet
+    /// [`ratchet`] measures — Q, a denser tying branch that still holds X, moving the victim's sink one
+    /// tick down so that S, forked under X, is shallow against it — needs Q's flip; Q's tip is one tick
+    /// under the public tip, so the victim keeps the incumbent and S is then three ticks deep: X stands.
+    /// A Q that does not lower the sink (two private slots, its tip at the public tip's DAA) still
+    /// flips — the single-release window is untouched — and S is refused behind it all the same.
     #[tokio::test]
-    async fn two_chained_shallow_ties_reverse_three_ticks() {
+    async fn a_shallow_tie_never_lowers_the_sink_so_chained_releases_stop_at_two() {
         kaspa_core::log::try_init_logger("warn");
         for label in ["strict-win", "release set"] {
             let (q_flipped, s_flipped, x, y) = ratchet(label, D + 1, 2, 1, 2).await;
             assert!(
-                q_flipped && s_flipped && !x && y,
-                "{label}: the ratchet — Q then S — reverses a payment {} ticks deep (Q {q_flipped}, S {s_flipped}, X {x}, Y {y})",
-                D + 1
+                !q_flipped && !s_flipped && x && !y,
+                "{label}: a Q that would lower the sink's DAA keeps the incumbent, and X stands (Q {q_flipped}, S {s_flipped}, X {x}, Y {y})"
+            );
+            let (q_flipped, s_flipped, x, y) = ratchet(label, D + 1, 2, 2, 2).await;
+            assert!(
+                q_flipped && !s_flipped && x && !y,
+                "{label}: a Q at the public tip's DAA flips (the window), and S under X is refused (Q {q_flipped}, S {s_flipped}, X {x}, Y {y})"
             );
         }
     }

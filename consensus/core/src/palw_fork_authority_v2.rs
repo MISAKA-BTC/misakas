@@ -143,16 +143,14 @@ pub fn decide_deep_reorg_v2(incumbent: &PalwCandidateOrderV1, challenger: &PalwC
 /// burst, so an honest race spans at most two ticks when it is decided. A private branch that ties the
 /// economic keys and out-piles the public chain in blue work can therefore reverse, in one release, a
 /// payment with at most two ticks of confirmation (about four minutes); deeper, the tie keeps the
-/// incumbent whatever blue work is piled against it. **Chained releases reach one tick further**
-/// (measured: `two_chained_shallow_ties_reverse_three_ticks`): the window is read at the incumbent's
-/// DAA, and a denser heartbeat branch that still holds the payment can first move the sink one tick
-/// DOWN, after which a branch without it is two ticks under the new sink — three under the public tip.
-/// Heartbeats alone stop it there (their blue density per tick is bounded); a branch that can add
-/// weight WITHOUT ticks — an attempt header carries 2²⁰ of blue work whatever its lottery said, and
-/// ties when it creates no claim — is not bounded that way (analysis, not measured). A rule that
-/// refused a shallow tie LOWERING the sink's DAA would hold every chain of releases at two. Neither
-/// number reaches the published merchant rule (finality, or a `Final` settlement anchor), which does
-/// not count ticks at all.
+/// incumbent whatever blue work is piled against it. **Chained releases stay at two**, because the
+/// processor's question also refuses a shallow tie that would LOWER the sink's DAA: the window is read
+/// at the incumbent's DAA, and without that a denser heartbeat branch that still holds the payment
+/// could first move the sink one tick down, after which a branch without it is two ticks under the new
+/// sink — three under the public tip (measured before the check), and a branch weighted without ticks
+/// (an attempt header carries 2²⁰ of blue work whatever its lottery said, and ties when it creates no
+/// claim) would not stop there. Neither number reaches the published merchant rule (finality, or a
+/// `Final` settlement anchor), which does not count ticks at all.
 ///
 /// The capacity lane carries the same value as `palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1`
 /// (rcore/cap-weight 3aa4abec4, F-W's copy of this rule); rcore/cap-int makes that name an alias of
@@ -184,9 +182,9 @@ pub const PALW_REORG_SHALLOW_TIE_WALK_V1: usize = 64;
 ///   [`palw_deep_reorg_strict_economic_v1`] exactly;
 /// * an all-economic tie allows iff `shallow_ghostdag_win()` — the caller's statement that the reorg is
 ///   SHALLOW (the incumbent's selected chain above its common chain ancestor with the challenger spans
-///   at most [`PALW_REORG_SHALLOW_TIE_DAA_V1`] DAA ticks) and that the challenger is heavier in
-///   GHOSTDAG's own order (blue work, then hash — the order the sink search pops candidates in). Asked
-///   only on a tie.
+///   at most [`PALW_REORG_SHALLOW_TIE_DAA_V1`] DAA ticks), that the challenger does not lower the
+///   sink's DAA, and that it is heavier in GHOSTDAG's own order (blue work, then hash — the order the
+///   sink search pops candidates in). Asked only on a tie.
 ///
 /// So it allows everything [`palw_deep_reorg_strict_economic_v1`] allows, and refuses everything it
 /// refuses except a shallow tie GHOSTDAG awards the challenger — which every node holding the DAG reads
@@ -195,8 +193,8 @@ pub const PALW_REORG_SHALLOW_TIE_WALK_V1: usize = 64;
 /// other until a later block merges both). A tie deeper than the bound still keeps the incumbent, so a private
 /// branch's blue-work pile against a payment older than the bound is refused exactly as before. The
 /// price, stated: a tying branch heavier on blue work can reverse a payment with at most
-/// [`PALW_REORG_SHALLOW_TIE_DAA_V1`] ticks of confirmation in one release, and three by chaining two
-/// (see the constant). Pure: the depth and the GHOSTDAG order are the caller's reads of its own
+/// [`PALW_REORG_SHALLOW_TIE_DAA_V1`] ticks of confirmation, however many releases are chained (see
+/// the constant). Pure: the depth, the DAA and the GHOSTDAG order are the caller's reads of its own
 /// stores (the processor's `palw_reorg_shallow_ghostdag_win_v1`).
 ///
 /// **One rule, two copies until rcore/cap-int.** The capacity lane measured the finding under its fence

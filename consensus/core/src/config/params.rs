@@ -1188,8 +1188,9 @@ pub struct Params {
     /// siblings they saw first and their virtual chains diverged over one DAG (measured through the
     /// pipeline, rcore/cap-weight 3aa4abec4: split at the first exchange in 8/8 runs). The price,
     /// stated: a tying branch heavier on blue work can reverse a payment with at most two ticks (~4
-    /// min) of confirmation in one release, three by chaining two (measured; the window is read at the
-    /// incumbent's DAA, which a denser tying branch can first lower by one); deeper, the tie keeps the
+    /// min) of confirmation however releases are chained (a shallow tie never LOWERS the sink's DAA,
+    /// so the window cannot be walked back — without that two chained releases reversed three ticks,
+    /// measured); deeper, the tie keeps the
     /// incumbent. The rule is keyed as before (read at the INCUMBENT's DAA), reads no clock and touches no
     /// live-weight rule (so it is independent of the two unconfirmed synthesis choices), and it fires
     /// only on actual reorgs, so forward progress
