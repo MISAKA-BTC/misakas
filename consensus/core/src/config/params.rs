@@ -1471,10 +1471,27 @@ pub struct Params {
     /// ([`crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1`]), the vesting rows that hold the
     /// executor's escrow `E`, the court/DA windows and the obligation-pruning slack all keep
     /// `window_court`, so the conviction path (court, DA default, held dissection, equivocation) still
-    /// FIRES through `F + window_court` and the fraudulent mint stays recoverable. The cost: a seat
-    /// that WITHDRAWS in `[F + 1,000, F + window_court]` — once its lock is `is_live`-dead — escapes
-    /// this lock's residual for a fraud discovered in that window; the vesting rows still cover `E`,
-    /// so no uncovered mint opens (claim-collateral design bar; the fence's safety note).
+    /// FIRES through `F + window_court` and the fraudulent mint stays recoverable.
+    ///
+    /// **The cost is a per-collateral DOUBLE-COMMIT of the seat's residual coverage, NOT a withdrawal
+    /// escape** (the fence's safety note, corrected 2026-09-26 after review). At `F + 1,000` the lock
+    /// is `is_live`-dead, so `slashable_available` releases its collateral for NEW work — while the
+    /// lock ROW stays present and convictable to `F + window_court` (it prunes only with the liability
+    /// record, `sweep_panel_obligations`, and the conviction reads the row, not `is_live`). A seat can
+    /// therefore back a fresh `Valid` lock against collateral that still answers an unconvicted prior
+    /// `Valid`: one unit of collateral covering two overlapping responsibilities, so a conviction of
+    /// one drains it ([`crate::palw_state_v2`]'s `slash_bond` clamps at the current collateral) and
+    /// leaves the other's residual short. This is reachable at `F + 1,000` with NO withdrawal —
+    /// testnet-12's `withdrawal_delay_daa` (≈ 12,900) is far longer than `window_court`, so a retire
+    /// started here cannot release the bond until long past `F + window_court`. It touches ONLY the
+    /// seat-side residual `G_res = G − E` the lock prices (~160 MSK/seat, ~800 MSK per five-seat
+    /// quorum), bounded per seat by its whole collateral and NOT additive to the mint: `E` stays on
+    /// the `window_court` clock in the vesting rows and is clawed back by the conviction funnel
+    /// regardless of the seat lock, so no uncovered MINT opens, and each colluding fraud already loses
+    /// `E`, so the residual gap is not a profitable path (claim-collateral design bar). Accepted as
+    /// the cost of returning seat capital ~3× sooner (user decision 2026-09-26 "both"); the tests
+    /// `a_conviction_past_f_plus_one_thousand_still_slashes_the_unpruned_lock` and
+    /// `the_freed_collateral_is_double_committed_in_the_gap` pin the reachable behaviour.
     ///
     /// Keyed on the DATING block's DAA, so a lock stamped below the height keeps the long life when
     /// read past it (the stored `expiry_daa` is what `is_live` reads) and one stamped past it gets the

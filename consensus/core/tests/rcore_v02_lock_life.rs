@@ -20,6 +20,18 @@
 //!   capital that much sooner;
 //! * a **conviction within `F + 1,000`** still slashes the resolved lock, exactly as the launch build.
 //!
+//! And the two the 2026-09-26 review asked for, pinning the reachable behaviour the fence's safety
+//! note now describes accurately (the exposure is a per-collateral DOUBLE-COMMIT reached by REUSE at
+//! `F + 1,000`, never a withdrawal — `withdrawal_delay_daa` ≈ 12,900 ≫ `window_court`):
+//!
+//! * a **conviction in the gap `(F + 1,000, F + window_court)`** still slashes the full lock of a
+//!   NON-exiting seat: the row stays present (it prunes only with the liability record at
+//!   `F + window_court`) and both conviction routes read the row, not `is_live`;
+//! * the **double-commit**: in that gap the armed build reports the lock's collateral as free for new
+//!   work (`slashable_available` rose) AND still takes it in a conviction, so free + reserved exceeds
+//!   the seat's posted collateral — the concurrent-risk under-reservation the review found — while the
+//!   launch build reserves it for the whole conviction window and never double-counts.
+//!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_v02_lock_life
 
 #[path = "rcore_common.rs"]
@@ -218,4 +230,112 @@ fn a_conviction_within_f_plus_one_thousand_still_slashes() {
     assert!(taken >= lock.amount, "the conviction takes at least the lock ({} ≥ {})", msk(taken), msk(lock.amount));
     assert!(c.s.slashable_lock(seat, claim).is_none(), "the lock is consumed");
     println!("[v02life] conviction at F+{}: seat lock {:.2} MSK, collateral taken {:.2} MSK", PALW_FINAL_LOCK_LIFE_DAA_V1 / 2, msk(lock.amount), msk(taken));
+}
+
+/// **A conviction in the gap `(F + 1,000, F + window_court)` still slashes the full lock of a
+/// NON-exiting seat.** Past `F + 1,000` the lock is `is_live`-dead — its capital reads as free — but
+/// its ROW is untouched: `sweep_panel_obligations` prunes a lock only with its liability record, and
+/// the record keeps `window_court`, so the row is present through `F + window_court` and both
+/// conviction routes read the row (`slashable_locks.get`), not `is_live`. So a seat that does NOT
+/// exit stays fully slashable for its residual right up to `F + window_court`, exactly as before the
+/// fence — the fence moves only the capital-accounting clock, never the conviction horizon.
+#[test]
+fn a_conviction_past_f_plus_one_thousand_still_slashes_the_unpruned_lock() {
+    let p = armed(1_002);
+    let (mut c, claim, seat, lock) = floor_to_final(p.clone(), 0x0301);
+    let f = c.daa;
+    let wc = c.sp.window_court();
+    assert_eq!(lock.expiry_daa, f + PALW_FINAL_LOCK_LIFE_DAA_V1, "the short life is in force");
+
+    // Squarely inside the gap: past is_live (F + 1,000), before the row prunes (F + window_court).
+    let at = f + PALW_FINAL_LOCK_LIFE_DAA_V1 + wc / 2;
+    assert!(at > f + PALW_FINAL_LOCK_LIFE_DAA_V1 && at < f + wc, "in (F + 1,000, F + window_court)");
+    assert!(!lock.is_live(at), "past F + 1,000 the lock is is_live-dead — its capital reads as free");
+
+    let before = c.s.bond(&seat).expect("the seat's bond").collateral;
+    c.step_at(at, &[false_valid(&p, claim, seat)], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let after = c.s.bond(&seat).expect("the seat's bond").collateral;
+    let taken = (before - after) as u128;
+
+    assert!(taken >= lock.amount, "the row is still convictable in the gap ({} ≥ {})", msk(taken), msk(lock.amount));
+    assert!(c.s.slashable_lock(seat, claim).is_none(), "the lock is consumed");
+    println!(
+        "[v02life] conviction at F+{} (is_live-dead, row present): seat lock {:.2} MSK, taken {:.2} MSK",
+        PALW_FINAL_LOCK_LIFE_DAA_V1 + wc / 2,
+        msk(lock.amount),
+        msk(taken)
+    );
+}
+
+/// **The double-commit the review found: in the gap `(F + 1,000, F + window_court)` the freed
+/// collateral is simultaneously reported free for NEW work and still taken by a conviction.** Because
+/// `slashable_available` releases the lock's collateral at `F + 1,000` (it reads `is_live`) while the
+/// row stays convictable to `F + window_court`, one unit of collateral answers both an unconvicted
+/// prior `Valid` and a fresh lock — so `free + reserved` exceeds the seat's posted collateral by the
+/// lock. The launch build keeps the lock live for the whole conviction window, so `free + reserved`
+/// never exceeds `posted` and no such gap opens. Reached by REUSE at `F + 1,000` with NO withdrawal
+/// (testnet-12's `withdrawal_delay_daa` ≈ 12,900 ≫ `window_court`). It touches only the seat-side
+/// residual `G_res`; the executor escrow `E` sits in the vesting rows on the `window_court` clock and
+/// is clawed back regardless of the seat lock, so no uncovered mint opens.
+#[test]
+fn the_freed_collateral_is_double_committed_in_the_gap() {
+    let p_armed = armed(1_002);
+    let (mut armed_c, a_claim, a_seat, a_lock) = floor_to_final(p_armed.clone(), 0x0401);
+    let (dormant_c, _d_claim, d_seat, d_lock) = floor_to_final(t12(), 0x0401);
+    let f = armed_c.daa;
+    assert_eq!(dormant_c.daa, f, "same progression, same Final DAA (the fence touches no deadline)");
+    let wc = armed_c.sp.window_court();
+
+    // A DAA in the gap: past is_live (F + 1,000), before the row prunes (F + window_court).
+    let gap = f + PALW_FINAL_LOCK_LIFE_DAA_V1 + wc / 2;
+    assert!(gap > f + PALW_FINAL_LOCK_LIFE_DAA_V1 && gap < f + wc);
+    assert!(!a_lock.is_live(gap), "armed: lock is_live-dead in the gap — collateral released for new work");
+    assert!(d_lock.is_live(gap), "launch: lock still live in the gap — collateral still reserved");
+
+    let posted = armed_c.s.bond(&a_seat).expect("bond").collateral as u128;
+    assert_eq!(posted, dormant_c.s.bond(&d_seat).expect("bond").collateral as u128, "same posted collateral");
+    assert_eq!(a_lock.amount, d_lock.amount, "same lock amount — only its life moved");
+
+    // (1) What the protocol offers as FREE to back a new lock in the gap.
+    let a_free = armed_c.s.slashable_available(&a_seat, gap);
+    let d_free = dormant_c.s.slashable_available(&d_seat, gap);
+    assert!(
+        a_free >= d_free + a_lock.amount,
+        "armed frees the lock's capital in the gap, launch does not ({:.2} ≥ {:.2} + {:.2})",
+        msk(a_free),
+        msk(d_free),
+        msk(a_lock.amount)
+    );
+
+    // (2) The SAME collateral is still RESERVED against the old claim: a conviction in the gap slashes
+    //     the full lock (the row is present until F + window_court, read directly, not via is_live).
+    let a_before = armed_c.s.bond(&a_seat).expect("bond").collateral;
+    armed_c.step_at(gap, &[false_valid(&p_armed, a_claim, a_seat)], PalwBlockWorkV3::None, Hash64::default(), 0);
+    let a_taken = (a_before - armed_c.s.bond(&a_seat).expect("bond").collateral) as u128;
+    assert!(a_taken >= a_lock.amount, "armed: still convictable in the gap ({:.2} ≥ {:.2})", msk(a_taken), msk(a_lock.amount));
+
+    // (3) The double-commit: free (1) + reserved (2) exceeds the seat's posted collateral by the lock
+    //     on the armed build (concurrent-risk under-reservation), never on the launch build.
+    assert!(
+        a_free + a_lock.amount > posted,
+        "armed double-commit: free {:.2} + reserved {:.2} > posted {:.2}",
+        msk(a_free),
+        msk(a_lock.amount),
+        msk(posted)
+    );
+    assert!(
+        d_free + d_lock.amount <= posted,
+        "launch reserves it whole: free {:.2} + reserved {:.2} ≤ posted {:.2}",
+        msk(d_free),
+        msk(d_lock.amount),
+        msk(posted)
+    );
+    println!(
+        "[v02life] gap F+{}: posted {:.2} MSK, lock {:.2} MSK; armed free {:.2} (+lock > posted: DOUBLE-COMMIT), launch free {:.2} (+lock ≤ posted)",
+        PALW_FINAL_LOCK_LIFE_DAA_V1 + wc / 2,
+        msk(posted),
+        msk(a_lock.amount),
+        msk(a_free),
+        msk(d_free)
+    );
 }

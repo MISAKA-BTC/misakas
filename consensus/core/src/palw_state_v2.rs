@@ -1439,8 +1439,19 @@ pub const PALW_SHORT_CHALLENGE_WINDOW_DAA_V1: u64 = 120;
 /// liability RECORD ([`PalwPanelLiabilityRecordV1::expiry_daa`]), the vesting rows that hold the
 /// executor's escrow `E` ([`Self::write_vesting_row_at_final`]), the court/DA windows and the
 /// obligation-pruning slack all keep `window_court`, so the conviction path still fires through
-/// `F + window_court` and the fraudulent mint stays recoverable — only a seat that WITHDRAWS in
-/// `[F + 1,000, F + window_court]` escapes this lock's residual (the safety note on the fence).
+/// `F + window_court` and the fraudulent MINT stays recoverable.
+///
+/// **The residual cost is a per-collateral DOUBLE-COMMIT, not a withdrawal escape** (safety note
+/// corrected 2026-09-26 after review). Because `slashable_available` releases the collateral at
+/// `F + 1,000` while the lock ROW stays present and convictable to `F + window_court` (it prunes
+/// with the liability record in `sweep_panel_obligations`, and both conviction routes read the row,
+/// not `is_live`), a seat can back a fresh `Valid` lock against collateral that still answers an
+/// unconvicted prior `Valid` — so a conviction of one drains it and leaves the other's residual
+/// `G_res = G − E` short. Reachable at `F + 1,000` with NO withdrawal (testnet-12's
+/// `withdrawal_delay_daa` ≈ 12,900 ≫ `window_court`). Bounded to the seat-side residual the lock
+/// prices (~800 MSK per five-seat quorum), never additive to the mint: `E` is clawed back on the
+/// `window_court` clock regardless of the seat lock, and each fraud already loses `E`, so no
+/// uncovered mint and no profitable path opens.
 pub const PALW_FINAL_LOCK_LIFE_DAA_V1: u64 = 1_000;
 
 /// **ADR-0152 §4-ter (A-held): the widest held context an honest party can dissect inside a turn.**
