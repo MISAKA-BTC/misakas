@@ -234,6 +234,37 @@ fn refusal_code(why: &str) -> String {
     short
 }
 
+/// What one poll of a submitted registration means for `model add`'s wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RegistrationWaitStepV1 {
+    /// The class row is written: go on to the lanes.
+    Folded,
+    /// Keep waiting (to the deadline).
+    Wait,
+    /// Mined and dropped, read on [`REGISTRATION_DROPPED_POLLS`] polls running: stop with the reason.
+    Dropped,
+}
+
+/// How many polls running must read `REGISTRATION_DROPPED` before the wait stops on it.
+pub(crate) const REGISTRATION_DROPPED_POLLS: u32 = 3;
+
+/// **One poll of the registration wait**: `(step, the DROPPED streak after this poll)`.
+///
+/// Only `REGISTRATION_DROPPED`, read [`REGISTRATION_DROPPED_POLLS`] polls running, stops the wait;
+/// any other reading resets the streak and waits. `REGISTRATION_NOT_INCLUDED` in particular is every
+/// successful carrier's state for one block interval — mined (out of the mempool) and not yet folded
+/// by the next chain block (review of T12-030) — so it is never a verdict here.
+pub(crate) fn registration_wait_step(now: &kaspa_rpc_core::RpcPalwModelRegistration, streak: u32) -> (RegistrationWaitStepV1, u32) {
+    if now.folded {
+        return (RegistrationWaitStepV1::Folded, 0);
+    }
+    if now.reject_code != kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationDropped.code() {
+        return (RegistrationWaitStepV1::Wait, 0);
+    }
+    let streak = streak.saturating_add(1);
+    (if streak >= REGISTRATION_DROPPED_POLLS { RegistrationWaitStepV1::Dropped } else { RegistrationWaitStepV1::Wait }, streak)
+}
+
 fn lane_name(lane: PalwCertifiedLaneV1) -> &'static str {
     match lane {
         PalwCertifiedLaneV1::Attempt => "block lane",
@@ -903,17 +934,12 @@ async fn register(
     let settled_drop = std::cell::Cell::new(0u32);
     walk.wait_for(flow, "the registration to be mined", 20, || async {
         let now = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
-        if now.folded {
-            return Ok(true);
-        }
-        let dropped = now.reject_code == kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationDropped.code();
-        if !dropped {
-            settled_drop.set(0);
-            return Ok(false);
-        }
-        settled_drop.set(settled_drop.get() + 1);
-        if settled_drop.get() < 3 {
-            return Ok(false);
+        let (step, streak) = registration_wait_step(&now, settled_drop.get());
+        settled_drop.set(streak);
+        match step {
+            RegistrationWaitStepV1::Folded => return Ok(true),
+            RegistrationWaitStepV1::Wait => return Ok(false),
+            RegistrationWaitStepV1::Dropped => {}
         }
         crate::palw_model_ops::print_pipeline(&now);
         Err(Halt::Blocked(
@@ -1071,6 +1097,65 @@ mod tests {
             covering: Default::default(),
         };
         ChainFamily { lane, digest: family.digest(), family }
+    }
+
+    fn poll(reject_code: &str, folded: bool) -> kaspa_rpc_core::RpcPalwModelRegistration {
+        use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1 as Code;
+        kaspa_rpc_core::RpcPalwModelRegistration {
+            submitted: true,
+            accepted: !reject_code.is_empty() || folded,
+            folded,
+            included: folded,
+            reject_code: reject_code.to_string(),
+            drop_reason: if reject_code == Code::RegistrationDropped.code() {
+                "CLASS_NOT_ATTRIBUTABLE: …".into()
+            } else {
+                String::new()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Runs `polls` through [`registration_wait_step`] the way the wait loop does: the step it stops
+    /// on and the poll index, or `None` when the polls run out still waiting.
+    fn run_wait(polls: &[kaspa_rpc_core::RpcPalwModelRegistration]) -> Option<(RegistrationWaitStepV1, usize)> {
+        let mut streak = 0;
+        for (i, now) in polls.iter().enumerate() {
+            let (step, next) = registration_wait_step(now, streak);
+            streak = next;
+            if step != RegistrationWaitStepV1::Wait {
+                return Some((step, i));
+            }
+        }
+        None
+    }
+
+    /// **Review of T12-030 (B1): a carrier mined and not yet folded does not stop the wait.** A
+    /// successful carrier reads `REGISTRATION_NOT_INCLUDED` for a whole block interval (~120 s on
+    /// testnet-12, 24 polls at 5 s) between leaving the mempool and its row being written; the wait
+    /// runs through it and ends on the fold. Three `REGISTRATION_DROPPED` polls running stop it; a
+    /// streak broken by any other reading starts again.
+    #[test]
+    fn b1_the_mined_but_not_yet_folded_window_never_stops_the_wait() {
+        use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1 as Code;
+        let (pooled, missing, dropped) = ("", Code::RegistrationNotIncluded.code(), Code::RegistrationDropped.code());
+        // Pooled for a while, mined, NOT_INCLUDED for the whole interval (and well past it), folded.
+        let mut polls = vec![poll(pooled, false); 4];
+        polls.extend(vec![poll(missing, false); 60]);
+        polls.push(poll(pooled, true));
+        assert_eq!(run_wait(&polls), Some((RegistrationWaitStepV1::Folded, 64)), "the success path waits to the fold");
+        // NOT_INCLUDED alone never stops it: the deadline does.
+        assert_eq!(run_wait(&vec![poll(missing, false); 240]), None, "an evicted carrier is waited out to the deadline");
+        // DROPPED three polls running stops it, on the third.
+        let mut drop = vec![poll(missing, false); 30];
+        drop.extend(vec![poll(dropped, false); 3]);
+        assert_eq!(run_wait(&drop), Some((RegistrationWaitStepV1::Dropped, 32)));
+        // Two, then another reading, then two: the streak restarts, and the wait goes on.
+        let broken =
+            vec![poll(dropped, false), poll(dropped, false), poll(missing, false), poll(dropped, false), poll(dropped, false)];
+        assert_eq!(run_wait(&broken), None, "a broken streak does not stop the wait");
+        assert_eq!(registration_wait_step(&poll(dropped, false), 2), (RegistrationWaitStepV1::Dropped, 3));
+        assert_eq!(registration_wait_step(&poll(missing, false), 2), (RegistrationWaitStepV1::Wait, 0));
     }
 
     /// The live terms decode to the type the SDK builds from, with each family on its own lane —
