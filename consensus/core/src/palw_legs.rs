@@ -965,7 +965,12 @@ pub fn check_legs_refutation_v1(refutation: &PalwLegsRefutationV1) -> Result<Pal
             if let Some(fault) = shape_fault {
                 return Ok(PalwLegsRefutationVerdictV1 { fault, evidence_id: evidence_id(committed, 0, 0, fault) });
             }
-            if later_opening.leaf_index != earlier_opening.leaf_index + 1 {
+            // MSK-26A-PALW-19: both indices are the evidence's own, unverified words (neither
+            // opening has been checked against the committed tree yet), so `u32::MAX + 1` must be
+            // a refusal, not an overflow — the release profile panics on overflow and kaspad's
+            // panic hook exits the process. No index at or past the count opens anyway, so the
+            // checked form refuses exactly what the unchecked one would have refused or crashed on.
+            if earlier_opening.leaf_index.checked_add(1) != Some(later_opening.leaf_index) {
                 return Err(PalwLegsError::ChainEvidenceNotAdjacent {
                     earlier: earlier_opening.leaf_index,
                     later: later_opening.leaf_index,
@@ -2164,6 +2169,30 @@ mod tests {
             },
         };
         assert_eq!(check_legs_refutation_v1(&refutation), Err(PalwLegsError::ChainEvidenceNotAdjacent { earlier: 1, later: 1 }));
+
+        // MSK-26A-PALW-19: an earlier index of u32::MAX is refused as not adjacent — against the
+        // later index a wrapping add would produce (0) and against any other — never an overflow
+        // panic before either opening is read.
+        for later in [0, 1, u32::MAX] {
+            let mut earlier_opening = checkpoint_opening(&two, 0);
+            earlier_opening.leaf_index = u32::MAX;
+            let mut later_opening = checkpoint_opening(&two, 1);
+            later_opening.leaf_index = later;
+            let refutation = PalwLegsRefutationV1 {
+                binding: two.binding.clone(),
+                evidence: PalwLegsEvidenceV1::CheckpointChain {
+                    earlier_opening,
+                    earlier_preimage: two.checkpoint_leaves[0].clone(),
+                    later_opening,
+                    later_preimage: two.checkpoint_leaves[1].clone(),
+                },
+            };
+            assert_eq!(
+                check_legs_refutation_v1(&refutation),
+                Err(PalwLegsError::ChainEvidenceNotAdjacent { earlier: u32::MAX, later }),
+                "later index {later}"
+            );
+        }
 
         // Oversized activation row dies at shape level.
         let mut preimage = world.activation_leaves[0].clone();

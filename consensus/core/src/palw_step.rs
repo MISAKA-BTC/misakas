@@ -1467,8 +1467,20 @@ fn step_leaf_count_capped_counted_v1(
         }
     }
     // The aux series is already O(1) in the job's length and is added exactly where the loop added
-    // it — after the main enumeration cleared the cap, and with the same `+`.
-    total += kv_aux_leaf_count(profile, context);
+    // it — after the main enumeration cleared the cap — and it SATURATES like every other term of
+    // the running total (MSK-26A-PALW-19 sibling).
+    //
+    // The loop spelled this `+`. At `cap == u64::MAX` a main enumeration that clamped to
+    // `u64::MAX` clears the cap, and any non-zero aux series then overflowed: a panic under the
+    // release profile's `overflow-checks = true`, and kaspad's panic hook exits the process. The
+    // cap is attacker-chosen there — `check_step_refutation_capped_v1`'s shape pass passes the
+    // binding's own `step_leaf_count` — so a carried `StepStructural` contradiction claiming
+    // `u64::MAX` leaves reached it before any opening was verified. Below the overflow the sum is
+    // the same number, so no answer the shipped binary ever returned moves; the corner that
+    // panicked now answers what the clamped main enumeration already answers for a job without
+    // an aux series (`Ok(u64::MAX)` at `cap == u64::MAX`, `TooManyLeaves` below it), and what
+    // `job_leaf_split_capped_v1` already assumed (`saturating_add` of this same series).
+    total = total.saturating_add(kv_aux_leaf_count(profile, context));
     if total > cap {
         return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
     }
@@ -3557,6 +3569,56 @@ mod tests {
                 "the saturating job disagrees at cap={cap}"
             );
         }
+    }
+
+    /// **MSK-26A-PALW-19 sibling: the aux series saturates like the rest of the total.**
+    ///
+    /// The test above holds `kv_chunk_calls = 0`, so its aux series is empty and the add after the
+    /// main enumeration is never exercised at the clamp. With an aux series, a main enumeration
+    /// that clamps to `u64::MAX` clears a `u64::MAX` cap and the old `total += aux` overflowed — a
+    /// process exit under the release profile's `overflow-checks = true`. That cap is the one an
+    /// accuser chooses: `check_step_refutation_capped_v1` passes the binding's own
+    /// `step_leaf_count`.
+    #[test]
+    fn a_saturating_job_with_an_aux_series_clamps_instead_of_overflowing() {
+        let mut p = tiny_profile();
+        p.layer_count = 3;
+        p.full_attention_interval = 1;
+        p.gdn_nodes = Vec::new();
+        p.n_ctx = 20_000;
+        p.kv_chunk_calls = 1;
+        p.attn_nodes = (0..PALW_STEP_MAX_NODES_PER_TABLE)
+            .map(|_| node(PalwStepOpKindV1::MatMulF16, PalwStepOutLenV1::KvScaled { multiplier: u32::MAX }, PALW_STEP_MIN_TILE_LEN))
+            .collect();
+        assert!(p.validate_shape().is_ok(), "the shape is inside every declared ceiling");
+
+        let mut ctx = tiny_context();
+        ctx.declared_prefill_tokens = 20_000;
+        ctx.exact_decode_tokens = 1;
+        let aux = kv_aux_leaf_count(&p, &ctx);
+        assert!(aux > 0, "the aux series must be non-empty or the add is not exercised");
+        let mut without_aux = p.clone();
+        without_aux.kv_chunk_calls = 0;
+        assert_eq!(
+            step_leaf_count_capped_counted_v1(&without_aux, &ctx, u64::MAX, &mut 0),
+            Ok(u64::MAX),
+            "the main enumeration alone must already clamp"
+        );
+
+        let at_max = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step_leaf_count_capped_v1(&p, &ctx, u64::MAX)));
+        assert_eq!(at_max.expect("the aux add must not overflow"), Ok(u64::MAX), "the total clamps, as without an aux series");
+        // Every cap below the clamp is refused by the main enumeration before the aux add, exactly
+        // as the loop refused it; nothing the shipped binary answered moves.
+        for cap in [u64::MAX - 1, PALW_STEP_MAX_LEAVES, 1 << 32] {
+            assert_eq!(
+                step_leaf_count_capped_counted_v1(&p, &ctx, cap, &mut 0),
+                job_leaf_count_loop_oracle_v1(&p, &ctx, cap, &mut 0),
+                "the saturating job with an aux series disagrees at cap={cap}"
+            );
+        }
+        // The split built on this total stays total, fail-closed: `(total, 0)`.
+        let split = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job_leaf_split_capped_v1(&p, &ctx, u64::MAX)));
+        assert_eq!(split.expect("the split must not overflow"), Ok((u64::MAX, 0)));
     }
 
     /// **The cost, measured: the walk pays for the job's length, the closed form does not.**
