@@ -58,6 +58,15 @@ pub struct PalwProducerBondFactsV2 {
     /// `Params::palw_rcore_plus`, `0` below it. The work gate never lets `committed + accuser` pass
     /// the collateral (the S review's M1).
     pub accuser_exposure: u128,
+    /// **Lane V02 (post-launch, 2026-09-26): the part of [`Self::committed`] the ceiling does not
+    /// carry** — the bond's locks on resolved claims (`palw_bond_off_ceiling_raw_v1`) where
+    /// `Params::palw_final_lock_full_collateral` is in force at the candidate DAA, `0` below it. The
+    /// fold's work gate is then `committed − committed_off_ceiling + claim ≤ exposure_ceiling`, and the
+    /// whole `committed` still counts against the collateral.
+    pub committed_off_ceiling: u128,
+    /// **Lane V02 (review HIGH): the accuser reserve the relief never spends**
+    /// (`palw_bond_accuser_reserve_v1` at the candidate DAA, `0` below the fence).
+    pub accuser_reserve: u128,
 }
 
 impl PalwProducerBondFactsV2 {
@@ -72,8 +81,46 @@ impl PalwProducerBondFactsV2 {
     /// up to registration exposure, which admission item 8 always counted (the accuser ledger is `0`
     /// there and the ratio is at most 1000‰, so the second clause is implied).
     pub fn has_committed_room(&self) -> bool {
-        self.committed.saturating_add(self.claim_exposure) <= self.exposure_ceiling
-            && self.committed.saturating_add(self.accuser_exposure).saturating_add(self.claim_exposure) <= self.collateral as u128
+        let launch = self.committed.saturating_add(self.claim_exposure) <= self.exposure_ceiling
+            && self.committed.saturating_add(self.accuser_exposure).saturating_add(self.claim_exposure) <= self.collateral as u128;
+        // Lane V02: `committed_off_ceiling` is 0 below `palw_final_lock_full_collateral` — the shipped
+        // test. Past it the work gate is `max(launch, split)` (`palw_rcore_work_room_of_ceiling_v1`):
+        // the resolved locks leave the ceiling, and the relief never spends the accuser reserve.
+        if self.committed_off_ceiling == 0 {
+            return launch;
+        }
+        launch
+            || (self.committed.saturating_sub(self.committed_off_ceiling).saturating_add(self.claim_exposure) <= self.exposure_ceiling
+                && self
+                    .committed
+                    .saturating_add(self.accuser_exposure)
+                    .saturating_add(self.accuser_reserve)
+                    .saturating_add(self.claim_exposure)
+                    <= self.collateral as u128)
+    }
+}
+
+/// **Lane V02 (review MEDIUM): the producer's accuser ledger as the fold reads it past the fence** —
+/// where `palw_final_lock_full_collateral` is in force at `daa_score` and the block folds held
+/// dissections at their charge (`held_charge_active`: the extras pair `offence_attribution_active &&
+/// held_context_ladder.is_some()`), [`PalwProducerBondFactsV2::accuser_exposure`] becomes
+/// `palw_accuser_ledger_v1` — the court index's count plus each open held dissection's surplus — so
+/// `has_committed_room` measures what the fold's `gate_room` and admission item 8 measure. Below the
+/// fence the facts are untouched. The caller that holds the block's fences (the processor) applies it.
+pub fn palw_producer_facts_apply_held_ledger_v1(
+    facts: &mut PalwProducerFactsV2,
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: Option<&PalwBondKeyV2>,
+    daa_score: u64,
+    held_charge_active: bool,
+) {
+    let Some(key) = bond else { return };
+    let Some(floor) = crate::palw_state_v2::palw_v02_held_charge_floor_v1(state_params, daa_score, held_charge_active) else {
+        return;
+    };
+    if let Some(bond_facts) = facts.bond.as_mut() {
+        bond_facts.accuser_exposure = crate::palw_state_v2::palw_accuser_ledger_v1(state, key, Some(floor));
     }
 }
 
@@ -185,6 +232,15 @@ pub struct PalwProducerFactsV2 {
     /// the tip does not hold this node's attempts still riding side blocks, so a producer that asked
     /// only the refusal started inferences its share could no longer admit.
     pub bond_class_share: Option<(u64, u32)>,
+    /// **Lane bind-deadlock (`Params::palw_anchor_at_ceiling`): the candidate block would be a binder.**
+    /// `true` where the fence and R-core+ are in force at the candidate's DAA, past the operator-anchor
+    /// fence (`Params::palw_operator_anchor`, lane A) there the named bond is an operator's, and the tip
+    /// holds a claim `Provisional` with its anchor slot at or below it — so an attempt this producer
+    /// mines now is that claim's anchor, which the chain keeps even when the bond has no room for a
+    /// claim of its own (the attempt then carries none). A producer whose only hold is
+    /// [`PALW_NOT_READY_EXPOSURE_FULL_V2`] mines exactly then, so a fleet at its ceilings still binds.
+    /// Filled by the caller that holds the fences (`false` from [`palw_producer_facts_v4`]).
+    pub binder_due: bool,
 }
 
 impl PalwProducerFactsV2 {
@@ -487,12 +543,18 @@ pub fn palw_producer_facts_v4(
             } else {
                 0
             },
+            // Lane V02: 0 below `palw_final_lock_full_collateral` (and below R-core+, which it requires).
+            committed_off_ceiling: crate::palw_state_v2::palw_bond_off_ceiling_raw_v1(state, state_params, key, daa_score, raw_depth),
+            // Lane V02 (review HIGH): 0 below the fence.
+            accuser_reserve: crate::palw_state_v2::palw_bond_accuser_reserve_v1(state_params, daa_score),
         })
     });
     Some(PalwProducerFactsV2 {
         // The caller that holds the block's fences asks the fold's class gate (route-matrix #7).
         class_admission_refusal: None,
         bond_class_share: None,
+        // Lane bind-deadlock: the caller that holds `Params::palw_anchor_at_ceiling` fills it.
+        binder_due: false,
         is_base_class: class_id == state_params.base_class_id(),
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
             || state.fp_lane_certification(&class_id).is_some(),
@@ -616,6 +678,55 @@ mod tests {
         assert_eq!(palw_claim_phase_deadline_v1(&state, &id, &c, &short, Some(999)), Some(999), "a court's backstop first");
         let base = state_params();
         assert_eq!(palw_claim_phase_deadline_v1(&state, &id, &c, &base, None), Some(200 + base.window_challenge()), "below the fence");
+    }
+
+    /// **V08: past R-core+ a `Provisional` row's date is its anchor slot** (`bind_base + anchor_delay`,
+    /// where SW-8 binds or voids it), from the redraw's DAA when it was re-bound; below the fence, and
+    /// for every other phase, the row keeps the date `palw_claim_phase_deadline_v1` gave it.
+    #[test]
+    fn v08_a_provisional_rows_date_is_its_anchor_slot_past_rcore_plus() {
+        let row = |phase: crate::palw_state_v2::PalwClaimPhaseV2, accepted_daa: u64, rebound_daa: Option<u64>, deadline: u64| {
+            PalwClaimRowV1 {
+                claim_id: h64(0xC1),
+                free_prompt: false,
+                quanta: 0,
+                quanta_spent: 0,
+                class_id: h64(1),
+                executor_bond: PalwBondKeyV2(bond_outpoint()),
+                phase,
+                accepted_daa,
+                accepted_block: crate::BlockHash::from_u64_word(0xB0),
+                rebound_daa,
+                seats: Vec::new(),
+                bound_daa: None,
+                deadline_daa: Some(deadline),
+                reserved: 0,
+                committed: Some(0),
+                escrowed_reward: 0,
+                payout_pending: None,
+                work_leaves: 0,
+                open_courts: 0,
+                exec_lane: None,
+            }
+        };
+        use crate::palw_state_v2::PalwClaimPhaseV2 as P;
+        let base = state_params();
+        let armed = state_params().with_rcore_plus_mirrors(Some(50), 0, Vec::new());
+        let window = base.window_bind();
+        let mut rows = vec![
+            row(P::Provisional, 200, None, 200 + window),
+            row(P::Provisional, 200, Some(260), 260 + window),
+            row(P::Provisional, 40, None, 40 + window),
+            row(P::PanelBound { bound_daa: 220 }, 200, None, 220 + base.window_receipt()),
+        ];
+        let below = rows.clone();
+        palw_claim_rows_bind_by_anchor_slot_v1(&mut rows, &base, 20);
+        assert_eq!(rows, below, "below the fence every row is untouched");
+        palw_claim_rows_bind_by_anchor_slot_v1(&mut rows, &armed, 20);
+        assert_eq!(rows[0].deadline_daa, Some(220), "accepted + the anchor delay, not accepted + {window}");
+        assert_eq!(rows[1].deadline_daa, Some(280), "a redraw's slot counts from the redraw");
+        assert_eq!(rows[2].deadline_daa, Some(40 + window), "a bind base below the fence keeps the backstop");
+        assert_eq!(rows[3].deadline_daa, below[3].deadline_daa, "a bound claim keeps its receipt date");
     }
 
     /// **ADR-0152 S-SPEC §2 / §10a: v4 hands the producer the ledger admission measures it by** —
@@ -1812,8 +1923,16 @@ pub struct PalwClaimRowV1 {
     /// When the current phase ends by itself: a window closes, a court's backstop, or — for a
     /// final or voided claim — when its record retires from the state.
     pub deadline_daa: Option<u64>,
-    /// The collateral this claim reserves on its bond until it ends.
+    /// **The claim's WEIGHT term** (`PalwClaimStateV2::reserved`): held on its bond until the claim
+    /// ends. Not everything the claim holds there — see [`Self::committed`] (testnet-12 lifecycle
+    /// audit: `getPalwClaims.reservedSompi` read as the whole reservation, and it is the weight).
     pub reserved: u128,
+    /// **Everything the claim holds on its bond at the tip** (`palw_claim_commitment_v1`): the
+    /// weight, plus option A's escrow term until the licence releases it past `palw_rcore_plus`
+    /// (released at LICENCE, not at Final), plus a free-prompt claim's priced receipt rights; 0 once
+    /// Final, and a void's abandon hold while it lasts. The sum is the bond's reserved exposure.
+    /// `None` when the figure overflows (`palw_claim_commitment_v1`'s own `None`) — never a sentinel.
+    pub committed: Option<u128>,
     /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
     pub escrowed_reward: u64,
     /// The payout queued for the next coinbase, once the claim is final — the producer's leg.
@@ -1909,7 +2028,9 @@ pub fn palw_claim_phase_deadline_v1(
 ) -> Option<u64> {
     use crate::palw_state_v2::PalwClaimPhaseV2 as P;
     match &claim.phase {
-        P::Provisional => Some(claim.rebound_daa.unwrap_or(claim.accepted_daa).saturating_add(state_params.window_bind())),
+        // The fold's own bind deadline: `bind_base + window_bind`, or — for a claim lane F1 re-anchored
+        // after a no-capable-panel — the backstop its acceptance set (`accepted + window_bind`).
+        P::Provisional => crate::palw_state_v2::palw_provisional_bind_deadline_v1(state, state_params, claim_id, claim).ok(),
         P::PanelBound { bound_daa } => Some(bound_daa.saturating_add(state_params.window_receipt())),
         P::ReceiptLicensed { licensed_daa } => court_backstop.or_else(|| {
             crate::palw_state_v2::palw_claim_final_floor_v1(state, state_params, claim_id, claim, *licensed_daa)
@@ -1930,6 +2051,27 @@ pub fn palw_claim_phase_deadline_v1(
     }
 }
 
+/// **V08 (the pre-t12 sweep of 2026-09-25): past `palw_rcore_plus` a `Provisional` claim's date is
+/// its anchor slot, not the bind window's backstop.** Under SW-8 a claim binds in its anchor block —
+/// the first attempt block at or past `bind_base + anchor_delay` — or step 4c voids it there
+/// (`NoCapablePanel` / `BindTimeout`); `bind_base + window_bind` is reached only when no attempt block
+/// arrives in the whole window. `getPalwClaims` printed that backstop (accepted + 600) for claims the
+/// fold decided at accepted + 20, so an operator read 600 DAA of room where there were 20. The rows
+/// the chain answers with carry the slot — the earliest DAA the phase can end at — for every
+/// `Provisional` row whose bind base is past the fence; below it, and for every other phase, the row
+/// is untouched. Read-side only: the fold, the deadline index and every sweep read their own dates.
+pub fn palw_claim_rows_bind_by_anchor_slot_v1(rows: &mut [PalwClaimRowV1], state_params: &PalwStateParamsV2, anchor_delay: u64) {
+    for row in rows.iter_mut() {
+        if !matches!(row.phase, crate::palw_state_v2::PalwClaimPhaseV2::Provisional) {
+            continue;
+        }
+        let bind_base = row.rebound_daa.unwrap_or(row.accepted_daa);
+        if state_params.rcore_plus_active_at(bind_base) {
+            row.deadline_daa = Some(bind_base.saturating_add(anchor_delay));
+        }
+    }
+}
+
 /// **A bond's claims, newest first** — as executor, or as a seat on their panels. `limit` bounds
 /// the rows (0 = no bound); the bool says whether any were left out.
 pub fn palw_claim_rows_v1(
@@ -1942,6 +2084,7 @@ pub fn palw_claim_rows_v1(
 ) -> (Vec<PalwClaimRowV1>, bool) {
     use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
     let payouts: std::collections::BTreeMap<&Hash64, u64> = state.pending_payouts_iter().map(|(id, p)| (id, p.amount)).collect();
+    let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
     let mut courts: std::collections::BTreeMap<Hash64, (usize, u64)> = std::collections::BTreeMap::new();
     for (_, session) in state.court_sessions_iter() {
         let entry = courts.entry(session.claim).or_insert((0, u64::MAX));
@@ -1981,6 +2124,7 @@ pub fn palw_claim_rows_v1(
                 bound_daa: panel.map(|p| p.bound_daa),
                 deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
                 reserved: claim.reserved,
+                committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa),
                 escrowed_reward: claim.escrowed_reward,
                 // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
                 // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
@@ -2038,6 +2182,79 @@ pub fn palw_bond_summary_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> O
     })
 }
 
+/// **One `Valid` lock a bond holds that the fold still counts** ([`palw_bond_live_locks_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwBondLockRowV1 {
+    pub claim_id: Hash64,
+    pub amount: u128,
+    /// The lock's DAA clock: live while the DAA is below it.
+    pub expiry_daa: u64,
+    /// `true` when the DAA clock has run and the lock is held by the anchor count alone (the second
+    /// clock) — which holds it at most until `expiry_daa + 2 × window_court`.
+    pub held_by_anchor_count: bool,
+}
+
+/// **What a bond's live `Valid` locks withhold, and until when** (testnet-12 lifecycle audit
+/// T12-058). `BondRetireRequested` is dropped while ANY lock on the bond is live — "still holds …
+/// sompi of slashable panel locks; withdraw is refused until liability expiry" — and a seat that
+/// served panels holds one per `Valid` it signed for `window_court` past the claim's Final. No read
+/// showed a lock, its expiry or the refusal it causes, so `bond retire` paid for a carrier the fold
+/// dropped. Judged exactly as the fold judges at `at_daa` (the next block's DAA), through
+/// [`PalwChainStateV2::palw_live_slashable_locks_v1`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwBondLocksV1 {
+    /// The DAA the locks were judged at: the one the next block folds at.
+    pub at_daa: u64,
+    /// The live locks, earliest expiry first — at most the read's `limit`.
+    pub locks: Vec<PalwBondLockRowV1>,
+    /// More live locks than `locks` lists.
+    pub truncated: bool,
+    /// How many live locks there are, and their sum: the figure the retirement's refusal names.
+    pub live_count: u64,
+    pub live_locked: u128,
+    /// The DAA every live lock's DAA clock has run by (the latest `expiry_daa`); 0 with none.
+    pub daa_clock_release: u64,
+    /// The latest the anchor count may hold any of them (`expiry_daa + 2 × window_court`, the
+    /// second clock's own bound) where a second clock runs at `at_daa`; `None` where none does.
+    pub anchor_count_bound: Option<u64>,
+    /// `Params::palw_objective_offence` is armed at `at_daa`: the fold refuses a retirement while
+    /// `live_locked > 0`. Below it locks are neither written nor read.
+    pub retire_refused_while_locked: bool,
+}
+
+/// [`PalwBondLocksV1`] for `bond`, judged at `at_daa` with the RAW second-clock depth there (the
+/// facts the next block's fold reads), listing at most `limit` locks (0: none listed, sums whole).
+pub fn palw_bond_live_locks_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    at_daa: u64,
+    raw_depth: Option<u64>,
+    objective_offence: bool,
+    limit: usize,
+) -> PalwBondLocksV1 {
+    let window_court = state_params.window_court();
+    let escaped = state.palw_escaped_second_clock_depth_v1(raw_depth, at_daa, window_court);
+    let mut read = PalwBondLocksV1 { at_daa, retire_refused_while_locked: objective_offence, ..Default::default() };
+    let mut rows: Vec<PalwBondLockRowV1> = Vec::new();
+    for (claim_id, lock) in state.palw_live_slashable_locks_v1(bond, at_daa, raw_depth, window_court) {
+        read.live_count = read.live_count.saturating_add(1);
+        read.live_locked = read.live_locked.saturating_add(lock.amount);
+        read.daa_clock_release = read.daa_clock_release.max(lock.expiry_daa);
+        let held_by_anchor_count = !lock.is_live(at_daa);
+        if escaped.is_some() {
+            let bound = lock.expiry_daa.saturating_add(window_court.saturating_mul(2));
+            read.anchor_count_bound = Some(read.anchor_count_bound.map_or(bound, |b| b.max(bound)));
+        }
+        rows.push(PalwBondLockRowV1 { claim_id, amount: lock.amount, expiry_daa: lock.expiry_daa, held_by_anchor_count });
+    }
+    rows.sort_by_key(|row| (row.expiry_daa, row.claim_id));
+    read.truncated = rows.len() > limit;
+    rows.truncate(limit);
+    read.locks = rows;
+    read
+}
+
 /// A bond's claims and the bond, at one tip — what `getPalwClaims` answers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwBondClaimsV1 {
@@ -2056,6 +2273,9 @@ pub struct PalwBondClaimsV1 {
     /// retirement on the row is the reward's only record. Newest Final first.
     pub vesting_only: Vec<crate::palw_vesting_read_v1::PalwVestingRowReadV1>,
     pub vesting_only_truncated: bool,
+    /// **The bond's live `Valid` locks** (testnet-12 lifecycle audit T12-058), judged at the next
+    /// block's DAA — read only with `vesting_at` (the RPC's entry), `None` from the node-policy one.
+    pub locks: Option<PalwBondLocksV1>,
 }
 
 /// **`getPalwClaims`' whole answer at one tip** (ADR-0122 §6.5, claim row v3): the rows
@@ -2078,9 +2298,28 @@ pub fn palw_bond_claims_v1(
     limit: usize,
     vesting_at: Option<(u64, Option<u64>)>,
 ) -> PalwBondClaimsV1 {
+    palw_bond_claims_with_locks_v1(state, state_params, bond, role, include_terminal, limit, vesting_at, false)
+}
+
+/// [`palw_bond_claims_v1`] with `objective_offence` (`Params::palw_objective_offence` at the next
+/// block's DAA) — whether the fold refuses a retirement while a lock is live. The RPC's entry.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_bond_claims_with_locks_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    role: PalwClaimRoleV1,
+    include_terminal: bool,
+    limit: usize,
+    vesting_at: Option<(u64, Option<u64>)>,
+    objective_offence: bool,
+) -> PalwBondClaimsV1 {
     use crate::palw_vesting_read_v1::{PalwVestingReaderV1, palw_vesting_only_rows_v1};
     let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
     let (rows, truncated) = palw_claim_rows_v1(state, state_params, bond, role, include_terminal, limit);
+    let locks = vesting_at.map(|(next_daa, raw_depth)| {
+        palw_bond_live_locks_v1(state, state_params, bond, next_daa, raw_depth, objective_offence, limit.max(1))
+    });
     let (vesting, (vesting_only, vesting_only_truncated)) = match vesting_at {
         Some((next_daa, raw_depth)) => {
             let reader = PalwVestingReaderV1::new(state, state_params, next_daa, raw_depth);
@@ -2103,6 +2342,7 @@ pub fn palw_bond_claims_v1(
         vesting,
         vesting_only,
         vesting_only_truncated,
+        locks,
     }
 }
 

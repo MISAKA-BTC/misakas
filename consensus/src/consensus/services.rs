@@ -195,7 +195,10 @@ impl ConsensusServices {
         .with_round_lane_declared(params.palw_execution_lane_fence().is_some())
         // ADR-0152-adjacent (Activation Pool): the activation sink's two doors, where the ruleset
         // declares the pool (testnet-12 alone).
-        .with_activation_pool_fence(params.palw_activation_pool_fence().map(|pool| pool.activation));
+        .with_activation_pool_fence(params.palw_activation_pool_fence().map(|pool| pool.activation))
+        // Lane sink (the model sink binding, post-launch): past its height an unbound model sink is
+        // refused in the header context. `None` on every shipped preset until the operator arms it.
+        .with_model_sink_bound_fence(params.palw_model_sink_bound_fence());
 
         let pruning_point_manager = PruningPointManager::new(
             params.pruning_depth(),

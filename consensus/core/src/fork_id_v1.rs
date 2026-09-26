@@ -569,7 +569,14 @@ mod tests {
             "palw_bond_maturity" => {
                 params.palw_bond_maturity = Some(crate::config::params::PalwBondMaturityV1 { activation: at, window_daa: 1_000 })
             }
+            // Lane maturity (post-launch, 2026-09-26): refused without `palw_bond_maturity` scheduled above
+            // it by `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_bond_maturity_early" => params.palw_bond_maturity_early = Some(at),
             "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
+            // lane: rcore/f1-forkchoice-attacks
+            "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
+            "palw_pruning_proof_strict_economic_win" => params.palw_pruning_proof_strict_economic_win = Some(at),
             "palw_heartbeat" => {
                 let hb = params.palw_heartbeat.as_mut().expect("the RC probe base carries the heartbeat lane");
                 hb.activation = at;
@@ -628,10 +635,32 @@ mod tests {
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
             "palw_rcore_plus" => params.palw_rcore_plus = Some(at),
+            // Lane F1 (the panel seed, post-launch): refused without R-core+ at or below it by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_panel_seed_execution" => params.palw_panel_seed_execution = Some(at),
+            // Lane A (the operator anchor, post-launch): the height over every genesis bond (the RC probe
+            // base is ConsensusV2); refused without R-core+ at or below it by `validate_palw_v2`, which the
+            // probe does not run — it asks only the hashers and the schedule.
+            "palw_operator_anchor" => {
+                let rule = params.palw_operator_anchor_of_genesis_bonds_v1(at).expect("the RC probe base is ConsensusV2");
+                params.palw_operator_anchor = Some(rule);
+            }
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch): refused without R-core+
+            // at or below it and an unsynced mirror by `validate_palw_v2`, which the probe does not run.
+            "palw_final_lock_full_collateral" => params.palw_final_lock_full_collateral = Some(at),
+            // Lane V02 (the shortened post-Final lock life, post-launch): refused without R-core+ at or
+            // below it and an unsynced mirror by `validate_palw_v2`, which the probe does not run.
+            "palw_final_lock_life" => params.palw_final_lock_life = Some(at),
             // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
             // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
             // hashers and the schedule.
             "palw_class_verify_deadline" => params.palw_class_verify_deadline = Some(at),
+            // Lane bind-deadlock (post-launch): refused without R-core+ at or below it by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_anchor_at_ceiling" => params.palw_anchor_at_ceiling = Some(at),
+            "palw_lane_accept_parents_first" => params.palw_lane_accept_parents_first = Some(at),
             // ADR-0152-adjacent (Activation Pool): the height with the user's terms beside it.
             "palw_activation_pool" => {
                 params.palw_activation_pool = Some(crate::config::params::PalwActivationPoolParamsV1 {
@@ -647,6 +676,10 @@ mod tests {
                     max_age_spans: crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1,
                 })
             }
+            // Lane F1 (registry resilience, V03/V05): a post-launch fence, refused below R-core+ and the
+            // registry by `validate_palw_v2`, which the probe does not run — it asks only the hashers
+            // and the schedule.
+            "palw_registry_resilience" => params.palw_registry_resilience = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),
@@ -673,6 +706,7 @@ mod tests {
             "palw_court_ladder" => params.palw_court_ladder = Some(at),
             "palw_fp_da_pins" => params.palw_fp_da_pins = Some(at),
             "palw_validator_payout_bounds" => params.palw_validator_payout_bounds = Some(at),
+            "palw_slashing_evidence_utxo_genuine" => params.palw_slashing_evidence_utxo_genuine = Some(at),
             "palw_epoch_boundary_budget" => params.palw_epoch_boundary_budget = Some(at),
             "palw_epoch_budget_release" => params.palw_epoch_budget_release = Some(at),
             "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
@@ -682,6 +716,9 @@ mod tests {
             "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
             "palw_model_seed_v2" => params.palw_model_seed_v2 = Some(at),
             "palw_model_evm" => params.palw_model_evm = Some(at),
+            // Lane sink (the model sink binding, post-launch): refused without the market and the
+            // 2026-09-23 audit fence at or below it by `validate_palw_v2`, which the probe does not run.
+            "palw_model_sink_bound" => params.palw_model_sink_bound = Some(at),
             "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
             "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
             "palw_kary_court" => params.palw_kary_court = Some(at),
@@ -704,6 +741,10 @@ mod tests {
             "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
             "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
             "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): refines the
+            // fence above; `validate_palw_v2` wants that one at or below it, which the probe does not
+            // run — it asks only the hashers and the schedule.
+            "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
             "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
             "palw_panel_economy" => params.palw_panel_economy = Some(at),
             "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),

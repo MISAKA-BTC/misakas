@@ -206,6 +206,17 @@ pub(crate) enum PalwWeighFaultV2 {
     StoreUnreadable,
 }
 
+/// **How one chain block stands as a panel anchor** ([`VirtualStateProcessor::palw_chain_block_as_anchor_v1`]).
+struct PalwChainAnchorV1 {
+    /// The highest claim slot the block anchors: its own DAA score, or past lane A the latest operator
+    /// attempt it is or merges, capped at its own DAA score.
+    reach: u64,
+    /// Past lane A, the operator attempts the block is or merges, `(DAA score, hash)`; `None` below it,
+    /// where the anchor block keys the seed itself. The seed's source among them is
+    /// [`VirtualStateProcessor::palw_operator_seed_source_v1`]'s.
+    operator_attempts: Option<Vec<(u64, BlockHash)>>,
+}
+
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -328,6 +339,10 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
     /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
     pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
+    /// Lane maturity's fence (post-launch, 2026-09-26: ADR-0065 D1 brought forward), MODE-folded
+    /// (`Params::palw_bond_maturity_early_fence`), `None` on every shipped preset. Read only through
+    /// [`Self::palw_bond_maturity_at`], beside the field above whose window it applies.
+    pub(super) palw_bond_maturity_early: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0071 SA-1..SA-4's fence, `None` on every shipped preset. Past it a capability
     /// declaration is bounded, priced and refused for a retiring bond, and a seat is drawn for a
     /// class only after a production fact. See [`Self::palw_capability_bound_at`], which is the
@@ -574,6 +589,17 @@ pub struct VirtualStateProcessor {
     /// bundle's mirror (`PalwStateParamsV2::rcore_plus_active_at`), which `validate_palw_rcore_plus_v1`
     /// keeps equal to it.
     pub(super) palw_rcore_plus: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **Lane F1 (post-launch, 2026-09-25): `Params::palw_panel_seed_execution`** — past it (at a
+    /// claim's ANCHOR DAA) the panel is drawn from the anchor attempt's execution commitment, not the
+    /// anchor block's identity. Dormant on every shipped preset; resolved once in
+    /// [`Self::palw_panel_seed_execution_at`].
+    pub(super) palw_panel_seed_execution: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **Lane A (post-launch, 2026-09-26): `Params::palw_operator_anchor`, resolved** — the fence and
+    /// each operator bond's genesis key. Past it (at a candidate anchor block's own DAA) a chain block
+    /// anchors a claim only if it is, or merges, an operator's attempt at or past the claim's slot, and
+    /// that attempt seeds the draw ([`Self::palw_chain_block_as_anchor_v1`]). `None` on every shipped
+    /// preset.
+    pub(super) palw_operator_anchor: Option<kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
@@ -583,6 +609,11 @@ pub struct VirtualStateProcessor {
     /// (testnet-12: 120 DAA, the challenge window it applies), handed to it as
     /// `PalwEconomicSafetyFoldV1::maturity_daa` wherever `palw_economic_safety` is in force.
     pub(super) palw_exec_quantum_maturity_daa: u64,
+    /// **Lane bind-deadlock (post-launch): `Params::palw_anchor_at_ceiling`, resolved** — past it (at
+    /// a chain block's own DAA) an attempt block refused only by admission item 8 still binds the
+    /// claims it anchors ([`Self::palw_v2_anchor_at_ceiling_binder_v1`]). `None` on every shipped
+    /// preset.
+    pub(super) palw_anchor_at_ceiling: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -597,11 +628,28 @@ pub struct VirtualStateProcessor {
     /// [`Self::palw_frontier_provenance_outcome`].
     pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
+    /// lane: rcore/f1-forkchoice-attacks — the deep-reorg strict-economic-win fence, `None` on
+    /// every shipped preset. Past it `dns_reorg_outcome` allows a deep reorg only on a strict
+    /// economic win, keeping the incumbent on an all-economic tie rather than the candidate hash —
+    /// except a SHALLOW tie (lane rcore/f1-strictwin-tie: at most `PALW_REORG_SHALLOW_TIE_DAA_V1` DAA
+    /// ticks on the incumbent's side), which GHOSTDAG's own order decides
+    /// ([`Self::palw_reorg_shallow_ghostdag_win_v1`]), so honest slot races converge.
+    pub(super) palw_reorg_strict_economic_win: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
     /// **ADR-0018 §E's payout bounds** (mainnet audit 2026-09-06 — H-2/H-3/M-1), mode folded in.
     /// `None` on testnet-11, devnet and simnet; `always()` on a card. Resolved at the BLOCK's DAA
     /// on both the coinbase construction and the validation path — they must agree, or every node
     /// builds a different coinbase.
     pub(super) palw_validator_payout_bounds: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **MSK-26A: the slashing-evidence UTXO genuineness fence.** Past it, `apply_slashing_side_effects`
+    /// removes an accused bond's stake only for evidence proved genuine (`proved_slash_targets`),
+    /// closing the merge-blue forgery that burns an honest bond. `None`/dormant on every shipped
+    /// preset — the side-effect is byte-identical to before the field existed.
+    pub(super) palw_slashing_evidence_utxo_genuine: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **Lane accept-order** (`Params::palw_lane_accept_parents_first_fence`): past it a merging block
+    /// applies its mergeset parents-first ([`Self::acceptance_ordered_mergeset_without_selected_parent`]).
+    /// `None` on every shipped preset — every order below is the consensus order, byte for byte.
+    pub(super) palw_lane_accept_parents_first: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0138: `Params::palw_anchor_clock` and ADR-0083's receipt fence — the heartbeat miner's
@@ -1009,6 +1057,7 @@ impl VirtualStateProcessor {
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,
             palw_bond_maturity: params.palw_bond_maturity,
+            palw_bond_maturity_early: params.palw_bond_maturity_early_fence(),
             // The MODE-folded fence: capability declarations, the claim lane and the panel draw
             // exist only under ConsensusV2, so the mode condition is folded once in `Params`
             // rather than remembered at each of the three sites below.
@@ -1078,11 +1127,17 @@ impl VirtualStateProcessor {
             palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
+            palw_panel_seed_execution: params.palw_panel_seed_execution_fence(),
+            palw_operator_anchor: params.palw_operator_anchor_rule_v1(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_exec_quantum_maturity_daa: params.palw_exec_quantum_maturity_v1(),
+            palw_anchor_at_ceiling: params.palw_anchor_at_ceiling_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
+            palw_reorg_strict_economic_win: params.palw_reorg_strict_economic_win,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
+            palw_slashing_evidence_utxo_genuine: params.palw_slashing_evidence_utxo_genuine,
+            palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
@@ -1225,15 +1280,34 @@ impl VirtualStateProcessor {
     /// behind the fold's, in either direction. A carrier that slips through that step is refused by
     /// the fold like any other; past the audit fence that refusal is refunded (P-B1).
     fn palw_mempool_market_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
-        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
-            || !self.palw_audit_2026_09_23_at(virtual_daa_score)
-        {
+        if !self.palw_market_gated_at(tx, virtual_daa_score) {
             return None;
         }
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        self.palw_mempool_market_refusal_with(tx, virtual_daa_score, chain_point, &state)
+    }
+
+    /// Whether [`Self::palw_mempool_market_refusal`] asks anything of `tx` at `virtual_daa_score`: a
+    /// lifecycle carrier, at or past `palw_audit_2026_09_23` (the gate's fence) — asked before any tip
+    /// is loaded, by the gate and by the sweep alike.
+    fn palw_market_gated_at(&self, tx: &Transaction, virtual_daa_score: u64) -> bool {
+        tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE && self.palw_audit_2026_09_23_at(virtual_daa_score)
+    }
+
+    /// [`Self::palw_mempool_market_refusal`] on a given tip (`chain_point`, `state`): the class's
+    /// lifecycle (P-B3), then the payout queue's room for this one carrier (P-B1) — the sweep asks it
+    /// on the one snapshot it checked against the virtual (the V01 review's LOW 3).
+    fn palw_mempool_market_refusal_with(
+        &self,
+        tx: &Transaction,
+        virtual_daa_score: u64,
+        chain_point: kaspa_consensus_core::BlockHash,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> Option<String> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
         if let Some(refusal) =
-            kaspa_consensus_core::palw_state_v2::palw_model_market_carrier_refusal_v1(&state, state_params, tx, || {
+            kaspa_consensus_core::palw_state_v2::palw_model_market_carrier_refusal_v1(state, state_params, tx, || {
                 self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
                     block: chain_point,
                     daa_score: virtual_daa_score,
@@ -1249,7 +1323,7 @@ impl VirtualStateProcessor {
         // full — the fold would refuse it and have no row to pay it back from, and its MSK would stay
         // in the sink. A fresh budget: this one carrier against the room the next block leaves. The
         // template carries one budget across its carriers as well (`palw_template_market_budget`).
-        kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(&state).admit(tx).err().map(|full| {
+        kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(state).admit(tx).err().map(|full| {
             format!("{full}: its move or its refund would overflow the payout queue (P-B1: refunds count against the cap)")
         })
     }
@@ -1328,13 +1402,24 @@ impl VirtualStateProcessor {
     /// (`palw_readiness_gate_daa_v1`): a seat names its own virtual's span, and a node the newest
     /// block has not reached yet must not turn the honest proof away where no gate asked before.
     pub(super) fn palw_mempool_h1_carrier_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
-        if !self.palw_rcore_plus_at(virtual_daa_score) {
-            return None;
-        }
-        let object = kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(tx)?;
+        let object = self.palw_h1_gated_object_at(tx, virtual_daa_score)?;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa_score, chain_point, &state)
+    }
+
+    /// The object [`Self::palw_mempool_h1_carrier_refusal`] puts to the fold: `None` below
+    /// `palw_rcore_plus` (the gate's fence) and for a transaction that carries no gated object —
+    /// asked before any tip is loaded, by the gate and by the sweep alike.
+    fn palw_h1_gated_object_at(
+        &self,
+        tx: &Transaction,
+        virtual_daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        if !self.palw_rcore_plus_at(virtual_daa_score) {
+            return None;
+        }
+        kaspa_consensus_core::palw_readiness_escalation_v1::palw_gated_carrier_object_of_tx_v1(tx)
     }
 
     /// [`Self::palw_mempool_h1_carrier_refusal`] on a given tip (`chain_point`, `state`) for the
@@ -1411,11 +1496,84 @@ impl VirtualStateProcessor {
     /// never builds a template (a seat-only node, a relay) kept it — and a seat's one carrier slot
     /// with it — until the Low-priority expiry, 720 DAA later. Node-local; all `None` with no
     /// virtual state, and below `palw_rcore_plus` (the gate's own fence).
+    ///
+    /// **In the template's order: the UTXO context before the gate** (the V01 review, MEDIUM). The
+    /// mempool hears of a block after the virtual may already have folded it — `on_new_block` walks
+    /// an ancestor batch one block at a time while the virtual resolves the batch at once, and an
+    /// IBD block the same — so the tip can already hold a carrier the pool still holds, and the fold
+    /// refuses a duplicate: the honest carrier would be evicted as "refused", its redeemers with
+    /// it. The template never asks such a carrier (its inputs are gone, `MissingTxOutpoints` first),
+    /// and neither does the sweep: a transaction with an input the virtual UTXO set does not hold is
+    /// not judged (`None`) — mined, the block handler removes it; double-spent, the double-spend
+    /// sweep does; chained on a pooled parent, it is judged at the block after the parent's.
+    ///
+    /// **One tip, the virtual's own.** The tip row is written before the virtual commits (the sink
+    /// search writes it at every candidate), so the gate's usual read can stand a block ahead of the
+    /// UTXO set just read. The sweep loads the tip once, under the same virtual read as the UTXO
+    /// facts, and judges nothing unless it stands at the virtual's sink; every transaction is then
+    /// put to the gate's own layers (`palw_mempool_h1_carrier_refusal_with`) on that one snapshot.
     pub fn palw_h1_carrier_refusals_v1_impl(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
-        let Some(virtual_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
+        let Some((virtual_daa, chain_point, state, spendable)) = self.palw_sweep_snapshot_v1(txs) else {
             return vec![None; txs.len()];
         };
-        txs.iter().map(|tx| self.palw_mempool_h1_carrier_refusal(tx, virtual_daa)).collect()
+        txs.iter()
+            .zip(spendable)
+            .map(|(tx, spendable)| {
+                if !spendable {
+                    return None;
+                }
+                let object = self.palw_h1_gated_object_at(tx, virtual_daa)?;
+                self.palw_mempool_h1_carrier_refusal_with(&object, virtual_daa, chain_point, &state)
+            })
+            .collect()
+    }
+
+    /// **The mempool sweep's market half** (the V01 review's LOW 3; the user's request of
+    /// 2026-09-25) — `ConsensusApi::palw_market_carrier_refusals_v1`. The P-B3 / P-B1 gate
+    /// (`palw_mempool_market_refusal`) was asked when a seed, a buy, a carrier sell or a top-up
+    /// entered the pool and at every template, so a node that builds no template kept one its class's
+    /// lifecycle or the payout queue stopped taking — and the user's inputs with it — until the
+    /// Low-priority expiry. Asked here in the H-1 sweep's order and on its snapshot
+    /// ([`Self::palw_sweep_snapshot_v1`]): what the virtual can still spend, on the virtual's own tip,
+    /// through the gate's own layers (`palw_mempool_market_refusal_with`). Node-local; all `None` with
+    /// no virtual state and below `palw_audit_2026_09_23` (the gate's own fence).
+    pub fn palw_market_carrier_refusals_v1_impl(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        let Some((virtual_daa, chain_point, state, spendable)) = self.palw_sweep_snapshot_v1(txs) else {
+            return vec![None; txs.len()];
+        };
+        txs.iter()
+            .zip(spendable)
+            .map(|(tx, spendable)| {
+                if !spendable || !self.palw_market_gated_at(tx, virtual_daa) {
+                    return None;
+                }
+                self.palw_mempool_market_refusal_with(tx, virtual_daa, chain_point, &state)
+            })
+            .collect()
+    }
+
+    /// **The one snapshot a mempool sweep judges on** (the V01 review, MEDIUM): under one virtual read,
+    /// the virtual's DAA, the PALW tip — only when it stands at the virtual's sink (the tip row is
+    /// written ahead of the virtual commit; mid-resolve the next block's sweep asks again) — and, per
+    /// transaction, whether the virtual UTXO set holds every input it spends (the template's order:
+    /// the UTXO context before the gate). `None` with no virtual state, off `ConsensusV2` or with no tip.
+    #[allow(clippy::type_complexity)]
+    fn palw_sweep_snapshot_v1(
+        &self,
+        txs: &[Arc<Transaction>],
+    ) -> Option<(u64, kaspa_consensus_core::BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>, Vec<bool>)> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state = virtual_read.state.get().ok()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        if chain_point != virtual_state.ghostdag_data.selected_parent {
+            return None;
+        }
+        let spendable: Vec<bool> = txs
+            .iter()
+            .map(|tx| tx.inputs.iter().all(|input| UtxoView::get(&virtual_read.utxo_set, &input.previous_outpoint).is_some()))
+            .collect();
+        Some((virtual_state.daa_score, chain_point, state, spendable))
     }
 
     /// **P-B1 at the template: one payout-queue budget across every market carrier the template
@@ -1557,6 +1715,15 @@ impl VirtualStateProcessor {
         let sink_ghostdag_data = Lazy::new(|| self.ghostdag_store.get_data(new_sink).unwrap());
         // Cache the DAA and Median time windows of the sink for future use, as well as prepare for virtual's window calculations
         self.cache_sink_windows(new_sink, prev_sink, &sink_ghostdag_data);
+        // The lead cap's local policy (`palw_clock_lead_cap`): a granted beat whose step every template
+        // would have to stamp past this node's clock plus 132 s is not merged yet. Asked after the sink's
+        // windows are cached, so the virtual windows it computes build on them.
+        let (virtual_parents, virtual_ghostdag_data) =
+            self.palw_lead_cap_virtual_parents(virtual_parents, virtual_ghostdag_data, pruning_point);
+        assert_eq!(
+            virtual_ghostdag_data.selected_parent, new_sink,
+            "the lead cap's policy leaves only merged tips out, never the sink"
+        );
 
         let new_virtual_state = self
             .calculate_and_commit_virtual_state(
@@ -2228,15 +2395,29 @@ impl VirtualStateProcessor {
                                 let attempt =
                                     match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
                                         Ok(attempt) => attempt,
-                                        Err(adm_error) => {
-                                            info!(
-                                                "Block {} is disqualified from virtual chain (PALW admission): {}",
-                                                current, adm_error
-                                            );
-                                            self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
-                                            chain_disqualified_counter += 1;
-                                            continue;
-                                        }
+                                        // Lane bind-deadlock (`palw_anchor_at_ceiling`): an anchor whose
+                                        // bond is at its ceiling still binds the claims due at it.
+                                        Err(adm_error) => match self
+                                            .palw_v2_anchor_at_ceiling_binder_v1(&header, state, state_params, &point, bootstrap)
+                                        {
+                                            Some(envelope) => {
+                                                info!(
+                                                    "Block {} anchors at its bond's exposure ceiling ({}): it binds the claims due at \
+                                                     it and its own attempt carries no claim (palw_anchor_at_ceiling)",
+                                                    current, adm_error
+                                                );
+                                                Some(envelope)
+                                            }
+                                            None => {
+                                                info!(
+                                                    "Block {} is disqualified from virtual chain (PALW admission): {}",
+                                                    current, adm_error
+                                                );
+                                                self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                                chain_disqualified_counter += 1;
+                                                continue;
+                                            }
+                                        },
                                     };
                                 let receipt_spend = match self.palw_v2_check_receipt_spend(&header, state, state_params, &point) {
                                     Ok(spend) => spend,
@@ -2549,8 +2730,8 @@ impl VirtualStateProcessor {
             None => {
                 // AcceptedEvmTxs(B) source: the consensus-ordered mergeset (selected
                 // parent first, then ascending blue work — §3.1 canonical order).
-                let sorted_mergeset: Vec<BlockHash> =
-                    ctx.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
+                // Lane accept-order: past its fence, parents-first at this block's DAA score.
+                let sorted_mergeset: Vec<BlockHash> = self.acceptance_ordered_mergeset(&ctx.ghostdag_data, header.daa_score);
                 // ADR-0139: this chain block's accepted-user-gas cap — one round budget per DISTINCT
                 // permitted round among the round blocks it merges, from the round indices their
                 // envelopes carry; the base where the execution lane is not in force.
@@ -2915,6 +3096,7 @@ impl VirtualStateProcessor {
             self.evm_bridge_ledger_activation_daa_score,
             self.evm_f003_mldsa_verify_activation_daa_score,
             self.evm_typed_receipt_root_activation_daa_score,
+            self.palw_lane_accept_parents_first,
         ))
     }
 
@@ -3137,8 +3319,8 @@ impl VirtualStateProcessor {
             }
             payload
         };
-        let sorted_mergeset: Vec<BlockHash> =
-            virtual_state.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
+        // Lane accept-order: the order validation will apply at this template's DAA score.
+        let sorted_mergeset: Vec<BlockHash> = self.acceptance_ordered_mergeset(&virtual_state.ghostdag_data, virtual_state.daa_score);
         let selected_parent = virtual_state.ghostdag_data.selected_parent;
         // C-01 S9/S9b: the producer must seed the SAME parent state the verifier later seeds from
         // (so the mined block reproduces evm_commitment_root). When flat-authoritative, seed from the
@@ -4501,6 +4683,36 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// **Lane B of the panel-seed stopgap (2026-09-26): the claims an operator's non-seat filer may
+    /// accuse**, at the tip, for the DAA the virtual's next block folds at
+    /// (`palw_operator_da_v1::palw_operator_da_candidates_v1`). Empty with no tip state. A read: node
+    /// policy, never a block rule.
+    pub fn palw_operator_da_candidates_v1_impl(
+        &self,
+        operators: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Vec<kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaCandidateV1> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return Vec::new() };
+        let Some(candidate_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
+            return Vec::new();
+        };
+        kaspa_consensus_core::palw_operator_da_v1::palw_operator_da_candidates_v1(&state, state_params, operators, candidate_daa)
+    }
+
+    /// **Lane B: one operator bond's standing**, at the tip, for the DAA the virtual's next block folds
+    /// at, over the second clock's raw depth there (`palw_operator_da_v1::palw_operator_da_standing_v1`).
+    /// `None` with no tip state. A read: node policy, never a block rule.
+    pub fn palw_operator_da_standing_v1_impl(
+        &self,
+        bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaStandingV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let candidate_daa = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score)?;
+        let raw_depth = self.palw_second_clock_depth_at(&state, candidate_daa);
+        kaspa_consensus_core::palw_operator_da_v1::palw_operator_da_standing_v1(&state, state_params, bond, candidate_daa, raw_depth)
+    }
+
     /// **ADR-0152 Phase 2, P2-8e review (MED): each asked claim's one deadline in the sweep queue**,
     /// at the tip ([`Self::palw_claim_deadlines_v1_on`]). Empty with no tip state. A read: node policy
     /// dates a seat's court filing by it.
@@ -5169,7 +5381,10 @@ impl VirtualStateProcessor {
             let next_daa = self.palw_next_block_daa_for_reads(&state);
             (next_daa, self.palw_settled_anchor_depth_at(next_daa))
         });
-        Some(kaspa_consensus_core::palw_producer_v2::palw_bond_claims_v1(
+        // T12-058 (read side): whether the next block's fold refuses a retirement while a lock is
+        // live — the fence `BondRetireRequested`'s refusal reads (`objective_offence_at`).
+        let objective_offence = vesting_at.is_some_and(|(next_daa, _)| self.palw_objective_offence_at(next_daa));
+        let mut claims = kaspa_consensus_core::palw_producer_v2::palw_bond_claims_with_locks_v1(
             &state,
             state_params,
             &bond,
@@ -5177,7 +5392,18 @@ impl VirtualStateProcessor {
             include_terminal,
             limit,
             vesting_at,
-        ))
+            objective_offence,
+        );
+        // V08 (the pre-t12 sweep): past R-core+ a `Provisional` row's date is its anchor slot, where
+        // SW-8 binds or voids it — not the bind window's backstop. Read-side only.
+        if let Some(panel) = self.palw_panel_params_v2.as_ref() {
+            kaspa_consensus_core::palw_producer_v2::palw_claim_rows_bind_by_anchor_slot_v1(
+                &mut claims.rows,
+                state_params,
+                panel.anchor_delay(),
+            );
+        }
+        Some(claims)
     }
 
     /// **The DAA the next block folds at, for a read of the committed tip** (ADR-0152 P2-10): the
@@ -5371,6 +5597,16 @@ impl VirtualStateProcessor {
             // `committed` reads live locks at the escaped depth exactly as admission and the fold do.
             self.palw_settled_anchor_depth_at(candidate_daa),
         )?;
+        // Lane V02 (post-launch, review MEDIUM): past `palw_final_lock_full_collateral` the facts'
+        // accuser ledger counts an open held dissection at its charge, as the fold and item 8 do.
+        kaspa_consensus_core::palw_producer_v2::palw_producer_facts_apply_held_ledger_v1(
+            &mut facts,
+            &state,
+            state_params,
+            bond.map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2).as_ref(),
+            candidate_daa,
+            budget_fences.held_accuser_charge_active,
+        );
         // The producer reads the same parent snapshot as admission. At a crossing block the
         // snapshot still carries the closed epoch's table, so the boundary fence must derive the
         // candidate epoch's budget here too; otherwise the producer would hold a non-floor block
@@ -5427,6 +5663,28 @@ impl VirtualStateProcessor {
             .err()
             .map(|refusal| refusal.to_string());
         }
+        // **Lane bind-deadlock (`palw_anchor_at_ceiling`): would the candidate be a binder?** The
+        // walk's own conditions (`palw_v2_anchor_at_ceiling_binder_v1`), read at the tip for the
+        // candidate's DAA: the fence and R-core+ in force there; past lane A's fence there, the named
+        // bond is an operator's (the walk keeps an operator's own attempt only — a non-operator's
+        // binder is disqualified, an inference wasted); and a claim `Provisional` with its slot at or
+        // below the candidate's DAA — the slots the producer's own attempt anchors (the attempt lane
+        // below lane A; past it an operator's attempt reaches its own DAA).
+        let lane_a_admits_the_bond = match self.palw_operator_anchor.as_ref().filter(|rule| rule.active_at(candidate_daa)) {
+            Some(rule) => bond.is_some_and(|outpoint| rule.operators().any(|(operator, _)| operator.0 == outpoint)),
+            None => true,
+        };
+        facts.binder_due = self.palw_anchor_at_ceiling_at(candidate_daa)
+            && lane_a_admits_the_bond
+            && self.palw_rcore_plus_at(candidate_daa)
+            && self.palw_panel_params_v2.as_ref().is_some_and(|panel| {
+                !kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1(
+                    &state,
+                    candidate_daa,
+                    panel.anchor_delay(),
+                )
+                .is_empty()
+            });
         // The share and the tip's count beside the refusal — a read the producer adds its own
         // unmerged attempts to (node policy; the fold's question above is unchanged).
         facts.bond_class_share = bond.and_then(|outpoint| {
@@ -10614,38 +10872,227 @@ impl VirtualStateProcessor {
 
     /// The panel's anchor, derived from THIS candidate's chain (Decision 7's sortition input).
     ///
-    /// The first chain block at or past `accepted_daa + anchor_delay`, with the predecessor's DAA
-    /// as the witness that makes "first at or past" checkable — the same shape as the free-prompt
-    /// beacon, for the same reason: a producer that supplies its own anchor picks its own jury.
-    fn palw_v2_anchor_fact_of_candidate(
+    /// The first chain block at or past `accepted_daa + anchor_delay` that anchors a claim with that
+    /// slot ([`Self::palw_chain_block_as_anchor_v1`]), with the predecessor's DAA as the witness that
+    /// makes "first at or past" checkable — the same shape as the free-prompt beacon, for the same
+    /// reason: a producer that supplies its own anchor picks its own jury.
+    ///
+    /// **Lane A (`Params::palw_operator_anchor`)** decides which chain block that is and what keys its
+    /// draw. Past it (at the chain block's own DAA score) a chain block anchors a claim iff it IS, or
+    /// MERGES (blue or red), an operator's attempt at or past the claim's slot. The seed is read off
+    /// the earliest such attempt ([`Self::palw_operator_seed_source_v1`]: the one no other of them is
+    /// in the DAG past of) — and the draw's DAA-keyed inputs (the draw policy,
+    /// the readiness clock, the maturity floor, the capability bound, the shard plan) are resolved at
+    /// that attempt's DAA score ([`Self::palw_v2_anchor_fact_with_seed_v1`]). Undisturbed, the anchor
+    /// is the operator's attempt itself. When a non-operator displaces it from the selected chain (a
+    /// sibling that wins the selected-parent tie-break after reading the attempt's panel off its
+    /// published header), the claim binds in the first chain block that merges the displaced attempt
+    /// — the very next one unless the displacer also keeps it out of that block's past — on the
+    /// displaced attempt's seed and at its DAA. Displacement therefore neither buys a fresh draw nor
+    /// holds a claim off its anchor (verification of lane A, 2026-09-26, finding 1: the rule this
+    /// replaces bound only at an operator attempt that was itself a chain block, so a bonded
+    /// non-operator displacing every operator attempt voided every claim `BindTimeout` at its
+    /// backstop, and the displaced attempt's seed was carried to a binding block up to the whole bind
+    /// window later, finding 2).
+    pub(super) fn palw_v2_anchor_fact_of_candidate(
         &self,
         from: BlockHash,
         accepted_daa: u64,
         panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
     ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
         let slot = accepted_daa.checked_add(panel_params.anchor_delay())?;
-        let mut candidate: Option<(BlockHash, u64)> = None;
+        // The latest chain block recorded at or past the slot that anchors it — the earliest on the
+        // chain once the walk is done — with, past lane A, the seed's source.
+        let mut candidate: Option<(BlockHash, u64, Option<(u64, BlockHash)>)> = None;
         for block in self.reachability_service.default_backward_chain_iterator(from) {
             let header = self.headers_store.get_header(block).ok()?;
             let daa = header.daa_score;
             if daa >= slot {
-                if self.palw_block_may_anchor_a_panel_v1(header.pow_algo_id, slot) {
-                    candidate = Some((block, daa));
+                match self.palw_chain_block_as_anchor_v1(block, &header)? {
+                    Some(anchor) if anchor.reach >= slot => {
+                        candidate = Some((block, daa, self.palw_operator_seed_source_v1(&anchor, slot)?));
+                    }
+                    _ => {}
                 }
                 continue;
             }
             // The first block BELOW the slot is the witness; the last one recorded at or above it
             // is the anchor.
-            let (anchor_block, anchor_daa) = candidate?;
-            return Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: daa });
+            let (anchor_block, anchor_daa, seed_source) = candidate?;
+            return self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, daa, seed_source);
         }
-        let (anchor_block, anchor_daa) = candidate?;
-        Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: 0 })
+        let (anchor_block, anchor_daa, seed_source) = candidate?;
+        self.palw_v2_anchor_fact_with_seed_v1(anchor_block, anchor_daa, 0, seed_source)
     }
 
-    /// **Which chain blocks may be a panel's anchor** — the one predicate the anchor walk
+    /// **How chain block `block` stands as a panel anchor — the one answer the anchor walk
     /// ([`Self::palw_v2_anchor_fact_of_candidate`], so the chain's derivation and the acceptance gate
-    /// alike) reads, resolved for a claim whose slot is `slot`.
+    /// alike), step 4c (`sw8_anchor_delay` and `sw8_anchor_reach`, [`Self::palw_sw8_anchor_for`]) and
+    /// the one-state pre-check read**, so they cannot disagree about which block a claim binds in.
+    ///
+    /// `Some(None)`: the block anchors no claim. `Some(Some(anchor))`: it anchors every claim whose slot
+    /// is at or below `anchor.reach` and that no earlier chain block at or past the slot anchored.
+    /// `None`: the store cannot serve a GHOSTDAG record or a merged header lane A reads — a node that
+    /// cannot read the past names no anchor, as for a missing header.
+    ///
+    /// * **Below lane A's fence at the block's own DAA score** (every network but an armed
+    ///   testnet-12): the block's lane decides alone ([`Self::palw_block_may_anchor_a_panel_v1`]), and
+    ///   a block that may anchor reaches its own DAA score — byte for byte the walk testnet-12 launched
+    ///   with.
+    /// * **Past it:** the operator attempts the block is or merges
+    ///   ([`Self::palw_operator_attempts_of_chain_block_v1`]). None, and the block anchors nothing,
+    ///   whatever its lane; otherwise it reaches the latest of them, capped at its own DAA score — a
+    ///   claim whose slot falls after that attempt (a displaced attempt merged a DAA or two late) is
+    ///   not this block's to bind or to void. So a heartbeat or a non-operator's attempt that merges a
+    ///   displaced operator attempt anchors the claims that attempt reached: the block binds them, the
+    ///   operator's execution seeds them. The block's lane no longer matters there, because the seed
+    ///   is never the block's own: lane A requires lane F1 at or below it, so it is the operator
+    ///   attempt's execution commitment.
+    fn palw_chain_block_as_anchor_v1(&self, block: BlockHash, header: &Header) -> Option<Option<PalwChainAnchorV1>> {
+        let daa = header.daa_score;
+        match self.palw_operator_anchor.as_ref().filter(|rule| rule.active_at(daa)) {
+            Some(rule) => {
+                let attempts = self.palw_operator_attempts_of_chain_block_v1(rule, block, header)?;
+                let latest = attempts.iter().map(|(attempt_daa, _)| *attempt_daa).max();
+                Some(latest.map(|latest| PalwChainAnchorV1 { reach: latest.min(daa), operator_attempts: Some(attempts) }))
+            }
+            None => Some(
+                self.palw_block_may_anchor_a_panel_v1(header, daa)
+                    .then_some(PalwChainAnchorV1 { reach: daa, operator_attempts: None }),
+            ),
+        }
+    }
+
+    /// **Lane A: the operator attempts chain block `block` is or merges** — the block itself and every
+    /// block its GHOSTDAG merges (blue or red; not its selected parent, a chain block that answers for
+    /// itself), each counted iff it is an operator's attempt
+    /// ([`kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1::operator_of_v1`]),
+    /// as `(DAA score, hash)`. Reads only chain data every node holds (the block's header, its GHOSTDAG
+    /// mergeset and the merged headers), so reorg, IBD and a pruning-proof sync resolve it alike.
+    /// `None` where the block's GHOSTDAG record or a merged header is missing.
+    fn palw_operator_attempts_of_chain_block_v1(
+        &self,
+        rule: &kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1,
+        block: BlockHash,
+        header: &Header,
+    ) -> Option<Vec<(u64, BlockHash)>> {
+        let mut attempts = Vec::new();
+        if rule.operator_of_v1(header).is_some() {
+            attempts.push((header.daa_score, block));
+        }
+        let data = self.ghostdag_store.get_data(block).ok()?;
+        for merged in data.mergeset_blues.iter().chain(data.mergeset_reds.iter()).filter(|hash| **hash != data.selected_parent) {
+            let merged_header = self.headers_store.get_header(*merged).ok()?;
+            if rule.operator_of_v1(&merged_header).is_some() {
+                attempts.push((merged_header.daa_score, *merged));
+            }
+        }
+        Some(attempts)
+    }
+
+    /// **Lane A: the seed's source for a claim whose slot is `slot`, at an anchor that is or merges
+    /// operator attempts** — `Some(None)` below lane A (the anchor keys the seed itself), `None` where
+    /// the reachability store cannot answer.
+    ///
+    /// The EARLIEST of the operator attempts at or past the slot that the anchor is or merges: one that
+    /// no other of them is in the DAG past of, and among several such (concurrent attempts, which only
+    /// operators make) the least `(DAA score, hash)`. The order is the DAG's, not the DAA score's:
+    /// testnet-12's clock is advanced only by heartbeats (ADR-0138), so an operator attempt produced
+    /// after a displaced one — and merging it — carries the same DAA score, and a `(DAA score, hash)`
+    /// minimum would hand the seed to whichever of the two hashes lower: a fresh draw on half of the
+    /// displacements an operator's next attempt follows. Reachability is chain data every node holds,
+    /// so reorg, IBD and a pruning-proof sync resolve it alike.
+    fn palw_operator_seed_source_v1(&self, anchor: &PalwChainAnchorV1, slot: u64) -> Option<Option<(u64, BlockHash)>> {
+        let Some(attempts) = anchor.operator_attempts.as_ref() else {
+            return Some(None);
+        };
+        let eligible: Vec<(u64, BlockHash)> = attempts.iter().filter(|(daa, _)| *daa >= slot).copied().collect();
+        let mut earliest: Option<(u64, BlockHash)> = None;
+        for &(daa, hash) in &eligible {
+            let mut has_an_earlier = false;
+            for &(_, other) in &eligible {
+                if other != hash && self.reachability_service.try_is_dag_ancestor_of(other, hash).ok()? {
+                    has_an_earlier = true;
+                    break;
+                }
+            }
+            if !has_an_earlier && earliest.is_none_or(|held| (daa, hash) < held) {
+                earliest = Some((daa, hash));
+            }
+        }
+        Some(earliest)
+    }
+
+    /// **The highest claim slot chain block `block` anchors**, or `None` where it anchors none (or the
+    /// store cannot serve what lane A reads): [`Self::palw_chain_block_as_anchor_v1`]'s answer, as step
+    /// 4c and the one-state pre-check read it. Below lane A it is the block's own DAA score on every
+    /// block whose lane may anchor.
+    pub(super) fn palw_anchor_reach_of_v1(&self, block: BlockHash, header: &Header) -> Option<u64> {
+        self.palw_chain_block_as_anchor_v1(block, header).flatten().map(|anchor| anchor.reach)
+    }
+
+    /// **The anchor fact, with what the panel seed is keyed on** (lane F1, the post-launch panel-seed
+    /// fence `Params::palw_panel_seed_execution`, 2026-09-25).
+    ///
+    /// Past the fence — resolved at the ANCHOR block's DAA score, a fact of the anchor header this
+    /// walk already found, so every node (reorg, IBD, a pruning-proof sync) resolves it alike — the
+    /// fact carries the anchor ATTEMPT's execution commitment, read off the anchor block's own header
+    /// (`palw_panel_anchor_execution_v1`: the key the fold dedups that block's attempt on and its class
+    /// ticket is drawn from), and the claim's panel, its segment assignment and its S3 sample are
+    /// drawn from `H(execution ‖ claim)`
+    /// ([`kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2::panel_seed`]): no signature,
+    /// timestamp or nonce inside the bucket moves it. Below the fence `None`, and the seed is the
+    /// anchor block, byte for byte the rule testnet-12 launched with.
+    ///
+    /// `validate_palw_v2` refuses the fence without `palw_rcore_plus` at or below it, so past it
+    /// every anchor below lane A is an attempt block ([`Self::palw_block_may_anchor_a_panel_v1`]). A
+    /// header the store cannot serve, or an attempt envelope that does not decode (the header stage
+    /// refuses one, so a chain block never does), names no anchor: nothing binds, and the claim voids
+    /// at its bind window as if its anchor had not arrived — a function of the candidate chain's own
+    /// headers.
+    ///
+    /// **Past lane A's fence at the anchor block's DAA** the seed is read off `seed_source` — the
+    /// earliest operator attempt at or past the slot that the anchor is or merges
+    /// ([`Self::palw_operator_seed_source_v1`]), the anchor itself unless an operator attempt was
+    /// displaced from the chain — and the fact's `anchor_daa`, the DAA score every draw input is
+    /// resolved at (the draw policy with its readiness clock, the maturity floor, the capability bound,
+    /// the shard plan; by the chain's derivation and by the gate alike), is that attempt's: a
+    /// displacement cannot move a seat across a readiness lapse or a maturity boundary. `anchor_block`
+    /// stays the block that binds (SW-8's "only in its own anchor block"), and the fences here are
+    /// resolved at its DAA, as the walk resolves lane A. `validate_palw_v2` refuses lane A without F1
+    /// at or below it, so there the seed is always an execution commitment.
+    fn palw_v2_anchor_fact_with_seed_v1(
+        &self,
+        anchor_block: BlockHash,
+        anchor_daa: u64,
+        predecessor_daa: u64,
+        seed_source: Option<(u64, BlockHash)>,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2> {
+        let (seed_block, draw_daa) = if self.palw_operator_anchor_at(anchor_daa) {
+            // A lane-A anchor anchors a slot only through an operator attempt at or past it, so the
+            // walk always hands one in.
+            let (source_daa, source) = seed_source?;
+            (source, source_daa.min(anchor_daa))
+        } else {
+            (anchor_block, anchor_daa)
+        };
+        let anchor_execution = if self.palw_panel_seed_execution_at(anchor_daa) {
+            let header = self.headers_store.get_header(seed_block).ok()?;
+            Some(kaspa_consensus_core::palw_panel_v2::palw_panel_anchor_execution_v1(self.palw_network_domain_v2(), &header)?)
+        } else {
+            None
+        };
+        Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 {
+            anchor_block,
+            anchor_daa: draw_daa,
+            predecessor_daa,
+            anchor_execution,
+        })
+    }
+
+    /// **Which chain blocks' LANE may anchor a panel** — the header-only half of the one answer
+    /// ([`Self::palw_chain_block_as_anchor_v1`]) below lane A's fence, resolved for a claim whose slot
+    /// is `slot`.
     ///
     /// **The anchor has to cost an inference to move.** The anchor block's hash is one of the two
     /// randomness inputs the panel draw runs on, so whoever can cheaply produce blocks at the anchor
@@ -10664,40 +11111,64 @@ impl VirtualStateProcessor {
     ///   anchor block (SW-8), so the anchor re-roll is the ONE post-seed lever left, and ADR-0152
     ///   prices it at one block's work per try; an attempt's execution commits to its header's
     ///   pre-PoW hash (`execution_anchor_v3`), so every other header — and so every other anchor —
-    ///   costs one more inference, the charge the job anchor makes for the same reason. What this
+    ///   costs one more inference, the charge the job anchor makes for the same reason. **That holds
+    ///   only where the seed is not the block's identity** (2026-09-25, `wf_72c1a397-e23`): the
+    ///   identity also covers the attempt's signature, the timestamp and the nonce inside its bucket,
+    ///   none of which the lottery prices, so one win re-rolled the panel for a re-signature. Past
+    ///   lane F1's fence (`Params::palw_panel_seed_execution`, post-launch) the seed is the anchor
+    ///   attempt's execution commitment and the claim ([`Self::palw_v2_anchor_fact_with_seed_v1`]);
+    ///   another panel is another lottery win — while audit P0-10 is open, ~279 junk BLAKE2b draws on
+    ///   the testnet-12 floor rather than an inference. What this
     ///   costs is waiting: the anchor is the first ATTEMPT block at or past the slot, which
     ///   `PalwConsensusParamsV2::validate` already holds to `anchor_delay + max_beacon_gap <
     ///   window_bind` (ADR-0077's lattice promise, written for this reading; 20 + 400 < 600 on the
     ///   RC lattice); a slot no attempt block reaches before the bind window lapses voids
     ///   `BindTimeout` at the window's backstop, without forfeit (S0), and a network with no attempts
     ///   has no claims to bind. The fold's step 4c voids a claim its anchor block did not bind at
-    ///   that block, on this same lane rule ([`Self::palw_sw8_anchor_delay_for`]).
+    ///   that block, on this same lane rule ([`Self::palw_sw8_anchor_for`]).
     ///
-    /// The fence is resolved at the SLOT: `palw_rcore_plus` is genesis-only
+    /// **Past lane A's fence (`Params::palw_operator_anchor`, testnet-12's post-launch stopgap,
+    /// 2026-09-26) this predicate is not asked**: while P0-10 is open whoever may produce the anchor
+    /// re-rolls a claim's panel by drawing fresh wins, so there a chain block anchors a claim iff it
+    /// is, or merges, an OPERATOR's attempt at or past the claim's slot — whatever its own lane — and
+    /// the seed is that operator attempt's execution ([`Self::palw_chain_block_as_anchor_v1`]). The
+    /// attacker cannot hold the seed's position, and the claim it fixed before the slot buys it one
+    /// draw on an execution it neither picks nor predicts.
+    ///
+    /// The R-core+ fence is resolved at the SLOT: `palw_rcore_plus` is genesis-only
     /// (`validate_palw_rcore_plus_v1`), so the slot, the anchor and the block give one answer on every
     /// chain that can run.
-    pub(super) fn palw_block_may_anchor_a_panel_v1(&self, pow_algo_id: u8, slot: u64) -> bool {
+    pub(super) fn palw_block_may_anchor_a_panel_v1(&self, header: &Header, slot: u64) -> bool {
         if self.palw_rcore_plus_at(slot) {
-            kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
+            kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
         } else {
-            !kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(pow_algo_id)
+            !kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id)
         }
     }
 
-    /// **ADR-0152 SW-8 / DL-1 (M4): `PalwTransitionExtrasV1::sw8_anchor_delay` for the block `point`
-    /// names** — the panel's `anchor_delay` iff `palw_rcore_plus` is active at the block and the
-    /// block's own lane may anchor a panel ([`Self::palw_block_may_anchor_a_panel_v1`], read off its
-    /// header: the same predicate the anchor walk reads, at the same fence), `None` otherwise. So the
-    /// fold's step 4c voids, in a block, exactly the claims whose anchor block it is by the walk's
-    /// own rule and which it did not bind. A block whose header the store does not hold (none that
-    /// the pipeline folds) answers `None`: its claims wait out the bind window's backstop.
-    pub(super) fn palw_sw8_anchor_delay_for(&self, point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2) -> Option<u64> {
+    /// **ADR-0152 SW-8 / DL-1 (M4): `PalwTransitionExtrasV1::{sw8_anchor_delay, sw8_anchor_reach}` for
+    /// the block `point` names** — the panel's `anchor_delay` and the highest slot the block anchors,
+    /// iff `palw_rcore_plus` is active at the block and the block anchors any claim
+    /// ([`Self::palw_anchor_reach_of_v1`], the same per-block answer the anchor walk reads, at the
+    /// same fences); `None` otherwise. So the fold's step 4c voids, in a block, exactly the claims
+    /// whose anchor block it is by the walk's own rule and which it did not bind. A block whose
+    /// header the store does not hold (none that the pipeline folds) answers `None`: its claims wait
+    /// out the bind window's backstop.
+    fn palw_sw8_anchor_for(&self, point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2) -> Option<(u64, u64)> {
         if !self.palw_rcore_plus_at(point.daa_score) {
             return None;
         }
         let panel = self.palw_panel_params_v2.as_ref()?;
         let header = self.headers_store.get_header(point.block).ok()?;
-        self.palw_block_may_anchor_a_panel_v1(header.pow_algo_id, point.daa_score).then(|| panel.anchor_delay())
+        let reach = self.palw_anchor_reach_of_v1(point.block, &header)?;
+        Some((panel.anchor_delay(), reach))
+    }
+
+    /// [`Self::palw_sw8_anchor_for`]'s `anchor_delay`: `Some` iff the block `point` names anchors a
+    /// panel past `palw_rcore_plus` — what the processor tests read back as a block's lane answer.
+    #[cfg(test)]
+    pub(super) fn palw_sw8_anchor_delay_for(&self, point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2) -> Option<u64> {
+        self.palw_sw8_anchor_for(point).map(|(anchor_delay, _)| anchor_delay)
     }
 
     /// **ADR-0065 D4, resolved in exactly one place.** Every consumer — the receipt tally, the
@@ -10798,6 +11269,38 @@ impl VirtualStateProcessor {
             self.palw_overlay_carve,
             attempt_daa_score,
             paying_daa_score,
+        )
+    }
+
+    /// **Lane accept-order**: whether a merging block at `daa_score` applies its mergeset parents-first.
+    pub(super) fn palw_lane_accept_parents_first_at(&self, daa_score: u64) -> bool {
+        self.palw_lane_accept_parents_first.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **The order a merging block at `daa_score` applies its mergeset in** (without the selected
+    /// parent): the consensus order, made parents-first past lane accept-order's fence. The ONE order
+    /// every consumer that applies a mergeset reads — UTXO acceptance, the fold's merged works, the EVM
+    /// lane — so construction and validation, and every node, apply one order at one DAA score.
+    pub(super) fn acceptance_ordered_mergeset_without_selected_parent(
+        &self,
+        ghostdag_data: &GhostdagData,
+        daa_score: u64,
+    ) -> Vec<BlockHash> {
+        ghostdag_data.acceptance_ordered_mergeset_without_selected_parent(
+            self.ghostdag_store.as_ref(),
+            self.headers_store.as_ref(),
+            self.palw_lane_accept_parents_first_at(daa_score),
+        )
+    }
+
+    /// [`Self::acceptance_ordered_mergeset_without_selected_parent`] behind the selected parent (the EVM
+    /// lane's `sorted_mergeset`; its readers are `evm`-only).
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
+    pub(super) fn acceptance_ordered_mergeset(&self, ghostdag_data: &GhostdagData, daa_score: u64) -> Vec<BlockHash> {
+        ghostdag_data.acceptance_ordered_mergeset(
+            self.ghostdag_store.as_ref(),
+            self.headers_store.as_ref(),
+            self.palw_lane_accept_parents_first_at(daa_score),
         )
     }
 
@@ -10963,6 +11466,17 @@ impl VirtualStateProcessor {
                 )
                 .eligibility,
                 ceiling_permille: state_params.fp_max_exposure_ratio_permille(),
+                // Lane V02 (post-launch): the bind's own split room, at the binding block's DAA.
+                resolved_locks_off_ceiling: state_params.final_lock_full_collateral_active_at(now_daa),
+                // Lane V02 (review HIGH): the accuser reserve the bind's `gate_room` keeps (0 below).
+                accuser_reserve: kaspa_consensus_core::palw_state_v2::palw_bond_accuser_reserve_v1(state_params, now_daa),
+                // Lane V02 (review MEDIUM): the fold's accuser ledger past the fence — held dissections
+                // at their charge, from the very extras the bind folds with; `None` below it.
+                held_charge_floor: kaspa_consensus_core::palw_state_v2::palw_v02_held_charge_floor_v1(
+                    state_params,
+                    now_daa,
+                    extras.offence_attribution_active && extras.held_context_ladder.is_some(),
+                ),
             }),
         })
     }
@@ -10979,7 +11493,8 @@ impl VirtualStateProcessor {
     /// fence and below it). Where it is `Some` the draw also refuses under SW-10's eligible-stake floor
     /// (`InsufficientEligibleStake`), a panel binds only in its own anchor block (SW-8,
     /// `validate_panel_bound_v2_with_policy`), that anchor is an attempt block
-    /// (`palw_block_may_anchor_a_panel_v1`), and a claim the anchor block does not bind voids there
+    /// (`palw_block_may_anchor_a_panel_v1`; past lane A, a block that is or merges an operator's
+    /// attempt, `palw_chain_block_as_anchor_v1`), and a claim the anchor block does not bind voids there
     /// (the fold's step 4c); `None` — testnet-11, devnet, mainnet, and testnet-12 with the fence off —
     /// is ADR-0130's operator lottery and ADR-0147's outsider ticket, byte for byte (T88).
     ///
@@ -11076,6 +11591,8 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
     ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
         let daa_score = point.daa_score;
+        // SW-8's step 4c, read once: `(anchor_delay, reach)` where the block anchors a panel.
+        let sw8 = self.palw_sw8_anchor_for(point);
         kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
@@ -11248,7 +11765,12 @@ impl VirtualStateProcessor {
             // panel past `palw_rcore_plus`. Written explicitly for the reason every line above
             // gives: an unwritten default here would leave a refused claim holding its reservation
             // for the whole bind window.
-            sw8_anchor_delay: self.palw_sw8_anchor_delay_for(point),
+            sw8_anchor_delay: sw8.map(|(anchor_delay, _)| anchor_delay),
+            // **Lane A: the highest slot this block anchors** — below lane A its own DAA score; past
+            // it the latest operator attempt it is or merges. Written explicitly for the same reason:
+            // a default here would void, at a block that merges a displaced operator attempt, claims
+            // whose slot falls after that attempt and which the block never anchored.
+            sw8_anchor_reach: sw8.map(|(_, reach)| reach),
         }
     }
 
@@ -11335,7 +11857,21 @@ impl VirtualStateProcessor {
             // ADR-0152 SR-7: the RAW second-clock depth, so item 8 reads the one committed ledger at
             // the escaped depth exactly as the fold's ceiling does (read only past `palw_rcore_plus`).
             settled_anchor_depth: self.palw_settled_anchor_depth_at(daa_score),
+            // Lane V02 (post-launch): the extras pair the fold's held charge reads, so item 8 counts a
+            // held dissection at its charge past `palw_final_lock_full_collateral` as `gate_room` does.
+            held_accuser_charge_active: self.palw_held_accuser_charge_at(daa_score),
+            // Lane bind-deadlock: enforced here; only the binder re-check
+            // (`palw_v2_anchor_at_ceiling_binder_v1`) waives it.
+            exposure_ceiling_waived: false,
         }
+    }
+
+    /// **Lane V02: whether a block at `daa_score` folds held dissections at their charge** — exactly
+    /// `extras.offence_attribution_active && extras.held_context_ladder.is_some()` of
+    /// [`Self::palw_transition_extras_at`] (the ladder is `Some` iff the held fence is active and the
+    /// court params exist), the pair the fold's `held_charge_block_active_v1` reads.
+    pub(super) fn palw_held_accuser_charge_at(&self, daa_score: u64) -> bool {
+        self.palw_offence_attribution_at(daa_score) && self.palw_held_context_at(daa_score) && self.palw_court_params_v2.is_some()
     }
 
     /// **ADR-0149 §5: the floor class's derived draw as the registry will write it** — its entry in
@@ -11490,9 +12026,28 @@ impl VirtualStateProcessor {
         self.palw_rcore_plus.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **Lane F1 (the panel seed, post-launch), resolved in exactly one place** — at a claim's
+    /// ANCHOR block's DAA score ([`Self::palw_v2_anchor_fact_with_seed_v1`]). `false` on every
+    /// shipped preset (the fence is dormant until armed at a post-launch height).
+    pub(super) fn palw_panel_seed_execution_at(&self, anchor_daa: u64) -> bool {
+        self.palw_panel_seed_execution.is_some_and(|fence| fence.is_active(anchor_daa))
+    }
+
+    /// **Lane A (the operator anchor, post-launch), at a candidate anchor's own DAA.** `false` on every
+    /// shipped preset.
+    pub(super) fn palw_operator_anchor_at(&self, anchor_daa: u64) -> bool {
+        self.palw_operator_anchor.as_ref().is_some_and(|rule| rule.active_at(anchor_daa))
+    }
+
     /// The second clock's depth where the fence carries it; `None` is the DAA-only rule.
     fn palw_settled_anchor_depth_at(&self, daa_score: u64) -> Option<u64> {
         if self.palw_audit_2026_09_23_at(daa_score) { self.palw_settled_anchor_depth } else { None }
+    }
+
+    /// **Lane bind-deadlock (the anchor at the ceiling, post-launch), at a chain block's own DAA.**
+    /// `false` on every shipped preset.
+    pub(super) fn palw_anchor_at_ceiling_at(&self, daa_score: u64) -> bool {
+        self.palw_anchor_at_ceiling.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// The second clock's depth at `daa_score` AFTER the liveness escape
@@ -11518,7 +12073,11 @@ impl VirtualStateProcessor {
     /// since it registered. ONE place, read by the validator, the assembler and the registry
     /// warning alike, so the three recompute one identical panel. Below the fence, or with fewer
     /// than `depth` anchors before the anchor (the bootstrap waiver), it is the window itself.
-    fn palw_bond_maturity_window_at(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, anchor_daa: u64) -> Option<u64> {
+    pub(super) fn palw_bond_maturity_window_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        anchor_daa: u64,
+    ) -> Option<u64> {
         let window = self.palw_bond_maturity_at(anchor_daa)?;
         let floor = self
             .palw_second_clock_depth_at(state, anchor_daa)
@@ -11613,8 +12172,18 @@ impl VirtualStateProcessor {
     /// that assembles one — must get the same answer, because a panel is accepted only if it
     /// equals the derived one exactly: a node that resolved the window differently would propose
     /// panels its own peers refuse, and blame the claim.
+    ///
+    /// **Lane maturity (post-launch, 2026-09-26)** brings the same rule forward: past
+    /// `palw_bond_maturity_early` the window is `palw_bond_maturity`'s even below that fence's own
+    /// height — one OR over one window (`palw_bond_maturity_window_in_force_v1`), so the two fences
+    /// never disagree and there is no gap where the early one hands over. Below both it is `None`,
+    /// byte for byte the released rule.
     fn palw_bond_maturity_at(&self, daa_score: u64) -> Option<u64> {
-        self.palw_bond_maturity.filter(|m| m.activation.is_active(daa_score)).map(|m| m.window_daa)
+        kaspa_consensus_core::config::params::palw_bond_maturity_window_in_force_v1(
+            self.palw_bond_maturity,
+            self.palw_bond_maturity_early,
+            daa_score,
+        )
     }
 
     /// **ADR-0071 SA-1..SA-4, resolved in exactly one place**, for the D1 reason: a panel is
@@ -11826,6 +12395,16 @@ impl VirtualStateProcessor {
             // Which freshness rule a readiness row is judged by at this DAA — the same resolution
             // the fold's extras carry (`readiness_v2_active`), for the readers holding only the fold.
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
+            // Lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on the ready count and the
+            // admission jury, from lane maturity's fence (MODE-folded) on — `palw_bond_maturity`'s
+            // window and the second clock's raw depth at this DAA, the pair `palw_bond_maturity_window_at`
+            // reads for the draw. `None` below the fence and on every shipped preset.
+            bond_maturity: kaspa_consensus_core::palw_model_registry_v1::palw_bond_maturity_fold_v1(
+                self.palw_bond_maturity,
+                self.palw_bond_maturity_early,
+                self.palw_settled_anchor_depth_at(daa_score),
+                daa_score,
+            ),
         })
     }
 
@@ -12130,6 +12709,21 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
+        self.palw_v2_check_attempt_admission_waiving_v1(header, state, state_params, point, bootstrap_state, false)
+    }
+
+    /// [`Self::palw_v2_check_attempt_admission`] with admission item 8 (the exposure ceiling) waived
+    /// when `waive_ceiling` — lane bind-deadlock's binder re-check
+    /// ([`Self::palw_v2_anchor_at_ceiling_binder_v1`]) and nothing else passes `true`.
+    fn palw_v2_check_attempt_admission_waiving_v1(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        waive_ceiling: bool,
+    ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
         use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
         // ADR-0072 SA-4: EITHER attempt id. Which one is a lane at this height was already decided
         // by the header processor and the pruning-proof gate, both of which refuse the closed side
@@ -12186,10 +12780,79 @@ impl VirtualStateProcessor {
             bootstrap_bond.as_ref(),
             // ADR-0045/ADR-0123: resolve both budget policies from the same block DAA, and pass
             // them as named fields so boundary and release cannot be transposed at this callsite.
-            self.palw_epoch_budget_fences_at(point.daa_score),
+            // Lane bind-deadlock: item 8 waived for a binder's re-check only.
+            {
+                let mut fences = self.palw_epoch_budget_fences_at(point.daa_score);
+                fences.exposure_ceiling_waived = waive_ceiling;
+                fences
+            },
         )
         .map_err(|e| e.to_string())?;
         Ok(Some(envelope))
+    }
+
+    /// **Lane bind-deadlock: the binder — a chain block whose own attempt admission refused on its
+    /// bond's exposure ceiling alone, and which is the anchor of a due claim** (`Params::palw_anchor_at_ceiling`,
+    /// at the block's own DAA).
+    ///
+    /// Past `palw_rcore_plus` a claim binds only in its anchor block (SW-8) and only an attempt block
+    /// anchors; an attempt a full bond cannot back was disqualified here, so a fleet whose producers all
+    /// stood at their ceilings had no anchor at all and its `Provisional` claims — the very room that
+    /// held it there — waited for the `BindTimeout` backstop. `Some(envelope)` — the walk keeps the block
+    /// and hands the fold its attempt — exactly when:
+    ///
+    /// 1. the fence is active at the block's DAA;
+    /// 2. **past lane A's fence (`Params::palw_operator_anchor`) at the block's DAA, the block's OWN
+    ///    attempt is an operator's** (`PalwOperatorAnchorRuleV1::operator_of_v1`). Lane A lets a chain
+    ///    block anchor through an operator attempt it merely MERGES, whatever its own lane; that
+    ///    capability is the merged attempt's, and any chain block that merges it — a heartbeat, which
+    ///    has no ceiling — carries it, so a non-operator at its ceiling is never the one block that can
+    ///    bind those claims and is disqualified as before. What lane A leaves stuck is the operator's
+    ///    own attempt at its ceiling: disqualified, it is popped from the sink search and merged by no
+    ///    template, so the claims due at it wait for an operator with room — none, in the deadlock;
+    /// 3. the block anchors a panel, and the parent holds a claim `Provisional` with its slot at or
+    ///    below the highest slot the block anchors ([`Self::palw_sw8_anchor_for`]: R-core+ at the block
+    ///    and the one per-block answer the anchor walk and step 4c read — below lane A the block's lane,
+    ///    reaching its own DAA; past it the operator attempts it is or merges, reaching the latest of
+    ///    them, which for an operator's own attempt is its own DAA) — so this block IS that claim's
+    ///    anchor and step 4c binds or voids it here; a block with nothing to anchor stays disqualified,
+    ///    so binders are bounded by the anchor events claims create;
+    /// 4. the full admission passes with item 8 waived — signature, pins, pwu, producer floor, budget,
+    ///    identity, class lottery: an anchor still costs a won draw by a registered bond's key.
+    ///
+    /// The fold then runs the attempt through `apply_attempt`, whose own ceiling (finding 17,
+    /// `AttemptExposureCeiling`, on the state this block's objects leave) skips it: no claim, no
+    /// reservation, the worker carve withheld and burned (`palw_v2_skipped_own_attempt_carve`). If this
+    /// block's own objects freed the room first, the fold admits the claim on the ceiling it measures
+    /// — the invariant `committed ≤ ceiling` is the fold's, whichever block the claim rides.
+    fn palw_v2_anchor_at_ceiling_binder_v1(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+    ) -> Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2> {
+        if !self.palw_anchor_at_ceiling_at(point.daa_score) {
+            return None;
+        }
+        // (2) Past lane A only an operator's own attempt binds at its ceiling.
+        if self.palw_operator_anchor.as_ref().is_some_and(|rule| rule.active_at(point.daa_score) && rule.operator_of_v1(header).is_none())
+        {
+            return None;
+        }
+        // (3) Due at the slots this block anchors — `reach`, as step 4c caps it — not at its own DAA.
+        let (anchor_delay, reach) = self.palw_sw8_anchor_for(point)?;
+        if kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1(
+            state,
+            reach.min(point.daa_score),
+            anchor_delay,
+        )
+        .is_empty()
+        {
+            return None;
+        }
+        self.palw_v2_check_attempt_admission_waiving_v1(header, state, state_params, point, bootstrap_state, true).ok().flatten()
     }
 
     /// Unit C step 4's consumer: a receipt-lane (algo-7) block's spend, admitted against a beacon
@@ -12234,8 +12897,8 @@ impl VirtualStateProcessor {
             return (works, skips);
         }
         let non_daa = mergeset_non_daa;
-        let merged: Vec<BlockHash> =
-            ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.as_ref()).collect();
+        // Lane accept-order: past its fence, parents-first at the accepting block's DAA score.
+        let merged: Vec<BlockHash> = self.acceptance_ordered_mergeset_without_selected_parent(ghostdag_data, point.daa_score);
         for blue in merged.iter() {
             if non_daa.contains(blue) {
                 continue;
@@ -12534,7 +13197,8 @@ impl VirtualStateProcessor {
     ///
     /// **Most blocks bind nothing, and cost nothing here** (M4 review finding 6). Past
     /// `palw_rcore_plus` a panel anchors only on an attempt block
-    /// ([`Self::palw_block_may_anchor_a_panel_v1`]), and step 2 cannot make a claim this block's
+    /// ([`Self::palw_block_may_anchor_a_panel_v1`]; past lane A only on a block that is or merges an
+    /// operator's attempt, [`Self::palw_anchor_reach_of_v1`]), and step 2 cannot make a claim this block's
     /// anchor (a redraw re-bases on this block, so its slot is later; the sweeps only remove claims),
     /// so a block binds only claims its PARENT already holds `Provisional` with their slot at or
     /// below this block's DAA (`palw_claims_provisional_past_their_anchor_slot_v1`). The pre-object
@@ -12560,13 +13224,15 @@ impl VirtualStateProcessor {
             // processed); a node that cannot read it derives nothing rather than guessing a point.
             return Vec::new();
         };
-        // Finding 6's pre-check, on the parent: an anchor-lane block with a claim whose slot it
-        // reaches, or nothing to derive. Resolved at the block's DAA, which is every candidate's
-        // anchor DAA (the candidates' slots are at or below it and the block is their anchor).
+        // Finding 6's pre-check, on the parent: a block that anchors, with a claim whose slot it
+        // reaches, or nothing to derive. The reach is the block's own DAA score, except past lane A,
+        // where a block anchors only the slots at or below the latest operator attempt it is or merges
+        // (`palw_anchor_reach_of_v1`, the answer the walk and step 4c read).
         let anchor_delay = panel_params.anchor_delay();
-        if !self.palw_block_may_anchor_a_panel_v1(header.pow_algo_id, block_daa)
-            || palw_claims_provisional_past_their_anchor_slot_v1(state, block_daa, anchor_delay).is_empty()
-        {
+        let Some(reach) = self.palw_anchor_reach_of_v1(block, &header) else {
+            return Vec::new();
+        };
+        if palw_claims_provisional_past_their_anchor_slot_v1(state, reach, anchor_delay).is_empty() {
             return Vec::new();
         }
         // The walk's chain point, spelled as the pipeline spells it for this block.
@@ -12594,9 +13260,9 @@ impl VirtualStateProcessor {
             Err(_) => return Vec::new(),
         };
         // Claim-id order, over the claims the base holds `Provisional` with their slot at or below
-        // this block (a binding moves only its own claim, so the list cannot change under the loop;
-        // every other `Provisional` claim's anchor is a later block, so it could not bind here).
-        let provisional = palw_claims_provisional_past_their_anchor_slot_v1(&folded, block_daa, anchor_delay);
+        // this block's reach (a binding moves only its own claim, so the list cannot change under the
+        // loop; every other `Provisional` claim's anchor is a later block, so it could not bind here).
+        let provisional = palw_claims_provisional_past_their_anchor_slot_v1(&folded, reach, anchor_delay);
         let mut out = Vec::new();
         for claim_id in provisional {
             let Some(claim) = folded.claim(&claim_id) else { continue };
@@ -12617,8 +13283,9 @@ impl VirtualStateProcessor {
                 Err(Some(why)) => {
                     info!(
                         "Block {block}: claim {claim_id}'s panel is not bound — its draw refused in its anchor block ({why}); \
-                         under the stake-weighted draw a claim binds only there, so it voids BindTimeout in this block, \
-                         without forfeit (ADR-0152 SW-8/SW-10)"
+                         under the stake-weighted draw a claim binds only there, so it voids in this block, without forfeit \
+                         (ADR-0152 SW-8/SW-10) — or, past palw_registry_resilience with its class unable to seat a panel, \
+                         is re-anchored at its next slot (lane F1, V03)"
                     );
                     continue;
                 }
@@ -12741,12 +13408,16 @@ impl VirtualStateProcessor {
         let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
         // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
         // panel of a sharded class would ask shard seats to judge a whole model.
+        // Lane F1, the panel seed: for a claim anchored past `Params::palw_panel_seed_execution`
+        // `H(anchor attempt's execution ‖ claim)`, below it the anchor block — the one value the gate
+        // recomputes and the fold stores.
+        let seed = anchor.panel_seed(claim_id);
         let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
             Some(shard_count) => kaspa_consensus_core::palw_panel_v2::derive_stratified_panel_v2(
                 state,
                 panel_params,
                 claim_id,
-                anchor.anchor_block,
+                seed,
                 min_collateral,
                 maturity_floor,
                 capability_bound,
@@ -12756,7 +13427,7 @@ impl VirtualStateProcessor {
                 state,
                 panel_params,
                 claim_id,
-                anchor.anchor_block,
+                seed,
                 min_collateral,
                 maturity_floor,
                 capability_bound,
@@ -12768,11 +13439,7 @@ impl VirtualStateProcessor {
         // carries the fence — and the acceptance layer demands that panel exactly, so a node
         // proposes only what its own fold will take. The identity test that stood here
         // compared fields a registrant writes for itself, and is gone with the rule it served.
-        Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
-            claim: *claim_id,
-            anchor: anchor.anchor_block,
-            seats,
-        })
+        Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound { claim: *claim_id, anchor: seed, seats })
     }
 
     fn palw_v2_objects_of_block(
@@ -13856,7 +14523,40 @@ impl VirtualStateProcessor {
             // silently downgraded to blue work.
             return match (self.palw_candidate_order_v2(prev_sink), self.palw_candidate_order_v2(candidate)) {
                 (Some(incumbent), Some(challenger)) => {
-                    match kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger) {
+                    // **lane: rcore/f1-forkchoice-attacks — an all-economic tie keeps the incumbent
+                    // past the fence.** `decide_deep_reorg_v2` allows a `Greater` challenger, whose
+                    // last tie-break is the candidate hash, so a private branch tying the incumbent on
+                    // all three economic keys wins the reorg by grinding a higher hash (the fork-choice
+                    // attack probes measure it). Past `palw_reorg_strict_economic_win` a reorg is
+                    // allowed only on a STRICT economic win. The fence is read at the INCUMBENT's DAA
+                    // — a candidate's own score is attacker-chosen — exactly as the confirmed-anchor
+                    // TTL and `palw_frontier_provenance_outcome` read it. Below the fence this is
+                    // byte-identical to `decide_deep_reorg_v2`.
+                    //
+                    // **lane: rcore/f1-strictwin-tie — past the fence a SHALLOW tie is GHOSTDAG's.**
+                    // This gate judges every non-extension sink move, a one-block sibling switch
+                    // included, and "a tie keeps the incumbent" is a rule about arrival order: two
+                    // honest nodes that saw sibling tips in different orders each kept their own, the
+                    // refused sibling left the virtual's parents, so neither merged the other's tip and
+                    // the split outlived every later block that tied (measured through the pipeline:
+                    // `strict_win_honest_race`, and rcore/cap-weight 3aa4abec4 before it). So the
+                    // fence's rule is `palw_reorg_strict_economic_win_v1`: a strict economic win or
+                    // loss exactly as before, and an all-economic tie decided by GHOSTDAG's own order
+                    // (blue work, then hash — the order this search pops in) when the incumbent's chain
+                    // above the fork point spans at most `PALW_REORG_SHALLOW_TIE_DAA_V1` DAA ticks, the
+                    // incumbent kept deeper. The depth walk runs only on a tie, keyed as the fence is
+                    // (the incumbent's DAA), and answers `false` on any read it cannot make.
+                    let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
+                    let decision = if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
+                        kaspa_consensus_core::palw_fork_authority_v2::palw_reorg_strict_economic_win_v1(
+                            &incumbent,
+                            &challenger,
+                            || self.palw_reorg_shallow_ghostdag_win_v1(candidate, prev_sink, incumbent_daa),
+                        )
+                    } else {
+                        kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger)
+                    };
+                    match decision {
                         kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => {
                             self.palw_frontier_provenance_outcome(candidate, prev_sink)
                         }
@@ -14057,6 +14757,82 @@ impl VirtualStateProcessor {
             );
         }
         outcome
+    }
+
+    /// **lane: rcore/f1-strictwin-tie — may GHOSTDAG decide this all-economic tie past
+    /// `palw_reorg_strict_economic_win`?** `true` exactly when (1) `candidate` is heavier than
+    /// `prev_sink` in GHOSTDAG's own order — blue work, then hash, the [`SortableBlock`] order the sink
+    /// search pops in — (2) `candidate` does not LOWER the sink's DAA (`daa(candidate) ≥
+    /// incumbent_daa`), and (3) the reorg is SHALLOW: the incumbent's selected chain above its common
+    /// chain ancestor with `candidate` spans at most [`PALW_REORG_SHALLOW_TIE_DAA_V1`] DAA ticks
+    /// (`incumbent_daa − daa(ancestor) ≤ D`). The question `palw_reorg_strict_economic_win_v1` asks,
+    /// and only on an all-economic tie.
+    ///
+    /// **Why a depth, and why on the incumbent's side.** A rule that keeps the incumbent on a tie is a
+    /// rule about arrival order, so two honest nodes racing a slot keep different sinks; a rule that
+    /// hands every tie to GHOSTDAG hands it to whoever piles more blue work in private, which is the
+    /// heartbeat double spend the fence closed. Honest races are resolved within a propagation delay —
+    /// well inside one slot, two ticks with the lead cap's burst — while a double spend must reverse a
+    /// payment someone has watched confirm. The depth is read on the INCUMBENT's own chain (this node's
+    /// history since the fork), which a challenger cannot shorten: blocks it gets merged into that
+    /// chain only lengthen it. So a shallow tie is decided the way every honest node decides it, and a
+    /// payment deeper than `D` ticks under this node's sink keeps the fence's protection whatever blue
+    /// work is piled against it in one release. The depth alone does not pin the sink's DAA — a denser
+    /// tying branch that still holds the payment could move the sink one tick DOWN first, and a second
+    /// release reach under the lowered window (measured: three ticks, and a branch weighted without
+    /// ticks would not stop there) — which is what (2) is for: a tie never lowers the sink's DAA, so no
+    /// chain of releases reaches deeper than `D` ticks under the highest sink a tie produced
+    /// (`a_shallow_tie_never_lowers_the_sink_so_chained_releases_stop_at_two`).
+    ///
+    /// Conservative on every read it cannot make — an unreadable header or GHOSTDAG row, a reachability
+    /// miss, a chain that runs past [`PALW_REORG_SHALLOW_TIE_WALK_V1`] blocks before leaving the depth —
+    /// is `false` (the tie keeps the incumbent, the strict answer). Reads only this node's committed
+    /// stores, so every node holding the same DAG answers the same.
+    ///
+    /// **Shared with the capacity lane.** rcore/cap-weight (3aa4abec4) carries this exact body as
+    /// `palw_capacity_shallow_ghostdag_win_v1`, over its own copies of the two constants, for F-W — which
+    /// requires this fence at or below it, so past F-W this function already answers. rcore/cap-int
+    /// keeps this one and drops that copy (see `palw_fork_authority_v2::palw_reorg_strict_economic_win_v1`).
+    ///
+    /// [`PALW_REORG_SHALLOW_TIE_DAA_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1
+    /// [`PALW_REORG_SHALLOW_TIE_WALK_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_WALK_V1
+    pub(crate) fn palw_reorg_shallow_ghostdag_win_v1(&self, candidate: BlockHash, prev_sink: BlockHash, incumbent_daa: u64) -> bool {
+        use kaspa_consensus_core::palw_fork_authority_v2::{PALW_REORG_SHALLOW_TIE_DAA_V1, PALW_REORG_SHALLOW_TIE_WALK_V1};
+        let heavier = match (self.ghostdag_store.get_blue_work(candidate), self.ghostdag_store.get_blue_work(prev_sink)) {
+            (Ok(c), Ok(p)) => SortableBlock::new(candidate, c) > SortableBlock::new(prev_sink, p),
+            _ => false,
+        };
+        if !heavier {
+            return false;
+        }
+        // **A shallow tie never LOWERS the sink's DAA** (the ratchet `strict_win_honest_race` measured:
+        // two chained releases reversed three ticks without this). The window is read at the incumbent's
+        // DAA, so a tie-flip onto a tying branch with FEWER ticks would move the window itself down and a
+        // second release could reach under it; keeping the incumbent there pins the window to the highest
+        // DAA a tie ever moved the sink to. Siblings on one parent set share one DAA, so an honest slot
+        // race moves the sink sideways, never back.
+        let Ok(candidate_daa) = self.headers_store.get_daa_score(candidate) else { return false };
+        if candidate_daa < incumbent_daa {
+            return false;
+        }
+        let floor = incumbent_daa.saturating_sub(PALW_REORG_SHALLOW_TIE_DAA_V1);
+        let mut block = prev_sink;
+        for _ in 0..PALW_REORG_SHALLOW_TIE_WALK_V1 {
+            let Ok(daa) = self.headers_store.get_daa_score(block) else { return false };
+            if daa < floor {
+                return false;
+            }
+            match self.reachability_service.try_is_chain_ancestor_of(block, candidate) {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(_) => return false,
+            }
+            match self.ghostdag_store.get_selected_parent(block) {
+                Ok(parent) if parent != block && parent != kaspa_consensus_core::blockhash::ORIGIN => block = parent,
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Caches the DAA and Median time windows of the sink block (if needed). Following, virtual's window calculations will
@@ -15151,6 +15927,158 @@ impl VirtualStateProcessor {
         Ok(())
     }
 
+    /// **The stamp a template built on a virtual carries — or the lead cap's refusal of it.** One
+    /// computation for the template builder and for [`Self::palw_lead_cap_virtual_parents`], so the
+    /// policy leaves out exactly what the builder would refuse.
+    ///
+    /// `max(now, median + 1)`, raised to the slot where the clock floor is armed and the block steps
+    /// (H5; `clock` is the virtual's own clock decision, `None` only where neither the floor nor the
+    /// cap is armed). Where `lead_capped` and the block steps (`granted`), a stamp more than
+    /// [`PALW_CLOCK_LEAD_CAP_MS`](kaspa_consensus_core::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS)
+    /// past `now` is `ClockStepTemplateTooFarAhead`: every header stage, this node's included, would
+    /// refuse the block (`ClockLeadTooFarAhead`), so the builder waits instead. The heartbeat adapter
+    /// then stamps a beat at `max(template, slot)` and hands that stamp back as `earliest`, and the
+    /// miner mints no beat while `earliest` is past its own clock.
+    fn palw_template_stamp_v1(
+        &self,
+        clock: Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockStepV1>,
+        lead_capped: bool,
+        past_median_time: u64,
+        now: u64,
+    ) -> Result<u64, RuleError> {
+        let proposed = u64::max(past_median_time + 1, now);
+        let timestamp = match clock {
+            Some(clock) if self.palw_clock_floor.is_some() => clock.floor_stamp(proposed),
+            _ => proposed,
+        };
+        if lead_capped
+            && clock.is_some_and(|clock| clock.granted)
+            && let Err(latest) = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(timestamp, now)
+        {
+            return Err(RuleError::ClockStepTemplateTooFarAhead(timestamp, latest, timestamp - latest));
+        }
+        Ok(timestamp)
+    }
+
+    /// **Would a template built on a virtual with this GHOSTDAG data step the clock past the lead
+    /// cap?** — [`Self::palw_template_stamp_v1`]'s refusal, asked of a candidate virtual. `false`
+    /// wherever the cap is not in force, the virtual steps nothing, or a window cannot be computed
+    /// (the builder then answers for itself).
+    fn palw_virtual_steps_past_lead_cap(&self, ghostdag_data: &GhostdagData, now: u64) -> bool {
+        let Some(fence) = self.palw_clock_lead_cap else {
+            return false;
+        };
+        let Ok(window) = self.window_manager.block_daa_window(ghostdag_data) else {
+            return false;
+        };
+        if !fence.is_active(window.daa_score) || !window.clock.granted {
+            return false;
+        }
+        let Ok((past_median_time, _)) = self.window_manager.calc_past_median_time(ghostdag_data) else {
+            return false;
+        };
+        self.palw_template_stamp_v1(Some(window.clock), true, past_median_time, now).is_err()
+    }
+
+    /// **The lead cap's local policy on virtual's parents** (`palw_clock_lead_cap`; the lead-cap
+    /// review's HIGH): a granted beat whose step every template would have to stamp past this node's
+    /// clock plus 132 s is not merged YET.
+    ///
+    /// A virtual whose mergeset carries a granted beat steps the clock, so every template built on it
+    /// — every lane's — is a step, stamped `max(now, median + 1, slot)`. A producer can hold the
+    /// past-median time more than 132 s ahead with blocks that move no clock (they keep the full
+    /// tolerance), and a beat granted BELOW that median — its own past carries none of the push:
+    /// withheld and released after it, or merely relayed late — is still a valid block and a tip.
+    /// Merged, it would make every template past the cap: the builder would refuse them all and the
+    /// node would produce nothing, in any lane, until wall time caught up — up to the tolerance less
+    /// the cap after the last push, and longer while the push is renewed, the pusher the only
+    /// producer meanwhile. So virtual leaves such a beat out, as it leaves out a tip past the merge
+    /// depth: a local choice of which tips to merge, never a verdict. The beat stays a valid tip, and
+    /// the first virtual resolved once wall time reaches the step's stamp less the cap merges it (if
+    /// the merge depth has passed it first, it is never merged, and the next beat takes the slot).
+    /// Every lane keeps building non-step blocks meanwhile, and what stalls is the DAA clock alone —
+    /// which the push holds anyway, since any step is stamped above the median: DAA-denominated
+    /// windows keep their wall length and no readiness row lapses.
+    ///
+    /// Left out, in order, until a template on the rest steps nothing past the cap: every parent
+    /// that brings a heartbeat into the mergeset (the sink excepted), then every parent but the sink
+    /// (the case of a sink that is itself the granted beat, merging the push beside it). A sink that
+    /// is a granted beat stepping past the cap on its own past is left as it is — the builder then
+    /// refuses until wall time catches up; that takes a push inside the beat's own median window
+    /// that the beat, stamped within the cap of the node that admitted it, did not already exceed.
+    ///
+    /// Its warnings are rate-limited to one a minute (a push is renewed block by block, and the
+    /// virtual is resolved at every block); the limiter is log state only, read by nothing else.
+    pub(super) fn palw_lead_cap_virtual_parents(
+        &self,
+        virtual_parents: Vec<BlockHash>,
+        virtual_ghostdag_data: GhostdagData,
+        pruning_point: BlockHash,
+    ) -> (Vec<BlockHash>, GhostdagData) {
+        /// The wall-clock millisecond this policy last warned at. Log state only.
+        static LAST_WARNED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let warn_due = |now: u64| {
+            use std::sync::atomic::Ordering::Relaxed;
+            let last = LAST_WARNED_MS.load(Relaxed);
+            now >= last.saturating_add(60_000) && LAST_WARNED_MS.compare_exchange(last, now, Relaxed, Relaxed).is_ok()
+        };
+        if self.palw_clock_lead_cap.is_none() || virtual_parents.len() < 2 {
+            return (virtual_parents, virtual_ghostdag_data);
+        }
+        let is_beat = |hash: BlockHash| {
+            self.headers_store
+                .get_header(hash)
+                .is_ok_and(|header| header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID)
+        };
+        let sink = virtual_ghostdag_data.selected_parent;
+        let merged_beats: Vec<BlockHash> =
+            virtual_ghostdag_data.unordered_mergeset_without_selected_parent().filter(|hash| is_beat(*hash)).collect();
+        // No beat in the mergeset: nothing is granted, and there is nothing to decide.
+        if merged_beats.is_empty() && !is_beat(sink) {
+            return (virtual_parents, virtual_ghostdag_data);
+        }
+        let now = unix_now();
+        if !self.palw_virtual_steps_past_lead_cap(&virtual_ghostdag_data, now) {
+            return (virtual_parents, virtual_ghostdag_data);
+        }
+        let _prune_guard = self.pruning_lock.blocking_read();
+        let without_beats: Vec<BlockHash> = virtual_parents
+            .iter()
+            .copied()
+            .filter(|parent| {
+                *parent == sink || !merged_beats.iter().any(|beat| self.reachability_service.is_dag_ancestor_of(*beat, *parent))
+            })
+            .collect();
+        let mut narrower = Vec::with_capacity(2);
+        if without_beats.len() < virtual_parents.len() {
+            narrower.push(without_beats);
+        }
+        narrower.push(vec![sink]);
+        for kept in narrower {
+            let (kept, kept_ghostdag_data) = self.remove_bounded_merge_breaking_parents(kept, pruning_point);
+            if !self.palw_virtual_steps_past_lead_cap(&kept_ghostdag_data, now) {
+                let left_out = virtual_parents.iter().filter(|parent| !kept.contains(parent)).count();
+                if warn_due(now) {
+                    warn!(
+                        "[palw-clock] virtual leaves {left_out} tip(s) unmerged for now: merged, a beat grants a clock step every \
+                         template would stamp more than 132 s past this node's clock (the past-median time stands that far ahead — \
+                         palw_clock_lead_cap); non-step blocks are built meanwhile and the DAA clock waits for wall time"
+                    );
+                } else {
+                    debug!("[palw-clock] virtual leaves {left_out} tip(s) unmerged for now (palw_clock_lead_cap)");
+                }
+                return (kept, kept_ghostdag_data);
+            }
+        }
+        if warn_due(now) {
+            warn!(
+                "[palw-clock] the sink {sink} is a beat whose clock step every template would stamp more than 132 s past this \
+                 node's clock (palw_clock_lead_cap): templates wait for wall time"
+            );
+        }
+        (virtual_parents, virtual_ghostdag_data)
+    }
+
     /// **ADR-0142: the clock's decision for a block built on `parents`** — the cursor its window
     /// derives at its selected parent's score and whether its mergeset carries a granted beat.
     ///
@@ -15797,6 +16725,22 @@ impl VirtualStateProcessor {
         // [`calc_block_parents`] can use deep blocks below the pruning point for this calculation, so we
         // need to hold the pruning lock.
         let _prune_guard = self.pruning_lock.blocking_read();
+        // **The template's stamp, decided before anything is built on it** (`palw_template_stamp_v1`:
+        // the median, H5's floor, and the lead cap's construction half). Past median time is the
+        // exclusive lower bound for valid block time. **H5 (the clock floor): a template that steps the
+        // clock on a beat's grant is stamped at or past the slot it consumes** — the header stage
+        // refuses it otherwise (`ClockStepBeforeItsSlot`). Raised here rather than left to the miner
+        // because every lane's template can be the step: on testnet-12 the first block of any lane
+        // built after a granted beat carries the tick. Decided on the virtual's own clock decision —
+        // the one this block's DAA score was computed from. **The lead cap**: such a step stamped past
+        // this node's clock plus 132 s is refused by every header stage, so it is refused here.
+        let lead_capped = self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let clock = if self.palw_clock_floor.is_some() || lead_capped {
+            Some(self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock)
+        } else {
+            None
+        };
+        let timestamp = self.palw_template_stamp_v1(clock, lead_capped, virtual_state.past_median_time, unix_now())?;
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let header_pruning_point =
             self.pruning_point_manager.expected_header_pruning_point(virtual_state.ghostdag_data.to_compact()).pruning_point;
@@ -15979,44 +16923,6 @@ impl VirtualStateProcessor {
         let accepted_id_merkle_root = self
             .calc_accepted_id_merkle_root(virtual_state.accepted_tx_ids.iter().copied(), virtual_state.ghostdag_data.selected_parent);
         let utxo_commitment = virtual_state.multiset.clone().finalize();
-        // Past median time is the exclusive lower bound for valid block time, so we increase by 1 to get the valid min
-        let min_block_time = virtual_state.past_median_time + 1;
-        // **H5 (the clock floor): a template that steps the clock on a beat's grant is stamped at or
-        // past the slot it consumes** — the header stage refuses it otherwise (`ClockStepBeforeItsSlot`).
-        // Raised here rather than left to the miner because every lane's template can be the step: on
-        // testnet-12 the first block of any lane built after a granted beat carries the tick. The
-        // raise is at most the granted beat's own lead over this node's clock, which peers accepted
-        // for the beat and accept for this block likewise. Decided on the virtual's own clock
-        // decision — the one this block's DAA score was computed from.
-        let lead_capped = self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
-        let clock = if self.palw_clock_floor.is_some() || lead_capped {
-            Some(self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock)
-        } else {
-            None
-        };
-        let now = unix_now();
-        let timestamp = {
-            let proposed = u64::max(min_block_time, now);
-            match clock {
-                Some(clock) if self.palw_clock_floor.is_some() => clock.floor_stamp(proposed),
-                _ => proposed,
-            }
-        };
-        // **The lead cap's construction half** (`palw_clock_lead_cap`): a template that steps the
-        // clock is stamped `max(now, median + 1, slot)`, and past `now + 132 s` the header stage — this
-        // node's and every peer's — refuses it. Wait instead of building it. Only this lane-agnostic
-        // half is asked here: the heartbeat adapter stamps a beat at `max(template, slot)` and hands
-        // back that stamp as `earliest`, and the miner mints no beat while `earliest` is past its own
-        // clock. The slot cannot put a step past the cap — a granted beat this node admitted was
-        // stamped at or past it and within the cap — so what reaches this refusal is a past-median
-        // time held more than 132 s ahead of this clock (the stall the header stage documents), or
-        // this host's clock stepping back.
-        if lead_capped
-            && clock.is_some_and(|clock| clock.granted)
-            && let Err(latest) = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(timestamp, now)
-        {
-            return Err(RuleError::ClockStepTemplateTooFarAhead(timestamp, latest, timestamp - latest));
-        }
         let header = Header::new_finalized(
             version,
             parents_by_level,

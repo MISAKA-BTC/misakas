@@ -20,6 +20,8 @@ pub mod palw_filer_false_valid;
 pub mod palw_fp_seat;
 pub mod palw_heartbeat_miner;
 pub mod palw_lane_watch;
+/// V04 (the pre-t12 drill of 2026-09-25): the order a collector offers licences in (node policy).
+pub mod palw_licence_order;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 pub mod palw_producer;

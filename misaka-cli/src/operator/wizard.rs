@@ -12,9 +12,12 @@
 //! script; without a terminal and without `--yes`, setup stops at the question and says so.
 //!
 //! The bond itself is registered by `kaspad --palw-register-bond` — the node's own builder, with
-//! everything it knows about sizing, relaying and naming a carrier — on a node setup starts for the
-//! purpose. Setup reads the outcome from that node's log and from the chain; nobody copies an
-//! outpoint off a log line.
+//! everything it knows about relaying and naming a carrier — on a node setup starts for the
+//! purpose, and always with `--palw-bond-collateral` set to the figure setup showed and the
+//! operator confirmed. That figure is the purpose's: a producer's bond locks what the node sizes for
+//! the class's claims; a verifier seat's locks at least what the panel draw seats
+//! ([`seat_requirement`]: ten producer floors, 130,000 MSK, on testnet-12). Setup reads the outcome
+//! from that node's log and from the chain; nobody copies an outpoint off a log line.
 
 use crate::operator::finding::{Finding, Severity, paint};
 use crate::operator::nodelog::{self, RegistrationNote};
@@ -142,6 +145,9 @@ struct OwnNode {
     child: Option<supervisor::Child>,
     pid: u32,
     register: bool,
+    /// The `--palw-bond-collateral` it registers with; `None` when it registers nothing, or was
+    /// started without the flag (an earlier setup's node, sizing its own default).
+    collateral: Option<u64>,
     started_unix: i64,
 }
 
@@ -178,8 +184,15 @@ pub(crate) struct ClassChoice {
     pub(crate) artifact_root: String,
     pub(crate) fp_certified: bool,
     pub(crate) share_permille: Option<u16>,
-    /// What a bond for it locks: the class's whole-lifetime sizing, never below the chain's floor.
+    /// What a PRODUCER's bond for it locks: `kaspad --palw-register-bond`'s own default for the
+    /// class — its whole-lifetime sizing, never below the producer floor. `None` when the node
+    /// reports no facts for it. `u64::MAX` is a saturated sizing, not an amount ([`bond_lock`]).
     pub(crate) collateral: Option<u64>,
+    /// What a SEAT's bond for it must hold before the panel draw seats it ([`seat_requirement`]).
+    pub(crate) seat_collateral: Option<u64>,
+    /// Why the class takes no new claim on this chain, if it does not ([`class_closed_reason`]): no
+    /// bond is sized for it in any role.
+    pub(crate) closed: Option<&'static str>,
 }
 
 impl ClassChoice {
@@ -189,6 +202,225 @@ impl ClassChoice {
             (false, false) => self.name.clone(),
             (false, true) => format!("{}…", &self.id[..8.min(self.id.len())]),
         }
+    }
+
+    /// What a bond for this class locks in `role`.
+    pub(crate) fn lock(&self, role: BondRole) -> BondLock {
+        bond_lock(role, self.collateral, self.seat_collateral, self.closed.is_none())
+    }
+}
+
+/// **Why a class takes no new claim on this chain**, when it does not — read off its status and the
+/// chain's own params, so the chooser says so instead of offering a bond for it:
+///
+/// * `Frozen` (a proven fault) and `Dormant` (reclaimed for producing nothing) classes take no new
+///   work until they are registered again;
+/// * past `palw_class_verify_deadline` (ADR-0152 §4-quater V2(a)) a class whose canonical job derives
+///   a verification deadline past `window_receipt` takes no claim on any lane until a measured row
+///   names it — `palw_class_needs_measured_row_v1`'s clause (i), the 2M row at testnet-12's launch
+///   (U-D1: 13,995 DAA against 600). `verification_ccu` is the registry row's (`None`: no row, so no
+///   class-derived deadline). Clause (ii), a held class with a published `n_ctx` past 8,192, needs a
+///   profile no read serves, and a class only it closes reads by its sizing, as before.
+pub(crate) fn class_closed_reason(
+    params: &kaspa_consensus_core::config::params::Params,
+    daa: u64,
+    class_id: &str,
+    status: &str,
+    share_permille: Option<u16>,
+    verification_ccu: Option<u128>,
+) -> Option<&'static str> {
+    use crate::operator::market::{ClassStage, class_stage};
+    if matches!(class_stage(status, share_permille), ClassStage::Frozen { .. } | ClassStage::Dormant { .. }) {
+        return Some("the class is Frozen or Dormant: it takes no new work until it is registered again");
+    }
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return None;
+    };
+    let state = &bundle.state;
+    let ccu = verification_ccu?;
+    let measured =
+        state.class_verify_rows().iter().any(|row| row.class_id.to_string().eq_ignore_ascii_case(class_id) && row.is_active_at(daa));
+    (state.class_verify_deadline_active_at(daa)
+        && !measured
+        && kaspa_consensus_core::palw_class_verify_deadline_v1::palw_derived_verify_daa_v1(ccu) > state.window_receipt())
+    .then_some(
+        "the class takes no claim until a measured verification row names it (ADR-0152 §4-quater): its derived verification \
+         deadline is past the chain's receipt window",
+    )
+}
+
+/// **What a bond is registered to do** — and so what the chain asks of its collateral.
+///
+/// A producer's collateral backs its own claims for their whole life; a seat's is what the panel
+/// draw reads before it seats the bond at all (ADR-0124 Decision 4). Where the chain states a panel
+/// floor the two are different numbers — testnet-12: a 13,000 MSK producer floor and a 130,000 MSK
+/// seat floor — and a bond meant to do both holds the larger. The registry takes one bond per key
+/// for the life of the chain and its collateral cannot be topped up, so the figure is settled
+/// before the lock, never after.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BondRole {
+    /// It opens claims (`--palw-produce`), backed by this collateral.
+    pub(crate) produce: bool,
+    /// It sits on panels and judges other producers' claims.
+    pub(crate) seat: bool,
+}
+
+impl BondRole {
+    pub(crate) const PRODUCER: BondRole = BondRole { produce: true, seat: false };
+    pub(crate) const SEAT: BondRole = BondRole { produce: false, seat: true };
+
+    /// The role a setup registers its bond for: `mining setup` a producer's, `verifier setup` a
+    /// seat's. (`validator setup` stakes a DNS-finality bond of its own and registers no PALW bond;
+    /// it reads as a seat only so that this is total.)
+    pub(crate) fn of(purpose: Purpose) -> BondRole {
+        match purpose {
+            Purpose::Mine => BondRole::PRODUCER,
+            Purpose::Verify | Purpose::Validate => BondRole::SEAT,
+        }
+    }
+
+    /// The role, as the confirmation names it.
+    pub(crate) fn name(self) -> &'static str {
+        match (self.produce, self.seat) {
+            (true, true) => "producer and verifier seat",
+            (true, false) => "producer",
+            (false, _) => "verifier seat",
+        }
+    }
+}
+
+/// What the chooser and the setup rows say for a class no bond can be sized for.
+pub(crate) const NOT_AVAILABLE: &str = "not available on this chain";
+
+/// **What a bond for one class locks in one role** — an amount, or why there is none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BondLock {
+    /// A postable amount, in sompi.
+    Sompi(u64),
+    /// No bond can be sized for it on this chain: the chain's own sizing saturates (`u64::MAX`) or
+    /// exceeds what one output may carry (`MAX_SOMPI`), or the class takes no new work.
+    NotAvailable,
+    /// The node reports no facts to size it from (yet).
+    Unknown,
+}
+
+impl BondLock {
+    pub(crate) fn sompi(self) -> Option<u64> {
+        match self {
+            BondLock::Sompi(sompi) => Some(sompi),
+            BondLock::NotAvailable | BondLock::Unknown => None,
+        }
+    }
+
+    /// The chooser's cell: an amount, or words — a saturated sizing is never printed as MSK.
+    pub(crate) fn shown(self) -> String {
+        match self {
+            BondLock::Sompi(sompi) => catalog::msk(sompi as u128),
+            BondLock::NotAvailable => NOT_AVAILABLE.to_string(),
+            BondLock::Unknown => "unknown".to_string(),
+        }
+    }
+}
+
+/// **The figure a role locks for a class**: the larger of the figures the role takes — the
+/// producer's for `produce`, the seat's for `seat`, both for a bond meant to do both. A figure no
+/// output can carry is [`BondLock::NotAvailable`] (the 2M row's producer sizing is `u64::MAX`), and
+/// one the node could not size is [`BondLock::Unknown`]; neither is ever offered as a lock.
+pub(crate) fn bond_lock(role: BondRole, producer: Option<u64>, seat: Option<u64>, takes_work: bool) -> BondLock {
+    if !takes_work {
+        return BondLock::NotAvailable;
+    }
+    let taken: Vec<Option<u64>> =
+        [(role.produce, producer), (role.seat, seat)].into_iter().filter(|(wanted, _)| *wanted).map(|(_, figure)| figure).collect();
+    if taken.iter().flatten().any(|figure| *figure > kaspa_consensus_core::constants::MAX_SOMPI) {
+        return BondLock::NotAvailable;
+    }
+    match taken.into_iter().collect::<Option<Vec<u64>>>().and_then(|figures| figures.into_iter().max()) {
+        Some(need) => BondLock::Sompi(need),
+        None => BondLock::Unknown,
+    }
+}
+
+/// A fence the network states — in force now or scheduled — as opposed to absent or `never()`.
+fn stated(fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> bool {
+    fence.is_some_and(|f| f != kaspa_consensus_core::config::params::ForkActivation::never())
+}
+
+/// **What the panel draw asks of a seat bond's collateral before it seats it**, read off the
+/// chain's own params at `daa` — the rules the draw (`palw_panel_bonds_judging_v1`) and the
+/// registry's ready predicate (`palw_seat_not_ready_reason_net_v1`) hold every seat to, whatever
+/// claim it is drawn onto:
+///
+/// * **The seat floor** (ADR-0124 Decision 4): past the panel economy a bond is drawn only with
+///   `palw_panel_collateral_floor_v1` of the producer floor posted — ten producer floors, 130,000
+///   MSK on testnet-12. Taken wherever the network states the economy, in force or scheduled, since
+///   a bond is registered once and outlives every fence; without it, the producer floor, as the
+///   draw does.
+/// * **A ready seat for a model class** (ADR-0135 Decision 4): under the registry a seat judges a
+///   class other than the floor only while `readiness_collateral_multiple` producer floors of its
+///   collateral are FREE, so the posted collateral also covers what its declaration reserves (the
+///   class and the floor, `PALW_CAPABILITY_EXPOSURE_SOMPI` each, where the capability bound is on).
+/// * **One panel's reservation.** Past R-core+ (ADR-0152 L-4b) the room a seat needs to be bound
+///   is priced per claim, `max(duty_bind, lock_2)`, which no read serves before the claim exists;
+///   the seat floor's 500 ‰ room holds it on every class testnet-12 carries (the dearest, the 2M
+///   row's `lock_2`, is about 33,400 MSK against the 65,000 MSK room of a 130,000 MSK bond —
+///   `rcore_s3_one_ledger` T78). Before R-core+ a seat reserved three times the claim's own
+///   exposure (ADR-0124 Decision 3); there setup keeps the producer's whole-lifetime figure for
+///   the class as the bound, as it always did, and is `None` where that figure is unknown.
+///
+/// `None` also off `ConsensusV2`, which seats no panel.
+pub(crate) fn seat_requirement(
+    params: &kaspa_consensus_core::config::params::Params,
+    daa: u64,
+    is_base: bool,
+    producer: Option<u64>,
+) -> Option<u64> {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return None;
+    };
+    let producer_floor = bundle.state.min_collateral_sompi();
+    let mut need = if stated(params.palw_panel_economy_fence()) {
+        kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(producer_floor)
+    } else {
+        producer_floor
+    };
+    if !is_base && stated(params.palw_model_registry) {
+        let multiple =
+            kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1(bundle).readiness_collateral_multiple;
+        let declared = if stated(params.palw_capability_bound_fence()) {
+            2 * kaspa_consensus_core::palw_state_v2::PALW_CAPABILITY_EXPOSURE_SOMPI
+        } else {
+            0
+        };
+        need = need.max(producer_floor.saturating_mul(u64::from(multiple)).saturating_add(declared));
+    }
+    if !params.palw_rcore_plus_active_at(daa) {
+        need = need.max(producer?);
+    }
+    Some(need)
+}
+
+/// **How long a retired bond's collateral stays locked**, in DAA — `palw_v2_bond_withdrawal_delay_at_v1`,
+/// the bundle's delay plus the data-availability court's lattice past its fence (12,900 DAA on
+/// testnet-12), resolved at the later of `daa` and that fence: a retirement is always later than
+/// now. `None` off `ConsensusV2`.
+pub(crate) fn withdrawal_delay_daa(params: &kaspa_consensus_core::config::params::Params, daa: u64) -> Option<u64> {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return None;
+    };
+    let at = params.palw_da_court.filter(|f| stated(Some(*f))).map_or(daa, |f| f.daa_score().max(daa));
+    Some(kaspa_consensus_core::config::params::palw_v2_bond_withdrawal_delay_at_v1(bundle, params.palw_da_court, at))
+}
+
+/// `12,900` DAA → `about 18 days`, at the ConsensusV2 block target (one DAA a block,
+/// `PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`). An estimate, and said as one.
+fn daa_as_time(daa: u64) -> String {
+    let hours = daa.saturating_mul(kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS) / 3_600_000;
+    match hours {
+        0 => "under an hour".to_string(),
+        1 => "about 1 hour".to_string(),
+        2..=47 => format!("about {hours} hours"),
+        _ => format!("about {} days", (hours + 12) / 24),
     }
 }
 
@@ -240,8 +472,29 @@ pub(crate) async fn class_collateral(node: &NodeRead, class_id: &str) -> Option<
 }
 
 /// The class table as a person chooses from it: each class with its founding line's name and what
-/// a bond for it locks, the floor first.
+/// a bond for it locks — as a producer and as a seat — the floor first.
 pub(crate) async fn class_choices(node: &NodeRead, rows: &[kaspa_rpc_core::RpcPalwClassRow]) -> Vec<ClassChoice> {
+    let params = &node.nv.params;
+    // The registry rows' verification work, for `class_closed_reason` — asked only where the chain
+    // arms §4-quater's deadlines (testnet-12, whose every node serves the registry read): a node that
+    // predates an op drops the connection on it, and every read after it would fail.
+    let verification_ccu: std::collections::BTreeMap<String, u128> = if stated(params.palw_class_verify_deadline) {
+        node.client()
+            .get_palw_model_registry()
+            .await
+            .ok()
+            .filter(|r| r.available)
+            .map(|r| {
+                r.classes
+                    .into_iter()
+                    .filter(|c| c.has_row)
+                    .filter_map(|c| Some((c.class_id.to_ascii_lowercase(), c.verification_ccu.parse::<u128>().ok()?)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Default::default()
+    };
     let mut classes = Vec::new();
     for c in rows {
         let name = node
@@ -251,6 +504,7 @@ pub(crate) async fn class_choices(node: &NodeRead, rows: &[kaspa_rpc_core::RpcPa
             .ok()
             .and_then(|l| l.lines.first().map(|l| l.name.clone()))
             .unwrap_or_default();
+        let collateral = class_collateral(node, &c.class_id).await;
         classes.push(ClassChoice {
             id: c.class_id.clone(),
             name,
@@ -258,7 +512,16 @@ pub(crate) async fn class_choices(node: &NodeRead, rows: &[kaspa_rpc_core::RpcPa
             artifact_root: c.artifact_root.clone(),
             fp_certified: c.fp_certified,
             share_permille: c.share_permille,
-            collateral: class_collateral(node, &c.class_id).await,
+            collateral,
+            seat_collateral: seat_requirement(params, node.daa(), c.is_base_class, collateral),
+            closed: class_closed_reason(
+                params,
+                node.daa(),
+                &c.class_id,
+                &c.status,
+                c.share_permille,
+                verification_ccu.get(&c.class_id.to_ascii_lowercase()).copied(),
+            ),
         });
     }
     // The floor first: it is the one every node can run.
@@ -387,6 +650,195 @@ pub(crate) fn capability_set(declared: &[String], serve: &str, base: Option<&str
     }
     let changed = want.len() != before;
     (want, changed)
+}
+
+/// **The chooser's table for a role**: each class with what a bond for it locks in that role. A
+/// class no bond can be sized for reads [`NOT_AVAILABLE`], never a number, and the model and
+/// collateral columns are as wide as their widest cells, so the columns after them stay aligned.
+/// The header first, unpainted.
+pub(crate) fn class_table(classes: &[ClassChoice], role: BondRole) -> (String, Vec<String>) {
+    let labels: Vec<String> = classes.iter().map(ClassChoice::label).collect();
+    let cells: Vec<String> = classes.iter().map(|c| c.lock(role).shown()).collect();
+    let widest = |column: &[String], least: usize| column.iter().map(|c| c.chars().count()).max().unwrap_or(0).max(least) + 2;
+    let (model, width) = (widest(&labels, 20), widest(&cells, 14));
+    let head = format!("  {:<3}{:<model$}{:<width$}{:<10}{:<8}{}", "#", "MODEL", "COLLATERAL", "SHARE", "PROMPT", "ARTIFACT");
+    let rows = classes
+        .iter()
+        .zip(labels.iter().zip(&cells))
+        .enumerate()
+        .map(|(i, (c, (label, cell)))| {
+            format!(
+                "  {:<3}{:<model$}{:<width$}{:<10}{:<8}{}",
+                i + 1,
+                label,
+                cell,
+                c.share_permille.map(|s| format!("{s} ‰")).unwrap_or_else(|| "—".into()),
+                if c.fp_certified { "yes" } else { "no" },
+                if c.is_base { "none — derived" } else { "a .palwart file" }
+            )
+        })
+        .collect();
+    (head, rows)
+}
+
+/// The margin of a registration's one funding output past the collateral, as the join doc says it.
+fn margin_words() -> String {
+    format!("{} for the carrier's fee and change", catalog::msk(REGISTRATION_MARGIN_SOMPI as u128))
+}
+
+/// What a bond registration is confirmed on — every figure read before the question is asked.
+pub(crate) struct RegistrationTerms<'a> {
+    pub(crate) role: BondRole,
+    /// The class the bond is for, as the chooser names it.
+    pub(crate) class: &'a str,
+    pub(crate) class_is_base: bool,
+    /// What the bond locks: the role's figure for the class, and what `--palw-bond-collateral` says.
+    pub(crate) collateral: u64,
+    /// What a seat needs here ([`seat_requirement`] for the class), when known.
+    pub(crate) seat_requirement: Option<u64>,
+    /// The one output the registration spends, shortened, and what it holds.
+    pub(crate) funding: &'a str,
+    pub(crate) funding_amount: u64,
+    pub(crate) payee: &'a str,
+    /// [`withdrawal_delay_daa`], when known.
+    pub(crate) withdrawal_delay_daa: Option<u64>,
+}
+
+/// **What setup says before it asks to register a bond**: the role, the amount and why that
+/// amount, the one-bond rule, and how and when the collateral comes back — the heading, then the
+/// lines printed under it, in the operator's words.
+pub(crate) fn registration_lines(t: &RegistrationTerms) -> (String, Vec<String>) {
+    let heading = format!("Register a {} bond for this key:", t.role.name());
+    let amount = catalog::msk(t.collateral as u128);
+    let mut lines = Vec::new();
+    lines.push(match (t.role.produce, t.role.seat) {
+        (true, true) => format!("role      producer and verifier seat: it mines {} and sits on panels", t.class),
+        (true, false) => format!("role      producer: it mines {}, and this collateral backs its claims", t.class),
+        (false, _) => "role      verifier seat: it sits on panels and judges other producers' claims; it does not mine".to_string(),
+    });
+    lines.push(match (t.role.produce, t.role.seat) {
+        (_, true) => format!("lock      {amount} as its collateral: the least a verifier seat needs on this chain"),
+        (true, false) => {
+            format!("lock      {amount} as its collateral: the node's own sizing for claims of {} over their whole life", t.class)
+        }
+        (false, false) => format!("lock      {amount} as its collateral"),
+    });
+    if t.role.seat {
+        lines.push(if t.class_is_base { format!("judges    {}", t.class) } else { format!("judges    {} and the floor", t.class) });
+    } else if let Some(seat) = t.seat_requirement.filter(|seat| t.collateral < *seat) {
+        lines.push(format!(
+            "seats     none: under the {} a verifier seat needs, the panel draw never seats this bond",
+            catalog::msk(seat as u128)
+        ));
+    }
+    lines.push(format!("from      {} ({})", t.funding, catalog::msk(t.funding_amount as u128)));
+    lines.push(format!("payee     {} — its rewards, and the collateral once the bond is retired", t.payee));
+    lines.push("one bond  this key can hold only ONE bond, ever: it can never register a second one (DuplicateBondKey),".to_string());
+    lines.push("          retiring this one does not free the key, and the collateral cannot be topped up".to_string());
+    lines.push("withdraw  the collateral stays locked while the bond is registered. To get it back: misaka bond retire,".to_string());
+    lines.push(match t.withdrawal_delay_daa {
+        Some(delay) => format!(
+            "          then the withdrawal delay, {} DAA after the retirement ({} at the {}-second block target)",
+            status::group(delay),
+            daa_as_time(delay),
+            kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS / 1000
+        ),
+        None => "          then the chain's withdrawal delay after the retirement".to_string(),
+    });
+    lines.push(
+        "          A bond that signed panels may first wait for their locks to run out (misaka bond status lists them)".to_string(),
+    );
+    (heading, lines)
+}
+
+/// **Setup's refusal to register a verifier seat below what the panel draw seats** — said in place
+/// of offering a smaller lock: such a bond locks the funds, is never drawn onto a panel, and uses
+/// up the key's only registration.
+pub(crate) fn seat_funds_refusal(class: &str, collateral: u64, have: u64, address: &str, network: &str, key: &str) -> Finding {
+    let need = collateral.saturating_add(REGISTRATION_MARGIN_SOMPI);
+    Finding::error(
+        "E-FUNDS-BELOW-SEAT-FLOOR",
+        exit::FUNDS,
+        format!(
+            "A verifier seat bond locks at least {}, and this key holds {}",
+            catalog::msk(collateral as u128),
+            catalog::msk(have as u128)
+        ),
+    )
+    .reason(
+        "the panel draw seats only a bond that holds the seat floor, so setup never registers a smaller seat bond: it would lock \
+         the funds, never be drawn onto a panel, and use up this key's only bond",
+    )
+    .current(format!("{} spendable at {address}", catalog::msk(have as u128)))
+    .required(format!(
+        "one ordinary output of at least {} — {} of collateral for {class}, and {}",
+        catalog::msk(need as u128),
+        catalog::msk(collateral as u128),
+        margin_words()
+    ))
+    .fix(format!("send {} or more to {address} in one transfer, then run misaka verifier setup again", catalog::msk(need as u128)))
+    .fix(format!(
+        "or send the missing {} and merge the outputs first: misaka --network {network} wallet utxo consolidate --key-file {key} --yes",
+        catalog::msk(need.saturating_sub(have) as u128)
+    ))
+    .docs("docs/testnet12-join-mining.md#4-funds")
+}
+
+/// What setup's own node registers: `kaspad --palw-register-bond` for this key, the class it names
+/// (empty: the floor), the one output it spends, and the collateral the operator confirmed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Registration {
+    pub(crate) class: String,
+    pub(crate) funding: String,
+    pub(crate) collateral: u64,
+}
+
+/// **The command line setup starts `kaspad` with** — the network, the node settings the file holds
+/// and, when it registers, the registration: the key, the class, the funding output, and the
+/// collateral as `--palw-bond-collateral`, always, so the node locks exactly the figure the
+/// operator confirmed and never a default of its own. The operator's `extra_kaspad_args` follow,
+/// minus the roles (this node produces and seats nothing) and minus any collateral of their own
+/// (the confirmed figure is the only one).
+pub(crate) fn setup_node_args(
+    network: &str,
+    appdir: &Path,
+    advanced: &AdvancedSection,
+    key: &Path,
+    register: Option<&Registration>,
+) -> Result<Vec<String>, Finding> {
+    let mut a = supervisor::network_flags(network)?;
+    a.push(format!("--appdir={}", appdir.display()));
+    if let Some(listen) = &advanced.listen {
+        a.push(format!("--listen={listen}"));
+    }
+    a.push(format!("--rpclisten-borsh={}", advanced.rpc_borsh.clone().unwrap_or_else(|| "default".into())));
+    a.push("--utxoindex".into());
+    for peer in &advanced.peers {
+        a.push(format!("--addpeer={peer}"));
+    }
+    if let Some(r) = register {
+        a.push("--palw-register-bond".into());
+        a.push(format!("--palw-producer-key={}", key.display()));
+        if !r.class.is_empty() {
+            a.push(format!("--palw-producer-class={}", r.class));
+        }
+        a.push(format!("--palw-fee-outpoint={}", r.funding));
+        a.push(format!("--palw-bond-collateral={}", r.collateral));
+    }
+    let mut extra = advanced.extra_kaspad_args.iter().peekable();
+    while let Some(x) = extra.next() {
+        match x.split('=').next().unwrap_or_default() {
+            "--palw-produce" | "--palw-panel" => {}
+            "--palw-bond-collateral" => {
+                // `--flag value` spelled as two arguments: the value goes with it.
+                if !x.contains('=') {
+                    extra.next_if(|v| !v.starts_with("--"));
+                }
+            }
+            _ => a.push(x.clone()),
+        }
+    }
+    Ok(a)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -823,41 +1275,11 @@ impl<'a> Wizard<'a> {
 
     // -- node -----------------------------------------------------------------------------------
 
-    fn node_args(&self, register: Option<(&str, Option<&str>)>) -> Result<Vec<String>, Finding> {
-        let mut a = supervisor::network_flags(&self.network)?;
-        a.push(format!("--appdir={}", self.appdir.display()));
-        if let Some(listen) = &self.file.advanced.listen {
-            a.push(format!("--listen={listen}"));
-        }
-        a.push(format!("--rpclisten-borsh={}", self.file.advanced.rpc_borsh.clone().unwrap_or_else(|| "default".into())));
-        a.push("--utxoindex".into());
-        for peer in &self.file.advanced.peers {
-            a.push(format!("--addpeer={peer}"));
-        }
-        if let Some((class, funding)) = register {
-            a.push("--palw-register-bond".into());
-            a.push(format!("--palw-producer-key={}", self.key_path.display()));
-            if !class.is_empty() {
-                a.push(format!("--palw-producer-class={class}"));
-            }
-            if let Some(funding) = funding {
-                a.push(format!("--palw-fee-outpoint={funding}"));
-            }
-        }
-        // The operator's own additions (a devnet's ruleset flags, say) — minus the roles: this node
-        // is setup's, and it produces nothing and seats nothing.
-        a.extend(
-            self.file
-                .advanced
-                .extra_kaspad_args
-                .iter()
-                .filter(|x| !matches!(x.split('=').next().unwrap_or_default(), "--palw-produce" | "--palw-panel"))
-                .cloned(),
-        );
-        Ok(a)
+    fn node_args(&self, register: Option<&Registration>) -> Result<Vec<String>, Finding> {
+        setup_node_args(&self.network, &self.appdir, &self.file.advanced, &self.key_path, register)
     }
 
-    fn spawn_own(&mut self, register: Option<(&str, Option<&str>)>) -> Step {
+    fn spawn_own(&mut self, register: Option<&Registration>) -> Step {
         let program = supervisor::binary(
             "kaspad",
             self.file.advanced.kaspad.as_deref().map(|k| PathBuf::from(procs::expand_home(k))).as_deref(),
@@ -873,7 +1295,13 @@ impl<'a> Wizard<'a> {
         let pid = child.child.id();
         let started_unix = procs::now_unix() as i64;
         SetupState { pid, appdir: self.appdir.display().to_string(), register: register.is_some(), started_unix }.write(&self.network);
-        self.own = Some(OwnNode { child: Some(child), pid, register: register.is_some(), started_unix });
+        self.own = Some(OwnNode {
+            child: Some(child),
+            pid,
+            register: register.is_some(),
+            collateral: register.map(|r| r.collateral),
+            started_unix,
+        });
         Ok(())
     }
 
@@ -928,8 +1356,14 @@ impl<'a> Wizard<'a> {
                     .or_else(|| args.rpclisten_borsh.clone().filter(|v| v != "default").map(|v| v.replace("0.0.0.0", "127.0.0.1")));
                 let adopted = SetupState::read(&self.network).filter(|s| s.pid == proc_.pid);
                 if let Some(state) = adopted {
-                    self.own =
-                        Some(OwnNode { child: None, pid: proc_.pid, register: state.register, started_unix: state.started_unix });
+                    self.own = Some(OwnNode {
+                        child: None,
+                        pid: proc_.pid,
+                        register: state.register,
+                        // Read off its command line: what it will register is what it was started with.
+                        collateral: args.bond_collateral,
+                        started_unix: state.started_unix,
+                    });
                     self.row(Severity::Ok, "node", format!("setup's own node from an earlier run, pid {} — adopted", proc_.pid));
                 } else {
                     let what = if args.produce {
@@ -1136,7 +1570,13 @@ impl<'a> Wizard<'a> {
                 self.classes[i].clone()
             }
         };
-        let collateral = chosen.collateral.map(|c| format!(" · a bond for it locks {}", catalog::msk(c as u128))).unwrap_or_default();
+        let role = BondRole::of(self.purpose);
+        let collateral = match chosen.lock(role) {
+            BondLock::Sompi(c) if role.seat => format!(" · a seat bond for it locks {}", catalog::msk(c as u128)),
+            BondLock::Sompi(c) => format!(" · a bond for it locks {}", catalog::msk(c as u128)),
+            BondLock::NotAvailable => format!(" · a bond for it: {NOT_AVAILABLE}"),
+            BondLock::Unknown => String::new(),
+        };
         let lane = if chosen.fp_certified { " · prompt lane certified" } else { "" };
         self.row(Severity::Ok, "model", format!("{}{collateral}{lane}", chosen.label()));
         self.file.mining.model = Some(if chosen.is_base { "base".to_string() } else { chosen.id.clone() });
@@ -1145,18 +1585,10 @@ impl<'a> Wizard<'a> {
     }
 
     fn print_classes(&self) {
-        self.ui
-            .say(&paint::dim(&format!("  {:<3}{:<22}{:<16}{:<10}{:<8}{}", "#", "MODEL", "COLLATERAL", "SHARE", "PROMPT", "ARTIFACT")));
-        for (i, c) in self.classes.iter().enumerate() {
-            self.ui.say(&format!(
-                "  {:<3}{:<22}{:<16}{:<10}{:<8}{}",
-                i + 1,
-                c.label(),
-                c.collateral.map(|s| catalog::msk(s as u128)).unwrap_or_else(|| "?".into()),
-                c.share_permille.map(|s| format!("{s} ‰")).unwrap_or_else(|| "—".into()),
-                if c.fp_certified { "yes" } else { "no" },
-                if c.is_base { "none — derived" } else { "a .palwart file" }
-            ));
+        let (head, rows) = class_table(&self.classes, BondRole::of(self.purpose));
+        self.ui.say(&paint::dim(&head));
+        for row in rows {
+            self.ui.say(&row);
         }
     }
 
@@ -1229,7 +1661,44 @@ impl<'a> Wizard<'a> {
                     .docs("docs/testnet11-join-mining.md#3-register-a-bond"),
             ));
         }
-        let recommended = self.class.as_ref().and_then(|class| class.collateral);
+        let role = BondRole::of(self.purpose);
+        // **A seat below what the panel draw seats is never drawn, and nothing makes it one**: its
+        // collateral cannot be topped up and its key cannot bond again. Said here, before a
+        // declaration's fee and a profile that would read "ready" for a verifier that never sits.
+        if role.seat
+            && let Some(class) = self.class.as_ref()
+            && let BondLock::Sompi(need) = class.lock(role)
+            && b.collateral < need
+        {
+            return Err(Halt::Blocked(
+                Finding::error(
+                    "E-IDENT-BOND-BELOW-SEAT-FLOOR",
+                    exit::IDENTITY,
+                    "This key's bond holds less than a verifier seat needs, so the panel draw never seats it",
+                )
+                .reason(
+                    "the draw seats only a bond that holds the seat floor, a bond's collateral cannot be topped up, and the \
+                     registry refuses a second bond from any key it has held (DuplicateBondKey)",
+                )
+                .current(format!("{} · {how} · collateral {}", b.outpoint, catalog::msk(b.collateral as u128)))
+                .required(format!("a bond of at least {} for {}", catalog::msk(need as u128), class.label()))
+                .fix(format!(
+                    "take this bond's collateral back: misaka --network {} bond retire --key-file {} --bond {} --class-id {} --yes \
+                     (it moves after the withdrawal delay)",
+                    self.network,
+                    host::tilde(&self.key_path),
+                    b.outpoint,
+                    class.id
+                ))
+                .fix(format!(
+                    "a seat needs a NEW key: misaka key gen --out <new seed>, fund it with {} or more in one output, then \
+                     misaka verifier setup --key-file <new seed>",
+                    catalog::msk(need.saturating_add(REGISTRATION_MARGIN_SOMPI) as u128)
+                ))
+                .docs("docs/testnet12-join-mining.md#4-funds"),
+            ));
+        }
+        let recommended = self.class.as_ref().and_then(|class| class.lock(role).sompi());
         let shortfall = (self.purpose == Purpose::Mine).then(|| collateral_shortfall(b.collateral, recommended)).flatten();
         self.row(
             if shortfall.is_some() { Severity::Warning } else { Severity::Ok },
@@ -1257,6 +1726,16 @@ impl<'a> Wizard<'a> {
                 "! collateral is fixed: this bond cannot be topped up, and this key cannot register a second bond",
             ));
             self.ui.sub("  sustained mining needs a NEW key and a NEW bond sized for the selected model");
+        }
+        if self.purpose == Purpose::Mine
+            && let Some(class) = self.class.as_ref()
+            && class.lock(role) == BondLock::NotAvailable
+        {
+            self.ui.sub(&paint::yellow(&format!(
+                "! a producer bond for {} is {NOT_AVAILABLE}: {}",
+                class.label(),
+                class.closed.unwrap_or("its whole-lifetime sizing is more than any output can hold")
+            )));
         }
         self.file.advanced.bond = Some(b.outpoint.clone());
         self.bond = Some(b);
@@ -1315,17 +1794,38 @@ impl<'a> Wizard<'a> {
         Ok((all, funds))
     }
 
-    async fn step_funds(&mut self) -> Result<(String, u64), Halt> {
-        let class = self.class.clone().expect("the model step ran");
-        let Some(collateral) = class.collateral else {
-            return Err(Halt::Blocked(
+    /// The collateral a registration for the chosen class locks in this setup's role — or the
+    /// finding that says why no registration can be sized.
+    fn registration_collateral(&self) -> Result<u64, Halt> {
+        let class = self.class.as_ref().expect("the model step ran");
+        let role = BondRole::of(self.purpose);
+        match class.lock(role) {
+            BondLock::Sompi(collateral) => Ok(collateral),
+            BondLock::NotAvailable => Err(Halt::Blocked(
+                Finding::error(
+                    "E-SETUP-COLLATERAL-NOT-AVAILABLE",
+                    exit::MODEL,
+                    format!("A {} bond for this class is {NOT_AVAILABLE}", role.name()),
+                )
+                .reason(class.closed.unwrap_or(
+                    "the chain's own sizing for it is more than any one output can hold, so no bond for it can be registered",
+                ))
+                .current(format!("class {}", class.label()))
+                .fix("misaka model list — then choose another class with --model (the floor: --model base)"),
+            )),
+            BondLock::Unknown => Err(Halt::Blocked(
                 Finding::error("E-SETUP-COLLATERAL-UNKNOWN", exit::MODEL, "What a bond for this class locks could not be read")
                     .reason("the collateral is sized from the class's facts, and the node reports none for it yet")
                     .current(format!("class {}", class.label())),
-            ));
-        };
-        let need = collateral + REGISTRATION_MARGIN_SOMPI;
-        let recommended = collateral + FLOAT_RECOMMENDED_SOMPI;
+            )),
+        }
+    }
+
+    async fn step_funds(&mut self) -> Result<(String, u64), Halt> {
+        let class = self.class.clone().expect("the model step ran");
+        let collateral = self.registration_collateral()?;
+        let need = collateral.saturating_add(REGISTRATION_MARGIN_SOMPI);
+        let recommended = collateral.saturating_add(FLOAT_RECOMMENDED_SOMPI);
         let address = self.key.as_ref().map(|k| k.address.clone()).unwrap_or_default();
         let mut told = false;
         let mut last: Option<Funds> = None;
@@ -1378,6 +1878,18 @@ impl<'a> Wizard<'a> {
                     );
                     self.self_send(need, "turn the rewards into one ordinary output the registration can spend").await?;
                     continue;
+                }
+                // A seat below the floor is never drawn: refused and said, never offered smaller.
+                FundsVerdict::Short(have) if BondRole::of(self.purpose).seat => {
+                    let mut refusal =
+                        seat_funds_refusal(&class.label(), collateral, have, &address, &self.network, &host::tilde(&self.key_path));
+                    if funds.maturing > 0 {
+                        refusal = refusal.current(format!("{} more is still maturing", catalog::msk(funds.maturing as u128)));
+                    }
+                    if let Some(f) = faucet(&self.network) {
+                        refusal = refusal.fix(format!("faucet: {f}"));
+                    }
+                    return Err(Halt::Blocked(refusal));
                 }
                 FundsVerdict::Short(have) => {
                     if !told {
@@ -1483,15 +1995,31 @@ impl<'a> Wizard<'a> {
 
     async fn step_register(&mut self, funding: &str, amount: u64) -> Step {
         let class = self.class.clone().expect("the model step ran");
-        let collateral = class.collateral.unwrap_or_default();
+        let role = BondRole::of(self.purpose);
+        let collateral = self.registration_collateral()?;
         let address = self.key.as_ref().map(|k| k.address.clone()).unwrap_or_default();
+        let label = class.label();
+        let (heading, lines) = registration_lines(&RegistrationTerms {
+            role,
+            class: &label,
+            class_is_base: class.is_base,
+            collateral,
+            seat_requirement: class.seat_collateral,
+            funding: &short_op(funding),
+            funding_amount: amount,
+            payee: &address,
+            withdrawal_delay_daa: withdrawal_delay_daa(&self.node().nv.params, self.node().daa()),
+        });
         self.ui.say("");
-        self.ui.say(&paint::bold("  Register a bond for this key:"));
-        self.ui.sub(&format!("lock      {} as collateral for {}", catalog::msk(collateral as u128), class.label()));
-        self.ui.sub(&format!("from      {} ({})", short_op(funding), catalog::msk(amount as u128)));
-        self.ui.sub(&format!("payee     {address} — its rewards, and the collateral once the bond is retired"));
-        self.ui.sub("forever   one key, one bond: this key can never register a second (DuplicateBondKey)");
-        self.ui.sub("release   misaka bond retire, then the chain's withdrawal delay");
+        self.ui.say(&paint::bold(&format!("  {heading}")));
+        for line in &lines {
+            self.ui.sub(line);
+        }
+        let registration = Registration {
+            class: if class.is_base { String::new() } else { class.id.clone() },
+            funding: funding.to_string(),
+            collateral,
+        };
         match self.ui.confirm("Register it?", false).await {
             Answer::Yes => {}
             Answer::Interrupted => return Err(Halt::Interrupted),
@@ -1502,7 +2030,7 @@ impl<'a> Wizard<'a> {
         }
         if let Some((proc_, _)) = &self.external {
             let mut cmd = vec!["kaspad".to_string()];
-            cmd.extend(self.node_args(Some((if class.is_base { "" } else { &class.id }, Some(funding)))).unwrap_or_default());
+            cmd.extend(self.node_args(Some(&registration)).unwrap_or_default());
             return Err(Halt::Blocked(
                 Finding::error("E-SETUP-REGISTER-OWN-NODE", exit::NOT_READY, "Registering a bond needs a node started for it")
                     .reason("the bond is built and signed by kaspad --palw-register-bond, and the node running here was not started with it")
@@ -1512,17 +2040,26 @@ impl<'a> Wizard<'a> {
                     .docs(DOCS_SETUP),
             ));
         }
-        // Restart setup's node with the registration flag — unless the node an earlier run left
-        // behind is already registering. The chain is synced in its appdir, so this costs seconds.
-        if self.own.as_ref().is_some_and(|o| o.register) {
+        // Restart setup's node with the registration flags — unless the node an earlier run left
+        // behind is already registering the collateral just confirmed. One started for another
+        // figure (or with none: an older setup's, sizing its own default) is stopped and started
+        // again, so what is registered is what was confirmed. The chain is synced in its appdir,
+        // so this costs seconds.
+        if self.own.as_ref().is_some_and(|o| o.register && o.collateral == Some(collateral)) {
             let pid = self.own.as_ref().map(|o| o.pid).unwrap_or_default();
             self.row(Severity::Info, "register", format!("the earlier run's kaspad --palw-register-bond is still at it (pid {pid})"));
         } else {
             self.stop_own().await;
-            let class_flag = if class.is_base { "" } else { class.id.as_str() };
-            self.spawn_own(Some((class_flag, Some(funding))))?;
+            self.spawn_own(Some(&registration))?;
             let pid = self.own.as_ref().map(|o| o.pid).unwrap_or_default();
-            self.row(Severity::Info, "register", format!("kaspad --palw-register-bond running (pid {pid})"));
+            self.row(
+                Severity::Info,
+                "register",
+                format!(
+                    "kaspad --palw-register-bond --palw-bond-collateral={collateral} running (pid {pid}) · locks {}",
+                    catalog::msk(collateral as u128)
+                ),
+            );
         }
         let started = self.own.as_ref().map(|o| o.started_unix).unwrap_or_default();
         // The node restarted: reconnect before asking the chain anything.
@@ -2098,11 +2635,11 @@ impl<'a> Wizard<'a> {
                 )),
             };
         }
+        // The newest line: the file holds the fee chain's lineage, newest first (T12-046).
         let persisted =
             std::fs::read_to_string(self.appdir.join(format!("misaka-{}", self.network)).join("palw-panel").join("palw-fee-outpoint"))
                 .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
+                .and_then(|s| crate::operator::profile::newest_fee_outpoint_line(&s));
         let remembered: Vec<(&str, String)> = persisted
             .into_iter()
             .map(|o| ("the panel's own, left by the registration", o))
@@ -2401,7 +2938,356 @@ mod tests {
             fp_certified: false,
             share_permille: None,
             collateral: Some(1),
+            seat_collateral: Some(1),
+            closed: None,
         }
+    }
+
+    const MSK: u64 = kaspa_consensus_core::constants::SOMPI_PER_KASPA;
+
+    /// testnet-12 as this build ships it (the DAA-750 release), and its bundle.
+    fn t12() -> kaspa_consensus_core::config::params::Params {
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))
+    }
+
+    fn producer_floor_of(params: &kaspa_consensus_core::config::params::Params) -> u64 {
+        match &params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.state.min_collateral_sompi(),
+            _ => panic!("a ConsensusV2 network"),
+        }
+    }
+
+    /// The figures the lifecycle auditor read off public testnet-12 (TB-W1, 2026-09-26): the node's
+    /// own producer sizing for the floor (3,119,145,986,560 sompi = 31,191.45 MSK), for the 8k row
+    /// (2,000,332,625.67 MSK) and for the 2M row (`u64::MAX`, saturated).
+    const TB_W1_FLOOR: u64 = 3_119_145_986_560;
+    const TB_W1_8K: u64 = 200_033_262_567 * 1_000_000;
+    const TB_W1_2M: u64 = u64::MAX;
+    /// A `verification_ccu` whose derived deadline is the 8k row's 15 DAA, and one whose is the 2M
+    /// row's 13,995 (`palw_derived_verify_daa_v1`; the registry row carries the real ones).
+    const CCU_8K: u128 = 2_000_000_000_000;
+    const CCU_2M: u128 = 3_357_600_000_000_000;
+
+    /// The auditor's three rows as the chooser holds them on testnet-12: the floor (no registry
+    /// row), the 8k row and the 2M row, each with its producer sizing, its seat figure and whether
+    /// the chain takes a claim of it.
+    fn tb_w1_classes(params: &kaspa_consensus_core::config::params::Params, daa: u64) -> Vec<ClassChoice> {
+        [("8f", true, TB_W1_FLOOR, 998, None), ("eb", false, TB_W1_8K, 1, Some(CCU_8K)), ("74", false, TB_W1_2M, 1, Some(CCU_2M))]
+            .into_iter()
+            .map(|(id, base, producer, share, ccu)| {
+                let choice = class(id, "", base);
+                ClassChoice {
+                    share_permille: Some(share),
+                    fp_certified: true,
+                    collateral: Some(producer),
+                    seat_collateral: seat_requirement(params, daa, base, Some(producer)),
+                    closed: class_closed_reason(params, daa, &choice.id, "Active", Some(share), ccu),
+                    ..choice
+                }
+            })
+            .collect()
+    }
+
+    /// **A class the chain takes no claim of is closed for every role**: past §4-quater's fence a
+    /// class whose derived deadline is past `window_receipt` waits for a measured row (the 2M row at
+    /// testnet-12's launch, U-D1), and a Frozen or Dormant class takes no new work. Everything else —
+    /// the floor, the 8k row, any class on a network without the fence — is open.
+    #[test]
+    fn a_class_the_chain_takes_no_claim_of_is_closed_for_every_role() {
+        use kaspa_consensus_core::palw_class_verify_deadline_v1::palw_derived_verify_daa_v1;
+        assert_eq!((palw_derived_verify_daa_v1(CCU_8K), palw_derived_verify_daa_v1(CCU_2M)), (15, 13_995), "the rows' own deadlines");
+        let t12 = t12();
+        let id = |hex: &str| hex.repeat(64);
+        for daa in [0, 750, 1_000] {
+            assert_eq!(class_closed_reason(&t12, daa, &id("8f"), "Active", Some(998), None), None, "the floor has no registry row");
+            assert_eq!(class_closed_reason(&t12, daa, &id("eb"), "Active", Some(1), Some(CCU_8K)), None, "15 DAA fits the window");
+            let two_m = class_closed_reason(&t12, daa, &id("74"), "Active", Some(1), Some(CCU_2M));
+            assert!(two_m.is_some_and(|why| why.contains("measured verification row")), "at DAA {daa}: {two_m:?}");
+        }
+        let frozen = class_closed_reason(&t12, 750, &id("eb"), "Frozen { since_daa: 7 }", Some(1), Some(CCU_8K));
+        assert!(frozen.is_some_and(|why| why.contains("Frozen")), "{frozen:?}");
+        assert!(class_closed_reason(&t12, 750, &id("eb"), "Dormant { since_daa: 7 }", None, None).is_some());
+        let t11 = kaspa_consensus_core::config::params::Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(
+            kaspa_consensus_core::network::NetworkType::Testnet,
+            11,
+        ));
+        assert_eq!(
+            class_closed_reason(&t11, 10_000, &id("74"), "Active", Some(1), Some(CCU_2M)),
+            None,
+            "testnet-11 has no such fence"
+        );
+
+        let classes = tb_w1_classes(&t12, 750);
+        for role in [BondRole::PRODUCER, BondRole::SEAT, BondRole { produce: true, seat: true }] {
+            assert_eq!(classes[2].lock(role), BondLock::NotAvailable, "the 2M row, {role:?}");
+            assert!(matches!(classes[1].lock(role), BondLock::Sompi(_)), "the 8k row, {role:?}");
+        }
+    }
+
+    /// **The bug TB-W1 found, closed: a verifier seat is sized by the seat floor the draw reads,
+    /// a producer's bond by the node's own sizing, unchanged.** The wizard offered a seat
+    /// 31,191.45 MSK — the floor's PRODUCER figure — on a chain whose panel draw seats nothing under
+    /// 130,000 MSK, spending the key's only bond on a seat that could never sit.
+    #[test]
+    fn a_verifier_seat_locks_at_least_the_seat_floor_and_a_producer_bond_is_unchanged() {
+        let t12 = t12();
+        let producer_floor = producer_floor_of(&t12);
+        let daa = 750;
+        let panel_floor = t12.palw_seat_economy_at(daa).expect("testnet-12 states the seat economy").panel_floor_sompi;
+        assert_eq!(panel_floor, kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(producer_floor));
+        assert_eq!(panel_floor, 130_000 * MSK, "the join doc's seat floor: ten producer floors of 13,000 MSK");
+        assert!(TB_W1_FLOOR < panel_floor, "the figure the wizard offered a seat was below the floor the draw reads");
+        for daa in [0, 750, 1_000] {
+            for (is_base, producer) in [(true, Some(TB_W1_FLOOR)), (false, Some(TB_W1_8K)), (false, Some(TB_W1_2M)), (true, None)] {
+                let seat = seat_requirement(&t12, daa, is_base, producer).expect("testnet-12 seats panels");
+                assert!(seat >= panel_floor, "at DAA {daa}: a seat of {seat} is below the floor {panel_floor}");
+                // Past R-core+ the seat floor binds on every testnet-12 class: the readiness bar (three
+                // producer floors free) is below it, and a seat does not post a producer's sizing.
+                assert_eq!(seat, panel_floor, "at DAA {daa}, base {is_base}, producer {producer:?}");
+            }
+        }
+        let classes = tb_w1_classes(&t12, daa);
+        let base = &classes[0];
+        assert_eq!(base.lock(BondRole::PRODUCER), BondLock::Sompi(TB_W1_FLOOR), "mining setup's figure is unchanged");
+        assert_eq!(base.lock(BondRole::SEAT), BondLock::Sompi(panel_floor), "verifier setup's is the seat floor");
+        assert_eq!(BondRole::of(Purpose::Verify), BondRole::SEAT);
+        assert_eq!(BondRole::of(Purpose::Mine), BondRole::PRODUCER);
+        assert_eq!(classes[1].lock(BondRole::PRODUCER), BondLock::Sompi(TB_W1_8K), "a finite producer sizing stays a number");
+        assert_eq!(classes[1].lock(BondRole::SEAT), BondLock::Sompi(panel_floor));
+        // A bond meant to do both holds the larger of the two figures.
+        let both = BondRole { produce: true, seat: true };
+        assert_eq!(base.lock(both), BondLock::Sompi(panel_floor.max(TB_W1_FLOOR)));
+        assert_eq!(classes[1].lock(both), BondLock::Sompi(TB_W1_8K.max(panel_floor)));
+        assert_eq!(bond_lock(both, Some(5 * MSK), Some(3 * MSK), true), BondLock::Sompi(5 * MSK));
+
+        // A network with the economy but not R-core+ (testnet-11): the seat floor, and the producer's
+        // whole-lifetime sizing as the bound on one panel's reservation, as setup always asked.
+        let t11 = kaspa_consensus_core::config::params::Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(
+            kaspa_consensus_core::network::NetworkType::Testnet,
+            11,
+        ));
+        let t11_floor = kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(producer_floor_of(&t11));
+        assert!(!t11.palw_rcore_plus_active_at(u64::MAX - 1), "testnet-11 has no R-core+");
+        assert_eq!(seat_requirement(&t11, 10_000, true, Some(1)), Some(t11_floor));
+        assert_eq!(seat_requirement(&t11, 10_000, true, Some(t11_floor + 7)), Some(t11_floor + 7));
+        assert_eq!(seat_requirement(&t11, 10_000, true, None), None, "the bound unknown, the seat is not sized");
+    }
+
+    /// **A figure no output can carry is words, never a number** — the 2M row's `u64::MAX` printed
+    /// as 184,467,440,737.09 MSK in the chooser, and anything past `MAX_SOMPI`, and a class that
+    /// takes no new work.
+    #[test]
+    fn a_saturated_figure_is_not_available_on_this_chain_and_never_a_number() {
+        use kaspa_consensus_core::constants::MAX_SOMPI;
+        let seat = Some(130_000 * MSK);
+        assert_eq!(bond_lock(BondRole::PRODUCER, Some(u64::MAX), seat, true), BondLock::NotAvailable);
+        assert_eq!(bond_lock(BondRole::PRODUCER, Some(MAX_SOMPI + 1), seat, true), BondLock::NotAvailable);
+        assert_eq!(bond_lock(BondRole::PRODUCER, Some(MAX_SOMPI), seat, true), BondLock::Sompi(MAX_SOMPI));
+        assert_eq!(
+            bond_lock(BondRole::SEAT, Some(u64::MAX), seat, true),
+            BondLock::Sompi(130_000 * MSK),
+            "a seat posts no producer sizing"
+        );
+        assert_eq!(bond_lock(BondRole { produce: true, seat: true }, Some(u64::MAX), seat, true), BondLock::NotAvailable);
+        assert_eq!(bond_lock(BondRole::SEAT, Some(1), Some(u64::MAX), true), BondLock::NotAvailable);
+        assert_eq!(bond_lock(BondRole::PRODUCER, None, seat, true), BondLock::Unknown);
+        assert_eq!(bond_lock(BondRole::SEAT, Some(1), None, true), BondLock::Unknown);
+        assert_eq!(bond_lock(BondRole::SEAT, Some(1), seat, false), BondLock::NotAvailable, "a Frozen or Dormant class");
+        assert_eq!(BondLock::NotAvailable.shown(), "not available on this chain");
+        assert_eq!(BondLock::NotAvailable.sompi(), None);
+        assert_eq!(BondLock::Unknown.shown(), "unknown");
+
+        // The chooser, both ways: the 2M row reads as words, and every column after the collateral
+        // starts where its header does (TB-W1's "2,000,332,625.67 MSK1 ‰" ran two columns together).
+        let t12 = t12();
+        let classes = tb_w1_classes(&t12, 750);
+        for role in [BondRole::PRODUCER, BondRole::SEAT] {
+            let (head, rows) = class_table(&classes, role);
+            let share_col = head.find("SHARE").expect("a SHARE column");
+            println!("{head}\n{}", rows.join("\n"));
+            for (row, share) in rows.iter().zip(["998 ‰", "1 ‰", "1 ‰"]) {
+                assert!(!row.contains("184,467,440,737.09"), "{row}");
+                let from: String = row.chars().skip(share_col).collect();
+                assert!(from.starts_with(share), "the SHARE column is misaligned: {row:?}");
+            }
+            assert!(rows[2].contains(NOT_AVAILABLE), "the 2M row: {rows:?}");
+            match role.produce {
+                true => assert!(rows[0].contains("31,191.45 MSK") && rows[1].contains("2,000,332,625.67 MSK"), "{rows:?}"),
+                false => assert!(rows[..2].iter().all(|r| r.contains("130,000.00 MSK")), "{rows:?}"),
+            }
+        }
+        // A founding line's long name widens its column instead of running into the next one.
+        let mut named = classes.clone();
+        named[1].name = "Qwen/Qwen2.5-1.5B/graph-v7@8192".into();
+        let (head, rows) = class_table(&named, BondRole::SEAT);
+        let collateral_col = head.find("COLLATERAL").expect("a COLLATERAL column");
+        for (row, cell) in rows.iter().zip(["130,000.00 MSK", "130,000.00 MSK", NOT_AVAILABLE]) {
+            let from: String = row.chars().skip(collateral_col).collect();
+            assert!(from.starts_with(cell), "the COLLATERAL column is misaligned: {row:?}");
+        }
+    }
+
+    /// **Setup's node registers exactly the collateral the operator confirmed**: the registration
+    /// always carries `--palw-bond-collateral` (TB-W1: it carried none, and the node locked its own
+    /// default), a collateral in the operator's own extra arguments cannot override it, and the
+    /// line reads back as kaspad reads it.
+    #[test]
+    fn setup_registers_the_confirmed_collateral_explicitly() {
+        let advanced = AdvancedSection {
+            peers: vec!["10.0.0.1:26311".into()],
+            extra_kaspad_args: vec![
+                "--palw-bond-collateral".into(),
+                "5".into(),
+                "--palw-panel".into(),
+                "--palw-bond-collateral=6".into(),
+                "--palw-devnet-floor-only".into(),
+            ],
+            ..Default::default()
+        };
+        let key = Path::new("/keys/seat.seed");
+        let seat = Registration { class: String::new(), funding: "aa:0".into(), collateral: 130_000 * MSK };
+        let args = setup_node_args("testnet-12", Path::new("/node"), &advanced, key, Some(&seat)).expect("testnet-12 starts");
+        for flag in [
+            "--palw-register-bond",
+            "--palw-producer-key=/keys/seat.seed",
+            "--palw-fee-outpoint=aa:0",
+            "--palw-bond-collateral=13000000000000",
+        ] {
+            assert!(args.iter().any(|a| a == flag), "{flag} missing: {args:?}");
+        }
+        assert_eq!(args.iter().filter(|a| a.starts_with("--palw-bond-collateral")).count(), 1, "the confirmed figure only: {args:?}");
+        assert!(!args.iter().any(|a| a == "5" || a == "--palw-panel"), "{args:?}");
+        assert!(args.iter().any(|a| a == "--palw-devnet-floor-only"), "the operator's other additions stay: {args:?}");
+        assert!(!args.iter().any(|a| a.starts_with("--palw-producer-class")), "the floor names no class");
+        let argv: Vec<String> = std::iter::once("kaspad".to_string()).chain(args).collect();
+        let read = procs::parse_kaspad_args(&argv);
+        assert!(read.register_bond && read.network == "testnet-12");
+        assert_eq!(read.bond_collateral, Some(130_000 * MSK), "what the node will lock");
+        assert_eq!(read.fee_outpoint.as_deref(), Some("aa:0"));
+
+        let model = Registration { class: "eb".repeat(64), funding: "bb:1".into(), collateral: 7 };
+        let args = setup_node_args("testnet-12", Path::new("/node"), &AdvancedSection::default(), key, Some(&model)).unwrap();
+        assert!(
+            args.contains(&format!("--palw-producer-class={}", "eb".repeat(64)))
+                && args.contains(&"--palw-bond-collateral=7".to_string())
+        );
+
+        // Setup's plain node registers nothing.
+        let plain = setup_node_args("testnet-12", Path::new("/node"), &advanced, key, None).unwrap();
+        assert!(
+            !plain.iter().any(|a| a.starts_with("--palw-register-bond")
+                || a.starts_with("--palw-bond-collateral")
+                || a.starts_with("--palw-producer-key")),
+            "{plain:?}"
+        );
+        assert_eq!(
+            procs::parse_kaspad_args(&std::iter::once("kaspad".to_string()).chain(plain).collect::<Vec<_>>()).bond_collateral,
+            None
+        );
+    }
+
+    /// **The confirmation says the role, the amount, the one-bond rule and the way back out, in
+    /// words** — the lines a verifier and a miner read before a registration on testnet-12, whole.
+    #[test]
+    fn the_confirmation_says_the_role_the_amount_the_one_bond_rule_and_the_way_out() {
+        let t12 = t12();
+        let delay = withdrawal_delay_daa(&t12, 750).expect("testnet-12 is ConsensusV2");
+        assert_eq!(delay, 12_900, "docs/testnet12-join-mining.md §9 says 12,900 DAA");
+        let seat_floor = seat_requirement(&t12, 750, true, Some(TB_W1_FLOOR));
+        let terms = |role: BondRole, collateral: u64| RegistrationTerms {
+            role,
+            class: "base (the floor)",
+            class_is_base: true,
+            collateral,
+            seat_requirement: seat_floor,
+            funding: "2eca7516…:0",
+            funding_amount: 400_000 * MSK,
+            payee: "misakatest:qz…",
+            withdrawal_delay_daa: Some(delay),
+        };
+        let text = |t: &RegistrationTerms| {
+            let (heading, lines) = registration_lines(t);
+            format!("{heading}\n{}", lines.join("\n"))
+        };
+        let way_out = "\
+payee     misakatest:qz… — its rewards, and the collateral once the bond is retired
+one bond  this key can hold only ONE bond, ever: it can never register a second one (DuplicateBondKey),
+          retiring this one does not free the key, and the collateral cannot be topped up
+withdraw  the collateral stays locked while the bond is registered. To get it back: misaka bond retire,
+          then the withdrawal delay, 12,900 DAA after the retirement (about 18 days at the 120-second block target)
+          A bond that signed panels may first wait for their locks to run out (misaka bond status lists them)";
+
+        let seat = text(&terms(BondRole::SEAT, 130_000 * MSK));
+        println!("{seat}\n");
+        assert_eq!(
+            seat,
+            format!(
+                "\
+Register a verifier seat bond for this key:
+role      verifier seat: it sits on panels and judges other producers' claims; it does not mine
+lock      130,000.00 MSK as its collateral: the least a verifier seat needs on this chain
+judges    base (the floor)
+from      2eca7516…:0 (400,000.00 MSK)
+{way_out}"
+            )
+        );
+
+        let producer = text(&terms(BondRole::PRODUCER, TB_W1_FLOOR));
+        println!("{producer}\n");
+        assert_eq!(
+            producer,
+            format!(
+                "\
+Register a producer bond for this key:
+role      producer: it mines base (the floor), and this collateral backs its claims
+lock      31,191.45 MSK as its collateral: the node's own sizing for claims of base (the floor) over their whole life
+seats     none: under the 130,000.00 MSK a verifier seat needs, the panel draw never seats this bond
+from      2eca7516…:0 (400,000.00 MSK)
+{way_out}"
+            )
+        );
+
+        // A seat for a model class judges it and the floor; a delay the chain cannot say is not guessed.
+        let model = RegistrationTerms {
+            class: "ebf44d0a…",
+            class_is_base: false,
+            withdrawal_delay_daa: None,
+            ..terms(BondRole::SEAT, 130_000 * MSK)
+        };
+        let (_, lines) = registration_lines(&model);
+        assert!(lines.contains(&"judges    ebf44d0a… and the floor".to_string()), "{lines:?}");
+        assert!(lines.contains(&"          then the chain's withdrawal delay after the retirement".to_string()), "{lines:?}");
+        assert_eq!(daa_as_time(30), "about 1 hour");
+        assert_eq!(daa_as_time(2_000), "about 3 days");
+    }
+
+    /// **Funds below what a seat needs are refused, never met with a smaller lock** (TB-W1's
+    /// second half: 100,000 MSK at the key would have bought a 31,191.45 MSK seat that never sits).
+    #[test]
+    fn a_verifier_short_of_the_seat_floor_is_refused_and_never_offered_a_smaller_lock() {
+        let f = seat_funds_refusal(
+            "base (the floor)",
+            130_000 * MSK,
+            100_000 * MSK,
+            "misakatest:qz",
+            "testnet-12",
+            "~/.misaka/miner.seed",
+        );
+        assert_eq!((f.code, f.exit), ("E-FUNDS-BELOW-SEAT-FLOOR", exit::FUNDS));
+        let text = f.render();
+        println!("{text}");
+        assert_eq!(
+            text,
+            "\
+✗ A verifier seat bond locks at least 130,000.00 MSK, and this key holds 100,000.00 MSK   [E-FUNDS-BELOW-SEAT-FLOOR]
+  Reason    the panel draw seats only a bond that holds the seat floor, so setup never registers a smaller seat bond: it would lock the funds, never be drawn onto a panel, and use up this key's only bond
+  Current   100,000.00 MSK spendable at misakatest:qz
+  Required  one ordinary output of at least 130,000.10 MSK — 130,000.00 MSK of collateral for base (the floor), and 0.10 MSK for the carrier's fee and change
+  Fix       send 130,000.10 MSK or more to misakatest:qz in one transfer, then run misaka verifier setup again
+            or send the missing 30,000.10 MSK and merge the outputs first: misaka --network testnet-12 wallet utxo consolidate --key-file ~/.misaka/miner.seed --yes
+  Docs      docs/testnet12-join-mining.md#4-funds"
+        );
     }
 
     /// `--model` takes what an operator would type: the floor's names, an id or its prefix, or the

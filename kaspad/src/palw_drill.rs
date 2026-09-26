@@ -18,6 +18,11 @@
 //!   from advertising itself to them).
 //! * **The shipping rules, unedited.** `--override-params-file` is refused: the salt swaps the params
 //!   for the drill's, and an override would either be discarded silently or drill rules nobody ships.
+//!   **The one narrow exception is the post-launch release's flag day**: `--palw-drill-fence-at=<DAA>`
+//!   arms (or moves) exactly the fences of `PALW_T12_POST_LAUNCH_FENCES_V1` — the ones the release
+//!   arms at DAA 500 — to a low height on the drill chain, so a drill crosses that flag day with the
+//!   shipping binary; nothing else moves, and it needs the salt
+//!   (`config::drill::palw_drill_post_launch_fences_at_v1`).
 //! * **Drill-only keys.** The producer key must be a bond key of THIS drill's keyring, the validator
 //!   key a validator key of it, and the pay and heartbeat addresses must be addresses of it. A card
 //!   key signing on a drill chain is the replay ADR-0152 §8.2 forbids, and a public miner script on
@@ -36,7 +41,10 @@
 //!   refuses a directory that holds another node's data without its marker, and an unsalted node
 //!   refuses one with a marker. Without it a drill pointed at a public node's app dir meets
 //!   "Genesis not found in active consensus DB … delete?" — and with `--yes` deletes that node's
-//!   database — and shares its panel state (`palw-panel/palw-fee-outpoint`) besides.
+//!   database — and shares its panel state (`palw-panel/palw-fee-outpoint`) besides. The marker also
+//!   names the flag day the drill chain was started with (`fence_at=`, `--palw-drill-fence-at`): a
+//!   stored drill chain is never reopened under another one, so a chain that passed the height
+//!   unfenced is never reported as having crossed it.
 use crate::args::Args;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::config::Config;
@@ -67,6 +75,12 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
         if args.palw_drill_write_keyring.is_some() {
             return Err(refused("--palw-drill-write-keyring writes a drill's keyring and needs --palw-drill-genesis-salt"));
         }
+        if let Some(at) = args.palw_drill_fence_at {
+            return Err(refused(format!(
+                "--palw-drill-fence-at={at} moves the post-launch release's fences on a DRILL chain and needs \
+                 --palw-drill-genesis-salt: on a real network the fences are the release's, and every node must agree on them"
+            )));
+        }
         return Ok(());
     };
     let network = args.network();
@@ -75,6 +89,12 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
             "a drill genesis salt applies to testnet-12 only (--testnet --netsuffix=12), and this node is on {network}: a salt drills \
              the network whose shipping rules it keeps"
         )));
+    }
+    // The flag day's move, on the drill params the salt names — the same constructor and the same move
+    // `apply_to_config` runs, so every refusal is a start-up refusal here and never a panic there.
+    if let Some(at) = args.palw_drill_fence_at {
+        let mut params = kaspa_consensus_core::config::drill::palw_chain_params_v1(network, Some(&salt)).map_err(refused)?;
+        kaspa_consensus_core::config::drill::palw_drill_post_launch_fences_at_v1(&mut params, at).map_err(refused)?;
     }
     // The export writes files and exits; it dials nobody and signs nothing, so the node-only
     // requirements below do not apply to it.
@@ -94,7 +114,8 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
     if args.override_params_file.is_some() {
         return Err(refused(
             "--override-params-file is refused on a drill: the salt installs testnet-12's shipping rules on the drill genesis, and a drill of \
-             edited rules drills a network nobody runs",
+             edited rules drills a network nobody runs (to cross the post-launch release's flag day, --palw-drill-fence-at moves \
+             exactly its fences)",
         ));
     }
     let ring = PalwDrillKeyringV1::new(salt);
@@ -188,20 +209,66 @@ pub fn palw_private_drill_network_v1(config: &Config) -> bool {
             && config.params.genesis.hash != kaspa_consensus_core::config::params::Params::from(config.params.net).genesis.hash)
 }
 
+/// **What a drill that crosses the post-launch release's flag day prints at start-up**
+/// (`--palw-drill-fence-at`): a header with the params and schedule ids the move produced, then one
+/// line per fence — armed (dormant in the release) or moved (from the release's height). Empty on
+/// every node without the flag.
+pub fn palw_drill_fence_lines_v1(config: &Config) -> Vec<String> {
+    let moves = &config.palw_drill_fence_moves;
+    if moves.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!(
+        "PALW DRILL FLAG DAY (--palw-drill-fence-at): {} post-launch fence(s) of testnet-12's release set on this drill chain, \
+         nothing else moved — params fingerprint {}, schedule id {}",
+        moves.len(),
+        config.params.consensus_params_id(),
+        config.params.consensus_schedule_id()
+    )];
+    lines.extend(moves.iter().map(|m| format!("PALW DRILL FLAG DAY: {m}")));
+    lines
+}
+
 /// The marker a drill writes into `<appdir>/<network>/`.
 pub const PALW_DRILL_DATADIR_MARKER_V1: &str = "palw-drill-genesis";
+
+/// How the drill marker names a flag day (`fence_at=`): the height `--palw-drill-fence-at` gave, or
+/// `none` — also what a marker written before the flag existed counts as.
+fn palw_drill_marker_fence_text_v1(fence_at: Option<u64>) -> String {
+    fence_at.map_or_else(|| "none".to_owned(), |at| at.to_string())
+}
 
 /// **The app-directory guard** (see the module doc): `prefixed_dir` is `<appdir>/<network prefixed>`.
 ///
 /// * salted: a marker naming another drill is refused; a directory holding anything but `logs/`
 ///   (the logger opens it before this runs) with no marker is refused — it may be a public node's;
 ///   otherwise the marker is written (idempotent) and the drill proceeds.
+/// * salted, the same drill: the marker's flag day (`fence_at=`, `none` when absent) must be this
+///   start's `--palw-drill-fence-at` (`fence_at`). A stored chain is never reopened under another
+///   flag day (the int-4 audit of 2026-09-26): armed after the chain passed the height, every block
+///   from it to the tip was validated unfenced and the node would still print "ARMED at DAA n" — a
+///   false pass of the flag-day drill that gates the release; dropped or moved, the node runs rules
+///   its stored chain was not validated under. A directory holding nothing but `logs/` and the
+///   marker (the chain never started) takes the new flag day.
 /// * unsalted: a marker is refused — the directory holds a drill chain.
-pub fn palw_drill_datadir_guard_v1(prefixed_dir: &Path, salt: Option<&PalwDrillSaltV1>, genesis_hash: &str) -> Result<(), String> {
+pub fn palw_drill_datadir_guard_v1(
+    prefixed_dir: &Path,
+    salt: Option<&PalwDrillSaltV1>,
+    genesis_hash: &str,
+    fence_at: Option<u64>,
+) -> Result<(), String> {
     let marker_path = prefixed_dir.join(PALW_DRILL_DATADIR_MARKER_V1);
-    let marker_id = std::fs::read_to_string(&marker_path)
-        .ok()
-        .and_then(|text| text.lines().find_map(|line| line.strip_prefix("salt_id=").map(|id| id.trim().to_owned())));
+    let marker = std::fs::read_to_string(&marker_path).ok();
+    let marker_line = |key: &str| {
+        marker.as_deref().and_then(|text| text.lines().find_map(|line| line.strip_prefix(key).map(|v| v.trim().to_owned())))
+    };
+    let marker_id = marker_line("salt_id=");
+    let fence_text = palw_drill_marker_fence_text_v1(fence_at);
+    let write_marker = |salt: &PalwDrillSaltV1| {
+        std::fs::create_dir_all(prefixed_dir).map_err(|e| format!("cannot create {}: {e}", prefixed_dir.display()))?;
+        std::fs::write(&marker_path, format!("salt_id={}\ngenesis={genesis_hash}\nfence_at={fence_text}\n", salt.id()))
+            .map_err(|e| format!("cannot write the drill marker {}: {e}", marker_path.display()))
+    };
     match (salt, marker_id) {
         (None, None) => Ok(()),
         (None, Some(id)) => Err(format!(
@@ -215,7 +282,34 @@ pub fn palw_drill_datadir_guard_v1(prefixed_dir: &Path, salt: Option<&PalwDrillS
             prefixed_dir.display(),
             salt.id()
         )),
-        (Some(_), Some(_)) => Ok(()),
+        (Some(salt), Some(id)) => {
+            let recorded = marker_line("fence_at=").unwrap_or_else(|| palw_drill_marker_fence_text_v1(None));
+            if recorded == fence_text {
+                return Ok(());
+            }
+            let started = std::fs::read_dir(prefixed_dir)
+                .map(|entries| {
+                    entries.filter_map(|e| e.ok()).any(|e| e.file_name() != "logs" && e.file_name() != PALW_DRILL_DATADIR_MARKER_V1)
+                })
+                .unwrap_or(false);
+            if !started {
+                // The marker and the logger's directory only: no chain was stored under the old flag day.
+                return write_marker(salt);
+            }
+            let flag = |text: &str| {
+                if text == "none" { "without --palw-drill-fence-at".to_owned() } else { format!("with --palw-drill-fence-at={text}") }
+            };
+            Err(format!(
+                "{} holds the chain of testnet-12 drill {id} started {}, and this node starts {}. A stored drill chain is never \
+                 reopened under another flag day: armed after the chain passed the height, its blocks past it were validated \
+                 without crossing it and the drill would report a crossing that never happened; dropped or moved, the node would \
+                 run rules its stored chain was not validated under. Restart it as it was started, or give every drill node a \
+                 fresh --appdir and the same --palw-drill-fence-at from the drill's genesis",
+                prefixed_dir.display(),
+                flag(&recorded),
+                flag(&fence_text)
+            ))
+        }
         (Some(salt), None) => {
             let occupied = std::fs::read_dir(prefixed_dir)
                 .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.file_name() != "logs"))
@@ -228,9 +322,7 @@ pub fn palw_drill_datadir_guard_v1(prefixed_dir: &Path, salt: Option<&PalwDrillS
                     prefixed_dir.display()
                 ));
             }
-            std::fs::create_dir_all(prefixed_dir).map_err(|e| format!("cannot create {}: {e}", prefixed_dir.display()))?;
-            std::fs::write(&marker_path, format!("salt_id={}\ngenesis={genesis_hash}\n", salt.id()))
-                .map_err(|e| format!("cannot write the drill marker {}: {e}", marker_path.display()))
+            write_marker(salt)
         }
     }
 }
@@ -251,8 +343,13 @@ pub const PALW_DRILL_KEYRING_FORMAT_V1: &str = "misaka-palw-drill-keyring/v1";
 /// seat's bond outpoint, fee float and address, so the drill script reads the binary's own answer and
 /// never re-derives one. The salt itself is not written: the operator already holds it.
 ///
+/// `fence_at` is the `--palw-drill-fence-at` on the same command line: the manifest's
+/// `consensus_params_id` is the fingerprint a node started with that flag announces — the post-launch
+/// fences moved exactly as `apply_to_config` moves them — and `fence_at` names the flag day (`null`
+/// without the flag), so a crossing drill's manifest never names the release drill's fingerprint.
+///
 /// A directory holding another drill's manifest is refused; the same drill's is rewritten.
-pub fn palw_drill_write_keyring_v1(salt: &PalwDrillSaltV1, dir: &Path) -> Result<PathBuf, String> {
+pub fn palw_drill_write_keyring_v1(salt: &PalwDrillSaltV1, dir: &Path, fence_at: Option<u64>) -> Result<PathBuf, String> {
     let manifest_path = dir.join("manifest.json");
     if let Ok(existing) = std::fs::read_to_string(&manifest_path) {
         let existing: serde_json::Value = serde_json::from_str(&existing).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
@@ -269,7 +366,11 @@ pub fn palw_drill_write_keyring_v1(salt: &PalwDrillSaltV1, dir: &Path) -> Result
         Ok(name)
     };
 
-    let params = kaspa_consensus_core::config::params::palw_t12_drill_params_v1(salt);
+    let mut params = kaspa_consensus_core::config::params::palw_t12_drill_params_v1(salt);
+    if let Some(at) = fence_at {
+        kaspa_consensus_core::config::drill::palw_drill_post_launch_fences_at_v1(&mut params, at)
+            .map_err(|e| format!("--palw-drill-fence-at: {e}"))?;
+    }
     let public = kaspa_consensus_core::config::params::Params::from(palw_drill_network_v1());
     let main = palw_t12_drill_main_key_v1(salt);
     let cards = palw_t12_drill_cards_v1(salt);
@@ -303,6 +404,7 @@ pub fn palw_drill_write_keyring_v1(salt: &PalwDrillSaltV1, dir: &Path) -> Result
         "salt_id": salt.id(),
         "genesis_hash": params.genesis.hash.to_string(),
         "consensus_params_id": params.consensus_params_id().to_string(),
+        "fence_at": fence_at,
         "public_genesis_hash": public.genesis.hash.to_string(),
         "public_consensus_params_id": public.consensus_params_id().to_string(),
         "premine_txid": kaspa_consensus_core::config::premine::palw_t12_drill_premine_txid_v1(salt).to_string(),
@@ -392,7 +494,7 @@ pub fn palw_drill_preflight_v1(args: &Args) {
     }
     let salt = palw_drill_salt_of_v1(args).ok().flatten();
     if let (Some(salt), Some(dir)) = (salt.as_ref(), args.palw_drill_write_keyring.as_deref()) {
-        match palw_drill_write_keyring_v1(salt, Path::new(dir)) {
+        match palw_drill_write_keyring_v1(salt, Path::new(dir), args.palw_drill_fence_at) {
             Ok(manifest) => {
                 println!("testnet-12 drill {} keyring written: {}", salt.id(), manifest.display());
                 std::process::exit(0);
@@ -413,7 +515,7 @@ pub fn palw_drill_datadir_guard_or_exit_v1(args: &Args, salt: Option<&PalwDrillS
     let prefixed = crate::daemon::get_app_dir_from_args(args).join(args.network().to_prefixed());
     let genesis =
         salt.map(|s| kaspa_consensus_core::config::drill::palw_t12_drill_genesis_block_v1(s).hash.to_string()).unwrap_or_default();
-    if let Err(e) = palw_drill_datadir_guard_v1(&prefixed, salt, &genesis) {
+    if let Err(e) = palw_drill_datadir_guard_v1(&prefixed, salt, &genesis, args.palw_drill_fence_at) {
         println!("{e}");
         std::process::exit(1);
     }
@@ -653,27 +755,86 @@ mod tests {
 
         let fresh = root.path().join("fresh/misaka-testnet-12");
         std::fs::create_dir_all(fresh.join("logs")).unwrap();
-        palw_drill_datadir_guard_v1(&fresh, Some(&a), "g").expect("a fresh app dir takes the drill");
+        palw_drill_datadir_guard_v1(&fresh, Some(&a), "g", None).expect("a fresh app dir takes the drill");
         assert!(std::fs::read_to_string(fresh.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap().contains(&format!("salt_id={}", a.id())));
         std::fs::create_dir_all(fresh.join("datadir")).unwrap();
-        palw_drill_datadir_guard_v1(&fresh, Some(&a), "g").expect("and keeps it across restarts");
-        let why = palw_drill_datadir_guard_v1(&fresh, Some(&b), "g").unwrap_err();
+        palw_drill_datadir_guard_v1(&fresh, Some(&a), "g", None).expect("and keeps it across restarts");
+        let why = palw_drill_datadir_guard_v1(&fresh, Some(&b), "g", None).unwrap_err();
         assert!(why.contains(&a.id()) && why.contains(&b.id()), "{why}");
-        let why = palw_drill_datadir_guard_v1(&fresh, None, "").unwrap_err();
+        let why = palw_drill_datadir_guard_v1(&fresh, None, "", None).unwrap_err();
         assert!(why.contains("holds the chain of testnet-12 drill"), "{why}");
 
         let public = root.path().join("public/misaka-testnet-12");
         std::fs::create_dir_all(public.join("datadir")).unwrap();
         std::fs::create_dir_all(public.join("palw-panel")).unwrap();
-        palw_drill_datadir_guard_v1(&public, None, "").expect("a public node's own directory is untouched");
-        let why = palw_drill_datadir_guard_v1(&public, Some(&a), "g").unwrap_err();
+        palw_drill_datadir_guard_v1(&public, None, "", None).expect("a public node's own directory is untouched");
+        let why = palw_drill_datadir_guard_v1(&public, Some(&a), "g", None).unwrap_err();
         assert!(why.contains("may be a public testnet-12 node's") && why.contains("delete"), "{why}");
         assert!(!public.join(PALW_DRILL_DATADIR_MARKER_V1).exists(), "a refused drill writes nothing");
 
         let absent = root.path().join("absent/misaka-testnet-12");
-        palw_drill_datadir_guard_v1(&absent, None, "").expect("nothing there, nothing to refuse");
-        palw_drill_datadir_guard_v1(&absent, Some(&a), "g").expect("created with its marker");
+        palw_drill_datadir_guard_v1(&absent, None, "", None).expect("nothing there, nothing to refuse");
+        palw_drill_datadir_guard_v1(&absent, Some(&a), "g", None).expect("created with its marker");
         assert!(absent.join(PALW_DRILL_DATADIR_MARKER_V1).exists());
+    }
+
+    /// **A stored drill chain is never reopened under another flag day** (the int-4 audit of
+    /// 2026-09-26): the marker names the `--palw-drill-fence-at` the chain was started with. The
+    /// audit's case first — a drill started without the flag (the script's default), run past DAA 40,
+    /// then restarted with `--palw-drill-fence-at=40`, would print "ARMED at DAA 40" over blocks that
+    /// were validated unfenced; now it is refused, as is a crossing drill restarted without the flag or
+    /// at another height. A directory with no chain stored yet takes the new flag day; a marker
+    /// written before the flag existed counts as started without it.
+    #[test]
+    fn a_drill_chain_is_never_reopened_under_another_flag_day() {
+        let a = salt();
+        let root = tempfile::tempdir().unwrap();
+        let marker_of = |dir: &Path| std::fs::read_to_string(dir.join(PALW_DRILL_DATADIR_MARKER_V1)).unwrap();
+
+        // The audit's case: a marker from before the flag (no `fence_at=` line), a stored chain, the
+        // flag added on restart.
+        let old = root.path().join("old/misaka-testnet-12");
+        std::fs::create_dir_all(old.join("datadir")).unwrap();
+        std::fs::write(old.join(PALW_DRILL_DATADIR_MARKER_V1), format!("salt_id={}\ngenesis=g\n", a.id())).unwrap();
+        palw_drill_datadir_guard_v1(&old, Some(&a), "g", None).expect("started without the flag, restarted without it");
+        let why = palw_drill_datadir_guard_v1(&old, Some(&a), "g", Some(40)).unwrap_err();
+        assert!(
+            why.contains("started without --palw-drill-fence-at") && why.contains("starts with --palw-drill-fence-at=40"),
+            "{why}"
+        );
+        assert!(why.contains("fresh") && why.contains("--appdir"), "{why}");
+        assert!(!marker_of(&old).contains("fence_at="), "a refused start rewrites nothing");
+
+        // A crossing drill: the marker names its height; the same flag reopens it, and nothing else does.
+        let crossing = root.path().join("crossing/misaka-testnet-12");
+        std::fs::create_dir_all(crossing.join("logs")).unwrap();
+        palw_drill_datadir_guard_v1(&crossing, Some(&a), "g", Some(40)).expect("a fresh app dir takes the crossing drill");
+        assert!(marker_of(&crossing).contains("fence_at=40\n"), "{}", marker_of(&crossing));
+        // Nothing stored yet (the logger's directory and the marker only): a corrected start is taken.
+        palw_drill_datadir_guard_v1(&crossing, Some(&a), "g", Some(41)).expect("no chain stored yet: the new flag day");
+        assert!(marker_of(&crossing).contains("fence_at=41\n"));
+        palw_drill_datadir_guard_v1(&crossing, Some(&a), "g", Some(40)).expect("and back");
+        std::fs::create_dir_all(crossing.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v1(&crossing, Some(&a), "g", Some(40)).expect("the same flag day across restarts");
+        for (at, wording) in [(None, "starts without --palw-drill-fence-at"), (Some(41), "starts with --palw-drill-fence-at=41")] {
+            let why = palw_drill_datadir_guard_v1(&crossing, Some(&a), "g", at).unwrap_err();
+            assert!(why.contains("started with --palw-drill-fence-at=40") && why.contains(wording), "{why}");
+        }
+        assert!(marker_of(&crossing).contains("fence_at=40\n"), "a refused start rewrites nothing");
+
+        // A release drill (no flag) writes `none`, and keeps it.
+        let release = root.path().join("release/misaka-testnet-12");
+        palw_drill_datadir_guard_v1(&release, Some(&a), "g", None).expect("created with its marker");
+        assert!(marker_of(&release).contains("fence_at=none\n"));
+        std::fs::create_dir_all(release.join("datadir")).unwrap();
+        palw_drill_datadir_guard_v1(&release, Some(&a), "g", None).expect("kept");
+        assert!(palw_drill_datadir_guard_v1(&release, Some(&a), "g", Some(40)).is_err(), "never armed over a stored chain");
+
+        // Both start-up calls pass the command line's flag.
+        let source = include_str!("palw_drill.rs");
+        let wrapper = &source[source.find("pub fn palw_drill_datadir_guard_or_exit_v1(").unwrap()..];
+        let wrapper = &wrapper[..wrapper.find("\n}\n").unwrap()];
+        assert!(wrapper.contains("palw_drill_datadir_guard_v1(&prefixed, salt, &genesis, args.palw_drill_fence_at)"), "{wrapper}");
     }
 
     /// **The keyring export is the binary's own answer**: seeds kaspad accepts (0600, the seat's
@@ -682,7 +843,7 @@ mod tests {
     #[test]
     fn t53_the_keyring_export_names_the_drill_and_its_seats() {
         let dir = tempfile::tempdir().unwrap();
-        let manifest_path = palw_drill_write_keyring_v1(&salt(), dir.path()).expect("written");
+        let manifest_path = palw_drill_write_keyring_v1(&salt(), dir.path(), None).expect("written");
         let manifest: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
         assert_eq!(manifest["format"], PALW_DRILL_KEYRING_FORMAT_V1);
         assert_eq!(manifest["salt_id"], salt().id());
@@ -748,9 +909,127 @@ mod tests {
         };
         assert!(palw_drill_validate_args_v1(&args).is_ok(), "{:?}", palw_drill_validate_args_v1(&args));
 
-        palw_drill_write_keyring_v1(&salt(), dir.path()).expect("the same drill rewrites its keyring");
+        palw_drill_write_keyring_v1(&salt(), dir.path(), None).expect("the same drill rewrites its keyring");
         let other = PalwDrillSaltV1::from_bytes([0x35; 32]).unwrap();
-        let why = palw_drill_write_keyring_v1(&other, dir.path()).unwrap_err();
+        let why = palw_drill_write_keyring_v1(&other, dir.path(), None).unwrap_err();
         assert!(why.contains("another drill's keyring"), "{why}");
+
+        // The manifest names the fingerprint the node on the same command line announces: the release
+        // drill's without the flag, the crossing drill's with it (the int-4 audit of 2026-09-26).
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let salted = format!("--palw-drill-genesis-salt={SALT}");
+        let announced = |extra: &[&str]| {
+            let argv: Vec<&str> = base.iter().copied().chain([salted.as_str()]).chain(extra.iter().copied()).collect();
+            config_of(&parse(&argv)).params.consensus_params_id().to_string()
+        };
+        assert_eq!(manifest["consensus_params_id"], announced(&[]).as_str(), "the release drill's fingerprint");
+        assert!(manifest["fence_at"].is_null(), "no flag day");
+        let crossing_dir = tempfile::tempdir().unwrap();
+        let crossing_path = palw_drill_write_keyring_v1(&salt(), crossing_dir.path(), Some(40)).expect("written");
+        let crossing: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&crossing_path).unwrap()).unwrap();
+        assert_eq!(crossing["consensus_params_id"], announced(&["--palw-drill-fence-at=40"]).as_str(), "the crossing drill's");
+        assert_ne!(crossing["consensus_params_id"], manifest["consensus_params_id"]);
+        assert_eq!(crossing["fence_at"], 40);
+        assert_eq!(crossing["genesis_hash"], manifest["genesis_hash"], "the salt's genesis either way");
+        let why = palw_drill_write_keyring_v1(&salt(), crossing_dir.path(), Some(0)).unwrap_err();
+        assert!(why.contains("--palw-drill-fence-at"), "{why}");
+    }
+
+    /// **`--palw-drill-fence-at`: a salted testnet-12 drill only, refused by name everywhere else, and
+    /// never beside a params override.** Accepted with the salt; refused without it (public
+    /// testnet-12 and every other network alike), with the salt off testnet-12, at 0, at another
+    /// fence's height (the fork id would not see it); `--override-params-file` stays refused with it.
+    /// Wired into the start-up check every entry point runs, command line only.
+    #[test]
+    fn the_drill_fence_flag_is_a_salted_drills_alone() {
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let flag = format!("--palw-drill-genesis-salt={SALT}");
+        let with = |extra: &[&str]| {
+            let mut argv: Vec<&str> = base.to_vec();
+            argv.extend_from_slice(extra);
+            parse(&argv)
+        };
+        assert!(palw_drill_validate_args_v1(&with(&[&flag, "--palw-drill-fence-at=40"])).is_ok(), "a drill crossing DAA 40");
+        assert_eq!(with(&[&flag, "--palw-drill-fence-at=40"]).palw_drill_fence_at, Some(40));
+        assert_eq!(with(&[&flag]).palw_drill_fence_at, None, "no flag, no move");
+
+        for argv in [
+            vec!["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311", "--palw-drill-fence-at=40"],
+            vec!["--testnet", "--netsuffix=12", "--palw-drill-fence-at=40"],
+            vec!["--testnet", "--netsuffix=11", "--palw-drill-fence-at=40"],
+            vec!["--devnet", "--palw-drill-fence-at=40"],
+            vec!["--simnet", "--palw-drill-fence-at=40"],
+            vec!["--palw-drill-fence-at=40"],
+        ] {
+            let why = refusal(&parse(&argv));
+            assert!(why.contains("needs --palw-drill-genesis-salt"), "{argv:?}: {why}");
+        }
+        let why = refusal(&parse(&["--testnet", "--netsuffix=10", "--nodnsseed", "--addpeer=10.0.0.2:26311", &flag, "--palw-drill-fence-at=40"]));
+        assert!(why.contains("testnet-12 only"), "{why}");
+        assert!(refusal(&with(&[&flag, "--palw-drill-fence-at=0"])).contains("not genesis"));
+        let drill = kaspa_consensus_core::config::params::palw_t12_drill_params_v1(&salt());
+        let (other, height) = drill
+            .palw_fences_v1()
+            .into_iter()
+            .filter(|(name, _)| kaspa_consensus_core::config::params::PALW_T12_POST_LAUNCH_FENCES_V1.iter().all(|f| f.name != *name))
+            .find_map(|(name, fence)| fence.map(|f| (name, f.daa_score())).filter(|(_, h)| *h != 0 && *h != u64::MAX))
+            .expect("testnet-12 schedules a fence past genesis");
+        let why = refusal(&with(&[&flag, &format!("--palw-drill-fence-at={height}")]));
+        assert!(why.contains(other) && why.contains("fork id"), "{why}");
+        let why = refusal(&with(&[&flag, "--palw-drill-fence-at=40", "--override-params-file=/tmp/p.json"]));
+        assert!(why.contains("--override-params-file") && why.contains("--palw-drill-fence-at"), "{why}");
+
+        assert!(matches!(
+            crate::daemon::validate_args(&parse(&["--testnet", "--netsuffix=12", "--palw-drill-fence-at=40"])),
+            Err(ConfigError::PalwDrillRefused(_))
+        ));
+        let help = crate::args::cli().render_long_help().to_string();
+        assert!(help.contains("--palw-drill-fence-at"));
+        assert!(!help.contains("KASPAD_PALW_DRILL_FENCE_AT"), "never from the environment");
+        let from_file: Result<Args, _> = toml::from_str("palw-drill-fence-at = 40");
+        assert!(from_file.is_err(), "never from a config file");
+        let cmd = crate::args::cli();
+        let text = cmd.get_arguments().find(|a| a.get_id() == "palw-drill-fence-at").and_then(|a| a.get_help()).unwrap().to_string();
+        assert!(!text.contains("  "), "--palw-drill-fence-at's help has a run of spaces: {text}");
+    }
+
+    /// **The config a drill crossing the flag day runs, and what it prints.** The drill genesis, every
+    /// post-launch fence at the flag's height with the moves recorded beside it, a params id and a
+    /// schedule id that are not the release drill's; one printed line per fence; and nothing for a node
+    /// without the flag — public testnet-12's config never carries a move.
+    #[test]
+    fn a_drill_crossing_the_flag_day_runs_and_prints_the_moved_fences() {
+        use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1};
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let flag = format!("--palw-drill-genesis-salt={SALT}");
+        let release_drill = config_of(&parse(&base.iter().copied().chain([flag.as_str()]).collect::<Vec<_>>()));
+        let crossing =
+            config_of(&parse(&base.iter().copied().chain([flag.as_str(), "--palw-drill-fence-at=40"]).collect::<Vec<_>>()));
+        assert_eq!(crossing.params.genesis.hash, release_drill.params.genesis.hash, "the salt's genesis");
+        assert_eq!(crossing.palw_drill_genesis_salt, Some(salt()));
+        assert_eq!(crossing.palw_drill_fence_moves.len(), PALW_T12_POST_LAUNCH_FENCES_V1.len());
+        let fences = crossing.params.palw_fences_v1();
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+            let at = fences.iter().find(|(name, _)| *name == fence.name).unwrap().1;
+            assert_eq!(at, Some(ForkActivation::new(40)), "{}", fence.name);
+        }
+        assert_ne!(crossing.params.consensus_params_id(), release_drill.params.consensus_params_id());
+        assert_ne!(crossing.params.consensus_schedule_id(), release_drill.params.consensus_schedule_id());
+        crossing.params.validate_palw_v2().expect("the crossing drill validates");
+
+        let lines = palw_drill_fence_lines_v1(&crossing);
+        assert_eq!(lines.len(), 1 + PALW_T12_POST_LAUNCH_FENCES_V1.len(), "{lines:#?}");
+        assert!(lines[0].contains(&crossing.params.consensus_params_id().to_string()), "{}", lines[0]);
+        for (line, fence) in lines[1..].iter().zip(PALW_T12_POST_LAUNCH_FENCES_V1) {
+            assert!(line.contains(fence.name) && line.contains("DAA 40"), "{line}");
+        }
+        assert!(palw_drill_fence_lines_v1(&release_drill).is_empty(), "no flag, nothing printed");
+        let public = config_of(&parse(&base));
+        assert!(public.palw_drill_fence_moves.is_empty() && palw_drill_fence_lines_v1(&public).is_empty());
+        assert_eq!(
+            public.params.consensus_params_id(),
+            kaspa_consensus_core::config::params::Params::from(palw_drill_network_v1()).consensus_params_id(),
+            "public testnet-12 is the release"
+        );
     }
 }

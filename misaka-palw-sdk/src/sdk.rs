@@ -734,6 +734,26 @@ impl PalwClassSdk {
         .map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)
         })
+        .and_then(|admitted| {
+            // **And the two checks the processor asks beside the gate** (ADR-0152 §4-ter C5,
+            // addendum §4-bis.8), through the one function every pre-check shares. Testnet-12
+            // lifecycle audit T12-030: without them this gate admitted a canonical job the processor
+            // then dropped, after `model add` had paid the carrier.
+            kaspa_consensus_core::palw_attempt_rules_v1::palw_registration_attribution_v1(
+                &entry.profile,
+                &canonical,
+                shape.offence_attribution,
+                shape.prompt_ids_form,
+            )
+            .map(|()| admitted)
+            .map_err(|e| {
+                format!(
+                    "the {} registration would be dropped by the processor, so nothing was signed or funded: {} ({e})",
+                    entry.model_id,
+                    e.code()
+                )
+            })
+        })
     }
 
     /// **Build the post-genesis registration object for one candidate — after the gate.**

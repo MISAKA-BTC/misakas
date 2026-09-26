@@ -56,6 +56,10 @@ impl HandleAntipastRequests {
 
             // Sort the headers in bottom-up topological order before sending
             headers.sort_by(|a, b| a.blue_work.cmp(&b.blue_work));
+            // Blue work alone is not that order on a round-lane network: a lane's blocks tie (ADR-0125),
+            // and this sort is stable over a traversal that walks from the tips DOWN, so tied blocks
+            // came out child first — every time. Put parents first; a list that already is is unchanged.
+            let headers = kaspa_consensus_core::topological_order::headers_parent_first(headers);
 
             self.router
                 .enqueue(make_response!(

@@ -127,6 +127,11 @@ fn assignment_draw(anchor: Hash64, claim_id: Hash64, seat_count: u16) -> u64 {
 /// from the anchor; the remaining seats, in panel order, take segments `(ordinal + rotation) mod K`
 /// one each, so the partial seats partition the job and every segment has exactly one partial
 /// holder beside the full seat (`K = seats − 1`).
+///
+/// `anchor` is the panel's stored seed (`PalwPanelStateV2::anchor`): for a claim anchored past
+/// `Params::palw_panel_seed_execution` (lane F1, post-launch) `H(anchor attempt's execution
+/// commitment ‖ claim)` (`palw_panel_v2::palw_panel_draw_seed_v1`), so the anchor block's producer
+/// cannot re-roll the assignment by re-signing; below it the anchor block, as testnet-12 launched.
 pub fn palw_segment_assignment_v2(anchor: Hash64, claim_id: Hash64, seat_count: u16) -> PalwSegmentAssignmentV2 {
     let k = palw_segment_count_v2(seat_count);
     let draw = assignment_draw(anchor, claim_id, seat_count);

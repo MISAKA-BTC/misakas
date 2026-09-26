@@ -75,6 +75,21 @@ impl MiningMonitor {
                     delta.tx_evicted_counts
                 );
             }
+            // V01 (the 2026-09-25 sweep): the carriers every node's gate sweep evicted because the
+            // tip's fold refuses them (their redeemers not counted).
+            if delta.palw_carrier_refused_evicted_counts > 0 {
+                info!(
+                    "Mempool stats: {} PALW carriers were evicted from the mempool because the tip's fold refuses them ({} since start)",
+                    delta.palw_carrier_refused_evicted_counts, snapshot.palw_carrier_refused_evicted_counts
+                );
+            }
+            // The V01 review, LOW 3: the market carriers the same sweep evicted.
+            if delta.palw_market_carrier_refused_evicted_counts > 0 {
+                info!(
+                    "Mempool stats: {} PALW market carriers were evicted from the mempool because the tip's market gate refuses them ({} since start)",
+                    delta.palw_market_carrier_refused_evicted_counts, snapshot.palw_market_carrier_refused_evicted_counts
+                );
+            }
             if tx_script_cache_snapshot != last_tx_script_cache_snapshot {
                 debug!(
                     "UTXO set stats: {} spent, {} created ({} signatures validated, {} cache hits, {:.2} hit ratio)",

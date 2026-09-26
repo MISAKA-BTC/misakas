@@ -368,6 +368,28 @@ pub struct PalwBondMaturityV1 {
     pub window_daa: u64,
 }
 
+// ---- lane maturity (post-launch, 2026-09-26): ADR-0065 D1 from the post-launch fence -------------
+/// **ADR-0065 D1's DAA window in force at `anchor_daa`, on both of its fences** — `maturity`'s window
+/// where `maturity`'s own activation OR lane maturity's `early` fence ([`Params::palw_bond_maturity_early`])
+/// is active at the anchor, else `None`.
+///
+/// One OR over ONE window: from `maturity`'s own height the answer is `maturity`'s alone whether or
+/// not `early` is armed (no double counting, no gap at the hand-over), and below `early` it is
+/// `None`, byte for byte the released rule. `early` without `maturity` answers nothing —
+/// `validate_palw_v2` refuses that pairing, and the resolver does not invent a window for it.
+/// The processor's `palw_bond_maturity_at` is this function over its copies of the two fields, so
+/// the validator, the assembler and the registry warning resolve one window.
+pub fn palw_bond_maturity_window_in_force_v1(
+    maturity: Option<PalwBondMaturityV1>,
+    early: Option<ForkActivation>,
+    anchor_daa: u64,
+) -> Option<u64> {
+    let maturity = maturity?;
+    let in_force = maturity.activation.is_active(anchor_daa) || early.is_some_and(|fence| fence.is_active(anchor_daa));
+    in_force.then_some(maturity.window_daa)
+}
+// ---- end lane maturity ---------------------------------------------------------------------------
+
 /// **ADR-0066 Decision 1's parameter: the heartbeat lane, and the fixed price it is held to.**
 ///
 /// The price is a network CONSTANT and never `header.bits`. That is the whole decision: the first
@@ -1142,6 +1164,62 @@ pub struct Params {
     /// coordinate.
     pub palw_frontier_provenance: Option<ForkActivation>,
 
+    // ─── lane: rcore/f1-forkchoice-attacks — the deep-reorg strict-economic-win fence ───
+    /// **A deep reorg must be earned on ECONOMICS, or the incumbent is kept.** `None` on every
+    /// shipped preset — dormant on testnet-12, armed only in this lane's tests.
+    ///
+    /// Below the fence `dns_reorg_outcome` allows a deep reorg when
+    /// `compare_palw_candidates_v1(challenger, incumbent)` is `Greater`, and that comparator's LAST
+    /// key is the candidate hash — so a private branch that ties the incumbent on all three
+    /// economic keys (safe-frontier blue score, safe weight, live total) wins the reorg on hash
+    /// alone. The fork-choice attack probes on this branch measure exactly that: with no `Final`
+    /// or immature claim on either side both candidates read `{frontier 0, safe 0, live 0}` and
+    /// `decide_deep_reorg_v2` Allows, so a heartbeat / junk-attempt private branch double-spends
+    /// inside the finality depth by grinding a higher-hash tip. Past the fence a reorg is allowed
+    /// on a STRICT economic win and refused on a strict economic loss, and an all-economic tie keeps
+    /// the incumbent — the confirmed history — **unless the reorg is SHALLOW** (lane
+    /// rcore/f1-strictwin-tie): a tie whose incumbent side (the incumbent's selected chain above its
+    /// common chain ancestor with the challenger) spans at most
+    /// `palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1` = 2 DAA ticks is decided by GHOSTDAG's
+    /// own order, blue work then hash (`palw_fork_authority_v2::palw_reorg_strict_economic_win_v1`;
+    /// the processor reads the depth and the order, `palw_reorg_shallow_ghostdag_win_v1`). Keeping
+    /// the incumbent on EVERY tie was a rule about arrival order: the gate judges every non-extension
+    /// sink move, one-block sibling switches included, so two honest nodes racing a slot kept the
+    /// siblings they saw first and their virtual chains diverged over one DAG (measured through the
+    /// pipeline, rcore/cap-weight 3aa4abec4: split at the first exchange in 8/8 runs). The price,
+    /// stated: a tying branch heavier on blue work can reverse a payment with at most two ticks (~4
+    /// min) of confirmation however releases are chained (a shallow tie never LOWERS the sink's DAA,
+    /// so the window cannot be walked back — without that two chained releases reversed three ticks,
+    /// measured); deeper, the tie keeps the
+    /// incumbent. The rule is keyed as before (read at the INCUMBENT's DAA), reads no clock and touches no
+    /// live-weight rule (so it is independent of the two unconfirmed synthesis choices), and it fires
+    /// only on actual reorgs, so forward progress
+    /// on GHOSTDAG blue work is byte-identical below and above it. A **bare fence with no companion
+    /// value**, the [`Self::palw_frontier_provenance`] rule for its reason.
+    pub palw_reorg_strict_economic_win: Option<ForkActivation>,
+    // ─── lane: rcore/hf-pptake2 — the pruning-proof / IBD adoption strict-economic-win fence ───
+    /// **A pruning-proof / IBD adoption must be earned on ECONOMICS, or the incumbent is kept.**
+    /// `None` on every shipped preset — dormant on testnet-12, armed only in this lane's tests.
+    ///
+    /// The IBD-commit sibling of [`Self::palw_reorg_strict_economic_win`]. A permissionless peer can
+    /// serve a node doing pruning-proof IBD a headers-only fork of unbonded / lottery-losing attempt
+    /// headers: each costs ~one ML-DSA signature (no bond, no lottery win, no inference; the attempt
+    /// lane's Layer-0 target is ambient, so its PoW is trivial) yet carries the 2²⁰ attempt constant,
+    /// because `palw_lane_blue_work_v1` is a pure function of the header, blind to the bond and the
+    /// lottery. So the proof outweighs the honest chain on raw accumulated blue work and
+    /// `compare_proofs_inner` adopts it. Below this fence the staging-commit gate then compares the
+    /// two PALW orders with `decide_ibd_commit_v2`, whose comparator's LAST key is the candidate
+    /// hash — and a chain that matured no work reads `{frontier 0, safe 0, live 0}`, tying an honest
+    /// chain whose own first floor claim is still short of `Final`, so the attacker takes the history
+    /// over by grinding a higher-hash tip. Past the fence `validate_staging_palw_order` commits only
+    /// on a STRICT economic win (`palw_ibd_commit_strict_economic_v1`); an all-economic tie keeps the
+    /// incumbent — the confirmed history — which is strictly more conservative, reads no clock and
+    /// touches no live-weight rule, and can only ever convert a `Commit` into a `KeepIncumbent`, so an
+    /// honestly-superior chain still syncs. Read at the INCUMBENT's DAA — a challenger's own score is
+    /// attacker-chosen. A **bare fence with no companion value**, the [`Self::palw_frontier_provenance`]
+    /// rule for its reason.
+    pub palw_pruning_proof_strict_economic_win: Option<ForkActivation>,
+
     /// **ADR-0066 Decision 1 — the heartbeat lane.** `None` on every shipped preset.
     ///
     /// Replaces `palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED`, a `const bool` that changed block
@@ -1404,12 +1482,17 @@ pub struct Params {
     /// is not cached as invalid and the header is admitted once wall time catches up. An attacker who
     /// holds the past-median time more than 132 s ahead stalls the DAA clock — steps must be stamped
     /// above the median — until wall time catches up; DAA-denominated windows do not shrink, so no
-    /// row lapses (`palw_clock_cursor_v1`'s cap and `t12_clock_floor`'s tests say how).
+    /// row lapses (`palw_clock_cursor_v1`'s cap and `t12_clock_floor`'s tests say how). A beat
+    /// granted below such a median (withheld through the push, or relayed late) would make every
+    /// template a step past the cap — no lane could build — so virtual does not merge it until wall
+    /// time catches up (`VirtualStateProcessor::palw_lead_cap_virtual_parents`, a local policy like
+    /// the merge-depth filter): every lane keeps building and only the clock waits.
     ///
     /// Armed from genesis wherever the tolerance is 1,620 s — testnet-12 and a mainnet card — and
     /// `None` elsewhere; hashed Some-only, so every other preset fingerprints byte-identically to a
-    /// build without it. Independent of the floor: on a network without the cursor nothing is ever
-    /// `granted` and the cap bounds heartbeats alone.
+    /// build without it. Independent of the floor: on a network without the anchor clock
+    /// (`palw_anchor_clock` — a mainnet card) nothing is ever `granted` and the cap bounds heartbeats
+    /// alone.
     pub palw_clock_lead_cap: Option<ForkActivation>,
     /// **ADR-0152 v2, stage F2: a false `Valid` is judged by one adjudicator bound to the claim's
     /// committed root.** Past it the V1 `PanelFalseValid` is refused by name — its
@@ -1454,6 +1537,80 @@ pub struct Params {
     /// presets built by struct update (`..TESTNET_PARAMS`) cannot carry one (a `Vec` gives the type
     /// drop glue a const cannot evaluate). The bundle's mirror is the `Vec` the spec names.
     pub palw_rcore_conservative_classes: &'static [crate::Hash64],
+    // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock is carried by the whole collateral ----
+    /// **Lane V02: a resolved claim's lock leaves the 500‰ work ceiling** (the 2026-09-25 sweep's
+    /// V02, HIGH; the user's option (a)). Past it, at a gate's own DAA, the slashable locks a bond holds
+    /// on claims that are no longer live (`Final`, voided or retired — the locks
+    /// `persist_panel_liability` re-dates to `F + window_court`) are counted against the bond's WHOLE
+    /// posted collateral and not against the `fp_max_exposure_ratio_permille` ceiling that gates new
+    /// work: the work gate's room is `max(launch, min(ceiling − (committed − resolved), C − R − committed
+    /// − accuser))` with `launch` the unsplit room and `R = 4 × min_collateral` the accuser reserve the
+    /// relief never spends (52,000 MSK on testnet-12; the V02 review's HIGH — without it binds spent
+    /// A-6's free half below one FinalRow DA session, court or held dissection)
+    /// ([`crate::palw_state_v2::palw_rcore_gate_room_split_of_v1`],
+    /// [`crate::palw_state_v2::palw_bond_accuser_reserve_v1`]). Past it the work readers outside the
+    /// fold (the draw's filter, admission item 8, the producer's facts) also read the fold's accuser
+    /// ledger, held dissections at their charge. The lock itself, its clocks, its liability row, its
+    /// slash and the bond's exit gate are untouched, and `committed + accuser ≤ C` holds at every gate
+    /// as before; the accuser gate is unchanged, and relief-admitted work leaves it at least `R`.
+    ///
+    /// Why: below it an honest `Valid` seat's post-`Final` lock (≈ 160–240 MSK per Final on a
+    /// testnet-12 floor claim) sits in the 500‰ budget for `window_court` (3,000 DAA), so at 2–4 floor
+    /// claims per DAA every seat's bind room closes within about 600–1,700 DAA of the first Final and
+    /// no panel can bind (claims void at the anchor slot, escrow burned).
+    ///
+    /// Keyed on the evaluating block's DAA (the fold's `ctx.daa_score`, the draw's binding block,
+    /// admission's block, the producer's candidate DAA); the rule classifies every lock by its claim's
+    /// phase at that DAA, so a lock written below the height is read past it exactly as one written
+    /// past it. Refused by `validate_palw_v2` off ConsensusV2, without `palw_rcore_plus` (the one
+    /// ledger it splits) armed at or below it, or with the bundle's mirror unsynced
+    /// (`sync_palw_final_lock_full_collateral`, which `sync_palw_rcore_plus` also calls). Dormant
+    /// (`None`) on every shipped preset, testnet-12 included, until the operator arms the common
+    /// post-launch height; hashed Some-only in every writer with the `never()` collapse.
+    pub palw_final_lock_full_collateral: Option<ForkActivation>,
+    // ---- lane V02 (post-launch, 2026-09-26): the post-Final honest lock life is shortened ----------
+    /// **Lane V02: a resolved `Valid` seat's lock lives `F + 1,000` DAA, not `F + window_court`** (the
+    /// 2026-09-25 sweep's V02, HIGH; the user's decision 2026-09-26 "both" — this shortening AND V02
+    /// option (a), the whole-collateral relief on rcore/f1-v02-lock-budget, are independent lanes).
+    /// Past it, at the dating block's own DAA, a `Valid` seat's slashable lock is stamped with a life
+    /// of [`crate::palw_state_v2::PALW_FINAL_LOCK_LIFE_DAA_V1`] (1,000, never longer than
+    /// `window_court`) in place of `window_court` (3,000 on testnet-12) — at the licence
+    /// ([`crate::palw_state_v2`]'s `lock_valid_seat*`, `lock_counted_seat_v1`) and at the `Final`
+    /// re-date (`persist_panel_liability`). The lock's `is_live` clock is what the withdrawal gate
+    /// ([`crate::palw_state_v2::palw_bond_backs_live_duty_v2`]), `slashable_available` and the seat's
+    /// duty backing read, so a seat's capital returns to the 500‰ work ceiling `window_court − 1,000`
+    /// DAA sooner — roughly tripling seat-capital throughput on that ceiling.
+    ///
+    /// **Only the lock's `expiry_daa` moves.** The liability RECORD
+    /// ([`crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1`]), the vesting rows that hold the
+    /// executor's escrow `E`, the court/DA windows and the obligation-pruning slack all keep
+    /// `window_court`, so the conviction path (court, DA default, held dissection, equivocation) still
+    /// FIRES through `F + window_court` and the fraudulent mint stays recoverable.
+    ///
+    /// **Past the height the lock also stops being SLASHABLE when it stops being COMMITTED** (the
+    /// user's decision 2026-09-26, closing the per-collateral double-commit the review found: at
+    /// `F + 1,000` `slashable_available` released the lock's collateral for new work while both
+    /// false-`Valid` conviction routes still took the lock ROW, which stays present to
+    /// `F + window_court` and prunes only with the liability record). A conviction in a block past the
+    /// height takes a seat's lock only while
+    /// [`crate::palw_state_v2::palw_false_valid_lock_slashable_v1`] holds — the per-lock term of
+    /// `palw_bond_committed_v1`, both clocks at the escaped depth — keyed on the CONVICTING block's DAA
+    /// as the life is keyed on the dating block's. An expired lock is left alone (no S4, no reporter
+    /// extraction from it); the rest of the conviction runs unchanged — the `Final` reversed, `E`
+    /// burned from its vesting row on the `window_court` clock, the producer's S3. So free + reserved
+    /// ≤ posted at every DAA, no uncovered MINT opens, and the seat-side deterrent of a resolved
+    /// `Valid` ends at `F + 1,000` (plus the second clock) by design. Below the height every
+    /// conviction reads the row exactly as before.
+    ///
+    /// Keyed on the DATING block's DAA, so a lock stamped below the height keeps the long life when
+    /// read past it (the stored `expiry_daa` is what `is_live` reads) and one stamped past it gets the
+    /// short life — deterministic across the fence. Refused by `validate_palw_v2` off ConsensusV2,
+    /// without `palw_rcore_plus` (whose vesting rows cover `E`) armed at or below it, or with the
+    /// bundle's mirror unsynced (`sync_palw_final_lock_life`, which `sync_palw_rcore_plus` also calls).
+    /// Dormant (`None`) on every shipped preset, testnet-12 included, until the operator arms the
+    /// common post-launch height; hashed Some-only in every writer with the `never()` collapse.
+    pub palw_final_lock_life: Option<ForkActivation>,
+    // ---- end lane V02 -------------------------------------------------------------------------------
     /// **ADR-0152 §4-quater: class-derived verification deadlines.** Past it a claim's
     /// compute-bearing deadline `D(c)` is its class's, in the registry's own units
     /// ([`crate::palw_class_verify_deadline_v1`]): the receipt window is `max(window_receipt, D(c))`
@@ -1484,6 +1641,63 @@ pub struct Params {
     /// lies are attributable, U-D8); hashed into the params id only when non-empty. A `&'static`
     /// slice for the reason `palw_rcore_conservative_classes` is one.
     pub palw_class_verify_rows: &'static [crate::palw_class_verify_deadline_v1::PalwClassVerifyRowV1],
+    // ---- lane bind-deadlock (post-launch, 2026-09-26): an attempt at its ceiling still anchors ----
+    /// **Lane bind-deadlock (post-launch fence, 2026-09-26; HIGH): an attempt block whose bond is at
+    /// its exposure ceiling may still be the anchor — the BINDER — of the claims due at it.**
+    ///
+    /// Past `palw_rcore_plus` a claim binds its panel only in its own anchor block (ADR-0152 SW-8),
+    /// the anchor is the first attempt block at or past `bind_base + anchor_delay` (heartbeats never
+    /// anchor), and a chain block whose own attempt fails admission item 8 (`ExposureCeilingExceeded`
+    /// against its parent state) is `StatusDisqualifiedFromChain`. So when every attempt-capable
+    /// producer stands at its ceiling no anchor can exist: `Provisional` claims hold that very room
+    /// until the `BindTimeout` backstop voids them, unpaid, and the cycle can repeat (audit-lifecycle
+    /// T12-052, measured in `t12_bind_deadlock`). Past this fence — keyed on the candidate chain
+    /// block's own DAA — such a block is not disqualified when it is the anchor of at least one claim
+    /// (the processor's `palw_sw8_anchor_for`: a block that anchors, and a claim `Provisional` in its
+    /// parent with its slot at or below the highest slot the block anchors) — past the operator-anchor
+    /// fence (`palw_operator_anchor`, lane A) only when the block's OWN attempt is an operator's, since
+    /// a block that anchors there by merely merging an operator attempt is one a heartbeat can stand in
+    /// for — and it passes every other item of the full admission (signature, pins, pwu, class
+    /// lottery, identity) with item 8 waived. The fold then treats its attempt exactly as
+    /// finding 17's step-4 skip already does (`AttemptExposureCeiling`): no claim, no reservation, the
+    /// worker carve withheld (`palw_v2_skipped_own_attempt_carve`) — while its derived bindings bind
+    /// every claim due at it. A second binder with nothing left to bind is disqualified as before, so
+    /// binders are bounded by the anchor events claims create.
+    ///
+    /// Refused by `validate_palw_v2` off ConsensusV2 and without `palw_rcore_plus` at or below it
+    /// (below R-core+ a heartbeat anchors, so there is no deadlock to break). Dormant (`None`) on every
+    /// shipped preset, testnet-12 included, until the post-launch release arms it; hashed Some-only and
+    /// collapsed from `Some(never())`, so a build that carries the field fingerprints and peers exactly
+    /// as one that does not until the fence is armed.
+    pub palw_anchor_at_ceiling: Option<ForkActivation>,
+    // ---- end lane bind-deadlock ---------------------------------------------------------------
+    // ---- lane accept-order (post-launch, 2026-09-26): a merging block applies its mergeset parents-first ----
+    /// **A merging chain block applies its mergeset parents first** (post-launch, 2026-09-26; the
+    /// 2026-09-26 IBD root-cause audit's consensus finding).
+    ///
+    /// Every round block hanging from one anchor carries that anchor's blue work (ADR-0125: a round
+    /// block is never blue and never a selected parent, and one whose parents are all round blocks
+    /// takes their anchor as its own), so the consensus order — ascending `(blue_work, hash)` — puts
+    /// a tied lane in HASH order, a child ahead of its parent. The merging block accepted the lane in
+    /// that order: a carrier spending its parent block's output was skipped (testnet-12's merging
+    /// block `42285c86…` at DAA 316 accepted three carriers only from later duplicates), a double
+    /// spend inside a lane was won by the hash, and a transaction's fee went to whichever round block
+    /// sorted first. Past this fence — keyed on the MERGING block's own DAA score — every consumer that
+    /// applies the mergeset (UTXO acceptance and with it the accepted-id merkle root, the PALW fold's
+    /// carried objects and merged works, the round lane's fee rows, and the EVM lane's
+    /// `AcceptedEvmTxs`) reads the consensus order made parents-first by a stable reorder over the
+    /// merged blocks' header parents
+    /// ([`crate::topological_order::stable_topological_order`]): the identity wherever the consensus
+    /// order already is parents-first, so only blocks of a tied lane can move. From the same fence a
+    /// round block's own body may not carry an EVM payload (keyed on the round block's DAA score).
+    ///
+    /// Refused by `validate_palw_v2` off ConsensusV2 and without the execution lane
+    /// (`palw_execution_lane`) opening at or below it: there are no round blocks to order. Dormant
+    /// (`None`) on every shipped preset, testnet-12 included, until the post-launch release arms it;
+    /// hashed Some-only and collapsed from `Some(never())`, so a build that carries the field
+    /// fingerprints and peers exactly as one that does not until the fence is armed.
+    pub palw_lane_accept_parents_first: Option<ForkActivation>,
+    // ---- end lane accept-order ------------------------------------------------------------------
     /// **ADR-0152-adjacent: the Activation Pool, R1 and R2** (user decision 2026-09-25) — see
     /// [`PalwActivationPoolParamsV1`]. `Some` at genesis on testnet-12 only; hashed Some-only.
     pub palw_activation_pool: Option<PalwActivationPoolParamsV1>,
@@ -1491,6 +1705,30 @@ pub struct Params {
     /// [`PalwReadinessV2MaxAgeParamsV1`]. `Some` at genesis on testnet-12 only (24 spans); hashed
     /// Some-only. The bundle's mirror is made by `sync_palw_readiness_v2_max_age_spans`.
     pub palw_readiness_v2_max_age_spans: Option<PalwReadinessV2MaxAgeParamsV1>,
+    // ---- lane F1: registry resilience (the 2026-09-25 pre-launch sweep's V03 and V05) ----
+    /// **The registry-resilience fence** (the 2026-09-25 sweep's V03 and V05, the user's decisions of
+    /// that evening): testnet-12's post-launch consensus change for the rules that AMPLIFY a readiness
+    /// dip into burned escrow and a lost probation. Past it:
+    ///
+    /// * **V03(1): a no-capable-panel at the anchor slot re-anchors instead of voiding.** A claim its
+    ///   anchor block did not bind, whose class's ready seats could not fill a panel on the state the
+    ///   draw read (the anchor block's pre-object base, fixed before anything the anchor producer
+    ///   chooses to carry), is re-based on that block and retried at its next anchor slot; only the
+    ///   bind window's backstop, `accepted_daa + window_bind`, voids it `NoCapablePanel`. Keyed on the
+    ///   anchor block's own DAA. ([`crate::palw_state_v2::palw_ncp_retry_is_due_v1`].)
+    /// * **V03(2): a class held for readiness keeps its probation progress** and returns to it.
+    /// * **V05: a probation resets only on failed probes of two distinct producer bonds.**
+    ///   V03(2) and V05 are keyed on the FIRST DAA of the execution span a probe is counted in, which
+    ///   is the span a step judges, so no span is judged by one rule with probes noted under the other
+    ///   ([`crate::palw_state_v2::PalwStateParamsV2::registry_resilience_governs_span_v1`]).
+    ///
+    /// Below it every rule is the shipped one, byte for byte. `None` on every preset — testnet-12
+    /// included, until the operator arms the common post-launch height (a height no other fence uses,
+    /// so the fork id names it) — and hashed Some-only in every writer, so every shipped id is
+    /// byte-identical to a build without the field; `Some(never())` collapses to `None` in the
+    /// identity. `validate_palw_v2` refuses it off ConsensusV2, below `palw_rcore_plus` or
+    /// `palw_model_registry`, or with the bundle's mirror (`sync_palw_registry_resilience`) unsynced.
+    pub palw_registry_resilience: Option<ForkActivation>,
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -1909,6 +2147,29 @@ pub struct Params {
     /// Read through [`Self::palw_validator_payout_bounds_fence`] only.
     pub palw_validator_payout_bounds: Option<ForkActivation>,
 
+    /// **MSK-26A (2026-09 pre-freeze security review): the UTXO side-effect of a DNS slash obeys the
+    /// same genuineness rule the bond-registry mutation already does.**
+    ///
+    /// The bond-REGISTRY path (`dns_bond_mutations_from_txs`) filters a chain block's accepted
+    /// slashing / precommit evidence through `proved_slash_targets`, which re-verifies both
+    /// attestation signatures against the accused bond's registered validator key — so evidence
+    /// riding in a MERGE-blue block (which the own-body `check_slashing_evidence_genuine` block rule
+    /// never sees) can no longer flip a bond to `Slashed`. But the UTXO SIDE-EFFECT path
+    /// (`apply_slashing_side_effects` -> `resolve_slashing_side_effects`) removes the accused bond's
+    /// locked output-0 UTXO and mints the reporter reward WITHOUT that filter and without any
+    /// signature check, so a forged evidence merged into a block burns an honest validator's stake
+    /// and pays its author a reward while the registry still reads the bond `Active`. Past this
+    /// fence, `apply_slashing_side_effects` keeps only the effects whose bond is `proved_slash_targets`
+    /// — the same signatures, freshness and status the registry path checks — so a slash reaches the
+    /// UTXO set only on evidence the accused validator actually signed.
+    ///
+    /// **A bare fence with no companion value**, and `None` on every shipped preset — a `None` writes
+    /// nothing into `consensus_params_id` / `consensus_schedule_id`, so the fingerprint does not move
+    /// and the behaviour is byte-identical to not having the field at all. testnet-12 arms it at the
+    /// post-launch fence; a card arms it from genesis (no history to fork). Read through
+    /// [`Self::palw_slashing_evidence_utxo_genuine_at`] only.
+    pub palw_slashing_evidence_utxo_genuine: Option<ForkActivation>,
+
     /// **ADR-0045 Decision 2's boundary sentence, made real — the crossing block derives its own
     /// epoch's budget from the parent state** (mainnet audit 2026-09-06, M-2). `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
@@ -2058,6 +2319,29 @@ pub struct Params {
     /// `validate_palw_v2` unless `palw_model_market` is armed at or before it and the EVM lane is
     /// active. Read through `palw_model_evm_fence` only.
     pub palw_model_evm: Option<ForkActivation>,
+    // ---- lane sink (post-launch, 2026-09-26): a model sink is block-valid only bound ------------
+    /// **Lane sink: the model sink binding** (the 2026-09-25 Position review's #1, post-launch fence).
+    /// In a block whose DAA score is at or past it, every `OP_RETURN "MSKMDL01" <line>` output must
+    /// be the one its lifecycle carrier's `ModelBuy` or `ModelSeed` names — its index, its line, its
+    /// value — on a carrier that pays a P2PKH-ML-DSA-87 output a refused buy or seed can be paid back
+    /// to ([`crate::palw_model_market_v1::palw_model_sink_binding_refusal_v1`]); a transaction with
+    /// any other sink is invalid in the header context (`TxRuleError::ModelSinkUnbound`), and so is a
+    /// block carrying one. Below it a sink no object binds is a valid output whose MSK leaves
+    /// circulation with nothing recorded (no reserve, no burn row, no P-B1 refund) — the rule
+    /// testnet-12 launched with, byte for byte.
+    ///
+    /// Keyed on the containing block's own DAA score (the header context already threads it for
+    /// ADR-0087 Decision 6), so reorg, IBD and a pruning-proof sync agree; the mempool and the
+    /// template ask it at the virtual's DAA. Refused by `validate_palw_v2` off ConsensusV2, without
+    /// `palw_model_market` declared (there is no sink form to bind) and without
+    /// `palw_audit_2026_09_23` (the P-B1 refund route its payee rule serves) armed at or below it.
+    /// Dormant (`None`) on every shipped preset, testnet-12 included, until the operator arms the
+    /// common post-launch height; hashed Some-only in every writer with the `never()` collapse, so a
+    /// build that carries the field fingerprints and peers exactly as one that does not until it is
+    /// armed. The node refuses such a sink as mempool standardness wherever the market is declared,
+    /// with or without this fence.
+    pub palw_model_sink_bound: Option<ForkActivation>,
+    // ---- end lane sink ---------------------------------------------------------------------------
     /// **ADR-0075 Decision 14 — only a chunk that can complete a group may spend the block's
     /// certification cap.** `None` on every shipped preset, so the behaviour is byte-identical to
     /// not having the field.
@@ -2531,6 +2815,112 @@ pub struct Params {
     /// the field.
     pub palw_exec_quantum_maturity_daa: Option<u64>,
 
+    // ---- lane F1 (post-launch, 2026-09-25): the panel seed is the anchor attempt's execution ----
+    /// **Lane F1, the panel seed (post-launch fence, 2026-09-25; `wf_72c1a397-e23`, CRITICAL).**
+    /// For a claim whose anchor block's DAA score is at or past this fence, the panel draw, the
+    /// segment assignment and the S3 sample are keyed on
+    /// `H("misaka-palw/panel-v2/draw-seed/v1" ‖ the anchor ATTEMPT's execution_commitment_v3 ‖ claim)`
+    /// ([`crate::palw_panel_v2::palw_panel_draw_seed_v1`]) instead of the anchor block's identity hash.
+    /// Below it the seed is the anchor block, byte for byte the rule testnet-12 launched with.
+    ///
+    /// Why: the identity covers the attempt's ML-DSA signature, the timestamp and the nonce inside its
+    /// 2^22 bucket, none of which the class lottery prices, so one lottery win let the anchor
+    /// producer redraw the panel privately for a re-signature. Past the fence every identity one win
+    /// can take draws one panel; another panel is another lottery win (which, while audit P0-10 is
+    /// open, is still cheap — docs/t12-panel-seed-2026-09-25.md says what this does and does not
+    /// close).
+    ///
+    /// Keyed on the ANCHOR's DAA score: a fact every node reads off the anchor header the processor's
+    /// one anchor walk already finds, so reorg, IBD and a pruning-proof sync agree. Refused by
+    /// `validate_palw_v2` without `palw_rcore_plus` armed at or below it (only attempt blocks anchor
+    /// there, so every anchor has an execution commitment). Dormant (`None`) on every shipped preset,
+    /// testnet-12 included, until an operator arms it at an independent post-launch height; hashed
+    /// Some-only with the seed rule's domain beside the height, and collapsed from `Some(never())`
+    /// with the other fences, so a build that carries the field fingerprints and peers exactly as
+    /// one that does not until the fence is armed.
+    pub palw_panel_seed_execution: Option<ForkActivation>,
+    // ---- end lane F1 ---------------------------------------------------------------------------
+    // ---- lane maturity (post-launch, 2026-09-26): ADR-0065 D1 from the post-launch fence ---------
+    /// **Lane maturity — ADR-0065 D1's seat maturity, brought forward to a post-launch fence**
+    /// (2026-09-26, the lifecycle audit's correction to the panel-seed note: "a seat bond registered
+    /// before DAA 1,000 is drawn onto floor panels within minutes — registered at DAA 13, on a panel
+    /// at bind DAA 21").
+    ///
+    /// testnet-12 arms [`Self::palw_bond_maturity`] at its own window (1,000 DAA), because
+    /// `validate_palw_v2` refuses it any earlier. So for its first 1,000 DAA no window applies at
+    /// all, and a bond registered after launch is drawable the moment its registration is
+    /// accepted. For a claim whose ANCHOR block's DAA score is at or past this fence, the draw
+    /// applies D1 exactly as `palw_bond_maturity` would — `palw_bond_maturity`'s own window, both
+    /// clocks (`palw_bond_maturity_window_v2`), one subtraction (`palw_seat_maturity_floor_v1`) — so:
+    ///
+    /// * a NON-genesis bond is drawable only once `anchor_daa ≥ registered_daa + window`. A bond
+    ///   registered BEFORE the fence gets no grandfathering: its window counts from its own
+    ///   registration DAA, as it would under `palw_bond_maturity` itself, so it leaves the draw at
+    ///   the fence and returns at `registered_daa + window` (a bond registered at DAA 13 returns at
+    ///   anchor 1,013). Counting from the fence instead would make the answer depend on when the
+    ///   fence was armed and would disagree with `palw_bond_maturity` past its own height — a
+    ///   second rule, where this is the first rule starting earlier;
+    /// * the genesis bonds (`registered_daa = genesis.daa_score = 0`) stay drawable at every
+    ///   anchor: the floor is `anchor_daa - window` saturating at 0, and `0 > 0` is false. That is
+    ///   why this fence may sit inside the window `palw_bond_maturity`'s own guard refuses — the
+    ///   guard's "every genesis bond would be immature" holds only for a genesis above DAA 0, and
+    ///   [`Self::validate_palw_bond_maturity_early_v1`] refuses exactly that case;
+    /// * from `palw_bond_maturity`'s own height on, the two answer the same window for the same
+    ///   anchor ([`palw_bond_maturity_window_in_force_v1`] is one OR over one window), so there is
+    ///   no double counting and no gap at 1,000: past it the draw is byte-for-byte the released rule.
+    ///
+    /// Keyed on the ANCHOR's DAA like `palw_bond_maturity` (the panel is a pure function of the
+    /// claim, so the validator, the assembler and the registry warning resolve one window). A
+    /// claim anchored below the fence keeps the released draw even if it binds past it; a panel
+    /// already bound keeps its seats. Refused by `validate_palw_v2` without `palw_bond_maturity`
+    /// scheduled (its window is the only window). Dormant (`None`) on every shipped preset,
+    /// testnet-12 included, until an operator arms it at the one post-launch height (after
+    /// `palw_t12_arm_every_rule_from_genesis`'s pass 2, which would zero it); hashed Some-only and
+    /// collapsed from `Some(never())`, so a build that carries the field fingerprints and peers
+    /// exactly as one that does not until the fence is armed.
+    ///
+    /// **Lane maturity-ext (user decision 2026-09-26: "under the same DAA-500 fence").** The same
+    /// fence also applies D1 wherever the MODEL REGISTRY counts a bond: from it a non-genesis bond is
+    /// neither a ready seat toward a class's `ready ≥ k` thresholds (the lifecycle's ready count, the
+    /// panel room, `NoCapablePanel`, the Activation Pool's (a)) nor in an ADR-0147 admission jury's
+    /// population until `registered_daa + window` — the draw's own floor (both clocks), asked at the
+    /// EVALUATING block's DAA ([`Self::palw_bond_maturity_registry_fold_at`],
+    /// `PalwModelRegistryFoldV1::bond_maturity`). One field rather than two because it is one rule:
+    /// "a bond counts once D1 says it is mature", with one window and one exemption (genesis bonds),
+    /// and two fences could be armed apart — a jury or a ready count built of seats the draw refuses
+    /// (or the reverse), the second answer to one question the registry's one-predicate rule exists
+    /// to forbid. Keyed on this fence alone, not on `palw_bond_maturity`'s own height: the release
+    /// never applied D1 to the registry, so unarmed testnet-12 keeps its registry past 1,000 too.
+    pub palw_bond_maturity_early: Option<ForkActivation>,
+    // ---- end lane maturity -------------------------------------------------------------------
+    // ---- lane A (post-launch, 2026-09-26): only an operator's attempt anchors a panel ----------
+    /// **Lane A, the operator-anchored panel (testnet-12's post-launch stopgap for the panel-seed
+    /// CRITICAL, user decision 2026-09-26).** Past `activation` — resolved at the candidate anchor
+    /// block's OWN DAA score, the key lane F1 resolves the seed rule at — a block may anchor a claim's
+    /// panel only if it is an attempt produced by one of `operators` (its envelope names the bond as
+    /// executor under the bond's genesis-registered key): the anchor is the first such attempt on the
+    /// selected chain at or past the claim's slot, and a slot none reaches before the bind window
+    /// lapses voids `BindTimeout` at the backstop (S0). See [`crate::palw_operator_anchor_v1`].
+    ///
+    /// Why: while audit P0-10 is open a lottery win is ~279 junk BLAKE2b draws, so whoever may produce
+    /// the anchor re-rolls the panel of any claim by drawing fresh wins (lane F1 prices a re-roll at a
+    /// win, not an inference). Past this fence the attacker cannot hold the anchor position; the
+    /// operator's future execution commitment is not its to pick or predict, so a claim id fixed before
+    /// the slot buys one fair draw. The cost is operator trust in the draw until an inference-bound
+    /// ticket exists.
+    ///
+    /// The seed (lane F1's execution-commitment seed, which lane A requires at or below itself) is read
+    /// off the EARLIEST operator attempt at or past the slot in the anchor's past, so an operator
+    /// attempt displaced from the selected chain by a heavier sibling still keys the draw.
+    ///
+    /// `operators` is sorted, distinct and a subset of the genesis registry (`validate_palw_v2`); on
+    /// testnet-12 it is all eight genesis bonds ([`crate::palw_operator_anchor_v1::PalwOperatorAnchorV1::of_genesis_bonds_v1`]).
+    /// Refused without `palw_rcore_plus` and `palw_panel_seed_execution` at or below the activation. Dormant (`None`) on every
+    /// shipped preset, testnet-12 included; hashed Some-only (the height, the rule's domain and the
+    /// operator outpoints) and collapsed from `Some(never())` with the other fences, so a build that
+    /// carries the field fingerprints and peers exactly as one that does not until it is armed.
+    pub palw_operator_anchor: Option<crate::palw_operator_anchor_v1::PalwOperatorAnchorV1>,
+    // ---- end lane A ----------------------------------------------------------------------------
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -2681,6 +3071,30 @@ pub struct Params {
     /// [`Self::palw_heartbeat_transparent_fence`] only.
     pub palw_heartbeat_transparent: Option<ForkActivation>,
 
+    // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+    /// **ADR-0105 §11 — heartbeat transparency stops at the merging block's own selected chain.**
+    /// `None` on every shipped preset, testnet-12 included, so no fingerprint, identity, schedule or
+    /// fork id moves on any network until a post-launch flag day arms it at a height.
+    ///
+    /// Past this fence a non-heartbeat mergeset candidate is heartbeat-transparent
+    /// ([`Self::palw_heartbeat_transparent`]) only when its selected parent lies on the merging
+    /// block's own selected chain, at most `merge_depth` blue score below the merging block's
+    /// selected parent — a draw that landed late on the chain it was drawn on, the block ADR-0105 was
+    /// written for. Any other non-heartbeat candidate is colored classically, against every blue, the
+    /// other branch's heartbeats included. Keyed, like the transparency fence, on the CANDIDATE's own
+    /// DAA score, which is fixed before any block that merges it is colored: a candidate below the
+    /// height is colored by the shipped rule in every block that ever merges it, byte for byte.
+    ///
+    /// Why (the 2026-09-25 heartbeat double-spend verifier, probes g2/h1/f/h2): under the shipped rule
+    /// a bondless heartbeat miner's private branch merges the public chain's attempts BLUE — its own
+    /// beats are invisible to them — so every public 2^20 counts on both branches and the private one
+    /// out-weighs the public one by its own ε: X reorged away inside the merge depth, with no bond.
+    ///
+    /// Refines the transparency fence, so `validate_palw_v2` refuses it unless that fence is in force
+    /// at or below its height. Hashed Some-only in every writer. Read it through
+    /// [`Self::palw_heartbeat_transparent_same_chain_fence`] only.
+    pub palw_heartbeat_transparent_same_chain: Option<ForkActivation>,
+    // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
     /// **ADR-0107: a class's cadence share grows only on work that reached `Final`.**
     ///
     /// The growth rule (ADR-0054, `derive_class_share_growth_v1`) reads the closed epoch's
@@ -3194,6 +3608,8 @@ impl Params {
                 return Err(crate::palw_mode_v2::PalwModeV2Error::ModelEvmOnInertLane);
             }
         }
+        // Lane sink (the model sink binding, post-launch): over the market and the P-B1 refund route.
+        self.validate_palw_model_sink_bound_v1()?;
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
         // **ADR-0093 Decision 8 needs the court it is a move of.** A root claim is a dissection's
         // first move; a fence armed where the k-ary court is not has no dissection to anchor. Asked
@@ -3757,6 +4173,22 @@ impl Params {
                  there is nothing for it to decide (ADR-0105)",
             ));
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // The same-chain restriction narrows ADR-0105's transparency; armed where that rule is not in
+        // force at or below its height it would enter the fingerprint and restrict nothing.
+        if let Some(same_chain) = self.palw_heartbeat_transparent_same_chain
+            && same_chain != ForkActivation::never()
+            && !self
+                .palw_heartbeat_transparent_fence()
+                .is_some_and(|transparent| transparent != ForkActivation::never() && transparent.daa_score() <= same_chain.daa_score())
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_heartbeat_transparent_same_chain is armed where palw_heartbeat_transparent is not in force at or below its \
+                 height: it restricts which candidates that rule exempts, and without the rule there is nothing to restrict \
+                 (ADR-0105 §11)",
+            ));
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // **ADR-0107 reads the closed epoch's finals off the claim records, so it must not be
         // armable where those records are gone before the boundary reads them** — or on a network
         // with no V2 lane at all, where there are no claims and the fence would hash and not fire.
@@ -3932,13 +4364,29 @@ impl Params {
         // The readiness-V2 horizon (user decision 2026-09-25, readiness capacity option (a)): genesis
         // only, over the registry and readiness V2 at genesis, inside [8, 30] spans, mirrored.
         self.validate_palw_readiness_v2_max_age_v1()?;
+        // Lane F1 (registry resilience, V03/V05): over R-core+ and the registry, mirrored.
+        self.validate_palw_registry_resilience_v1()?;
+        // Lane maturity (post-launch, 2026-09-26): ADR-0065 D1 brought forward, on both paths.
+        self.validate_palw_bond_maturity_early_v1()?;
+        // Lane bind-deadlock (post-launch): ConsensusV2 with R-core+ at or below it, on both paths.
+        self.validate_palw_anchor_at_ceiling_v1()?;
+        // Lane accept-order (post-launch): ConsensusV2 with the execution lane at or below it, on both paths.
+        self.validate_palw_lane_accept_parents_first_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
             // ADR-0151's stated maturity after it (user decision 2026-09-25): a value riding a fence
             // the prerequisites name first.
             self.validate_palw_rcore_plus_v1()?;
-            return self.validate_palw_exec_quantum_maturity_v1();
+            self.validate_palw_exec_quantum_maturity_v1()?;
+            // Lane F1 (the panel seed, post-launch): over R-core+, which names its own refusals first.
+            self.validate_palw_panel_seed_execution_v1()?;
+            // Lane V02 (post-launch): over R-core+, mirrored.
+            self.validate_palw_final_lock_full_collateral_v1()?;
+            // Lane V02's lock life (post-launch): over R-core+, mirrored.
+            self.validate_palw_final_lock_life_v1()?;
+            // Lane A (the operator anchor, post-launch): over R-core+, likewise.
+            return self.validate_palw_operator_anchor_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -4774,11 +5222,18 @@ impl Params {
         // ADR-0152 R-core+ (see the non-V2 return above), and then — after every fence's own
         // refusal, so a missing prerequisite names itself first — the §4-ter answerability mirror.
         self.validate_palw_rcore_plus_v1()?;
+        // Lane V02 (post-launch): over R-core+, mirrored.
+        self.validate_palw_final_lock_full_collateral_v1()?;
+        self.validate_palw_final_lock_life_v1()?;
         self.validate_palw_held_answerability_v1()?;
         // ADR-0151's stated maturity (user decision 2026-09-25), after every fence's own refusal: it
         // rides `palw_economic_safety`, so a missing bundle is named by the rules that need it first.
         // Over its bundle's fence, inside the liability horizon, and never the `None` rule twice.
-        self.validate_palw_exec_quantum_maturity_v1()
+        self.validate_palw_exec_quantum_maturity_v1()?;
+        // Lane F1 (the panel seed, post-launch): over R-core+, which names its own refusals first.
+        self.validate_palw_panel_seed_execution_v1()?;
+        // Lane A (the operator anchor, post-launch): over R-core+, likewise.
+        self.validate_palw_operator_anchor_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -4932,9 +5387,29 @@ impl Params {
         if self.palw_bond_maturity.is_some_and(|m| m.activation == ForkActivation::never()) {
             self.palw_bond_maturity = None;
         }
+        // Lane maturity (post-launch, 2026-09-26): D1 brought forward is a bare fence hashed
+        // Some-only, so the same collapse — without it a build that schedules the fence and one that
+        // does not would refuse each other on deploy day over a height neither has reached.
+        if self.palw_bond_maturity_early == Some(ForkActivation::never()) {
+            self.palw_bond_maturity_early = None;
+        }
         // ADR-0065 D2, a bare fence: same collapse, same reason.
         if self.palw_frontier_provenance == Some(ForkActivation::never()) {
             self.palw_frontier_provenance = None;
+        }
+        // lane: rcore/f1-forkchoice-attacks, a bare fence: same collapse, same reason. Without this
+        // a scheduled `never()` writes "palw_reorg_strict_economic_win" + u64::MAX into
+        // consensus_params_id while a build that never armed it writes nothing, and the two
+        // identities split — the Some-only fingerprint above is only safe with this collapse.
+        if self.palw_reorg_strict_economic_win == Some(ForkActivation::never()) {
+            self.palw_reorg_strict_economic_win = None;
+        }
+        // lane: rcore/hf-pptake2, a bare fence: same collapse, same reason. Without this a scheduled
+        // `never()` writes "palw_pruning_proof_strict_economic_win" + u64::MAX into consensus_params_id
+        // while a build that never armed it writes nothing, and the two identities split — the
+        // Some-only fingerprint below is only safe with this collapse.
+        if self.palw_pruning_proof_strict_economic_win == Some(ForkActivation::never()) {
+            self.palw_pruning_proof_strict_economic_win = None;
         }
         // ADR-0066 Decisions 1 and 4. Both carry a value beside the fence, so both take the whole
         // option — the D1 rule, for the D1 reason. The value does not vanish: ADR-0066 SA-4 folds
@@ -5030,9 +5505,42 @@ impl Params {
         if self.palw_rcore_plus == Some(ForkActivation::never()) {
             self.palw_rcore_plus = None;
         }
+        // Lane F1 (the panel seed, post-launch): Some-only hashed, so the same collapse — without it
+        // a build that schedules the fence and one that does not would refuse each other on deploy
+        // day over a height neither has reached.
+        if self.palw_panel_seed_execution == Some(ForkActivation::never()) {
+            self.palw_panel_seed_execution = None;
+        }
+        // Lane A (the operator anchor, post-launch): Some-only hashed (with its operator list), so the
+        // same collapse — the list goes with the height, or a build that schedules the fence and one
+        // that does not would refuse each other over a height neither has reached.
+        if self.palw_operator_anchor.as_ref().is_some_and(|rule| rule.activation == ForkActivation::never()) {
+            self.palw_operator_anchor = None;
+        }
+        // Lane V02 (a resolved claim's lock off the work ceiling, post-launch): Some-only hashed, so
+        // the same collapse — a build that schedules it and one that does not share an identity until
+        // the height.
+        if self.palw_final_lock_full_collateral == Some(ForkActivation::never()) {
+            self.palw_final_lock_full_collateral = None;
+        }
+        // Lane V02 (post-launch, the shortened post-Final lock life): Some-only hashed, so the same
+        // collapse — a build that schedules it and one that does not share an identity until the height.
+        if self.palw_final_lock_life == Some(ForkActivation::never()) {
+            self.palw_final_lock_life = None;
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence: Some-only hashed, so the same collapse.
         if self.palw_class_verify_deadline == Some(ForkActivation::never()) {
             self.palw_class_verify_deadline = None;
+        }
+        // Lane bind-deadlock (post-launch): Some-only hashed, so the same collapse — without it a build
+        // that schedules the fence and one that does not would refuse each other on deploy day over a
+        // height neither has reached.
+        if self.palw_anchor_at_ceiling == Some(ForkActivation::never()) {
+            self.palw_anchor_at_ceiling = None;
+        }
+        // Lane accept-order (post-launch): Some-only hashed, so the same collapse.
+        if self.palw_lane_accept_parents_first == Some(ForkActivation::never()) {
+            self.palw_lane_accept_parents_first = None;
         }
         // ADR-0152-adjacent (Activation Pool): Some-only hashed, the carve's shape — the whole option
         // collapses, so the terms beside a never-armed fence leave the identity with it.
@@ -5043,6 +5551,11 @@ impl Params {
         // whole option collapses, so the spans beside a never-armed fence leave the identity with it.
         if self.palw_readiness_v2_max_age_spans.is_some_and(|horizon| horizon.activation == ForkActivation::never()) {
             self.palw_readiness_v2_max_age_spans = None;
+        }
+        // Lane F1 (registry resilience, V03/V05): Some-only hashed, so the same collapse — a build that
+        // schedules it and one that does not must share an identity until the height.
+        if self.palw_registry_resilience == Some(ForkActivation::never()) {
+            self.palw_registry_resilience = None;
         }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
@@ -5126,6 +5639,12 @@ impl Params {
         // ADR-0089 Decision 9, a bare fence: the same collapse.
         if self.palw_model_evm == Some(ForkActivation::never()) {
             self.palw_model_evm = None;
+        }
+        // Lane sink (the model sink binding, post-launch): Some-only hashed, so the same collapse —
+        // without it a build that schedules the fence and one that does not would refuse each other
+        // on deploy day over a height neither has reached.
+        if self.palw_model_sink_bound == Some(ForkActivation::never()) {
+            self.palw_model_sink_bound = None;
         }
         // ADR-0075 D14, a bare fence: the D2 collapse, for the D2 reason.
         if self.palw_chunk_cap_charge == Some(ForkActivation::never()) {
@@ -5242,6 +5761,10 @@ impl Params {
         if self.palw_validator_payout_bounds == Some(ForkActivation::never()) {
             self.palw_validator_payout_bounds = None;
         }
+        // MSK-26A: the slashing-evidence UTXO genuineness fence — a bare fence, `never()` is absence.
+        if self.palw_slashing_evidence_utxo_genuine == Some(ForkActivation::never()) {
+            self.palw_slashing_evidence_utxo_genuine = None;
+        }
         // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps (mainnet audit
         // 2026-09-06, M-2 and L-2): bare fences, same collapse, same reason.
         if self.palw_epoch_boundary_budget == Some(ForkActivation::never()) {
@@ -5290,6 +5813,13 @@ impl Params {
         if self.palw_heartbeat_transparent == Some(ForkActivation::never()) {
             self.palw_heartbeat_transparent = None;
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // A bare Some-only fence: the same collapse, or a build that schedules it and a build that
+        // does not would refuse each other on deploy day over a height neither has reached.
+        if self.palw_heartbeat_transparent_same_chain == Some(ForkActivation::never()) {
+            self.palw_heartbeat_transparent_same_chain = None;
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // ADR-0107, a bare fence: the same collapse for the same reason.
         if self.palw_share_growth_final == Some(ForkActivation::never()) {
             self.palw_share_growth_final = None;
@@ -5364,6 +5894,16 @@ impl Params {
             _ => None,
         }
     }
+
+    // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+    /// **ADR-0105 §11's same-chain restriction with the mode, the lane AND the transparency fence
+    /// folded in** — `Some` only where [`Self::palw_heartbeat_transparent_fence`] is. GHOSTDAG carries
+    /// it inside `HeartbeatTransparency`, so the restriction is never read where the rule it narrows
+    /// is not.
+    pub fn palw_heartbeat_transparent_same_chain_fence(&self) -> Option<ForkActivation> {
+        self.palw_heartbeat_transparent_fence().and(self.palw_heartbeat_transparent_same_chain)
+    }
+    // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
 
     /// **ADR-0107's share-growth rule, read in ONE place** — `Some` only on a `ConsensusV2`
     /// network that has armed it, for [`Self::palw_fp_da_pins_fence`]'s reason. The transition
@@ -5576,7 +6116,158 @@ impl Params {
         // Every caller that re-mirrors R-core+ after moving a fence re-mirrors this one too: it reads
         // `palw_offence_attribution`, R-core+'s own prerequisite.
         self.sync_palw_held_answerability();
+        // Lane V02 (post-launch): the fence that splits R-core+'s one ledger rides the same re-mirror.
+        self.sync_palw_final_lock_full_collateral();
+        // Lane V02's lock life (post-launch): the shortened lock life rides R-core+'s re-mirror — its
+        // vesting rows are what cover `E` while a seat's lock is released early, so the two are armed
+        // together.
+        self.sync_palw_final_lock_life();
     }
+
+    // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock is carried by the whole collateral ----
+
+    /// **Lane V02's fence** ([`Self::palw_final_lock_full_collateral`]), `never()` read as absence.
+    /// `None` on every shipped preset until the operator arms it.
+    pub fn palw_final_lock_full_collateral_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_final_lock_full_collateral) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a gate evaluated at `daa_score` counts a resolved claim's lock against the whole
+    /// collateral rather than the work ceiling. `false` on every shipped preset.
+    pub fn palw_final_lock_full_collateral_active_at(&self, daa_score: u64) -> bool {
+        self.palw_final_lock_full_collateral_fence().is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Lane V02's mirror**: the `#[borsh(skip)]` copy on `PalwStateParamsV2` every reader of the
+    /// work gate reads (`final_lock_full_collateral_active_at`) — the fold, admission, the draw's seat
+    /// filter and the producer's facts hold only the state params. Written here and nowhere else;
+    /// `None` where the fence is not armed. Called by `sync_palw_rcore_plus` (so every site that
+    /// assembles or re-fences a bundle re-mirrors it) and callable alone; `validate_palw_v2` refuses a
+    /// ruleset whose copy disagrees, so a missed call is a startup refusal.
+    pub fn sync_palw_final_lock_full_collateral(&mut self) {
+        let from_daa =
+            self.palw_final_lock_full_collateral.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_final_lock_full_collateral_from_daa(from_daa);
+        }
+    }
+
+    /// **What lane V02's fence refuses.** Called by `validate_palw_v2` after R-core+'s own refusals,
+    /// public so a test can name each. Below the fence it checks only that the bundle's mirror is
+    /// `None`. Past it: ConsensusV2 only; `palw_rcore_plus` (the one ledger this splits) armed at or
+    /// below its height; the mirror equal to the height. Any height is admissible — genesis included,
+    /// and on a live testnet-12 the common post-launch height.
+    pub fn validate_palw_final_lock_full_collateral_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.final_lock_full_collateral_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_final_lock_full_collateral.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a final-lock height without palw_final_lock_full_collateral armed: mirror the fence \
+                     with Params::sync_palw_final_lock_full_collateral after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_final_lock_full_collateral is armed on a network that is not ConsensusV2: the ledger it splits is \
+                 R-core+'s",
+            ));
+        };
+        if !self.palw_rcore_plus.is_some_and(|rcore| rcore != ForkActivation::never() && rcore.daa_score() <= fence.daa_score()) {
+            return Err(Invalid(
+                "palw_final_lock_full_collateral is armed without palw_rcore_plus at or below it: it splits R-core+'s one \
+                 committed ledger, which does not exist below that fence",
+            ));
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_final_lock_full_collateral disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_final_lock_full_collateral after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane V02 (option a) ----------------------------------------------------------------------
+
+    // ---- lane V02 (post-launch, 2026-09-26): the post-Final honest lock life is shortened ----------
+
+    /// **Lane V02's fence** ([`Self::palw_final_lock_life`]), `never()` read as absence, folded with
+    /// the mode. `None` on every shipped preset until the operator arms it.
+    pub fn palw_final_lock_life_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_final_lock_life) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a `Valid` seat's lock dated at `daa_score` gets the shortened post-`Final` life
+    /// ([`crate::palw_state_v2::PALW_FINAL_LOCK_LIFE_DAA_V1`]) rather than `window_court`. `false` on
+    /// every shipped preset.
+    pub fn palw_final_lock_life_active_at(&self, daa_score: u64) -> bool {
+        self.palw_final_lock_life_fence().is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Lane V02's mirror**: the `#[borsh(skip)]` copy on `PalwStateParamsV2` the state machine reads
+    /// (`final_lock_life_at`) — the fold holds only the state params, never the outer `Params`.
+    /// Written here and nowhere else; `None` where the fence is not armed. Called by
+    /// `sync_palw_rcore_plus` (so every site that assembles or re-fences a bundle re-mirrors it) and
+    /// callable alone; `validate_palw_v2` refuses a ruleset whose copy disagrees, so a missed call is
+    /// a startup refusal.
+    pub fn sync_palw_final_lock_life(&mut self) {
+        let from_daa = self.palw_final_lock_life.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_final_lock_life_from_daa(from_daa);
+        }
+    }
+
+    /// **What lane V02's fence refuses.** Called by `validate_palw_v2` after R-core+'s own refusals,
+    /// public so a test can name each. Below the fence it checks only that the bundle's mirror is
+    /// `None`. Past it: ConsensusV2 only; `palw_rcore_plus` (whose vesting rows cover `E` while a lock
+    /// is released early) armed at or below its height; the mirror equal to the height. Any height is
+    /// admissible — genesis included, and on a live testnet-12 the common post-launch height.
+    pub fn validate_palw_final_lock_life_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.final_lock_life_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_final_lock_life.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a final-lock-life height without palw_final_lock_life armed: mirror the fence \
+                     with Params::sync_palw_final_lock_life after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_final_lock_life is armed on a network that is not ConsensusV2: the locks it dates are R-core+'s",
+            ));
+        };
+        if !self.palw_rcore_plus.is_some_and(|rcore| rcore != ForkActivation::never() && rcore.daa_score() <= fence.daa_score()) {
+            return Err(Invalid(
+                "palw_final_lock_life is armed without palw_rcore_plus at or below it: its vesting rows are what still \
+                 cover E once a Valid seat's lock is released early, and they do not exist below that fence",
+            ));
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_final_lock_life disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_final_lock_life after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane V02 -------------------------------------------------------------------------------
 
     /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
     /// [`crate::palw_state_v2::palw_held_unanswerable_classes_of_v1`] over the bundle's genesis rows
@@ -5971,6 +6662,64 @@ impl Params {
         Ok(())
     }
 
+    // ---- lane F1: registry resilience (V03/V05) — the mirror and what the fence refuses ----
+
+    /// **The registry-resilience fence's mirror** (lane F1): the `#[borsh(skip)]` copy on
+    /// `PalwStateParamsV2` the fold reads (`registry_resilience_active_at`) — the fold's load-time
+    /// re-derivations (a retried claim's bind deadline) have no transition extras, only the params
+    /// they are handed. Written here and nowhere else; `None` where the fence is not armed. Call it
+    /// wherever the fence is set on an assembled ruleset; `validate_palw_v2` refuses a ruleset whose
+    /// copy disagrees, so a missed call is a startup refusal rather than a fold on the old rules.
+    pub fn sync_palw_registry_resilience(&mut self) {
+        let from_daa = self.palw_registry_resilience.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_registry_resilience_from_daa(from_daa);
+        }
+    }
+
+    /// **What `palw_registry_resilience` refuses** (lane F1). Called by `validate_palw_v2`, public so a
+    /// test can name each refusal. Below the fence it checks only that the bundle's mirror is `None`.
+    /// Past it: ConsensusV2 only; `palw_rcore_plus` (SW-8's anchor-block void, which V03(1) narrows)
+    /// and `palw_model_registry` (the lifecycle V03(2) and V05 step) armed at or below its height; the
+    /// mirror equal to the height. Any height is admissible, genesis included — the rules are written
+    /// to be crossed on a live chain.
+    pub fn validate_palw_registry_resilience_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.registry_resilience_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_registry_resilience.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a registry-resilience height without palw_registry_resilience armed: mirror the \
+                     fence with Params::sync_palw_registry_resilience after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_registry_resilience is armed on a network that is not ConsensusV2: the rules it changes are the V2 \
+                 registry's and SW-8's",
+            ));
+        };
+        let at_or_below = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score());
+        if !(at_or_below(self.palw_rcore_plus) && at_or_below(self.palw_model_registry)) {
+            return Err(Invalid(
+                "palw_registry_resilience is armed without palw_rcore_plus and palw_model_registry both armed at or below \
+                 it: the re-anchor narrows SW-8's anchor-block void, and the probation rules step the registry's lifecycle",
+            ));
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_registry_resilience disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_registry_resilience after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+
     /// **The maturity ADR-0151's fold serves and prices, in DAA** — `PalwEconomicSafetyFoldV1::
     /// maturity_daa`, filled by the processor from this and nothing else.
     ///
@@ -6038,6 +6787,90 @@ impl Params {
         }
         Ok(())
     }
+
+    // ---- lane maturity (post-launch, 2026-09-26): ADR-0065 D1 from the post-launch fence ---------
+
+    /// **Lane maturity's fence** ([`Self::palw_bond_maturity_early`]), resolved off a ConsensusV2
+    /// ruleset; `never()` is dormant.
+    pub fn palw_bond_maturity_early_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_bond_maturity_early) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) if f != ForkActivation::never() => Some(f),
+            _ => None,
+        }
+    }
+
+    /// **ADR-0065 D1's window in force for a claim anchored at `anchor_daa`** — the DAA window alone,
+    /// before the processor widens it by the second clock (`palw_bond_maturity_window_v2`). `None`
+    /// where neither `palw_bond_maturity` nor lane maturity's fence is active at the anchor. What the
+    /// processor's `palw_bond_maturity_at` answers, through the same free function.
+    pub fn palw_bond_maturity_window_at(&self, anchor_daa: u64) -> Option<u64> {
+        palw_bond_maturity_window_in_force_v1(self.palw_bond_maturity, self.palw_bond_maturity_early_fence(), anchor_daa)
+    }
+
+    /// **Lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on the model registry at `daa`** —
+    /// what the processor's `palw_model_registry_fold_at` carries as
+    /// `PalwModelRegistryFoldV1::bond_maturity`, through the same free function
+    /// ([`crate::palw_model_registry_v1::palw_bond_maturity_fold_v1`]): `Some` from this fence on
+    /// (its window `palw_bond_maturity`'s, the second clock's raw depth at `daa`), `None` below it and
+    /// wherever it is dormant — every shipped preset. Unlike [`Self::palw_bond_maturity_window_at`]
+    /// it is NOT in force from `palw_bond_maturity`'s own height alone: the release never applied D1
+    /// to the ready count or the admission jury, so an unarmed testnet-12 keeps that registry past
+    /// 1,000 byte for byte.
+    pub fn palw_bond_maturity_registry_fold_at(&self, daa: u64) -> Option<crate::palw_model_registry_v1::PalwBondMaturityFoldV1> {
+        let depth = if self.palw_audit_2026_09_23_active_at(daa) { self.palw_settled_anchor_depth } else { None };
+        crate::palw_model_registry_v1::palw_bond_maturity_fold_v1(
+            self.palw_bond_maturity,
+            self.palw_bond_maturity_early_fence(),
+            depth,
+            daa,
+        )
+    }
+
+    /// **What lane maturity's fence refuses.** Called by `validate_palw_v2` on both paths, and public
+    /// so a test can name each refusal alone. Dormant (`None` or `never()`) is always valid.
+    ///
+    /// * **On a network that is not ConsensusV2** — there is no V2 panel to draw.
+    /// * **Without `palw_bond_maturity` scheduled** — the window is `palw_bond_maturity`'s and the
+    ///   fence has none of its own: one window, so the two can never disagree about a bond.
+    /// * **At or past `palw_bond_maturity`'s own height** — it would bring nothing forward, and at the
+    ///   SAME height (testnet-12's 1,000) a second fence is invisible to the fork id.
+    /// * **Inside the window on a genesis above DAA 0** — the one case in which D1 armed early starves
+    ///   the draw: genesis bonds register at `genesis.daa_score`, and `anchor_daa - window` saturating
+    ///   at 0 stays below it until `genesis.daa_score + window`. At a DAA-0 genesis (testnet-12, and
+    ///   every shipped genesis) the floor never falls below a genesis bond, which is the whole reason
+    ///   this fence may sit where `palw_bond_maturity`'s own guard would refuse.
+    pub fn validate_palw_bond_maturity_early_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_bond_maturity_early.filter(|f| *f != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid(
+                "palw_bond_maturity_early is armed on a network that is not ConsensusV2: there is no V2 panel to draw",
+            ));
+        }
+        let Some(maturity) = self.palw_bond_maturity.filter(|m| m.activation != ForkActivation::never()) else {
+            return Err(Invalid(
+                "palw_bond_maturity_early is armed without palw_bond_maturity scheduled: the window it brings forward \
+                 is palw_bond_maturity's, and it has none of its own",
+            ));
+        };
+        if fence.daa_score() >= maturity.activation.daa_score() {
+            return Err(Invalid(
+                "palw_bond_maturity_early is armed at or past palw_bond_maturity's own height: it brings nothing \
+                 forward, and at the same height a second fence is invisible to the fork id",
+            ));
+        }
+        let genesis = self.genesis.daa_score;
+        if genesis != 0 && fence.daa_score() < genesis.saturating_add(maturity.window_daa) {
+            return Err(Invalid(
+                "palw_bond_maturity_early is armed inside its window on a genesis above DAA 0: the genesis bonds \
+                 register at the genesis DAA, the saturating floor stays below it, and no panel could be drawn",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane maturity -------------------------------------------------------------------
 
     pub fn set_palw_short_challenge_window(&mut self, at: Option<ForkActivation>) {
         self.palw_short_challenge_window = at;
@@ -6215,6 +7048,16 @@ impl Params {
         self.palw_validator_payout_bounds_fence().is_some()
     }
 
+    /// **MSK-26A: is the slashing-evidence UTXO genuineness rule armed at `daa_score`?** — past it
+    /// the DNS slashing UTXO side-effect (`apply_slashing_side_effects`) removes an accused bond's
+    /// stake only for evidence proved genuine (`proved_slash_targets`), closing the merge-blue
+    /// forgery that burns an honest bond's stake. `None`/dormant on every shipped preset, so the
+    /// side-effect is byte-identical to before the field existed. The construction and validation
+    /// paths read this one function, so both compute one UTXO commitment for the same block.
+    pub fn palw_slashing_evidence_utxo_genuine_at(&self, daa_score: u64) -> bool {
+        self.palw_slashing_evidence_utxo_genuine.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// ADR-0087 Decision 6's fence with the mode condition folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it. The ONE place the model market is decided.
     pub fn palw_model_market_fence(&self) -> Option<ForkActivation> {
@@ -6311,6 +7154,58 @@ impl Params {
     pub fn palw_model_evm_active_at(&self, daa_score: u64) -> bool {
         matches!(self.palw_model_evm_fence(), Some(fence) if fence.is_active(daa_score))
     }
+
+    // ---- lane sink (post-launch, 2026-09-26): a model sink is block-valid only bound ------------
+
+    /// **Lane sink's fence** ([`Self::palw_model_sink_bound`]), resolved off a ConsensusV2 ruleset with
+    /// `never()` read as absence. `None` on every shipped preset until the operator arms it.
+    pub fn palw_model_sink_bound_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_model_sink_bound) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a transaction in a block at `daa_score` must bind every model sink it pays. `false`
+    /// on every shipped preset: the fence is dormant until an operator arms it.
+    pub fn palw_model_sink_bound_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_sink_bound_fence().is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **What lane sink's fence refuses.** Called by `validate_palw_v2`, public so a test can name
+    /// each refusal. The binding is a rule about the market's `MSKMDL01` sink on a V2 lifecycle
+    /// carrier, so it needs a ConsensusV2 ruleset that declares `palw_model_market` (at any height:
+    /// below the market the header-context door refuses the form outright, so refusing an unbound
+    /// one there too changes nothing). Its payee rule exists for the P-B1 refund of a refused buy or
+    /// seed, which `palw_audit_2026_09_23` arms, so that fence must be armed at or below it. Any
+    /// height is legal otherwise — genesis included, and on a live testnet-12 the common
+    /// post-launch height the operator picks away from every scheduled one.
+    pub fn validate_palw_model_sink_bound_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_model_sink_bound.filter(|fence| *fence != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid(
+                "palw_model_sink_bound is armed on a network that is not ConsensusV2: the model market's sink is a V2 \
+                 lifecycle carrier's output",
+            ));
+        }
+        if !self.palw_model_market.is_some_and(|market| market != ForkActivation::never()) {
+            return Err(Invalid(
+                "palw_model_sink_bound is armed without palw_model_market declared: there is no model sink form to bind",
+            ));
+        }
+        if !self.palw_audit_2026_09_23.is_some_and(|audit| audit != ForkActivation::never() && audit.daa_score() <= fence.daa_score())
+        {
+            return Err(Invalid(
+                "palw_model_sink_bound is armed without palw_audit_2026_09_23 at or below it: its payee rule exists for the \
+                 P-B1 refund of a refused carrier buy or seed, which that fence arms",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane sink ---------------------------------------------------------------------------
 
     /// ADR-0089: the three fences the executor reads, resolved at one DAA.
     pub fn palw_evm_market_fences_at(&self, daa_score: u64) -> crate::evm::model_market::PalwEvmMarketFencesV1 {
@@ -6651,6 +7546,118 @@ impl Params {
         self.palw_rcore_plus_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    // ---- lane F1 (post-launch, 2026-09-25): the panel seed is the anchor attempt's execution ----
+
+    /// **Lane F1's fence** ([`Self::palw_panel_seed_execution`]), resolved off a ConsensusV2 ruleset.
+    pub fn palw_panel_seed_execution_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_panel_seed_execution) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Whether a claim whose ANCHOR block sits at `anchor_daa` draws its panel from the anchor
+    /// attempt's execution commitment ([`crate::palw_panel_v2::palw_panel_draw_seed_v1`]). `false` on
+    /// every shipped preset: the fence is dormant until an operator arms it.
+    pub fn palw_panel_seed_execution_active_at(&self, anchor_daa: u64) -> bool {
+        self.palw_panel_seed_execution_fence().is_some_and(|f| f.is_active(anchor_daa))
+    }
+
+    /// **What lane F1's fence refuses.** Only one thing: arming it where an anchor may be a block
+    /// with no execution commitment. Past `palw_rcore_plus` only attempt blocks anchor a panel
+    /// (`palw_block_may_anchor_a_panel_v1`), so every anchor carries the commitment the seed is
+    /// keyed on; below it a heartbeat may anchor and the seed would name nothing. So the fence needs
+    /// `palw_rcore_plus` armed at or below it, on a ConsensusV2 ruleset. Any height is legal
+    /// otherwise — genesis included (a new network may be born with the rule), and on a live
+    /// testnet-12 a post-launch height the operator picks away from every scheduled one (1,000 is
+    /// `palw_bond_maturity`'s, and a fence sharing a height is invisible to the fork id).
+    pub fn validate_palw_panel_seed_execution_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_panel_seed_execution.filter(|f| *f != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid(
+                "palw_panel_seed_execution is armed on a network that is not ConsensusV2: there is no V2 panel to seed",
+            ));
+        }
+        if !self.palw_rcore_plus.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score()) {
+            return Err(Invalid(
+                "palw_panel_seed_execution is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat may \
+                 anchor a panel, and a heartbeat has no execution commitment to key the seed on",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane F1 ------------------------------------------------------------------------
+
+    // ---- lane A (post-launch, 2026-09-26): only an operator's attempt anchors a panel -----------
+
+    /// **Lane A's rule** ([`Self::palw_operator_anchor`]) resolved off a ConsensusV2 ruleset: the
+    /// fence and each operator bond's genesis-registered key — what the processor's anchor predicate
+    /// reads. `None` where the fence is absent, `never()`, or the network is not ConsensusV2.
+    pub fn palw_operator_anchor_rule_v1(&self) -> Option<crate::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1> {
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return None };
+        let value = self.palw_operator_anchor.as_ref().filter(|rule| rule.activation != ForkActivation::never())?;
+        Some(value.rule_v1(&bundle.genesis_objects))
+    }
+
+    /// Whether a candidate anchor block at `anchor_daa` is under lane A's rule. `false` on every
+    /// shipped preset: the fence is dormant until an operator arms it.
+    pub fn palw_operator_anchor_active_at(&self, anchor_daa: u64) -> bool {
+        matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+            && self.palw_operator_anchor.as_ref().is_some_and(|rule| rule.activation.is_active(anchor_daa))
+    }
+
+    /// **Lane A armed at `activation` over every genesis bond** — testnet-12's post-launch value (its
+    /// genesis registers exactly the operator's eight cards). `None` off ConsensusV2.
+    pub fn palw_operator_anchor_of_genesis_bonds_v1(
+        &self,
+        activation: ForkActivation,
+    ) -> Option<crate::palw_operator_anchor_v1::PalwOperatorAnchorV1> {
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return None };
+        Some(crate::palw_operator_anchor_v1::PalwOperatorAnchorV1::of_genesis_bonds_v1(activation, &bundle.genesis_objects))
+    }
+
+    /// **What lane A's fence refuses**: arming it off ConsensusV2 (there is no V2 panel to anchor);
+    /// without `palw_rcore_plus` at or below it (below R-core+ a heartbeat may anchor a panel, and the
+    /// rule is written over the attempt-only lane rule R-core+ installs); without lane F1
+    /// (`palw_panel_seed_execution`) at or below it (the displacement-proof seed is an execution
+    /// commitment read off the earliest operator attempt, which only F1's seed rule carries); and a value
+    /// [`crate::palw_operator_anchor_v1::PalwOperatorAnchorV1::refusal_v1`] refuses — an empty operator
+    /// list, one not sorted and distinct, or one naming a bond the genesis does not register. Any
+    /// height is legal otherwise; on a live testnet-12 the operator picks one post-launch height for
+    /// every post-launch fence, away from every scheduled one (never 1,000, `palw_bond_maturity`'s).
+    pub fn validate_palw_operator_anchor_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(value) = self.palw_operator_anchor.as_ref().filter(|rule| rule.activation != ForkActivation::never()) else {
+            return Ok(());
+        };
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
+            return Err(Invalid("palw_operator_anchor is armed on a network that is not ConsensusV2: there is no V2 panel to anchor"));
+        };
+        if !self.palw_rcore_plus.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= value.activation.daa_score()) {
+            return Err(Invalid(
+                "palw_operator_anchor is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat may anchor a \
+                 panel, and the operator rule narrows R-core+'s attempt-only anchor lane",
+            ));
+        }
+        if !self.palw_panel_seed_execution.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= value.activation.daa_score())
+        {
+            return Err(Invalid(
+                "palw_operator_anchor is armed without palw_panel_seed_execution (lane F1) at or below it: past lane A the seed is \
+                 read off the earliest operator attempt at or past the slot as an execution commitment, so a displaced operator \
+                 attempt still keys the draw — without F1 the seed would be the binding block's identity, and displacing the \
+                 anchor would re-roll the panel",
+            ));
+        }
+        if let Some(why) = value.refusal_v1(&bundle.genesis_objects) {
+            return Err(Invalid(why));
+        }
+        Ok(())
+    }
+    // ---- end lane A ------------------------------------------------------------------------
+
     /// ADR-0152 §4-quater's class-verify-deadline fence, resolved off a ConsensusV2 ruleset.
     pub fn palw_class_verify_deadline_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_class_verify_deadline) {
@@ -6665,6 +7672,107 @@ impl Params {
     pub fn palw_class_verify_deadline_active_at(&self, daa_score: u64) -> bool {
         self.palw_class_verify_deadline_fence().is_some_and(|f| f.is_active(daa_score))
     }
+
+    // ---- lane bind-deadlock (post-launch, 2026-09-26): an attempt at its ceiling still anchors ----
+
+    /// **Lane bind-deadlock's fence** ([`Self::palw_anchor_at_ceiling`]), resolved off a ConsensusV2
+    /// ruleset.
+    pub fn palw_anchor_at_ceiling_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_anchor_at_ceiling) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Whether a chain block at `daa_score` whose own attempt is at its bond's exposure ceiling may
+    /// still bind the claims it anchors (a binder). `false` on every shipped preset.
+    pub fn palw_anchor_at_ceiling_active_at(&self, daa_score: u64) -> bool {
+        self.palw_anchor_at_ceiling_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **What lane bind-deadlock's fence refuses**: arming it off ConsensusV2; without
+    /// `palw_rcore_plus` at or below it — below R-core+ every lane but the receipt and round lanes
+    /// anchors (a heartbeat among them), so a claim never waits on an attempt and there is no deadlock
+    /// to break; the rule is written for SW-8's one-anchor-block world; and without lane A
+    /// (`palw_operator_anchor`) at or below it (the int-4 audit's LOW) — the binder's second condition
+    /// is lane A's operator predicate (`palw_v2_anchor_at_ceiling_binder_v1`), so below lane A every
+    /// bonded attempt at its ceiling, not only an operator's own, would bind the claims due at it. Any other height
+    /// is legal; on a live testnet-12 the post-launch release arms it with the other post-launch fences
+    /// at one independent height (never 1,000, `palw_bond_maturity`'s).
+    pub fn validate_palw_anchor_at_ceiling_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_anchor_at_ceiling.filter(|f| *f != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid("palw_anchor_at_ceiling is armed on a network that is not ConsensusV2: there is no V2 anchor to bind"));
+        }
+        if !self.palw_rcore_plus.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score()) {
+            return Err(Invalid(
+                "palw_anchor_at_ceiling is armed without palw_rcore_plus at or below it: below R-core+ a heartbeat anchors a panel, \
+                 so no claim waits on an attempt block and there is no ceiling deadlock to break",
+            ));
+        }
+        if !self
+            .palw_operator_anchor
+            .as_ref()
+            .is_some_and(|rule| rule.activation != ForkActivation::never() && rule.activation.daa_score() <= fence.daa_score())
+        {
+            return Err(Invalid(
+                "palw_anchor_at_ceiling is armed without palw_operator_anchor (lane A) at or below it: the binder is an operator's \
+                 own attempt at its bond's exposure ceiling, judged by lane A's operator predicate — below lane A any bonded \
+                 attempt at its ceiling would bind the claims due at it",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane bind-deadlock ----------------------------------------------------------------
+
+    // ---- lane accept-order (post-launch, 2026-09-26): the mergeset is applied parents-first ----
+
+    /// **Lane accept-order's fence** ([`Self::palw_lane_accept_parents_first`]), resolved off a
+    /// ConsensusV2 ruleset with the execution lane configured — the one place it is decided; the
+    /// virtual processor and the body processor read this and never the raw field.
+    pub fn palw_lane_accept_parents_first_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_execution_lane, self.palw_lane_accept_parents_first) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(_), Some(f)) if f != ForkActivation::never() => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Whether a block at `daa_score` applies its mergeset parents-first (and, a round block at
+    /// `daa_score`, carries no EVM payload). `false` on every shipped preset.
+    pub fn palw_lane_accept_parents_first_active_at(&self, daa_score: u64) -> bool {
+        self.palw_lane_accept_parents_first_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **What lane accept-order's fence refuses**: arming it off ConsensusV2, or without the execution
+    /// lane opening at or below it — without round blocks no two blocks of a mergeset tie on blue work
+    /// while one is in the other's past, so there is nothing to reorder and no round block to refuse
+    /// an EVM payload. Any other height is legal; on a live testnet-12 (lane open from genesis) the
+    /// post-launch release arms it with the other post-launch fences at one independent height.
+    pub fn validate_palw_lane_accept_parents_first_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_lane_accept_parents_first.filter(|f| *f != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid(
+                "palw_lane_accept_parents_first is armed on a network that is not ConsensusV2: there is no round lane to order",
+            ));
+        }
+        if !self
+            .palw_execution_lane
+            .is_some_and(|lane| lane.activation != ForkActivation::never() && lane.activation.daa_score() <= fence.daa_score())
+        {
+            return Err(Invalid(
+                "palw_lane_accept_parents_first is armed without palw_execution_lane opening at or below it: without round blocks \
+                 no mergeset holds a blue-work tie between a block and its parent, so there is nothing to order",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane accept-order -----------------------------------------------------------------
 
     /// **ADR-0152-adjacent: the Activation Pool's fence** (R1, R2 and the pool), resolved off a
     /// ConsensusV2 ruleset — the ONE place it is decided; the fold's extras, the transaction
@@ -6814,7 +7922,11 @@ impl Params {
             palw_bootstrap_activation,
             palw_unavailable_abstains,
             palw_bond_maturity,
+            // Lane maturity (post-launch, 2026-09-26).
+            palw_bond_maturity_early,
             palw_frontier_provenance,
+            palw_reorg_strict_economic_win,
+            palw_pruning_proof_strict_economic_win,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -6838,11 +7950,24 @@ impl Params {
             palw_clock_lead_cap,
             palw_offence_attribution,
             palw_rcore_plus,
+            // Lane F1 (the panel seed, post-launch).
+            palw_panel_seed_execution,
+            // Lane A (the operator anchor, post-launch).
+            palw_operator_anchor,
             palw_rcore_conservative_classes: _,
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
+            palw_final_lock_full_collateral,
+            // Lane V02 (the shortened post-Final lock life, post-launch).
+            palw_final_lock_life,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
+            // Lane bind-deadlock (post-launch).
+            palw_anchor_at_ceiling,
+            // Lane accept-order (post-launch).
+            palw_lane_accept_parents_first,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
+            palw_registry_resilience,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6861,6 +7986,7 @@ impl Params {
             palw_court_ladder,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
+            palw_slashing_evidence_utxo_genuine,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
             palw_panel_economy,
@@ -6875,6 +8001,8 @@ impl Params {
             palw_model_leg_v2,
             palw_model_seed_v2,
             palw_model_evm,
+            // Lane sink (the model sink binding, post-launch).
+            palw_model_sink_bound,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -6906,6 +8034,8 @@ impl Params {
             palw_attempt_header_pins,
             palw_signature_contexts_v2,
             palw_heartbeat_transparent,
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            palw_heartbeat_transparent_same_chain,
             palw_share_growth_final,
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation: _,
@@ -6924,7 +8054,14 @@ impl Params {
             ("palw_bootstrap_activation", *palw_bootstrap_activation),
             ("palw_unavailable_abstains", *palw_unavailable_abstains),
             ("palw_bond_maturity", palw_bond_maturity.map(|f| f.activation)),
+            // Lane maturity (post-launch, 2026-09-26): a top-level fence an un-upgraded peer does not
+            // implement, so it is on the schedule and gates the fork id like every other.
+            ("palw_bond_maturity_early", *palw_bond_maturity_early),
             ("palw_frontier_provenance", *palw_frontier_provenance),
+            // lane: rcore/f1-forkchoice-attacks — feeds fork_id_gate_fences_v1 automatically.
+            ("palw_reorg_strict_economic_win", *palw_reorg_strict_economic_win),
+            // lane: rcore/hf-pptake2 — feeds fork_id_gate_fences_v1 automatically.
+            ("palw_pruning_proof_strict_economic_win", *palw_pruning_proof_strict_economic_win),
             ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
             ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
             ("palw_attempt_activation", *palw_attempt_activation),
@@ -6948,9 +8085,29 @@ impl Params {
             ("palw_clock_lead_cap", *palw_clock_lead_cap),
             ("palw_offence_attribution", *palw_offence_attribution),
             ("palw_rcore_plus", *palw_rcore_plus),
+            // Lane F1 (the panel seed, post-launch): a top-level fence an un-upgraded peer does not
+            // implement, so it is on the schedule and gates the fork id like every other.
+            ("palw_panel_seed_execution", *palw_panel_seed_execution),
+            // Lane A (the operator anchor, post-launch): the height only — on the schedule and the
+            // fork-id gate like every top-level fence an un-upgraded peer does not implement.
+            ("palw_operator_anchor", palw_operator_anchor.as_ref().map(|rule| rule.activation)),
+            // Lane V02 (post-launch): a top-level fence an un-upgraded peer does not implement, so it
+            // is on the schedule and gates the fork id like every other.
+            ("palw_final_lock_full_collateral", *palw_final_lock_full_collateral),
+            // Lane V02 (post-launch): a top-level fence an un-upgraded peer does not implement, so it
+            // is on the schedule and gates the fork id like every other.
+            ("palw_final_lock_life", *palw_final_lock_life),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
+            // Lane bind-deadlock (post-launch): a top-level fence an un-upgraded peer does not implement,
+            // so it is on the schedule and gates the fork id like every other.
+            ("palw_anchor_at_ceiling", *palw_anchor_at_ceiling),
+            // Lane accept-order (post-launch): a top-level fence an un-upgraded peer does not implement,
+            // so it is on the schedule and gates the fork id like every other.
+            ("palw_lane_accept_parents_first", *palw_lane_accept_parents_first),
             ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
             ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
+            // Lane F1 (registry resilience, V03/V05).
+            ("palw_registry_resilience", *palw_registry_resilience),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -6968,6 +8125,7 @@ impl Params {
             ("palw_court_ladder", *palw_court_ladder),
             ("palw_fp_da_pins", *palw_fp_da_pins),
             ("palw_validator_payout_bounds", *palw_validator_payout_bounds),
+            ("palw_slashing_evidence_utxo_genuine", *palw_slashing_evidence_utxo_genuine),
             ("palw_epoch_boundary_budget", *palw_epoch_boundary_budget),
             ("palw_epoch_budget_release", *palw_epoch_budget_release),
             ("palw_panel_economy", *palw_panel_economy),
@@ -7022,6 +8180,9 @@ impl Params {
             ("palw_model_leg_v2", *palw_model_leg_v2),
             ("palw_model_seed_v2", *palw_model_seed_v2),
             ("palw_model_evm", *palw_model_evm),
+            // Lane sink (the model sink binding, post-launch): a top-level fence an un-upgraded peer
+            // does not implement, so it is on the schedule and gates the fork id like every other.
+            ("palw_model_sink_bound", *palw_model_sink_bound),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
             ("palw_kary_court", *palw_kary_court),
@@ -7045,6 +8206,8 @@ impl Params {
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
             ("palw_signature_contexts_v2", *palw_signature_contexts_v2),
             ("palw_heartbeat_transparent", *palw_heartbeat_transparent),
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            ("palw_heartbeat_transparent_same_chain", *palw_heartbeat_transparent_same_chain),
             ("palw_share_growth_final", *palw_share_growth_final),
         ]
     }
@@ -7101,6 +8264,12 @@ impl Params {
         if let Some(maturity) = self.palw_bond_maturity {
             h.write(b"palw_bond_maturity_window");
             h.write(maturity.window_daa.to_le_bytes());
+        }
+        // Lane maturity (post-launch, 2026-09-26), NAMED and Some-only: it changes which bonds a claim
+        // anchored past it may seat, so an operator reading the schedule must see which fence it is.
+        if let Some(activation) = self.palw_bond_maturity_early {
+            h.write(b"palw_bond_maturity_early");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // **ADR-0073 SA-1's width rides with its fence here, and only here** — same rule, same
         // reason as D1's window directly above. `k` must never reach `for_each_fence` (a visited
@@ -7325,10 +8494,49 @@ impl Params {
             h.write(b"palw_rcore_plus");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane F1 (the panel seed, post-launch), NAMED for the same reason and Some-only: it changes
+        // which panel a claim anchored past it binds, so an operator reading the schedule must see it.
+        if let Some(activation) = self.palw_panel_seed_execution {
+            h.write(b"palw_panel_seed_execution");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane A (the operator anchor, post-launch), NAMED for the same reason and Some-only: it changes
+        // which block anchors a claim past it, so an operator reading the schedule must see it.
+        if let Some(rule) = &self.palw_operator_anchor {
+            h.write(b"palw_operator_anchor");
+            h.write(rule.activation.daa_score().to_le_bytes());
+        }
+        // Lane V02 (a resolved claim's lock off the work ceiling, post-launch), NAMED and Some-only: it
+        // changes which binds, attempts and licences a bond's collateral admits past its height, so an
+        // operator reading the schedule must see it, and a preset that leaves it `None` prints the id
+        // of a build without the field.
+        if let Some(activation) = self.palw_final_lock_full_collateral {
+            h.write(b"palw_final_lock_full_collateral");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane V02 (post-launch), NAMED and Some-only: it changes how long a Valid seat's collateral is
+        // locked past its height, so an operator reading the schedule must see it, and a preset that
+        // leaves it `None` prints the id of a build without the field.
+        if let Some(activation) = self.palw_final_lock_life {
+            h.write(b"palw_final_lock_life");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence, NAMED for the same reason and Some-only: it
         // changes which claims a block may carry and when a licensed claim may Final.
         if let Some(activation) = self.palw_class_verify_deadline {
             h.write(b"palw_class_verify_deadline");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane bind-deadlock (post-launch), NAMED for the same reason and Some-only: it changes which
+        // chain blocks a node disqualifies, so an operator reading the schedule must see it.
+        if let Some(activation) = self.palw_anchor_at_ceiling {
+            h.write(b"palw_anchor_at_ceiling");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane accept-order (post-launch), NAMED for the same reason and Some-only: it changes the order
+        // a merging block applies its mergeset in, so an operator reading the schedule must see it.
+        if let Some(activation) = self.palw_lane_accept_parents_first {
+            h.write(b"palw_lane_accept_parents_first");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0152-adjacent (Activation Pool), NAMED for the same reason and Some-only, with its terms
@@ -7346,6 +8554,12 @@ impl Params {
             h.write(b"palw_readiness_v2_max_age_spans");
             h.write(horizon.activation.daa_score().to_le_bytes());
             h.write(horizon.max_age_spans.to_le_bytes());
+        }
+        // Lane F1 (registry resilience, V03/V05), NAMED and Some-only: it changes which claims void at
+        // their anchor slot and how a probation is judged, so an operator reading the schedule must see it.
+        if let Some(activation) = self.palw_registry_resilience {
+            h.write(b"palw_registry_resilience");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
@@ -7375,6 +8589,25 @@ impl Params {
         if let Some(bounds) = self.palw_validator_payout_bounds {
             h.write(b"palw_validator_payout_bounds");
             h.write(bounds.daa_score().to_le_bytes());
+        }
+        // MSK-26A: the slashing-evidence UTXO genuineness fence. Some-only, for its siblings'
+        // reason: a preset that leaves it `None` writes nothing, so the schedule id does not move.
+        if let Some(genuine) = self.palw_slashing_evidence_utxo_genuine {
+            h.write(b"palw_slashing_evidence_utxo_genuine");
+            h.write(genuine.daa_score().to_le_bytes());
+        }
+        // Fork choice and hf-pptake2 (post-launch, the int-4 audit's LOW): the two strict-economic-win
+        // fences, NAMED and Some-only like their siblings. `for_each_fence` visits their heights
+        // Some-only but unnamed, so the operator log could not say WHICH rule a peer schedules; named
+        // here, a preset that leaves them `None` (every one but testnet-12) writes nothing and its
+        // schedule id does not move.
+        if let Some(activation) = self.palw_reorg_strict_economic_win {
+            h.write(b"palw_reorg_strict_economic_win");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_pruning_proof_strict_economic_win {
+            h.write(b"palw_pruning_proof_strict_economic_win");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps. Some-only, at the
         // tail, for the reason their siblings are: a preset that leaves them `None` prints the
@@ -7423,6 +8656,13 @@ impl Params {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane sink (the model sink binding, post-launch), NAMED and Some-only: it changes which
+        // transactions a block may carry past its height, so an operator reading the schedule must
+        // see it, and a preset that leaves it `None` prints the id of a build without the field.
+        if let Some(activation) = self.palw_model_sink_bound {
+            h.write(b"palw_model_sink_bound");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
         // at the tail, for the reason its siblings are: it is genesis-only, so an operator reading
         // the schedule sees a rule in force from block one rather than a height to cross.
@@ -7438,6 +8678,14 @@ impl Params {
             h.write(b"palw_heartbeat_transparent");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // NAMED and Some-only: it changes which blocks are blue past its height, so an operator reading
+        // the schedule must see the height; a preset that leaves it `None` prints the id it printed.
+        if let Some(activation) = self.palw_heartbeat_transparent_same_chain {
+            h.write(b"palw_heartbeat_transparent_same_chain");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // ADR-0107. Some-only, at the tail: it changes which epochs grow a class's share past its
         // height, so the schedule must show the height, and a preset that leaves it `None` prints
         // the id of a build from before the field existed.
@@ -7517,7 +8765,11 @@ impl Params {
             palw_bootstrap_activation,
             palw_unavailable_abstains,
             palw_bond_maturity,
+            // Lane maturity (post-launch, 2026-09-26).
+            palw_bond_maturity_early,
             palw_frontier_provenance,
+            palw_reorg_strict_economic_win,
+            palw_pruning_proof_strict_economic_win,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -7541,11 +8793,24 @@ impl Params {
             palw_clock_lead_cap,
             palw_offence_attribution,
             palw_rcore_plus,
+            // Lane F1 (the panel seed, post-launch).
+            palw_panel_seed_execution,
+            // Lane A (the operator anchor, post-launch).
+            palw_operator_anchor,
             palw_rcore_conservative_classes: _,
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
+            palw_final_lock_full_collateral,
+            // Lane V02 (the shortened post-Final lock life, post-launch).
+            palw_final_lock_life,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
+            // Lane bind-deadlock (post-launch).
+            palw_anchor_at_ceiling,
+            // Lane accept-order (post-launch).
+            palw_lane_accept_parents_first,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
+            palw_registry_resilience,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7568,6 +8833,8 @@ impl Params {
             palw_model_leg_v2,
             palw_model_seed_v2,
             palw_model_evm,
+            // Lane sink (the model sink binding, post-launch).
+            palw_model_sink_bound,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -7600,6 +8867,7 @@ impl Params {
             palw_signature_contexts_v2,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
+            palw_slashing_evidence_utxo_genuine,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
             palw_panel_economy,
@@ -7609,6 +8877,8 @@ impl Params {
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            palw_heartbeat_transparent_same_chain,
             palw_share_growth_final,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
@@ -7691,6 +8961,12 @@ impl Params {
                 visit(&mut absent);
             }
         }
+        // Lane maturity (post-launch, 2026-09-26): SOME-ONLY — an absent fence visits nothing, so a
+        // build carrying the field fingerprints as one without it; its `Some(never())` collapses in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_bond_maturity_early.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0065 D2. A pure fence with no payload, so visiting it is safe.
         match palw_frontier_provenance.as_mut() {
             Some(activation) => fork(activation, visit),
@@ -7698,6 +8974,25 @@ impl Params {
                 absent = u64::MAX;
                 visit(&mut absent);
             }
+        }
+        // lane: rcore/f1-forkchoice-attacks. A bare fence with no payload, visited SOME-ONLY — the
+        // clock floor's rule and its reason: a `None` visited as a sentinel would put a new value
+        // into every preset's schedule id (testnet-12's launch release included, schedule 93da24cc),
+        // so a node update carrying this fence dormant would print a schedule the release does not.
+        // Some-only, a dormant build is the release in every id: params, schedule, identity, fork id.
+        if let Some(activation) = palw_reorg_strict_economic_win.as_mut() {
+            fork(activation, visit);
+        }
+        // lane: rcore/hf-pptake2. A bare fence with no payload — visited SOME-ONLY, the sibling
+        // rule of palw_reorg_strict_economic_win. A `u64::MAX`-for-absence arm would put eight
+        // bytes into consensus_schedule_id on every preset that leaves the field None, so a build
+        // carrying this dormant fence would print a different schedule id from the launch release
+        // (which has no such field at all) for schedules that are identical — inverting the "these
+        // schedules agree" signal the id exists to give, and breaking the discipline that a dormant
+        // fence changes nothing an operator can observe. Absence cannot alias a present value:
+        // consensus_params_id writes this fence again under its own NAME when it is Some.
+        if let Some(activation) = palw_pruning_proof_strict_economic_win.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0066 Decisions 1 and 4. **Only the activation is visited.** `work_log2` and
         // `t_leak_daa` are a price and a duration; normalising either to `0`/`u64::MAX` would make
@@ -7869,9 +9164,41 @@ impl Params {
         if let Some(activation) = palw_rcore_plus.as_mut() {
             fork(activation, visit);
         }
+        // Lane F1 (the panel seed, post-launch): SOME-ONLY, as the floor above and for its reason; its
+        // `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_panel_seed_execution.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane A (the operator anchor, post-launch): the height only, SOME-ONLY, for the floor's reason;
+        // its `Some(never())` collapses (list and all) in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(rule) = palw_operator_anchor.as_mut() {
+            fork(&mut rule.activation, visit);
+        }
+        // Lane V02 (post-launch): SOME-ONLY, as R-core+ above — a `None` visited through a sentinel
+        // would move every preset's schedule id — and its `Some(never())` collapses in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_final_lock_full_collateral.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane V02 (post-launch): SOME-ONLY, as R-core+ above — a `None` visited through a sentinel
+        // would move every preset's schedule id — and its `Some(never())` collapses in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_final_lock_life.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence: SOME-ONLY, as the floor above and for its
         // reason.
         if let Some(activation) = palw_class_verify_deadline.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane bind-deadlock (post-launch): SOME-ONLY, as the floor above and for its reason; its
+        // `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_anchor_at_ceiling.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane accept-order (post-launch): SOME-ONLY, as the floor above and for its reason; its
+        // `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_lane_accept_parents_first.as_mut() {
             fork(activation, visit);
         }
         // ADR-0152-adjacent (Activation Pool): the height only, SOME-ONLY, as the floor above and for
@@ -7883,6 +9210,10 @@ impl Params {
         // above and for its reason — the spans are a value beside it (the D1 rule).
         if let Some(horizon) = palw_readiness_v2_max_age_spans.as_mut() {
             fork(&mut horizon.activation, visit);
+        }
+        // Lane F1 (registry resilience, V03/V05): SOME-ONLY, as the horizon above and for its reason.
+        if let Some(activation) = palw_registry_resilience.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
         match palw_artifact_root_ownership.as_mut() {
@@ -8022,6 +9353,12 @@ impl Params {
                 absent = u64::MAX;
                 visit(&mut absent);
             }
+        }
+        // Lane sink (the model sink binding, post-launch): SOME-ONLY, unlike its market siblings
+        // above — a `None` visited through the sentinel would move every preset's schedule id — and
+        // its `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_model_sink_bound.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0069 Decision 7. A pure fence with no payload, so visiting it is safe — the same
         // shape as D2 beside it.
@@ -8181,6 +9518,10 @@ impl Params {
         if let Some(activation) = palw_validator_payout_bounds.as_mut() {
             fork(activation, visit);
         }
+        // MSK-26A: the slashing-evidence UTXO genuineness fence. Some-only, like its siblings.
+        if let Some(activation) = palw_slashing_evidence_utxo_genuine.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps. Some-only and at the
         // tail, for their siblings' reason: a `u64::MAX`-for-absence arm would put eight bytes
         // into every preset that leaves them `None`.
@@ -8235,6 +9576,14 @@ impl Params {
         if let Some(activation) = palw_heartbeat_transparent.as_mut() {
             fork(activation, visit);
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // SOME-ONLY, for the reason above: a `u64::MAX`-for-absence arm would put eight bytes into every
+        // preset that leaves it `None`. Visited, so a scheduled height normalises out of the identity
+        // (a rolling deploy peers until it fires) and joins `fence_schedule_v1` and the fork id.
+        if let Some(activation) = palw_heartbeat_transparent_same_chain.as_mut() {
+            fork(activation, visit);
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // ADR-0107. Some-only and at the tail, for the same reason as the fence above it.
         if let Some(activation) = palw_share_growth_final.as_mut() {
             fork(activation, visit);
@@ -8444,7 +9793,11 @@ impl Params {
             palw_bootstrap_activation,
             palw_unavailable_abstains,
             palw_bond_maturity,
+            // Lane maturity (post-launch, 2026-09-26).
+            palw_bond_maturity_early,
             palw_frontier_provenance,
+            palw_reorg_strict_economic_win,
+            palw_pruning_proof_strict_economic_win,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -8468,11 +9821,24 @@ impl Params {
             palw_clock_lead_cap,
             palw_offence_attribution,
             palw_rcore_plus,
+            // Lane F1 (the panel seed, post-launch).
+            palw_panel_seed_execution,
+            // Lane A (the operator anchor, post-launch).
+            palw_operator_anchor,
             palw_rcore_conservative_classes,
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
+            palw_final_lock_full_collateral,
+            // Lane V02 (the shortened post-Final lock life, post-launch).
+            palw_final_lock_life,
             palw_class_verify_deadline,
             palw_class_verify_rows,
+            // Lane bind-deadlock (post-launch).
+            palw_anchor_at_ceiling,
+            // Lane accept-order (post-launch).
+            palw_lane_accept_parents_first,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
+            palw_registry_resilience,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -8495,6 +9861,8 @@ impl Params {
             palw_model_leg_v2,
             palw_model_seed_v2,
             palw_model_evm,
+            // Lane sink (the model sink binding, post-launch).
+            palw_model_sink_bound,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -8522,6 +9890,7 @@ impl Params {
             palw_signature_contexts_v2,
             palw_fp_da_pins,
             palw_validator_payout_bounds,
+            palw_slashing_evidence_utxo_genuine,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
             palw_panel_economy,
@@ -8531,6 +9900,8 @@ impl Params {
             palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            palw_heartbeat_transparent_same_chain,
             palw_share_growth_final,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
@@ -8669,9 +10040,28 @@ impl Params {
             h.write(maturity.activation.daa_score().to_le_bytes());
             h.write(maturity.window_daa.to_le_bytes());
         }
+        // Lane maturity (post-launch, 2026-09-26), Some-only (and collapsed from `Some(never())` for
+        // the identity), so a build that leaves it dormant fingerprints byte-identically to one
+        // without the field. No companion value: the window is `palw_bond_maturity`'s, written above.
+        if let Some(activation) = palw_bond_maturity_early {
+            h.write(b"palw_bond_maturity_early");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0065 D2, Some-only like its siblings.
         if let Some(activation) = palw_frontier_provenance {
             h.write(b"palw_frontier_provenance");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // lane: rcore/f1-forkchoice-attacks. Some-only, so a build that never arms it writes
+        // nothing and the normalize collapse below keeps a scheduled `never()` from writing either.
+        if let Some(activation) = palw_reorg_strict_economic_win {
+            h.write(b"palw_reorg_strict_economic_win");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // lane: rcore/hf-pptake2. Some-only, so a build that never arms it writes nothing and the
+        // normalize collapse above keeps a scheduled `never()` from writing either.
+        if let Some(activation) = palw_pruning_proof_strict_economic_win {
+            h.write(b"palw_pruning_proof_strict_economic_win");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0071 SA-1..SA-4, Some-only for the ADR-0065 D4 reason: an unset fence writes
@@ -8771,12 +10161,53 @@ impl Params {
             h.write(b"palw_rcore_plus");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane F1 (the panel seed, post-launch): the height and, beside it, the seed rule's domain —
+        // the rule's version rides its fence, so two builds arming different seed rules at one height
+        // announce different rulesets (and, like any armed fence, part by fork id at the height).
+        // Some-only (and collapsed from `Some(never())` for the identity), so a build that leaves it
+        // dormant fingerprints byte-identically to one without the field.
+        if let Some(activation) = palw_panel_seed_execution {
+            h.write(b"palw_panel_seed_execution");
+            h.write(activation.daa_score().to_le_bytes());
+            h.write(crate::palw_panel_v2::PALW_PANEL_V2_DOMAIN_DRAW_SEED_V1);
+        }
+        // Lane A (the operator anchor, post-launch): the height, the rule's domain beside it (the rule's
+        // version rides its fence) and the operator bonds it trusts, as listed (`validate_palw_v2` holds
+        // the list sorted and distinct, so one set has one spelling) — two builds trusting different
+        // operators at one height announce different rulesets. The keys are not written: each is its
+        // genesis registration's, already inside the ruleset id. Some-only (and collapsed from
+        // `Some(never())` for the identity), so a build that leaves it dormant fingerprints
+        // byte-identically to one without the field.
+        if let Some(rule) = palw_operator_anchor {
+            h.write(b"palw_operator_anchor");
+            h.write(rule.activation.daa_score().to_le_bytes());
+            h.write(crate::palw_operator_anchor_v1::PALW_OPERATOR_ANCHOR_DOMAIN_V1);
+            h.write((rule.operators.len() as u64).to_le_bytes());
+            for bond in rule.operators.iter() {
+                h.write(bond.0.transaction_id.as_byte_slice());
+                h.write(bond.0.index.to_le_bytes());
+            }
+        }
+        // Lane V02 (post-launch): the height, Some-only (and collapsed from `Some(never())` for the
+        // identity), so a build that leaves it dormant fingerprints byte-identically to one without
+        // the field.
+        if let Some(activation) = palw_final_lock_full_collateral {
+            h.write(b"palw_final_lock_full_collateral");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         if !palw_rcore_conservative_classes.is_empty() {
             h.write(b"palw_rcore_conservative_classes");
             h.write((palw_rcore_conservative_classes.len() as u64).to_le_bytes());
             for class in palw_rcore_conservative_classes.iter() {
                 h.write(class.as_byte_slice());
             }
+        }
+        // Lane V02 (post-launch): the height, Some-only (and collapsed from `Some(never())` for the
+        // identity), so a build that leaves it dormant fingerprints byte-identically to one without
+        // the field.
+        if let Some(activation) = palw_final_lock_life {
+            h.write(b"palw_final_lock_life");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0152 §4-quater: the fence's height only, Some-only, for the floor's reason; and the
         // measured rows only when non-empty, every field of each in declaration order, so every other
@@ -8798,6 +10229,20 @@ impl Params {
                 h.write(row.leaves_per_position.to_le_bytes());
             }
         }
+        // Lane bind-deadlock (post-launch): the height only, Some-only (and collapsed from
+        // `Some(never())` for the identity), so a build that leaves it dormant fingerprints
+        // byte-identically to one without the field.
+        if let Some(activation) = palw_anchor_at_ceiling {
+            h.write(b"palw_anchor_at_ceiling");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane accept-order (post-launch): the height only, Some-only (and collapsed from
+        // `Some(never())` for the identity), so a build that leaves it dormant fingerprints
+        // byte-identically to one without the field.
+        if let Some(activation) = palw_lane_accept_parents_first {
+            h.write(b"palw_lane_accept_parents_first");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0152-adjacent (Activation Pool): the height and its terms, Some-only, so every preset
         // but testnet-12 fingerprints byte-identically to a build without the field.
         if let Some(pool) = palw_activation_pool {
@@ -8811,6 +10256,12 @@ impl Params {
             h.write(b"palw_readiness_v2_max_age_spans");
             h.write(horizon.activation.daa_score().to_le_bytes());
             h.write(horizon.max_age_spans.to_le_bytes());
+        }
+        // Lane F1 (registry resilience, V03/V05): the height only, Some-only, so every preset that leaves
+        // it unset — all of them as shipped — fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_registry_resilience {
+            h.write(b"palw_registry_resilience");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
         if let Some(activation) = palw_artifact_root_ownership {
@@ -8984,6 +10435,13 @@ impl Params {
             h.write(b"palw_model_evm");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane sink (the model sink binding, post-launch): the height, Some-only (and collapsed from
+        // `Some(never())` for the identity), so a build that leaves it dormant fingerprints
+        // byte-identically to one without the field.
+        if let Some(activation) = palw_model_sink_bound {
+            h.write(b"palw_model_sink_bound");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0075 D14, Some-only like its siblings: an unset fence writes nothing, so every
         // shipped preset fingerprints byte-identically to before the field existed.
         if let Some(activation) = palw_chunk_cap_charge {
@@ -9154,6 +10612,11 @@ impl Params {
             h.write(b"palw_validator_payout_bounds");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // MSK-26A: the slashing-evidence UTXO genuineness fence. Some-only, for its siblings' reason.
+        if let Some(activation) = palw_slashing_evidence_utxo_genuine {
+            h.write(b"palw_slashing_evidence_utxo_genuine");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0045 D2's boundary budget and ADR-0044 D9's free-prompt caps (mainnet audit
         // 2026-09-06, M-2 and L-2). Some-only, at the tail, for the ADR-0065 D4 reason: every
         // shipped preset leaves them `None` and fingerprints byte-identically to a build from
@@ -9241,6 +10704,15 @@ impl Params {
             h.write(b"palw_heartbeat_transparent");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ---- F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
+        // WRITTEN, Some-only: arming it changes which blocks are blue past its height, and every
+        // preset that leaves it `None` — all of them, testnet-12 included — fingerprints byte-identically
+        // to a build without the field.
+        if let Some(activation) = palw_heartbeat_transparent_same_chain {
+            h.write(b"palw_heartbeat_transparent_same_chain");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ---- end F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency) ----
         // ADR-0107. Some-only, like every fence above it: every preset leaves it `None` and
         // fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_share_growth_final {
@@ -9557,7 +11029,12 @@ impl Params {
             palw_bootstrap_activation: self.palw_bootstrap_activation,
             palw_unavailable_abstains: self.palw_unavailable_abstains,
             palw_bond_maturity: self.palw_bond_maturity,
+            // Lane maturity (post-launch, 2026-09-26): CARRIED beside `palw_bond_maturity`, whose window
+            // it reads — an override that dropped the prerequisite then fails `validate_palw_v2` by name.
+            palw_bond_maturity_early: self.palw_bond_maturity_early,
             palw_frontier_provenance: self.palw_frontier_provenance,
+            palw_reorg_strict_economic_win: self.palw_reorg_strict_economic_win, // lane: rcore/f1-forkchoice-attacks
+            palw_pruning_proof_strict_economic_win: self.palw_pruning_proof_strict_economic_win, // lane: rcore/hf-pptake2
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_attempt_activation: self.palw_attempt_activation,
@@ -9590,12 +11067,27 @@ impl Params {
             // overridden testnet-12 then fails `validate_palw_v2` on the prerequisites the override
             // dropped, instead of silently disarming R-core+.
             palw_rcore_plus: self.palw_rcore_plus,
+            // Lane F1 (the panel seed, post-launch): CARRIED beside its one prerequisite, which is
+            // carried too.
+            palw_panel_seed_execution: self.palw_panel_seed_execution,
+            // Lane A (the operator anchor, post-launch): CARRIED beside its one prerequisite.
+            palw_operator_anchor: self.palw_operator_anchor.clone(),
             palw_rcore_conservative_classes: self.palw_rcore_conservative_classes,
+            // Lane V02 (post-launch): CARRIED with R-core+, whose ledger it splits, and with the bundle
+            // whose mirror it matches.
+            palw_final_lock_full_collateral: self.palw_final_lock_full_collateral,
+            // Lane V02 (post-launch): CARRIED with R-core+, whose vesting rows cover E while a lock is
+            // released early, and with the bundle whose mirror it matches.
+            palw_final_lock_life: self.palw_final_lock_life,
             // ADR-0152 §4-quater: CARRIED like R-core+, never reset — an overridden testnet-12 then fails
             // `validate_palw_v2` on a prerequisite the override dropped instead of silently reopening
             // the 2M row.
             palw_class_verify_deadline: self.palw_class_verify_deadline,
             palw_class_verify_rows: self.palw_class_verify_rows,
+            // Lane bind-deadlock (post-launch): CARRIED beside its one prerequisite, which is carried too.
+            palw_anchor_at_ceiling: self.palw_anchor_at_ceiling,
+            // Lane accept-order (post-launch): CARRIED beside the execution lane it orders, which is carried too.
+            palw_lane_accept_parents_first: self.palw_lane_accept_parents_first,
             // ADR-0152-adjacent (Activation Pool): CARRIED for R-core+'s reason — an overridden
             // testnet-12 fails `validate_palw_v2` on the prerequisite the override dropped
             // (`palw_admission_independence`) instead of silently disarming R1, R2 and the pool.
@@ -9605,6 +11097,8 @@ impl Params {
             // `validate_palw_v2` on a prerequisite the override dropped rather than silently
             // counting them by eight spans.
             palw_readiness_v2_max_age_spans: self.palw_readiness_v2_max_age_spans,
+            // Lane F1: CARRIED with the bundle whose mirror it matches.
+            palw_registry_resilience: self.palw_registry_resilience,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -9627,6 +11121,9 @@ impl Params {
             palw_model_leg_v2: self.palw_model_leg_v2,
             palw_model_seed_v2: self.palw_model_seed_v2,
             palw_model_evm: self.palw_model_evm,
+            // Lane sink (the model sink binding, post-launch): CARRIED with the market it binds and
+            // the audit fence it needs, both carried too.
+            palw_model_sink_bound: self.palw_model_sink_bound,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
@@ -9656,6 +11153,7 @@ impl Params {
             palw_signature_contexts_v2: self.palw_signature_contexts_v2,
             palw_fp_da_pins: self.palw_fp_da_pins,
             palw_validator_payout_bounds: self.palw_validator_payout_bounds,
+            palw_slashing_evidence_utxo_genuine: self.palw_slashing_evidence_utxo_genuine,
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
             palw_epoch_budget_release: self.palw_epoch_budget_release,
             palw_panel_economy: self.palw_panel_economy,
@@ -9665,6 +11163,8 @@ impl Params {
             palw_panel_exposure_floor: self.palw_panel_exposure_floor,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency)
+            palw_heartbeat_transparent_same_chain: self.palw_heartbeat_transparent_same_chain,
             palw_share_growth_final: self.palw_share_growth_final,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
@@ -10598,7 +12098,10 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_bond_maturity_early: None,
     palw_frontier_provenance: None,
+    palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
+    palw_pruning_proof_strict_economic_win: None, // lane: rcore/hf-pptake2
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -10625,11 +12128,18 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_clock_lead_cap: None,
     palw_offence_attribution: None,
     palw_rcore_plus: None,
+    palw_panel_seed_execution: None,
+    palw_operator_anchor: None,
     palw_rcore_conservative_classes: &[],
+    palw_final_lock_full_collateral: None,
+    palw_final_lock_life: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_anchor_at_ceiling: None,
+    palw_lane_accept_parents_first: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
+    palw_registry_resilience: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10655,6 +12165,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
     palw_model_evm: None,
+    palw_model_sink_bound: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -10682,6 +12193,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_slashing_evidence_utxo_genuine: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
@@ -10692,6 +12204,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
+    palw_heartbeat_transparent_same_chain: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -10823,7 +12337,10 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_bond_maturity_early: None,
     palw_frontier_provenance: None,
+    palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
+    palw_pruning_proof_strict_economic_win: None, // lane: rcore/hf-pptake2
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -10850,11 +12367,18 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_clock_lead_cap: None,
     palw_offence_attribution: None,
     palw_rcore_plus: None,
+    palw_panel_seed_execution: None,
+    palw_operator_anchor: None,
     palw_rcore_conservative_classes: &[],
+    palw_final_lock_full_collateral: None,
+    palw_final_lock_life: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_anchor_at_ceiling: None,
+    palw_lane_accept_parents_first: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
+    palw_registry_resilience: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10880,6 +12404,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
     palw_model_evm: None,
+    palw_model_sink_bound: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -10907,6 +12432,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_slashing_evidence_utxo_genuine: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
@@ -10917,6 +12443,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
+    palw_heartbeat_transparent_same_chain: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -11030,7 +12558,10 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_bond_maturity_early: None,
     palw_frontier_provenance: None,
+    palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
+    palw_pruning_proof_strict_economic_win: None, // lane: rcore/hf-pptake2
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -11057,11 +12588,18 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_clock_lead_cap: None,
     palw_offence_attribution: None,
     palw_rcore_plus: None,
+    palw_panel_seed_execution: None,
+    palw_operator_anchor: None,
     palw_rcore_conservative_classes: &[],
+    palw_final_lock_full_collateral: None,
+    palw_final_lock_life: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_anchor_at_ceiling: None,
+    palw_lane_accept_parents_first: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
+    palw_registry_resilience: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -11087,6 +12625,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
     palw_model_evm: None,
+    palw_model_sink_bound: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -11114,6 +12653,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_slashing_evidence_utxo_genuine: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
@@ -11124,6 +12664,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
+    palw_heartbeat_transparent_same_chain: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -16007,10 +17549,31 @@ pub fn palw_rc_shipped_params() -> Params {
 /// `palw_class_receipt_window` are all in force at DAA 0. Only the rows the operator put in the
 /// genesis are in the genesis BLOCK.
 pub fn palw_t12_shipped_params() -> Params {
-    if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
-        return palw_t12_base_params();
+    palw_t12_public_params_over_v1(palw_t12_base_params())
+}
+
+/// **testnet-12 as it LAUNCHED** (`0e8ec984e`; params `b8564b88…`, identity `5de80e64…`, schedule
+/// `93da24cc…`): [`palw_t12_shipped_params`] with every fence of [`PALW_T12_POST_LAUNCH_FENCES_V1`] set
+/// back to dormant, each through its own `set` (mirrors included). The ruleset a node that has not
+/// taken the post-launch release still runs — byte for byte, which
+/// `post_launch_fence_arming_tests` pins to the launch release's three ids — and the baseline the
+/// post-launch lanes' tests arm ONE fence over, so each lane's test keeps judging its own fence
+/// against the build it replaces.
+pub fn palw_t12_launch_params_v1() -> Params {
+    let mut params = palw_t12_shipped_params();
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+        (fence.set)(&mut params, None);
     }
-    let base = palw_t12_base_params();
+    params
+}
+
+/// [`palw_t12_shipped_params`]'s assembly over a given base — public testnet-12's genesis registry and
+/// premine on `base`. The preset passes [`palw_t12_base_params`] itself; a test passes it with a
+/// post-launch fence set after pass 2, to prove the assembly carries what was set there.
+fn palw_t12_public_params_over_v1(base: Params) -> Params {
+    if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+        return base;
+    }
     // **Each card's bond is named on testnet-12's OWN premine txid** (`premine_outpoint_for`; user
     // decision 2026-09-24, replay separation): the same indices as testnet-11's cards, on a txid
     // no private chain that shared the sentinel ever minted.
@@ -16059,6 +17622,160 @@ pub fn palw_t12_drill_params_v1(salt: &crate::config::drill::PalwDrillSaltV1) ->
     with_registered_models(palw_t12_params_with_registry_v1(base, bonds, genesis_utxos))
 }
 
+/// **One post-launch fence of testnet-12's post-launch release** (the user's decision of 2026-09-26:
+/// one fence height, [`PALW_T12_POST_LAUNCH_FENCE_DAA`], carrying every CRITICAL/HIGH fix found after
+/// launch). An entry of [`PALW_T12_POST_LAUNCH_FENCES_V1`].
+#[derive(Clone, Copy)]
+pub struct PalwPostLaunchFenceV1 {
+    /// The fence's name, exactly as [`Params::palw_fences_v1`] spells it (a test holds every entry to
+    /// that list, so a misspelt or non-fence name fails the build).
+    pub name: &'static str,
+    /// **Sets the fence on an ASSEMBLED ruleset** — the field and every mirror of it the fold reads
+    /// (a V2 bundle copy, say), and nothing else: `Some(at)` arms or moves it, `None` leaves it
+    /// dormant. The drill's move ([`crate::config::drill::palw_drill_post_launch_fences_at_v1`]) and
+    /// its tests call this and nothing else, so a lane that adds a fence to the release writes how to
+    /// set it once, here.
+    pub set: fn(&mut Params, Option<ForkActivation>),
+}
+
+impl std::fmt::Debug for PalwPostLaunchFenceV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
+/// **The fences testnet-12's post-launch release arms at one post-launch height**
+/// ([`PALW_T12_POST_LAUNCH_FENCE_DAA`], DAA 750 — the user's decision of 2026-09-26) — the ONE list of
+/// them. Each lane that puts a fix behind the
+/// release's fence adds its entry here and nowhere else (int-4 phase 2b: twelve entries — F1's three,
+/// fork choice, maturity, sink, lane A, V02's two lock fences, bind-deadlock, MSK-26A's slash and
+/// pptake2's IBD commit):
+///
+/// * the drill's `--palw-drill-fence-at=<DAA>` moves exactly these to a low height on a salted drill
+///   chain, so a drill crosses the release's flag day with the shipping binary
+///   ([`crate::config::drill::palw_drill_post_launch_fences_at_v1`]; the memory rule "a flag day
+///   needs a drill that crosses it");
+/// * the release arms exactly these at its height, through `set` so every mirror follows, on the
+///   ASSEMBLED ruleset — in [`palw_t12_params_with_registry_v1`] after the assembly and before its
+///   `validate_palw_v2`, the one body the public preset and every drill share. Never inside
+///   [`palw_t12_base_params`] before its pass 2 (which zeroes every fence height it visits: a genesis
+///   rule, a re-mint), and never at 1,000 (`palw_bond_maturity`'s height, which `validate_palw_v2`
+///   refuses for `palw_bond_maturity_early` and the fork id cannot see).
+///
+/// **Lane A's entry needs the assembled ruleset**: its operators are the bonds the genesis REGISTRY
+/// names, which a bundle-less base does not carry yet, so on one it panics rather than leave the
+/// CRITICAL's stopgap silently dormant. Every other entry is a bare height or mirrors itself, and
+/// the registry-resilience mirror is also re-made by the assembly
+/// ([`palw_v2_params_with_class_rows_v1`]), so those may be set after pass 2 as well. With every
+/// entry at one height, `validate_palw_v2`'s prerequisites among them hold (lane A over F1's seed at
+/// or below it; the rest over fences testnet-12 arms at 0) — `drill.rs` and the processor's combined
+/// crossing (`t12_post_launch_fences_combined`) test exactly that.
+///
+/// **Armed on testnet-12 at [`PALW_T12_POST_LAUNCH_FENCE_DAA`]** by
+/// [`palw_t12_arm_post_launch_fences_v1`] (so on every drill ruleset too, which
+/// `--palw-drill-fence-at` then MOVES), and dormant (`None`) on every other preset.
+pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    // Lane F1, registry resilience (V03/V05): the field and the V2 bundle's mirror the fold reads.
+    PalwPostLaunchFenceV1 {
+        name: "palw_registry_resilience",
+        set: |params, at| {
+            params.palw_registry_resilience = at;
+            params.sync_palw_registry_resilience();
+        },
+    },
+    // Lane F1, the panel seed is the anchor attempt's execution commitment (CRITICAL): a bare height.
+    PalwPostLaunchFenceV1 { name: "palw_panel_seed_execution", set: |params, at| params.palw_panel_seed_execution = at },
+    // F1, heartbeat transparency stops at the merging block's own chain (CRITICAL): a bare height.
+    PalwPostLaunchFenceV1 {
+        name: "palw_heartbeat_transparent_same_chain",
+        set: |params, at| params.palw_heartbeat_transparent_same_chain = at,
+    },
+    // Fork choice (HIGH): a deep reorg needs a strict economic win, a tie keeps the incumbent — unless
+    // it is at most two DAA ticks deep on the incumbent's side, where GHOSTDAG's order decides it so
+    // honest slot races converge (rcore/f1-strictwin-tie): a bare height.
+    PalwPostLaunchFenceV1 { name: "palw_reorg_strict_economic_win", set: |params, at| params.palw_reorg_strict_economic_win = at },
+    // Lane maturity (HIGH): ADR-0065 D1 before 1,000 for non-genesis bonds: a bare height, below
+    // `palw_bond_maturity`'s 1,000 (never at it).
+    PalwPostLaunchFenceV1 { name: "palw_bond_maturity_early", set: |params, at| params.palw_bond_maturity_early = at },
+    // Lane sink (Position #1): a model sink is block-valid only bound: a bare height.
+    PalwPostLaunchFenceV1 { name: "palw_model_sink_bound", set: |params, at| params.palw_model_sink_bound = at },
+    // Lane A, the operator-anchored panel (the panel-seed CRITICAL's stopgap): the height over every
+    // bond the genesis registers (testnet-12's eight operator cards), testnet-12's armed value. Needs an
+    // assembled ConsensusV2 ruleset (see the list's doc); requires F1's seed at or below it.
+    PalwPostLaunchFenceV1 {
+        name: "palw_operator_anchor",
+        set: |params, at| {
+            let rule = at.map(|at| {
+                params.palw_operator_anchor_of_genesis_bonds_v1(at).expect(
+                    "palw_operator_anchor is set on an ASSEMBLED ConsensusV2 ruleset: its operators are the genesis registry's \
+                     bonds (arm the post-launch list in palw_t12_params_with_registry_v1, after the assembly)",
+                )
+            });
+            params.palw_operator_anchor = rule;
+        },
+    },
+    // Lane V02 option (a) (HIGH): a resolved claim's lock is carried by the whole collateral with the
+    // 4-floor accuser reserve: the field and the V2 bundle's mirror the fold reads.
+    PalwPostLaunchFenceV1 {
+        name: "palw_final_lock_full_collateral",
+        set: |params, at| {
+            params.palw_final_lock_full_collateral = at;
+            params.sync_palw_final_lock_full_collateral();
+        },
+    },
+    // Lane V02 lock life (HIGH): a resolved Valid seat's lock lives F + 1,000 and stops being slashable
+    // when it stops being committed: the field and the V2 bundle's mirror the fold reads. Independent
+    // of the entry above; both compose at one height (each is its own mirror on the state params).
+    PalwPostLaunchFenceV1 {
+        name: "palw_final_lock_life",
+        set: |params, at| {
+            params.palw_final_lock_life = at;
+            params.sync_palw_final_lock_life();
+        },
+    },
+    // Lane bind-deadlock (HIGH): an operator's own attempt at its bond's exposure ceiling still anchors
+    // the claims due at it: a bare height, at or above lane A's (`palw_operator_anchor`) — its binder
+    // reads lane A's anchor rule past that fence, and the release sets both to one height.
+    PalwPostLaunchFenceV1 { name: "palw_anchor_at_ceiling", set: |params, at| params.palw_anchor_at_ceiling = at },
+    // MSK-26A (audit Critical, hf-slash): the UTXO side-effect of a DNS slash obeys the genuineness
+    // rule the registry path does: a bare height.
+    PalwPostLaunchFenceV1 {
+        name: "palw_slashing_evidence_utxo_genuine",
+        set: |params, at| params.palw_slashing_evidence_utxo_genuine = at,
+    },
+    // hf-pptake2 (audit Critical): a pruning-proof / IBD staging commit needs a strict economic win,
+    // read at the incumbent's DAA: a bare height.
+    PalwPostLaunchFenceV1 {
+        name: "palw_pruning_proof_strict_economic_win",
+        set: |params, at| params.palw_pruning_proof_strict_economic_win = at,
+    },
+    // Lane accept-order (the 2026-09-26 IBD audit's consensus finding): a merging block applies a tied
+    // round lane parents-first, and a round block carries no EVM payload: a bare height, over the
+    // execution lane (testnet-12 opens it at genesis).
+    PalwPostLaunchFenceV1 {
+        name: "palw_lane_accept_parents_first",
+        set: |params, at| params.palw_lane_accept_parents_first = at,
+    },
+];
+
+/// **testnet-12's post-launch fence height: DAA 750** (the user's decision of 2026-09-26, with the live
+/// chain at DAA ~457): every entry of [`PALW_T12_POST_LAUNCH_FENCES_V1`] arms here. Not 500 (the height
+/// first planned), and never 1,000 — `palw_bond_maturity`'s height, where a second fence would be
+/// invisible to the fork id (`validate_palw_v2` refuses `palw_bond_maturity_early` there). A node
+/// that has not upgraded keeps peering below this height and is refused by an upgraded one from it.
+pub const PALW_T12_POST_LAUNCH_FENCE_DAA: u64 = 750;
+
+/// **The post-launch release, armed** — every entry of [`PALW_T12_POST_LAUNCH_FENCES_V1`] at
+/// [`PALW_T12_POST_LAUNCH_FENCE_DAA`], each through its own `set` so every mirror follows (the V2
+/// bundle's registry-resilience and V02 copies, lane A's operator list over the genesis registry).
+/// Called on the ASSEMBLED ruleset in [`palw_t12_params_with_registry_v1`], after the assembly and
+/// before its `validate_palw_v2` — the one body public testnet-12 and every drill share.
+fn palw_t12_arm_post_launch_fences_v1(params: &mut Params) {
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+        (fence.set)(params, Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA)));
+    }
+}
+
 /// **testnet-12's assembly over a given genesis registry** — the one body [`palw_t12_shipped_params`]
 /// and [`palw_t12_drill_params_v1`] share, so a drill cannot run a ruleset the network does not.
 fn palw_t12_params_with_registry_v1(
@@ -16084,7 +17801,12 @@ fn palw_t12_params_with_registry_v1(
     // is a live identity; this one is minted fresh, so it derives the set from its own objects —
     // which is only non-empty for the held rows because the families that cover them
     // (`PALW-QWEN25-A16-V5`, `PALW-QWEN36-V6`) are drilled on both lanes.
-    let params = mainnet_certify_registered_classes_v1(params);
+    let mut params = mainnet_certify_registered_classes_v1(params);
+    // **The post-launch release** (int-4, the user's decision of 2026-09-26): every fence of
+    // `PALW_T12_POST_LAUNCH_FENCES_V1` at DAA 750, on the assembled ruleset (lane A's operators are
+    // the registry this body just installed) and before the validation below, which holds their
+    // prerequisites among themselves (lane A over F1's seed, bind-deadlock over lane A).
+    palw_t12_arm_post_launch_fences_v1(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -16611,9 +18333,11 @@ pub fn palw_t12_base_params() -> Params {
     // `⌊T / I⌋ + 1` = 14 with no other block in between (2 at 132 s) — every DAA-denominated window
     // is shortened by that much wall time, and a burst that outlasts a readiness row's remaining age
     // lapses the row with no proof able to land (the 2026-09-25 mainnet-values review, HIGH; measured
-    // on the lifecycle fold by `t12_a_run_ahead_burst_outlasts_a_readiness_row`). **Open, for the
-    // user's decision before launch** — cap the clock-stepping beat's stamp near the receiver's clock,
-    // re-prove far enough ahead of the horizon, or keep 132 s here.
+    // on the lifecycle fold by `t12_a_run_ahead_burst_outlasts_a_readiness_row`). **Closed by the lead
+    // cap** (the user's option (a), 2026-09-25): `palw_clock_lead_cap`, armed below, admits a header
+    // that moves the clock at most 132 s past the receiving node's clock, so a burst is 2 ticks
+    // again and every other block keeps this tolerance
+    // (`t12_the_lead_cap_bounds_a_run_ahead_burst_to_two_ticks`).
     params.timestamp_deviation_tolerance = palw_v2_timestamp_deviation_tolerance_v1(
         params.past_median_time_window_size,
         BlockrateParams::new_two_minute_bps().past_median_time_sample_rate,
@@ -17271,6 +18995,11 @@ pub fn palw_v2_params_on_base(
     // The readiness-V2 horizon (user decision 2026-09-25), for the same reason and in the same place:
     // its spans, mirrored onto the bundle this function built.
     params.sync_palw_readiness_v2_max_age_spans();
+    // Lane F1's registry-resilience height (V03/V05), for the same reason and in the same place: a base
+    // that set the fence before it had a bundle (the post-launch release arming its list after
+    // `palw_t12_base_params`'s pass 2) had its mirror written into no bundle, and `validate_palw_v2`
+    // below refused the ruleset — the int-4 phase-1 audit's LOW. Re-mirrored here, it follows.
+    params.sync_palw_registry_resilience();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -17382,7 +19111,10 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_bond_maturity_early: None,
     palw_frontier_provenance: None,
+    palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
+    palw_pruning_proof_strict_economic_win: None, // lane: rcore/hf-pptake2
     // **ADR-0068 Phase 1, armed on the drill network and nowhere else.** Devnet is the network
     // these fences exist to be drilled on: the heartbeat lane (fixed 2^24-hash price, width-bounded
     // mergesets) and the attempt lane's constant blue work, both live from genesis. Every other
@@ -17422,11 +19154,18 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_clock_lead_cap: None,
     palw_offence_attribution: None,
     palw_rcore_plus: None,
+    palw_panel_seed_execution: None,
+    palw_operator_anchor: None,
     palw_rcore_conservative_classes: &[],
+    palw_final_lock_full_collateral: None,
+    palw_final_lock_life: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
+    palw_anchor_at_ceiling: None,
+    palw_lane_accept_parents_first: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
+    palw_registry_resilience: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -17471,6 +19210,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_leg_v2: None,
     palw_model_seed_v2: None,
     palw_model_evm: None,
+    palw_model_sink_bound: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
     // bytes against a one-carrier budget of 83,333, so the Merkle form buys nothing and arming it
@@ -17516,6 +19256,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_signature_contexts_v2: None,
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
+    palw_slashing_evidence_utxo_genuine: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
@@ -17526,6 +19267,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): dormant on every preset.
+    palw_heartbeat_transparent_same_chain: None,
     // ADR-0107: dormant on every shipped preset (see the field's doc).
     palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -25882,5 +27625,242 @@ mod adr0142_release_probe {
         }
         assert!(rows.iter().any(|(n, _)| *n == "palw_work_target"), "the work target keeps the day");
         assert!(rows.iter().any(|(n, _)| *n == "palw_model_registry"), "and so does the registry");
+    }
+}
+
+/// **testnet-12's post-launch release, armed** (int-4; the user's decision of 2026-09-26): every entry of
+/// [`PALW_T12_POST_LAUNCH_FENCES_V1`] at [`PALW_T12_POST_LAUNCH_FENCE_DAA`] (750) on the shipped ruleset,
+/// and set back it is the launch release to the id.
+#[cfg(test)]
+mod post_launch_fence_arming_tests {
+    use super::*;
+
+    /// The ruleset testnet-12 LAUNCHED on (`0e8ec984e`; the shipping re-pin `9c717c16d`): params,
+    /// identity, schedule. History — the launch release never moves again, so this is not a re-pin
+    /// target: the post-launch list set back to dormant must hash to exactly these.
+    const T12_LAUNCH_IDS: (&str, &str, &str) = (
+        "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+        "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
+        "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+    );
+
+    fn entry(name: &str) -> &'static PalwPostLaunchFenceV1 {
+        PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name} is listed"))
+    }
+
+    fn height(params: &Params, name: &str) -> Option<ForkActivation> {
+        params.palw_fences_v1().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is a fence")).1
+    }
+
+    fn ids(p: &Params) -> (String, String, String) {
+        (p.consensus_params_id().to_string(), p.consensus_identity_id().to_string(), p.consensus_schedule_id().to_string())
+    }
+
+    /// **The phase-1 audit's LOW, under the armed release: whatever an entry was set to after pass 2
+    /// of `palw_t12_base_params` — before the bundle exists — the assembly arms the release's height
+    /// over it, every mirror included.** Setting any entry but lane A's on the base at another height
+    /// (500) and assembling is byte-identical (`Debug`) to the shipped release: no stale mirror of the
+    /// base's height survives (the registry-resilience mirror is re-made at 750). Lane A's needs the
+    /// genesis registry and refuses a bundle-less base loudly rather than leave the rule dormant.
+    #[test]
+    fn an_entry_set_after_pass_2_is_armed_at_the_release_height_by_the_assembly() {
+        if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+            return;
+        }
+        let release = palw_t12_shipped_params();
+        let other = Some(ForkActivation::new(500));
+        // Lane A needs the genesis registry (below); bind-deadlock needs lane A at or below it, which a
+        // bundle-less base cannot carry, so the assembly's own validation refuses it there (below).
+        for fence in
+            PALW_T12_POST_LAUNCH_FENCES_V1.iter().filter(|f| f.name != "palw_operator_anchor" && f.name != "palw_anchor_at_ceiling")
+        {
+            let mut base = palw_t12_base_params();
+            (fence.set)(&mut base, other);
+            let assembled = palw_t12_public_params_over_v1(base);
+            assembled.validate_palw_v2().unwrap_or_else(|e| panic!("{}: set after pass 2, assembled: {e}", fence.name));
+            assert_eq!(
+                height(&assembled, fence.name),
+                Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA)),
+                "{}: the assembly arms the release's height",
+                fence.name
+            );
+            assert_eq!(format!("{assembled:?}"), format!("{release:?}"), "{}: one ruleset, whatever the base carried", fence.name);
+        }
+        let mut base = palw_t12_base_params();
+        let registry = entry("palw_registry_resilience");
+        (registry.set)(&mut base, other);
+        let assembled = palw_t12_public_params_over_v1(base);
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &assembled.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(
+            bundle.state.registry_resilience_from_daa(),
+            Some(PALW_T12_POST_LAUNCH_FENCE_DAA),
+            "the fold's mirror follows the release's height into the bundle"
+        );
+
+        let lane_a = entry("palw_operator_anchor");
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut base = palw_t12_base_params();
+            (lane_a.set)(&mut base, other);
+        }));
+        assert!(refused.is_err(), "lane A's entry refuses a bundle-less base (its operators are the genesis registry's)");
+        let mut base = palw_t12_base_params();
+        (lane_a.set)(&mut base, None);
+        assert_eq!(base.palw_operator_anchor, None, "setting it dormant needs no registry");
+        // Bind-deadlock alone on a bare base: the assembly validates before the release arms lane A,
+        // and refuses it by name (the int-4 audit's LOW) — a loud startup failure, never a silent rule.
+        let binder = entry("palw_anchor_at_ceiling");
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut base = palw_t12_base_params();
+            (binder.set)(&mut base, other);
+            palw_t12_public_params_over_v1(base)
+        }));
+        assert!(refused.is_err(), "bind-deadlock set on a bare base, without lane A, does not assemble");
+    }
+
+    /// **The SHIPPED testnet-12 ruleset arms every post-launch fence at exactly DAA 750 and validates**
+    /// — through `palw_t12_shipped_params` and through `Params::from(testnet-12)`, the path kaspad
+    /// takes. Every prerequisite among the fences holds at one height, each rule is live at 750 and not
+    /// at 749 (the bundle's mirrors included), lane A trusts the eight genesis bonds, the identity is
+    /// the launch release's (a scheduled fence is peer-compatible) while the params id, the schedule
+    /// and the fork id move, and the list set back is the LAUNCH release to the id
+    /// ([`palw_t12_launch_params_v1`]). Every other preset leaves every entry dormant.
+    #[test]
+    fn the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates() {
+        if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+            return;
+        }
+        const AT: u64 = PALW_T12_POST_LAUNCH_FENCE_DAA;
+        assert_eq!(AT, 750, "the user's decision of 2026-09-26");
+        let release = palw_t12_shipped_params();
+        let from_net = Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+        let launch = palw_t12_launch_params_v1();
+        release.validate_palw_v2().expect("the armed release is a runnable testnet-12 ruleset");
+        launch.validate_palw_v2().expect("the launch release still validates");
+        assert_eq!(ids(&from_net), ids(&release), "the network id's ruleset is the shipped one");
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+            assert_eq!(height(&release, fence.name), Some(ForkActivation::new(AT)), "{} at exactly 750", fence.name);
+            assert_eq!(height(&from_net, fence.name), Some(ForkActivation::new(AT)), "{} at 750 via Params::from", fence.name);
+            assert_eq!(height(&launch, fence.name), None, "{}: dormant on the launch release", fence.name);
+            for preset in [palw_rc_shipped_params(), devnet_shipped_params(), mainnet_shipped_params()] {
+                assert_eq!(height(&preset, fence.name), None, "{} is dormant on {}", fence.name, preset.net);
+            }
+        }
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &release.palw_consensus_mode else { panic!("V2") };
+        assert_eq!(bundle.state.registry_resilience_from_daa(), Some(AT), "registry resilience's mirror");
+        assert_eq!(bundle.state.final_lock_full_collateral_from_daa(), Some(AT), "V02 option (a)'s mirror");
+        assert_eq!(bundle.state.final_lock_life_from_daa(), Some(AT), "V02 lock life's mirror");
+        assert!(release.palw_panel_seed_execution_active_at(AT) && !release.palw_panel_seed_execution_active_at(AT - 1));
+        assert!(release.palw_operator_anchor_active_at(AT) && !release.palw_operator_anchor_active_at(AT - 1));
+        assert!(release.palw_model_sink_bound_active_at(AT) && !release.palw_model_sink_bound_active_at(AT - 1));
+        assert_eq!(release.palw_heartbeat_transparent_same_chain_fence(), Some(ForkActivation::new(AT)));
+        assert_eq!(release.palw_reorg_strict_economic_win, Some(ForkActivation::new(AT)));
+        assert_eq!(
+            (release.palw_bond_maturity_window_at(AT - 1), release.palw_bond_maturity_window_at(AT)),
+            (None, Some(PALW_T12_BOND_MATURITY_WINDOW_DAA)),
+            "D1's window from 750, not below"
+        );
+        assert!(release.palw_final_lock_full_collateral_active_at(AT) && !release.palw_final_lock_full_collateral_active_at(AT - 1));
+        assert!(release.palw_final_lock_life_active_at(AT) && !release.palw_final_lock_life_active_at(AT - 1));
+        assert!(release.palw_anchor_at_ceiling_active_at(AT) && !release.palw_anchor_at_ceiling_active_at(AT - 1));
+        assert!(release.palw_slashing_evidence_utxo_genuine_at(AT) && !release.palw_slashing_evidence_utxo_genuine_at(AT - 1));
+        assert!(release.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(AT) && !f.is_active(AT - 1)));
+        let genesis_bonds: Vec<_> = bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(*bond),
+                _ => None,
+            })
+            .collect();
+        let mut operators = release.palw_operator_anchor.as_ref().expect("lane A").operators.to_vec();
+        operators.sort();
+        let mut expected = genesis_bonds.clone();
+        expected.sort();
+        assert_eq!((operators.len(), &operators), (8, &expected), "lane A trusts every genesis bond");
+
+        // The ids: the identity is the launch release's, the params id and the schedule name the height.
+        let (now, then) = (ids(&release), ids(&launch));
+        println!("testnet-12 armed at {AT}: {now:?}; launch release: {then:?}");
+        assert_eq!((then.0.as_str(), then.1.as_str(), then.2.as_str()), T12_LAUNCH_IDS, "the list is the whole difference");
+        assert_eq!(now.1, then.1, "a scheduled fence keeps the identity: the two builds peer below 750");
+        assert_ne!(now.0, then.0, "the params id names the heights");
+        assert_ne!(now.2, then.2, "and so does the schedule");
+        assert_eq!(release.genesis.hash, launch.genesis.hash, "the genesis does not move");
+        let gate = crate::fork_id_v1::fork_id_gate_fences_v1(&release);
+        assert!(gate.contains(&AT), "the fork id gates on 750 ({gate:?})");
+        assert!(!crate::fork_id_v1::fork_id_gate_fences_v1(&launch).contains(&AT));
+        assert_eq!(release.fence_schedule_v1(), vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA], "750, then D1's 1,000");
+
+        // 1,000 — `palw_bond_maturity`'s own height — is refused by name.
+        let mut at_maturity = release.clone();
+        for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+            (fence.set)(&mut at_maturity, Some(ForkActivation::new(1_000)));
+        }
+        let why = at_maturity.validate_palw_v2().expect_err("never at 1,000");
+        assert!(format!("{why:?}").contains("palw_bond_maturity_early"), "{why:?}");
+    }
+
+    /// **The int-4 audit's LOW: `palw_anchor_at_ceiling` validates only with lane A
+    /// (`palw_operator_anchor`) at or below it.** On the launch ruleset alone, above lane A, and with
+    /// lane A dormant it is refused by name; at lane A's height (the release) or above it, legal.
+    #[test]
+    fn the_anchor_at_ceiling_fence_needs_the_operator_anchor_at_or_below_it() {
+        if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+            return;
+        }
+        let refused = |p: &Params, why: &str| {
+            let e = p.validate_palw_v2().expect_err(why);
+            assert!(format!("{e:?}").contains("palw_anchor_at_ceiling is armed without palw_operator_anchor"), "{why}: {e:?}");
+        };
+        let mut alone = palw_t12_launch_params_v1();
+        alone.palw_anchor_at_ceiling = Some(ForkActivation::new(900));
+        refused(&alone, "lane A dormant");
+        let release = palw_t12_shipped_params();
+        let mut below = release.clone();
+        below.palw_anchor_at_ceiling = Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA - 1));
+        refused(&below, "one DAA below lane A");
+        let mut lane_a_never = release.clone();
+        (entry("palw_operator_anchor").set)(&mut lane_a_never, Some(ForkActivation::never()));
+        refused(&lane_a_never, "lane A scheduled never");
+        release.validate_palw_v2().expect("at lane A's own height: the release");
+        let mut above = release.clone();
+        above.palw_anchor_at_ceiling = Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA + 250));
+        above.validate_palw_v2().expect("above lane A");
+        let mut never = palw_t12_launch_params_v1();
+        never.palw_anchor_at_ceiling = Some(ForkActivation::never());
+        never.validate_palw_v2().expect("a never() fence is dormant and needs nothing");
+    }
+
+    /// **The int-4 audit's LOW: `consensus_schedule_id` names the two strict-economic-win fences** — on
+    /// testnet-12, where they are armed, each one moved alone moves the schedule id; on every preset that
+    /// leaves them `None` (all but testnet-12) nothing is written, so no other network's id moved (the
+    /// presets' own pins hold that; here: set to `None` is the launch schedule id, and a network that
+    /// never had them keeps its id when they are cleared again).
+    #[test]
+    fn the_schedule_id_names_the_two_strict_win_fences_on_testnet12_only() {
+        if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+            return;
+        }
+        let release = palw_t12_shipped_params();
+        for name in ["palw_reorg_strict_economic_win", "palw_pruning_proof_strict_economic_win"] {
+            let mut moved = release.clone();
+            (entry(name).set)(&mut moved, Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA + 1)));
+            assert_ne!(moved.consensus_schedule_id(), release.consensus_schedule_id(), "{name}: its height is in the schedule id");
+            assert_eq!(moved.consensus_identity_id(), release.consensus_identity_id(), "{name}: a scheduled height, not identity");
+        }
+        // ONE of the two at a height, the other dormant: `for_each_fence` visits them Some-only and
+        // side by side, so unnamed the two schedules hash the same sequence — only the names tell the
+        // operator log WHICH rule a peer schedules.
+        let (mut a, mut b) = (release.clone(), release.clone());
+        a.palw_reorg_strict_economic_win = Some(ForkActivation::new(800));
+        a.palw_pruning_proof_strict_economic_win = None;
+        b.palw_reorg_strict_economic_win = None;
+        b.palw_pruning_proof_strict_economic_win = Some(ForkActivation::new(800));
+        assert_eq!(a.fence_schedule_v1(), b.fence_schedule_v1(), "the same heights");
+        assert_ne!(a.consensus_schedule_id(), b.consensus_schedule_id(), "named: which rule sits at the height is reported");
+        for preset in [palw_rc_shipped_params(), devnet_shipped_params(), mainnet_shipped_params()] {
+            assert_eq!(preset.palw_reorg_strict_economic_win, None, "{}", preset.net);
+            assert_eq!(preset.palw_pruning_proof_strict_economic_win, None, "{}", preset.net);
+        }
     }
 }

@@ -498,6 +498,70 @@ pub fn palw_model_sink_class_v1(spk: &ScriptPublicKey) -> Option<Hash64> {
     Some(Hash64::from_bytes(id))
 }
 
+/// **Lane sink (the 2026-09-25 Position review's #1): why a model sink output of `tx` is not bound**,
+/// as `(output index, reason)`, or `None` when every one is (or `tx` pays none) — the activation
+/// sink's rule ([`crate::palw_activation_pool_v1::palw_activation_sink_binding_refusal_v1`]) for the
+/// market's `MSKMDL01` sink. A sink is bound iff `tx` is a lifecycle carrier whose payload decodes,
+/// at the current wire version, to a `ModelBuy` or `ModelSeed` naming that output's index, the line
+/// its script names and the value it holds. One carrier carries one object, so a second sink in the
+/// same carrier is unbound by construction.
+///
+/// **The hole it closes.** The binding the extraction walk checks
+/// ([`crate::palw_lifecycle_objects_v2::palw_model_buy_binds_its_carrier_v1`]) runs object → output
+/// only: a sink no object names — a bare transfer to a sink, a carrier whose `msk_in` or line
+/// disagrees with its sink, an out-of-range `sink_index`, an extra sink, a sink on a sell's (or any
+/// other object's) carrier — is a valid output whose object (if any) the walk skips, so the MSK
+/// leaves circulation with no reserve credited, no burn recorded and no P-B1 refund.
+///
+/// And, as the activation sink's F6 (i): a carrier that pays no P2PKH-ML-DSA-87 output is refused
+/// too, because a buy or seed the fold refuses is paid back to the first such output (P-B1,
+/// [`crate::palw_lifecycle_objects_v2::palw_model_carrier_refund_v1`]) and without one its sink would
+/// keep the MSK with nobody to pay. Every carrier the shipped CLI builds pays its change at output 0.
+///
+/// Context-free (the transaction alone). Consensus asks it in the header context past
+/// `Params::palw_model_sink_bound` (the containing block's DAA); the mempool asks it as standardness
+/// on every network that declares the market (`check_transaction_standard`), where it binds no block.
+pub fn palw_model_sink_binding_refusal_v1(tx: &crate::tx::Transaction) -> Option<(usize, &'static str)> {
+    use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    use crate::palw_state_v2::PalwConsensusObjectV2;
+    let mut sinks = tx
+        .outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, output)| palw_model_sink_class_v1(&output.script_public_key).map(|line| (i, line)));
+    let first = sinks.next()?;
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return Some((first.0, "a model sink rides only a lifecycle carrier"));
+    }
+    if !tx.outputs.iter().any(|output| crate::mldsa87_primitives::p2pkh_mldsa87_payload(&output.script_public_key).is_some()) {
+        return Some((first.0, "a model sink's carrier pays no P2PKH-ML-DSA-87 output a refusal could be paid back to"));
+    }
+    let bound = match borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) {
+        Ok(payload) if payload.version == PALW_LIFECYCLE_TX_VERSION_V2 => match payload.object {
+            PalwConsensusObjectV2::ModelBuy { line_id, msk_in, sink_index, .. } => Some((sink_index as usize, line_id, msk_in)),
+            PalwConsensusObjectV2::ModelSeed { line_id, msk_seed, sink_index, .. } => Some((sink_index as usize, line_id, msk_seed)),
+            _ => None,
+        },
+        _ => None,
+    };
+    for (index, line) in std::iter::once(first).chain(sinks) {
+        match bound {
+            None => return Some((index, "a model sink's carrier carries no ModelBuy or ModelSeed")),
+            Some((named, _, _)) if named != index => {
+                return Some((index, "a model sink is not the output its carrier's ModelBuy or ModelSeed names"));
+            }
+            Some((_, named_line, _)) if named_line != line => {
+                return Some((index, "a model sink names another line than its carrier's ModelBuy or ModelSeed"));
+            }
+            Some((_, _, amount)) if amount != tx.outputs[index].value => {
+                return Some((index, "a model sink holds another amount than its carrier's ModelBuy or ModelSeed declares"));
+            }
+            Some(_) => {}
+        }
+    }
+    None
+}
+
 /// **The holder is its key's id, and that id is not a payout payload** (M8): the 64-byte *unkeyed*
 /// BLAKE2b of the ML-DSA-87 public key (`mldsa87_key_id`). It keys the holder's positions
 /// (`(line, holder)`) and is what a sell's signature is checked against, and it stays exactly this

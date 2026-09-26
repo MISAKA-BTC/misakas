@@ -6,6 +6,11 @@
   testnet-11 is a flag day (§7). **Decision 2 IMPLEMENTED in the heartbeat miner** — node policy,
   no rule, safe to roll out host by host today. **Decision 3** is operator guidance, written into
   [`testnet11-node-operator.md`](../testnet11-node-operator.md) §7a.
+* **Amended 2026-09-25 — F1 (§11), a post-launch flag day**: past
+  `Params::palw_heartbeat_transparent_same_chain` transparency stops at the merging block's own
+  selected chain; the rule as written (and as testnet-12 launched with it, from genesis) lets a
+  private heartbeat branch borrow the public chain's attempts. The fence is `None` on every shipped
+  preset, testnet-12 included, until an operator schedules it.
 * Builds on: [ADR-0060](0060-the-liveness-doctrine.md) Decisions 1–2 (the heartbeat lane and its
   ramp), [ADR-0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)
   Decisions 1–3 (the lane's own id and constant price; the one-block-deep slot rule; ε against the
@@ -275,7 +280,9 @@ a producer; at most one heartbeat miner per operator, on the current build). The
   the budget caps the episode either way.
 * **A withheld bonded block** is blue only inside the merge-depth window — where a red would be
   admitted — and adds its weight to whichever chain merges it. A private chain gains nothing: its
-  own bonded blocks are its chain blocks. The honest chain in a heartbeat-led episode is now as
+  own bonded blocks are its chain blocks. **(Wrong as written: a private chain that merges the
+  PUBLIC chain's attempts gains all of their weight — §11, closed past
+  `palw_heartbeat_transparent_same_chain`.)** The honest chain in a heartbeat-led episode is now as
   heavy as its bonded production, where before one private attempt block out-weighed the whole
   episode.
 * **Sibling width (ADR-0066 F3a)** — unchanged, and no longer able to redden bonded blocks.
@@ -382,3 +389,161 @@ fence name, the code and every test are unchanged. **The next free number is 010
   (`ghostdag_test`'s golden DAGs run the classic rule, which this change must leave byte-identical);
   `cargo clippy --tests` on the four touched crates adds no finding. `shipped_presets_have_pinned_fingerprints`
   passes unchanged: no pin moved.
+
+## 11. Amendment F1 (2026-09-25): transparency stops at the merging block's own chain — a post-launch flag day
+
+* **The hole.** §5.1 as written makes a non-heartbeat candidate blind to heartbeats in EVERY block
+  that merges it. The heartbeat double-spend verifier (workflow `wf_35c50751-12d`, on the eve of
+  testnet-12's launch — the one network that arms the fence, from genesis) built what §6's "a private
+  chain gains nothing" missed: a bondless heartbeat miner forks with the conflicting spend Y and
+  merges the public chain's attempts into its private heartbeat branch. There their anticone holds
+  only the attacker's heartbeats, so they are blue there too: every public 2²⁰ counts on both
+  branches, and the private one wins by its own ε (g2: +2,097,158 against +2,097,157 — X reorged
+  away, Y kept; h1 absorbed the attempts after an X-carrying one; f let one bond out-weigh two; h2
+  borrowed eight before merge depth 30 reddened the ninth — on the release, nine in a row, the tenth
+  left out of the attacker's next block). Reach: the merge depth, ~30 blue,
+  ~5 DAA, ~10 minutes of the public chain. Independent of the beat lead cap and of the 132 s /
+  1,620 s tolerance.
+* **Why a fence and not a genesis change.** testnet-12 launched on release `0e8ec984e` with §5.1 as
+  written. The fix changes which blocks are blue past a height, so it ships as a flag day:
+  `Params::palw_heartbeat_transparent_same_chain`, a bare Some-only fence, `None` on every shipped
+  preset — testnet-12 included, whose params, identity and schedule ids (`b8564b88…`, `5de80e64…`,
+  `93da24cc…`) stay the release's — until an operator schedules it at a height `H`. The operator
+  picks one common height for every post-launch fence, and it must be a height no other fence uses
+  (the fork id sorts and dedups heights, so a fence at a height already scheduled is invisible to it).
+  **Arm it after `palw_t12_base_params`' pass 2**, as `Some(ForkActivation::new(H))`: that pass walks
+  every fence height to 0, so a line added before it — or at the builder's `at`, which is `always()` —
+  makes this a genesis rule, a new identity, and every launched node refused at once rather than at
+  `H` (`on_testnet12_it_is_a_height_never_a_genesis_rule` guards it).
+* **The rule.** Past `H`, keyed on the candidate's own DAA score, a non-heartbeat candidate is
+  `Weighted` (transparent to heartbeats) only when it **hangs from the merging block's own selected
+  chain**: its selected parent is the merging block's selected parent, or one of that block's
+  selected-chain ancestors at most `merge_depth` blue score below it
+  (`GhostdagManager::hangs_from_the_merging_chain`). Any other non-heartbeat candidate is `Classic` —
+  counted against every blue, the other branch's heartbeats included. Heartbeat candidates are
+  unchanged. Below `H` the code path is the shipped one, byte for byte: the walk runs only for a
+  non-heartbeat candidate at or past `H`, so a block that merges no such candidate reads exactly what
+  it read before. The fence rides `HeartbeatTransparency` beside the merge depth, so every site that
+  colors — the header path, the virtual, the pruning proof's build, validate and apply — carries it
+  with the rule it narrows, and `validate_palw_v2` refuses it unless `palw_heartbeat_transparent` is
+  in force at or below it.
+* **Why the switch is keyed on the candidate's own DAA score.**
+  * *Fixed before any block that merges it is colored*, and it is the key the transparency fence
+    already uses — so a candidate is colored by one rule in every block that ever merges it, on every
+    node, whatever chain the merging block is on. A block's GHOSTDAG data is a pure function of its
+    past, computed once and never recomputed on a reorg, so a reorg whose two sides straddle `H` needs
+    nothing: each block keeps the coloring its own past gives it, and the virtual's is recomputed from
+    its parents like any block's.
+  * *Out of the attacker's hands.* The blocks being absorbed are the PUBLIC chain's attempts, whose DAA
+    the public chain sets. Keyed on the merging block instead (its selected parent's DAA score), a
+    private branch whose clock lags the public one — every branch steps its own clock at most once a
+    slot, and a withholding miner may step it less — could keep merging post-`H` public attempts under
+    the old rule for as long as its own tip stayed below `H`.
+  * *In the header*, so the pruning proof's build, validate and apply and an IBD node read the same
+    number; a computed blue score is not (a proof level computes blue scores from its own root).
+  * The consequence to operate by: a block whose own DAA score is below `H` can merge a candidate at
+    or past `H` and color it by the new rule, so the launched build and the armed build can disagree
+    about a block stamped just below `H`. Every node must run the armed build **before the network
+    reaches `H`**; from `H` the fork id refuses a node that does not.
+* **The property it keeps.** ADR-0105 is for a draw that lands late on the chain it was drawn on: its
+  template's selected parent `T` was the sink, and the heartbeats minted while it computed were minted
+  on `T`'s chain, so `T` is on the merging block's chain and the draw is transparent exactly as before.
+  §8's three pipeline tests are unchanged, and
+  `hb_regression_an_8k_draw_200s_late_stays_blue_on_its_own_chain` measures it on testnet-12 at an 8k
+  draw's ~200 s with one and with two heartbeat miners, as launched and past the fence (blue, the
+  merger carries 2²⁰; the control with ADR-0105 taken away is red).
+* **What a branch can still count.** Only attempts that hang from its own chain — on a branch that
+  forked at `F`, attempts drawn at or below `F`. The other branch hangs from those as well, so they
+  count on both and decide nothing (`hb_regression_h1_…`). Attempts minted below `H` stay borrowable
+  under the old rule until they fall out of the merge depth — the window a scheduled fence leaves is
+  the ~10 minutes before `H` (`hb_regression_the_fence_splits_an_attack_at_the_candidates_own_daa`:
+  the attempt below `H` is borrowed, the one at `H` is not, and one borrowed attempt no longer beats
+  two). The heartbeat-only regime (sibling layers, run-ahead — probes b) and attempt parity (c) are
+  untouched and out of scope; the finality depth (d) and a `Final` anchor (e) still stop a reorg.
+* **What it gives up.** A draw whose template's selected parent leaves the chain before the draw lands
+  — in practice a template taken while only the losing one of two sibling heartbeats had arrived — is
+  colored classically, i.e. red, as testnet-11 colors every late draw today
+  (`hb_regression_the_same_chain_rule_colors_the_same_through_the_pruning_proof`'s draw 2: blue as
+  launched, red past `H`). No DAG-only rule can keep it blue and close the hole: the absorbed public
+  attempt of g2 hangs one heartbeat off the attacker's chain exactly as that draw hangs one heartbeat
+  off the honest chain, and admitting "one heartbeat off" re-opens f (one bond plus one borrowed
+  attempt beats two). The exposure is a template taken inside the propagation window of a sibling
+  layer — about the propagation delay times two layers a slot, a percent or so of draws where the
+  fleet mines sibling layers; not measured on a network. A node-side mitigation (take a draw's
+  template only once a heartbeat layer has settled) is open.
+* **Deterministic from the DAG — walked on the GHOSTDAG store, not asked of the reachability tree.**
+  The candidate's selected parent is its stored GHOSTDAG output, and the walk follows stored selected
+  parents down from the merging block's selected parent. The reachability tree would give the same
+  answer on the header path and in the proof's build and validate, which all make the GHOSTDAG
+  selected parent the tree parent — but not on a node that applied a pruning proof: `apply_proof`
+  fills the tree below the pruning point from the heaviest parent by header blue work, which does not
+  know the round lane (ADR-0125: a round block is never a selected parent), so a round block tied with
+  a chain block on blue work and winning the hash tie is that node's tree parent and not its selected
+  parent. A verdict read off the tree would then differ from the network's in a block right above the
+  pruning point and the syncing node would refuse it; the stored selected parent is what every path
+  computes (`find_selected_parent`, or the syncer's own for a trusted block). The walk is bounded:
+  blue score strictly falls along a selected chain, so it visits at most `merge_depth + 1` blocks, and
+  a candidate whose selected parent sits deeper is answered `Classic` without walking, so a block
+  cannot make a node walk its chain by merging an old block. (Such a candidate is red under the
+  transparent rule too wherever its coloring walk passes a heartbeat — the merge-depth floor comes
+  before its own ancestor — and where it passes none the two rules count the same blues.) A candidate
+  whose selected parent is ORIGIN hangs from no chain. A read that
+  fails (a walk that runs off a proof level's truncated root) answers `Classic` on every node that
+  holds the same level. Measured: the victim of every absorb regression colors each released block
+  exactly as the attacker that built it did; and on testnet-12 (depths shrunk) a proof whose level 0
+  holds a hanging draw and a non-hanging one is built, validated by a node at genesis, applied by a
+  staging node that colors every level-0 header as the source did, and built back — as launched and
+  past the fence.
+* **The fingerprint and the handshake.** Hashed Some-only in `consensus_params_id`,
+  `consensus_schedule_id` (named) and the `for_each_fence` walk, collapsed from `Some(never())` in
+  `normalize_values_a_scheduled_fence_drags_with_it`, and named in `palw_fences_v1`, the fork-id probe
+  and the ruleset-candidate kind. Scheduled at `H` on testnet-12: the params id and the schedule id
+  move, the identity does not, so the armed build and the launched build peer through the rollout
+  (`handshake_rules_verdict_v1` keeps a peer whose identity agrees). The fork id names `H` — beside
+  the one height the launched testnet-12 already schedules, ADR-0065 D1's bond-maturity window at
+  **1,000** (armed AT its window), which also means the launched build's fork-id gate is armed:
+  * **`H` must not be 1,000.** The fork id carries heights, deduplicated, never names: at 1,000 the
+    armed and launched builds announce identical fork ids at every DAA, neither ever refuses the
+    other, and past 1,000 they fork silently.
+  * **`H` below 1,000** (inside the first ~33 hours): nobody is refused before `H`; from `H` the armed
+    build refuses the launched one (`DisagreePastFence { fired_through: H }`), and a connection either
+    side made below `H` is re-judged at `H`.
+  * **`H` above 1,000**: nobody is refused before `H`, and from `H` the armed build refuses the launched
+    one at a handshake — **but a connection an armed node made while the chain was below 1,000 is
+    never re-judged**: the launched peer announced `next = 1,000`, which the armed schedule also has
+    next, so the snapshot the connection layer stores agrees at every height and the straggler stays
+    connected past `H` until the connection is re-made (block validity still refuses what it relays).
+    Re-make the armed fleet's connections (restart) once the chain is past 1,000, or prefer `H` below
+    it.
+  Two consequences the notice must carry: a node syncing a launched peer's chain past `H` stops at the
+  first block the two rules color differently; and, as for every scheduled fence, the block-relay
+  recovery path ignores IBD-candidate summaries from peers whose params id differs, so during the
+  rollout a mixed fleet recovers only from its own build.
+  (`palw_hb_transparency_same_chain_fence` holds all of it.)
+* **Tests** (`hb_fork_choice_probe`, each attack run as launched — the verifier's measurement kept as
+  the control — and fenced): `hb_regression_g2_…`, `_h1_…`, `_h2_the_horizon_is_zero_past_the_fence`,
+  `_f_one_bond_cannot_borrow_a_second_attempt` (the double spend lands as launched and does not past
+  the fence); `_the_fence_splits_an_attack_at_the_candidates_own_daa`;
+  `_below_the_fence_the_armed_build_is_the_launched_build` (g2's attack DAG replayed into a node with
+  the fence scheduled above it: every block colored identically and the same double-spent UTXO set;
+  into a node with it armed below: the absorbing blocks are refused and X stands);
+  `_the_fence_crosses_an_honest_chain_and_the_clock_runs` (fence at DAA 8: every honest slot steps the
+  DAA score by exactly one before, at and past the height, heartbeat-only stretches on both sides, late
+  draws with one and two heartbeat miners blue on both sides, two draws on one template both blue, and
+  a node without the fence colors all of it identically); `_an_8k_draw_200s_late_…`;
+  `_the_same_chain_rule_colors_the_same_through_the_pruning_proof`.
+* **What a drill across `H` must check** (the rule changes coloring, so the drill must cross the
+  height, not reach it, on the lane profile of testnet-12): `H` a few slots above the drill's start;
+  (1) the DAA score keeps stepping one per slot across `H` on every node, with heartbeat-only stretches
+  before and after it; (2) late attempts landing behind the heartbeat tip on the SAME chain are blue in
+  their merging heartbeat before and after `H` (`getBlock` blues/reds of the merger), with the fleet's
+  sibling heartbeat miners running; (3) every node reports the same sink, blue score and blue work at
+  the same DAA — no split at `H`; (4) a node on the launched build is kept below `H` and disconnected at
+  `H` with the named fork-id refusal — including a connection made before the drill's own
+  maturity-window height when `H` is above it (the re-judge gap: expect it to survive, and verify the
+  restart that re-makes it) — and an armed node restarted from an empty datadir after `H` syncs through
+  `H` (IBD and pruning-proof paths) to the same tip; (5) the absorb attack replayed on the drill
+  (a withheld heartbeat branch merging the public attempts after `H`, then released) leaves X in place;
+  (6) the same attack with its attempts minted below `H` shows the ~10-minute window close as they
+  leave the merge depth; (7) evidence from the run's own logs after the action, not from configured
+  values.

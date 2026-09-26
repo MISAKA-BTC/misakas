@@ -935,6 +935,31 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **Lane B of the panel-seed stopgap (2026-09-26): the claims an operator's non-seat filer may
+    /// accuse** at the tip, for the DAA the virtual's next block folds at
+    /// ([`crate::palw_operator_da_v1::palw_operator_da_candidates_v1`]: licensed or `Final`-with-row
+    /// claims produced outside `operators` that relied on a `Valid` signer outside them). A read for
+    /// node policy, never a block rule; empty off `ConsensusV2`, with no tip state, and below
+    /// `palw_rcore_plus`.
+    fn palw_operator_da_candidates_v1(
+        &self,
+        _operators: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<crate::palw_operator_da_v1::PalwOperatorDaCandidateV1> {
+        Vec::new()
+    }
+
+    /// **Lane B: one operator bond's standing** at the tip, for the DAA the virtual's next block folds
+    /// at ([`crate::palw_operator_da_v1::palw_operator_da_standing_v1`]: its collateral net of slashes,
+    /// A-6's room on its free half, the DA exposure it holds) — what the node's seat reserve and its
+    /// blind-accusation budget read. A read for node policy; `None` off `ConsensusV2`, with no tip
+    /// state, or for a bond the state does not hold.
+    fn palw_operator_da_standing_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<crate::palw_operator_da_v1::PalwOperatorDaStandingV1> {
+        None
+    }
+
     /// **ADR-0152 R-3/R-4 (Phase 2, P2-8): what the reporter's filer reads of one filing** at the
     /// tip, for the DAA the virtual's next block folds at — its commitment's row, the conviction and
     /// the reward under `offence_key` ([`crate::palw_state_v2::palw_reporter_filing_read_v1`]) — and,
@@ -1009,7 +1034,26 @@ pub trait ConsensusApi: Send + Sync {
     /// fold stopped taking leaves the pool of a node that never builds a template (a seat-only node,
     /// a relay) exactly as it leaves a miner's. All `None` below `palw_rcore_plus` (every network but
     /// testnet-12), off `ConsensusV2` and with no tip state. Node-local: never a block rule.
+    ///
+    /// In the template's order (the V01 review): `None` for a transaction with an input the virtual
+    /// UTXO set does not hold — mined (the tip would refuse it as a duplicate), double-spent, or
+    /// chained on a pooled parent — and all `None` while the PALW tip row does not stand at the
+    /// virtual's sink (mid-resolve); every judged transaction is judged on that one tip.
     fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        vec![None; txs.len()]
+    }
+
+    /// **The market gate's answers on pooled market carriers, for the mempool's per-block sweep**
+    /// (the V01 review's LOW 3; the user's request of 2026-09-25): per transaction, in order,
+    /// `Some(reason)` for a seed, a buy, a carrier sell or an Activation Pool top-up the P-B3 / P-B1
+    /// gate refuses at the tip (`palw_mempool_market_refusal`, the predicate admission and every
+    /// template ask) — its class's lifecycle moved (Probation → Held), or the payout queue has no room
+    /// for its move or refund — and `None` for every other transaction. Judged exactly as
+    /// [`Self::palw_h1_carrier_refusals_v1`] judges: the UTXO context first (`None` for an input the
+    /// virtual does not hold) and one tip, the virtual's own. All `None` below
+    /// `palw_audit_2026_09_23` (the gate's fence), off `ConsensusV2` and with no tip state.
+    /// Node-local: never a block rule.
+    fn palw_market_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
         vec![None; txs.len()]
     }
 

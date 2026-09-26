@@ -20,13 +20,14 @@ use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType,
     api::BlockValidationFuture,
     block::Block,
+    config::ibd_checkpoint::{self, IbdCheckpoint, IbdCheckpointViolation},
     header::Header,
     pruning::{PruningPointProof, PruningPointsList, PruningProofMetadata},
     trusted::TrustedBlock,
     tx::Transaction,
 };
 use kaspa_consensusmanager::{ConsensusProxy, StagingConsensus, spawn_blocking};
-use kaspa_core::{debug, info, time::unix_now, warn};
+use kaspa_core::{debug, error, info, time::unix_now, warn};
 use kaspa_muhash::MuHash;
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
@@ -51,7 +52,7 @@ use std::{
 };
 use tokio::{sync::broadcast, time::sleep};
 
-use super::{HeadersChunk, IBD_BATCH_SIZE, PruningPointUtxosetChunkStream, progress::ProgressReporter};
+use super::{HeadersChunk, IBD_BATCH_SIZE, PruningPointUtxosetChunkStream, order::ParentFirstHeaders, progress::ProgressReporter};
 type BlockBody = Vec<Transaction>;
 
 /// How often a waiting proof fetch re-checks that its lease is still its own.
@@ -323,6 +324,9 @@ impl IbdFlow {
                 match outcome {
                     Ok(_) => {
                         info!("IBD with peer {} completed successfully", self.router);
+                        // A wrong checkpoint is caught here on a synced node, not by fresh nodes
+                        // banning every honest peer (kaspad runs the same self-check at startup).
+                        self.report_checkpoints_contradicted_by_own_chain().await;
                         // An IBD moves this node's score the furthest at once — the explorer node went
                         // from DAA 0 to 3,158 in one — past the fence of every peer it kept on a
                         // fork-id warning at the start (2026-09-10).
@@ -392,7 +396,9 @@ impl IbdFlow {
                         // withholding participation is not mining or attesting, and every path this
                         // keeps open is separately rate-limited — summary cooldown, verification
                         // lease, per-peer failure count.
-                        if !self.ctx.is_consensus_participation_allowed() {
+                        // A node-side checkpoint violation IS misbehaviour (the peer is already banned),
+                        // so it never keeps the connection.
+                        if !matches!(e, ProtocolError::MisbehavingPeer(_)) && !self.ctx.is_consensus_participation_allowed() {
                             info!(
                                 "Keeping the connection to {} despite the failed IBD: this node is still reviewing its chain, and \
                                  a peer offering a different one is evidence rather than an offence.",
@@ -1976,9 +1982,15 @@ impl IbdFlow {
         }
         // And an incumbent standing at genesis defends nothing. On a young network every joining
         // node is in exactly that position, so refusing there is refusing to bootstrap.
-        if consensus.async_get_sink().await == self.ctx.config.genesis.hash {
+        let incumbent_sink = consensus.async_get_sink().await;
+        if incumbent_sink == self.ctx.config.genesis.hash {
             return Ok(());
         }
+        // **lane: rcore/hf-pptake2 — the fence height, read at the INCUMBENT's DAA.** A challenger's
+        // own DAA score is attacker-chosen, so the fence is keyed on this node's own confirmed sink,
+        // exactly as the deep-reorg fence reads it at the incumbent's DAA. `Ok(0)` on a missing
+        // header falls to the unfenced rule below rather than failing the sync.
+        let incumbent_daa = consensus.async_get_header(incumbent_sink).await.map(|h| h.daa_score).unwrap_or(0);
         let incumbent = consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
         let challenger = staging_consensus.clone().spawn_blocking(|c| c.get_palw_candidate_order_v2()).await;
         // **Fail CLOSED.** This used to be a let-else returning `Ok(())`, and the challenger was
@@ -2000,7 +2012,21 @@ impl IbdFlow {
                 ));
             }
         };
-        match kaspa_consensus_core::palw_fork_authority_v2::decide_ibd_commit_v2(&incumbent, &challenger) {
+        // **lane: rcore/hf-pptake2 — past the fence the commit needs a STRICT economic win.**
+        // `decide_ibd_commit_v2`'s comparator tie-breaks on the candidate hash, so a staged chain
+        // that ties the incumbent on all three economic keys — a headers-only fork of unbonded /
+        // losing attempt headers, which matured no work and reads `{frontier 0, safe 0, live 0}`
+        // against an honest chain whose own first floor claim is still short of `Final` — commits by
+        // grinding a higher-hash tip: the pruning-proof takeover. Past the fence an all-economic tie
+        // keeps the incumbent (`palw_ibd_commit_strict_economic_v1`); an honestly-superior chain, one
+        // that genuinely matured a deeper frontier / more safe / more live, still commits with any
+        // hash. Below the fence this is byte-identical to `decide_ibd_commit_v2`.
+        let commit = if self.ctx.config.params.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
+            kaspa_consensus_core::palw_fork_authority_v2::palw_ibd_commit_strict_economic_v1(&incumbent, &challenger)
+        } else {
+            kaspa_consensus_core::palw_fork_authority_v2::decide_ibd_commit_v2(&incumbent, &challenger)
+        };
+        match commit {
             kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::Commit => Ok(()),
             kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::KeepIncumbent => Err(ProtocolError::OtherOwned(format!(
                 "the staged chain does not win the PALW fork-choice order (staged frontier {} weight {}, local frontier {}                      weight {}); keeping the local chain",
@@ -2024,6 +2050,15 @@ impl IbdFlow {
             proof.iter().map(|l| l.len()).sum::<usize>(),
             proof.iter().flatten().unique_by(|h| h.hash).count()
         );
+
+        // **Node-side IBD checkpoints, before the proof is validated or anything else downloaded.** A
+        // proof claims the history from genesis to its pruning point, so it covers every checkpoint at
+        // or below that DAA score and must contain each of those blocks at its score. Checked first
+        // because validating a PALW proof is expensive and a proof that fails here is refused either
+        // way; whether a contained checkpoint is on the selected chain is checked once it is applied.
+        if let Err(violation) = ibd_checkpoint::judge_proof_against_checkpoints(&self.ctx.config.ibd_checkpoints, &proof) {
+            return Err(self.refuse_checkpoint_violation("pruning-point proof", violation).await);
+        }
 
         let proof_metadata = PruningProofMetadata::new(relay_header.blue_work);
 
@@ -2178,6 +2213,10 @@ impl IbdFlow {
                 .await?;
         }
 
+        // The proof is applied, so staging has reachability for it: every checkpoint the proof covers
+        // (contained, per the pre-check) must be on the pruning point's selected chain.
+        self.check_chain_checkpoints(staging, proof_pruning_point, 0, "pruning-point proof").await?;
+
         // TODO (relaxed): add logs to staging commit process
 
         info!("Starting to process {} trusted blocks", trusted_set.len());
@@ -2219,21 +2258,31 @@ impl IbdFlow {
             ))
             .await?;
         let mut chunk_stream = HeadersChunkStream::new(&self.router, &mut self.incoming_route, self.header_format);
+        // Headers go to consensus parents-first, not in the order the syncer sent them: on a
+        // round-lane network the fleet's batches carry lanes child-first (see `super::order`). A
+        // batch that is already parents-first goes over exactly as received.
+        let mut parents_first = ParentFirstHeaders::new();
 
         if let Some(chunk) = chunk_stream.next().await? {
             let (mut prev_daa_score, mut prev_timestamp) = {
                 let last_header = chunk.last().expect("chunk is never empty");
                 (last_header.daa_score, last_header.timestamp)
             };
-            let mut prev_jobs: Vec<BlockValidationFuture> =
-                chunk.into_iter().map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task).collect();
+            let mut prev_jobs: Vec<BlockValidationFuture> = parents_first
+                .admit(consensus, chunk)
+                .await
+                .into_iter()
+                .map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task)
+                .collect();
 
             while let Some(chunk) = chunk_stream.next().await? {
                 let (current_daa_score, current_timestamp) = {
                     let last_header = chunk.last().expect("chunk is never empty");
                     (last_header.daa_score, last_header.timestamp)
                 };
-                let current_jobs = chunk
+                let current_jobs = parents_first
+                    .admit(consensus, chunk)
+                    .await
                     .into_iter()
                     .map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task)
                     .collect();
@@ -2247,6 +2296,14 @@ impl IbdFlow {
                 prev_jobs = current_jobs;
             }
 
+            // Anything still held waits for a parent the syncer never sent: hand it over anyway, so
+            // consensus refuses it exactly as it would have (`MissingParents`).
+            prev_jobs.extend(
+                parents_first
+                    .drain()
+                    .into_iter()
+                    .map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task),
+            );
             let prev_chunk_len = prev_jobs.len();
             try_join_all(prev_jobs).await?;
             progress_reporter.report_completion(prev_chunk_len);
@@ -2262,7 +2319,144 @@ impl IbdFlow {
 
         self.sync_missing_relay_past_headers(consensus, syncer_virtual_selected_parent, relay_header.hash).await?;
 
+        // Before any body is downloaded — a header-only chain moves no sink.
+        self.check_synced_chain_against_checkpoints(consensus, syncer_virtual_selected_parent, relay_header).await?;
+
         Ok(())
+    }
+
+    /// **Node-side IBD checkpoints (`--checkpoint`, and the network's built-in list) at the header
+    /// stage.** Node policy only: consensus accepted these headers and still would; this node just
+    /// will not sync onto them.
+    ///
+    /// 1. The synced chain (the syncer's sink, and the relay block's chain) must pass through every
+    ///    checkpoint between this consensus's pruning point and its top. Below the pruning point is
+    ///    history this node has already committed to — or, in staging, what the proof check judged.
+    /// 2. A node that has not yet reached a checkpoint is not moved onto a chain that stops short of
+    ///    it: a chain of free attempts can end just below the checkpoint's DAA score, cover nothing,
+    ///    and still outweigh the honest chain. Not misbehaviour (an honest peer may simply be behind),
+    ///    so no ban — this peer is just not the one to sync from. `ibd()` fetches the bodies of BOTH
+    ///    the syncer sink's past and the relay block's past, so the rule reads the LOWER of the two
+    ///    tops: a relayed fork that branches off below a checkpoint and stays below its DAA score
+    ///    (attempt-lane blocks do not advance it) covers nothing, and must not ride in beside an
+    ///    honest syncer sink. Honest relay and handoff headers are recent tips, above every checkpoint.
+    async fn check_synced_chain_against_checkpoints(
+        &self,
+        consensus: &ConsensusProxy,
+        syncer_sink: BlockHash,
+        relay_header: &Header,
+    ) -> Result<(), ProtocolError> {
+        let checkpoints = &self.ctx.config.ibd_checkpoints;
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
+        let floor_daa_score = consensus.async_get_header(consensus.async_pruning_point().await).await?.daa_score;
+        self.check_chain_checkpoints(consensus, syncer_sink, floor_daa_score, "synced header chain").await?;
+        let mut top_daa_score = consensus.async_get_header(syncer_sink).await?.daa_score;
+        if relay_header.hash != syncer_sink && consensus.async_get_block_status(relay_header.hash).await.is_some() {
+            self.check_chain_checkpoints(consensus, relay_header.hash, floor_daa_score, "relay block's header chain").await?;
+            // Its bodies are fetched too, so its top is one the reach rule must judge.
+            top_daa_score = top_daa_score.min(consensus.async_get_header(relay_header.hash).await?.daa_score);
+        }
+        // The ACTIVE consensus's sink, unguarded: the caller may hold a guarded session on it already.
+        let local_daa_score = self.ctx.consensus().unguarded_session().async_get_sink_daa_score_timestamp().await.daa_score;
+        if let Some(cp) = ibd_checkpoint::unreached_checkpoint(checkpoints, local_daa_score, top_daa_score) {
+            return Err(ProtocolError::OtherOwned(format!(
+                "not syncing from {}: the chain it offers (syncer sink {}, relay block {}) ends at DAA {} below checkpoint {} \
+                 that this node (sink DAA {}) has not reached yet; a chain that stops short of a checkpoint cannot be told \
+                 from a free-attempt fork",
+                self.router, syncer_sink, relay_header.hash, top_daa_score, cp, local_daa_score
+            )));
+        }
+        Ok(())
+    }
+
+    /// The checkpoints between `floor_daa_score` and `top`'s DAA score must each be a chain ancestor
+    /// of `top` sitting at its own DAA score; otherwise the peer is banned and refused.
+    async fn check_chain_checkpoints(
+        &self,
+        consensus: &ConsensusProxy,
+        top: BlockHash,
+        floor_daa_score: u64,
+        what: &str,
+    ) -> Result<(), ProtocolError> {
+        let checkpoints = &self.ctx.config.ibd_checkpoints;
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
+        let top_daa_score = consensus.async_get_header(top).await?.daa_score;
+        let mut on_chain = Vec::new();
+        for cp in ibd_checkpoint::covered_checkpoints(checkpoints, floor_daa_score, top_daa_score) {
+            let at_its_score = consensus.async_get_header(cp.block_hash).await.is_ok_and(|h| h.daa_score == cp.daa_score);
+            if at_its_score && consensus.async_is_chain_ancestor_of(cp.block_hash, top).await.unwrap_or(false) {
+                on_chain.push(cp);
+            }
+        }
+        match ibd_checkpoint::judge_chain_against_checkpoints(checkpoints, floor_daa_score, top_daa_score, |cp| on_chain.contains(cp))
+        {
+            Ok(()) => Ok(()),
+            Err(violation) => Err(self.refuse_checkpoint_violation(what, violation).await),
+        }
+    }
+
+    /// Ban the peer and build the refusal. The ban goes through the connection manager, which skips
+    /// a permanent (`--connect` / `--addpeer`) peer — the operator named that one.
+    ///
+    /// **Unless this node's own chain contradicts the same checkpoint.** A wrong entry (a merged or
+    /// round block, a block reorged out, a typo) is on no honest chain, and a ban is persisted and
+    /// outlives the fix — so a node whose OWN selected chain covers the checkpoint without passing
+    /// through it has no evidence the peer misbehaved: it refuses the chain, logs an ERROR, and
+    /// bans nobody. A fresh node (sink = genesis) contradicts nothing and still bans.
+    async fn refuse_checkpoint_violation(&self, what: &str, violation: IbdCheckpointViolation) -> ProtocolError {
+        if self.checkpoints_contradicted_by_own_chain().await.contains(&violation.checkpoint) {
+            error!(
+                "IBD: refusing the {} from peer {} WITHOUT banning it: {}. This node's OWN selected chain covers checkpoint {} \
+                 and does not pass through it either, so the checkpoint is wrong (a merged or round block, a reorged-out \
+                 block, a typo) or this node is on the wrong chain. Fix --checkpoint / PALW_T12_IBD_CHECKPOINTS.",
+                what, self.router, violation, violation.checkpoint
+            );
+            return ProtocolError::OtherOwned(format!(
+                "the {what} violates node-side IBD checkpoint {}, which this node's own chain contradicts too",
+                violation.checkpoint
+            ));
+        }
+        warn!(
+            "IBD: refusing the {} from peer {}: {}. Banning the peer's IP; the ban is persisted and survives a restart. \
+             (Node-side checkpoint: if the checkpoint itself is wrong, fix --checkpoint / PALW_T12_IBD_CHECKPOINTS, then \
+             lift the bans with the unban RPC — or, on a fresh node, restart from an empty datadir.)",
+            what, self.router, violation
+        );
+        if let Some(connection_manager) = self.ctx.connection_manager() {
+            connection_manager.ban(self.router.net_address().ip()).await;
+        }
+        ProtocolError::MisbehavingPeer(format!("the {what} violates a node-side IBD checkpoint: {violation}"))
+    }
+
+    /// The checkpoints the ACTIVE consensus's own selected chain covers but does not pass through
+    /// (`ibd_checkpoint::own_chain_contradictions`). Unguarded: the caller may hold a guarded
+    /// session on it already.
+    async fn checkpoints_contradicted_by_own_chain(&self) -> Vec<IbdCheckpoint> {
+        let checkpoints = self.ctx.config.ibd_checkpoints.clone();
+        if checkpoints.is_empty() {
+            return Vec::new();
+        }
+        self.ctx
+            .consensus()
+            .unguarded_session()
+            .spawn_blocking(move |c| ibd_checkpoint::own_chain_contradictions(&checkpoints, c))
+            .await
+    }
+
+    /// One ERROR per checkpoint this node's own chain contradicts.
+    async fn report_checkpoints_contradicted_by_own_chain(&self) {
+        for cp in self.checkpoints_contradicted_by_own_chain().await {
+            error!(
+                "IBD checkpoint {} is contradicted by this node's OWN selected chain (it covers DAA {} but does not pass \
+                 through that block there): the entry is wrong or this node is on the wrong chain. Peers on this chain \
+                 are refused but not banned; fix --checkpoint / PALW_T12_IBD_CHECKPOINTS.",
+                cp, cp.daa_score
+            );
+        }
     }
 
     async fn sync_new_utxo_set(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
@@ -2348,8 +2542,13 @@ impl IbdFlow {
 
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::BlockHeaders)?;
         let chunk: HeadersChunk = Versioned(self.header_format, msg).try_into()?;
+        // Parents first: an un-upgraded syncer answers `RequestAntipast` with tied round blocks
+        // child-first (see `super::order`). One chunk, so what cannot be placed goes over last.
+        let mut parents_first = ParentFirstHeaders::new();
+        let mut ordered = parents_first.admit(consensus, chunk).await;
+        ordered.extend(parents_first.drain());
         let jobs: Vec<BlockValidationFuture> =
-            chunk.into_iter().map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task).collect();
+            ordered.into_iter().map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task).collect();
         try_join_all(jobs).await?;
         dequeue_with_timeout!(self.incoming_route, Payload::DoneHeaders)?;
 
@@ -2673,6 +2872,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                     return Err(ProtocolError::OtherOwned(format!("sent empty block body for block {}", hash)));
                 }
                 let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Arc::new(evm_payload) };
+                // Bridge audit BR-1: a payload the stored header does not commit to is the peer's
+                // fault; refuse it (disconnect) before consensus sees it.
+                crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
                 // TODO (relaxed): sending ghostdag data may be redundant, especially when the headers were already verified.
                 // Consider sending empty ghostdag data, simplifying a great deal. The result should be the same -
                 // a trusted task is sent, however the header is already verified, and hence only the block body will be verified.
@@ -2711,6 +2913,8 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                 if block.is_header_only() {
                     return Err(ProtocolError::OtherOwned(format!("sent header of {} where expected block with body", block.hash())));
                 }
+                // Bridge audit BR-1: the id does not cover the payload bytes (see above).
+                crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
                 // TODO (relaxed): sending ghostdag data may be redundant, especially when the headers were already verified.
                 // Consider sending empty ghostdag data, simplifying a great deal. The result should be the same -
                 // a trusted task is sent, however the header is already verified, and hence only the block body will be verified.
@@ -2821,6 +3025,9 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             if block.is_header_only() {
                 return Err(ProtocolError::OtherOwned(format!("sent header of {} where expected block with body", block.hash())));
             }
+            // Bridge audit BR-1: the id does not cover the payload bytes; a payload the header
+            // does not commit to is the sync peer's fault, never the block's.
+            crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
             current_daa_score = block.header.daa_score;
             current_timestamp = block.header.timestamp;
             jobs.push(consensus.validate_and_insert_block(block).virtual_state_task);
@@ -2858,6 +3065,8 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
                 return Err(ProtocolError::OtherOwned(format!("sent empty block body for block {}", expected_hash)));
             }
             let block = Block { header: blk_header, transactions: blk_body.into(), evm_payload: Arc::new(evm_payload) };
+            // Bridge audit BR-1: see sync_missing_trusted_bodies_no_headers.
+            crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
             current_daa_score = block.header.daa_score;
             current_timestamp = block.header.timestamp;
             jobs.push(consensus.validate_and_insert_block(block).virtual_state_task);

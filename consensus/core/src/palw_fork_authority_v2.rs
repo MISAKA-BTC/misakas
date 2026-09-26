@@ -63,6 +63,39 @@ pub fn decide_ibd_commit_v2(incumbent: &PalwCandidateOrderV1, challenger: &PalwC
     }
 }
 
+/// **lane: rcore/hf-pptake2 — an IBD/pruning-proof adoption earned on ECONOMICS, not on a hash tie.**
+///
+/// The IBD staging-commit sibling of `palw_deep_reorg_strict_economic_v1` (rcore/f1-forkchoice-attacks),
+/// for the pruning-proof takeover. [`decide_ibd_commit_v2`] commits a challenger that is `Greater`
+/// under [`compare_palw_candidates_v1`], whose LAST tie-break key is the candidate hash — so a
+/// staged chain that ties the incumbent on all three economic keys (safe-frontier blue score, safe
+/// weight, live total) wins the commit on hash alone. A permissionless peer serving a node a
+/// pruning-proof IBD a headers-only fork of unbonded / lottery-losing attempt headers is exactly
+/// that tie: each such header carries the 2²⁰ attempt constant (`palw_lane_blue_work_v1` is blind to
+/// the bond and the lottery, which are chain state), so the proof outweighs the honest chain on raw
+/// accumulated blue work and is adopted (`compare_proofs_inner`); but that chain matured NO work — no
+/// bond, no lottery win, no inference, so no `Final` claim — and its imported, root-verified PALW
+/// carriage therefore reads `{frontier 0, safe 0, live 0}`, the same order an honest chain reads
+/// while its own first floor claim is still short of `Final`. On that all-economic tie the
+/// hash-tie-breaking commit rule lets the attacker grind a higher candidate hash and take the
+/// history over through IBD.
+///
+/// This variant commits only when the challenger STRICTLY exceeds the incumbent on some economic
+/// key; an all-economic tie keeps the incumbent (the confirmed history). It reads no clock and no
+/// live-weight rule, so it is independent of the two unconfirmed synthesis choices; and it only ever
+/// turns a `Commit` into a `KeepIncumbent` (the hash-only tie), never the reverse — strictly the
+/// more conservative of the two, so it can never refuse an honestly-superior chain: a challenger
+/// that genuinely matured deeper (a real `Final` frontier, more safe weight, more live total) still
+/// commits, with any hash. Used only where `Params::palw_pruning_proof_strict_economic_win` is armed
+/// (dormant on every shipped preset), read at the INCUMBENT's DAA — a challenger's own score is
+/// attacker-chosen.
+pub fn palw_ibd_commit_strict_economic_v1(incumbent: &PalwCandidateOrderV1, challenger: &PalwCandidateOrderV1) -> PalwIbdCommitV2 {
+    // The economic prefix of the order — everything before the candidate-hash tie-break, exactly the
+    // keys `palw_deep_reorg_strict_economic_v1` compares.
+    let economic = |o: &PalwCandidateOrderV1| (o.safe_frontier_blue_score, o.safe_weight, o.live_total);
+    if economic(challenger) > economic(incumbent) { PalwIbdCommitV2::Commit } else { PalwIbdCommitV2::KeepIncumbent }
+}
+
 /// The highest blue score pruning may reach on the selected chain: the safe frontier. Everything
 /// at or below it is resolved (`Final`/`Voided`) and travels summarized in the state carriage
 /// (ADR-0043 §4); everything above it may still be evidence — an unresolved claim's history, an
@@ -96,6 +129,120 @@ pub fn decide_deep_reorg_v2(incumbent: &PalwCandidateOrderV1, challenger: &PalwC
         Ordering::Greater => PalwDeepReorgV2::Allow,
         Ordering::Equal | Ordering::Less => PalwDeepReorgV2::Refuse,
     }
+}
+
+/// **The depth, in DAA ticks, within which an all-economic tie is GHOSTDAG's past
+/// `Params::palw_reorg_strict_economic_win`** ([`palw_reorg_strict_economic_win_v1`]; lane
+/// rcore/f1-strictwin-tie). A tie in a reorg whose incumbent side — the incumbent's selected chain
+/// above its common chain ancestor with the challenger — spans at most this many ticks is decided by
+/// GHOSTDAG's own order (blue work, then hash); a deeper one keeps the incumbent.
+///
+/// **Why 2.** testnet-12's DAA is its heartbeat clock: one tick a slot. Two honest nodes racing a slot
+/// each extend their own tip by a holder and a step — one tick — before they hear each other, and the
+/// lead cap lets a producer run the clock at most `⌊PALW_CLOCK_LEAD_CAP_MS / I⌋ + 1` = 2 ticks in one
+/// burst, so an honest race spans at most two ticks when it is decided. A private branch that ties the
+/// economic keys and out-piles the public chain in blue work can therefore reverse, in one release, a
+/// payment with at most two ticks of confirmation (about four minutes); deeper, the tie keeps the
+/// incumbent whatever blue work is piled against it. **Chained releases stay at two**, because the
+/// processor's question also refuses a shallow tie that would LOWER the sink's DAA: the window is read
+/// at the incumbent's DAA, and without that a denser heartbeat branch that still holds the payment
+/// could first move the sink one tick down, after which a branch without it is two ticks under the new
+/// sink — three under the public tip (measured before the check), and a branch weighted without ticks
+/// (an attempt header carries 2²⁰ of blue work whatever its lottery said, and ties when it creates no
+/// claim) would not stop there. Neither number reaches the published merchant rule (finality, or a
+/// `Final` settlement anchor), which does not count ticks at all.
+///
+/// The capacity lane carries the same value as `palw_weight_cap_v1::PALW_CAPACITY_SHALLOW_REORG_DAA_V1`
+/// (rcore/cap-weight 3aa4abec4, F-W's copy of this rule); rcore/cap-int makes that name an alias of
+/// this one (see [`palw_reorg_strict_economic_win_v1`]).
+pub const PALW_REORG_SHALLOW_TIE_DAA_V1: u64 = 2;
+
+/// The most selected-chain blocks the processor walks back from the incumbent looking for the common
+/// chain ancestor within [`PALW_REORG_SHALLOW_TIE_DAA_V1`] ticks. An honest chain carries a few blocks
+/// a tick (a holder, a step, the attempts of the slot); a chain that has not left the depth after this
+/// many blocks is treated as deep — the tie keeps the incumbent, the strict answer — so the walk is
+/// bounded however many blocks a tick holds. (The capacity lane's
+/// `PALW_CAPACITY_SHALLOW_REORG_WALK_V1`, the same value.)
+pub const PALW_REORG_SHALLOW_TIE_WALK_V1: usize = 64;
+
+/// **`Params::palw_reorg_strict_economic_win`'s rule: a strict economic win, and a SHALLOW
+/// all-economic tie decided by GHOSTDAG** (lane rcore/f1-strictwin-tie — the capacity lane's verify
+/// finding 2, which is strict-win's own).
+///
+/// [`palw_deep_reorg_strict_economic_v1`] keeps the incumbent on every all-economic tie, and the gate
+/// that consults the fence (`dns_reorg_outcome`) judges every non-extension sink move, a one-block
+/// sibling switch included. "The incumbent" is whichever sibling a node saw first, so two honest nodes
+/// racing a slot keep different sinks — and since the refused sibling leaves the virtual's parents,
+/// neither merges the other's tip and every later block that ties keeps them apart: their virtual
+/// chains (acceptance order, PALW state, DAA) diverge over one shared DAG. Measured through the
+/// pipeline with two honest nodes and no attacker, that split at the first exchange in 8/8 runs
+/// (rcore/cap-weight 3aa4abec4). Past the fence, therefore:
+///
+/// * a strict economic win allows and a strict economic loss refuses —
+///   [`palw_deep_reorg_strict_economic_v1`] exactly;
+/// * an all-economic tie allows iff `shallow_ghostdag_win()` — the caller's statement that the reorg is
+///   SHALLOW (the incumbent's selected chain above its common chain ancestor with the challenger spans
+///   at most [`PALW_REORG_SHALLOW_TIE_DAA_V1`] DAA ticks), that the challenger does not lower the
+///   sink's DAA, and that it is heavier in GHOSTDAG's own order (blue work, then hash — the order the
+///   sink search pops candidates in). Asked only on a tie.
+///
+/// So it allows everything [`palw_deep_reorg_strict_economic_v1`] allows, and refuses everything it
+/// refuses except a shallow tie GHOSTDAG awards the challenger — which every node holding the DAG reads
+/// alike, so an honest race that TIES converges (one the economic keys already order is decided by
+/// them, as before: where GHOSTDAG's order disagrees, the node holding GHOSTDAG's pick never weighs the
+/// other until a later block merges both). A tie deeper than the bound still keeps the incumbent, so a private
+/// branch's blue-work pile against a payment older than the bound is refused exactly as before. The
+/// price, stated: a tying branch heavier on blue work can reverse a payment with at most
+/// [`PALW_REORG_SHALLOW_TIE_DAA_V1`] ticks of confirmation, however many releases are chained (see
+/// the constant). Pure: the depth, the DAA and the GHOSTDAG order are the caller's reads of its own
+/// stores (the processor's `palw_reorg_shallow_ghostdag_win_v1`).
+///
+/// **One rule, two copies until rcore/cap-int.** The capacity lane measured the finding under its fence
+/// F-W and gave F-W this exact rule as `palw_deep_reorg_capacity_v1` (with
+/// `palw_capacity_shallow_ghostdag_win_v1` and `PALW_CAPACITY_SHALLOW_REORG_{DAA,WALK}_V1`). F-W
+/// requires this fence at or below it, so wherever F-W is active this function already answers, and
+/// identically: rcore/cap-int keeps this one, drops F-W's arm in `dns_reorg_outcome`, and makes the
+/// capacity names aliases of these (or deletes them).
+pub fn palw_reorg_strict_economic_win_v1(
+    incumbent: &PalwCandidateOrderV1,
+    challenger: &PalwCandidateOrderV1,
+    shallow_ghostdag_win: impl FnOnce() -> bool,
+) -> PalwDeepReorgV2 {
+    // The economic prefix of the order — everything before the candidate-hash tie-break, exactly the
+    // keys `palw_deep_reorg_strict_economic_v1` compares.
+    let economic = |o: &PalwCandidateOrderV1| (o.safe_frontier_blue_score, o.safe_weight, o.live_total);
+    match economic(challenger).cmp(&economic(incumbent)) {
+        Ordering::Greater => PalwDeepReorgV2::Allow,
+        Ordering::Less => PalwDeepReorgV2::Refuse,
+        Ordering::Equal if shallow_ghostdag_win() => PalwDeepReorgV2::Allow,
+        Ordering::Equal => PalwDeepReorgV2::Refuse,
+    }
+}
+
+/// **lane: rcore/f1-forkchoice-attacks — a deep reorg earned on ECONOMICS, not on a hash tie.**
+///
+/// [`decide_deep_reorg_v2`] allows a challenger that is `Greater` under
+/// [`compare_palw_candidates_v1`], whose LAST tie-break key is the candidate hash — so a branch
+/// that ties the incumbent on all three economic keys (safe-frontier blue score, safe weight,
+/// live total) wins the reorg on hash alone. The fork-choice attack probes measure exactly that:
+/// with no `Final` or immature claim on either side both candidates read `{frontier 0, safe 0,
+/// live 0}` and the deep-reorg gate Allows, so a heartbeat / junk-attempt private branch
+/// double-spends inside the finality depth by grinding a higher-hash tip.
+///
+/// This variant refuses unless the challenger STRICTLY exceeds the incumbent on some economic key;
+/// an all-economic tie keeps the incumbent (the confirmed history). Reads no clock and no
+/// live-weight rule, so it is independent of the two unconfirmed synthesis choices; and it only
+/// ever *refuses* reorgs `decide_deep_reorg_v2` would allow, so it can never adopt a chain the
+/// unfenced rule would not — strictly the more conservative of the two.
+///
+/// **It is not, by itself, the fence's rule** (lane rcore/f1-strictwin-tie): keeping the incumbent on
+/// EVERY tie splits honest nodes racing a slot. Where `Params::palw_reorg_strict_economic_win` is
+/// armed the gate runs [`palw_reorg_strict_economic_win_v1`] — this comparison, except that a SHALLOW
+/// tie is GHOSTDAG's — and with that function's depth question answered `false` the two are one.
+pub fn palw_deep_reorg_strict_economic_v1(incumbent: &PalwCandidateOrderV1, challenger: &PalwCandidateOrderV1) -> PalwDeepReorgV2 {
+    // The economic prefix of the order — everything before the candidate-hash tie-break.
+    let economic = |o: &PalwCandidateOrderV1| (o.safe_frontier_blue_score, o.safe_weight, o.live_total);
+    if economic(challenger) > economic(incumbent) { PalwDeepReorgV2::Allow } else { PalwDeepReorgV2::Refuse }
 }
 
 /// Convenience for sites that hold `(block, order)` pairs: the selected block hash.
@@ -150,6 +297,51 @@ mod tests {
         assert_eq!(decide_ibd_commit_v2(&incumbent, &order(99, 999, 999, 2)), PalwIbdCommitV2::KeepIncumbent, "a heavier pile loses");
     }
 
+    /// **lane: rcore/hf-pptake2 — the pruning-proof takeover, and its close.** The strict-economic
+    /// commit refuses a hash-only win the unfenced commit rule takes, and commits every genuine
+    /// economic win — the IBD-commit analog of the deep-reorg fence's test.
+    #[test]
+    fn pruning_proof_adoption_keeps_the_incumbent_on_an_all_economic_tie() {
+        // The attack shape: an unbonded/losing-attempt headers-only fork matured no work, so its
+        // imported, root-verified PALW carriage reads `{frontier 0, safe 0, live 0}` — the same order
+        // the honest chain reads while its own first floor claim is still short of `Final`. The
+        // attacker grinds a higher candidate hash. The unfenced commit rule COMMITS (its last key is
+        // the hash); the strict-economic rule KEEPS the incumbent.
+        let incumbent = order(0, 0, 0, 1);
+        let higher_hash = order(0, 0, 0, 9);
+        assert_eq!(decide_ibd_commit_v2(&incumbent, &higher_hash), PalwIbdCommitV2::Commit, "unfenced: the hash decides the commit");
+        assert_eq!(
+            palw_ibd_commit_strict_economic_v1(&incumbent, &higher_hash),
+            PalwIbdCommitV2::KeepIncumbent,
+            "fenced: an all-economic tie keeps the incumbent, whatever the hash"
+        );
+        // A free-attempt pile is refused even when its raw blue work is enormous — that weight never
+        // enters the economic order (frontier/safe/live), which is the whole point.
+        assert_eq!(
+            palw_ibd_commit_strict_economic_v1(&incumbent, &order(0, 0, 0, u64::MAX)),
+            PalwIbdCommitV2::KeepIncumbent,
+            "the highest possible hash still does not commit on a frontier tie"
+        );
+        // It must not become a veto on legitimate syncs: a strict win on ANY economic key — frontier,
+        // then safe weight, then live total — still commits, even with a LOWER hash.
+        assert_eq!(palw_ibd_commit_strict_economic_v1(&incumbent, &order(1, 0, 0, 0)), PalwIbdCommitV2::Commit, "a deeper frontier commits");
+        assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0)), PalwIbdCommitV2::Commit, "more safe weight commits");
+        assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0)), PalwIbdCommitV2::Commit, "more live total commits");
+        // A challenger economically WORSE is kept out by both.
+        assert_eq!(palw_ibd_commit_strict_economic_v1(&order(5, 3, 2, 1), &order(5, 3, 1, 9)), PalwIbdCommitV2::KeepIncumbent);
+        // The fenced rule never commits a chain the unfenced rule would not: it only ever converts a
+        // Commit into a KeepIncumbent (the hash-only tie), never the reverse.
+        for (fi, si, li) in [(0u64, 0u128, 0u128), (5, 3, 2)] {
+            for (fc, sc, lc) in [(0u64, 0u128, 0u128), (5, 3, 2), (6, 0, 0), (5, 4, 0)] {
+                let inc = order(fi, si, li, 1);
+                let chal = order(fc, sc, lc, 9);
+                if palw_ibd_commit_strict_economic_v1(&inc, &chal) == PalwIbdCommitV2::Commit {
+                    assert_eq!(decide_ibd_commit_v2(&inc, &chal), PalwIbdCommitV2::Commit, "fenced Commit implies unfenced Commit");
+                }
+            }
+        }
+    }
+
     #[test]
     fn deep_reorgs_answer_to_the_same_comparator_and_nothing_else() {
         let incumbent = order(100, 10, 0, 1);
@@ -159,6 +351,117 @@ mod tests {
         // reorgs, it is the same authority applied at depth.
         assert_eq!(decide_deep_reorg_v2(&incumbent, &order(101, 10, 0, 2)), PalwDeepReorgV2::Allow);
         assert_eq!(decide_deep_reorg_v2(&incumbent, &incumbent.clone()), PalwDeepReorgV2::Refuse, "equal is not a reorg reason");
+    }
+
+    /// **lane: rcore/f1-strictwin-tie — strict-win's rule is the strict-economic comparison, with a
+    /// SHALLOW tie decided by GHOSTDAG, and nothing else moves.** The caller's "shallow and
+    /// GHOSTDAG-heavier" is asked on an all-economic tie and nowhere else; with it `false` the rule IS
+    /// `palw_deep_reorg_strict_economic_v1` exactly, and with it `true` the only reorg it adds is that
+    /// tie. (The capacity lane's `capacity_reorg_is_strict_win_but_a_shallow_tie_goes_to_ghostdag`,
+    /// on strict-win's own function.)
+    #[test]
+    fn strict_win_is_the_strict_comparison_but_a_shallow_tie_goes_to_ghostdag() {
+        let never = || -> bool { panic!("the depth and the GHOSTDAG order are asked only on an all-economic tie") };
+        // The tie itself: GHOSTDAG's answer, whatever the PALW candidate hashes say.
+        let incumbent = order(0, 0, 0, 9);
+        let lower_hash = order(0, 0, 0, 1);
+        assert_eq!(
+            palw_reorg_strict_economic_win_v1(&incumbent, &lower_hash, || true),
+            PalwDeepReorgV2::Allow,
+            "shallow, GHOSTDAG-heavier"
+        );
+        assert_eq!(
+            palw_reorg_strict_economic_win_v1(&incumbent, &lower_hash, || false),
+            PalwDeepReorgV2::Refuse,
+            "deep, or GHOSTDAG-lighter: the incumbent is kept, as the strict comparison keeps it"
+        );
+        // A strict economic win or loss never asks — and never differs from the strict comparison, even
+        // against the candidate hash.
+        assert_eq!(palw_reorg_strict_economic_win_v1(&order(0, 0, 0, 1), &order(1, 0, 0, 0), never), PalwDeepReorgV2::Allow);
+        assert_eq!(palw_reorg_strict_economic_win_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0), never), PalwDeepReorgV2::Allow);
+        assert_eq!(palw_reorg_strict_economic_win_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0), never), PalwDeepReorgV2::Allow);
+        assert_eq!(palw_reorg_strict_economic_win_v1(&order(5, 3, 2, 1), &order(5, 3, 1, 9), never), PalwDeepReorgV2::Refuse);
+        assert_eq!(palw_reorg_strict_economic_win_v1(&order(6, 0, 0, 1), &order(5, 9, 9, 9), never), PalwDeepReorgV2::Refuse);
+        // The pile the fence exists for — a dead frontier under any immature weight — is refused without
+        // the question being asked, however heavy GHOSTDAG would call it.
+        assert_eq!(
+            palw_reorg_strict_economic_win_v1(&order(100, 10, 0, 1), &order(40, 9, u128::MAX / 2, 2), never),
+            PalwDeepReorgV2::Refuse
+        );
+        // Over a grid: `false` is the strict comparison exactly; `true` differs from it only on an
+        // economic tie; and the question is asked exactly on the ties.
+        for (fi, si, li) in [(0u64, 0u128, 0u128), (5, 3, 2)] {
+            for (fc, sc, lc) in [(0u64, 0u128, 0u128), (5, 3, 2), (6, 0, 0), (5, 4, 0), (5, 3, 1), (4, 9, 9)] {
+                for (hi, hc) in [(1u64, 9u64), (9, 1)] {
+                    let (inc, chal) = (order(fi, si, li, hi), order(fc, sc, lc, hc));
+                    let strict = palw_deep_reorg_strict_economic_v1(&inc, &chal);
+                    let tie = (fi, si, li) == (fc, sc, lc);
+                    let asked = core::cell::Cell::new(0u32);
+                    let deep = palw_reorg_strict_economic_win_v1(&inc, &chal, || {
+                        asked.set(asked.get() + 1);
+                        false
+                    });
+                    assert_eq!(deep, strict, "not shallow: the strict comparison itself");
+                    let shallow = palw_reorg_strict_economic_win_v1(&inc, &chal, || {
+                        asked.set(asked.get() + 1);
+                        true
+                    });
+                    assert_eq!(shallow, if tie { PalwDeepReorgV2::Allow } else { strict }, "shallow: only the tie moves");
+                    assert_eq!(asked.get(), if tie { 2 } else { 0 }, "the depth question is asked on a tie and only there");
+                }
+            }
+        }
+    }
+
+    /// The shallow-tie depth is a slot race with the lead cap's burst (`⌊132 s / 120 s⌋ + 1` = two
+    /// ticks), and the walk that finds it covers any honest chain's blocks in that many ticks many
+    /// times over.
+    #[test]
+    fn the_shallow_tie_depth_is_a_slot_race() {
+        use crate::palw_clock_cursor_v1::PALW_CLOCK_LEAD_CAP_MS;
+        use crate::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS;
+        assert_eq!(PALW_REORG_SHALLOW_TIE_DAA_V1, 2);
+        assert_eq!(
+            PALW_REORG_SHALLOW_TIE_DAA_V1,
+            PALW_CLOCK_LEAD_CAP_MS / HEARTBEAT_RECOVERY_INTERVAL_MS + 1,
+            "the most ticks one producer can run the clock in a burst"
+        );
+        assert!(PALW_REORG_SHALLOW_TIE_WALK_V1 as u64 >= 8 * (PALW_REORG_SHALLOW_TIE_DAA_V1 + 1));
+    }
+
+    /// **lane: rcore/f1-forkchoice-attacks — the strict-economic reorg refuses a hash-only win the
+    /// unfenced gate allows, and allows every genuine economic win.**
+    #[test]
+    fn strict_economic_reorg_keeps_the_incumbent_on_an_all_economic_tie() {
+        // The attack shape the probes measure: both sides `{frontier 0, safe 0, live 0}`, the
+        // challenger's hash higher. The unfenced gate ALLOWS (its last key is the hash); the
+        // strict-economic gate REFUSES.
+        let incumbent = order(0, 0, 0, 1);
+        let higher_hash = order(0, 0, 0, 9);
+        assert_eq!(decide_deep_reorg_v2(&incumbent, &higher_hash), PalwDeepReorgV2::Allow, "unfenced: the hash decides the reorg");
+        assert_eq!(
+            palw_deep_reorg_strict_economic_v1(&incumbent, &higher_hash),
+            PalwDeepReorgV2::Refuse,
+            "fenced: an all-economic tie keeps the incumbent, whatever the hash"
+        );
+        // And it must not become a veto on legitimate reorgs: a strict win on ANY economic key —
+        // frontier, then safe weight, then live total — is still allowed, even with a LOWER hash.
+        assert_eq!(palw_deep_reorg_strict_economic_v1(&incumbent, &order(1, 0, 0, 0)), PalwDeepReorgV2::Allow, "deeper frontier wins");
+        assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 0, 0, 9), &order(5, 1, 0, 0)), PalwDeepReorgV2::Allow, "more safe weight wins");
+        assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 3, 0, 9), &order(5, 3, 1, 0)), PalwDeepReorgV2::Allow, "more live total wins");
+        // A challenger economically WORSE is refused by both.
+        assert_eq!(palw_deep_reorg_strict_economic_v1(&order(5, 3, 2, 1), &order(5, 3, 1, 9)), PalwDeepReorgV2::Refuse);
+        // The fenced rule never adopts a chain the unfenced rule would not: it only ever converts
+        // an Allow into a Refuse (the hash-only tie), never the reverse.
+        for (fi, si, li) in [(0u64, 0u128, 0u128), (5, 3, 2)] {
+            for (fc, sc, lc) in [(0u64, 0u128, 0u128), (5, 3, 2), (6, 0, 0), (5, 4, 0)] {
+                let inc = order(fi, si, li, 1);
+                let chal = order(fc, sc, lc, 9);
+                if palw_deep_reorg_strict_economic_v1(&inc, &chal) == PalwDeepReorgV2::Allow {
+                    assert_eq!(decide_deep_reorg_v2(&inc, &chal), PalwDeepReorgV2::Allow, "fenced Allow implies unfenced Allow");
+                }
+            }
+        }
     }
 
     #[test]

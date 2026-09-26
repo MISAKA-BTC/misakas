@@ -64,6 +64,10 @@ pub struct MiningCounters {
     /// the tip's fold refuses them (`MiningManager::evict_palw_refused_carriers`); their redeemers
     /// are not counted.
     pub palw_carrier_refused_evicted_counts: AtomicU64,
+    /// **Market carriers (seeds, buys, carrier sells, Activation Pool top-ups) the gate sweep evicted
+    /// at a new block** because the tip's market gate refuses them (the V01 review's LOW 3,
+    /// `MiningManager::evict_palw_refused_carriers`); their redeemers are not counted.
+    pub palw_market_carrier_refused_evicted_counts: AtomicU64,
 
     // Samples
     pub ready_txs_sample: AtomicU64,
@@ -95,6 +99,7 @@ impl Default for MiningCounters {
             attestation_template_evicted_counts: Default::default(),
             attestation_quarantined_counts: Default::default(),
             palw_carrier_refused_evicted_counts: Default::default(),
+            palw_market_carrier_refused_evicted_counts: Default::default(),
             ready_txs_sample: Default::default(),
             txs_sample: Default::default(),
             orphans_sample: Default::default(),
@@ -124,6 +129,7 @@ impl MiningCounters {
             attestation_template_evicted_counts: self.attestation_template_evicted_counts.load(Ordering::Relaxed),
             attestation_quarantined_counts: self.attestation_quarantined_counts.load(Ordering::Relaxed),
             palw_carrier_refused_evicted_counts: self.palw_carrier_refused_evicted_counts.load(Ordering::Relaxed),
+            palw_market_carrier_refused_evicted_counts: self.palw_market_carrier_refused_evicted_counts.load(Ordering::Relaxed),
             ready_txs_sample: self.ready_txs_sample.load(Ordering::Relaxed),
             txs_sample: self.txs_sample.load(Ordering::Relaxed),
             orphans_sample: self.orphans_sample.load(Ordering::Relaxed),
@@ -170,6 +176,7 @@ pub struct MempoolCountersSnapshot {
     pub attestation_template_evicted_counts: u64,
     pub attestation_quarantined_counts: u64,
     pub palw_carrier_refused_evicted_counts: u64,
+    pub palw_market_carrier_refused_evicted_counts: u64,
     pub ready_txs_sample: u64,
     pub txs_sample: u64,
     pub orphans_sample: u64,
@@ -242,6 +249,9 @@ impl core::ops::Sub for &MempoolCountersSnapshot {
             palw_carrier_refused_evicted_counts: self
                 .palw_carrier_refused_evicted_counts
                 .saturating_sub(rhs.palw_carrier_refused_evicted_counts),
+            palw_market_carrier_refused_evicted_counts: self
+                .palw_market_carrier_refused_evicted_counts
+                .saturating_sub(rhs.palw_market_carrier_refused_evicted_counts),
             ready_txs_sample: (self.ready_txs_sample + rhs.ready_txs_sample) / 2,
             txs_sample: (self.txs_sample + rhs.txs_sample) / 2,
             orphans_sample: (self.orphans_sample + rhs.orphans_sample) / 2,

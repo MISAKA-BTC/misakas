@@ -118,6 +118,20 @@ pub struct PalwEpochBudgetFencesV1 {
     /// (`palw_bond_committed_raw_v1`), whose live locks are read at the escaped depth computed from
     /// this — the fold's own ceiling and the producer's facts read the same. `None` by `Default`.
     pub settled_anchor_depth: Option<u64>,
+    /// **Lane V02 (post-launch, review MEDIUM): whether the block folds held dissections at their
+    /// charge** — the block's `offence_attribution_active && held_context_ladder.is_some()`, the pair
+    /// the fold's `held_charge_block_active_v1` reads. Past `palw_final_lock_full_collateral` item 8 then
+    /// reads the fold's accuser ledger (`palw_accuser_ledger_v1`), not the court index's count alone.
+    /// Unread below that fence. `false` by `Default`.
+    pub held_accuser_charge_active: bool,
+    /// **Lane bind-deadlock (`Params::palw_anchor_at_ceiling`): item 8 is computed and NOT enforced.**
+    /// Set only by the processor's re-check of a chain block that the walk found to be the anchor
+    /// of a due claim and whose own attempt the plain admission refused — every other item (the
+    /// entitlement, the pwu, the budget, the producer floor, the escrow backing, the identity, and
+    /// the composed entry point's stateless shape, signature, DA pins and class lottery) still
+    /// refuses. Such a block carries no claim: the fold's own ceiling (`AttemptExposureCeiling`,
+    /// finding 17) skips its attempt. `false` by `Default` — every other caller, byte for byte.
+    pub exposure_ceiling_waived: bool,
 }
 
 impl PalwAdmissionParamsV2 {
@@ -676,11 +690,32 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         // `palw_rcore_gate_room_of_v1` — the 500‰ ceiling less `committed`, never past
         // `collateral − committed − accuser` — so `committed + accuser + claim ≤ C` holds here as in
         // the fold's `apply_attempt`. Reported as the ceiling this claim was measured against.
-        reserved.saturating_add(crate::palw_state_v2::palw_rcore_gate_room_of_v1(
+        reserved.saturating_add(crate::palw_state_v2::palw_rcore_gate_room_split_of_v1(
             bond.collateral,
             admission.max_exposure_ratio_permille,
             reserved,
-            crate::palw_state_v2::palw_accuser_exposure_v1(state, &bond_key),
+            // Lane V02: past `palw_final_lock_full_collateral` at this block's DAA the bond's resolved
+            // locks leave the ceiling (the fold's `gate_room`); 0 below it.
+            crate::palw_state_v2::palw_bond_off_ceiling_raw_v1(
+                state,
+                state_params,
+                &bond_key,
+                ctx.daa_score,
+                budget_fences.settled_anchor_depth,
+            ),
+            // Lane V02 (review HIGH): the relief never spends the accuser reserve (0 below the fence).
+            crate::palw_state_v2::palw_bond_accuser_reserve_v1(state_params, ctx.daa_score),
+            // Lane V02 (review MEDIUM): past the fence the fold's accuser ledger, held dissections at
+            // their charge; below it the shipped count.
+            crate::palw_state_v2::palw_accuser_ledger_v1(
+                state,
+                &bond_key,
+                crate::palw_state_v2::palw_v02_held_charge_floor_v1(
+                    state_params,
+                    ctx.daa_score,
+                    budget_fences.held_accuser_charge_active,
+                ),
+            ),
             crate::palw_state_v2::PalwRcoreGateV1::Work,
         ))
     } else {
@@ -690,7 +725,8 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
             / 1000
     };
     let would_reserve = reserved.checked_add(claim_reservation).ok_or(PalwAdmissionV2Error::Overflow("reserved exposure"))?;
-    if would_reserve > ceiling {
+    // Lane bind-deadlock: a binder's re-check waives the refusal (never the arithmetic above).
+    if would_reserve > ceiling && !budget_fences.exposure_ceiling_waived {
         return Err(PalwAdmissionV2Error::ExposureCeilingExceeded {
             reserved,
             claim: claim_reservation,

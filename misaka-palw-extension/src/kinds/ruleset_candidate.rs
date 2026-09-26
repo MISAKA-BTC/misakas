@@ -49,7 +49,16 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_bootstrap_activation" => params.palw_bootstrap_activation = Some(at),
         "palw_unavailable_abstains" => params.palw_unavailable_abstains = Some(at),
         "palw_bond_maturity" => companion(&mut params.palw_bond_maturity, name, "window_daa", at, |f, at| f.activation = at)?,
+        // Lane maturity (post-launch, 2026-09-26): a bare height; `validate_palw_v2` refuses it without
+        // `palw_bond_maturity` scheduled above it.
+        "palw_bond_maturity_early" => params.palw_bond_maturity_early = Some(at),
         "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
+        // lane rcore/f1-forkchoice-attacks (post-launch): a bare height — a deep reorg needs a strict
+        // economic win past it.
+        "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
+        // rcore/hf-pptake2 (post-launch): a bare height — a pruning-proof / IBD staging commit needs a
+        // strict economic win past it, read at the incumbent's DAA.
+        "palw_pruning_proof_strict_economic_win" => params.palw_pruning_proof_strict_economic_win = Some(at),
         "palw_heartbeat" => {
             companion(&mut params.palw_heartbeat, name, "work_log2 and the mergeset bound", at, |f, at| f.activation = at)?
         }
@@ -76,6 +85,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_court_ladder" => params.palw_court_ladder = Some(at),
         "palw_fp_da_pins" => params.palw_fp_da_pins = Some(at),
         "palw_validator_payout_bounds" => params.palw_validator_payout_bounds = Some(at),
+        "palw_slashing_evidence_utxo_genuine" => params.palw_slashing_evidence_utxo_genuine = Some(at),
         "palw_epoch_boundary_budget" => params.palw_epoch_boundary_budget = Some(at),
         "palw_epoch_budget_release" => params.palw_epoch_budget_release = Some(at),
         "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
@@ -85,6 +95,9 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
         "palw_model_seed_v2" => params.palw_model_seed_v2 = Some(at),
         "palw_model_evm" => params.palw_model_evm = Some(at),
+        // Lane sink (the model sink binding, post-launch): a bare height; `validate_palw_v2` refuses it
+        // without the market and the 2026-09-23 audit fence at or below it.
+        "palw_model_sink_bound" => params.palw_model_sink_bound = Some(at),
         "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
         "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
         "palw_kary_court" => params.palw_kary_court = Some(at),
@@ -106,6 +119,8 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
         "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
         "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
+        // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency).
+        "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
         "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
         "palw_model_registry" => params.palw_model_registry = Some(at),
         "palw_economic_payout" => {
@@ -135,6 +150,25 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_rcore_plus = Some(at);
             params.sync_palw_rcore_plus();
         }
+        // Lane F1 (the panel seed, post-launch): a bare height; `validate_palw_v2` refuses it without
+        // R-core+ at or below it.
+        "palw_panel_seed_execution" => params.palw_panel_seed_execution = Some(at),
+        // Lane A (the operator anchor, post-launch): the height over every bond the genesis registers
+        // (testnet-12's eight operator cards); `validate_palw_v2` refuses it without R-core+ at or below it
+        // and off ConsensusV2.
+        "palw_operator_anchor" => params.palw_operator_anchor = params.palw_operator_anchor_of_genesis_bonds_v1(at),
+        // Lane V02 (a resolved claim's lock off the work ceiling, post-launch): the V2 bundle mirrors the
+        // height and `validate_palw_v2` refuses the two apart — set together; refused below R-core+.
+        "palw_final_lock_full_collateral" => {
+            params.palw_final_lock_full_collateral = Some(at);
+            params.sync_palw_final_lock_full_collateral();
+        }
+        // Lane V02 (the shortened post-Final lock life, post-launch): the V2 bundle mirrors the height and
+        // `validate_palw_v2` refuses the two apart — set together; refused below R-core+.
+        "palw_final_lock_life" => {
+            params.palw_final_lock_life = Some(at);
+            params.sync_palw_final_lock_life();
+        }
         // ADR-0152-adjacent (Activation Pool): genesis-only (R1 and R2 change how every class is
         // reclaimed and stepped), so a height is refused here by name. At genesis the terms this preset
         // carries are kept, and a preset that carries none takes the user's illustrative scale — the
@@ -159,6 +193,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
                 Some(kaspa_consensus_core::config::params::PalwReadinessV2MaxAgeParamsV1 { activation: at, max_age_spans });
             params.sync_palw_readiness_v2_max_age_spans();
         }
+        // Lane F1 (registry resilience, V03/V05): the V2 bundle mirrors the height the fold reads, and
+        // `validate_palw_v2` refuses the two apart — set together.
+        "palw_registry_resilience" => {
+            params.palw_registry_resilience = Some(at);
+            params.sync_palw_registry_resilience();
+        }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
         "palw_objective_offence" => params.palw_objective_offence = Some(at),
@@ -175,6 +215,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_class_verify_deadline = Some(at);
             params.sync_palw_class_verify_deadline();
         }
+        // Lane bind-deadlock (post-launch): a bare height; `validate_palw_v2` refuses it without
+        // R-core+ and lane A (`palw_operator_anchor`) at or below it.
+        "palw_anchor_at_ceiling" => params.palw_anchor_at_ceiling = Some(at),
+        // Lane accept-order (post-launch): a bare height; `validate_palw_v2` refuses it off ConsensusV2 or
+        // without the execution lane at or below it.
+        "palw_lane_accept_parents_first" => params.palw_lane_accept_parents_first = Some(at),
         "palw_execution_quanta" => params.palw_execution_quanta = Some(at),
         "palw_public_model_source_required" => {
             params.palw_public_model_source_required =

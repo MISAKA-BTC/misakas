@@ -455,6 +455,17 @@ pub(crate) fn palw_producer_ready_v1(
     Ok(())
 }
 
+/// **Lane bind-deadlock (`Params::palw_anchor_at_ceiling`): does this hold give way to anchor duty?**
+/// Exactly when the only thing between the bond and an attempt is its exposure ceiling
+/// ([`PALW_NOT_READY_EXPOSURE_FULL_V2`], the last question `ready_to_produce_v3` asks, so every other
+/// one passed) and the chain would keep the attempt as a binder (`PalwProducerFactsV2::binder_due`:
+/// the fence in force at the candidate, past lane A's operator-anchor fence the bond an operator's,
+/// and a claim due at it). Every other hold holds.
+pub(crate) fn palw_producer_binds_at_ceiling_v1(facts: &PalwProducerFactsV2, hold: &PalwProducerHoldV1) -> bool {
+    use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_EXPOSURE_FULL_V2;
+    facts.binder_due && *hold == PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2)
+}
+
 /// **The `holding:` line's detail**, which is also the runtime's `producer_reason` — the sentence,
 /// then the numbers that tell one cause of it from another.
 ///
@@ -724,6 +735,11 @@ impl PalwProducerService {
         }
     }
 
+    /// Whether `signal_exit` has fired.
+    fn exiting(&self) -> bool {
+        self.shutdown.listener.is_triggered()
+    }
+
     /// Sleep `period`, or return `false` the moment `signal_exit` fires — the panel's `tick`,
     /// copied verbatim. Every wait in the worker loop goes through this, which is what makes
     /// shutdown reach code that would otherwise sleep forever (ADR-0068 drill finding F1).
@@ -980,7 +996,21 @@ impl PalwProducerService {
             // `facts` were built for) — and below it `ready_to_produce` unchanged. See
             // `palw_producer_ready_v1`.
             let rcore_plus = palw_rcore_plus_reads_v1(&self.consensus_config.params, &session, facts.class_id, &bond, facts.daa_score);
-            if let Err(hold) = palw_producer_ready_v1(&facts, &self.verification_key(), rcore_plus) {
+            let ready = palw_producer_ready_v1(&facts, &self.verification_key(), rcore_plus);
+            // **Lane bind-deadlock (`palw_anchor_at_ceiling`): anchor duty at the ceiling.** A bond
+            // whose only hold is its exposure ceiling mines anyway when the block would be the anchor
+            // of a claim due at it: past the fence the chain keeps that attempt as a binder (it binds
+            // the due claims and carries no claim of its own), and without it nothing anchors while
+            // every producer stands at its ceiling.
+            if let Err(hold) = &ready
+                && palw_producer_binds_at_ceiling_v1(&facts, hold)
+            {
+                info!(
+                    "[{PALW_PRODUCER}] anchor duty: {hold}, and a claim is due at DAA {} — mining a binder (it binds the due \
+                     claims and carries no claim of its own; palw_anchor_at_ceiling)",
+                    facts.daa_score
+                );
+            } else if let Err(hold) = ready {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
                 // spent" is what a class that exhausted its cap says AND what a class that was
                 // never granted one says, and those are opposite problems: the first resolves at
@@ -1098,6 +1128,8 @@ impl PalwProducerService {
                         draws_reported_at = Some(std::time::Instant::now());
                     }
                 }
+                // Stopping is not a failure: the next tick ends the loop.
+                Err(err) if self.exiting() => info!("[{PALW_PRODUCER}] {err}"),
                 Err(err) => warn!("[{PALW_PRODUCER}] {err}"),
             }
         }
@@ -1162,9 +1194,9 @@ impl PalwProducerService {
         template.block.header.finalize();
         let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
         let hash = block.hash();
-        self.flow_context
-            .submit_rpc_block(session, block)
+        palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
             .await
+            .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: receipt block {hash} was not submitted"))?
             .map_err(|e| format!("the chain refused a receipt block this node produced: {e}"))?;
         Ok(Some(hash))
     }
@@ -1380,17 +1412,24 @@ impl PalwProducerService {
         // number that said the fleet's draws were page faults, made a line an operator can watch.
         let storage_before = crate::palw_backends::storage_snapshot_v1(&self.class_holdings);
         let draw_started = std::time::Instant::now();
-        let (run, answer_ids) = tokio::task::spawn_blocking(move || {
-            let run = match tamper {
-                None => backend.execute(&job_for_blocking, &prompt_for_blocking),
-                Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
-            }?;
-            // The answer's ids, read back off the capture by the family that wrote it — for the
-            // attempt-lane answer envelope (ADR-0084 Decision 4) staged beside the material.
-            let answer_ids = backend.fp_committed_output_ids(&run.material);
-            Ok::<_, String>((run, answer_ids))
-        })
+        // **Raced against the exit signal** (T12-049): a draw of a wide class runs for minutes, and a
+        // SIGINT that lands inside it must not wait for it — the blocking task finishes on its own
+        // and is dropped with the runtime.
+        let (run, answer_ids) = palw_until_exit_v1(
+            &self.shutdown.listener,
+            tokio::task::spawn_blocking(move || {
+                let run = match tamper {
+                    None => backend.execute(&job_for_blocking, &prompt_for_blocking),
+                    Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
+                }?;
+                // The answer's ids, read back off the capture by the family that wrote it — for the
+                // attempt-lane answer envelope (ADR-0084 Decision 4) staged beside the material.
+                let answer_ids = backend.fp_committed_output_ids(&run.material);
+                Ok::<_, String>((run, answer_ids))
+            }),
+        )
         .await
+        .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: the draw in flight is abandoned"))?
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
         let storage_read_mib = crate::palw_backends::log_draw_storage_v1(PALW_PRODUCER, &storage_before, &self.class_holdings);
         let draw_millis = draw_started.elapsed().as_millis() as u64;
@@ -1522,11 +1561,15 @@ impl PalwProducerService {
             // the block — queued behind the bytes — never entered the DAG (card §6l). The material
             // is retained and SERVED (the pull, answered with the answer envelope when the capture
             // does not fit); the announcement is a courtesy the transport skips over the cap.
-            self.flow_context
-                .submit_rpc_block(session, block)
+            // T12-049: past the exit signal the consensus pipeline no longer drains its queue, and a
+            // block submitted into it waits forever on its validation result — the AsyncRuntime's
+            // join, and the process, with it (8+ minutes at 0 % CPU on a graph-v7@2048 producer whose
+            // 97 s draw finished after SIGINT). So the submit and the announcement both yield to it.
+            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
                 .await
+                .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: block {hash} was not submitted"))?
                 .map_err(|e| format!("the chain refused a block this node produced: {e}"))?;
-            self.flow_context.broadcast_palw_material(message, material).await;
+            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, material)).await;
             return Ok(Some((hash, message)));
         }
         Ok(None)
@@ -1558,6 +1601,28 @@ impl AsyncService for PalwProducerService {
             trace!("{} stopped", PALW_PRODUCER);
             Ok(())
         })
+    }
+}
+
+/// What a producer says when the exit signal cut a draw or a submit short.
+pub(crate) const PALW_PRODUCER_EXITING: &str = "stopping: the node is shutting down";
+
+/// **`fut`, or `None` the moment the exit signal fires** (testnet-12 lifecycle audit T12-049).
+///
+/// A service's loop observes shutdown at its `tick`, and nowhere else — so an await INSIDE one
+/// iteration that the shutdown itself makes endless keeps the service's future pending, the
+/// AsyncRuntime's join waiting on it, and the process alive until SIGKILL. The one such await on the
+/// production paths is a block submit: `Core::shutdown` stops the consensus pipeline first, a block
+/// sent into it afterwards sits in the pipeline's queue with its result sender, and
+/// `submit_rpc_block` waits on that result forever. A graph-v7@2048 producer whose 97 s draw
+/// finished after SIGINT hung 8+ minutes there at 0 % CPU; a floor producer's draw finishes in
+/// milliseconds, so it was always back at its `tick` when the signal came. `biased`: once the signal
+/// has fired, nothing further is started.
+pub(crate) async fn palw_until_exit_v1<F: std::future::Future>(exit: &kaspa_utils::triggers::Listener, fut: F) -> Option<F::Output> {
+    tokio::select! {
+        biased;
+        _ = exit.clone() => None,
+        out = fut => Some(out),
     }
 }
 
@@ -1610,6 +1675,66 @@ pub(crate) fn palw_dissection_refusal_v1(
 /// `palw_required_algo_id` is never 9).
 fn template_declares_an_attempt_lane(pow_algo_id: u8) -> bool {
     kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::{PALW_PRODUCER_EXITING, palw_until_exit_v1};
+    use kaspa_utils::triggers::SingleTrigger;
+
+    /// **T12-049: an await the shutdown itself made endless yields to the exit signal.** A block
+    /// submitted into a stopped pipeline waits on a result sender that sits, alive, in the
+    /// pipeline's queue: modelled here by a oneshot whose sender is held and never used. Unraced, the
+    /// service future never finishes and SIGINT hangs the node; raced, it returns the moment the
+    /// signal fires.
+    #[tokio::test]
+    async fn t12_049_an_await_the_shutdown_made_endless_yields_to_the_exit_signal() {
+        let exit = SingleTrigger::new();
+        let (queued_sender, result) = tokio::sync::oneshot::channel::<()>();
+        let listener = exit.listener.clone();
+        let submit = tokio::spawn(async move { palw_until_exit_v1(&listener, result).await });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(!submit.is_finished(), "a result that never comes is waited on while the node runs");
+        exit.trigger.trigger();
+        let out = tokio::time::timeout(std::time::Duration::from_secs(5), submit)
+            .await
+            .expect("the exit signal ends the wait")
+            .expect("the task did not panic");
+        assert!(out.is_none(), "and says it was cut short");
+        drop(queued_sender);
+
+        // A future that is ready passes through while the node runs; once the signal has fired
+        // nothing further is started (`biased`).
+        let fresh = SingleTrigger::new();
+        assert_eq!(palw_until_exit_v1(&fresh.listener, async { 7 }).await, Some(7));
+        fresh.trigger.trigger();
+        assert_eq!(palw_until_exit_v1(&fresh.listener, async { 7 }).await, None);
+        assert!(PALW_PRODUCER_EXITING.starts_with("stopping"));
+    }
+
+    /// **Every block submit on a PALW production path yields to the exit signal** — the producer's
+    /// attempt and receipt blocks, the execution lane's round blocks and the heartbeats. A new
+    /// `submit_rpc_block(` that is not raced is the T12-049 hang again.
+    #[test]
+    fn t12_049_every_palw_block_submit_is_raced_against_the_exit_signal() {
+        for (name, source) in [
+            ("palw_producer.rs", include_str!("palw_producer.rs")),
+            ("palw_round_producer.rs", include_str!("palw_round_producer.rs")),
+            ("palw_heartbeat_miner.rs", include_str!("palw_heartbeat_miner.rs")),
+        ] {
+            let production = &source[..source.find("#[cfg(test)]").unwrap_or(source.len())];
+            let mut submits = 0;
+            for (at, _) in production.match_indices(".submit_rpc_block(") {
+                submits += 1;
+                let before = &production[at.saturating_sub(160)..at];
+                assert!(
+                    before.contains("palw_until_exit_v1("),
+                    "{name}: a block submit at byte {at} is not raced against the exit signal"
+                );
+            }
+            assert!(submits > 0, "{name} submits blocks");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2302,5 +2427,31 @@ mod p6_tests {
                 assert_eq!(palw_rcore_plus_producer_floor_v1(&p, daa), None, "{name} at DAA {daa} keeps the old pre-check");
             }
         }
+    }
+
+    /// **Lane bind-deadlock: anchor duty gives way on the ceiling hold alone, and only when a claim is
+    /// due** (`PalwProducerFactsV2::binder_due`, filled by the processor from
+    /// `Params::palw_anchor_at_ceiling`). A bond at its committed ceiling with no claim due holds as
+    /// before; with one due it mines (the chain keeps the attempt as a binder); a bond that holds for
+    /// any other reason — here a key that is not the bond's — holds whatever is due.
+    #[test]
+    fn anchor_duty_gives_way_only_on_the_ceiling_hold_with_a_claim_due() {
+        let binds = super::palw_producer_binds_at_ceiling_v1;
+        let p = params(1, true);
+        let state = state(AMPLE, 0, true);
+        let mut f = facts(&state, &p, 1);
+        assert!(!f.binder_due, "the builder leaves it to the processor, which holds the fence");
+        let bond = f.bond.as_mut().unwrap();
+        bond.committed = bond.exposure_ceiling - bond.claim_exposure + 1;
+        let hold = palw_producer_ready_v1(&f, &KEY, past(1, None)).unwrap_err();
+        assert_eq!(hold, PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2));
+        assert!(!binds(&f, &hold), "nothing due: the ceiling holds, as released");
+        f.binder_due = true;
+        assert!(binds(&f, &hold), "a claim due at the candidate: anchor duty, the producer mines a binder");
+        let other = palw_producer_ready_v1(&f, &KEY_2, past(1, None)).unwrap_err();
+        assert_ne!(other, hold);
+        assert!(!binds(&f, &other), "any other hold holds, due claim or not");
+        let floor = PalwProducerHoldV1::BelowProducerFloor { shortfall: 1, floor: 2 };
+        assert!(!binds(&f, &floor), "a bond under the producer floor never binds (the admission refuses it too)");
     }
 }

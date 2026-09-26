@@ -800,3 +800,192 @@ fn a_held_dissections_verdict_convicts_the_producer_and_no_signer_on_testnet_12(
         assert!(kind3(&red).is_ok(), "recorded as CourtFraud, the same void would convict the honest signer: {:?}", kind3(&red));
     }
 }
+
+// ---- Lane V02 (post-launch) review MEDIUM: one accuser ledger at every work gate past the fence ----
+
+/// **Past `palw_final_lock_full_collateral` the draw's seat filter and the producer's facts read the
+/// fold's accuser ledger — an open held dissection at its charge — so a lock-heavy seat with one open
+/// is left out of the draw exactly where the bind would refuse it.**
+///
+/// A bystander (200,000 MSK) opens a held dissection on a licensed 8k claim under testnet-12's own
+/// fences with lane V02 armed at 1,001: its court index counts the claim's `reserved`, the fold's ledger
+/// `min(max(reserved, G), floor)` — the surplus. Its post-`Final` locks of retired claims then put its
+/// work room (the 100% term less the accuser reserve) inside that surplus: counted at `reserved` the
+/// room would fit a second 8k claim's bind eligibility, counted at the charge it does not. The fold
+/// leaves the panel with the bystander seated inert; the draw's filter as the processor resolves it
+/// (held-charge floor from the binding block's extras) leaves the bystander out — the lane's first cut
+/// (no floor) seated it, the void the review named. With the surplus freed the three agree the other
+/// way. The producer's facts, patched as the processor patches them, give the same answer for its own
+/// floor attempt.
+#[test]
+fn v02_a_lock_heavy_seat_with_an_open_held_dissection_reads_one_room_at_the_draw_the_bind_and_the_facts() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_panel_v2::{PalwPanelValidLockV1, PalwRcoreSeatFilterV1};
+    use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
+    use kaspa_consensus_core::palw_producer_v2::{palw_producer_facts_apply_held_ledger_v1, palw_producer_facts_v4};
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwRcoreGateV1, palw_accuser_ledger_v1, palw_bond_accuser_reserve_v1, palw_bond_committed_raw_v1, palw_rcore_bind_prices_v1,
+        palw_rcore_gate_room_split_of_v1, palw_second_clock_depth_of_v1, palw_v02_held_charge_floor_v1,
+    };
+    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+
+    const MSK: u128 = 100_000_000;
+    let mut p = t12();
+    p.palw_final_lock_full_collateral = Some(ForkActivation::new(1_001));
+    p.sync_palw_final_lock_full_collateral();
+    p.validate_palw_v2().expect("the armed copy is a runnable ruleset");
+    let collateral = 200_000 * MSK;
+    let (mut c, row, seats) = chain_on_params(p.clone(), Rule::T12, collateral as u64, eight_k);
+    let held_claim = licensed(&mut c, &row, &seats, 1);
+    open(&mut c, &row, held_claim).expect("the bystander's held dissection opens");
+    let by = bond_key(BYSTANDER);
+
+    // A second 8k claim of the executor's, waiting for its panel.
+    let pwu = match c.s.palw_canonical_per_draw_v1(&row.id, c.daa + 1, c.p.palw_canonical_work_daa()) {
+        Some(work) => kaspa_consensus_core::palw_admission_v2::palw_attempt_derived_pwu_v1(row.target, work),
+        None => palw_pwu_v1(row.target, row.leaves),
+    };
+    let (env, key, claim2) =
+        junk_attempt(row.id, bond_key(EXECUTOR), pubkey_of(EXECUTOR), &operator_pubkey_of(EXECUTOR), pwu, 7, 0x0A1E_0000 + 7);
+    c.step(&[], PalwBlockWorkV3::Attempt(&env), key, Rule::T12).expect("the attempt folds");
+    let t = c.daa + 1;
+    let e = court_extras(&c.p, t, Rule::T12);
+    let record = c.s.claim(&claim2).expect("the claim").clone();
+    let eligibility = palw_rcore_bind_prices_v1(&c.s, &c.sp, &e, &claim2, &record, seats.len(), t).eligibility;
+
+    let floor = palw_v02_held_charge_floor_v1(&c.sp, t, e.offence_attribution_active && e.held_context_ladder.is_some());
+    assert_eq!(floor, Some(c.sp.min_collateral_sompi()), "past the fence the block charges held sessions: the floor rides");
+    assert_eq!(palw_v02_held_charge_floor_v1(&c.sp, 1_000, true), None, "below the fence the readers read what they shipped with");
+    let count = palw_accuser_exposure_v1(&c.s, &by);
+    let ledger = palw_accuser_ledger_v1(&c.s, &by, floor);
+    let surplus = ledger - count;
+    assert!(surplus > 2 * MSK, "the held session's charge exceeds its reserved (surplus {:.2} MSK)", msk(surplus));
+    let reserve = palw_bond_accuser_reserve_v1(&c.sp, t);
+
+    // The bystander's post-Final locks (one retired claim's row), set so its committed ledger is `target`.
+    let raw = e.settled_anchor_depth;
+    let with_committed = |c: &Chain, target: u128, retired: u64| -> PalwChainStateV2 {
+        let now = palw_bond_committed_raw_v1(&c.s, &c.sp, &by, t, raw);
+        let settled = c.s.settled_attempt_finals();
+        let mut k = PalwStateCarriageV2::from_state(&c.s);
+        k.slashable_locks.insert(
+            (by, h(retired)),
+            PalwSlashableLockV1 {
+                claim: h(retired),
+                amount: target - now,
+                expiry_daa: t + c.sp.window_court(),
+                settled_at_final: settled,
+                attested: PalwSegmentMaskV2::NONE,
+                segments: 0,
+            },
+        );
+        k.into_state_v3(&c.sp, None, flags(&c.p, 0).uncertified_weightless, c.p.palw_canonical_work_daa())
+            .expect("a consistent carriage")
+    };
+    let filter = |s: &PalwChainStateV2, held_charge_floor: Option<u64>| PalwPanelValidLockV1 {
+        required: u128::MAX,
+        now_daa: t,
+        settled_anchor_depth: palw_second_clock_depth_of_v1(s, &c.sp, &e, t),
+        window_court: c.sp.window_court(),
+        rcore: Some(PalwRcoreSeatFilterV1 {
+            eligibility,
+            ceiling_permille: c.sp.fp_max_exposure_ratio_permille(),
+            resolved_locks_off_ceiling: c.sp.final_lock_full_collateral_active_at(t),
+            accuser_reserve: reserve,
+            held_charge_floor,
+        }),
+    };
+    let by_operator = kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&operator_pubkey_of(BYSTANDER));
+    let mut panel: Vec<(PalwBondKeyV2, Hash64)> = seats[..seats.len() - 1].to_vec();
+    panel.push((by, by_operator));
+    let binds = |s: &PalwChainStateV2| -> bool {
+        let f = flags(&c.p, t);
+        let (next, _, _) = apply_palw_transition_v7(
+            s,
+            &c.sp,
+            None,
+            &ctx(0x0A1E_0000 + t, t, t, 0),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim2, anchor: h(0x0A1E_0B00), seats: seats_of(&panel) }],
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            f.unavailable_abstains,
+            f.capability_bound,
+            f.uncertified_weightless,
+            f.da_court,
+            &e,
+        )
+        .expect("an unbacked panel is inert, never the block's error");
+        matches!(next.claim(&claim2).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. })
+    };
+    let ceiling = collateral * u128::from(c.sp.fp_max_exposure_ratio_permille()) / 1000;
+
+    // Inside the surplus: the count alone would fit the bind, the charge does not.
+    let inside = with_committed(&c, collateral - reserve - count - eligibility - surplus / 2, 0x0E_C0C0);
+    assert!(palw_bond_committed_raw_v1(&inside, &c.sp, &by, t, raw) > ceiling, "the premise: locks past the 500‰ ceiling");
+    assert!(!binds(&inside), "the fold refuses the bind on its accuser ledger");
+    assert!(!filter(&inside, floor).admits(&inside, &by), "the draw leaves the bystander out, as the bind does");
+    assert!(
+        filter(&inside, None).admits(&inside, &by),
+        "the lane's first cut (the count alone) seated it — the void the review named"
+    );
+
+    // With the surplus freed (100 MSK to spare on the ledger): all three seat it.
+    let outside = with_committed(&c, collateral - reserve - ledger - eligibility - 100 * MSK, 0x0E_C0C1);
+    assert!(filter(&outside, floor).admits(&outside, &by), "the draw seats the bystander");
+    assert!(binds(&outside), "and the fold binds the panel");
+
+    // The producer's facts for its own floor attempt, patched as the processor patches them.
+    let (floor_class, _, _, _) = genesis_classes(&p)[0];
+    let base_known = registry_fold(&p, t).and_then(|fold| fold.genesis_works.get(&floor_class).map(|w| w.economic_ccu_per_claim));
+    let b = bundle(&p);
+    let facts_on = |s: &PalwChainStateV2, patched: bool| {
+        let mut facts = palw_producer_facts_v4(
+            s,
+            &c.sp,
+            &b.admission,
+            kaspa_consensus_core::BlockHash::from_u64_word(1),
+            t,
+            floor_class,
+            Some(&by),
+            None,
+            p.palw_canonical_work_daa(),
+            base_known,
+            true,
+            // Option A: the escrow the candidate's own claim would carry (the processor's argument).
+            kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(&c.sp, T12_BLOCK_SUBSIDY_SOMPI, e.escrow_carve),
+            raw,
+        )
+        .expect("the floor has facts");
+        if patched {
+            palw_producer_facts_apply_held_ledger_v1(&mut facts, s, &c.sp, Some(&by), t, true);
+        }
+        facts.bond.expect("the bystander's facts")
+    };
+    let claim_exposure = facts_on(&c.s, true).claim_exposure;
+    assert!(claim_exposure > 0, "the premise: the attempt commits something");
+    let inside = with_committed(&c, collateral - reserve - count - claim_exposure - surplus / 2, 0x0E_C0C2);
+    let fold_room = palw_rcore_gate_room_split_of_v1(
+        collateral as u64,
+        c.sp.fp_max_exposure_ratio_permille(),
+        palw_bond_committed_raw_v1(&inside, &c.sp, &by, t, raw),
+        kaspa_consensus_core::palw_state_v2::palw_bond_off_ceiling_raw_v1(&inside, &c.sp, &by, t, raw),
+        reserve,
+        palw_accuser_ledger_v1(&inside, &by, floor),
+        PalwRcoreGateV1::Work,
+    );
+    assert!(fold_room < claim_exposure, "the fold's gate refuses the attempt");
+    let patched = facts_on(&inside, true);
+    assert_eq!(patched.accuser_exposure, palw_accuser_ledger_v1(&inside, &by, floor), "the facts carry the fold's ledger");
+    assert!(!patched.has_committed_room(), "the producer's pre-check agrees with the fold");
+    assert!(facts_on(&inside, false).has_committed_room(), "unpatched (the count alone) it would mine into the refusal");
+    println!(
+        "[v02] held dissection: reserved {:.2} MSK counted, charged {:.2} (surplus {:.2}); bind eligibility {:.2}; attempt commitment {:.2}; reserve {:.2}",
+        msk(count),
+        msk(ledger),
+        msk(surplus),
+        msk(eligibility),
+        msk(claim_exposure),
+        msk(reserve)
+    );
+}

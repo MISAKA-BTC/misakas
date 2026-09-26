@@ -12452,6 +12452,10 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
                 ctx.consensus.validate_mempool_transaction(&mut mutable, &Default::default())
             };
             mempool(&second).expect("with room, the carrier is admitted");
+            // **The V01 review's LOW 3: every node's per-block sweep asks the same gate** — nothing
+            // while the queue has room, and a spent input is never the sweep's to judge.
+            let pooled = std::sync::Arc::new(second.clone());
+            assert_eq!(ctx.consensus.palw_market_carrier_refusals_v1(&[pooled.clone()]), vec![None], "room: the sweep keeps it");
             vp.palw_state_v2_store.write().set_tip_for_tests(sink, &full).expect("the full queue becomes the tip");
             match mempool(&second) {
                 Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(why)) => {
@@ -12459,6 +12463,26 @@ async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
                 }
                 other => panic!("a full queue must refuse the carrier at the mempool, got {other:?}"),
             }
+            match ctx.consensus.palw_market_carrier_refusals_v1(&[pooled.clone()]).as_slice() {
+                [Some(why)] => assert!(why.contains("payout queue"), "the sweep refuses it as admission does: {why}"),
+                other => panic!("a full queue must refuse the pooled carrier at the sweep, got {other:?}"),
+            }
+            let unfunded = {
+                let mut tx = second.clone();
+                tx.inputs[0].previous_outpoint = TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0x51E), 0);
+                tx.finalize();
+                std::sync::Arc::new(tx)
+            };
+            assert_eq!(
+                ctx.consensus.palw_market_carrier_refusals_v1(&[unfunded]),
+                vec![None],
+                "an input the virtual does not hold (mined, double-spent, chained): not judged"
+            );
+            assert_eq!(
+                ctx.consensus.palw_h1_carrier_refusals_v1(&[pooled.clone()]),
+                vec![None],
+                "a market carrier is not the H-1 gate's to judge"
+            );
             let template = ctx.consensus.build_block_template(
                 new_miner_data(),
                 Box::new(OnetimeTxSelector::new(vec![second.clone()])),
@@ -13374,6 +13398,9 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     // production source declares them. Every one of them reaches its tip read before it looks at
     // its arguments, so the values here only have to be well-formed.
     let _ = vp.palw_disputable_claims_v2_impl(&mine);
+    // Lane B (2026-09-26): the operator's non-seat filer's read, once a DAA on every operator node.
+    let _ = vp.palw_operator_da_candidates_v1_impl(&mine);
+    let _ = vp.palw_operator_da_standing_v1_impl(&mine[0]);
     let _ = vp.palw_court_duties_v2_impl(&mine);
     let _ = vp.palw_da_duties_v2_impl(&mine);
     let _ = vp.palw_claim_readers_v2_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1));
@@ -13484,9 +13511,17 @@ fn p_b3_the_template_asks_the_market_gate_the_mempool_asks() {
         );
     }
     assert!(
-        body_of("palw_mempool_market_refusal").contains("palw_model_market_carrier_refusal_v1("),
+        body_of("palw_mempool_market_refusal_with").contains("palw_model_market_carrier_refusal_v1("),
         "the gate is the core predicate the fold's refusal is tested against"
     );
+    // The V01 review's LOW 3: and every node's mempool sweep at each new block — the gate's own
+    // fence and layers, on the one snapshot the H-1 sweep takes.
+    let gate = body_of("palw_mempool_market_refusal");
+    assert!(gate.contains("self.palw_market_gated_at(") && gate.contains("self.palw_mempool_market_refusal_with("));
+    let sweep = body_of("palw_market_carrier_refusals_v1_impl");
+    assert!(sweep.contains("self.palw_sweep_snapshot_v1(txs)"), "the H-1 sweep's snapshot");
+    assert!(sweep.contains("self.palw_market_gated_at(") && sweep.contains("self.palw_mempool_market_refusal_with("));
+    assert!(body_of("palw_h1_carrier_refusals_v1_impl").contains("self.palw_sweep_snapshot_v1(txs)"));
 }
 
 /// **ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the template asks the H-1 gate the mempool asks,
@@ -13502,14 +13537,21 @@ fn h1_the_template_asks_the_carrier_gate_the_mempool_asks() {
         let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
         rest[..end].to_string()
     };
-    // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block.
-    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction", "palw_h1_carrier_refusals_v1_impl"] {
+    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
         assert!(
             body_of(caller).contains("self.palw_mempool_h1_carrier_refusal("),
             "{caller} must ask the H-1 carrier gate (palw_mempool_h1_carrier_refusal)"
         );
     }
-    assert!(body_of("palw_mempool_h1_carrier_refusal").contains("self.palw_h1_carrier_refusal_on("));
+    // V01 (the 2026-09-25 sweep): and every node's mempool sweep at each new block — the gate's own
+    // two steps (its object, then its layers on a tip), on the one snapshot the sweep checked
+    // against the virtual (the V01 review, MEDIUM).
+    for asker in ["palw_mempool_h1_carrier_refusal", "palw_h1_carrier_refusals_v1_impl"] {
+        let body = body_of(asker);
+        assert!(body.contains("self.palw_h1_gated_object_at("), "{asker} takes the gate's object");
+        assert!(body.contains("self.palw_mempool_h1_carrier_refusal_with("), "{asker} asks the gate's layers");
+    }
+    assert!(body_of("palw_mempool_h1_carrier_refusal_with").contains("self.palw_h1_carrier_refusal_on("));
     let on = body_of("palw_h1_carrier_refusal_on");
     assert!(on.contains("self.palw_v2_validate_objects("), "the acceptance layer");
     assert!(on.contains("palw_v2_apply_one_object_v1("), "and the fold's own arm");
@@ -16326,6 +16368,11 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
 // Test-only: the scenario lives in `tests/t12_round_lane_e2e.rs` beside this file, as a child of
 // this module so it reuses `TestContext` and the harness identities.
 mod t12_clock_floor;
+// 2026-09-25 question: can a heartbeat miner's private fork carry a double spend? Two nodes, one
+// released private branch, the victim's sink and blue work measured (a probe; no rule changes) — and,
+// below it, the regressions of the absorb hole F1's post-launch fence closes (ADR-0105 §11,
+// `Params::palw_heartbeat_transparent_same_chain`; `hb_regression_*`).
+mod hb_fork_choice_probe;
 // ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the node's H-1 gate asks the fold about a carrier
 // before this node admits, relays, spares or mines it.
 mod t12_h1_carrier_gate;
@@ -16335,6 +16382,10 @@ mod t12_offence_attribution_gate;
 mod t12_rcore_skeleton_gate;
 // ADR-0152 v3.1 S-6: the per-bond share in the producer's own pre-check and the free-prompt price.
 mod t12_rcore_s6_producer_share;
+// Lane sink (post-launch): a testnet-12 chain crossing the model sink binding — an unbound sink valid
+// in the block below the fence, refused from it; a bound buy valid on both sides; the released rule
+// and the armed one agreeing on every block below it.
+mod t12_model_sink_bound_fence;
 // ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
 // and the fold past `palw_rcore_plus`, with real card signatures.
 mod t12_rcore_s7_reporter_gate;
@@ -16342,12 +16393,35 @@ mod t12_rcore_s7_reporter_gate;
 // past `palw_rcore_plus`, and nothing below it (M4 review, finding 1).
 mod t12_rcore_sr10_door_gate;
 mod t12_round_lane_e2e;
+// The 2026-09-26 testnet-12 IBD stall from DAA 316: a round lane ties on blue work, so blue-work
+// order is not topological; the node's sync paths order parents first (node-only).
+mod ibd_parents_first;
+// Post-launch lane accept-order (`palw_lane_accept_parents_first`): a merging block applies a tied round
+// lane parents-first past the fence, exactly as before below it; a round block carries no EVM payload.
+mod lane_accept_parents_first;
 // The 2026-09-26 testnet-12 split at DAA 198: a producer's in-process block with a stale cached
 // coinbase id forks that producer off the network; ids re-derived at submission keep it on.
 mod t12_split_stale_coinbase_id;
 // ADR-0152 M4: the stake-weighted draw where the chain draws — the one resolver (SW-1) and the
 // one-state, bind-only-in-the-anchor-block derivation (SW-8, T89) on a real testnet-12 chain.
 mod t12_stake_draw_integration;
+// Lane F1 (the 2026-09-25 sweep's V03/V05): the registry-resilience fence armed on a copy of
+// testnet-12 and crossed by a real chain — the processor's mirror, a floor claim unchanged across the
+// height, and the no-capable-panel re-anchor at a real anchor block.
+mod t12_registry_resilience;
+// Post-launch lane bind-deadlock (`palw_anchor_at_ceiling`): a producer at its exposure ceiling mines
+// no attempt, so nothing anchors its claims — measured on the released rule and closed past the fence.
+mod t12_bind_deadlock;
+// Lane F1 (post-launch): a testnet-12 chain crossing the panel-seed fence — the block below it, the
+// anchor attempt's execution commitment past it, and a second node that agrees.
+mod t12_panel_seed_fence;
+// Lane A (post-launch): a testnet-12 chain crossing the operator-anchor fence — below it the released
+// chain, past it only an operator's attempt anchors a panel, and a slot only non-operators reach voids at
+// the bind window's backstop.
+mod t12_operator_anchor_fence;
+// Lane V02 (post-launch, 2026-09-26): `palw_final_lock_full_collateral` crossed on a real chain — lock-heavy
+// seats bind from the height and void their anchor below it.
+mod t12_final_lock_full_collateral_fence;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;
@@ -16355,25 +16429,29 @@ mod t46_false_valid_real_claim;
 mod p2_b3_vesting_payee_gate;
 // ADR-0152 Phase 2, P2-2: the mint path on real testnet-12 blocks (T58, T03, T47, T25, T05, T29).
 mod p2_mint_path;
+// Lane maturity (post-launch, 2026-09-26): ADR-0065 D1 brought forward — a bond registered at DAA 13
+// is drawable below the fence, and past it only once its own window has run; the genesis seats carry
+// every claim across it.
+mod t12_seat_maturity_fence;
+// testnet-12's post-launch release (int-4): EVERY fence of PALW_T12_POST_LAUNCH_FENCES_V1 at one
+// height, crossed by one chain with the clock running — the combined crossing no lane ran alone.
+mod t12_post_launch_fences_combined;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
 
-/// **MSK-26A (2026-09 pre-freeze security review): the node-only half of the slashing-evidence
-/// genuineness fix — this fleet never relays or mines a DNS slashing / precommit evidence that is
-/// not genuine at its tip.**
-///
-/// Taken node-only from rcore/hf-slash: the emergency binary carries the mempool/template refusal
-/// (`palw_slashing_evidence_mempool_refusal`) but NOT the dormant consensus fence
-/// `palw_slashing_evidence_utxo_genuine`, so the fingerprint does not move. This is the regression
-/// test for that refusal; the fence-armed consensus tests from 96abbb249 (which set the excluded
-/// params field) are intentionally not taken. A forged evidence (structurally valid but signed by
-/// the attacker, not the accused validator) is refused at mempool admission; a genuine equivocation
-/// by the bonded validator is admitted.
-mod msk26a_slash_genuineness_node_refusal {
+/// **MSK-26A (2026-09 pre-freeze security review): a slash applied on unchecked evidence**, end to
+/// end through `validate_and_insert_block`: a forged slashing evidence rides in a side block `M`
+/// that the honest virtual MERGES (M has lower blue work than the sink, so it is never
+/// chain-validated and its own body is never genuineness-checked), then an honest template `C`
+/// merges it. Pins the shipped (dormant) behaviour, the armed fix, the genuine-evidence control,
+/// the mixed-order case (a forgery sorted ahead of a genuine equivocation must not choose the
+/// reporter payout or the victim epoch), and the node-side mempool refusal.
+mod msk26a_slash_genuineness {
     use super::*;
     use kaspa_consensus_core::{
         Hash64,
+        config::params::ForkActivation,
         dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
         tx::{MutableTransaction, ScriptPublicKey},
     };
@@ -16384,6 +16462,7 @@ mod msk26a_slash_genuineness_node_refusal {
         atk: dns_harness::HarnessValidator,
         bond_outpoint: TransactionOutpoint,
         target_daa: u64,
+        side_parent: BlockHash,
         k_funds: Vec<(TransactionOutpoint, u64, u64)>,
         a_funds: Vec<(TransactionOutpoint, u64, u64)>,
         k_payload: [u8; 64],
@@ -16396,7 +16475,7 @@ mod msk26a_slash_genuineness_node_refusal {
         (TransactionOutpoint::new(cb.id(), i as u32), o.value, b.header.daa_score)
     }
 
-    async fn world() -> World {
+    async fn world(fence: Option<ForkActivation>) -> World {
         let config = ConfigBuilder::new(MAINNET_PARAMS)
             .skip_proof_of_work()
             .edit_consensus_params(|p| {
@@ -16414,6 +16493,7 @@ mod msk26a_slash_genuineness_node_refusal {
                 dns.attestation_anchor_backoff_blue_score = 1;
                 dns.stake_score_window_blue_score = 10_000;
                 p.dns_params = Some(dns);
+                p.palw_slashing_evidence_utxo_genuine = fence;
             })
             .build();
         let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -16449,7 +16529,10 @@ mod msk26a_slash_genuineness_node_refusal {
             buried.push(ctx.mine_block(new_miner_data(), vec![]).await);
         }
         let target_daa = buried[1].header.daa_score;
-        World { ctx, honest, atk, bond_outpoint, target_daa, k_funds, a_funds, k_payload, a_payload }
+        // M hangs off the sink's grandparent: strictly lower blue work than the sink, so the sink
+        // search never pops it (never chain-validated) and the virtual keeps it as a merge parent.
+        let side_parent = buried[buried.len() - 3].header.hash;
+        World { ctx, honest, atk, bond_outpoint, target_daa, side_parent, k_funds, a_funds, k_payload, a_payload }
     }
 
     /// Two attestations for the honest bond carrying the honest validator's id, signed by the
@@ -16520,10 +16603,152 @@ mod msk26a_slash_genuineness_node_refusal {
         dns_harness::funded_signed_slashing_evidence_tx(funder, fund.0, fund.1, fund.2, ev, storage)
     }
 
-    /// The node-only half: the mempool refuses the forged evidence and admits the genuine one.
+    /// Insert side block M (utxo-invalid coinbase, never chain-validated) carrying `txs`, then mine
+    /// an honest template C that merges it. Returns (M, C).
+    async fn merge_side_block(w: &mut World, txs: Vec<Transaction>) -> (BlockHash, Block) {
+        w.ctx.simulated_time += w.ctx.consensus.params().target_time_per_block();
+        let mut m = w.ctx.consensus.build_block_with_parents_and_transactions(blockhash::NONE, vec![w.side_parent], txs);
+        m.header.timestamp = w.ctx.simulated_time;
+        m.header.nonce = w.ctx.simulated_time;
+        m.header.finalize();
+        let m_hash = m.header.hash;
+        w.ctx.validate_and_insert_block(m.to_immutable()).await;
+        assert!(w.ctx.consensus.get_virtual_parents().contains(&m_hash), "the honest virtual merges M");
+        let c = w.ctx.mine_block(new_miner_data(), vec![]).await;
+        assert!(c.header.direct_parents().contains(&m_hash), "the honest template C merges M");
+        assert_eq!(w.ctx.consensus.block_status(c.header.hash), BlockStatus::StatusUTXOValid, "C is UTXO-valid");
+        assert_eq!(w.ctx.consensus.get_sink(), c.header.hash);
+        (m_hash, c)
+    }
+
+    fn utxos(w: &World) -> std::collections::HashMap<TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry> {
+        w.ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect()
+    }
+
+    fn registry_slashed(w: &World) -> Option<Option<u64>> {
+        w.ctx.consensus.virtual_processor().initial_active_bond_view().get(&w.bond_outpoint).map(|r| r.slashed_at_daa_score)
+    }
+
+    async fn forged_only(fence: Option<ForkActivation>) -> (bool, Option<(u64, ScriptPublicKey)>, Option<Option<u64>>) {
+        let mut w = world(fence).await;
+        let tx = evidence_tx(&w, w.atk.seed, w.a_funds[0], forged(&w, 1, w.a_payload));
+        let id = tx.id();
+        assert!(utxos(&w).contains_key(&w.bond_outpoint), "the honest bond's stake exists before");
+        merge_side_block(&mut w, vec![tx]).await;
+        let u = utxos(&w);
+        let mint = u.get(&TransactionOutpoint::new(id, 0)).map(|e| (e.amount, e.script_public_key.clone()));
+        (u.contains_key(&w.bond_outpoint), mint, registry_slashed(&w))
+    }
+
+    /// (1) The failure on the shipped behaviour (fence dormant = 0e8ec984e's code path).
+    #[tokio::test]
+    async fn dormant_a_merged_forged_evidence_burns_the_honest_stake_and_pays_the_forger() {
+        let (bond_present, mint, registry) = forged_only(None).await;
+        eprintln!("DORMANT: bond_utxo_present={bond_present} mint={mint:?} registry_slashed_at={registry:?}");
+        assert!(!bond_present, "shipped: the honest bond's staked output-0 is removed by forged evidence");
+        assert!(mint.is_some(), "shipped: the forger is minted a reporter reward");
+        assert_eq!(registry, Some(None), "while the registry still reads the bond unslashed");
+    }
+
+    /// (1') The fix, armed: the same attack is a no-op.
+    #[tokio::test]
+    async fn armed_a_merged_forged_evidence_burns_nothing() {
+        let (bond_present, mint, registry) = forged_only(Some(ForkActivation::always())).await;
+        eprintln!("ARMED: bond_utxo_present={bond_present} mint={mint:?} registry_slashed_at={registry:?}");
+        assert!(bond_present, "armed: the honest bond's stake stays");
+        assert!(mint.is_none(), "armed: no reporter mint");
+        assert_eq!(registry, Some(None));
+    }
+
+    /// Control: armed, a GENUINE equivocation merged the same way still slashes (no false negative).
+    #[tokio::test]
+    async fn armed_a_merged_genuine_evidence_still_slashes() {
+        let mut w = world(Some(ForkActivation::always())).await;
+        let tx = evidence_tx(&w, w.honest.seed, w.k_funds[1], genuine(&w, 1, w.k_payload));
+        let id = tx.id();
+        merge_side_block(&mut w, vec![tx]).await;
+        let u = utxos(&w);
+        eprintln!(
+            "ARMED GENUINE: bond_utxo_present={} mint={:?} registry_slashed_at={:?}",
+            u.contains_key(&w.bond_outpoint),
+            u.get(&TransactionOutpoint::new(id, 0)).map(|e| e.amount),
+            registry_slashed(&w)
+        );
+        assert!(!u.contains_key(&w.bond_outpoint), "a genuine merged equivocation still slashes the UTXO");
+        assert!(u.contains_key(&TransactionOutpoint::new(id, 0)), "and pays its reporter");
+        assert!(matches!(registry_slashed(&w), Some(Some(_))), "and the registry agrees");
+    }
+
+    /// (2) Regression for the MSK-26A follow-up: resolution keeps the FIRST evidence naming a bond,
+    /// and that tx supplies the reporter payload, the mint outpoint and the victim epoch. A forged
+    /// tx placed ahead of a genuine one in the same mergeset must decide none of them — armed, the
+    /// unproved tx is dropped BEFORE resolution, so the genuine tx is the effect.
+    #[tokio::test]
+    async fn armed_a_forged_evidence_ahead_of_a_genuine_one_neither_takes_the_mint_nor_picks_the_epoch() {
+        let mut w = world(Some(ForkActivation::always())).await;
+        let forged_tx = evidence_tx(&w, w.atk.seed, w.a_funds[0], forged(&w, 99, w.a_payload));
+        let genuine_tx = evidence_tx(&w, w.honest.seed, w.k_funds[1], genuine(&w, 1, w.k_payload));
+        let (fid, gid) = (forged_tx.id(), genuine_tx.id());
+
+        // Pure-function view of exactly what `apply_slashing_side_effects` computes past the fence.
+        {
+            use kaspa_consensus_core::dns_finality::resolve_slashing_side_effects;
+            let view = w.ctx.consensus.virtual_processor().initial_active_bond_view();
+            let txs = vec![forged_tx.clone(), genuine_tx.clone()];
+            let daa = w.ctx.consensus.get_virtual_daa_score();
+            let window = w.ctx.consensus.params().dns_params.clone().unwrap().evidence_window_blocks;
+            let net = w.ctx.consensus.params().genesis.hash;
+            // What the by-bond filter computed: the forged tx wins the dedup and survives.
+            let mut by_bond = resolve_slashing_side_effects(&txs, &view, daa, 1000, 4000, 4000);
+            let proved = crate::pipeline::virtual_processor::utxo_validation::proved_slash_targets(&txs, &view, net, daa, window);
+            by_bond.retain(|e| proved.contains(&e.bond_outpoint));
+            assert_eq!(by_bond.len(), 1);
+            assert_eq!(by_bond[0].slashing_tx_id, fid, "the by-bond filter lets the forgery choose (the bug this pins)");
+            // What the fix computes: only proved txs reach resolution.
+            let proved_txs =
+                crate::pipeline::virtual_processor::utxo_validation::proved_slashing_evidence_txs(&txs, &view, net, daa, window);
+            assert_eq!(proved_txs.iter().map(|t| t.id()).collect::<Vec<_>>(), vec![gid], "only the genuine tx is proved");
+            let effects = resolve_slashing_side_effects(&proved_txs, &view, daa, 1000, 4000, 4000);
+            eprintln!(
+                "PURE: effects={} slashed_epoch={} slashing_tx_is_genuine={} reporter_is_honest={}",
+                effects.len(),
+                effects[0].slashed_epoch,
+                effects[0].slashing_tx_id == gid,
+                effects[0].reporter_output.as_ref().map(|o| o.script_public_key == p2pkh_mldsa87_spk(&w.k_payload)).unwrap_or(false)
+            );
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].slashed_epoch, 1, "the victim epoch is the SIGNED epoch of the genuine evidence");
+            assert_eq!(effects[0].slashing_tx_id, gid);
+            assert_eq!(
+                effects[0].reporter_output.as_ref().map(|o| o.script_public_key.clone()),
+                Some(p2pkh_mldsa87_spk(&w.k_payload)),
+                "the genuine reporter is the one paid"
+            );
+        }
+
+        merge_side_block(&mut w, vec![forged_tx, genuine_tx]).await;
+        let u = utxos(&w);
+        let forged_mint = u.get(&TransactionOutpoint::new(fid, 0)).map(|e| e.amount);
+        let genuine_mint = u.get(&TransactionOutpoint::new(gid, 0)).map(|e| (e.amount, e.script_public_key.clone()));
+        eprintln!(
+            "ARMED MIXED: bond_utxo_present={} forged_mint={forged_mint:?} genuine_mint={genuine_mint:?} registry_slashed_at={:?}",
+            u.contains_key(&w.bond_outpoint),
+            registry_slashed(&w)
+        );
+        assert!(!u.contains_key(&w.bond_outpoint), "the genuine equivocation slashes");
+        assert_eq!(forged_mint, None, "the forger is minted nothing");
+        assert_eq!(
+            genuine_mint.map(|(_, spk)| spk),
+            Some(p2pkh_mldsa87_spk(&w.k_payload)),
+            "the reporter reward is minted at the GENUINE tx, to its reporter"
+        );
+        assert!(matches!(registry_slashed(&w), Some(Some(_))), "and the registry agrees");
+    }
+
+    /// (3) The node-only half: the mempool refuses the forged evidence and admits the genuine one.
     #[tokio::test]
     async fn node_mempool_refuses_forged_admits_genuine() {
-        let w = world().await;
+        let w = world(None).await;
         let forged_tx = evidence_tx(&w, w.atk.seed, w.a_funds[0], forged(&w, 1, w.a_payload));
         let genuine_tx = evidence_tx(&w, w.honest.seed, w.k_funds[1], genuine(&w, 1, w.k_payload));
         let mempool = |tx: &Transaction| {

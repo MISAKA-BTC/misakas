@@ -70,6 +70,16 @@ impl TrustedDataPackage {
 
         // Topological sort
         blocks.sort_by(|a, b| a.block.header.blue_work.cmp(&b.block.header.blue_work));
+        // Blue work is not a topological order on a round-lane network: a lane's blocks tie (ADR-0125)
+        // and the stable sort keeps them in the syncer's order, which an un-upgraded syncer takes from
+        // the hash. A trusted block processed ahead of its parent is stored WITHOUT that parent
+        // (`collect_known_direct_parents` keeps the known ones), so put parents first. A set whose
+        // blue-work order is already topological is returned exactly as sorted.
+        let blocks = kaspa_consensus_core::topological_order::stable_topological_order(
+            blocks,
+            |tb| tb.block.hash(),
+            |tb| tb.block.header.direct_parents().to_vec(),
+        );
 
         Ok(blocks)
     }

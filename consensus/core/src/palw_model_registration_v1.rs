@@ -32,6 +32,17 @@ pub fn palw_registration_object_id_v1(bytes: &[u8]) -> Hash64 {
 /// (`palw_lifecycle_objects_from_accepted_txs_v2`), so a registration status and the transition
 /// cannot disagree about what a transaction carried.
 pub fn palw_registration_carrier_class_v1(tx: &crate::tx::Transaction) -> Option<(Hash64, Hash64)> {
+    match palw_registration_carrier_object_v1(tx)? {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } => Some((class_id, artifact_root)),
+        _ => None,
+    }
+}
+
+/// **The `ClassRegistered` a lifecycle carrier carries, whole** — [`palw_registration_carrier_class_v1`]'s
+/// read, keeping the object: what a node re-asks its preflight about when a MINED carrier wrote no
+/// row (`REGISTRATION_DROPPED`, testnet-12 lifecycle audit T12-030). `None` for any other
+/// transaction.
+pub fn palw_registration_carrier_object_v1(tx: &crate::tx::Transaction) -> Option<PalwConsensusObjectV2> {
     use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return None;
@@ -40,10 +51,41 @@ pub fn palw_registration_carrier_class_v1(tx: &crate::tx::Transaction) -> Option
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return None;
     }
-    match payload.object {
-        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } => Some((class_id, artifact_root)),
-        _ => None,
+    matches!(payload.object, PalwConsensusObjectV2::ClassRegistered { .. }).then_some(payload.object)
+}
+
+/// **How many DAA past a carrier's acceptance the fold of its accepting block has certainly run** —
+/// the margin before a mined carrier with no class row is read as dropped. A carrier's output enters
+/// the virtual UTXO set when a block carrying it is added, and its row is written when a CHAIN block
+/// accepts that block and folds it (about one block later); inside that interval the row is merely
+/// not written YET.
+pub const PALW_REGISTRATION_DROP_SETTLE_DAA_V1: u64 = 2;
+
+/// **A lifecycle carrier's change: its output 0** (`build_palw_lifecycle_tx`: one input, one change
+/// output back to the funding script). What a node looks up in its virtual UTXO set to learn that a
+/// carrier was mined.
+pub fn palw_lifecycle_carrier_change_v1(carrier: crate::tx::TransactionId) -> crate::tx::TransactionOutpoint {
+    crate::tx::TransactionOutpoint::new(carrier, 0)
+}
+
+/// **Is this registration carrier one the chain mined and the processor DROPPED?** `Some(the DAA it
+/// was accepted at)` exactly when it is out of the mempool, wrote no class row, its change
+/// ([`palw_lifecycle_carrier_change_v1`]) stands in the virtual UTXO set at `change_accepted_daa`, and
+/// the virtual is [`PALW_REGISTRATION_DROP_SETTLE_DAA_V1`] past it — so the fold of its accepting
+/// block has run. Inside that margin a mined carrier is merely not folded yet (review of T12-030);
+/// with its change spent (or never mined) there is no evidence either way and the answer is `None`.
+/// Node policy (`getPalwModelRegistrationStatus`); nothing that folds calls it.
+pub fn palw_registration_carrier_dropped_v1(
+    in_mempool: bool,
+    row_written: bool,
+    change_accepted_daa: Option<u64>,
+    virtual_daa: u64,
+) -> Option<u64> {
+    if in_mempool || row_written {
+        return None;
     }
+    let mined = change_accepted_daa?;
+    (virtual_daa >= mined.saturating_add(PALW_REGISTRATION_DROP_SETTLE_DAA_V1)).then_some(mined)
 }
 
 /// **Which class-table row a carrier wrote — inclusion read off the chain's own record.**
@@ -108,6 +150,13 @@ pub enum PalwModelRegistrationCodeV1 {
     CourtCovered,
     KimiFamilyNeedsItsFence,
     AdmissionOk,
+    /// Past `palw_offence_attribution` the class is not attributable
+    /// (`palw_registration_attribution_v1`'s `Class` arm): the processor drops the registration.
+    ClassNotAttributable,
+    /// The carrier was MINED (its output stands in the virtual UTXO set) and no class row was
+    /// written: the processor dropped the object. The fee is spent; re-sending the same object
+    /// pays again for the same drop (testnet-12 lifecycle audit T12-030).
+    RegistrationDropped,
 }
 
 impl PalwModelRegistrationCodeV1 {
@@ -125,6 +174,8 @@ impl PalwModelRegistrationCodeV1 {
             Self::CourtCovered => "CourtCovered",
             Self::KimiFamilyNeedsItsFence => "KimiFamilyNeedsItsFence",
             Self::AdmissionOk => "ADMISSION_OK",
+            Self::ClassNotAttributable => "CLASS_NOT_ATTRIBUTABLE",
+            Self::RegistrationDropped => "REGISTRATION_DROPPED",
         }
     }
 
@@ -142,6 +193,10 @@ impl PalwModelRegistrationCodeV1 {
             Self::CourtCovered => "every kernel the graph reaches is in this court's catalog",
             Self::KimiFamilyNeedsItsFence => "the class reaches a Kimi K3 kernel and the Kimi family fence is closed",
             Self::AdmissionOk => "the processor's admission gate would admit this registration",
+            Self::ClassNotAttributable => {
+                "past palw_offence_attribution the class is not attributable (canonical job, logits head, Kimi kernel or prompt form)"
+            }
+            Self::RegistrationDropped => "the carrier was mined, and the processor dropped the object: no class row was written",
         }
     }
 
@@ -168,6 +223,8 @@ impl PalwModelRegistrationCodeV1 {
             "ARTIFACT_ROOT_MISMATCH" => Some(Self::ArtifactRootMismatch),
             "REGISTRATION_NOT_INCLUDED" => Some(Self::RegistrationNotIncluded),
             "READY_SEATS_INSUFFICIENT" => Some(Self::ReadySeatsInsufficient),
+            "CLASS_NOT_ATTRIBUTABLE" => Some(Self::ClassNotAttributable),
+            "REGISTRATION_DROPPED" => Some(Self::RegistrationDropped),
             _ => None,
         }
     }
@@ -223,6 +280,9 @@ pub fn palw_model_reject_from_submit_text_v1(text: &str) -> Option<PalwModelRegi
     if t.contains("ARTIFACT") && t.contains("ROOT") {
         return Some(PalwModelRegistrationCodeV1::ArtifactRootMismatch);
     }
+    if t.contains("NOT ATTRIBUTABLE") || t.contains("CLASS_NOT_ATTRIBUTABLE") {
+        return Some(PalwModelRegistrationCodeV1::ClassNotAttributable);
+    }
     None
 }
 
@@ -259,7 +319,9 @@ impl PalwModelPreflightReportV1 {
     }
 }
 
-/// Processor-same preflight: fit walls plus [`verify_class_admission_v9`].
+/// Processor-same preflight: fit walls plus [`verify_class_admission_v9`] and the attribution
+/// checks the processor asks beside it
+/// ([`crate::palw_attempt_rules_v1::palw_registration_attribution_v1`]).
 pub fn palw_model_preflight_v1(
     params: &Params,
     bundle: &PalwConsensusParamsV2,
@@ -315,24 +377,36 @@ pub fn palw_model_preflight_v1(
         shape.kimi_family,
         // 2026-09-23 audit C-4: the geometry a non-fused class is priced from must fit its query row.
         shape.attention_geometry_bound,
-    )
-    // ADR-0152 §4-ter C5, asked where the processor asks it (beside the gate).
-    .and_then(|entry| {
-        crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(profile, params.palw_offence_attribution_active_at(daa_score))
-            .map(|()| entry)
-    });
+    );
+    // **The processor's attribution checks, asked where it asks them** (beside the gate, after it):
+    // ADR-0152 §4-ter C5's held check and addendum §4-bis.8's — one shared function, the processor's
+    // two calls with its arguments (testnet-12 lifecycle audit T12-030: this preflight asked only
+    // the first, so a canonical job the processor drops read ADMISSION_OK).
+    let attribution = crate::palw_attempt_rules_v1::palw_registration_attribution_v1(
+        profile,
+        canonical,
+        shape.offence_attribution,
+        shape.prompt_ids_form,
+    );
 
     let mut reject_code = String::new();
     let mut processor_verdict = PalwModelRegistrationCodeV1::AdmissionOk.code().to_string();
-    let admissible = match &admission {
-        Ok(_) => {
+    let admissible = match (&admission, &attribution) {
+        (Ok(_), Ok(())) => {
             checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::CourtCovered, true));
             if *share_permille > 0 {
                 checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::AdmissionOk, true));
             }
             true
         }
-        Err(err) => {
+        (Ok(_), Err(err)) => {
+            checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::CourtCovered, true));
+            checks.push(PalwModelPreflightCheckV1 { code: err.code().to_string(), ok: false, message: err.to_string() });
+            reject_code = err.code().to_string();
+            processor_verdict = err.code().to_string();
+            false
+        }
+        (Err(err), _) => {
             checks.push(PalwModelPreflightCheckV1::from_admission_err(err));
             reject_code = err.code().to_string();
             processor_verdict = err.code().to_string();
@@ -467,6 +541,24 @@ mod tests {
             palw_registration_row_written_by_v1(&other_root, 1_234, &rows).is_none(),
             "a rival registration does not claim the row"
         );
+    }
+
+    /// **The DROPPED judgement** (review of T12-030): only a carrier out of the mempool, with no row,
+    /// whose change stands mined, and only from two DAA past its acceptance — inside that margin a
+    /// successful carrier is mined and not yet folded, and must not read as dropped.
+    #[test]
+    fn a_mined_carrier_reads_dropped_only_past_the_fold_of_its_block() {
+        use PALW_REGISTRATION_DROP_SETTLE_DAA_V1 as SETTLE;
+        assert_eq!(SETTLE, 2);
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, Some(100), 100), None, "accepted this DAA: not folded yet");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, Some(100), 101), None, "one DAA on: still inside the margin");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, Some(100), 102), Some(100), "past the fold of its block");
+        assert_eq!(palw_registration_carrier_dropped_v1(true, false, Some(100), 500), None, "still pooled");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, true, Some(100), 500), None, "its row is written");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, None, 500), None, "no mined change: no evidence");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, Some(u64::MAX), u64::MAX), Some(u64::MAX), "no overflow");
+        let carrier = crate::tx::TransactionId::from_u64_word(7);
+        assert_eq!(palw_lifecycle_carrier_change_v1(carrier), crate::tx::TransactionOutpoint::new(carrier, 0));
     }
 
     /// Only a lifecycle carrier at the fold's wire version carrying a `ClassRegistered` names a class.

@@ -3,6 +3,7 @@ pub mod constants;
 pub mod drill;
 pub mod genesis;
 pub mod class_manifest_const_v1;
+pub mod ibd_checkpoint;
 pub mod params;
 pub mod premine;
 pub mod trusted_checkpoint;
@@ -49,6 +50,12 @@ pub struct Config {
     /// by verified work. `None` means the node has no external trust root and must rely on work
     /// alone — which is the weak-subjectivity gap ADR-0009 documents, not a safe default.
     pub trusted_checkpoint: Option<trusted_checkpoint::TrustedCheckpoint>,
+
+    /// Node-side IBD checkpoints: the network's built-in list plus every `--checkpoint`. A proof or
+    /// synced header chain covering one of these DAA scores without passing through that block is
+    /// refused and its peer banned ([`ibd_checkpoint`]). Node policy only: never read by consensus
+    /// and never hashed into any params or fork id.
+    pub ibd_checkpoints: Vec<ibd_checkpoint::IbdCheckpoint>,
 
     // TODO: move non-consensus parameters like utxoindex to a higher scoped Config
     /// Enable the UTXO index
@@ -169,6 +176,12 @@ pub struct Config {
     /// only when this is set and the public genesis only when it is not. Not a consensus input: the
     /// salt reaches consensus through the genesis it moved.
     pub palw_drill_genesis_salt: Option<drill::PalwDrillSaltV1>,
+
+    /// **The post-launch fences this drill moved, or empty on every real network** (a salted
+    /// testnet-12 drill's `--palw-drill-fence-at`, `drill::palw_drill_post_launch_fences_at_v1`).
+    /// Written by kaspad in the same place as the move itself, so the node prints what its params
+    /// carry. Not a consensus input: the move reaches consensus through the params.
+    pub palw_drill_fence_moves: Vec<drill::PalwDrillFenceMoveV1>,
 }
 
 impl Config {
@@ -184,6 +197,7 @@ impl Config {
             is_archival: false,
             enable_sanity_checks: false,
             trusted_checkpoint: None,
+            ibd_checkpoints: Vec::new(),
             utxoindex: false,
             unsafe_rpc: false,
             enable_unsynced_mining: false,
@@ -207,6 +221,7 @@ impl Config {
             evm_prune_legacy_206: false,
             evm_materialize_pp_anchor: false,
             palw_drill_genesis_salt: None,
+            palw_drill_fence_moves: Vec::new(),
         }
     }
 

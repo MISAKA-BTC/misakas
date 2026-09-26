@@ -17,6 +17,7 @@ impl BlockBodyProcessor {
         Self::check_hash_merkle_root(block)?;
         Self::check_only_one_coinbase(block)?;
         Self::check_evm_payload(block)?;
+        self.check_round_block_carries_no_evm_payload(block)?;
         self.check_transactions_in_isolation(block)?;
         let mass = self.check_block_mass(block)?;
         self.check_duplicate_transactions(block)?;
@@ -74,11 +75,18 @@ impl BlockBodyProcessor {
             return Ok(());
         }
         let bytes = block.evm_payload.payload_bytes();
-        if bytes.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
-            return Err(RuleError::EvmPayloadTooLarge(bytes.len(), MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK));
-        }
+        // Bridge audit BR-1 (node-only): the commitment is checked BEFORE the size cap. A payload
+        // that does not hash to the header's commitment is a bad delivery (`EvmPayloadHashMismatch`,
+        // which the body processor never persists as `StatusInvalid`); only a payload the block id
+        // really commits to can be judged too large — and then the block itself is invalid. Every
+        // (header, payload) pair gets the same accept/reject as before; only the error of a pair
+        // that fails both changes. Hashing an over-cap payload is bounded: P2P decoding refuses
+        // bytes over the cap, and RPC is bounded by its message limit.
         if block.header.evm_payload_hash != kaspa_consensus_core::evm::payload_hash_of_bytes(&bytes) {
             return Err(RuleError::EvmPayloadHashMismatch);
+        }
+        if bytes.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
+            return Err(RuleError::EvmPayloadTooLarge(bytes.len(), MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK));
         }
         // ADR-0089: deposit claims and market settlements are two budgets — each op kind is
         // counted against its own cap, so a settlement never spends a claim's slot or vice versa.
@@ -100,6 +108,30 @@ impl BlockBodyProcessor {
         }
         crate::processes::evm::admit_evm_payload_txs(&block.evm_payload)
             .map_err(|(i, reason)| RuleError::EvmPayloadTxInadmissible(i, reason))?;
+        Ok(())
+    }
+
+    /// **Lane accept-order (post-launch): from `palw_lane_accept_parents_first`, keyed on the round
+    /// block's own DAA score, a round block carries no EVM payload.**
+    ///
+    /// A merging block executes every mergeset block's payload (`AcceptedEvmTxs`), and nothing on the
+    /// EVM side asks a round block for its permit: a round block is valid at the header with any bond's
+    /// signature, and an unpermitted one — whose transactions the UTXO side never accepts — still had its
+    /// payload executed, in an order its producer could grind by hash within a tied lane, against the
+    /// merging block's gas budget. The node's own round template has always carried an empty payload
+    /// (`round_adapt_block_template`); past the fence the rule says so. After `check_evm_payload`, so a
+    /// payload the id does not commit to is still a bad delivery (never persisted invalid), and only a
+    /// committed one poisons the block.
+    fn check_round_block_carries_no_evm_payload(&self, block: &Block) -> BlockProcessResult<()> {
+        let daa_score = block.header.daa_score;
+        let round = block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+            && self.palw_round_lane.is_some_and(|fence| fence.is_active(daa_score));
+        if round
+            && self.palw_lane_accept_parents_first.is_some_and(|fence| fence.is_active(daa_score))
+            && !block.evm_payload.is_empty()
+        {
+            return Err(RuleError::RoundBlockCarriesEvmPayload);
+        }
         Ok(())
     }
 

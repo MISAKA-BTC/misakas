@@ -181,6 +181,15 @@ impl ConsensusSessionOwned {
     pub fn validate_and_insert_block_batch(&self, mut batch: Vec<Block>) -> BlockProcessingBatch {
         // Sort by blue work in order to ensure topological order
         batch.sort_by(|a, b| a.header.blue_work.partial_cmp(&b.header.blue_work).unwrap());
+        // ... which it is not on a round-lane network: a lane's blocks tie on blue work (ADR-0125) and
+        // a stable sort leaves ties in the caller's order — for the orphan pool, a hash set's. Put any
+        // child that still precedes a parent in this batch behind it; a batch whose blue-work order is
+        // already topological is left exactly as sorted.
+        let batch = kaspa_consensus_core::topological_order::stable_topological_order(
+            batch,
+            |block| block.hash(),
+            |block| block.header.direct_parents().to_vec(),
+        );
         let (block_tasks, virtual_state_tasks) = batch
             .iter()
             .map(|b| {
@@ -246,6 +255,22 @@ impl ConsensusSessionOwned {
         accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
     ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1> {
         self.consensus.palw_da_accusation_check_v1(claim, accuser)
+    }
+
+    /// Lane B of the panel-seed stopgap (2026-09-26): the claims an operator's non-seat filer may accuse.
+    pub fn palw_operator_da_candidates_v1(
+        &self,
+        operators: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaCandidateV1> {
+        self.consensus.palw_operator_da_candidates_v1(operators)
+    }
+
+    /// Lane B: one operator bond's standing (collateral net of slashes, A-6's room, DA exposure held).
+    pub fn palw_operator_da_standing_v1(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaStandingV1> {
+        self.consensus.palw_operator_da_standing_v1(bond)
     }
 
     /// ADR-0152 R-3/R-4 (P2-8): the reporter filer's read of one filing, and the gate on one object.

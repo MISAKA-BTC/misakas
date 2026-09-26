@@ -379,8 +379,19 @@ pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selec
         }
     };
     println!("  {:<11}{artifact}", "Artifact");
-    if let Some(c) = class.collateral {
-        println!("  {:<11}a bond for it locks {}", "Bond", crate::operator::catalog::msk(c as u128));
+    // What each role's bond locks — a saturated sizing reads as words, never as `u64::MAX` in MSK.
+    {
+        use crate::operator::wizard::{BondLock, BondRole};
+        let mut bond_lines = Vec::new();
+        if let producer @ (BondLock::Sompi(_) | BondLock::NotAvailable) = class.lock(BondRole::PRODUCER) {
+            bond_lines.push(format!("to produce: {}", producer.shown()));
+        }
+        if let BondLock::Sompi(seat) = class.lock(BondRole::SEAT) {
+            bond_lines.push(format!("as a verifier seat: at least {}", crate::operator::catalog::msk(seat as u128)));
+        }
+        for (i, line) in bond_lines.iter().enumerate() {
+            println!("  {:<11}{line}", if i == 0 { "Bond" } else { "" });
+        }
     }
     let market_line = match &market {
         Some(m) if market_from_response(m).is_open() => {

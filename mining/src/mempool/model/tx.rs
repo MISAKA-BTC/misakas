@@ -102,6 +102,10 @@ pub(crate) enum TxRemovalReason {
     /// redeemers by the gate sweep every node runs at each new block
     /// (`MiningManager::evict_palw_refused_carriers`) — not only by a template build.
     PalwCarrierRefused,
+    /// **A market carrier (seed, buy, carrier sell, Activation Pool top-up) the tip's market gate now
+    /// refuses** (P-B3 / P-B1, `palw_mempool_market_refusal`), evicted with its redeemers by the same
+    /// per-block sweep (the V01 review's LOW 3) — not only by a template build.
+    PalwMarketCarrierRefused,
 }
 
 impl TxRemovalReason {
@@ -121,6 +125,7 @@ impl TxRemovalReason {
             TxRemovalReason::AttestationReplaced => "attestation replaced",
             TxRemovalReason::AttestationTemplateDropped => "attestation template-dropped",
             TxRemovalReason::PalwCarrierRefused => "PALW carrier refused by the tip's fold",
+            TxRemovalReason::PalwMarketCarrierRefused => "PALW market carrier refused by the tip's market gate",
         }
     }
 

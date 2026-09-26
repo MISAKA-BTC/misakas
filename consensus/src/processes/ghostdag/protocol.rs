@@ -82,16 +82,30 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
 /// below the window is red, i.e. no block this rule turns blue is deeper than a red the
 /// bounded-merge rule already admits. That also bounds the walk itself, which would otherwise run
 /// back through every heartbeat to the candidate's parent.
+///
+/// **F1 (ADR-0105 §11, a post-launch flag day): `same_chain`** rides here for the same reason — it
+/// narrows this rule and nothing else, so it travels with it to every site that colors (the header
+/// path, the virtual, and the pruning proof's build, validate and apply), and cannot be forgotten at
+/// one of them. `None` on every shipped preset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeartbeatTransparency {
     pub fence: kaspa_consensus_core::config::params::ForkActivation,
     pub merge_depth: u64,
+    /// `Params::palw_heartbeat_transparent_same_chain_fence`: past it (at the candidate's own DAA
+    /// score) a non-heartbeat candidate is `Weighted` only if it hangs from the merging block's own
+    /// selected chain (`GhostdagManager::hangs_from_the_merging_chain`).
+    pub same_chain: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl HeartbeatTransparency {
-    /// The fence from `params`, with the mode and the lane folded in, and the merge depth beside it.
+    /// The fence from `params`, with the mode and the lane folded in, and the merge depth and the
+    /// same-chain restriction beside it.
     pub fn from_params(params: &kaspa_consensus_core::config::params::Params) -> Option<Self> {
-        params.palw_heartbeat_transparent_fence().map(|fence| Self { fence, merge_depth: params.merge_depth() })
+        params.palw_heartbeat_transparent_fence().map(|fence| Self {
+            fence,
+            merge_depth: params.merge_depth(),
+            same_chain: params.palw_heartbeat_transparent_same_chain_fence(),
+        })
     }
 }
 
@@ -115,6 +129,20 @@ enum LaneColoring {
     /// anticone, their counts not consulted, and it does not enlarge theirs. Among non-heartbeat
     /// blocks it is the classic k-cluster rule, bounded by the merge-depth window
     /// ([`HeartbeatTransparency`]).
+    ///
+    /// **F1 — past `HeartbeatTransparency::same_chain` (ADR-0105 §11, a post-launch flag day), only
+    /// a candidate that hangs from the merging block's own selected chain is `Weighted`.** ADR-0105
+    /// was written for a draw that lands late on the chain it was built on: the heartbeats in its
+    /// anticone were minted on top of its own selected parent while it computed. Below that fence a
+    /// non-heartbeat block is invisible-to-heartbeats in EVERY block that merges it, including one
+    /// whose selected chain is another branch — so a bondless heartbeat miner's private branch
+    /// merges the public chain's attempts BLUE (its own beats do not count against them), carries
+    /// every public 2²⁰ plus its own ε and out-weighs the public chain by ε: a double spend with no
+    /// bond (measured, `hb_fork_choice_probe::hb_regression_*`). Past it, a non-heartbeat block that
+    /// does not hang from the merging chain is [`LaneColoring::Classic`]: every heartbeat of the other
+    /// branch counts against it, as GHOSTDAG always did. A branch can then take the weight only of
+    /// attempts drawn on its own chain — at or below its fork point, which the other branch holds on
+    /// its chain as well, so that weight decides nothing.
     Weighted,
 }
 
@@ -308,7 +336,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
                 new_block_data.add_red(blue_candidate);
                 continue;
             }
-            let lane = self.lane_coloring(blue_candidate);
+            let lane = self.lane_coloring(blue_candidate, selected_parent);
             // ADR-0105: the lowest blue score a `Weighted` candidate's coloring walk may reach once it
             // has passed over a heartbeat. The new block's blue score is the selected parent's plus
             // its final mergeset blues, which are at most the blues already added (the selected
@@ -372,11 +400,14 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         self.is_heartbeat_header(&self.headers_store.get_header(hash).unwrap())
     }
 
-    /// **ADR-0105: which rule colors `candidate`.** Keyed on the candidate's OWN DAA score, which is
-    /// fixed before any block that merges it is colored — so the answer never depends on the new
-    /// block's GHOSTDAG output, and a block below the fence is colored identically by every build.
-    /// No header is read where the fence is not configured.
-    fn lane_coloring(&self, candidate: BlockHash) -> LaneColoring {
+    /// **ADR-0105: which rule colors `candidate` in the block whose selected parent is
+    /// `merging_selected_parent`.** Keyed on the candidate's OWN DAA score, which is fixed before any
+    /// block that merges it is colored — so the answer never depends on the new block's GHOSTDAG
+    /// output, and a block below a fence is colored identically by every build. No header is read
+    /// where the transparency fence is not configured, and the chain walk below runs only for a
+    /// non-heartbeat candidate at or past the same-chain fence: below it this is the shipped rule,
+    /// byte for byte, and reads exactly what the shipped rule reads.
+    fn lane_coloring(&self, candidate: BlockHash, merging_selected_parent: BlockHash) -> LaneColoring {
         let Some(transparency) = self.heartbeat_transparent else {
             return LaneColoring::Classic;
         };
@@ -385,8 +416,69 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             LaneColoring::Classic
         } else if self.is_heartbeat_header(&header) {
             LaneColoring::Heartbeat
+        } else if transparency.same_chain.is_some_and(|fence| fence.is_active(header.daa_score))
+            && !self.hangs_from_the_merging_chain(candidate, merging_selected_parent, transparency.merge_depth)
+        {
+            // F1 (ADR-0105 §11): an attempt of another branch is colored against that branch's
+            // heartbeats — classic GHOSTDAG.
+            LaneColoring::Classic
         } else {
             LaneColoring::Weighted
+        }
+    }
+
+    /// **F1 (ADR-0105 §11): does `candidate` hang from the merging block's own selected chain?** Is
+    /// its selected parent `merging_selected_parent`, or one of that block's selected-chain
+    /// ancestors no more than `window` (the merge depth) blue score below it?
+    ///
+    /// **Walked on the GHOSTDAG store, not asked of the reachability tree.** The two agree on the
+    /// header path and in the pruning proof's build and validate, which all make the GHOSTDAG
+    /// selected parent the tree parent. They need not agree on a node that applied a pruning proof:
+    /// `apply_proof` fills the tree below the pruning point from the heaviest parent by the header's
+    /// blue work, which does not know the round lane (ADR-0125: a round block is never a selected
+    /// parent) — a round block tied with a chain block on blue work and winning the hash tie would be
+    /// that node's tree parent and not its selected parent, and a verdict read off the tree would then
+    /// differ from the network's in a block right above its pruning point. The selected parent a
+    /// block's GHOSTDAG data records is the one every path computes (`find_selected_parent`), or the
+    /// syncer's own for a trusted block, so the walk is a pure function of the DAG on every path.
+    ///
+    /// **Bounded**: blue score strictly falls along a selected chain, so the walk visits at most
+    /// `window + 1` blocks, and a candidate whose selected parent sits deeper than the window is
+    /// answered without walking (`false`) — a block cannot make this node walk its whole chain by
+    /// merging an old block. Such a candidate is red under the transparent rule too wherever its
+    /// coloring walk passes a heartbeat on the way down — the merge-depth floor
+    /// ([`HeartbeatTransparency`]) comes before its own ancestor — and where it passes none the two
+    /// rules count the same blues.
+    /// A read that fails (the walk ran off a proof's truncated root) answers `false`, the classic
+    /// rule, identically on every node that holds the same level of the same DAG.
+    fn hangs_from_the_merging_chain(&self, candidate: BlockHash, merging_selected_parent: BlockHash, window: u64) -> bool {
+        let target = self.ghostdag_store.get_selected_parent(candidate).expect("a mergeset candidate has GHOSTDAG data");
+        // A candidate that hangs from ORIGIN (a proof level's truncated root) hangs from no chain.
+        if target.is_origin() {
+            return false;
+        }
+        let Ok(target_score) = self.ghostdag_store.get_blue_score(target) else {
+            return false;
+        };
+        let mut current = merging_selected_parent;
+        loop {
+            if current == target {
+                return true;
+            }
+            if current.is_origin() {
+                return false;
+            }
+            let Ok(score) = self.ghostdag_store.get_blue_score(current) else {
+                return false;
+            };
+            // Past the target's height without meeting it, or out of the window: not on this chain.
+            if score <= target_score || score - target_score > window {
+                return false;
+            }
+            let Ok(parent) = self.ghostdag_store.get_selected_parent(current) else {
+                return false;
+            };
+            current = parent;
         }
     }
 
@@ -762,6 +854,78 @@ mod lane_weight_tests {
         for lane in [PalwAttemptLaneV1::LegacyArm, PalwAttemptLaneV1::ExecutionArm] {
             assert_eq!(palw_lane_blue_work_v1(lane.attempt_algo_id(), BITS, FENCE, None, None, BlueWorkType::from(0u64)), hash_priced);
         }
+    }
+
+    /// **lane: rcore/hf-pptake2 — the pruning-proof takeover reproduced at the weight function
+    /// `compare_proofs_inner` compares chains with.**
+    ///
+    /// `compare_proofs_inner` ranks two pruning proofs by accumulated blue work, and that blue work
+    /// is the sum of `palw_lane_blue_work_v1` over the level chains (via `GhostdagManager::with_level`,
+    /// whose only callers are the proof's build and validate) plus the declared pruning-period span.
+    /// `palw_lane_blue_work_v1` is a pure function of the header — the bond and the class-ticket
+    /// lottery are chain state it never sees — so a lottery-LOSING, UNBONDED attempt header (one
+    /// ML-DSA-87 signature on testnet-12, whose attempt lane sits at the ambient PoW target) carries
+    /// the SAME 2²⁰ constant a genuine bonded winner does, at every proof level, while the honest
+    /// clock — the heartbeat — carries only ε = 1. So a headers-only fork of a HANDFUL of free
+    /// attempts outweighs an honest heartbeat chain of ANY practical length, and the proof
+    /// comparison adopts it (the takeover this lane fences at the adoption gate).
+    ///
+    /// This measures that asymmetry on the shipped testnet-12 rules; the takeover's completion (the
+    /// adoption commit that then ties on `{frontier 0, safe 0, live 0}` and is decided by the
+    /// candidate hash) and its close are in `palw_fork_authority_v2::tests::
+    /// pruning_proof_adoption_keeps_the_incumbent_on_an_all_economic_tie`.
+    #[test]
+    fn pptake2_a_free_attempt_proof_outranks_an_honest_heartbeat_chain_of_any_length() {
+        use super::palw_lane_blue_work_v1;
+        use kaspa_consensus_core::config::params::palw_t12_shipped_params;
+        use kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
+        use kaspa_consensus_core::pow_layer0::{PALW_V2_ATTEMPT_BITS, PalwAttemptLaneV1};
+
+        // testnet-12 as shipped arms both lanes at genesis, so these are the rules a live node runs.
+        let t12 = palw_t12_shipped_params();
+        let heartbeat = t12.palw_heartbeat.map(|h| h.activation);
+        let attempt_work = t12.palw_attempt_work.map(|w| w.activation);
+        assert!(heartbeat.is_some_and(|f| f.is_active(0)), "t12 arms the heartbeat lane at genesis");
+        assert!(attempt_work.is_some_and(|f| f.is_active(0)), "t12 arms the attempt-work constant at genesis");
+
+        let attempt_id = PalwAttemptLaneV1::ExecutionArm.attempt_algo_id();
+        let epsilon = BlueWorkType::from(HEARTBEAT_BLUE_WORK_EPSILON);
+        let two_20 = BlueWorkType::from(1u64 << PALW_ATTEMPT_BLUE_WORK_LOG2);
+
+        // One heartbeat weighs ε; one free, unbonded attempt weighs 2²⁰ — at every proof level (the
+        // attempt lane earns NO level-sized weight, so `level_work` never lifts it above the
+        // constant), whatever DAA the header declares. The lottery outcome and the bond cannot enter
+        // here; there is no input that carries them.
+        let hb = palw_lane_blue_work_v1(PALW_HEARTBEAT_ALGO_ID, PALW_V2_ATTEMPT_BITS, 5_000, heartbeat, attempt_work, BlueWorkType::from(0u64));
+        assert_eq!(hb, epsilon, "a heartbeat weighs ε = 1");
+        for level in [0u8, 1, 8, 64] {
+            for daa in [0u64, 499, 500, 50_000] {
+                assert_eq!(
+                    palw_lane_blue_work_v1(attempt_id, PALW_V2_ATTEMPT_BITS, daa, heartbeat, attempt_work, level_work(level, 225)),
+                    two_20,
+                    "a free attempt header weighs 2^20 at proof level {level}, declared DAA {daa} — bond/lottery-blind"
+                );
+            }
+        }
+
+        // The takeover arithmetic, on `compare_proofs_inner`'s own metric. Take an honest heartbeat
+        // chain of a MILLION blocks (far more than testnet-12 has near DAA 500): its whole accumulated
+        // proof weight is 1,000,000·ε. A single free attempt already outweighs it, and any honest
+        // chain length is outweighed by ⌈honest·ε / 2^20⌉ + 1 free signatures — no bond, no lottery
+        // win, no inference.
+        let honest_blocks: u64 = 1_000_000;
+        let honest_weight = epsilon * BlueWorkType::from(honest_blocks);
+        assert!(two_20 > honest_weight, "one free attempt (2^20) already outranks a million honest heartbeats");
+        // And with a still-larger honest chain, a small constant number of free attempts suffices.
+        let big_honest: u64 = 100_000_000;
+        let big_weight = epsilon * BlueWorkType::from(big_honest);
+        let attempts_needed = big_weight / two_20 + BlueWorkType::from(1u64);
+        assert!(
+            two_20 * attempts_needed > big_weight,
+            "a headers-only fork of {attempts_needed} free attempts outranks {big_honest} honest heartbeats"
+        );
+        // ε : 2^20 is the exchange rate the proof pays a free signature.
+        assert_eq!(two_20 / hb, two_20, "a free attempt header outweighs a heartbeat 2^20 : 1, live and in the proof alike");
     }
 
     /// **rcore/hf-pptake — what an attempt header weighs toward the pruning proof, as shipped.**

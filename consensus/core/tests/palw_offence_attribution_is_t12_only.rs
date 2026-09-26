@@ -85,10 +85,11 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// HIGH): armed from genesis on testnet-12 and hashed Some-only into all three ids;
 /// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
 /// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
+// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was c4b06529…, c9fa230b…)
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "937c60e803d6be5d211be4f93a5291ca89fe09913659cef0b0c9a48bbf820106",
+    "5e6607f296fd4a8e6fe4305a7b01b5dd7751b6a11ed8fed907366cc516c4c9ea",
     "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
-    "f19448fb847caab08af0f858eab4acbfb59ff4be5b24a45fcdbad7d95a4da1a1",
+    "048e9ed2b619f1fc1215645fe54722a173cd5f1d85540d17925145b005a2fafa",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -103,10 +104,11 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 ///
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
 /// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
+// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was 122345b7…, acff74b1…)
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "dc03241310fa50c9db9655aa26c3cd26b1b17f8f2481b898ad744e2d267ac460",
+    "f518ba661c5bb3220e97eb86d54feb4d7e290481d922ace0c3a880509e79c647",
     "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
-    "4791135724c1427dc1d73e7ad26a5d6639fda6cc4f529c9b927e49aff17b22aa",
+    "83cd5f3694dc470cbe18f027ffc21fe0d1403ad80d26f1b5eee247825b348ca1",
 );
 
 fn shipped(name: &str) -> Params {
@@ -229,10 +231,12 @@ fn a_later_height_is_refused_by_validation() {
         let refusal = late.validate_palw_v2().expect_err("a later crossing keys one false Valid under two ledgers");
         assert!(format!("{refusal:?}").contains("palw_offence_attribution may only be armed at genesis"), "{height}: {refusal:?}");
     }
-    let mut never = t12.clone();
-    never.palw_offence_attribution = Some(ForkActivation::never());
     // ADR-0152: R-core+ is armed above this fence on testnet-12 and refuses to stand without it, so
-    // the absence that validates is the fence's with R-core+ taken off too.
+    // the absence that validates is the fence's with R-core+ taken off too — on the LAUNCH ruleset
+    // (`palw_t12_launch_params_v1`): the post-launch release's fences armed at DAA 750 stand on
+    // R-core+ as well, and are not what this fence's genesis rule is about.
+    let mut never = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
+    never.palw_offence_attribution = Some(ForkActivation::never());
     never.palw_rcore_plus = None;
     never.palw_rcore_conservative_classes = &[];
     never.sync_palw_rcore_plus();

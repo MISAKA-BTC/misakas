@@ -448,6 +448,16 @@ pub struct PalwAdmissionShapeV1 {
     /// "admissible" for a class the chain then refused — after the registrant had paid the carrier
     /// (the 2026-09-23 route-matrix audit's #6).
     pub legal_job_bound: bool,
+    /// **ADR-0152 v3.1 addendum §4-bis.8 / §4-ter C5**: `Params::palw_offence_attribution` active at
+    /// the height — whether the processor asks [`palw_held_class_is_attributable_v1`] and
+    /// [`crate::palw_attempt_rules_v1::palw_attributable_class_v1`] of the registration beside the
+    /// gate. Carried so every pre-check that reads a shape asks both (testnet-12 lifecycle audit
+    /// T12-030: the preflights answered `ADMISSION_OK` for a canonical job `(14, 2)` the fold then
+    /// dropped as "not the formula's (1, 2)" — after the registrant had paid the carrier).
+    pub offence_attribution: bool,
+    /// `Params::palw_prompt_ids_form_at` at the height — the network form the attribution check's
+    /// (d) reads (the court's own copy is `None` where the court is dormant).
+    pub prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 }
 
 /// **ADR-0103: what the held regime's gate reads at the height** — the caller's reading of two
@@ -497,6 +507,8 @@ pub fn palw_admission_shape_at_v1(
         kimi_family: params.palw_kimi_k3_at(daa_score),
         attention_geometry_bound: params.palw_audit_2026_09_23_active_at(daa_score),
         legal_job_bound: params.palw_canonical_work_daa().is_some_and(|height| daa_score >= height),
+        offence_attribution: params.palw_offence_attribution_active_at(daa_score),
+        prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),
     })
 }
 

@@ -142,7 +142,7 @@ pub(crate) fn kaspad_args(p: &Profile, role: Role) -> Result<Vec<String>, Findin
     // and could carry nothing — no quorum, no court answer. So the persisted outpoint is passed as
     // the flag when the configuration names none: with the flag present the panel tries the
     // persisted one, then this one, then scans the key's own outputs.
-    let persisted = std::fs::read_to_string(p.persisted_fee_outpoint()).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let persisted = p.newest_persisted_fee_outpoint();
     if let Some(fee) = p.fee_outpoint.clone().or(persisted) {
         args.push(format!("--palw-fee-outpoint={fee}"));
     } else if role == Role::Miner {
@@ -1345,6 +1345,12 @@ mod tests {
         p.fee_outpoint = Some("aa:1".into());
         let args = kaspad_args(&p, Role::Miner).unwrap();
         assert!(args.contains(&"--palw-fee-outpoint=aa:1".to_string()), "the configured one wins: {args:?}");
+        // T12-046: the panel now remembers its fee chain's lineage, newest first — the flag is the
+        // newest line, never the whole file.
+        std::fs::write(panel.join("palw-fee-outpoint"), "dd:0\ncc:1\nbb:0").unwrap();
+        p.fee_outpoint = None;
+        let args = kaspad_args(&p, Role::Miner).unwrap();
+        assert!(args.contains(&"--palw-fee-outpoint=dd:0".to_string()), "the newest line: {args:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

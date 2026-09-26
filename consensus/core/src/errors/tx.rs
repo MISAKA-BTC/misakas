@@ -203,6 +203,15 @@ pub enum TxRuleError {
     #[error("transaction output #{0} is an activation sink before the pool's activation (daa {1})")]
     ActivationSinkBeforePoolActivation(usize, u64),
 
+    /// **Lane sink (the 2026-09-25 Position review's #1): a model sink nothing binds.** In a block at
+    /// or past `Params::palw_model_sink_bound`, every `OP_RETURN "MSKMDL01" <line>` output must be the
+    /// one its lifecycle carrier's `ModelBuy` or `ModelSeed` names, with its value and its line, on a
+    /// carrier that pays a refund payee — or the transaction, and a block carrying it, is invalid: a
+    /// model sink can never burn silently
+    /// ([`crate::palw_model_market_v1::palw_model_sink_binding_refusal_v1`]).
+    #[error("transaction output #{0} is an unbound model sink: {1}")]
+    ModelSinkUnbound(usize, &'static str),
+
     /// kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): a transaction spends a known
     /// non-releasable bond's locked output-0 ({0}). Above the
     /// `bond_spend_gate_mergeset_activation_daa_score` fence the per-tx UTXO validation rejects such a

@@ -66,6 +66,8 @@ require_release() {
     [[ "$EXPECT_GENESIS" =~ ^[0-9a-f]{128}$ ]] || die "fleet.env: EXPECT_GENESIS must be the full 128-hex genesis hash"
     [[ "$PREMINE_TXID" =~ ^[0-9a-f]{128}$ ]] || die "fleet.env: PREMINE_TXID must be the full 128-hex t12 premine txid"
     [[ "$HB_ADDR" =~ ^misakatest: ]] || die "fleet.env: HB_ADDR must be a misakatest: address"
+    [ -z "${UPGRADE_FROM_FP:-}" ] || [[ "$UPGRADE_FROM_FP" =~ ^[0-9a-f]{64}$ ]] \
+        || die "fleet.env: UPGRADE_FROM_FP must be empty or 64 lowercase hex (the fingerprint the RUNNING nodes print before a fence release)"
     REL="$REL_ROOT/$REV"
     local why; why=$(genesis_refusal "$EXPECT_GENESIS")
     [ -z "$why" ] || die "EXPECT_GENESIS ${EXPECT_GENESIS:0:8}… is $why — this is not the R-core+ regenesis build"
@@ -702,7 +704,9 @@ usage: $0 <command>
                    refused for a REV that was an upgrade — NEVER use it to undo an upgrade)
   upgrade          ROLLING in-place binary upgrade of the RUNNING chain: appdirs kept; node by node stop -> this REV's
                    unit -> start -> fingerprint/genesis/database/duties -> synced + a new block (PLAN.md §15).
-                   DRY_RUN=1 prints every step; UPGRADE_SYNC_TIMEOUT=600; UPGRADE_UNHEALTHY_OK=1; UPGRADE_ARGS_CHANGE_OK=1
+                   DRY_RUN=1 prints every step; UPGRADE_SYNC_TIMEOUT=600; UPGRADE_UNHEALTHY_OK=1; UPGRADE_ARGS_CHANGE_OK=1;
+                   a FENCE release (the fingerprint moves): fleet.env UPGRADE_FROM_FP=<the fp the fleet prints now>
+                   (DAA750-ROLLOUT.md)
   upgrade-rollback put back the unit each node had before 'upgrade' with this REV (appdirs never moved; DRY_RUN=1)
   purge-old        delete the old chain data switch moved aside (CONFIRM_PURGE=yes; rollback impossible after)
   seeder-status    read-only (swap/rollback of a seeder: seeders/30-swap.sh, 50-rollback.sh from the Mac)
@@ -724,9 +728,12 @@ EOF2
 #    now (a node-only hotfix changes BIN and EXPECT_SHA; UPGRADE_ARGS_CHANGE_OK=1 accepts a difference);
 #  * the current unit / drop-in is the kit's (its header) and its ExecStart is a kit launch script that
 #    still exists (upgrade-rollback puts that file back, so it must be runnable);
-#  * the RUNNING node answers EXPECT_FP and holds EXPECT_GENESIS — this release is for the chain on this
-#    appdir — and is synced with ≥ 1 peer (UPGRADE_UNHEALTHY_OK=1 lets a stopped or unsynced node through;
-#    it then gets the regression checks only);
+#  * the RUNNING node answers EXPECT_FP — or UPGRADE_FROM_FP, for a FENCE release: one that schedules a
+#    new height moves the params fingerprint while the genesis and the consensus identity stay, so the
+#    running node prints the previous release's fingerprint (fleet.env UPGRADE_FROM_FP; empty = EXPECT_FP,
+#    a node-only upgrade) — and holds EXPECT_GENESIS — this release is for the chain on this appdir — and is
+#    synced with ≥ 1 peer (UPGRADE_UNHEALTHY_OK=1 lets a stopped or unsynced node through; it then gets the
+#    regression checks only). Past the restart the node must answer EXPECT_FP, the new release's, always;
 #  * every UPGRADE_REQUIRE_UP host:port (the other hosts' nodes, from the host script) takes a TCP
 #    connection — asked again before each node stops. One host at a time (PLAN.md §15).
 # After each restart, in order (a failure stops the rollout; the nodes after it keep their old release):
@@ -794,12 +801,15 @@ require_other_hosts_up() { # $1 = when
 # N_PRE_HEALTHY (1 = synced with a peer: the after-restart gate asks for synced + a new block), N_GATE_FACTS.
 # Dies (nothing stopped) when the running node is not on this release's chain.
 upgrade_baseline() {
-    local s p i
+    local s p i from_fp=${UPGRADE_FROM_FP:-$EXPECT_FP} pre_args
     N_PRE_STATE="STATE unreachable"; N_PRE_DAA=""; N_PRE_HEALTHY=0; N_GATE_FACTS=1
     t12check_expect
+    # The running node is read against the fingerprint it runs NOW: UPGRADE_FROM_FP for a fence release
+    # (EXPECT_ARGS starts with `--expect-fp EXPECT_FP`; everything after it — genesis, premine, classes — stays).
+    pre_args=(--expect-fp "$from_fp" "${EXPECT_ARGS[@]:2}")
     if systemctl is-active --quiet "$N_UNIT"; then
         for i in 1 2 3 4 5; do   # '?' = a call got no answer in time (t12check --state-line): ask again
-            N_PRE_STATE=$(node_state "${EXPECT_ARGS[@]}")
+            N_PRE_STATE=$(node_state "${pre_args[@]}")
             case "$N_PRE_STATE" in *"fp=?"*|*"genesis=?"*|*"facts=?"*|*"synced=?"*|*"daa=?"*|"STATE unreachable") sleep 3 ;; *) break ;; esac
         done
     fi
@@ -810,7 +820,7 @@ upgrade_baseline() {
     fi
     case "$(st_get "$N_PRE_STATE" fp) $(st_get "$N_PRE_STATE" genesis)" in *"?"*)
         die "b$N_ID: the running node does not answer its fingerprint / genesis in time (${N_PRE_STATE#STATE }) — nothing was stopped; retry when it answers" ;; esac
-    [ "$(st_get "$N_PRE_STATE" fp)" = OK ] || die "b$N_ID: the RUNNING node's fingerprint is not EXPECT_FP ${EXPECT_FP:0:16}… (${N_PRE_STATE#STATE }) — this release's fleet.env is not for the chain it runs; nothing was stopped"
+    [ "$(st_get "$N_PRE_STATE" fp)" = OK ] || die "b$N_ID: the RUNNING node's fingerprint is not $([ "$from_fp" = "$EXPECT_FP" ] && echo EXPECT_FP || echo UPGRADE_FROM_FP) ${from_fp:0:16}… (${N_PRE_STATE#STATE }) — this release's fleet.env is not for the chain it runs (a fence release sets UPGRADE_FROM_FP to the fingerprint the fleet prints now); nothing was stopped"
     [ "$(st_get "$N_PRE_STATE" genesis)" = OK ] || die "b$N_ID: the RUNNING node does not hold EXPECT_GENESIS ${EXPECT_GENESIS:0:16}… (${N_PRE_STATE#STATE }) — this release is for another chain; nothing was stopped"
     if [ "$(st_get "$N_PRE_STATE" facts)" = "?" ]; then
         N_GATE_FACTS=0
@@ -818,7 +828,7 @@ upgrade_baseline() {
     elif [ "$(st_get "$N_PRE_STATE" facts)" != OK ]; then
         N_GATE_FACTS=0
         warn "b$N_ID: the running node already fails the kit's chain-fact copies (the genesis bonds on PREMINE_TXID:0..7 / CLASS_8K / the 2M prefix — a bond retired or was removed, a class moved: chain state, not the binary). That part is dropped from b$N_ID's after-restart gate:"
-        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${EXPECT_ARGS[@]}" 2>&1 | grep -E 'genesis bonds|class |RESULT' | sed 's/^/    /' >&2 || true
+        python3 "$KIT_DIR/t12check.py" --port "$N_JSON" "${pre_args[@]}" 2>&1 | grep -E 'genesis bonds|class |RESULT' | sed 's/^/    /' >&2 || true
     fi
     N_PRE_DAA=$(st_get "$N_PRE_STATE" daa); [[ "$N_PRE_DAA" =~ ^[0-9]+$ ]] || N_PRE_DAA=""
     s=$(st_get "$N_PRE_STATE" synced); p=$(st_get "$N_PRE_STATE" peers)
@@ -1025,6 +1035,11 @@ upgrade_host() { # $1 = seconds between nodes
 
 upgrade_rollback_host() { # $1 = seconds between nodes — puts back the unit/drop-in each node had before `upgrade`
     local gap=$1 spec saved cur old restored=0 since got i
+    # A rolled-back node runs the PREVIOUS release again, so every check below (the fingerprint read after
+    # the restart, t12check_expect, upgrade_wait_synced) must expect that release's fingerprint: for a fence
+    # release that is UPGRADE_FROM_FP, not the new EXPECT_FP (the 750-release review, B-kit). `local` shadows
+    # the global for every function this one calls (bash scoping), so nothing else changes.
+    local EXPECT_FP=${UPGRADE_FROM_FP:-$EXPECT_FP}
     [ -d "$STATE_DIR/upgrade-$REV" ] || die "no $STATE_DIR/upgrade-$REV — nothing was upgraded with REV=$REV here (REV must be the UPGRADE's rev, the one fleet.env named when \`upgrade\` ran)"
     if [ "$DRY_RUN" = 1 ]; then say "DRY_RUN=1: nothing is stopped, installed, started or written"; fi
     for spec in "${NODES[@]}"; do   # read-only: every file we would put back runs
@@ -1058,7 +1073,7 @@ upgrade_rollback_host() { # $1 = seconds between nodes — puts back the unit/dr
             sleep 3
         done
         if [ "$got" != "$EXPECT_FP" ] || ! systemctl is-active --quiet "$N_UNIT"; then
-            warn "b$N_ID did not come back on EXPECT_FP after the rollback (fingerprint ${got:-<none>}, $(systemctl show -p ActiveState,Result --value "$N_UNIT" | tr '\n' ' ')) — journal:"
+            warn "b$N_ID did not come back on the previous release's fingerprint ($EXPECT_FP) after the rollback (fingerprint ${got:-<none>}, $(systemctl show -p ActiveState,Result --value "$N_UNIT" | tr '\n' ' ')) — journal:"
             journalctl -u "$N_UNIT" --since "@$since" -n 30 --no-pager -o cat >&2 || true
         else
             say "  b$N_ID fingerprint OK, main process $(main_exe_of "$N_UNIT")"

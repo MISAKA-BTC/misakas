@@ -95,10 +95,11 @@ impl<
             if blocks.len() + gd.mergeset_size() > max_blocks {
                 break;
             }
-            blocks.extend(
-                gd.consensus_ordered_mergeset(self.ghostdag_store.deref())
-                    .filter(|hash| !self.reachability_service.is_dag_ancestor_of(*hash, original_low)),
-            );
+            let segment: Vec<BlockHash> = gd
+                .consensus_ordered_mergeset(self.ghostdag_store.deref())
+                .filter(|hash| !self.reachability_service.is_dag_ancestor_of(*hash, original_low))
+                .collect();
+            blocks.extend(self.parents_first(segment));
             highest_reached = current;
         }
 
@@ -108,6 +109,29 @@ impl<
         }
 
         (blocks, highest_reached)
+    }
+
+    /// **One chain block's share of [`Self::antipast_hashes_between`], parents first.**
+    ///
+    /// The segment is the selected parent followed by the mergeset in consensus order — ascending
+    /// `(blue_work, hash)` — which upstream relies on being topological. ADR-0125 breaks that: every
+    /// round block hanging from one anchor carries the same blue work, so a lane comes out in HASH
+    /// order, a child ahead of its parent. The list feeds a syncer's header batches
+    /// (`get_hashes_between`) and a syncing node's own body requests
+    /// (`get_missing_block_body_hashes`), and either one handed to the pipeline child-first fails with
+    /// `MissingParents` (testnet-12 from DAA 316: no node could finish IBD).
+    ///
+    /// Segments need no reordering against each other: a block's parents lie in the selected
+    /// parent's past, or are the selected parent, or are in the same mergeset. Within a segment the
+    /// reorder is stable, and a segment that is already parents-first — every segment of a DAG whose
+    /// blue work is strictly monotone — comes back untouched. Only the ORDER of this list changes:
+    /// its contents, and the consensus order a mergeset is accepted in, do not.
+    fn parents_first(&self, segment: Vec<BlockHash>) -> Vec<BlockHash> {
+        kaspa_consensus_core::topological_order::stable_topological_order(
+            segment,
+            |hash| *hash,
+            |hash| self.traversal_manager.direct_parents(*hash),
+        )
     }
 
     pub fn find_highest_common_chain_block(&self, low: BlockHash, high: BlockHash) -> BlockHash {

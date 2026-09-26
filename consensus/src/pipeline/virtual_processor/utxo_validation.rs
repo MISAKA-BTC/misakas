@@ -59,7 +59,7 @@ use kaspa_utils::refs::Refs;
 
 use rayon::prelude::*;
 use smallvec::{SmallVec, smallvec};
-use std::{iter::once, ops::Deref};
+use std::iter::once;
 
 pub(crate) mod crescendo {
     use kaspa_core::{info, log::CRESCENDO_KEYWORD};
@@ -359,6 +359,11 @@ impl VirtualStateProcessor {
         let validated_coinbase_id = validated_coinbase.id();
         ctx.accepted_tx_ids.push(validated_coinbase_id);
 
+        // Lane accept-order: the order this block applies its mergeset in — the consensus order, made
+        // parents-first past `palw_lane_accept_parents_first` at this block's DAA score. Read once, and
+        // by both loops below, so the gate view and the acceptance walk see one order.
+        let acceptance_order = self.acceptance_ordered_mergeset_without_selected_parent(&ctx.ghostdag_data, pov_daa_score);
+
         // kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): above the fence, build the
         // POST-ACCEPTANCE bond view the per-tx spend-skip is evaluated against = the selected-parent
         // bonds PLUS every bond freshly DECLARED by a StakeBond tx anywhere in this mergeset. Only
@@ -390,7 +395,7 @@ impl VirtualStateProcessor {
                 // derived from ACCEPTED txs (`dns_bond_mutations_from_acceptance`, processor.rs). The
                 // two must stay superset-consistent (this raw view ⊇ the accepted-tx bond set).
                 let mergeset_txs: Vec<Transaction> = once(ctx.selected_parent())
-                    .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()))
+                    .chain(acceptance_order.iter().copied())
                     .flat_map(|b| (*self.block_transactions_store.get(b).unwrap()).clone())
                     .collect();
                 let inserts: Vec<BondMutation> = // `false`: this call keeps only `Insert` mutations (see the filter below), so the
@@ -412,7 +417,7 @@ impl VirtualStateProcessor {
             .map(|verdicts| verdicts.round_blocks.difference(&verdicts.permitted).copied().collect())
             .unwrap_or_default();
         for (i, (merged_block, txs)) in once((ctx.selected_parent(), selected_parent_transactions))
-            .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()).map(|b| {
+            .chain(acceptance_order.iter().copied().map(|b| {
                 let txs = self.block_transactions_store.get(b).unwrap();
                 if unpermitted_rounds.contains(&b) { (b, std::sync::Arc::new(txs[..1].to_vec())) } else { (b, txs) }
             }))
@@ -608,8 +613,43 @@ impl VirtualStateProcessor {
         } else {
             (0, 0)
         };
+        // **MSK-26A (2026-09 pre-freeze security review): the UTXO side-effect obeys the same
+        // genuineness rule the bond-REGISTRY mutation already does.** `resolve_slashing_side_effects`
+        // verifies no signature — it slashes any accepted evidence whose bond resolves Active — so a
+        // forged slashing / precommit evidence riding in a MERGE-blue block (which the own-body
+        // `check_slashing_evidence_genuine` block rule never sees, and which the registry path drops
+        // via `proved_slash_targets`) removes an honest validator's staked output-0 and mints its
+        // author a reward. Past `palw_slashing_evidence_utxo_genuine`, resolution runs over the
+        // PROVED evidence transactions only (`proved_slashing_evidence_txs`: each tx judged alone by
+        // the registry's own signature, freshness and status checks), so a slash reaches the UTXO
+        // set only on evidence the accused validator actually signed.
+        //
+        // The filter is by TRANSACTION, not by bond: resolution keeps the FIRST evidence naming a
+        // bond (canonical order), and that tx supplies the reporter payload, the mint outpoint
+        // `(slashing_tx_id, 0)` and the `slashed_epoch` the victim pool pays. Filtering the resolved
+        // effects by bond would let a forged tx sorted ahead of a genuine one for the same bond
+        // choose all three (MSK-26A follow-up); filtering before resolution makes the first PROVED
+        // tx win, so every field comes from signed evidence.
+        //
+        // `None`/dormant on every shipped preset, so the effects (and the utxo_commitment) are
+        // byte-identical to before the field existed; construction and validation read the same
+        // fence, so they compute one commitment.
+        let proved_txs: Vec<Transaction>;
+        let evidence_txs: &[Transaction] =
+            if self.palw_slashing_evidence_utxo_genuine.is_some_and(|fence| fence.is_active(pov_daa_score)) {
+                proved_txs = proved_slashing_evidence_txs(
+                    &accepted_txs,
+                    selected_parent_bond_view,
+                    self.genesis.hash,
+                    pov_daa_score,
+                    dns_params.evidence_window_blocks,
+                );
+                &proved_txs
+            } else {
+                &accepted_txs
+            };
         let mut effects = resolve_slashing_side_effects(
-            &accepted_txs,
+            evidence_txs,
             selected_parent_bond_view,
             pov_daa_score,
             dns_params.reward_params.slashing_reporter_reward_bps,
@@ -2190,6 +2230,30 @@ pub(super) fn proved_slash_targets(
         }
     }
     proved
+}
+
+/// **MSK-26A: the accepted slashing / precommit evidence transactions that PROVE their slash**, in
+/// their original (canonical) order — the input `apply_slashing_side_effects` hands
+/// `resolve_slashing_side_effects` past `palw_slashing_evidence_utxo_genuine`.
+///
+/// Each tx is judged alone by [`proved_slash_targets`] (the registry path's own signature,
+/// freshness and status rules), so a forged tx never condemns or displaces a genuine sibling. The
+/// filter is per TRANSACTION rather than per bond on purpose: resolution keeps the first evidence
+/// naming a bond, and that tx decides the reporter payload, the mint outpoint and the victim epoch.
+/// Dropping unproved txs BEFORE resolution makes the first PROVED tx win, so none of those fields
+/// can be chosen by a forgery sorted ahead of a genuine equivocation. Non-evidence txs are dropped
+/// too; resolution ignores them anyway.
+pub(super) fn proved_slashing_evidence_txs(
+    txs: &[Transaction],
+    bond_view: &ActiveBondView,
+    net_id: BlockHash,
+    including_daa: u64,
+    evidence_window_blocks: u64,
+) -> Vec<Transaction> {
+    txs.iter()
+        .filter(|tx| !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty())
+        .cloned()
+        .collect()
 }
 
 fn slashing_evidence_genuine(

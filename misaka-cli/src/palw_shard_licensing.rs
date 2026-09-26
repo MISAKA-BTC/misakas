@@ -47,11 +47,13 @@ async fn key_is_the_bonds(
     bond: &PalwBondKeyV2,
     raw: &str,
 ) -> Result<(), CliError> {
+    let lookup_class = crate::bond::bond_lookup_class(nv)?;
     let facts = nv
         .client
-        .get_palw_producer_facts(crate::bond::bond_lookup_class(nv)?, bond.0.transaction_id.to_string(), bond.0.index, true)
+        .get_palw_producer_facts(lookup_class.clone(), bond.0.transaction_id.to_string(), bond.0.index, true)
         .await
         .map_err(|e| CliError::connection(format!("cannot read the bond's facts from the node: {e}")))?;
+    crate::bond::bond_facts_answered(facts.available, &lookup_class, raw)?;
     if !facts.bond_known {
         return Err(CliError::new(exit::GENERIC, format!("the chain knows no bond at {raw}")));
     }

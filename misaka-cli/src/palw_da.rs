@@ -49,11 +49,13 @@ pub(crate) async fn accuse(ctx: &Ctx, ks: &KeySource, args: DaAccuseArgs<'_>) ->
 
     // **The key must be the bond's registered key**, or the chain refuses the signature and the
     // carrier's fee is gone — the same reason `court-close` refuses to default `--side`.
+    let lookup_class = crate::bond::bond_lookup_class(&nv)?;
     let facts = nv
         .client
-        .get_palw_producer_facts(crate::bond::bond_lookup_class(&nv)?, accuser.0.transaction_id.to_string(), accuser.0.index, true)
+        .get_palw_producer_facts(lookup_class.clone(), accuser.0.transaction_id.to_string(), accuser.0.index, true)
         .await
         .map_err(|e| CliError::connection(format!("cannot read the bond's facts from the node: {e}")))?;
+    crate::bond::bond_facts_answered(facts.available, &lookup_class, args.bond)?;
     if !facts.bond_known {
         return Err(CliError::new(exit::GENERIC, format!("the chain knows no bond at {}", args.bond)));
     }

@@ -203,6 +203,42 @@ async fn v01_the_mempool_sweep_asks_the_h1_gate_itself() {
     assert_eq!(off.ctx.consensus.palw_h1_carrier_refusals_v1(&[junk_tx]), vec![None], "below R-core+ the sweep evicts nothing");
 }
 
+/// **The V01 review, MEDIUM: the sweep judges in the template's order — what the virtual can still
+/// spend, on the virtual's own tip.** The mempool hears of a block after the virtual may have folded
+/// it, and the fold refuses a duplicate: a carrier the tip already holds must not be evicted as
+/// "refused" with its redeemers. So a carrier with an input the virtual UTXO set does not hold (mined,
+/// double-spent or chained on a pooled parent) is not judged, though the gate alone would refuse it;
+/// and with the tip row a block away from the virtual's sink (written ahead of the commit, as the
+/// sink search does) nothing is judged until the next block.
+#[tokio::test]
+async fn v01_the_sweep_judges_only_what_the_virtual_can_spend_on_the_virtuals_own_tip() {
+    use kaspa_consensus_core::tx::{TransactionInput, TransactionOutpoint};
+    let g = gate(true);
+    let junk = Obj::DefaultAccused {
+        claim: Hash64::from_u64_word(0x39FF),
+        missing_event_index: 0,
+        accuser: g.cards[1],
+        signature: vec![1; 8],
+    };
+    let unfunded = std::sync::Arc::new(carrier_tx(junk.clone()));
+    let mut spent = carrier_tx(junk);
+    spent.inputs.push(TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(0x39AA), 0), vec![], 0, 1));
+    spent.finalize();
+    let spent = std::sync::Arc::new(spent);
+    let vp = g.ctx.consensus.virtual_processor();
+    let daa = g.ctx.consensus.get_virtual_daa_score();
+    assert!(vp.palw_mempool_h1_carrier_refusal(&spent, daa).is_some(), "the gate alone refuses both");
+
+    let swept = g.ctx.consensus.palw_h1_carrier_refusals_v1(&[unfunded.clone(), spent.clone()]);
+    assert!(swept[0].is_some(), "every input the virtual holds (none): judged, and refused");
+    assert_eq!(swept[1], None, "an input the virtual has spent: not the sweep's to judge");
+
+    // The tip row a block away from the virtual's sink: nothing is judged.
+    vp.palw_state_v2_store.write().set_tip_for_tests(Hash64::from_u64_word(0x39BB), &g.state).unwrap();
+    assert!(vp.palw_mempool_h1_carrier_refusal(&unfunded, daa).is_some(), "the gate reads whatever tip is stored");
+    assert_eq!(g.ctx.consensus.palw_h1_carrier_refusals_v1(&[unfunded]), vec![None], "the sweep waits for the virtual's own tip");
+}
+
 /// A lifecycle transaction carrying `object`, as `Gate::tx_refusal` builds it.
 fn carrier_tx(object: Obj) -> Transaction {
     let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap();

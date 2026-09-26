@@ -183,6 +183,21 @@ impl Mempool {
             }
         }
 
+        // **Lane sink (the 2026-09-25 Position review's #1), as relay policy wherever the market is
+        // declared — in force the moment a node runs this build, with or without the fence.** A model
+        // sink no `ModelBuy`/`ModelSeed` of the same carrier binds — a bare transfer to a sink, a
+        // carrier whose value or line disagrees with its sink, an out-of-range `sink_index`, an extra
+        // sink, a sink on another object's carrier, a carrier with no refund payee — is consensus-valid
+        // below `Params::palw_model_sink_bound`, and its MSK then leaves circulation with no reserve,
+        // no burn record and no refund. This node neither relays nor mines one (the block template
+        // draws from this pool), and a submitter hears why at once. Consensus asks the same function
+        // in the header context past the fence; here it binds no block, so no verdict moves.
+        if self.config.model_sink_relay_allowed
+            && let Some((index, why)) = kaspa_consensus_core::palw_model_market_v1::palw_model_sink_binding_refusal_v1(&transaction.tx)
+        {
+            return Err(NonStandardError::RejectUnboundModelSink(transaction_id, index, why));
+        }
+
         Ok(())
     }
 
@@ -754,6 +769,42 @@ mod tests {
             mtx.calculated_non_contextual_masses = Some(NonContextualMasses::new(1000, 1000));
             mtx
         };
+        // Lane sink: an honest carrier buy — change at output 0 to a P2PKH-ML-DSA-87 payee, the sink
+        // at 1, the `ModelBuy` naming it — the shape `misaka palw model-buy` builds.
+        let bound_carrier = |msk_in: u64, sink_index: u32, paid: u64| {
+            let input = TransactionInput::new(
+                TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(1), 1),
+                vec![0u8; 65],
+                MAX_TX_IN_SEQUENCE_NUM,
+                1,
+            );
+            let object = kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ModelBuy {
+                line_id: kaspa_consensus_core::Hash64::from_u64_word(7),
+                holder: kaspa_consensus_core::Hash64::from_u64_word(8),
+                msk_in,
+                min_units_out: 0,
+                sink_index,
+            };
+            let payload = borsh::to_vec(&kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+                version: kaspa_consensus_core::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
+                object,
+            })
+            .unwrap();
+            let change =
+                TransactionOutput::new(SOMPI_PER_KASPA, kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[5u8; 64]));
+            let tx = Transaction::new(
+                TX_VERSION,
+                vec![input],
+                vec![change, TransactionOutput::new(paid, sink_spk.clone())],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                payload,
+            );
+            let mut mtx = MutableTransaction::from_tx(tx);
+            mtx.calculated_non_contextual_masses = Some(NonContextualMasses::new(1000, 1000));
+            mtx
+        };
         // A value low enough that the ordinary dust rule would refuse it, so the assertion below is
         // about the carve-out and not about the amount.
         let dusty = TransactionOutput::new(1, sink_spk.clone());
@@ -771,9 +822,17 @@ mod tests {
         );
         assert!(dormant.is_transaction_output_dust(&dusty), "the dust exemption is the same rule and moves with it");
 
-        // ..and where it does, both are open.
+        // ..and where it does, both are open — for a BOUND sink. Lane sink (the Position review's #1):
+        // a bare transfer to a sink binds nothing, so it no longer relays (it would burn unrecorded).
         assert!(
-            declares.check_transaction_standard_in_isolation(&sink_tx(SOMPI_PER_KASPA)).is_ok(),
+            matches!(
+                declares.check_transaction_standard_in_isolation(&sink_tx(SOMPI_PER_KASPA)),
+                Err(NonStandardError::RejectUnboundModelSink(_, 0, why)) if why.contains("rides only a lifecycle carrier")
+            ),
+            "a bare sink binds nothing and must not relay"
+        );
+        assert!(
+            declares.check_transaction_standard_in_isolation(&bound_carrier(SOMPI_PER_KASPA, 1, SOMPI_PER_KASPA)).is_ok(),
             "a carrier buy must relay on a network that has the market"
         );
         assert!(!declares.is_transaction_output_dust(&dusty), "the sink is the one unspendable output that is not dust");
@@ -785,6 +844,23 @@ mod tests {
         let not_sink = TransactionOutput::new(SOMPI_PER_KASPA, ScriptPublicKey::new(0, other.into()));
         for mempool in [&dormant, &declares] {
             assert!(mempool.is_transaction_output_dust(&not_sink), "an unspendable non-sink stays dust either way");
+        }
+        // Lane sink on the relay side: a value, an index or a line the sink does not match is refused
+        // by name where the market is declared (in force without the consensus fence), and never
+        // asked where the market is dormant (the class rule refuses the form first).
+        for (tx, why) in [
+            (bound_carrier(SOMPI_PER_KASPA + 1, 1, SOMPI_PER_KASPA), "another amount"),
+            (bound_carrier(SOMPI_PER_KASPA, 5, SOMPI_PER_KASPA), "is not the output"),
+            (bound_carrier(SOMPI_PER_KASPA, 0, SOMPI_PER_KASPA), "is not the output"),
+        ] {
+            match declares.check_transaction_standard_in_isolation(&tx) {
+                Err(NonStandardError::RejectUnboundModelSink(_, 1, reason)) => assert!(reason.contains(why), "{why}: {reason}"),
+                other => panic!("{why}: expected an unbound sink at output 1, got {other:?}"),
+            }
+            assert!(matches!(
+                dormant.check_transaction_standard_in_isolation(&tx),
+                Err(NonStandardError::RejectOutputScriptClass(_, 1))
+            ));
         }
     }
 }

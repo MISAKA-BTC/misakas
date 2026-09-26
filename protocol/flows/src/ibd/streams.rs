@@ -45,7 +45,8 @@ impl<'a, 'b> TrustedEntryStream<'a, 'b> {
                             if entry.block.is_header_only() {
                                 Err(ProtocolError::OtherOwned(format!("trusted entry block {} is header only", entry.block.hash())))
                             } else {
-                                Ok(Some(entry))
+                                // Bridge audit BR-1: the id does not cover the payload bytes.
+                                crate::evm_payload_delivery::check_delivered_evm_payload(&entry.block).map(|()| Some(entry))
                             }
                         }
                         Some(Payload::DoneBlocksWithTrustedData(_)) => {

@@ -50,6 +50,7 @@ impl TransactionValidator {
     ) -> TxResult<()> {
         self.check_tx_is_finalized(tx, lock_time_arg)?;
         self.check_model_sink_outputs_in_context(tx, ctx_daa_score)?;
+        self.check_model_sink_binding_in_context(tx, ctx_daa_score)?;
         self.check_activation_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)
     }
@@ -108,6 +109,31 @@ impl TransactionValidator {
             }
         }
         Ok(())
+    }
+
+    /// **Lane sink (the 2026-09-25 Position review's #1, post-launch): a model sink is block-valid only
+    /// bound, past `Params::palw_model_sink_bound`.** At or past the fence's height (the containing
+    /// block's own DAA score; the virtual's for the mempool and the template) every model sink must
+    /// be the output its lifecycle carrier's `ModelBuy` or `ModelSeed` names, with the line and the
+    /// value it declares, on a carrier that pays a P2PKH-ML-DSA-87 output a refusal can be paid back
+    /// to ([`kaspa_consensus_core::palw_model_market_v1::palw_model_sink_binding_refusal_v1`]). Below
+    /// it the extraction walk's object → output binding is the only check, exactly as testnet-12
+    /// launched: a sink no object names is a valid output whose MSK leaves circulation unrecorded.
+    ///
+    /// Asked after the market's own height rule above, so below the market a sink is refused as
+    /// `ModelSinkBeforeMarketActivation` whatever this fence says. Inert where the fence is not armed
+    /// (every shipped preset): returns on its first line.
+    fn check_model_sink_binding_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_model_sink_bound_fence else {
+            return Ok(());
+        };
+        if !fence.is_active(ctx_daa_score) {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_model_market_v1::palw_model_sink_binding_refusal_v1(tx) {
+            Some((index, why)) => Err(TxRuleError::ModelSinkUnbound(index, why)),
+            None => Ok(()),
+        }
     }
 
     /// **ADR-0152-adjacent (Activation Pool): the height-indexed half of the activation sink** — the

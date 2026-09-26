@@ -154,6 +154,14 @@ pub enum NonStandardError {
 
     #[error("transaction input #{1} has {2} signature operations which is more than the allowed max amount of {3}")]
     RejectSignatureCount(TransactionId, usize, u64, u8),
+
+    /// Lane sink (the 2026-09-25 Position review's #1): a model-market sink output no `ModelBuy` or
+    /// `ModelSeed` of the same carrier binds (index, line, value), or one on a carrier with no refund
+    /// payee — its MSK would leave circulation with nothing recorded. Refused as standardness on
+    /// every network that declares the market; consensus refuses it too past
+    /// `Params::palw_model_sink_bound`.
+    #[error("transaction output #{1}: an unbound model sink ({2})")]
+    RejectUnboundModelSink(TransactionId, usize, &'static str),
 }
 
 impl NonStandardError {
@@ -170,6 +178,7 @@ impl NonStandardError {
             NonStandardError::RejectInputScriptClass(id, _) => id,
             NonStandardError::RejectInsufficientFee(id, _, _) => id,
             NonStandardError::RejectSignatureCount(id, _, _, _) => id,
+            NonStandardError::RejectUnboundModelSink(id, _, _) => id,
         }
     }
 }

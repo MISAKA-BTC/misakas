@@ -100,6 +100,14 @@ pub struct TransactionValidator {
     /// The header-context door refuses the form below the height. `None` on every preset but
     /// testnet-12, which keeps every other network's transaction validity byte for byte.
     palw_activation_pool_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **Lane sink (the 2026-09-25 Position review's #1): `Params::palw_model_sink_bound_fence()`**
+    /// (`never()` read as absence). In a block at or past its height every model sink
+    /// (`OP_RETURN "MSKMDL01" <line>`) must be bound to its carrier's `ModelBuy` or `ModelSeed`
+    /// (index, line, value) on a carrier that pays a refund payee, or the transaction is invalid in
+    /// the header context. `None` on every shipped preset (testnet-12 included until the operator
+    /// arms it), which keeps every network's transaction validity byte for byte.
+    palw_model_sink_bound_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl TransactionValidator {
@@ -154,6 +162,7 @@ impl TransactionValidator {
                 .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never()),
             palw_round_lane_declared: false,
             palw_activation_pool_fence: None,
+            palw_model_sink_bound_fence: None,
         }
     }
 
@@ -162,6 +171,15 @@ impl TransactionValidator {
     /// activation sink at isolation — bound, and from the fence's height.
     pub fn with_activation_pool_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
         self.palw_activation_pool_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
+    }
+
+    /// Lane sink (the model sink binding, post-launch): declare the fence
+    /// (`Params::palw_model_sink_bound_fence()`), past whose height the header context refuses an
+    /// unbound model sink.
+    pub fn with_model_sink_bound_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_model_sink_bound_fence =
             fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
         self
     }
@@ -215,6 +233,8 @@ impl TransactionValidator {
             palw_round_lane_declared: false,
             // Every shipped preset's door but testnet-12's: no pool, no activation sink.
             palw_activation_pool_fence: None,
+            // Every shipped preset's door: the model sink binding is dormant.
+            palw_model_sink_bound_fence: None,
         }
     }
 

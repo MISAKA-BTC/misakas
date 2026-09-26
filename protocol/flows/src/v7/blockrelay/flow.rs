@@ -572,6 +572,11 @@ impl HandleRelayInvsFlow {
         if block.hash() != requested_hash {
             Err(ProtocolError::OtherOwned(format!("requested block hash {} but got block {}", requested_hash, block.hash())))
         } else {
+            // Bridge audit BR-1: the block id does not cover the payload bytes, so a payload the
+            // header does not commit to is this peer's fault, not the block's. Refuse it here —
+            // before it reaches consensus, the orphan pool or any per-slot relay budget under the
+            // genuine id.
+            crate::evm_payload_delivery::check_delivered_evm_payload(&block)?;
             Ok(Some((block, request_scope)))
         }
     }

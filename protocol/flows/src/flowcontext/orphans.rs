@@ -352,4 +352,65 @@ mod tests {
 
         drop((a, b, c, d, e, f, g, h, k));
     }
+
+    /// A pipeline that refuses a block handed over before one of its parents — what the real one
+    /// does when that parent is not even in flight yet.
+    #[derive(Default)]
+    struct ParentCheckingProcessor {
+        processed: Arc<RwLock<Vec<BlockHash>>>,
+    }
+
+    impl ConsensusApi for ParentCheckingProcessor {
+        fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
+            let mut processed = self.processed.write();
+            let missing: Vec<BlockHash> =
+                block.header.direct_parents().iter().copied().filter(|parent| !processed.contains(parent)).collect();
+            let result: BlockProcessResult<BlockStatus> = if missing.is_empty() {
+                processed.push(block.hash());
+                Ok(BlockStatus::StatusUTXOPendingVerification)
+            } else {
+                Err(kaspa_consensus_core::errors::block::RuleError::MissingParents(missing))
+            };
+            BlockValidationFutures {
+                block_task: Box::pin(std::future::ready(result.clone())),
+                virtual_state_task: Box::pin(std::future::ready(result)),
+            }
+        }
+
+        fn get_block_status(&self, hash: BlockHash) -> Option<BlockStatus> {
+            self.processed.read().contains(&hash).then_some(BlockStatus::StatusUTXOPendingVerification)
+        }
+    }
+
+    /// **A round lane in the orphan pool is handed to consensus parents-first.** A lane's blocks tie
+    /// on blue work (ADR-0125) — here every block carries the default, as a lane's all carry one —
+    /// so the batch's blue-work sort leaves them in the pool's hash-set order, and a child ahead of
+    /// its parent is refused with `MissingParents`. The batch now puts parents first.
+    #[tokio::test]
+    async fn an_orphan_lane_that_ties_on_blue_work_is_handed_over_parents_first() {
+        let processor = ParentCheckingProcessor::default();
+        let processed = processor.processed.clone();
+        let ci = ConsensusInstance::new(SessionLock::new(), Arc::new(processor));
+        let consensus = ci.session().await;
+        let mut pool = OrphanBlocksPool::new(16);
+
+        // The lane 2 ← 3 ← 4 ← 5 ← 6 hangs from 1, and arrives before 1 does, tip first.
+        let anchor = Block::from_precomputed_hash(1.into(), vec![]);
+        for i in (2u64..=6).rev() {
+            let block = Block::from_precomputed_hash(i.into(), vec![(i - 1).into()]);
+            assert_match!(pool.add_orphan(&consensus, block).await, Some(OrphanOutput::Roots(_)));
+        }
+        consensus.validate_and_insert_block(anchor).virtual_state_task.await.unwrap();
+
+        // A block on the lane's tip: every ancestor is known or in the pool, so the pool hands the
+        // whole lane over as one batch.
+        let tip = Block::from_precomputed_hash(7.into(), vec![6.into()]);
+        let Some(OrphanOutput::NoRoots(batch)) = pool.add_orphan(&consensus, tip).await else {
+            panic!("every ancestor is in the pool or known");
+        };
+        let order: Vec<BlockHash> = batch.blocks.iter().map(|block| block.hash()).collect();
+        assert_eq!(order, (2u64..=6).map(BlockHash::from).collect::<Vec<_>>(), "parents first, whatever the hash set's order");
+        try_join_all(batch.virtual_state_tasks.unwrap()).await.expect("every lane block lands behind its parent");
+        assert_eq!(*processed.read(), (1u64..=6).map(BlockHash::from).collect::<Vec<_>>());
+    }
 }

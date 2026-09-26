@@ -250,9 +250,21 @@ POOL = "consensus/core/tests/palw_activation_pool_is_t12_only.rs"
 HORIZON = "consensus/core/tests/palw_readiness_horizon_is_t12_only.rs"
 MATURITY = "consensus/core/tests/palw_exec_maturity_is_t12_only.rs"
 CAP = "consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs"
+SEED = "consensus/core/tests/palw_panel_seed_execution_is_t12_only.rs"
+RESIL = "consensus/core/tests/palw_registry_resilience_is_t12_only.rs"
+HBSC = "consensus/core/tests/palw_hb_transparency_same_chain_fence.rs"
+SEATMAT = "consensus/core/tests/palw_bond_maturity_early_is_t12_only.rs"
+OPANCHOR = "consensus/core/tests/palw_operator_anchor_is_t12_only.rs"
+REORG = "consensus/core/tests/reorg_strict_win_fence.rs"
 MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
+SINK = "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs"
+V02 = "consensus/core/tests/palw_final_lock_full_collateral_is_t12_only.rs"
+V02LIFE = "consensus/core/tests/palw_final_lock_life_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
+BINDER = "consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs"
+PPSTRICT = "consensus/core/tests/pruning_proof_strict_economic_fence.rs"
+LANEORDER = "consensus/core/tests/palw_lane_accept_parents_first_is_t12_only.rs"
 PARAMS = "consensus/core/src/config/params.rs"
 GOLDEN = "consensus/core/tests/rcore_m5_v22_golden.rs"
 STATE = "consensus/core/src/palw_state_v2.rs"
@@ -270,6 +282,10 @@ SCAN_DEPLOY = "contrib/misakascan-t12/DEPLOY.md"
 CHECKLIST = "docs/t12-rcore-launch-checklist.md"
 REGEN_DOC = "docs/testnet-12-regenesis-2026-09-23.md"
 JOIN_DOC = "docs/testnet12-join-mining.md"
+README = "README.md"
+SCAN_INDEX = "contrib/misakascan-t12/index.html"
+MONITOR = "contrib/t12-monitor/panel_bias.py"
+MONITOR_DOC = "contrib/t12-monitor/README.md"
 
 # Pin files a step-1 merge brings (checklist §4 steps 1–3). Before that merge their rows are "absent"
 # (reported, not an error); once this tree's history has had the file, or with --shipping, a missing
@@ -417,9 +433,60 @@ def registry() -> list[Pin]:
                  for i_, what in enumerate(["params_id", "identity_id", "schedule_id"])]
     pins += _triple("cap.T12_BEFORE_THE_CAP", "t12", CAP, "const T12_BEFORE_THE_CAP: (&str, &str, &str) = (", "twin.no_cap", cap_twin)
     pins += _triple("cap.T12_WITH_THE_CAP", "t12", CAP, "const T12_WITH_THE_CAP: (&str, &str, &str) = (", "shipped.testnet-12", cap_twin)
+    # Lane F1 (the panel-seed fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
+    pins += _triple("seed.T12_RELEASE", "t12", SEED, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{SEED}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Lane F1 (registry resilience, V03/V05, post-launch, dormant): testnet-12 as shipped, and every other preset at the
+    # release (testnet-10 / simnet as history, as the cap's file keeps them).
+    resil_tests = (f"{RESIL}::every_shipped_id_is_the_release_ones",)
+    pins += _triple("resilience.T12_RELEASE", "t12", RESIL, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    resil_tests)
+    resil_others = "const OTHERS_AT_THE_RELEASE: &[(&str, &str, &str, &str)] = &["
+    pins += _rows("resilience.OTHERS_AT_THE_RELEASE", _net_scope, RESIL, resil_others, _shipped, resil_tests)
+    for net_ in ("testnet-10", "simnet"):
+        pins += [Pin(key=f"resilience.OTHERS_AT_THE_RELEASE.{net_}.{what}", scope="history", file=RESIL,
+                     anchors=[re.escape(resil_others), rf'"{re.escape(net_)}",'], nth=i_, length=64, until=r"^\];", value=None,
+                     tests=resil_tests)
+                 for i_, what in enumerate(["params_id", "identity_id", "schedule_id"])]
+    # F1 heartbeat transparency (the same-chain fence, post-launch, dormant): testnet-12 as shipped.
+    pins += _triple("hbsc.T12_RELEASED", "t12", HBSC, "const T12_RELEASED: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{HBSC}::the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750",))
+    # Lane maturity (ADR-0065 D1 brought forward to the post-launch fence, dormant): testnet-12 as shipped,
+    # which the dormant fence must not move.
+    pins += _triple("seatmat.T12_RELEASE", "t12", SEATMAT, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{SEATMAT}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Lane A (the operator-anchor fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
+    pins += _triple("opanchor.T12_RELEASE", "t12", OPANCHOR, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{OPANCHOR}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Fork choice (the strict-economic-win reorg fence, post-launch; armed at DAA 750 since int-4): testnet-12 as shipped.
+    pins += _triple("reorg.T12_RELEASE", "t12", REORG, "const T12_RELEASE: (&str, &str, &str) = (",
+                    "shipped.testnet-12", (f"{REORG}::shipped_testnet_12_arms_the_fence_at_750",))
     # The mainnet values (2026-09-25): testnet-12 with the three values set back (and the later fences taken away).
     pins += _triple("mnv.PARENT_WITHOUT_THE_ATTRIBUTION", "t12", MNV, "const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
                     "twin.mnv_parent", (f"{MNV}::the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",))
+    # Lane sink (the model sink binding, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
+    pins += _triple("sink.T12_RELEASE", "t12", SINK, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{SINK}::the_binding_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Lane V02 (a resolved claim's lock off the work ceiling, post-launch, dormant): testnet-12 as shipped,
+    # which the dormant fence must not move.
+    pins += _triple("v02.T12_RELEASE", "t12", V02, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{V02}::the_split_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Lane V02 (the shortened post-Final lock life, post-launch, dormant): testnet-12 as shipped, which
+    # the dormant fence must not move.
+    pins += _triple("v02life.T12_RELEASE", "t12", V02LIFE, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{V02LIFE}::the_shortening_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Lane bind-deadlock (the anchor-at-ceiling fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must
+    # not move.
+    pins += _triple("binder.T12_RELEASE", "t12", BINDER, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{BINDER}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # hf-pptake2 (the pruning-proof / IBD staging-commit strict-economic-win fence, post-launch, dormant): testnet-12 as
+    # shipped, which the dormant fence must not move.
+    pins += _triple("ppstrict.T12_RELEASE", "t12", PPSTRICT, "const T12_RELEASE: (&str, &str, &str) = (",
+                    "shipped.testnet-12", (f"{PPSTRICT}::shipped_testnet_12_arms_the_fence_at_750",))
+    # Lane accept-order (a merging block applies a tied round lane parents-first; the post-launch release arms it at
+    # 750 with the rest of the list): testnet-12 as shipped.
+    pins += _triple("laneorder.T12_RELEASE", "t12", LANEORDER, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{LANEORDER}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)
@@ -551,6 +618,28 @@ def registry() -> list[Pin]:
                     comment=None))
     pins.append(Pin("scan_deploy.PANEL_BOND_TX", "copy", SCAN_DEPLOY, [r"固有の premine txid `"], "testnet-12.premine_txid", fmt="abbr",
                     comment=None))
+    # The fingerprint copies the int-4 audit found outside this registry (its LOW: README, the explorer's
+    # banner, the panel-bias monitor and its README, the join guide's startup-log sample) — prose and a
+    # Python default: no reason comment, the commit carries it.
+    pins.append(Pin("join_doc.fp", "copy", JOIN_DOC, [r"^Consensus params fingerprint: "], "from.testnet-12.params_id", fmt="token",
+                    length=64, comment=None))
+    pins.append(Pin("join_doc.schedule_id", "copy", JOIN_DOC, [r"^Consensus fence schedule: [0-9, ]+ \(schedule id "],
+                    "from.testnet-12.schedule_id", fmt="token", length=64, comment=None))
+    pins.append(Pin("readme.fp", "copy", README, [r"consensus params fingerprint \*\*`"], "from.testnet-12.params_id", fmt="token",
+                    length=64, comment=None))
+    pins.append(Pin("readme.schedule_id", "copy", README, [r"consensus params fingerprint \*\*`", r"and schedule id `"],
+                    "from.testnet-12.schedule_id", fmt="abbr", comment=None))
+    pins.append(Pin("scan_index.fp", "copy", SCAN_INDEX,
+                    [r'network prints params fingerprint\n\s*<span class="mono" style="word-break:break-all">'],
+                    "from.testnet-12.params_id", fmt="token", length=64, comment=None))
+    pins.append(Pin("scan_index.schedule_id", "copy", SCAN_INDEX, [r"network prints params fingerprint", r'\(schedule id <span class="mono">'],
+                    lambda c: c["from.testnet-12.schedule_id"][:8], fmt="token", length=8, comment=None))
+    pins.append(Pin("monitor.T12_FP", "copy", MONITOR, [r'^T12_FP = "'], "from.testnet-12.params_id", fmt="token", length=64,
+                    comment=None, note="the monitor's --expect-fp default"))
+    pins.append(Pin("monitor_doc.fp", "copy", MONITOR_DOC, [r"consensus params fp が出荷値（`"], "from.testnet-12.params_id",
+                    fmt="abbr", comment=None))
+    pins.append(Pin("monitor_doc.sample_fp", "copy", MONITOR_DOC, [r'^PANEL_BIAS \{"status":"OK","time":\.\.\.,"tip":70,"fp":"'],
+                    lambda c: c["from.testnet-12.params_id"][:16], fmt="token", length=16, comment=None))
     return pins
 
 
