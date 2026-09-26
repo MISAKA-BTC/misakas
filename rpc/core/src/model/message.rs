@@ -11540,7 +11540,8 @@ pub struct RpcPalwCapacityStepRow {
     pub committed_sompi: String,
     pub seat_duty_sompi: String,
     pub seat_lock_sompi: String,
-    /// §5.4: floor claims per DAA the seat capital sustains, in thousandths.
+    /// §5.4: floor claims per DAA the seat capital sustains, in thousandths — lane liab's AS-1 duty
+    /// (the λ-term over ρ, AS-2's lock as the lock term) and AS-2 lock.
     pub seat_capacity_milli_per_daa: u64,
     /// Floor claims a fresh 13,000 MSK bond holds at once.
     pub n_instant_13k: u64,

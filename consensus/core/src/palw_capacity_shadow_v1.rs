@@ -239,7 +239,8 @@ pub struct PalwCapacityStepShadowV1 {
     pub committed_total: u128,
     pub seat_duty_total: u128,
     pub seat_lock_total: u128,
-    /// §5.4: floor claims per DAA the seats' capital sustains, in thousandths (lane liab's AS-2).
+    /// §5.4: floor claims per DAA the seats' capital sustains, in thousandths (lane liab's AS-1 duty
+    /// and AS-2 lock).
     pub seat_capacity_milli_per_daa: u64,
     /// `N_instant` of a fresh 13,000 MSK bond on floor claims.
     pub n_instant_13k: u64,
