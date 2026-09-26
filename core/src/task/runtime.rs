@@ -133,7 +133,11 @@ impl AsyncRuntime {
 /// landed inside it held the process until the draw ended, and systemd's stop timeout could come
 /// first. Past this grace the draw is abandoned with the process: a draw writes nothing durable
 /// (its block is submitted only by the service future, which has already stopped).
-pub const BLOCKING_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+///
+/// **90 s** (review of T12-049): long enough that the blocking work that DOES write — an IBD staging
+/// commit, a utxoindex resync step — finishes inside it, and below the fleet kit's systemd
+/// `TimeoutStopSec=180`, so the bound, not SIGKILL, is what ends a stop that outlives it.
+pub const BLOCKING_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// `fut` on `runtime`, then the runtime's shutdown bounded by `grace` for blocking tasks.
 pub fn run_then_shut_down_within<F: std::future::Future>(
