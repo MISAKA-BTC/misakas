@@ -5,6 +5,12 @@
 //! holds, the seats' capacity per DAA, the licence queue, and the attribution counters Stage 0's gate
 //! reads. Read-only (`getPalwCapacityShadow`, op 201: a node built before it drops the connection,
 //! so the read goes on a connection of its own). Nothing here is a rule: no capacity fence is armed.
+//!
+//! **Which steps.** With none named the node prices the schedule its F-L fence arms, else the
+//! UNCREDITED ramp (ρ 10 … 1000 at q 0, `m_c = E`: what the rules give until an attribution rate is
+//! measured and credited). `--reference` names ADR-0160's reference ramp (q 143‰, the E-T3 rows
+//! 20 / 50 / 101 / 203 / 2,030 at 13k) — conditional on a measured attribution rate of at least
+//! 0.29, and every row is printed with the q it credits.
 
 use crate::node::Ctx;
 use crate::{CliError, CliResult, OutputFormat, exit};
@@ -17,9 +23,14 @@ const SOMPI_PER_MSK: u128 = 100_000_000;
 /// `misaka palw capacity-shadow`'s arguments (their own `Args`, so the command tree's parse stays small).
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct CapacityShadowArgs {
-    /// A step `rho[:q_permille]` (repeatable; none: ρ 10 / 25 / 50 / 100 / 1000 at q 143‰).
+    /// A step `rho[:q_permille]` (repeatable; q defaults to 0, no attribution credited). None: the
+    /// node's default — the armed F-L schedule, else ρ 10 / 25 / 50 / 100 / 1000 at q 0.
     #[arg(long = "step", value_name = "RHO[:Q]")]
     pub(crate) step: Vec<String>,
+    /// Price ADR-0160's reference ramp, ρ 10 / 25 / 50 / 100 / 1000 at q 143‰ — conditional on a
+    /// measured attribution rate ≥ 0.29 (the ramp gate G2), not the rule in force.
+    #[arg(long, conflicts_with = "step")]
+    pub(crate) reference: bool,
     /// Only this bond's row (and claims), `<txid>:<index>`.
     #[arg(long, value_name = "TXID:INDEX")]
     pub(crate) bond: Option<String>,
@@ -49,11 +60,11 @@ fn read_error(e: &kaspa_rpc_core::RpcError) -> CliError {
     }
 }
 
-/// `rho[:q]` → a step (`q` in permille, default 143: the credit at which the ramp term binds).
+/// `rho[:q]` → a step (`q` in permille, default 0: a credit is named, never assumed).
 pub(crate) fn parse_step(text: &str) -> Result<RpcPalwCapacityStep, CliError> {
     let (rho, q) = match text.split_once(':') {
         Some((rho, q)) => (rho, q),
-        None => (text, "143"),
+        None => (text, "0"),
     };
     let bad = || CliError::new(exit::GENERIC, format!("step '{text}' is not rho[:q_permille]"));
     Ok(RpcPalwCapacityStep {
@@ -61,6 +72,14 @@ pub(crate) fn parse_step(text: &str) -> Result<RpcPalwCapacityStep, CliError> {
         rho: rho.trim().parse().map_err(|_| bad())?,
         q_credit_permille: q.trim().parse().map_err(|_| bad())?,
     })
+}
+
+/// ADR-0160's reference ramp (`PALW_CAPACITY_REFERENCE_STEPS_V1`), on the wire.
+pub(crate) fn reference_steps() -> Vec<RpcPalwCapacityStep> {
+    kaspa_consensus_core::palw_capacity_formulas_v1::PALW_CAPACITY_REFERENCE_STEPS_V1
+        .iter()
+        .map(|s| RpcPalwCapacityStep { from_daa: s.from_daa, rho: s.rho, q_credit_permille: u32::from(s.q_credit_permille) })
+        .collect()
 }
 
 fn msk(text: &str) -> String {
@@ -111,19 +130,27 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
         r.carriers_per_block,
         r.carriage_blocks_to_drain
     ));
-    out.push_str("  ρ     q‰  m_floor MSK  q_needed‰  13k holds  seats/DAA  claims commit MSK  alarm\n");
+    out.push_str("  ρ     q‰  m_floor MSK  q_needed‰  13k holds  seats/DAA (if D-5)  claims commit MSK  alarm\n");
     for s in &r.steps {
         out.push_str(&format!(
-            "  {:<5} {:<3} {:>12} {:>9} {:>10} {:>10} {:>18}  {}\n",
+            "  {:<5} {:<3} {:>12} {:>9} {:>10} {:>9} ({:>7}) {:>18}  {}\n",
             s.step.rho,
             s.step.q_credit_permille,
             msk(&s.m_floor_sompi),
             s.q_needed_permille,
             s.n_instant_13k,
             per_daa(s.seat_capacity_milli_per_daa),
+            per_daa(s.seat_capacity_if_d5_milli_per_daa),
             msk(&s.claims_commitment_sompi),
             if s.q_alarm { "q-ALARM" } else { "-" }
         ));
+    }
+    if r.steps.iter().any(|s| s.step.q_credit_permille > 0) {
+        out.push_str(
+            "  (a row with q‰ > 0 credits an attribution rate: it holds only once a measured rate of at least 2q is credited \
+             by a flag day; seats/DAA is lane liab's AS-2 — locks divide only at q ≥ 250‰ — and the parenthesised column \
+             is §10 D-5's, an open decision)\n",
+        );
     }
     out.push_str(&format!("bonds ({} of {}):\n", r.bonds.len(), r.bonds_total));
     for b in &r.bonds {
@@ -156,7 +183,8 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
     }
     for a in &r.attribution {
         out.push_str(&format!(
-            "class {}: live {} final {} voided {} (attributed {}), convictions {:?}, DA non-seat open {} / ever {}, q {}\n",
+            "class {}: live {} final {} voided {} (attributed {}), convictions {:?}, DA non-seat open {} / ever {}, \
+             adversary {} (caught {}, undetected {}, censored {}, in flight {}), q {}\n",
             if a.class_id.is_empty() { "(none)" } else { &a.class_id[..a.class_id.len().min(12)] },
             a.claims_live,
             a.claims_final,
@@ -165,6 +193,11 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
             a.convictions_by_kind,
             a.da_open_non_seat,
             a.da_opened_non_seat_total,
+            a.adversary_claims,
+            a.adversary_attributed,
+            a.adversary_undetected,
+            a.adversary_censored,
+            a.adversary_in_flight,
             a.q_measured_permille.map(|q| format!("{q}‰")).unwrap_or_else(|| "-".to_string())
         ));
     }
@@ -172,9 +205,9 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
 }
 
 pub(crate) async fn run(ctx: &Ctx, args: CapacityShadowArgs) -> CliResult {
-    let CapacityShadowArgs { step, bond, adversary, claims, limit, json } = args;
+    let CapacityShadowArgs { step, reference, bond, adversary, claims, limit, json } = args;
     let request = GetPalwCapacityShadowRequest {
-        steps: step.iter().map(|s| parse_step(s)).collect::<Result<Vec<_>, _>>()?,
+        steps: if reference { reference_steps() } else { step.iter().map(|s| parse_step(s)).collect::<Result<Vec<_>, _>>()? },
         bond: bond.unwrap_or_default(),
         adversary_bonds: adversary,
         include_claims: claims,
@@ -220,14 +253,25 @@ mod tests {
         .expect("parses");
         let crate::Command::Palw(crate::PalwCmd::CapacityShadow(args)) = cli.command else { panic!("capacity-shadow") };
         assert_eq!(
-            (args.step, args.adversary, args.claims, args.limit, args.bond),
-            (vec!["100".into(), "10:250".into()], vec![bond], true, 7, None)
+            (args.step, args.adversary, args.claims, args.limit, args.bond, args.reference),
+            (vec!["100".into(), "10:250".into()], vec![bond], true, 7, None, false)
+        );
+        let cli = crate::Cli::try_parse_from(["misaka", "palw", "capacity-shadow", "--reference"]).expect("parses");
+        let crate::Command::Palw(crate::PalwCmd::CapacityShadow(args)) = cli.command else { panic!("capacity-shadow") };
+        assert!(args.reference && args.step.is_empty());
+        assert!(
+            crate::Cli::try_parse_from(["misaka", "palw", "capacity-shadow", "--reference", "--step", "10"]).is_err(),
+            "the reference ramp and named steps are exclusive"
+        );
+        assert_eq!(
+            reference_steps().iter().map(|s| (s.rho, s.q_credit_permille)).collect::<Vec<_>>(),
+            vec![(10, 143), (25, 143), (50, 143), (100, 143), (1000, 143)]
         );
     }
 
     #[test]
     fn steps_parse_as_rho_and_q() {
-        assert_eq!(parse_step("100").unwrap(), RpcPalwCapacityStep { from_daa: 0, rho: 100, q_credit_permille: 143 });
+        assert_eq!(parse_step("100").unwrap(), RpcPalwCapacityStep { from_daa: 0, rho: 100, q_credit_permille: 0 }, "no credit assumed");
         assert_eq!(parse_step("10:250").unwrap(), RpcPalwCapacityStep { from_daa: 0, rho: 10, q_credit_permille: 250 });
         assert!(parse_step("x").is_err());
     }
@@ -250,6 +294,12 @@ mod tests {
         let text = render(&r);
         assert!(text.contains("today 13.00 → under J-1 2.00"), "{text}");
         assert!(text.contains("32.00") && text.contains("203"), "{text}");
+        assert!(text.contains("credits an attribution rate"), "a q > 0 row is marked conditional: {text}");
+        let uncredited = GetPalwCapacityShadowResponse {
+            steps: vec![RpcPalwCapacityStepRow { step: RpcPalwCapacityStep { from_daa: 0, rho: 10, q_credit_permille: 0 }, ..Default::default() }],
+            ..r.clone()
+        };
+        assert!(!render(&uncredited).contains("credits an attribution rate"));
         assert!(render(&GetPalwCapacityShadowResponse::default()).contains("no V2 state"));
     }
 }

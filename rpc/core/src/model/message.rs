@@ -11483,7 +11483,11 @@ impl Deserializer for RpcPalwCapacityStep {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwCapacityShadowRequest {
-    /// The steps to price; empty for the reference ramp ρ 10 / 25 / 50 / 100 / 1000 at q 143‰.
+    /// The steps to price. Empty: the schedule the chain's F-L fence arms when its params carry one,
+    /// else the UNCREDITED ramp ρ 10 / 25 / 50 / 100 / 1000 at q 0 (`m_c = E`, what the rules give
+    /// until an attribution rate is measured and credited). ADR-0160's reference ramp (q 143‰, the
+    /// E-T3 rows 20 / 50 / 101 / 203 / 2,030) is priced only when named here: it is conditional on a
+    /// measured attribution rate of at least 0.29.
     pub steps: Vec<RpcPalwCapacityStep>,
     /// `<txid>:<index>`: only this bond's row and claims; empty for every bond.
     pub bond: String,
@@ -11528,7 +11532,8 @@ pub struct RpcPalwCapacityStepRow {
     /// `m_c` of a reference floor claim, and the `q` its ramp term needs at `L = 3G` (permille).
     pub m_floor_sompi: String,
     pub q_needed_permille: u32,
-    /// `q_credit ≥ q_needed` (the ramp term binds) and AS-2's seat credit applies.
+    /// `q_credit ≥ q_needed` (the ramp term binds), and lane liab's AS-2 seat credit applies
+    /// (`q_credit ≥ 250‰`, so locks shrink by ρ).
     pub ramp_binds: bool,
     pub seat_credit: bool,
     pub claims_commitment_sompi: String,
@@ -11541,6 +11546,10 @@ pub struct RpcPalwCapacityStepRow {
     pub n_instant_13k: u64,
     /// A8: a class's measured `q` is below `2 × q_needed`.
     pub q_alarm: bool,
+    /// §10 D-5's conditional column (an open decision: `L_seat` = the 130,000 MSK seat bond, so
+    /// `q_seat` ≈ 25‰): would the seat credit apply, and the §5.4 estimate if it did.
+    pub seat_credit_if_d5: bool,
+    pub seat_capacity_if_d5_milli_per_daa: u64,
 }
 
 impl Serializer for RpcPalwCapacityStepRow {
@@ -11558,6 +11567,8 @@ impl Serializer for RpcPalwCapacityStepRow {
         store!(u64, &self.seat_capacity_milli_per_daa, writer)?;
         store!(u64, &self.n_instant_13k, writer)?;
         store!(bool, &self.q_alarm, writer)?;
+        store!(bool, &self.seat_credit_if_d5, writer)?;
+        store!(u64, &self.seat_capacity_if_d5_milli_per_daa, writer)?;
         Ok(())
     }
 }
@@ -11578,6 +11589,8 @@ impl Deserializer for RpcPalwCapacityStepRow {
             seat_capacity_milli_per_daa: load!(u64, reader)?,
             n_instant_13k: load!(u64, reader)?,
             q_alarm: load!(bool, reader)?,
+            seat_credit_if_d5: load!(bool, reader)?,
+            seat_capacity_if_d5_milli_per_daa: load!(u64, reader)?,
         })
     }
 }
@@ -11754,8 +11767,17 @@ pub struct RpcPalwCapacityAttributionRow {
     pub da_opened_non_seat_total: u64,
     /// DAA from acceptance to conviction: < 10, 50, 100, 300, 600, 1,200, 3,000, and the rest.
     pub conviction_latency_histogram: Vec<u64>,
+    /// Adversary claims (of bonds the request named): `attributed + undetected + censored + in_flight`.
     pub adversary_claims: u64,
+    /// Caught: a conviction names the claim, or it was voided for one.
     pub adversary_attributed: u64,
+    /// Resolved with nobody convicted: `Final`, or voided for a reason that convicts nobody.
+    pub adversary_undetected: u64,
+    /// Voided by a bond-level forfeiture before its own outcome (out of `q`).
+    pub adversary_censored: u64,
+    /// Not yet resolved (out of `q` until it is).
+    pub adversary_in_flight: u64,
+    /// `attributed / (attributed + undetected)` in permille; absent while none has resolved.
     pub q_measured_permille: Option<u32>,
 }
 
@@ -11775,6 +11797,9 @@ impl Serializer for RpcPalwCapacityAttributionRow {
         store!(Vec<u64>, &self.conviction_latency_histogram, writer)?;
         store!(u64, &self.adversary_claims, writer)?;
         store!(u64, &self.adversary_attributed, writer)?;
+        store!(u64, &self.adversary_undetected, writer)?;
+        store!(u64, &self.adversary_censored, writer)?;
+        store!(u64, &self.adversary_in_flight, writer)?;
         store!(Option<u32>, &self.q_measured_permille, writer)?;
         Ok(())
     }
@@ -11797,6 +11822,9 @@ impl Deserializer for RpcPalwCapacityAttributionRow {
             conviction_latency_histogram: load!(Vec<u64>, reader)?,
             adversary_claims: load!(u64, reader)?,
             adversary_attributed: load!(u64, reader)?,
+            adversary_undetected: load!(u64, reader)?,
+            adversary_censored: load!(u64, reader)?,
+            adversary_in_flight: load!(u64, reader)?,
             q_measured_permille: load!(Option<u32>, reader)?,
         })
     }

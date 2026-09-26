@@ -4669,6 +4669,8 @@ pub fn palw_capacity_shadow_response_v1(
                 seat_capacity_milli_per_daa: row.seat_capacity_milli_per_daa,
                 n_instant_13k: row.n_instant_13k,
                 q_alarm: row.q_alarm,
+                seat_credit_if_d5: row.seat_credit_if_d5,
+                seat_capacity_if_d5_milli_per_daa: row.seat_capacity_if_d5_milli_per_daa,
             })
             .collect(),
         bonds_total: bonds.len() as u64,
@@ -4738,6 +4740,9 @@ pub fn palw_capacity_shadow_response_v1(
                 conviction_latency_histogram: row.conviction_latency_histogram.to_vec(),
                 adversary_claims: row.adversary_claims,
                 adversary_attributed: row.adversary_attributed,
+                adversary_undetected: row.adversary_undetected,
+                adversary_censored: row.adversary_censored,
+                adversary_in_flight: row.adversary_in_flight,
                 q_measured_permille: row.q_measured_permille.map(u32::from),
             })
             .collect(),

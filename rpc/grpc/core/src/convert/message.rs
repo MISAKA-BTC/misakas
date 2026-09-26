@@ -1461,6 +1461,8 @@ from!(item: &kaspa_rpc_core::RpcPalwCapacityStepRow, protowire::RpcPalwCapacityS
         seat_capacity_milli_per_daa: item.seat_capacity_milli_per_daa,
         n_instant13k: item.n_instant_13k,
         q_alarm: item.q_alarm,
+        seat_credit_if_d5: item.seat_credit_if_d5,
+        seat_capacity_if_d5_milli_per_daa: item.seat_capacity_if_d5_milli_per_daa,
     }
 });
 from!(item: &kaspa_rpc_core::RpcPalwCapacityClaimRow, protowire::RpcPalwCapacityClaimRow, {
@@ -1523,6 +1525,9 @@ from!(item: &kaspa_rpc_core::RpcPalwCapacityAttributionRow, protowire::RpcPalwCa
         adversary_claims: item.adversary_claims,
         adversary_attributed: item.adversary_attributed,
         q_measured_permille: item.q_measured_permille,
+        adversary_undetected: item.adversary_undetected,
+        adversary_censored: item.adversary_censored,
+        adversary_in_flight: item.adversary_in_flight,
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire::GetPalwCapacityShadowResponseMessage, {
@@ -3560,6 +3565,8 @@ try_from!(item: &protowire::RpcPalwCapacityStepRow, kaspa_rpc_core::RpcPalwCapac
         seat_capacity_milli_per_daa: item.seat_capacity_milli_per_daa,
         n_instant_13k: item.n_instant13k,
         q_alarm: item.q_alarm,
+        seat_credit_if_d5: item.seat_credit_if_d5,
+        seat_capacity_if_d5_milli_per_daa: item.seat_capacity_if_d5_milli_per_daa,
     }
 });
 try_from!(item: &protowire::RpcPalwCapacityClaimRow, kaspa_rpc_core::RpcPalwCapacityClaimRow, {
@@ -3622,6 +3629,9 @@ try_from!(item: &protowire::RpcPalwCapacityAttributionRow, kaspa_rpc_core::RpcPa
         adversary_claims: item.adversary_claims,
         adversary_attributed: item.adversary_attributed,
         q_measured_permille: item.q_measured_permille,
+        adversary_undetected: item.adversary_undetected,
+        adversary_censored: item.adversary_censored,
+        adversary_in_flight: item.adversary_in_flight,
     }
 });
 try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kaspa_rpc_core::GetPalwCapacityShadowResponse>, {
@@ -4743,6 +4753,8 @@ mod palw_capacity_shadow_grpc_tests {
                 seat_capacity_milli_per_daa: 94_094,
                 n_instant_13k: 203,
                 q_alarm: true,
+                seat_credit_if_d5: true,
+                seat_capacity_if_d5_milli_per_daa: 94_095,
             }],
             bonds: vec![RpcPalwCapacityBondRow {
                 bond: "b0".repeat(64) + ":1",
@@ -4800,6 +4812,9 @@ mod palw_capacity_shadow_grpc_tests {
                 conviction_latency_histogram: vec![0, 1, 0, 0, 0, 0, 0, 2],
                 adversary_claims: 8,
                 adversary_attributed: 9,
+                adversary_undetected: 10,
+                adversary_censored: 11,
+                adversary_in_flight: 12,
                 q_measured_permille: Some(500),
             }],
         };

@@ -2847,6 +2847,8 @@ message RpcPalwCapacityStepRow {
   uint64 seatCapacityMilliPerDaa = 10;
   uint64 nInstant13k = 11;
   bool qAlarm = 12;
+  bool seatCreditIfD5 = 13;
+  uint64 seatCapacityIfD5MilliPerDaa = 14;
 }
 
 message RpcPalwCapacityClaimRow {
@@ -2906,6 +2908,9 @@ message RpcPalwCapacityAttributionRow {
   uint64 adversaryClaims = 12;
   uint64 adversaryAttributed = 13;
   optional uint32 qMeasuredPermille = 14;
+  uint64 adversaryUndetected = 15;
+  uint64 adversaryCensored = 16;
+  uint64 adversaryInFlight = 17;
 }
 
 message GetPalwCapacityShadowResponseMessage {

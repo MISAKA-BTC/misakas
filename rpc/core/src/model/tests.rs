@@ -2468,6 +2468,8 @@ mod mockery {
                 seat_capacity_milli_per_daa: mock(),
                 n_instant_13k: mock(),
                 q_alarm: mock(),
+                seat_credit_if_d5: mock(),
+                seat_capacity_if_d5_milli_per_daa: mock(),
             }
         }
     }
@@ -2541,6 +2543,9 @@ mod mockery {
                 conviction_latency_histogram: vec![mock(), mock(), mock()],
                 adversary_claims: mock(),
                 adversary_attributed: mock(),
+                adversary_undetected: mock(),
+                adversary_censored: mock(),
+                adversary_in_flight: mock(),
                 q_measured_permille: mock(),
             }
         }

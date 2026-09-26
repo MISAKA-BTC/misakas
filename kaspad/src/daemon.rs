@@ -796,8 +796,12 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // act as a bond; no flag turns one on or off. One INFO line says which run and why the others do
     // not; each deprecated duty flag the operator still names gets one WARN line.
     let palw_duty_plan = crate::palw_duties::palw_duty_plan_v1(args, &config.params);
-    // ADR-0160 §7.5: the capacity shadow's carriage estimate divides the block mass limit.
+    // ADR-0160 §7.5: the capacity shadow's carriage estimate divides the block mass limit; the
+    // O-3 run's bonds (if any) are what its A8 alarm measures q on. A malformed one refuses the start.
     let palw_capacity_shadow_block_mass = config.params.max_block_mass;
+    let palw_capacity_shadow_adversary =
+        crate::palw_capacity_shadow::palw_capacity_shadow_adversary_bonds(&args.palw_capacity_shadow_adversary)
+            .unwrap_or_else(|e| panic!("--palw-capacity-shadow-adversary: {e}"));
     for line in crate::palw_duties::palw_deprecated_duty_flag_warnings_v1(args, &config.params) {
         warn!("{line}");
     }
@@ -1952,6 +1956,7 @@ Do you confirm? (y/n)";
             consensus_manager.clone(),
             flow_context.clone(),
             palw_capacity_shadow_block_mass,
+            palw_capacity_shadow_adversary,
         )));
     }
     if palw_consensus_v2 {
