@@ -17,8 +17,8 @@ inference** (PALW) rather than by hashing alone.
 |---|---|
 | **Stage** | Public testnet. **Not** a mainnet release candidate yet — see [Mainnet readiness](docs/mainnet-readiness.md) |
 | **Network** | `testnet-12` (R-core+, ADR-0152 v3.1), launched 2026-09-25/26 JST |
-| **Release** | launch commit **`0e8ec984e`** → node update `8a0810992` (2026-09-26) → **post-launch fence release `c3dbaee3c`** (13 fences activate at **DAA 750**, 2026-09-27) — **build `c3dbaee3c` and run it before DAA 750**; no tag yet |
-| **Consensus** | **Not frozen.** The post-launch fixes activate as 13 fences at DAA 750 ([launch note §00](docs/t12-launch-2026-09-25.md)) |
+| **Release** | launch commit **`0e8ec984e`** → node update `8a0810992` (2026-09-26) → **post-launch fence release `c3dbaee3c`** (13 fences active since **DAA 750**, 2026-09-27 07:29 JST) — **build `c3dbaee3c`**; no tag yet |
+| **Consensus** | **Not frozen.** The post-launch fixes activated as 13 fences at DAA 750 ([launch note §00](docs/t12-launch-2026-09-25.md)) |
 | **Consensus params fingerprint** | `dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9` (release `c3dbaee3c`; the launch build and `8a0810992` print `b8564b88…`) |
 | **Genesis** | `a27f8f44fe4d91a5…` · fence schedule `750, 1000` · schedule id `7c652212ab5337bd…` |
 | **Mainnet** | parameter set defined; **not launched, not endorsed** — do not run `--mainnet` expecting a live network |
@@ -181,14 +181,14 @@ Authoritative design & spec live under [`docs/`](docs/):
 
 ## Prebuilt binaries
 
-**testnet-12 has no GitHub release yet: build from `c3dbaee3c`, and run it before DAA 750.** It is the
-post-launch fence release: 13 fences activate at DAA 750 (about 2026-09-27 07:00 JST; read your node's
-`virtualDaaScore`), so from DAA 750 on an older node is refused at the handshake and falls off the network.
-Upgrading keeps your datadir (same genesis and identity); a node that crossed DAA 750 on an older build
-must move its datadir aside and resync. It also fixes IBD (since DAA 316 a fresh node could not finish
-syncing). What it contains is in [launch note §00](docs/t12-launch-2026-09-25.md). The public fleet moves to
-the x86_64 Linux release build of that commit before DAA 750 (glibc 2.39 floor, `contrib/t12-deploy-kit/build-release-local.sh
-c3dbaee3c`); its sha256, to compare a build of your own against:
+**testnet-12 has no GitHub release yet: build from `c3dbaee3c`.** It is the post-launch fence release: its
+13 fences have been active since DAA 750 (2026-09-27 07:29 JST), and a node on an older build
+(`0e8ec984e`, `8a0810992`) is refused at the handshake and is off the network. A node that crossed DAA 750
+on an older build must move its datadir aside and resync with `c3dbaee3c`. It also fixes IBD (since DAA 316
+a fresh node could not finish syncing). What it contains is in [launch note §00](docs/t12-launch-2026-09-25.md).
+Since 2026-09-27 02:15 JST (DAA 623) the public fleet runs the x86_64 Linux release build of that commit
+(glibc 2.39 floor, `contrib/t12-deploy-kit/build-release-local.sh c3dbaee3c`); its sha256, to compare a build
+of your own against:
 
 | binary | sha256 |
 |---|---|

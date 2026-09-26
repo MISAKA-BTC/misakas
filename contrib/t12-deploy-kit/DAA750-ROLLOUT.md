@@ -1,6 +1,10 @@
 # testnet-12 DAA 750 post-launch release — rollout checklist
 
-2026-09-26 作成（`rcore/int-4`）。**この文書のどの手順もまだ実行していない。** 読み取りで確かめたのは次の 3 つだけ:
+> **実施済み（2026-09-27）**: 01:50〜02:15 JST に公開 fleet の 8 ノードを `c3dbaee3c` に 1 台ずつ入れ替えた（DAA 623 まで、check-fleet 8/8 OK、
+> 起動ログ `Consensus fence schedule: 750, 1000`）。DAA 750 には 07:29 JST に達し、その前後で 8 ノードは同じ chain にとどまった（分岐なし）。
+> 旧スケジュールのノードは handshake で拒否されている。以下は実施前に書いたチェックリスト。
+
+2026-09-26 作成（`rcore/int-4`）。**作成時点では、この文書のどの手順もまだ実行していなかった。** 読み取りで確かめたのは次の 3 つだけ:
 .113 の `/etc/misaka-mtp/chain.pin`（`cat` のみ）、IBD checkpoint の候補（explorer の node と ibm の node への `getBlock`）、
 公開 node の DAA。
 

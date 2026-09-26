@@ -2,8 +2,8 @@
 
 **testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`). On
 2026-09-26 the public fleet moved to the node-only update `8a0810992`; the post-launch fence release `c3dbaee3c`
-(published 2026-09-27; 13 fences activate at DAA 750; launch note §00) replaces it on the fleet before DAA 750 — **build `c3dbaee3c` and run it
-before DAA 750**. The identity values below were checked against that release. Read
+(published 2026-09-27; launch note §00) replaced it on the fleet by 02:15 JST that day, and its 13 fences have been
+active since DAA 750 (2026-09-27 07:29 JST) — **build `c3dbaee3c`**. The identity values below were checked against that release. Read
 [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists what the release contains, the
 known issues (two CRITICAL ones are fixed by post-launch activation fences) and when a payment may be
 treated as final.
@@ -46,10 +46,10 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 1. Build
 
-Use commit `c3dbaee3c` — the post-launch fence release the public fleet moves to before DAA 750 (kaspad sha256 of
-its x86_64 Linux release build `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571`). It must be running
-before DAA 750, where its 13 fences activate: from DAA 750 an older node is refused at the handshake. It
-also fixes IBD: an older build cannot sync a fresh node past DAA 316.
+Use commit `c3dbaee3c` — the post-launch fence release the public fleet runs (kaspad sha256 of its x86_64 Linux
+release build `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571`). Its 13 fences have been active since
+DAA 750: an older node (`0e8ec984e`, `8a0810992`) is refused at the handshake, and one that crossed DAA 750 on an
+older build must move its datadir aside and resync. It also fixes IBD: an older build cannot sync a fresh node past DAA 316.
 
 ```bash
 git checkout c3dbaee3c

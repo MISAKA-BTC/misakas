@@ -1,6 +1,6 @@
 # Testnet-12 Operator UI(ADR-0122)
 
-`misaka` は mining、Bond、work、reward、model、verifier、validator を 1 つの入口から扱います。対象は testnet-12 と、その現行ビルド `c3dbaee3c`(2026-09-27 の post-launch fence release。DAA 750 より前に動かしておくこと)です。`misaka` はネットワークを指定しなければ testnet-12 を使いますが、このページの例では `--network testnet-12` を明示しています。
+`misaka` は mining、Bond、work、reward、model、verifier、validator を 1 つの入口から扱います。対象は testnet-12 と、その現行ビルド `c3dbaee3c`(2026-09-27 の post-launch fence release。13 本の fence が DAA 750 で有効になった)です。`misaka` はネットワークを指定しなければ testnet-12 を使いますが、このページの例では `--network testnet-12` を明示しています。
 
 ## セットアップ
 

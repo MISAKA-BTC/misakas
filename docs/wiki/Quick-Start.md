@@ -1,6 +1,6 @@
 # Quick Start — testnet-12
 
-対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の post-launch fence release `c3dbaee3c` です。13 本の fence が DAA 750 で有効になるので、DAA 750 より前に動かしてください。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
+対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の post-launch fence release `c3dbaee3c` です。13 本の fence が DAA 750(2026-09-27 07:29 JST)で有効になりました。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
 
 ## 1. Build
 
@@ -15,7 +15,7 @@ cargo build --release -p kaspad -p misaka-cli
 
 `misaka-cli` から作られるバイナリは `target/release/misaka` です。以下では `target/release` を PATH に加えた前提で書きます。加えない場合は `./target/release/kaspad` と `./target/release/misaka` と読み替えてください。
 
-公開 fleet は DAA 750 より前に `c3dbaee3c` の x86_64 Linux release build へ入れ替えます(kaspad の sha256 は `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571`)。DAA 750 で 13 本の fence が有効になり、`0e8ec984e`・`8a0810992` のノードは DAA 750 から handshake で拒否されます。DAA 750 より前に入れ替えてください。古いビルドのまま DAA 750 を越えたノードは `<appdir>/misaka-testnet-12/datadir` を退避して同期し直します(公開ノート §00)。
+公開 fleet は 2026-09-27 02:15 JST に `c3dbaee3c` の x86_64 Linux release build へ入れ替えました(kaspad の sha256 は `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571`)。DAA 750 で 13 本の fence が有効になり、`0e8ec984e`・`8a0810992` のノードは handshake で拒否されます。古いビルドのまま DAA 750 を越えたノードは `<appdir>/misaka-testnet-12/datadir` を退避し、`c3dbaee3c` で同期し直します(公開ノート §00)。
 
 > 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドします。
 
