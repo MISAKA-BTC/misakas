@@ -281,6 +281,10 @@ SCAN_DEPLOY = "contrib/misakascan-t12/DEPLOY.md"
 CHECKLIST = "docs/t12-rcore-launch-checklist.md"
 REGEN_DOC = "docs/testnet-12-regenesis-2026-09-23.md"
 JOIN_DOC = "docs/testnet12-join-mining.md"
+README = "README.md"
+SCAN_INDEX = "contrib/misakascan-t12/index.html"
+MONITOR = "contrib/t12-monitor/panel_bias.py"
+MONITOR_DOC = "contrib/t12-monitor/README.md"
 
 # Pin files a step-1 merge brings (checklist §4 steps 1–3). Before that merge their rows are "absent"
 # (reported, not an error); once this tree's history has had the file, or with --shipping, a missing
@@ -609,6 +613,28 @@ def registry() -> list[Pin]:
                     comment=None))
     pins.append(Pin("scan_deploy.PANEL_BOND_TX", "copy", SCAN_DEPLOY, [r"固有の premine txid `"], "testnet-12.premine_txid", fmt="abbr",
                     comment=None))
+    # The fingerprint copies the int-4 audit found outside this registry (its LOW: README, the explorer's
+    # banner, the panel-bias monitor and its README, the join guide's startup-log sample) — prose and a
+    # Python default: no reason comment, the commit carries it.
+    pins.append(Pin("join_doc.fp", "copy", JOIN_DOC, [r"^Consensus params fingerprint: "], "from.testnet-12.params_id", fmt="token",
+                    length=64, comment=None))
+    pins.append(Pin("join_doc.schedule_id", "copy", JOIN_DOC, [r"^Consensus fence schedule: [0-9, ]+ \(schedule id "],
+                    "from.testnet-12.schedule_id", fmt="token", length=64, comment=None))
+    pins.append(Pin("readme.fp", "copy", README, [r"consensus params fingerprint \*\*`"], "from.testnet-12.params_id", fmt="token",
+                    length=64, comment=None))
+    pins.append(Pin("readme.schedule_id", "copy", README, [r"consensus params fingerprint \*\*`", r"and schedule id `"],
+                    "from.testnet-12.schedule_id", fmt="abbr", comment=None))
+    pins.append(Pin("scan_index.fp", "copy", SCAN_INDEX,
+                    [r'network prints params fingerprint\n\s*<span class="mono" style="word-break:break-all">'],
+                    "from.testnet-12.params_id", fmt="token", length=64, comment=None))
+    pins.append(Pin("scan_index.schedule_id", "copy", SCAN_INDEX, [r"network prints params fingerprint", r'\(schedule id <span class="mono">'],
+                    lambda c: c["from.testnet-12.schedule_id"][:8], fmt="token", length=8, comment=None))
+    pins.append(Pin("monitor.T12_FP", "copy", MONITOR, [r'^T12_FP = "'], "from.testnet-12.params_id", fmt="token", length=64,
+                    comment=None, note="the monitor's --expect-fp default"))
+    pins.append(Pin("monitor_doc.fp", "copy", MONITOR_DOC, [r"consensus params fp が出荷値（`"], "from.testnet-12.params_id",
+                    fmt="abbr", comment=None))
+    pins.append(Pin("monitor_doc.sample_fp", "copy", MONITOR_DOC, [r'^PANEL_BIAS \{"status":"OK","time":\.\.\.,"tip":70,"fp":"'],
+                    lambda c: c["from.testnet-12.params_id"][:16], fmt="token", length=16, comment=None))
     return pins
 
 

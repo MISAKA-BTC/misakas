@@ -59,19 +59,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was 1870bc1f…, 6e193d30…, 79563f51…)
+// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was 730d7f10…, 01854a38…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "730d7f10dc1416980ff88c9825a5279e4e7fd64f8f475f11b4e13d572ba17e47",
+    "3c5aaf66b03282a1f222df2720bd7eb732f8cca3f4f4502e3f0093b7fc064ae0",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "01854a388d6e40393e6752261076eab7c1b0f11f62d4ec92bf356b7c8e977de6",
+    "8d17b2f722e72fd7045fbfa2ac19af89cb16c680c9656d45425c9f20b1e6cfd4",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was b688f0d1…, ade04862…, 3f5180c0…)
+// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was b8564b88…, 93da24cc…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "1274ac128a77482840d8785bf86487d7632cbfa6751140d1091d78cf2d4657f7",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+    "ae8cc4b7615fbbb7fa3cbf809bb8b867740afe98731c2f9c3bd8ab768095a300",
 );
 
 fn shipped(name: &str) -> Params {

@@ -35,10 +35,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
+// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was 8e395c26…, 9451ec5d…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "8e395c26a6eac260b9c509fe6977e85709ab7948482d3660fe255b2eaf60c51a",
+    "ac41a9d5658028b7558d6beac44a4742c0361900c431a5de167fb836caf368d6",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "9451ec5dbf480f4966de343e67e53f8e2d97a7705d1b5771a364a4b26bcda211",
+    "be669e4c001060f2bf29ff9aeb1d2b24d075365d0a0a83f9c8eed415e1771b4e",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

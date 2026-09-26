@@ -306,7 +306,9 @@ fn validate_refuses_the_fence_without_each_prerequisite() {
 /// fails on the prerequisites the override dropped instead of silently disarming.
 #[test]
 fn the_fence_off_twin_validates_and_the_fence_moves_only_testnet12() {
-    let t12 = palw_t12_shipped_params();
+    // The LAUNCH ruleset: the post-launch release's fences (armed at DAA 750 since int-4) stand on
+    // R-core+ themselves, so the twin that takes R-core+ away is the launch ruleset's.
+    let t12 = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
     let mut twin = t12.clone();
     twin.palw_rcore_plus = None;
     twin.palw_rcore_conservative_classes = &[];

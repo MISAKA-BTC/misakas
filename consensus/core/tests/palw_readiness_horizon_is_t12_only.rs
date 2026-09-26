@@ -57,11 +57,11 @@ const BEFORE_THE_HORIZON: &[(&str, &str, &str, &str)] = &[
 /// Re-pinned 2026-09-25 (`rcore/exec-maturity-120`): testnet-12's 120-DAA execution-quantum maturity
 /// (`palw_exec_maturity_is_t12_only`) is in this twin — and so are c6ffd812's mainnet values, which the
 /// merge `2004c588` left un-re-pinned here. Previous: `fd7353c0…` / `a7fe561c…` / `28d866f1…`.
-// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was 3d8670a6…, af69b742…, 6cb1aaaa…)
+// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was 71777608…, c9964f90…)
 const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
-    "71777608d6ca83717313202c59989604d615049b53365a69f79f3cb0a48ce85c",
+    "fd3e1c121bf5ff2821fb82cead53efdd88ff2abb121f16184fc1f9d0840847e1",
     "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
-    "c9964f908e0a16e5c0664c9b962506e96966f7bd53db4fc2bde6892055d65989",
+    "701f9c9e7aecc2263b8ab62b1e58710bda7b4beb56b2a43cc332287af2501b13",
 );
 
 /// testnet-12 with the horizon, on the same tree (at `3e9ae4ba`, before the pool and int-3 merges:
@@ -71,11 +71,11 @@ const T12_BEFORE_THE_HORIZON: (&str, &str, &str) = (
 /// (= `palw_exec_maturity_is_t12_only`'s `T12_WITH_THE_MATURITY`; at `2004c588` they were `2790d7ce…` /
 /// `1fd06c99…` / `e0af0218…`, which this pin never caught up with). Previous: `4d38b3f1…` / `2477a803…` /
 /// `06dd5566…`.
-// re-pin 2026-09-25 @57c1fe323c44: t12 shipping re-pin 2026-09-25 (rcore/int-3 57c1fe32): mainnet values (λ 5, 1,620 s tolerance, level 225; mainnet takes t12's DNS set, carve, Decision A), the beat lead cap (132 s past the receiver clock), the execution-quantum maturity 120 DAA, the readiness-memory / duties / mempool node fixes; T41 v22 golden moves because R1 (palw_activation_pool) excludes genesis rows from silence reclamation. Genesis a27f8f44 and premine txid 5e0d5f1b unchanged. (was 730d7f10…, 50990e0f…, 01854a38…)
+// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was b8564b88…, 93da24cc…)
 const T12_WITH_THE_HORIZON: (&str, &str, &str) = (
-    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "1274ac128a77482840d8785bf86487d7632cbfa6751140d1091d78cf2d4657f7",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+    "ae8cc4b7615fbbb7fa3cbf809bb8b867740afe98731c2f9c3bd8ab768095a300",
 );
 
 fn shipped(name: &str) -> Params {

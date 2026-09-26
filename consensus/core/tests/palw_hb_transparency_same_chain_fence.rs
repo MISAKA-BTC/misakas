@@ -38,10 +38,11 @@ use kaspa_consensus_core::fork_id_v1::{
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
+// re-pin 2026-09-26 @77fda971cc39: the DAA-750 post-launch release: every PALW_T12_POST_LAUNCH_FENCES_V1 fence armed at DAA 750 (params + schedule move; identity, genesis, premine unchanged) (was b8564b88…, 93da24cc…)
 const T12_RELEASED: (&str, &str, &str) = (
-    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "1274ac128a77482840d8785bf86487d7632cbfa6751140d1091d78cf2d4657f7",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+    "ae8cc4b7615fbbb7fa3cbf809bb8b867740afe98731c2f9c3bd8ab768095a300",
 );
 
 /// An illustrative flag-day height. The operator picks one common, independent height for every
