@@ -724,6 +724,11 @@ impl PalwProducerService {
         }
     }
 
+    /// Whether `signal_exit` has fired.
+    fn exiting(&self) -> bool {
+        self.shutdown.listener.is_triggered()
+    }
+
     /// Sleep `period`, or return `false` the moment `signal_exit` fires — the panel's `tick`,
     /// copied verbatim. Every wait in the worker loop goes through this, which is what makes
     /// shutdown reach code that would otherwise sleep forever (ADR-0068 drill finding F1).
@@ -1098,6 +1103,8 @@ impl PalwProducerService {
                         draws_reported_at = Some(std::time::Instant::now());
                     }
                 }
+                // Stopping is not a failure: the next tick ends the loop.
+                Err(err) if self.exiting() => info!("[{PALW_PRODUCER}] {err}"),
                 Err(err) => warn!("[{PALW_PRODUCER}] {err}"),
             }
         }
@@ -1162,9 +1169,9 @@ impl PalwProducerService {
         template.block.header.finalize();
         let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
         let hash = block.hash();
-        self.flow_context
-            .submit_rpc_block(session, block)
+        palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
             .await
+            .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: receipt block {hash} was not submitted"))?
             .map_err(|e| format!("the chain refused a receipt block this node produced: {e}"))?;
         Ok(Some(hash))
     }
@@ -1380,17 +1387,24 @@ impl PalwProducerService {
         // number that said the fleet's draws were page faults, made a line an operator can watch.
         let storage_before = crate::palw_backends::storage_snapshot_v1(&self.class_holdings);
         let draw_started = std::time::Instant::now();
-        let (run, answer_ids) = tokio::task::spawn_blocking(move || {
-            let run = match tamper {
-                None => backend.execute(&job_for_blocking, &prompt_for_blocking),
-                Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
-            }?;
-            // The answer's ids, read back off the capture by the family that wrote it — for the
-            // attempt-lane answer envelope (ADR-0084 Decision 4) staged beside the material.
-            let answer_ids = backend.fp_committed_output_ids(&run.material);
-            Ok::<_, String>((run, answer_ids))
-        })
+        // **Raced against the exit signal** (T12-049): a draw of a wide class runs for minutes, and a
+        // SIGINT that lands inside it must not wait for it — the blocking task finishes on its own
+        // and is dropped with the runtime.
+        let (run, answer_ids) = palw_until_exit_v1(
+            &self.shutdown.listener,
+            tokio::task::spawn_blocking(move || {
+                let run = match tamper {
+                    None => backend.execute(&job_for_blocking, &prompt_for_blocking),
+                    Some(leaf) => backend.execute_with_injected_fault(&job_for_blocking, &prompt_for_blocking, leaf),
+                }?;
+                // The answer's ids, read back off the capture by the family that wrote it — for the
+                // attempt-lane answer envelope (ADR-0084 Decision 4) staged beside the material.
+                let answer_ids = backend.fp_committed_output_ids(&run.material);
+                Ok::<_, String>((run, answer_ids))
+            }),
+        )
         .await
+        .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: the draw in flight is abandoned"))?
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
         let storage_read_mib = crate::palw_backends::log_draw_storage_v1(PALW_PRODUCER, &storage_before, &self.class_holdings);
         let draw_millis = draw_started.elapsed().as_millis() as u64;
@@ -1522,11 +1536,15 @@ impl PalwProducerService {
             // the block — queued behind the bytes — never entered the DAG (card §6l). The material
             // is retained and SERVED (the pull, answered with the answer envelope when the capture
             // does not fit); the announcement is a courtesy the transport skips over the cap.
-            self.flow_context
-                .submit_rpc_block(session, block)
+            // T12-049: past the exit signal the consensus pipeline no longer drains its queue, and a
+            // block submitted into it waits forever on its validation result — the AsyncRuntime's
+            // join, and the process, with it (8+ minutes at 0 % CPU on a graph-v7@2048 producer whose
+            // 97 s draw finished after SIGINT). So the submit and the announcement both yield to it.
+            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
                 .await
+                .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: block {hash} was not submitted"))?
                 .map_err(|e| format!("the chain refused a block this node produced: {e}"))?;
-            self.flow_context.broadcast_palw_material(message, material).await;
+            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, material)).await;
             return Ok(Some((hash, message)));
         }
         Ok(None)
@@ -1558,6 +1576,28 @@ impl AsyncService for PalwProducerService {
             trace!("{} stopped", PALW_PRODUCER);
             Ok(())
         })
+    }
+}
+
+/// What a producer says when the exit signal cut a draw or a submit short.
+pub(crate) const PALW_PRODUCER_EXITING: &str = "stopping: the node is shutting down";
+
+/// **`fut`, or `None` the moment the exit signal fires** (testnet-12 lifecycle audit T12-049).
+///
+/// A service's loop observes shutdown at its `tick`, and nowhere else — so an await INSIDE one
+/// iteration that the shutdown itself makes endless keeps the service's future pending, the
+/// AsyncRuntime's join waiting on it, and the process alive until SIGKILL. The one such await on the
+/// production paths is a block submit: `Core::shutdown` stops the consensus pipeline first, a block
+/// sent into it afterwards sits in the pipeline's queue with its result sender, and
+/// `submit_rpc_block` waits on that result forever. A graph-v7@2048 producer whose 97 s draw
+/// finished after SIGINT hung 8+ minutes there at 0 % CPU; a floor producer's draw finishes in
+/// milliseconds, so it was always back at its `tick` when the signal came. `biased`: once the signal
+/// has fired, nothing further is started.
+pub(crate) async fn palw_until_exit_v1<F: std::future::Future>(exit: &kaspa_utils::triggers::Listener, fut: F) -> Option<F::Output> {
+    tokio::select! {
+        biased;
+        _ = exit.clone() => None,
+        out = fut => Some(out),
     }
 }
 
@@ -1610,6 +1650,66 @@ pub(crate) fn palw_dissection_refusal_v1(
 /// `palw_required_algo_id` is never 9).
 fn template_declares_an_attempt_lane(pow_algo_id: u8) -> bool {
     kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::{PALW_PRODUCER_EXITING, palw_until_exit_v1};
+    use kaspa_utils::triggers::SingleTrigger;
+
+    /// **T12-049: an await the shutdown itself made endless yields to the exit signal.** A block
+    /// submitted into a stopped pipeline waits on a result sender that sits, alive, in the
+    /// pipeline's queue: modelled here by a oneshot whose sender is held and never used. Unraced, the
+    /// service future never finishes and SIGINT hangs the node; raced, it returns the moment the
+    /// signal fires.
+    #[tokio::test]
+    async fn t12_049_an_await_the_shutdown_made_endless_yields_to_the_exit_signal() {
+        let exit = SingleTrigger::new();
+        let (queued_sender, result) = tokio::sync::oneshot::channel::<()>();
+        let listener = exit.listener.clone();
+        let submit = tokio::spawn(async move { palw_until_exit_v1(&listener, result).await });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(!submit.is_finished(), "a result that never comes is waited on while the node runs");
+        exit.trigger.trigger();
+        let out = tokio::time::timeout(std::time::Duration::from_secs(5), submit)
+            .await
+            .expect("the exit signal ends the wait")
+            .expect("the task did not panic");
+        assert!(out.is_none(), "and says it was cut short");
+        drop(queued_sender);
+
+        // A future that is ready passes through while the node runs; once the signal has fired
+        // nothing further is started (`biased`).
+        let fresh = SingleTrigger::new();
+        assert_eq!(palw_until_exit_v1(&fresh.listener, async { 7 }).await, Some(7));
+        fresh.trigger.trigger();
+        assert_eq!(palw_until_exit_v1(&fresh.listener, async { 7 }).await, None);
+        assert!(PALW_PRODUCER_EXITING.starts_with("stopping"));
+    }
+
+    /// **Every block submit on a PALW production path yields to the exit signal** — the producer's
+    /// attempt and receipt blocks, the execution lane's round blocks and the heartbeats. A new
+    /// `submit_rpc_block(` that is not raced is the T12-049 hang again.
+    #[test]
+    fn t12_049_every_palw_block_submit_is_raced_against_the_exit_signal() {
+        for (name, source) in [
+            ("palw_producer.rs", include_str!("palw_producer.rs")),
+            ("palw_round_producer.rs", include_str!("palw_round_producer.rs")),
+            ("palw_heartbeat_miner.rs", include_str!("palw_heartbeat_miner.rs")),
+        ] {
+            let production = &source[..source.find("#[cfg(test)]").unwrap_or(source.len())];
+            let mut submits = 0;
+            for (at, _) in production.match_indices(".submit_rpc_block(") {
+                submits += 1;
+                let before = &production[at.saturating_sub(160)..at];
+                assert!(
+                    before.contains("palw_until_exit_v1("),
+                    "{name}: a block submit at byte {at} is not raced against the exit signal"
+                );
+            }
+            assert!(submits > 0, "{name} submits blocks");
+        }
+    }
 }
 
 #[cfg(test)]

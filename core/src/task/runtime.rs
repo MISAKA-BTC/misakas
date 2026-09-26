@@ -51,12 +51,12 @@ impl AsyncRuntime {
 
     /// Launch a tokio Runtime and run the top-level async objects
     pub fn worker(self: &Arc<AsyncRuntime>, core: Arc<Core>) {
-        tokio::runtime::Builder::new_multi_thread()
+        let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(self.threads)
             .enable_all()
             .build()
-            .expect("Failed building the Runtime")
-            .block_on(async { self.worker_impl(core).await })
+            .expect("Failed building the Runtime");
+        run_then_shut_down_within(runtime, async { self.worker_impl(core).await }, BLOCKING_SHUTDOWN_GRACE)
     }
 
     pub async fn worker_impl(self: &Arc<AsyncRuntime>, core: Arc<Core>) {
@@ -125,6 +125,27 @@ impl AsyncRuntime {
     }
 }
 
+/// **How long the runtime's shutdown waits for `spawn_blocking` work still running** once every
+/// service has stopped (testnet-12 lifecycle audit T12-049).
+///
+/// Dropping a tokio runtime waits for every running blocking task with no bound. A PALW producer's
+/// draw of a wide class is one — minutes at graph-v7@2048, far longer at 2M — so a SIGINT that
+/// landed inside it held the process until the draw ended, and systemd's stop timeout could come
+/// first. Past this grace the draw is abandoned with the process: a draw writes nothing durable
+/// (its block is submitted only by the service future, which has already stopped).
+pub const BLOCKING_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// `fut` on `runtime`, then the runtime's shutdown bounded by `grace` for blocking tasks.
+pub fn run_then_shut_down_within<F: std::future::Future>(
+    runtime: tokio::runtime::Runtime,
+    fut: F,
+    grace: std::time::Duration,
+) -> F::Output {
+    let out = runtime.block_on(fut);
+    runtime.shutdown_timeout(grace);
+    out
+}
+
 impl Service for AsyncRuntime {
     fn ident(self: Arc<AsyncRuntime>) -> &'static str {
         Self::IDENT
@@ -136,5 +157,29 @@ impl Service for AsyncRuntime {
 
     fn stop(self: Arc<AsyncRuntime>) {
         self.signal_exit()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_then_shut_down_within;
+
+    /// **T12-049: a blocking task still running does not hold the shutdown past its grace** — the
+    /// producer's minutes-long draw, abandoned with the process instead of waited for.
+    #[test]
+    fn a_running_blocking_task_does_not_hold_the_shutdown_past_its_grace() {
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        let started = std::time::Instant::now();
+        let out = run_then_shut_down_within(
+            runtime,
+            async {
+                // Spawned and never awaited: what a draw in flight is once its service stopped.
+                let _draw = tokio::task::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_secs(30)));
+                7
+            },
+            std::time::Duration::from_millis(200),
+        );
+        assert_eq!(out, 7);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "the shutdown waited {:?}", started.elapsed());
     }
 }
