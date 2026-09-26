@@ -116,7 +116,17 @@ pub(super) fn t12_with_harness_cards_and_evm(
     use kaspa_consensus_core::config::params::PALW_T12_GENESIS_BONDS;
     use kaspa_consensus_core::config::premine::{PALW_RC_BOND_FEE_FLOAT_SOMPI, genesis_premine_utxos_for, premine_outpoint_for};
     assert!(!keep_evm || cfg!(feature = "evm"), "a build without the `evm` feature cannot build a template for an active EVM lane");
-    let shipped = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+    // testnet-12 as LAUNCHED: the shipped ruleset with the post-launch release's list
+    // (`PALW_T12_POST_LAUNCH_FENCES_V1`, armed at DAA 750 since int-4) set back to dormant — byte for
+    // byte what `Params::from(testnet-12)` was at launch. Every suite on this harness was written
+    // against it (and each post-launch lane arms its own fence over it); the release's twelve fences
+    // together are `t12_post_launch_fences_combined`'s crossing.
+    let shipped = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
+    debug_assert_eq!(
+        shipped.genesis.hash,
+        Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)).genesis.hash,
+        "the network id's genesis"
+    );
     let mut params = shipped.clone();
     assert_eq!(PALW_T12_GENESIS_BONDS.len(), T12_GENESIS_CARDS);
 

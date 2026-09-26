@@ -2,6 +2,14 @@
 //! dormant on every shipped preset, names testnet-12's eight genesis bonds when armed, and arming it is
 //! a scheduled fence like any other.**
 //!
+//! **Since the post-launch release (int-4; the user's decision of 2026-09-26) testnet-12 SHIPS this
+//! fence armed at DAA 750** (`PALW_T12_POST_LAUNCH_FENCE_DAA`), with the rest of
+//! `PALW_T12_POST_LAUNCH_FENCES_V1`. What is said below of "as shipped" / "the release" now holds of
+//! the LAUNCH ruleset — `palw_t12_launch_params_v1()`, the shipped ruleset with the post-launch list
+//! set back to dormant, byte for byte the `b8564b88…` release a node that has not upgraded runs — and
+//! the tests judge this fence alone against it; the shipped (armed) ids are pinned in the release
+//! constant, and the shipped ruleset is asserted to carry the fence at 750.
+//!
 //! The user's decision (2026-09-26 01:00 JST) for the panel-seed CRITICAL: beside lane F1, past a fence
 //! only an attempt produced by one of testnet-12's eight genesis bonds (premine `5e0d5f1b…:0..7`) may
 //! anchor a claim's panel — operator trust in the draw until an inference-bound lottery ticket exists.
@@ -26,16 +34,19 @@
 //! T3c, `void_after_panel_adv_verify` a5).
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_GENESIS_BONDS, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params,
-    palw_rc_shipped_params, palw_t12_shipped_params,
+    ForkActivation, PALW_T12_GENESIS_BONDS, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::config::premine::premine_outpoint_for;
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorV1;
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 
-/// testnet-12 as the release ships it (`0e8ec984e`; the shipping re-pin `9c717c16d`): params,
-/// identity, schedule.
+/// testnet-12 as THIS build ships it — the post-launch release, every fence of
+/// `PALW_T12_POST_LAUNCH_FENCES_V1` at DAA 750 (re-pinned by `scripts/t12-repin.sh` with it; the launch
+/// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
+/// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
+/// `T12_WITH_THE_CAP` holds.
 const T12_RELEASE: (&str, &str, &str) = (
     "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -52,7 +63,7 @@ fn ids(p: &Params) -> (String, String, String) {
 
 /// testnet-12 as shipped with lane F1 at `height` — lane A's prerequisite.
 fn f1_at(height: u64) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_launch_params_v1();
     p.palw_panel_seed_execution = Some(ForkActivation::new(height));
     p
 }
@@ -68,7 +79,7 @@ fn armed_at(height: u64) -> Params {
 
 fn presets() -> Vec<(&'static str, Params)> {
     vec![
-        ("testnet-12", palw_t12_shipped_params()),
+        ("testnet-12 as launched", palw_t12_launch_params_v1()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
         ("mainnet", mainnet_shipped_params()),
@@ -79,7 +90,7 @@ fn presets() -> Vec<(&'static str, Params)> {
 
 /// **Dormant everywhere as shipped**, and testnet-12's ids are the release's.
 #[test]
-fn the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
+fn the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750() {
     for (name, p) in presets() {
         assert_eq!(p.palw_operator_anchor, None, "{name}: lane A's fence ships dormant");
         assert!(!p.palw_operator_anchor_active_at(0) && !p.palw_operator_anchor_active_at(u64::MAX - 1), "{name}");
@@ -91,6 +102,11 @@ fn the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
     }
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
+    assert_eq!(
+        t12.palw_operator_anchor.as_ref().map(|rule| rule.activation),
+        Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA)),
+        "testnet-12 ships it armed at DAA 750, the post-launch release's height"
+    );
     let now = ids(&t12);
     println!("testnet-12 on this build: {now:?}");
     assert_eq!((now.0.as_str(), now.1.as_str(), now.2.as_str()), T12_RELEASE, "testnet-12 is the release's ruleset, to the id");
@@ -130,7 +146,7 @@ fn testnet12_s_operators_are_its_eight_genesis_cards() {
 /// from block one.
 #[test]
 fn arming_moves_the_params_and_schedule_ids_but_not_the_identity() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_launch_params_v1();
     let (params_id, identity_id, schedule_id) = ids(&shipped);
     let mut seen = std::collections::BTreeSet::new();
     for height in HEIGHTS {
@@ -173,7 +189,7 @@ fn arming_moves_the_params_and_schedule_ids_but_not_the_identity() {
 /// refuses the shipped one.
 #[test]
 fn an_armed_build_below_its_fence_handshakes_with_the_shipped_build() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_launch_params_v1();
     let shipped_gate = fork_id_gate_fences_v1(&shipped);
     for height in HEIGHTS {
         let common = armed_at(height);
@@ -231,7 +247,7 @@ fn the_fence_needs_rcore_plus_and_a_genesis_operator_list() {
     }
     // Without lane F1 at or below it (absent, or above it): refused by name.
     for f1 in [None, Some(1_235u64)] {
-        let mut p = palw_t12_shipped_params();
+        let mut p = palw_t12_launch_params_v1();
         p.palw_panel_seed_execution = f1.map(ForkActivation::new);
         p.palw_operator_anchor = p.palw_operator_anchor_of_genesis_bonds_v1(ForkActivation::new(1_234));
         let refused = p.validate_palw_v2();
@@ -265,7 +281,7 @@ fn the_fence_needs_rcore_plus_and_a_genesis_operator_list() {
     for (name, mut p) in presets() {
         if let Some(never) = p.palw_operator_anchor_of_genesis_bonds_v1(ForkActivation::never()) {
             p.palw_operator_anchor = Some(never);
-            if name == "testnet-12" {
+            if name == "testnet-12 as launched" {
                 p.validate_palw_v2().expect("never() is dormant");
             }
         }

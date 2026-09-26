@@ -2,6 +2,14 @@
 //! a post-launch flag day: dormant on every shipped preset, testnet-12 included, until an operator
 //! arms it at a height.**
 //!
+//! **Since the post-launch release (int-4; the user's decision of 2026-09-26) testnet-12 SHIPS this
+//! fence armed at DAA 750** (`PALW_T12_POST_LAUNCH_FENCE_DAA`), with the rest of
+//! `PALW_T12_POST_LAUNCH_FENCES_V1`. What is said below of "as shipped" / "the release" now holds of
+//! the LAUNCH ruleset — `palw_t12_launch_params_v1()`, the shipped ruleset with the post-launch list
+//! set back to dormant, byte for byte the `b8564b88…` release a node that has not upgraded runs — and
+//! the tests judge this fence alone against it; the shipped (armed) ids are pinned in the release
+//! constant, and the shipped ruleset is asserted to carry the fence at 750.
+//!
 //! `Params::palw_heartbeat_transparent_same_chain` changes which blocks are blue past its height, so it
 //! is a consensus fence, and testnet-12 launched without it (release `0e8ec984e`). What this file
 //! holds, from the fingerprints to the handshake:
@@ -17,17 +25,19 @@
 //! * `validate_palw_v2` refuses it where ADR-0105's transparency is not in force at or below it.
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, PALW_T12_BOND_MATURITY_WINDOW_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
+    ForkActivation, PALW_T12_BOND_MATURITY_WINDOW_DAA, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{
     FORK_ID_NO_NEXT_FENCE, ForkIdMismatch, ForkIdVerdict, evaluate_fork_id_v1, fired_fences_digest_v1, fork_id_gate_armed_v1,
     fork_id_gate_fences_v1, fork_id_refusal_height_v1, fork_id_v1,
 };
 
-/// testnet-12 as released (`0e8ec984e`, the shipping re-pin `9c717c16`): params, identity, schedule —
-/// `palw_clock_lead_cap_is_t12_only`'s `T12_WITH_THE_CAP`, restated so this file fails by itself if
-/// the fence ever moves them.
+/// testnet-12 as THIS build ships it — the post-launch release, every fence of
+/// `PALW_T12_POST_LAUNCH_FENCES_V1` at DAA 750 (re-pinned by `scripts/t12-repin.sh` with it; the launch
+/// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
+/// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
+/// `T12_WITH_THE_CAP` holds.
 const T12_RELEASED: (&str, &str, &str) = (
     "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -43,14 +53,14 @@ fn ids(p: &Params) -> (String, String, String) {
 }
 
 fn armed_at(at: ForkActivation) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_launch_params_v1();
     p.palw_heartbeat_transparent_same_chain = Some(at);
     p
 }
 
 fn shipped_presets() -> Vec<(&'static str, Params)> {
     vec![
-        ("testnet-12", palw_t12_shipped_params()),
+        ("testnet-12 as launched", palw_t12_launch_params_v1()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
         ("mainnet", mainnet_shipped_params()),
@@ -61,7 +71,7 @@ fn shipped_presets() -> Vec<(&'static str, Params)> {
 
 /// **Dormant on every preset — testnet-12 included — and testnet-12's ids are the release's.**
 #[test]
-fn the_same_chain_fence_is_dormant_on_every_preset_and_t12_is_the_release() {
+fn the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750() {
     for (name, p) in shipped_presets() {
         assert_eq!(p.palw_heartbeat_transparent_same_chain, None, "{name}: F1 ships dormant");
         assert_eq!(p.palw_heartbeat_transparent_same_chain_fence(), None, "{name}: and the reader resolves nothing");
@@ -71,13 +81,20 @@ fn the_same_chain_fence_is_dormant_on_every_preset_and_t12_is_the_release() {
         );
         p.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
-    let t12 = ids(&palw_t12_shipped_params());
+    let shipped = palw_t12_shipped_params();
+    assert_eq!(
+        shipped.palw_heartbeat_transparent_same_chain,
+        Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA)),
+        "testnet-12 ships it armed at DAA 750, the post-launch release's height"
+    );
+    shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
+    let t12 = ids(&shipped);
     println!("testnet-12: {t12:?}");
     assert_eq!((t12.0.as_str(), t12.1.as_str(), t12.2.as_str()), T12_RELEASED, "testnet-12 is the released ruleset, to the id");
     assert_eq!(
-        palw_t12_shipped_params().fence_schedule_v1(),
+        palw_t12_launch_params_v1().fence_schedule_v1(),
         vec![PALW_T12_BOND_MATURITY_WINDOW_DAA],
-        "the released testnet-12 schedules one height, ADR-0065 D1's bond-maturity window, and F1 adds none"
+        "the LAUNCHED testnet-12 schedules one height, ADR-0065 D1's bond-maturity window, and F1 adds none"
     );
 }
 
@@ -87,7 +104,7 @@ fn the_same_chain_fence_is_dormant_on_every_preset_and_t12_is_the_release() {
 /// schedule walk it normalises out like any unset height.
 #[test]
 fn arming_moves_the_params_and_schedule_ids_and_not_the_identity() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_launch_params_v1();
     let armed = armed_at(ForkActivation::new(H));
     armed.validate_palw_v2().expect("testnet-12 validates with F1 scheduled: its transparency is in force from genesis");
     let (s, a) = (ids(&shipped), ids(&armed));
@@ -139,7 +156,7 @@ fn arming_moves_the_params_and_schedule_ids_and_not_the_identity() {
 /// once the chain is past 1,000.
 #[test]
 fn an_armed_build_peers_with_the_launched_build_until_the_height() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_launch_params_v1();
     let maturity = PALW_T12_BOND_MATURITY_WINDOW_DAA;
     assert!(fork_id_gate_armed_v1(&shipped), "the launched testnet-12's gate is armed by the maturity window");
     assert_eq!(fork_id_gate_fences_v1(&shipped), vec![maturity]);
@@ -237,7 +254,7 @@ fn an_armed_build_peers_with_the_launched_build_until_the_height() {
 /// operator's common post-launch height must be one no fence already uses.
 #[test]
 fn at_the_maturity_windows_height_the_fence_is_invisible_to_the_fork_id() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_launch_params_v1();
     let hidden = armed_at(ForkActivation::new(PALW_T12_BOND_MATURITY_WINDOW_DAA));
     assert_eq!(hidden.fence_schedule_v1(), shipped.fence_schedule_v1(), "one height, deduplicated away");
     for d in [0, PALW_T12_BOND_MATURITY_WINDOW_DAA - 1, PALW_T12_BOND_MATURITY_WINDOW_DAA, PALW_T12_BOND_MATURITY_WINDOW_DAA + 1] {
@@ -266,7 +283,7 @@ fn it_is_refused_without_the_transparency_it_narrows() {
     assert!(rc.palw_heartbeat_transparent_same_chain_fence().is_none(), "and the reader never resolves it there");
 
     // Transparency scheduled ABOVE the restriction: refused (the restriction would fire first on nothing).
-    let mut late = palw_t12_shipped_params();
+    let mut late = palw_t12_launch_params_v1();
     late.palw_heartbeat_transparent = Some(ForkActivation::new(H + 1));
     late.palw_heartbeat_transparent_same_chain = Some(ForkActivation::new(H));
     let e = late.validate_palw_v2().expect_err("the transparency must be in force at or below the restriction");
@@ -289,7 +306,7 @@ fn it_is_refused_without_the_transparency_it_narrows() {
 /// instead of at the height. Arm it AFTER the walk, as `Some(ForkActivation::new(H))`.
 #[test]
 fn on_testnet12_it_is_a_height_never_a_genesis_rule() {
-    let t12 = palw_t12_shipped_params();
+    let t12 = palw_t12_launch_params_v1();
     if let Some(fence) = t12.palw_heartbeat_transparent_same_chain {
         assert!(
             fence.daa_score() > 0 && fence != ForkActivation::never(),

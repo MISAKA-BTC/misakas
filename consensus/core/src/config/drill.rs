@@ -927,6 +927,16 @@ mod tests {
             panic!("testnet-12 is ConsensusV2");
         };
         n.genesis_objects = p.genesis_objects.clone();
+        // Lane A's operator list (armed with the post-launch release) is the genesis REGISTRY's bonds,
+        // derived by its entry over the registry it is set on: re-derived over the public registry, it
+        // is public testnet-12's — part of the registry difference, not another one.
+        let lane_a = crate::config::params::PALW_T12_POST_LAUNCH_FENCES_V1
+            .iter()
+            .find(|f| f.name == "palw_operator_anchor")
+            .expect("lane A is listed");
+        let at = normalized.palw_operator_anchor.as_ref().map(|rule| rule.activation);
+        assert!(at.is_some(), "the drill runs the release's lane A");
+        (lane_a.set)(&mut normalized, at);
         assert_eq!(
             normalized.consensus_params_id(),
             public.consensus_params_id(),

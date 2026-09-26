@@ -1,6 +1,14 @@
 //! **lane: rcore/hf-pptake2 — the pruning-proof / IBD adoption strict-economic-win fence, armed and
 //! measured on testnet-12's own params.**
 //!
+//! **Since the post-launch release (int-4; the user's decision of 2026-09-26) testnet-12 SHIPS this
+//! fence armed at DAA 750** (`PALW_T12_POST_LAUNCH_FENCE_DAA`), with the rest of
+//! `PALW_T12_POST_LAUNCH_FENCES_V1`. What is said below of "as shipped" / "the release" now holds of
+//! the LAUNCH ruleset — `palw_t12_launch_params_v1()`, the shipped ruleset with the post-launch list
+//! set back to dormant, byte for byte the `b8564b88…` release a node that has not upgraded runs — and
+//! the tests judge this fence alone against it; the shipped (armed) ids are pinned in the release
+//! constant, and the shipped ruleset is asserted to carry the fence at 750.
+//!
 //! The fence `palw_pruning_proof_strict_economic_win` ships DORMANT (`None`) on every preset. This
 //! suite proves the four fingerprint properties a Some-only fence must have (the 2026-09-18 lessons
 //! `a-some-only-fence-needs-its-never-collapse` and `a-fence-at-a-scheduled-height-is-invisible-to-
@@ -14,17 +22,22 @@
 //!
 //! Run: cargo test -p kaspa-consensus-core --test pruning_proof_strict_economic_fence -- --nocapture
 
-use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
+use kaspa_consensus_core::config::params::{
+    ForkActivation, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, palw_t12_launch_params_v1, palw_t12_shipped_params,
+};
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 
+/// testnet-12 as LAUNCHED (the post-launch list dormant): the ruleset each test arms this fence over.
 fn t12() -> Params {
-    palw_t12_shipped_params()
+    palw_t12_launch_params_v1()
 }
 
-/// The launch release's own ids (rcore/int-3 `0e8ec984e`, re-pin `9c717c16d`): `(params, identity,
-/// schedule)` — the same pins the sibling fence suites hold. A dormant build must announce these
-/// three unchanged, or the shipped fingerprint b8564b88… moved.
-const T12_LAUNCH_RELEASE: (&str, &str, &str) = (
+/// testnet-12 as THIS build ships it — the post-launch release, every fence of
+/// `PALW_T12_POST_LAUNCH_FENCES_V1` at DAA 750 (re-pinned by `scripts/t12-repin.sh` with it; the launch
+/// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
+/// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
+/// `T12_WITH_THE_CAP` holds.
+const T12_RELEASE: (&str, &str, &str) = (
     "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
     "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
@@ -36,40 +49,43 @@ const T12_LAUNCH_RELEASE: (&str, &str, &str) = (
 const ARM_AT: u64 = 9_200_001;
 
 #[test]
-fn shipped_testnet_12_leaves_the_fence_dormant() {
-    let t12 = t12();
-    assert_eq!(t12.palw_pruning_proof_strict_economic_win, None, "the fence ships dormant on testnet-12");
-    // A node update carrying the dormant fence IS the launch release in every id it announces —
-    // params fingerprint, identity and schedule (the fence is hashed and visited SOME-ONLY) — so it
-    // needs no re-pin and prints exactly what the release prints.
-    let ids = (
-        t12.consensus_params_id().to_string(),
-        t12.consensus_identity_id().to_string(),
-        t12.consensus_schedule_id().to_string(),
-    );
+fn shipped_testnet_12_arms_the_fence_at_750() {
+    let shipped = palw_t12_shipped_params();
     assert_eq!(
-        (ids.0.as_str(), ids.1.as_str(), ids.2.as_str()),
-        T12_LAUNCH_RELEASE,
-        "the dormant build is the launch release, to the id (b8564b88… unmoved)"
+        shipped.palw_pruning_proof_strict_economic_win,
+        Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA)),
+        "testnet-12 ships the fence armed at DAA 750, the post-launch release's height"
     );
+    // The shipped build announces the post-launch release's ids (T12_RELEASE, re-pinned with it).
+    let ids = (
+        shipped.consensus_params_id().to_string(),
+        shipped.consensus_identity_id().to_string(),
+        shipped.consensus_schedule_id().to_string(),
+    );
+    assert_eq!((ids.0.as_str(), ids.1.as_str(), ids.2.as_str()), T12_RELEASE, "testnet-12 is the post-launch release, to the id");
     // And through the network-id path a node takes.
     assert_eq!(
         Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)).consensus_params_id(),
-        t12.consensus_params_id(),
+        shipped.consensus_params_id(),
         "Params::from(testnet-12) is the shipped testnet-12"
     );
-    // And it is listed by palw_fences_v1 (which is what feeds the fork-id gate), so the integrator's
-    // PALW_T12_POST_LAUNCH_FENCES_V1 entry {name: "pruning_proof_strict_economic_win"} finds it.
+    // The launch ruleset leaves it dormant, and it is listed by palw_fences_v1 (which feeds the fork-id gate).
+    let launch = t12();
+    assert_eq!(launch.palw_pruning_proof_strict_economic_win, None, "the launch ruleset leaves the fence dormant");
     assert!(
-        t12.palw_fences_v1().iter().any(|(name, _)| *name == "palw_pruning_proof_strict_economic_win"),
+        launch.palw_fences_v1().iter().any(|(name, _)| *name == "palw_pruning_proof_strict_economic_win"),
         "the fence is enumerated in palw_fences_v1"
     );
-    // Dormant, so it contributes nothing to the fork-id gate.
     assert!(
-        !kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1(&t12).contains(&ARM_AT),
+        !kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1(&launch).contains(&ARM_AT),
         "a dormant fence adds no height to the fork-id gate"
     );
-    t12.validate_palw_v2().expect("shipped testnet-12 validates with the fence dormant");
+    assert!(
+        kaspa_consensus_core::fork_id_v1::fork_id_gate_fences_v1(&shipped).contains(&PALW_T12_POST_LAUNCH_FENCE_DAA),
+        "the shipped build gates the fork id on 750"
+    );
+    shipped.validate_palw_v2().expect("shipped testnet-12 validates with the fence armed");
+    launch.validate_palw_v2().expect("the launch ruleset validates with the fence dormant");
 }
 
 #[test]
@@ -139,10 +155,13 @@ fn armed_at_genesis_is_a_real_rule_difference_that_separates_identities() {
 fn the_two_strict_economic_fences_are_independent_heights() {
     // The deep-reorg fence (rcore/f1-forkchoice-attacks) and this one gate the SAME strict-economic
     // principle at two different sites (the virtual processor's deep-reorg gate, and the IBD staging
-    // commit). They are separate fields, so the integrator can arm each at DAA 500 with its own
-    // PALW_T12_POST_LAUNCH_FENCES_V1 entry. Here we only assert this lane's field exists and is
-    // dormant; the deep-reorg field arrives on its own branch and is armed alongside.
+    // commit). They are separate fields, each with its own PALW_T12_POST_LAUNCH_FENCES_V1 entry, and
+    // the release arms both at DAA 750; here: this lane's field exists, is dormant as launched, and
+    // moves independently of the deep-reorg one.
     let t12 = t12();
     assert_eq!(t12.palw_pruning_proof_strict_economic_win, None);
     assert!(t12.palw_fences_v1().iter().any(|(n, _)| *n == "palw_pruning_proof_strict_economic_win"));
+    let mut one = palw_t12_shipped_params();
+    one.palw_pruning_proof_strict_economic_win = Some(ForkActivation::new(ARM_AT));
+    assert_eq!(one.palw_reorg_strict_economic_win, Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA)), "the other one stays");
 }

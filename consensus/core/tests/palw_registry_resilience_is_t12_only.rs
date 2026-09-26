@@ -1,6 +1,14 @@
 //! **Lane F1: the registry-resilience fence (the 2026-09-25 pre-launch sweep's V03 and V05) ships
 //! dormant, and arming it is a post-launch flag day that moves exactly what a flag day moves.**
 //!
+//! **Since the post-launch release (int-4; the user's decision of 2026-09-26) testnet-12 SHIPS this
+//! fence armed at DAA 750** (`PALW_T12_POST_LAUNCH_FENCE_DAA`), with the rest of
+//! `PALW_T12_POST_LAUNCH_FENCES_V1`. What is said below of "as shipped" / "the release" now holds of
+//! the LAUNCH ruleset — `palw_t12_launch_params_v1()`, the shipped ruleset with the post-launch list
+//! set back to dormant, byte for byte the `b8564b88…` release a node that has not upgraded runs — and
+//! the tests judge this fence alone against it; the shipped (armed) ids are pinned in the release
+//! constant, and the shipped ruleset is asserted to carry the fence at 750.
+//!
 //! `Params::palw_registry_resilience` changes three fold rules past its height — a no-capable-panel
 //! at the anchor slot re-anchors instead of voiding (V03(1)), a readiness hold keeps its probation
 //! progress (V03(2)), a probation resets only on two distinct bonds' failed probes (V05). testnet-12
@@ -16,15 +24,17 @@
 //! * `validate_palw_v2` refuses it unsynced, below R-core+ or the registry, and off ConsensusV2.
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params,
-    palw_t12_shipped_params,
+    ForkActivation, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
-/// testnet-12 as released (`0e8ec984e`: params `b8564b88…`, identity `5de80e64…`, schedule
-/// `93da24cc…`) — the ids the launch's nodes announce, which a build carrying this field must
-/// announce too while the fence is unset.
+/// testnet-12 as THIS build ships it — the post-launch release, every fence of
+/// `PALW_T12_POST_LAUNCH_FENCES_V1` at DAA 750 (re-pinned by `scripts/t12-repin.sh` with it; the launch
+/// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
+/// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
+/// `T12_WITH_THE_CAP` holds.
 const T12_RELEASE: (&str, &str, &str) = (
     "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -71,7 +81,7 @@ const H: u64 = 2_000;
 
 fn shipped(name: &str) -> Params {
     match name {
-        "testnet-12" => palw_t12_shipped_params(),
+        "testnet-12" => palw_t12_launch_params_v1(), // as launched: the post-launch list dormant
         "testnet-11" => palw_rc_shipped_params(),
         "devnet" => devnet_shipped_params(),
         "mainnet" => mainnet_shipped_params(),
@@ -94,7 +104,7 @@ fn mirror(p: &Params) -> Option<u64> {
 
 /// testnet-12 with the fence armed at `at`, mirrored as the operator's build assembles it.
 fn armed(at: ForkActivation) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_launch_params_v1();
     p.palw_registry_resilience = Some(at);
     p.sync_palw_registry_resilience();
     p
@@ -109,7 +119,15 @@ fn the_fence_ships_dormant_on_every_preset() {
         assert_eq!(p.palw_registry_resilience, None, "{name}: the fence ships dormant");
         assert_eq!(mirror(&p), None, "{name}: and so does the bundle's mirror");
     }
-    palw_t12_shipped_params().validate_palw_v2().expect("testnet-12 as released validates");
+    palw_t12_launch_params_v1().validate_palw_v2().expect("testnet-12 as launched validates");
+    let t12 = palw_t12_shipped_params();
+    assert_eq!(
+        t12.palw_registry_resilience,
+        Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA)),
+        "testnet-12 ships it armed at DAA 750, the post-launch release's height"
+    );
+    assert_eq!(mirror(&t12), Some(PALW_T12_POST_LAUNCH_FENCE_DAA), "and the bundle's mirror with it");
+    t12.validate_palw_v2().expect("testnet-12 as shipped validates");
 }
 
 /// **testnet-12's release ids and every other preset's are byte-identical to the build before the
@@ -135,7 +153,7 @@ fn every_shipped_id_is_the_release_ones() {
 /// collapses to absence in the identity too (the fourth place a Some-only fence needs).
 #[test]
 fn arming_moves_the_params_and_schedule_ids_and_never_the_identity() {
-    let t12 = palw_t12_shipped_params();
+    let t12 = palw_t12_launch_params_v1();
     let at_h = armed(ForkActivation::new(H));
     at_h.validate_palw_v2().expect("armed at a height, testnet-12 validates");
     assert_eq!(mirror(&at_h), Some(H), "the mirror the fold reads");
@@ -182,7 +200,7 @@ fn arming_moves_the_params_and_schedule_ids_and_never_the_identity() {
 /// only when blocks differ, which is why the armed side's refusal is the one that matters).
 #[test]
 fn an_armed_build_keeps_the_launch_build_until_the_height() {
-    let launch = palw_t12_shipped_params();
+    let launch = palw_t12_launch_params_v1();
     let upgraded = armed(ForkActivation::new(H));
     assert_eq!(launch.consensus_identity_id(), upgraded.consensus_identity_id(), "the identity gate passes both ways");
     for daa in [0, 1, H / 2, H - 1] {
@@ -209,7 +227,7 @@ fn an_armed_build_keeps_the_launch_build_until_the_height() {
 /// SW-8's anchor-block void — so the fence is testnet-12's by construction.
 #[test]
 fn the_fence_is_refused_unsynced_below_its_prerequisites_and_off_testnet12() {
-    let mut unsynced = palw_t12_shipped_params();
+    let mut unsynced = palw_t12_launch_params_v1();
     unsynced.palw_registry_resilience = Some(ForkActivation::new(H));
     let why = unsynced.validate_palw_v2().expect_err("an unsynced mirror is refused");
     assert!(why.to_string().contains("palw_registry_resilience disagrees with the V2 bundle's mirror"), "{why}");

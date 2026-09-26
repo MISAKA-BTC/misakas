@@ -430,7 +430,7 @@ def registry() -> list[Pin]:
     pins += _triple("cap.T12_WITH_THE_CAP", "t12", CAP, "const T12_WITH_THE_CAP: (&str, &str, &str) = (", "shipped.testnet-12", cap_twin)
     # Lane F1 (the panel-seed fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
     pins += _triple("seed.T12_RELEASE", "t12", SEED, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
-                    (f"{SEED}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+                    (f"{SEED}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
     # Lane F1 (registry resilience, V03/V05, post-launch, dormant): testnet-12 as shipped, and every other preset at the
     # release (testnet-10 / simnet as history, as the cap's file keeps them).
     resil_tests = (f"{RESIL}::every_shipped_id_is_the_release_ones",)
@@ -445,39 +445,39 @@ def registry() -> list[Pin]:
                  for i_, what in enumerate(["params_id", "identity_id", "schedule_id"])]
     # F1 heartbeat transparency (the same-chain fence, post-launch, dormant): testnet-12 as shipped.
     pins += _triple("hbsc.T12_RELEASED", "t12", HBSC, "const T12_RELEASED: (&str, &str, &str) = (", "shipped.testnet-12",
-                    (f"{HBSC}::the_same_chain_fence_is_dormant_on_every_preset_and_t12_is_the_release",))
+                    (f"{HBSC}::the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750",))
     # Lane maturity (ADR-0065 D1 brought forward to the post-launch fence, dormant): testnet-12 as shipped,
     # which the dormant fence must not move.
     pins += _triple("seatmat.T12_RELEASE", "t12", SEATMAT, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
-                    (f"{SEATMAT}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+                    (f"{SEATMAT}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
     # Lane A (the operator-anchor fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
     pins += _triple("opanchor.T12_RELEASE", "t12", OPANCHOR, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
-                    (f"{OPANCHOR}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
-    # Fork choice (the strict-economic-win reorg fence, post-launch, dormant): testnet-12 as shipped.
-    pins += _triple("reorg.T12_LAUNCH_RELEASE", "t12", REORG, "const T12_LAUNCH_RELEASE: (&str, &str, &str) = (",
-                    "shipped.testnet-12", (f"{REORG}::shipped_testnet_12_leaves_the_fence_dormant",))
+                    (f"{OPANCHOR}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Fork choice (the strict-economic-win reorg fence, post-launch; armed at DAA 750 since int-4): testnet-12 as shipped.
+    pins += _triple("reorg.T12_RELEASE", "t12", REORG, "const T12_RELEASE: (&str, &str, &str) = (",
+                    "shipped.testnet-12", (f"{REORG}::shipped_testnet_12_arms_the_fence_at_750",))
     # The mainnet values (2026-09-25): testnet-12 with the three values set back (and the later fences taken away).
     pins += _triple("mnv.PARENT_WITHOUT_THE_ATTRIBUTION", "t12", MNV, "const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
                     "twin.mnv_parent", (f"{MNV}::the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",))
     # Lane sink (the model sink binding, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
     pins += _triple("sink.T12_RELEASE", "t12", SINK, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
-                    (f"{SINK}::the_binding_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+                    (f"{SINK}::the_binding_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
     # Lane V02 (a resolved claim's lock off the work ceiling, post-launch, dormant): testnet-12 as shipped,
     # which the dormant fence must not move.
     pins += _triple("v02.T12_RELEASE", "t12", V02, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
-                    (f"{V02}::the_split_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+                    (f"{V02}::the_split_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
     # Lane V02 (the shortened post-Final lock life, post-launch, dormant): testnet-12 as shipped, which
     # the dormant fence must not move.
     pins += _triple("v02life.T12_RELEASE", "t12", V02LIFE, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
-                    (f"{V02LIFE}::the_shortening_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+                    (f"{V02LIFE}::the_shortening_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
     # Lane bind-deadlock (the anchor-at-ceiling fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must
     # not move.
     pins += _triple("binder.T12_RELEASE", "t12", BINDER, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
-                    (f"{BINDER}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+                    (f"{BINDER}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
     # hf-pptake2 (the pruning-proof / IBD staging-commit strict-economic-win fence, post-launch, dormant): testnet-12 as
     # shipped, which the dormant fence must not move.
-    pins += _triple("ppstrict.T12_LAUNCH_RELEASE", "t12", PPSTRICT, "const T12_LAUNCH_RELEASE: (&str, &str, &str) = (",
-                    "shipped.testnet-12", (f"{PPSTRICT}::shipped_testnet_12_leaves_the_fence_dormant",))
+    pins += _triple("ppstrict.T12_RELEASE", "t12", PPSTRICT, "const T12_RELEASE: (&str, &str, &str) = (",
+                    "shipped.testnet-12", (f"{PPSTRICT}::shipped_testnet_12_arms_the_fence_at_750",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)

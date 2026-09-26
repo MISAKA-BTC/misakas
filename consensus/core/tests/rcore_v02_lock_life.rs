@@ -58,7 +58,8 @@ use kaspa_consensus_core::palw_offence_v1::{
 use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
 use kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_layout_id_v1;
 use kaspa_consensus_core::palw_state_v2::{
-    PALW_FINAL_LOCK_LIFE_DAA_V1, PalwVoidReasonV2, palw_false_valid_lock_slashable_v1, palw_second_clock_depth_v1,
+    PALW_FINAL_LOCK_LIFE_DAA_V1, PalwRcoreGateV1, PalwVoidReasonV2, palw_bond_committed_raw_v1, palw_bond_off_ceiling_raw_v1,
+    palw_bond_resolved_locks_v1, palw_false_valid_lock_slashable_v1, palw_rcore_gate_room_v1, palw_second_clock_depth_v1,
 };
 use kaspa_consensus_core::palw_step_leg::{
     PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, checkpoint_leg_root_v2,
@@ -76,7 +77,7 @@ fn msk(sompi: u128) -> f64 {
 /// testnet-12 with lane V02's lock-life fence armed at `at`, re-mirrored, validated.
 fn armed(at: u64) -> Params {
     let mut p = t12();
-    assert_eq!(p.palw_final_lock_life, None, "testnet-12 ships the fence dormant");
+    assert_eq!(p.palw_final_lock_life, None, "the launch ruleset leaves the fence dormant");
     p.palw_final_lock_life = Some(ForkActivation::new(at));
     p.sync_palw_final_lock_life();
     p.validate_palw_v2().expect("the armed copy is a runnable ruleset");
@@ -613,5 +614,131 @@ fn a_conviction_in_the_gap_reverses_the_final_and_burns_e_and_leaves_the_expired
         msk(u128::from(s3)),
         msk(lock.amount),
         msk(s4)
+    );
+}
+
+// ---- the int-4 audit's LOW 1: V02 option (a) AND the lock life, armed together ------------------
+
+/// testnet-12 (the launch ruleset) with BOTH of lane V02's fences at `at` — option (a)
+/// (`palw_final_lock_full_collateral`) and the lock life (`palw_final_lock_life`) — at ONE height, as
+/// the post-launch release arms them (DAA 750 on the shipped ruleset); each re-mirrored, validated.
+fn armed_both(at: u64) -> Params {
+    let mut p = armed(at);
+    p.palw_final_lock_full_collateral = Some(ForkActivation::new(at));
+    p.sync_palw_final_lock_full_collateral();
+    p.validate_palw_v2().expect("both V02 fences at one height are a runnable ruleset");
+    assert!(p.palw_final_lock_full_collateral_active_at(at) && p.palw_final_lock_life_active_at(at));
+    p
+}
+
+/// **The int-4 audit's LOW 1: V02 option (a) and the shortened lock life, armed TOGETHER, past
+/// `F + 1,000`.** Each fence had its own suite (`rcore_v02_final_lock_budget`, the tests above) and the
+/// release arms both at one height, but no test ran a lock through both. Here a floor claim Finals past
+/// the shared height and the second clock is released (thirty more licences, whose own locks stay
+/// behind on the seat), then at every DAA from `F + 999` to one epoch past `F + window_court`:
+///
+/// * option (a)'s off-ceiling term IS the resolved-lock term (`palw_bond_off_ceiling_raw_v1 ==
+///   palw_bond_resolved_locks_v1`), and `committed` moves with it and nothing else — so option (a)
+///   never keeps a lock off the work ceiling that the lock life has released;
+/// * the target lock leaves both at `F + 1,000` exactly (the resolved sum drops by the lock there),
+///   while option (a) ALONE (the lock life dormant, the twin) still carries it to `F + window_court`;
+/// * `free + reserved ≤ posted`, and the lock is slashable exactly while its DAA clock runs — the lock
+///   life's rule, unchanged by option (a); the work gate's room never shrinks;
+/// * the fold agrees at the edges: a false-`Valid` conviction takes the lock at `F + 999` and nothing from
+///   `F + 1,000`, while it still reverses the `Final`.
+#[test]
+fn v02_option_a_and_the_lock_life_together_release_the_lock_once_at_f_plus_one_thousand() {
+    let fence = 1_002;
+    let p = armed_both(fence);
+    let (mut c, claim, seat, lock) = floor_to_final(p.clone(), 0x0501);
+    let f = c.daa;
+    assert!(f > fence, "the premise: the claim Finals past the shared height");
+    let wc = c.sp.window_court();
+    let released = PALW_FINAL_LOCK_LIFE_DAA_V1;
+    assert_eq!(lock.expiry_daa, f + released, "the short life is in force");
+    let settled_to = settle_licences_after_final(&mut c, 30, 0x0510);
+    assert!(settled_to < f + released - 1, "the settling ends before the gap");
+    assert_eq!(*c.s.slashable_lock(seat, claim).expect("the target lock is untouched by the settling"), lock);
+
+    // Option (a) alone over the same progression: the lock keeps the window_court life.
+    let mut a_only = t12();
+    a_only.palw_final_lock_full_collateral = Some(ForkActivation::new(fence));
+    a_only.sync_palw_final_lock_full_collateral();
+    a_only.validate_palw_v2().expect("option (a) alone validates");
+    let (mut twin, t_claim, t_seat, t_lock) = floor_to_final(a_only, 0x0501);
+    assert_eq!(twin.daa, f, "same progression, same Final DAA");
+    assert_eq!(settle_licences_after_final(&mut twin, 30, 0x0510), settled_to, "same settling");
+    assert_eq!(t_lock.expiry_daa, f + wc, "option (a) alone keeps the window_court life");
+
+    let raw = |c: &Chain, daa: u64| c.extras_at(daa).settled_anchor_depth;
+    let resolved = |c: &Chain, bond: &PalwBondKeyV2, daa: u64| palw_bond_resolved_locks_v1(&c.s, bond, daa, escaped_depth(c, daa), wc);
+    let posted = c.s.bond(&seat).expect("bond").collateral as u128;
+    let epoch = c.sp.epoch_length();
+    let other_terms = palw_bond_committed_raw_v1(&c.s, &c.sp, &seat, f + released - 1, raw(&c, f + released - 1))
+        - resolved(&c, &seat, f + released - 1);
+    let mut last_room = 0u128;
+    for daa in (f + released - 1)..=(f + wc + epoch) {
+        let at = daa - f;
+        let r = resolved(&c, &seat, daa);
+        let off_ceiling = palw_bond_off_ceiling_raw_v1(&c.s, &c.sp, &seat, daa, raw(&c, daa));
+        assert_eq!(off_ceiling, r, "F+{at}: option (a) carries off the ceiling exactly the resolved locks, never a released one");
+        let committed = palw_bond_committed_raw_v1(&c.s, &c.sp, &seat, daa, raw(&c, daa));
+        assert_eq!(committed, other_terms + r, "F+{at}: committed moves with the resolved locks and nothing else");
+        let (free, reserved) = free_and_reserved(&c, &seat, daa);
+        assert!(
+            free + reserved <= posted,
+            "F+{at}: free {:.2} + reserved {:.2} ≤ posted {:.2}",
+            msk(free),
+            msk(reserved),
+            msk(posted)
+        );
+        let slashable = palw_false_valid_lock_slashable_v1(&c.s, &c.sp, &claim, &lock, daa, escaped_depth(&c, daa));
+        assert_eq!(slashable, lock.is_live(daa), "F+{at}: slashable exactly while its DAA clock runs");
+        let room = palw_rcore_gate_room_v1(&c.s, &c.sp, &seat, daa, raw(&c, daa), PalwRcoreGateV1::Work);
+        assert!(room >= last_room, "F+{at}: the work room never shrinks as locks release ({} < {})", msk(room), msk(last_room));
+        last_room = room;
+        if daa < f + wc {
+            assert!(
+                palw_bond_off_ceiling_raw_v1(&twin.s, &twin.sp, &t_seat, daa, raw(&twin, daa)) >= t_lock.amount,
+                "F+{at}: option (a) alone still carries the target lock off the ceiling"
+            );
+            assert!(
+                palw_false_valid_lock_slashable_v1(&twin.s, &twin.sp, &t_claim, &t_lock, daa, escaped_depth(&twin, daa)),
+                "F+{at}: and option (a) alone still reserves it for a conviction"
+            );
+        }
+    }
+    assert!(lock.is_live(f + released - 1) && !lock.is_live(f + released), "the edge is F + 1,000");
+    assert_eq!(
+        resolved(&c, &seat, f + released - 1) - resolved(&c, &seat, f + released),
+        lock.amount,
+        "at F + 1,000 exactly the target lock leaves the resolved term (and with it the off-ceiling term and committed)"
+    );
+    assert_eq!(
+        resolved(&twin, &t_seat, f + released - 1),
+        resolved(&twin, &t_seat, f + released),
+        "option (a) alone: nothing leaves at F + 1,000"
+    );
+
+    // The fold at the edges (V1 route: `dos_l5`'s extras).
+    let before = c.s.bond(&seat).expect("bond").collateral;
+    let (after, kept) = probe(&c, f + released - 1, &[false_valid(&p, claim, seat)], seat, claim);
+    assert!((before - after) as u128 >= lock.amount && !kept, "at F+999 the live lock is taken");
+    for daa in [f + released, f + released + 1, f + wc - 1] {
+        let (after, kept) = probe(&c, daa, &[false_valid(&p, claim, seat)], seat, claim);
+        assert_eq!(after, before, "at F+{}: nothing is taken from the released lock", daa - f);
+        assert!(kept, "at F+{}: the released lock row is left alone", daa - f);
+    }
+    let gap = f + released + wc / 2;
+    c.step_at(gap, &[false_valid(&p, claim, seat)], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(
+        matches!(c.claim(&claim).phase, PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::CourtFraud } if voided_daa == gap),
+        "the Final is still reversed"
+    );
+    assert_eq!(c.s.bond(&seat).expect("bond").collateral, before, "the seat pays nothing for the released lock");
+    println!(
+        "[v02 both] fence {fence}, F {f}: lock {:.2} MSK leaves the resolved term, the off-ceiling term and committed together at \
+         F+{released}; option (a) alone holds it to F+{wc}",
+        msk(lock.amount)
     );
 }

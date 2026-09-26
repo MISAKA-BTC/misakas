@@ -30,8 +30,15 @@ use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 pub const T12_BLOCK_SUBSIDY_SOMPI: u64 = 444_562_014_000;
 pub const NET: u64 = 0xD05_0012;
 
+/// **testnet-12 as LAUNCHED** — `Params::from(testnet-12)` with the post-launch release's list
+/// (`PALW_T12_POST_LAUNCH_FENCES_V1`, armed at DAA 750 since int-4) set back to dormant, byte for byte
+/// the `b8564b88…` release (`palw_t12_launch_params_v1`). The suites that fold through this fixture
+/// were written against the launch ruleset and run chains well past DAA 750 (`window_court` is 3,000),
+/// so they keep folding it; each post-launch fence is judged by its own lane's suite armed over this
+/// ruleset, and all twelve together by the processor's combined crossing (`t12_post_launch_fences_combined`)
+/// and `config::params::post_launch_fence_arming_tests`.
 pub fn t12() -> Params {
-    Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))
+    kaspa_consensus_core::config::params::palw_t12_launch_params_v1()
 }
 
 /// **The measured row ADR-0153's flag day would install for testnet-12's 2M row, as a fixture**

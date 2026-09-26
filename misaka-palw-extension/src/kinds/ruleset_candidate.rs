@@ -216,7 +216,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.sync_palw_class_verify_deadline();
         }
         // Lane bind-deadlock (post-launch): a bare height; `validate_palw_v2` refuses it without
-        // R-core+ at or below it.
+        // R-core+ and lane A (`palw_operator_anchor`) at or below it.
         "palw_anchor_at_ceiling" => params.palw_anchor_at_ceiling = Some(at),
         "palw_execution_quanta" => params.palw_execution_quanta = Some(at),
         "palw_public_model_source_required" => {

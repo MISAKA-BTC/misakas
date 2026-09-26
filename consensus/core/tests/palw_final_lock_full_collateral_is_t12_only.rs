@@ -2,6 +2,14 @@
 //! post-launch, 2026-09-26) is dormant on every shipped preset, and arming it is a scheduled fence like
 //! any other.**
 //!
+//! **Since the post-launch release (int-4; the user's decision of 2026-09-26) testnet-12 SHIPS this
+//! fence armed at DAA 750** (`PALW_T12_POST_LAUNCH_FENCE_DAA`), with the rest of
+//! `PALW_T12_POST_LAUNCH_FENCES_V1`. What is said below of "as shipped" / "the release" now holds of
+//! the LAUNCH ruleset — `palw_t12_launch_params_v1()`, the shipped ruleset with the post-launch list
+//! set back to dormant, byte for byte the `b8564b88…` release a node that has not upgraded runs — and
+//! the tests judge this fence alone against it; the shipped (armed) ids are pinned in the release
+//! constant, and the shipped ruleset is asserted to carry the fence at 750.
+//!
 //! testnet-12 launched from `0e8ec984e` counting an honest `Valid` seat's post-`Final` lock inside the
 //! 500‰ work ceiling for `window_court`, which closes every seat's bind room once enough Finals land
 //! (the 2026-09-25 sweep's V02, HIGH). The fix ships after launch behind this fence, which the operator
@@ -23,14 +31,17 @@
 //! `t12_final_lock_full_collateral_fence` (a real chain crossing the height).
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params,
-    palw_rc_shipped_params, palw_t12_shipped_params,
+    ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
-/// testnet-12 as the release ships it (`0e8ec984e`; pinned by the shipping re-pin `9c717c16d` as
-/// `palw_clock_lead_cap_is_t12_only::T12_WITH_THE_CAP`): params, identity, schedule.
+/// testnet-12 as THIS build ships it — the post-launch release, every fence of
+/// `PALW_T12_POST_LAUNCH_FENCES_V1` at DAA 750 (re-pinned by `scripts/t12-repin.sh` with it; the launch
+/// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
+/// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
+/// `T12_WITH_THE_CAP` holds.
 const T12_RELEASE: (&str, &str, &str) = (
     "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -53,7 +64,7 @@ fn mirror(p: &Params) -> Option<u64> {
 }
 
 fn armed_at(height: u64) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_launch_params_v1();
     p.palw_final_lock_full_collateral = Some(ForkActivation::new(height));
     p.sync_palw_final_lock_full_collateral();
     p
@@ -61,7 +72,7 @@ fn armed_at(height: u64) -> Params {
 
 fn presets() -> Vec<(&'static str, Params)> {
     vec![
-        ("testnet-12", palw_t12_shipped_params()),
+        ("testnet-12 as launched", palw_t12_launch_params_v1()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
         ("mainnet", mainnet_shipped_params()),
@@ -73,7 +84,7 @@ fn presets() -> Vec<(&'static str, Params)> {
 /// **Dormant everywhere as shipped**, and testnet-12's ids are the release's: the field, its mirror,
 /// its Some-only writers and its collapse cost the live chain nothing until an operator arms it.
 #[test]
-fn the_split_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
+fn the_split_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750() {
     for (name, p) in presets() {
         assert_eq!(p.palw_final_lock_full_collateral, None, "{name}: lane V02's fence ships dormant");
         assert_eq!(p.palw_final_lock_full_collateral_fence(), None, "{name}");
@@ -86,6 +97,12 @@ fn the_split_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
     }
     let t12 = palw_t12_shipped_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
+    assert_eq!(
+        t12.palw_final_lock_full_collateral,
+        Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA)),
+        "testnet-12 ships it armed at DAA 750, the post-launch release's height"
+    );
+    assert_eq!(mirror(&t12), Some(PALW_T12_POST_LAUNCH_FENCE_DAA), "and the bundle's mirror with it");
     let now = ids(&t12);
     println!("testnet-12 on this build: {now:?}");
     assert_eq!((now.0.as_str(), now.1.as_str(), now.2.as_str()), T12_RELEASE, "testnet-12 is the release's ruleset, to the id");
@@ -96,7 +113,7 @@ fn the_split_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
 /// from block one, and the identity separates the two. A `Some(never())` is absence.
 #[test]
 fn arming_the_split_moves_the_params_and_schedule_ids_but_not_the_identity() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_launch_params_v1();
     let (params_id, identity_id, schedule_id) = ids(&shipped);
     let mut seen = std::collections::BTreeSet::new();
     for height in HEIGHTS {
@@ -131,7 +148,7 @@ fn arming_the_split_moves_the_params_and_schedule_ids_but_not_the_identity() {
 /// directions; from it the armed build refuses the shipped one.
 #[test]
 fn an_armed_build_below_the_split_handshakes_with_the_shipped_build() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_launch_params_v1();
     let shipped_gate = fork_id_gate_fences_v1(&shipped);
     for height in HEIGHTS {
         let armed = armed_at(height);
@@ -167,14 +184,14 @@ fn the_split_needs_rcore_plus_and_a_synced_mirror() {
         assert!(p.validate_palw_v2().is_err(), "{needle}: validate_palw_v2 asks it");
     };
     // Unsynced: the field without the mirror, and the mirror without the field.
-    let mut unsynced = palw_t12_shipped_params();
+    let mut unsynced = palw_t12_launch_params_v1();
     unsynced.palw_final_lock_full_collateral = Some(ForkActivation::new(500));
     named(&unsynced, "disagrees with the V2 bundle's mirror");
     let mut stale = armed_at(500);
     stale.palw_final_lock_full_collateral = None;
     named(&stale, "without palw_final_lock_full_collateral armed");
     // `sync_palw_rcore_plus` re-mirrors it (every site that assembles or re-fences a bundle calls it).
-    let mut via_rcore = palw_t12_shipped_params();
+    let mut via_rcore = palw_t12_launch_params_v1();
     via_rcore.palw_final_lock_full_collateral = Some(ForkActivation::new(500));
     via_rcore.sync_palw_rcore_plus();
     assert_eq!(mirror(&via_rcore), Some(500));

@@ -1,6 +1,7 @@
 //! **testnet-12's post-launch release at the processor: EVERY fence of
 //! `PALW_T12_POST_LAUNCH_FENCES_V1` armed at ONE height, and a chain that crosses it** (the user's
-//! decision of 2026-09-26: one post-launch fence height, DAA 500, carrying every CRITICAL/HIGH fix).
+//! decision of 2026-09-26: one post-launch fence height — DAA 750 on the shipped ruleset,
+//! `PALW_T12_POST_LAUNCH_FENCE_DAA` — carrying every CRITICAL/HIGH fix).
 //!
 //! Each lane drilled its own fence across a crossing; none drilled them together, and the release
 //! arms them together (the int-4 phase-1 audit: "no combined crossing exists"). Fences that are each
@@ -8,7 +9,7 @@
 //! over the execution-commitment seed over seat maturity over the same-chain heartbeat rule, V02's
 //! two lock fences, the at-ceiling binder, the slash side-effect and the IBD commit rule — so this
 //! runs testnet-12 (with harness cards) with every listed fence set through its own entry's `set` to
-//! the same height `H`, exactly as the release will set them at 500 (every mirror follows; lane A
+//! the same height `H`, exactly as the release sets them at 750 (every mirror follows; lane A
 //! trusts every genesis bond, testnet-12's armed value), and:
 //!
 //! 1. the ruleset validates, and every listed fence reads `H` (the one list, walked);
@@ -40,7 +41,7 @@ use kaspa_hashes::Hash64;
 
 type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
 
-/// The one post-launch height every listed fence is set to here (the release's is 500; the combined
+/// The one post-launch height every listed fence is set to here (the release's is 750; the combined
 /// crossing needs only blocks below and above one height).
 const H: u64 = 60;
 
@@ -50,7 +51,7 @@ fn t12_release(armed: bool) -> (Config, PalwConsensusParamsV2, Premine, Premine)
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
         let (_, at) = config.params.palw_fences_v1().into_iter().find(|(name, _)| *name == fence.name).expect("a listed fence");
-        assert_eq!(at, None, "testnet-12 ships {} dormant", fence.name);
+        assert_eq!(at, None, "testnet-12 as launched (the harness's ruleset) leaves {} dormant", fence.name);
     }
     if !armed {
         return (config, bundle, premine, floats);
