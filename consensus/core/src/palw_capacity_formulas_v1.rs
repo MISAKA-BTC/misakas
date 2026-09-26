@@ -163,7 +163,8 @@ pub fn palw_capacity_step_at_v1(steps: &[PalwCapacityStepV1], daa: u64) -> Optio
 pub enum PalwCapacityStageV1 {
     /// `Provisional`: 0.
     Created,
-    /// `PanelBound`, `DefaultDisputed`: `⌊W_full × 10‰⌋`.
+    /// `PanelBound`: `⌊W_full × 10‰⌋`. (`DefaultDisputed` keeps the stage of the phase it resumes —
+    /// see [`palw_capacity_stage_of_claim_v1`].)
     Anchored,
     /// `ReceiptLicensed`: `⌊W_full × permille‰⌋` — 1000 on a counted licence, 250 on S2 (a future
     /// sampled-coverage door writes its covered permille).
@@ -193,22 +194,51 @@ impl PalwCapacityStageV1 {
     }
 }
 
-/// **The stage a claim's phase puts it in** (§4.2). `ReceiptLicensed` is a counted licence
-/// (`palw_rcore_counts_licensed_v1`: no door recorded, or `basis_k ≥ 2`) at 1000‰, else S2 at 250‰.
+/// **The stage a claim's phase puts it in** (§4.2). `ReceiptLicensed` is a counted licence (no door
+/// recorded, or `basis_k ≥ 2` — `palw_rcore_counts_licensed_v1`'s test, asked of the licence record)
+/// at 1000‰, else S2 at 250‰.
+///
+/// **An open DA accusation keeps the stage the claim held** (`DefaultDisputed { resumed, .. }` reads
+/// `resumed`, the phase a refutation restores) — lane weight's `stage_of_phase` on `rcore/cap-weight`,
+/// which the fold prices with past F-W (review of lane shadow, finding 3(a)). An accusation is not a
+/// conviction: it must not lower live weight (a bonded accuser could shave an honest chain's weight
+/// at will), and a refutation must not raise it. On the phase most accusations find (`PanelBound`)
+/// this is the ADR table's `Anchored` either way.
 pub fn palw_capacity_stage_of_claim_v1(claim: &PalwClaimStateV2) -> PalwCapacityStageV1 {
-    match &claim.phase {
+    palw_capacity_stage_of_phase_v1(claim, &claim.phase)
+}
+
+/// [`palw_capacity_stage_of_claim_v1`] of `phase` (the claim's own, or a disputed claim's resumed
+/// one). The licence record (`claim.rcore`) is the claim's whatever phase a dispute parked it in.
+fn palw_capacity_stage_of_phase_v1(claim: &PalwClaimStateV2, phase: &PalwClaimPhaseV2) -> PalwCapacityStageV1 {
+    match phase {
         PalwClaimPhaseV2::Provisional => PalwCapacityStageV1::Created,
-        PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::DefaultDisputed { .. } => PalwCapacityStageV1::Anchored,
+        PalwClaimPhaseV2::PanelBound { .. } => PalwCapacityStageV1::Anchored,
         PalwClaimPhaseV2::ReceiptLicensed { .. } => {
-            if crate::palw_state_v2::palw_rcore_counts_licensed_v1(claim) {
-                PalwCapacityStageV1::Licensed { permille: PALW_CAPACITY_FULL_PERMILLE_V1 }
-            } else {
-                PalwCapacityStageV1::Licensed { permille: PALW_CAPACITY_S2_PERMILLE_V1 }
+            let counted = claim.rcore.licence_door.is_none()
+                || claim.rcore.basis_k >= crate::palw_state_v2::PALW_RCORE_FINAL_BASIS_K_V1;
+            PalwCapacityStageV1::Licensed {
+                permille: if counted { PALW_CAPACITY_FULL_PERMILLE_V1 } else { PALW_CAPACITY_S2_PERMILLE_V1 },
             }
         }
+        PalwClaimPhaseV2::DefaultDisputed { resumed, .. } => palw_capacity_stage_of_phase_v1(claim, resumed),
         PalwClaimPhaseV2::Final { .. } => PalwCapacityStageV1::Final,
         PalwClaimPhaseV2::Voided { .. } => PalwCapacityStageV1::Terminal,
     }
+}
+
+/// **Is the claim still waiting for its licence?** `Provisional` or `PanelBound` — through a
+/// `DefaultDisputed` to the phase it resumes, as [`palw_capacity_stage_of_claim_v1`] reads it: a DA
+/// accusation on a licensed claim does not make it unlicensed again.
+pub fn palw_capacity_is_unlicensed_v1(claim: &PalwClaimStateV2) -> bool {
+    fn phase_unlicensed(phase: &PalwClaimPhaseV2) -> bool {
+        match phase {
+            PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } => true,
+            PalwClaimPhaseV2::DefaultDisputed { resumed, .. } => phase_unlicensed(resumed),
+            PalwClaimPhaseV2::ReceiptLicensed { .. } | PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => false,
+        }
+    }
+    phase_unlicensed(&claim.phase)
 }
 
 /// **`W_full(c) = min(raw_c, ceiling_class(c))`** (§4.2): `raw_c` is the stored
@@ -408,6 +438,34 @@ pub fn palw_capacity_h_obl_v1(window_receipt: u64) -> u64 {
 /// first block whose DAA exceeds `voided_daa + h_obl`. An overflowing release never comes.
 pub fn palw_capacity_void_holds_v1(voided_daa: u64, h_obl: u64, now_daa: u64) -> bool {
     voided_daa.checked_add(h_obl).is_none_or(|release_at| now_daa <= release_at)
+}
+
+/// **Does a void for `reason` keep E-4's obligation hold?** Every reason nobody is convicted under
+/// — the ones a producer reaches by withholding, abandoning or starving its own claim after seeing
+/// its panel (`BindTimeout`, `NoCapablePanel`, `ReceiptTimeout`, `UnavailableQuorum`,
+/// `NotReplayBacked`). **A conviction's void is charged, not held** (`CourtFraud`,
+/// `ProducerWithholding`, `CourtDefault`, `CourtHeldVerdict`): the conviction takes the forfeit and
+/// the tier at the void, and the same reasons mark a `Final` it reverses, whose commitment `Final`
+/// already released — holding it would re-count what the ledger no longer carries.
+///
+/// This is lane escrow's `palw_void_reason_keeps_obligation_v1` (`rcore/cap-escrow`), the rule the
+/// fold holds with past F-E (review of lane shadow, finding 3(e)). The ADR's E-4 text says "whatever
+/// the void reason"; the two readings differ only on convicted voids, and the ADR text is to follow
+/// the lane. Exhaustive: a reason added later (lane liab's `AggregateForfeit`) does not compile here
+/// until it is placed by name.
+pub fn palw_capacity_void_reason_keeps_obligation_v1(reason: crate::palw_state_v2::PalwVoidReasonV2) -> bool {
+    use crate::palw_state_v2::PalwVoidReasonV2;
+    match reason {
+        PalwVoidReasonV2::BindTimeout
+        | PalwVoidReasonV2::NoCapablePanel
+        | PalwVoidReasonV2::ReceiptTimeout
+        | PalwVoidReasonV2::UnavailableQuorum
+        | PalwVoidReasonV2::NotReplayBacked => true,
+        PalwVoidReasonV2::CourtFraud
+        | PalwVoidReasonV2::ProducerWithholding
+        | PalwVoidReasonV2::CourtDefault
+        | PalwVoidReasonV2::CourtHeldVerdict => false,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -879,6 +937,28 @@ mod tests {
         let vccu = 3_357_281_757_221_376u128;
         let at = |mult| palw_capacity_gpu_equivalents_milli_v1(mult, 2, vccu, 2_400_000_000_000, 2_900) / 100;
         assert_eq!([10, 100, 1000].map(at), [96, 964, 9_647]);
+    }
+
+    /// E-4 holds the obligation for the reasons nobody is convicted under, not for a conviction's
+    /// void (lane escrow's rule); every reason is placed, in borsh order.
+    #[test]
+    fn the_void_hold_keeps_the_unconvicted_reasons() {
+        use crate::palw_state_v2::PalwVoidReasonV2 as R;
+        let table = [
+            (R::BindTimeout, true),
+            (R::ReceiptTimeout, true),
+            (R::CourtFraud, false),
+            (R::ProducerWithholding, false),
+            (R::NoCapablePanel, true),
+            (R::UnavailableQuorum, true),
+            (R::NotReplayBacked, true),
+            (R::CourtDefault, false),
+            (R::CourtHeldVerdict, false),
+        ];
+        for (i, (reason, keeps)) in table.iter().enumerate() {
+            assert_eq!(borsh::to_vec(reason).unwrap(), vec![i as u8], "the table lists every reason in borsh order");
+            assert_eq!(palw_capacity_void_reason_keeps_obligation_v1(*reason), *keeps, "{reason:?}");
+        }
     }
 
     #[test]

@@ -30,9 +30,21 @@
 //!
 //! * The as-if rule applies to every attempt claim; free-prompt claims keep today's accounting
 //!   (E-6: `E = 0`, `rights_reserved` per claim), and so does their reservation.
-//! * The weight budget is spent in acceptance order (`accepted_daa`, then claim id) over the bond's
-//!   claims that still hold a reservation under the new rule: non-terminal, or voided within `h_obl
-//!   = window_receipt` (E-4, any reason, inclusive like the abandon hold).
+//! * **Where the consensus lanes already fix a reading, the shadow takes theirs** (review of lane
+//!   shadow, finding 3), so G5's "shadow = fold" check can hold on `rcore/cap-int`:
+//!   - the stage of a `DefaultDisputed` claim is its resumed phase's (lane weight's
+//!     `stage_of_phase`), and so is "unlicensed";
+//!   - the weight budget `R_budget` is held by NON-TERMINAL claims only (lane weight's index releases
+//!     a terminal claim's `reserved` at once): it is spent in acceptance order (`accepted_daa`, then
+//!     claim id) over the bond's live attempt claims, and a void still inside its hold keeps the
+//!     `reserved` it was priced at in its commitment without holding budget;
+//!   - E-4's hold (`m_c + reserved` to `voided_daa + h_obl`, `h_obl = window_receipt`, inclusive
+//!     like the abandon hold) is kept for the reasons nobody is convicted under, not for a
+//!     conviction's void (lane escrow's `palw_void_reason_keeps_obligation_v1`;
+//!     [`palw_capacity_void_reason_keeps_obligation_v1`]);
+//!   - `L = 3G` of the claim (§4.5's normative value). Lane escrow prices with `3E` (≤ `3G`, so its
+//!     `m*` is never lower); the two agree at `q = 0`, the default display, and differ by `3w`
+//!     (0.32 MSK on the floor) in `L` otherwise.
 //! * A seat duty row is repriced from its stored `seat_exposure` `d` as `min(⌈d/ρ⌉, commitment′ /
 //!   seats)`. That is AS-1 exactly when `d` was not capped by `commitment / seats` at bind (floor and
 //!   8k: the λ-term or `lock_2` bound it); a capped row (2M) reports a lower bound, and the count of
@@ -48,11 +60,16 @@
 //!   ([`palw_capacity_void_attribution_v1`] is an exhaustive match: a void reason added later does not
 //!   compile until it is classed). A `Final` still inside its conviction horizon counts as undetected
 //!   until convicted — biased low, the side on which A8 alarms.
-//! * AG-3's freeze reads the chain's conviction records: `DaDefault` and `CourtConviction` are the
-//!   intent class (final); `ExecutorRefuted` and `PanelFalseValidV2` may be either (their
-//!   contradiction kind is not in the record), so they freeze for `window_court` and are reported
-//!   as undetermined; the rest are tier-capped. Lane liab's `palw_offence_is_intent_class_v1`
-//!   replaces this reading once it merges.
+//! * AG-3's freeze reads the chain's conviction records ([`palw_capacity_conviction_freeze_class_v1`]):
+//!   `DaDefault` is the intent class (final), and so is `CourtConviction` unless its claim was voided
+//!   `CourtHeldVerdict` (a held dissection's verdict proves the producer's filings false, not the
+//!   committed execution: tier, as lane liab reads it); `ExecutorRefuted` and `PanelFalseValidV2`
+//!   may be either (their contradiction kind is not in the record), so they freeze for
+//!   `window_court` and are reported as undetermined; the rest are tier-capped. A
+//!   `PanelFalseValidV2` finding that ACTED on its claim (the claim, or its liability row, voided
+//!   for a conviction in the record's own block) charges the claim's producer by the same class as
+//!   the seat, as lane liab's `liable` list does. On `rcore/cap-int` the shadow reads lane liab's
+//!   rooted freeze map instead of re-deriving it.
 //!
 //! **Cost** (S-I3): one pass over the claims, the bonds, their locks, the duty rows, the DA sessions
 //! and the conviction records — `O(claims + bonds + locks + rows)` per call, with a sort of each
@@ -66,14 +83,15 @@ use crate::palw_capacity_formulas_v1::{
     PALW_CAPACITY_COVERAGE_CARRIER_MASS_V1, PALW_CAPACITY_SEAT_DUTY_HOLD_DAA_V1, PALW_CAPACITY_SOMPI_PER_MSK_V1,
     PALW_CAPACITY_UNCREDITED_STEPS_V1, PALW_CAPACITY_W_FCW_SOMPI_V1, PalwCapacitySeatCapitalInputsV1, PalwCapacityStageV1,
     PalwCapacityStepV1, palw_capacity_bond_weight_term_v1, palw_capacity_carriers_per_block_v1, palw_capacity_claims_per_daa_milli_v1,
-    palw_capacity_consensus_reservation_v1, palw_capacity_conviction_l_v1, palw_capacity_h_obl_v1, palw_capacity_m_c_v1,
-    palw_capacity_n_instant_v1, palw_capacity_q_needed_permille_v1, palw_capacity_seat_capital_per_claim_v1,
+    palw_capacity_consensus_reservation_v1, palw_capacity_conviction_l_v1, palw_capacity_h_obl_v1, palw_capacity_is_unlicensed_v1,
+    palw_capacity_m_c_v1, palw_capacity_n_instant_v1, palw_capacity_q_needed_permille_v1, palw_capacity_seat_capital_per_claim_v1,
     palw_capacity_seat_credit_applies_v1, palw_capacity_seat_credit_liab_v1, palw_capacity_seat_duty_v1,
     palw_capacity_seat_lock_liab_v1, palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1,
-    palw_capacity_staged_weight_v1, palw_capacity_void_holds_v1, palw_capacity_weight_budget_sompi_v1, palw_capacity_weight_cap_v1,
-    palw_capacity_weight_full_v1,
+    palw_capacity_staged_weight_v1, palw_capacity_void_holds_v1, palw_capacity_void_reason_keeps_obligation_v1,
+    palw_capacity_weight_budget_sompi_v1, palw_capacity_weight_cap_v1, palw_capacity_weight_full_v1,
 };
-use crate::palw_offence_v1::PalwOffenceKindV1;
+use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
+use crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1;
 use crate::palw_state_v2::{
     PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwRcoreGateV1,
     PalwStateParamsV2, PalwVoidReasonV2, palw_accuser_exposure_v1, palw_bond_committed_raw_v1, palw_claim_commitment_v1,
@@ -432,7 +450,7 @@ pub enum PalwCapacityFreezeClassV1 {
     Undetermined,
 }
 
-/// The shadow's reading of AG-2's intent class from a conviction record.
+/// The shadow's reading of AG-2's intent class from a conviction record's kind alone.
 pub fn palw_capacity_freeze_class_v1(kind: PalwOffenceKindV1) -> PalwCapacityFreezeClassV1 {
     match kind {
         PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => PalwCapacityFreezeClassV1::Intent,
@@ -441,12 +459,62 @@ pub fn palw_capacity_freeze_class_v1(kind: PalwOffenceKindV1) -> PalwCapacityFre
     }
 }
 
-/// Does the attempt claim hold a reservation under the new rule at `now_daa` (non-terminal, or
-/// voided within `h_obl`, E-4)?
+/// The void the chain wrote on a conviction's claim: the claim's own `Voided` phase, else its
+/// liability row's (a claim already retired, or voided before the conviction reached it).
+fn conviction_void(claim: Option<&PalwClaimStateV2>, liability: Option<&PalwPanelLiabilityRecordV1>) -> Option<(u64, PalwVoidReasonV2)> {
+    match claim.map(|c| &c.phase) {
+        Some(PalwClaimPhaseV2::Voided { voided_daa, reason }) => Some((*voided_daa, *reason)),
+        _ => liability.and_then(|row| row.voided_daa.zip(row.void_reason)),
+    }
+}
+
+/// **The freeze class of one conviction record** (review of lane shadow, finding 3(b)): the kind's
+/// ([`palw_capacity_freeze_class_v1`]), except a `CourtConviction` whose claim was voided
+/// `CourtHeldVerdict` — a held dissection's verdict, which lane liab keeps on the tier.
+pub fn palw_capacity_conviction_freeze_class_v1(
+    offence: &PalwConsumedOffenceV1,
+    claim: Option<&PalwClaimStateV2>,
+    liability: Option<&PalwPanelLiabilityRecordV1>,
+) -> PalwCapacityFreezeClassV1 {
+    match offence.kind {
+        PalwOffenceKindV1::CourtConviction
+            if conviction_void(claim, liability).is_some_and(|(_, reason)| reason == PalwVoidReasonV2::CourtHeldVerdict) =>
+        {
+            PalwCapacityFreezeClassV1::Tier
+        }
+        kind => palw_capacity_freeze_class_v1(kind),
+    }
+}
+
+/// **The claim's producer, when a `PanelFalseValidV2` finding acted on its claim** (review of lane
+/// shadow, finding 3(c)): a finding that proves the claim false voids it (or reverses its `Final`)
+/// for a conviction in the record's own block, and lane liab then charges the producer by the
+/// seat's class. Read off the void the chain wrote at the record's DAA; `None` for any other kind,
+/// a finding that restated an earlier void, or a producer that is the accused itself.
+pub fn palw_capacity_false_valid_producer_v1(
+    offence: &PalwConsumedOffenceV1,
+    claim: Option<&PalwClaimStateV2>,
+    liability: Option<&PalwPanelLiabilityRecordV1>,
+) -> Option<PalwBondKeyV2> {
+    if offence.kind != PalwOffenceKindV1::PanelFalseValidV2 || offence.claim_id == Hash64::default() {
+        return None;
+    }
+    let (voided_daa, reason) = conviction_void(claim, liability)?;
+    if voided_daa != offence.accepted_daa || palw_capacity_void_reason_keeps_obligation_v1(reason) {
+        return None;
+    }
+    let producer = claim.map(|c| c.bond).or_else(|| liability.map(|row| row.executor_bond))?;
+    (producer.0 != offence.accused).then_some(producer)
+}
+
+/// Does the attempt claim hold a commitment under the new rule at `now_daa` (non-terminal, or voided
+/// within `h_obl` for a reason E-4 holds)?
 fn holds_new_rule(claim: &PalwClaimStateV2, h_obl: u64, now_daa: u64) -> bool {
     match &claim.phase {
         PalwClaimPhaseV2::Final { .. } => false,
-        PalwClaimPhaseV2::Voided { voided_daa, .. } => palw_capacity_void_holds_v1(*voided_daa, h_obl, now_daa),
+        PalwClaimPhaseV2::Voided { voided_daa, reason } => {
+            palw_capacity_void_reason_keeps_obligation_v1(*reason) && palw_capacity_void_holds_v1(*voided_daa, h_obl, now_daa)
+        }
         _ => true,
     }
 }
@@ -603,11 +671,15 @@ pub fn palw_capacity_shadow_with_v1(
             let commitment_today = palw_claim_commitment_v1(params, claim, now_daa).unwrap_or(0);
             let l_sompi = palw_capacity_conviction_l_v1(palw_claim_g_v1(state, &id).map(|g| g.g()).unwrap_or(0));
             let holds = holds_new_rule(claim, h_obl, now_daa);
+            // The budget is held by live claims only (lane weight's index); a void inside its hold
+            // keeps the `reserved` it was priced at in its commitment, without holding budget.
             let reserved_new = if free_prompt {
                 claim.reserved
             } else if holds {
                 let r = palw_capacity_consensus_reservation_v1(claim.reserved, budget, held);
-                held = held.saturating_add(r);
+                if !claim.phase.is_terminal() {
+                    held = held.saturating_add(r);
+                }
                 r
             } else {
                 0
@@ -660,7 +732,7 @@ pub fn palw_capacity_shadow_with_v1(
                 acc.own_new[i] = acc.own_new[i].saturating_add(*c);
                 claims_commitment_new[i] = claims_commitment_new[i].saturating_add(*c);
             }
-            if !free_prompt {
+            if !free_prompt && !claim.phase.is_terminal() {
                 acc.reserved_new_total = acc.reserved_new_total.saturating_add(reserved_new);
             }
             bind_commitment_new.insert(id, bind_new);
@@ -668,10 +740,7 @@ pub fn palw_capacity_shadow_with_v1(
                 continue;
             }
             acc.live += 1;
-            if matches!(
-                claim.phase,
-                PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::DefaultDisputed { .. }
-            ) {
+            if palw_capacity_is_unlicensed_v1(claim) {
                 acc.unlicensed += 1;
             }
             claims_out.push(PalwCapacityClaimShadowV1 {
@@ -759,16 +828,22 @@ pub fn palw_capacity_shadow_with_v1(
     let mut kinds: BTreeMap<Hash64, BTreeMap<u8, u64>> = BTreeMap::new();
     for (_, offence) in state.consumed_offences_iter() {
         convictions_total += 1;
-        let freeze = freezes.entry(PalwBondKeyV2(offence.accused)).or_default();
-        freeze.first = Some(freeze.first.map_or(offence.accepted_daa, |d| d.min(offence.accepted_daa)));
-        freeze.last = freeze.last.max(offence.accepted_daa);
-        freeze.count += 1;
-        match palw_capacity_freeze_class_v1(offence.kind) {
-            PalwCapacityFreezeClassV1::Intent => freeze.intent = true,
-            PalwCapacityFreezeClassV1::Undetermined => freeze.undetermined = true,
-            PalwCapacityFreezeClassV1::Tier => {}
+        let named = offence.claim_id != Hash64::default();
+        let claim = named.then(|| state.claim(&offence.claim_id)).flatten();
+        let liability = named.then(|| state.panel_liability(&offence.claim_id)).flatten();
+        let class = palw_capacity_conviction_freeze_class_v1(offence, claim, liability);
+        let charged = std::iter::once(PalwBondKeyV2(offence.accused)).chain(palw_capacity_false_valid_producer_v1(offence, claim, liability));
+        for bond in charged {
+            let freeze = freezes.entry(bond).or_default();
+            freeze.first = Some(freeze.first.map_or(offence.accepted_daa, |d| d.min(offence.accepted_daa)));
+            freeze.last = freeze.last.max(offence.accepted_daa);
+            freeze.count += 1;
+            match class {
+                PalwCapacityFreezeClassV1::Intent => freeze.intent = true,
+                PalwCapacityFreezeClassV1::Undetermined => freeze.undetermined = true,
+                PalwCapacityFreezeClassV1::Tier => {}
+            }
         }
-        let claim = (offence.claim_id != Hash64::default()).then(|| state.claim(&offence.claim_id)).flatten();
         let class_id = claim.map(|c| c.class_id).unwrap_or_default();
         *kinds.entry(class_id).or_default().entry(offence.kind as u8).or_default() += 1;
         let class = attribution.entry(class_id).or_insert_with(|| PalwCapacityClassAttributionV1 { class_id, ..Default::default() });
@@ -919,12 +994,7 @@ pub fn palw_capacity_shadow_with_v1(
             convictions,
         });
     }
-    // Claims whose bond record is gone still weigh (no cap: W_cap of no collateral is 0).
-    for (bond, acc) in &accs {
-        if state.bond(bond).is_none() {
-            bounded_immature_new = bounded_immature_new.saturating_add(palw_capacity_bond_weight_term_v1(acc.x_b, 0));
-        }
-    }
+    // A claim whose bond record is gone adds nothing under the cap: its `W_cap` (of no collateral) is 0.
 
     // ---- the reference floor claim's seat prices, and the §5.4 estimate per step ------------
     let reference_seats = if floor_duty_rows > 0 {
@@ -1067,7 +1137,6 @@ mod tests {
     use crate::palw_capacity_formulas_v1::{
         PALW_CAPACITY_C7_WEIGHT_CEILING_V1, PALW_CAPACITY_FCW_V1, PALW_CAPACITY_REFERENCE_STEPS_V1, palw_capacity_m_ramp_v1,
     };
-    use crate::palw_offence_v1::PalwConsumedOffenceV1;
     use crate::palw_panel_var_v1::PalwSlashableLockV1;
     use crate::palw_state_v2::{
         PalwBlockContextV2, PalwBondStateV2, PalwClaimRcoreV1, PalwDeltaEntryV2, PalwPanelDutyRowV1, PalwStateDeltaV2, apply_delta_v2,
@@ -1426,12 +1495,121 @@ mod tests {
         assert_eq!(row.committed_today, state.reserved_exposure(&bond_key(2)), "A-1 = the planted exposure");
         assert_eq!(row.own_claims_today, row.committed_today);
         assert_eq!(row.committed_new, vec![2 * (m + W_FLOOR) + W_FLOOR + (m + W_FLOOR) + W_FLOOR + 777]);
-        // The void hold spends budget too: four attempt claims hold, each within R_budget(100k).
-        assert_eq!(row.reserved_new_total, 4 * W_FLOOR);
+        // The void keeps its reserved in its hold but no budget (lane weight's index): three live
+        // attempt claims hold budget, each within R_budget(100k).
+        assert_eq!(claim_row(&shadow, 4).unwrap().reserved_new, W_FLOOR);
+        assert_eq!(row.reserved_new_total, 3 * W_FLOOR);
         assert_eq!(row.unlicensed_claims, 3, "provisional, panel-bound and the FP claim");
         assert_eq!(shadow.licence_queue, 1);
         assert_eq!(shadow.licence_queue_oldest_bound_daa, Some(NOW - 9));
         assert_eq!(shadow.licensed_recent, 1);
+    }
+
+    /// **Where a consensus lane fixes the reading, the shadow reads as it does** (review of lane
+    /// shadow, finding 3, probes P2/P3): (a) a DA accusation on a licensed claim keeps its full
+    /// weight and it stays licensed (lane weight); (b) a `CourtConviction` whose claim was voided
+    /// `CourtHeldVerdict` is tier-class, lifted at `since + window_court` (lane liab); (c) a
+    /// `PanelFalseValidV2` finding that acted on its claim charges the producer too (lane liab);
+    /// (d) a void releases the weight budget at once (lane weight's index); (e) a conviction's void
+    /// holds no obligation, an unconvicted one holds `m_c + reserved` for `h_obl` (lane escrow).
+    #[test]
+    fn s_t1_the_shadow_reads_as_the_consensus_lanes_do() {
+        let offence = |kind, accused: u64, daa: u64, claim_id: Hash64| PalwConsumedOffenceV1 {
+            kind,
+            accused: bond_key(accused).0,
+            amount: 1,
+            accepted_daa: daa,
+            execution_root: Hash64::default(),
+            collected: 1,
+            claim_id,
+        };
+        let voided = |daa, reason| PalwClaimPhaseV2::Voided { voided_daa: daa, reason };
+        // (a) DefaultDisputed { resumed: ReceiptLicensed } on bond 1.
+        let mut disputed = floor_claim(1, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: NOW - 5 }, NOW - 30);
+        disputed.phase = PalwClaimPhaseV2::DefaultDisputed {
+            accused_daa: NOW - 2,
+            missing_event_index: 0,
+            accuser: bond_key(100),
+            accuser_exposure: 0,
+            resumed: Box::new(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: NOW - 5 }),
+        };
+        let mut bound_disputed = floor_claim(1, PalwClaimPhaseV2::PanelBound { bound_daa: NOW - 8 }, NOW - 31);
+        bound_disputed.phase = PalwClaimPhaseV2::DefaultDisputed {
+            accused_daa: NOW - 2,
+            missing_event_index: 0,
+            accuser: bond_key(100),
+            accuser_exposure: 0,
+            resumed: Box::new(PalwClaimPhaseV2::PanelBound { bound_daa: NOW - 8 }),
+        };
+        let mut plant = eight_cards(Plant::new())
+            .bond(1, 13_000 * MSK, false)
+            .claim(0x77, disputed)
+            .claim(0x78, bound_disputed)
+            // (b) bond 20: a held dissection's verdict 3,500 DAA ago; bond 22: a proven one.
+            .bond(20, 13_000 * MSK, false)
+            .claim(0x90, floor_claim(20, voided(NOW - 3_500, PalwVoidReasonV2::CourtHeldVerdict), NOW - 3_600))
+            .bond(22, 13_000 * MSK, false)
+            .claim(0x92, floor_claim(22, voided(NOW - 3_500, PalwVoidReasonV2::CourtFraud), NOW - 3_600))
+            // (c) bond 21's claim voided CourtFraud by a kind-3 against seat 101 in the same block; bond
+            // 23's claim voided by a DA default 50 DAA before a kind-3 against seat 102 restated it.
+            .bond(21, 13_000 * MSK, false)
+            .claim(0x91, floor_claim(21, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 100))
+            .bond(23, 13_000 * MSK, false)
+            .claim(0x93, floor_claim(23, voided(NOW - 60, PalwVoidReasonV2::ProducerWithholding), NOW - 100))
+            // (d)/(e) bond 3: a timed-out void and a convicted void inside h_obl, then a live claim.
+            .bond(3, 13_000 * MSK, false)
+            .claim(0xD0, floor_claim(3, voided(NOW - 20, PalwVoidReasonV2::ReceiptTimeout), NOW - 50))
+            .claim(0xD1, floor_claim(3, voided(NOW - 20, PalwVoidReasonV2::CourtFraud), NOW - 49))
+            .claim(0xD2, floor_claim(3, PalwClaimPhaseV2::Provisional, NOW - 2))
+            .claim(0xD3, floor_claim(3, PalwClaimPhaseV2::Provisional, NOW - 1));
+        let records = [
+            (0xC0u64, PalwOffenceKindV1::CourtConviction, 20u64, NOW - 3_500, h(0x90)),
+            (0xC2, PalwOffenceKindV1::CourtConviction, 22, NOW - 3_500, h(0x92)),
+            (0xC1, PalwOffenceKindV1::PanelFalseValidV2, 101, NOW - 10, h(0x91)),
+            (0xC3, PalwOffenceKindV1::PanelFalseValidV2, 102, NOW - 10, h(0x93)),
+        ];
+        for (key, kind, accused, daa, claim_id) in records {
+            plant.extra.push(PalwDeltaEntryV2::ConsumedOffence { key: h(key), old: None, new: Some(offence(kind, accused, daa, claim_id)) });
+        }
+        let state = plant.state();
+        let steps = [PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 0 }];
+        let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &steps);
+
+        // (a)
+        let row = claim_row(&shadow, 0x77).unwrap();
+        assert_eq!(row.stage, PalwCapacityStageV1::Licensed { permille: 1_000 }, "an accusation keeps the licensed stage");
+        assert_eq!(row.staged_w, row.w_full);
+        assert_eq!(claim_row(&shadow, 0x78).unwrap().stage, PalwCapacityStageV1::Anchored, "a bound claim disputed: Anchored");
+        assert_eq!(row_of(&shadow, 1).unlicensed_claims, 1, "only the disputed PanelBound claim is unlicensed");
+
+        // (b)
+        let frozen = |n| {
+            let r = row_of(&shadow, n);
+            (r.frozen_would_be, r.freeze_final, r.freeze_undetermined, r.convictions)
+        };
+        assert_eq!(frozen(20), (false, false, false, 1), "held verdict: tier, lifted at since + window_court");
+        assert_eq!(frozen(22), (true, true, false, 1), "a proven verdict: intent, final");
+
+        // (c)
+        assert_eq!(frozen(101), (true, false, true, 1), "the seat");
+        assert_eq!(frozen(21), (true, false, true, 1), "the producer of the claim the finding voided, by the seat's class");
+        assert_eq!(frozen(102), (true, false, true, 1));
+        assert_eq!(frozen(23), (false, false, false, 0), "a finding that restated an earlier void does not charge the producer");
+        assert_eq!(shadow.convictions_total, 4);
+
+        // (d) and (e)
+        let m = u128::from(E);
+        let d = |id| {
+            let r = claim_row(&shadow, id);
+            r.map(|r| (r.reserved_new, r.commitment_new[0]))
+        };
+        assert_eq!(d(0xD0), Some((W_FLOOR, m + W_FLOOR)), "E-4: a timed-out void holds m_c + reserved for h_obl");
+        assert_eq!(d(0xD1), None, "a conviction's void is charged, not held");
+        assert_eq!(d(0xD2), Some((W_FLOOR, m + W_FLOOR)), "the void released the budget: the next live claim gets w");
+        assert_eq!(d(0xD3), Some((W_FLOOR, m + W_FLOOR)), "R_budget(13k) = 2 w, both to the live claims");
+        let row = row_of(&shadow, 3);
+        assert_eq!(row.reserved_new_total, 2 * W_FLOOR, "W-I4 over the live claims");
+        assert_eq!(row.committed_new[0], 3 * (m + W_FLOOR));
     }
 
     /// **Seat duties and locks**: the identity step (ρ 1, q 0) reproduces every seat's A-1; a ρ = 10
