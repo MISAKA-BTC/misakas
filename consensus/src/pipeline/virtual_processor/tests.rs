@@ -16396,6 +16396,11 @@ mod t12_round_lane_e2e;
 // ADR-0152 M4: the stake-weighted draw where the chain draws — the one resolver (SW-1) and the
 // one-state, bind-only-in-the-anchor-block derivation (SW-8, T89) on a real testnet-12 chain.
 mod t12_stake_draw_integration;
+// audit/claim-capacity (2026-09-26): the bond x class claim-capacity profiler (ignored measurement runs).
+mod t12_claim_capacity;
+// ADR-0160 lane verify (F-B batch licence, F-R room v2): the fences crossed on a real testnet-12 chain,
+// and the ×10 step measured in the capacity harness.
+mod t12_capacity_verify;
 // Lane F1 (the 2026-09-25 sweep's V03/V05): the registry-resilience fence armed on a copy of
 // testnet-12 and crossed by a real chain — the processor's mirror, a floor claim unchanged across the
 // height, and the no-capable-panel re-anchor at a real anchor block.
