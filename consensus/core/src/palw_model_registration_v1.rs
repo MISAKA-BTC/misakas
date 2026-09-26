@@ -54,6 +54,40 @@ pub fn palw_registration_carrier_object_v1(tx: &crate::tx::Transaction) -> Optio
     matches!(payload.object, PalwConsensusObjectV2::ClassRegistered { .. }).then_some(payload.object)
 }
 
+/// **How many DAA past a carrier's acceptance the fold of its accepting block has certainly run** —
+/// the margin before a mined carrier with no class row is read as dropped. A carrier's output enters
+/// the virtual UTXO set when a block carrying it is added, and its row is written when a CHAIN block
+/// accepts that block and folds it (about one block later); inside that interval the row is merely
+/// not written YET.
+pub const PALW_REGISTRATION_DROP_SETTLE_DAA_V1: u64 = 2;
+
+/// **A lifecycle carrier's change: its output 0** (`build_palw_lifecycle_tx`: one input, one change
+/// output back to the funding script). What a node looks up in its virtual UTXO set to learn that a
+/// carrier was mined.
+pub fn palw_lifecycle_carrier_change_v1(carrier: crate::tx::TransactionId) -> crate::tx::TransactionOutpoint {
+    crate::tx::TransactionOutpoint::new(carrier, 0)
+}
+
+/// **Is this registration carrier one the chain mined and the processor DROPPED?** `Some(the DAA it
+/// was accepted at)` exactly when it is out of the mempool, wrote no class row, its change
+/// ([`palw_lifecycle_carrier_change_v1`]) stands in the virtual UTXO set at `change_accepted_daa`, and
+/// the virtual is [`PALW_REGISTRATION_DROP_SETTLE_DAA_V1`] past it — so the fold of its accepting
+/// block has run. Inside that margin a mined carrier is merely not folded yet (review of T12-030);
+/// with its change spent (or never mined) there is no evidence either way and the answer is `None`.
+/// Node policy (`getPalwModelRegistrationStatus`); nothing that folds calls it.
+pub fn palw_registration_carrier_dropped_v1(
+    in_mempool: bool,
+    row_written: bool,
+    change_accepted_daa: Option<u64>,
+    virtual_daa: u64,
+) -> Option<u64> {
+    if in_mempool || row_written {
+        return None;
+    }
+    let mined = change_accepted_daa?;
+    (virtual_daa >= mined.saturating_add(PALW_REGISTRATION_DROP_SETTLE_DAA_V1)).then_some(mined)
+}
+
 /// **Which class-table row a carrier wrote — inclusion read off the chain's own record.**
 ///
 /// The class table stamps every row with the DAA of the chain block whose fold wrote it
@@ -507,6 +541,24 @@ mod tests {
             palw_registration_row_written_by_v1(&other_root, 1_234, &rows).is_none(),
             "a rival registration does not claim the row"
         );
+    }
+
+    /// **The DROPPED judgement** (review of T12-030): only a carrier out of the mempool, with no row,
+    /// whose change stands mined, and only from two DAA past its acceptance — inside that margin a
+    /// successful carrier is mined and not yet folded, and must not read as dropped.
+    #[test]
+    fn a_mined_carrier_reads_dropped_only_past_the_fold_of_its_block() {
+        use PALW_REGISTRATION_DROP_SETTLE_DAA_V1 as SETTLE;
+        assert_eq!(SETTLE, 2);
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, Some(100), 100), None, "accepted this DAA: not folded yet");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, Some(100), 101), None, "one DAA on: still inside the margin");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, Some(100), 102), Some(100), "past the fold of its block");
+        assert_eq!(palw_registration_carrier_dropped_v1(true, false, Some(100), 500), None, "still pooled");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, true, Some(100), 500), None, "its row is written");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, None, 500), None, "no mined change: no evidence");
+        assert_eq!(palw_registration_carrier_dropped_v1(false, false, Some(u64::MAX), u64::MAX), Some(u64::MAX), "no overflow");
+        let carrier = crate::tx::TransactionId::from_u64_word(7);
+        assert_eq!(palw_lifecycle_carrier_change_v1(carrier), crate::tx::TransactionOutpoint::new(carrier, 0));
     }
 
     /// Only a lifecycle carrier at the fold's wire version carrying a `ClassRegistered` names a class.

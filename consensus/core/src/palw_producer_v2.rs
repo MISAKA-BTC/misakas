@@ -1820,7 +1820,8 @@ pub struct PalwClaimRowV1 {
     /// weight, plus option A's escrow term until the licence releases it past `palw_rcore_plus`
     /// (released at LICENCE, not at Final), plus a free-prompt claim's priced receipt rights; 0 once
     /// Final, and a void's abandon hold while it lasts. The sum is the bond's reserved exposure.
-    pub committed: u128,
+    /// `None` when the figure overflows (`palw_claim_commitment_v1`'s own `None`) — never a sentinel.
+    pub committed: Option<u128>,
     /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
     pub escrowed_reward: u64,
     /// The payout queued for the next coinbase, once the claim is final — the producer's leg.
@@ -1989,7 +1990,7 @@ pub fn palw_claim_rows_v1(
                 bound_daa: panel.map(|p| p.bound_daa),
                 deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
                 reserved: claim.reserved,
-                committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa).unwrap_or(u128::MAX),
+                committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa),
                 escrowed_reward: claim.escrowed_reward,
                 // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
                 // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.

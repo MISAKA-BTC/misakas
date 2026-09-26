@@ -754,6 +754,53 @@ mod tests {
         );
     }
 
+    /// **The processor's own calls cannot drift from the shared gate** (review of T12-030): the
+    /// `ClassRegistered` arm still asks, after `verify_class_admission_v9` and in this order,
+    /// `palw_held_class_is_attributable_v1(&carriage.profile, <the fence at the block>)` and — under
+    /// that fence — `palw_attributable_class_v1(&carriage.profile, &carriage.canonical, false,
+    /// <the prompt form at the block>)`: exactly what [`palw_registration_attribution_v1`] calls. A
+    /// change to either side fails here and must be made to both.
+    #[test]
+    fn t12_030_the_processors_attribution_calls_are_the_shared_gates() {
+        let processor = include_str!("../../src/pipeline/virtual_processor/processor.rs");
+        let arm = &processor[processor
+            .find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(\n                        bundle,")
+            .expect("the ClassRegistered arm's gate")..];
+        let arm = &arm[..arm.find("Obj::ReceiptLicensed { claim, receipts }").expect("the arm ends")];
+        let held = arm
+            .find(
+                "kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v1(\n                        \
+                 &carriage.profile,\n                        self.palw_offence_attribution_at(point.daa_score),\n                    )",
+            )
+            .expect("the held check, with the fence at the block");
+        let fence = arm.find("if self.palw_offence_attribution_at(point.daa_score) {").expect("the attribution check is fenced");
+        let class = arm
+            .find(
+                "kaspa_consensus_core::palw_attempt_rules_v1::palw_attributable_class_v1(\n                            \
+                 &carriage.profile,\n                            &carriage.canonical,\n                            false,\n                            \
+                 self.palw_prompt_ids_form_at(point.daa_score),\n                        )",
+            )
+            .expect("the attribution check, with is_base false and the form at the block");
+        assert!(held < fence && fence < class, "held first, then the fenced attribution check");
+        assert_eq!(arm.matches("palw_attributable_class_v1(").count(), 1, "one call");
+        assert_eq!(arm.matches("palw_held_class_is_attributable_v1(").count(), 1, "one call");
+        // And the shared gate calls the same two, in the same order, with the same arguments.
+        let this = include_str!("palw_attempt_rules_v1.rs");
+        let gate = &this[this.find("pub fn palw_registration_attribution_v1(").expect("the gate")..];
+        let gate = &gate[..gate.find("\n}\n").expect("its end")];
+        let g_held = gate
+            .find("crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(profile, offence_attribution)")
+            .expect("the held check");
+        let g_fence = gate.find("if offence_attribution {").expect("fenced");
+        let g_class = gate.find("palw_attributable_class_v1(profile, canonical, false, network_form)").expect("the attribution check");
+        assert!(g_held < g_fence && g_fence < g_class);
+        // And every preflight reads the fence and the form from the params at the height the shape
+        // is read at — the accessors the processor's are mirrors of.
+        let admission = include_str!("palw_class_admission_v2.rs");
+        assert!(admission.contains("offence_attribution: params.palw_offence_attribution_active_at(daa_score),"));
+        assert!(admission.contains("prompt_ids_form: params.palw_prompt_ids_form_at(daa_score),"));
+    }
+
     /// **testnet-12's genesis rows are attributable** (addendum §4-bis.8: "genesis rows already
     /// satisfy (a)–(d); a test asserts it"): every row the genesis registers with a carriage passes
     /// under the network's form, the floor on its own canonical job.

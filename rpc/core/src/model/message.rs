@@ -4255,7 +4255,7 @@ pub struct RpcPalwClaimRow {
     /// tip**, decimal sompi — its weight (`reserved_sompi`), plus the block lane's escrow term until
     /// the LICENCE releases it (past `palw_rcore_plus`; the weight stays to Final), plus a
     /// free-prompt claim's receipt rights. What the bond's reserved exposure sums. Empty from a
-    /// version-3 peer.
+    /// version-3 peer, and where the node's figure overflows (never a sentinel amount).
     #[serde(default)]
     pub committed_sompi: String,
 }

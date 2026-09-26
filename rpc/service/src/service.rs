@@ -581,14 +581,18 @@ impl RpcCoreService {
             registration.mempool_accepted = true;
         } else if inclusion_known && !registration.included && !registration.folded {
             use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1 as Code;
-            if let Some((mined_daa, verdict, reason)) = self.palw_registration_dropped_carrier(txid).await {
+            if let Some((_mined_daa, verdict, reason)) = self.palw_registration_dropped_carrier(txid).await {
                 // **Mined, and no row: the processor dropped it** (testnet-12 lifecycle audit
                 // T12-030). The carrier's fee is spent and nothing will ever write the row, so this
                 // is a verdict, not a wait — and not `REGISTRATION_NOT_INCLUDED`, which read as "not
                 // mined" for a carrier two blocks had carried.
+                //
+                // **`included` stays false** (review of T12-030): a CLI from before this answer
+                // waits for `folded || included` and then prints "registered ✅" — for a dropped
+                // registration. The DAA it was mined at rides the reason instead.
                 registration.accepted = true;
-                registration.included = true;
-                registration.included_daa = mined_daa;
+                registration.included = false;
+                registration.included_daa = 0;
                 registration.reject_code = Code::RegistrationDropped.code().to_string();
                 registration.processor_verdict = verdict;
                 registration.drop_reason = reason;
@@ -619,18 +623,20 @@ impl RpcCoreService {
     async fn palw_registration_dropped_carrier(&self, carrier: kaspa_hashes::Hash64) -> Option<(u64, String, String)> {
         use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1 as Code;
         let session = self.consensus_manager.consensus().unguarded_session();
-        let change = kaspa_consensus_core::tx::TransactionOutpoint::new(carrier, 0);
-        let entry = session.async_get_virtual_utxo_entry(change).await?;
-        let mined_daa = entry.block_daa_score;
-        if session.get_virtual_daa_score() < mined_daa.saturating_add(2) {
-            return None;
-        }
+        let change = kaspa_consensus_core::palw_model_registration_v1::palw_lifecycle_carrier_change_v1(carrier);
+        let entry = session.async_get_virtual_utxo_entry(change).await;
+        // The caller established "out of the mempool, no row"; the judgement is the core's.
+        let mined_daa = kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_dropped_v1(
+            false,
+            false,
+            entry.map(|e| e.block_daa_score),
+            session.get_virtual_daa_score(),
+        )?;
         let unknown = (
             Code::RegistrationDropped.code().to_string(),
-            format!(
-                "the carrier was mined at DAA {mined_daa} and the processor dropped its object; this node could not re-read it — \
-                 its log names the reason (\"a PALW lifecycle object was dropped\")"
-            ),
+            "the processor dropped its object and this node could not re-read it — its log names the reason (\"a PALW \
+             lifecycle object was dropped\")"
+                .to_string(),
         );
         let object = match session
             .async_get_transactions_by_accepting_daa_score(mined_daa, Some(vec![carrier]), TransactionType::Transaction)
@@ -657,7 +663,7 @@ impl RpcCoreService {
             },
             _ => unknown,
         };
-        Some((mined_daa, verdict, reason))
+        Some((mined_daa, verdict, format!("mined at DAA {mined_daa}, not folded — {reason}")))
     }
 
     /// **The class row a registration carrier wrote, read off the chain's own record** — see
@@ -1644,7 +1650,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     seats: row.seats.iter().map(outpoint).collect(),
                     deadline_daa: row.deadline_daa,
                     reserved_sompi: row.reserved.to_string(),
-                    committed_sompi: row.committed.to_string(),
+                    // Empty where the figure overflows — no sentinel reads as an amount.
+                    committed_sompi: row.committed.map(|c| c.to_string()).unwrap_or_default(),
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,
