@@ -2470,6 +2470,11 @@ mod mockery {
                 q_alarm: mock(),
                 seat_credit_if_d5: mock(),
                 seat_capacity_if_d5_milli_per_daa: mock(),
+                m_floor_v1_superseded_sompi: mock::<u64>().to_string(),
+                n_instant_13k_v1_superseded: mock(),
+                q_needed_route_permille: mock(),
+                q_required_permille: mock(),
+                q_alarm_unmeasured: mock(),
             }
         }
     }
@@ -2541,16 +2546,31 @@ mod mockery {
                 da_open_seat: mock(),
                 da_opened_non_seat_total: mock(),
                 conviction_latency_histogram: vec![mock(), mock(), mock()],
-                adversary_claims: mock(),
-                adversary_attributed: mock(),
-                adversary_undetected: mock(),
-                adversary_censored: mock(),
-                adversary_in_flight: mock(),
-                q_measured_permille: mock(),
             }
         }
     }
     test!(RpcPalwCapacityAttributionRow);
+
+    impl Mock for RpcPalwCapacityAdversaryRow {
+        fn mock() -> Self {
+            RpcPalwCapacityAdversaryRow {
+                class_id: mock_hex(),
+                strategy: "garbage".to_string(),
+                c7: mock(),
+                claims: mock(),
+                caught: mock(),
+                caught_late: mock(),
+                caught_unpriced: mock(),
+                unpriced_by_route: vec!["refuted-untagged=2".to_string(), "court-default=1".to_string()],
+                undetected: mock(),
+                censored: mock(),
+                in_flight: mock(),
+                seat_only: mock(),
+                q_measured_permille: mock(),
+            }
+        }
+    }
+    test!(RpcPalwCapacityAdversaryRow);
 
     impl Mock for GetPalwCapacityShadowResponse {
         fn mock() -> Self {
@@ -2566,6 +2586,7 @@ mod mockery {
                 reference_escrow_sompi: mock::<u64>().to_string(),
                 reference_w_floor_sompi: mock::<u64>().to_string(),
                 reference_l_sompi: mock::<u64>().to_string(),
+                reference_conviction_tier_sompi: mock::<u64>().to_string(),
                 reference_seats: mock(),
                 reference_duty_sompi: mock::<u64>().to_string(),
                 reference_lock_sompi: mock::<u64>().to_string(),
@@ -2590,6 +2611,7 @@ mod mockery {
                 claims: mock(),
                 claims_total: mock(),
                 attribution: mock(),
+                adversary: mock(),
             }
         }
     }

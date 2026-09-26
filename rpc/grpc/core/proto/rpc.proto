@@ -2849,6 +2849,11 @@ message RpcPalwCapacityStepRow {
   bool qAlarm = 12;
   bool seatCreditIfD5 = 13;
   uint64 seatCapacityIfD5MilliPerDaa = 14;
+  string mFloorV1SupersededSompi = 15;
+  uint64 nInstant13kV1Superseded = 16;
+  uint32 qNeededRoutePermille = 17;
+  uint32 qRequiredPermille = 18;
+  bool qAlarmUnmeasured = 19;
 }
 
 message RpcPalwCapacityClaimRow {
@@ -2905,12 +2910,24 @@ message RpcPalwCapacityAttributionRow {
   uint64 daOpenSeat = 9;
   uint64 daOpenedNonSeatTotal = 10;
   repeated uint64 convictionLatencyHistogram = 11;
-  uint64 adversaryClaims = 12;
-  uint64 adversaryAttributed = 13;
-  optional uint32 qMeasuredPermille = 14;
-  uint64 adversaryUndetected = 15;
-  uint64 adversaryCensored = 16;
-  uint64 adversaryInFlight = 17;
+  // 12-17 carried the per-class adversary counts before they became RpcPalwCapacityAdversaryRow.
+  reserved 12 to 17;
+}
+
+message RpcPalwCapacityAdversaryRow {
+  string classId = 1;
+  string strategy = 2;
+  bool c7 = 3;
+  uint64 claims = 4;
+  uint64 caught = 5;
+  uint64 caughtLate = 6;
+  uint64 caughtUnpriced = 7;
+  repeated string unpricedByRoute = 8;
+  uint64 undetected = 9;
+  uint64 censored = 10;
+  uint64 inFlight = 11;
+  uint64 seatOnly = 12;
+  optional uint32 qMeasuredPermille = 13;
 }
 
 message GetPalwCapacityShadowResponseMessage {
@@ -2949,5 +2966,7 @@ message GetPalwCapacityShadowResponseMessage {
   repeated RpcPalwCapacityClaimRow claims = 33;
   uint64 claimsTotal = 34;
   repeated RpcPalwCapacityAttributionRow attribution = 35;
+  string referenceConvictionTierSompi = 36;
+  repeated RpcPalwCapacityAdversaryRow adversary = 37;
   RPCError error = 1000;
 }

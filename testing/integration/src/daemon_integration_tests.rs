@@ -407,10 +407,12 @@ async fn daemon_cleaning_test() {
 /// the uncredited ramp (ρ 10 … 1000 at q 0), and that answer is EXACTLY the service's builder
 /// applied to the consensus read taken in-process on the same tip — the request parse, the
 /// processor's read, the builder and both gRPC conversions agree, field for field. Named steps are
-/// priced as named (the reference ramp at q 143‰), a bond filter returns that bond's row, an
-/// adversary bond is accepted (and measures nothing on a chain with no claims), and a malformed
-/// request is refused. The genesis point funds no escrow, so `E` reads 0 here; the golden `N13k`
-/// values on a chain with a subsidy are S-T4's consensus half (`t12_capacity_shadow`).
+/// priced as named (v1's reference ramp at q 143‰: credited, and with nothing measured every step
+/// alarms), a bond filter returns that bond's row, an adversary bond is accepted with or without a
+/// strategy (and measures nothing on a chain with no claims), and a malformed request — a bad bond, a
+/// bad strategy, a bond named with two — is refused. The genesis point funds no escrow, so `E` reads
+/// 0 here; the golden `N13k` values on a chain with a subsidy are S-T4's consensus half
+/// (`t12_capacity_shadow`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn daemon_palw_capacity_shadow_round_trips_on_a_testnet12_node() {
     use kaspa_consensus_core::config::params::Params;
@@ -471,7 +473,7 @@ async fn daemon_palw_capacity_shadow_round_trips_on_a_testnet12_node() {
                 .map(|s| RpcPalwCapacityStep { from_daa: s.from_daa, rho: s.rho, q_credit_permille: u32::from(s.q_credit_permille) })
                 .collect(),
             bond: card.clone(),
-            adversary_bonds: vec![card.clone()],
+            adversary_bonds: vec![format!("{card}:naive")],
             include_claims: false,
             limit: 0,
         })
@@ -483,9 +485,19 @@ async fn daemon_palw_capacity_shadow_round_trips_on_a_testnet12_node() {
         "named steps are priced as named"
     );
     assert_eq!((named.bonds.len(), named.bonds_total, named.bonds[0].bond.as_str()), (1, 1, card.as_str()));
-    assert!(named.attribution.iter().all(|a| a.adversary_claims == 0 && a.q_measured_permille.is_none()));
+    assert!(named.adversary.is_empty(), "a named bond with no claims measures nothing");
+    assert!(named.steps.iter().all(|s| s.q_alarm && s.q_alarm_unmeasured), "a credit nobody measured alarms");
     // A malformed request is still an error before any state is read.
     assert!(client.get_palw_capacity_shadow(GetPalwCapacityShadowRequest { bond: "x".into(), ..Default::default() }).await.is_err());
+    let bogus = GetPalwCapacityShadowRequest { adversary_bonds: vec![format!("{card}:bogus")], ..Default::default() };
+    assert!(client.get_palw_capacity_shadow(bogus).await.is_err(), "an unknown strategy");
+    let twice = GetPalwCapacityShadowRequest {
+        adversary_bonds: vec![format!("{card}:naive"), format!("{card}:garbage")],
+        ..Default::default()
+    };
+    assert!(client.get_palw_capacity_shadow(twice).await.is_err(), "one bond, two strategies");
+    let bare = GetPalwCapacityShadowRequest { adversary_bonds: vec![card.clone()], ..Default::default() };
+    assert!(client.get_palw_capacity_shadow(bare).await.is_ok(), "no strategy: unnamed");
 
     client.disconnect().await.unwrap();
     drop(client);

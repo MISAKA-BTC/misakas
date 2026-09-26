@@ -11483,15 +11483,17 @@ impl Deserializer for RpcPalwCapacityStep {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwCapacityShadowRequest {
-    /// The steps to price. Empty: the schedule the chain's F-L fence arms when its params carry one,
-    /// else the UNCREDITED ramp ρ 10 / 25 / 50 / 100 / 1000 at q 0 (`m_c = E`, what the rules give
-    /// until an attribution rate is measured and credited). ADR-0160's reference ramp (q 143‰, the
-    /// E-T3 rows 20 / 50 / 101 / 203 / 2,030) is priced only when named here: it is conditional on a
-    /// measured attribution rate of at least 0.29.
+    /// The steps to price, as the fold would (lane escrow's `m_c`: a credit applies only from
+    /// `q_seat` = 250‰). Empty: the schedule the chain's F-L fence arms when its params carry one,
+    /// else the UNCREDITED ramp ρ 10 / 25 / 50 / 100 / 1000 at q 0 (`m_c = E`). ADR-0160 v1's
+    /// reference ramp (q 143‰) prices as the uncredited one under the rules as built; its v1 figures
+    /// are in each step row's superseded column.
     pub steps: Vec<RpcPalwCapacityStep>,
     /// `<txid>:<index>`: only this bond's row and claims; empty for every bond.
     pub bond: String,
-    /// Bonds whose claims are adversarial (an O-3 run): their claims measure `q` per class.
+    /// The bonds of an O-3 run, `<txid>:<index>[:<strategy>]` (`naive`, `garbage` or `borrowed`;
+    /// none: unnamed): their claims measure `q` per (class, strategy). A bond named with two
+    /// strategies is refused.
     pub adversary_bonds: Vec<String>,
     /// Return the per-claim rows (the bond rows and totals always come).
     pub include_claims: bool,
@@ -11529,28 +11531,42 @@ impl Deserializer for GetPalwCapacityShadowRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RpcPalwCapacityStepRow {
     pub step: RpcPalwCapacityStep,
-    /// `m_c` of a reference floor claim, and the `q` its ramp term needs at `L = 3G` (permille).
+    /// `m_c` of a reference floor claim as the fold prices it (lane escrow's term: the `q_seat` gate,
+    /// `m*` on the conviction floor), and the credit that rule needs for `⌈E/ρ⌉` to bind (permille,
+    /// never below `q_seat`; 693 … 997 on testnet-12's floor).
     pub m_floor_sompi: String,
     pub q_needed_permille: u32,
-    /// `q_credit ≥ q_needed` (the ramp term binds), and lane liab's AS-2 seat credit applies
-    /// (`q_credit ≥ 250‰`, so locks shrink by ρ).
+    /// `m_floor` is the ramp term `⌈E/ρ⌉`; and the credit applies (`q_credit ≥ 250‰`: lane
+    /// escrow's gate and lane liab's AS-2, one threshold — `m_c < E` and the locks shrink by ρ).
     pub ramp_binds: bool,
     pub seat_credit: bool,
     pub claims_commitment_sompi: String,
     pub committed_sompi: String,
     pub seat_duty_sompi: String,
     pub seat_lock_sompi: String,
-    /// §5.4: floor claims per DAA the seat capital sustains, in thousandths — lane liab's AS-1 duty
-    /// (the λ-term over ρ, AS-2's lock as the lock term) and AS-2 lock.
+    /// §5.4: floor claims per DAA the seat capital sustains, in thousandths — what a seat reserves at
+    /// bind (lane liab's AS-1 duty, lane escrow's `max(duty′, lock′)`) and the AS-2 lock.
     pub seat_capacity_milli_per_daa: u64,
     /// Floor claims a fresh 13,000 MSK bond holds at once.
     pub n_instant_13k: u64,
-    /// A8: a class's measured `q` is below `2 × q_needed`.
+    /// A8: a measured (class, strategy) `q` of an attributable class is below `qRequiredPermille`,
+    /// or `qAlarmUnmeasured`.
     pub q_alarm: bool,
     /// §10 D-5's conditional column (an open decision: `L_seat` = the 130,000 MSK seat bond, so
     /// `q_seat` ≈ 25‰): would the seat credit apply, and the §5.4 estimate if it did.
     pub seat_credit_if_d5: bool,
     pub seat_capacity_if_d5_milli_per_daa: u64,
+    /// **Superseded (ADR-0160 v1, `L = 3G`, no `q_seat` gate)**: `m_c` and a 13k bond's floor claims
+    /// as v1 priced them — not a rule anywhere.
+    pub m_floor_v1_superseded_sompi: String,
+    pub n_instant_13k_v1_superseded: u64,
+    /// `q` the routes the credit prices need at their `L = 3G` (131 … 143‰), and A8's bar
+    /// `2 × max(that, q_seat, q_credit)` (500‰ for a credit up to 250‰).
+    pub q_needed_route_permille: u32,
+    pub q_required_permille: u32,
+    /// The step credits (`q_credit > 0`) and an attributable class has a named strategy nobody
+    /// measured.
+    pub q_alarm_unmeasured: bool,
 }
 
 impl Serializer for RpcPalwCapacityStepRow {
@@ -11570,6 +11586,11 @@ impl Serializer for RpcPalwCapacityStepRow {
         store!(bool, &self.q_alarm, writer)?;
         store!(bool, &self.seat_credit_if_d5, writer)?;
         store!(u64, &self.seat_capacity_if_d5_milli_per_daa, writer)?;
+        store!(String, &self.m_floor_v1_superseded_sompi, writer)?;
+        store!(u64, &self.n_instant_13k_v1_superseded, writer)?;
+        store!(u32, &self.q_needed_route_permille, writer)?;
+        store!(u32, &self.q_required_permille, writer)?;
+        store!(bool, &self.q_alarm_unmeasured, writer)?;
         Ok(())
     }
 }
@@ -11592,6 +11613,11 @@ impl Deserializer for RpcPalwCapacityStepRow {
             q_alarm: load!(bool, reader)?,
             seat_credit_if_d5: load!(bool, reader)?,
             seat_capacity_if_d5_milli_per_daa: load!(u64, reader)?,
+            m_floor_v1_superseded_sompi: load!(String, reader)?,
+            n_instant_13k_v1_superseded: load!(u64, reader)?,
+            q_needed_route_permille: load!(u32, reader)?,
+            q_required_permille: load!(u32, reader)?,
+            q_alarm_unmeasured: load!(bool, reader)?,
         })
     }
 }
@@ -11768,18 +11794,6 @@ pub struct RpcPalwCapacityAttributionRow {
     pub da_opened_non_seat_total: u64,
     /// DAA from acceptance to conviction: < 10, 50, 100, 300, 600, 1,200, 3,000, and the rest.
     pub conviction_latency_histogram: Vec<u64>,
-    /// Adversary claims (of bonds the request named): `attributed + undetected + censored + in_flight`.
-    pub adversary_claims: u64,
-    /// Caught: a conviction names the claim, or it was voided for one.
-    pub adversary_attributed: u64,
-    /// Resolved with nobody convicted: `Final`, or voided for a reason that convicts nobody.
-    pub adversary_undetected: u64,
-    /// Voided by a bond-level forfeiture before its own outcome (out of `q`).
-    pub adversary_censored: u64,
-    /// Not yet resolved (out of `q` until it is).
-    pub adversary_in_flight: u64,
-    /// `attributed / (attributed + undetected)` in permille; absent while none has resolved.
-    pub q_measured_permille: Option<u32>,
 }
 
 impl Serializer for RpcPalwCapacityAttributionRow {
@@ -11796,12 +11810,6 @@ impl Serializer for RpcPalwCapacityAttributionRow {
         store!(u64, &self.da_open_seat, writer)?;
         store!(u64, &self.da_opened_non_seat_total, writer)?;
         store!(Vec<u64>, &self.conviction_latency_histogram, writer)?;
-        store!(u64, &self.adversary_claims, writer)?;
-        store!(u64, &self.adversary_attributed, writer)?;
-        store!(u64, &self.adversary_undetected, writer)?;
-        store!(u64, &self.adversary_censored, writer)?;
-        store!(u64, &self.adversary_in_flight, writer)?;
-        store!(Option<u32>, &self.q_measured_permille, writer)?;
         Ok(())
     }
 }
@@ -11821,11 +11829,78 @@ impl Deserializer for RpcPalwCapacityAttributionRow {
             da_open_seat: load!(u64, reader)?,
             da_opened_non_seat_total: load!(u64, reader)?,
             conviction_latency_histogram: load!(Vec<u64>, reader)?,
-            adversary_claims: load!(u64, reader)?,
-            adversary_attributed: load!(u64, reader)?,
-            adversary_undetected: load!(u64, reader)?,
-            adversary_censored: load!(u64, reader)?,
-            adversary_in_flight: load!(u64, reader)?,
+        })
+    }
+}
+
+/// **One (class, strategy) of the named O-3 bonds: the measured attribution rate** — counted only on
+/// what the credit prices (the claim's own producer convicted by `DaDefault` or a proven court verdict
+/// before the claim's earliest maturity); every other resolution is a miss. A lower bound: kind-3/4
+/// routes (garbage, borrowed) read as misses until their contradiction tag is readable.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwCapacityAdversaryRow {
+    pub class_id: String,
+    /// `naive`, `garbage`, `borrowed` or `unnamed`.
+    pub strategy: String,
+    /// A C7 class: never credited, never alarms.
+    pub c7: bool,
+    /// `caught + caughtLate + caughtUnpriced + undetected + censored + inFlight`.
+    pub claims: u64,
+    pub caught: u64,
+    /// A priced conviction at or past `accepted + window_court` (a miss).
+    pub caught_late: u64,
+    /// Convicted only by routes the credit does not price (a miss), and `route=count`.
+    pub caught_unpriced: u64,
+    pub unpriced_by_route: Vec<String>,
+    /// Resolved with no producer conviction (a miss).
+    pub undetected: u64,
+    /// Voided by a bond-level forfeiture before its own outcome, and not yet resolved (out of `q`).
+    pub censored: u64,
+    pub in_flight: u64,
+    /// Claims a seat-only record names (counted beside).
+    pub seat_only: u64,
+    /// `caught / (caught + caughtLate + caughtUnpriced + undetected)` in permille; absent while none
+    /// has resolved.
+    pub q_measured_permille: Option<u32>,
+}
+
+impl Serializer for RpcPalwCapacityAdversaryRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.strategy, writer)?;
+        store!(bool, &self.c7, writer)?;
+        store!(u64, &self.claims, writer)?;
+        store!(u64, &self.caught, writer)?;
+        store!(u64, &self.caught_late, writer)?;
+        store!(u64, &self.caught_unpriced, writer)?;
+        store!(Vec<String>, &self.unpriced_by_route, writer)?;
+        store!(u64, &self.undetected, writer)?;
+        store!(u64, &self.censored, writer)?;
+        store!(u64, &self.in_flight, writer)?;
+        store!(u64, &self.seat_only, writer)?;
+        store!(Option<u32>, &self.q_measured_permille, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwCapacityAdversaryRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            strategy: load!(String, reader)?,
+            c7: load!(bool, reader)?,
+            claims: load!(u64, reader)?,
+            caught: load!(u64, reader)?,
+            caught_late: load!(u64, reader)?,
+            caught_unpriced: load!(u64, reader)?,
+            unpriced_by_route: load!(Vec<String>, reader)?,
+            undetected: load!(u64, reader)?,
+            censored: load!(u64, reader)?,
+            in_flight: load!(u64, reader)?,
+            seat_only: load!(u64, reader)?,
             q_measured_permille: load!(Option<u32>, reader)?,
         })
     }
@@ -11846,10 +11921,13 @@ pub struct GetPalwCapacityShadowResponse {
     pub bounded_immature_new: String,
     pub safe_weight: String,
     pub w_cap_total: String,
-    /// The reference floor claim the network rows price: E, w, L = 3G, seats, duty and lock.
+    /// The reference floor claim the network rows price: E, w, L = 3G (v1's pricing: the superseded
+    /// column and A8's route `L`), the conviction tier its `m_c` is priced against (lane escrow's
+    /// `Tier`: 1,300 MSK on testnet-12), seats, duty and lock.
     pub reference_escrow_sompi: String,
     pub reference_w_floor_sompi: String,
     pub reference_l_sompi: String,
+    pub reference_conviction_tier_sompi: String,
     pub reference_seats: u32,
     pub reference_duty_sompi: String,
     pub reference_lock_sompi: String,
@@ -11877,6 +11955,8 @@ pub struct GetPalwCapacityShadowResponse {
     /// Claim rows the query matched before the limit.
     pub claims_total: u64,
     pub attribution: Vec<RpcPalwCapacityAttributionRow>,
+    /// `q` per (class, strategy) of the O-3 bonds the request named.
+    pub adversary: Vec<RpcPalwCapacityAdversaryRow>,
 }
 
 impl Serializer for GetPalwCapacityShadowResponse {
@@ -11893,6 +11973,7 @@ impl Serializer for GetPalwCapacityShadowResponse {
         store!(String, &self.reference_escrow_sompi, writer)?;
         store!(String, &self.reference_w_floor_sompi, writer)?;
         store!(String, &self.reference_l_sompi, writer)?;
+        store!(String, &self.reference_conviction_tier_sompi, writer)?;
         store!(u32, &self.reference_seats, writer)?;
         store!(String, &self.reference_duty_sompi, writer)?;
         store!(String, &self.reference_lock_sompi, writer)?;
@@ -11917,6 +11998,7 @@ impl Serializer for GetPalwCapacityShadowResponse {
         serialize!(Vec<RpcPalwCapacityClaimRow>, &self.claims, writer)?;
         store!(u64, &self.claims_total, writer)?;
         serialize!(Vec<RpcPalwCapacityAttributionRow>, &self.attribution, writer)?;
+        serialize!(Vec<RpcPalwCapacityAdversaryRow>, &self.adversary, writer)?;
         Ok(())
     }
 }
@@ -11936,6 +12018,7 @@ impl Deserializer for GetPalwCapacityShadowResponse {
             reference_escrow_sompi: load!(String, reader)?,
             reference_w_floor_sompi: load!(String, reader)?,
             reference_l_sompi: load!(String, reader)?,
+            reference_conviction_tier_sompi: load!(String, reader)?,
             reference_seats: load!(u32, reader)?,
             reference_duty_sompi: load!(String, reader)?,
             reference_lock_sompi: load!(String, reader)?,
@@ -11960,6 +12043,7 @@ impl Deserializer for GetPalwCapacityShadowResponse {
             claims: deserialize!(Vec<RpcPalwCapacityClaimRow>, reader)?,
             claims_total: load!(u64, reader)?,
             attribution: deserialize!(Vec<RpcPalwCapacityAttributionRow>, reader)?,
+            adversary: deserialize!(Vec<RpcPalwCapacityAdversaryRow>, reader)?,
         })
     }
 }

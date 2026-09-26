@@ -5378,8 +5378,9 @@ impl VirtualStateProcessor {
         options.raw_depth = self.palw_settled_anchor_depth_at(next_daa);
         // The default display (review of lane shadow, finding 1): the schedule F-L arms once the
         // params carry one — `rcore/cap-int` passes `palw_capacity_aggregate_liability`'s steps here
-        // in place of `None` — else the uncredited ramp (q = 0, m_c = E). The ADR's reference ramp
-        // (q = 143‰) is priced only when a caller names it.
+        // in place of `None` — else the uncredited ramp (q = 0, m_c = E). ADR-0160 v1's reference
+        // ramp (q = 143‰) is priced only when a caller names it, and prices as the uncredited one
+        // (below q_seat nothing is credited; review of lane shadow, round 2, finding 2).
         if options.steps.is_empty() {
             options.steps = kaspa_consensus_core::palw_capacity_shadow_v1::palw_capacity_display_steps_v1(None);
         }

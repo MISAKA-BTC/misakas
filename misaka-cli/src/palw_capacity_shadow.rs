@@ -6,11 +6,17 @@
 //! reads. Read-only (`getPalwCapacityShadow`, op 201: a node built before it drops the connection,
 //! so the read goes on a connection of its own). Nothing here is a rule: no capacity fence is armed.
 //!
-//! **Which steps.** With none named the node prices the schedule its F-L fence arms, else the
-//! UNCREDITED ramp (ρ 10 … 1000 at q 0, `m_c = E`: what the rules give until an attribution rate is
-//! measured and credited). `--reference` names ADR-0160's reference ramp (q 143‰, the E-T3 rows
-//! 20 / 50 / 101 / 203 / 2,030 at 13k) — conditional on a measured attribution rate of at least
-//! 0.29, and every row is printed with the q it credits.
+//! **Which steps, priced how.** With none named the node prices the schedule its F-L fence arms,
+//! else the UNCREDITED ramp (ρ 10 … 1000 at q 0, `m_c = E`). Every step is priced as the fold would
+//! (lane escrow's `m_c`: nothing is credited below `q_seat` = 250‰, and past it `m*` is priced on the
+//! conviction floor — 4 floor claims per 13k at 250‰, 10 at 500‰, at every ρ). `--reference` names
+//! ADR-0160 v1's reference ramp (q 143‰): it prices as the uncredited one, and v1's figures for it
+//! (E-T3's 20 / 50 / 101 / 203 / 2,030 at 13k) are printed only in the column marked superseded.
+//!
+//! **The adversary rows.** `--adversary TXID:INDEX[:STRATEGY]` names an O-3 bond and its strategy
+//! (naive, garbage, borrowed); `q` is printed per (class, strategy) and counts a claim caught only
+//! when its producer is convicted by a route the credit prices — a lower bound, never a credit's input
+//! on its own.
 
 use crate::node::Ctx;
 use crate::{CliError, CliResult, OutputFormat, exit};
@@ -27,15 +33,16 @@ pub(crate) struct CapacityShadowArgs {
     /// node's default — the armed F-L schedule, else ρ 10 / 25 / 50 / 100 / 1000 at q 0.
     #[arg(long = "step", value_name = "RHO[:Q]")]
     pub(crate) step: Vec<String>,
-    /// Price ADR-0160's reference ramp, ρ 10 / 25 / 50 / 100 / 1000 at q 143‰ — conditional on a
-    /// measured attribution rate ≥ 0.29 (the ramp gate G2), not the rule in force.
+    /// Price ADR-0160 v1's reference ramp, ρ 10 / 25 / 50 / 100 / 1000 at q 143‰ — below q_seat, so it
+    /// prices as the uncredited ramp; v1's own figures appear in the superseded column.
     #[arg(long, conflicts_with = "step")]
     pub(crate) reference: bool,
     /// Only this bond's row (and claims), `<txid>:<index>`.
     #[arg(long, value_name = "TXID:INDEX")]
     pub(crate) bond: Option<String>,
-    /// A bond whose claims are adversarial (an O-3 run; repeatable): measures q per class.
-    #[arg(long, value_name = "TXID:INDEX")]
+    /// A bond whose claims are adversarial (an O-3 run; repeatable), with its strategy (naive,
+    /// garbage or borrowed): measures q per (class, strategy).
+    #[arg(long, value_name = "TXID:INDEX[:STRATEGY]")]
     pub(crate) adversary: Vec<String>,
     /// Also list the claim rows.
     #[arg(long)]
@@ -111,9 +118,10 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
         fcw(&r.safe_weight)
     ));
     out.push_str(&format!(
-        "reference floor claim: E {} MSK, w {} MSK, L = 3G {} MSK; {} seats, duty {} / lock {} MSK\n",
+        "reference floor claim: E {} MSK, w {} MSK, conviction tier {} MSK (v1's L = 3G {} MSK); {} seats, duty {} / lock {} MSK\n",
         msk(&r.reference_escrow_sompi),
         msk(&r.reference_w_floor_sompi),
+        if r.reference_conviction_tier_sompi.is_empty() { "whole bond".to_string() } else { msk(&r.reference_conviction_tier_sompi) },
         msk(&r.reference_l_sompi),
         r.reference_seats,
         msk(&r.reference_duty_sompi),
@@ -130,10 +138,12 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
         r.carriers_per_block,
         r.carriage_blocks_to_drain
     ));
-    out.push_str("  ρ     q‰  m_floor MSK  q_needed‰  13k holds  seats/DAA (if D-5)  claims commit MSK  alarm\n");
+    out.push_str(
+        "  ρ     q‰  m_floor MSK  q_needed‰  13k holds  seats/DAA (if D-5)  claims commit MSK  A8 bar‰  alarm  | superseded v1: m MSK / 13k\n",
+    );
     for s in &r.steps {
         out.push_str(&format!(
-            "  {:<5} {:<3} {:>12} {:>9} {:>10} {:>9} ({:>7}) {:>18}  {}\n",
+            "  {:<5} {:<3} {:>12} {:>9} {:>10} {:>9} ({:>7}) {:>18} {:>8}  {:<7} | {} / {}\n",
             s.step.rho,
             s.step.q_credit_permille,
             msk(&s.m_floor_sompi),
@@ -142,16 +152,25 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
             per_daa(s.seat_capacity_milli_per_daa),
             per_daa(s.seat_capacity_if_d5_milli_per_daa),
             msk(&s.claims_commitment_sompi),
-            if s.q_alarm { "q-ALARM" } else { "-" }
+            s.q_required_permille,
+            if s.q_alarm_unmeasured {
+                "UNMEAS"
+            } else if s.q_alarm {
+                "q-ALARM"
+            } else {
+                "-"
+            },
+            msk(&s.m_floor_v1_superseded_sompi),
+            s.n_instant_13k_v1_superseded
         ));
     }
-    if r.steps.iter().any(|s| s.step.q_credit_permille > 0) {
-        out.push_str(
-            "  (a row with q‰ > 0 credits an attribution rate: it holds only once a measured rate of at least 2q is credited \
-             by a flag day; seats/DAA is lane liab's AS-2 — locks divide only at q ≥ 250‰ — and the parenthesised column \
-             is §10 D-5's, an open decision)\n",
-        );
-    }
+    out.push_str(
+        "  (every column left of '|' is priced as the fold would: a credit applies only from q_seat = 250‰ — lane escrow's \
+         gate, lane liab's AS-2 — and m_c is priced on the conviction tier; q_needed‰ is the credit that makes ⌈E/ρ⌉ bind. \
+         The column right of '|' is ADR-0160 v1's pricing (L = 3G, no gate), SUPERSEDED. The parenthesised seats/DAA \
+         column is §10 D-5's, an open decision. A8 bar = 2 × max(q needed at L = 3G, q_seat, q‰); UNMEAS: a credited \
+         step with a named strategy nobody measured)\n",
+    );
     out.push_str(&format!("bonds ({} of {}):\n", r.bonds.len(), r.bonds_total));
     for b in &r.bonds {
         out.push_str(&format!(
@@ -183,8 +202,7 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
     }
     for a in &r.attribution {
         out.push_str(&format!(
-            "class {}: live {} final {} voided {} (attributed {}), convictions {:?}, DA non-seat open {} / ever {}, \
-             adversary {} (caught {}, undetected {}, censored {}, in flight {}), q {}\n",
+            "class {}: live {} final {} voided {} (conviction voids {}), convictions {:?}, DA non-seat open {} / ever {}\n",
             if a.class_id.is_empty() { "(none)" } else { &a.class_id[..a.class_id.len().min(12)] },
             a.claims_live,
             a.claims_final,
@@ -193,11 +211,24 @@ pub(crate) fn render(r: &GetPalwCapacityShadowResponse) -> String {
             a.convictions_by_kind,
             a.da_open_non_seat,
             a.da_opened_non_seat_total,
-            a.adversary_claims,
-            a.adversary_attributed,
-            a.adversary_undetected,
-            a.adversary_censored,
-            a.adversary_in_flight,
+        ));
+    }
+    for a in &r.adversary {
+        out.push_str(&format!(
+            "O-3 class {} {}{}: {} claims — caught {}, late {}, unpriced {} {:?}, undetected {}, censored {}, in flight {}, \
+             seat-only {}; q {} (a lower bound: only convictions the credit prices)\n",
+            &a.class_id[..a.class_id.len().min(12)],
+            a.strategy,
+            if a.c7 { " (C7: never credited)" } else { "" },
+            a.claims,
+            a.caught,
+            a.caught_late,
+            a.caught_unpriced,
+            a.unpriced_by_route,
+            a.undetected,
+            a.censored,
+            a.in_flight,
+            a.seat_only,
             a.q_measured_permille.map(|q| format!("{q}‰")).unwrap_or_else(|| "-".to_string())
         ));
     }
@@ -219,7 +250,7 @@ pub(crate) async fn run(ctx: &Ctx, args: CapacityShadowArgs) -> CliResult {
     let response = answer.map_err(|e| read_error(&e))?;
     if json || ctx.output == OutputFormat::Json {
         let mut doc = serde_json::to_value(&response).expect("a response serializes");
-        doc["schema"] = "misaka.palw.capacity-shadow.v1".into();
+        doc["schema"] = "misaka.palw.capacity-shadow.v2".into();
         println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
     } else {
         print!("{}", render(&response));
@@ -245,7 +276,7 @@ mod tests {
             "--step",
             "10:250",
             "--adversary",
-            &bond,
+            &format!("{bond}:garbage"),
             "--claims",
             "--limit",
             "7",
@@ -254,7 +285,7 @@ mod tests {
         let crate::Command::Palw(crate::PalwCmd::CapacityShadow(args)) = cli.command else { panic!("capacity-shadow") };
         assert_eq!(
             (args.step, args.adversary, args.claims, args.limit, args.bond, args.reference),
-            (vec!["100".into(), "10:250".into()], vec![bond], true, 7, None, false)
+            (vec!["100".into(), "10:250".into()], vec![format!("{bond}:garbage")], true, 7, None, false)
         );
         let cli = crate::Cli::try_parse_from(["misaka", "palw", "capacity-shadow", "--reference"]).expect("parses");
         let crate::Command::Palw(crate::PalwCmd::CapacityShadow(args)) = cli.command else { panic!("capacity-shadow") };
@@ -271,7 +302,11 @@ mod tests {
 
     #[test]
     fn steps_parse_as_rho_and_q() {
-        assert_eq!(parse_step("100").unwrap(), RpcPalwCapacityStep { from_daa: 0, rho: 100, q_credit_permille: 0 }, "no credit assumed");
+        assert_eq!(
+            parse_step("100").unwrap(),
+            RpcPalwCapacityStep { from_daa: 0, rho: 100, q_credit_permille: 0 },
+            "no credit assumed"
+        );
         assert_eq!(parse_step("10:250").unwrap(), RpcPalwCapacityStep { from_daa: 0, rho: 10, q_credit_permille: 250 });
         assert!(parse_step("x").is_err());
     }
@@ -285,21 +320,32 @@ mod tests {
             bounded_immature_new: (2 * FCW).to_string(),
             steps: vec![RpcPalwCapacityStepRow {
                 step: RpcPalwCapacityStep { from_daa: 0, rho: 100, q_credit_permille: 143 },
-                m_floor_sompi: "3200846501".to_string(),
-                n_instant_13k: 203,
+                m_floor_sompi: "320084650080".to_string(),
+                n_instant_13k: 2,
+                m_floor_v1_superseded_sompi: "3200846501".to_string(),
+                n_instant_13k_v1_superseded: 203,
+                q_required_permille: 500,
+                q_alarm: true,
+                q_alarm_unmeasured: true,
+                ..Default::default()
+            }],
+            adversary: vec![kaspa_rpc_core::RpcPalwCapacityAdversaryRow {
+                class_id: "e0".repeat(64),
+                strategy: "garbage".to_string(),
+                claims: 6,
+                caught_unpriced: 3,
+                unpriced_by_route: vec!["refuted-untagged=1".to_string()],
+                undetected: 3,
+                q_measured_permille: Some(0),
                 ..Default::default()
             }],
             ..Default::default()
         };
         let text = render(&r);
         assert!(text.contains("today 13.00 → under J-1 2.00"), "{text}");
-        assert!(text.contains("32.00") && text.contains("203"), "{text}");
-        assert!(text.contains("credits an attribution rate"), "a q > 0 row is marked conditional: {text}");
-        let uncredited = GetPalwCapacityShadowResponse {
-            steps: vec![RpcPalwCapacityStepRow { step: RpcPalwCapacityStep { from_daa: 0, rho: 10, q_credit_permille: 0 }, ..Default::default() }],
-            ..r.clone()
-        };
-        assert!(!render(&uncredited).contains("credits an attribution rate"));
+        assert!(text.contains("3200.84") && text.contains("| 32.00 / 203"), "the fold's price, and v1's only as superseded: {text}");
+        assert!(text.contains("SUPERSEDED") && text.contains("UNMEAS"), "{text}");
+        assert!(text.contains("O-3 class e0e0e0e0e0e0 garbage: 6 claims") && text.contains("q 0‰"), "{text}");
         assert!(render(&GetPalwCapacityShadowResponse::default()).contains("no V2 state"));
     }
 }

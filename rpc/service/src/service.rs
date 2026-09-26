@@ -2848,15 +2848,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             "" => None,
             b => Some(PalwBondKeyV2(parse_bond_outpoint(b)?)),
         };
-        let adversary_bonds =
-            request.adversary_bonds.iter().map(|b| parse_bond_outpoint(b.trim()).map(PalwBondKeyV2)).collect::<RpcResult<Vec<_>>>()?;
+        let adversaries = palw_capacity_adversaries_of_request(&request.adversary_bonds)?;
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(GetPalwCapacityShadowResponse::default());
         }
         let options = kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1 {
             steps,
             raw_depth: None,
-            adversary_bonds,
+            adversaries,
             block_mass_limit: self.config.params.max_block_mass,
             // The processor fills it from the fold's own carve at the next block's DAA.
             reference_escrow_sompi: None,
@@ -4603,6 +4602,28 @@ fn palw_capacity_steps_of_request(
         .collect()
 }
 
+/// `getPalwCapacityShadow`'s O-3 bonds, `<txid>:<index>[:<strategy>]` — the shadow's own reading of the
+/// strategy suffix (`palw_capacity_split_adversary_v1`), and a bond named with two strategies refused.
+fn palw_capacity_adversaries_of_request(
+    named: &[String],
+) -> RpcResult<Vec<kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityAdversaryV1>> {
+    use kaspa_consensus_core::palw_capacity_shadow_v1::{
+        PalwCapacityAdversaryV1, palw_capacity_check_adversaries_v1, palw_capacity_split_adversary_v1,
+    };
+    let adversaries = named
+        .iter()
+        .map(|text| {
+            let (outpoint, strategy) = palw_capacity_split_adversary_v1(text).map_err(RpcError::General)?;
+            Ok(PalwCapacityAdversaryV1 {
+                bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(parse_bond_outpoint(outpoint)?),
+                strategy,
+            })
+        })
+        .collect::<RpcResult<Vec<_>>>()?;
+    palw_capacity_check_adversaries_v1(&adversaries).map_err(RpcError::General)?;
+    Ok(adversaries)
+}
+
 /// **The wire form of one shadow** — every total and step row, the bond rows (one bond's when
 /// `bond` names it), and the claim rows when asked, each list at most `limit` long.
 pub fn palw_capacity_shadow_response_v1(
@@ -4635,6 +4656,10 @@ pub fn palw_capacity_shadow_response_v1(
         reference_escrow_sompi: text(shadow.reference_escrow),
         reference_w_floor_sompi: text(shadow.reference_w_floor),
         reference_l_sompi: text(shadow.reference_l),
+        reference_conviction_tier_sompi: match shadow.reference_floor {
+            kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityConvictionFloorV1::Tier(tier) => text(tier),
+            kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityConvictionFloorV1::WholeBond => String::new(),
+        },
         reference_seats: shadow.reference_seats,
         reference_duty_sompi: text(shadow.reference_duty),
         reference_lock_sompi: text(shadow.reference_lock),
@@ -4671,6 +4696,11 @@ pub fn palw_capacity_shadow_response_v1(
                 q_alarm: row.q_alarm,
                 seat_credit_if_d5: row.seat_credit_if_d5,
                 seat_capacity_if_d5_milli_per_daa: row.seat_capacity_if_d5_milli_per_daa,
+                m_floor_v1_superseded_sompi: text(row.m_floor_v1_superseded),
+                n_instant_13k_v1_superseded: row.n_instant_13k_v1_superseded,
+                q_needed_route_permille: u32::from(row.q_needed_route_permille),
+                q_required_permille: u32::from(row.q_required_permille),
+                q_alarm_unmeasured: row.q_alarm_unmeasured,
             })
             .collect(),
         bonds_total: bonds.len() as u64,
@@ -4738,11 +4768,24 @@ pub fn palw_capacity_shadow_response_v1(
                 da_open_seat: row.da_open_seat,
                 da_opened_non_seat_total: row.da_opened_non_seat_total,
                 conviction_latency_histogram: row.conviction_latency_histogram.to_vec(),
-                adversary_claims: row.adversary_claims,
-                adversary_attributed: row.adversary_attributed,
-                adversary_undetected: row.adversary_undetected,
-                adversary_censored: row.adversary_censored,
-                adversary_in_flight: row.adversary_in_flight,
+            })
+            .collect(),
+        adversary: shadow
+            .adversary
+            .iter()
+            .map(|row| RpcPalwCapacityAdversaryRow {
+                class_id: row.class_id.to_string(),
+                strategy: row.strategy.name().to_string(),
+                c7: row.c7,
+                claims: row.claims,
+                caught: row.caught,
+                caught_late: row.caught_late,
+                caught_unpriced: row.caught_unpriced,
+                unpriced_by_route: row.unpriced_by_route.iter().map(|(route, n)| format!("{route}={n}")).collect(),
+                undetected: row.undetected,
+                censored: row.censored,
+                in_flight: row.in_flight,
+                seat_only: row.seat_only,
                 q_measured_permille: row.q_measured_permille.map(u32::from),
             })
             .collect(),

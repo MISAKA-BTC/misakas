@@ -4,48 +4,57 @@
 //! * [`s_t4_the_shadow_read_answers_on_a_testnet12_chain`] (fast, in the suite): the processor's
 //!   read (`palw_capacity_shadow_v1`, the one consensus-crate call of the shadow) answers on a real
 //!   testnet-12 chain — eight genesis cards as seats, `E` from the tip's subsidy, the default display
-//!   uncredited (q 0: a 13k bond still holds 2 at every ρ), the reference ramp's golden `N13k` only
-//!   when named — and moves nothing (the tip's state root is the same before and after).
+//!   uncredited (q 0: a 13k bond still holds 2 at every ρ); v1's reference ramp, named, prices as the
+//!   fold would (143‰ < q_seat: still 2, and the credited step alarms with nothing measured), v1's
+//!   E-T3 figures only in the superseded column — and moves nothing (the tip's state root is the same
+//!   before and after).
 //! * [`s_t5_a8_the_alarm_fires_when_the_auditors_stop_and_clears_when_they_run`] (in the suite):
-//!   ADR-0160's A8 drill on a real testnet-12 chain. Two claims of the named O-3 bonds resolve `Final`
-//!   with nobody auditing them: measured q = 0, every step alarms (and a read naming no bond measures
-//!   nothing). Then an auditor accuses one of them, nobody answers, the chain convicts its producer
-//!   (`DaDefault`): q = 500‰ ≥ 2 × q_needed, the alarm clears, and the producer reads frozen for good.
+//!   ADR-0160's A8 drill on a real testnet-12 chain. Two claims of the named O-3 bonds (naive) resolve
+//!   `Final` with nobody auditing them: measured q = 0, every step alarms (and a read naming no bond
+//!   measures nothing). Then an auditor accuses one of them, nobody answers, the chain convicts its
+//!   producer (`DaDefault`, a route the credit prices): q = 500‰, the bar (2 × max(q needed, q_seat,
+//!   q_credit) = 500‰) is met, the alarm clears, and the producer reads frozen for good.
 //! * [`s_t5_the_shadow_on_the_live_like_13k_floor_chain`] (a measurement run on the capacity
 //!   harness, `--ignored`): `L1_floor_13k_live` — one 13,000 MSK producer making floor claims with the
 //!   live licence mix (90.6 % all-five / 5.7 % three-seat / 3.8 % S2) and the live bind → licence
-//!   delays — read every 10 DAA. Each snapshot: the subject's `N_instant` is today's 2, E-T3's
-//!   20 / 50 / 101 / 203 / 2,030 at the reference credit (q 143‰, conditional), and still 2 at
-//!   testnet-12's armed first step (ρ 10, q 0); the identity step (ρ 1, q 0) reproduces every seat's A-1; the
-//!   subject's provisional weight stays within its `W_cap` (2 FCW); the chain's own gate never holds
-//!   more unlicensed claims than today's `N_instant`. `CAP_SHADOW_DAA` (default 60) sets the length.
+//!   delays — read every 10 DAA. Each snapshot: the subject's `N_instant` is today's 2, still 2 at
+//!   v1's reference credit (q 143‰ < q_seat; E-T3's 20 / 50 / 101 / 203 / 2,030 only in the
+//!   superseded column) and at testnet-12's armed first step (ρ 10, q 0), 4 at a 250‰ credit and 10
+//!   at 500‰; the identity step (ρ 1, q 0) reproduces every seat's A-1; the subject's provisional
+//!   weight stays within its `W_cap` (2 FCW); the chain's own gate never holds more unlicensed claims
+//!   than today's `N_instant`. `CAP_SHADOW_DAA` (default 60) sets the length.
 
 use super::p2_mint_path::{Kind, Minting, beat, mined, sign};
 use super::t12_claim_capacity::{LicencePolicy, drive, expand, sim};
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use kaspa_consensus_core::api::ConsensusApi;
+use kaspa_consensus_core::palw_capacity_formulas_v1::{PALW_CAPACITY_FCW_V1, PALW_CAPACITY_REFERENCE_STEPS_V1, PalwCapacityStepV1};
+use kaspa_consensus_core::palw_capacity_shadow_v1::{
+    PalwCapacityAdversaryV1, PalwCapacityShadowOptionsV1, PalwCapacityShadowV1, PalwCapacityStrategyV1,
+};
 use kaspa_consensus_core::palw_state_v2::{
     PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2, PalwVoidReasonV2,
     palw_da_accusation_message_v2,
 };
 use kaspa_hashes::Hash64;
-use kaspa_consensus_core::palw_capacity_formulas_v1::{PALW_CAPACITY_FCW_V1, PALW_CAPACITY_REFERENCE_STEPS_V1, PalwCapacityStepV1};
-use kaspa_consensus_core::palw_capacity_shadow_v1::{PalwCapacityShadowOptionsV1, PalwCapacityShadowV1};
 
-/// The reference ramp (indices 0–4, q 143‰: conditional on a measured attribution rate), the
-/// identity step (5: ρ 1, q 0 — today's prices under the new structure), and testnet-12's armed
-/// first step (6: ρ 10, q 0 — lane liab's `PALW_T12_CAPACITY_STEPS_V1`, what F-L would actually
-/// give on arming).
+/// v1's reference ramp (indices 0–4, q 143‰), the identity step (5: ρ 1, q 0 — today's prices under
+/// the new structure), testnet-12's armed first step (6: ρ 10, q 0 — lane liab's
+/// `PALW_T12_CAPACITY_STEPS_V1`, what F-L would actually give on arming), and two credited steps (7:
+/// ρ 10 at q_seat, 250‰; 8: ρ 10 at 500‰, the most D-8 can credit).
 fn steps_with_identity() -> Vec<PalwCapacityStepV1> {
     let mut steps = PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec();
     steps.push(PalwCapacityStepV1 { from_daa: 0, rho: 1, q_credit_permille: 0 });
     steps.push(PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 0 });
+    steps.push(PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 250 });
+    steps.push(PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 500 });
     steps
 }
 
-/// E-T3's golden: a 13,000 MSK bond with no other commitment holds 20 / 50 / 101 / 203 / 2,030
-/// floor claims at ρ 10 / 25 / 50 / 100 / 1000 (q credited at 143‰), and 2 today.
-const E_T3_13K: [u64; 5] = [20, 50, 101, 203, 2_030];
+/// E-T3's golden as ADR-0160 v1 priced it (the SUPERSEDED column): a 13,000 MSK bond with no other
+/// commitment held 20 / 50 / 101 / 203 / 2,030 floor claims at ρ 10 / 25 / 50 / 100 / 1000 with q
+/// credited at 143‰. As the fold prices those steps (143‰ < q_seat), it holds 2.
+const E_T3_13K_V1_SUPERSEDED: [u64; 5] = [20, 50, 101, 203, 2_030];
 
 #[tokio::test]
 async fn s_t4_the_shadow_read_answers_on_a_testnet12_chain() {
@@ -78,19 +87,31 @@ async fn s_t4_the_shadow_read_answers_on_a_testnet12_chain() {
     assert!(card.seat && card.w_cap == 144 * PALW_CAPACITY_FCW_V1, "a card is a seat with W_cap 144 FCW");
     assert!(shadow.summary().starts_with("capacity-shadow: daa="));
     assert!(shadow.summary().contains("N13k[ρ@q‰]=10@0:2,"), "{}", shadow.summary());
-    // Named, the ADR's reference ramp (q 143‰, conditional on a measured q ≥ 0.29) gives E-T3.
+    // Named, v1's reference ramp (q 143‰) prices as the fold would: below q_seat nothing is
+    // credited, a 13k bond still holds 2, and E-T3 is only the superseded column's; the chain's
+    // attributable classes are credited with nothing measured, so every step alarms.
     let reference = PalwCapacityShadowOptionsV1 { steps: PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec(), ..options.clone() };
     let conditional = chain.ctx.consensus.palw_capacity_shadow_v1(reference).expect("a ConsensusV2 node answers");
-    assert_eq!(conditional.steps.iter().map(|s| s.n_instant_13k).collect::<Vec<_>>(), E_T3_13K.to_vec());
-    assert!(conditional.steps.iter().all(|s| !s.seat_credit && s.seat_credit_if_d5), "143‰: lane liab's locks stay, D-5's would divide");
+    assert_eq!(conditional.steps.iter().map(|s| s.n_instant_13k).collect::<Vec<_>>(), vec![2; 5]);
+    assert_eq!(conditional.steps.iter().map(|s| s.n_instant_13k_v1_superseded).collect::<Vec<_>>(), E_T3_13K_V1_SUPERSEDED.to_vec());
+    assert!(
+        conditional.steps.iter().all(|s| !s.seat_credit && s.seat_credit_if_d5),
+        "143‰: lane liab's locks stay, D-5's would divide"
+    );
+    assert!(!conditional.credited_classes.is_empty(), "testnet-12's floor is an attributable class");
+    assert!(conditional.steps.iter().all(|s| s.q_alarm && s.q_alarm_unmeasured), "a credit nobody measured alarms");
     // The same answer twice: the read is a function of the committed tip.
     assert_eq!(chain.ctx.consensus.palw_capacity_shadow_v1(options), Some(shadow));
 }
 
-/// The shadow of `m`'s tip as a node reads it, measuring q on `adversary` (an O-3 run's bonds).
+/// The shadow of `m`'s tip as a node reads it, measuring q on `adversary` (an O-3 run's bonds, naive:
+/// roots no seat can replay).
 fn shadow_of(m: &Minting, adversary: &[PalwBondKeyV2]) -> PalwCapacityShadowV1 {
     let options = PalwCapacityShadowOptionsV1 {
-        adversary_bonds: adversary.to_vec(),
+        adversaries: adversary
+            .iter()
+            .map(|bond| PalwCapacityAdversaryV1 { bond: *bond, strategy: PalwCapacityStrategyV1::Naive })
+            .collect(),
         block_mass_limit: m.chain.config.params.max_block_mass,
         ..Default::default()
     };
@@ -100,13 +121,15 @@ fn shadow_of(m: &Minting, adversary: &[PalwBondKeyV2]) -> PalwCapacityShadowV1 {
 /// **A8 on a real testnet-12 chain** (ADR-0160 §8 A8, the drill the ADR assigns to S-T5 and gate
 /// G2: "the alarm fires in the drill when auditors are stopped"; review of lane shadow, finding 2).
 ///
-/// Cards 0 and 7 are the O-3 run's bonds. Their claims A and B are licensed and reach `Final` with
-/// no auditor looking: both resolved, neither caught — measured q = 0 < 2 × q_needed at every step,
-/// so every step alarms and the line ends `q-ALARM`. A read that names no bond (a node without
-/// `--palw-capacity-shadow-adversary`) measures nothing and stays quiet. Then the auditors run:
-/// card 1 accuses B's row, nobody answers, the chain convicts card 7 (`DaDefault`, B voided
-/// `ProducerWithholding`) — one caught of two resolved, q = 500‰ ≥ 2 × 143‰, and the alarm clears;
-/// card 7 reads frozen for good (the intent class).
+/// Cards 0 and 7 are the O-3 run's bonds (naive). Their claims A and B are licensed and reach `Final`
+/// with no auditor looking: both resolved, neither caught — measured q = 0 < 500‰ at every step, so
+/// every step alarms and the line ends `q-ALARM`. A read that names no bond (a node without
+/// `--palw-capacity-shadow-adversary`) measures nothing and stays quiet on the uncredited display.
+/// Then the auditors run: card 1 accuses B's row, nobody answers, the chain convicts card 7
+/// (`DaDefault` — a route the credit prices, lane liab's intent class as built; B voided
+/// `ProducerWithholding`) — one caught of two resolved, q = 500‰, which meets the bar (2 × max(q
+/// needed, q_seat, 0) = 500‰), and the alarm clears; card 7 reads frozen for good (the intent class).
+/// The covering signers' kind-3 records name B too: they are seat-only, counted beside.
 #[tokio::test]
 async fn s_t5_a8_the_alarm_fires_when_the_auditors_stop_and_clears_when_they_run() {
     let mut m = mined().await;
@@ -120,18 +143,19 @@ async fn s_t5_a8_the_alarm_fires_when_the_auditors_stop_and_clears_when_they_run
     let o3 = [m.chain.bonds[0], m.chain.bonds[7]];
     let floor = m.sp().base_class_id();
     let adversary_of = |shadow: &PalwCapacityShadowV1| {
-        let row = shadow.attribution.iter().find(|r| r.class_id == floor).expect("the floor's row");
-        (row.adversary_claims, row.adversary_attributed, row.adversary_undetected, row.adversary_in_flight, row.q_measured_permille)
+        let row = shadow.adversary_row(&floor, PalwCapacityStrategyV1::Naive).expect("the floor's naive row");
+        assert_eq!((row.caught_late, row.caught_unpriced, row.censored), (0, 0, 0), "{row:?}");
+        (row.claims, row.caught, row.undetected, row.in_flight, row.q_measured_permille)
     };
 
     // The auditors are stopped: both claims resolved Final, nobody convicted.
     let stopped = shadow_of(&m, &o3);
     assert_eq!(adversary_of(&stopped), (2, 0, 2, 0, Some(0)), "two resolved, none caught");
-    assert!(stopped.steps.iter().all(|s| s.q_alarm), "q 0 < 2 × q_needed at every step");
+    assert!(stopped.steps.iter().all(|s| s.q_alarm && s.q_required_permille == 500), "q 0 < 500‰ at every step");
     assert!(stopped.summary().ends_with("q-ALARM"), "{}", stopped.summary());
     eprintln!("[A8] auditors stopped, sink DAA {}: {}", m.sink_daa(), stopped.summary());
     let unnamed = shadow_of(&m, &[]);
-    assert_eq!(unnamed.attribution.iter().find(|r| r.class_id == floor).unwrap().q_measured_permille, None);
+    assert!(unnamed.adversary.is_empty());
     assert!(unnamed.steps.iter().all(|s| !s.q_alarm), "a node that names no O-3 bond measures nothing");
 
     // The auditors run: card 1 accuses B's row; nobody answers.
@@ -163,10 +187,17 @@ async fn s_t5_a8_the_alarm_fires_when_the_auditors_stop_and_clears_when_they_run
         "A undetected or retired: {:?}",
         adversary_of(&running)
     );
-    assert!(running.steps.iter().all(|s| !s.q_alarm), "500‰ ≥ 2 × q_needed at every step: {}", running.summary());
+    assert!(running.steps.iter().all(|s| !s.q_alarm), "500‰ meets the 500‰ bar at every step: {}", running.summary());
     let producer = running.bonds.iter().find(|row| row.bond == m.chain.bonds[7]).expect("card 7's row");
     let (_, tip) = m.chain.tip_state();
     let records: Vec<_> = tip.consumed_offences_iter().map(|(_, o)| (o.kind, o.accused, o.claim_id == b, o.accepted_daa)).collect();
+    // A covering signer's kind-3 record on B convicts a seat, not the producer: counted beside q.
+    let covering = records
+        .iter()
+        .filter(|(kind, _, on_b, _)| *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 && *on_b)
+        .count();
+    let row = running.adversary_row(&floor, PalwCapacityStrategyV1::Naive).unwrap();
+    assert_eq!(row.seat_only, u64::from(covering > 0), "B is counted seat-only once if any covering signer was charged: {row:?}");
     // The default writes its DaDefault record on card 7 and a kind-3 record on each covering signer
     // of B; only the first charges the producer.
     assert!(
@@ -215,9 +246,17 @@ const LIVE_FLOOR_DELAYS: [(u64, usize); 23] = [
 fn check_snapshot(shadow: &PalwCapacityShadowV1, subject: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, rel: u64) {
     let identity = shadow.steps.iter().position(|s| s.step.rho == 1).expect("the identity step");
     let row = shadow.bonds.iter().find(|b| b.bond == *subject).expect("the subject's row");
-    // E-T3 on the live chain: the subject is a pure producer, so its N_instant is the golden.
+    // E-T3 on the live chain as the fold prices it: the subject is a pure producer, so its
+    // N_instant is a fresh 13k bond's — 2 at v1's 143‰ credit (below q_seat), E-T3 only in the
+    // superseded column; 4 at 250‰ and 10 at 500‰ (lane escrow's m* on the Tier(1,300) floor).
     assert_eq!(row.n_instant_today, 2, "rel {rel}: today a 13k bond holds two floor claims");
-    assert_eq!(row.n_instant_new[..5], E_T3_13K, "rel {rel}: E-T3");
+    assert_eq!(row.n_instant_new[..5], [2; 5], "rel {rel}: 143‰ credits nothing");
+    assert_eq!(
+        shadow.steps[..5].iter().map(|s| s.n_instant_13k_v1_superseded).collect::<Vec<_>>(),
+        E_T3_13K_V1_SUPERSEDED.to_vec(),
+        "rel {rel}: v1's E-T3, superseded"
+    );
+    assert_eq!((row.n_instant_new[7], row.n_instant_new[8]), (4, 10), "rel {rel}: the fold's credited counts");
     assert!(row.unlicensed_claims <= row.n_instant_today, "rel {rel}: the chain's gate holds at most N_instant unlicensed");
     // J-1: the subject's provisional weight is capped at 2 FCW, whatever it holds.
     assert_eq!(row.w_cap, 2 * PALW_CAPACITY_FCW_V1);
@@ -273,7 +312,7 @@ async fn s_t5_the_shadow_on_the_live_like_13k_floor_chain() {
         eprintln!(
             "[S-T5] rel {rel}: subject live {} unlicensed {} weight today {} → capped {} FCW, committed today {} → identity {} sompi; \
              claims today/new(ρ=10@143) {}/{} sompi, new(ρ=10@0, armed) {} sompi; seats {} duty rows {} (capped {}) locks {} sompi; \
-             seatcap/DAA ×1000 today {} ρ10@143 {} (if D-5 {}) ρ10@0 {}",
+             seatcap/DAA ×1000 today {} ρ10@143 {} (if D-5 {}) ρ10@0 {} ρ10@250 {} ρ10@500 {}",
             row.live_claims,
             row.unlicensed_claims,
             row.raw_immature_today / PALW_CAPACITY_FCW_V1,
@@ -291,6 +330,8 @@ async fn s_t5_the_shadow_on_the_live_like_13k_floor_chain() {
             shadow.steps[0].seat_capacity_milli_per_daa,
             shadow.steps[0].seat_capacity_if_d5_milli_per_daa,
             shadow.steps[6].seat_capacity_milli_per_daa,
+            shadow.steps[7].seat_capacity_milli_per_daa,
+            shadow.steps[8].seat_capacity_milli_per_daa,
         );
         check_snapshot(&shadow, &subject, rel);
     }

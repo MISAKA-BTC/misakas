@@ -9,27 +9,35 @@
 //!   capped one `min(w, R_budget − held)` (§4.1), today's commitment and the new one per step
 //!   (`m_c + reserved`, E-3's release, E-4's void hold);
 //! * **per bond** — collateral, `W_cap`, `X_b`, `min(X_b, W_cap)`, the A-1 commitment today and per
-//!   step (its own claims, its seat duties and locks repriced by AS-1/AS-2, the rest unchanged), the
-//!   instantaneous floor-claim capacity `N_instant` today and per step (E-T3's number), and whether
-//!   AG-3 would have frozen it;
+//!   step (its own claims, its seat reservations and locks repriced by AS-1/AS-2 and lane escrow's
+//!   bind, the rest unchanged), the instantaneous floor-claim capacity `N_instant` today and per step
+//!   (E-T3's number), and whether AG-3 would have frozen it;
 //! * **network** — `bounded_immature` today vs `Σ_b min(X_b, W_cap)`, seat duty and lock totals and
-//!   the §5.4 seat-capacity estimate per step, the licence queue and the carriage it needs, and
+//!   the §5.4 seat-capacity estimate per step, the licence queue and the carriage it needs,
 //!   attribution counters per class (convictions by kind, DA sessions by non-panel filers, the
-//!   conviction-latency histogram, and — for bonds a caller names as adversarial, the O-3 runs of
-//!   ADR-0160 §9 Stage 0 — the measured attribution rate `q` with the A8 alarm).
+//!   conviction-latency histogram), and — for bonds a caller names as adversarial, the O-3 runs of
+//!   ADR-0160 §9 Stage 0 — the measured attribution rate `q` per (class, strategy) with the A8 alarm.
 //!
 //! **Which steps.** A caller's steps; else [`palw_capacity_display_steps_v1`]: the schedule F-L arms
 //! when the params carry one, else the UNCREDITED ramp ([`PALW_CAPACITY_UNCREDITED_STEPS_V1`]:
-//! ρ 10 … 1000 at `q = 0`, so `m_c = E`). The ADR's reference ramp (`q = 143‰`, the E-T3 rows
-//! 20 / 50 / 101 / 203 / 2,030) is priced only when a caller names it: it is conditional on a
-//! measured attribution rate of at least 0.29 (D-8's half rule), and its ×ρ seat capacity further on
-//! §10 D-5 (review of lane shadow, finding 1).
+//! ρ 10 … 1000 at `q = 0`, so `m_c = E`). ADR-0160 v1's reference ramp (`q = 143‰`) is priced only
+//! when a caller names it, and under the rules as built it prices exactly as the uncredited ramp
+//! (below `q_seat`, nothing is credited); v1's figures for it (E-T3's 20 / 50 / 101 / 203 / 2,030)
+//! appear only in each step's "superseded (v1, L = 3G)" column (review of lane shadow, round 2,
+//! finding 2).
 //!
 //! **Where each "new" value comes from.** The formulas are [`crate::palw_capacity_formulas_v1`]'s;
 //! the reading of the state is this module's and it is stated where it is an approximation:
 //!
 //! * The as-if rule applies to every attempt claim; free-prompt claims keep today's accounting
 //!   (E-6: `E = 0`, `rights_reserved` per claim), and so does their reservation.
+//! * **`m_c` is priced as the fold prices it** — lane escrow's `palw_escrow_term_v2` (`d6a058249`,
+//!   [`palw_capacity_m_c_v2`]): a credit applies only from `q_seat` (250‰), and `m*` is priced on the
+//!   conviction floor `rcore/cap-int`'s fold gives the claim ([`palw_capacity_conviction_floor_v1`]:
+//!   `Tier(min(100‰ · C_min, 3E))`, 1,300 MSK on testnet-12, while lane liab keeps kinds 5 / 12 on
+//!   the tier). So a 13k bond holds 2 floor claims below 250‰, 4 at 250‰ and 10 at 500‰, at every ρ;
+//!   `⌈E/ρ⌉` binds only from 693‰ (ρ 10) to 997‰ (ρ 1000). Lane D replaces the rule (ADR-0160 v2
+//!   §5.3; v3's operator audit door, D-23), and the shadow follows it there (v2 D.11 / v3 D.9).
 //! * **Where the consensus lanes already fix a reading, the shadow takes theirs** (review of lane
 //!   shadow, finding 3), so G5's "shadow = fold" check can hold on `rcore/cap-int`:
 //!   - the stage of a `DefaultDisputed` claim is its resumed phase's (lane weight's
@@ -41,29 +49,22 @@
 //!   - E-4's hold (`m_c + reserved` to `voided_daa + h_obl`, `h_obl = window_receipt`, inclusive
 //!     like the abandon hold) is kept for the reasons nobody is convicted under, not for a
 //!     conviction's void (lane escrow's `palw_void_reason_keeps_obligation_v1`;
-//!     [`palw_capacity_void_reason_keeps_obligation_v1`]);
-//!   - `L = 3G` of the claim (§4.5's normative value). Lane escrow prices with `3E` (≤ `3G`, so its
-//!     `m*` is never lower); the two agree at `q = 0`, the default display, and differ by `3w`
-//!     (0.32 MSK on the floor) in `L` otherwise.
+//!     [`palw_capacity_void_reason_keeps_obligation_v1`]).
 //! * A seat duty row is repriced by lane liab's AS-1 ([`palw_capacity_seat_duty_liab_v1`]:
 //!   `min(max(⌈λ/ρ⌉, lock′), commitment′ / seats)`, `lock′` AS-2's lock — the lock the licence will
-//!   post, undivided below `q_seat`), from its stored `seat_exposure` `d` as the λ-term (an attempt
-//!   row not capped at bind: floor and 8k, where `λ ≥ lock_2`; `0` on a free-prompt row, whose duty
-//!   IS its `lock_2`) and `lock_2` re-derived from the claim's frozen gain at `k′ = 2`
-//!   (`palw_rcore_lock_v1`, with no buyback slice beyond the cap — an upper bound for a class with
-//!   a pair). A row capped by `commitment / seats` at bind (2M) reports a lower bound, and the count
-//!   of such rows is reported.
+//!   post, undivided below `q_seat`), and what the seat RESERVES at bind is lane escrow's
+//!   ([`palw_capacity_seat_bind_reservation_v1`]: `max(duty′, lock′)` for an attributable attempt, so
+//!   a credited commitment never binds a seat below the lock it must post). The row's stored
+//!   `seat_exposure` `d` is the λ-term (an attempt row not capped at bind: floor and 8k, where
+//!   `λ ≥ lock_2`; `0` on a free-prompt row, whose duty IS its `lock_2`) and `lock_2` is re-derived
+//!   from the claim's frozen gain at `k′ = 2` (`palw_rcore_lock_v1`, with no buyback slice beyond the
+//!   cap — an upper bound for a class with a pair). A row capped by `commitment / seats` at bind (2M)
+//!   reports a lower bound, and the count of such rows is reported.
 //! * AS-2's lock credit is lane liab's consensus rule ([`palw_capacity_seat_lock_liab_v1`]: `q_seat`
 //!   = 250‰ flat, `L_seat = 3G`), so a lock shrinks by ρ only under a step crediting `q ≥ 250‰`.
 //!   §10 D-5's recommendation (`L_seat =` [`PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1`], the 130,000 MSK
 //!   seat floor, `q_seat ≈ 25‰`) is undecided and reported only as its own column
 //!   (`seat_credit_if_d5`, `seat_capacity_if_d5_milli_per_daa`), never folded into A-1 or `N_instant`.
-//! * The measured `q` counts RESOLVED adversary claims only — convicted (caught), `Final` or voided
-//!   for a reason that is no conviction (undetected) — and reports in-flight claims, and claims a
-//!   bond-level forfeiture voided before their own outcome (censored), beside it
-//!   ([`palw_capacity_void_attribution_v1`] is an exhaustive match: a void reason added later does not
-//!   compile until it is classed). A `Final` still inside its conviction horizon counts as undetected
-//!   until convicted — biased low, the side on which A8 alarms.
 //! * AG-3's freeze reads the chain's conviction records ([`palw_capacity_conviction_freeze_class_v1`]):
 //!   `DaDefault` is the intent class (final), and so is `CourtConviction` unless its claim was voided
 //!   `CourtHeldVerdict` (a held dissection's verdict proves the producer's filings false, not the
@@ -77,6 +78,45 @@
 //!   `ProducerWithholding` in the same block) charge the seats only. On `rcore/cap-int` the shadow
 //!   reads lane liab's rooted freeze map instead of re-deriving it.
 //!
+//! **The measured `q` counts only what the credit prices** (review of lane shadow, round 2,
+//! finding 1). An O-3 run names its bonds, each with its strategy ([`PalwCapacityStrategyV1`]:
+//! naive, garbage, borrowed — ADR-0160 v2 §5.3's table — or unnamed), and `q` is measured per
+//! (class, strategy) over RESOLVED attempt claims (the credit prices `E`; a free-prompt claim has
+//! none) ([`palw_capacity_adversary_outcome_v1`]):
+//!
+//! * **caught** — the claim's own producer convicted by a route the credit prices, before the
+//!   claim's earliest maturity (`accepted_daa + window_court`: no reward can have moved). As built
+//!   that is lane liab's `palw_producer_conviction_credits_q_v1` — the intent class, the only
+//!   producer convictions that collect at least the `L` the credit assumes — as far as a record
+//!   shows it ([`palw_capacity_route_credits_q_v1`]): a `DaDefault` record (S1, intent as lane liab
+//!   builds it), or a `CourtConviction` on a `CourtFraud` void (a proven verdict);
+//! * **misses** — a priced conviction that came later (`caught_late`: the reward may have escaped);
+//!   a conviction by a route the credit does not price (`caught_unpriced`, by route: a kind-4
+//!   refutation or a kind-3 finding acting on the claim, whose contradiction tag — tier 5 / 12 or
+//!   intent 9 / 10 / 11 / 13 — is not in the record; a held verdict; a court default; a conviction
+//!   void whose record the state does not hold; any other kind); and a claim resolved with no
+//!   producer conviction (`undetected`: `Final`, or voided for a reason that convicts nobody);
+//! * **out of `q`** — claims still in flight, and claims a bond-level forfeiture voided before
+//!   their own outcome (`censored`; [`palw_capacity_void_attribution_v1`] is an exhaustive match: a
+//!   void reason added later does not compile until it is classed). Seat-only records naming a claim
+//!   (a covering signer's, a finding that restated an earlier void) are counted beside it
+//!   (`seat_only`) and change nothing.
+//!
+//! So `q` is a LOWER bound: never inflated by a conviction the credit cannot rely on. Its cost is
+//! that garbage and borrowed read 0 here (their routes are kind 4, untagged in the record) until
+//! `rcore/cap-int` reads the tag from lane liab's rooted freeze map, or lane D's AG-6 prices the tier
+//! routes — **this build's `q` is evidence for the naive route only, never a credit's input** (v2's
+//! G2 needs ≥ 50 claims per class and strategy with the routes in force; v3 retires the sampled `q`
+//! altogether — the credit becomes the audit door's `d = 1000‰`, G2′ — and D.9 turns this column
+//! into `d` and the operator's would-be audit latency).
+//!
+//! **The A8 alarm, per step** ([`PalwCapacityStepShadowV1::q_alarm`]): the step's
+//! `q_required = 2 × max(q_needed at the priced routes' L = 3G, q_seat, q_credit)` — 500‰ for any
+//! credit up to 250‰, v2 §8.2's bar — and the alarm fires when a measured (class, strategy) row of
+//! an attributable class is below it, or when the step credits anything (`q_credit > 0`) and some
+//! attributable class the chain holds has a named strategy nobody measured. C7 rows never alarm (C7
+//! is never credited). A node that names no bond measures nothing, and alarms only on a credited step.
+//!
 //! **Cost** (S-I3): one pass over the claims, the bonds, their locks, the duty rows, the DA sessions
 //! and the conviction records — `O(claims + bonds + locks + rows)` per call, with a sort of each
 //! bond's live claims. kaspad calls it every [`PALW_CAPACITY_SHADOW_INTERVAL_DAA_V1`] DAA.
@@ -86,22 +126,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use kaspa_hashes::Hash64;
 
 use crate::palw_capacity_formulas_v1::{
-    PALW_CAPACITY_COVERAGE_CARRIER_MASS_V1, PALW_CAPACITY_SEAT_DUTY_HOLD_DAA_V1, PALW_CAPACITY_SOMPI_PER_MSK_V1,
-    PALW_CAPACITY_UNCREDITED_STEPS_V1, PALW_CAPACITY_W_FCW_SOMPI_V1, PalwCapacitySeatCapitalInputsV1, PalwCapacityStageV1,
-    PalwCapacityStepV1, palw_capacity_bond_weight_term_v1, palw_capacity_carriers_per_block_v1, palw_capacity_claims_per_daa_milli_v1,
-    palw_capacity_consensus_reservation_v1, palw_capacity_conviction_l_v1, palw_capacity_h_obl_v1, palw_capacity_is_unlicensed_v1,
-    palw_capacity_m_c_v1, palw_capacity_n_instant_v1, palw_capacity_q_needed_permille_v1, palw_capacity_seat_capital_per_claim_v1,
-    palw_capacity_seat_credit_applies_v1, palw_capacity_seat_credit_liab_v1, palw_capacity_seat_duty_liab_v1,
-    palw_capacity_seat_duty_with_lock_v1, palw_capacity_seat_lock_liab_v1, palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1,
-    palw_capacity_staged_weight_v1, palw_capacity_void_holds_v1, palw_capacity_void_reason_keeps_obligation_v1,
-    palw_capacity_weight_budget_sompi_v1, palw_capacity_weight_cap_v1, palw_capacity_weight_full_v1,
+    PALW_CAPACITY_COVERAGE_CARRIER_MASS_V1, PALW_CAPACITY_Q_SEAT_PERMILLE_V1, PALW_CAPACITY_SEAT_DUTY_HOLD_DAA_V1,
+    PALW_CAPACITY_SOMPI_PER_MSK_V1, PALW_CAPACITY_UNCREDITED_STEPS_V1, PALW_CAPACITY_W_FCW_SOMPI_V1, PalwCapacityConvictionFloorV1,
+    PalwCapacitySeatCapitalInputsV1, PalwCapacityStageV1, PalwCapacityStepV1, palw_capacity_bond_weight_term_v1,
+    palw_capacity_carriers_per_block_v1, palw_capacity_claims_per_daa_milli_v1, palw_capacity_consensus_reservation_v1,
+    palw_capacity_conviction_floor_v1, palw_capacity_conviction_l_v1, palw_capacity_escrow_credit_applies_v1, palw_capacity_h_obl_v1,
+    palw_capacity_is_unlicensed_v1, palw_capacity_m_c_v1, palw_capacity_m_c_v2, palw_capacity_m_ramp_v1, palw_capacity_n_instant_v1,
+    palw_capacity_q_needed_permille_v1, palw_capacity_q_needed_permille_v2, palw_capacity_seat_bind_reservation_v1,
+    palw_capacity_seat_capital_per_claim_v1, palw_capacity_seat_credit_applies_v1, palw_capacity_seat_credit_liab_v1,
+    palw_capacity_seat_duty_liab_v1, palw_capacity_seat_duty_with_lock_v1, palw_capacity_seat_lock_liab_v1,
+    palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1, palw_capacity_staged_weight_v1, palw_capacity_void_holds_v1,
+    palw_capacity_void_reason_keeps_obligation_v1, palw_capacity_weight_budget_sompi_v1, palw_capacity_weight_cap_v1,
+    palw_capacity_weight_full_v1,
 };
 use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
 use crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1;
 use crate::palw_state_v2::{
-    PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwRcoreGateV1,
-    PalwStateParamsV2, PalwVoidReasonV2, palw_accuser_exposure_v1, palw_bond_committed_raw_v1, palw_claim_commitment_v1,
-    palw_claim_g_v1, palw_rcore_class_is_c7_v1, palw_rcore_gate_room_of_v1, palw_rcore_lock_v1, palw_second_clock_depth_v1,
+    PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwClassStatusV2,
+    PalwRcoreGateV1, PalwStateParamsV2, PalwVoidReasonV2, palw_accuser_exposure_v1, palw_bond_committed_raw_v1,
+    palw_claim_commitment_v1, palw_claim_g_v1, palw_rcore_class_is_c7_v1, palw_rcore_gate_room_of_v1, palw_rcore_lock_v1,
+    palw_second_clock_depth_v1,
 };
 
 /// kaspad recomputes the shadow every this many DAA of the tip (ADR-0160 §7.5).
@@ -126,18 +170,96 @@ pub const PALW_CAPACITY_LATENCY_BUCKETS_V1: [u64; 7] = [10, 50, 100, 300, 600, 1
 /// Licences counted as "recent" (the carriage's observed rate) within this many DAA of `now`.
 pub const PALW_CAPACITY_SHADOW_RECENT_DAA_V1: u64 = PALW_CAPACITY_SHADOW_INTERVAL_DAA_V1;
 
+/// **An O-3 run's strategy** (ADR-0160 v2 §5.3's table): what a named adversary bond's fraudulent
+/// claims are, so `q` is measured per (class, strategy) — a fraudster picks the strategy the
+/// auditors catch least, so a credit needs every named strategy measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PalwCapacityStrategyV1 {
+    /// Roots with no material behind them: an honest seat cannot replay, and the route is the DA
+    /// default (S1).
+    Naive,
+    /// Real material, wrong arithmetic or logits: a kind-4 refutation, contradiction 5 / 12 (tier).
+    Garbage,
+    /// A real execution of another job, output or prompt: kind 4, contradiction 9 / 10 / 11 / 13
+    /// (intent).
+    Borrowed,
+    /// The run named no strategy: measured and reported, but it backs no strategy's credit.
+    #[default]
+    Unnamed,
+}
+
+impl PalwCapacityStrategyV1 {
+    /// The strategies a credit must see measured.
+    pub const NAMED: [Self; 3] = [Self::Naive, Self::Garbage, Self::Borrowed];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Naive => "naive",
+            Self::Garbage => "garbage",
+            Self::Borrowed => "borrowed",
+            Self::Unnamed => "unnamed",
+        }
+    }
+
+    /// `naive`, `garbage` or `borrowed` (any case); anything else is no strategy.
+    pub fn parse_v1(text: &str) -> Option<Self> {
+        Self::NAMED.into_iter().find(|s| s.name().eq_ignore_ascii_case(text.trim()))
+    }
+}
+
+/// **One bond of an O-3 run, and its strategy.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwCapacityAdversaryV1 {
+    pub bond: PalwBondKeyV2,
+    pub strategy: PalwCapacityStrategyV1,
+}
+
+/// **`<txid>:<index>[:<strategy>]` → the outpoint text and the strategy** (unnamed when there is
+/// none) — the one reading of kaspad's `--palw-capacity-shadow-adversary`, `getPalwCapacityShadow`'s
+/// `adversaryBonds` and the CLI's `--adversary`. The outpoint itself is parsed by the caller.
+pub fn palw_capacity_split_adversary_v1(text: &str) -> Result<(&str, PalwCapacityStrategyV1), String> {
+    let text = text.trim();
+    match text.rsplit_once(':') {
+        Some((head, tail)) if head.contains(':') => PalwCapacityStrategyV1::parse_v1(tail)
+            .map(|strategy| (head, strategy))
+            .ok_or_else(|| format!("'{text}': unknown strategy '{tail}' (naive, garbage or borrowed)")),
+        _ => Ok((text, PalwCapacityStrategyV1::Unnamed)),
+    }
+}
+
+/// **A bond named twice must name one strategy** — the list a caller hands the shadow, refused when
+/// one bond carries two.
+pub fn palw_capacity_check_adversaries_v1(adversaries: &[PalwCapacityAdversaryV1]) -> Result<(), String> {
+    let mut seen: BTreeMap<PalwBondKeyV2, PalwCapacityStrategyV1> = BTreeMap::new();
+    for adversary in adversaries {
+        if let Some(previous) = seen.insert(adversary.bond, adversary.strategy)
+            && previous != adversary.strategy
+        {
+            return Err(format!(
+                "bond {}:{} is named as {} and as {}",
+                adversary.bond.0.transaction_id,
+                adversary.bond.0.index,
+                previous.name(),
+                adversary.strategy.name()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// What one shadow computation reads besides the state and its params.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwCapacityShadowOptionsV1 {
     /// The ramp steps to price. Empty: [`palw_capacity_display_steps_v1`]`(None)`, the uncredited
     /// ramp — the processor's read passes F-L's armed schedule instead once the params carry one.
-    /// The ADR's reference ramp (`PALW_CAPACITY_REFERENCE_STEPS_V1`, q 143‰) only when named here.
+    /// ADR-0160 v1's reference ramp (`PALW_CAPACITY_REFERENCE_STEPS_V1`, q 143‰) only when named here.
     pub steps: Vec<PalwCapacityStepV1>,
     /// The second clock's RAW depth at `now_daa` (the processor's `palw_settled_anchor_depth_at`);
     /// `None` is the DAA-only lock rule. Only lock liveness reads it.
     pub raw_depth: Option<u64>,
-    /// Bonds whose claims are known to be adversarial (an O-3 run): their claims measure `q`.
-    pub adversary_bonds: Vec<PalwBondKeyV2>,
+    /// The bonds of an O-3 run and their strategies: their claims measure `q`
+    /// ([`palw_capacity_check_adversaries_v1`] refuses a bond named with two; here the first wins).
+    pub adversaries: Vec<PalwCapacityAdversaryV1>,
     /// The block transient-mass limit the carriage estimate divides (`Params::max_block_mass`);
     /// `0` reads 500,000, testnet-12's.
     pub block_mass_limit: u64,
@@ -174,9 +296,9 @@ pub struct PalwCapacityClaimShadowV1 {
     pub escrow_released: bool,
     /// Today's commitment (`palw_claim_commitment_v1`).
     pub commitment_today: u128,
-    /// `L = 3G` for this claim.
+    /// `L = 3G` for this claim (v1's pricing; the superseded column and A8's route `L`).
     pub l_sompi: u128,
-    /// `m_c` per step (0 for a free-prompt claim).
+    /// `m_c` per step as the fold prices it ([`palw_capacity_m_c_v2`]; 0 for a free-prompt claim).
     pub m_new: Vec<u128>,
     /// The commitment per step.
     pub commitment_new: Vec<u128>,
@@ -224,12 +346,15 @@ pub struct PalwCapacityBondShadowV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwCapacityStepShadowV1 {
     pub step: PalwCapacityStepV1,
-    /// `m_c` of the reference floor claim (attributable) and the `q` its ramp term needs at `L = 3G`.
+    /// `m_c` of the reference floor claim as the fold prices it ([`palw_capacity_m_c_v2`]).
     pub m_floor: u128,
+    /// The credit lane escrow's rule needs for `⌈E/ρ⌉` to bind ([`palw_capacity_q_needed_permille_v2`],
+    /// never below `q_seat`): 693 … 997‰ on testnet-12's floor.
     pub q_needed_permille: u16,
-    /// `q_credit ≥ q_needed`: the ramp term `⌈E/ρ⌉` binds, not `m*`.
+    /// The ramp term `⌈E/ρ⌉` is what `m_floor` is (the credit applies and reaches `q_needed`).
     pub ramp_binds: bool,
-    /// Lane liab's AS-2 seat credit applies (`q_credit ≥ 250‰`), so locks shrink by ρ.
+    /// The credit applies — lane escrow's gate and lane liab's AS-2, one threshold (`q_credit ≥
+    /// 250‰`): `m_c` falls below `E` and the locks shrink by ρ only past it.
     pub seat_credit: bool,
     /// §10 D-5's conditional column (`L_seat` = the 130,000 MSK seat floor, `q_seat` ≈ 25‰; an open
     /// user decision): would the seat credit apply, and the §5.4 estimate if it did.
@@ -237,15 +362,31 @@ pub struct PalwCapacityStepShadowV1 {
     pub seat_capacity_if_d5_milli_per_daa: u64,
     pub claims_commitment_total: u128,
     pub committed_total: u128,
+    /// What the seats reserve at bind (lane liab's AS-1 duty, lane escrow's `max(duty′, lock′)`) and
+    /// the locks (AS-2), summed over the rows.
     pub seat_duty_total: u128,
     pub seat_lock_total: u128,
-    /// §5.4: floor claims per DAA the seats' capital sustains, in thousandths (lane liab's AS-1 duty
-    /// and AS-2 lock).
+    /// §5.4: floor claims per DAA the seats' capital sustains, in thousandths (the reservation at
+    /// bind and the AS-2 lock of the reference floor claim).
     pub seat_capacity_milli_per_daa: u64,
     /// `N_instant` of a fresh 13,000 MSK bond on floor claims.
     pub n_instant_13k: u64,
-    /// A8: some class's measured `q` (resolved adversary claims) is below `2 × q_needed`.
+    /// **The "superseded (v1, L = 3G)" column**: `m_c` and `N_instant(13k)` as ADR-0160 v1 priced
+    /// them (`L = 3G`, no `q_seat` gate) — E-T3's 20 / 50 / 101 / 203 / 2,030 at q 143‰. Not a rule
+    /// anywhere; kept so the v1 tables can be read against what the fold gives.
+    pub m_floor_v1_superseded: u128,
+    pub n_instant_13k_v1_superseded: u64,
+    /// `q` the routes the credit prices need at their `L` (the reference claim's `3G`) for `⌈E/ρ⌉`
+    /// (v1's figure: 131 … 143‰) — the first term of `q_required_permille`.
+    pub q_needed_route_permille: u16,
+    /// **A8's bar**: `2 × max(q_needed_route, q_seat, q_credit)` — 500‰ for a credit up to 250‰.
+    pub q_required_permille: u16,
+    /// A8: a measured (class, strategy) row of an attributable class is below `q_required`, or
+    /// [`Self::q_alarm_unmeasured`].
     pub q_alarm: bool,
+    /// The step credits (`q_credit > 0`) and an attributable class the chain holds has a named
+    /// strategy with no measurement.
+    pub q_alarm_unmeasured: bool,
 }
 
 /// **Attribution counters of one class** (`class_id` zero: records whose claim the state no longer
@@ -259,7 +400,7 @@ pub struct PalwCapacityClassAttributionV1 {
     /// Voided claims by reason (`Debug` names), attributed or not.
     pub voids_by_reason: Vec<(String, u64)>,
     /// Voids whose reason is a conviction (`CourtFraud`, `ProducerWithholding`, `CourtDefault`,
-    /// `CourtHeldVerdict`).
+    /// `CourtHeldVerdict`), priced or not.
     pub voids_attributed: u64,
     /// Conviction records by `PalwOffenceKindV1` discriminant.
     pub convictions_by_kind: Vec<(u8, u64)>,
@@ -270,19 +411,35 @@ pub struct PalwCapacityClassAttributionV1 {
     pub da_opened_non_seat_total: u64,
     /// DAA from acceptance to conviction, bucketed by [`PALW_CAPACITY_LATENCY_BUCKETS_V1`].
     pub conviction_latency_histogram: [u64; 8],
-    /// Adversary claims of this class the state holds: `attributed + undetected + censored +
-    /// in_flight`.
-    pub adversary_claims: u64,
-    /// Caught: convicted (a conviction record names the claim), or voided for a conviction.
-    pub adversary_attributed: u64,
-    /// Resolved without a conviction: `Final`, or voided for a reason that convicts nobody.
-    pub adversary_undetected: u64,
-    /// Voided by a bond-level forfeiture before its own outcome was known (AG-2's
-    /// `AggregateForfeit` once lane liab merges): neither caught nor missed, so out of `q`.
-    pub adversary_censored: u64,
-    /// Not yet resolved (not terminal, not convicted): out of `q` until it resolves.
-    pub adversary_in_flight: u64,
-    /// `attributed / (attributed + undetected)` in permille (`None` while none has resolved).
+}
+
+/// **The measured attribution rate of one (class, strategy)** — the attempt claims of the named
+/// bonds of that strategy the state holds: `caught + caught_late + caught_unpriced + undetected +
+/// censored + in_flight`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwCapacityAdversaryRowV1 {
+    pub class_id: Hash64,
+    pub strategy: PalwCapacityStrategyV1,
+    /// A C7 class: never credited, never alarms.
+    pub c7: bool,
+    pub claims: u64,
+    /// Its producer convicted by a route the credit prices before its earliest maturity.
+    pub caught: u64,
+    /// Convicted by a priced route only at or past `accepted_daa + window_court` (a miss for `q`).
+    pub caught_late: u64,
+    /// Convicted only by routes the credit does not price (a miss for `q`), and by which.
+    pub caught_unpriced: u64,
+    pub unpriced_by_route: Vec<(&'static str, u64)>,
+    /// Resolved with no producer conviction (a miss for `q`).
+    pub undetected: u64,
+    /// Voided by a bond-level forfeiture before its own outcome (out of `q`).
+    pub censored: u64,
+    /// Not yet resolved (out of `q` until it is).
+    pub in_flight: u64,
+    /// Claims a seat-only record names (counted beside; the claim's outcome is above).
+    pub seat_only: u64,
+    /// `caught / (caught + caught_late + caught_unpriced + undetected)` in permille (`None` while
+    /// none has resolved).
     pub q_measured_permille: Option<u16>,
 }
 
@@ -304,6 +461,8 @@ pub struct PalwCapacityShadowV1 {
     pub reference_escrow: u128,
     pub reference_w_floor: u128,
     pub reference_l: u128,
+    /// The conviction floor its `m_c` is priced against ([`palw_capacity_conviction_floor_v1`]).
+    pub reference_floor: PalwCapacityConvictionFloorV1,
     pub reference_seats: u32,
     pub reference_duty: u128,
     pub reference_lock: u128,
@@ -327,6 +486,11 @@ pub struct PalwCapacityShadowV1 {
     pub carriage_blocks_to_drain: u64,
     // Attribution.
     pub attribution: Vec<PalwCapacityClassAttributionV1>,
+    /// `q` per (class, strategy) of the named O-3 bonds, in (class, strategy) order.
+    pub adversary: Vec<PalwCapacityAdversaryRowV1>,
+    /// The attributable (not C7) classes a credited step must see measured: `Active` classes the
+    /// chain holds and the classes of its attempt claims.
+    pub credited_classes: Vec<Hash64>,
     pub convictions_total: u64,
 }
 
@@ -336,10 +500,16 @@ impl PalwCapacityShadowV1 {
         self.steps.iter().find(|s| s.step.rho == rho)
     }
 
+    /// The adversary row of (`class_id`, `strategy`), if measured.
+    pub fn adversary_row(&self, class_id: &Hash64, strategy: PalwCapacityStrategyV1) -> Option<&PalwCapacityAdversaryRowV1> {
+        self.adversary.iter().find(|row| row.class_id == *class_id && row.strategy == strategy)
+    }
+
     /// **The one compact log line** (ADR-0160 §7.5): `capacity-shadow: daa=… immature today/new=…/…
     /// bonds=… claims=… N13k[ρ@q‰]=… seatcap[ρ@q‰]=… queue=… convictions=…`. Weights in FCW, seat
     /// capacity in floor claims per DAA. Every per-step figure is labelled with the `q` it credits,
-    /// so a conditional row (a credit the chain has not measured) cannot pass for the armed rule.
+    /// so a conditional row (a credit the chain has not measured) cannot pass for the armed rule;
+    /// every figure is the rule as built (the superseded v1 column is the RPC's and the CLI's only).
     pub fn summary(&self) -> String {
         let fcw = |w: u128| w / crate::palw_capacity_formulas_v1::PALW_CAPACITY_FCW_V1;
         let n13k: Vec<String> =
@@ -399,11 +569,12 @@ fn phase_name(phase: &PalwClaimPhaseV2) -> &'static str {
     }
 }
 
-/// **What a void says about its claim's attribution** (A8's measured `q`).
+/// **What a void's reason says about its claim's producer**, before any record is read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwCapacityVoidAttributionV1 {
-    /// The void is a conviction of the claim's producer: caught.
-    Caught,
+    /// The void is a conviction of the producer; which route — and whether the credit prices it —
+    /// is read off the conviction record ([`palw_capacity_route_of_record_v1`]).
+    Conviction,
     /// The claim resolved without anyone being convicted of it (a timeout, a failed class).
     Undetected,
     /// The claim was voided because its BOND was convicted on another claim (AG-2's aggregate
@@ -415,13 +586,13 @@ pub enum PalwCapacityVoidAttributionV1 {
 /// **The class of every void reason — an exhaustive match, on purpose** (review of lane shadow,
 /// finding 2): a reason added by a later lane does not compile here until it is classed. Lane liab's
 /// `AggregateForfeit` (borsh 9, AG-2: every other live claim of a forfeited bond) is `Censored`; the
-/// `rcore/cap-int` merge adds that arm.
+/// `rcore/cap-int` merge adds that arm (and v2's `TaintLapsed` — AG-7 — is a miss, lane D).
 pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapacityVoidAttributionV1 {
     match reason {
         PalwVoidReasonV2::CourtFraud
         | PalwVoidReasonV2::ProducerWithholding
         | PalwVoidReasonV2::CourtDefault
-        | PalwVoidReasonV2::CourtHeldVerdict => PalwCapacityVoidAttributionV1::Caught,
+        | PalwVoidReasonV2::CourtHeldVerdict => PalwCapacityVoidAttributionV1::Conviction,
         PalwVoidReasonV2::BindTimeout
         | PalwVoidReasonV2::ReceiptTimeout
         | PalwVoidReasonV2::NoCapablePanel
@@ -430,14 +601,156 @@ pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapaci
     }
 }
 
-/// A void whose reason is a conviction of the producer.
+/// A void whose reason is a conviction of the producer (priced or not).
 fn void_is_attributed(reason: PalwVoidReasonV2) -> bool {
-    palw_capacity_void_attribution_v1(reason) == PalwCapacityVoidAttributionV1::Caught
+    palw_capacity_void_attribution_v1(reason) == PalwCapacityVoidAttributionV1::Conviction
+}
+
+/// **The route a producer conviction took** (ADR-0160 v2 §5.3's routes), as far as the chain's
+/// records show it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PalwCapacityRouteV1 {
+    /// A `DaDefault` record (kind 5) on the producer — S1, the naive strategy's route. Intent-class
+    /// as lane liab builds it (the user's 17:50 decision 1 moves S1 to the tier on lane D, where v2
+    /// prices it by DA-7's covering-signer charge instead).
+    DaDefault,
+    /// A `CourtConviction` (kind 6) on a `CourtFraud` void: a proven verdict, intent-class.
+    CourtFraud,
+    /// A `CourtConviction` on a `CourtHeldVerdict` void: a held dissection's verdict, tier.
+    CourtHeldVerdict,
+    /// An `ExecutorRefuted` (kind 4) on the producer: contradiction 5 / 12 (tier, garbage) or
+    /// 9 / 10 / 11 / 13 (intent, borrowed) — the tag is not in the record.
+    Refuted,
+    /// A `PanelFalseValidV2` (kind 3) that acted on the claim: the producer is charged by the seat's
+    /// contradiction class, which the record does not carry either.
+    SeatFinding,
+    /// A `CourtDefault` void: no record, never reaches the conviction funnel.
+    CourtDefault,
+    /// A conviction void (`CourtFraud`, `ProducerWithholding`) with no record of the producer in
+    /// the state: nothing says which route it was.
+    Unrecorded,
+    /// Any other kind naming the claim against its producer (0, 1, 2).
+    Other,
+}
+
+impl PalwCapacityRouteV1 {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::DaDefault => "da-default",
+            Self::CourtFraud => "court-fraud",
+            Self::CourtHeldVerdict => "court-held-verdict",
+            Self::Refuted => "refuted-untagged",
+            Self::SeatFinding => "seat-finding-untagged",
+            Self::CourtDefault => "court-default",
+            Self::Unrecorded => "unrecorded",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// **Does a producer conviction by `route` count toward the attribution rate a step may credit?**
+/// Lane liab's `palw_producer_conviction_credits_q_v1` (`rcore/cap-liab` `deccda81b`): exactly the
+/// intent class — AG-2 takes the whole bond, at least the `L` the credit assumes — as far as a
+/// record shows it: `DaDefault` (S1 is intent as lane liab builds it) and a proven court verdict.
+/// A kind 3 / 4 record's class is its contradiction's, which the record does not carry, so it is
+/// NOT counted (conservative: it could be 5 / 12, which collects the S2 tier alone and leaves
+/// `EV(1) > 0` at a credited step — lane liab's L-T6); nor are a held verdict, a court default or
+/// any other kind. On `rcore/cap-int` the tag is readable through lane liab's rooted freeze map, and
+/// lane D's rule (AG-6 on the tier routes; v3's audit door) replaces this one (v2 D.11 / v3 D.9).
+pub fn palw_capacity_route_credits_q_v1(route: PalwCapacityRouteV1) -> bool {
+    match route {
+        PalwCapacityRouteV1::DaDefault | PalwCapacityRouteV1::CourtFraud => true,
+        PalwCapacityRouteV1::CourtHeldVerdict
+        | PalwCapacityRouteV1::Refuted
+        | PalwCapacityRouteV1::SeatFinding
+        | PalwCapacityRouteV1::CourtDefault
+        | PalwCapacityRouteV1::Unrecorded
+        | PalwCapacityRouteV1::Other => false,
+    }
+}
+
+/// **The route of one conviction record of a claim's producer** (exhaustive over the kinds, so a
+/// kind added later is routed by name before this compiles). A `PanelFalseValidV2` is the producer's
+/// only when it acted on the claim ([`palw_capacity_false_valid_producer_v1`]); the caller decides.
+pub fn palw_capacity_route_of_record_v1(
+    offence: &PalwConsumedOffenceV1,
+    claim: Option<&PalwClaimStateV2>,
+    liability: Option<&PalwPanelLiabilityRecordV1>,
+) -> PalwCapacityRouteV1 {
+    match offence.kind {
+        PalwOffenceKindV1::DaDefault => PalwCapacityRouteV1::DaDefault,
+        PalwOffenceKindV1::CourtConviction => match conviction_void(claim, liability).map(|(_, reason)| reason) {
+            Some(PalwVoidReasonV2::CourtFraud) => PalwCapacityRouteV1::CourtFraud,
+            Some(PalwVoidReasonV2::CourtHeldVerdict) => PalwCapacityRouteV1::CourtHeldVerdict,
+            _ => PalwCapacityRouteV1::Other,
+        },
+        PalwOffenceKindV1::ExecutorRefuted => PalwCapacityRouteV1::Refuted,
+        PalwOffenceKindV1::PanelFalseValidV2 => PalwCapacityRouteV1::SeatFinding,
+        PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::PanelFalseValid | PalwOffenceKindV1::CourtExecutorGuilty => {
+            PalwCapacityRouteV1::Other
+        }
+    }
+}
+
+/// **What one adversary claim's outcome counts as in `q`.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCapacityOutcomeV1 {
+    /// Its producer convicted by a priced route before its earliest maturity.
+    Caught,
+    /// Convicted by a priced route only at or past `accepted_daa + window_court`.
+    CaughtLate,
+    /// Convicted only by a route the credit does not price.
+    CaughtUnpriced(PalwCapacityRouteV1),
+    /// Resolved with no producer conviction.
+    Undetected,
+    /// Voided by a bond-level forfeiture before its own outcome (out of `q`).
+    Censored,
+    /// Not resolved yet (out of `q`).
+    InFlight,
+}
+
+/// **The outcome of one adversary claim** from its producer's conviction records `(route, DAA)`
+/// (review of lane shadow, round 2, finding 1): a priced route before the claim's earliest maturity
+/// (`accepted_daa + window_court` — a row matures no earlier than `Final + window_court`) is caught;
+/// later, a miss (`CaughtLate`); only unpriced routes, a miss by the earliest of them; no record: the
+/// void's reason decides (a conviction void with no record is a miss — `CourtDefault`,
+/// `CourtHeldVerdict`, else `Unrecorded`), `Final` is undetected, anything else in flight. A
+/// conviction naming the claim decides it whatever its phase (AG-5 keeps a void convictable).
+pub fn palw_capacity_adversary_outcome_v1(
+    claim: &PalwClaimStateV2,
+    convictions: &[(PalwCapacityRouteV1, u64)],
+    window_court: u64,
+) -> PalwCapacityOutcomeV1 {
+    let horizon = claim.accepted_daa.saturating_add(window_court);
+    let priced: Vec<u64> =
+        convictions.iter().filter(|(route, _)| palw_capacity_route_credits_q_v1(*route)).map(|(_, daa)| *daa).collect();
+    if priced.iter().any(|daa| *daa < horizon) {
+        return PalwCapacityOutcomeV1::Caught;
+    }
+    if !priced.is_empty() {
+        return PalwCapacityOutcomeV1::CaughtLate;
+    }
+    if let Some((route, _)) = convictions.iter().min_by_key(|(route, daa)| (*daa, *route)) {
+        return PalwCapacityOutcomeV1::CaughtUnpriced(*route);
+    }
+    match &claim.phase {
+        PalwClaimPhaseV2::Voided { reason, .. } => match palw_capacity_void_attribution_v1(*reason) {
+            PalwCapacityVoidAttributionV1::Conviction => PalwCapacityOutcomeV1::CaughtUnpriced(match reason {
+                PalwVoidReasonV2::CourtDefault => PalwCapacityRouteV1::CourtDefault,
+                PalwVoidReasonV2::CourtHeldVerdict => PalwCapacityRouteV1::CourtHeldVerdict,
+                _ => PalwCapacityRouteV1::Unrecorded,
+            }),
+            PalwCapacityVoidAttributionV1::Undetected => PalwCapacityOutcomeV1::Undetected,
+            PalwCapacityVoidAttributionV1::Censored => PalwCapacityOutcomeV1::Censored,
+        },
+        PalwClaimPhaseV2::Final { .. } => PalwCapacityOutcomeV1::Undetected,
+        _ => PalwCapacityOutcomeV1::InFlight,
+    }
 }
 
 /// **The steps shown when a caller names none**: the schedule F-L arms (`armed`, the processor's
 /// read passes it once the params carry `palw_capacity_aggregate_liability`), else the uncredited
-/// ramp [`PALW_CAPACITY_UNCREDITED_STEPS_V1`]. Never the ADR's reference ramp: its `q = 143‰` is a
+/// ramp [`PALW_CAPACITY_UNCREDITED_STEPS_V1`]. Never v1's reference ramp: its `q = 143‰` is a
 /// credit no chain has measured, so it is shown only when asked (review of lane shadow, finding 1).
 pub fn palw_capacity_display_steps_v1(armed: Option<&[PalwCapacityStepV1]>) -> Vec<PalwCapacityStepV1> {
     match armed {
@@ -468,7 +781,10 @@ pub fn palw_capacity_freeze_class_v1(kind: PalwOffenceKindV1) -> PalwCapacityFre
 
 /// The void the chain wrote on a conviction's claim: the claim's own `Voided` phase, else its
 /// liability row's (a claim already retired, or voided before the conviction reached it).
-fn conviction_void(claim: Option<&PalwClaimStateV2>, liability: Option<&PalwPanelLiabilityRecordV1>) -> Option<(u64, PalwVoidReasonV2)> {
+fn conviction_void(
+    claim: Option<&PalwClaimStateV2>,
+    liability: Option<&PalwPanelLiabilityRecordV1>,
+) -> Option<(u64, PalwVoidReasonV2)> {
     match claim.map(|c| &c.phase) {
         Some(PalwClaimPhaseV2::Voided { voided_daa, reason }) => Some((*voided_daa, *reason)),
         _ => liability.and_then(|row| row.voided_daa.zip(row.void_reason)),
@@ -528,6 +844,14 @@ fn holds_new_rule(claim: &PalwClaimStateV2, h_obl: u64, now_daa: u64) -> bool {
     }
 }
 
+/// Does lane escrow's bind reserve the lock for a seat on `claim`? An attributable attempt with an
+/// escrow (`palw_escrow_bind_reserves_the_lock_v1` under the as-if rule).
+fn bind_reserves_the_lock(params: &PalwStateParamsV2, state: &PalwChainStateV2, claim: &PalwClaimStateV2) -> bool {
+    matches!(claim.source, PalwClaimSourceV2::Attempt)
+        && claim.escrowed_reward > 0
+        && !palw_rcore_class_is_c7_v1(params, state, &claim.class_id)
+}
+
 fn latency_bucket(latency: u64) -> usize {
     PALW_CAPACITY_LATENCY_BUCKETS_V1.iter().position(|upper| latency < *upper).unwrap_or(PALW_CAPACITY_LATENCY_BUCKETS_V1.len())
 }
@@ -567,7 +891,11 @@ pub fn palw_capacity_shadow_with_v1(
     let h_obl = palw_capacity_h_obl_v1(params.window_receipt());
     let window_court = params.window_court();
     let ratio = params.fp_max_exposure_ratio_permille();
-    let adversary: BTreeSet<PalwBondKeyV2> = options.adversary_bonds.iter().copied().collect();
+    let min_collateral = params.min_collateral_sompi();
+    let mut adversary: BTreeMap<PalwBondKeyV2, PalwCapacityStrategyV1> = BTreeMap::new();
+    for named in &options.adversaries {
+        adversary.entry(named.bond).or_insert(named.strategy);
+    }
 
     // ---- the reference floor claim ----------------------------------------------------------
     // E is the same for every class (720‰ of the subsidy): the newest attempt claim's, or the
@@ -585,22 +913,52 @@ pub fn palw_capacity_shadow_with_v1(
     };
     let reference_w_floor = PALW_CAPACITY_W_FCW_SOMPI_V1;
     let reference_l = palw_capacity_conviction_l_v1(reference_escrow.saturating_add(reference_w_floor));
+    let reference_floor = palw_capacity_conviction_floor_v1(min_collateral, reference_escrow);
     let floor_class = params.base_class_id();
+
+    // ---- the producers' conviction records, per claim (A8's routes) --------------------------
+    // `(route, DAA)` of every record that convicts a claim's OWN producer, and the claims a
+    // seat-only record names. Only claims the state holds are measured.
+    let mut producer_convictions: BTreeMap<Hash64, Vec<(PalwCapacityRouteV1, u64)>> = BTreeMap::new();
+    let mut seat_only_claims: BTreeSet<Hash64> = BTreeSet::new();
+    for (_, offence) in state.consumed_offences_iter() {
+        if offence.claim_id == Hash64::default() {
+            continue;
+        }
+        let Some(claim) = state.claim(&offence.claim_id) else { continue };
+        let liability = state.panel_liability(&offence.claim_id);
+        let producer_charged = if offence.kind == PalwOffenceKindV1::PanelFalseValidV2 {
+            palw_capacity_false_valid_producer_v1(offence, Some(claim), liability) == Some(claim.bond)
+        } else {
+            PalwBondKeyV2(offence.accused) == claim.bond
+        };
+        if producer_charged {
+            let route = palw_capacity_route_of_record_v1(offence, Some(claim), liability);
+            producer_convictions.entry(offence.claim_id).or_default().push((route, offence.accepted_daa));
+        } else {
+            seat_only_claims.insert(offence.claim_id);
+        }
+    }
 
     // ---- pass 1: claims, grouped by bond in acceptance order ---------------------------------
     let mut by_bond: BTreeMap<PalwBondKeyV2, Vec<(u64, Hash64)>> = BTreeMap::new();
-    let mut convicted_claims: BTreeSet<Hash64> = BTreeSet::new();
-    for (_, offence) in state.consumed_offences_iter() {
-        if offence.claim_id != Hash64::default() {
-            convicted_claims.insert(offence.claim_id);
-        }
-    }
     let mut attribution: BTreeMap<Hash64, PalwCapacityClassAttributionV1> = BTreeMap::new();
+    let mut adversary_rows: BTreeMap<(Hash64, PalwCapacityStrategyV1), PalwCapacityAdversaryRowV1> = BTreeMap::new();
+    let mut unpriced: BTreeMap<(Hash64, PalwCapacityStrategyV1), BTreeMap<PalwCapacityRouteV1, u64>> = BTreeMap::new();
+    let mut credited_classes: BTreeSet<Hash64> = state
+        .classes_iter()
+        .filter(|(id, class)| matches!(class.status, PalwClassStatusV2::Active) && !palw_rcore_class_is_c7_v1(params, state, id))
+        .map(|(id, _)| *id)
+        .collect();
     let mut voids: BTreeMap<Hash64, BTreeMap<String, u64>> = BTreeMap::new();
     let mut licence_queue = 0u64;
     let mut licence_queue_oldest: Option<u64> = None;
     let mut licensed_recent = 0u64;
     for (id, claim) in state.claims_iter() {
+        let c7 = palw_rcore_class_is_c7_v1(params, state, &claim.class_id);
+        if matches!(claim.source, PalwClaimSourceV2::Attempt) && !c7 {
+            credited_classes.insert(claim.class_id);
+        }
         let class = attribution
             .entry(claim.class_id)
             .or_insert_with(|| PalwCapacityClassAttributionV1 { class_id: claim.class_id, ..Default::default() });
@@ -629,24 +987,30 @@ pub fn palw_capacity_shadow_with_v1(
         if let Some(da) = state.da_claim(id) {
             class.da_opened_non_seat_total += u64::from(da.opened_non_seat_total);
         }
-        if adversary.contains(&claim.bond) {
-            class.adversary_claims += 1;
-            // A conviction naming the claim decides it whatever its phase (AG-5 keeps a void
-            // convictable); otherwise only a resolved claim counts.
-            let outcome = if convicted_claims.contains(id) {
-                Some(PalwCapacityVoidAttributionV1::Caught)
-            } else {
-                match &claim.phase {
-                    PalwClaimPhaseV2::Final { .. } => Some(PalwCapacityVoidAttributionV1::Undetected),
-                    PalwClaimPhaseV2::Voided { reason, .. } => Some(palw_capacity_void_attribution_v1(*reason)),
-                    _ => None,
+        // The credit prices attempt claims (a free-prompt claim carries no `E`, E-6): only they measure q.
+        if let Some(strategy) = adversary.get(&claim.bond).filter(|_| matches!(claim.source, PalwClaimSourceV2::Attempt)) {
+            let key = (claim.class_id, *strategy);
+            let row = adversary_rows.entry(key).or_insert_with(|| PalwCapacityAdversaryRowV1 {
+                class_id: claim.class_id,
+                strategy: *strategy,
+                c7,
+                ..Default::default()
+            });
+            row.claims += 1;
+            if seat_only_claims.contains(id) {
+                row.seat_only += 1;
+            }
+            let records = producer_convictions.get(id).map(Vec::as_slice).unwrap_or(&[]);
+            match palw_capacity_adversary_outcome_v1(claim, records, window_court) {
+                PalwCapacityOutcomeV1::Caught => row.caught += 1,
+                PalwCapacityOutcomeV1::CaughtLate => row.caught_late += 1,
+                PalwCapacityOutcomeV1::CaughtUnpriced(route) => {
+                    row.caught_unpriced += 1;
+                    *unpriced.entry(key).or_default().entry(route).or_default() += 1;
                 }
-            };
-            match outcome {
-                Some(PalwCapacityVoidAttributionV1::Caught) => class.adversary_attributed += 1,
-                Some(PalwCapacityVoidAttributionV1::Undetected) => class.adversary_undetected += 1,
-                Some(PalwCapacityVoidAttributionV1::Censored) => class.adversary_censored += 1,
-                None => class.adversary_in_flight += 1,
+                PalwCapacityOutcomeV1::Undetected => row.undetected += 1,
+                PalwCapacityOutcomeV1::Censored => row.censored += 1,
+                PalwCapacityOutcomeV1::InFlight => row.in_flight += 1,
             }
         }
         by_bond.entry(claim.bond).or_default().push((claim.accepted_daa, *id));
@@ -694,6 +1058,7 @@ pub fn palw_capacity_shadow_with_v1(
                 0
             };
             let e = u128::from(claim.escrowed_reward);
+            let floor = palw_capacity_conviction_floor_v1(min_collateral, e);
             let mut m_new = Vec::with_capacity(n_steps);
             let mut commitment_new = Vec::with_capacity(n_steps);
             let mut bind_new = Vec::with_capacity(n_steps);
@@ -705,7 +1070,8 @@ pub fn palw_capacity_shadow_with_v1(
                     bind_new.push(crate::palw_state_v2::palw_claim_bond_reservation_v1(params, claim).unwrap_or(0));
                     continue;
                 }
-                let m = palw_capacity_m_c_v1(e, Some(step), !c7, l_sompi);
+                // Lane escrow's term: the q_seat gate, m* on the conviction floor, never above E.
+                let m = palw_capacity_m_c_v2(e, Some(step), !c7, floor, ratio);
                 let full = m.saturating_add(reserved_new);
                 let commitment = match &claim.phase {
                     PalwClaimPhaseV2::Final { .. } => 0,
@@ -781,7 +1147,7 @@ pub fn palw_capacity_shadow_with_v1(
     let mut duty_rows_capped = 0u64;
     let mut seat_duty_total_today = 0u128;
     let mut seat_duty_total_new = vec![0u128; n_steps];
-    // (seat, claim) → duty per step, for the lock excess.
+    // (seat, claim) → what the seat reserves per step, for the lock excess.
     let mut duty_of: BTreeMap<(PalwBondKeyV2, Hash64), Vec<u128>> = BTreeMap::new();
     let mut floor_duty_sum = 0u128;
     let mut floor_duty_rows = 0u128;
@@ -805,8 +1171,10 @@ pub fn palw_capacity_shadow_with_v1(
             floor_seat_sum += seats as u128;
         }
         let bind_new = bind_commitment_new.get(claim_id);
-        // Lane liab's AS-1: the λ-term divides, the lock term is AS-2's lock of the claim's lock_2.
+        // Lane liab's AS-1: the λ-term divides, the lock term is AS-2's lock of the claim's lock_2;
+        // lane escrow's bind: an attributable attempt's seat reserves max(duty′, lock′).
         let free_prompt = claim.is_some_and(|c| matches!(c.source, PalwClaimSourceV2::FreePrompt { .. }));
+        let reserves_lock = claim.is_some_and(|c| bind_reserves_the_lock(params, state, c));
         let (lambda_term, lock_2) = if free_prompt {
             (0, d)
         } else {
@@ -817,7 +1185,8 @@ pub fn palw_capacity_shadow_with_v1(
             .enumerate()
             .map(|(i, step)| {
                 let commitment = bind_new.map(|v| v[i]).unwrap_or(commitment_today_at_bind);
-                palw_capacity_seat_duty_liab_v1(lambda_term, lock_2, commitment, seats, Some(step))
+                let duty = palw_capacity_seat_duty_liab_v1(lambda_term, lock_2, commitment, seats, Some(step));
+                palw_capacity_seat_bind_reservation_v1(duty, palw_capacity_seat_lock_liab_v1(lock_2, Some(step)), reserves_lock)
             })
             .collect();
         seat_duty_total_today = seat_duty_total_today.saturating_add(d.saturating_mul(seats as u128));
@@ -848,7 +1217,8 @@ pub fn palw_capacity_shadow_with_v1(
         let claim = named.then(|| state.claim(&offence.claim_id)).flatten();
         let liability = named.then(|| state.panel_liability(&offence.claim_id)).flatten();
         let class = palw_capacity_conviction_freeze_class_v1(offence, claim, liability);
-        let charged = std::iter::once(PalwBondKeyV2(offence.accused)).chain(palw_capacity_false_valid_producer_v1(offence, claim, liability));
+        let charged =
+            std::iter::once(PalwBondKeyV2(offence.accused)).chain(palw_capacity_false_valid_producer_v1(offence, claim, liability));
         for bond in charged {
             let freeze = freezes.entry(bond).or_default();
             freeze.first = Some(freeze.first.map_or(offence.accepted_daa, |d| d.min(offence.accepted_daa)));
@@ -891,7 +1261,7 @@ pub fn palw_capacity_shadow_with_v1(
     let mut bounded_immature_new = 0u128;
     let mut w_cap_total = 0u128;
     let reference_steps_m: Vec<u128> =
-        steps.iter().map(|step| palw_capacity_m_c_v1(reference_escrow, Some(step), true, reference_l)).collect();
+        steps.iter().map(|step| palw_capacity_m_c_v2(reference_escrow, Some(step), true, reference_floor, ratio)).collect();
     let empty_acc = BondAcc { own_new: vec![0; n_steps], duties_new: vec![0; n_steps], ..Default::default() };
     for (bond, record) in state.bonds_iter() {
         let acc = accs.get(bond).unwrap_or(&empty_acc);
@@ -902,7 +1272,7 @@ pub fn palw_capacity_shadow_with_v1(
             seats += 1;
             seat_usable_capital = seat_usable_capital.saturating_add(ceiling);
         }
-        // Locks: today's excess over the duty, and each step's.
+        // Locks: today's excess over the duty, and each step's over the seat's reservation.
         let mut locks_excess_today = 0u128;
         let mut locks_excess_new = vec![0u128; n_steps];
         for ((_, claim_id), lock) in state.slashable_locks_of(bond) {
@@ -1055,56 +1425,80 @@ pub fn palw_capacity_shadow_with_v1(
         .map(|mut row| {
             row.voids_by_reason = voids.remove(&row.class_id).map(|m| m.into_iter().collect()).unwrap_or_default();
             row.convictions_by_kind = kinds.remove(&row.class_id).map(|m| m.into_iter().collect()).unwrap_or_default();
-            let resolved = row.adversary_attributed + row.adversary_undetected;
-            row.q_measured_permille = (resolved > 0).then(|| {
-                u16::try_from(u128::from(row.adversary_attributed) * 1_000 / u128::from(resolved)).unwrap_or(1_000)
-            });
             row
         })
         .collect();
     attribution_out.sort_by_key(|row| row.class_id);
+    let adversary_out: Vec<PalwCapacityAdversaryRowV1> = adversary_rows
+        .into_iter()
+        .map(|(key, mut row)| {
+            row.unpriced_by_route = unpriced
+                .remove(&key)
+                .map(|routes| routes.into_iter().map(|(route, n)| (route.name(), n)).collect())
+                .unwrap_or_default();
+            let resolved = row.caught + row.caught_late + row.caught_unpriced + row.undetected;
+            row.q_measured_permille =
+                (resolved > 0).then(|| u16::try_from(u128::from(row.caught) * 1_000 / u128::from(resolved)).unwrap_or(1_000));
+            row
+        })
+        .collect();
+    // Every (attributable class, named strategy) a credited step needs measured.
+    let measured: BTreeSet<(Hash64, PalwCapacityStrategyV1)> =
+        adversary_out.iter().filter(|row| row.q_measured_permille.is_some()).map(|row| (row.class_id, row.strategy)).collect();
+    let unmeasured = credited_classes
+        .iter()
+        .any(|class_id| PalwCapacityStrategyV1::NAMED.iter().any(|strategy| !measured.contains(&(*class_id, *strategy))));
 
+    let budget_13k = palw_capacity_weight_budget_sompi_v1(PALW_CAPACITY_SHADOW_REFERENCE_BOND_SOMPI_V1);
+    let ceiling_13k = u128::from(PALW_CAPACITY_SHADOW_REFERENCE_BOND_SOMPI_V1) * u128::from(ratio) / 1_000;
     let step_rows: Vec<PalwCapacityStepShadowV1> = steps
         .iter()
         .enumerate()
         .map(|(i, step)| {
             let m_floor = reference_steps_m[i];
-            let q_needed = palw_capacity_q_needed_permille_v1(reference_escrow, step.rho, reference_l);
-            // Lane liab's AS-1/AS-2 on the reference floor claim, and D-5's column (its lock in the
-            // duty's lock term too).
+            let credit = palw_capacity_escrow_credit_applies_v1(step.q_credit_permille);
+            // Lane liab's AS-1/AS-2 on the reference floor claim, lane escrow's reservation at bind
+            // (it is an attributable attempt), and D-5's column (its lock in the duty's lock term).
             let commitment_new = m_floor.saturating_add(reference_w_floor);
             let seats_n = reference_seats as usize;
-            let duty = palw_capacity_seat_duty_liab_v1(reference_duty, reference_lock, commitment_new, seats_n, Some(step));
             let lock = palw_capacity_seat_lock_liab_v1(reference_lock, Some(step));
+            let duty = palw_capacity_seat_duty_liab_v1(reference_duty, reference_lock, commitment_new, seats_n, Some(step));
+            let reservation = palw_capacity_seat_bind_reservation_v1(duty, lock, true);
             let lock_if_d5 =
                 palw_capacity_seat_lock_v1(reference_lock, Some(step), reference_escrow, PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1);
             let duty_if_d5 = palw_capacity_seat_duty_with_lock_v1(reference_duty, lock_if_d5, commitment_new, seats_n, step.rho);
-            let q_alarm =
-                attribution_out.iter().filter_map(|row| row.q_measured_permille).any(|q| u32::from(q) < 2 * u32::from(q_needed));
+            let reservation_if_d5 = palw_capacity_seat_bind_reservation_v1(duty_if_d5, lock_if_d5, true);
+            // A8: the bar every attributable (class, strategy) measurement must clear.
+            let q_needed_route = palw_capacity_q_needed_permille_v1(reference_escrow, step.rho, reference_l);
+            let q_required = q_needed_route.max(PALW_CAPACITY_Q_SEAT_PERMILLE_V1).max(step.q_credit_permille).saturating_mul(2);
+            let below = adversary_out.iter().filter(|row| !row.c7).filter_map(|row| row.q_measured_permille).any(|q| q < q_required);
+            let q_alarm_unmeasured = step.q_credit_permille > 0 && unmeasured;
+            // v1's superseded pricing, for its column only.
+            let m_floor_v1 = palw_capacity_m_c_v1(reference_escrow, Some(step), true, reference_l);
             PalwCapacityStepShadowV1 {
                 step: *step,
                 m_floor,
-                q_needed_permille: q_needed,
-                ramp_binds: step.q_credit_permille >= q_needed,
+                q_needed_permille: palw_capacity_q_needed_permille_v2(reference_escrow, step.rho, reference_floor, ratio),
+                ramp_binds: credit && m_floor == palw_capacity_m_ramp_v1(reference_escrow, step.rho),
                 seat_credit: palw_capacity_seat_credit_liab_v1(step.q_credit_permille),
                 seat_credit_if_d5: palw_capacity_seat_credit_applies_v1(
                     step.q_credit_permille,
                     reference_escrow,
                     PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1,
                 ),
-                seat_capacity_if_d5_milli_per_daa: seat_capacity(duty_if_d5, lock_if_d5),
+                seat_capacity_if_d5_milli_per_daa: seat_capacity(reservation_if_d5, lock_if_d5),
                 claims_commitment_total: claims_commitment_new[i],
                 committed_total: committed_new_total[i],
                 seat_duty_total: seat_duty_total_new[i],
                 seat_lock_total: seat_lock_total_new[i],
-                seat_capacity_milli_per_daa: seat_capacity(duty, lock),
-                n_instant_13k: palw_capacity_n_instant_v1(
-                    u128::from(PALW_CAPACITY_SHADOW_REFERENCE_BOND_SOMPI_V1) * u128::from(ratio) / 1_000,
-                    m_floor,
-                    reference_w_floor,
-                    palw_capacity_weight_budget_sompi_v1(PALW_CAPACITY_SHADOW_REFERENCE_BOND_SOMPI_V1),
-                ),
-                q_alarm,
+                seat_capacity_milli_per_daa: seat_capacity(reservation, lock),
+                n_instant_13k: palw_capacity_n_instant_v1(ceiling_13k, m_floor, reference_w_floor, budget_13k),
+                m_floor_v1_superseded: m_floor_v1,
+                n_instant_13k_v1_superseded: palw_capacity_n_instant_v1(ceiling_13k, m_floor_v1, reference_w_floor, budget_13k),
+                q_needed_route_permille: q_needed_route,
+                q_required_permille: q_required,
+                q_alarm: below || q_alarm_unmeasured,
+                q_alarm_unmeasured,
             }
         })
         .collect();
@@ -1122,6 +1516,7 @@ pub fn palw_capacity_shadow_with_v1(
         reference_escrow,
         reference_w_floor,
         reference_l,
+        reference_floor,
         reference_seats,
         reference_duty,
         reference_lock,
@@ -1140,14 +1535,17 @@ pub fn palw_capacity_shadow_with_v1(
         carriers_per_block,
         carriage_blocks_to_drain,
         attribution: attribution_out,
+        adversary: adversary_out,
+        credited_classes: credited_classes.into_iter().collect(),
         convictions_total,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! **S-T1 / S-I4 (shadow half): the shadow on planted states equals ADR-0160's golden tables**
-    //! (§4.5, §5.2, E-T3), and each "new" value is the formula applied to the state's own facts.
+    //! **S-T1 / S-I4 (shadow half): the shadow on planted states prices every step as the fold would
+    //! (lane escrow's term, lane liab's AS-1/AS-2, lane escrow's bind), keeps ADR-0160 v1's golden
+    //! tables only in the superseded column, and measures `q` only on what the credit prices.**
     use super::*;
     use crate::palw_capacity_formulas_v1::{
         PALW_CAPACITY_C7_WEIGHT_CEILING_V1, PALW_CAPACITY_FCW_V1, PALW_CAPACITY_REFERENCE_STEPS_V1, palw_capacity_m_ramp_v1,
@@ -1168,6 +1566,10 @@ mod tests {
     const NOW: u64 = 5_000;
     /// A genesis card: 939,063.21 MSK.
     const CARD: u64 = 93_906_321_000_000;
+    /// `m_c` of a floor claim as the fold prices it on testnet-12 (`Tier(1,300 MSK)`, κ 500‰), at a
+    /// credit of 250‰ and 500‰ — at every ρ.
+    const M_AT_250: u128 = 140_050_790_048;
+    const M_AT_500: u128 = 64_016_930_016;
 
     fn h(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)
@@ -1183,7 +1585,8 @@ mod tests {
     }
 
     /// testnet-12's shape: β 100‰, window_receipt 600 (= h_obl), window_court 3,000, the 500‰
-    /// ceiling, option A's escrow term from genesis, R-core+ from genesis with 2M in C7.
+    /// ceiling, the 13,000 MSK producer floor, option A's escrow term from genesis, R-core+ from
+    /// genesis with 2M in C7.
     fn params() -> PalwStateParamsV2 {
         PalwStateParamsV2::new(100, 600, 600, 120, 3_000, 1_000, floor(), 4, 1_000, 13_000 * MSK, 800, 600)
             .unwrap()
@@ -1244,6 +1647,26 @@ mod tests {
         claim(producer, floor(), phase, W_FLOOR, PALW_CAPACITY_FCW_V1, accepted_daa)
     }
 
+    fn voided(daa: u64, reason: PalwVoidReasonV2) -> PalwClaimPhaseV2 {
+        PalwClaimPhaseV2::Voided { voided_daa: daa, reason }
+    }
+
+    fn offence(kind: PalwOffenceKindV1, accused: u64, daa: u64, claim_id: Hash64) -> PalwConsumedOffenceV1 {
+        PalwConsumedOffenceV1 {
+            kind,
+            accused: bond_key(accused).0,
+            amount: 1,
+            accepted_daa: daa,
+            execution_root: Hash64::default(),
+            collected: 1,
+            claim_id,
+        }
+    }
+
+    fn adversary(n: u64, strategy: PalwCapacityStrategyV1) -> PalwCapacityAdversaryV1 {
+        PalwCapacityAdversaryV1 { bond: bond_key(n), strategy }
+    }
+
     /// A planted chain: bonds, claims (with each producer's `reserved_exposure` the sum of its
     /// claims' commitments plus its duties, as the fold keeps it), and `extra` entries.
     struct Plant {
@@ -1263,6 +1686,10 @@ mod tests {
         }
         fn claim(mut self, id: u64, record: PalwClaimStateV2) -> Self {
             self.claims.push((h(id), record));
+            self
+        }
+        fn record(mut self, key: u64, record: PalwConsumedOffenceV1) -> Self {
+            self.extra.push(PalwDeltaEntryV2::ConsumedOffence { key: h(key), old: None, new: Some(record) });
             self
         }
         fn state(self) -> PalwChainStateV2 {
@@ -1310,17 +1737,36 @@ mod tests {
         shadow.claims.iter().find(|c| c.claim_id == h(id))
     }
 
-    /// **E-T3 and §5.2 on a planted chain, and which rows are conditional.** By default (no steps
-    /// named, no F-L schedule) the shadow prices the UNCREDITED ramp: at `q = 0`, `m_c = E`, so a
-    /// fresh 13k / 100k / 1M bond still holds 2 / 15 / 156 floor claims at every ρ, and under lane
-    /// liab's AS-1 the floor duty falls only to the undivided `lock_2` (640.17 → 240.13 MSK) — eight
-    /// genesis cards go 0.94 → 1.00 floor claims/DAA at every ρ, not ×ρ. Named explicitly, the ADR's
-    /// reference ramp (q 143‰) gives E-T3's 20·50·101·203·2,030 / …; the credited `m_c` lets the
-    /// commitment cap pull the duty to `(m_c + w)/5`, so ≈ 1.03–1.04/DAA — still ≈ ×1.1 under lane
-    /// liab's AS-2 (`q_seat` 250‰); the ×ρ column (9.4 … 940.9/DAA) appears only as D-5's conditional
-    /// one, or at a credit of 250‰.
+    /// `(claims, caught, late, unpriced, undetected, censored, in flight, q)` of one adversary row.
+    fn counts(row: &PalwCapacityAdversaryRowV1) -> (u64, u64, u64, u64, u64, u64, u64, Option<u16>) {
+        (
+            row.claims,
+            row.caught,
+            row.caught_late,
+            row.caught_unpriced,
+            row.undetected,
+            row.censored,
+            row.in_flight,
+            row.q_measured_permille,
+        )
+    }
+
+    fn named(shadow: &PalwCapacityShadowV1, strategy: PalwCapacityStrategyV1) -> &PalwCapacityAdversaryRowV1 {
+        shadow.adversary_row(&floor(), strategy).expect("the floor's row for the strategy")
+    }
+
+    /// **E-T3 and §5.2 on a planted chain, as the fold prices them** (review of lane shadow, round 2,
+    /// finding 2). By default (no steps named, no F-L schedule) the shadow prices the UNCREDITED
+    /// ramp: at `q = 0`, `m_c = E`, so a fresh 13k / 100k / 1M bond holds 2 / 15 / 156 floor claims
+    /// at every ρ, and under lane liab's AS-1 the floor duty falls only to the undivided `lock_2`
+    /// (640.17 → 240.13 MSK) — eight genesis cards go 0.94 → 1.00 floor claims/DAA at every ρ.
+    /// Named, v1's reference ramp (q 143‰) prices EXACTLY the same — 143‰ is below `q_seat`, so lane
+    /// escrow's gate keeps `m_c = E` and the locks stay — and its v1 figures (E-T3's 20 … 2,030) are
+    /// in the superseded column only; with nothing measured, a credited step alarms. A credit of
+    /// 250‰ opens the gate: `m_c` = 1,400.51 MSK on the `Tier(1,300)` floor (4 per 13k, not
+    /// ×ρ), while the seat side divides by ρ (the locks at `q_seat`, the duty's λ-term).
     #[test]
-    fn s_t1_fresh_bonds_hold_the_golden_claim_counts() {
+    fn s_t1_fresh_bonds_hold_the_claim_counts_the_fold_gives() {
         let state = eight_cards(Plant::new())
             .bond(1, 13_000 * MSK, false)
             .bond(2, 100_000 * MSK, false)
@@ -1333,6 +1779,7 @@ mod tests {
         // ---- the default display: the uncredited ramp ----
         let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &[]);
         assert_eq!(shadow.reference_escrow, u128::from(E), "E read off the newest attempt claim");
+        assert_eq!(shadow.reference_floor, PalwCapacityConvictionFloorV1::Tier(1_300 * u128::from(MSK)), "min(100‰ · 13,000, 3E)");
         assert_eq!(
             shadow.steps.iter().map(|s| (s.step.rho, s.step.q_credit_permille)).collect::<Vec<_>>(),
             vec![(10, 0), (25, 0), (50, 0), (100, 0), (1000, 0)],
@@ -1346,8 +1793,8 @@ mod tests {
         }
         assert_eq!(shadow.steps.iter().map(|s| s.n_instant_13k).collect::<Vec<_>>(), vec![2; 5]);
         assert!(shadow.steps.iter().all(|s| s.m_floor == u128::from(E) && !s.ramp_binds && !s.seat_credit && !s.seat_credit_if_d5));
-        // §5.4: 8 cards × 469,531.6 MSK against a floor claim's duty and lock — 0.94/DAA today;
-        // AS-1 divides the duty (640.17 → 64.02 … 0.64 MSK), the 240.1 MSK lock stays.
+        assert!(shadow.steps.iter().all(|s| !s.q_alarm && s.q_required_permille == 500), "uncredited: nothing to back, the bar 500‰");
+        // §5.4: 8 cards × 469,531.6 MSK against a floor claim's duty and lock — 0.94/DAA today.
         assert_eq!(shadow.seats, 8);
         assert_eq!(shadow.seat_usable_capital, 8 * u128::from(CARD) / 2);
         assert_eq!(shadow.reference_duty, u128::from(E) / 5, "λ binds the floor duty at E/5 = 640.17 MSK");
@@ -1357,55 +1804,71 @@ mod tests {
         // Lane liab's AS-1 at q 0: the duty is the undivided lock_2 (240.13 MSK) at every ρ ≥ 3,
         // so 3,756,252.8 MSK / (5 × 240.13 × (122 + 3,000)) = 1.002/DAA.
         for s in &shadow.steps {
-            assert!(near(s.seat_capacity_milli_per_daa, 1_002), "ρ {}: seat capacity {} vs 1,002", s.step.rho, s.seat_capacity_milli_per_daa);
+            assert!(
+                near(s.seat_capacity_milli_per_daa, 1_002),
+                "ρ {}: seat capacity {} vs 1,002",
+                s.step.rho,
+                s.seat_capacity_milli_per_daa
+            );
             assert_eq!(s.seat_capacity_if_d5_milli_per_daa, s.seat_capacity_milli_per_daa, "q = 0 is below D-5's 25‰ too");
         }
         assert_eq!((shadow.carriers_per_block, shadow.licence_queue, shadow.carriage_blocks_to_drain), (3, 0, 0));
         let line = shadow.summary();
         assert!(line.contains("N13k[ρ@q‰]=10@0:2,25@0:2,50@0:2,100@0:2,1000@0:2"), "{line}");
-        assert!(line.contains("seatcap[ρ@q‰]=10@0:1.00,"), "{line}");
+        assert!(line.contains("seatcap[ρ@q‰]=10@0:1.00,") && !line.contains("ALARM"), "{line}");
 
-        // ---- the ADR's reference ramp, named: conditional on a measured q ≥ 0.29 ----
+        // ---- v1's reference ramp, named: below q_seat nothing is credited (×1) ----
         let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &PALW_CAPACITY_REFERENCE_STEPS_V1);
         assert_eq!(shadow.steps.iter().map(|s| s.step.rho).collect::<Vec<_>>(), vec![10, 25, 50, 100, 1000]);
-        let golden: [(u64, u64, [u64; 5]); 3] = [
-            (1, 2, [20, 50, 101, 203, 2_030]),
-            (2, 15, [156, 390, 781, 1_562, 15_620]),
-            (3, 156, [1_562, 3_905, 7_810, 15_620, 156_203]),
-        ];
-        for (n, today, new) in golden {
+        for (n, today) in [(1u64, 2u64), (2, 15), (3, 156)] {
             let row = row_of(&shadow, n);
-            assert_eq!(row.n_instant_today, today, "bond {n} today");
-            assert_eq!(row.n_instant_new, new.to_vec(), "bond {n} per step");
+            assert_eq!(row.n_instant_new, vec![today; 5], "bond {n}: 143‰ < q_seat, m_c = E");
             assert_eq!(row.n_more_new, row.n_instant_new, "a fresh bond can open all of them now");
         }
-        assert_eq!(shadow.steps.iter().map(|s| s.n_instant_13k).collect::<Vec<_>>(), vec![20, 50, 101, 203, 2_030]);
-        // §4.5: the obligation is the ramp term, and the q it needs at L = 3G.
-        let m: Vec<u128> = shadow.steps.iter().map(|s| s.m_floor).collect();
-        assert_eq!(m, [10u32, 25, 50, 100, 1000].map(|rho| palw_capacity_m_ramp_v1(u128::from(E), rho)).to_vec());
-        let q: Vec<u16> = shadow.steps.iter().map(|s| s.q_needed_permille).collect();
-        assert_eq!((q[0], q[1], q[3], q[4]), (131, 138, 142, 143));
-        // Lane liab's AS-2: 143‰ < 250‰, so the locks keep today's price; the credited m_c caps the
-        // duty at (⌈E/ρ⌉ + w)/5, and the seats go ×1.1.
-        assert!(shadow.steps.iter().all(|s| s.ramp_binds && !s.seat_credit && s.seat_credit_if_d5));
-        let capped_duty = [1_032u64, 1_038, 1_041, 1_042, 1_043];
-        for (s, want) in shadow.steps.iter().zip(capped_duty) {
-            assert!(near(s.seat_capacity_milli_per_daa, want), "ρ {}: {} vs {want}", s.step.rho, s.seat_capacity_milli_per_daa);
+        assert!(shadow.steps.iter().all(|s| s.m_floor == u128::from(E) && s.n_instant_13k == 2 && !s.ramp_binds && !s.seat_credit));
+        // The superseded (v1, L = 3G) column keeps E-T3: v1 priced 143‰ as ⌈E/ρ⌉.
+        assert_eq!(shadow.steps.iter().map(|s| s.n_instant_13k_v1_superseded).collect::<Vec<_>>(), vec![20, 50, 101, 203, 2_030]);
+        assert_eq!(
+            shadow.steps.iter().map(|s| s.m_floor_v1_superseded).collect::<Vec<_>>(),
+            [10u32, 25, 50, 100, 1000].map(|rho| palw_capacity_m_ramp_v1(u128::from(E), rho)).to_vec()
+        );
+        // What the fold needs for ⌈E/ρ⌉ (Tier(1,300)), and what the priced routes need at 3G.
+        assert_eq!(shadow.steps.iter().map(|s| s.q_needed_permille).collect::<Vec<_>>(), vec![693, 858, 925, 962, 997]);
+        assert_eq!(shadow.steps.iter().map(|s| s.q_needed_route_permille).collect::<Vec<_>>(), vec![131, 138, 141, 142, 143]);
+        // No seat credit: the duty is lock_2 (the credit no longer cuts the commitment under it) —
+        // ≈ 1.00/DAA, not v1's 1.03–1.04; D-5's column (L_seat = 130k, 25‰) divides both, ×ρ.
+        for s in &shadow.steps {
+            assert!(near(s.seat_capacity_milli_per_daa, 1_002), "ρ {}: {}", s.step.rho, s.seat_capacity_milli_per_daa);
+            assert!(s.seat_credit_if_d5);
         }
-        // D-5's conditional column: ×ρ with both ÷ρ (within 0.5% of the ADR's 640.17 / 240.1 inputs).
         for (s, want) in shadow.steps.iter().zip([9_409u64, 23_523, 47_047, 94_094, 940_944]) {
-            assert!(near(s.seat_capacity_if_d5_milli_per_daa, want), "D-5 seat capacity {} vs {want}", s.seat_capacity_if_d5_milli_per_daa);
+            assert!(
+                near(s.seat_capacity_if_d5_milli_per_daa, want),
+                "D-5 seat capacity {} vs {want}",
+                s.seat_capacity_if_d5_milli_per_daa
+            );
         }
-        assert!(shadow.summary().contains("N13k[ρ@q‰]=10@143:20,25@143:50,50@143:101,100@143:203,1000@143:2030"), "{}", shadow.summary());
+        // Credited (143‰ > 0) and nothing measured: A8 alarms on every step.
+        assert_eq!(shadow.credited_classes, vec![floor()]);
+        assert!(shadow.steps.iter().all(|s| s.q_alarm && s.q_alarm_unmeasured && s.q_required_permille == 500));
+        let line = shadow.summary();
+        assert!(line.contains("N13k[ρ@q‰]=10@143:2,25@143:2,50@143:2,100@143:2,1000@143:2") && line.ends_with("q-ALARM"), "{line}");
 
-        // ---- a step crediting lane liab's q_seat (250‰): the locks divide too, ×ρ ----
+        // ---- a credit of q_seat (250‰): the gate opens; m_c on the Tier(1,300) floor, locks ÷ρ ----
         let credited: Vec<PalwCapacityStepV1> =
             PALW_CAPACITY_REFERENCE_STEPS_V1.iter().map(|s| PalwCapacityStepV1 { q_credit_permille: 250, ..*s }).collect();
         let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &credited);
-        assert!(shadow.steps.iter().all(|s| s.seat_credit && s.seat_credit_if_d5));
+        assert!(shadow.steps.iter().all(|s| s.seat_credit && s.seat_credit_if_d5 && !s.ramp_binds));
+        assert!(shadow.steps.iter().all(|s| s.m_floor == M_AT_250 && s.n_instant_13k == 4), "1,400.51 MSK: 4 per 13k at every ρ");
+        assert_eq!(row_of(&shadow, 3).n_instant_new, vec![357; 5], "1M: ⌊500,000 / 1,400.51⌋");
         for (s, want) in shadow.steps.iter().zip([9_409u64, 23_523, 47_047, 94_094, 940_944]) {
             assert!(near(s.seat_capacity_milli_per_daa, want), "seat capacity {} vs {want}", s.seat_capacity_milli_per_daa);
         }
+        // q 500‰, the most D-8 can ever credit: 640.17 MSK, 10 per 13k, still at every ρ.
+        let most: Vec<PalwCapacityStepV1> =
+            PALW_CAPACITY_REFERENCE_STEPS_V1.iter().map(|s| PalwCapacityStepV1 { q_credit_permille: 500, ..*s }).collect();
+        let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &most);
+        assert!(shadow.steps.iter().all(|s| s.m_floor == M_AT_500 && s.n_instant_13k == 10 && s.q_required_permille == 1_000));
     }
 
     /// The default steps: F-L's armed schedule when the params carry one, else the uncredited ramp.
@@ -1457,9 +1920,14 @@ mod tests {
         assert_eq!(big.m_new, vec![u128::from(E); 5], "C7: m = E at every step");
         assert_eq!(big.commitment_new, vec![u128::from(E) + 2 * W_FLOOR; 5]);
         assert_eq!(big.commitment_today, u128::from(E) + W_2M);
+        let credited = [PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 500 }];
+        let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &credited);
+        assert_eq!(claim_row(&shadow, 0x2000).unwrap().m_new, vec![u128::from(E)], "C7 is never credited");
+        assert_eq!(shadow.credited_classes, vec![floor()], "C7 is not a credited class");
     }
 
-    /// **The commitment table by phase** (§4.4 E-3/E-4, E-6) and the bond's A-1 recomposed.
+    /// **The commitment table by phase** (§4.4 E-3/E-4, E-6) and the bond's A-1 recomposed, at a
+    /// credited step (500‰: `m_c` = 640.17 MSK on the fold's floor).
     #[test]
     fn s_t1_commitments_by_phase_and_the_void_hold() {
         let mut released = floor_claim(2, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: NOW - 1 }, NOW - 25);
@@ -1473,31 +1941,21 @@ mod tests {
             .claim(1, floor_claim(2, PalwClaimPhaseV2::Provisional, NOW - 30))
             .claim(2, floor_claim(2, PalwClaimPhaseV2::PanelBound { bound_daa: NOW - 9 }, NOW - 29))
             .claim(3, released)
-            .claim(
-                4,
-                floor_claim(2, PalwClaimPhaseV2::Voided { voided_daa: NOW - 5, reason: PalwVoidReasonV2::BindTimeout }, NOW - 605),
-            )
-            .claim(
-                5,
-                floor_claim(
-                    2,
-                    PalwClaimPhaseV2::Voided { voided_daa: NOW - 601, reason: PalwVoidReasonV2::ReceiptTimeout },
-                    NOW - 900,
-                ),
-            )
+            .claim(4, floor_claim(2, voided(NOW - 5, PalwVoidReasonV2::BindTimeout), NOW - 605))
+            .claim(5, floor_claim(2, voided(NOW - 601, PalwVoidReasonV2::ReceiptTimeout), NOW - 900))
             .claim(6, floor_claim(2, PalwClaimPhaseV2::Final { final_daa: NOW - 3 }, NOW - 200))
             .claim(7, fp)
             .state();
         let p = params();
-        let steps = [PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 143 }];
+        let steps = [PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 500 }];
         let shadow = palw_capacity_shadow_v1(&state, &p, NOW, &steps);
-        let m = palw_capacity_m_ramp_v1(u128::from(E), 10);
+        let m = M_AT_500;
         let full_today = u128::from(E) + W_FLOOR;
         let expect: [(u64, u128, u128); 5] = [
             (1, full_today, m + W_FLOOR),
             (2, full_today, m + W_FLOOR),
             (3, W_FLOOR, W_FLOOR),
-            // E-4: a void holds m_c + reserved for h_obl = 600, whatever the reason — today it holds nothing.
+            // E-4: an unconvicted void holds m_c + reserved for h_obl = 600 — today it holds nothing.
             (4, 0, m + W_FLOOR),
             (7, W_FLOOR + 777, W_FLOOR + 777),
         ];
@@ -1508,6 +1966,7 @@ mod tests {
         assert!(claim_row(&shadow, 5).is_none(), "a void past h_obl holds nothing under either rule");
         assert!(claim_row(&shadow, 6).is_none(), "Final holds nothing");
         assert_eq!(claim_row(&shadow, 7).unwrap().m_new, vec![0], "E-6: the FP lane keeps its accounting");
+        assert_eq!(claim_row(&shadow, 1).unwrap().m_new, vec![m], "lane escrow's term at 500‰");
         assert_eq!(claim_row(&shadow, 1).unwrap().stage, PalwCapacityStageV1::Created);
         assert_eq!(claim_row(&shadow, 2).unwrap().stage, PalwCapacityStageV1::Anchored);
         assert_eq!(claim_row(&shadow, 2).unwrap().staged_w, PALW_CAPACITY_FCW_V1 / 100);
@@ -1534,16 +1993,6 @@ mod tests {
     /// holds no obligation, an unconvicted one holds `m_c + reserved` for `h_obl` (lane escrow).
     #[test]
     fn s_t1_the_shadow_reads_as_the_consensus_lanes_do() {
-        let offence = |kind, accused: u64, daa: u64, claim_id: Hash64| PalwConsumedOffenceV1 {
-            kind,
-            accused: bond_key(accused).0,
-            amount: 1,
-            accepted_daa: daa,
-            execution_root: Hash64::default(),
-            collected: 1,
-            claim_id,
-        };
-        let voided = |daa, reason| PalwClaimPhaseV2::Voided { voided_daa: daa, reason };
         // (a) DefaultDisputed { resumed: ReceiptLicensed } on bond 1.
         let mut disputed = floor_claim(1, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: NOW - 5 }, NOW - 30);
         disputed.phase = PalwClaimPhaseV2::DefaultDisputed {
@@ -1561,7 +2010,7 @@ mod tests {
             accuser_exposure: 0,
             resumed: Box::new(PalwClaimPhaseV2::PanelBound { bound_daa: NOW - 8 }),
         };
-        let mut plant = eight_cards(Plant::new())
+        let state = eight_cards(Plant::new())
             .bond(1, 13_000 * MSK, false)
             .claim(0x77, disputed)
             .claim(0x78, bound_disputed)
@@ -1585,19 +2034,14 @@ mod tests {
             .claim(0xD0, floor_claim(3, voided(NOW - 20, PalwVoidReasonV2::ReceiptTimeout), NOW - 50))
             .claim(0xD1, floor_claim(3, voided(NOW - 20, PalwVoidReasonV2::CourtFraud), NOW - 49))
             .claim(0xD2, floor_claim(3, PalwClaimPhaseV2::Provisional, NOW - 2))
-            .claim(0xD3, floor_claim(3, PalwClaimPhaseV2::Provisional, NOW - 1));
-        let records = [
-            (0xC0u64, PalwOffenceKindV1::CourtConviction, 20u64, NOW - 3_500, h(0x90)),
-            (0xC2, PalwOffenceKindV1::CourtConviction, 22, NOW - 3_500, h(0x92)),
-            (0xC1, PalwOffenceKindV1::PanelFalseValidV2, 101, NOW - 10, h(0x91)),
-            (0xC3, PalwOffenceKindV1::PanelFalseValidV2, 102, NOW - 10, h(0x93)),
-            (0xC4, PalwOffenceKindV1::DaDefault, 24, NOW - 10, h(0x94)),
-            (0xC5, PalwOffenceKindV1::PanelFalseValidV2, 103, NOW - 10, h(0x94)),
-        ];
-        for (key, kind, accused, daa, claim_id) in records {
-            plant.extra.push(PalwDeltaEntryV2::ConsumedOffence { key: h(key), old: None, new: Some(offence(kind, accused, daa, claim_id)) });
-        }
-        let state = plant.state();
+            .claim(0xD3, floor_claim(3, PalwClaimPhaseV2::Provisional, NOW - 1))
+            .record(0xC0, offence(PalwOffenceKindV1::CourtConviction, 20, NOW - 3_500, h(0x90)))
+            .record(0xC2, offence(PalwOffenceKindV1::CourtConviction, 22, NOW - 3_500, h(0x92)))
+            .record(0xC1, offence(PalwOffenceKindV1::PanelFalseValidV2, 101, NOW - 10, h(0x91)))
+            .record(0xC3, offence(PalwOffenceKindV1::PanelFalseValidV2, 102, NOW - 10, h(0x93)))
+            .record(0xC4, offence(PalwOffenceKindV1::DaDefault, 24, NOW - 10, h(0x94)))
+            .record(0xC5, offence(PalwOffenceKindV1::PanelFalseValidV2, 103, NOW - 10, h(0x94)))
+            .state();
         let steps = [PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 0 }];
         let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &steps);
 
@@ -1640,10 +2084,11 @@ mod tests {
         assert_eq!(row.committed_new[0], 3 * (m + W_FLOOR));
     }
 
-    /// **Seat duties and locks under lane liab's AS-1/AS-2**: the identity step (ρ 1, q 0) reproduces
-    /// every seat's A-1; at ρ = 10 the duty is `min(max(⌈λ/10⌉, lock′), commitment′/5)` — the claim's
-    /// undivided `lock_2` at q 0, the commitment cap `(⌈E/10⌉ + w)/5` at the ADR's 143‰ credit, and
-    /// `⌈λ/10⌉` with the lock divided too only at `q_seat` = 250‰.
+    /// **Seat duties and locks under lane liab's AS-1/AS-2 and lane escrow's bind**: the identity step
+    /// (ρ 1, q 0) reproduces every seat's A-1; at ρ = 10 below `q_seat` (q 0 and v1's 143‰ alike)
+    /// the seat reserves the claim's undivided `lock_2` — lane escrow's gate keeps `m_c = E`, so the
+    /// commitment no longer cuts the duty under the lock it must post (v1 priced 143‰ as a credit
+    /// and cut it to `(⌈E/10⌉ + w)/5`) — and at `q_seat` (250‰) `⌈λ/10⌉` with the lock divided too.
     #[test]
     fn s_t1_seat_duties_and_locks_reprice_by_rho() {
         let duty = u128::from(E) / 5;
@@ -1685,15 +2130,14 @@ mod tests {
         // The bound claims' own lock_2 (L-1 at k′ = 2 on their frozen gain w): ≈ 240.1 MSK.
         let lock_2 = palw_rcore_lock_v1(W_FLOOR, E, 0, 2);
         assert!(lock_2 > duty.div_ceil(10) && lock_2 < duty);
-        let credited_cap = (u128::from(E).div_ceil(10) + W_FLOOR) / 5;
         assert_eq!(seat.committed_today, 2 * duty + lock);
-        assert_eq!(seat.committed_new[1], 2 * credited_cap + lock, "143‰: the credited commitment caps the duty, the lock stays");
+        assert_eq!(seat.committed_new[1], 2 * lock_2 + lock, "143‰ < q_seat: m_c = E, the seat reserves lock_2, the lock stays");
         assert_eq!(seat.committed_new[2], 2 * duty.div_ceil(10) + lock.div_ceil(10), "250‰: both divide");
         assert_eq!(seat.committed_new[3], 2 * lock_2 + lock, "testnet-12's first step (ρ 10, q 0): the duty is lock_2");
         assert_eq!(shadow.duty_rows, 2);
         assert_eq!(shadow.duty_rows_capped, 0, "the floor duty is λ-bound, below commitment / seats");
         assert_eq!(shadow.seat_duty_total_today, 2 * 5 * duty);
-        assert_eq!(shadow.steps[1].seat_duty_total, 2 * 5 * credited_cap);
+        assert_eq!(shadow.steps[1].seat_duty_total, 2 * 5 * lock_2);
         assert_eq!(shadow.steps[3].seat_duty_total, 2 * 5 * lock_2);
         assert_eq!(shadow.seat_lock_total_today, lock);
         assert_eq!(
@@ -1704,20 +2148,10 @@ mod tests {
         assert_eq!(shadow.reference_lock, lock, "the floor locks' mean");
     }
 
-    /// **AG-3 read off the conviction records, and the attribution counters** (convictions by
-    /// kind, DA by non-seats, the latency histogram, the adversary q and the A8 alarm).
+    /// **AG-3 read off the conviction records, and the class counters** (convictions by kind, DA by
+    /// non-seats, the latency histogram).
     #[test]
-    fn s_t1_freeze_and_attribution_counters() {
-        let offence = |kind, accused: u64, daa: u64, claim_id: Hash64| PalwConsumedOffenceV1 {
-            kind,
-            accused: bond_key(accused).0,
-            amount: 1,
-            accepted_daa: daa,
-            execution_root: Hash64::default(),
-            collected: 1,
-            claim_id,
-        };
-        let voided = |daa, reason| PalwClaimPhaseV2::Voided { voided_daa: daa, reason };
+    fn s_t1_freeze_and_class_counters() {
         let mut plant = eight_cards(Plant::new())
             .bond(10, 13_000 * MSK, false)
             .bond(11, 13_000 * MSK, false)
@@ -1727,20 +2161,11 @@ mod tests {
             .claim(0x50, floor_claim(10, voided(NOW - 4_000, PalwVoidReasonV2::ProducerWithholding), NOW - 4_050))
             .claim(0x60, floor_claim(14, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 700))
             .claim(0x61, floor_claim(14, PalwClaimPhaseV2::PanelBound { bound_daa: NOW - 4 }, NOW - 30))
-            .claim(0x62, floor_claim(14, PalwClaimPhaseV2::Provisional, NOW - 3));
-        let kinds = [
-            (0xA0, PalwOffenceKindV1::DaDefault, 10, NOW - 4_000, h(0x50)),
-            (0xA1, PalwOffenceKindV1::ExecutorEquivocation, 11, NOW - 10, Hash64::default()),
-            (0xA2, PalwOffenceKindV1::ExecutorEquivocation, 12, NOW - 3_001, Hash64::default()),
-            (0xA3, PalwOffenceKindV1::ExecutorRefuted, 13, NOW - 100, Hash64::default()),
-        ];
-        for (key, kind, accused, daa, claim_id) in kinds {
-            plant.extra.push(PalwDeltaEntryV2::ConsumedOffence {
-                key: h(key),
-                old: None,
-                new: Some(offence(kind, accused, daa, claim_id)),
-            });
-        }
+            .claim(0x62, floor_claim(14, PalwClaimPhaseV2::Provisional, NOW - 3))
+            .record(0xA0, offence(PalwOffenceKindV1::DaDefault, 10, NOW - 4_000, h(0x50)))
+            .record(0xA1, offence(PalwOffenceKindV1::ExecutorEquivocation, 11, NOW - 10, Hash64::default()))
+            .record(0xA2, offence(PalwOffenceKindV1::ExecutorEquivocation, 12, NOW - 3_001, Hash64::default()))
+            .record(0xA3, offence(PalwOffenceKindV1::ExecutorRefuted, 13, NOW - 100, Hash64::default()));
         let session = |seat| crate::palw_da_rcore_v1::PalwDaSessionV1 {
             opened_daa: NOW - 2,
             deadline_daa: NOW + 20,
@@ -1762,9 +2187,7 @@ mod tests {
             }),
         });
         let state = plant.state();
-        let p = params();
-        let options = PalwCapacityShadowOptionsV1 { adversary_bonds: vec![bond_key(10), bond_key(14)], ..Default::default() };
-        let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &options);
+        let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &[]);
         let frozen = |n| {
             let r = row_of(&shadow, n);
             (r.frozen_would_be, r.freeze_final, r.freeze_undetermined, r.convictions)
@@ -1780,103 +2203,260 @@ mod tests {
         assert_eq!((floor_row.da_open_non_seat, floor_row.da_open_seat, floor_row.da_opened_non_seat_total), (1, 1, 3));
         assert_eq!((floor_row.claims_voided, floor_row.voids_attributed, floor_row.claims_live), (2, 2, 2));
         assert_eq!(floor_row.voids_by_reason, vec![("CourtFraud".to_string(), 1), ("ProducerWithholding".to_string(), 1)]);
-        // Adversary bonds 10 and 14 hold four claims: two caught (a DA default, a court fraud), two
-        // still in flight — out of q until they resolve, so q = 2/2, no alarm.
-        let adversary = |row: &PalwCapacityClassAttributionV1| {
-            (
-                row.adversary_claims,
-                row.adversary_attributed,
-                row.adversary_undetected,
-                row.adversary_censored,
-                row.adversary_in_flight,
-                row.q_measured_permille,
-            )
-        };
-        assert_eq!(adversary(floor_row), (4, 2, 0, 0, 2, Some(1_000)));
-        assert!(shadow.steps.iter().all(|s| !s.q_alarm));
         let keyless = shadow.attribution.iter().find(|a| a.class_id == Hash64::default()).unwrap();
         assert_eq!(keyless.convictions_by_kind.iter().map(|(_, n)| n).sum::<u64>(), 3, "records naming no claim");
-        // Only bond 14 named: one caught, two in flight — still no alarm.
-        let one = PalwCapacityShadowOptionsV1 { adversary_bonds: vec![bond_key(14)], ..Default::default() };
-        let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &one);
-        assert_eq!(adversary(shadow.attribution.iter().find(|a| a.class_id == floor()).unwrap()), (3, 1, 0, 0, 2, Some(1_000)));
-        assert!(shadow.steps.iter().all(|s| !s.q_alarm));
+        assert!(shadow.adversary.is_empty(), "no O-3 bond named: nothing is measured");
+    }
 
-        // **The in-flight bias is gone**: one caught and three just created used to read 250‰ and
-        // alarm; unresolved claims are not misses, so nothing has been measured against the catch.
+    /// **VP-A (review of lane shadow, round 2, finding 1): `q` counts only what the credit prices.**
+    /// A garbage campaign convicted only by routes the credit does not price — a kind-4 refutation
+    /// (its tag, 5 / 12 or 9–13, is not in the record), a held verdict, a court default — plus a seat
+    /// record restating a timeout void and two uncaught `Final`s reads `q = 0` (it used to read
+    /// 666‰), and A8 alarms on every step, the default display and v1's reference ramp alike.
+    #[test]
+    fn vp_a_convictions_the_credit_cannot_rely_on_are_misses() {
+        use PalwCapacityStrategyV1::{Garbage, Naive};
         let state = eight_cards(Plant::new())
             .bond(14, 13_000 * MSK, false)
-            .claim(0x60, floor_claim(14, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 700))
+            .claim(0x70, floor_claim(14, voided(NOW - 40, PalwVoidReasonV2::CourtFraud), NOW - 100))
+            .claim(0x71, floor_claim(14, voided(NOW - 40, PalwVoidReasonV2::CourtHeldVerdict), NOW - 100))
+            .claim(0x72, floor_claim(14, voided(NOW - 40, PalwVoidReasonV2::CourtDefault), NOW - 100))
+            .claim(0x73, floor_claim(14, voided(NOW - 60, PalwVoidReasonV2::ReceiptTimeout), NOW - 100))
+            .claim(0x74, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, NOW - 200))
+            .claim(0x75, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 19 }, NOW - 199))
+            .record(0xE0, offence(PalwOffenceKindV1::ExecutorRefuted, 14, NOW - 40, h(0x70)))
+            .record(0xE1, offence(PalwOffenceKindV1::CourtConviction, 14, NOW - 40, h(0x71)))
+            .record(0xE3, offence(PalwOffenceKindV1::PanelFalseValidV2, 101, NOW - 10, h(0x73)))
+            .state();
+        for steps in [Vec::new(), PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec()] {
+            let options = PalwCapacityShadowOptionsV1 { adversaries: vec![adversary(14, Garbage)], steps, ..Default::default() };
+            let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &options);
+            let row = named(&shadow, Garbage);
+            assert_eq!(counts(row), (6, 0, 0, 3, 3, 0, 0, Some(0)), "three unpriced convictions and three undetected: q 0");
+            assert_eq!(row.unpriced_by_route, vec![("court-held-verdict", 1), ("refuted-untagged", 1), ("court-default", 1)]);
+            assert_eq!(row.seat_only, 1, "the seat's kind 3 on the timed-out claim is counted beside");
+            assert!(shadow.adversary_row(&floor(), Naive).is_none());
+            assert!(shadow.steps.iter().all(|s| s.q_alarm), "q 0 < 500‰ on every step");
+            assert!(shadow.summary().ends_with("q-ALARM"));
+        }
+        // The same campaign with a proven verdict (kind 6 on a CourtFraud void) and a DA default in
+        // place of the refutation and the held verdict: those two count, the court default does not.
+        let state = eight_cards(Plant::new())
+            .bond(14, 13_000 * MSK, false)
+            .claim(0x70, floor_claim(14, voided(NOW - 40, PalwVoidReasonV2::CourtFraud), NOW - 100))
+            .claim(0x71, floor_claim(14, voided(NOW - 40, PalwVoidReasonV2::ProducerWithholding), NOW - 100))
+            .claim(0x72, floor_claim(14, voided(NOW - 40, PalwVoidReasonV2::CourtDefault), NOW - 100))
+            .record(0xE0, offence(PalwOffenceKindV1::CourtConviction, 14, NOW - 40, h(0x70)))
+            .record(0xE1, offence(PalwOffenceKindV1::DaDefault, 14, NOW - 40, h(0x71)))
+            .state();
+        let options = PalwCapacityShadowOptionsV1 { adversaries: vec![adversary(14, Naive)], ..Default::default() };
+        let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &options);
+        assert_eq!(counts(named(&shadow, Naive)), (3, 2, 0, 1, 0, 0, 0, Some(666)));
+        assert!(shadow.steps.iter().all(|s| !s.q_alarm), "666‰ ≥ 500‰ at an uncredited step");
+    }
+
+    /// **VP-B (review of lane shadow, round 2, finding 1): a credited step needs twice ITS credit,
+    /// every named strategy measured.** A measured 300‰ alarms at a step crediting `q_seat` (250‰:
+    /// the bar is 500‰), and so does an unmeasured strategy; three strategies measured at 600‰
+    /// clear a 250‰ and a 300‰ credit, and not a 301‰ one (the bar 602‰).
+    #[test]
+    fn vp_b_a_credited_step_needs_twice_its_credit_for_every_strategy() {
+        use PalwCapacityStrategyV1::{Borrowed, Garbage, Naive};
+        // Bond 14 (naive): 3 DA defaults caught of 10 resolved.
+        let campaign = |plant: Plant, bond: u64, base: u64, caught: u64| {
+            let mut plant = plant.bond(bond, 13_000 * MSK, false);
+            for i in 0..10u64 {
+                let id = base + i;
+                if i < caught {
+                    plant = plant
+                        .claim(id, floor_claim(bond, voided(NOW - 40, PalwVoidReasonV2::ProducerWithholding), NOW - 200 + i))
+                        .record(0x1_0000 + id, offence(PalwOffenceKindV1::DaDefault, bond, NOW - 40, h(id)));
+                } else {
+                    plant = plant.claim(id, floor_claim(bond, PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, NOW - 200 + i));
+                }
+            }
+            plant
+        };
+        let at = |q| vec![PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: q }];
+        let state = campaign(eight_cards(Plant::new()), 14, 0x100, 3).state();
+        let options = PalwCapacityShadowOptionsV1 { adversaries: vec![adversary(14, Naive)], steps: at(250), ..Default::default() };
+        let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &options);
+        assert_eq!(named(&shadow, Naive).q_measured_permille, Some(300));
+        let s = &shadow.steps[0];
+        assert!(s.seat_credit && s.q_required_permille == 500 && s.q_alarm, "300 < 2 × 250");
+        // Three strategies at 600‰ each.
+        let state = campaign(campaign(campaign(eight_cards(Plant::new()), 14, 0x100, 6), 15, 0x200, 6), 16, 0x300, 6).state();
+        let three = vec![adversary(14, Naive), adversary(15, Garbage), adversary(16, Borrowed)];
+        for (q, alarm) in [(250u16, false), (300, false), (301, true), (0, false)] {
+            let options = PalwCapacityShadowOptionsV1 { adversaries: three.clone(), steps: at(q), ..Default::default() };
+            let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &options);
+            assert!(PalwCapacityStrategyV1::NAMED.iter().all(|s| named(&shadow, *s).q_measured_permille == Some(600)));
+            let s = &shadow.steps[0];
+            assert_eq!((s.q_alarm, s.q_alarm_unmeasured), (alarm, false), "credit {q}‰: bar {}", s.q_required_permille);
+        }
+        // One strategy unmeasured: a credited step alarms whatever the others read; uncredited not.
+        let two = vec![adversary(14, Naive), adversary(15, Garbage)];
+        let options = PalwCapacityShadowOptionsV1 { adversaries: two.clone(), steps: at(250), ..Default::default() };
+        let s = palw_capacity_shadow_with_v1(&state, &params(), NOW, &options).steps[0].clone();
+        assert!(s.q_alarm && s.q_alarm_unmeasured, "borrowed is unmeasured");
+        let options = PalwCapacityShadowOptionsV1 { adversaries: two, steps: at(0), ..Default::default() };
+        assert!(!palw_capacity_shadow_with_v1(&state, &params(), NOW, &options).steps[0].q_alarm);
+        // An unnamed strategy is measured and reported, but backs no strategy's credit.
+        let unnamed = vec![PalwCapacityAdversaryV1 { bond: bond_key(14), strategy: PalwCapacityStrategyV1::Unnamed }];
+        let options = PalwCapacityShadowOptionsV1 { adversaries: unnamed, steps: at(250), ..Default::default() };
+        let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &options);
+        assert_eq!(named(&shadow, PalwCapacityStrategyV1::Unnamed).q_measured_permille, Some(600));
+        assert!(shadow.steps[0].q_alarm_unmeasured);
+    }
+
+    /// **A8 on planted states**: resolved claims only (in-flight claims are out of `q`), the
+    /// auditors stop (q 250‰ < 500‰: every step alarms), a node naming no bond measures nothing
+    /// (quiet on the uncredited display, alarming on a credited one), and the auditors run.
+    #[test]
+    fn a8_q_over_resolved_claims_and_the_alarm() {
+        use PalwCapacityStrategyV1::Naive;
+        let one = PalwCapacityShadowOptionsV1 { adversaries: vec![adversary(14, Naive)], ..Default::default() };
+        let proven = |plant: Plant| {
+            plant
+                .claim(0x60, floor_claim(14, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 700))
+                .record(0xB9, offence(PalwOffenceKindV1::CourtConviction, 14, NOW - 10, h(0x60)))
+        };
+        // One caught (a proven verdict) and three just created: nothing measured against the catch.
+        let state = proven(eight_cards(Plant::new()).bond(14, 13_000 * MSK, false))
             .claim(0x61, floor_claim(14, PalwClaimPhaseV2::Provisional, NOW - 5))
             .claim(0x62, floor_claim(14, PalwClaimPhaseV2::Provisional, NOW - 4))
             .claim(0x63, floor_claim(14, PalwClaimPhaseV2::Provisional, NOW - 3))
             .state();
-        let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &one);
-        assert_eq!(adversary(&shadow.attribution[0]), (4, 1, 0, 0, 3, Some(1_000)));
+        let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &one);
+        assert_eq!(counts(named(&shadow, Naive)), (4, 1, 0, 0, 0, 0, 3, Some(1_000)));
         assert!(shadow.steps.iter().all(|s| !s.q_alarm), "in-flight claims do not alarm");
 
-        // **A8: the auditors stop.** The same campaign resolves with nobody convicted — two `Final`,
-        // one timed out — so q = 1/4 = 250‰ < 2 × q_needed at every step (ρ = 10 needs 131 → 262;
-        // 1000 needs 143 → 286): the alarm fires, on the default display and the reference ramp.
-        // A conviction naming a claim still in flight counts caught whatever its phase.
-        let state = eight_cards(Plant::new())
-            .bond(14, 13_000 * MSK, false)
-            .claim(0x60, floor_claim(14, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 700))
+        // The auditors stop: two `Final`, one timed out, nobody convicted: q = 1/4 = 250‰ < 500‰. The
+        // bond's free-prompt claim (no `E`, nothing the credit prices) is not measured.
+        let mut fp = floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, NOW - 200);
+        fp.source = PalwClaimSourceV2::FreePrompt { quanta: 4, spent: Default::default() };
+        fp.escrowed_reward = 0;
+        let state = proven(eight_cards(Plant::new()).bond(14, 13_000 * MSK, false))
             .claim(0x61, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, NOW - 200))
             .claim(0x62, floor_claim(14, voided(NOW - 30, PalwVoidReasonV2::BindTimeout), NOW - 300))
             .claim(0x63, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 9 }, NOW - 190))
             .claim(0x64, floor_claim(14, PalwClaimPhaseV2::Provisional, NOW - 3))
+            .claim(0x65, fp)
             .state();
-        let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &one);
-        assert_eq!(adversary(&shadow.attribution[0]), (5, 1, 3, 0, 1, Some(250)));
-        assert!(shadow.steps.iter().all(|s| s.q_alarm), "250‰ < 2 × q_needed at every step");
+        let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &one);
+        assert_eq!(counts(named(&shadow, Naive)), (5, 1, 0, 0, 3, 0, 1, Some(250)));
+        assert!(shadow.steps.iter().all(|s| s.q_alarm && !s.q_alarm_unmeasured), "250‰ < 500‰ at every step");
         assert!(shadow.summary().ends_with("q-ALARM"), "{}", shadow.summary());
         let reference = PalwCapacityShadowOptionsV1 { steps: PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec(), ..one.clone() };
-        assert!(palw_capacity_shadow_with_v1(&state, &p, NOW, &reference).steps.iter().all(|s| s.q_alarm));
-        // Unnamed, nothing is measured and nothing alarms — what a node without
-        // `--palw-capacity-shadow-adversary` sees.
-        let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &PalwCapacityShadowOptionsV1::default());
-        assert_eq!(shadow.attribution[0].q_measured_permille, None);
+        assert!(palw_capacity_shadow_with_v1(&state, &params(), NOW, &reference).steps.iter().all(|s| s.q_alarm));
+        // Unnamed, nothing is measured: quiet on the uncredited display — what a node without
+        // `--palw-capacity-shadow-adversary` logs — and alarming on a credited step.
+        let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &PalwCapacityShadowOptionsV1::default());
+        assert!(shadow.adversary.is_empty() && shadow.steps.iter().all(|s| !s.q_alarm));
+        let unmeasured = PalwCapacityShadowOptionsV1 { steps: PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec(), ..Default::default() };
+        assert!(
+            palw_capacity_shadow_with_v1(&state, &params(), NOW, &unmeasured).steps.iter().all(|s| s.q_alarm && s.q_alarm_unmeasured)
+        );
+
+        // The auditors run: DA defaults convict the Final claim and the bound one — priced routes.
+        let running = |kind| {
+            proven(eight_cards(Plant::new()).bond(14, 13_000 * MSK, false))
+                .claim(0x61, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, NOW - 200))
+                .claim(0x64, floor_claim(14, PalwClaimPhaseV2::PanelBound { bound_daa: NOW - 2 }, NOW - 25))
+                .record(0xB0, offence(kind, 14, NOW - 1, h(0x61)))
+                .record(0xB1, offence(kind, 14, NOW - 1, h(0x64)))
+                .state()
+        };
+        let shadow = palw_capacity_shadow_with_v1(&running(PalwOffenceKindV1::DaDefault), &params(), NOW, &one);
+        assert_eq!(counts(named(&shadow, Naive)), (3, 3, 0, 0, 0, 0, 0, Some(1_000)));
         assert!(shadow.steps.iter().all(|s| !s.q_alarm));
-        // The auditors run: the in-flight claim is convicted (a record naming it) and so is one Final.
-        let mut plant = eight_cards(Plant::new())
-            .bond(14, 13_000 * MSK, false)
-            .claim(0x60, floor_claim(14, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 700))
-            .claim(0x61, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, NOW - 200))
-            .claim(0x64, floor_claim(14, PalwClaimPhaseV2::PanelBound { bound_daa: NOW - 2 }, NOW - 25));
-        for (key, claim_id) in [(0xB0u64, h(0x61)), (0xB1, h(0x64))] {
-            plant.extra.push(PalwDeltaEntryV2::ConsumedOffence {
-                key: h(key),
-                old: None,
-                new: Some(offence(PalwOffenceKindV1::ExecutorRefuted, 14, NOW - 1, claim_id)),
-            });
-        }
-        let shadow = palw_capacity_shadow_with_v1(&plant.state(), &p, NOW, &one);
-        assert_eq!(adversary(&shadow.attribution[0]), (3, 3, 0, 0, 0, Some(1_000)));
-        assert!(shadow.steps.iter().all(|s| !s.q_alarm));
+        // Kind-4 refutations in their place are misses: they may be tier (5 / 12), whose collection
+        // the credit cannot rely on — 1 of 3, and the alarm.
+        let shadow = palw_capacity_shadow_with_v1(&running(PalwOffenceKindV1::ExecutorRefuted), &params(), NOW, &one);
+        let row = named(&shadow, Naive);
+        assert_eq!((counts(row), row.unpriced_by_route.clone()), ((3, 1, 0, 2, 0, 0, 0, Some(333)), vec![("refuted-untagged", 2)]));
+        assert!(shadow.steps.iter().all(|s| s.q_alarm));
     }
 
-    /// **Every void reason is classed** (the match is exhaustive): the four convictions are caught,
-    /// the five failures of time or capacity are undetected. Lane liab's `AggregateForfeit` joins as
-    /// censored at the `rcore/cap-int` merge, where this match stops compiling until it does.
+    /// **A priced conviction past the claim's earliest maturity is a miss** (lane liab's rule: counted
+    /// only before any reward of the bond can have matured), and a C7 class never alarms.
+    #[test]
+    fn late_convictions_are_misses_and_c7_never_alarms() {
+        use PalwCapacityStrategyV1::Naive;
+        let state = eight_cards(Plant::new())
+            .bond(14, 13_000 * MSK, false)
+            .claim(0x80, floor_claim(14, voided(NOW - 50, PalwVoidReasonV2::ProducerWithholding), NOW - 3_050))
+            .claim(0x81, floor_claim(14, voided(NOW - 50, PalwVoidReasonV2::ProducerWithholding), NOW - 3_049))
+            .record(0xF0, offence(PalwOffenceKindV1::DaDefault, 14, NOW - 50, h(0x80)))
+            .record(0xF1, offence(PalwOffenceKindV1::DaDefault, 14, NOW - 50, h(0x81)))
+            .bond(15, 13_000 * MSK, false)
+            .claim(0x90, claim(15, two_m(), PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, W_2M, RAW_2M, NOW - 200))
+            .state();
+        let options =
+            PalwCapacityShadowOptionsV1 { adversaries: vec![adversary(14, Naive), adversary(15, Naive)], ..Default::default() };
+        let shadow = palw_capacity_shadow_with_v1(&state, &params(), NOW, &options);
+        // 0x80: 3,000 DAA after acceptance — at the horizon, late; 0x81: 2,999, caught.
+        assert_eq!(counts(named(&shadow, Naive)), (2, 1, 1, 0, 0, 0, 0, Some(500)));
+        let c7 = shadow.adversary_row(&two_m(), Naive).expect("the 2M row");
+        assert!(c7.c7 && c7.q_measured_permille == Some(0));
+        assert!(shadow.steps.iter().all(|s| !s.q_alarm), "500‰ clears the bar; the C7 row's 0 never alarms");
+    }
+
+    /// **Every void reason is classed** (the match is exhaustive): the four conviction voids are
+    /// convictions (their route read off the record), the five failures of time or capacity are
+    /// undetected. Lane liab's `AggregateForfeit` joins as censored at the `rcore/cap-int` merge,
+    /// where this match stops compiling until it does.
     #[test]
     fn every_void_reason_is_classed_for_q() {
-        use PalwCapacityVoidAttributionV1::{Caught, Undetected};
+        use PalwCapacityVoidAttributionV1::{Conviction, Undetected};
         let classes = [
             (PalwVoidReasonV2::BindTimeout, Undetected),
             (PalwVoidReasonV2::ReceiptTimeout, Undetected),
-            (PalwVoidReasonV2::CourtFraud, Caught),
-            (PalwVoidReasonV2::ProducerWithholding, Caught),
+            (PalwVoidReasonV2::CourtFraud, Conviction),
+            (PalwVoidReasonV2::ProducerWithholding, Conviction),
             (PalwVoidReasonV2::NoCapablePanel, Undetected),
             (PalwVoidReasonV2::UnavailableQuorum, Undetected),
             (PalwVoidReasonV2::NotReplayBacked, Undetected),
-            (PalwVoidReasonV2::CourtDefault, Caught),
-            (PalwVoidReasonV2::CourtHeldVerdict, Caught),
+            (PalwVoidReasonV2::CourtDefault, Conviction),
+            (PalwVoidReasonV2::CourtHeldVerdict, Conviction),
         ];
         for (i, (reason, class)) in classes.iter().enumerate() {
             assert_eq!(borsh::to_vec(reason).unwrap(), vec![i as u8], "the table lists every reason in borsh order");
             assert_eq!(palw_capacity_void_attribution_v1(*reason), *class, "{reason:?}");
         }
+        // Only lane liab's credited routes count, by name.
+        let priced: Vec<PalwCapacityRouteV1> = [
+            PalwCapacityRouteV1::DaDefault,
+            PalwCapacityRouteV1::CourtFraud,
+            PalwCapacityRouteV1::CourtHeldVerdict,
+            PalwCapacityRouteV1::Refuted,
+            PalwCapacityRouteV1::SeatFinding,
+            PalwCapacityRouteV1::CourtDefault,
+            PalwCapacityRouteV1::Unrecorded,
+            PalwCapacityRouteV1::Other,
+        ]
+        .into_iter()
+        .filter(|route| palw_capacity_route_credits_q_v1(*route))
+        .collect();
+        assert_eq!(priced, vec![PalwCapacityRouteV1::DaDefault, PalwCapacityRouteV1::CourtFraud]);
+    }
+
+    /// **The O-3 bond list**: `<txid>:<index>[:<strategy>]`, a bond named with two strategies refused.
+    #[test]
+    fn the_adversary_list_names_a_strategy_per_bond() {
+        let txid = "ab".repeat(64);
+        assert_eq!(
+            palw_capacity_split_adversary_v1(&format!("{txid}:3")),
+            Ok((format!("{txid}:3").as_str(), PalwCapacityStrategyV1::Unnamed))
+        );
+        let named = format!(" {txid}:3:Garbage ");
+        assert_eq!(palw_capacity_split_adversary_v1(&named), Ok((format!("{txid}:3").as_str(), PalwCapacityStrategyV1::Garbage)));
+        assert!(palw_capacity_split_adversary_v1(&format!("{txid}:3:bogus")).is_err());
+        assert_eq!(PalwCapacityStrategyV1::parse_v1("unnamed"), None, "unnamed is the absence of a strategy, not one");
+        let same = [adversary(1, PalwCapacityStrategyV1::Naive), adversary(1, PalwCapacityStrategyV1::Naive)];
+        assert!(palw_capacity_check_adversaries_v1(&same).is_ok());
+        let twice = [adversary(1, PalwCapacityStrategyV1::Naive), adversary(1, PalwCapacityStrategyV1::Borrowed)];
+        assert!(palw_capacity_check_adversaries_v1(&twice).is_err());
     }
 
     /// **S-I3's shape**: every claim and bond is visited once; a large planted chain reports every

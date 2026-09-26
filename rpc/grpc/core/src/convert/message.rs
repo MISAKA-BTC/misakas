@@ -1463,6 +1463,11 @@ from!(item: &kaspa_rpc_core::RpcPalwCapacityStepRow, protowire::RpcPalwCapacityS
         q_alarm: item.q_alarm,
         seat_credit_if_d5: item.seat_credit_if_d5,
         seat_capacity_if_d5_milli_per_daa: item.seat_capacity_if_d5_milli_per_daa,
+        m_floor_v1_superseded_sompi: item.m_floor_v1_superseded_sompi.clone(),
+        n_instant13k_v1_superseded: item.n_instant_13k_v1_superseded,
+        q_needed_route_permille: item.q_needed_route_permille,
+        q_required_permille: item.q_required_permille,
+        q_alarm_unmeasured: item.q_alarm_unmeasured,
     }
 });
 from!(item: &kaspa_rpc_core::RpcPalwCapacityClaimRow, protowire::RpcPalwCapacityClaimRow, {
@@ -1522,12 +1527,23 @@ from!(item: &kaspa_rpc_core::RpcPalwCapacityAttributionRow, protowire::RpcPalwCa
         da_open_seat: item.da_open_seat,
         da_opened_non_seat_total: item.da_opened_non_seat_total,
         conviction_latency_histogram: item.conviction_latency_histogram.clone(),
-        adversary_claims: item.adversary_claims,
-        adversary_attributed: item.adversary_attributed,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwCapacityAdversaryRow, protowire::RpcPalwCapacityAdversaryRow, {
+    Self {
+        class_id: item.class_id.clone(),
+        strategy: item.strategy.clone(),
+        c7: item.c7,
+        claims: item.claims,
+        caught: item.caught,
+        caught_late: item.caught_late,
+        caught_unpriced: item.caught_unpriced,
+        unpriced_by_route: item.unpriced_by_route.clone(),
+        undetected: item.undetected,
+        censored: item.censored,
+        in_flight: item.in_flight,
+        seat_only: item.seat_only,
         q_measured_permille: item.q_measured_permille,
-        adversary_undetected: item.adversary_undetected,
-        adversary_censored: item.adversary_censored,
-        adversary_in_flight: item.adversary_in_flight,
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire::GetPalwCapacityShadowResponseMessage, {
@@ -1543,6 +1559,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire
         reference_escrow_sompi: item.reference_escrow_sompi.clone(),
         reference_w_floor_sompi: item.reference_w_floor_sompi.clone(),
         reference_l_sompi: item.reference_l_sompi.clone(),
+        reference_conviction_tier_sompi: item.reference_conviction_tier_sompi.clone(),
         reference_seats: item.reference_seats,
         reference_duty_sompi: item.reference_duty_sompi.clone(),
         reference_lock_sompi: item.reference_lock_sompi.clone(),
@@ -1567,6 +1584,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire
         claims: item.claims.iter().map(protowire::RpcPalwCapacityClaimRow::from).collect(),
         claims_total: item.claims_total,
         attribution: item.attribution.iter().map(protowire::RpcPalwCapacityAttributionRow::from).collect(),
+        adversary: item.adversary.iter().map(protowire::RpcPalwCapacityAdversaryRow::from).collect(),
         error: None,
     }
 });
@@ -3567,6 +3585,11 @@ try_from!(item: &protowire::RpcPalwCapacityStepRow, kaspa_rpc_core::RpcPalwCapac
         q_alarm: item.q_alarm,
         seat_credit_if_d5: item.seat_credit_if_d5,
         seat_capacity_if_d5_milli_per_daa: item.seat_capacity_if_d5_milli_per_daa,
+        m_floor_v1_superseded_sompi: item.m_floor_v1_superseded_sompi.clone(),
+        n_instant_13k_v1_superseded: item.n_instant13k_v1_superseded,
+        q_needed_route_permille: item.q_needed_route_permille,
+        q_required_permille: item.q_required_permille,
+        q_alarm_unmeasured: item.q_alarm_unmeasured,
     }
 });
 try_from!(item: &protowire::RpcPalwCapacityClaimRow, kaspa_rpc_core::RpcPalwCapacityClaimRow, {
@@ -3626,12 +3649,23 @@ try_from!(item: &protowire::RpcPalwCapacityAttributionRow, kaspa_rpc_core::RpcPa
         da_open_seat: item.da_open_seat,
         da_opened_non_seat_total: item.da_opened_non_seat_total,
         conviction_latency_histogram: item.conviction_latency_histogram.clone(),
-        adversary_claims: item.adversary_claims,
-        adversary_attributed: item.adversary_attributed,
+    }
+});
+try_from!(item: &protowire::RpcPalwCapacityAdversaryRow, kaspa_rpc_core::RpcPalwCapacityAdversaryRow, {
+    Self {
+        class_id: item.class_id.clone(),
+        strategy: item.strategy.clone(),
+        c7: item.c7,
+        claims: item.claims,
+        caught: item.caught,
+        caught_late: item.caught_late,
+        caught_unpriced: item.caught_unpriced,
+        unpriced_by_route: item.unpriced_by_route.clone(),
+        undetected: item.undetected,
+        censored: item.censored,
+        in_flight: item.in_flight,
+        seat_only: item.seat_only,
         q_measured_permille: item.q_measured_permille,
-        adversary_undetected: item.adversary_undetected,
-        adversary_censored: item.adversary_censored,
-        adversary_in_flight: item.adversary_in_flight,
     }
 });
 try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kaspa_rpc_core::GetPalwCapacityShadowResponse>, {
@@ -3647,6 +3681,7 @@ try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kasp
         reference_escrow_sompi: item.reference_escrow_sompi.clone(),
         reference_w_floor_sompi: item.reference_w_floor_sompi.clone(),
         reference_l_sompi: item.reference_l_sompi.clone(),
+        reference_conviction_tier_sompi: item.reference_conviction_tier_sompi.clone(),
         reference_seats: item.reference_seats,
         reference_duty_sompi: item.reference_duty_sompi.clone(),
         reference_lock_sompi: item.reference_lock_sompi.clone(),
@@ -3675,6 +3710,7 @@ try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kasp
             .iter()
             .map(kaspa_rpc_core::RpcPalwCapacityAttributionRow::try_from)
             .collect::<RpcResult<Vec<_>>>()?,
+        adversary: item.adversary.iter().map(kaspa_rpc_core::RpcPalwCapacityAdversaryRow::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
 try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {
@@ -4687,8 +4723,8 @@ mod palw_derived_artifacts_tests {
 mod palw_capacity_shadow_grpc_tests {
     use crate::protowire;
     use kaspa_rpc_core::{
-        GetPalwCapacityShadowRequest, GetPalwCapacityShadowResponse, RpcPalwCapacityAttributionRow, RpcPalwCapacityBondRow,
-        RpcPalwCapacityClaimRow, RpcPalwCapacityStep, RpcPalwCapacityStepRow, RpcResult,
+        GetPalwCapacityShadowRequest, GetPalwCapacityShadowResponse, RpcPalwCapacityAdversaryRow, RpcPalwCapacityAttributionRow,
+        RpcPalwCapacityBondRow, RpcPalwCapacityClaimRow, RpcPalwCapacityStep, RpcPalwCapacityStepRow, RpcResult,
     };
 
     /// **`getPalwCapacityShadow` (op 201) survives the grpc wire, both ways** — every field crosses
@@ -4700,7 +4736,7 @@ mod palw_capacity_shadow_grpc_tests {
         let request = GetPalwCapacityShadowRequest {
             steps: vec![step.clone(), RpcPalwCapacityStep { from_daa: 0, rho: 1, q_credit_permille: 0 }],
             bond: "b0".repeat(64) + ":1",
-            adversary_bonds: vec!["c0".repeat(64) + ":2"],
+            adversary_bonds: vec!["c0".repeat(64) + ":2:garbage"],
             include_claims: true,
             limit: 42,
         };
@@ -4722,6 +4758,7 @@ mod palw_capacity_shadow_grpc_tests {
             reference_escrow_sompi: "320084650080".to_string(),
             reference_w_floor_sompi: "10752660".to_string(),
             reference_l_sompi: "960286208220".to_string(),
+            reference_conviction_tier_sompi: "130000000000".to_string(),
             reference_seats: 5,
             reference_duty_sompi: "64016930016".to_string(),
             reference_lock_sompi: "24010000000".to_string(),
@@ -4755,6 +4792,11 @@ mod palw_capacity_shadow_grpc_tests {
                 q_alarm: true,
                 seat_credit_if_d5: true,
                 seat_capacity_if_d5_milli_per_daa: 94_095,
+                m_floor_v1_superseded_sompi: "3200846502".to_string(),
+                n_instant_13k_v1_superseded: 204,
+                q_needed_route_permille: 141,
+                q_required_permille: 502,
+                q_alarm_unmeasured: true,
             }],
             bonds: vec![RpcPalwCapacityBondRow {
                 bond: "b0".repeat(64) + ":1",
@@ -4810,11 +4852,20 @@ mod palw_capacity_shadow_grpc_tests {
                 da_open_seat: 6,
                 da_opened_non_seat_total: 7,
                 conviction_latency_histogram: vec![0, 1, 0, 0, 0, 0, 0, 2],
-                adversary_claims: 8,
-                adversary_attributed: 9,
-                adversary_undetected: 10,
-                adversary_censored: 11,
-                adversary_in_flight: 12,
+            }],
+            adversary: vec![RpcPalwCapacityAdversaryRow {
+                class_id: "e0".repeat(64),
+                strategy: "garbage".to_string(),
+                c7: true,
+                claims: 8,
+                caught: 9,
+                caught_late: 10,
+                caught_unpriced: 11,
+                unpriced_by_route: vec!["refuted-untagged=11".to_string()],
+                undetected: 12,
+                censored: 13,
+                in_flight: 14,
+                seat_only: 15,
                 q_measured_permille: Some(500),
             }],
         };

@@ -11,15 +11,23 @@
 //!   [`palw_capacity_stage_of_claim_v1`], [`palw_capacity_weight_full_v1`],
 //!   [`palw_capacity_staged_weight_v1`], [`palw_capacity_weight_cap_v1`] (`W_cap`) and
 //!   [`palw_capacity_bond_weight_term_v1`] (`min(X_b, W_cap)`);
-//! * §4.5 the monetary pre-licence risk: [`palw_capacity_m_star_v1`] (`m*(q)`),
-//!   [`palw_capacity_m_ramp_v1`] (`⌈E/ρ⌉`), [`palw_capacity_m_c_v1`] (`m_c`),
+//! * §4.5 the monetary pre-licence risk **as the fold prices it** (lane escrow `d6a058249`,
+//!   `palw_escrow_term_v2`): the credit gate [`palw_capacity_escrow_credit_applies_v1`] (`q_credit ≥
+//!   q_seat`), the conviction floor [`PalwCapacityConvictionFloorV1`] /
+//!   [`palw_capacity_conviction_floor_v1`], `m*` on a tier route [`palw_capacity_m_star_tier_v2`],
+//!   [`palw_capacity_m_c_v2`] (`m_c`) and [`palw_capacity_q_needed_permille_v2`] — what the shadow
+//!   prices every step with;
+//! * §4.5 as ADR-0160 v1 wrote it, **superseded** (`L = 3G`, no `q_seat` gate): [`palw_capacity_m_star_v1`]
+//!   (`m*(q)`), [`palw_capacity_m_ramp_v1`] (`⌈E/ρ⌉`), [`palw_capacity_m_c_v1`],
 //!   [`palw_capacity_conviction_l_v1`] (`L = 3G`), [`palw_capacity_q_needed_permille_v1`] and the
-//!   campaign expectation [`palw_capacity_campaign_ev_sompi_v1`] (`EV(K)`);
+//!   campaign expectation [`palw_capacity_campaign_ev_sompi_v1`] (`EV(K)`) — the shadow's
+//!   "superseded (v1, L = 3G)" column, and A8's reference `L` for the routes the credit prices;
 //! * §4.7 the seat side: [`palw_capacity_seat_duty_v1`] (AS-1 `duty′`),
 //!   [`palw_capacity_seat_lock_v1`] (AS-2 `lock′`) and its credit test
 //!   [`palw_capacity_seat_credit_applies_v1`] (`q ≥ q_seat`), the ADR's parametric form — and lane
 //!   liab's consensus rule [`palw_capacity_seat_lock_liab_v1`] (`q_seat` = 250‰ flat), which the
-//!   shadow prices with;
+//!   shadow prices with, and lane escrow's bind [`palw_capacity_seat_bind_reservation_v1`] (a seat
+//!   bound to an attributable attempt reserves `max(duty′, lock′)`);
 //! * §5 the numeric targets: [`palw_capacity_n_instant_v1`] (concurrent claims per bond),
 //!   [`palw_capacity_per_80_daa_milli_v1`] (per-bond throughput), the §5.4 seat-capital estimate
 //!   [`palw_capacity_seat_capital_per_claim_v1`] / [`palw_capacity_claims_per_daa_milli_v1`],
@@ -111,19 +119,23 @@ impl PalwCapacityStepV1 {
     }
 }
 
-/// **The ramp the ADR's tables are written for** (§5.2, §9): ρ ∈ {10, 25, 50, 100, 1000} with
-/// `q_credit = 143‰`, the smallest credit at which `m* = 0` for every ρ at `L = 3G` — so each row's
-/// obligation is the ramp term `⌈E/ρ⌉` (the ADR's "attributable" column). `from_daa = 0`: a shadow
-/// step, not a schedule.
+/// **The ramp ADR-0160 v1's tables are written for** (§5.2, §9): ρ ∈ {10, 25, 50, 100, 1000} with
+/// `q_credit = 143‰`, the smallest credit at which v1's `m* = 0` for every ρ at `L = 3G`. `from_daa =
+/// 0`: a shadow step, not a schedule.
 ///
-/// **Conditional, and shown only when asked** (review of lane shadow, finding 1). These rows are
-/// what the rules WOULD give once a flag day credits `q = 143‰` — which D-8's half rule reaches
-/// only from a measured attribution rate of at least 0.29 — and testnet-12's armed schedule credits
-/// `q = 0` (lane liab's `PALW_T12_CAPACITY_STEPS_V1`), where `m_c = E` and a 13k bond still holds
-/// two floor claims. Their ×ρ seat capacity further needs §10 D-5 (`L_seat` = the whole seat bond);
-/// under lane liab's rule (`q_seat = 250‰`) a 143‰ credit leaves every seat lock at today's price.
-/// A caller names them explicitly (`misaka palw capacity-shadow --reference`); the default display
-/// is [`PALW_CAPACITY_UNCREDITED_STEPS_V1`].
+/// **Superseded, and shown only when asked** (review of lane shadow, round 2, finding 2). Under the
+/// rules as built a 143‰ credit is below `q_seat` (250‰): lane escrow's gate leaves `m_c = E` and
+/// lane liab's AS-2 leaves every lock at today's price, so these steps price exactly as the
+/// uncredited ramp — a 13k bond holds two floor claims at every ρ (×1). v1's figures for them (13k →
+/// 20 / 50 / 101 / 203 / 2,030) are printed only in the shadow's "superseded (v1, L = 3G)" column:
+/// v1 priced `m*` at `L = 3G` with no `q_seat` gate, and neither holds. Past the gate lane escrow
+/// prices `m*` on the conviction floor (`Tier(1,300 MSK)` on `rcore/cap-int`), so the ramp term
+/// `⌈E/ρ⌉` binds only from `q = 693 / 858 / 925 / 962 / 997‰` — beyond D-8's half rule at every ρ.
+/// The ×ρ rows need lane D's credit rule: ADR-0160 v2 §5.3 (G2: ≥ 500‰ measured per class and
+/// strategy, AG-6 / AG-7 armed), which v3 (`ccd5499c8`) replaces with the operator audit door (D-23;
+/// G2′: detection 1000‰ per class and strategy in the salted drill). A caller names these steps
+/// explicitly (`misaka palw capacity-shadow --reference`); the default display is
+/// [`PALW_CAPACITY_UNCREDITED_STEPS_V1`].
 pub const PALW_CAPACITY_REFERENCE_STEPS_V1: [PalwCapacityStepV1; 5] = [
     PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 143 },
     PalwCapacityStepV1 { from_daa: 0, rho: 25, q_credit_permille: 143 },
@@ -215,8 +227,8 @@ fn palw_capacity_stage_of_phase_v1(claim: &PalwClaimStateV2, phase: &PalwClaimPh
         PalwClaimPhaseV2::Provisional => PalwCapacityStageV1::Created,
         PalwClaimPhaseV2::PanelBound { .. } => PalwCapacityStageV1::Anchored,
         PalwClaimPhaseV2::ReceiptLicensed { .. } => {
-            let counted = claim.rcore.licence_door.is_none()
-                || claim.rcore.basis_k >= crate::palw_state_v2::PALW_RCORE_FINAL_BASIS_K_V1;
+            let counted =
+                claim.rcore.licence_door.is_none() || claim.rcore.basis_k >= crate::palw_state_v2::PALW_RCORE_FINAL_BASIS_K_V1;
             PalwCapacityStageV1::Licensed {
                 permille: if counted { PALW_CAPACITY_FULL_PERMILLE_V1 } else { PALW_CAPACITY_S2_PERMILLE_V1 },
             }
@@ -334,10 +346,15 @@ pub fn palw_capacity_m_ramp_v1(e_sompi: u128, rho: u32) -> u128 {
     e_sompi.div_ceil(u128::from(rho.max(1)))
 }
 
-/// **`m_c`** (§4.5): `E` when there is no step (today, or below F-L) or when the class has no
-/// conviction route (C7, `q ≡ 0`); otherwise `max(m*(q_credit), ⌈E/ρ⌉)`. `L` is the claim's
-/// [`palw_capacity_conviction_l_v1`]. `m_c ≥ ⌈E/ρ⌉ ≥ 1` sompi whenever `E ≥ 1` (X-I6), and
-/// `m_c = E` at `q_credit = 0`.
+/// **`m_c` as ADR-0160 v1 wrote it — SUPERSEDED** (§4.5): `E` when there is no step (today, or below
+/// F-L) or when the class has no conviction route (C7, `q ≡ 0`); otherwise `max(m*(q_credit),
+/// ⌈E/ρ⌉)` at the claim's `L =` [`palw_capacity_conviction_l_v1`] (`3G`), with no `q_seat` gate.
+/// `m_c ≥ ⌈E/ρ⌉ ≥ 1` sompi whenever `E ≥ 1` (X-I6), and `m_c = E` at `q_credit = 0`.
+///
+/// **Not what the fold prices** (review of lane shadow, round 2, finding 2): lane escrow applies a
+/// credit only from `q_seat` and prices `m*` on the conviction floor the params give
+/// ([`palw_capacity_m_c_v2`]), because a tier-class producer conviction collects far less than
+/// `3G` (lane liab's L-T6). The shadow prints this only in its "superseded (v1, L = 3G)" column.
 pub fn palw_capacity_m_c_v1(e_sompi: u128, step: Option<&PalwCapacityStepV1>, attributable: bool, l_sompi: u128) -> u128 {
     match step {
         None => e_sompi,
@@ -372,6 +389,147 @@ pub fn palw_capacity_q_needed_permille_v1(e_sompi: u128, rho: u32, l_sompi: u128
         }
     }
     lo
+}
+
+// ---------------------------------------------------------------------------------------------
+// §4.5 as built — lane escrow's term (`rcore/cap-escrow` d6a058249), what the fold prices with
+// ---------------------------------------------------------------------------------------------
+
+/// **What one producer conviction of a claim is sure to collect beyond the claim's own forfeit** —
+/// lane escrow's `PalwEscrowConvictionFloorV1` (`palw_escrow_funding_v2.rs`), the floor its `m*` is
+/// priced against. `rcore/cap-int` re-exports that type here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCapacityConvictionFloorV1 {
+    /// **Some producer route collects the forfeit `w + m_c` plus at most `tier` sompi and burns no
+    /// other reward of the bond**: a campaign is priced claim by claim, and the tiers of many
+    /// convictions are paid from the bond's free half ([`palw_capacity_m_star_tier_v2`]).
+    Tier(u128),
+    /// **Every producer route forfeits the whole bond and burns every unmatured reward**: one claim
+    /// binds, `L = 3E`.
+    WholeBond,
+}
+
+/// **The action tier every producer conviction adds at the smallest bond that can hold a claim** —
+/// S1/S2's `min(100‰ · C_min, 3E)` (lane escrow's `palw_escrow_tier_at_min_bond_v1`): 1,300 MSK on
+/// testnet-12.
+pub fn palw_capacity_tier_at_min_bond_v1(min_collateral_sompi: u64, e_sompi: u128) -> u128 {
+    let share =
+        u128::from(min_collateral_sompi).saturating_mul(u128::from(crate::palw_state_v2::PALW_RCORE_S1S2_ACTION_PERMILLE_V1)) / 1_000;
+    share.min(e_sompi.saturating_mul(3))
+}
+
+/// **The conviction floor `rcore/cap-int`'s fold prices a credit against** — lane escrow's documented
+/// rewire 3 of `capacity_escrow_conviction_floor_at_v1`: `Tier(min(100‰ · C_min, 3E))` while lane
+/// liab's intent class holds S1 and kinds 5 / 12 stay tier-capped (D-5 not taken), which is every
+/// ruleset the lanes build. (`rcore/cap-escrow` alone answers `Tier(0)`; `WholeBond` would need every
+/// producer route in the intent class.) Lane D replaces this pricing with an all-or-nothing credit
+/// (ADR-0160 v2 §5.3; v3's audit door, D-23), and the shadow follows it there (v2 D.11 / v3 D.9).
+pub fn palw_capacity_conviction_floor_v1(min_collateral_sompi: u64, e_sompi: u128) -> PalwCapacityConvictionFloorV1 {
+    PalwCapacityConvictionFloorV1::Tier(palw_capacity_tier_at_min_bond_v1(min_collateral_sompi, e_sompi))
+}
+
+/// **Does a step's credit lower the escrow slot at all?** Lane escrow's `palw_escrow_credit_applies_v1`
+/// (review 1 of lane escrow, finding 1): only at `q_credit ≥ q_seat` =
+/// [`PALW_CAPACITY_Q_SEAT_PERMILLE_V1`], the threshold at which lane liab's AS-2 divides the seat lock
+/// by the same `ρ` — the two sides read one threshold on `rcore/cap-int`. Below it the slot is `E`.
+pub fn palw_capacity_escrow_credit_applies_v1(q_credit_permille: u16) -> bool {
+    q_credit_permille >= PALW_CAPACITY_Q_SEAT_PERMILLE_V1
+}
+
+/// **`m*` against a route that burns nothing beyond the convicted claim** — lane escrow's
+/// `palw_escrow_m_star_v2`, integer for integer: the smallest `m` with
+/// `EV(1) = (1−q)·[P*·E − (1−P*)·m] − q·(m + x(m)) ≤ 0`, where `x(m) = min(tier, f·m)` is the tier
+/// one conviction is sure to collect and `f = (1000 − κ)/κ` (κ the work gate's ceiling in permille,
+/// 500‰ on testnet-12: `f = 1`). Rounded up; `q = 1000‰` needs nothing; `P*` clamped below 1000‰
+/// and κ into `1..=1000‰`. Saturating.
+pub fn palw_capacity_m_star_tier_v2(
+    e_sompi: u128,
+    q_permille: u16,
+    tier_sompi: u128,
+    p_star_permille: u16,
+    ceiling_permille: u32,
+) -> u128 {
+    let q = u128::from(q_permille.min(1_000));
+    if q == 1_000 {
+        return 0;
+    }
+    let p = u128::from(p_star_permille.min(999));
+    let k = u128::from(ceiling_permille.clamp(1, 1_000));
+    // Scaled by 10⁶·κ: (1−q)·P·E → (1000−q)·P·E·κ; (1−q)(1−P) + q·(1+f) = (1−q)(1−P) + q/κ.
+    let gain = (1_000 - q).saturating_mul(p).saturating_mul(e_sompi);
+    let m_free_half = gain
+        .saturating_mul(k)
+        .div_ceil((1_000 - q).saturating_mul(1_000 - p).saturating_mul(k).saturating_add(q.saturating_mul(1_000_000)));
+    if (1_000 - k).saturating_mul(m_free_half) <= k.saturating_mul(tier_sompi) {
+        return m_free_half;
+    }
+    // Past the tier: each conviction collects `m + tier`.
+    let loss = q.saturating_mul(1_000).saturating_mul(tier_sompi);
+    if loss >= gain {
+        return 0;
+    }
+    (gain - loss).div_ceil((1_000 - q).saturating_mul(1_000 - p).saturating_add(q.saturating_mul(1_000)))
+}
+
+/// **`m_c` as the fold prices it** — lane escrow's `palw_escrow_term_v2` (`rcore/cap-escrow`
+/// `d6a058249`), the rule the shadow prices every step with (review of lane shadow, round 2,
+/// finding 2):
+///
+/// ```text
+/// m_c = 0                                   if E = 0
+///     = E                                   if no step, a C7 class, or q_credit < q_seat (the gate)
+///     = min(E, max(m*(q_credit, floor), ⌈E/ρ⌉)) otherwise
+/// ```
+///
+/// with `m*` [`palw_capacity_m_star_tier_v2`] on `Tier(t)` and v1's `m*` at `L = 3E` on `WholeBond`.
+/// On testnet-12's floor (`Tier(1,300 MSK)`, κ 500‰) a credit of 143‰ leaves `m_c = E` (a 13k bond
+/// holds 2 floor claims), 250‰ gives 1,400.51 MSK (4), 500‰ 640.17 MSK (10) — at every ρ; `⌈E/ρ⌉`
+/// binds only from [`palw_capacity_q_needed_permille_v2`]. Never above `E`.
+pub fn palw_capacity_m_c_v2(
+    e_sompi: u128,
+    step: Option<&PalwCapacityStepV1>,
+    attributable: bool,
+    floor: PalwCapacityConvictionFloorV1,
+    ceiling_permille: u32,
+) -> u128 {
+    if e_sompi == 0 {
+        return 0;
+    }
+    let Some(step) = step.filter(|step| attributable && palw_capacity_escrow_credit_applies_v1(step.q_credit_permille)) else {
+        return e_sompi;
+    };
+    let m_star = match floor {
+        PalwCapacityConvictionFloorV1::WholeBond => {
+            palw_capacity_m_star_at_v1(e_sompi, step.q_credit_permille, e_sompi.saturating_mul(3), PALW_CAPACITY_P_STAR_PERMILLE_V1)
+        }
+        PalwCapacityConvictionFloorV1::Tier(tier) => {
+            palw_capacity_m_star_tier_v2(e_sompi, step.q_credit_permille, tier, PALW_CAPACITY_P_STAR_PERMILLE_V1, ceiling_permille)
+        }
+    };
+    m_star.max(palw_capacity_m_ramp_v1(e_sompi, step.rho)).min(e_sompi)
+}
+
+/// **The credit a step needs for `⌈E/ρ⌉` to bind under the rule as built** — lane escrow's
+/// `palw_escrow_q_needed_permille_v2`: the first permille at which `m*(q, floor) ≤ ⌈E/ρ⌉`, and never
+/// below `q_seat` (under it the credit does not apply at all). On testnet-12's `Tier(1,300 MSK)`:
+/// 693 / 858 / 925 / 962 / 997‰ at ρ = 10 / 25 / 50 / 100 / 1000 — twice each is above 1000‰, so no
+/// measurement reaches the ramp term under D-8's half rule; `Tier(0)`: 819 … 999‰; `WholeBond`: 250‰.
+pub fn palw_capacity_q_needed_permille_v2(
+    e_sompi: u128,
+    rho: u32,
+    floor: PalwCapacityConvictionFloorV1,
+    ceiling_permille: u32,
+) -> u16 {
+    let target = palw_capacity_m_ramp_v1(e_sompi, rho);
+    let m_star = |q: u16| match floor {
+        PalwCapacityConvictionFloorV1::WholeBond => {
+            palw_capacity_m_star_at_v1(e_sompi, q, e_sompi.saturating_mul(3), PALW_CAPACITY_P_STAR_PERMILLE_V1)
+        }
+        PalwCapacityConvictionFloorV1::Tier(tier) => {
+            palw_capacity_m_star_tier_v2(e_sompi, q, tier, PALW_CAPACITY_P_STAR_PERMILLE_V1, ceiling_permille)
+        }
+    };
+    (0..=1_000u16).find(|q| m_star(*q) <= target).unwrap_or(1_000).max(PALW_CAPACITY_Q_SEAT_PERMILLE_V1)
 }
 
 /// **`EV(K)` of a campaign of `K` fraudulent claims inside one maturity window** (§4.5), in sompi
@@ -576,6 +734,17 @@ pub fn palw_capacity_seat_duty_liab_v1(
             step.rho,
         ),
     }
+}
+
+/// **What a seat reserves when it is bound** — lane escrow's bind (`reserve_seat_duties` with
+/// `palw_escrow_bind_reserves_the_lock_v1`, review 1 of lane escrow, finding 1): a seat bound to an
+/// attributable attempt (not C7, escrow `> 0`) reserves the eligibility `max(duty′, lock′)` —
+/// `lock′` the lock a counted `Valid` will post (AS-2's, lane liab's `rcore_bind_prices` on
+/// `rcore/cap-int`) — so a drawn seat can always back its `Valid`; every other row (C7, the
+/// free-prompt lane) reserves the duty, as L-4b accepts. Where no credit cut the commitment the two
+/// agree on floor and 8k (`lock′ ≤ duty′`), so today's rows are unchanged.
+pub fn palw_capacity_seat_bind_reservation_v1(duty_new: u128, lock_new: u128, reserves_lock: bool) -> u128 {
+    if reserves_lock { duty_new.max(lock_new) } else { duty_new }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -799,6 +968,7 @@ mod tests {
         }
     }
 
+    /// v1's `m_c` (the superseded column's formula).
     #[test]
     fn m_c_rules() {
         let step = |rho, q| PalwCapacityStepV1 { from_daa: 0, rho, q_credit_permille: q };
@@ -806,7 +976,7 @@ mod tests {
         assert_eq!(palw_capacity_m_c_v1(E, None, true, l), E, "no step: today's E");
         assert_eq!(palw_capacity_m_c_v1(E, Some(&step(100, 500)), false, l), E, "C7: m = E whatever the step");
         assert_eq!(palw_capacity_m_c_v1(E, Some(&step(100, 0)), true, l), E, "q_credit 0: m = E (X-I6)");
-        // The ramp rows of §5.2: 320.08 / 128.03 / 64.02 / 32.01 / 3.20.
+        // v1's ramp rows of §5.2 (superseded): 320.08 / 128.03 / 64.02 / 32.01 / 3.20.
         let ramp: Vec<u128> =
             [10u32, 25, 50, 100, 1000].iter().map(|rho| centi(palw_capacity_m_c_v1(E, Some(&step(*rho, 143)), true, l))).collect();
         assert_eq!(ramp, vec![32_008, 12_803, 6_402, 3_201, 320]);
@@ -815,10 +985,12 @@ mod tests {
         assert!(palw_capacity_m_c_v1(1, Some(&step(1_000_000, 143)), true, l) >= 1, "⌈E/ρ⌉ ≥ 1 sompi");
     }
 
-    /// §5.2: concurrent claims per 13k / 100k / 1M bond, floor/8k by collateral and 2M under C7,
-    /// with the J-1 weight budget (E-T3's figures: 13k → 20 / 50 / 101 / 203 / 2,030). Exact, so
-    /// the weight term counts: ρ = 1000 at 1M is 156,203, where the ADR's table (which omits the
-    /// ≤ 16.45 MSK weight budget and rounds `E/ρ` down) prints 156,208.
+    /// **§5.2 as ADR-0160 v1 priced it — the SUPERSEDED column**: concurrent claims per 13k / 100k /
+    /// 1M bond, floor/8k by collateral and 2M under C7, with the J-1 weight budget (E-T3's figures:
+    /// 13k → 20 / 50 / 101 / 203 / 2,030 at q 143‰, `L = 3G`, no `q_seat` gate). Exact, so the weight
+    /// term counts: ρ = 1000 at 1M is 156,203, where the ADR's table (which omits the ≤ 16.45 MSK
+    /// weight budget and rounds `E/ρ` down) prints 156,208. The rule as built gives ×1 here
+    /// ([`m_c_as_the_fold_prices_it`]).
     #[test]
     fn claims_per_bond_golden() {
         let l = l_3g_floor();
@@ -855,6 +1027,80 @@ mod tests {
         assert!(m50 + W_FLOOR <= 65 * MSK);
         let m25 = palw_capacity_m_c_v1(E, Some(&PalwCapacityStepV1 { from_daa: 0, rho: 25, q_credit_permille: 143 }), true, l);
         assert!(m25 > 65 * MSK);
+    }
+
+    /// **`m_c` as the fold prices it** (lane escrow `d6a058249`'s `palw_escrow_term_v2`, replicated
+    /// integer for integer; review of lane shadow, round 2, finding 2): testnet-12's floor on
+    /// `rcore/cap-int`'s conviction floor `Tier(1,300 MSK)`, κ 500‰. Below `q_seat` nothing is
+    /// credited — v1's reference credit (143‰) included — so a 13k bond holds 2 floor claims at every
+    /// ρ; 250‰ gives 1,400.51 MSK (4), 500‰ — the most D-8 can credit — 640.17 MSK (10), at every ρ;
+    /// `⌈E/ρ⌉` binds only from 693 / 858 / 925 / 962 / 997‰, and 2 × each is above 1000‰. The
+    /// verifier's replica (`escrow_mstar.py`) gives the same numbers.
+    #[test]
+    fn m_c_as_the_fold_prices_it() {
+        let floor = palw_capacity_conviction_floor_v1(msk(13_000), E);
+        assert_eq!(floor, PalwCapacityConvictionFloorV1::Tier(1_300 * MSK), "min(100‰ · 13,000, 3E) = 1,300 MSK");
+        assert_eq!(palw_capacity_tier_at_min_bond_v1(msk(13_000), 100 * MSK), 300 * MSK, "3E binds a small E");
+        let step = |rho, q| PalwCapacityStepV1 { from_daa: 0, rho, q_credit_permille: q };
+        let m = |rho, q| palw_capacity_m_c_v2(E, Some(&step(rho, q)), true, floor, 500);
+        let budget = palw_capacity_weight_budget_sompi_v1(msk(13_000));
+        let n13k = |m| palw_capacity_n_instant_v1(ceiling(13_000), m, W_FLOOR, budget);
+        let rows: [(u16, u128, u64); 6] =
+            [(0, E, 2), (143, E, 2), (249, E, 2), (250, 140_050_790_048, 4), (300, 117_925_923_714, 5), (500, 64_016_930_016, 10)];
+        for (q, want_m, want_n) in rows {
+            for rho in [10u32, 25, 50, 100, 1000] {
+                assert_eq!((m(rho, q), n13k(m(rho, q))), (want_m, want_n), "q {q}‰ at ρ {rho}");
+            }
+        }
+        // The ramp term binds only from these credits; D-8 (q_credit ≤ ½ measured) never reaches one.
+        let needed: Vec<u16> =
+            [10u32, 25, 50, 100, 1000].iter().map(|rho| palw_capacity_q_needed_permille_v2(E, *rho, floor, 500)).collect();
+        assert_eq!(needed, vec![693, 858, 925, 962, 997]);
+        assert!(needed.iter().all(|q| 2 * u32::from(*q) > 1_000), "no measured rate backs ⌈E/ρ⌉ under the rule as built");
+        for (rho, q) in [(10u32, 693u16), (1000, 997)] {
+            assert_eq!(m(rho, q), palw_capacity_m_ramp_v1(E, rho), "ρ {rho}: ⌈E/ρ⌉ at {q}‰");
+            assert!(m(rho, q - 1) > palw_capacity_m_ramp_v1(E, rho));
+        }
+        assert_eq!(
+            [10u32, 25, 50, 100, 1000].map(|rho| palw_capacity_q_needed_permille_v2(
+                E,
+                rho,
+                PalwCapacityConvictionFloorV1::Tier(0),
+                500
+            )),
+            [819, 924, 961, 981, 999],
+            "rcore/cap-escrow alone: the forfeit is all a conviction collects"
+        );
+        // WholeBond (every producer route in the intent class): v1's L = 3E, gated at q_seat.
+        let whole = PalwCapacityConvictionFloorV1::WholeBond;
+        assert_eq!([10u32, 1000].map(|rho| palw_capacity_q_needed_permille_v2(E, rho, whole, 500)), [250, 250], "never below q_seat");
+        assert_eq!(palw_capacity_m_c_v2(E, Some(&step(10, 250)), true, whole, 500), palw_capacity_m_ramp_v1(E, 10));
+        assert_eq!(palw_capacity_m_c_v2(E, Some(&step(10, 249)), true, whole, 500), E, "the gate, whatever the floor");
+        // The rest of X-I5 / X-I6: C7, no step, E = 0, never above E.
+        assert_eq!(palw_capacity_m_c_v2(E, Some(&step(10, 500)), false, floor, 500), E, "C7: m = E");
+        assert_eq!(palw_capacity_m_c_v2(E, None, true, floor, 500), E, "no step: today's E");
+        assert_eq!(palw_capacity_m_c_v2(0, Some(&step(10, 500)), true, floor, 500), 0, "the free-prompt lane");
+        assert!(palw_capacity_m_c_v2(E, Some(&step(1, 1_000)), true, floor, 500) <= E);
+        // One claim's expectation at the fold's m_c is ≤ 0 on the tier route it is priced for.
+        for q in [250u16, 300, 500] {
+            let m = m(10, q);
+            let x = (1_300 * MSK).min(m);
+            let (q, p) = (i128::from(q), 500i128);
+            let (e, m, x) = (E as i128, m as i128, x as i128);
+            assert!((1_000 - q) * (p * e - (1_000 - p) * m) - 1_000 * q * (m + x) <= 0, "EV(1) ≤ 0 at {q}‰");
+        }
+        // v1's superseded pricing of the same credits, for the column that keeps it.
+        let l = l_3g_floor();
+        assert_eq!(palw_capacity_m_c_v1(E, Some(&step(10, 143)), true, l), palw_capacity_m_ramp_v1(E, 10), "v1: 143‰ bought ⌈E/ρ⌉");
+    }
+
+    /// Lane escrow's bind: an attributable attempt's seat reserves `max(duty′, lock′)`; C7 and the
+    /// free-prompt lane reserve the duty.
+    #[test]
+    fn a_bound_seat_reserves_the_lock_it_will_post() {
+        assert_eq!(palw_capacity_seat_bind_reservation_v1(64, 240, true), 240, "a credited duty under the lock: the lock");
+        assert_eq!(palw_capacity_seat_bind_reservation_v1(640, 240, true), 640, "λ-bound: the duty, as today");
+        assert_eq!(palw_capacity_seat_bind_reservation_v1(64, 240, false), 64, "C7 / FP: the duty");
     }
 
     /// §5.3: per-bond floor throughput at H_L = 21 DAA (claims per 80 DAA).
@@ -970,7 +1216,10 @@ mod tests {
         );
         assert_eq!(palw_capacity_seat_duty_with_lock_v1(lambda, lock_2.div_ceil(10), full, seats, 10), lambda.div_ceil(10));
         // The uncredited ramp is the reference ramp's ρ at q = 0.
-        assert_eq!(PALW_CAPACITY_UNCREDITED_STEPS_V1.map(|s| (s.rho, s.q_credit_permille)), PALW_CAPACITY_REFERENCE_STEPS_V1.map(|s| (s.rho, 0)));
+        assert_eq!(
+            PALW_CAPACITY_UNCREDITED_STEPS_V1.map(|s| (s.rho, s.q_credit_permille)),
+            PALW_CAPACITY_REFERENCE_STEPS_V1.map(|s| (s.rho, 0))
+        );
     }
 
     /// Appendix A: EV(K) at q 0.11, P 0.5, m 32, L 13,000 — K = 1 binds.

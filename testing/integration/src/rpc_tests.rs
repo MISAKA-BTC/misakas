@@ -1152,6 +1152,11 @@ async fn sanity_test() {
                     assert!(rpc_client.get_palw_capacity_shadow_call(None, big_q).await.is_err());
                     let bad_bond = GetPalwCapacityShadowRequest { bond: "x".to_string(), ..Default::default() };
                     assert!(rpc_client.get_palw_capacity_shadow_call(None, bad_bond).await.is_err());
+                    let bad_strategy = GetPalwCapacityShadowRequest {
+                        adversary_bonds: vec![format!("{}:0:bogus", "ab".repeat(64))],
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_capacity_shadow_call(None, bad_strategy).await.is_err());
                     let read = rpc_client
                         .get_palw_capacity_shadow_call(
                             None,
