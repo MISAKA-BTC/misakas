@@ -512,20 +512,40 @@ async fn t12_bind_deadlock_f1_past_the_fence_an_at_ceiling_attempt_binds_the_cla
     let slot = accepted + anchor_delay;
     println!("[f1] card 7 at its ceiling after {} claims at DAA {accepted}; slot {slot}; fence {fence}", claims.len());
 
-    // Below the fence: the released rule, at the slot and at the last DAA before the fence.
-    for below in [slot, fence - 1] {
-        f.beat_to(below).await;
-        assert!(!f.facts(7).binder_due, "below the fence the node is told no binder is due (it would be disqualified)");
-        let sink = f.chain.sink();
-        let (block, _) = f.build_attempt(7);
-        let daa = block.header.daa_score;
-        assert!(daa < fence, "built below the fence (DAA {daa})");
-        let (hash, status) = f.insert(block).await;
-        assert_eq!(status, BlockStatus::StatusDisqualifiedFromChain, "below the fence the at-ceiling attempt {hash} is disqualified");
-        assert_eq!(f.chain.sink(), sink);
-        assert_eq!(phases(&f.state(), &claims).get("Provisional"), Some(&claims.len()));
-        println!("[f1] DAA {daa} (below the fence): card 7's attempt {status:?}; all {} claims Provisional", claims.len());
+    // Below the fence: the released rule, at the slot and at the last DAA before the fence — probed on a
+    // SECOND chain of the same ruleset, driven the same way. Card 7 is an operator of the release's lane
+    // A (armed at the fence with the binder), and past lane A a chain block that MERGES an operator
+    // attempt anchors through it; a displaced probe left in THIS chain's DAG would be merged past the
+    // fence (or not — a disqualified tip is not always taken as a virtual parent) and bind the claims
+    // through lane A, on a seed drawn from its own execution, before any binder could. The binder is
+    // what this chain's claims are left with at the fence.
+    {
+        let mut probe = Fleet::new(Some(fence));
+        probe.chain.heartbeat(probe.ttpb(), Vec::new()).await;
+        let probe_claims = probe.fill_the_ceiling(7).await;
+        assert_eq!(probe_claims.len(), claims.len(), "the same ruleset, driven the same way");
+        assert_eq!(probe.state().claim(&probe_claims[0]).unwrap().accepted_daa, accepted);
+        for below in [slot, fence - 1] {
+            probe.beat_to(below).await;
+            assert!(!probe.facts(7).binder_due, "below the fence the node is told no binder is due (it would be disqualified)");
+            let sink = probe.chain.sink();
+            let (block, _) = probe.build_attempt(7);
+            let daa = block.header.daa_score;
+            assert!(daa < fence, "built below the fence (DAA {daa})");
+            let (hash, status) = probe.insert(block).await;
+            assert_eq!(
+                status,
+                BlockStatus::StatusDisqualifiedFromChain,
+                "below the fence the at-ceiling attempt {hash} is disqualified"
+            );
+            assert_eq!(probe.chain.sink(), sink);
+            assert_eq!(phases(&probe.state(), &probe_claims).get("Provisional"), Some(&probe_claims.len()));
+            println!("[f1] DAA {daa} (below the fence): card 7's attempt {status:?}; all {} claims Provisional", probe_claims.len());
+        }
     }
+    f.beat_to(fence - 1).await;
+    assert!(!f.facts(7).binder_due, "below the fence no binder is due");
+    assert_eq!(phases(&f.state(), &claims).get("Provisional"), Some(&claims.len()), "every claim still Provisional below the fence");
 
     // From the fence: the binder. The node's own facts say so: the only hold is the ceiling, and a
     // claim is due at the candidate — kaspad's producer mines on exactly this pair.
