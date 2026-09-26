@@ -17,7 +17,9 @@
 //!   campaign expectation [`palw_capacity_campaign_ev_sompi_v1`] (`EV(K)`);
 //! * §4.7 the seat side: [`palw_capacity_seat_duty_v1`] (AS-1 `duty′`),
 //!   [`palw_capacity_seat_lock_v1`] (AS-2 `lock′`) and its credit test
-//!   [`palw_capacity_seat_credit_applies_v1`] (`q ≥ q_seat`);
+//!   [`palw_capacity_seat_credit_applies_v1`] (`q ≥ q_seat`), the ADR's parametric form — and lane
+//!   liab's consensus rule [`palw_capacity_seat_lock_liab_v1`] (`q_seat` = 250‰ flat), which the
+//!   shadow prices with;
 //! * §5 the numeric targets: [`palw_capacity_n_instant_v1`] (concurrent claims per bond),
 //!   [`palw_capacity_per_80_daa_milli_v1`] (per-bond throughput), the §5.4 seat-capital estimate
 //!   [`palw_capacity_seat_capital_per_claim_v1`] / [`palw_capacity_claims_per_daa_milli_v1`],
@@ -112,13 +114,36 @@ impl PalwCapacityStepV1 {
 /// **The ramp the ADR's tables are written for** (§5.2, §9): ρ ∈ {10, 25, 50, 100, 1000} with
 /// `q_credit = 143‰`, the smallest credit at which `m* = 0` for every ρ at `L = 3G` — so each row's
 /// obligation is the ramp term `⌈E/ρ⌉` (the ADR's "attributable" column). `from_daa = 0`: a shadow
-/// step, not a schedule. What the shadow reports when a caller names no steps.
+/// step, not a schedule.
+///
+/// **Conditional, and shown only when asked** (review of lane shadow, finding 1). These rows are
+/// what the rules WOULD give once a flag day credits `q = 143‰` — which D-8's half rule reaches
+/// only from a measured attribution rate of at least 0.29 — and testnet-12's armed schedule credits
+/// `q = 0` (lane liab's `PALW_T12_CAPACITY_STEPS_V1`), where `m_c = E` and a 13k bond still holds
+/// two floor claims. Their ×ρ seat capacity further needs §10 D-5 (`L_seat` = the whole seat bond);
+/// under lane liab's rule (`q_seat = 250‰`) a 143‰ credit leaves every seat lock at today's price.
+/// A caller names them explicitly (`misaka palw capacity-shadow --reference`); the default display
+/// is [`PALW_CAPACITY_UNCREDITED_STEPS_V1`].
 pub const PALW_CAPACITY_REFERENCE_STEPS_V1: [PalwCapacityStepV1; 5] = [
     PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 143 },
     PalwCapacityStepV1 { from_daa: 0, rho: 25, q_credit_permille: 143 },
     PalwCapacityStepV1 { from_daa: 0, rho: 50, q_credit_permille: 143 },
     PalwCapacityStepV1 { from_daa: 0, rho: 100, q_credit_permille: 143 },
     PalwCapacityStepV1 { from_daa: 0, rho: 1000, q_credit_permille: 143 },
+];
+
+/// **The ramp with no attribution credited** — ρ ∈ {10, 25, 50, 100, 1000} at `q_credit = 0`: what
+/// the rules give until Stage 0 measures an attribution rate and a flag day credits half of it
+/// (§10 D-8). At `q = 0`, `m* = E`, so `m_c = E` at every ρ (the escrow lane's
+/// `palw_monetary_prelicense_risk_v1` agrees), no seat lock shrinks, and only AS-1's duty divides by
+/// ρ. testnet-12's first armed step (lane liab: ρ = 10, q = 0) is this ramp's first row. The
+/// shadow's default display when neither the caller nor the params name a schedule.
+pub const PALW_CAPACITY_UNCREDITED_STEPS_V1: [PalwCapacityStepV1; 5] = [
+    PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 0 },
+    PalwCapacityStepV1 { from_daa: 0, rho: 25, q_credit_permille: 0 },
+    PalwCapacityStepV1 { from_daa: 0, rho: 50, q_credit_permille: 0 },
+    PalwCapacityStepV1 { from_daa: 0, rho: 100, q_credit_permille: 0 },
+    PalwCapacityStepV1 { from_daa: 0, rho: 1000, q_credit_permille: 0 },
 ];
 
 /// **The step in force at `daa`** in a schedule sorted by `from_daa`: the last whose `from_daa ≤ daa`,
@@ -417,12 +442,39 @@ pub fn palw_capacity_q_seat_permille_v1(e_sompi: u128, l_seat_sompi: u128) -> u1
 /// ([`palw_capacity_seat_credit_applies_v1`] at `e_sompi` and `l_seat_sompi`), else `lock_k`
 /// unchanged. The lock stays `> 0` so B-3's exit gate still pins the seat to its horizon. `None`
 /// (no step) is today's lock.
+///
+/// This is the ADR's parametric form. **The consensus rule is lane liab's**
+/// ([`palw_capacity_seat_lock_liab_v1`]); the shadow prices with that one, and uses this form only
+/// for §10 D-5's conditional column (`L_seat` = the whole seat bond).
 pub fn palw_capacity_seat_lock_v1(lock_k: u128, step: Option<&PalwCapacityStepV1>, e_sompi: u128, l_seat_sompi: u128) -> u128 {
     match step {
         Some(step) if palw_capacity_seat_credit_applies_v1(step.q_credit_permille, e_sompi, l_seat_sompi) => {
             lock_k.div_ceil(step.rho_or_one()).max(1)
         }
         _ => lock_k,
+    }
+}
+
+/// **Lane liab's `q_seat`, in permille: 250‰, flat** (`E / (E + 3G)` at its largest, `G ≥ E`). Lane
+/// liab prices AS-2 in consensus past F-L with `L_seat = 3G`, the tier a seat conviction definitely
+/// collects (DA-7's covering-signer S4), not §10 D-5's whole seat bond (≈ 25‰), which stays a user
+/// decision. The value of `palw_aggregate_liability_v1::PALW_CAPACITY_Q_SEAT_PERMILLE_V1` on
+/// `rcore/cap-liab`; `rcore/cap-int` re-exports that one here (review of lane shadow, finding 1).
+pub const PALW_CAPACITY_Q_SEAT_PERMILLE_V1: u16 = 250;
+
+/// **Lane liab's AS-2 credit test**: `q_credit ≥` [`PALW_CAPACITY_Q_SEAT_PERMILLE_V1`], whatever the
+/// claim (`palw_seat_credit_applies_v1` on `rcore/cap-liab`).
+pub fn palw_capacity_seat_credit_liab_v1(q_credit_permille: u16) -> bool {
+    q_credit_permille >= PALW_CAPACITY_Q_SEAT_PERMILLE_V1
+}
+
+/// **Lane liab's AS-2 lock** (`palw_seat_lock_v2` on `rcore/cap-liab`): `max(1 sompi, ⌈lock/ρ⌉)`
+/// under a step whose credit reaches 250‰, else `lock` unchanged — so at testnet-12's armed first
+/// step (ρ = 10, q = 0) and at the ADR's reference credit (143‰) every lock keeps today's price.
+pub fn palw_capacity_seat_lock_liab_v1(lock: u128, step: Option<&PalwCapacityStepV1>) -> u128 {
+    match step {
+        Some(step) if palw_capacity_seat_credit_liab_v1(step.q_credit_permille) => lock.div_ceil(step.rho_or_one()).max(1),
+        _ => lock,
     }
 }
 
@@ -786,6 +838,20 @@ mod tests {
         assert_eq!(palw_capacity_seat_lock_v1(lock, Some(&short), E, l3g), lock, "q below q_seat: the lock stays");
         assert_eq!(palw_capacity_seat_lock_v1(lock, None, E, l3g), lock);
         assert_eq!(palw_capacity_seat_lock_v1(1, Some(&PalwCapacityStepV1 { rho: 1_000, ..credited }), E, l3g), 1, "lock′ ≥ 1 sompi");
+        // Lane liab's rule (the one consensus prices with past F-L): 250‰ flat, whatever E and G —
+        // its a_i5: below q_seat the lock is today's; D-5's 130k column would divide at 25‰.
+        for q in [0u16, 25, 142, 143, 249] {
+            let step = PalwCapacityStepV1 { from_daa: 0, rho: 100, q_credit_permille: q };
+            assert!(!palw_capacity_seat_credit_liab_v1(q));
+            assert_eq!(palw_capacity_seat_lock_liab_v1(lock, Some(&step)), lock, "q = {q}‰ < 250‰: today's lock");
+        }
+        assert_eq!(palw_capacity_seat_lock_v1(lock, Some(&short), E, 130_000 * MSK), 240_100_000, "D-5: 143‰ ≥ 25‰ divides");
+        assert!(palw_capacity_seat_credit_liab_v1(250));
+        assert_eq!(palw_capacity_seat_lock_liab_v1(lock, Some(&credited)), 240_100_000);
+        assert_eq!(palw_capacity_seat_lock_liab_v1(lock, None), lock);
+        assert_eq!(palw_capacity_seat_lock_liab_v1(1, Some(&PalwCapacityStepV1 { rho: 1_000, ..credited })), 1, "never 0");
+        // The uncredited ramp is the reference ramp's ρ at q = 0.
+        assert_eq!(PALW_CAPACITY_UNCREDITED_STEPS_V1.map(|s| (s.rho, s.q_credit_permille)), PALW_CAPACITY_REFERENCE_STEPS_V1.map(|s| (s.rho, 0)));
     }
 
     /// Appendix A: EV(K) at q 0.11, P 0.5, m 32, L 13,000 — K = 1 binds.

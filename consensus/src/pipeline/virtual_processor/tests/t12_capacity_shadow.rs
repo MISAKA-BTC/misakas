@@ -49,11 +49,23 @@ async fn s_t4_the_shadow_read_answers_on_a_testnet12_chain() {
     assert_eq!(shadow.bounded_immature_new, 0);
     // E from the tip's subsidy carve (no claim to read it off): testnet-12's 3,200.85 MSK.
     assert_eq!(shadow.reference_escrow / 1_000_000, 320_084, "E = 720‰ of the 4,445.62 MSK subsidy");
-    assert_eq!(shadow.steps.iter().map(|s| s.n_instant_13k).collect::<Vec<_>>(), E_T3_13K.to_vec());
+    // The default display is the uncredited ramp (no F-L schedule on this build): m_c = E, so a
+    // fresh 13k bond still holds two floor claims at every ρ, and the log line says q = 0.
+    assert_eq!(
+        shadow.steps.iter().map(|s| (s.step.rho, s.step.q_credit_permille, s.n_instant_13k)).collect::<Vec<_>>(),
+        vec![(10, 0, 2), (25, 0, 2), (50, 0, 2), (100, 0, 2), (1000, 0, 2)]
+    );
+    assert!(shadow.steps.iter().all(|s| !s.seat_credit && !s.q_alarm));
     assert_eq!(shadow.carriers_per_block, 3, "three coverage carriers per 500,000-mass block");
     let card = &shadow.bonds[0];
     assert!(card.seat && card.w_cap == 144 * PALW_CAPACITY_FCW_V1, "a card is a seat with W_cap 144 FCW");
     assert!(shadow.summary().starts_with("capacity-shadow: daa="));
+    assert!(shadow.summary().contains("N13k[ρ@q‰]=10@0:2,"), "{}", shadow.summary());
+    // Named, the ADR's reference ramp (q 143‰, conditional on a measured q ≥ 0.29) gives E-T3.
+    let reference = PalwCapacityShadowOptionsV1 { steps: PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec(), ..options.clone() };
+    let conditional = chain.ctx.consensus.palw_capacity_shadow_v1(reference).expect("a ConsensusV2 node answers");
+    assert_eq!(conditional.steps.iter().map(|s| s.n_instant_13k).collect::<Vec<_>>(), E_T3_13K.to_vec());
+    assert!(conditional.steps.iter().all(|s| !s.seat_credit && s.seat_credit_if_d5), "143‰: lane liab's locks stay, D-5's would divide");
     // The same answer twice: the read is a function of the committed tip.
     assert_eq!(chain.ctx.consensus.palw_capacity_shadow_v1(options), Some(shadow));
 }

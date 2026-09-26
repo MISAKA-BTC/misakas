@@ -18,6 +18,13 @@
 //!   conviction-latency histogram, and — for bonds a caller names as adversarial, the O-3 runs of
 //!   ADR-0160 §9 Stage 0 — the measured attribution rate `q` with the A8 alarm).
 //!
+//! **Which steps.** A caller's steps; else [`palw_capacity_display_steps_v1`]: the schedule F-L arms
+//! when the params carry one, else the UNCREDITED ramp ([`PALW_CAPACITY_UNCREDITED_STEPS_V1`]:
+//! ρ 10 … 1000 at `q = 0`, so `m_c = E`). The ADR's reference ramp (`q = 143‰`, the E-T3 rows
+//! 20 / 50 / 101 / 203 / 2,030) is priced only when a caller names it: it is conditional on a
+//! measured attribution rate of at least 0.29 (D-8's half rule), and its ×ρ seat capacity further on
+//! §10 D-5 (review of lane shadow, finding 1).
+//!
 //! **Where each "new" value comes from.** The formulas are [`crate::palw_capacity_formulas_v1`]'s;
 //! the reading of the state is this module's and it is stated where it is an approximation:
 //!
@@ -30,8 +37,17 @@
 //!   seats)`. That is AS-1 exactly when `d` was not capped by `commitment / seats` at bind (floor and
 //!   8k: the λ-term or `lock_2` bound it); a capped row (2M) reports a lower bound, and the count of
 //!   such rows is reported.
-//! * AS-2's lock credit uses `L_seat =` [`PALW_CAPACITY_SEAT_L_REFERENCE_SOMPI_V1`] (130,000 MSK, the
-//!   seat floor: §10 D-5's recommended whole-seat-bond forfeiture on a located false Valid).
+//! * AS-2's lock credit is lane liab's consensus rule ([`palw_capacity_seat_lock_liab_v1`]: `q_seat`
+//!   = 250‰ flat, `L_seat = 3G`), so a lock shrinks by ρ only under a step crediting `q ≥ 250‰`.
+//!   §10 D-5's recommendation (`L_seat =` [`PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1`], the 130,000 MSK
+//!   seat floor, `q_seat ≈ 25‰`) is undecided and reported only as its own column
+//!   (`seat_credit_if_d5`, `seat_capacity_if_d5_milli_per_daa`), never folded into A-1 or `N_instant`.
+//! * The measured `q` counts RESOLVED adversary claims only — convicted (caught), `Final` or voided
+//!   for a reason that is no conviction (undetected) — and reports in-flight claims, and claims a
+//!   bond-level forfeiture voided before their own outcome (censored), beside it
+//!   ([`palw_capacity_void_attribution_v1`] is an exhaustive match: a void reason added later does not
+//!   compile until it is classed). A `Final` still inside its conviction horizon counts as undetected
+//!   until convicted — biased low, the side on which A8 alarms.
 //! * AG-3's freeze reads the chain's conviction records: `DaDefault` and `CourtConviction` are the
 //!   intent class (final); `ExecutorRefuted` and `PanelFalseValidV2` may be either (their
 //!   contradiction kind is not in the record), so they freeze for `window_court` and are reported
@@ -47,12 +63,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use kaspa_hashes::Hash64;
 
 use crate::palw_capacity_formulas_v1::{
-    PALW_CAPACITY_COVERAGE_CARRIER_MASS_V1, PALW_CAPACITY_REFERENCE_STEPS_V1, PALW_CAPACITY_SEAT_DUTY_HOLD_DAA_V1,
-    PALW_CAPACITY_SOMPI_PER_MSK_V1, PALW_CAPACITY_W_FCW_SOMPI_V1, PalwCapacitySeatCapitalInputsV1, PalwCapacityStageV1,
+    PALW_CAPACITY_COVERAGE_CARRIER_MASS_V1, PALW_CAPACITY_SEAT_DUTY_HOLD_DAA_V1, PALW_CAPACITY_SOMPI_PER_MSK_V1,
+    PALW_CAPACITY_UNCREDITED_STEPS_V1, PALW_CAPACITY_W_FCW_SOMPI_V1, PalwCapacitySeatCapitalInputsV1, PalwCapacityStageV1,
     PalwCapacityStepV1, palw_capacity_bond_weight_term_v1, palw_capacity_carriers_per_block_v1, palw_capacity_claims_per_daa_milli_v1,
     palw_capacity_consensus_reservation_v1, palw_capacity_conviction_l_v1, palw_capacity_h_obl_v1, palw_capacity_m_c_v1,
     palw_capacity_n_instant_v1, palw_capacity_q_needed_permille_v1, palw_capacity_seat_capital_per_claim_v1,
-    palw_capacity_seat_credit_applies_v1, palw_capacity_seat_duty_v1, palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1,
+    palw_capacity_seat_credit_applies_v1, palw_capacity_seat_credit_liab_v1, palw_capacity_seat_duty_v1,
+    palw_capacity_seat_lock_liab_v1, palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1,
     palw_capacity_staged_weight_v1, palw_capacity_void_holds_v1, palw_capacity_weight_budget_sompi_v1, palw_capacity_weight_cap_v1,
     palw_capacity_weight_full_v1,
 };
@@ -69,9 +86,11 @@ pub const PALW_CAPACITY_SHADOW_INTERVAL_DAA_V1: u64 = 10;
 /// The reference bond of the log line's `N13k[ρ]`: the 13,000 MSK producer floor.
 pub const PALW_CAPACITY_SHADOW_REFERENCE_BOND_SOMPI_V1: u64 = 13_000 * 100_000_000;
 
-/// **`L_seat` for AS-2's credit test** (§4.7, §10 D-5): the 130,000 MSK seat floor, what a located
-/// `PanelFalseValidV2` forfeits at least under D-5's recommendation (q_seat ≈ 0.024).
-pub const PALW_CAPACITY_SEAT_L_REFERENCE_SOMPI_V1: u128 = 130_000 * PALW_CAPACITY_SOMPI_PER_MSK_V1;
+/// **`L_seat` of §10 D-5's conditional column** (§4.7): the 130,000 MSK seat floor, what a located
+/// `PanelFalseValidV2` forfeits at least under D-5's recommendation (`q_seat` ≈ 25‰). D-5 is a user
+/// decision still open and lane liab prices AS-2 at `L_seat = 3G` (250‰), so this value prices
+/// only `seat_credit_if_d5` / `seat_capacity_if_d5_milli_per_daa`, never A-1 or `N_instant`.
+pub const PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1: u128 = 130_000 * PALW_CAPACITY_SOMPI_PER_MSK_V1;
 
 /// The seats of a floor panel when the state holds none to count (testnet-12's panel).
 pub const PALW_CAPACITY_SHADOW_DEFAULT_SEATS_V1: u32 = 5;
@@ -86,7 +105,9 @@ pub const PALW_CAPACITY_SHADOW_RECENT_DAA_V1: u64 = PALW_CAPACITY_SHADOW_INTERVA
 /// What one shadow computation reads besides the state and its params.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwCapacityShadowOptionsV1 {
-    /// The ramp steps to price. Empty: [`PALW_CAPACITY_REFERENCE_STEPS_V1`].
+    /// The ramp steps to price. Empty: [`palw_capacity_display_steps_v1`]`(None)`, the uncredited
+    /// ramp — the processor's read passes F-L's armed schedule instead once the params carry one.
+    /// The ADR's reference ramp (`PALW_CAPACITY_REFERENCE_STEPS_V1`, q 143‰) only when named here.
     pub steps: Vec<PalwCapacityStepV1>,
     /// The second clock's RAW depth at `now_daa` (the processor's `palw_settled_anchor_depth_at`);
     /// `None` is the DAA-only lock rule. Only lock liveness reads it.
@@ -184,17 +205,21 @@ pub struct PalwCapacityStepShadowV1 {
     pub q_needed_permille: u16,
     /// `q_credit ≥ q_needed`: the ramp term `⌈E/ρ⌉` binds, not `m*`.
     pub ramp_binds: bool,
-    /// AS-2's seat credit applies (`q_credit ≥ q_seat`), so locks shrink by ρ.
+    /// Lane liab's AS-2 seat credit applies (`q_credit ≥ 250‰`), so locks shrink by ρ.
     pub seat_credit: bool,
+    /// §10 D-5's conditional column (`L_seat` = the 130,000 MSK seat floor, `q_seat` ≈ 25‰; an open
+    /// user decision): would the seat credit apply, and the §5.4 estimate if it did.
+    pub seat_credit_if_d5: bool,
+    pub seat_capacity_if_d5_milli_per_daa: u64,
     pub claims_commitment_total: u128,
     pub committed_total: u128,
     pub seat_duty_total: u128,
     pub seat_lock_total: u128,
-    /// §5.4: floor claims per DAA the seats' capital sustains, in thousandths.
+    /// §5.4: floor claims per DAA the seats' capital sustains, in thousandths (lane liab's AS-2).
     pub seat_capacity_milli_per_daa: u64,
     /// `N_instant` of a fresh 13,000 MSK bond on floor claims.
     pub n_instant_13k: u64,
-    /// A8: some class's measured `q` (adversary claims) is below `2 × q_needed`.
+    /// A8: some class's measured `q` (resolved adversary claims) is below `2 × q_needed`.
     pub q_alarm: bool,
 }
 
@@ -220,10 +245,19 @@ pub struct PalwCapacityClassAttributionV1 {
     pub da_opened_non_seat_total: u64,
     /// DAA from acceptance to conviction, bucketed by [`PALW_CAPACITY_LATENCY_BUCKETS_V1`].
     pub conviction_latency_histogram: [u64; 8],
-    /// Adversary claims of this class the state holds, and of them the attributed ones.
+    /// Adversary claims of this class the state holds: `attributed + undetected + censored +
+    /// in_flight`.
     pub adversary_claims: u64,
+    /// Caught: convicted (a conviction record names the claim), or voided for a conviction.
     pub adversary_attributed: u64,
-    /// `adversary_attributed / adversary_claims` in permille (`None` without adversary claims).
+    /// Resolved without a conviction: `Final`, or voided for a reason that convicts nobody.
+    pub adversary_undetected: u64,
+    /// Voided by a bond-level forfeiture before its own outcome was known (AG-2's
+    /// `AggregateForfeit` once lane liab merges): neither caught nor missed, so out of `q`.
+    pub adversary_censored: u64,
+    /// Not yet resolved (not terminal, not convicted): out of `q` until it resolves.
+    pub adversary_in_flight: u64,
+    /// `attributed / (attributed + undetected)` in permille (`None` while none has resolved).
     pub q_measured_permille: Option<u16>,
 }
 
@@ -278,21 +312,29 @@ impl PalwCapacityShadowV1 {
     }
 
     /// **The one compact log line** (ADR-0160 §7.5): `capacity-shadow: daa=… immature today/new=…/…
-    /// bonds=… claims=… N13k[ρ]=… seatcap[ρ]=… queue=… convictions=…`. Weights in FCW, seat
-    /// capacity in floor claims per DAA.
+    /// bonds=… claims=… N13k[ρ@q‰]=… seatcap[ρ@q‰]=… queue=… convictions=…`. Weights in FCW, seat
+    /// capacity in floor claims per DAA. Every per-step figure is labelled with the `q` it credits,
+    /// so a conditional row (a credit the chain has not measured) cannot pass for the armed rule.
     pub fn summary(&self) -> String {
         let fcw = |w: u128| w / crate::palw_capacity_formulas_v1::PALW_CAPACITY_FCW_V1;
-        let n13k: Vec<String> = self.steps.iter().map(|s| format!("{}:{}", s.step.rho, s.n_instant_13k)).collect();
+        let n13k: Vec<String> =
+            self.steps.iter().map(|s| format!("{}@{}:{}", s.step.rho, s.step.q_credit_permille, s.n_instant_13k)).collect();
         let seatcap: Vec<String> = self
             .steps
             .iter()
             .map(|s| {
-                format!("{}:{}.{:02}", s.step.rho, s.seat_capacity_milli_per_daa / 1_000, (s.seat_capacity_milli_per_daa % 1_000) / 10)
+                format!(
+                    "{}@{}:{}.{:02}",
+                    s.step.rho,
+                    s.step.q_credit_permille,
+                    s.seat_capacity_milli_per_daa / 1_000,
+                    (s.seat_capacity_milli_per_daa % 1_000) / 10
+                )
             })
             .collect();
         let alarm = if self.steps.iter().any(|s| s.q_alarm) { " q-ALARM" } else { "" };
         format!(
-            "capacity-shadow: daa={} immature today/new={}/{} FCW bonds={} claims={} N13k[ρ]={} seatcap[ρ]={} (today {}.{:02}/DAA) queue={} convictions={}{}",
+            "capacity-shadow: daa={} immature today/new={}/{} FCW bonds={} claims={} N13k[ρ@q‰]={} seatcap[ρ@q‰]={} (today {}.{:02}/DAA) queue={} convictions={}{}",
             self.now_daa,
             fcw(self.bounded_immature_today),
             fcw(self.bounded_immature_new),
@@ -332,15 +374,51 @@ fn phase_name(phase: &PalwClaimPhaseV2) -> &'static str {
     }
 }
 
+/// **What a void says about its claim's attribution** (A8's measured `q`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCapacityVoidAttributionV1 {
+    /// The void is a conviction of the claim's producer: caught.
+    Caught,
+    /// The claim resolved without anyone being convicted of it (a timeout, a failed class).
+    Undetected,
+    /// The claim was voided because its BOND was convicted on another claim (AG-2's aggregate
+    /// forfeiture): its own outcome was never observed, so it is out of `q` — counting it caught
+    /// would read a K-claim campaign with one conviction as `q = 1`, counting it missed as `1/K`.
+    Censored,
+}
+
+/// **The class of every void reason — an exhaustive match, on purpose** (review of lane shadow,
+/// finding 2): a reason added by a later lane does not compile here until it is classed. Lane liab's
+/// `AggregateForfeit` (borsh 9, AG-2: every other live claim of a forfeited bond) is `Censored`; the
+/// `rcore/cap-int` merge adds that arm.
+pub fn palw_capacity_void_attribution_v1(reason: PalwVoidReasonV2) -> PalwCapacityVoidAttributionV1 {
+    match reason {
+        PalwVoidReasonV2::CourtFraud
+        | PalwVoidReasonV2::ProducerWithholding
+        | PalwVoidReasonV2::CourtDefault
+        | PalwVoidReasonV2::CourtHeldVerdict => PalwCapacityVoidAttributionV1::Caught,
+        PalwVoidReasonV2::BindTimeout
+        | PalwVoidReasonV2::ReceiptTimeout
+        | PalwVoidReasonV2::NoCapablePanel
+        | PalwVoidReasonV2::UnavailableQuorum
+        | PalwVoidReasonV2::NotReplayBacked => PalwCapacityVoidAttributionV1::Undetected,
+    }
+}
+
 /// A void whose reason is a conviction of the producer.
 fn void_is_attributed(reason: PalwVoidReasonV2) -> bool {
-    matches!(
-        reason,
-        PalwVoidReasonV2::CourtFraud
-            | PalwVoidReasonV2::ProducerWithholding
-            | PalwVoidReasonV2::CourtDefault
-            | PalwVoidReasonV2::CourtHeldVerdict
-    )
+    palw_capacity_void_attribution_v1(reason) == PalwCapacityVoidAttributionV1::Caught
+}
+
+/// **The steps shown when a caller names none**: the schedule F-L arms (`armed`, the processor's
+/// read passes it once the params carry `palw_capacity_aggregate_liability`), else the uncredited
+/// ramp [`PALW_CAPACITY_UNCREDITED_STEPS_V1`]. Never the ADR's reference ramp: its `q = 143‰` is a
+/// credit no chain has measured, so it is shown only when asked (review of lane shadow, finding 1).
+pub fn palw_capacity_display_steps_v1(armed: Option<&[PalwCapacityStepV1]>) -> Vec<PalwCapacityStepV1> {
+    match armed {
+        Some(steps) if !steps.is_empty() => steps.to_vec(),
+        _ => PALW_CAPACITY_UNCREDITED_STEPS_V1.to_vec(),
+    }
 }
 
 /// **The freeze class AG-3 would give a conviction of `kind`** (see the module doc).
@@ -407,7 +485,7 @@ pub fn palw_capacity_shadow_with_v1(
     options: &PalwCapacityShadowOptionsV1,
 ) -> PalwCapacityShadowV1 {
     let steps: Vec<PalwCapacityStepV1> =
-        if options.steps.is_empty() { PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec() } else { options.steps.clone() };
+        if options.steps.is_empty() { palw_capacity_display_steps_v1(None) } else { options.steps.clone() };
     let n_steps = steps.len();
     let h_obl = palw_capacity_h_obl_v1(params.window_receipt());
     let window_court = params.window_court();
@@ -476,10 +554,22 @@ pub fn palw_capacity_shadow_with_v1(
         }
         if adversary.contains(&claim.bond) {
             class.adversary_claims += 1;
-            let attributed = convicted_claims.contains(id)
-                || matches!(claim.phase, PalwClaimPhaseV2::Voided { reason, .. } if void_is_attributed(reason));
-            if attributed {
-                class.adversary_attributed += 1;
+            // A conviction naming the claim decides it whatever its phase (AG-5 keeps a void
+            // convictable); otherwise only a resolved claim counts.
+            let outcome = if convicted_claims.contains(id) {
+                Some(PalwCapacityVoidAttributionV1::Caught)
+            } else {
+                match &claim.phase {
+                    PalwClaimPhaseV2::Final { .. } => Some(PalwCapacityVoidAttributionV1::Undetected),
+                    PalwClaimPhaseV2::Voided { reason, .. } => Some(palw_capacity_void_attribution_v1(*reason)),
+                    _ => None,
+                }
+            };
+            match outcome {
+                Some(PalwCapacityVoidAttributionV1::Caught) => class.adversary_attributed += 1,
+                Some(PalwCapacityVoidAttributionV1::Undetected) => class.adversary_undetected += 1,
+                Some(PalwCapacityVoidAttributionV1::Censored) => class.adversary_censored += 1,
+                None => class.adversary_in_flight += 1,
             }
         }
         by_bond.entry(claim.bond).or_default().push((claim.accepted_daa, *id));
@@ -739,10 +829,10 @@ pub fn palw_capacity_shadow_with_v1(
                 floor_lock_sum = floor_lock_sum.saturating_add(lock.amount);
                 floor_lock_count += 1;
             }
-            let e = claim.map(|c| u128::from(c.escrowed_reward)).unwrap_or(reference_escrow);
             let duties = duty_of.get(&(*bond, *claim_id));
             for (i, step) in steps.iter().enumerate() {
-                let lock_new = palw_capacity_seat_lock_v1(lock.amount, Some(step), e, PALW_CAPACITY_SEAT_L_REFERENCE_SOMPI_V1);
+                // Lane liab's AS-2 (q_seat 250‰, whatever the claim's E and G), not D-5's column.
+                let lock_new = palw_capacity_seat_lock_liab_v1(lock.amount, Some(step));
                 let duty_new = duties.map(|v| v[i]).unwrap_or(0);
                 locks_excess_new[i] = locks_excess_new[i].saturating_add(lock_new.saturating_sub(duty_new));
                 seat_lock_total_new[i] = seat_lock_total_new[i].saturating_add(lock_new);
@@ -879,8 +969,9 @@ pub fn palw_capacity_shadow_with_v1(
         .map(|mut row| {
             row.voids_by_reason = voids.remove(&row.class_id).map(|m| m.into_iter().collect()).unwrap_or_default();
             row.convictions_by_kind = kinds.remove(&row.class_id).map(|m| m.into_iter().collect()).unwrap_or_default();
-            row.q_measured_permille = (row.adversary_claims > 0).then(|| {
-                u16::try_from(u128::from(row.adversary_attributed) * 1_000 / u128::from(row.adversary_claims)).unwrap_or(1_000)
+            let resolved = row.adversary_attributed + row.adversary_undetected;
+            row.q_measured_permille = (resolved > 0).then(|| {
+                u16::try_from(u128::from(row.adversary_attributed) * 1_000 / u128::from(resolved)).unwrap_or(1_000)
             });
             row
         })
@@ -900,8 +991,9 @@ pub fn palw_capacity_shadow_with_v1(
                 reference_seats as usize,
                 step.rho,
             );
-            let lock =
-                palw_capacity_seat_lock_v1(reference_lock, Some(step), reference_escrow, PALW_CAPACITY_SEAT_L_REFERENCE_SOMPI_V1);
+            let lock = palw_capacity_seat_lock_liab_v1(reference_lock, Some(step));
+            let lock_if_d5 =
+                palw_capacity_seat_lock_v1(reference_lock, Some(step), reference_escrow, PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1);
             let q_alarm =
                 attribution_out.iter().filter_map(|row| row.q_measured_permille).any(|q| u32::from(q) < 2 * u32::from(q_needed));
             PalwCapacityStepShadowV1 {
@@ -909,11 +1001,13 @@ pub fn palw_capacity_shadow_with_v1(
                 m_floor,
                 q_needed_permille: q_needed,
                 ramp_binds: step.q_credit_permille >= q_needed,
-                seat_credit: palw_capacity_seat_credit_applies_v1(
+                seat_credit: palw_capacity_seat_credit_liab_v1(step.q_credit_permille),
+                seat_credit_if_d5: palw_capacity_seat_credit_applies_v1(
                     step.q_credit_permille,
                     reference_escrow,
-                    PALW_CAPACITY_SEAT_L_REFERENCE_SOMPI_V1,
+                    PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1,
                 ),
+                seat_capacity_if_d5_milli_per_daa: seat_capacity(duty, lock_if_d5),
                 claims_commitment_total: claims_commitment_new[i],
                 committed_total: committed_new_total[i],
                 seat_duty_total: seat_duty_total_new[i],
@@ -970,7 +1064,9 @@ mod tests {
     //! **S-T1 / S-I4 (shadow half): the shadow on planted states equals ADR-0160's golden tables**
     //! (§4.5, §5.2, E-T3), and each "new" value is the formula applied to the state's own facts.
     use super::*;
-    use crate::palw_capacity_formulas_v1::{PALW_CAPACITY_C7_WEIGHT_CEILING_V1, PALW_CAPACITY_FCW_V1, palw_capacity_m_ramp_v1};
+    use crate::palw_capacity_formulas_v1::{
+        PALW_CAPACITY_C7_WEIGHT_CEILING_V1, PALW_CAPACITY_FCW_V1, PALW_CAPACITY_REFERENCE_STEPS_V1, palw_capacity_m_ramp_v1,
+    };
     use crate::palw_offence_v1::PalwConsumedOffenceV1;
     use crate::palw_panel_var_v1::PalwSlashableLockV1;
     use crate::palw_state_v2::{
@@ -1130,9 +1226,13 @@ mod tests {
         shadow.claims.iter().find(|c| c.claim_id == h(id))
     }
 
-    /// **E-T3 and §5.2 on a planted chain**: a fresh 13k / 100k / 1M bond holds 2 / 15 / 156 floor
-    /// claims today and 20·50·101·203·2,030 / … at ρ = 10·25·50·100·1000 (q credited at 143‰); the
-    /// §4.5 obligations and q-needed; the §5.4 seat capacity of eight genesis cards.
+    /// **E-T3 and §5.2 on a planted chain, and which rows are conditional.** By default (no steps
+    /// named, no F-L schedule) the shadow prices the UNCREDITED ramp: at `q = 0`, `m_c = E`, so a
+    /// fresh 13k / 100k / 1M bond still holds 2 / 15 / 156 floor claims at every ρ and only AS-1's
+    /// duty divides — eight genesis cards go 0.94 → ≈ 1.03–1.04 floor claims/DAA, not ×ρ. Named
+    /// explicitly, the ADR's reference ramp (q 143‰) gives E-T3's 20·50·101·203·2,030 / …; its seat
+    /// capacity is still ≈ ×1.1 under lane liab's AS-2 (`q_seat` 250‰), and the ×ρ column
+    /// (9.4 … 940.9/DAA) appears only as D-5's conditional one.
     #[test]
     fn s_t1_fresh_bonds_hold_the_golden_claim_counts() {
         let state = eight_cards(Plant::new())
@@ -1142,8 +1242,44 @@ mod tests {
             .bond(9, 1_000_000 * MSK, false)
             .claim(0x900, floor_claim(9, PalwClaimPhaseV2::Provisional, NOW - 3))
             .state();
+        let near = |got: u64, want: u64| got.abs_diff(want) * 200 <= want;
+
+        // ---- the default display: the uncredited ramp ----
         let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &[]);
         assert_eq!(shadow.reference_escrow, u128::from(E), "E read off the newest attempt claim");
+        assert_eq!(
+            shadow.steps.iter().map(|s| (s.step.rho, s.step.q_credit_permille)).collect::<Vec<_>>(),
+            vec![(10, 0), (25, 0), (50, 0), (100, 0), (1000, 0)],
+            "no steps named and no F-L schedule: the uncredited ramp, never the reference one"
+        );
+        for (n, today) in [(1u64, 2u64), (2, 15), (3, 156)] {
+            let row = row_of(&shadow, n);
+            assert_eq!(row.n_instant_today, today, "bond {n} today");
+            assert_eq!(row.n_instant_new, vec![today; 5], "bond {n}: at q = 0, m_c = E at every ρ");
+            assert_eq!(row.committed_today, 0);
+        }
+        assert_eq!(shadow.steps.iter().map(|s| s.n_instant_13k).collect::<Vec<_>>(), vec![2; 5]);
+        assert!(shadow.steps.iter().all(|s| s.m_floor == u128::from(E) && !s.ramp_binds && !s.seat_credit && !s.seat_credit_if_d5));
+        // §5.4: 8 cards × 469,531.6 MSK against a floor claim's duty and lock — 0.94/DAA today;
+        // AS-1 divides the duty (640.17 → 64.02 … 0.64 MSK), the 240.1 MSK lock stays.
+        assert_eq!(shadow.seats, 8);
+        assert_eq!(shadow.seat_usable_capital, 8 * u128::from(CARD) / 2);
+        assert_eq!(shadow.reference_duty, u128::from(E) / 5, "λ binds the floor duty at E/5 = 640.17 MSK");
+        let lock_msk = shadow.reference_lock / u128::from(MSK);
+        assert!((239..=241).contains(&lock_msk), "the floor's L-1 lock at k′ = 2 is ≈ 240.1 MSK, got {lock_msk}");
+        assert!(near(shadow.seat_capacity_today_milli_per_daa, 940), "{}", shadow.seat_capacity_today_milli_per_daa);
+        let duty_only = [1_032u64, 1_038, 1_041, 1_042, 1_043];
+        for (s, want) in shadow.steps.iter().zip(duty_only) {
+            assert!(near(s.seat_capacity_milli_per_daa, want), "ρ {}: seat capacity {} vs {want}", s.step.rho, s.seat_capacity_milli_per_daa);
+            assert_eq!(s.seat_capacity_if_d5_milli_per_daa, s.seat_capacity_milli_per_daa, "q = 0 is below D-5's 25‰ too");
+        }
+        assert_eq!((shadow.carriers_per_block, shadow.licence_queue, shadow.carriage_blocks_to_drain), (3, 0, 0));
+        let line = shadow.summary();
+        assert!(line.contains("N13k[ρ@q‰]=10@0:2,25@0:2,50@0:2,100@0:2,1000@0:2"), "{line}");
+        assert!(line.contains("seatcap[ρ@q‰]=10@0:1.03,"), "{line}");
+
+        // ---- the ADR's reference ramp, named: conditional on a measured q ≥ 0.29 ----
+        let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &PALW_CAPACITY_REFERENCE_STEPS_V1);
         assert_eq!(shadow.steps.iter().map(|s| s.step.rho).collect::<Vec<_>>(), vec![10, 25, 50, 100, 1000]);
         let golden: [(u64, u64, [u64; 5]); 3] = [
             (1, 2, [20, 50, 101, 203, 2_030]),
@@ -1155,7 +1291,6 @@ mod tests {
             assert_eq!(row.n_instant_today, today, "bond {n} today");
             assert_eq!(row.n_instant_new, new.to_vec(), "bond {n} per step");
             assert_eq!(row.n_more_new, row.n_instant_new, "a fresh bond can open all of them now");
-            assert_eq!(row.committed_today, 0);
         }
         assert_eq!(shadow.steps.iter().map(|s| s.n_instant_13k).collect::<Vec<_>>(), vec![20, 50, 101, 203, 2_030]);
         // §4.5: the obligation is the ramp term, and the q it needs at L = 3G.
@@ -1163,22 +1298,34 @@ mod tests {
         assert_eq!(m, [10u32, 25, 50, 100, 1000].map(|rho| palw_capacity_m_ramp_v1(u128::from(E), rho)).to_vec());
         let q: Vec<u16> = shadow.steps.iter().map(|s| s.q_needed_permille).collect();
         assert_eq!((q[0], q[1], q[3], q[4]), (131, 138, 142, 143));
-        assert!(shadow.steps.iter().all(|s| s.ramp_binds && s.seat_credit), "143‰ credits the ramp and the seats (L_seat 130k)");
-        // §5.4: 8 cards × 469,531.6 MSK against a floor claim's duty and lock — 0.94/DAA today,
-        // and ×ρ per step with both ÷ρ (within 0.5% of the ADR's 640.17 / 240.1 MSK inputs).
-        assert_eq!(shadow.seats, 8);
-        assert_eq!(shadow.seat_usable_capital, 8 * u128::from(CARD) / 2);
-        assert_eq!(shadow.reference_duty, u128::from(E) / 5, "λ binds the floor duty at E/5 = 640.17 MSK");
-        let lock_msk = shadow.reference_lock / u128::from(MSK);
-        assert!((239..=241).contains(&lock_msk), "the floor's L-1 lock at k′ = 2 is ≈ 240.1 MSK, got {lock_msk}");
-        let near = |got: u64, want: u64| got.abs_diff(want) * 200 <= want;
-        assert!(near(shadow.seat_capacity_today_milli_per_daa, 940), "{}", shadow.seat_capacity_today_milli_per_daa);
-        let cap: Vec<u64> = shadow.steps.iter().map(|s| s.seat_capacity_milli_per_daa).collect();
-        for (got, want) in cap.iter().zip([9_409u64, 23_523, 47_047, 94_094, 940_944]) {
-            assert!(near(*got, want), "seat capacity {got} vs {want}");
+        // Lane liab's AS-2: 143‰ < 250‰, so the locks keep today's price and the seats go ×1.1.
+        assert!(shadow.steps.iter().all(|s| s.ramp_binds && !s.seat_credit && s.seat_credit_if_d5));
+        for (s, want) in shadow.steps.iter().zip(duty_only) {
+            assert!(near(s.seat_capacity_milli_per_daa, want), "ρ {}: {} vs {want}", s.step.rho, s.seat_capacity_milli_per_daa);
         }
-        assert_eq!((shadow.carriers_per_block, shadow.licence_queue, shadow.carriage_blocks_to_drain), (3, 0, 0));
-        assert!(shadow.summary().contains("N13k[ρ]=10:20,25:50,50:101,100:203,1000:2030"), "{}", shadow.summary());
+        // D-5's conditional column: ×ρ with both ÷ρ (within 0.5% of the ADR's 640.17 / 240.1 inputs).
+        for (s, want) in shadow.steps.iter().zip([9_409u64, 23_523, 47_047, 94_094, 940_944]) {
+            assert!(near(s.seat_capacity_if_d5_milli_per_daa, want), "D-5 seat capacity {} vs {want}", s.seat_capacity_if_d5_milli_per_daa);
+        }
+        assert!(shadow.summary().contains("N13k[ρ@q‰]=10@143:20,25@143:50,50@143:101,100@143:203,1000@143:2030"), "{}", shadow.summary());
+
+        // ---- a step crediting lane liab's q_seat (250‰): the locks divide too, ×ρ ----
+        let credited: Vec<PalwCapacityStepV1> =
+            PALW_CAPACITY_REFERENCE_STEPS_V1.iter().map(|s| PalwCapacityStepV1 { q_credit_permille: 250, ..*s }).collect();
+        let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &credited);
+        assert!(shadow.steps.iter().all(|s| s.seat_credit && s.seat_credit_if_d5));
+        for (s, want) in shadow.steps.iter().zip([9_409u64, 23_523, 47_047, 94_094, 940_944]) {
+            assert!(near(s.seat_capacity_milli_per_daa, want), "seat capacity {} vs {want}", s.seat_capacity_milli_per_daa);
+        }
+    }
+
+    /// The default steps: F-L's armed schedule when the params carry one, else the uncredited ramp.
+    #[test]
+    fn the_display_steps_are_the_armed_schedule_else_uncredited() {
+        assert_eq!(palw_capacity_display_steps_v1(None), PALW_CAPACITY_UNCREDITED_STEPS_V1.to_vec());
+        assert_eq!(palw_capacity_display_steps_v1(Some(&[])), PALW_CAPACITY_UNCREDITED_STEPS_V1.to_vec());
+        let armed = [PalwCapacityStepV1 { from_daa: 1_200, rho: 10, q_credit_permille: 0 }];
+        assert_eq!(palw_capacity_display_steps_v1(Some(&armed)), armed.to_vec(), "testnet-12's first step, as armed");
     }
 
     /// **W-I1 in the shadow: claims × N is not fork power × N.** A 13k bond's licensed floor claims
@@ -1287,8 +1434,9 @@ mod tests {
         assert_eq!(shadow.licensed_recent, 1);
     }
 
-    /// **Seat duties and locks**: the identity step (ρ 1, q 0) reproduces every seat's A-1; a
-    /// credited ρ = 10 step divides the duty (AS-1) and the lock (AS-2) by ten.
+    /// **Seat duties and locks**: the identity step (ρ 1, q 0) reproduces every seat's A-1; a ρ = 10
+    /// step divides the duty (AS-1) at any credit, and the lock (AS-2) only at lane liab's
+    /// `q_seat` = 250‰ — at the ADR's 143‰ the lock keeps today's price.
     #[test]
     fn s_t1_seat_duties_and_locks_reprice_by_rho() {
         let duty = u128::from(E) / 5;
@@ -1318,6 +1466,8 @@ mod tests {
         let steps = [
             PalwCapacityStepV1 { from_daa: 0, rho: 1, q_credit_permille: 0 },
             PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 143 },
+            PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 250 },
+            PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 0 },
         ];
         let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &steps);
         for n in 100..108u64 {
@@ -1326,13 +1476,18 @@ mod tests {
         }
         let seat = row_of(&shadow, 100);
         assert_eq!(seat.committed_today, 2 * duty + lock);
-        assert_eq!(seat.committed_new[1], 2 * duty.div_ceil(10) + lock.div_ceil(10));
+        assert_eq!(seat.committed_new[1], 2 * duty.div_ceil(10) + lock, "143‰ < q_seat: the lock stays");
+        assert_eq!(seat.committed_new[2], 2 * duty.div_ceil(10) + lock.div_ceil(10), "250‰: the lock divides too");
+        assert_eq!(seat.committed_new[3], seat.committed_new[1], "testnet-12's first step (ρ 10, q 0): the duty only");
         assert_eq!(shadow.duty_rows, 2);
         assert_eq!(shadow.duty_rows_capped, 0, "the floor duty is λ-bound, below commitment / seats");
         assert_eq!(shadow.seat_duty_total_today, 2 * 5 * duty);
         assert_eq!(shadow.steps[1].seat_duty_total, 2 * 5 * duty.div_ceil(10));
-        assert_eq!((shadow.seat_lock_total_today, shadow.steps[1].seat_lock_total), (lock, lock.div_ceil(10)));
-        assert_eq!(shadow.steps[0].seat_lock_total, lock, "q 0: no seat credit, the lock stays");
+        assert_eq!(shadow.seat_lock_total_today, lock);
+        assert_eq!(
+            shadow.steps.iter().map(|s| (s.seat_lock_total, s.seat_credit)).collect::<Vec<_>>(),
+            vec![(lock, false), (lock, false), (lock.div_ceil(10), true), (lock, false)]
+        );
         assert_eq!(shadow.reference_duty, duty, "the floor rows' mean duty");
         assert_eq!(shadow.reference_lock, lock, "the floor locks' mean");
     }
@@ -1413,17 +1568,30 @@ mod tests {
         assert_eq!((floor_row.da_open_non_seat, floor_row.da_open_seat, floor_row.da_opened_non_seat_total), (1, 1, 3));
         assert_eq!((floor_row.claims_voided, floor_row.voids_attributed, floor_row.claims_live), (2, 2, 2));
         assert_eq!(floor_row.voids_by_reason, vec![("CourtFraud".to_string(), 1), ("ProducerWithholding".to_string(), 1)]);
-        // Adversary bonds 10 and 14 hold four claims, two attributed: q = 500‰ ≥ 2 × 143 — no alarm.
-        assert_eq!((floor_row.adversary_claims, floor_row.adversary_attributed, floor_row.q_measured_permille), (4, 2, Some(500)));
+        // Adversary bonds 10 and 14 hold four claims: two caught (a DA default, a court fraud), two
+        // still in flight — out of q until they resolve, so q = 2/2, no alarm.
+        let adversary = |row: &PalwCapacityClassAttributionV1| {
+            (
+                row.adversary_claims,
+                row.adversary_attributed,
+                row.adversary_undetected,
+                row.adversary_censored,
+                row.adversary_in_flight,
+                row.q_measured_permille,
+            )
+        };
+        assert_eq!(adversary(floor_row), (4, 2, 0, 0, 2, Some(1_000)));
         assert!(shadow.steps.iter().all(|s| !s.q_alarm));
         let keyless = shadow.attribution.iter().find(|a| a.class_id == Hash64::default()).unwrap();
         assert_eq!(keyless.convictions_by_kind.iter().map(|(_, n)| n).sum::<u64>(), 3, "records naming no claim");
-        // A8: with only bond 14 named, one of three attributed — 333‰ — still ≥ 2 × 143 = 286.
+        // Only bond 14 named: one caught, two in flight — still no alarm.
         let one = PalwCapacityShadowOptionsV1 { adversary_bonds: vec![bond_key(14)], ..Default::default() };
         let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &one);
+        assert_eq!(adversary(shadow.attribution.iter().find(|a| a.class_id == floor()).unwrap()), (3, 1, 0, 0, 2, Some(1_000)));
         assert!(shadow.steps.iter().all(|s| !s.q_alarm));
-        // The measured rate falls under twice what the step needs: the alarm fires (ρ = 10 needs
-        // 131, so 250‰ < 262 alarms; the 1000 step needs 143 → 286).
+
+        // **The in-flight bias is gone**: one caught and three just created used to read 250‰ and
+        // alarm; unresolved claims are not misses, so nothing has been measured against the catch.
         let state = eight_cards(Plant::new())
             .bond(14, 13_000 * MSK, false)
             .claim(0x60, floor_claim(14, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 700))
@@ -1432,9 +1600,71 @@ mod tests {
             .claim(0x63, floor_claim(14, PalwClaimPhaseV2::Provisional, NOW - 3))
             .state();
         let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &one);
-        assert_eq!(shadow.attribution[0].q_measured_permille, Some(250));
-        assert!(shadow.steps.iter().all(|s| s.q_alarm), "250‰ < 2 × q_needed at every reference step");
+        assert_eq!(adversary(&shadow.attribution[0]), (4, 1, 0, 0, 3, Some(1_000)));
+        assert!(shadow.steps.iter().all(|s| !s.q_alarm), "in-flight claims do not alarm");
+
+        // **A8: the auditors stop.** The same campaign resolves with nobody convicted — two `Final`,
+        // one timed out — so q = 1/4 = 250‰ < 2 × q_needed at every step (ρ = 10 needs 131 → 262;
+        // 1000 needs 143 → 286): the alarm fires, on the default display and the reference ramp.
+        // A conviction naming a claim still in flight counts caught whatever its phase.
+        let state = eight_cards(Plant::new())
+            .bond(14, 13_000 * MSK, false)
+            .claim(0x60, floor_claim(14, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 700))
+            .claim(0x61, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, NOW - 200))
+            .claim(0x62, floor_claim(14, voided(NOW - 30, PalwVoidReasonV2::BindTimeout), NOW - 300))
+            .claim(0x63, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 9 }, NOW - 190))
+            .claim(0x64, floor_claim(14, PalwClaimPhaseV2::Provisional, NOW - 3))
+            .state();
+        let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &one);
+        assert_eq!(adversary(&shadow.attribution[0]), (5, 1, 3, 0, 1, Some(250)));
+        assert!(shadow.steps.iter().all(|s| s.q_alarm), "250‰ < 2 × q_needed at every step");
         assert!(shadow.summary().ends_with("q-ALARM"), "{}", shadow.summary());
+        let reference = PalwCapacityShadowOptionsV1 { steps: PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec(), ..one.clone() };
+        assert!(palw_capacity_shadow_with_v1(&state, &p, NOW, &reference).steps.iter().all(|s| s.q_alarm));
+        // Unnamed, nothing is measured and nothing alarms — what a node without
+        // `--palw-capacity-shadow-adversary` sees.
+        let shadow = palw_capacity_shadow_with_v1(&state, &p, NOW, &PalwCapacityShadowOptionsV1::default());
+        assert_eq!(shadow.attribution[0].q_measured_permille, None);
+        assert!(shadow.steps.iter().all(|s| !s.q_alarm));
+        // The auditors run: the in-flight claim is convicted (a record naming it) and so is one Final.
+        let mut plant = eight_cards(Plant::new())
+            .bond(14, 13_000 * MSK, false)
+            .claim(0x60, floor_claim(14, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 700))
+            .claim(0x61, floor_claim(14, PalwClaimPhaseV2::Final { final_daa: NOW - 20 }, NOW - 200))
+            .claim(0x64, floor_claim(14, PalwClaimPhaseV2::PanelBound { bound_daa: NOW - 2 }, NOW - 25));
+        for (key, claim_id) in [(0xB0u64, h(0x61)), (0xB1, h(0x64))] {
+            plant.extra.push(PalwDeltaEntryV2::ConsumedOffence {
+                key: h(key),
+                old: None,
+                new: Some(offence(PalwOffenceKindV1::ExecutorRefuted, 14, NOW - 1, claim_id)),
+            });
+        }
+        let shadow = palw_capacity_shadow_with_v1(&plant.state(), &p, NOW, &one);
+        assert_eq!(adversary(&shadow.attribution[0]), (3, 3, 0, 0, 0, Some(1_000)));
+        assert!(shadow.steps.iter().all(|s| !s.q_alarm));
+    }
+
+    /// **Every void reason is classed** (the match is exhaustive): the four convictions are caught,
+    /// the five failures of time or capacity are undetected. Lane liab's `AggregateForfeit` joins as
+    /// censored at the `rcore/cap-int` merge, where this match stops compiling until it does.
+    #[test]
+    fn every_void_reason_is_classed_for_q() {
+        use PalwCapacityVoidAttributionV1::{Caught, Undetected};
+        let classes = [
+            (PalwVoidReasonV2::BindTimeout, Undetected),
+            (PalwVoidReasonV2::ReceiptTimeout, Undetected),
+            (PalwVoidReasonV2::CourtFraud, Caught),
+            (PalwVoidReasonV2::ProducerWithholding, Caught),
+            (PalwVoidReasonV2::NoCapablePanel, Undetected),
+            (PalwVoidReasonV2::UnavailableQuorum, Undetected),
+            (PalwVoidReasonV2::NotReplayBacked, Undetected),
+            (PalwVoidReasonV2::CourtDefault, Caught),
+            (PalwVoidReasonV2::CourtHeldVerdict, Caught),
+        ];
+        for (i, (reason, class)) in classes.iter().enumerate() {
+            assert_eq!(borsh::to_vec(reason).unwrap(), vec![i as u8], "the table lists every reason in borsh order");
+            assert_eq!(palw_capacity_void_attribution_v1(*reason), *class, "{reason:?}");
+        }
     }
 
     /// **S-I3's shape**: every claim and bond is visited once; a large planted chain reports every

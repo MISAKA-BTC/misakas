@@ -166,7 +166,7 @@ fn output(payout: &PalwPayoutV2) -> TransactionOutput {
 
 /// Card `card`'s ML-DSA-87 signature over `message` under `context` (the harness keys the genesis
 /// cards carry, `t12_with_harness_cards`).
-fn sign(card: usize, message: &[u8], context: &[u8]) -> Vec<u8> {
+pub(super) fn sign(card: usize, message: &[u8], context: &[u8]) -> Vec<u8> {
     libcrux_ml_dsa::ml_dsa_87::sign(&TestConsensus::palw_v2_registry_keypair(card as u64).signing_key, message, context, [0x03u8; 32])
         .expect("ML-DSA-87 signs")
         .as_ref()
@@ -232,23 +232,23 @@ impl Books {
     }
 }
 
-enum Kind {
+pub(super) enum Kind {
     Heartbeat(Vec<Transaction>),
     Attempt(usize),
 }
 
-fn beat() -> Kind {
+pub(super) fn beat() -> Kind {
     Kind::Heartbeat(Vec::new())
 }
 
 /// One block's facts: the committed parent, the block, the child the node committed, the vesting
 /// notes of the block's delta, and the claim an attempt block made.
-struct Stepped {
+pub(super) struct Stepped {
     parent: PalwChainStateV2,
     block: Block,
-    child: PalwChainStateV2,
+    pub(super) child: PalwChainStateV2,
     notes: Vec<PalwVestingNoteV1>,
-    claim: Option<Hash64>,
+    pub(super) claim: Option<Hash64>,
 }
 
 impl Stepped {
@@ -292,9 +292,9 @@ fn plan_is_exact(parent: &PalwChainStateV2, child: &PalwChainStateV2, notes: &[P
             || child.pending_payouts_iter().all(|(k, _)| !is_market(k) || parent.pending_payout(k).is_some()))
 }
 
-struct Minting {
-    chain: T12Chain,
-    domain: Hash64,
+pub(super) struct Minting {
+    pub(super) chain: T12Chain,
+    pub(super) domain: Hash64,
     /// Each genesis card's payout payload.
     payloads: Vec<Hash64>,
     /// The state the books start from: the last plant, or the tip as mined.
@@ -323,7 +323,7 @@ struct Minting {
 }
 
 /// **testnet-12 as shipped (harness cards), one heartbeat in, nothing planted.**
-async fn mined() -> Minting {
+pub(super) async fn mined() -> Minting {
     kaspa_core::log::try_init_logger("warn");
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     assert!(bundle.state.rcore_plus_active_at(0), "testnet-12 arms R-core+ from genesis");
@@ -364,7 +364,7 @@ async fn minting(edit: impl FnOnce(&Plant, &mut PalwStateCarriageV2)) -> Minting
 }
 
 impl Minting {
-    fn sp(&self) -> &PalwStateParamsV2 {
+    pub(super) fn sp(&self) -> &PalwStateParamsV2 {
         &self.chain.bundle.state
     }
 
@@ -372,7 +372,7 @@ impl Minting {
         self.chain.config.params.target_time_per_block()
     }
 
-    fn sink_daa(&self) -> u64 {
+    pub(super) fn sink_daa(&self) -> u64 {
         self.chain.daa_of(self.chain.sink())
     }
 
@@ -432,7 +432,7 @@ impl Minting {
     }
 
     /// Mine one block of `kind` and hold it to `after`'s checks.
-    async fn step(&mut self, kind: Kind) -> Stepped {
+    pub(super) async fn step(&mut self, kind: Kind) -> Stepped {
         let (parent_hash, parent) = self.chain.tip_state();
         let step = self.ttpb();
         let (block, claim, card) = match kind {
@@ -714,7 +714,7 @@ impl Minting {
     /// **A funded, signed 0x4b carrier of `object`, paid from `payer`'s wallet**, change at output 0
     /// back to the payer's own script and `sink` (a market buy's) at output 1 — as `misaka palw`
     /// builds one. The change becomes the payer's wallet once a block accepts the carrier.
-    fn carrier(&mut self, payer: usize, object: PalwConsensusObjectV2, sink: Option<TransactionOutput>) -> Transaction {
+    pub(super) fn carrier(&mut self, payer: usize, object: PalwConsensusObjectV2, sink: Option<TransactionOutput>) -> Transaction {
         let (outpoint, entry) = self.wallets.remove(&payer).unwrap_or_else(|| panic!("card {payer} has a wallet"));
         let sunk = sink.as_ref().map_or(0, |o| o.value);
         let change = entry.amount - sunk - CARRIER_FEE;
@@ -750,7 +750,7 @@ impl Minting {
     }
 
     /// Heartbeats until `done` holds of the tip, at most `cap`.
-    async fn beat_until(&mut self, cap: u64, what: &str, done: impl Fn(&PalwChainStateV2) -> bool) {
+    pub(super) async fn beat_until(&mut self, cap: u64, what: &str, done: impl Fn(&PalwChainStateV2) -> bool) {
         for _ in 0..cap {
             if done(&self.chain.tip_state().1) {
                 return;
@@ -762,7 +762,7 @@ impl Minting {
 
     /// **The block that binds `claim_id`'s panel** (SW-8, IA-1a): heartbeats to the claim's anchor
     /// slot, then card `card`'s attempt — which binds it and makes a claim of its own, returned.
-    async fn attempt_at_the_anchor_slot(&mut self, claim_id: Hash64, card: usize) -> Hash64 {
+    pub(super) async fn attempt_at_the_anchor_slot(&mut self, claim_id: Hash64, card: usize) -> Hash64 {
         let slot = self.chain.tip_state().1.claim(&claim_id).expect("the claim exists").bind_base_daa()
             + self.chain.bundle.panel.anchor_delay();
         while self.sink_daa() < slot {
@@ -779,7 +779,7 @@ impl Minting {
     /// **A quorum of `claim_id`'s panel signs `Valid`** (V2 receipts, through the node's own
     /// assembler) and the `ReceiptLicensed` rides a carrier paid by `payer`: the block carrying it,
     /// then the block accepting it.
-    async fn license(&mut self, claim_id: Hash64, payer: usize) {
+    pub(super) async fn license(&mut self, claim_id: Hash64, payer: usize) {
         let panel = self.chain.tip_state().1.panel(&claim_id).expect("a bound claim has a panel").clone();
         let signed_daa = self.chain.ctx.consensus.get_virtual_daa_score();
         let message = palw_receipt_message_v2(self.domain, claim_id, PalwReceiptVerdictV2::Valid, signed_daa);

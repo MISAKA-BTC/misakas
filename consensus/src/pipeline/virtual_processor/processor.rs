@@ -5376,6 +5376,13 @@ impl VirtualStateProcessor {
         let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let next_daa = self.palw_next_block_daa_for_reads(&state);
         options.raw_depth = self.palw_settled_anchor_depth_at(next_daa);
+        // The default display (review of lane shadow, finding 1): the schedule F-L arms once the
+        // params carry one — `rcore/cap-int` passes `palw_capacity_aggregate_liability`'s steps here
+        // in place of `None` — else the uncredited ramp (q = 0, m_c = E). The ADR's reference ramp
+        // (q = 143‰) is priced only when a caller names it.
+        if options.steps.is_empty() {
+            options.steps = kaspa_consensus_core::palw_capacity_shadow_v1::palw_capacity_display_steps_v1(None);
+        }
         // `E` of a claim the next block would accept: the tip's subsidy under the carve the fold
         // resolves at that DAA (ADR-0126's overlay on testnet-12), for a state with no claim to read.
         let subsidy = state.last_point().map(|point| point.subsidy).unwrap_or(0);
