@@ -91,7 +91,9 @@ pub(crate) fn bond_lookup_class_of(params: &kaspa_consensus_core::config::params
 /// already returns the locked set and exact bond facts; this is the readable distinction between
 /// consensus registration and an ordinary or node-local reserved output.
 pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, bond_arg: Option<&str>) -> CliResult {
-    let nv = connect(ctx).await?;
+    let mut nv = connect(ctx).await?;
+    // getPalwClaims (the lock read) is an ADR-0122 op: asked only of a node that serves them.
+    let ops_0122 = node_serves_ops_0122(ctx, &mut nv).await?;
     // The producer-facts wire shape asks for a class even though registry membership is not
     // class-specific. The node parameters already name a guaranteed registered class, so the
     // ordinary status path must not make an operator discover and paste 128 hex first.
@@ -137,7 +139,12 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
             facts.bond_known && facts.bond_registered_pubkey.eq_ignore_ascii_case(&faster_hex::hex_string(key.public_key()))
         });
         let outpoint = format!("{}:{}", bond.transaction_id, bond.index);
-        let locks = if facts.bond_known { bond_lock_read(&nv, &bond, 10).await.ok() } else { None };
+        let locks = match (facts.bond_known, ops_0122) {
+            (true, true) => bond_lock_read(&nv, &bond, 10).await.ok(),
+            // A node that predates the op: "not reported", never a WebSocket it drops.
+            (true, false) => Some(kaspa_rpc_core::GetPalwClaimsResponse::default()),
+            (false, _) => None,
+        };
         let lifetime_collateral = class_lifetime_collateral(&nv, facts.pwu, &facts.class_target);
         let collateral_shortfall = lifetime_collateral.and_then(|need| need.checked_sub(facts.bond_collateral)).filter(|v| *v > 0);
         match ctx.output {
@@ -285,7 +292,11 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
     // a retirement too.
     let mut owned_locks = Vec::with_capacity(owned.len());
     for (op, _) in &owned {
-        owned_locks.push(bond_lock_read(&nv, op, 3).await.ok());
+        owned_locks.push(if ops_0122 {
+            bond_lock_read(&nv, op, 3).await.ok()
+        } else {
+            Some(kaspa_rpc_core::GetPalwClaimsResponse::default())
+        });
     }
 
     // Every UTXO at this address, with the node's own view of which are consensus-locked. The
@@ -403,6 +414,22 @@ async fn bond_lock_read(
         .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwClaims: {e}")))
 }
 
+/// **Does this node serve the ADR-0122 ops** (getPalwClaims among them)? Asked with
+/// `getPalwNodeStatus`, as `snapshot::connect_to` asks it: a node built before them does not answer
+/// "method not found" — it drops the WebSocket, and every later read on that connection fails. So
+/// the probe reconnects `nv` when the node drops it, and says no.
+async fn node_serves_ops_0122(ctx: &Ctx, nv: &mut NodeView) -> Result<bool, CliError> {
+    match nv.client.get_palw_node_status().await {
+        Ok(_) => Ok(true),
+        Err(e) if kaspa_wrpc_client::error::rpc_error_is_connection_loss(&e) => {
+            *nv = connect(ctx).await?;
+            Ok(false)
+        }
+        // The node knows the op and refused this call for its own reason.
+        Err(_) => Ok(true),
+    }
+}
+
 /// `getPalwClaims` answered the lock read: a version-3 node stamps the DAA it judged at (never 0 —
 /// a read is for the block after the tip).
 fn lock_read_known(r: &kaspa_rpc_core::GetPalwClaimsResponse) -> bool {
@@ -443,7 +470,7 @@ fn lock_status_lines(r: &kaspa_rpc_core::GetPalwClaimsResponse) -> Vec<String> {
     let mut out = Vec::new();
     if !lock_read_known(r) {
         out.push(
-            "locks:      not reported by this node (it predates getPalwClaims v3) — a seat's panel locks can hold a retirement".into(),
+            "locks:      not reported by this node (it predates the lock read) — a seat's panel locks can hold a retirement".into(),
         );
     } else if r.bond_live_lock_count == 0 {
         out.push("locks:      none live — a retirement is not held by panel locks".into());
@@ -703,7 +730,10 @@ fn resolve_bond(
 }
 
 pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id: Option<&str>, dry_run: bool, yes: bool) -> CliResult {
-    let nv = connect(ctx).await?;
+    let mut nv = connect(ctx).await?;
+    // getPalwClaims (the lock read and the Retiring wait) is an ADR-0122 op: asked only of a node that
+    // serves them, so an older node's dropped WebSocket never takes the submit down with it.
+    let ops_0122 = node_serves_ops_0122(ctx, &mut nv).await?;
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
     let all = page_all(&nv, &addr).await?;
@@ -868,7 +898,9 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id:
     // the reservation above is claims; a seat's `Valid` locks outlive its claims by `window_court`,
     // and the fold drops a retirement while any is live — after the carrier is mined and its fee
     // paid, with the bond still Active and nothing on the CLI's side to say so.
-    match bond_lock_read(&nv, &bond_outpoint, 5).await {
+    let lock_read =
+        if ops_0122 { bond_lock_read(&nv, &bond_outpoint, 5).await } else { Ok(kaspa_rpc_core::GetPalwClaimsResponse::default()) };
+    match lock_read {
         Ok(r) if lock_read_known(&r) => retire_lock_verdict(&r).map_err(|why| CliError::new(exit::NOT_READY, why))?,
         Ok(_) => eprintln!(
             "warning: this node does not report panel locks (getPalwClaims v3), so this CLI cannot tell whether the chain will drop \
@@ -940,7 +972,8 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id:
     // **Say what the chain did, not what was sent** (T12-058): "submitted" was the last word even when
     // the fold dropped the object. Wait (bounded) for the bond to read Retiring, then name the DAA
     // the collateral can move from.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(RETIRE_FOLD_WAIT_SECS);
+    // A node without the op cannot be asked: no wait, the pointer to `bond status` below.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(if ops_0122 { RETIRE_FOLD_WAIT_SECS } else { 0 });
     let mut last = None;
     while std::time::Instant::now() < deadline {
         if let Ok(r) = bond_lock_read(&nv, &bond_outpoint, 1).await {
@@ -1239,5 +1272,26 @@ mod retire_lock_tests {
         // A node that predates the read says so rather than "none".
         let old = lock_status_lines(&GetPalwClaimsResponse::default()).join("\n");
         assert!(old.contains("not reported by this node"), "{old}");
+    }
+
+    /// **getPalwClaims is asked only of a node that serves the ADR-0122 ops** (review of T12-058): a
+    /// node built before them drops the WebSocket on the unknown op, and `bond retire` would then lose
+    /// the connection its submit rides. Every lock read in `status` and `retire` sits behind the
+    /// `getPalwNodeStatus` probe.
+    #[test]
+    fn t12_058_every_lock_read_is_behind_the_ops_probe() {
+        let source = include_str!("bond.rs");
+        let production = &source[..source.find("#[cfg(test)]").expect("the tests")];
+        for entry in ["pub async fn status(", "pub async fn retire("] {
+            let body = &production[production.find(entry).expect(entry)..];
+            let body = &body[..body.find("\n}\n").expect("its end")];
+            let probe = body.find("let ops_0122 = node_serves_ops_0122(ctx, &mut nv).await?;").expect("the probe, first");
+            let reads: Vec<usize> = body.match_indices("bond_lock_read(&nv").map(|(at, _)| at).collect();
+            assert!(!reads.is_empty(), "{entry} reads the locks");
+            for at in reads {
+                assert!(probe < at, "{entry}: a lock read before the probe");
+                assert!(body[at.saturating_sub(420)..at].contains("ops_0122"), "{entry}: a lock read at {at} not behind the probe");
+            }
+        }
     }
 }
