@@ -58,6 +58,15 @@ pub struct PalwProducerBondFactsV2 {
     /// `Params::palw_rcore_plus`, `0` below it. The work gate never lets `committed + accuser` pass
     /// the collateral (the S review's M1).
     pub accuser_exposure: u128,
+    /// **Lane V02 (post-launch, 2026-09-26): the part of [`Self::committed`] the ceiling does not
+    /// carry** — the bond's locks on resolved claims (`palw_bond_off_ceiling_raw_v1`) where
+    /// `Params::palw_final_lock_full_collateral` is in force at the candidate DAA, `0` below it. The
+    /// fold's work gate is then `committed − committed_off_ceiling + claim ≤ exposure_ceiling`, and the
+    /// whole `committed` still counts against the collateral.
+    pub committed_off_ceiling: u128,
+    /// **Lane V02 (review HIGH): the accuser reserve the relief never spends**
+    /// (`palw_bond_accuser_reserve_v1` at the candidate DAA, `0` below the fence).
+    pub accuser_reserve: u128,
 }
 
 impl PalwProducerBondFactsV2 {
@@ -72,8 +81,46 @@ impl PalwProducerBondFactsV2 {
     /// up to registration exposure, which admission item 8 always counted (the accuser ledger is `0`
     /// there and the ratio is at most 1000‰, so the second clause is implied).
     pub fn has_committed_room(&self) -> bool {
-        self.committed.saturating_add(self.claim_exposure) <= self.exposure_ceiling
-            && self.committed.saturating_add(self.accuser_exposure).saturating_add(self.claim_exposure) <= self.collateral as u128
+        let launch = self.committed.saturating_add(self.claim_exposure) <= self.exposure_ceiling
+            && self.committed.saturating_add(self.accuser_exposure).saturating_add(self.claim_exposure) <= self.collateral as u128;
+        // Lane V02: `committed_off_ceiling` is 0 below `palw_final_lock_full_collateral` — the shipped
+        // test. Past it the work gate is `max(launch, split)` (`palw_rcore_work_room_of_ceiling_v1`):
+        // the resolved locks leave the ceiling, and the relief never spends the accuser reserve.
+        if self.committed_off_ceiling == 0 {
+            return launch;
+        }
+        launch
+            || (self.committed.saturating_sub(self.committed_off_ceiling).saturating_add(self.claim_exposure) <= self.exposure_ceiling
+                && self
+                    .committed
+                    .saturating_add(self.accuser_exposure)
+                    .saturating_add(self.accuser_reserve)
+                    .saturating_add(self.claim_exposure)
+                    <= self.collateral as u128)
+    }
+}
+
+/// **Lane V02 (review MEDIUM): the producer's accuser ledger as the fold reads it past the fence** —
+/// where `palw_final_lock_full_collateral` is in force at `daa_score` and the block folds held
+/// dissections at their charge (`held_charge_active`: the extras pair `offence_attribution_active &&
+/// held_context_ladder.is_some()`), [`PalwProducerBondFactsV2::accuser_exposure`] becomes
+/// `palw_accuser_ledger_v1` — the court index's count plus each open held dissection's surplus — so
+/// `has_committed_room` measures what the fold's `gate_room` and admission item 8 measure. Below the
+/// fence the facts are untouched. The caller that holds the block's fences (the processor) applies it.
+pub fn palw_producer_facts_apply_held_ledger_v1(
+    facts: &mut PalwProducerFactsV2,
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: Option<&PalwBondKeyV2>,
+    daa_score: u64,
+    held_charge_active: bool,
+) {
+    let Some(key) = bond else { return };
+    let Some(floor) = crate::palw_state_v2::palw_v02_held_charge_floor_v1(state_params, daa_score, held_charge_active) else {
+        return;
+    };
+    if let Some(bond_facts) = facts.bond.as_mut() {
+        bond_facts.accuser_exposure = crate::palw_state_v2::palw_accuser_ledger_v1(state, key, Some(floor));
     }
 }
 
@@ -487,6 +534,10 @@ pub fn palw_producer_facts_v4(
             } else {
                 0
             },
+            // Lane V02: 0 below `palw_final_lock_full_collateral` (and below R-core+, which it requires).
+            committed_off_ceiling: crate::palw_state_v2::palw_bond_off_ceiling_raw_v1(state, state_params, key, daa_score, raw_depth),
+            // Lane V02 (review HIGH): 0 below the fence.
+            accuser_reserve: crate::palw_state_v2::palw_bond_accuser_reserve_v1(state_params, daa_score),
         })
     });
     Some(PalwProducerFactsV2 {

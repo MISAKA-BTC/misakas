@@ -16407,6 +16407,9 @@ mod t12_panel_seed_fence;
 // chain, past it only an operator's attempt anchors a panel, and a slot only non-operators reach voids at
 // the bind window's backstop.
 mod t12_operator_anchor_fence;
+// Lane V02 (post-launch, 2026-09-26): `palw_final_lock_full_collateral` crossed on a real chain — lock-heavy
+// seats bind from the height and void their anchor below it.
+mod t12_final_lock_full_collateral_fence;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;

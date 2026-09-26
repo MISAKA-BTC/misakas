@@ -153,6 +153,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // (testnet-12's eight operator cards); `validate_palw_v2` refuses it without R-core+ at or below it
         // and off ConsensusV2.
         "palw_operator_anchor" => params.palw_operator_anchor = params.palw_operator_anchor_of_genesis_bonds_v1(at),
+        // Lane V02 (a resolved claim's lock off the work ceiling, post-launch): the V2 bundle mirrors the
+        // height and `validate_palw_v2` refuses the two apart — set together; refused below R-core+.
+        "palw_final_lock_full_collateral" => {
+            params.palw_final_lock_full_collateral = Some(at);
+            params.sync_palw_final_lock_full_collateral();
+        }
         // ADR-0152-adjacent (Activation Pool): genesis-only (R1 and R2 change how every class is
         // reclaimed and stepped), so a height is refused here by name. At genesis the terms this preset
         // carries are kept, and a preset that carries none takes the user's illustrative scale — the

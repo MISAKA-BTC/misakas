@@ -259,6 +259,7 @@ REORG = "consensus/core/tests/reorg_strict_win_fence.rs"
 MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 SINK = "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs"
+V02 = "consensus/core/tests/palw_final_lock_full_collateral_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 PARAMS = "consensus/core/src/config/params.rs"
 GOLDEN = "consensus/core/tests/rcore_m5_v22_golden.rs"
@@ -458,6 +459,10 @@ def registry() -> list[Pin]:
     # Lane sink (the model sink binding, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
     pins += _triple("sink.T12_RELEASE", "t12", SINK, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{SINK}::the_binding_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # Lane V02 (a resolved claim's lock off the work ceiling, post-launch, dormant): testnet-12 as shipped,
+    # which the dormant fence must not move.
+    pins += _triple("v02.T12_RELEASE", "t12", V02, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{V02}::the_split_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)
