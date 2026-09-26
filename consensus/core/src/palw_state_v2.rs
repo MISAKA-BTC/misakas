@@ -28742,14 +28742,16 @@ fn apply_object(
                 return Err(PalwStateV2Error::CapacityBatchLicenceDormant);
             }
             for entry in entries {
-                if crate::palw_batch_licence_v1::palw_batch_entry_route_v1(&builder.state, builder.params, ctx.daa_score, entry)
-                    == crate::palw_batch_licence_v1::PalwBatchEntryRouteV1::Inert
-                {
+                let route = crate::palw_batch_licence_v1::palw_batch_entry_route_v1(&builder.state, builder.params, ctx.daa_score, entry);
+                if route == crate::palw_batch_licence_v1::PalwBatchEntryRouteV1::Inert {
                     continue;
                 }
+                // A claim another object licensed first feeds only the seats the chain has not
+                // counted (the lane-verify review's batch finding) — acceptance judged exactly these.
+                let live = crate::palw_batch_licence_v1::palw_batch_entry_live_v1(&builder.state, route, entry);
                 let seats: Vec<PalwBondKeyV2> =
                     builder.state.panels.get(&entry.claim).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
-                let receipts = crate::palw_batch_licence_v1::palw_batch_entry_receipts_v1(entry, &seats)
+                let receipts = crate::palw_batch_licence_v1::palw_batch_entry_receipts_v1(&live, &seats)
                     .ok_or(PalwStateV2Error::WrongPhase { claim: entry.claim, edge: "ReceiptLicensedBatchV1" })?;
                 apply_receipt_licensed_v2(builder, ctx, &entry.claim, &receipts)?;
             }

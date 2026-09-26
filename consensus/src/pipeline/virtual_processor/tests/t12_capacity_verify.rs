@@ -16,6 +16,9 @@
 //!   one tip, the claims' single `ReceiptLicensedV2`s and one `ReceiptLicensedBatchV1` of the same
 //!   receipts are both admitted by the gate and fold to the same state root; a tampered path, a
 //!   foreign root, another anchor's leaves (the cross-fork import) are refused or inert.
+//! * [`adr0160_vt1b_a_licence_landed_first_leaves_the_batch_standing`] (not ignored; the lane-verify
+//!   review's batch finding): a single licence of one claim in the same block or the block before, or
+//!   anyone's one-entry copy of the batch carried first, leaves the batch licensing all six claims.
 //! * the measurement runs (`#[ignore]`, steered by `CAP_*`, JSON lines to `CAP_OUT`): V-T2 carriage,
 //!   V-T3 c_8k at 16 ready seats, V-T4 split and junk, V-T5 the floor room under a flood, and V4's
 //!   attempt lane and bind cost.
@@ -845,8 +848,114 @@ async fn adr0160_vt1_a_batch_licenses_exactly_as_its_single_licences() {
     for claim in &due {
         assert!(matches!(folded.claim(claim).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "another anchor's receipts license nothing");
     }
-    // Inert entries do not drop a live one: a batch re-offering a licensed claim beside a bound one.
-    let _ = anchor_delay;
+    // Inert entries do not drop a live one — a licence another object lands first: V-T1b below.
+}
+
+/// **V-T1b (the lane-verify review's batch finding): a licence another object lands first leaves the
+/// batch standing.** A batch is public in the mempool: anyone can copy its signed window roots and one
+/// entry into a one-entry batch with no key, and two collectors' due lists overlap. Before the fix the
+/// batch's entry on the claim licensed first met SR-10's door as a supplementary set, the door refused
+/// its seats as already credited, and the whole batch was dropped (the review measured 1 of 6 claims
+/// licensed). From one tip with six bound claims, every case below licenses all six:
+///
+/// * **(a)** a single licence of claim 0 ahead of the batch in the same block — one root with the six
+///   single licences (V-I1; the batch's entry 0 is inert, its seats counted);
+/// * **(b)** that single licence folded in the block before — the gate takes the batch, which licenses
+///   the other five exactly as their singles would;
+/// * **(c)** a stranger's one-entry copy of the batch (its roots, entry 0) ahead of it — one root with
+///   the singles; a copy whose path does not fold is refused alone and the batch still licenses six;
+/// * **(d)** claim 0 licensed with one seat not counted (planted): the batch's entry 0 is a
+///   supplementary set of that seat alone — accepted, and the seat is credited.
+#[tokio::test]
+async fn adr0160_vt1b_a_licence_landed_first_leaves_the_batch_standing() {
+    let mut s = Sim::new(Some(0)).await;
+    let base = s.base;
+    let anchor_delay = s.chain.bundle.panel.anchor_delay();
+    s.beat_to(34).await;
+    let mut claims = Vec::new();
+    for card in 0..6 {
+        let (claim, created) = s.attempt(Who::Card(card), base, Vec::new()).await;
+        assert!(created);
+        claims.push(claim);
+    }
+    s.beat_to(34 + anchor_delay).await;
+    s.attempt(Who::Card(6), base, Vec::new()).await;
+    let bound = s.bound_claims();
+    let due: Vec<Hash64> = bound.iter().copied().filter(|c| claims.contains(c)).collect();
+    assert_eq!(due.len(), 6, "six bound claims");
+    let singles: Vec<Obj> = due.iter().map(|c| s.single_licence(*c)).collect();
+    let batch = s.batch_licence(&due, 480_000 / 4).expect("the assembler batches them");
+    let point = s.point();
+    let tip = s.state();
+    let sp = s.chain.bundle.state.clone();
+    let vp = s.vp();
+    let sink = s.chain.sink();
+    let licensed = |st: &PalwChainStateV2| {
+        due.iter().filter(|c| matches!(st.claim(c).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. })).count()
+    };
+    let reference = vp.palw_v2_fold_accepted_for_tests(&tip, &sp, &point, &singles).expect("the singles fold").state_root();
+    let alone = vp.palw_v2_accepted_objects_for_tests(&tip, &sp, &point, vec![batch.clone()], sink);
+    assert_eq!(alone, vec![batch.clone()], "control: the batch alone");
+
+    // (a) One block: [single(claim 0), batch(claims 0..5)].
+    let a = vp.palw_v2_accepted_objects_for_tests(&tip, &sp, &point, vec![singles[0].clone(), batch.clone()], sink);
+    assert_eq!(a, vec![singles[0].clone(), batch.clone()], "(a) the single and the batch both land");
+    let a_folded = vp.palw_v2_fold_accepted_for_tests(&tip, &sp, &point, &a).expect("(a) folds");
+    assert_eq!(licensed(&a_folded), 6, "(a) all six licensed");
+    assert_eq!(a_folded.state_root(), reference, "(a) one root with the six singles");
+
+    // (b) The single in the block before; the batch offered after it.
+    let after_single = vp.palw_v2_fold_accepted_for_tests(&tip, &sp, &point, &singles[..1]).expect("the single folds");
+    let next = PalwBlockContextV2 { block: point.block, daa_score: point.daa_score, blue_score: point.blue_score + 1, subsidy: 0 };
+    vp.palw_v2_validate_objects(&after_single, &sp, &next, std::slice::from_ref(&batch)).expect("(b) the gate takes the batch after the single");
+    let b = vp.palw_v2_accepted_objects_for_tests(&after_single, &sp, &next, vec![batch.clone()], sink);
+    assert_eq!(b, vec![batch.clone()], "(b) the batch lands");
+    let b_folded = vp.palw_v2_fold_accepted_for_tests(&after_single, &sp, &next, &b).expect("(b) folds");
+    assert_eq!(licensed(&b_folded), 6, "(b) all six licensed");
+    let b_reference = vp.palw_v2_fold_accepted_for_tests(&after_single, &sp, &next, &singles[1..]).expect("the other singles fold").state_root();
+    assert_eq!(b_folded.state_root(), b_reference, "(b) the batch licenses the other five exactly as their singles");
+
+    // (c) Anyone's one-entry copy of the batch (its roots, entry 0, no key) ahead of it.
+    let Obj::ReceiptLicensedBatchV1 { roots, entries } = &batch else { unreachable!() };
+    let copy = Obj::ReceiptLicensedBatchV1 { roots: roots.clone(), entries: vec![entries[0].clone()] };
+    let c = vp.palw_v2_accepted_objects_for_tests(&tip, &sp, &point, vec![copy.clone(), batch.clone()], sink);
+    assert_eq!(c, vec![copy.clone(), batch.clone()], "(c) the copy and the batch both land");
+    let c_folded = vp.palw_v2_fold_accepted_for_tests(&tip, &sp, &point, &c).expect("(c) folds");
+    assert_eq!(licensed(&c_folded), 6, "(c) all six licensed");
+    assert_eq!(c_folded.state_root(), reference, "(c) one root with the six singles");
+    // A broken copy is refused alone: the batch behind it licenses six.
+    let mut broken_entry = entries[0].clone();
+    if roots[broken_entry.seats[0].root_index as usize].leaves.is_empty() {
+        broken_entry.seats[0].path[0] = Hash64::from_u64_word(0xBAD);
+    } else {
+        let count = roots[broken_entry.seats[0].root_index as usize].count;
+        broken_entry.seats[0].leaf_index = (broken_entry.seats[0].leaf_index + 1) % count;
+    }
+    let broken = Obj::ReceiptLicensedBatchV1 { roots: roots.clone(), entries: vec![broken_entry] };
+    let c2 = vp.palw_v2_accepted_objects_for_tests(&tip, &sp, &point, vec![broken, batch.clone()], sink);
+    assert_eq!(c2, vec![batch.clone()], "a copy that does not prove is refused alone");
+
+    // (d) Claim 0 licensed with one seat not yet counted (planted: its credit and lock removed, as a
+    // licence that carried four seats leaves it): the batch's entry 0 feeds that seat alone.
+    let claim0 = due[0];
+    let left_seat = after_single.panel(&claim0).expect("bound").seats[4].bond;
+    let planted = {
+        let mut carriage = PalwStateCarriageV2::from_state(&after_single);
+        carriage.slashable_locks.remove(&(left_seat, claim0));
+        carriage.panel_duties.get_mut(&claim0).expect("the duty row").seats.insert(left_seat, 0);
+        carriage.into_state(&sp, None).expect("a consistent planted state")
+    };
+    assert!(kaspa_consensus_core::palw_state_v2::palw_seat_uncounted_on_licence_v1(&planted, &claim0, &left_seat), "the seat is uncounted");
+    let route = kaspa_consensus_core::palw_batch_licence_v1::palw_batch_entry_route_v1(&planted, &sp, next.daa_score, &entries[0]);
+    assert_eq!(route, kaspa_consensus_core::palw_batch_licence_v1::PalwBatchEntryRouteV1::Supplementary);
+    let live = kaspa_consensus_core::palw_batch_licence_v1::palw_batch_entry_live_v1(&planted, route, &entries[0]);
+    assert_eq!(live.seats.len(), 1, "only the uncounted seat is fed");
+    let d = vp.palw_v2_accepted_objects_for_tests(&planted, &sp, &next, vec![batch.clone()], sink);
+    assert_eq!(d, vec![batch.clone()], "(d) the batch lands");
+    let d_folded = vp.palw_v2_fold_accepted_for_tests(&planted, &sp, &next, &d).expect("(d) folds");
+    assert_eq!(licensed(&d_folded), 6, "(d) all six licensed");
+    assert!(!kaspa_consensus_core::palw_state_v2::palw_seat_uncounted_on_licence_v1(&d_folded, &claim0, &left_seat), "(d) the seat is counted now");
+    out_line(format!("{{\"vt1b\":1,\"a\":{},\"b\":{},\"c\":{},\"d\":{}}}", licensed(&a_folded), licensed(&b_folded), licensed(&c_folded), licensed(&d_folded)));
 }
 
 // ---------------------------------------------------------------------------------------------------

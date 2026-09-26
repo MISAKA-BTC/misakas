@@ -48,8 +48,14 @@
 //! An entry whose claim is no longer licensable — voided, already licensed below R-core+, redrawn on
 //! another anchor, missing — is INERT: skipped by acceptance and fold alike
 //! ([`palw_batch_entry_route_v1`], one predicate on the same state), so a competing single licence of
-//! one claim does not drop the other twenty-nine. Any other fault — a bad path, a mask the panel did
-//! not assign, a root that does not verify, a live entry that does not license — refuses the whole
+//! one claim does not drop the other twenty-nine. **Past R-core+ (testnet-12, the only network F-B
+//! arms on) a claim licensed first by another object** — a single licence, another collector's
+//! overlapping batch, or anyone's copy of one entry, which needs no key — routes as an SR-10
+//! supplementary set of only the seats the chain has not counted ([`palw_batch_entry_live_v1`]), and
+//! is inert when none is left (or the door is shut: its window closed, only abstentions on a latched
+//! claim). The lane-verify review measured the old reading: a one-entry copy carried first dropped a
+//! six-claim batch whole (1 of 6 licensed). Any other fault — a bad path, a mask the panel did not
+//! assign, a root that does not verify, a live entry that does not license — refuses the whole
 //! object, which is dropped with the block standing, exactly as a bad single licence is.
 //!
 //! # Attribution survives batching
@@ -270,16 +276,52 @@ pub fn palw_receipt_window_message_v1(
 /// **How an entry routes on a state** — the one predicate acceptance and the fold share.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwBatchEntryRouteV1 {
-    /// Skipped: the claim is gone, is not at a phase this batch can move, or its bound panel is not on
-    /// the entry's anchor (a redraw, another fork).
+    /// Skipped: the claim is gone, is not at a phase this batch can move, its bound panel is not on
+    /// the entry's anchor (a redraw, another fork), or — licensed — the supplementary door has
+    /// nothing left to take from it ([`palw_batch_entry_route_v1`]).
     Inert,
     /// A `PanelBound` claim: the entry is a coverage licence.
     Licence,
-    /// A licensed claim past `palw_rcore_plus`: the entry is an SR-10 supplementary set.
+    /// A licensed claim past `palw_rcore_plus`: the entry's seats the chain has not counted are an
+    /// SR-10 supplementary set ([`palw_batch_entry_live_v1`]).
     Supplementary,
 }
 
+/// **Has the chain already counted this entry receipt's seat on `claim_id`?** — credited on the
+/// claim's duty row or holding a lock on it: exactly the two refusals of SR-10's door
+/// (`SeatAlreadyCredited`) that a licence of the same claim by ANOTHER object causes. A seat index
+/// the panel does not have is not counted (the validator refuses it by name).
+fn palw_batch_seat_counted_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    panel_seats: &[crate::palw_state_v2::PalwPanelSeatV2],
+    duties: Option<&std::collections::BTreeMap<PalwBondKeyV2, u64>>,
+    seat: &PalwBatchSeatReceiptV1,
+) -> bool {
+    let Some(bond) = panel_seats.get(seat.seat_index as usize).map(|seat| seat.bond) else { return false };
+    duties.and_then(|row| row.get(&bond)).is_some_and(|at| *at != 0) || state.slashable_lock(bond, *claim_id).is_some()
+}
+
 /// **The entry's route** at `daa_score` on `state`: [`PalwBatchEntryRouteV1`].
+///
+/// **A licensed claim routes on what the SR-10 door can still take from the entry** (the lane-verify
+/// review's batch finding). A batch is public in the mempool, and its roots and entries can be copied
+/// with no key: whoever carries a copy of one entry (or a single licence of its claim) ahead of the
+/// batch licenses that claim first. The batch's entry then meets SR-10's door, which refuses a seat
+/// already counted — and a live entry that fails refuses the whole object, so one copied entry used to
+/// drop every other claim of the batch, its carrier fee paid. The route now follows the licence that
+/// landed first, on facts of the chain's state only — facts another object moves, never the entry's
+/// own correctness:
+///
+/// * the seats the chain already counted on the claim are dropped from the entry
+///   ([`palw_batch_entry_live_v1`]) — they were credited by the object that won;
+/// * the entry is **inert** when nothing is left for the door to take: every carried seat counted, the
+///   claim's duty row gone, its receipt window closed at `daa_score`
+///   ([`crate::palw_state_v2::palw_claim_receipt_deadline_v1`]), or only abstentions left on a claim
+///   whose `unserved_seen` is already latched;
+/// * otherwise it is a supplementary set of the seats left, judged by the door as the single object
+///   of those receipts would be: a bad path, a forged root, a mask the panel did not assign, a
+///   receipt outside its window still refuse the whole object.
 pub fn palw_batch_entry_route_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -294,9 +336,52 @@ pub fn palw_batch_entry_route_v1(
     }
     match claim.phase {
         PalwClaimPhaseV2::PanelBound { .. } => PalwBatchEntryRouteV1::Licence,
-        PalwClaimPhaseV2::ReceiptLicensed { .. } if params.rcore_plus_active_at(daa_score) => PalwBatchEntryRouteV1::Supplementary,
+        PalwClaimPhaseV2::ReceiptLicensed { .. } if params.rcore_plus_active_at(daa_score) => {
+            let Some(duties) = state.panel_duties_of(&entry.claim) else { return PalwBatchEntryRouteV1::Inert };
+            if crate::palw_state_v2::palw_claim_receipt_deadline_v1(state, params, &entry.claim, claim)
+                .is_ok_and(|deadline| deadline.is_some_and(|deadline| daa_score > deadline))
+            {
+                return PalwBatchEntryRouteV1::Inert;
+            }
+            let mut left = entry
+                .seats
+                .iter()
+                .filter(|seat| !palw_batch_seat_counted_v1(state, &entry.claim, &panel.seats, Some(duties), seat))
+                .peekable();
+            if left.peek().is_none() {
+                return PalwBatchEntryRouteV1::Inert;
+            }
+            let answers = left.any(|seat| matches!(seat.verdict, PalwReceiptVerdictV2::Valid | PalwReceiptVerdictV2::Sampled));
+            if !answers && claim.rcore.unserved_seen {
+                return PalwBatchEntryRouteV1::Inert;
+            }
+            PalwBatchEntryRouteV1::Supplementary
+        }
         _ => PalwBatchEntryRouteV1::Inert,
     }
+}
+
+/// **The receipts of a live entry the door judges and the fold feeds**: the whole entry for a
+/// `Licence`; for a `Supplementary` set, only the seats the chain has not counted on the claim (the
+/// counted ones were credited by the object that licensed it first). One function for acceptance, the
+/// fold and the assembler, on the state each is at, so the three never disagree about which receipts
+/// an entry stands for. An `Inert` entry is returned as it is (nobody reads it).
+pub fn palw_batch_entry_live_v1<'e>(
+    state: &PalwChainStateV2,
+    route: PalwBatchEntryRouteV1,
+    entry: &'e PalwBatchLicenceEntryV1,
+) -> std::borrow::Cow<'e, PalwBatchLicenceEntryV1> {
+    if route != PalwBatchEntryRouteV1::Supplementary {
+        return std::borrow::Cow::Borrowed(entry);
+    }
+    let Some(panel) = state.panel(&entry.claim) else { return std::borrow::Cow::Borrowed(entry) };
+    let duties = state.panel_duties_of(&entry.claim);
+    let seats: Vec<PalwBatchSeatReceiptV1> =
+        entry.seats.iter().filter(|seat| !palw_batch_seat_counted_v1(state, &entry.claim, &panel.seats, duties, seat)).cloned().collect();
+    if seats.len() == entry.seats.len() {
+        return std::borrow::Cow::Borrowed(entry);
+    }
+    std::borrow::Cow::Owned(PalwBatchLicenceEntryV1 { claim: entry.claim, anchor_hash: entry.anchor_hash, seats })
 }
 
 /// **The receipts an entry stands for**, in its order, exactly as a `ReceiptLicensedV2` of the same
@@ -401,6 +486,13 @@ pub fn palw_batch_licence_shape_v1(roots: &[PalwSeatWindowRootV1], entries: &[Pa
         }
         if entry.seats.is_empty() || entry.seats.len() > PALW_BATCH_LICENCE_MAX_SEATS_V1 {
             return Err(Shape("an entry with no receipt or more than PALW_BATCH_LICENCE_MAX_SEATS_V1"));
+        }
+        // One receipt a seat: the door refuses a seat twice by name, and a live entry's counted seats
+        // are dropped before it looks ([`palw_batch_entry_live_v1`]), so the shape holds it here.
+        for (i, seat) in entry.seats.iter().enumerate() {
+            if entry.seats[..i].iter().any(|other| other.seat_index == seat.seat_index) {
+                return Err(Shape("a seat twice in one entry"));
+            }
         }
         for seat in &entry.seats {
             if seat.root_index as usize >= roots.len() {
@@ -538,8 +630,13 @@ pub fn palw_validate_batch_entries_v1(
         }
         let seats: Vec<PalwBondKeyV2> =
             state.panel(&entry.claim).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
+        // Every carried receipt must prove into its root — a counted seat's too: a bad path or a
+        // foreign root is the carrier's fault, whoever licensed the claim first.
         let proven = palw_batch_entry_proofs_v1(state, network_domain, roots, entry, &seats)?;
-        let receipts = palw_batch_entry_receipts_v1(entry, &seats)
+        // What the door judges: the whole entry for a licence, the seats not yet counted for a
+        // supplementary set ([`palw_batch_entry_live_v1`], the fold's own reading).
+        let live = palw_batch_entry_live_v1(state, route, entry);
+        let receipts = palw_batch_entry_receipts_v1(&live, &seats)
             .ok_or(PalwBatchLicenceErrorV1::Proof { claim: entry.claim, why: "a seat index the panel does not have" })?;
         // The single object's signature question, answered by the proofs: "signed" exactly for a
         // (key, V3 message) pair this entry proved into a verified root, and only under the V3 context.
@@ -750,8 +847,12 @@ pub fn palw_assemble_batch_licence_v1(
         if !live.is_ok_and(|summary| summary.inert.is_empty()) {
             continue;
         }
+        // The receipts the fold will feed for this entry on this state (a claim licensed meanwhile
+        // offers only its uncounted seats, [`palw_batch_entry_live_v1`]).
         let seats: Vec<PalwBondKeyV2> = panel.seats.iter().map(|seat| seat.bond).collect();
-        if !palw_batch_entry_receipts_v1(&entry, &seats).is_some_and(|receipts| licenses(claim, &receipts)) {
+        let route = palw_batch_entry_route_v1(state, state_params, ctx.daa_score, &entry);
+        let live_entry = palw_batch_entry_live_v1(state, route, &entry);
+        if !palw_batch_entry_receipts_v1(&live_entry, &seats).is_some_and(|receipts| licenses(claim, &receipts)) {
             continue;
         }
         let mut trial_windows = root_windows.clone();
@@ -967,6 +1068,29 @@ mod tests {
         let distinct: std::collections::BTreeSet<&[u8]> = all.iter().copied().collect();
         assert_eq!(distinct.len(), all.len());
         assert!(!crate::palw_mode_v2::PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5.contains(&PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT), "not in t12's committed set: the Some-only fence covers it");
+    }
+
+    /// One receipt a seat in an entry: the shape refuses a seat twice (the door would, and a live
+    /// entry's counted seats are dropped before the door looks, so the shape holds it).
+    #[test]
+    fn an_entry_names_each_seat_once() {
+        let seat = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(0x5EA7), 0));
+        let root = PalwSeatWindowRootV1 { seat_bond: seat, from_daa: 5, to_daa: 5, root: h(1), count: 2, signature: vec![0; 4], leaves: Vec::new() };
+        let receipt = |seat_index: u8| PalwBatchSeatReceiptV1 {
+            seat_index,
+            root_index: 0,
+            verdict: PalwReceiptVerdictV2::Valid,
+            mask: PalwSegmentMaskV2(1),
+            signed_daa: 5,
+            leaf_index: 0,
+            path: vec![h(2)],
+        };
+        let entry = |seats: Vec<PalwBatchSeatReceiptV1>| PalwBatchLicenceEntryV1 { claim: h(0xC1), anchor_hash: h(0xA1), seats };
+        assert_eq!(palw_batch_licence_shape_v1(std::slice::from_ref(&root), &[entry(vec![receipt(0), receipt(1)])]), Ok(()));
+        assert_eq!(
+            palw_batch_licence_shape_v1(std::slice::from_ref(&root), &[entry(vec![receipt(0), receipt(1), receipt(0)])]),
+            Err(PalwBatchLicenceErrorV1::Shape("a seat twice in one entry"))
+        );
     }
 
     #[test]
