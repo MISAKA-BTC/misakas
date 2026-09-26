@@ -371,7 +371,23 @@ pub(crate) async fn run(ctx: &crate::node::Ctx, profile: Profile, args: ModelAdd
         (None, Some(path)) => format!("misaka model add --manifest {}", path.display()),
         (None, None) => "misaka model add <model>".to_string(),
     };
-    flow.finish(result, "misaka.model.add.v1", "LIVE — weight-bearing from the next epoch", &resume, doc)
+    let done = done_line(doc.get("registry_state").and_then(|v| v.as_str()));
+    flow.finish(result, "misaka.model.add.v1", &done, &resume, doc)
+}
+
+/// **The closing line, from the registry's own state** (testnet-12 lifecycle audit T12-035): it read
+/// `LIVE — weight-bearing from the next epoch` for every run that reached the end, including a
+/// genesis class in `Prefetching` (0 of 7 seats ready, admitting no claim) and a class just
+/// registered as `Candidate`. LIVE is said only of a state that admits weight-bearing claims at
+/// full or limited cadence; any other state is named as it stands.
+fn done_line(registry_state: Option<&str>) -> String {
+    match registry_state {
+        Some(state) if state.starts_with("Active") => format!("LIVE — {state}: weight-bearing from the next epoch"),
+        Some(state) if !state.is_empty() => format!(
+            "REGISTERED — the registry holds it as {state}, which admits no weight yet; `misaka model status <class>` follows it"
+        ),
+        _ => "REGISTERED — the registry's state could not be read; `misaka model status <class>` follows it".to_string(),
+    }
 }
 
 async fn walk(
@@ -623,6 +639,17 @@ async fn walk(
     } else {
         flow.row(Severity::Skip, "prompt lane", "not certified — optional: misaka model add … --prompt-lane");
     }
+    // The registry's own state, for the closing line (T12-035): LIVE only where it admits weight.
+    if let Ok(model) = walk.node.client().get_palw_model(kaspa_rpc_core::GetPalwModelRequest { class_id: class_hex.clone() }).await {
+        if model.found && !model.registry_state.is_empty() {
+            flow.row(
+                if model.registry_state.starts_with("Active") { Severity::Ok } else { Severity::Info },
+                "registry",
+                format!("{} · {} of {} ready seats", model.registry_state, model.ready_seats, model.required_ready_seats),
+            );
+            doc.insert("registry_state".into(), model.registry_state.into());
+        }
+    }
     doc.insert("next".into(), format!("misaka model market open {class_hex}").into());
     flow.ui.sub(&paint::dim(&format!(
         "next: misaka model market open {}…  ·  misaka mining setup --model {}…",
@@ -812,6 +839,18 @@ async fn register(
              folded (recommended pool {}, non-binding; --sponsor <MSK> changes it, --no-sponsor skips it)",
             crate::palw_model::msk(amount),
             crate::palw_model::msk(recommended)
+        ));
+    }
+    // **The registration's designed burn, disclosed before the yes** (testnet-12 lifecycle audit
+    // T12-032): past `palw_audit_2026_09_23` a bought registration burns
+    // `PALW_CLASS_REGISTRATION_BURN_SOMPI_V1` out of the registrant bond's collateral when it folds —
+    // recorded in the bond's `slashed` figure (the one debit path), though it is a price and no
+    // penalty. Nothing said so, and `bondSlashed` then read like a conviction.
+    if walk.params.palw_audit_2026_09_23_active_at(walk.node.daa()) {
+        flow.ui.sub(&format!(
+            "burn      {} out of the bond's collateral when it folds — the registration's price, never refunded; the bond's \
+             `slashed` figure records it (a price, not a penalty)",
+            crate::palw_model::msk(kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1)
         ));
     }
     flow.ask("Register it?", false, "the class was not registered").await?;

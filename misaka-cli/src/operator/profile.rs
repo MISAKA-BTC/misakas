@@ -326,6 +326,19 @@ impl Profile {
     pub(crate) fn persisted_fee_outpoint(&self) -> PathBuf {
         self.appdir.join(format!("misaka-{}", self.network)).join("palw-panel").join("palw-fee-outpoint")
     }
+
+    /// **The newest outpoint the panel persisted**, if any. The file holds the rolling fee chain's
+    /// recent lineage, newest first, one `<txid>:<index>` per line (kaspad's
+    /// `palw_fee_lineage_push_v1`, testnet-12 lifecycle audit T12-046) — a reader that took the
+    /// whole file as one outpoint would pass kaspad a flag holding a newline.
+    pub(crate) fn newest_persisted_fee_outpoint(&self) -> Option<String> {
+        newest_fee_outpoint_line(&std::fs::read_to_string(self.persisted_fee_outpoint()).ok()?)
+    }
+}
+
+/// The first non-empty line of a persisted fee-outpoint file, trimmed.
+pub(crate) fn newest_fee_outpoint_line(text: &str) -> Option<String> {
+    text.lines().map(str::trim).find(|line| !line.is_empty()).map(str::to_string)
 }
 
 #[cfg(test)]

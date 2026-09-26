@@ -189,8 +189,9 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                 println!();
                 println!("To create a bond, run the synced node once with `--palw-register-bond`,");
                 println!("`--palw-producer-key`, `--palw-producer-pay-address`, and the intended");
-                println!("`--palw-producer-class`. The node spends confirmed funding, prints the NEW");
-                println!("registered bond outpoint, and stops. Use that printed outpoint afterward.");
+                println!("`--palw-producer-class`. The node spends confirmed funding and prints the NEW");
+                println!("registered bond outpoint; it keeps running as a node afterwards (it does not exit).");
+                println!("Use that printed outpoint afterward.");
             }
             OutputFormat::Json => println!(
                 "{}",

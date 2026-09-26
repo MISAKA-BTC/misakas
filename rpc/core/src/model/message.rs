@@ -4380,6 +4380,9 @@ pub struct GetPalwClaimsResponse {
     /// `None` while the bond is Active.
     pub bond_retiring_since_daa: Option<u64>,
     pub bond_collateral: u64,
+    /// Every sompi debited from the bond's collateral: convictions AND, past
+    /// `palw_audit_2026_09_23`, the designed 1 MSK burn of each class registration it bought
+    /// (`PALW_CLASS_REGISTRATION_BURN_SOMPI_V1`) — a price, not a penalty.
     pub bond_slashed: u64,
     pub bond_registered_daa: u64,
     /// The classes this bond is seated for: a bond judges only the classes it declared, and a

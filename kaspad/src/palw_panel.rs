@@ -4451,10 +4451,14 @@ impl PalwPanelService {
             return None;
         }
         let mut candidates: Vec<TransactionOutpoint> = Vec::new();
-        if let Ok(persisted) = std::fs::read_to_string(self.fee_state_path())
-            && let Ok(outpoint) = crate::palw_producer::parse_outpoint(persisted.trim())
-        {
-            candidates.push(outpoint);
+        // **The rolling chain's whole recent lineage, newest first** (testnet-12 lifecycle audit
+        // T12-046): the file used to hold only the LAST change, which a restart makes a ghost when
+        // the carrier that created it was still unmined (a node's mempool does not survive it) — and
+        // then neither memory resolved, the scan below took the largest output under the key (the
+        // user's own 2,499.59 MSK balance) and the consented float's live remainder, one step back
+        // in the chain, was forgotten.
+        if let Ok(persisted) = std::fs::read_to_string(self.fee_state_path()) {
+            candidates.extend(palw_fee_lineage_read_v1(&persisted));
         }
         if let Some(configured) = self.config.fee_outpoint.as_deref()
             && let Ok(outpoint) = crate::palw_producer::parse_outpoint(configured)
@@ -4584,11 +4588,24 @@ impl PalwPanelService {
         }
         let PalwFeeFundingScanV1 { found, under_script, busy, unripe, dust } = scan;
         if let Some((outpoint, entry)) = found {
-            info!(
-                "[{PALW_PANEL}] recovered funding at {}:{} ({} sompi, the largest output that pays a carrier) — the remembered \
-                 outpoints were spent, never mined or drained",
-                outpoint.transaction_id, outpoint.index, entry.amount
-            );
+            if let Some(consented) = self.config.fee_outpoint.as_deref() {
+                // T12-046: the operator named WHICH output funds carriers; this one is not it nor its
+                // remembered change, so say so where they will look — it is their balance.
+                warn!(
+                    "[{PALW_PANEL}] funding carriers from {}:{} ({} sompi, the largest output under this node's key that pays a \
+                     carrier): the consented --palw-fee-outpoint {consented} and every remembered change of it are spent, unmined \
+                     or drained. Carrier change returns to the same address, but this output is now the panel's (`misaka wallet \
+                     utxo list` marks it reserved; `wallet send` leaves it alone) — restart with --palw-fee-outpoint naming the \
+                     output you want carriers funded from to choose another",
+                    outpoint.transaction_id, outpoint.index, entry.amount
+                );
+            } else {
+                info!(
+                    "[{PALW_PANEL}] recovered funding at {}:{} ({} sompi, the largest output that pays a carrier) — the remembered \
+                     outpoints were spent, never mined or drained",
+                    outpoint.transaction_id, outpoint.index, entry.amount
+                );
+            }
             self.persist_fee_outpoint(outpoint);
             return Some((outpoint, entry));
         }
@@ -4995,7 +5012,10 @@ impl PalwPanelService {
         // rejected only because the panel's own carrier had already spent it in the mempool.
         self.flow_context.palw_reserve_outpoint(outpoint);
         let _ = std::fs::create_dir_all(&self.config.state_dir);
-        if let Err(e) = std::fs::write(self.fee_state_path(), format!("{}:{}", outpoint.transaction_id, outpoint.index)) {
+        // The lineage, newest first (T12-046): a restart that finds the newest a ghost resumes from
+        // the next one still standing instead of scanning the key's whole balance.
+        let before = std::fs::read_to_string(self.fee_state_path()).unwrap_or_default();
+        if let Err(e) = std::fs::write(self.fee_state_path(), palw_fee_lineage_push_v1(&before, outpoint)) {
             warn!("[{PALW_PANEL}] cannot persist the rolling fee outpoint: {e} — a restart will fall back to --palw-fee-outpoint");
         }
     }
@@ -6235,10 +6255,16 @@ impl PalwPanelService {
                         if let Some(kp) = self.keypair.as_ref()
                             && let Some((bond, _)) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
                         {
+                            // The process does NOT exit here (by design: `start` falls through to the panel, so
+                            // a unit file that keeps the flag never loses its seat). Say so — the join doc and
+                            // `bond status` said "prints the bond outpoint and stops", and an operator waited
+                            // for an exit that never came (testnet-12 lifecycle audit F-03).
                             info!(
                                 "[{PALW_PANEL}] registered bond {}:{} with {} sompi of collateral, in tx {txid}. \
-                                 Restart with --palw-producer-bond={}:{} (and --palw-produce) to mine with it; \
-                                 the collateral is reclaimable at this node's pay address once the bond is retired.",
+                                 This process keeps running as this node (its panel starts now; --palw-register-bond is a \
+                                 no-op from here) — it does not exit. To mine with the bond, restart with \
+                                 --palw-producer-bond={}:{} (and --palw-produce) and without --palw-register-bond; the \
+                                 collateral is reclaimable at this node's pay address once the bond is retired.",
                                 bond.0.transaction_id, bond.0.index, collateral, bond.0.transaction_id, bond.0.index
                             );
                             return;
@@ -11783,6 +11809,61 @@ impl AsyncService for PalwPanelService {
             trace!("{} stopped", PALW_PANEL);
             Ok(())
         })
+    }
+}
+
+/// How many of the rolling fee chain's change outpoints `palw-fee-outpoint` remembers, newest first
+/// (testnet-12 lifecycle audit T12-046).
+pub(crate) const PALW_FEE_LINEAGE_KEEP_V1: usize = 16;
+
+/// The remembered fee lineage, newest first: one `<txid>:<index>` per line. A file a previous build
+/// wrote (one line) reads as a lineage of one; a line that does not parse is skipped.
+pub(crate) fn palw_fee_lineage_read_v1(text: &str) -> Vec<TransactionOutpoint> {
+    text.lines().filter_map(|line| crate::palw_producer::parse_outpoint(line.trim()).ok()).collect()
+}
+
+/// `outpoint` at the head of the remembered lineage `text`, the rest after it once each, at most
+/// [`PALW_FEE_LINEAGE_KEEP_V1`] — the file's next contents.
+pub(crate) fn palw_fee_lineage_push_v1(text: &str, outpoint: TransactionOutpoint) -> String {
+    let mut lineage = vec![outpoint];
+    for older in palw_fee_lineage_read_v1(text) {
+        if !lineage.contains(&older) {
+            lineage.push(older);
+        }
+    }
+    lineage.truncate(PALW_FEE_LINEAGE_KEEP_V1);
+    lineage.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join("\n")
+}
+
+#[cfg(test)]
+mod fee_lineage_tests {
+    use super::{PALW_FEE_LINEAGE_KEEP_V1, palw_fee_lineage_push_v1, palw_fee_lineage_read_v1};
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    fn op(n: u64) -> TransactionOutpoint {
+        TransactionOutpoint::new(TransactionId::from_u64_word(n), 0)
+    }
+
+    /// **T12-046: a restart resumes from the consented float's live remainder.** The file used to
+    /// hold only the newest change; when the carrier that made it was unmined at the restart, that
+    /// outpoint was a ghost and the panel scanned the key's whole balance. The lineage keeps the one
+    /// before it — the float's remainder still standing on chain — as the next candidate.
+    #[test]
+    fn t12_046_the_fee_file_keeps_the_lineage_newest_first() {
+        let old_file = format!("{}:{}", op(1).transaction_id, op(1).index);
+        assert_eq!(palw_fee_lineage_read_v1(&old_file), vec![op(1)], "a previous build's one-line file reads as a lineage of one");
+        let two = palw_fee_lineage_push_v1(&old_file, op(2));
+        assert_eq!(palw_fee_lineage_read_v1(&two), vec![op(2), op(1)], "newest first, the older change kept");
+        let again = palw_fee_lineage_push_v1(&two, op(1));
+        assert_eq!(palw_fee_lineage_read_v1(&again), vec![op(1), op(2)], "each once");
+        let mut text = String::new();
+        for n in 0..40 {
+            text = palw_fee_lineage_push_v1(&text, op(n));
+        }
+        let lineage = palw_fee_lineage_read_v1(&text);
+        assert_eq!(lineage.len(), PALW_FEE_LINEAGE_KEEP_V1, "bounded");
+        assert_eq!(lineage[0], op(39));
+        assert_eq!(palw_fee_lineage_read_v1("garbage\n\n"), vec![], "a line that does not parse is skipped");
     }
 }
 
