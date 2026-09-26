@@ -44,9 +44,14 @@ impl CompressedParents {
             return Some(&self.0[0].1);
         }
         // `partition_point` returns the index of the first element for which the predicate is false.
-        // The predicate `cum - 1 < index` checks if a run is before the desired `index`.
+        // The predicate `cum <= index` (i.e. `cum - 1 < index`) checks if a run is before the desired `index`.
         // The first run for which this is false is the one that contains our index.
-        let i = self.0.partition_point(|(cum, _)| (*cum as usize) - 1 < index);
+        //
+        // Written without the subtraction: `cum - 1` underflowed (a panic under the release
+        // profile's `overflow-checks`) on a run at cumulative level 0, which the compressed P2P
+        // wire form used to admit (see the `TryFrom<Vec<(u8, Vec<BlockHash>)>>` below). For every
+        // well-formed value (`cum >= 1`) the two predicates are the same function.
+        let i = self.0.partition_point(|(cum, _)| (*cum as usize) <= index);
         Some(&self.0[i].1)
     }
 
@@ -108,6 +113,17 @@ impl TryFrom<Vec<Vec<BlockHash>>> for CompressedParents {
 impl TryFrom<Vec<(u8, Vec<BlockHash>)>> for CompressedParents {
     type Error = CompressedParentsError;
     fn try_from(parents: Vec<(u8, Vec<BlockHash>)>) -> Result<Self, Self::Error> {
+        // **Strictly increasing FROM 0, so the first run's level is at least 1.** This is the
+        // constructor the compressed (protocol >= 9) P2P header form goes through, so every
+        // cumulative level here is a remote peer's choice. The pairwise check below never looked
+        // at the first run, and a first run at level 0 panicked the node inside the P2P conversion
+        // itself: `Header::new_finalized` hashes the header, the hash walks `expanded_iter`, and
+        // `expand_rle` `expect`s strictly increasing counts from 0 (and `get` computed `0 - 1`).
+        // No node can ever have accepted such a header — it could not even be hashed — so refusing
+        // it here changes no verdict; it turns a crash into a conversion error, which drops the peer.
+        if parents.first().is_some_and(|(cumulative_level, _)| *cumulative_level == 0) {
+            return Err(CompressedParentsError::LevelsNotStrictlyIncreasing);
+        }
         for ((last_cumulative_level, last_parents), (cumulative_level, parents)) in parents.iter().tuple_windows() {
             // Make sure any next cumulative_level is strictly greater than the last
             if cumulative_level <= last_cumulative_level {
@@ -555,6 +571,43 @@ mod tests {
         assert_eq!(compressed_single_run.get(1), Some(first.as_slice()));
         assert_eq!(compressed_single_run.get(2), Some(first.as_slice()));
         assert_eq!(compressed_single_run.get(3), None);
+    }
+
+    /// **A peer's compressed parents may not start at cumulative level 0** (the remote header
+    /// crash): the pairwise check never saw the first run, and hashing such a header panicked.
+    #[test]
+    fn a_first_run_at_cumulative_level_zero_is_refused() {
+        let (a, b) = (vec_from(&[1]), vec_from(&[2]));
+        for runs in [vec![(0u8, a.clone())], vec![(0, a.clone()), (3, b.clone())], vec![(0, a.clone()), (0, b.clone())]] {
+            assert!(
+                matches!(CompressedParents::try_from(runs.clone()), Err(CompressedParentsError::LevelsNotStrictlyIncreasing)),
+                "{runs:?} was admitted"
+            );
+        }
+        // Well-formed runs are unchanged, including the maximum level and the empty (genesis) form.
+        assert!(CompressedParents::try_from(vec![(1u8, a.clone()), (3, b.clone())]).is_ok());
+        assert!(CompressedParents::try_from(vec![(255u8, a.clone())]).is_ok());
+        assert!(CompressedParents::try_from(Vec::<(u8, Vec<BlockHash>)>::new()).is_ok());
+        // And `get` no longer underflows even on a value that bypassed the constructor (a raw
+        // deserialization): it answers, where `cum - 1` panicked under overflow-checks.
+        let raw = CompressedParents(vec![(0, a.clone()), (3, b.clone())]);
+        assert_eq!(raw.get(1), Some(b.as_slice()));
+        assert_eq!(raw.get(3), None);
+    }
+
+    /// The subtraction-free `get` predicate is the old one on every well-formed value.
+    #[test]
+    fn get_agrees_with_the_expansion_on_well_formed_parents() {
+        let levels: Vec<Vec<BlockHash>> =
+            vec![vec_from(&[1]), vec_from(&[1]), vec_from(&[2]), vec_from(&[3]), vec_from(&[3]), vec_from(&[3]), vec_from(&[4])];
+        for len in 0..=levels.len() {
+            let compressed = CompressedParents::try_from(levels[..len].to_vec()).unwrap();
+            let expanded: Vec<Vec<BlockHash>> = (&compressed).into();
+            for (index, level) in expanded.iter().enumerate() {
+                assert_eq!(compressed.get(index), Some(level.as_slice()));
+            }
+            assert_eq!(compressed.get(len), None);
+        }
     }
 
     #[test]

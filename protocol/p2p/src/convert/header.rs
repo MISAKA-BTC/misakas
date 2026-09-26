@@ -173,3 +173,114 @@ impl TryFrom<Versioned<protowire::IbdCandidateSummaryMessage>> for crate::conver
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! **A remote crash from a malformed header** (pre-freeze review, group A): the compressed
+    //! (protocol >= 9) header wire form lets the PEER choose every run's `cumulative_level`, and a
+    //! first run at level 0 panicked this node inside the conversion itself — `Header::new_finalized`
+    //! hashes the header, the hash walks `expanded_iter`, and `expand_rle` `expect`s strictly
+    //! increasing counts from 0. Every MISAKA peer speaks protocol 105, so the path is the relay
+    //! (`RequestRelayBlocks` → `Block`), IBD headers, the IBD candidate summary, pruning-point proofs
+    //! and trusted data: all of them convert through `TryFrom<Versioned<BlockHeader>>` below.
+    use super::*;
+    use crate::convert::model::ibd_candidate::IbdCandidateSummary;
+    use kaspa_consensus_core::block::Block;
+    use kaspa_consensus_core::errors::header::CompressedParentsError;
+    use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH;
+
+    fn h(v: u64) -> BlockHash {
+        BlockHash::from_u64_word(v)
+    }
+
+    fn honest_header() -> Header {
+        Header::new_finalized(
+            1,
+            vec![vec![h(1), h(2)], vec![h(1), h(2)], vec![h(3)]].try_into().unwrap(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            1_758_800_000_000,
+            0x1f00_ffff,
+            7,
+            POW_ALGO_ID_KHEAVYHASH,
+            10,
+            5u64.into(),
+            9,
+            Default::default(),
+        )
+    }
+
+    fn run(cumulative_level: u32, parents: &[BlockHash]) -> protowire::BlockLevelParents {
+        protowire::BlockLevelParents { cumulative_level, parent_hashes: parents.iter().map(|p| p.into()).collect() }
+    }
+
+    /// Every malformed parents shape a peer can put on the compressed wire: each must come back as
+    /// a conversion error (the flow then drops the peer), never as a panic of this process.
+    fn malformed_runs() -> Vec<Vec<protowire::BlockLevelParents>> {
+        vec![
+            // One run at level 0: expands to zero levels, and the hash's `expand_rle` panics.
+            vec![run(0, &[h(1)])],
+            // A zero first run followed by a well-formed one: passes the pairwise
+            // strictly-increasing check, then panics in the hash (and `get` would underflow).
+            vec![run(0, &[h(1)]), run(3, &[h(2)])],
+            // The LEGACY encoding (every run at level 0) sent under the compressed format.
+            vec![run(0, &[h(1)]), run(0, &[h(2)])],
+            // Non-increasing and repeated runs (refused before this fix too).
+            vec![run(2, &[h(1)]), run(2, &[h(2)])],
+            vec![run(1, &[h(1)]), run(2, &[h(1)])],
+            // A level that does not fit the u8 the header stores.
+            vec![run(256, &[h(1)])],
+        ]
+    }
+
+    #[test]
+    fn a_malformed_compressed_parents_run_is_a_conversion_error_not_a_panic() {
+        for parents in malformed_runs() {
+            let mut wire = protowire::BlockHeader::from((HeaderFormat::Compressed, &honest_header()));
+            wire.parents = parents.clone();
+            let converted = std::panic::catch_unwind(|| Header::try_from(Versioned(HeaderFormat::Compressed, wire)));
+            let converted = converted.unwrap_or_else(|_| panic!("a peer's header with parents {parents:?} panicked the conversion"));
+            assert!(converted.is_err(), "a peer's header with parents {parents:?} was accepted");
+        }
+        // The zero first run is refused by NAME, where the rule lives.
+        let mut wire = protowire::BlockHeader::from((HeaderFormat::Compressed, &honest_header()));
+        wire.parents = vec![run(0, &[h(1)]), run(3, &[h(2)])];
+        assert!(matches!(
+            Header::try_from(Versioned(HeaderFormat::Compressed, wire)),
+            Err(ConversionError::CompressedParentsError(CompressedParentsError::LevelsNotStrictlyIncreasing))
+        ));
+    }
+
+    /// The same header inside the messages that carry one: the relayed block and the IBD candidate
+    /// summary. (Proof, headers and trusted-data messages map each element through the same impl.)
+    #[test]
+    fn the_messages_that_carry_a_header_refuse_it_too() {
+        let mut header = protowire::BlockHeader::from((HeaderFormat::Compressed, &honest_header()));
+        header.parents = vec![run(0, &[h(1)])];
+        let block = protowire::BlockMessage { header: Some(header.clone()), transactions: vec![], evm_payload: vec![] };
+        let converted = std::panic::catch_unwind(|| Block::try_from(Versioned(HeaderFormat::Compressed, block)));
+        assert!(converted.expect("the relayed block panicked the conversion").is_err());
+        let summary = protowire::IbdCandidateSummaryMessage {
+            virtual_selected_parent: Some(header),
+            pruning_point: Some(h(4).into()),
+            genesis_hash: vec![],
+            consensus_params_id: vec![],
+        };
+        let converted = std::panic::catch_unwind(|| IbdCandidateSummary::try_from(Versioned(HeaderFormat::Compressed, summary)));
+        assert!(converted.expect("the IBD candidate summary panicked the conversion").is_err());
+    }
+
+    /// No verdict moves for a well-formed header: both wire forms still round-trip to the same
+    /// header and the same block hash.
+    #[test]
+    fn a_well_formed_header_converts_to_the_same_hash_in_both_formats() {
+        let header = honest_header();
+        for format in [HeaderFormat::Compressed, HeaderFormat::Legacy] {
+            let wire = protowire::BlockHeader::from((format, &header));
+            let back = Header::try_from(Versioned(format, wire)).expect("an honest header converts");
+            assert_eq!(back.hash, header.hash);
+            assert_eq!(back.parents_by_level, header.parents_by_level);
+        }
+    }
+}
