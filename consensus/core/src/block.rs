@@ -83,6 +83,34 @@ impl Block {
         self.header.hash
     }
 
+    /// The block with every transaction's cached id re-derived from its bytes, and how many were
+    /// stale. The block's hash does not move — `hash_merkle_root` hashes the bytes, never the
+    /// cached id — so this is the same block every peer received, now holding the ids every peer
+    /// computed for it.
+    ///
+    /// **For an in-process block at the point it enters consensus** (the 2026-09-26 testnet-12
+    /// split at DAA 198). Consensus keys outpoints, acceptance data and the UTXO commitment by
+    /// `Transaction::id()`, which is a cache; a block decoded from P2P or RPC always carries current
+    /// ids, but one built in this process carries whatever its builder left there, and a stale one
+    /// makes this node alone compute a different `utxo_commitment` for the first chain block that
+    /// merges it. Costs one id hash per transaction and allocates only when something was stale.
+    pub fn with_current_tx_ids(self) -> (Self, usize) {
+        let stale = self.transactions.iter().filter(|tx| !tx.id_is_current()).count();
+        if stale == 0 {
+            return (self, 0);
+        }
+        let transactions = self
+            .transactions
+            .iter()
+            .map(|tx| {
+                let mut tx = tx.clone();
+                tx.finalize();
+                tx
+            })
+            .collect();
+        (Self { header: self.header, transactions: Arc::new(transactions), evm_payload: self.evm_payload }, stale)
+    }
+
     /// WARNING: To be used for test purposes only
     pub fn from_precomputed_hash(hash: BlockHash, parents: Vec<BlockHash>) -> Block {
         Block::from_header(Header::from_precomputed_hash(hash, parents))

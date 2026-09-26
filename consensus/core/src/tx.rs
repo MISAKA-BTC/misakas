@@ -261,6 +261,16 @@ impl Transaction {
         self.id = hashing::tx::id(self);
     }
 
+    /// Whether the cached id (`id()`) is still the id of this transaction's current bytes.
+    ///
+    /// It is not after a field was edited without a `finalize`. A transaction received as bytes
+    /// (P2P, RPC) is always current — its id is computed on construction — so only an in-process
+    /// object can fail this, and when it does the node that holds it disagrees with every peer
+    /// about the transaction's outpoints (the 2026-09-26 testnet-12 split at DAA 198).
+    pub fn id_is_current(&self) -> bool {
+        self.id == hashing::tx::id(self)
+    }
+
     /// Returns the transaction ID
     pub fn id(&self) -> TransactionId {
         self.id
