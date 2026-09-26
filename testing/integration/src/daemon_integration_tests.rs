@@ -397,3 +397,97 @@ async fn daemon_cleaning_test() {
     assert_eq!(async_runtime.strong_count(), 0);
     assert_eq!(core.strong_count(), 0);
 }
+
+/// **ADR-0160 S-T4, the RPC half: `getPalwCapacityShadow` (op 201) round-trips on a ConsensusV2 node**
+/// (review of lane shadow, finding 5 — the suite's simnet daemons are not ConsensusV2, so they only
+/// ever answered `available: false`).
+///
+/// A testnet-12 daemon that dials nobody (no DNS seeding, no peers, outbound target 0) answers over
+/// gRPC with the shadow of its own genesis tip: the eight genesis cards as seats, the default display
+/// the uncredited ramp (ρ 10 … 1000 at q 0), and that answer is EXACTLY the service's builder
+/// applied to the consensus read taken in-process on the same tip — the request parse, the
+/// processor's read, the builder and both gRPC conversions agree, field for field. Named steps are
+/// priced as named (the reference ramp at q 143‰), a bond filter returns that bond's row, an
+/// adversary bond is accepted (and measures nothing on a chain with no claims), and a malformed
+/// request is refused. The genesis point funds no escrow, so `E` reads 0 here; the golden `N13k`
+/// values on a chain with a subsidy are S-T4's consensus half (`t12_capacity_shadow`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn daemon_palw_capacity_shadow_round_trips_on_a_testnet12_node() {
+    use kaspa_consensus_core::config::params::Params;
+    use kaspa_consensus_core::network::{NetworkId, NetworkType};
+    use kaspa_consensus_core::palw_capacity_formulas_v1::PALW_CAPACITY_REFERENCE_STEPS_V1;
+    use kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1;
+    use kaspa_rpc_core::{GetPalwCapacityShadowRequest, RpcPalwCapacityStep};
+    init_allocator_with_default_settings();
+    kaspa_core::log::try_init_logger("INFO");
+
+    let args = Args {
+        testnet: true,
+        testnet_suffix: 12,
+        disable_upnp: true,
+        disable_dns_seeding: true,
+        outbound_target: 0,
+        ..Default::default()
+    };
+    let max_block_mass = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12)).max_block_mass;
+    let total_fd_limit = 10;
+    let mut kaspad = Daemon::new_random_with_args(args, total_fd_limit);
+    let consensus_manager =
+        Arc::downcast::<ConsensusManager>(kaspad.core.find(ConsensusManager::IDENT).unwrap().into_any_arc()).unwrap();
+    kaspad.run();
+    tokio::time::timeout(Duration::from_secs(120), kaspad.grpc_server_started()).await.expect("the testnet-12 node serves gRPC");
+    let client = kaspad.new_client().await;
+
+    // The default request, over gRPC.
+    let answer = client
+        .get_palw_capacity_shadow(GetPalwCapacityShadowRequest { include_claims: true, ..Default::default() })
+        .await
+        .expect("op 201 answers");
+    // The same read in-process, through the builder the service answers with.
+    let session = consensus_manager.consensus().unguarded_session();
+    let options = PalwCapacityShadowOptionsV1 { block_mass_limit: max_block_mass, ..Default::default() };
+    let shadow = session.spawn_blocking(move |c| c.palw_capacity_shadow_v1(options)).await.expect("a ConsensusV2 node reads");
+    let expected = kaspa_rpc_service::service::palw_capacity_shadow_response_v1(&shadow, None, true, 500);
+    assert_eq!(answer, expected, "the wire answer is the in-process read, field for field");
+    assert!(answer.available, "testnet-12 is ConsensusV2");
+    assert_eq!((answer.seats, answer.bonds.len(), answer.bonds_total), (8, 8, 8), "the eight genesis cards, each a seat");
+    assert!(answer.bonds.iter().all(|b| b.seat && !b.frozen_would_be));
+    assert!(answer.claims.is_empty() && answer.claims_total == 0, "no claim at genesis");
+    assert_eq!(
+        answer.steps.iter().map(|s| (s.step.rho, s.step.q_credit_permille)).collect::<Vec<_>>(),
+        vec![(10, 0), (25, 0), (50, 0), (100, 0), (1000, 0)],
+        "the default display is the uncredited ramp, never the reference one"
+    );
+    assert!(answer.steps.iter().all(|s| !s.seat_credit && !s.q_alarm));
+    assert!(answer.summary.starts_with("capacity-shadow: daa=") && answer.summary.contains("N13k[ρ@q‰]=10@0:"), "{}", answer.summary);
+    assert_eq!(answer.reference_escrow_sompi, "0", "the genesis point carries no subsidy, so no claim's E yet");
+
+    // Named: the reference ramp, one bond's row, and that bond as an O-3 adversary.
+    let card = answer.bonds[0].bond.clone();
+    let named = client
+        .get_palw_capacity_shadow(GetPalwCapacityShadowRequest {
+            steps: PALW_CAPACITY_REFERENCE_STEPS_V1
+                .iter()
+                .map(|s| RpcPalwCapacityStep { from_daa: s.from_daa, rho: s.rho, q_credit_permille: u32::from(s.q_credit_permille) })
+                .collect(),
+            bond: card.clone(),
+            adversary_bonds: vec![card.clone()],
+            include_claims: false,
+            limit: 0,
+        })
+        .await
+        .expect("op 201 answers");
+    assert_eq!(
+        named.steps.iter().map(|s| (s.step.rho, s.step.q_credit_permille)).collect::<Vec<_>>(),
+        vec![(10, 143), (25, 143), (50, 143), (100, 143), (1000, 143)],
+        "named steps are priced as named"
+    );
+    assert_eq!((named.bonds.len(), named.bonds_total, named.bonds[0].bond.as_str()), (1, 1, card.as_str()));
+    assert!(named.attribution.iter().all(|a| a.adversary_claims == 0 && a.q_measured_permille.is_none()));
+    // A malformed request is still an error before any state is read.
+    assert!(client.get_palw_capacity_shadow(GetPalwCapacityShadowRequest { bond: "x".into(), ..Default::default() }).await.is_err());
+
+    client.disconnect().await.unwrap();
+    drop(client);
+    kaspad.shutdown();
+}

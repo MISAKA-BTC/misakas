@@ -472,9 +472,11 @@ pub fn palw_capacity_void_reason_keeps_obligation_v1(reason: crate::palw_state_v
 // §4.7 the seat side (lane liab AS-1 / AS-2)
 // ---------------------------------------------------------------------------------------------
 
-/// **AS-1: `duty′ = palw_rcore_duty_bind_v1(⌈λ/ρ⌉, ⌈lock_2/ρ⌉, commitment′_at_bind, seats)`**, with
-/// `commitment′ = m_c + reserved`, so `seats × duty′ ≤ commitment′` (the ≤ 1 amplification bound,
-/// F14) still holds. `rho = 1` is today's duty.
+/// **AS-1 as the ADR writes it: `duty′ = palw_rcore_duty_bind_v1(⌈λ/ρ⌉, ⌈lock_2/ρ⌉, commitment′_at_bind,
+/// seats)`**, with `commitment′ = m_c + reserved`, so `seats × duty′ ≤ commitment′` (the ≤ 1
+/// amplification bound, F14) still holds. `rho = 1` is today's duty. **Not the consensus rule**: lane
+/// liab keeps AS-2's lock as the lock term ([`palw_capacity_seat_duty_liab_v1`]), which the shadow
+/// prices with.
 pub fn palw_capacity_seat_duty_v1(lambda_term: u128, lock_2: u128, commitment_new: u128, seat_count: usize, rho: u32) -> u128 {
     let rho = u128::from(rho.max(1));
     crate::palw_state_v2::palw_rcore_duty_bind_v1(lambda_term.div_ceil(rho), lock_2.div_ceil(rho), commitment_new, seat_count)
@@ -533,6 +535,46 @@ pub fn palw_capacity_seat_lock_liab_v1(lock: u128, step: Option<&PalwCapacitySte
     match step {
         Some(step) if palw_capacity_seat_credit_liab_v1(step.q_credit_permille) => lock.div_ceil(step.rho_or_one()).max(1),
         _ => lock,
+    }
+}
+
+/// **AS-1 with a given lock term: `palw_rcore_duty_bind_v1(⌈λ/ρ⌉, lock′, commitment′_at_bind, seats)`**
+/// — the duty a seat reserves at bind when a counted `Valid` on the claim will post `lock′` at the
+/// licence. [`palw_capacity_seat_duty_liab_v1`] is this at lane liab's `lock′`; the shadow's D-5
+/// column is this at D-5's.
+pub fn palw_capacity_seat_duty_with_lock_v1(
+    lambda_term: u128,
+    lock_new: u128,
+    commitment_new: u128,
+    seat_count: usize,
+    rho: u32,
+) -> u128 {
+    crate::palw_state_v2::palw_rcore_duty_bind_v1(lambda_term.div_ceil(u128::from(rho.max(1))), lock_new, commitment_new, seat_count)
+}
+
+/// **Lane liab's AS-1** (`palw_seat_duty_v2` on `rcore/cap-liab`, after its review 2, finding 3):
+/// `palw_rcore_duty_bind_v1(⌈λ/ρ⌉, lock′, commitment′, seats)` with `lock′ =`
+/// [`palw_capacity_seat_lock_liab_v1`]`(lock_2, step)` — the lock the licence will post, so a bound
+/// seat is backed at the licence by construction. Below `q_seat` (testnet-12's armed first step, and
+/// the ADR's 143‰ reference credit) `lock′ = lock_2`, so a floor duty falls from `λ` = 640.17 MSK to
+/// `max(⌈λ/ρ⌉, lock_2)` = 240.13 MSK, not to `⌈λ/ρ⌉` = 64.02 — unless the commitment cap
+/// `commitment′ / seats` binds lower (a credited `m_c`). `None` is today's duty.
+pub fn palw_capacity_seat_duty_liab_v1(
+    lambda_term: u128,
+    lock_2: u128,
+    commitment_new: u128,
+    seat_count: usize,
+    step: Option<&PalwCapacityStepV1>,
+) -> u128 {
+    match step {
+        None => crate::palw_state_v2::palw_rcore_duty_bind_v1(lambda_term, lock_2, commitment_new, seat_count),
+        Some(step) => palw_capacity_seat_duty_with_lock_v1(
+            lambda_term,
+            palw_capacity_seat_lock_liab_v1(lock_2, Some(step)),
+            commitment_new,
+            seat_count,
+            step.rho,
+        ),
     }
 }
 
@@ -908,6 +950,25 @@ mod tests {
         assert_eq!(palw_capacity_seat_lock_liab_v1(lock, Some(&credited)), 240_100_000);
         assert_eq!(palw_capacity_seat_lock_liab_v1(lock, None), lock);
         assert_eq!(palw_capacity_seat_lock_liab_v1(1, Some(&PalwCapacityStepV1 { rho: 1_000, ..credited })), 1, "never 0");
+        // Lane liab's AS-1: the lock term is AS-2's lock, so below q_seat a floor duty is lock_2,
+        // not λ/ρ; the commitment cap still binds under a credited m_c; at q_seat both divide.
+        let (lambda, lock_2, seats) = (u128::from(E) / 5, lock, 5usize);
+        let full = u128::from(E) + 10_752_660;
+        let step = |q| PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: q };
+        assert_eq!(palw_capacity_seat_duty_liab_v1(lambda, lock_2, full, seats, None), lambda, "today: λ binds");
+        assert_eq!(palw_capacity_seat_duty_liab_v1(lambda, lock_2, full, seats, Some(&step(0))), lock_2, "q 0: lock_2, not λ/ρ");
+        let credited_commitment = u128::from(E).div_ceil(10) + 10_752_660;
+        assert_eq!(
+            palw_capacity_seat_duty_liab_v1(lambda, lock_2, credited_commitment, seats, Some(&step(143))),
+            credited_commitment / 5,
+            "q 143: the commitment cap binds below lock_2"
+        );
+        assert_eq!(
+            palw_capacity_seat_duty_liab_v1(lambda, lock_2, full, seats, Some(&step(250))),
+            lambda.div_ceil(10).max(lock_2.div_ceil(10)),
+            "q_seat: both divide"
+        );
+        assert_eq!(palw_capacity_seat_duty_with_lock_v1(lambda, lock_2.div_ceil(10), full, seats, 10), lambda.div_ceil(10));
         // The uncredited ramp is the reference ramp's ρ at q = 0.
         assert_eq!(PALW_CAPACITY_UNCREDITED_STEPS_V1.map(|s| (s.rho, s.q_credit_permille)), PALW_CAPACITY_REFERENCE_STEPS_V1.map(|s| (s.rho, 0)));
     }

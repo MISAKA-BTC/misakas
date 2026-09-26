@@ -45,10 +45,14 @@
 //!   - `L = 3G` of the claim (§4.5's normative value). Lane escrow prices with `3E` (≤ `3G`, so its
 //!     `m*` is never lower); the two agree at `q = 0`, the default display, and differ by `3w`
 //!     (0.32 MSK on the floor) in `L` otherwise.
-//! * A seat duty row is repriced from its stored `seat_exposure` `d` as `min(⌈d/ρ⌉, commitment′ /
-//!   seats)`. That is AS-1 exactly when `d` was not capped by `commitment / seats` at bind (floor and
-//!   8k: the λ-term or `lock_2` bound it); a capped row (2M) reports a lower bound, and the count of
-//!   such rows is reported.
+//! * A seat duty row is repriced by lane liab's AS-1 ([`palw_capacity_seat_duty_liab_v1`]:
+//!   `min(max(⌈λ/ρ⌉, lock′), commitment′ / seats)`, `lock′` AS-2's lock — the lock the licence will
+//!   post, undivided below `q_seat`), from its stored `seat_exposure` `d` as the λ-term (an attempt
+//!   row not capped at bind: floor and 8k, where `λ ≥ lock_2`; `0` on a free-prompt row, whose duty
+//!   IS its `lock_2`) and `lock_2` re-derived from the claim's frozen gain at `k′ = 2`
+//!   (`palw_rcore_lock_v1`, with no buyback slice beyond the cap — an upper bound for a class with
+//!   a pair). A row capped by `commitment / seats` at bind (2M) reports a lower bound, and the count
+//!   of such rows is reported.
 //! * AS-2's lock credit is lane liab's consensus rule ([`palw_capacity_seat_lock_liab_v1`]: `q_seat`
 //!   = 250‰ flat, `L_seat = 3G`), so a lock shrinks by ρ only under a step crediting `q ≥ 250‰`.
 //!   §10 D-5's recommendation (`L_seat =` [`PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1`], the 130,000 MSK
@@ -87,8 +91,8 @@ use crate::palw_capacity_formulas_v1::{
     PalwCapacityStepV1, palw_capacity_bond_weight_term_v1, palw_capacity_carriers_per_block_v1, palw_capacity_claims_per_daa_milli_v1,
     palw_capacity_consensus_reservation_v1, palw_capacity_conviction_l_v1, palw_capacity_h_obl_v1, palw_capacity_is_unlicensed_v1,
     palw_capacity_m_c_v1, palw_capacity_n_instant_v1, palw_capacity_q_needed_permille_v1, palw_capacity_seat_capital_per_claim_v1,
-    palw_capacity_seat_credit_applies_v1, palw_capacity_seat_credit_liab_v1, palw_capacity_seat_duty_v1,
-    palw_capacity_seat_lock_liab_v1, palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1,
+    palw_capacity_seat_credit_applies_v1, palw_capacity_seat_credit_liab_v1, palw_capacity_seat_duty_liab_v1,
+    palw_capacity_seat_duty_with_lock_v1, palw_capacity_seat_lock_liab_v1, palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1,
     palw_capacity_staged_weight_v1, palw_capacity_void_holds_v1, palw_capacity_void_reason_keeps_obligation_v1,
     palw_capacity_weight_budget_sompi_v1, palw_capacity_weight_cap_v1, palw_capacity_weight_full_v1,
 };
@@ -800,12 +804,19 @@ pub fn palw_capacity_shadow_with_v1(
             floor_seat_sum += seats as u128;
         }
         let bind_new = bind_commitment_new.get(claim_id);
+        // Lane liab's AS-1: the λ-term divides, the lock term is AS-2's lock of the claim's lock_2.
+        let free_prompt = claim.is_some_and(|c| matches!(c.source, PalwClaimSourceV2::FreePrompt { .. }));
+        let (lambda_term, lock_2) = if free_prompt {
+            (0, d)
+        } else {
+            (d, palw_claim_g_v1(state, claim_id).map(|g| palw_rcore_lock_v1(g.g_res, g.escrowed_reward, 0, 2)).unwrap_or(0))
+        };
         let per_step: Vec<u128> = steps
             .iter()
             .enumerate()
             .map(|(i, step)| {
                 let commitment = bind_new.map(|v| v[i]).unwrap_or(commitment_today_at_bind);
-                palw_capacity_seat_duty_v1(d, 0, commitment, seats, step.rho)
+                palw_capacity_seat_duty_liab_v1(lambda_term, lock_2, commitment, seats, Some(step))
             })
             .collect();
         seat_duty_total_today = seat_duty_total_today.saturating_add(d.saturating_mul(seats as u128));
@@ -1058,16 +1069,15 @@ pub fn palw_capacity_shadow_with_v1(
         .map(|(i, step)| {
             let m_floor = reference_steps_m[i];
             let q_needed = palw_capacity_q_needed_permille_v1(reference_escrow, step.rho, reference_l);
-            let duty = palw_capacity_seat_duty_v1(
-                reference_duty,
-                0,
-                m_floor.saturating_add(reference_w_floor),
-                reference_seats as usize,
-                step.rho,
-            );
+            // Lane liab's AS-1/AS-2 on the reference floor claim, and D-5's column (its lock in the
+            // duty's lock term too).
+            let commitment_new = m_floor.saturating_add(reference_w_floor);
+            let seats_n = reference_seats as usize;
+            let duty = palw_capacity_seat_duty_liab_v1(reference_duty, reference_lock, commitment_new, seats_n, Some(step));
             let lock = palw_capacity_seat_lock_liab_v1(reference_lock, Some(step));
             let lock_if_d5 =
                 palw_capacity_seat_lock_v1(reference_lock, Some(step), reference_escrow, PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1);
+            let duty_if_d5 = palw_capacity_seat_duty_with_lock_v1(reference_duty, lock_if_d5, commitment_new, seats_n, step.rho);
             let q_alarm =
                 attribution_out.iter().filter_map(|row| row.q_measured_permille).any(|q| u32::from(q) < 2 * u32::from(q_needed));
             PalwCapacityStepShadowV1 {
@@ -1081,7 +1091,7 @@ pub fn palw_capacity_shadow_with_v1(
                     reference_escrow,
                     PALW_CAPACITY_SEAT_L_IF_D5_SOMPI_V1,
                 ),
-                seat_capacity_if_d5_milli_per_daa: seat_capacity(duty, lock_if_d5),
+                seat_capacity_if_d5_milli_per_daa: seat_capacity(duty_if_d5, lock_if_d5),
                 claims_commitment_total: claims_commitment_new[i],
                 committed_total: committed_new_total[i],
                 seat_duty_total: seat_duty_total_new[i],
@@ -1301,11 +1311,13 @@ mod tests {
 
     /// **E-T3 and §5.2 on a planted chain, and which rows are conditional.** By default (no steps
     /// named, no F-L schedule) the shadow prices the UNCREDITED ramp: at `q = 0`, `m_c = E`, so a
-    /// fresh 13k / 100k / 1M bond still holds 2 / 15 / 156 floor claims at every ρ and only AS-1's
-    /// duty divides — eight genesis cards go 0.94 → ≈ 1.03–1.04 floor claims/DAA, not ×ρ. Named
-    /// explicitly, the ADR's reference ramp (q 143‰) gives E-T3's 20·50·101·203·2,030 / …; its seat
-    /// capacity is still ≈ ×1.1 under lane liab's AS-2 (`q_seat` 250‰), and the ×ρ column
-    /// (9.4 … 940.9/DAA) appears only as D-5's conditional one.
+    /// fresh 13k / 100k / 1M bond still holds 2 / 15 / 156 floor claims at every ρ, and under lane
+    /// liab's AS-1 the floor duty falls only to the undivided `lock_2` (640.17 → 240.13 MSK) — eight
+    /// genesis cards go 0.94 → 1.00 floor claims/DAA at every ρ, not ×ρ. Named explicitly, the ADR's
+    /// reference ramp (q 143‰) gives E-T3's 20·50·101·203·2,030 / …; the credited `m_c` lets the
+    /// commitment cap pull the duty to `(m_c + w)/5`, so ≈ 1.03–1.04/DAA — still ≈ ×1.1 under lane
+    /// liab's AS-2 (`q_seat` 250‰); the ×ρ column (9.4 … 940.9/DAA) appears only as D-5's conditional
+    /// one, or at a credit of 250‰.
     #[test]
     fn s_t1_fresh_bonds_hold_the_golden_claim_counts() {
         let state = eight_cards(Plant::new())
@@ -1341,15 +1353,16 @@ mod tests {
         let lock_msk = shadow.reference_lock / u128::from(MSK);
         assert!((239..=241).contains(&lock_msk), "the floor's L-1 lock at k′ = 2 is ≈ 240.1 MSK, got {lock_msk}");
         assert!(near(shadow.seat_capacity_today_milli_per_daa, 940), "{}", shadow.seat_capacity_today_milli_per_daa);
-        let duty_only = [1_032u64, 1_038, 1_041, 1_042, 1_043];
-        for (s, want) in shadow.steps.iter().zip(duty_only) {
-            assert!(near(s.seat_capacity_milli_per_daa, want), "ρ {}: seat capacity {} vs {want}", s.step.rho, s.seat_capacity_milli_per_daa);
+        // Lane liab's AS-1 at q 0: the duty is the undivided lock_2 (240.13 MSK) at every ρ ≥ 3,
+        // so 3,756,252.8 MSK / (5 × 240.13 × (122 + 3,000)) = 1.002/DAA.
+        for s in &shadow.steps {
+            assert!(near(s.seat_capacity_milli_per_daa, 1_002), "ρ {}: seat capacity {} vs 1,002", s.step.rho, s.seat_capacity_milli_per_daa);
             assert_eq!(s.seat_capacity_if_d5_milli_per_daa, s.seat_capacity_milli_per_daa, "q = 0 is below D-5's 25‰ too");
         }
         assert_eq!((shadow.carriers_per_block, shadow.licence_queue, shadow.carriage_blocks_to_drain), (3, 0, 0));
         let line = shadow.summary();
         assert!(line.contains("N13k[ρ@q‰]=10@0:2,25@0:2,50@0:2,100@0:2,1000@0:2"), "{line}");
-        assert!(line.contains("seatcap[ρ@q‰]=10@0:1.03,"), "{line}");
+        assert!(line.contains("seatcap[ρ@q‰]=10@0:1.00,"), "{line}");
 
         // ---- the ADR's reference ramp, named: conditional on a measured q ≥ 0.29 ----
         let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &PALW_CAPACITY_REFERENCE_STEPS_V1);
@@ -1371,9 +1384,11 @@ mod tests {
         assert_eq!(m, [10u32, 25, 50, 100, 1000].map(|rho| palw_capacity_m_ramp_v1(u128::from(E), rho)).to_vec());
         let q: Vec<u16> = shadow.steps.iter().map(|s| s.q_needed_permille).collect();
         assert_eq!((q[0], q[1], q[3], q[4]), (131, 138, 142, 143));
-        // Lane liab's AS-2: 143‰ < 250‰, so the locks keep today's price and the seats go ×1.1.
+        // Lane liab's AS-2: 143‰ < 250‰, so the locks keep today's price; the credited m_c caps the
+        // duty at (⌈E/ρ⌉ + w)/5, and the seats go ×1.1.
         assert!(shadow.steps.iter().all(|s| s.ramp_binds && !s.seat_credit && s.seat_credit_if_d5));
-        for (s, want) in shadow.steps.iter().zip(duty_only) {
+        let capped_duty = [1_032u64, 1_038, 1_041, 1_042, 1_043];
+        for (s, want) in shadow.steps.iter().zip(capped_duty) {
             assert!(near(s.seat_capacity_milli_per_daa, want), "ρ {}: {} vs {want}", s.step.rho, s.seat_capacity_milli_per_daa);
         }
         // D-5's conditional column: ×ρ with both ÷ρ (within 0.5% of the ADR's 640.17 / 240.1 inputs).
@@ -1624,9 +1639,10 @@ mod tests {
         assert_eq!(row.committed_new[0], 3 * (m + W_FLOOR));
     }
 
-    /// **Seat duties and locks**: the identity step (ρ 1, q 0) reproduces every seat's A-1; a ρ = 10
-    /// step divides the duty (AS-1) at any credit, and the lock (AS-2) only at lane liab's
-    /// `q_seat` = 250‰ — at the ADR's 143‰ the lock keeps today's price.
+    /// **Seat duties and locks under lane liab's AS-1/AS-2**: the identity step (ρ 1, q 0) reproduces
+    /// every seat's A-1; at ρ = 10 the duty is `min(max(⌈λ/10⌉, lock′), commitment′/5)` — the claim's
+    /// undivided `lock_2` at q 0, the commitment cap `(⌈E/10⌉ + w)/5` at the ADR's 143‰ credit, and
+    /// `⌈λ/10⌉` with the lock divided too only at `q_seat` = 250‰.
     #[test]
     fn s_t1_seat_duties_and_locks_reprice_by_rho() {
         let duty = u128::from(E) / 5;
@@ -1665,14 +1681,19 @@ mod tests {
             assert_eq!(row.committed_new[0], row.committed_today, "the identity step is today's A-1 (seat {n})");
         }
         let seat = row_of(&shadow, 100);
+        // The bound claims' own lock_2 (L-1 at k′ = 2 on their frozen gain w): ≈ 240.1 MSK.
+        let lock_2 = palw_rcore_lock_v1(W_FLOOR, E, 0, 2);
+        assert!(lock_2 > duty.div_ceil(10) && lock_2 < duty);
+        let credited_cap = (u128::from(E).div_ceil(10) + W_FLOOR) / 5;
         assert_eq!(seat.committed_today, 2 * duty + lock);
-        assert_eq!(seat.committed_new[1], 2 * duty.div_ceil(10) + lock, "143‰ < q_seat: the lock stays");
-        assert_eq!(seat.committed_new[2], 2 * duty.div_ceil(10) + lock.div_ceil(10), "250‰: the lock divides too");
-        assert_eq!(seat.committed_new[3], seat.committed_new[1], "testnet-12's first step (ρ 10, q 0): the duty only");
+        assert_eq!(seat.committed_new[1], 2 * credited_cap + lock, "143‰: the credited commitment caps the duty, the lock stays");
+        assert_eq!(seat.committed_new[2], 2 * duty.div_ceil(10) + lock.div_ceil(10), "250‰: both divide");
+        assert_eq!(seat.committed_new[3], 2 * lock_2 + lock, "testnet-12's first step (ρ 10, q 0): the duty is lock_2");
         assert_eq!(shadow.duty_rows, 2);
         assert_eq!(shadow.duty_rows_capped, 0, "the floor duty is λ-bound, below commitment / seats");
         assert_eq!(shadow.seat_duty_total_today, 2 * 5 * duty);
-        assert_eq!(shadow.steps[1].seat_duty_total, 2 * 5 * duty.div_ceil(10));
+        assert_eq!(shadow.steps[1].seat_duty_total, 2 * 5 * credited_cap);
+        assert_eq!(shadow.steps[3].seat_duty_total, 2 * 5 * lock_2);
         assert_eq!(shadow.seat_lock_total_today, lock);
         assert_eq!(
             shadow.steps.iter().map(|s| (s.seat_lock_total, s.seat_credit)).collect::<Vec<_>>(),
