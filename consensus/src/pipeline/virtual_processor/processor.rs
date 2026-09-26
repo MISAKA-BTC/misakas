@@ -5376,6 +5376,14 @@ impl VirtualStateProcessor {
         let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let next_daa = self.palw_next_block_daa_for_reads(&state);
         options.raw_depth = self.palw_settled_anchor_depth_at(next_daa);
+        // `E` of a claim the next block would accept: the tip's subsidy under the carve the fold
+        // resolves at that DAA (ADR-0126's overlay on testnet-12), for a state with no claim to read.
+        let subsidy = state.last_point().map(|point| point.subsidy).unwrap_or(0);
+        options.reference_escrow_sompi = Some(kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+            state_params,
+            subsidy,
+            self.palw_escrow_carve_at(next_daa, next_daa),
+        ));
         Some(kaspa_consensus_core::palw_capacity_shadow_v1::palw_capacity_shadow_with_v1(&state, state_params, next_daa, &options))
     }
 

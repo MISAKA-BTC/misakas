@@ -372,6 +372,19 @@ fn mul_fixed(a: u128, b: u128, one: u128) -> u128 {
     (hi.saturating_mul(b) / (one / 1_000_000_000)).saturating_add(lo.saturating_mul(b) / one)
 }
 
+/// **`h_obl`, E-4's obligation hold** (§4.4, §6.1): a claim voided past the fence keeps
+/// `m_c + reserved` committed, and stays convictable (AG-5), for `window_receipt` DAA past its void.
+pub fn palw_capacity_h_obl_v1(window_receipt: u64) -> u64 {
+    window_receipt
+}
+
+/// **Does a void at `voided_daa` still hold its obligation at `now_daa`?** Inclusive, as the
+/// free-prompt abandon hold is (`palw_claim_is_on_abandon_hold_v2`): the sweep releases it in the
+/// first block whose DAA exceeds `voided_daa + h_obl`. An overflowing release never comes.
+pub fn palw_capacity_void_holds_v1(voided_daa: u64, h_obl: u64, now_daa: u64) -> bool {
+    voided_daa.checked_add(h_obl).is_none_or(|release_at| now_daa <= release_at)
+}
+
 // ---------------------------------------------------------------------------------------------
 // §4.7 the seat side (lane liab AS-1 / AS-2)
 // ---------------------------------------------------------------------------------------------
@@ -800,6 +813,16 @@ mod tests {
         let vccu = 3_357_281_757_221_376u128;
         let at = |mult| palw_capacity_gpu_equivalents_milli_v1(mult, 2, vccu, 2_400_000_000_000, 2_900) / 100;
         assert_eq!([10, 100, 1000].map(at), [96, 964, 9_647]);
+    }
+
+    #[test]
+    fn the_void_hold_is_window_receipt_inclusive() {
+        let h = palw_capacity_h_obl_v1(600);
+        assert_eq!(h, 600);
+        assert!(palw_capacity_void_holds_v1(1_000, h, 1_000));
+        assert!(palw_capacity_void_holds_v1(1_000, h, 1_600), "the release DAA itself still holds");
+        assert!(!palw_capacity_void_holds_v1(1_000, h, 1_601));
+        assert!(palw_capacity_void_holds_v1(u64::MAX - 1, h, u64::MAX), "an overflowing release never comes");
     }
 
     #[test]

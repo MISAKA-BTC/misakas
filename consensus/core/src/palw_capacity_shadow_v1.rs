@@ -50,10 +50,11 @@ use crate::palw_capacity_formulas_v1::{
     PALW_CAPACITY_COVERAGE_CARRIER_MASS_V1, PALW_CAPACITY_REFERENCE_STEPS_V1, PALW_CAPACITY_SEAT_DUTY_HOLD_DAA_V1,
     PALW_CAPACITY_SOMPI_PER_MSK_V1, PALW_CAPACITY_W_FCW_SOMPI_V1, PalwCapacitySeatCapitalInputsV1, PalwCapacityStageV1,
     PalwCapacityStepV1, palw_capacity_bond_weight_term_v1, palw_capacity_carriers_per_block_v1, palw_capacity_claims_per_daa_milli_v1,
-    palw_capacity_consensus_reservation_v1, palw_capacity_conviction_l_v1, palw_capacity_m_c_v1, palw_capacity_n_instant_v1,
-    palw_capacity_q_needed_permille_v1, palw_capacity_seat_capital_per_claim_v1, palw_capacity_seat_credit_applies_v1,
-    palw_capacity_seat_duty_v1, palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1, palw_capacity_staged_weight_v1,
-    palw_capacity_weight_budget_sompi_v1, palw_capacity_weight_cap_v1, palw_capacity_weight_full_v1,
+    palw_capacity_consensus_reservation_v1, palw_capacity_conviction_l_v1, palw_capacity_h_obl_v1, palw_capacity_m_c_v1,
+    palw_capacity_n_instant_v1, palw_capacity_q_needed_permille_v1, palw_capacity_seat_capital_per_claim_v1,
+    palw_capacity_seat_credit_applies_v1, palw_capacity_seat_duty_v1, palw_capacity_seat_lock_v1, palw_capacity_stage_of_claim_v1,
+    palw_capacity_staged_weight_v1, palw_capacity_void_holds_v1, palw_capacity_weight_budget_sompi_v1, palw_capacity_weight_cap_v1,
+    palw_capacity_weight_full_v1,
 };
 use crate::palw_offence_v1::PalwOffenceKindV1;
 use crate::palw_state_v2::{
@@ -95,6 +96,11 @@ pub struct PalwCapacityShadowOptionsV1 {
     /// The block transient-mass limit the carriage estimate divides (`Params::max_block_mass`);
     /// `0` reads 500,000, testnet-12's.
     pub block_mass_limit: u64,
+    /// `E` of a claim the next block would accept (`palw_claim_escrow_v1` at the tip's subsidy
+    /// with the carve the fold resolves there — ADR-0126's overlay carve on testnet-12), the
+    /// reference when the state holds no attempt claim to read it off. `None`: the bundle's own
+    /// carve of the tip's subsidy.
+    pub reference_escrow_sompi: Option<u64>,
 }
 
 /// **One claim, today and under the new rules.**
@@ -362,7 +368,7 @@ pub fn palw_capacity_freeze_class_v1(kind: PalwOffenceKindV1) -> PalwCapacityFre
 fn holds_new_rule(claim: &PalwClaimStateV2, h_obl: u64, now_daa: u64) -> bool {
     match &claim.phase {
         PalwClaimPhaseV2::Final { .. } => false,
-        PalwClaimPhaseV2::Voided { voided_daa, .. } => voided_daa.checked_add(h_obl).is_none_or(|release_at| now_daa <= release_at),
+        PalwClaimPhaseV2::Voided { voided_daa, .. } => palw_capacity_void_holds_v1(*voided_daa, h_obl, now_daa),
         _ => true,
     }
 }
@@ -403,7 +409,7 @@ pub fn palw_capacity_shadow_with_v1(
     let steps: Vec<PalwCapacityStepV1> =
         if options.steps.is_empty() { PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec() } else { options.steps.clone() };
     let n_steps = steps.len();
-    let h_obl = params.window_receipt();
+    let h_obl = palw_capacity_h_obl_v1(params.window_receipt());
     let window_court = params.window_court();
     let ratio = params.fp_max_exposure_ratio_permille();
     let adversary: BTreeSet<PalwBondKeyV2> = options.adversary_bonds.iter().copied().collect();
@@ -415,9 +421,10 @@ pub fn palw_capacity_shadow_with_v1(
         .claims_iter()
         .filter(|(_, c)| matches!(c.source, PalwClaimSourceV2::Attempt) && c.escrowed_reward > 0)
         .max_by_key(|(id, c)| (c.accepted_daa, **id));
-    let reference_escrow: u128 = match newest_attempt {
-        Some((_, claim)) => u128::from(claim.escrowed_reward),
-        None => {
+    let reference_escrow: u128 = match (newest_attempt, options.reference_escrow_sompi) {
+        (Some((_, claim)), _) => u128::from(claim.escrowed_reward),
+        (None, Some(escrow)) => u128::from(escrow),
+        (None, None) => {
             u128::from(crate::palw_state_v2::palw_claim_escrow_v1(params, state.last_point().map(|p| p.subsidy).unwrap_or(0), None))
         }
     };
