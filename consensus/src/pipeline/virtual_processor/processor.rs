@@ -1254,6 +1254,47 @@ impl VirtualStateProcessor {
         })
     }
 
+    /// **MSK-26A (2026-09 pre-freeze security review): this fleet never relays or mines a DNS slashing
+    /// / precommit evidence that is not genuine at its tip.**
+    ///
+    /// A NODE policy, not a consensus rule (the fold alone judges a block another node mined). The
+    /// own-body block-validity rule (`check_slashing_evidence_genuine`) already rejects a block that
+    /// carries forged evidence in its OWN body, but evidence riding in a MERGE-blue block still
+    /// reaches the UTXO side-effect and — until `palw_slashing_evidence_utxo_genuine` is armed —
+    /// burns an honest validator's staked output-0 on unchecked signatures. So this fleet refuses to
+    /// admit or template such a transaction at all: `proved_slash_targets` over the single tx, at the
+    /// tip's bond view, is exactly the registry path's genuineness (both signatures verify against
+    /// the accused bond's registered validator key, fresh, and the bond held slashable stake). Empty
+    /// means the evidence proves no slash, so this node neither relays nor mines it. `None` when the
+    /// DNS overlay is off or the tx is not slashing/precommit evidence, so every other path is
+    /// unchanged. Read at the tip, so a genuine evidence about a bond this node has not yet synced is
+    /// declined here and admitted once the bond is in view — a conservative node policy, never a fork.
+    pub(super) fn palw_slashing_evidence_mempool_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
+        use kaspa_consensus_core::dns_finality::{DnsTxKind, dns_tx_kind};
+        let dns_params = self.dns_params.as_ref()?;
+        if virtual_daa_score < dns_params.dns_activation_daa_score {
+            return None;
+        }
+        if !matches!(dns_tx_kind(&tx.subnetwork_id), Some(DnsTxKind::SlashingEvidence) | Some(DnsTxKind::PrecommitEvidence)) {
+            return None;
+        }
+        // The tip bond view (the stake-bond store snapshot = state at the sink): the same view the
+        // block-validity genuineness rule and the template's reward fan-out read.
+        let bond_view = self.initial_active_bond_view();
+        let proved = super::utxo_validation::proved_slash_targets(
+            std::slice::from_ref(tx),
+            &bond_view,
+            self.genesis.hash,
+            virtual_daa_score,
+            dns_params.evidence_window_blocks,
+        );
+        proved.is_empty().then(|| {
+            "its attestation signatures do not verify against the accused bond's registered validator key at this tip (or the \
+             named bond is unknown, stale or not slashable): a forged slash this fleet will neither relay nor mine"
+                .to_string()
+        })
+    }
+
     /// **ADR-0152 v3.1 H-1 (P2-9 review, finding 5): the fold's own answer on an H-1 carrier, before
     /// this node admits, relays, spares or mines it** — the P-B3 pattern for the objects H-1 obliges a
     /// heartbeat to carry (`palw_heartbeat_carriers_v1`).
@@ -14740,6 +14781,12 @@ impl VirtualStateProcessor {
         if let Some(refusal) = self.palw_mempool_market_refusal(&mutable_tx.tx, virtual_daa_score) {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
         }
+        // **MSK-26A: this fleet never relays a DNS slashing/precommit evidence that is not genuine at
+        // the tip** — a forged one merged into a block burns an honest validator's staked UTXO until
+        // `palw_slashing_evidence_utxo_genuine` is armed. Node policy, not a block rule.
+        if let Some(refusal) = self.palw_slashing_evidence_mempool_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwSlashingEvidenceNotGenuine(refusal));
+        }
         self.validate_mempool_transaction_in_utxo_context(
             mutable_tx,
             virtual_utxo_view,
@@ -14875,6 +14922,11 @@ impl VirtualStateProcessor {
         // another node mines is judged by the fold alone. `None` below the audit fence (testnet-11).
         if let Some(refusal) = self.palw_mempool_market_refusal(tx, virtual_state.daa_score) {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
+        }
+        // **MSK-26A: never lead a template with a DNS slashing/precommit evidence that is not genuine
+        // at the tip** — the mining manager evicts it (P-B3 pattern). Node policy, not a block rule.
+        if let Some(refusal) = self.palw_slashing_evidence_mempool_refusal(tx, virtual_state.daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwSlashingEvidenceNotGenuine(refusal));
         }
         let ValidatedTransaction { calculated_fee, .. } =
             // `None`: mempool/template single-tx context, not mergeset acceptance (bond spend-gate inert here).

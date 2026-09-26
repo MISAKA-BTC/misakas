@@ -16355,3 +16355,182 @@ mod p2_mint_path;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
+
+/// **MSK-26A (2026-09 pre-freeze security review): the node-only half of the slashing-evidence
+/// genuineness fix — this fleet never relays or mines a DNS slashing / precommit evidence that is
+/// not genuine at its tip.**
+///
+/// Taken node-only from rcore/hf-slash: the emergency binary carries the mempool/template refusal
+/// (`palw_slashing_evidence_mempool_refusal`) but NOT the dormant consensus fence
+/// `palw_slashing_evidence_utxo_genuine`, so the fingerprint does not move. This is the regression
+/// test for that refusal; the fence-armed consensus tests from 96abbb249 (which set the excluded
+/// params field) are intentionally not taken. A forged evidence (structurally valid but signed by
+/// the attacker, not the accused validator) is refused at mempool admission; a genuine equivocation
+/// by the bonded validator is admitted.
+mod msk26a_slash_genuineness_node_refusal {
+    use super::*;
+    use kaspa_consensus_core::{
+        Hash64,
+        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
+        tx::{MutableTransaction, ScriptPublicKey},
+    };
+
+    struct World {
+        ctx: TestContext,
+        honest: dns_harness::HarnessValidator,
+        atk: dns_harness::HarnessValidator,
+        bond_outpoint: TransactionOutpoint,
+        target_daa: u64,
+        k_funds: Vec<(TransactionOutpoint, u64, u64)>,
+        a_funds: Vec<(TransactionOutpoint, u64, u64)>,
+        k_payload: [u8; 64],
+        a_payload: [u8; 64],
+    }
+
+    fn paid(b: &Block, spk: &ScriptPublicKey) -> (TransactionOutpoint, u64, u64) {
+        let cb = &b.transactions[0];
+        let (i, o) = cb.outputs.iter().enumerate().find(|(_, o)| o.script_public_key == *spk).expect("coinbase pays the key");
+        (TransactionOutpoint::new(cb.id(), i as u32), o.value, b.header.daa_score)
+    }
+
+    async fn world() -> World {
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| {
+                p.max_block_parents = 4;
+                p.mergeset_size_limit = 10;
+                p.coinbase_maturity = 2;
+                let mut dns = DEVNET_PARAMS.dns_params.clone().unwrap();
+                dns.dns_activation_daa_score = 0;
+                dns.pos_v2_activation_daa_score = 0;
+                dns.epoch_length_blocks = 2;
+                dns.reward_uniqueness_window_blocks = 50;
+                dns.max_reorg_horizon_blocks = 2;
+                dns.attestation_epoch_length_blue_score = 3;
+                dns.attestation_lag_blue_score = 2;
+                dns.attestation_anchor_backoff_blue_score = 1;
+                dns.stake_score_window_blue_score = 10_000;
+                p.dns_params = Some(dns);
+            })
+            .build();
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        let honest = dns_harness::harness_validator([0x42u8; 32]);
+        let atk = dns_harness::harness_validator([0x77u8; 32]);
+        let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&honest.pubkey).as_bytes();
+        let a_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&atk.pubkey).as_bytes();
+        let k_spk = p2pkh_mldsa87_spk(&k_payload);
+        let a_spk = p2pkh_mldsa87_spk(&a_payload);
+        let k_miner = MinerData::new(k_spk.clone(), vec![]);
+        let a_miner = MinerData::new(a_spk.clone(), vec![]);
+        // A block's coinbase pays its selected parent's miner, so the funding is one block behind.
+        ctx.mine_block(k_miner.clone(), vec![]).await;
+        let h1 = ctx.mine_block(k_miner.clone(), vec![]).await;
+        let h2 = ctx.mine_block(k_miner.clone(), vec![]).await;
+        let h3 = ctx.mine_block(a_miner.clone(), vec![]).await;
+        let x1 = ctx.mine_block(a_miner.clone(), vec![]).await;
+        let x2 = ctx.mine_block(a_miner.clone(), vec![]).await;
+        let x3 = ctx.mine_block(new_miner_data(), vec![]).await;
+        let k_funds = vec![paid(&h1, &k_spk), paid(&h2, &k_spk), paid(&h3, &k_spk)];
+        let a_funds = vec![paid(&x1, &a_spk), paid(&x2, &a_spk), paid(&x3, &a_spk)];
+        for _ in 0..5 {
+            ctx.mine_block(new_miner_data(), vec![]).await;
+        }
+        let storage = ctx.consensus.params().storage_mass_parameter;
+        let (op, value, daa) = k_funds[0];
+        let (bond_tx, _, _) = dns_harness::funded_signed_bond_tx(honest.seed, op, value, daa, value - 100_000, 0, storage);
+        let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
+        let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
+        assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid);
+        let mut buried = Vec::new();
+        for _ in 0..6 {
+            buried.push(ctx.mine_block(new_miner_data(), vec![]).await);
+        }
+        let target_daa = buried[1].header.daa_score;
+        World { ctx, honest, atk, bond_outpoint, target_daa, k_funds, a_funds, k_payload, a_payload }
+    }
+
+    /// Two attestations for the honest bond carrying the honest validator's id, signed by the
+    /// ATTACKER's key (the attacker cannot sign as the validator) — structurally valid evidence.
+    fn forged(w: &World, epoch: u64, reporter: [u8; 64]) -> SlashingEvidencePayload {
+        let net = w.ctx.consensus.params().genesis.hash;
+        let mut a = dns_harness::build_signed_attestation(
+            &w.atk,
+            net.as_byte_slice(),
+            w.bond_outpoint,
+            epoch,
+            Hash64::from_bytes([0x5a; 64]),
+            w.target_daa,
+            Hash64::default(),
+        );
+        let mut b = dns_harness::build_signed_attestation(
+            &w.atk,
+            net.as_byte_slice(),
+            w.bond_outpoint,
+            epoch,
+            Hash64::from_bytes([0x9b; 64]),
+            w.target_daa,
+            Hash64::default(),
+        );
+        a.validator_id = w.honest.validator_id;
+        b.validator_id = w.honest.validator_id;
+        SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: w.bond_outpoint,
+            attestation_a: a,
+            attestation_b: b,
+            reporter_reward_spk_payload: reporter,
+        }
+    }
+
+    /// A GENUINE equivocation by the bonded validator (it really signed both).
+    fn genuine(w: &World, epoch: u64, reporter: [u8; 64]) -> SlashingEvidencePayload {
+        let net = w.ctx.consensus.params().genesis.hash;
+        let a = dns_harness::build_signed_attestation(
+            &w.honest,
+            net.as_byte_slice(),
+            w.bond_outpoint,
+            epoch,
+            Hash64::from_bytes([0xa1; 64]),
+            w.target_daa,
+            Hash64::default(),
+        );
+        let b = dns_harness::build_signed_attestation(
+            &w.honest,
+            net.as_byte_slice(),
+            w.bond_outpoint,
+            epoch,
+            Hash64::from_bytes([0xb2; 64]),
+            w.target_daa,
+            Hash64::default(),
+        );
+        SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: w.bond_outpoint,
+            attestation_a: a,
+            attestation_b: b,
+            reporter_reward_spk_payload: reporter,
+        }
+    }
+
+    fn evidence_tx(w: &World, funder: [u8; 32], fund: (TransactionOutpoint, u64, u64), ev: SlashingEvidencePayload) -> Transaction {
+        let storage = w.ctx.consensus.params().storage_mass_parameter;
+        dns_harness::funded_signed_slashing_evidence_tx(funder, fund.0, fund.1, fund.2, ev, storage)
+    }
+
+    /// The node-only half: the mempool refuses the forged evidence and admits the genuine one.
+    #[tokio::test]
+    async fn node_mempool_refuses_forged_admits_genuine() {
+        let w = world().await;
+        let forged_tx = evidence_tx(&w, w.atk.seed, w.a_funds[0], forged(&w, 1, w.a_payload));
+        let genuine_tx = evidence_tx(&w, w.honest.seed, w.k_funds[1], genuine(&w, 1, w.k_payload));
+        let mempool = |tx: &Transaction| {
+            let mut m = MutableTransaction::from_tx(tx.clone());
+            w.ctx.consensus.validate_mempool_transaction(&mut m, &Default::default())
+        };
+        let f = mempool(&forged_tx);
+        let g = mempool(&genuine_tx);
+        eprintln!("MEMPOOL: forged={f:?} genuine={g:?}");
+        assert!(matches!(f, Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwSlashingEvidenceNotGenuine(_))));
+        assert!(g.is_ok());
+    }
+}
