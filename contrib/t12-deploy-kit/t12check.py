@@ -9,7 +9,7 @@ and, with --registry, getPalwModelRegistry. Prints one block of lines and exits
   2  the node did not answer
 Nothing it sends changes node state.
 
-usage: t12check.py --port 26314 --expect-fp <64 hex> --expect-genesis <128 hex> [--registry] [--json]
+usage: t12check.py --port 26314 --expect-fp <64 hex> --expect-genesis <128 hex> [--registry] [--json] [--state-line]
                    [--expect-premine <128 hex>] [--expect-class <class id>[:<registry artifactBytes>]] [--expect-class-prefix <hex>]
        t12check.py --port 26994 --probe      # a FRESH isolated node: print its fingerprint and genesis
        t12check.py --port 26994 --premine    # the txid the genesis bonds sit on (getPalwPanelSeats)
@@ -21,6 +21,13 @@ seat's bond is <txid>:<card> for cards 0..7, the class is registered, and a regi
 prefix. The registry's artifactBytes is the work derivation's figure (2,620,391,424 for both t12 dense rows),
 NOT the artifact file's size (ART_8K_BYTES), so the optional :<bytes> compares with the former only.
 --expect-class needs --registry (added when absent).
+
+--state-line appends ONE machine-readable line for lib.sh's `upgrade` gates (the same run, nothing extra asked):
+  STATE fp=OK|BAD|? genesis=OK|BAD|? facts=OK|BAD|?|- synced=true|false|? peers=<n> daa=<n>|? blocks=<n>|? ready=<now>/<required>|-
+'?' = that call got no answer (or, except getBlock, an error) before --timeout — unknown, not a mismatch;
+facts = the kit's chain-fact copies (--expect-premine / --expect-class / --expect-class-prefix; '-' when none was asked);
+ready = the first --expect-class's readySeatsNow / requiredReadySeats. A node that does not answer prints
+`STATE unreachable` (exit 2).
 """
 import argparse, base64, json, os, socket, struct, sys, time
 
@@ -139,6 +146,8 @@ def main():
     ap.add_argument("--expect-panel", action="store_true",
                     help="the node holds a bond: its panel must be RUNNING (getPalwNodeStatus.panelRunning), not just planned")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--state-line", action="store_true",
+                    help="append one 'STATE fp=… genesis=… facts=… synced=… peers=… daa=… blocks=… ready=…' line (lib.sh upgrade)")
     ap.add_argument("--timeout", type=float, default=20)
     a = ap.parse_args()
     if a.probe:
@@ -194,6 +203,8 @@ def main():
         res = call_all(a.port, calls, a.timeout)
     except Exception as e:  # noqa: BLE001 — any transport failure is "did not answer"
         print(f"  UNREACHABLE json wRPC 127.0.0.1:{a.port}: {e}")
+        if a.state_line:
+            print("STATE unreachable")
         return 2
     if a.json:
         print(json.dumps(res, indent=1))
@@ -285,6 +296,30 @@ def main():
             print(f"  class {cid[:8]} state={pick(c, 'state', default='?')} ready={pick(c, 'readySeats', default='?')}"
                   f"/now {pick(c, 'readySeatsNow', default='?')} of {pick(c, 'requiredReadySeats', default='?')} "
                   f"inflight={pick(c, 'inflightNow', default='?')} — {str(pick(c, 'reason', default=''))[:110]}")
+    if a.state_line:
+        facts_asked = bool(a.expect_premine or a.expect_class or a.expect_class_prefix)
+        facts_bad = any(b == "premine" or b.startswith("class") for b in bad)
+        ready = "-"
+        if a.registry and a.expect_class:
+            rows = {str(pick(c, "classId", default="")): c for c in pick(res.get("getPalwModelRegistry") or {}, "classes", default=[]) or []}
+            row = rows.get(a.expect_class[0].partition(":")[0])
+            if row is not None:
+                ready = f"{pick(row, 'readySeatsNow', default='?')}/{pick(row, 'requiredReadySeats', default='?')}"
+        synced = pick(info, "isSynced", default=None)
+
+        def num(v):
+            return str(v) if isinstance(v, int) and not isinstance(v, bool) else (v if isinstance(v, str) and v.isdigit() else "?")
+        # '?' = the call got no answer before --timeout (call_all returns what arrived): not a mismatch, and
+        # lib.sh must not act on it (it stops a node only on a definite BAD)
+        def verdict(ok, *methods):
+            if ok:
+                return "OK"
+            return "?" if any(m not in res or (isinstance(res[m], dict) and "error" in res[m] and m != "getBlock") for m in methods) else "BAD"
+        facts_methods = (["getPalwPanelSeats"] if a.expect_premine else []) + (["getPalwModelRegistry"] if a.registry else [])
+        print(f"STATE fp={verdict(fp_ok, 'getPalwNodeStatus')} genesis={verdict(genesis_known, 'getBlock')} "
+              f"facts={verdict(not facts_bad, *facts_methods) if facts_asked else '-'} "
+              f"synced={'true' if synced is True else ('false' if synced is False else '?')} peers={len(peer_list)} "
+              f"daa={num(daa)} blocks={num(blocks)} ready={ready}")
     if bad:
         print(f"  RESULT: MISMATCH ({', '.join(bad)})")
         return 1

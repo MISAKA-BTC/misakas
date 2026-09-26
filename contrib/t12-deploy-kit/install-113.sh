@@ -23,11 +23,16 @@
 # first; they come back as testnet-12 validators after launch (checklist §4 step 18).
 #
 # Run as root on .113 from $REL_ROOT/kit:  ./install-113.sh preflight | stage | switch | check | explorer-apply | rollback
+# The chain is LIVE (09-25): a new binary under it is  ./install-113.sh stage && ./install-113.sh upgrade  (PLAN.md §15),
+# undone by  ./install-113.sh upgrade-rollback  — never by `rollback` (that retires the chain).
 . "$(dirname "$0")/lib.sh"
 
 HOST_NAME_EXPECTED=vmi3527497
 RESERVE_MIB=4096             # non-kaspad RSS 1.3 GiB measured 09-23 + postgres cache + margin (PLAN.md §2: 12,288 of 24,033 MiB)
 START_GAP=10
+# upgrade: before b6 stops, ibm's b0 (the other heartbeat miner, the 8k producer) and b1 must take a TCP
+# connection (PLAN.md §15)
+UPGRADE_REQUIRE_UP=(169.58.39.220:26311 169.58.39.220:26321)
 BINARIES=(kaspad misaka palw-class)
 NODES=(
   "6|misaka-t12-node|dropin|0.0.0.0:26311|26313|26314|26312|8545|8192|17|floor|1|1|169.58.39.220:26311,169.58.39.220:26321"

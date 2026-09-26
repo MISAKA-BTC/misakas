@@ -20,11 +20,16 @@
 # and the seeders dial the anchors on the default port 26311, which nothing on ibm answers today.
 #
 # Run as root on ibm from $REL_ROOT/kit:  ./install-ibm.sh preflight | stage | switch | check | rollback
+# The chain is LIVE (09-25): a new binary under it is  ./install-ibm.sh stage && ./install-ibm.sh upgrade  (PLAN.md §15),
+# undone by  ./install-ibm.sh upgrade-rollback  — never by `rollback` (that retires the chain).
 . "$(dirname "$0")/lib.sh"
 
 HOST_NAME_EXPECTED=vmi3450148
 RESERVE_MIB=2048              # ollama, journald, seeder, faucet, tunnel: 0.3 GiB measured; the rest is margin (PLAN.md §2: 20,736 of 24,033 MiB)
 START_GAP=20
+# upgrade: before each node here stops, the other heartbeat miner (.113 b6) must take a TCP connection —
+# b0 and b6 are the only heartbeat miners; both down pauses the chain clock (PLAN.md §15)
+UPGRADE_REQUIRE_UP=(169.58.232.113:26311)
 BINARIES=(kaspad misaka palw-class)
 # id|unit|mode|listen|borsh|json|grpc|evm|share_mib|memmax_gib|produce|heartbeat|seat8k|peers
 NODES=(
