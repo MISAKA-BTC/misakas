@@ -5128,7 +5128,10 @@ impl VirtualStateProcessor {
             let next_daa = self.palw_next_block_daa_for_reads(&state);
             (next_daa, self.palw_settled_anchor_depth_at(next_daa))
         });
-        Some(kaspa_consensus_core::palw_producer_v2::palw_bond_claims_v1(
+        // T12-058 (read side): whether the next block's fold refuses a retirement while a lock is
+        // live — the fence `BondRetireRequested`'s refusal reads (`objective_offence_at`).
+        let objective_offence = vesting_at.is_some_and(|(next_daa, _)| self.palw_objective_offence_at(next_daa));
+        Some(kaspa_consensus_core::palw_producer_v2::palw_bond_claims_with_locks_v1(
             &state,
             state_params,
             &bond,
@@ -5136,6 +5139,7 @@ impl VirtualStateProcessor {
             include_terminal,
             limit,
             vesting_at,
+            objective_offence,
         ))
     }
 

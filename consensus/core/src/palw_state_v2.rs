@@ -10190,6 +10190,39 @@ impl PalwChainStateV2 {
         crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
     }
 
+    /// **The `Valid` locks on `bond` the fold counts as live at `now_daa`, by claim** — the filter
+    /// [`Self::palw_slashable_available_v1`] sums and `BondRetireRequested`'s refusal
+    /// (`slashable_live_locked`, "still holds … sompi of slashable panel locks") sums: the lock's
+    /// DAA clock, or the second clock at the depth the liveness escape leaves
+    /// ([`palw_second_clock_depth_v1`] over `settled_anchor_depth`, the RAW depth at `now_daa`).
+    /// Read-only, for node policy and RPC (testnet-12 lifecycle audit T12-058: a seat's retirement
+    /// was dropped for locks no read showed); nothing that folds calls it.
+    pub fn palw_live_slashable_locks_v1(
+        &self,
+        bond: &PalwBondKeyV2,
+        now_daa: u64,
+        settled_anchor_depth: Option<u64>,
+        window_court: u64,
+    ) -> impl Iterator<Item = (Hash64, &crate::palw_panel_var_v1::PalwSlashableLockV1)> + '_ {
+        let settled_now = self.settled_attempt_finals;
+        let depth = palw_second_clock_depth_v1(settled_anchor_depth, &self.recent_anchor_daas, now_daa, window_court);
+        self.slashable_locks_of(bond)
+            .filter(move |(_, lock)| lock.is_live_v3(now_daa, settled_now, depth, window_court))
+            .map(|((_, claim), lock)| (*claim, lock))
+    }
+
+    /// The second clock's depth at `now_daa` after the liveness escape, from the RAW depth — what
+    /// [`Self::palw_live_slashable_locks_v1`] judges with, for a reader that must say whether the
+    /// DAA clock or the anchor count is what still holds a lock.
+    pub fn palw_escaped_second_clock_depth_v1(
+        &self,
+        settled_anchor_depth: Option<u64>,
+        now_daa: u64,
+        window_court: u64,
+    ) -> Option<u64> {
+        palw_second_clock_depth_v1(settled_anchor_depth, &self.recent_anchor_daas, now_daa, window_court)
+    }
+
     pub fn reserved_exposure(&self, key: &PalwBondKeyV2) -> u128 {
         self.reserved_exposure.get(key).copied().unwrap_or(0)
     }
@@ -61220,6 +61253,47 @@ pub(crate) mod tests {
             u.settled_attempt_finals = 1;
             assert_eq!(palw_bond_committed_raw_v1(&u, &p, &b, 1_000, Some(5)), 1_370 + 999, "held by the second clock");
             assert_eq!(palw_bond_committed_raw_v1(&u, &p, &b, 1_000 + 2 * p.window_court(), Some(5)), 1_370, "escaped");
+        }
+
+        /// **T12-058 (read side): the live locks a read lists are the ones the fold sums.** The bond's
+        /// retirement is refused while `slashable_live_locked > 0`; the read's figure is the same
+        /// filter, so it equals `collateral − palw_slashable_available_v1` whenever the locks fit the
+        /// collateral — on the DAA clock, under the second clock, and once the escape fires.
+        #[test]
+        fn t12_058_the_lock_read_is_the_folds_live_filter() {
+            let p = rcore_params();
+            let wc = p.window_court();
+            let b = bond_key(1);
+            let s = ledger_state();
+            let live: Vec<(Hash64, u128)> =
+                s.palw_live_slashable_locks_v1(&b, 1_000, None, wc).map(|(claim, lock)| (claim, lock.amount)).collect();
+            assert_eq!(live, vec![(h64(0xD1), 300), (h64(0xD2), 100), (h64(0xD3), 120)], "D4's DAA clock ran; bond 2's is not b's");
+            let read = crate::palw_producer_v2::palw_bond_live_locks_v1(&s, &p, &b, 1_000, None, true, 2);
+            assert_eq!((read.live_count, read.live_locked), (3, 520));
+            assert_eq!(read.live_locked, 5_000 - s.palw_slashable_available_v1(&b, 1_000, None, wc), "the fold's own sum");
+            assert_eq!(read.daa_clock_release, 10_000, "the retirement folds once the last DAA clock has run");
+            assert_eq!(read.anchor_count_bound, None, "no second clock below its depth");
+            assert!(read.retire_refused_while_locked);
+            assert_eq!((read.locks.len(), read.truncated), (2, true), "listed to the limit, summed whole");
+            assert!(read.locks.iter().all(|l| !l.held_by_anchor_count));
+            // Past every DAA clock nothing is live, and a retirement would fold.
+            let after = crate::palw_producer_v2::palw_bond_live_locks_v1(&s, &p, &b, 10_000, None, true, 10);
+            assert_eq!((after.live_count, after.live_locked, after.daa_clock_release), (0, 0, 0));
+            // Under the second clock the expired lock is live again, and the read says the anchor
+            // count holds it, bounded at its expiry plus 2 × window_court.
+            let mut u = s.clone();
+            u.recent_anchor_daas = vec![900];
+            u.settled_attempt_finals = 1;
+            let held = crate::palw_producer_v2::palw_bond_live_locks_v1(&u, &p, &b, 1_000, Some(5), true, 10);
+            assert_eq!(held.live_locked, 520 + 999);
+            assert_eq!(held.live_locked, 5_000 - u.palw_slashable_available_v1(&b, 1_000, Some(5), wc));
+            let d4 = held.locks.iter().find(|l| l.claim_id == h64(0xD4)).expect("D4 is held");
+            assert!(d4.held_by_anchor_count && d4.expiry_daa == 100);
+            assert_eq!(held.anchor_count_bound, Some(10_000 + 2 * wc));
+            // Escaped: the DAA clock alone again.
+            let escaped = crate::palw_producer_v2::palw_bond_live_locks_v1(&u, &p, &b, 1_000 + 2 * wc, Some(5), true, 10);
+            assert_eq!(escaped.live_locked, 5_000 - u.palw_slashable_available_v1(&b, 1_000 + 2 * wc, Some(5), wc));
+            assert!(escaped.locks.iter().all(|l| !l.held_by_anchor_count));
         }
 
         /// **A-6: an accuser's exposure is its open courts' `reserved`, read by the challenger index**,

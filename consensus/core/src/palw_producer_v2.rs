@@ -1812,8 +1812,15 @@ pub struct PalwClaimRowV1 {
     /// When the current phase ends by itself: a window closes, a court's backstop, or — for a
     /// final or voided claim — when its record retires from the state.
     pub deadline_daa: Option<u64>,
-    /// The collateral this claim reserves on its bond until it ends.
+    /// **The claim's WEIGHT term** (`PalwClaimStateV2::reserved`): held on its bond until the claim
+    /// ends. Not everything the claim holds there — see [`Self::committed`] (testnet-12 lifecycle
+    /// audit: `getPalwClaims.reservedSompi` read as the whole reservation, and it is the weight).
     pub reserved: u128,
+    /// **Everything the claim holds on its bond at the tip** (`palw_claim_commitment_v1`): the
+    /// weight, plus option A's escrow term until the licence releases it past `palw_rcore_plus`
+    /// (released at LICENCE, not at Final), plus a free-prompt claim's priced receipt rights; 0 once
+    /// Final, and a void's abandon hold while it lasts. The sum is the bond's reserved exposure.
+    pub committed: u128,
     /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
     pub escrowed_reward: u64,
     /// The payout queued for the next coinbase, once the claim is final — the producer's leg.
@@ -1942,6 +1949,7 @@ pub fn palw_claim_rows_v1(
 ) -> (Vec<PalwClaimRowV1>, bool) {
     use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
     let payouts: std::collections::BTreeMap<&Hash64, u64> = state.pending_payouts_iter().map(|(id, p)| (id, p.amount)).collect();
+    let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
     let mut courts: std::collections::BTreeMap<Hash64, (usize, u64)> = std::collections::BTreeMap::new();
     for (_, session) in state.court_sessions_iter() {
         let entry = courts.entry(session.claim).or_insert((0, u64::MAX));
@@ -1981,6 +1989,7 @@ pub fn palw_claim_rows_v1(
                 bound_daa: panel.map(|p| p.bound_daa),
                 deadline_daa: palw_claim_phase_deadline_v1(state, id, claim, state_params, court.map(|c| c.1)),
                 reserved: claim.reserved,
+                committed: crate::palw_state_v2::palw_claim_commitment_v1(state_params, claim, tip_daa).unwrap_or(u128::MAX),
                 escrowed_reward: claim.escrowed_reward,
                 // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
                 // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
@@ -2038,6 +2047,79 @@ pub fn palw_bond_summary_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> O
     })
 }
 
+/// **One `Valid` lock a bond holds that the fold still counts** ([`palw_bond_live_locks_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwBondLockRowV1 {
+    pub claim_id: Hash64,
+    pub amount: u128,
+    /// The lock's DAA clock: live while the DAA is below it.
+    pub expiry_daa: u64,
+    /// `true` when the DAA clock has run and the lock is held by the anchor count alone (the second
+    /// clock) — which holds it at most until `expiry_daa + 2 × window_court`.
+    pub held_by_anchor_count: bool,
+}
+
+/// **What a bond's live `Valid` locks withhold, and until when** (testnet-12 lifecycle audit
+/// T12-058). `BondRetireRequested` is dropped while ANY lock on the bond is live — "still holds …
+/// sompi of slashable panel locks; withdraw is refused until liability expiry" — and a seat that
+/// served panels holds one per `Valid` it signed for `window_court` past the claim's Final. No read
+/// showed a lock, its expiry or the refusal it causes, so `bond retire` paid for a carrier the fold
+/// dropped. Judged exactly as the fold judges at `at_daa` (the next block's DAA), through
+/// [`PalwChainStateV2::palw_live_slashable_locks_v1`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwBondLocksV1 {
+    /// The DAA the locks were judged at: the one the next block folds at.
+    pub at_daa: u64,
+    /// The live locks, earliest expiry first — at most the read's `limit`.
+    pub locks: Vec<PalwBondLockRowV1>,
+    /// More live locks than `locks` lists.
+    pub truncated: bool,
+    /// How many live locks there are, and their sum: the figure the retirement's refusal names.
+    pub live_count: u64,
+    pub live_locked: u128,
+    /// The DAA every live lock's DAA clock has run by (the latest `expiry_daa`); 0 with none.
+    pub daa_clock_release: u64,
+    /// The latest the anchor count may hold any of them (`expiry_daa + 2 × window_court`, the
+    /// second clock's own bound) where a second clock runs at `at_daa`; `None` where none does.
+    pub anchor_count_bound: Option<u64>,
+    /// `Params::palw_objective_offence` is armed at `at_daa`: the fold refuses a retirement while
+    /// `live_locked > 0`. Below it locks are neither written nor read.
+    pub retire_refused_while_locked: bool,
+}
+
+/// [`PalwBondLocksV1`] for `bond`, judged at `at_daa` with the RAW second-clock depth there (the
+/// facts the next block's fold reads), listing at most `limit` locks (0: none listed, sums whole).
+pub fn palw_bond_live_locks_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    at_daa: u64,
+    raw_depth: Option<u64>,
+    objective_offence: bool,
+    limit: usize,
+) -> PalwBondLocksV1 {
+    let window_court = state_params.window_court();
+    let escaped = state.palw_escaped_second_clock_depth_v1(raw_depth, at_daa, window_court);
+    let mut read = PalwBondLocksV1 { at_daa, retire_refused_while_locked: objective_offence, ..Default::default() };
+    let mut rows: Vec<PalwBondLockRowV1> = Vec::new();
+    for (claim_id, lock) in state.palw_live_slashable_locks_v1(bond, at_daa, raw_depth, window_court) {
+        read.live_count = read.live_count.saturating_add(1);
+        read.live_locked = read.live_locked.saturating_add(lock.amount);
+        read.daa_clock_release = read.daa_clock_release.max(lock.expiry_daa);
+        let held_by_anchor_count = !lock.is_live(at_daa);
+        if escaped.is_some() {
+            let bound = lock.expiry_daa.saturating_add(window_court.saturating_mul(2));
+            read.anchor_count_bound = Some(read.anchor_count_bound.map_or(bound, |b| b.max(bound)));
+        }
+        rows.push(PalwBondLockRowV1 { claim_id, amount: lock.amount, expiry_daa: lock.expiry_daa, held_by_anchor_count });
+    }
+    rows.sort_by_key(|row| (row.expiry_daa, row.claim_id));
+    read.truncated = rows.len() > limit;
+    rows.truncate(limit);
+    read.locks = rows;
+    read
+}
+
 /// A bond's claims and the bond, at one tip — what `getPalwClaims` answers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwBondClaimsV1 {
@@ -2056,6 +2138,9 @@ pub struct PalwBondClaimsV1 {
     /// retirement on the row is the reward's only record. Newest Final first.
     pub vesting_only: Vec<crate::palw_vesting_read_v1::PalwVestingRowReadV1>,
     pub vesting_only_truncated: bool,
+    /// **The bond's live `Valid` locks** (testnet-12 lifecycle audit T12-058), judged at the next
+    /// block's DAA — read only with `vesting_at` (the RPC's entry), `None` from the node-policy one.
+    pub locks: Option<PalwBondLocksV1>,
 }
 
 /// **`getPalwClaims`' whole answer at one tip** (ADR-0122 §6.5, claim row v3): the rows
@@ -2078,9 +2163,28 @@ pub fn palw_bond_claims_v1(
     limit: usize,
     vesting_at: Option<(u64, Option<u64>)>,
 ) -> PalwBondClaimsV1 {
+    palw_bond_claims_with_locks_v1(state, state_params, bond, role, include_terminal, limit, vesting_at, false)
+}
+
+/// [`palw_bond_claims_v1`] with `objective_offence` (`Params::palw_objective_offence` at the next
+/// block's DAA) — whether the fold refuses a retirement while a lock is live. The RPC's entry.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_bond_claims_with_locks_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    role: PalwClaimRoleV1,
+    include_terminal: bool,
+    limit: usize,
+    vesting_at: Option<(u64, Option<u64>)>,
+    objective_offence: bool,
+) -> PalwBondClaimsV1 {
     use crate::palw_vesting_read_v1::{PalwVestingReaderV1, palw_vesting_only_rows_v1};
     let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
     let (rows, truncated) = palw_claim_rows_v1(state, state_params, bond, role, include_terminal, limit);
+    let locks = vesting_at.map(|(next_daa, raw_depth)| {
+        palw_bond_live_locks_v1(state, state_params, bond, next_daa, raw_depth, objective_offence, limit.max(1))
+    });
     let (vesting, (vesting_only, vesting_only_truncated)) = match vesting_at {
         Some((next_daa, raw_depth)) => {
             let reader = PalwVestingReaderV1::new(state, state_params, next_daa, raw_depth);
@@ -2103,6 +2207,7 @@ pub fn palw_bond_claims_v1(
         vesting,
         vesting_only,
         vesting_only_truncated,
+        locks,
     }
 }
 

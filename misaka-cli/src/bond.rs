@@ -137,6 +137,7 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
             facts.bond_known && facts.bond_registered_pubkey.eq_ignore_ascii_case(&faster_hex::hex_string(key.public_key()))
         });
         let outpoint = format!("{}:{}", bond.transaction_id, bond.index);
+        let locks = if facts.bond_known { bond_lock_read(&nv, &bond, 10).await.ok() } else { None };
         let lifetime_collateral = class_lifetime_collateral(&nv, facts.pwu, &facts.class_target);
         let collateral_shortfall = lifetime_collateral.and_then(|need| need.checked_sub(facts.bond_collateral)).filter(|v| *v > 0);
         match ctx.output {
@@ -170,6 +171,11 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                 if !facts.not_ready_reason.is_empty() {
                     println!("readiness:  {}", facts.not_ready_reason);
                 }
+                // T12-058: the locks that hold a retirement, and when they release — no read showed them.
+                match &locks {
+                    Some(r) => lock_status_lines(r).iter().for_each(|line| println!("{line}")),
+                    None => println!("locks:      could not be read from this node"),
+                }
                 println!();
                 println!("Use `--palw-producer-bond={outpoint}` with the key that registered it.");
                 println!("Do not run `--palw-register-bond` again for this bond; registration is already complete.");
@@ -202,6 +208,23 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                     "collateral_shortfall_sompi": facts.bond_known.then_some(collateral_shortfall).flatten(),
                     "not_ready_reason": facts.bond_known.then_some(facts.not_ready_reason),
                     "owned_by_supplied_key": owned_by_supplied_key,
+                    // T12-058: the live Valid locks that hold a retirement, and when they release.
+                    "locks": locks.as_ref().filter(|r| lock_read_known(r)).map(|r| serde_json::json!({
+                        "at_daa": r.bond_locks_at_daa,
+                        "live_count": r.bond_live_lock_count,
+                        "live_locked_sompi": r.bond_live_locked_sompi,
+                        "daa_clock_release": r.bond_lock_daa_clock_release,
+                        "anchor_count_bound": r.bond_lock_anchor_count_bound,
+                        "retire_refused_while_locked": r.bond_retire_refused_while_locked,
+                        "retire_would_be_dropped": retire_lock_verdict(r).is_err(),
+                        "locks": r.bond_locks.iter().map(|l| serde_json::json!({
+                            "claim_id": l.claim_id, "amount_sompi": l.amount_sompi, "expiry_daa": l.expiry_daa,
+                            "held_by_anchor_count": l.held_by_anchor_count,
+                        })).collect::<Vec<_>>(),
+                        "truncated": r.bond_locks_truncated,
+                    })),
+                    "retiring_since_daa": locks.as_ref().and_then(|r| r.bond_retiring_since_daa),
+                    "withdrawal_delay_daa": locks.as_ref().filter(|r| lock_read_known(r)).map(|r| r.bond_withdrawal_delay_daa),
                 })
             ),
         }
@@ -257,6 +280,13 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
         }
     }
 
+    // T12-058: each owned bond's live panel locks and retirement, so the key's view shows what holds
+    // a retirement too.
+    let mut owned_locks = Vec::with_capacity(owned.len());
+    for (op, _) in &owned {
+        owned_locks.push(bond_lock_read(&nv, op, 3).await.ok());
+    }
+
     // Every UTXO at this address, with the node's own view of which are consensus-locked. The
     // intersection is this key's bonds; the rest is spendable.
     let all = page_all(&nv, &addr).await?;
@@ -281,8 +311,11 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                 }
                 (false, _) => {
                     println!("bonds:   {} registered to THIS key — pass one to --palw-producer-bond", owned.len());
-                    for (op, collateral) in &owned {
+                    for ((op, collateral), locks) in owned.iter().zip(&owned_locks) {
                         println!("  {}:{}  collateral {} sompi", op.transaction_id, op.index, collateral);
+                        if let Some(r) = locks {
+                            lock_status_lines(r).iter().for_each(|line| println!("    {line}"));
+                        }
                     }
                     if unanswered > 0 {
                         println!("         ({unanswered} further outpoint(s) could not be checked — the list may be short)");
@@ -353,6 +386,105 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
         }
     }
     Ok(())
+}
+
+/// **The bond's live `Valid` locks, as the node's next block would judge them** (testnet-12
+/// lifecycle audit T12-058) — `getPalwClaims` version 3's lock fields. `limit` bounds the locks (and
+/// the seat rows) listed; the counts are whole.
+async fn bond_lock_read(
+    nv: &NodeView,
+    bond: &TransactionOutpoint,
+    limit: u32,
+) -> Result<kaspa_rpc_core::GetPalwClaimsResponse, CliError> {
+    nv.client
+        .get_palw_claims(format!("{}:{}", bond.transaction_id, bond.index), "seat".into(), false, limit)
+        .await
+        .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwClaims: {e}")))
+}
+
+/// `getPalwClaims` answered the lock read: a version-3 node stamps the DAA it judged at (never 0 —
+/// a read is for the block after the tip).
+fn lock_read_known(r: &kaspa_rpc_core::GetPalwClaimsResponse) -> bool {
+    r.bond_locks_at_daa > 0
+}
+
+/// **Would the chain drop a `BondRetireRequested` for this bond now?** `Err` with the sentence that
+/// says why and from when — the fold's own refusal ("still holds … sompi of slashable panel locks;
+/// withdraw is refused until liability expiry", `palw_state_v2.rs`), read before a carrier is paid
+/// for. A seat that served panels holds one lock per `Valid` it signed for `window_court` past each
+/// claim's Final, so it cannot even START its withdrawal delay until then (T12-058). Below
+/// `palw_objective_offence` the chain reads no lock, and neither does this.
+fn retire_lock_verdict(r: &kaspa_rpc_core::GetPalwClaimsResponse) -> Result<(), String> {
+    if !r.bond_retire_refused_while_locked || r.bond_live_lock_count == 0 {
+        return Ok(());
+    }
+    let locked: u128 = r.bond_live_locked_sompi.parse().unwrap_or(0);
+    let bound = match r.bond_lock_anchor_count_bound {
+        Some(b) if b > r.bond_lock_daa_clock_release => format!(
+            " — or, while anchors settle slowly, as late as DAA {b} (the anchor count may hold a lock up to 2 × window_court past its DAA clock)"
+        ),
+        _ => String::new(),
+    };
+    Err(format!(
+        "this bond still holds {} live Valid lock(s) totalling {locked} sompi ({} MSK) from panels it served, and the chain drops a \
+         retirement while any is live (\"withdraw is refused until liability expiry\") — after its carrier is mined and paid for. \
+         The last DAA clock among them runs to DAA {}{bound}; retire from then (the node reads DAA {} now). `misaka bond status \
+         --bond <txid>:<index>` lists them.",
+        r.bond_live_lock_count,
+        sompi_to_msk(u64::try_from(locked).unwrap_or(u64::MAX)),
+        r.bond_lock_daa_clock_release,
+        r.bond_locks_at_daa.saturating_sub(1),
+    ))
+}
+
+/// The human lines `bond status` prints for a bond's locks and retirement (T12-058).
+fn lock_status_lines(r: &kaspa_rpc_core::GetPalwClaimsResponse) -> Vec<String> {
+    let mut out = Vec::new();
+    if !lock_read_known(r) {
+        out.push(
+            "locks:      not reported by this node (it predates getPalwClaims v3) — a seat's panel locks can hold a retirement".into(),
+        );
+    } else if r.bond_live_lock_count == 0 {
+        out.push("locks:      none live — a retirement is not held by panel locks".into());
+    } else {
+        let locked: u128 = r.bond_live_locked_sompi.parse().unwrap_or(0);
+        out.push(format!(
+            "locks:      {} live Valid lock(s), {locked} sompi ({} MSK){}",
+            r.bond_live_lock_count,
+            sompi_to_msk(u64::try_from(locked).unwrap_or(u64::MAX)),
+            if r.bond_retire_refused_while_locked { " — the chain refuses `bond retire` while any is live" } else { "" }
+        ));
+        out.push(format!(
+            "            last DAA clock runs to DAA {}{}",
+            r.bond_lock_daa_clock_release,
+            match r.bond_lock_anchor_count_bound {
+                Some(b) if b > r.bond_lock_daa_clock_release => format!(" (the anchor count may hold them to DAA {b} at most)"),
+                _ => String::new(),
+            }
+        ));
+        for lock in &r.bond_locks {
+            let amount: u128 = lock.amount_sompi.parse().unwrap_or(0);
+            out.push(format!(
+                "            claim {}…  {} MSK  until DAA {}{}",
+                &lock.claim_id[..lock.claim_id.len().min(16)],
+                sompi_to_msk(u64::try_from(amount).unwrap_or(u64::MAX)),
+                lock.expiry_daa,
+                if lock.held_by_anchor_count { " (DAA clock ran; held by the anchor count)" } else { "" }
+            ));
+        }
+        if r.bond_locks_truncated {
+            out.push(format!("            … {} more", r.bond_live_lock_count.saturating_sub(r.bond_locks.len() as u64)));
+        }
+    }
+    if let Some(since) = r.bond_retiring_since_daa {
+        out.push(format!(
+            "retiring:   since DAA {since} — the collateral stays locked until DAA {} at the earliest (withdrawal delay {} DAA), and \
+             while it is payee of a vesting row (`misaka wallet utxo list` shows B-3)",
+            since.saturating_add(r.bond_withdrawal_delay_daa),
+            r.bond_withdrawal_delay_daa
+        ));
+    }
+    out
 }
 
 /// **`misaka bond retire`** (D2) — sign the release the consensus rule has always accepted.
@@ -726,9 +858,22 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id:
         return Err(CliError::new(
             exit::GENERIC,
             format!(
-                "this bond still reserves {reserved} of exposure, which means at least one claim against it can still be disputed. Retiring now would take the collateral out from under a live court. Stop producing, wait for the reservations to release (they do as claims reach Final or void), and retry — `misaka bond status` shows the bond and the node's log reports the lattice."
+                "this bond still reserves {reserved} of exposure, which means at least one claim against it can still be disputed. Retiring now would take the collateral out from under a live court. Stop producing, wait for the reservations to release (a claim's escrow part at its licence, its weight part at Final or void), and retry — `misaka bond status` shows the bond and the node's log reports the lattice."
             ),
         ));
+    }
+
+    // **Refuse while a panel lock would make the chain drop it** (testnet-12 lifecycle audit T12-058):
+    // the reservation above is claims; a seat's `Valid` locks outlive its claims by `window_court`,
+    // and the fold drops a retirement while any is live — after the carrier is mined and its fee
+    // paid, with the bond still Active and nothing on the CLI's side to say so.
+    match bond_lock_read(&nv, &bond_outpoint, 5).await {
+        Ok(r) if lock_read_known(&r) => retire_lock_verdict(&r).map_err(|why| CliError::new(exit::NOT_READY, why))?,
+        Ok(_) => eprintln!(
+            "warning: this node does not report panel locks (getPalwClaims v3), so this CLI cannot tell whether the chain will drop \
+             the retirement for a live Valid lock — a seat that served panels in the last window_court DAA holds some"
+        ),
+        Err(e) => eprintln!("warning: the lock read failed ({}); the chain drops a retirement while a panel lock is live", e.msg),
     }
 
     // Fund the carrier from a MATURE, UNBONDED UTXO at this address. `page_all` already marks the
@@ -787,22 +932,63 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id:
 
     let rpc_tx: kaspa_rpc_core::RpcTransaction = (&tx).into();
     nv.client.submit_transaction(rpc_tx, false).await.map_err(|e| CliError::new(exit::GENERIC, format!("submitTransaction: {e}")))?;
-    match ctx.output {
-        OutputFormat::Human => {
-            println!("submitted {txid}");
-            println!("The bond moves to Retiring when this transaction is accepted; the collateral");
-            println!("is spendable after the withdrawal delay. `misaka bond status` reflects it.");
+    if ctx.output == OutputFormat::Human {
+        println!("submitted {txid}");
+        println!("waiting for the chain to fold it (the bond reads Retiring once it does; Ctrl-C stops waiting, not the retirement)…");
+    }
+    // **Say what the chain did, not what was sent** (T12-058): "submitted" was the last word even when
+    // the fold dropped the object. Wait (bounded) for the bond to read Retiring, then name the DAA
+    // the collateral can move from.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(RETIRE_FOLD_WAIT_SECS);
+    let mut last = None;
+    while std::time::Instant::now() < deadline {
+        if let Ok(r) = bond_lock_read(&nv, &bond_outpoint, 1).await {
+            let retiring = r.bond_retiring_since_daa.is_some();
+            last = Some(r);
+            if retiring {
+                break;
+            }
         }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+    let since = last.as_ref().and_then(|r| r.bond_retiring_since_daa);
+    let delay = last.as_ref().map(|r| r.bond_withdrawal_delay_daa).unwrap_or(0);
+    match ctx.output {
+        OutputFormat::Human => match since {
+            Some(since) => {
+                println!("Retiring since DAA {since}.");
+                println!(
+                    "The collateral stays locked until DAA {} at the earliest (withdrawal delay {delay} DAA), and while the bond",
+                    since.saturating_add(delay)
+                );
+                println!("is payee of a vesting row the conviction window still holds (`misaka wallet utxo list` shows B-3).");
+            }
+            None => {
+                println!("The bond does not read Retiring yet ({} s).", RETIRE_FOLD_WAIT_SECS);
+                println!(
+                    "`misaka bond status --bond {}:{}` reads it again. If the carrier was mined and the bond is still",
+                    bond_outpoint.transaction_id, bond_outpoint.index
+                );
+                println!("Active, the chain dropped it — its node log names why (\"a PALW lifecycle object was dropped\").");
+            }
+        },
         OutputFormat::Json => println!(
             "{}",
             serde_json::json!({
                 "ok": true, "submitted": true, "txid": txid.to_string(),
                 "bond": format!("{}:{}", bond_outpoint.transaction_id, bond_outpoint.index),
+                "retiring_since_daa": since,
+                "withdrawal_delay_daa": since.map(|_| delay),
+                "release_earliest_daa": since.map(|s| s.saturating_add(delay)),
             })
         ),
     }
     Ok(())
 }
+
+/// How long `bond retire` waits for the chain to fold the retirement: two DAA at testnet-12's
+/// two-minute cadence, and a little over.
+const RETIRE_FOLD_WAIT_SECS: u64 = 300;
 
 #[cfg(test)]
 mod bond_lookup_class_tests {
@@ -983,5 +1169,74 @@ mod retirement_domain_tests {
     fn a_human_bond_status_does_not_dump_a_whole_mldsa_public_key() {
         assert_eq!(short_identity("abcd"), "abcd");
         assert_eq!(short_identity("0123456789abcdef0123456789abcdef01234567"), "0123456789abcdef…01234567");
+    }
+}
+
+#[cfg(test)]
+mod retire_lock_tests {
+    use super::{lock_read_known, lock_status_lines, retire_lock_verdict};
+    use kaspa_rpc_core::{GetPalwClaimsResponse, RpcPalwBondLock};
+
+    /// The audit's seat (T12-058): 51 panels Final, reserved exposure 0, and 1,160,619,281,472 sompi
+    /// of live `Valid` locks the fold refused the retirement for.
+    fn seat_at_daa_356() -> GetPalwClaimsResponse {
+        GetPalwClaimsResponse {
+            bond_known: true,
+            bond_locks_at_daa: 357,
+            bond_live_lock_count: 51,
+            bond_live_locked_sompi: "1160619281472".into(),
+            bond_locks: vec![RpcPalwBondLock {
+                claim_id: "ab".repeat(64),
+                amount_sompi: "64017000000".into(),
+                expiry_daa: 3_236,
+                held_by_anchor_count: false,
+            }],
+            bond_locks_truncated: true,
+            bond_lock_daa_clock_release: 3_353,
+            bond_lock_anchor_count_bound: Some(9_353),
+            bond_retire_refused_while_locked: true,
+            bond_withdrawal_delay_daa: 12_900,
+            ..Default::default()
+        }
+    }
+
+    /// **`bond retire` refuses before paying, naming the DAA** — the chain would drop it.
+    #[test]
+    fn t12_058_a_locked_seat_is_refused_with_its_release_daa() {
+        let r = seat_at_daa_356();
+        assert!(lock_read_known(&r));
+        let why = retire_lock_verdict(&r).expect_err("the fold drops a retirement while a lock is live");
+        assert!(why.contains("51 live Valid lock(s)"), "{why}");
+        assert!(why.contains("1160619281472 sompi"), "{why}");
+        assert!(why.contains("runs to DAA 3353"), "{why}");
+        assert!(why.contains("DAA 9353"), "the anchor count's bound is named too: {why}");
+        // Once the locks have run, or below the fence (no lock is read), it passes.
+        assert_eq!(
+            retire_lock_verdict(&GetPalwClaimsResponse { bond_live_lock_count: 0, bond_live_locked_sompi: "0".into(), ..r.clone() }),
+            Ok(())
+        );
+        assert_eq!(retire_lock_verdict(&GetPalwClaimsResponse { bond_retire_refused_while_locked: false, ..r }), Ok(()));
+    }
+
+    /// `bond status` shows the locks, their release and — once retiring — the collateral's release.
+    #[test]
+    fn t12_058_bond_status_names_the_locks_and_the_release() {
+        let lines = lock_status_lines(&seat_at_daa_356()).join("\n");
+        assert!(lines.contains("51 live Valid lock(s)") && lines.contains("refuses `bond retire`"), "{lines}");
+        assert!(lines.contains("last DAA clock runs to DAA 3353") && lines.contains("DAA 9353"), "{lines}");
+        assert!(lines.contains("until DAA 3236") && lines.contains("… 50 more"), "{lines}");
+        let retiring = GetPalwClaimsResponse {
+            bond_locks_at_daa: 3_400,
+            bond_live_locked_sompi: "0".into(),
+            bond_retiring_since_daa: Some(3_400),
+            bond_withdrawal_delay_daa: 12_900,
+            ..Default::default()
+        };
+        let lines = lock_status_lines(&retiring).join("\n");
+        assert!(lines.contains("none live"), "{lines}");
+        assert!(lines.contains("since DAA 3400") && lines.contains("until DAA 16300"), "{lines}");
+        // A node that predates the read says so rather than "none".
+        let old = lock_status_lines(&GetPalwClaimsResponse::default()).join("\n");
+        assert!(old.contains("not reported by this node"), "{old}");
     }
 }

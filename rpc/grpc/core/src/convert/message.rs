@@ -768,6 +768,7 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         vesting_matured_at: item.vesting_matured_at,
         vesting_eta_daa: item.vesting_eta_daa,
         vesting_eta_estimated: item.vesting_eta_estimated,
+        committed_sompi: item.committed_sompi.clone(),
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -790,6 +791,24 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwClaimsResponse>, protowire::GetPal
         bond_capable_classes: item.bond_capable_classes.clone(),
         vesting_only_rows: item.vesting_only_rows.iter().map(protowire::RpcPalwClaimRow::from).collect(),
         vesting_only_truncated: item.vesting_only_truncated,
+        bond_locks_at_daa: item.bond_locks_at_daa,
+        bond_live_lock_count: item.bond_live_lock_count,
+        bond_live_locked_sompi: item.bond_live_locked_sompi.clone(),
+        bond_locks: item
+            .bond_locks
+            .iter()
+            .map(|lock| protowire::RpcPalwBondLock {
+                claim_id: lock.claim_id.clone(),
+                amount_sompi: lock.amount_sompi.clone(),
+                expiry_daa: lock.expiry_daa,
+                held_by_anchor_count: lock.held_by_anchor_count,
+            })
+            .collect(),
+        bond_locks_truncated: item.bond_locks_truncated,
+        bond_lock_daa_clock_release: item.bond_lock_daa_clock_release,
+        bond_lock_anchor_count_bound: item.bond_lock_anchor_count_bound,
+        bond_retire_refused_while_locked: item.bond_retire_refused_while_locked,
+        bond_withdrawal_delay_daa: item.bond_withdrawal_delay_daa,
         error: None,
     }
 });
@@ -2739,6 +2758,7 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         vesting_matured_at: item.vesting_matured_at,
         vesting_eta_daa: item.vesting_eta_daa,
         vesting_eta_estimated: item.vesting_eta_estimated,
+        committed_sompi: item.committed_sompi.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {
@@ -2765,6 +2785,24 @@ try_from!(item: &protowire::GetPalwClaimsResponseMessage, RpcResult<kaspa_rpc_co
             .map(kaspa_rpc_core::RpcPalwClaimRow::try_from)
             .collect::<RpcResult<Vec<_>>>()?,
         vesting_only_truncated: item.vesting_only_truncated,
+        bond_locks_at_daa: item.bond_locks_at_daa,
+        bond_live_lock_count: item.bond_live_lock_count,
+        bond_live_locked_sompi: item.bond_live_locked_sompi.clone(),
+        bond_locks: item
+            .bond_locks
+            .iter()
+            .map(|lock| kaspa_rpc_core::RpcPalwBondLock {
+                claim_id: lock.claim_id.clone(),
+                amount_sompi: lock.amount_sompi.clone(),
+                expiry_daa: lock.expiry_daa,
+                held_by_anchor_count: lock.held_by_anchor_count,
+            })
+            .collect(),
+        bond_locks_truncated: item.bond_locks_truncated,
+        bond_lock_daa_clock_release: item.bond_lock_daa_clock_release,
+        bond_lock_anchor_count_bound: item.bond_lock_anchor_count_bound,
+        bond_retire_refused_while_locked: item.bond_retire_refused_while_locked,
+        bond_withdrawal_delay_daa: item.bond_withdrawal_delay_daa,
     }
 });
 try_from!(item: &protowire::RpcPalwClassRow, kaspa_rpc_core::RpcPalwClassRow, {

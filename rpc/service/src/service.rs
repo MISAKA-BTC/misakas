@@ -1644,6 +1644,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     seats: row.seats.iter().map(outpoint).collect(),
                     deadline_daa: row.deadline_daa,
                     reserved_sompi: row.reserved.to_string(),
+                    committed_sompi: row.committed.to_string(),
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,
@@ -1680,12 +1681,25 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     phase_daa: only.row.final_daa,
                     seats: only.row.seats.iter().map(|(seat, _)| outpoint(seat)).collect(),
                     reserved_sompi: "0".to_string(),
+                    committed_sompi: "0".to_string(),
                     escrow_sompi: only.row.escrowed_reward,
                     ..palw_claim_row_vesting_fields(Some(&stage), &bond)
                 }
             })
             .collect();
         let summary = read.bond.as_ref();
+        // T12-058: the bond's live locks, as the next block's fold judges them, and the withdrawal
+        // delay a retirement starts — so `bond status` / `bond retire` can say WHEN before paying.
+        let locks = read.locks.clone().unwrap_or_default();
+        let withdrawal_delay = palw_v2_bundle(&self.config.params)
+            .map(|bundle| {
+                kaspa_consensus_core::config::params::palw_v2_bond_withdrawal_delay_at_v1(
+                    bundle,
+                    self.config.params.palw_da_court,
+                    locks.at_daa.max(read.tip_daa),
+                )
+            })
+            .unwrap_or(0);
         Ok(GetPalwClaimsResponse {
             available: true,
             tip_daa: read.tip_daa,
@@ -1702,6 +1716,24 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             bond_capable_classes: summary.map(|b| b.capable_classes.iter().map(|c| c.to_string()).collect()).unwrap_or_default(),
             vesting_only_rows,
             vesting_only_truncated: read.vesting_only_truncated,
+            bond_locks_at_daa: locks.at_daa,
+            bond_live_lock_count: locks.live_count,
+            bond_live_locked_sompi: locks.live_locked.to_string(),
+            bond_locks: locks
+                .locks
+                .iter()
+                .map(|lock| kaspa_rpc_core::RpcPalwBondLock {
+                    claim_id: lock.claim_id.to_string(),
+                    amount_sompi: lock.amount.to_string(),
+                    expiry_daa: lock.expiry_daa,
+                    held_by_anchor_count: lock.held_by_anchor_count,
+                })
+                .collect(),
+            bond_locks_truncated: locks.truncated,
+            bond_lock_daa_clock_release: locks.daa_clock_release,
+            bond_lock_anchor_count_bound: locks.anchor_count_bound,
+            bond_retire_refused_while_locked: locks.retire_refused_while_locked,
+            bond_withdrawal_delay_daa: withdrawal_delay,
         })
     }
 

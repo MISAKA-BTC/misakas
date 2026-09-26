@@ -1815,6 +1815,16 @@ message RpcPalwClaimRow {
   optional uint64 vestingMaturedAt = 34;
   optional uint64 vestingEtaDaa = 35;
   bool vestingEtaEstimated = 36;
+  // Testnet-12 lifecycle audit: weight + escrow (until licence) + receipt rights, decimal sompi.
+  string committedSompi = 37;
+}
+
+// Testnet-12 lifecycle audit T12-058: one live Valid lock on a bond.
+message RpcPalwBondLock {
+  string claimId = 1;
+  string amountSompi = 2;
+  uint64 expiryDaa = 3;
+  bool heldByAnchorCount = 4;
 }
 
 message GetPalwClaimsResponseMessage {
@@ -1834,6 +1844,16 @@ message GetPalwClaimsResponseMessage {
   // ADR-0152 R-core+: retired claims whose reward still vests.
   repeated RpcPalwClaimRow vestingOnlyRows = 14;
   bool vestingOnlyTruncated = 15;
+  // Testnet-12 lifecycle audit T12-058: the bond's live Valid locks, judged at the next block.
+  uint64 bondLocksAtDaa = 16;
+  uint64 bondLiveLockCount = 17;
+  string bondLiveLockedSompi = 18;
+  repeated RpcPalwBondLock bondLocks = 19;
+  bool bondLocksTruncated = 20;
+  uint64 bondLockDaaClockRelease = 21;
+  optional uint64 bondLockAnchorCountBound = 22;
+  bool bondRetireRefusedWhileLocked = 23;
+  uint64 bondWithdrawalDelayDaa = 24;
   RPCError error = 1000;
 }
 

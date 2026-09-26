@@ -15731,6 +15731,7 @@ mod own_claim_event_tests {
             bound_daa: None,
             deadline_daa: Some(700),
             reserved: 0,
+            committed: 0,
             escrowed_reward: 0,
             payout_pending: None,
             work_leaves: 0,

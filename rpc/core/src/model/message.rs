@@ -4207,7 +4207,9 @@ pub struct RpcPalwClaimRow {
     pub seats: Vec<String>,
     /// When the current phase ends by itself (a window, a court's backstop, a retirement).
     pub deadline_daa: Option<u64>,
-    /// The collateral this claim reserves, in sompi, as a decimal string (a u128).
+    /// **The claim's WEIGHT term** on its bond, in sompi, as a decimal string (a u128) — not
+    /// everything the claim holds there: see `committed_sompi` (version 4). Held until the claim
+    /// ends (Final or void).
     pub reserved_sompi: String,
     pub escrow_sompi: u64,
     pub payout_pending_sompi: Option<u64>,
@@ -4249,11 +4251,18 @@ pub struct RpcPalwClaimRow {
     /// bound (`vesting_eta_estimated`).
     pub vesting_eta_daa: Option<u64>,
     pub vesting_eta_estimated: bool,
+    /// **Version 4 (testnet-12 lifecycle audit): everything the claim holds on its bond at the
+    /// tip**, decimal sompi — its weight (`reserved_sompi`), plus the block lane's escrow term until
+    /// the LICENCE releases it (past `palw_rcore_plus`; the weight stays to Final), plus a
+    /// free-prompt claim's receipt rights. What the bond's reserved exposure sums. Empty from a
+    /// version-3 peer.
+    #[serde(default)]
+    pub committed_sompi: String,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
         store!(String, &self.class_id, writer)?;
@@ -4293,6 +4302,8 @@ impl Serializer for RpcPalwClaimRow {
         store!(Option<u64>, &self.vesting_matured_at, writer)?;
         store!(Option<u64>, &self.vesting_eta_daa, writer)?;
         store!(bool, &self.vesting_eta_estimated, writer)?;
+        // Version 4: what the claim holds on its bond, whole (weight + escrow + rights).
+        store!(String, &self.committed_sompi, writer)?;
         Ok(())
     }
 }
@@ -4343,6 +4354,9 @@ impl Deserializer for RpcPalwClaimRow {
             row.vesting_eta_daa = load!(Option<u64>, reader)?;
             row.vesting_eta_estimated = load!(bool, reader)?;
         }
+        if version >= 4 {
+            row.committed_sompi = load!(String, reader)?;
+        }
         Ok(row)
     }
 }
@@ -4377,11 +4391,80 @@ pub struct GetPalwClaimsResponse {
     /// Each is shaped as a `final` claim row carrying its vesting fields; newest Final first.
     pub vesting_only_rows: Vec<RpcPalwClaimRow>,
     pub vesting_only_truncated: bool,
+    /// **Version 3 (testnet-12 lifecycle audit T12-058): the bond's live `Valid` locks.** A seat
+    /// holds one per `Valid` it signed, for `window_court` past the claim's Final, and while ANY is
+    /// live the chain drops a `BondRetireRequested` ("still holds … sompi of slashable panel locks")
+    /// after its carrier is mined. Judged as the next block's fold judges them, at
+    /// `bond_locks_at_daa`. `bond_live_lock_count` / `bond_live_locked_sompi` are whole;
+    /// `bond_locks` lists at most `limit` of them, earliest expiry first.
+    #[serde(default)]
+    pub bond_locks_at_daa: u64,
+    #[serde(default)]
+    pub bond_live_lock_count: u64,
+    /// Decimal sompi (a u128).
+    #[serde(default)]
+    pub bond_live_locked_sompi: String,
+    #[serde(default)]
+    pub bond_locks: Vec<RpcPalwBondLock>,
+    #[serde(default)]
+    pub bond_locks_truncated: bool,
+    /// The DAA every live lock's DAA clock has run by (0: none live) — the earliest a retirement
+    /// can fold, where no anchor count holds a lock past it.
+    #[serde(default)]
+    pub bond_lock_daa_clock_release: u64,
+    /// The latest the anchor count (the second clock) may hold any of them; `None` where no second
+    /// clock runs.
+    #[serde(default)]
+    pub bond_lock_anchor_count_bound: Option<u64>,
+    /// The chain refuses a retirement while a lock is live (`palw_objective_offence` armed).
+    #[serde(default)]
+    pub bond_retire_refused_while_locked: bool,
+    /// How long a Retiring bond's collateral stays locked after `bond_retiring_since_daa`, at the
+    /// next block (the bundle's delay plus the DA court's lattice where armed); a vesting row the
+    /// bond is payee of can hold it longer (B-3).
+    #[serde(default)]
+    pub bond_withdrawal_delay_daa: u64,
+}
+
+/// One live `Valid` lock on a bond (`getPalwClaims` version 3).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwBondLock {
+    pub claim_id: String,
+    /// Decimal sompi (a u128).
+    pub amount_sompi: String,
+    /// The lock's DAA clock: live while the DAA is below it.
+    pub expiry_daa: u64,
+    /// The DAA clock has run and the anchor count alone holds it.
+    pub held_by_anchor_count: bool,
+}
+
+impl Serializer for RpcPalwBondLock {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.amount_sompi, writer)?;
+        store!(u64, &self.expiry_daa, writer)?;
+        store!(bool, &self.held_by_anchor_count, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwBondLock {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            amount_sompi: load!(String, reader)?,
+            expiry_daa: load!(u64, reader)?,
+            held_by_anchor_count: load!(bool, reader)?,
+        })
+    }
 }
 
 impl Serializer for GetPalwClaimsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
         store!(bool, &self.available, writer)?;
         store!(u64, &self.tip_daa, writer)?;
         store!(String, &self.bond, writer)?;
@@ -4398,6 +4481,16 @@ impl Serializer for GetPalwClaimsResponse {
         // Version 2: the retired claims' vesting rows (ADR-0152).
         serialize!(Vec<RpcPalwClaimRow>, &self.vesting_only_rows, writer)?;
         store!(bool, &self.vesting_only_truncated, writer)?;
+        // Version 3: the bond's live locks (T12-058).
+        store!(u64, &self.bond_locks_at_daa, writer)?;
+        store!(u64, &self.bond_live_lock_count, writer)?;
+        store!(String, &self.bond_live_locked_sompi, writer)?;
+        serialize!(Vec<RpcPalwBondLock>, &self.bond_locks, writer)?;
+        store!(bool, &self.bond_locks_truncated, writer)?;
+        store!(u64, &self.bond_lock_daa_clock_release, writer)?;
+        store!(Option<u64>, &self.bond_lock_anchor_count_bound, writer)?;
+        store!(bool, &self.bond_retire_refused_while_locked, writer)?;
+        store!(u64, &self.bond_withdrawal_delay_daa, writer)?;
         Ok(())
     }
 }
@@ -4422,6 +4515,18 @@ impl Deserializer for GetPalwClaimsResponse {
         let bond_capable_classes = load!(Vec<String>, reader)?;
         let (vesting_only_rows, vesting_only_truncated) =
             if version >= 2 { (deserialize!(Vec<RpcPalwClaimRow>, reader)?, load!(bool, reader)?) } else { (Vec::new(), false) };
+        let mut locks = GetPalwClaimsResponse::default();
+        if version >= 3 {
+            locks.bond_locks_at_daa = load!(u64, reader)?;
+            locks.bond_live_lock_count = load!(u64, reader)?;
+            locks.bond_live_locked_sompi = load!(String, reader)?;
+            locks.bond_locks = deserialize!(Vec<RpcPalwBondLock>, reader)?;
+            locks.bond_locks_truncated = load!(bool, reader)?;
+            locks.bond_lock_daa_clock_release = load!(u64, reader)?;
+            locks.bond_lock_anchor_count_bound = load!(Option<u64>, reader)?;
+            locks.bond_retire_refused_while_locked = load!(bool, reader)?;
+            locks.bond_withdrawal_delay_daa = load!(u64, reader)?;
+        }
         Ok(Self {
             available,
             tip_daa,
@@ -4438,6 +4543,7 @@ impl Deserializer for GetPalwClaimsResponse {
             bond_capable_classes,
             vesting_only_rows,
             vesting_only_truncated,
+            ..locks
         })
     }
 }
@@ -11624,8 +11730,9 @@ mod palw_vesting_wire_tests {
         let row = RpcPalwClaimRow { exec_credit: 9, ..Default::default() };
         let mut bytes = Vec::new();
         Serializer::serialize(&row, &mut bytes).unwrap();
-        // Version 3 appended: "" (4) + u64 + u64 + None + u64 + None + None + None + bool.
-        let tail = 4 + 8 + 8 + 1 + 8 + 1 + 1 + 1 + 1;
+        // Version 3 appended: "" (4) + u64 + u64 + None + u64 + None + None + None + bool; version 4
+        // after it: "" (4).
+        let tail = 4 + 8 + 8 + 1 + 8 + 1 + 1 + 1 + 1 + 4;
         bytes.truncate(bytes.len() - tail);
         bytes[..2].copy_from_slice(&2u16.to_le_bytes());
         let back = <RpcPalwClaimRow as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
@@ -11650,14 +11757,70 @@ mod palw_vesting_wire_tests {
         let back = <GetPalwClaimsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
         assert_eq!(back.vesting_only_rows, response.vesting_only_rows);
         assert!(back.vesting_only_truncated);
-        // A version-1 peer: the same bytes without the tail.
+        // A version-1 peer: the same bytes without the version-2 and version-3 tails.
         let mut tail = Vec::new();
         serialize!(Vec<RpcPalwClaimRow>, &response.vesting_only_rows, &mut tail).unwrap();
-        bytes.truncate(bytes.len() - tail.len() - 1);
+        bytes.truncate(bytes.len() - lock_tail_len(&response) - tail.len() - 1);
         bytes[..2].copy_from_slice(&1u16.to_le_bytes());
         let old = <GetPalwClaimsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
         assert!(old.vesting_only_rows.is_empty() && !old.vesting_only_truncated);
         assert_eq!(old.claims, response.claims);
         assert_eq!(old.bond_capable_classes, response.bond_capable_classes);
+    }
+
+    /// The version-3 tail's length, as `GetPalwClaimsResponse`'s serializer writes it.
+    fn lock_tail_len(r: &GetPalwClaimsResponse) -> usize {
+        let mut v3 = Vec::new();
+        store!(u64, &r.bond_locks_at_daa, &mut v3).unwrap();
+        store!(u64, &r.bond_live_lock_count, &mut v3).unwrap();
+        store!(String, &r.bond_live_locked_sompi, &mut v3).unwrap();
+        serialize!(Vec<RpcPalwBondLock>, &r.bond_locks, &mut v3).unwrap();
+        store!(bool, &r.bond_locks_truncated, &mut v3).unwrap();
+        store!(u64, &r.bond_lock_daa_clock_release, &mut v3).unwrap();
+        store!(Option<u64>, &r.bond_lock_anchor_count_bound, &mut v3).unwrap();
+        store!(bool, &r.bond_retire_refused_while_locked, &mut v3).unwrap();
+        store!(u64, &r.bond_withdrawal_delay_daa, &mut v3).unwrap();
+        v3.len()
+    }
+
+    /// **`getPalwClaims` v3 carries the bond's live locks** (testnet-12 lifecycle audit T12-058), and
+    /// a version-2 answer (no lock tail) reads with none — its vesting rows intact.
+    #[test]
+    fn the_claims_answer_gates_its_lock_tail_on_its_version() {
+        let response = GetPalwClaimsResponse {
+            available: true,
+            bond: "b:0".to_string(),
+            claims: vec![v3_row("live")],
+            vesting_only_rows: vec![v3_row("retired")],
+            bond_locks_at_daa: 357,
+            bond_live_lock_count: 51,
+            bond_live_locked_sompi: "1160619281472".to_string(),
+            bond_locks: vec![RpcPalwBondLock {
+                claim_id: "c".repeat(128),
+                amount_sompi: "64017000000".to_string(),
+                expiry_daa: 3_353,
+                held_by_anchor_count: false,
+            }],
+            bond_locks_truncated: true,
+            bond_lock_daa_clock_release: 3_353,
+            bond_lock_anchor_count_bound: Some(9_353),
+            bond_retire_refused_while_locked: true,
+            bond_withdrawal_delay_daa: 12_900,
+            ..Default::default()
+        };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwClaimsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(back.bond_locks.len(), 1);
+        assert_eq!(back.bond_locks[0].expiry_daa, 3_353);
+        assert_eq!(back.bond_live_locked_sompi, response.bond_live_locked_sompi);
+        assert_eq!((back.bond_lock_anchor_count_bound, back.bond_withdrawal_delay_daa), (Some(9_353), 12_900));
+        assert!(back.bond_retire_refused_while_locked && back.bond_locks_truncated);
+        // A version-2 peer: the same bytes without the lock tail.
+        bytes.truncate(bytes.len() - lock_tail_len(&response));
+        bytes[..2].copy_from_slice(&2u16.to_le_bytes());
+        let old = <GetPalwClaimsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(old.vesting_only_rows, response.vesting_only_rows, "version 2's tail is intact");
+        assert!(old.bond_locks.is_empty() && old.bond_live_lock_count == 0 && !old.bond_retire_refused_while_locked);
     }
 }
