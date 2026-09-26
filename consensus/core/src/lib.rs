@@ -186,6 +186,10 @@ pub mod palw_block_commitment;
 /// `Params::palw_prefill_draw` runs a different one. Behind `Params::palw_canonical_work`, `None`
 /// on every preset.
 pub mod palw_canonical_work_v1;
+/// ADR-0160 — the reference formulas of claim-capacity separation (staged weight and the per-bond
+/// cap, `m_c`, the seat repricing, the §5 targets). Pure; called by no consensus rule until a
+/// capacity lane's fence arms (`palw_capacity_shadow_is_node_only` enforces it).
+pub mod palw_capacity_formulas_v1;
 pub mod palw_class_identity_v1;
 /// MISAKA PALW chain carriage v1 (ADR-0029): the Stage-0 magic envelope, the five payload
 /// bodies, their caps, and the stateless validators that become the Stage-1 admission
