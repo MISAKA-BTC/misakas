@@ -293,6 +293,56 @@ pub(crate) fn palw_operator_da_plan_v1(
     P::File { rank, of: pool.len(), due }
 }
 
+// ---- ADR-0160 lane verify V3: the deferred audit — a private fraction of every candidate -----------
+
+/// **The fraction of the lane's candidates each operator node replays privately** (ADR-0160 V3), in
+/// permille: past its public judges' turns, every operator bond that is neither the claim's producer
+/// nor one of its seats replays this share of the candidates, chosen by a key only it holds
+/// ([`palw_deferred_audit_selects_v1`]) — so a producer can neither predict nor avoid the auditor, and
+/// a lie meets an honest replay with probability `q_audit = 1 − (1 − a)^n` over the `n` non-seat
+/// operators (measured by `deferred_audit_coverage_is_one_minus_one_minus_a_to_the_n`). Node policy:
+/// a refuted replay is filed through the lane's existing accusation (`FileRefuted`), nothing else.
+pub(crate) const PALW_DEFERRED_AUDIT_FRACTION_PERMILLE_V1: u16 = 100;
+
+/// Keyed-BLAKE2b-512 domain of the deferred audit's private draw.
+pub(crate) const PALW_DEFERRED_AUDIT_DOMAIN_V1: &[u8] = b"misaka-node/deferred-audit/v1";
+
+/// **Does this node's private draw select `claim`?** `H_secret(domain ‖ claim) mod 1000 < a`: a
+/// uniform draw per (node, claim) no one without `secret` can compute, stable for the claim's life on
+/// this node (the secret is drawn once a process).
+pub(crate) fn palw_deferred_audit_selects_v1(secret: &[u8; 32], claim: &Hash64, fraction_permille: u16) -> bool {
+    if fraction_permille >= 1_000 {
+        return true;
+    }
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(secret).to_state();
+    state.update(PALW_DEFERRED_AUDIT_DOMAIN_V1);
+    state.update(claim.as_byte_slice());
+    let digest = state.finalize();
+    let draw = u64::from_le_bytes(digest.as_bytes()[..8].try_into().expect("8 bytes")) % 1_000;
+    draw < fraction_permille as u64
+}
+
+/// **The turn rule with the deferred audit** (ADR-0160 V3): [`palw_operator_da_plan_v1`], and where
+/// that leaves this node out of a REPLAYABLE claim's judging — not one of its public judges, or not its
+/// turn yet — but its private draw selects the claim (`audit_selected`) and its bond declared the
+/// class, a private judge's replay now (`Judge { rank: usize::MAX, of: 0 }`). Every other answer is
+/// the turn rule's: a producer, a seat, a claim an operator already accuses or that DA-8 shields is
+/// never audited here.
+pub(crate) fn palw_operator_da_plan_with_audit_v1(
+    claim: &PalwOperatorDaCandidateV1,
+    me: &PalwBondKeyV2,
+    operators: &[PalwBondKeyV2],
+    now_daa: u64,
+    audit_selected: bool,
+) -> PalwOperatorDaPlanV1 {
+    let plan = palw_operator_da_plan_v1(claim, me, operators, now_daa);
+    let left_out = matches!(plan, PalwOperatorDaPlanV1::Wait { .. } | PalwOperatorDaPlanV1::Skip(PalwOperatorDaSkipV1::NotAJudge));
+    if left_out && audit_selected && palw_operator_da_replayable_v1(&claim.job) && claim.capable.contains(me) {
+        return PalwOperatorDaPlanV1::Judge { rank: usize::MAX, of: 0 };
+    }
+    plan
+}
+
 /// **What this node's replay of a claim came to** (the replay gate).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwOperatorDaVerdictV1 {
@@ -416,15 +466,38 @@ pub(super) struct PalwOperatorDaBookV1 {
     /// The DAA a scan last found nothing to do at: the candidates are not scanned again within it
     /// (every change of the book clears it).
     pub(super) idle_at: Option<u64>,
+    /// **ADR-0160 V3: this node's private audit key and fraction** — drawn once a process
+    /// ([`Self::new`]); `None` audits nothing (the tests of the turn rule alone).
+    audit: Option<([u8; 32], u16)>,
 }
 
 impl PalwOperatorDaBookV1 {
     pub(super) fn new(registrations: Vec<(PalwBondKeyV2, u64)>) -> Self {
+        let mut secret = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut secret);
         Self {
             operators: registrations.iter().map(|(bond, _)| *bond).collect(),
             registered: registrations.into_iter().collect(),
+            audit: Some((secret, PALW_DEFERRED_AUDIT_FRACTION_PERMILLE_V1)),
             ..Default::default()
         }
+    }
+
+    /// The book with the deferred audit set (a test's own key and fraction) or off (`None`).
+    #[cfg(test)]
+    pub(super) fn with_audit(mut self, audit: Option<([u8; 32], u16)>) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    /// Whether this node's private draw selects `claim` for a deferred audit (ADR-0160 V3).
+    fn audit_selects(&self, claim: &Hash64) -> bool {
+        self.audit.is_some_and(|(secret, fraction)| palw_deferred_audit_selects_v1(&secret, claim, fraction))
+    }
+
+    /// The turn rule this node follows: [`palw_operator_da_plan_with_audit_v1`] with its own draw.
+    fn plan(&self, claim: &PalwOperatorDaCandidateV1, me: &PalwBondKeyV2, now_daa: u64) -> PalwOperatorDaPlanV1 {
+        palw_operator_da_plan_with_audit_v1(claim, me, &self.operators, now_daa, self.audit_selects(&claim.claim_id))
     }
 
     pub(super) fn operators(&self) -> &[PalwBondKeyV2] {
@@ -435,7 +508,9 @@ impl PalwOperatorDaBookV1 {
     /// running replay is detached with the runner (its reservation is held until it returns).
     pub(super) fn clear(&mut self) {
         let registrations = self.operators.iter().map(|bond| (*bond, self.registered.get(bond).copied().unwrap_or(0))).collect();
+        let audit = self.audit;
         *self = Self::new(registrations);
+        self.audit = audit;
     }
 
     /// Whether the candidates are due a re-read at `now_daa` (once a DAA).
@@ -498,7 +573,7 @@ impl PalwOperatorDaBookV1 {
     /// node's to file leaves the queue unsent): a refuted claim while nothing skips it, any other on
     /// this node's blind turn.
     pub(super) fn still_files(&self, claim: &Hash64, me: &PalwBondKeyV2, now_daa: u64) -> bool {
-        self.candidate(claim).is_some_and(|c| match palw_operator_da_plan_v1(c, me, &self.operators, now_daa) {
+        self.candidate(claim).is_some_and(|c| match self.plan(c, me, now_daa) {
             PalwOperatorDaPlanV1::Skip(_) => false,
             PalwOperatorDaPlanV1::File { .. } => true,
             _ => self.verdicts.get(claim) == Some(&PalwOperatorDaVerdictV1::Refuted),
@@ -533,7 +608,8 @@ impl PalwOperatorDaBookV1 {
             {
                 return None;
             }
-            let plan = palw_operator_da_plan_v1(claim, me, &self.operators, now_daa);
+            // ADR-0160 V3: the turn rule with this node's private deferred audit.
+            let plan = self.plan(claim, me, now_daa);
             match (self.verdicts.get(&id), plan) {
                 (_, PalwOperatorDaPlanV1::Skip(_)) => None,
                 (Some(PalwOperatorDaVerdictV1::Refuted), _) => may_file.then_some((
@@ -1036,7 +1112,7 @@ mod tests {
         assert_eq!(bonds.iter().map(|b| b.0.index).collect::<Vec<_>>(), (0..8).collect::<Vec<u32>>(), "outputs 0..7");
         assert!(registrations.iter().all(|(_, c)| *c == GENESIS_C), "each registered at the genesis collateral: {registrations:?}");
         assert!(palw_operator_registrations_v1(&Params::from(NetworkId::new(NetworkType::Mainnet))).is_empty(), "no genesis cards on mainnet");
-        let book = PalwOperatorDaBookV1::new(registrations);
+        let book = PalwOperatorDaBookV1::new(registrations).with_audit(None);
         assert_eq!(book.registered(&bonds[3]), GENESIS_C);
         assert_eq!(book.registered(&outsider(0)), 0);
         // Armed exactly where identity says: rcore_plus, a carrier, an operator's bond — no flag.
@@ -1338,7 +1414,7 @@ mod tests {
                 .expect("some claim ranks the same bond first")
         };
         let blind = |action: Option<(Hash64, PalwOperatorDaActionV1)>| action.map(|(c, a)| (c, a.blind()));
-        let mut book = PalwOperatorDaBookV1::new(registrations());
+        let mut book = PalwOperatorDaBookV1::new(registrations()).with_audit(None);
         book.refresh(vec![a.clone(), b.clone()], Some(fresh()), 1_500);
         assert_eq!(blind(book.next(&me, 1_500, false, true)), Some((a.claim_id, true)), "the oldest first (the chain's order), blind");
         assert_eq!(book.next(&me, 1_500, true, true), None, "one of this lane's items queued at a time");
@@ -1362,7 +1438,7 @@ mod tests {
         book.queued(b.claim_id, 1, again + 2);
         assert_eq!(book.next(&me, again + 12 * PALW_OPERATOR_DA_TURN_DAA_V1, false, true), None, "never a third send");
         // Room and deferral.
-        let mut book = PalwOperatorDaBookV1::new(registrations());
+        let mut book = PalwOperatorDaBookV1::new(registrations()).with_audit(None);
         book.refresh(vec![a.clone(), b.clone()], Some(fresh()), 1_500);
         book.room_refused(1_500);
         assert_eq!(book.next(&me, 1_500 + COURT_MOVE_REPLAN_DAA - 1, false, true), None, "a room refusal holds a re-plan");
@@ -1389,7 +1465,7 @@ mod tests {
             .map(|n| judged(0xD200 + n, 1_500, panel()))
             .find(|c| palw_operator_da_judges_v1(c, &ops)[0] == judge)
             .expect("a second claim the same bond judges first");
-        let mut book = PalwOperatorDaBookV1::new(registrations());
+        let mut book = PalwOperatorDaBookV1::new(registrations()).with_audit(None);
         book.refresh(vec![honest.clone(), lie.clone()], Some(fresh()), 1_500);
         assert_eq!(book.next(&judge, 1_500, false, false), None, "no replay may start: nothing");
         assert_eq!(book.next(&judge, 1_500, false, true), Some((honest.claim_id, PalwOperatorDaActionV1::Replay { rank: 0, of: 3 })));
@@ -1417,7 +1493,7 @@ mod tests {
         assert_eq!(book.next(&judge, late + COURT_MOVE_REPLAN_DAA + 1, false, true), None);
         assert_eq!(book.verdict(&lie.claim_id), Some(PalwOperatorDaVerdictV1::Refuted));
         // Unjudged: settled here.
-        let mut book = PalwOperatorDaBookV1::new(registrations());
+        let mut book = PalwOperatorDaBookV1::new(registrations()).with_audit(None);
         book.refresh(vec![lie.clone()], Some(fresh()), 1_500);
         book.judge(lie.claim_id, PalwOperatorDaVerdictV1::Unjudged("its class does not resolve on this host"));
         assert!(book.is_settled(&lie.claim_id));
@@ -1425,7 +1501,7 @@ mod tests {
         // A blind queued item is not this node's once its turn passed.
         let blind = candidate(0xD3, 1_500, panel());
         let owner = palw_operator_da_order_v1(&blind, &ops)[0];
-        let mut book = PalwOperatorDaBookV1::new(registrations());
+        let mut book = PalwOperatorDaBookV1::new(registrations()).with_audit(None);
         book.refresh(vec![blind.clone()], Some(fresh()), 1_500);
         assert!(book.still_files(&blind.claim_id, &owner, 1_500));
         assert!(!book.still_files(&blind.claim_id, &owner, 1_500 + PALW_OPERATOR_DA_TURN_DAA_V1));
@@ -1478,7 +1554,7 @@ mod tests {
             };
             let down: BTreeMap<Hash64, PalwBondKeyV2> =
                 claims.iter().filter(|_| down_rank0).map(|(c, _)| (c.claim_id, first_owner(c))).collect();
-            let mut books: Vec<PalwOperatorDaBookV1> = ops.iter().map(|_| PalwOperatorDaBookV1::new(registrations())).collect();
+            let mut books: Vec<PalwOperatorDaBookV1> = ops.iter().map(|_| PalwOperatorDaBookV1::new(registrations()).with_audit(None)).collect();
             let mut accused: BTreeMap<Hash64, Vec<PalwBondKeyV2>> = Default::default();
             let mut replays: BTreeMap<Hash64, usize> = Default::default();
             let mut per_node: BTreeMap<PalwBondKeyV2, Vec<u64>> = Default::default();
@@ -1617,5 +1693,63 @@ mod tests {
         assert!(panel[tick..carriers].contains("seat_replays.has_room(false)"), "the lane's replay yields to the seat's slots");
         let args = include_str!("args.rs");
         assert!(!args.contains("operator-da") && !args.contains("operator_da"), "no opt-in or opt-out flag");
+    }
+
+    /// **ADR-0160 V3: the deferred audit's coverage.** Each operator's private draw selects a
+    /// fraction `a` of the candidates, independently of every other operator's (a key each), so a
+    /// lie meets at least one of the `n` non-seat operators' replays with probability
+    /// `1 − (1 − a)^n`. Measured over 20,000 claim ids with testnet-12's shape — eight operators, five
+    /// of them the claim's seats, an outside producer — at a ∈ {0.1, 0.3, 1.0}: q_audit ≈ 0.271,
+    /// 0.657, 1.0 within 2%.
+    #[test]
+    fn deferred_audit_coverage_is_one_minus_one_minus_a_to_the_n() {
+        let non_seat_operators = 3usize;
+        let keys: Vec<[u8; 32]> = (0..non_seat_operators).map(|i| [0x51u8.wrapping_add(i as u8); 32]).collect();
+        for (a, expect) in [(100u16, 0.271f64), (300, 0.657), (1_000, 1.0)] {
+            let claims = 20_000u64;
+            let covered = (0..claims)
+                .filter(|i| {
+                    let claim = Hash64::from_u64_word(0xC1A1_0000_0000_0000 ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+                    keys.iter().any(|key| palw_deferred_audit_selects_v1(key, &claim, a))
+                })
+                .count();
+            let q = covered as f64 / claims as f64;
+            println!("ADR-0160 V3: a = {a}‰, {non_seat_operators} non-seat operators: q_audit = {q:.3} (1 − (1 − a)^n = {expect:.3})");
+            assert!((q - expect).abs() < 0.02, "a = {a}: {q} vs {expect}");
+        }
+        // Private: another key's draw is another set (a producer cannot read one node's off another's).
+        let claim = |i: u64| Hash64::from_u64_word(0xAB00 + i);
+        let a: Vec<bool> = (0..2_000).map(|i| palw_deferred_audit_selects_v1(&[1u8; 32], &claim(i), 300)).collect();
+        let b: Vec<bool> = (0..2_000).map(|i| palw_deferred_audit_selects_v1(&[2u8; 32], &claim(i), 300)).collect();
+        let both = a.iter().zip(&b).filter(|(x, y)| **x && **y).count() as f64 / 2_000.0;
+        assert!((both - 0.09).abs() < 0.03, "independent draws overlap at a² ≈ 0.09: {both}");
+    }
+
+    /// **ADR-0160 V3: the audit only adds replays where the turn rule left this node out** — never
+    /// for its own claim, a claim it seats, or a claim that is not replayable here.
+    #[test]
+    fn the_deferred_audit_replays_only_where_the_turn_rule_left_this_node_out() {
+        let ops = operators();
+        let c = judged(0xC3, 1_000, vec![bond(1), bond(2), bond(3), bond(4), bond(5)]);
+        let now = c.stage_daa;
+        for me in &ops {
+            let base = palw_operator_da_plan_v1(&c, me, &ops, now);
+            let audited = palw_operator_da_plan_with_audit_v1(&c, me, &ops, now, true);
+            match base {
+                PalwOperatorDaPlanV1::Skip(PalwOperatorDaSkipV1::Seat) => assert_eq!(audited, base, "a seat is never audited here"),
+                PalwOperatorDaPlanV1::Judge { .. } => assert_eq!(audited, base, "a public judge on its turn judges as before"),
+                PalwOperatorDaPlanV1::Wait { .. } | PalwOperatorDaPlanV1::Skip(PalwOperatorDaSkipV1::NotAJudge) => {
+                    assert_eq!(audited, PalwOperatorDaPlanV1::Judge { rank: usize::MAX, of: 0 }, "a private judge now")
+                }
+                other => assert_eq!(audited, other),
+            }
+            assert_eq!(palw_operator_da_plan_with_audit_v1(&c, me, &ops, now, false), base, "an unselected claim: the turn rule alone");
+        }
+        // Not replayable here (a free prompt): the audit adds nothing.
+        let mut fp = c.clone();
+        fp.job.free_prompt = true;
+        for me in &ops {
+            assert_eq!(palw_operator_da_plan_with_audit_v1(&fp, me, &ops, now, true), palw_operator_da_plan_v1(&fp, me, &ops, now));
+        }
     }
 }

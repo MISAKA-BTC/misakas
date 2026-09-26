@@ -79,6 +79,11 @@ mod palw_filer_replay;
 #[path = "palw_operator_da.rs"]
 mod palw_operator_da;
 
+/// ADR-0160 lane verify V1: a seat's one window root a DAA, the collector's window pool and its batch
+/// licence (node policy; dormant below `palw_capacity_batch_licence`).
+#[allow(dead_code)]
+mod batch_licence;
+
 /// **Take the host ledger's reservation for a replay of `role`** — the body of
 /// [`PalwPanelService::reserve_replay_v1`], free of the service so a blocking task that prices its
 /// own need (the replay filer's, which decodes its candidates off the loop) takes it through the
@@ -12012,6 +12017,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::SeatReadinessProved { .. } => "SeatReadinessProved",
         PalwConsensusObjectV2::ClassManifestV2 { .. } => "ClassManifestV2",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
+        PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
         // path in this node builds one yet.
