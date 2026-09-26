@@ -190,6 +190,10 @@ pub mod palw_canonical_work_v1;
 /// cap, `m_c`, the seat repricing, the §5 targets). Pure; called by no consensus rule until a
 /// capacity lane's fence arms (`palw_capacity_shadow_is_node_only` enforces it).
 pub mod palw_capacity_formulas_v1;
+/// ADR-0160 §6.3 / §7.5 — shadow accounting: what the capacity formulas would reserve, weigh and
+/// allow for every live claim and bond, next to today's values. Node-only (`getPalwCapacityShadow`,
+/// kaspad's interval log); no consensus rule reads it.
+pub mod palw_capacity_shadow_v1;
 pub mod palw_class_identity_v1;
 /// MISAKA PALW chain carriage v1 (ADR-0029): the Stage-0 magic envelope, the five payload
 /// bodies, their caps, and the stateless validators that become the Stage-1 admission

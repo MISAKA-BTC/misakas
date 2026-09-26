@@ -891,6 +891,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0160 §7.5: the capacity shadow at the tip** (`getPalwCapacityShadow`; kaspad's
+    /// interval log): what the capacity formulas would reserve, weigh and allow for every live
+    /// claim and bond, per ramp step, next to today's values — asked at the next block's DAA with
+    /// the RAW second-clock depth. A read: no rule calls it. `None` off `ConsensusV2`.
+    fn palw_capacity_shadow_v1(
+        &self,
+        _options: crate::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,
+    ) -> Option<crate::palw_capacity_shadow_v1::PalwCapacityShadowV1> {
+        None
+    }
+
     /// The court's half: open sessions this node holds a bond in.
     fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
         Vec::new()

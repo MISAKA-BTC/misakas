@@ -9992,6 +9992,13 @@ impl PalwChainStateV2 {
         self.consumed_offences.get(id)
     }
 
+    /// **Every conviction the chain remembers, by offence key** — a read for ADR-0160's shadow
+    /// accounting (`palw_capacity_shadow_v1`: attribution counters and the would-be AG-3 freeze).
+    /// No rule reads it.
+    pub fn consumed_offences_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_offence_v1::PalwConsumedOffenceV1)> + '_ {
+        self.consumed_offences.iter()
+    }
+
     pub fn slashable_lock(&self, seat: PalwBondKeyV2, claim: Hash64) -> Option<&crate::palw_panel_var_v1::PalwSlashableLockV1> {
         self.slashable_locks.get(&(seat, claim))
     }
