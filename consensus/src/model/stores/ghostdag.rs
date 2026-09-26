@@ -186,6 +186,44 @@ impl GhostdagData {
         self.ascending_mergeset_without_selected_parent(store).map(|s| s.hash)
     }
 
+    /// **The mergeset in the order a merging block APPLIES it** — without the selected parent.
+    ///
+    /// `parents_first` is `Params::palw_lane_accept_parents_first` at the MERGING block's own DAA
+    /// score. Unset, this is [`Self::consensus_ordered_mergeset_without_selected_parent`] exactly. Set,
+    /// it is that order made parents-first by a stable reorder over the merged blocks' HEADER parents
+    /// (immutable and the same on every node, whatever it stored as relations) — the identity wherever
+    /// the consensus order already lists every parent first, so only blocks that tie on blue work with
+    /// a parent (a round lane, ADR-0125) can move. A pure function of the mergeset and its headers.
+    pub fn acceptance_ordered_mergeset_without_selected_parent(
+        &self,
+        store: &(impl GhostdagStoreReader + ?Sized),
+        headers: &(impl crate::model::stores::headers::HeaderStoreReader + ?Sized),
+        parents_first: bool,
+    ) -> Vec<BlockHash> {
+        let consensus_order: Vec<BlockHash> = self.consensus_ordered_mergeset_without_selected_parent(store).collect();
+        if !parents_first {
+            return consensus_order;
+        }
+        kaspa_consensus_core::topological_order::stable_topological_order(
+            consensus_order,
+            |hash| *hash,
+            |hash| headers.get_header(*hash).map(|header| header.direct_parents().to_vec()).unwrap_or_default(),
+        )
+    }
+
+    /// [`Self::acceptance_ordered_mergeset_without_selected_parent`] behind the selected parent — the
+    /// EVM lane's `sorted_mergeset`.
+    pub fn acceptance_ordered_mergeset(
+        &self,
+        store: &(impl GhostdagStoreReader + ?Sized),
+        headers: &(impl crate::model::stores::headers::HeaderStoreReader + ?Sized),
+        parents_first: bool,
+    ) -> Vec<BlockHash> {
+        once(self.selected_parent)
+            .chain(self.acceptance_ordered_mergeset_without_selected_parent(store, headers, parents_first))
+            .collect()
+    }
+
     /// Returns an iterator to the mergeset with no specified order (including the selected parent)
     pub fn unordered_mergeset(&self) -> impl Iterator<Item = BlockHash> + '_ {
         self.mergeset_blues.iter().cloned().chain(self.mergeset_reds.iter().cloned())

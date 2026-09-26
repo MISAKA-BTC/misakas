@@ -660,6 +660,7 @@ mod tests {
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
             "palw_anchor_at_ceiling" => params.palw_anchor_at_ceiling = Some(at),
+            "palw_lane_accept_parents_first" => params.palw_lane_accept_parents_first = Some(at),
             // ADR-0152-adjacent (Activation Pool): the height with the user's terms beside it.
             "palw_activation_pool" => {
                 params.palw_activation_pool = Some(crate::config::params::PalwActivationPoolParamsV1 {

@@ -264,6 +264,7 @@ V02LIFE = "consensus/core/tests/palw_final_lock_life_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 BINDER = "consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs"
 PPSTRICT = "consensus/core/tests/pruning_proof_strict_economic_fence.rs"
+LANEORDER = "consensus/core/tests/palw_lane_accept_parents_first_is_t12_only.rs"
 PARAMS = "consensus/core/src/config/params.rs"
 GOLDEN = "consensus/core/tests/rcore_m5_v22_golden.rs"
 STATE = "consensus/core/src/palw_state_v2.rs"
@@ -482,6 +483,10 @@ def registry() -> list[Pin]:
     # shipped, which the dormant fence must not move.
     pins += _triple("ppstrict.T12_RELEASE", "t12", PPSTRICT, "const T12_RELEASE: (&str, &str, &str) = (",
                     "shipped.testnet-12", (f"{PPSTRICT}::shipped_testnet_12_arms_the_fence_at_750",))
+    # Lane accept-order (a merging block applies a tied round lane parents-first; the post-launch release arms it at
+    # 750 with the rest of the list): testnet-12 as shipped.
+    pins += _triple("laneorder.T12_RELEASE", "t12", LANEORDER, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{LANEORDER}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------
     held = (f"{REGEN}::the_held_rows_are_the_fleets_classes",)

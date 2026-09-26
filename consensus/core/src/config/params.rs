@@ -1657,6 +1657,33 @@ pub struct Params {
     /// as one that does not until the fence is armed.
     pub palw_anchor_at_ceiling: Option<ForkActivation>,
     // ---- end lane bind-deadlock ---------------------------------------------------------------
+    // ---- lane accept-order (post-launch, 2026-09-26): a merging block applies its mergeset parents-first ----
+    /// **A merging chain block applies its mergeset parents first** (post-launch, 2026-09-26; the
+    /// 2026-09-26 IBD root-cause audit's consensus finding).
+    ///
+    /// Every round block hanging from one anchor carries that anchor's blue work (ADR-0125: a round
+    /// block is never blue and never a selected parent, and one whose parents are all round blocks
+    /// takes their anchor as its own), so the consensus order — ascending `(blue_work, hash)` — puts
+    /// a tied lane in HASH order, a child ahead of its parent. The merging block accepted the lane in
+    /// that order: a carrier spending its parent block's output was skipped (testnet-12's merging
+    /// block `42285c86…` at DAA 316 accepted three carriers only from later duplicates), a double
+    /// spend inside a lane was won by the hash, and a transaction's fee went to whichever round block
+    /// sorted first. Past this fence — keyed on the MERGING block's own DAA score — every consumer that
+    /// applies the mergeset (UTXO acceptance and with it the accepted-id merkle root, the PALW fold's
+    /// carried objects and merged works, the round lane's fee rows, and the EVM lane's
+    /// `AcceptedEvmTxs`) reads the consensus order made parents-first by a stable reorder over the
+    /// merged blocks' header parents
+    /// ([`crate::topological_order::stable_topological_order`]): the identity wherever the consensus
+    /// order already is parents-first, so only blocks of a tied lane can move. From the same fence a
+    /// round block's own body may not carry an EVM payload (keyed on the round block's DAA score).
+    ///
+    /// Refused by `validate_palw_v2` off ConsensusV2 and without the execution lane
+    /// (`palw_execution_lane`) opening at or below it: there are no round blocks to order. Dormant
+    /// (`None`) on every shipped preset, testnet-12 included, until the post-launch release arms it;
+    /// hashed Some-only and collapsed from `Some(never())`, so a build that carries the field
+    /// fingerprints and peers exactly as one that does not until the fence is armed.
+    pub palw_lane_accept_parents_first: Option<ForkActivation>,
+    // ---- end lane accept-order ------------------------------------------------------------------
     /// **ADR-0152-adjacent: the Activation Pool, R1 and R2** (user decision 2026-09-25) — see
     /// [`PalwActivationPoolParamsV1`]. `Some` at genesis on testnet-12 only; hashed Some-only.
     pub palw_activation_pool: Option<PalwActivationPoolParamsV1>,
@@ -4329,6 +4356,8 @@ impl Params {
         self.validate_palw_bond_maturity_early_v1()?;
         // Lane bind-deadlock (post-launch): ConsensusV2 with R-core+ at or below it, on both paths.
         self.validate_palw_anchor_at_ceiling_v1()?;
+        // Lane accept-order (post-launch): ConsensusV2 with the execution lane at or below it, on both paths.
+        self.validate_palw_lane_accept_parents_first_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -5494,6 +5523,10 @@ impl Params {
         // height neither has reached.
         if self.palw_anchor_at_ceiling == Some(ForkActivation::never()) {
             self.palw_anchor_at_ceiling = None;
+        }
+        // Lane accept-order (post-launch): Some-only hashed, so the same collapse.
+        if self.palw_lane_accept_parents_first == Some(ForkActivation::never()) {
+            self.palw_lane_accept_parents_first = None;
         }
         // ADR-0152-adjacent (Activation Pool): Some-only hashed, the carve's shape — the whole option
         // collapses, so the terms beside a never-armed fence leave the identity with it.
@@ -7681,6 +7714,52 @@ impl Params {
     }
     // ---- end lane bind-deadlock ----------------------------------------------------------------
 
+    // ---- lane accept-order (post-launch, 2026-09-26): the mergeset is applied parents-first ----
+
+    /// **Lane accept-order's fence** ([`Self::palw_lane_accept_parents_first`]), resolved off a
+    /// ConsensusV2 ruleset with the execution lane configured — the one place it is decided; the
+    /// virtual processor and the body processor read this and never the raw field.
+    pub fn palw_lane_accept_parents_first_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_execution_lane, self.palw_lane_accept_parents_first) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(_), Some(f)) if f != ForkActivation::never() => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Whether a block at `daa_score` applies its mergeset parents-first (and, a round block at
+    /// `daa_score`, carries no EVM payload). `false` on every shipped preset.
+    pub fn palw_lane_accept_parents_first_active_at(&self, daa_score: u64) -> bool {
+        self.palw_lane_accept_parents_first_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **What lane accept-order's fence refuses**: arming it off ConsensusV2, or without the execution
+    /// lane opening at or below it — without round blocks no two blocks of a mergeset tie on blue work
+    /// while one is in the other's past, so there is nothing to reorder and no round block to refuse
+    /// an EVM payload. Any other height is legal; on a live testnet-12 (lane open from genesis) the
+    /// post-launch release arms it with the other post-launch fences at one independent height.
+    pub fn validate_palw_lane_accept_parents_first_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_lane_accept_parents_first.filter(|f| *f != ForkActivation::never()) else {
+            return Ok(());
+        };
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return Err(Invalid(
+                "palw_lane_accept_parents_first is armed on a network that is not ConsensusV2: there is no round lane to order",
+            ));
+        }
+        if !self
+            .palw_execution_lane
+            .is_some_and(|lane| lane.activation != ForkActivation::never() && lane.activation.daa_score() <= fence.daa_score())
+        {
+            return Err(Invalid(
+                "palw_lane_accept_parents_first is armed without palw_execution_lane opening at or below it: without round blocks \
+                 no mergeset holds a blue-work tie between a block and its parent, so there is nothing to order",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane accept-order -----------------------------------------------------------------
+
     /// **ADR-0152-adjacent: the Activation Pool's fence** (R1, R2 and the pool), resolved off a
     /// ConsensusV2 ruleset — the ONE place it is decided; the fold's extras, the transaction
     /// validator's sink rule and the mempool read this and never the raw field.
@@ -7870,6 +7949,8 @@ impl Params {
             palw_class_verify_rows: _,
             // Lane bind-deadlock (post-launch).
             palw_anchor_at_ceiling,
+            // Lane accept-order (post-launch).
+            palw_lane_accept_parents_first,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_registry_resilience,
@@ -8006,6 +8087,9 @@ impl Params {
             // Lane bind-deadlock (post-launch): a top-level fence an un-upgraded peer does not implement,
             // so it is on the schedule and gates the fork id like every other.
             ("palw_anchor_at_ceiling", *palw_anchor_at_ceiling),
+            // Lane accept-order (post-launch): a top-level fence an un-upgraded peer does not implement,
+            // so it is on the schedule and gates the fork id like every other.
+            ("palw_lane_accept_parents_first", *palw_lane_accept_parents_first),
             ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
             ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
             // Lane F1 (registry resilience, V03/V05).
@@ -8435,6 +8519,12 @@ impl Params {
             h.write(b"palw_anchor_at_ceiling");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane accept-order (post-launch), NAMED for the same reason and Some-only: it changes the order
+        // a merging block applies its mergeset in, so an operator reading the schedule must see it.
+        if let Some(activation) = self.palw_lane_accept_parents_first {
+            h.write(b"palw_lane_accept_parents_first");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0152-adjacent (Activation Pool), NAMED for the same reason and Some-only, with its terms
         // beside the height for the SA-4 reason the carve's numbers are: two operators arming the
         // pool with different terms must see it in the log.
@@ -8702,6 +8792,8 @@ impl Params {
             palw_class_verify_rows: _,
             // Lane bind-deadlock (post-launch).
             palw_anchor_at_ceiling,
+            // Lane accept-order (post-launch).
+            palw_lane_accept_parents_first,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_registry_resilience,
@@ -9088,6 +9180,11 @@ impl Params {
         // Lane bind-deadlock (post-launch): SOME-ONLY, as the floor above and for its reason; its
         // `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
         if let Some(activation) = palw_anchor_at_ceiling.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane accept-order (post-launch): SOME-ONLY, as the floor above and for its reason; its
+        // `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_lane_accept_parents_first.as_mut() {
             fork(activation, visit);
         }
         // ADR-0152-adjacent (Activation Pool): the height only, SOME-ONLY, as the floor above and for
@@ -9723,6 +9820,8 @@ impl Params {
             palw_class_verify_rows,
             // Lane bind-deadlock (post-launch).
             palw_anchor_at_ceiling,
+            // Lane accept-order (post-launch).
+            palw_lane_accept_parents_first,
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_registry_resilience,
@@ -10121,6 +10220,13 @@ impl Params {
         // byte-identically to one without the field.
         if let Some(activation) = palw_anchor_at_ceiling {
             h.write(b"palw_anchor_at_ceiling");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane accept-order (post-launch): the height only, Some-only (and collapsed from
+        // `Some(never())` for the identity), so a build that leaves it dormant fingerprints
+        // byte-identically to one without the field.
+        if let Some(activation) = palw_lane_accept_parents_first {
+            h.write(b"palw_lane_accept_parents_first");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0152-adjacent (Activation Pool): the height and its terms, Some-only, so every preset
@@ -10966,6 +11072,8 @@ impl Params {
             palw_class_verify_rows: self.palw_class_verify_rows,
             // Lane bind-deadlock (post-launch): CARRIED beside its one prerequisite, which is carried too.
             palw_anchor_at_ceiling: self.palw_anchor_at_ceiling,
+            // Lane accept-order (post-launch): CARRIED beside the execution lane it orders, which is carried too.
+            palw_lane_accept_parents_first: self.palw_lane_accept_parents_first,
             // ADR-0152-adjacent (Activation Pool): CARRIED for R-core+'s reason — an overridden
             // testnet-12 fails `validate_palw_v2` on the prerequisite the override dropped
             // (`palw_admission_independence`) instead of silently disarming R1, R2 and the pool.
@@ -12014,6 +12122,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_anchor_at_ceiling: None,
+    palw_lane_accept_parents_first: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_registry_resilience: None,
@@ -12252,6 +12361,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_anchor_at_ceiling: None,
+    palw_lane_accept_parents_first: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_registry_resilience: None,
@@ -12472,6 +12582,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_anchor_at_ceiling: None,
+    palw_lane_accept_parents_first: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_registry_resilience: None,
@@ -17623,6 +17734,13 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
         name: "palw_pruning_proof_strict_economic_win",
         set: |params, at| params.palw_pruning_proof_strict_economic_win = at,
     },
+    // Lane accept-order (the 2026-09-26 IBD audit's consensus finding): a merging block applies a tied
+    // round lane parents-first, and a round block carries no EVM payload: a bare height, over the
+    // execution lane (testnet-12 opens it at genesis).
+    PalwPostLaunchFenceV1 {
+        name: "palw_lane_accept_parents_first",
+        set: |params, at| params.palw_lane_accept_parents_first = at,
+    },
 ];
 
 /// **testnet-12's post-launch fence height: DAA 750** (the user's decision of 2026-09-26, with the live
@@ -19029,6 +19147,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_anchor_at_ceiling: None,
+    palw_lane_accept_parents_first: None,
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_registry_resilience: None,

@@ -216,6 +216,11 @@ pub enum RuleError {
     #[error("round lane mergeset: {0}")]
     BadRoundLaneMergeset(String),
 
+    /// Lane accept-order (post-launch, `palw_lane_accept_parents_first`): a round block carries no EVM
+    /// payload — its merging block would execute it with no permit asked.
+    #[error("a round block carries a non-empty EVM payload past palw_lane_accept_parents_first")]
+    RoundBlockCarriesEvmPayload,
+
     #[error("block is violating bounded merge depth")]
     ViolatingBoundedMergeDepth,
 

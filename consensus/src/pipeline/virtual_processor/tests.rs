@@ -16396,6 +16396,9 @@ mod t12_round_lane_e2e;
 // The 2026-09-26 testnet-12 IBD stall from DAA 316: a round lane ties on blue work, so blue-work
 // order is not topological; the node's sync paths order parents first (node-only).
 mod ibd_parents_first;
+// Post-launch lane accept-order (`palw_lane_accept_parents_first`): a merging block applies a tied round
+// lane parents-first past the fence, exactly as before below it; a round block carries no EVM payload.
+mod lane_accept_parents_first;
 // The 2026-09-26 testnet-12 split at DAA 198: a producer's in-process block with a stale cached
 // coinbase id forks that producer off the network; ids re-derived at submission keep it on.
 mod t12_split_stale_coinbase_id;
