@@ -1501,6 +1501,22 @@ impl FlowContext {
             return Err(RuleError::NoTransactions)?;
         }
         let hash = block.hash();
+        // **This is where an in-process block enters consensus, so its cached tx ids are re-derived
+        // here** (the 2026-09-26 testnet-12 split at DAA 198). Every PALW lane (producer, receipt
+        // spend, heartbeat, round) submits the `Block` it built through this call, without the
+        // byte round trip that recomputes ids on P2P and RPC input; consensus then keys the
+        // block's outpoints and acceptance data by whatever `id()` the builder left cached. One
+        // stale coinbase id put b6 alone on a different `utxo_commitment` for the chain block that
+        // merged its block. The block hash does not change, so what is stored and relayed is the
+        // block every peer receives — only with the ids every peer computes for it.
+        let (block, stale_ids) = block.with_current_tx_ids();
+        if stale_ids > 0 {
+            warn!(
+                "Block {} was submitted with {} transaction id(s) that did not match their transactions' bytes (a builder edited a \
+                 transaction after finalizing it); re-derived them before validation so this node stores the ids its peers compute",
+                hash, stale_ids
+            );
+        }
         let BlockValidationFutures { block_task, virtual_state_task } = consensus.validate_and_insert_block(block.clone());
         if let Err(err) = block_task.await {
             warn!("Validation failed for block {}: {}", hash, err);

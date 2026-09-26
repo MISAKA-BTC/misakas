@@ -16342,6 +16342,9 @@ mod t12_rcore_s7_reporter_gate;
 // past `palw_rcore_plus`, and nothing below it (M4 review, finding 1).
 mod t12_rcore_sr10_door_gate;
 mod t12_round_lane_e2e;
+// The 2026-09-26 testnet-12 split at DAA 198: a producer's in-process block with a stale cached
+// coinbase id forks that producer off the network; ids re-derived at submission keep it on.
+mod t12_split_stale_coinbase_id;
 // ADR-0152 M4: the stake-weighted draw where the chain draws — the one resolver (SW-1) and the
 // one-state, bind-only-in-the-anchor-block derivation (SW-8, T89) on a real testnet-12 chain.
 mod t12_stake_draw_integration;

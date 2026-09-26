@@ -1182,6 +1182,53 @@ mod tests {
         assert_eq!(outputs[0].script_public_key, new_miner_data.script_public_key);
         assert_eq!(outputs[1].script_public_key, validator_data.script_public_key);
         assert_eq!(outputs[2].script_public_key, new_miner_data.script_public_key);
+        // And the id the coinbase carries is the id of the bytes it now has — the outputs above
+        // changed, so a stale cache would still name the old miner's coinbase.
+        assert!(modified.block.transactions[0].id_is_current(), "a retargeted coinbase keeps the id of its old bytes");
+    }
+
+    /// **The 2026-09-26 testnet-12 split at DAA 198: a template served from ANOTHER miner's cached
+    /// template carries the id of its own coinbase, not of the one it was cloned from.**
+    ///
+    /// b6 ran a heartbeat miner and a PALW producer against one mining manager. The heartbeat miner
+    /// asked first after a virtual change, so the cache held a template whose coinbase paid the
+    /// heartbeat address; the producer asked inside the cache's lifetime and was served
+    /// `modify_block_template`'s clone — payload rewritten to the producer's address, cached
+    /// `Transaction::id` not. The producer submits the in-memory block, so b6 stored the id of the
+    /// heartbeat's coinbase (`44da7820…`, reproduced exactly from the block's bytes with the
+    /// heartbeat script put back) while every peer computed the id of the bytes it relayed
+    /// (`a70ead4e…`). The first chain block to merge it (`60878caf…`) was UTXO-invalid on b6 alone.
+    #[test]
+    fn a_template_served_from_another_miners_cache_carries_its_own_coinbase_id() {
+        let consensus = Arc::new(ConsensusMock::new());
+        let counters = Arc::new(MiningCounters::default());
+        let mining_manager = MiningManager::new(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS, None, counters);
+        let heartbeat_miner = get_miner_data(Prefix::Testnet);
+        let producer = get_miner_data(Prefix::Testnet);
+
+        // The heartbeat miner asks first: its template is the one the cache keeps.
+        let cached = mining_manager.get_block_template(consensus.as_ref(), &heartbeat_miner).expect("a template");
+        // The producer asks inside the cache's lifetime and is served a modified clone of it.
+        let served = mining_manager.get_block_template(consensus.as_ref(), &producer).expect("a template");
+
+        let (cached_coinbase, served_coinbase) = (&cached.block.transactions[0], &served.block.transactions[0]);
+        assert_ne!(cached_coinbase.payload, served_coinbase.payload, "the fixture must take the modify path, or it proves nothing");
+        assert!(
+            served_coinbase.id_is_current(),
+            "the served coinbase carries the cached id of the template it was cloned from — the id of another miner's coinbase"
+        );
+        assert_ne!(served_coinbase.id(), cached_coinbase.id(), "two coinbases with different bytes cannot share an id");
+        // What a peer computes: the same transaction rebuilt from its bytes, as P2P and RPC do.
+        let relayed = Transaction::new(
+            served_coinbase.version,
+            served_coinbase.inputs.clone(),
+            served_coinbase.outputs.clone(),
+            served_coinbase.lock_time,
+            served_coinbase.subnetwork_id.clone(),
+            served_coinbase.gas,
+            served_coinbase.payload.clone(),
+        );
+        assert_eq!(served_coinbase.id(), relayed.id(), "the producer's node and its peers must agree on the coinbase's outpoint");
     }
 
     // This is a sanity test for the mempool eviction policy. We check that if the mempool reached to its maximum
