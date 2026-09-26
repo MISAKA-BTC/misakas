@@ -131,6 +131,14 @@ fn policy_at(c: &Chain, base: &PalwChainStateV2, claim_id: &Hash64, daa: u64) ->
         rcore: sp.rcore_plus_active_at(daa).then(|| PalwRcoreSeatFilterV1 {
             eligibility: palw_rcore_bind_prices_v1(base, sp, &e, claim_id, claim, seat_count, daa).eligibility,
             ceiling_permille: sp.fp_max_exposure_ratio_permille(),
+            // Lane V02: as the processor resolves it at the binding block.
+            resolved_locks_off_ceiling: sp.final_lock_full_collateral_active_at(daa),
+            accuser_reserve: kaspa_consensus_core::palw_state_v2::palw_bond_accuser_reserve_v1(sp, daa),
+            held_charge_floor: kaspa_consensus_core::palw_state_v2::palw_v02_held_charge_floor_v1(
+                sp,
+                daa,
+                e.offence_attribution_active && e.held_context_ladder.is_some(),
+            ),
         }),
     });
     PalwPanelDrawPolicyV1 {

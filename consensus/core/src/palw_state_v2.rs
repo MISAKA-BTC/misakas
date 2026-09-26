@@ -1422,6 +1422,15 @@ pub struct PalwStateParamsV2 {
     /// hashes (Some-only), and `validate_palw_v2` refuses a bundle whose copy disagrees with it.
     #[borsh(skip)]
     registry_resilience_from_daa: Option<u64>,
+    /// **Lane V02 (post-launch): `Params::palw_final_lock_life`'s height**, mirrored here by
+    /// `Params::sync_palw_final_lock_life` because the state machine that dates a `Valid` seat's lock
+    /// holds only the bundle's `PalwStateParamsV2`, never the outer `Params`. `None` on every shipped
+    /// preset, testnet-12 included, until the operator arms the common post-launch height; read
+    /// through [`Self::final_lock_life_at`], which answers `window_court` (byte for byte the pre-fence
+    /// life) below it. Skipped by borsh for `readiness_v2_max_age_spans`'s reason: the fence itself is
+    /// what the params and schedule ids name, Some-only, and the life value is a constant beside it.
+    #[borsh(skip)]
+    final_lock_life_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1438,6 +1447,34 @@ pub struct PalwClassReceiptWindowV1 {
 /// ADR-0132 §7.6: the challenge window, in DAA, for a claim licensed past
 /// `Params::palw_short_challenge_window` (`6fdf6ba7`'s 120, as a fence).
 pub const PALW_SHORT_CHALLENGE_WINDOW_DAA_V1: u64 = 120;
+
+/// **Lane V02 (post-launch, 2026-09-26): the post-`Final` honest lock life past
+/// `Params::palw_final_lock_life`** — the DAA a resolved `Valid` seat's slashable lock stays LIVE
+/// (`is_live`) after the claim's licence/`Final`, in place of `window_court` (3,000 on testnet-12).
+/// The user's decision (2026-09-26 "both"): with V02 option (a) already on rcore/f1-v02-lock-budget,
+/// also shorten this life to F + 1,000 so a seat's capital returns to the 500‰ ceiling ~3× sooner.
+///
+/// **It shortens ONLY the lock's own `expiry_daa`** — the clock the withdrawal gate
+/// ([`palw_bond_backs_live_duty_v2`]), `slashable_available` and the seat-duty backing read. The
+/// liability RECORD ([`PalwPanelLiabilityRecordV1::expiry_daa`]), the vesting rows that hold the
+/// executor's escrow `E` ([`Self::write_vesting_row_at_final`]), the court/DA windows and the
+/// obligation-pruning slack all keep `window_court`, so the conviction path still fires through
+/// `F + window_court` and the fraudulent MINT stays recoverable.
+///
+/// **Past the same fence the lock stops being SLASHABLE when it stops being COMMITTED** (the
+/// 2026-09-26 review found a double-commit; the user's decision closes it this way). The lock ROW
+/// stays present to `F + window_court` (it prunes with the liability record in
+/// `sweep_panel_obligations`), and before this rule both conviction routes took the row whatever its
+/// clocks said, while `slashable_available` had already handed its collateral to new work at
+/// `F + 1,000` — one unit of collateral answering two `Valid`s. Now a false-`Valid` conviction at a
+/// block past the height takes a seat's lock only while [`palw_lock_is_committed_v1`] still counts
+/// it (the per-lock term of [`palw_bond_committed_v1`]: live on both clocks, or its claim not yet
+/// terminal); an expired lock is left alone — no S4 and no reporter extraction from it — while the
+/// rest of the conviction runs unchanged: the `Final` is reversed and the executor's escrow `E` is
+/// burned from its vesting row, which keeps the `window_court` clock. So free + reserved ≤ posted at
+/// every DAA, the uncovered mint is 0, and the seat-side deterrent of a resolved `Valid` ends at
+/// `F + 1,000` (plus the second clock) by design.
+pub const PALW_FINAL_LOCK_LIFE_DAA_V1: u64 = 1_000;
 
 /// **ADR-0152 §4-ter (A-held): the widest held context an honest party can dissect inside a turn.**
 ///
@@ -1586,6 +1623,7 @@ impl PalwStateParamsV2 {
             held_unanswerable_classes: Vec::new(),
             readiness_v2_max_age_spans: None,
             registry_resilience_from_daa: None,
+            final_lock_life_from_daa: None,
         })
     }
 
@@ -2198,6 +2236,38 @@ impl PalwStateParamsV2 {
     /// The per-session court budget (see the field's doc).
     pub fn window_court(&self) -> u64 {
         self.window_court
+    }
+
+    /// **Lane V02 (post-launch): the mirror's setter** — written by `Params::sync_palw_final_lock_life`
+    /// and by nothing else, so the copy cannot drift from `Params::palw_final_lock_life`. `None` where
+    /// the fence is not armed.
+    pub fn with_final_lock_life_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.final_lock_life_from_daa = from_daa;
+        self
+    }
+
+    /// Lane V02 (post-launch): `Params::palw_final_lock_life`'s height, if the network arms it (the mirror).
+    pub fn final_lock_life_from_daa(&self) -> Option<u64> {
+        self.final_lock_life_from_daa
+    }
+
+    /// **Lane V02 (post-launch): the DAA life a `Valid` seat's slashable lock gets when it is dated at
+    /// `now_daa`.** [`PALW_FINAL_LOCK_LIFE_DAA_V1`] (1,000, never longer than `window_court`) once
+    /// `Params::palw_final_lock_life` is in force at `now_daa`, else `window_court` — byte for byte the
+    /// pre-fence life. Keyed on the DATING block's DAA, so a lock stamped below the height keeps the
+    /// long life when read past it (the stored `expiry_daa` is what `is_live` reads), and one stamped
+    /// past it gets the short life; deterministic across the fence.
+    pub fn final_lock_life_at(&self, now_daa: u64) -> u64 {
+        if self.final_lock_life_active_at(now_daa) { PALW_FINAL_LOCK_LIFE_DAA_V1.min(self.window_court) } else { self.window_court }
+    }
+
+    /// **Lane V02 (post-launch): is `Params::palw_final_lock_life` in force at `now_daa`?** The one
+    /// key both halves of the fence read, each at its own block's DAA: the block that DATES a `Valid`
+    /// lock ([`Self::final_lock_life_at`]) and the block that CONVICTS on one (a lock the fold no
+    /// longer counts as committed is not slashable past the height — the user's 2026-09-26 decision).
+    /// `false` wherever the fence is not armed, so both read exactly as before it.
+    pub fn final_lock_life_active_at(&self, now_daa: u64) -> bool {
+        self.final_lock_life_from_daa.is_some_and(|from| now_daa >= from)
     }
 
     pub fn base_class_id(&self) -> Hash64 {
@@ -2830,18 +2900,52 @@ pub fn palw_bond_committed_v1(
     escaped_depth: Option<u64>,
     window_court: u64,
 ) -> u128 {
-    let settled_now = state.settled_attempt_finals;
     let lock_excess = state
         .slashable_locks
         .range((*bond, ZERO_HASH64)..)
         .take_while(|((holder, _), _)| holder == bond)
-        .filter(|((_, claim_id), lock)| {
-            lock.is_live_v3(now_daa, settled_now, escaped_depth, window_court)
-                || state.claims.get(claim_id).is_some_and(|claim| !claim.phase.is_terminal())
-        })
+        .filter(|((_, claim_id), lock)| palw_lock_is_committed_v1(state, claim_id, lock, now_daa, escaped_depth, window_court))
         .map(|((_, claim_id), lock)| lock.amount.saturating_sub(palw_seat_duty_of_v1(state, claim_id, bond)))
         .fold(0u128, u128::saturating_add);
     state.reserved_exposure(bond).saturating_add(state.registration_exposure(bond)).saturating_add(lock_excess)
+}
+
+/// **[`palw_bond_committed_v1`]'s per-lock term: does `lock` on `claim_id` still hold its seat's
+/// collateral at `now_daa`?** Live on both clocks (`is_live_v3` at the ESCAPED depth), or its claim
+/// not yet terminal (review L5: a live claim's lock is committed whatever its clocks say). Past
+/// `Params::palw_final_lock_life` it is also what a false-`Valid` conviction may take: a lock this
+/// answers `false` for has released its collateral to new work, so no conviction takes it again
+/// ([`PALW_FINAL_LOCK_LIFE_DAA_V1`]). Pure; extracted unchanged from `palw_bond_committed_v1`.
+pub fn palw_lock_is_committed_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    lock: &crate::palw_panel_var_v1::PalwSlashableLockV1,
+    now_daa: u64,
+    escaped_depth: Option<u64>,
+    window_court: u64,
+) -> bool {
+    lock.is_live_v3(now_daa, state.settled_attempt_finals, escaped_depth, window_court)
+        || state.claims.get(claim_id).is_some_and(|claim| !claim.phase.is_terminal())
+}
+
+/// **Lane V02 (post-launch; the user's 2026-09-26 decision): may a false-`Valid` conviction in a
+/// block at `now_daa` take the seat's `lock` on `claim_id`?** Below `Params::palw_final_lock_life`
+/// (and wherever it is not armed) always — the row is what the conviction reads, byte for byte as
+/// before. Past it, only while [`palw_lock_is_committed_v1`] still counts it at the ESCAPED depth
+/// (the fold's `second_clock_depth`), so collateral the fold has released to new work is never
+/// taken a second time: an expired lock is left alone and the conviction runs without it (the
+/// `Final` reversed, `E` burned from the vesting row). Keyed on the CONVICTING block's DAA, as the
+/// life is keyed on the dating block's; every lock dated past the height is convicted past it.
+pub fn palw_false_valid_lock_slashable_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    lock: &crate::palw_panel_var_v1::PalwSlashableLockV1,
+    now_daa: u64,
+    escaped_depth: Option<u64>,
+) -> bool {
+    !params.final_lock_life_active_at(now_daa)
+        || palw_lock_is_committed_v1(state, claim_id, lock, now_daa, escaped_depth, params.window_court)
 }
 
 /// [`palw_bond_committed_v1`] from the second clock's RAW depth: the escape is computed here, from
@@ -16739,7 +16843,9 @@ impl<'a> TransitionBuilder<'a> {
         }
         let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(
             self.valid_lock_anchor_v1(&claim_id, now_daa),
-            self.params.window_court,
+            // Lane V02 (post-launch): the seat lock's life is `window_court` below the fence, shortened
+            // to `PALW_FINAL_LOCK_LIFE_DAA_V1` past it (keyed on the dating DAA — the `Final` re-dates it).
+            self.params.final_lock_life_at(now_daa),
         );
         self.write_slashable_lock(
             (seat, claim_id),
@@ -16980,6 +17086,11 @@ impl<'a> TransitionBuilder<'a> {
         self.state.palw_slashable_available_v1(bond, now_daa, self.second_clock_depth(now_daa), self.params.window_court)
     }
 
+    /// [`palw_false_valid_lock_slashable_v1`] on this fold's inputs (the escaped depth the bind reads).
+    fn false_valid_lock_slashable_v1(&self, claim_id: &Hash64, lock: &crate::palw_panel_var_v1::PalwSlashableLockV1, now_daa: u64) -> bool {
+        palw_false_valid_lock_slashable_v1(&self.state, self.params, claim_id, lock, now_daa, self.second_clock_depth(now_daa))
+    }
+
     fn slashable_live_locked(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
         let (settled_now, depth) = (self.state.settled_attempt_finals, self.second_clock_depth(now_daa));
         self.state
@@ -17008,7 +17119,9 @@ impl<'a> TransitionBuilder<'a> {
         }
         let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(
             self.valid_lock_anchor_v1(&claim_id, now_daa),
-            self.params.window_court,
+            // Lane V02 (post-launch): the seat lock's life is `window_court` below the fence, shortened
+            // to `PALW_FINAL_LOCK_LIFE_DAA_V1` past it (keyed on the dating DAA — the `Final` re-dates it).
+            self.params.final_lock_life_at(now_daa),
         );
         self.write_slashable_lock(
             (seat, claim_id),
@@ -17133,6 +17246,14 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
+        // Lane V02 (post-launch): the LOCK re-dates to `F + final_lock_life_at(F)` — `window_court`
+        // below the fence (byte for byte the record's `expiry_daa`), `PALW_FINAL_LOCK_LIFE_DAA_V1`
+        // past it. The liability RECORD keeps `expiry_daa` (`window_court`), so the conviction path,
+        // the vesting-row escrow and the pruning slack are untouched: only the seat's capital, its
+        // withdrawal gate and its duty backing (all `is_live`) release `window_court − 1,000` sooner.
+        // `lock_expiry_daa ≤ expiry_daa` keeps the sweep's group-prune invariant (a lock's expiry is
+        // at most its liability's), so lock and record still prune together at the record's horizon.
+        let lock_expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.final_lock_life_at(now_daa));
         let mut valid_signers: Vec<(crate::tx::TransactionOutpoint, Hash64)> = Vec::new();
         let mut locked_sompi = 0u128;
         let keys: Vec<(PalwBondKeyV2, Hash64)> = self.state.slashable_locks.keys().filter(|(_, c)| *c == claim_id).copied().collect();
@@ -17140,11 +17261,11 @@ impl<'a> TransitionBuilder<'a> {
             if let Some(lock) = self.state.slashable_locks.get(&key).copied() {
                 locked_sompi = locked_sompi.saturating_add(lock.amount);
                 valid_signers.push((key.0.0, key.1));
-                if lock.expiry_daa < expiry_daa {
+                if lock.expiry_daa < lock_expiry_daa {
                     // The liability begins at the Final: both clocks start here.
                     self.write_slashable_lock(
                         key,
-                        Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa, settled_at_final: self.state.settled_attempt_finals, ..lock }),
+                        Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa: lock_expiry_daa, settled_at_final: self.state.settled_attempt_finals, ..lock }),
                     );
                 }
             }
@@ -17331,8 +17452,15 @@ impl<'a> TransitionBuilder<'a> {
                 palw_panel_contradiction_convicts_execution_v1(&payload.contradiction, execution_root, artifact_root, ladder)
                     .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(offence_id, e.to_string()))?;
                 if let Some(lock) = self.state.slashable_locks.get(&(accused, payload.claim_id)).copied() {
-                    self.write_slashable_lock((accused, payload.claim_id), None);
-                    u64::try_from(lock.amount.min(u128::from(u64::MAX))).unwrap_or(u64::MAX)
+                    if self.false_valid_lock_slashable_v1(&payload.claim_id, &lock, ctx.daa_score) {
+                        self.write_slashable_lock((accused, payload.claim_id), None);
+                        u64::try_from(lock.amount.min(u128::from(u64::MAX))).unwrap_or(u64::MAX)
+                    } else {
+                        // Lane V02 (past `palw_final_lock_life`): the lock expired and its collateral
+                        // already backs new work — nothing from it, the row left to prune with its
+                        // record; the conviction still records and reverses the `Final` below.
+                        0
+                    }
                 } else if self
                     .state
                     .panel_liabilities
@@ -17524,8 +17652,14 @@ impl<'a> TransitionBuilder<'a> {
             return self.convict_false_valid_rcore_v1(ctx, accused, evidence_id, &finding, offence_id);
         }
         let amount = if let Some(lock) = self.state.slashable_locks.get(&(accused, claim_id)).copied() {
-            self.write_slashable_lock((accused, claim_id), None);
-            u64::try_from(lock.amount.min(u128::from(u64::MAX))).unwrap_or(u64::MAX)
+            if self.false_valid_lock_slashable_v1(&claim_id, &lock, ctx.daa_score) {
+                self.write_slashable_lock((accused, claim_id), None);
+                u64::try_from(lock.amount.min(u128::from(u64::MAX))).unwrap_or(u64::MAX)
+            } else {
+                // Lane V02: an expired lock past `palw_final_lock_life` gives nothing (in practice
+                // unreachable — the fence requires `palw_rcore_plus`, whose funnel is taken above).
+                0
+            }
         } else if self
             .state
             .panel_liabilities
@@ -17596,8 +17730,8 @@ impl<'a> TransitionBuilder<'a> {
         let now = ctx.daa_score;
         let claim_id = finding.target.claim_id;
         let producer = finding.target.executor_bond;
-        let lock = self.state.slashable_locks.get(&(accused, claim_id)).copied();
-        if lock.is_none()
+        let row_lock = self.state.slashable_locks.get(&(accused, claim_id)).copied();
+        if row_lock.is_none()
             && !self
                 .state
                 .panel_liabilities
@@ -17611,6 +17745,12 @@ impl<'a> TransitionBuilder<'a> {
                     .into(),
             ));
         }
+        // Lane V02 (past `palw_final_lock_life`, the user's 2026-09-26 decision): a lock the fold no
+        // longer counts as committed has released its collateral to new work, so the seat is
+        // convicted as one the row lists without a lock — no S4, no reporter extraction, the row left
+        // to prune with its record — and the claim's legs below (the `Final` reversed, `E` burned
+        // with S3) run unchanged. Read on the pre-state; `row_lock` itself below the fence.
+        let lock = row_lock.filter(|lock| self.false_valid_lock_slashable_v1(&claim_id, lock, now));
         let conv = self.open_conviction_v1(&[accused, producer], now);
         let gains = self.claim_g_v1(&claim_id).unwrap_or_default();
         let live = self.claim_is_live_before_final_v1(&claim_id);
@@ -20598,7 +20738,9 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
             return;
         }
-        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
+        // Lane V02 (post-launch): a supplementary Valid's lock takes the same shortened life as a
+        // panel Valid's — `window_court` below the fence, `PALW_FINAL_LOCK_LIFE_DAA_V1` past it.
+        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.final_lock_life_at(now_daa));
         self.write_slashable_lock(
             (seat, claim_id),
             Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
