@@ -184,6 +184,23 @@ pub fn palw_false_valid_evidence_is_windowed_v1(evidence: &[u8]) -> bool {
         .is_ok_and(|payload| matches!(payload.receipt, PalwFalseValidReceiptV1::Windowed(_)))
 }
 
+/// **Kind-3 evidence as a reader AHEAD of the gate decodes it** (ADR-0160 F-B, the lane-verify
+/// review's heavy-slot finding): the payload, or `None` where it does not decode — and, below
+/// `Params::palw_capacity_batch_licence` (`windowed_admitted = false`), `None` for a `Windowed`
+/// receipt too. Tag 2 did not exist in `0e8ec984e`, where such bytes do not decode; every reader that
+/// runs before the gate refuses the form (the carrier's rent [`palw_offence_heavy_prompt_ids_v1`],
+/// the heavy budget [`palw_offence_heavy_prompt_charge_v1`]) reads it through here, so below the
+/// fence it prices and charges exactly what the base does: nothing. Without this, an upgraded node
+/// charged a `Windowed` `Whole` 13 against the block's one 2M slot (and burned its carrier's prompt
+/// rent) before the gate refused it, while a `0e8ec984e` node charged nothing — one block, two folds.
+pub fn palw_false_valid_evidence_decode_v1(evidence: &[u8], windowed_admitted: bool) -> Option<PalwPanelFalseValidEvidenceV2> {
+    let payload = borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok()?;
+    if !windowed_admitted && matches!(payload.receipt, PalwFalseValidReceiptV1::Windowed(_)) {
+        return None;
+    }
+    Some(payload)
+}
+
 /// **A panel seat signed `Valid`, and an objective contradiction pinned to the claim's committed
 /// root says the work was false.** One seat, one claim, one offence.
 ///
@@ -1385,13 +1402,17 @@ pub fn palw_prompt_not_anchored_admit_v1(
 /// everything else. Read from the object alone — no state — because it prices the carrier's rent
 /// (`palw_object_rent_ceiling_v2`), which is read where no state is in hand; what the heavy budget
 /// CHARGES is [`palw_offence_heavy_prompt_charge_v1`], which asks whether the recompute will run.
-pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8]) -> u64 {
+///
+/// `windowed_admitted` is `Params::palw_capacity_batch_licence` at the block's DAA: below it a kind-3
+/// payload whose receipt is `Windowed` reads as undecodable ([`palw_false_valid_evidence_decode_v1`]),
+/// as it does on `0e8ec984e`, so it prices nothing.
+pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8], windowed_admitted: bool) -> u64 {
     use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
         return 0;
     }
     let contradiction = match kind {
-        K::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|p| p.contradiction),
+        K::PanelFalseValidV2 => palw_false_valid_evidence_decode_v1(evidence, windowed_admitted).map(|p| p.contradiction),
         K::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|p| p.contradiction),
         _ => None,
     };
@@ -1425,12 +1446,18 @@ pub struct PalwHeavyPromptChargeV1 {
 /// an honest one on the same claim does not cost it the slot. What is left — a Whole that reaches the
 /// recompute on ANOTHER claim — pays for it: its carrier's rent is the carriage of the prompt it
 /// recomputes (`palw_object_rent_ceiling_v2`).
+///
+/// `windowed_admitted` is `Params::palw_capacity_batch_licence` at the block's DAA: below it a kind-3
+/// payload whose receipt is `Windowed` is junk that fails before the recompute (the gate refuses the
+/// form, and `0e8ec984e` cannot decode it), so it is charged nothing
+/// ([`palw_false_valid_evidence_decode_v1`]).
 pub fn palw_offence_heavy_prompt_charge_v1(
     state: &PalwChainStateV2,
     accused: &PalwBondKeyV2,
     kind: crate::palw_offence_v1::PalwOffenceKindV1,
     evidence: &[u8],
     rules: PalwIdentityRulesV1,
+    windowed_admitted: bool,
 ) -> Option<PalwHeavyPromptChargeV1> {
     use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
@@ -1438,7 +1465,7 @@ pub fn palw_offence_heavy_prompt_charge_v1(
     }
     let (claim_id, contradiction, executor_only) = match kind {
         K::PanelFalseValidV2 => {
-            let payload = borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok()?;
+            let payload = palw_false_valid_evidence_decode_v1(evidence, windowed_admitted)?;
             let inner = payload.receipt.inner();
             if payload.version != PALW_PANEL_FALSE_VALID_VERSION_V2
                 || payload.accused_seat != accused.0
@@ -3252,18 +3279,72 @@ mod f1c_tests {
         };
         let whole =
             evidence(PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof: PalwPromptProofV1::Whole });
-        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &whole), 262_143);
-        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, &whole), 0, "not a kind-3 payload");
-        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorEquivocation, &whole), 0);
+        for fb in [false, true] {
+            assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &whole, fb), 262_143);
+            assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, &whole, fb), 0, "not a kind-3 payload");
+            assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorEquivocation, &whole, fb), 0);
+        }
         let tile = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&[1, 2, 3], 0).unwrap();
         let tiled =
             evidence(PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof: PalwPromptProofV1::Tile(tile) });
-        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &tiled), 0, "a Tile is cheap");
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &tiled, false), 0, "a Tile is cheap");
         let nine = evidence(PalwPanelContradictionV1::IdentityMismatch { binding });
-        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &nine), 0);
-        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, b"junk"), 0);
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &nine, false), 0);
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, b"junk", false), 0);
         assert!(262_143 <= crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1, "one 2M check a block");
         assert!(2 * 262_143 > crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1, "and not two");
+    }
+
+    /// **ADR-0160 F-B, the lane-verify review's heavy-slot finding: below the batch fence a kind-3
+    /// whose receipt is `Windowed` reads as the base reads it — undecodable** — so the carrier's rent
+    /// and the heavy budget price it at nothing, as `0e8ec984e` (no variant 2) does; past the fence it
+    /// is priced as any other `Whole` 13. The `Segmented` form prices alike on both sides.
+    #[test]
+    fn a_windowed_kind3_is_undecodable_below_the_batch_fence() {
+        let binding = crate::palw_attempt_rules_v1::model_binding_for_tests_v1(&h64(1), 2_097_152, PalwPromptIdsFormV1::MerkleV1);
+        let whole = PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::Whole };
+        let seat = PalwBondKeyV2(TransactionOutpoint::new(h64(0x5EA7), 0));
+        let signed = PalwSeatReceiptV3 {
+            receipt: PalwSeatReceiptV2 { claim: h64(0xC1A1), verdict: PalwReceiptVerdictV2::Valid, seat_bond: seat, signed_daa: 9, signature: vec![7; 8] },
+            segments: crate::palw_verification_v2::PalwSegmentMaskV2(0b1),
+        };
+        let windowed = PalwFalseValidReceiptV1::Windowed(crate::palw_batch_licence_v1::PalwWindowedReceiptV1 {
+            receipt: signed.clone(),
+            anchor_hash: h64(0xA1),
+            from_daa: 9,
+            to_daa: 9,
+            count: 1,
+            leaf_index: 0,
+            path: Vec::new(),
+        });
+        let bytes = |receipt: PalwFalseValidReceiptV1| {
+            borsh::to_vec(&PalwPanelFalseValidEvidenceV2::filed_v2(h64(0xC1A1), receipt, whole.clone(), None)).unwrap()
+        };
+        let windowed_bytes = bytes(windowed);
+        let segmented_bytes = bytes(PalwFalseValidReceiptV1::Segmented(signed));
+        assert!(palw_false_valid_evidence_is_windowed_v1(&windowed_bytes));
+        assert_eq!(palw_false_valid_evidence_decode_v1(&windowed_bytes, false), None, "below F-B: the base's reading");
+        assert!(palw_false_valid_evidence_decode_v1(&windowed_bytes, true).is_some(), "past F-B: the form decodes");
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, &windowed_bytes, false), 0);
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, &windowed_bytes, true), 262_143);
+        for fb in [false, true] {
+            assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, &segmented_bytes, fb), 262_143);
+            assert!(palw_false_valid_evidence_decode_v1(&segmented_bytes, fb).is_some());
+        }
+        // The base's own reading of the Windowed bytes: variant 2 does not exist there, which this
+        // build reproduces with a variant it does not know either (3).
+        let tag_at = borsh::to_vec(&PALW_PANEL_FALSE_VALID_VERSION_V2).unwrap().len()
+            + borsh::to_vec(&h64(0xC1A1)).unwrap().len()
+            + borsh::to_vec(&seat.0).unwrap().len();
+        assert_eq!(windowed_bytes[tag_at], 2, "the receipt's variant tag");
+        let mut base_bytes = windowed_bytes.clone();
+        base_bytes[tag_at] = 3;
+        assert!(borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(&base_bytes).is_err());
+        assert_eq!(
+            palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, &base_bytes, true),
+            palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, &windowed_bytes, false),
+            "below F-B the Windowed form prices as the base prices it"
+        );
     }
 
     /// **The remembered root is the root** (the Phase 3 review's heavy-budget finding): the memo a

@@ -7502,12 +7502,20 @@ impl VirtualStateProcessor {
             // Charged before the gate computes and kept when the gate then refuses; the object that
             // would breach the budget is dropped and the block stands. The fold charges by the same
             // function as its second lock.
+            //
+            // **ADR-0160 F-B (the lane-verify review's heavy-slot finding): both readers here run
+            // before the gate, so both read the batch fence.** Below it a kind-3 whose receipt is
+            // `Windowed` is what `0e8ec984e` reads — bytes that do not decode — so it owes no prompt
+            // rent and is charged nothing; the gate then refuses it by name. Read otherwise, an
+            // upgraded node spent the block's one 2M slot on it and dropped an honest Whole behind it
+            // that the base admitted.
+            let batch_licence = state_params.capacity_batch_active_at(point.daa_score);
             if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence, .. } =
                 &object
                 && self.palw_offence_attribution_at(point.daa_score)
             {
                 if rent_armed {
-                    let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(&object, true);
+                    let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(&object, true, batch_licence);
                     if carrier_fee < owed {
                         info!(
                             "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier paid \
@@ -7522,6 +7530,7 @@ impl VirtualStateProcessor {
                     *kind,
                     evidence,
                     self.palw_identity_rules_v1(point.daa_score),
+                    batch_licence,
                 ) && !heavy_prompt_claims.contains(&charge.claim_id)
                 {
                     let (heavy, budget) = (charge.prompt_ids, kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1);

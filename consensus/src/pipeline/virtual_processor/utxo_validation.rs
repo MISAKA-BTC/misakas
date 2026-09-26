@@ -514,10 +514,14 @@ impl VirtualStateProcessor {
                     .first()
                     // ADR-0152 v3.1 (the Phase 3 review): past `palw_offence_attribution` a whole-prompt
                     // `PromptNotAnchored` pays its prompt's carriage too; below it this is v1 exactly.
+                    // ADR-0160 F-B: and below the batch fence a kind-3 whose receipt is `Windowed`
+                    // prices as `0e8ec984e` reads it — undecodable, so no prompt rent — or this
+                    // burn, and so the coinbase, would differ between the two builds.
                     .map(|carried| {
                         kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(
                             &carried.object,
                             self.palw_offence_attribution_at(pov_daa_score),
+                            self.palw_state_params_v2.as_ref().is_some_and(|params| params.capacity_batch_active_at(pov_daa_score)),
                         )
                     })
                     .unwrap_or(0)

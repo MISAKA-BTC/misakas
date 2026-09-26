@@ -6846,11 +6846,16 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
 /// [`palw_object_rent_ceiling_v1`], so no network without the fence burns a sompi more. Read from the
 /// object alone (the rent is read where no state is in hand): every Whole pays, including one the
 /// heavy budget will not charge because it fails early.
-pub fn palw_object_rent_ceiling_v2(object: &PalwConsensusObjectV2, offence_attribution: bool) -> u64 {
+///
+/// `batch_licence` is `Params::palw_capacity_batch_licence` at the block's DAA (ADR-0160 F-B): below
+/// it a kind-3 whose receipt is `Windowed` reads as undecodable, as `0e8ec984e` reads it, and so
+/// prices what the base prices (the lane-verify review: the form's rent was burned by upgraded nodes
+/// only, a coinbase two builds disagreed on).
+pub fn palw_object_rent_ceiling_v2(object: &PalwConsensusObjectV2, offence_attribution: bool, batch_licence: bool) -> u64 {
     if offence_attribution
         && let PalwConsensusObjectV2::ObjectiveOffence { kind, evidence, .. } = object
     {
-        let ids = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(*kind, evidence);
+        let ids = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(*kind, evidence, batch_licence);
         if ids > 0 {
             return palw_relay_fee_for_mass_v1(ids.saturating_mul(crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1));
         }
@@ -17575,9 +17580,11 @@ impl<'a> TransitionBuilder<'a> {
                 "evidence_id is not the digest of the evidence bytes".into(),
             ));
         }
-        self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence)?;
         // ADR-0160 F-B: a batched receipt (`Windowed`) convicts only past the batch fence, as the
-        // gate refuses it below (the form did not decode before the fence existed).
+        // gate refuses it below (the form did not decode before the fence existed). Refused BEFORE
+        // the heavy budget is charged — junk that fails before the recompute costs the budget nothing,
+        // and `0e8ec984e`, which cannot decode the form, charges nothing for it (the lane-verify
+        // review's heavy-slot finding; the charge reads the same fence as its second lock).
         if !self.params.capacity_batch_active_at(ctx.daa_score)
             && crate::palw_offence_attribution_v1::palw_false_valid_evidence_is_windowed_v1(evidence)
         {
@@ -17586,6 +17593,7 @@ impl<'a> TransitionBuilder<'a> {
                 "a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".into(),
             ));
         }
+        self.charge_heavy_prompt_ids_v1(ctx.daa_score, &accused, PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence)?;
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
         let finding = palw_check_panel_false_valid_v2(
             &self.state,
@@ -17802,6 +17810,8 @@ impl<'a> TransitionBuilder<'a> {
             kind,
             evidence,
             self.identity_rules_v1(now_daa),
+            // ADR-0160 F-B: below the batch fence a `Windowed` kind-3 is the base's undecodable junk.
+            self.params.capacity_batch_active_at(now_daa),
         ) else {
             return Ok(());
         };
