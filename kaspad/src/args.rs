@@ -1,4 +1,5 @@
 use clap::{Arg, ArgAction, Command, arg};
+use kaspa_consensus_core::config::ibd_checkpoint::{IbdCheckpoint, builtin_ibd_checkpoints};
 use kaspa_consensus_core::config::trusted_checkpoint::TrustedCheckpoint;
 use kaspa_consensus_core::{
     config::Config,
@@ -191,6 +192,12 @@ pub struct Args {
     /// node has no trust root beyond accumulated work, which is the weak-subjectivity gap
     /// ADR-0009 documents rather than a safe default.
     pub trusted_checkpoint: Option<String>,
+
+    /// `--checkpoint=<daa-score>:<block-hash>`, repeatable: node-side IBD checkpoints added to the
+    /// network's built-in list (`kaspa_consensus_core::config::ibd_checkpoint`). A proof or header
+    /// chain covering one of these DAA scores without that block is refused and its peer banned.
+    #[serde(rename = "checkpoint")]
+    pub checkpoints: Vec<String>,
 
     /// Enforce the chain-participation gate on a network where it is off by default.
     ///
@@ -491,6 +498,7 @@ impl Default for Args {
             enable_unsynced_mining: false,
             enable_mainnet_mining: true,
             trusted_checkpoint: None,
+            checkpoints: vec![],
             enforce_chain_participation: false,
             clear_quarantine: false,
             enable_validator: false,
@@ -1063,6 +1071,13 @@ impl Args {
             None => None,
         };
 
+        // Node-side IBD checkpoints: the built-in list for THIS genesis (so a drill's salted genesis
+        // or any other network gets none) plus every --checkpoint. Fatal when malformed or when two
+        // name different blocks at one DAA score — no chain could satisfy both, and the node would
+        // refuse every peer while its operator believed it was merely pinned.
+        config.ibd_checkpoints = merge_ibd_checkpoints(builtin_ibd_checkpoints(config.genesis.hash), &self.checkpoints)
+            .unwrap_or_else(|e| panic!("--checkpoint: {e}"));
+
         #[cfg(feature = "devnet-prealloc")]
         if let Some(num_prealloc_utxos) = self.num_prealloc_utxos {
             config.initial_utxo_set = Arc::new(self.generate_prealloc_utxos(num_prealloc_utxos));
@@ -1305,6 +1320,19 @@ pub fn cli() -> Command {
                      has forked this is what decides which one it may join. Unset means work alone decides.",
                 )
                 .env("KASPAD_TRUSTED_CHECKPOINT"),
+        )
+        .arg(
+            Arg::new("checkpoint")
+                .long("checkpoint")
+                .value_name("daa:hash")
+                .action(ArgAction::Append)
+                .help(
+                    "Node-side IBD checkpoint <daa-score>:<block-hash> (repeatable), added to the network's built-in list. \
+                     During IBD a pruning-point proof or header chain whose selected chain covers that DAA score without \
+                     passing through that block is refused and the peer banned; a fresh node also does not sync onto a \
+                     chain that stops short of a checkpoint it has not reached. Node policy only: no consensus rule moves.",
+                )
+                .env("KASPAD_CHECKPOINT"),
         )
         .arg(
             arg!(--"enforce-chain-participation" "kaspa-pq: enforce the post-IBD chain-participation gate on networks where it is off by default (devnet/simnet). Always enforced on mainnet and testnet.")
@@ -2269,6 +2297,7 @@ impl Args {
             enable_unsynced_mining: arg_match_unwrap_or::<bool>(&m, "enable-unsynced-mining", defaults.enable_unsynced_mining),
             enable_mainnet_mining: arg_match_unwrap_or::<bool>(&m, "enable-mainnet-mining", defaults.enable_mainnet_mining),
             trusted_checkpoint: m.get_one::<String>("trusted-checkpoint").cloned(),
+            checkpoints: arg_match_many_unwrap_or::<String>(&m, "checkpoint", defaults.checkpoints),
             clear_quarantine: arg_match_unwrap_or::<bool>(&m, "clear-quarantine", defaults.clear_quarantine),
             enforce_chain_participation: arg_match_unwrap_or::<bool>(
                 &m,
@@ -2583,6 +2612,24 @@ fn arg_match_unwrap_or<T: Clone + Send + Sync + 'static>(m: &clap::ArgMatches, a
 fn arg_match_named_flag(m: &clap::ArgMatches, arg_id: &str) -> Option<bool> {
     matches!(m.value_source(arg_id), Some(clap::parser::ValueSource::CommandLine | clap::parser::ValueSource::EnvVariable))
         .then(|| m.get_flag(arg_id))
+}
+
+/// The built-in IBD checkpoints plus the `--checkpoint` strings, sorted by DAA score, duplicates
+/// folded; an unparsable string or two different blocks at one DAA score is an error.
+pub fn merge_ibd_checkpoints(builtin: Vec<IbdCheckpoint>, extra: &[String]) -> Result<Vec<IbdCheckpoint>, String> {
+    let mut all = builtin;
+    for raw in extra {
+        all.push(raw.parse::<IbdCheckpoint>().map_err(|e| format!("{raw:?} is invalid: {e}"))?);
+    }
+    all.sort_by_key(|cp| cp.daa_score);
+    all.dedup();
+    if let Some(w) = all.windows(2).find(|w| w[0].daa_score == w[1].daa_score) {
+        return Err(format!(
+            "two checkpoints name different blocks at DAA {}: {} and {}",
+            w[0].daa_score, w[0].block_hash, w[1].block_hash
+        ));
+    }
+    Ok(all)
 }
 
 fn arg_match_many_unwrap_or<T: Clone + Send + Sync + 'static>(m: &clap::ArgMatches, arg_id: &str, default: Vec<T>) -> Vec<T> {
@@ -2985,5 +3032,51 @@ mod devnet_fence_knob_tests {
         assert_eq!(a.palw_canonical_work_devnet_daa, Some(9_000));
         assert_eq!(a.palw_admission_independence_devnet_daa, Some(9_100));
         assert_eq!(a.palw_fp_derived_work_devnet_daa, Some(9_200));
+    }
+}
+
+#[cfg(test)]
+mod ibd_checkpoint_arg_tests {
+    use super::*;
+    use kaspa_consensus_core::config::Config;
+    use kaspa_consensus_core::config::params::Params;
+
+    fn parse(extra: &[&str]) -> Args {
+        let mut argv = vec!["kaspad"];
+        argv.extend_from_slice(extra);
+        Args::parse(argv).expect("args parse")
+    }
+
+    fn hash(n: u8) -> String {
+        format!("{:02x}", n).repeat(64)
+    }
+
+    /// `--checkpoint=<daa>:<hash>` is repeatable, lands in the config sorted and de-duplicated, and
+    /// moves no consensus identity (node policy only).
+    #[test]
+    fn checkpoints_are_repeatable_node_policy_and_move_no_fingerprint() {
+        let (a, b) = (format!("--checkpoint=480:{}", hash(2)), format!("--checkpoint=300:{}", hash(1)));
+        let args = parse(&["--testnet", "--netsuffix=12", &a, &b, &b]);
+        assert_eq!(args.checkpoints.len(), 3);
+        let params: Params = args.network().into();
+        let mut config = Config::new(params.clone());
+        args.apply_to_config(&mut config);
+        let daa: Vec<u64> = config.ibd_checkpoints.iter().map(|cp| cp.daa_score).collect();
+        assert_eq!(daa, vec![300, 480], "sorted, duplicate folded (built-in t12 list is still the placeholder)");
+        assert_eq!(config.params.consensus_params_id(), params.consensus_params_id(), "the fingerprint does not move");
+        let plain = parse(&["--testnet", "--netsuffix=12"]);
+        let mut plain_config = Config::new(plain.network().into());
+        plain.apply_to_config(&mut plain_config);
+        assert_eq!(plain_config.params.consensus_params_id(), config.params.consensus_params_id());
+    }
+
+    #[test]
+    fn a_malformed_or_conflicting_checkpoint_is_refused() {
+        assert!(merge_ibd_checkpoints(vec![], &["300".to_owned()]).is_err());
+        assert!(
+            merge_ibd_checkpoints(vec![], &[format!("300:{}", hash(1)), format!("300:{}", hash(2))]).is_err(),
+            "two blocks at one DAA"
+        );
+        assert_eq!(merge_ibd_checkpoints(vec![], &[format!("300:{}", hash(1)), format!("300:{}", hash(1))]).unwrap().len(), 1);
     }
 }

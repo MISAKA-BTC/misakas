@@ -785,6 +785,19 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // 2026-08-13. One line here makes "is this binary the release?" answerable without a peer,
     // which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
+    // Node-side IBD checkpoints (node policy, not consensus): say which are in force, and whether the
+    // built-in list for this genesis is still the operator placeholder.
+    match config.ibd_checkpoints.iter().map(|cp| cp.to_string()).collect::<Vec<_>>() {
+        list if list.is_empty() => info!("IBD checkpoints: none"),
+        list => info!("IBD checkpoints ({}): {}", list.len(), list.join(", ")),
+    }
+    let unfilled = kaspa_consensus_core::config::ibd_checkpoint::builtin_ibd_checkpoints_unfilled(config.genesis.hash);
+    if unfilled > 0 {
+        warn!(
+            "the built-in IBD checkpoint list for this network still has {unfilled} __FILL_ME__ placeholder(s) \
+             (PALW_T12_IBD_CHECKPOINTS); a fresh node relies on --checkpoint=<daa>:<hash> alone"
+        );
+    }
     // **The node's protocol duties, decided once from the params and the identity alone** (user
     // decision 2026-09-25, `crate::palw_duties`): the panel's seat duties, the execution lane and — where
     // the registry is in force from genesis — the chain-registered-class arm run on every node that can

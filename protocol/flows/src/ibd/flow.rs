@@ -20,6 +20,7 @@ use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType,
     api::BlockValidationFuture,
     block::Block,
+    config::ibd_checkpoint::{self, IbdCheckpointViolation},
     header::Header,
     pruning::{PruningPointProof, PruningPointsList, PruningProofMetadata},
     trusted::TrustedBlock,
@@ -392,7 +393,9 @@ impl IbdFlow {
                         // withholding participation is not mining or attesting, and every path this
                         // keeps open is separately rate-limited — summary cooldown, verification
                         // lease, per-peer failure count.
-                        if !self.ctx.is_consensus_participation_allowed() {
+                        // A node-side checkpoint violation IS misbehaviour (the peer is already banned),
+                        // so it never keeps the connection.
+                        if !matches!(e, ProtocolError::MisbehavingPeer(_)) && !self.ctx.is_consensus_participation_allowed() {
                             info!(
                                 "Keeping the connection to {} despite the failed IBD: this node is still reviewing its chain, and \
                                  a peer offering a different one is evidence rather than an offence.",
@@ -2025,6 +2028,15 @@ impl IbdFlow {
             proof.iter().flatten().unique_by(|h| h.hash).count()
         );
 
+        // **Node-side IBD checkpoints, before the proof is validated or anything else downloaded.** A
+        // proof claims the history from genesis to its pruning point, so it covers every checkpoint at
+        // or below that DAA score and must contain each of those blocks at its score. Checked first
+        // because validating a PALW proof is expensive and a proof that fails here is refused either
+        // way; whether a contained checkpoint is on the selected chain is checked once it is applied.
+        if let Err(violation) = ibd_checkpoint::judge_proof_against_checkpoints(&self.ctx.config.ibd_checkpoints, &proof) {
+            return Err(self.refuse_checkpoint_violation("pruning-point proof", violation).await);
+        }
+
         let proof_metadata = PruningProofMetadata::new(relay_header.blue_work);
 
         // Get a new session for current consensus (non staging)
@@ -2178,6 +2190,10 @@ impl IbdFlow {
                 .await?;
         }
 
+        // The proof is applied, so staging has reachability for it: every checkpoint the proof covers
+        // (contained, per the pre-check) must be on the pruning point's selected chain.
+        self.check_chain_checkpoints(staging, proof_pruning_point, 0, "pruning-point proof").await?;
+
         // TODO (relaxed): add logs to staging commit process
 
         info!("Starting to process {} trusted blocks", trusted_set.len());
@@ -2262,7 +2278,91 @@ impl IbdFlow {
 
         self.sync_missing_relay_past_headers(consensus, syncer_virtual_selected_parent, relay_header.hash).await?;
 
+        // Before any body is downloaded — a header-only chain moves no sink.
+        self.check_synced_chain_against_checkpoints(consensus, syncer_virtual_selected_parent, relay_header).await?;
+
         Ok(())
+    }
+
+    /// **Node-side IBD checkpoints (`--checkpoint`, and the network's built-in list) at the header
+    /// stage.** Node policy only: consensus accepted these headers and still would; this node just
+    /// will not sync onto them.
+    ///
+    /// 1. The synced chain (the syncer's sink, and the relay block's chain) must pass through every
+    ///    checkpoint between this consensus's pruning point and its top. Below the pruning point is
+    ///    history this node has already committed to — or, in staging, what the proof check judged.
+    /// 2. A node that has not yet reached a checkpoint is not moved onto a chain that stops short of
+    ///    it: a chain of free attempts can end just below the checkpoint's DAA score, cover nothing,
+    ///    and still outweigh the honest chain. Not misbehaviour (an honest peer may simply be behind),
+    ///    so no ban — this peer is just not the one to sync from.
+    async fn check_synced_chain_against_checkpoints(
+        &self,
+        consensus: &ConsensusProxy,
+        syncer_sink: BlockHash,
+        relay_header: &Header,
+    ) -> Result<(), ProtocolError> {
+        let checkpoints = &self.ctx.config.ibd_checkpoints;
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
+        let floor_daa_score = consensus.async_get_header(consensus.async_pruning_point().await).await?.daa_score;
+        self.check_chain_checkpoints(consensus, syncer_sink, floor_daa_score, "synced header chain").await?;
+        if relay_header.hash != syncer_sink && consensus.async_get_block_status(relay_header.hash).await.is_some() {
+            self.check_chain_checkpoints(consensus, relay_header.hash, floor_daa_score, "relay block's header chain").await?;
+        }
+        // The ACTIVE consensus's sink, unguarded: the caller may hold a guarded session on it already.
+        let local_daa_score = self.ctx.consensus().unguarded_session().async_get_sink_daa_score_timestamp().await.daa_score;
+        let top_daa_score = consensus.async_get_header(syncer_sink).await?.daa_score;
+        if let Some(cp) = ibd_checkpoint::unreached_checkpoint(checkpoints, local_daa_score, top_daa_score) {
+            return Err(ProtocolError::OtherOwned(format!(
+                "not syncing from {}: its chain ends at DAA {} below checkpoint {} that this node (sink DAA {}) has not reached \
+                 yet; a chain that stops short of a checkpoint cannot be told from a free-attempt fork",
+                self.router, top_daa_score, cp, local_daa_score
+            )));
+        }
+        Ok(())
+    }
+
+    /// The checkpoints between `floor_daa_score` and `top`'s DAA score must each be a chain ancestor
+    /// of `top` sitting at its own DAA score; otherwise the peer is banned and refused.
+    async fn check_chain_checkpoints(
+        &self,
+        consensus: &ConsensusProxy,
+        top: BlockHash,
+        floor_daa_score: u64,
+        what: &str,
+    ) -> Result<(), ProtocolError> {
+        let checkpoints = &self.ctx.config.ibd_checkpoints;
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
+        let top_daa_score = consensus.async_get_header(top).await?.daa_score;
+        let mut on_chain = Vec::new();
+        for cp in ibd_checkpoint::covered_checkpoints(checkpoints, floor_daa_score, top_daa_score) {
+            let at_its_score = consensus.async_get_header(cp.block_hash).await.is_ok_and(|h| h.daa_score == cp.daa_score);
+            if at_its_score && consensus.async_is_chain_ancestor_of(cp.block_hash, top).await.unwrap_or(false) {
+                on_chain.push(cp);
+            }
+        }
+        match ibd_checkpoint::judge_chain_against_checkpoints(checkpoints, floor_daa_score, top_daa_score, |cp| on_chain.contains(cp))
+        {
+            Ok(()) => Ok(()),
+            Err(violation) => Err(self.refuse_checkpoint_violation(what, violation).await),
+        }
+    }
+
+    /// Ban the peer and build the refusal. The ban goes through the connection manager, which skips
+    /// a permanent (`--connect` / `--addpeer`) peer — the operator named that one.
+    async fn refuse_checkpoint_violation(&self, what: &str, violation: IbdCheckpointViolation) -> ProtocolError {
+        warn!(
+            "IBD: refusing the {} from peer {}: {}. Banning the peer. (Node-side checkpoint: if the checkpoint itself is wrong, \
+             fix --checkpoint / PALW_T12_IBD_CHECKPOINTS.)",
+            what, self.router, violation
+        );
+        if let Some(connection_manager) = self.ctx.connection_manager() {
+            connection_manager.ban(self.router.net_address().ip()).await;
+        }
+        ProtocolError::MisbehavingPeer(format!("the {what} violates a node-side IBD checkpoint: {violation}"))
     }
 
     async fn sync_new_utxo_set(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
