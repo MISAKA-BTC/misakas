@@ -173,21 +173,43 @@ Registration and each declared class also reserve small fixed amounts on the bon
 **Pass `--palw-bond-collateral` explicitly (in sompi).** Without it the node locks its own derived
 default: the weight-only whole-lifetime figure for the class in `--palw-producer-class`, or the floor
 when that flag is absent. The permissionless drill on 2026-09-23 measured that default at
-3,119,145,986,560 sompi (≈ 31,191 MSK) for the floor, which is more than most funding outputs hold.
-The default does not include the escrow, so it holds about 4 floor claims at once, not the lifetime
-it was sized for. Re-measure it on the release build.
+3,119,145,986,560 sompi (≈ 31,191 MSK) for the floor, and public testnet-12 showed the same figure on
+2026-09-26. The default does not include the escrow, so it holds about 4 floor claims at once, not
+the lifetime it was sized for. **It is a producer's figure: a bond of that size is never drawn onto a
+panel**, because the panel draw seats only a bond holding the seat floor (130,000 MSK).
 
 ### The wizard (recommended)
 
 ```bash
-misaka --network testnet-12 mining setup
+misaka --network testnet-12 mining setup     # a producer's bond
+misaka --network testnet-12 verifier setup   # a panel seat's bond
 ```
 
 The ADR-0122 wizard checks the node, the network, the model, the key, funds, the bond registry, the
 artifact, capability and the fee output, then writes `~/.misaka/mining.toml`. Running it again
 resumes from chain and local state. It registers through `kaspad --palw-register-bond`, so it gets
-the operator-possession fix. It does not pass `--palw-bond-collateral`. It registers the node's
-derived default and asks for funds to match. To choose the amount, use the manual form.
+the operator-possession fix, and it always passes `--palw-bond-collateral` with the amount it showed
+you, so the node locks exactly what you confirmed. The amount depends on what the bond is for:
+
+* **`mining setup`** locks the producer figure for the model you chose: the node's own
+  whole-lifetime sizing above (≈ 31,191.45 MSK for the floor). That is below the seat floor, so the
+  bond produces but is not drawn onto panels; the confirmation says so.
+* **`verifier setup`** locks the seat floor, **130,000 MSK** (ten producer floors), whichever model
+  the seat judges besides the floor: the least collateral the panel draw seats. It needs one ordinary
+  output of at least 130,000.1 MSK at the key's address (the collateral plus 0.1 MSK for the carrier's
+  fee and change). With less, it stops with `E-FUNDS-BELOW-SEAT-FLOOR` and does not offer a smaller
+  bond: a smaller one would lock the money, never be seated, and use up the key's only bond. A key
+  whose bond is already below the seat floor stops with `E-IDENT-BOND-BELOW-SEAT-FLOOR`: retire that
+  bond (§9) and set the seat up under a new key.
+
+Before it asks, the wizard prints the role, the amount, that the key can hold only one bond for good,
+and how the money comes back: `misaka bond retire`, then the 12,900-DAA withdrawal delay (about 18
+days at the 120-second block target). The model chooser shows each model's figure for the role. A
+model no bond can be registered for shows `not available on this chain` instead of a number: one
+whose figure no single output can hold, and one the chain takes no claim of. On the release that is
+the 2M row in both choosers: its producer sizing is `u64::MAX`, and it takes no claim until a measured
+verification row is installed for it (ADR-0152 §4-quater). To lock a different amount, use the manual
+form.
 
 ### Manual, one shot
 
