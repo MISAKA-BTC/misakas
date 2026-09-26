@@ -19,6 +19,26 @@
 //! * the measurement runs (`#[ignore]`, steered by `CAP_*`, JSON lines to `CAP_OUT`): V-T2 carriage,
 //!   V-T3 c_8k at 16 ready seats, V-T4 split and junk, V-T5 the floor room under a flood, and V4's
 //!   attempt lane and bind cost.
+//!
+//! **Measured (2026-09-26, debug build, testnet-12's params, real ML-DSA-87):**
+//! * **V-T2 carriage:** one five-receipt coverage licence is 125,768 transient mass (≤ 3 a block);
+//!   one batch carries **59** coverage licences in a 477,768-mass block at 16 seats (sixteen window
+//!   roots alone are 304k) and 64 at 8 seats (bound by the run's 64-claim window, 329,624 mass) —
+//!   ×20. Accept → licence stays 22 DAA at p50 / p90 / p99 / max under batching (no tail).
+//! * **V-T3:** c_8k past F-R = 29 at the eight cards, 32 with eight 130k seats more, **58** at 16
+//!   genesis-sized ready seats (released: 5 / 6 / 11) — ×11.6. The 8k network at those 16 seats (two
+//!   1M producers, licence at bind + 3): **232** claims per 80 DAA armed, 44 released (×5.3; ×13 over
+//!   today's eight-seat ≈ 17.4).
+//! * **V-T4** (one slack unit a bond): a whole 988k attacker holds 20 beside an honest 1M bond's 20
+//!   and a card (s·room = 19.6); split into 76 × 13k it holds 2 and the honest bond 29.
+//! * **V-T5** (a 10M bond flooding 64 floor attempts a DAA beside a 13k producer): armed, 90 DAA —
+//!   the flood held at 1,049 by the seats' capital, no claim voided, the honest producer's 8 claims 7
+//!   licensed and 1 bound, no `BindTimeout`; released, 60 DAA — the flood 3,840 accepted and 1,455
+//!   voided `BindTimeout` (their escrow destroyed), the honest producer's 6 claims: 2 licensed, 2 voided
+//!   `BindTimeout`, 2 still waiting.
+//! * **V4:** the attempt lane made 20 / 36 / 68 / 85 claims a DAA at 4 / 8 / 16 / 32 parallel
+//!   producers (four merge rounds a DAA; a merge takes ≈ 21 at most); binding 100 and 1,000 claims in
+//!   one anchor block took 135 ms and 1,870 ms (1.35 / 1.87 ms a bind).
 use super::t12_round_lane_e2e::{T12Chain, card_payout_spk, sign_spend, stamp_harness_time, t12_genesis_chain, t12_with_harness_cards};
 use crate::consensus::test_consensus::TestConsensus;
 use kaspa_consensus_core::api::ConsensusApi;
@@ -283,6 +303,32 @@ impl Sim {
         self.insert(block, &format!("{w:?}'s attempt")).await;
         let created = self.state().claim(&claim_id).is_some();
         (claim_id, created)
+    }
+
+    /// [`Self::attempt`] for a run that measures harm rather than asserting its absence (V-T5's released
+    /// baseline): a block the chain disqualifies is recorded, not a panic — `Err(status)`, its carriers
+    /// returned to the queue, the sink unmoved.
+    async fn try_attempt(&mut self, w: Who, class: Hash64, txs: Vec<Transaction>) -> Result<(Hash64, bool), BlockStatus> {
+        let (block, claim_id) = self.build_attempt(w, class, txs.clone());
+        let block = block.to_immutable();
+        let hash = block.header.hash;
+        self.chain
+            .ctx
+            .consensus
+            .validate_and_insert_block(block.clone())
+            .virtual_state_task
+            .await
+            .unwrap_or_else(|e| panic!("{w:?}'s attempt {hash} was refused: {e}"));
+        self.blocks += 1;
+        let status = self.chain.ctx.consensus.block_status(hash);
+        if status != BlockStatus::StatusUTXOValid || self.chain.sink() != hash {
+            let mut back = txs;
+            back.append(&mut self.queued);
+            self.queued = back;
+            return Err(status);
+        }
+        self.inserted.push(block);
+        Ok((claim_id, self.state().claim(&claim_id).is_some()))
     }
 
     fn build_attempt(&mut self, w: Who, class: Hash64, txs: Vec<Transaction>) -> (MutableBlock, Hash64) {
@@ -1070,6 +1116,7 @@ async fn adr0160_vt3_c8k_at_sixteen_ready_seats() {
 #[tokio::test]
 #[ignore = "a measurement run (ADR-0160 V-T4); run with --ignored"]
 async fn adr0160_vt4_split_and_junk_on_the_8k_room() {
+    let mut whole: Option<(u64, u64)> = None;
     for split in [false, true] {
         let mut s = Sim::new(Some(0)).await;
         let k8 = s.k8.expect("8k");
@@ -1111,14 +1158,28 @@ async fn adr0160_vt4_split_and_junk_on_the_8k_room() {
             attackers.len(),
             why
         ));
+        // Pass (measured 2026-09-26: whole 20 vs honest 20, split 2 vs honest 29): the whole attacker,
+        // whose stake is below the honest bond's, holds at most the honest bond's share plus its one
+        // slack unit (≤ s·room + 1), and the split gains nothing over the whole (V-I4) nor takes from
+        // the honest bond (A4).
+        match whole {
+            None => {
+                assert!(attacker_held <= honest_held + 1, "V-T4: the whole attacker {attacker_held} vs the honest {honest_held}");
+                whole = Some((attacker_held, honest_held));
+            }
+            Some((whole_attacker, whole_honest)) => {
+                assert!(attacker_held <= whole_attacker, "V-I4: the split holds {attacker_held}, the whole {whole_attacker}");
+                assert!(honest_held >= whole_honest, "A4: the honest bond holds {honest_held} against the split, {whole_honest} against the whole");
+            }
+        }
     }
 }
 
 /// **V-T5: the floor room stops a flood before the seats saturate** (the capacity map's
 /// `K_floor_big`), with F-R and without: a 1M pure producer floods floor claims (`CAP_PER_DAA`, 64)
 /// while an honest 13k producer makes one a DAA; a card anchors every DAA; every due claim is licensed
-/// (batch past F-B). Recorded per run: the flood's refusals by reason, every honest claim's fate —
-/// pass: no honest `BindTimeout` with F-R.
+/// (batch past F-B). Recorded per run: the flood's refusals by reason, every honest claim's fate, and
+/// (released) every admitted block the chain disqualified — pass: no honest `BindTimeout` with F-R.
 #[tokio::test]
 #[ignore = "a measurement run (ADR-0160 V-T5): tens of minutes; run with --ignored"]
 async fn adr0160_vt5_the_floor_room_stops_the_flood() {
@@ -1139,6 +1200,7 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
     let mut flood_accepted = 0u64;
     let mut refusals: BTreeMap<String, u64> = BTreeMap::new();
     let mut anchors_missed = 0u64;
+    let mut disqualified: BTreeMap<String, u64> = BTreeMap::new();
     for rel in 0..daa_len {
         // The anchor: the first card (rotating) whose producer facts admit an attempt — a producer
         // holds, as the node's own does, rather than mine a block admission refuses.
@@ -1147,27 +1209,41 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
             let card = ((rel + k) % 8) as usize;
             if s.ready(Who::Card(card), base).is_ok() {
                 let txs = s.take_carriers();
-                s.attempt(Who::Card(card), base, txs).await;
-                anchored = true;
+                // Released, the facts may admit a block the chain then disqualifies (the harm this
+                // run measures); armed, every admitted block must stand.
+                match s.try_attempt(Who::Card(card), base, txs).await {
+                    Ok(_) => anchored = true,
+                    Err(status) if !armed => *disqualified.entry(format!("anchor {status:?}")).or_default() += 1,
+                    Err(status) => panic!("V-T5 armed: Card({card})'s admitted attempt is {status:?}"),
+                }
                 break;
             }
         }
         anchors_missed += (!anchored) as u64;
         match s.ready(Who::Planted(9), base) {
-            Ok(()) => {
-                let (claim, created) = s.attempt(Who::Planted(9), base, Vec::new()).await;
-                if created {
-                    honest.push(claim);
+            Ok(()) => match s.try_attempt(Who::Planted(9), base, Vec::new()).await {
+                Ok((claim, created)) => {
+                    if created {
+                        honest.push(claim);
+                    }
                 }
-            }
+                Err(status) if !armed => *disqualified.entry(format!("honest {status:?}")).or_default() += 1,
+                Err(status) => panic!("V-T5 armed: the honest producer's admitted attempt is {status:?}"),
+            },
             Err(why) => *refusals.entry(format!("honest: {}", why.split(" (").next().unwrap_or(""))).or_default() += 1,
         }
         for _ in 0..per_daa {
             match s.ready(Who::Planted(8), base) {
                 Ok(()) => {
                     let txs = s.take_carriers();
-                    let (_, created) = s.attempt(Who::Planted(8), base, txs).await;
-                    flood_accepted += created as u64;
+                    match s.try_attempt(Who::Planted(8), base, txs).await {
+                        Ok((_, created)) => flood_accepted += created as u64,
+                        Err(status) if !armed => {
+                            *disqualified.entry(format!("flood {status:?}")).or_default() += 1;
+                            break;
+                        }
+                        Err(status) => panic!("V-T5 armed: the flood's admitted attempt is {status:?}"),
+                    }
                 }
                 Err(why) => {
                     let key = why.split(" (").next().unwrap_or("").chars().take(120).collect::<String>();
@@ -1198,7 +1274,12 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
         }
         s.beat().await;
         if rel % 10 == 0 {
-            eprintln!("[cap-verify] {run} rel {rel} daa {} flood {flood_accepted} honest {} elapsed {:?}", s.daa(), honest.len(), started.elapsed());
+            eprintln!(
+                "[cap-verify] {run} rel {rel} daa {} flood {flood_accepted} honest {} disqualified {disqualified:?} elapsed {:?}",
+                s.daa(),
+                honest.len(),
+                started.elapsed()
+            );
         }
     }
     let st = s.state();
@@ -1215,10 +1296,11 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
     let bind_timeouts: u64 = fates.iter().filter(|(k, _)| k.contains("BindTimeout")).map(|(_, v)| *v).sum();
     let flood_voids = st.claims_iter().filter(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::Voided { .. })).count() as u64;
     out_line(format!(
-        "{{\"run\":\"{run}\",\"daa\":{daa_len},\"flood_accepted\":{flood_accepted},\"honest\":{},\"honest_fates\":{:?},\"flood_voids\":{},\"anchors_missed\":{anchors_missed},\"refusals\":{:?},\"elapsed_s\":{}}}",
+        "{{\"run\":\"{run}\",\"daa\":{daa_len},\"flood_accepted\":{flood_accepted},\"honest\":{},\"honest_fates\":{:?},\"flood_voids\":{},\"anchors_missed\":{anchors_missed},\"disqualified\":{:?},\"refusals\":{:?},\"elapsed_s\":{}}}",
         honest.len(),
         fates,
         flood_voids,
+        disqualified,
         refusals,
         started.elapsed().as_secs()
     ));
@@ -1307,9 +1389,10 @@ async fn adr0160_v4_bind_cost_per_anchor_block() {
 /// **V-T3's throughput half: the 8k network at the ×10 room**, past F-R with 16 genesis-sized ready
 /// seats (the eight cards and eight planted seats, each proving 8k readiness): `CAP_BONDS` pure
 /// producers (default two of 1M) make 8k claims while the chain admits them for `CAP_DAA` DAA
-/// (default 80); a card anchors every DAA; every due 8k claim is licensed by batch at bind +
-/// `CAP_LIC_DELAY` (default 3, live testnet-12's 8k median). Counted: 8k claims accepted per 80 DAA
-/// network-wide (the ADR's target ≈ 174 at c = 50) and what held the producers.
+/// (default 80); a card anchors every DAA; every due 8k claim is licensed at bind + `CAP_LIC_DELAY`
+/// (default 3, live testnet-12's 8k median) — by batch past F-B, by single licences released
+/// (`CAP_ARMED=0`). Counted: 8k claims accepted per 80 DAA network-wide (the ADR's target ≈ 174 at
+/// c = 50) and what held the producers.
 #[tokio::test]
 #[ignore = "a measurement run (ADR-0160 V-T3 throughput): tens of minutes; run with --ignored"]
 async fn adr0160_vt3_the_8k_network_at_the_x10_room() {
@@ -1351,9 +1434,21 @@ async fn adr0160_vt3_the_8k_network_at_the_x10_room() {
         }
         let mut due = s.due(lic_delay, &sent);
         while !due.is_empty() {
-            let Some(object) = s.batch_licence(&due, 480_000 / 4 - 8_000) else { break };
-            let Obj::ReceiptLicensedBatchV1 { entries, .. } = &object else { unreachable!() };
-            let taken: Vec<Hash64> = entries.iter().map(|e| e.claim).collect();
+            // Released, a batch rides a valid block and folds nothing (F-B is dormant): the single
+            // licence is what licenses there.
+            let object = if armed {
+                match s.batch_licence(&due, 480_000 / 4 - 8_000) {
+                    Some(o) => o,
+                    None => break,
+                }
+            } else {
+                s.single_licence(due[0])
+            };
+            let taken: Vec<Hash64> = match &object {
+                Obj::ReceiptLicensedBatchV1 { entries, .. } => entries.iter().map(|e| e.claim).collect(),
+                Obj::ReceiptLicensedV2 { claim, .. } => vec![*claim],
+                _ => unreachable!(),
+            };
             let Some(tx) = s.carrier(object.clone()) else { break };
             sent.extend(taken.iter().copied());
             due.retain(|c| !taken.contains(c));
