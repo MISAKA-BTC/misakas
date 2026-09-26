@@ -46,6 +46,15 @@
 //! not yet counted — an incumbent that filled an empty room refills a slot as it frees until the
 //! newcomer's attempt wins one; from then on the newcomer's share is guaranteed.
 //!
+//! **The floor's racing headroom** ([`palw_floor_room_race_headroom_v1`]). On the floor the shares
+//! divide the room less a headroom (at least 24 units, one in sixteen of a larger room, never more
+//! than a quarter), and the slack is counted over the whole room, so small bonds — whose share beside
+//! large holders is 0 — racing the same tip find at least that many single units instead of a
+//! rounding slack smaller than the holder count. A racer the fold skips loses its withheld worker
+//! carve (burned: it is unverified work), which the pre-check at its tip could not foresee; the
+//! headroom is what keeps that rare. A model class's share has no headroom (its room is small, and
+//! its class room is first come below F-R too).
+//!
 //! # The floor room (J-6)
 //!
 //! The floor is ungated below the fence, so a flood of floor claims fills the seats' capital and the
@@ -193,7 +202,14 @@ pub struct PalwRoomHolderV1 {
 /// at a stake fraction of 0.3375 (s·room + 1.4), past §7.4's `≤ s·room + 1`. With one unit a bond an
 /// attacker of stake fraction `s` holds at most `⌊s·room⌋ + 1`; the room left idle is at most the
 /// slack no second bond wants (fewer units than active bonds).
-pub fn palw_bond_room_cap_v1(room: u64, me: usize, holders: &[PalwRoomHolderV1]) -> u64 {
+///
+/// **`headroom`: units kept out of the shares** (the floor's racing headroom,
+/// [`palw_floor_room_race_headroom_v1`]; `0` for a model class's room, whose share is exactly the
+/// above). The shares divide `room − headroom`; the slack is still counted over the whole room, so at
+/// least `headroom` single units beyond the rounding slack stay open to the bonds past their share,
+/// first come — the room small producers racing the same tip draw from. What a share guarantees is
+/// then `⌊s·(room − headroom)⌋`.
+pub fn palw_bond_room_cap_v1(room: u64, headroom: u64, me: usize, holders: &[PalwRoomHolderV1]) -> u64 {
     let Some(mine) = holders.get(me) else { return 0 };
     if mine.frozen {
         return 0;
@@ -201,8 +217,9 @@ pub fn palw_bond_room_cap_v1(room: u64, me: usize, holders: &[PalwRoomHolderV1])
     // A frozen holder's claims still occupy the room until they leave; the live holders share the rest.
     let frozen_held: u64 = holders.iter().filter(|h| h.frozen).map(|h| h.held).fold(0u64, u64::saturating_add);
     let live_room = room.saturating_sub(frozen_held);
+    let pool = live_room.saturating_sub(headroom);
     let live_total: u128 = holders.iter().filter(|h| !h.frozen).map(|h| h.collateral as u128).fold(0, u128::saturating_add);
-    let share_of = |h: &PalwRoomHolderV1| palw_bond_room_share_v1(live_room, h.collateral, live_total.saturating_sub(h.collateral as u128), false);
+    let share_of = |h: &PalwRoomHolderV1| palw_bond_room_share_v1(pool, h.collateral, live_total.saturating_sub(h.collateral as u128), false);
     let live = || holders.iter().filter(|h| !h.frozen);
     let shares: u64 = live().map(share_of).fold(0u64, u64::saturating_add);
     let excess: u64 = live().map(|h| h.held.saturating_sub(share_of(h))).fold(0u64, u64::saturating_add);
@@ -228,6 +245,39 @@ pub fn palw_verify_bond_is_frozen_v1(_state: &PalwChainStateV2, _bond: &PalwBond
 /// one anchor a DAA each hold ≈ 3 own claims at a time until their licences release the escrow; four
 /// is that with one to spare (≈ 12,800 MSK a seat today, 2.7% of a genesis seat's work room).
 pub const PALW_FLOOR_ROOM_ANCHOR_RESERVE_V1: u32 = 4;
+
+/// **ADR-0160 V2 (J-6): the fewest units the floor's racing headroom holds** — V4 measured ≈ 21
+/// attempts in one merge at a 32-producer flood; 24 covers one such merge.
+pub const PALW_FLOOR_ROOM_RACE_HEADROOM_MIN_V1: u64 = 24;
+/// **ADR-0160 V2 (J-6): the racing headroom's share of a larger floor** — one unit in sixteen, so a
+/// room that grows with the seats' capital keeps its headroom in step with the producers racing it.
+pub const PALW_FLOOR_ROOM_RACE_HEADROOM_DIVISOR_V1: u64 = 16;
+
+/// **ADR-0160 V2 (J-6): the floor's racing headroom** — the units of a floor room of `capacity`
+/// claims kept out of the stake shares ([`palw_bond_room_cap_v1`]'s `headroom`):
+/// `min(capacity / 4, max(PALW_FLOOR_ROOM_RACE_HEADROOM_MIN_V1, capacity / 16))`.
+///
+/// **Why the floor needs one** (the lane-verify review's racing finding). A producer asks the floor
+/// gate at its tip (`palw_floor_room_admits_v1`) and cannot see the attempts other producers mine on
+/// the same tip; the chain merges those siblings and the fold admits them in order. Next to large
+/// holders a small bond's guaranteed share is 0 and it holds only a slack unit, so when more small
+/// producers race than the room has free units, the late ones are skipped — and a skipped merged
+/// attempt's withheld worker carve is burned: measured, 4 of 12 racing 13k producers lost it. Below
+/// F-R the floor has no share and all twelve were admitted.
+///
+/// **What it guarantees, and what it cannot.** With the headroom the rounding slack is never less
+/// than it, so racers are skipped only when more of them land ahead than the free units their tip
+/// showed — at least the headroom while nobody holds it. Measured (V-T5r, a 66-claim floor under a
+/// seat load, headroom 16, a 10M flooder at its cap): 12 racers all admitted (8 before the headroom),
+/// 24 racers 18 admitted, 40 racers 18. No rule can make it zero for any number of racers: the loser's
+/// carve cannot be paid (a skipped attempt is unverified work, and paying it pays a producer that
+/// mines attempts the gate will skip), and the winners cannot all be admitted past the room (the
+/// overflow voids `BindTimeout` later, the harm J-6 exists to stop, and crowds the shares A4
+/// guarantees). The price is the shares': a bond of stake fraction `s` is guaranteed
+/// `⌊s·(capacity − headroom)⌋` rather than `⌊s·capacity⌋`.
+pub fn palw_floor_room_race_headroom_v1(capacity: u64) -> u64 {
+    PALW_FLOOR_ROOM_RACE_HEADROOM_MIN_V1.max(capacity / PALW_FLOOR_ROOM_RACE_HEADROOM_DIVISOR_V1).min(capacity / 4)
+}
 
 /// **ADR-0160 V2 (J-6): the floor's seat-capital room**, as the fold reads it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -345,7 +395,7 @@ mod tests {
         let room = 58u64;
         let h = |c: u64, held: u64| PalwRoomHolderV1 { collateral: c, held, frozen: false };
         // Uncontended: the whole room.
-        assert_eq!(palw_bond_room_cap_v1(room, 0, &[h(13_000, 0)]), room);
+        assert_eq!(palw_bond_room_cap_v1(room, 0, 0, &[h(13_000, 0)]), room);
         // The Sybil flood: 76 pieces each holding one claim (76 > room is not even reachable) — the
         // honest 1M bond's cap is its share whatever the pieces hold.
         let mut holders = vec![h(1_000_000, 0)];
@@ -355,14 +405,14 @@ mod tests {
         // Fill greedily, pieces first: each piece takes a slot while its cap allows.
         let mut total = 0u64;
         for i in 1..holders.len() {
-            while holders[i].held < palw_bond_room_cap_v1(room, i, &holders) && total < room {
+            while holders[i].held < palw_bond_room_cap_v1(room, 0, i, &holders) && total < room {
                 holders[i].held += 1;
                 total += 1;
             }
         }
         let pieces_hold = total;
         // The honest bond still reaches its share, and the room holds.
-        while holders[0].held < palw_bond_room_cap_v1(room, 0, &holders) {
+        while holders[0].held < palw_bond_room_cap_v1(room, 0, 0, &holders) {
             holders[0].held += 1;
             total += 1;
         }
@@ -371,20 +421,20 @@ mod tests {
         assert!(total <= room, "the room holds: {total}");
         // A whole 988k bond in the same place holds its share plus what slack it wins.
         let whole = vec![h(1_000_000, 0), h(988_000, 0)];
-        let whole_cap = palw_bond_room_cap_v1(room, 1, &whole);
+        let whole_cap = palw_bond_room_cap_v1(room, 0, 1, &whole);
         assert!(pieces_hold <= whole_cap + 76, "V-I4: the split gains at most one unit per piece");
         assert!(pieces_hold <= room - honest_share, "the pieces never take the honest share");
         // The whole attacker fills first beside the honest bond and a card (each holding one): at
         // most ⌊s·room⌋ + 1, however much slack the flooring left (two units here).
         let mut three = vec![h(1_000_000, 1), h(939_063, 1), h(988_000, 0)];
-        while three[2].held < palw_bond_room_cap_v1(room, 2, &three) {
+        while three[2].held < palw_bond_room_cap_v1(room, 0, 2, &three) {
             three[2].held += 1;
         }
         let s_room = room as f64 * 988_000.0 / (1_000_000.0 + 939_063.0 + 988_000.0);
         assert_eq!(three[2].held, s_room as u64 + 1, "the attacker: its share and one slack unit ({s_room:.2})");
         assert!(three[2].held as f64 <= s_room + 1.0, "A4/V-T4: ≤ s·room + 1");
         for i in 0..2 {
-            while three[i].held < palw_bond_room_cap_v1(room, i, &three) {
+            while three[i].held < palw_bond_room_cap_v1(room, 0, i, &three) {
                 three[i].held += 1;
             }
         }
@@ -392,8 +442,68 @@ mod tests {
         assert_eq!(three[0].held, palw_bond_room_share_v1(room, 1_000_000, 939_063 + 988_000, false) + 1, "the honest bond: its share and the other unit");
         // A frozen holder takes nothing, and what it holds is charged to the slack.
         let frozen = vec![h(1_000_000, 0), PalwRoomHolderV1 { collateral: 1_000_000, held: 10, frozen: true }];
-        assert_eq!(palw_bond_room_cap_v1(room, 1, &frozen), 0);
-        assert_eq!(palw_bond_room_cap_v1(room, 0, &frozen), room - 10, "the frozen bond's claims hold room until they leave");
+        assert_eq!(palw_bond_room_cap_v1(room, 0, 1, &frozen), 0);
+        assert_eq!(palw_bond_room_cap_v1(room, 0, 0, &frozen), room - 10, "the frozen bond's claims hold room until they leave");
+    }
+
+    /// **The floor's racing headroom** (the lane-verify review's racing finding, its probe's shape):
+    /// eight cards holding one floor claim each, a 10M flooder filled to its cap and a 10M bond
+    /// holding one, in a 66-claim floor. Twelve 13k bonds — share 0 beside them — racing one tip each
+    /// ask for a unit; the fold admits them in order. With the headroom every one gets its unit
+    /// (without it, the rounding slack runs out first — the review measured 4 of 12 skipped and their
+    /// carves burned); the room is never exceeded; the 10M honest bond still reaches its share of the
+    /// room less the headroom (A4); and the headroom's size is `min(c/4, max(24, c/16))`.
+    #[test]
+    fn the_floor_headroom_keeps_single_units_open_to_racers() {
+        for (capacity, expected) in [(0u64, 0u64), (3, 0), (66, 16), (96, 24), (400, 25), (1_172, 73), (9_000, 562)] {
+            assert_eq!(palw_floor_room_race_headroom_v1(capacity), expected, "capacity {capacity}");
+        }
+        let mut last = 0;
+        for capacity in 0..6_000u64 {
+            let headroom = palw_floor_room_race_headroom_v1(capacity);
+            assert!(headroom <= capacity / 4 && headroom >= PALW_FLOOR_ROOM_RACE_HEADROOM_MIN_V1.min(capacity / 4), "{capacity}");
+            assert!(headroom >= last, "monotone in the room: {capacity}");
+            last = headroom;
+        }
+        let h = |c: u64, held: u64| PalwRoomHolderV1 { collateral: c, held, frozen: false };
+        let race = |headroom: u64| -> (u64, Vec<PalwRoomHolderV1>) {
+            let capacity = 66u64;
+            let mut holders: Vec<PalwRoomHolderV1> = (0..8).map(|_| h(939_063, 1)).collect();
+            holders.push(h(10_000_000, 0));
+            holders.push(h(10_000_000, 1));
+            while holders[8].held < palw_bond_room_cap_v1(capacity, headroom, 8, &holders) {
+                holders[8].held += 1;
+            }
+            let mut admitted = 0u64;
+            for _ in 0..12 {
+                holders.push(h(13_000, 0));
+                let me = holders.len() - 1;
+                if palw_bond_room_cap_v1(capacity, headroom, me, &holders) >= 1 {
+                    holders[me].held = 1;
+                    admitted += 1;
+                }
+            }
+            (admitted, holders)
+        };
+        let (bare, _) = race(0);
+        let headroom = palw_floor_room_race_headroom_v1(66);
+        let (admitted, mut holders) = race(headroom);
+        println!("twelve 13k racers beside a 10M flooder in a 66-claim floor: {bare} admitted with no headroom, {admitted} with {headroom}");
+        assert!(bare < 12, "the rounding slack alone runs out: {bare}");
+        assert_eq!(admitted, 12, "with the headroom every racer finds its single unit");
+        assert!(holders.iter().map(|h| h.held).sum::<u64>() <= 66, "the room holds");
+        // A4 over the pool: the honest 10M bond (index 9) still reaches its share of 66 − headroom.
+        let total: u128 = holders.iter().map(|h| h.collateral as u128).sum();
+        let guaranteed = ((66 - headroom) as u128 * 10_000_000 / total) as u64;
+        while holders[9].held < palw_bond_room_cap_v1(66, headroom, 9, &holders) {
+            holders[9].held += 1;
+        }
+        assert!(holders[9].held >= guaranteed, "A4: {} ≥ ⌊s·(room − headroom)⌋ = {guaranteed}", holders[9].held);
+        assert!(holders.iter().map(|h| h.held).sum::<u64>() <= 66, "the room still holds");
+        // One unit a bond: no racer holds two.
+        for (i, holder) in holders.iter().enumerate().skip(10) {
+            assert_eq!(palw_bond_room_cap_v1(66, headroom, i, &holders), holder.held, "racer {i} is at its one unit");
+        }
     }
 
     #[test]

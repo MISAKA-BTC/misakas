@@ -19,9 +19,12 @@
 //! * [`adr0160_vt1b_a_licence_landed_first_leaves_the_batch_standing`] (not ignored; the lane-verify
 //!   review's batch finding): a single licence of one claim in the same block or the block before, or
 //!   anyone's one-entry copy of the batch carried first, leaves the batch licensing all six claims.
+//! * [`adr0160_vt5r_racing_small_producers_keep_their_carves`] (not ignored; the review's racing
+//!   finding): twelve 13k producers passing their facts at one tip, merged as siblings beside a 10M
+//!   flooder at its cap, all make their claims (none skipped, no carve burned).
 //! * the measurement runs (`#[ignore]`, steered by `CAP_*`, JSON lines to `CAP_OUT`): V-T2 carriage,
-//!   V-T3 c_8k at 16 ready seats, V-T4 split and junk, V-T5 the floor room under a flood, and V4's
-//!   attempt lane and bind cost.
+//!   V-T3 c_8k at 16 ready seats, V-T4 split and junk, V-T5 the floor room under a flood, V-T5r's
+//!   racing residual, and V4's attempt lane and bind cost.
 //!
 //! **Measured (2026-09-26, debug build, testnet-12's params, real ML-DSA-87):**
 //! * **V-T2 carriage:** one five-receipt coverage licence is 125,768 transient mass (≤ 3 a block);
@@ -34,13 +37,20 @@
 //!   today's eight-seat ≈ 17.4).
 //! * **V-T4** (one slack unit a bond): a whole 988k attacker holds 20 beside an honest 1M bond's 20
 //!   and a card (s·room = 19.6); split into 76 × 13k it holds 2 and the honest bond 29.
-//! * **V-T5** (a 10M bond flooding 64 floor attempts a DAA beside a 13k producer): armed, 90 DAA —
-//!   the flood held at 1,047 by the seats' capital, no claim voided, the honest producer's 5 claims all
-//!   licensed, no `BindTimeout` (8 claims, 7 licensed + 1 bound, while the slack was first come: one
-//!   slack unit a bond leaves a 13k bond one waiting floor claim beside a 10M flooder, its stake
-//!   share being 0.0013); released, 60 DAA — the flood 3,840 accepted and 1,455 voided `BindTimeout`
-//!   (their escrow destroyed), the honest producer's 6 claims: 2 licensed, 2 voided `BindTimeout`, 2
-//!   still waiting.
+//! * **V-T5** (a 10M bond flooding 64 floor attempts a DAA beside a 13k producer): armed, 90 DAA,
+//!   with the floor's racing headroom — the flood held at 1,027 by the seats' capital, no claim
+//!   voided, the honest producer's 6 claims 5 licensed and 1 waiting at the run's end, no `BindTimeout`,
+//!   3 DAA with no card anchor (before the headroom: flood 1,047, 5 claims all licensed, 9 DAA with no
+//!   anchor; one slack unit a bond leaves a 13k bond one or two waiting floor claims beside a 10M
+//!   flooder, its stake share being 0.0013); released, 60 DAA — the flood 3,840 accepted and 1,455
+//!   voided `BindTimeout` (their escrow destroyed), the honest producer's 6 claims: 2 licensed, 2 voided
+//!   `BindTimeout`, 2 still waiting.
+//! * **V-T5r** (racing siblings at one tip, a 66-claim floor under a 430k-MSK seat load, a 10M flooder
+//!   at its cap — held at 16, 21 before the headroom): armed, 12 racing 13k producers all admitted
+//!   (before the headroom 8, 4 carves burned); 24 racers 18 admitted and 6 skipped; 40 racers 18 and
+//!   22 — past the headroom (16 here) and the rounding slack the late racers are skipped again, the
+//!   residual the headroom's doc states. Released: all admitted at 12 / 24 / 40, the flood unbounded
+//!   (400 taken).
 //! * **V4:** the attempt lane made 20 / 36 / 68 / 85 claims a DAA at 4 / 8 / 16 / 32 parallel
 //!   producers (four merge rounds a DAA; a merge takes ≈ 21 at most); binding 100 and 1,000 claims in
 //!   one anchor block took 135 ms and 1,870 ms (1.35 / 1.87 ms a bind).
@@ -1417,6 +1427,140 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
     ));
     if armed {
         assert_eq!(bind_timeouts, 0, "V-T5: no honest BindTimeout past F-R");
+    }
+}
+
+impl Sim {
+    /// One live lock of `load_msk` on every genesis card: the seats' capital already spoken for (a
+    /// network some way into a flood), so the floor room is a few dozen claims.
+    fn plant_seat_load(&mut self, load_msk: u64) {
+        let vp = self.vp();
+        let bundle = self.chain.bundle.clone();
+        let (sink, tip) = self.chain.tip_state();
+        let now = self.daa();
+        let mut carriage = PalwStateCarriageV2::from_state(&tip);
+        for (i, seat) in self.chain.bonds.clone().iter().enumerate() {
+            let claim = Hash64::from_u64_word(0x10AD_0000_0000_0000 ^ i as u64);
+            carriage.slashable_locks.insert(
+                (*seat, claim),
+                kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1 {
+                    claim,
+                    amount: load_msk as u128 * SOMPI as u128,
+                    expiry_daa: now + 100_000,
+                    settled_at_final: 0,
+                    attested: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                    segments: 0,
+                },
+            );
+        }
+        let state: PalwChainStateV2 = carriage.into_state(&bundle.state, None).expect("the planted load is a consistent state");
+        vp.palw_state_v2_store.write().set_tip_for_tests(sink, &state).expect("plant");
+    }
+}
+
+/// What one racing round came to: the racers whose producer facts admitted an attempt at the shared
+/// tip, how many of those the chain made claims of, and the flood the room held before them.
+struct RaceOutcome {
+    flood: u64,
+    ready: u64,
+    admitted: u64,
+    tips_after: usize,
+}
+
+/// **One racing round (V-T5r):** the eight cards hold one floor claim each, beside a 10M bond holding
+/// one and a 10M flooder filled to what its producer facts admit, in a floor the seats' planted load
+/// (`load_msk` a card) makes a few dozen claims. Then `racers` 13k bonds — each a guaranteed share of 0
+/// beside them — ask their producer facts at ONE tip; every one admitted mines its attempt on that tip
+/// (siblings, as racing producers do), the chain takes them all, and heartbeats merge them.
+async fn race_one_tip(armed: bool, racers: u64, load_msk: u64) -> RaceOutcome {
+    let mut s = Sim::new(armed.then_some(0)).await;
+    let base = s.base;
+    s.beat_to(34).await;
+    s.plant_seat_load(load_msk);
+    for card in 0..8 {
+        let _ = s.attempt(Who::Card(card), base, Vec::new()).await;
+    }
+    s.plant_bonds(8, 1, 10_000_000, false);
+    s.plant_bonds(9, 1, 10_000_000, false);
+    s.plant_bonds(40, racers, 13_000, false);
+    let _ = s.attempt(Who::Planted(9), base, Vec::new()).await;
+    let mut flood = 0u64;
+    for _ in 0..400 {
+        if s.ready(Who::Planted(8), base).is_err() {
+            break;
+        }
+        let txs = s.take_carriers();
+        let (_, created) = s.attempt(Who::Planted(8), base, txs).await;
+        flood += created as u64;
+    }
+    let ready: Vec<u64> = (40..40 + racers).filter(|n| s.ready(Who::Planted(*n), base).is_ok()).collect();
+    let built: Vec<(MutableBlock, Hash64)> = ready.iter().map(|n| s.build_attempt(Who::Planted(*n), base, Vec::new())).collect();
+    let ids: Vec<Hash64> = built.iter().map(|(_, id)| *id).collect();
+    for (block, _) in built {
+        let block = block.to_immutable();
+        s.chain.ctx.consensus.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("a racing sibling is valid");
+        s.blocks += 1;
+    }
+    let ttpb = s.chain.config.params.target_time_per_block();
+    for _ in 0..6 {
+        let block = s.chain.heartbeat(ttpb, Vec::new()).await;
+        s.blocks += 1;
+        s.inserted.push(block);
+    }
+    let st = s.state();
+    let admitted = ids.iter().filter(|id| st.claim(id).is_some()).count() as u64;
+    RaceOutcome { flood, ready: ids.len() as u64, admitted, tips_after: s.chain.ctx.consensus.get_tips().len() }
+}
+
+/// **V-T5r (the lane-verify review's racing finding): small producers racing one tip keep their
+/// carves.** V-T5 inserts one attempt at a time as the sink, so it never races; racing producers each
+/// pass their pre-check at the SAME tip and the fold admits their merged siblings in order — a skipped
+/// one's withheld worker carve is burned (unverified work is never paid). Measured before the floor's
+/// racing headroom: 12 racing 13k producers beside a 10M flooder at its cap, **8 admitted and 4
+/// skipped** (4 carves of 3,200.85 MSK burned), against 12 of 12 below F-R. With the headroom
+/// ([`kaspa_consensus_core::palw_verify_capacity_v1::palw_floor_room_race_headroom_v1`]) every racer is
+/// admitted. Pass: every racer whose facts admitted it at the tip makes its claim, and they merged.
+#[tokio::test]
+async fn adr0160_vt5r_racing_small_producers_keep_their_carves() {
+    let racers = 12;
+    let r = race_one_tip(true, racers, 430_000).await;
+    out_line(format!(
+        "{{\"run\":\"vt5r\",\"armed\":true,\"seat_load_msk\":430000,\"flood\":{},\"racers\":{racers},\"racers_ready\":{},\"racers_admitted\":{},\"racers_skipped\":{},\"tips_after_merge\":{}}}",
+        r.flood,
+        r.ready,
+        r.admitted,
+        r.ready - r.admitted,
+        r.tips_after
+    ));
+    assert_eq!(r.tips_after, 1, "the racing siblings merged");
+    assert_eq!(r.ready, racers, "every racer's facts admitted it at the shared tip");
+    assert_eq!(r.admitted, r.ready, "V-T5r: no racer skipped, no carve burned");
+}
+
+/// **V-T5r's residual, measured**: armed and released, at 12, 24 and 40 racers (`CAP_RACERS` for
+/// others). Past the racing headroom plus the rounding slack, the late racers are skipped again — the
+/// residual no rule removes without paying unverified work or overfilling the room (the headroom's
+/// doc). Measured 2026-09-26 (headroom 16 in the 66-claim floor): armed 12 / 18 / 18 admitted of 12 /
+/// 24 / 40; released all, beside an unbounded flood.
+#[tokio::test]
+#[ignore = "a measurement run (ADR-0160 V-T5r); run with --ignored"]
+async fn adr0160_vt5r_racing_residual() {
+    let counts: Vec<u64> = std::env::var("CAP_RACERS")
+        .ok()
+        .map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect())
+        .unwrap_or_else(|| vec![12, 24, 40]);
+    for armed in [true, false] {
+        for racers in counts.iter().copied() {
+            let r = race_one_tip(armed, racers, 430_000).await;
+            out_line(format!(
+                "{{\"run\":\"vt5r-residual\",\"armed\":{armed},\"seat_load_msk\":430000,\"flood\":{},\"racers\":{racers},\"racers_ready\":{},\"racers_admitted\":{},\"racers_skipped\":{},\"tips_after_merge\":{}}}",
+                r.flood,
+                r.ready,
+                r.admitted,
+                r.ready - r.admitted,
+                r.tips_after
+            ));
+        }
     }
 }
 

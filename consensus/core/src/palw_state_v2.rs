@@ -13599,12 +13599,14 @@ impl PalwFoldReadV1<'_> {
                 .map(|tally| tally.unlicensed_by_bond.iter().map(|(holder, n)| (*holder, *n as u64)).collect())
                 .unwrap_or_default()
         });
-        Some(self.room_cap_v1(room, bond, &held))
+        // A model class's room keeps no racing headroom (the floor's, `check_floor_room_v1`).
+        Some(self.room_cap_v1(room, 0, bond, &held))
     }
 
     /// [`crate::palw_verify_capacity_v1::palw_bond_room_cap_v1`] for `bond` over the holders `held`
-    /// (bond → claims held against `room`), `bond` counted with what it holds (none if absent).
-    fn room_cap_v1(&self, room: u64, bond: &PalwBondKeyV2, held: &BTreeMap<PalwBondKeyV2, u64>) -> u64 {
+    /// (bond → claims held against `room`), `bond` counted with what it holds (none if absent), the
+    /// shares dividing `room − headroom`.
+    fn room_cap_v1(&self, room: u64, headroom: u64, bond: &PalwBondKeyV2, held: &BTreeMap<PalwBondKeyV2, u64>) -> u64 {
         let holder = |key: &PalwBondKeyV2, n: u64| crate::palw_verify_capacity_v1::PalwRoomHolderV1 {
             collateral: self.state.bonds.get(key).map(|record| record.collateral).unwrap_or(0),
             held: n,
@@ -13612,7 +13614,7 @@ impl PalwFoldReadV1<'_> {
         };
         let mut holders = vec![holder(bond, held.get(bond).copied().unwrap_or(0))];
         holders.extend(held.iter().filter(|(key, _)| *key != bond).map(|(key, n)| holder(key, *n)));
-        crate::palw_verify_capacity_v1::palw_bond_room_cap_v1(room, 0, &holders)
+        crate::palw_verify_capacity_v1::palw_bond_room_cap_v1(room, headroom, 0, &holders)
     }
 
     /// **ADR-0160 F-R (J-6): may one more floor claim — `claim`, about to be accepted on `bond` —
@@ -13625,6 +13627,10 @@ impl PalwFoldReadV1<'_> {
     /// 2. the bond's cap on that pipeline ([`crate::palw_verify_capacity_v1::palw_bond_room_cap_v1`]
     ///    over the bonds with a floor claim waiting): its waiting floor claims plus this one within
     ///    its stake share and the free rounding slack — `BondClassShareExceeded` on the base class.
+    ///    The shares divide the pipeline less its racing headroom
+    ///    ([`crate::palw_verify_capacity_v1::palw_floor_room_race_headroom_v1`]), which stays open to
+    ///    single units past a share: producers racing one tip are skipped (their carve burned) only
+    ///    when more of them land first than the units free at that tip.
     ///
     /// The eligible seats are the draw's structural population for the floor: `Active` at the
     /// panel's floor and able to judge the base class. Both refusals are skips for the block's own
@@ -13692,7 +13698,13 @@ impl PalwFoldReadV1<'_> {
             return Err(PalwStateV2Error::FloorRoomExhausted { pending, slots: room.slots });
         }
         let own_waiting = waiting.get(bond).copied().unwrap_or(0);
-        let share = self.room_cap_v1(room.capacity(), bond, &waiting);
+        // The floor keeps its racing headroom out of the shares (the lane-verify review's racing
+        // finding): small bonds racing the same tip draw single units from it, so a producer whose
+        // pre-check passed at its tip is skipped — its withheld carve burned — only when more racers
+        // land ahead of it than its tip showed free units.
+        let capacity = room.capacity();
+        let headroom = crate::palw_verify_capacity_v1::palw_floor_room_race_headroom_v1(capacity);
+        let share = self.room_cap_v1(capacity, headroom, bond, &waiting);
         if own_waiting.saturating_add(1) > share {
             return Err(PalwStateV2Error::BondClassShareExceeded {
                 bond: *bond,
