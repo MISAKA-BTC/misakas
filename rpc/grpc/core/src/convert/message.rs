@@ -1257,6 +1257,7 @@ from!(item: &kaspa_rpc_core::RpcPalwModelRegistration, protowire::RpcPalwModelRe
         included_daa: item.included_daa,
         registry_state: item.registry_state.clone(),
         transaction_id: item.transaction_id.clone(),
+        drop_reason: item.drop_reason.clone(),
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwModelPreflightRequest, protowire::GetPalwModelPreflightRequestMessage, {
@@ -3234,6 +3235,7 @@ try_from!(item: &protowire::RpcPalwModelRegistration, kaspa_rpc_core::RpcPalwMod
         included_daa: item.included_daa,
         registry_state: item.registry_state.clone(),
         transaction_id: item.transaction_id.clone(),
+        drop_reason: item.drop_reason.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwModelPreflightRequestMessage, kaspa_rpc_core::GetPalwModelPreflightRequest, {

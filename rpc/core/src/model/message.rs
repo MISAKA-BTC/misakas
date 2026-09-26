@@ -6673,11 +6673,17 @@ pub struct RpcPalwModelRegistration {
     pub included_daa: u64,
     pub registry_state: String,
     pub transaction_id: String,
+    /// **Version 2 (testnet-12 lifecycle audit T12-030): why a MINED carrier wrote no class row** —
+    /// set with `reject_code` `REGISTRATION_DROPPED`: the processor's refusal as the node's preflight
+    /// re-derives it at the DAA the carrier was accepted at (e.g. `CLASS_NOT_ATTRIBUTABLE: …`), or a
+    /// pointer to the node's log where the object could not be re-read. Empty otherwise.
+    #[serde(default)]
+    pub drop_reason: String,
 }
 
 impl Serializer for RpcPalwModelRegistration {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.object_id, writer)?;
         store!(String, &self.class_id, writer)?;
         store!(bool, &self.constructed, writer)?;
@@ -6693,13 +6699,16 @@ impl Serializer for RpcPalwModelRegistration {
         store!(u64, &self.included_daa, writer)?;
         store!(String, &self.registry_state, writer)?;
         store!(String, &self.transaction_id, writer)?;
+        // Version 2: the tail sits inside this record's own payload frame, so a version-1 reader
+        // leaves it there.
+        store!(String, &self.drop_reason, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for RpcPalwModelRegistration {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         Ok(Self {
             object_id: load!(String, reader)?,
             class_id: load!(String, reader)?,
@@ -6716,6 +6725,7 @@ impl Deserializer for RpcPalwModelRegistration {
             included_daa: load!(u64, reader)?,
             registry_state: load!(String, reader)?,
             transaction_id: load!(String, reader)?,
+            drop_reason: if version >= 2 { load!(String, reader)? } else { String::new() },
         })
     }
 }

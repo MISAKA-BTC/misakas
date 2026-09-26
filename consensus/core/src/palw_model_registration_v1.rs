@@ -32,6 +32,17 @@ pub fn palw_registration_object_id_v1(bytes: &[u8]) -> Hash64 {
 /// (`palw_lifecycle_objects_from_accepted_txs_v2`), so a registration status and the transition
 /// cannot disagree about what a transaction carried.
 pub fn palw_registration_carrier_class_v1(tx: &crate::tx::Transaction) -> Option<(Hash64, Hash64)> {
+    match palw_registration_carrier_object_v1(tx)? {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } => Some((class_id, artifact_root)),
+        _ => None,
+    }
+}
+
+/// **The `ClassRegistered` a lifecycle carrier carries, whole** — [`palw_registration_carrier_class_v1`]'s
+/// read, keeping the object: what a node re-asks its preflight about when a MINED carrier wrote no
+/// row (`REGISTRATION_DROPPED`, testnet-12 lifecycle audit T12-030). `None` for any other
+/// transaction.
+pub fn palw_registration_carrier_object_v1(tx: &crate::tx::Transaction) -> Option<PalwConsensusObjectV2> {
     use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return None;
@@ -40,10 +51,7 @@ pub fn palw_registration_carrier_class_v1(tx: &crate::tx::Transaction) -> Option
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return None;
     }
-    match payload.object {
-        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } => Some((class_id, artifact_root)),
-        _ => None,
-    }
+    matches!(payload.object, PalwConsensusObjectV2::ClassRegistered { .. }).then_some(payload.object)
 }
 
 /// **Which class-table row a carrier wrote — inclusion read off the chain's own record.**
@@ -108,6 +116,13 @@ pub enum PalwModelRegistrationCodeV1 {
     CourtCovered,
     KimiFamilyNeedsItsFence,
     AdmissionOk,
+    /// Past `palw_offence_attribution` the class is not attributable
+    /// (`palw_registration_attribution_v1`'s `Class` arm): the processor drops the registration.
+    ClassNotAttributable,
+    /// The carrier was MINED (its output stands in the virtual UTXO set) and no class row was
+    /// written: the processor dropped the object. The fee is spent; re-sending the same object
+    /// pays again for the same drop (testnet-12 lifecycle audit T12-030).
+    RegistrationDropped,
 }
 
 impl PalwModelRegistrationCodeV1 {
@@ -125,6 +140,8 @@ impl PalwModelRegistrationCodeV1 {
             Self::CourtCovered => "CourtCovered",
             Self::KimiFamilyNeedsItsFence => "KimiFamilyNeedsItsFence",
             Self::AdmissionOk => "ADMISSION_OK",
+            Self::ClassNotAttributable => "CLASS_NOT_ATTRIBUTABLE",
+            Self::RegistrationDropped => "REGISTRATION_DROPPED",
         }
     }
 
@@ -142,6 +159,10 @@ impl PalwModelRegistrationCodeV1 {
             Self::CourtCovered => "every kernel the graph reaches is in this court's catalog",
             Self::KimiFamilyNeedsItsFence => "the class reaches a Kimi K3 kernel and the Kimi family fence is closed",
             Self::AdmissionOk => "the processor's admission gate would admit this registration",
+            Self::ClassNotAttributable => {
+                "past palw_offence_attribution the class is not attributable (canonical job, logits head, Kimi kernel or prompt form)"
+            }
+            Self::RegistrationDropped => "the carrier was mined, and the processor dropped the object: no class row was written",
         }
     }
 
@@ -168,6 +189,8 @@ impl PalwModelRegistrationCodeV1 {
             "ARTIFACT_ROOT_MISMATCH" => Some(Self::ArtifactRootMismatch),
             "REGISTRATION_NOT_INCLUDED" => Some(Self::RegistrationNotIncluded),
             "READY_SEATS_INSUFFICIENT" => Some(Self::ReadySeatsInsufficient),
+            "CLASS_NOT_ATTRIBUTABLE" => Some(Self::ClassNotAttributable),
+            "REGISTRATION_DROPPED" => Some(Self::RegistrationDropped),
             _ => None,
         }
     }
@@ -223,6 +246,9 @@ pub fn palw_model_reject_from_submit_text_v1(text: &str) -> Option<PalwModelRegi
     if t.contains("ARTIFACT") && t.contains("ROOT") {
         return Some(PalwModelRegistrationCodeV1::ArtifactRootMismatch);
     }
+    if t.contains("NOT ATTRIBUTABLE") || t.contains("CLASS_NOT_ATTRIBUTABLE") {
+        return Some(PalwModelRegistrationCodeV1::ClassNotAttributable);
+    }
     None
 }
 
@@ -259,7 +285,9 @@ impl PalwModelPreflightReportV1 {
     }
 }
 
-/// Processor-same preflight: fit walls plus [`verify_class_admission_v9`].
+/// Processor-same preflight: fit walls plus [`verify_class_admission_v9`] and the attribution
+/// checks the processor asks beside it
+/// ([`crate::palw_attempt_rules_v1::palw_registration_attribution_v1`]).
 pub fn palw_model_preflight_v1(
     params: &Params,
     bundle: &PalwConsensusParamsV2,
@@ -315,24 +343,36 @@ pub fn palw_model_preflight_v1(
         shape.kimi_family,
         // 2026-09-23 audit C-4: the geometry a non-fused class is priced from must fit its query row.
         shape.attention_geometry_bound,
-    )
-    // ADR-0152 §4-ter C5, asked where the processor asks it (beside the gate).
-    .and_then(|entry| {
-        crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(profile, params.palw_offence_attribution_active_at(daa_score))
-            .map(|()| entry)
-    });
+    );
+    // **The processor's attribution checks, asked where it asks them** (beside the gate, after it):
+    // ADR-0152 §4-ter C5's held check and addendum §4-bis.8's — one shared function, the processor's
+    // two calls with its arguments (testnet-12 lifecycle audit T12-030: this preflight asked only
+    // the first, so a canonical job the processor drops read ADMISSION_OK).
+    let attribution = crate::palw_attempt_rules_v1::palw_registration_attribution_v1(
+        profile,
+        canonical,
+        shape.offence_attribution,
+        shape.prompt_ids_form,
+    );
 
     let mut reject_code = String::new();
     let mut processor_verdict = PalwModelRegistrationCodeV1::AdmissionOk.code().to_string();
-    let admissible = match &admission {
-        Ok(_) => {
+    let admissible = match (&admission, &attribution) {
+        (Ok(_), Ok(())) => {
             checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::CourtCovered, true));
             if *share_permille > 0 {
                 checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::AdmissionOk, true));
             }
             true
         }
-        Err(err) => {
+        (Ok(_), Err(err)) => {
+            checks.push(PalwModelPreflightCheckV1::from_code(PalwModelRegistrationCodeV1::CourtCovered, true));
+            checks.push(PalwModelPreflightCheckV1 { code: err.code().to_string(), ok: false, message: err.to_string() });
+            reject_code = err.code().to_string();
+            processor_verdict = err.code().to_string();
+            false
+        }
+        (Err(err), _) => {
             checks.push(PalwModelPreflightCheckV1::from_admission_err(err));
             reject_code = err.code().to_string();
             processor_verdict = err.code().to_string();

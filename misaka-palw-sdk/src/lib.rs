@@ -277,6 +277,85 @@ mod tests {
         assert!(err.contains("nothing was signed or funded"), "{err}");
     }
 
+    /// **Testnet-12 lifecycle audit T12-030, the audit's own case.** `Qwen/Qwen2.5-1.5B` (ctx 16) built
+    /// at its TABLE's canonical job — what `misaka model add` built with a bare (`Legacy`) SDK —
+    /// passed every preflight (`model inspect`, the node's `getPalwModelPreflight`), was mined, and
+    /// the processor dropped it: "the registered canonical job (14, 2) is not the formula's (1, 2)".
+    /// Every preflight now asks the processor's attribution checks and refuses it by name, before
+    /// anything is signed or funded; the chain-rule SDK (`CoreV1`, the node's) registers the formula.
+    #[test]
+    fn t12_030_a_table_canonical_registration_is_refused_before_it_is_paid_for() {
+        use kaspa_consensus_core::palw_attempt_rules_v1::{PalwAttemptRulesV1, palw_attempt_rules_of_params_v1};
+        use kaspa_consensus_core::palw_class_admission_v2::{palw_admission_shape_at_v1, palw_post_genesis_registration_capped_v1};
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-12 ships a ConsensusV2 bundle");
+        };
+        assert_eq!(palw_attempt_rules_of_params_v1(&params), PalwAttemptRulesV1::CoreV1);
+        let legacy = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
+        let row = legacy.ledger().into_iter().find(|e| e.model_id == "Qwen/Qwen2.5-1.5B").expect("the audit's catalog row");
+        assert_eq!(row.canonical_job, (14, 2), "the table's job, the one the audit registered");
+        let root = Hash64::from_u64_word(0x1_5B);
+        let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, 0).expect("t12's shape");
+        assert!(shape.offence_attribution, "t12 arms palw_offence_attribution from genesis");
+
+        // The SDK gate (what `model add` and `model inspect` build through).
+        let err = legacy.preflight_admission(bundle, &row, root, &shape).expect_err("refused before signing");
+        assert!(err.contains("CLASS_NOT_ATTRIBUTABLE") && err.contains("(14, 2) is not the formula's (1, 2)"), "{err}");
+        assert!(err.contains("nothing was signed or funded"), "{err}");
+
+        // The node's preflight (`getPalwModelPreflight`), on the object the bare SDK used to build.
+        let object = palw_post_genesis_registration_capped_v1(
+            row.profile.clone(),
+            row.canonical_context(),
+            root,
+            0,
+            1,
+            1,
+            0,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::default(),
+                0,
+            )),
+            Vec::new(),
+            bundle.court.max_step_leaf_count(),
+        )
+        .expect("the object expresses");
+        let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+        let report = kaspa_consensus_core::palw_model_registration_v1::palw_model_preflight_v1(
+            &params,
+            bundle,
+            &object,
+            &certified,
+            &[],
+            0,
+            false,
+            None,
+        )
+        .expect("a report");
+        assert!(!report.admissible, "the node no longer answers ADMISSION_OK: {report:?}");
+        assert_eq!(report.reject_code, "CLASS_NOT_ATTRIBUTABLE");
+        assert!(report.checks.iter().any(|c| !c.ok && c.message.contains("(14, 2) is not the formula's (1, 2)")), "{report:?}");
+
+        // The chain-rule SDK registers the formula's job, which the attribution check asks for.
+        let chain = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes())
+            .with_attempt_rules_v1(palw_attempt_rules_of_params_v1(&params));
+        let canonical = chain.registration_canonical_v1(&row).expect("wide enough for the formula");
+        assert_eq!((canonical.declared_prefill_tokens, canonical.exact_decode_tokens), (1, 2));
+        if let Err(err) = chain.preflight_admission(bundle, &row, root, &shape) {
+            assert!(!err.contains("is not the formula's"), "whatever else refuses it, not the canonical job: {err}");
+        }
+        // And the report of which rows t12 would register, for the operator reading this test.
+        for entry in chain.ledger() {
+            let Ok(shape) = palw_admission_shape_at_v1(&params, bundle, &entry.profile, 0) else { continue };
+            let verdict = chain
+                .preflight_admission(bundle, &entry, root, &shape)
+                .map(|_| ())
+                .map_err(|e| e.chars().take(160).collect::<String>());
+            eprintln!("t12 catalog row {} (ctx {}): {verdict:?}", entry.model_id, entry.profile.n_ctx);
+        }
+    }
+
     /// **The ADR-0082 devnet drill's stage-2 failure, as a unit test.** The graph-v5 row
     /// preflights under the court devnet arms at genesis (the shape the acceptance path judges
     /// by), and is refused BY NAME under no court — so a preflight that asked a court-less gate
@@ -312,6 +391,8 @@ mod tests {
             kimi_family: false,
             attention_geometry_bound: false,
             legal_job_bound: false,
+            offence_attribution: false,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         };
         let err = s.preflight_admission(bundle, &row, root, &dormant).expect_err("no court, no fused row");
         assert!(err.contains("has no dissection to try it with"), "{err}");
@@ -377,6 +458,8 @@ mod tests {
             kimi_family: false,
             attention_geometry_bound: false,
             legal_job_bound: false,
+            offence_attribution: false,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         };
         let priced = s.preflight_admission(bundle, &row, root, &with_rules).expect("the same row, the rules stated");
         assert_eq!(format!("{priced:?}"), format!("{admitted:?}"), "one price for the fused row under one court");

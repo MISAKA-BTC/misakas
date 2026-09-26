@@ -223,6 +223,60 @@ pub fn palw_attributable_class_v1(
     Ok(())
 }
 
+/// **Why a registration is refused beside the admission gate past `palw_offence_attribution`**
+/// — one of the two checks the processor's `ClassRegistered` arm asks after
+/// `verify_class_admission_v9`, by name.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwRegistrationAttributionErrorV1 {
+    /// ADR-0152 §4-ter C5: [`crate::palw_class_admission_v2::palw_held_class_is_attributable_v1`].
+    #[error("{0}")]
+    Held(crate::palw_class_admission_v2::PalwClassAdmissionError),
+    /// Addendum §4-bis.8: [`palw_attributable_class_v1`].
+    #[error("the class is not attributable past palw_offence_attribution: {0}")]
+    Class(PalwAttributableClassErrorV1),
+}
+
+impl PalwRegistrationAttributionErrorV1 {
+    /// Stable machine token for CLI/RPC: the held gate's own token, or `CLASS_NOT_ATTRIBUTABLE`.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Held(err) => err.code(),
+            Self::Class(_) => "CLASS_NOT_ATTRIBUTABLE",
+        }
+    }
+}
+
+/// **The processor's attribution checks for a post-genesis registration, for every pre-check.**
+///
+/// The acceptance path (`processor.rs`, the `ClassRegistered` arm) asks, after
+/// `verify_class_admission_v9` and in this order,
+/// [`crate::palw_class_admission_v2::palw_held_class_is_attributable_v1`] with the fence's reading,
+/// and — only where `palw_offence_attribution` is armed — [`palw_attributable_class_v1`] with
+/// `is_base: false` and the network's prompt-ids form at the block. This calls the same two
+/// functions with the same arguments; it re-derives nothing, so a preflight that passes here passes
+/// there. Node policy only: the processor keeps its own two calls (a consensus path is not moved to
+/// serve a pre-check), and `the_attribution_gate_is_the_processors_two_calls` pins that this answers
+/// as they do.
+///
+/// Testnet-12 lifecycle audit T12-030: every preflight (`model inspect`, `getPalwModelPreflight`,
+/// the SDK's gate `model add` builds through) asked `verify_class_admission_v9` alone, so a catalog
+/// row registered at its table's canonical job `(14, 2)` read `ADMISSION_OK`, its carrier was mined
+/// and paid for, and the processor dropped it: "the registered canonical job (14, 2) is not the
+/// formula's (1, 2)".
+pub fn palw_registration_attribution_v1(
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    offence_attribution: bool,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), PalwRegistrationAttributionErrorV1> {
+    crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(profile, offence_attribution)
+        .map_err(PalwRegistrationAttributionErrorV1::Held)?;
+    if offence_attribution {
+        palw_attributable_class_v1(profile, canonical, false, network_form).map_err(PalwRegistrationAttributionErrorV1::Class)?;
+    }
+    Ok(())
+}
+
 /// **The canonical job `(prefill, decode)` a class is attempted at, as the chain derives it.**
 ///
 /// The base class's is [`crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL`], the job every floor
@@ -630,6 +684,74 @@ mod tests {
             Err(R::WidePromptNotMerkle { prefill: p })
         );
         assert_eq!(palw_attributable_class_v1(&wide, &rc_job_context(&wide, p, d), false, merkle), Ok(()), "and Merkle opens it");
+    }
+
+    /// **T12-030: the attribution gate every preflight shares is the processor's two calls**, in its
+    /// order and with its arguments — and it refuses the lifecycle audit's case by name: a dense
+    /// 16-wide class registered at its table's `(14, 2)` is "not the formula's (1, 2)" past
+    /// `palw_offence_attribution`, and passes below it.
+    #[test]
+    fn t12_030_the_attribution_gate_is_the_processors_two_calls() {
+        use crate::palw_base0_profile::rc_job_context;
+        use crate::palw_context_ladder::{palw_a16_context_row_profile_v7, palw_qwen36_context_row_profile_v7};
+        let mut dense16 = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        dense16.n_ctx = 16;
+        assert_eq!(palw_attempt_canonical_v1(&dense16, false), Some((1, 2)), "the formula at 16 is (16/8 - 1, 2)");
+        let a16 = palw_a16_context_row_profile_v7(8_192).unwrap();
+        let (ap, ad) = palw_attempt_canonical_v1(&a16, false).unwrap();
+        let cases = [
+            ("dense16 at the table's (14, 2)", dense16.clone(), rc_job_context(&dense16, 14, 2)),
+            ("dense16 at the formula", dense16.clone(), rc_job_context(&dense16, 1, 2)),
+            ("A16@8192 at the formula", a16.clone(), rc_job_context(&a16, ap, ad)),
+            ("A16@8192 off the formula", a16.clone(), rc_job_context(&a16, ap - 1, ad)),
+            ("A16@2M (held)", palw_a16_context_row_profile_v7(2_097_152).unwrap(), {
+                let p = palw_a16_context_row_profile_v7(2_097_152).unwrap();
+                let (x, y) = palw_attempt_canonical_v1(&p, false).unwrap();
+                rc_job_context(&p, x, y)
+            }),
+            ("Q36@512", palw_qwen36_context_row_profile_v7(512).unwrap(), {
+                let p = palw_qwen36_context_row_profile_v7(512).unwrap();
+                let (x, y) = palw_attempt_canonical_v1(&p, false).unwrap();
+                rc_job_context(&p, x, y)
+            }),
+        ];
+        for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+            for armed in [false, true] {
+                for (label, profile, canonical) in &cases {
+                    // The processor's `ClassRegistered` arm, spelled out.
+                    let processor = crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(profile, armed)
+                        .map_err(PalwRegistrationAttributionErrorV1::Held)
+                        .and_then(|()| {
+                            if armed {
+                                palw_attributable_class_v1(profile, canonical, false, form)
+                                    .map_err(PalwRegistrationAttributionErrorV1::Class)
+                            } else {
+                                Ok(())
+                            }
+                        });
+                    assert_eq!(palw_registration_attribution_v1(profile, canonical, armed, form), processor, "{label}, armed {armed}");
+                }
+            }
+        }
+        let refused =
+            palw_registration_attribution_v1(&dense16, &rc_job_context(&dense16, 14, 2), true, PalwPromptIdsFormV1::MerkleV1)
+                .expect_err("the audit's registration is dropped past the fence");
+        assert_eq!(
+            refused,
+            PalwRegistrationAttributionErrorV1::Class(PalwAttributableClassErrorV1::CanonicalNotTheFormula {
+                got_prefill: 14,
+                got_decode: 2,
+                want_prefill: 1,
+                want_decode: 2
+            })
+        );
+        assert_eq!(refused.code(), "CLASS_NOT_ATTRIBUTABLE");
+        assert!(refused.to_string().contains("(14, 2) is not the formula's (1, 2)"), "{refused}");
+        assert_eq!(
+            palw_registration_attribution_v1(&dense16, &rc_job_context(&dense16, 14, 2), false, PalwPromptIdsFormV1::Flat),
+            Ok(()),
+            "below the fence the processor asks neither check"
+        );
     }
 
     /// **testnet-12's genesis rows are attributable** (addendum §4-bis.8: "genesis rows already

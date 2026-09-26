@@ -2196,6 +2196,7 @@ mod mockery {
                 included_daa: mock(),
                 registry_state: "Probation".into(),
                 transaction_id: mock_hex(),
+                drop_reason: "CLASS_NOT_ATTRIBUTABLE: the registered canonical job (14, 2) is not the formula's (1, 2)".into(),
             }
         }
     }

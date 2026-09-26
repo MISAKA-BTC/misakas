@@ -105,6 +105,39 @@ pub(crate) fn covering_chain_family<'a>(
     families.iter().find(|f| f.lane == lane && reachable.is_subset(&f.family.kernel_ids))
 }
 
+/// **The SDK this CLI builds registrations with: the chain's attempt rule, as the node's.**
+///
+/// A node's SDK takes `palw_attempt_rules_of_params_v1(&params)` (`palw_backends::for_node_v1`),
+/// and past `palw_offence_attribution` that makes every registration it builds carry the formula
+/// canonical job (`registration_canonical_v1`) — the only one the processor admits. This CLI built
+/// `builtin_v1` bare, i.e. `Legacy`, so on testnet-12 `model add` registered a catalog row at its
+/// TABLE's canonical job — `(14, 2)` for `Qwen/Qwen2.5-1.5B` — which the processor dropped as "not
+/// the formula's (1, 2)" after the carrier was mined and paid for (lifecycle audit T12-030).
+pub(crate) fn chain_sdk(
+    params: &kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    network: &str,
+) -> misaka_palw_sdk::PalwClassSdk {
+    misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), network.as_bytes().to_vec())
+        .with_attempt_rules_v1(kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(params))
+        .with_held_answerability_v1(params.palw_held_answerability_v1())
+}
+
+/// **Is `entry` registrable on the chain at `daa`, by the gate and the checks the processor asks?**
+/// `Ok(())`, or the refusal in the SDK's words — nothing is signed or funded either way. The root is
+/// a placeholder: no check this asks reads it (the duplicate-root refusal is `model add`'s own).
+pub(crate) fn catalog_row_admissible(
+    params: &kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    sdk: &misaka_palw_sdk::PalwClassSdk,
+    entry: &misaka_palw_sdk::PalwClassEntryV1,
+    chain_certified: &[PalwE2eFamilyV1],
+    daa: u64,
+) -> Result<(), String> {
+    let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(params, bundle, &entry.profile, daa)?;
+    sdk.preflight_admission_with_chain(bundle, entry, Hash64::from_u64_word(1), chain_certified, &shape).map(|_| ())
+}
+
 /// **A signed `ClassRegistered`** — built twice by the SDK (the object, then the registrant's
 /// signature over its whole preimage), exactly as the panel builds one. `extension submit` and
 /// `model add` share it.
@@ -129,16 +162,19 @@ pub(crate) fn signed_class_registration(
         initial_target,
         pwu_rule,
         share_permille,
-        ..
+        admission: Some(carriage),
     } = &unsigned
     else {
-        return Err("the SDK did not build a registration".into());
+        return Err("the SDK did not build a registration with its admission carriage".into());
     };
     let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         params.net.to_string().as_bytes(),
         Some(params.genesis.hash),
     );
-    let canonical = candidate.entry.canonical_context();
+    // **The canonical job the OBJECT carries**, which is what the processor verifies the signature
+    // over (`carriage.canonical`) — never the table's, which under `CoreV1` is not the one the SDK
+    // registered (`registration_canonical_v1`), and a signature over it is "not signed by the bond".
+    let canonical = carriage.canonical.clone();
     let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
         network_domain,
         *class_id,
@@ -179,6 +215,23 @@ pub(crate) fn resolve_catalog<'a>(
             many.iter().map(|e| e.model_id).collect::<Vec<_>>().join(", ")
         )),
     }
+}
+
+/// A refusal, short: the machine token it names (`CLASS_NOT_ATTRIBUTABLE`, …) where its text carries
+/// one, else the gate's own sentence without the SDK's "nothing was signed or funded" preamble.
+fn refusal_code(why: &str) -> String {
+    let token = why
+        .split(|c: char| !(c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()))
+        .find(|w| w.len() > 6 && w.contains('_') && w.chars().next().is_some_and(|c| c.is_ascii_uppercase()));
+    if let Some(t) = token {
+        return t.to_string();
+    }
+    let reason = why.split_once("signed or funded: ").map(|(_, r)| r).unwrap_or(why);
+    let mut short: String = reason.chars().take(72).collect();
+    if reason.chars().count() > 72 {
+        short.push('…');
+    }
+    short
 }
 
 fn lane_name(lane: PalwCertifiedLaneV1) -> &'static str {
@@ -347,7 +400,7 @@ async fn walk(
     flow.ui.say(&paint::dim("  Each step reads what the chain already holds, so running this again resumes where it stopped."));
     flow.ui.say("");
     flow.ui.mark(Severity::Info, "catalog", "building this build's class table (it drills each family once, a few seconds)…");
-    let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), net.to_string().into_bytes());
+    let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
     let ledger = sdk.ledger();
 
     // No model named and no manifest: the catalog, and which of it the chain already holds.
@@ -360,23 +413,55 @@ async fn walk(
             }
             _ => Vec::new(),
         };
+        // **Which rows this chain would register at all** (testnet-12 lifecycle audit T12-030): the
+        // gate and the processor's attribution checks, at the node's DAA and against its certified
+        // families where a node answers, else at the network's genesis rules. A row refused here is
+        // one whose registration the processor drops after its carrier is paid for.
+        let chain_certified = match &node {
+            Some(n) if n.ops_0122 => match n.client().get_palw_registration_terms().await {
+                Ok(r) if r.available => decode_terms(&r).map(|(t, _)| t.chain_certified_families).unwrap_or_default(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        let daa = node.as_ref().map(|n| n.daa()).unwrap_or(0);
         let width = ledger.iter().map(|e| e.model_id.len()).max().unwrap_or(5) + 2;
-        flow.ui.say(&paint::dim(&format!("  {:<width$}{:<18}{:<12}{}", "MODEL", "LINEAGE", "CLASS", "ON CHAIN")));
+        flow.ui.say(&paint::dim(&format!("  {:<width$}{:<18}{:<12}{:<10}{}", "MODEL", "LINEAGE", "CLASS", "ON CHAIN", "REGISTRABLE")));
+        let mut refused = 0usize;
         for e in &ledger {
             let id = e.class_id().to_string();
+            let on_chain = if node.is_none() {
+                "?"
+            } else if held.contains(&id) {
+                "yes"
+            } else {
+                "no"
+            };
+            let registrable = if on_chain == "yes" {
+                "—".to_string()
+            } else {
+                match catalog_row_admissible(&params, &bundle, &sdk, e, &chain_certified, daa) {
+                    Ok(()) => "yes".to_string(),
+                    Err(why) => {
+                        refused += 1;
+                        paint::yellow(&format!("no — {}", refusal_code(&why)))
+                    }
+                }
+            };
             flow.ui.say(&format!(
-                "  {:<width$}{:<18}{:<12}{}",
+                "  {:<width$}{:<18}{:<12}{:<10}{}",
                 e.model_id,
                 e.lineage_id,
                 format!("{}…", &id[..8]),
-                if node.is_none() {
-                    "?"
-                } else if held.contains(&id) {
-                    "yes"
-                } else {
-                    "no"
-                }
+                on_chain,
+                registrable
             ));
+        }
+        if refused > 0 {
+            flow.ui.say(&paint::dim(&format!(
+                "  {refused} row(s) marked `no` would be refused or dropped by this chain's processor — `model add` refuses them before \
+                 paying anything"
+            )));
         }
         flow.ui.say(&paint::dim(
             "  misaka model add <model>   registers one and certifies its lanes; misaka model status <class> reads one",
@@ -556,6 +641,20 @@ async fn register(
     terms: &PalwRegistrationTermsV2,
 ) -> Step {
     let class_hex = entry.class_id().to_string();
+    // **Refused before the artifact is read, anything is signed, or a fee is paid** (testnet-12
+    // lifecycle audit T12-030): the gate and the attribution checks the processor asks beside it, at
+    // the node's DAA. `model add Qwen/Qwen2.5-1.5B` paid a mined carrier the processor then dropped,
+    // waited for a row that could never be written, and paid again on every retry.
+    catalog_row_admissible(&walk.params, bundle, sdk, entry, &terms.chain_certified_families, walk.node.daa()).map_err(|why| {
+        Halt::Blocked(
+            Finding::error("E-MODEL-NOT-ADMISSIBLE", exit::MODEL, "This chain would not register this model's class")
+                .reason(
+                    "the processor refuses or drops this registration: its carrier would be mined and paid for, and no class row written",
+                )
+                .current(why)
+                .fix("misaka model add   (lists which catalog rows this chain registers)"),
+        )
+    })?;
     // The root: the artifact's own, computed from the file — the chain pins it, and a class whose
     // root is someone else's weights is a mispairing the admission gate refuses. A manifest states
     // its root (verified at Full depth against the artifact it names, where this machine holds it),
@@ -687,6 +786,20 @@ async fn register(
     } else {
         "share     0 ‰ — weightless until its block lane is certified (the next step)".to_string()
     });
+    // The job the class is registered (and attempted) at: past `palw_offence_attribution` the chain's
+    // formula, never the catalog table's (T12-030) — said, because it is what producers will run.
+    if let PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. } = &object {
+        let (p, d) = (carriage.canonical.declared_prefill_tokens, carriage.canonical.exact_decode_tokens);
+        flow.ui.sub(&if (p, d) == entry.canonical_job {
+            format!("job       prefill {p} / decode {d}")
+        } else {
+            format!(
+                "job       prefill {p} / decode {d} — the chain's formula job (n_ctx/8 − 1, 2); the catalog table's ({}, {}) is \
+                 not admissible past palw_offence_attribution",
+                entry.canonical_job.0, entry.canonical_job.1
+            )
+        });
+    }
     // The pool's P4 (user decision 2026-09-25): the registration sponsors its own listing, where
     // the chain arms a pool — one follow-up carrier once the registration folds.
     let pool_terms = walk.params.palw_activation_pool_at(walk.node.daa());
@@ -733,13 +846,49 @@ async fn register(
                 .current(tracked.reject_code),
         ));
     }
+    // **A mined carrier the processor dropped is a verdict, not a wait** (testnet-12 lifecycle audit
+    // T12-030): this loop waited for `included`, which a dropped registration never reaches, so the
+    // CLI sat there until Ctrl-C while the node's log said why — and every re-run paid again. The
+    // node now names a mined carrier with no row `REGISTRATION_DROPPED` (with the processor's reason),
+    // and a carrier that is neither pooled nor mined `REGISTRATION_NOT_INCLUDED`; either, read on
+    // three polls running (so a block landing between two reads is not mistaken for one), stops
+    // here with the reason.
+    let settled_miss = std::cell::Cell::new(0u32);
     walk.wait_for(flow, "the registration to be mined", 20, || async {
         let now = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
-        Ok(now.folded || now.included)
+        if now.folded {
+            return Ok(true);
+        }
+        let dropped = now.reject_code == kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationDropped.code();
+        let missing = now.reject_code
+            == kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded.code();
+        if !(dropped || missing) {
+            settled_miss.set(0);
+            return Ok(false);
+        }
+        settled_miss.set(settled_miss.get() + 1);
+        if settled_miss.get() < 3 {
+            return Ok(false);
+        }
+        crate::palw_model_ops::print_pipeline(&now);
+        Err(Halt::Blocked(if dropped {
+            Finding::error("E-MODEL-REGISTRATION-DROPPED", exit::MODEL, "The registration was mined and the chain dropped it")
+                .reason("the carrier's fee is spent and no class row was written; sending the same registration again pays again for the same drop")
+                .current(if now.drop_reason.is_empty() { now.processor_verdict.clone() } else { now.drop_reason.clone() })
+                .fix("misaka model add   (lists which catalog rows this chain registers)")
+        } else {
+            Finding::error("E-OBJECT-REFUSED", exit::NOT_READY, "The registration left the mempool without being mined")
+                .reason(
+                    "this node's pool no longer holds it and it does not find it mined — evicted, or mined with its change already \
+                     spent; no class row was written either way",
+                )
+                .current(now.reject_code.clone())
+                .fix(format!("misaka model registration {txid}   (re-reads it), then re-run this command to resubmit"))
+        }))
     })
     .await?;
     let included = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
-    if included.included {
+    if included.folded {
         flow.row(
             Severity::Ok,
             "registered",

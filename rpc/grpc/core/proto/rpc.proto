@@ -2515,6 +2515,8 @@ message RpcPalwModelRegistration {
   uint64 includedDaa = 13;
   string registryState = 14;
   string transactionId = 15;
+  // Testnet-12 lifecycle audit T12-030: why a mined carrier wrote no class row (REGISTRATION_DROPPED).
+  string dropReason = 16;
 }
 
 message GetPalwModelPreflightRequestMessage {

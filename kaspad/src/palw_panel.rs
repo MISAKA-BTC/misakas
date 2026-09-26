@@ -4913,7 +4913,6 @@ impl PalwPanelService {
             .sdk()
             .registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref())
             .map_err(|e| e.to_string())?;
-        let canonical = candidate.entry.canonical_context();
 
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
             &self.consensus_config.params.palw_consensus_mode
@@ -4950,11 +4949,17 @@ impl PalwPanelService {
             initial_target: signed_target,
             pwu_rule: signed_rule,
             share_permille: signed_share,
-            ..
+            admission: Some(carriage),
         } = &unsigned
         else {
-            return Err("the builder did not build a registration".to_string());
+            return Err("the builder did not build a registration with its admission carriage".to_string());
         };
+        // **The canonical job the object CARRIES** — what the processor verifies this signature over
+        // (`carriage.canonical`). Under `CoreV1` the builder registers the formula's job
+        // (`registration_canonical_v1`), not the table's `candidate.entry.canonical_context()`, and a
+        // signature over the table's is "not signed by the bond" for every row whose two differ
+        // (testnet-12 lifecycle audit T12-030).
+        let canonical = carriage.canonical.clone();
         // The whole object, not five of its fields (audit M2-6) — the signer's own comment already
         // said "signing anything assembled beside the object would sign a class that is not the one
         // being registered", and this is that comment made true.
