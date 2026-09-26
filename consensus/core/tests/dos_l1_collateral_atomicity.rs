@@ -1360,6 +1360,7 @@ fn dos_l1_q7_a_free_prompt_commitment_on_a_non_admitting_t12_class_is_refused() 
         grace_until_daa: 0,
         admission_audit_period_daa: p.palw_admission_audit_period_daa,
         readiness_v2_active: p.palw_readiness_v2_at(0),
+        bond_maturity: None,
     };
     let with_registry = |audit: bool| PalwTransitionExtrasV1 {
         audit_2026_09_23_active: audit,

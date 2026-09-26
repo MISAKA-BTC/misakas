@@ -192,6 +192,7 @@ pub fn registry_fold(p: &Params, daa: u64) -> Option<kaspa_consensus_core::palw_
         grace_until_daa: PalwModelRegistryFoldV1::grace_until_v1(activation, span, &globals),
         admission_audit_period_daa: p.palw_admission_audit_period_daa,
         readiness_v2_active: p.palw_readiness_v2_at(daa),
+        bond_maturity: p.palw_bond_maturity_registry_fold_at(daa),
     })
 }
 

@@ -19043,6 +19043,14 @@ impl<'a> TransitionBuilder<'a> {
         };
         let registrant = self.state.classes.get(class_id).and_then(|record| record.registrant_bond);
         let registrant_operator = registrant.and_then(|key| self.state.bonds.get(&key)).map(|bond| bond.operator_id);
+        // **Lane maturity-ext (post-launch, 2026-09-26): past `palw_bond_maturity_early` the
+        // population is ADR-0065 D1's too** — a bond is drawn only once the draw itself could seat it
+        // (`registered_daa <= registered_by`, the draw's floor at THIS block's DAA), the stricter of
+        // that and the span cutoff above. Without it a bond registered minutes ago sat on the jury the
+        // draw keeps it off, voting a Candidate in (or, never ready, holding one out); the readiness
+        // clause alone would leave it drawn as a structural NO. `None` below the fence: the release.
+        let matured_by =
+            fold.bond_maturity.map(|maturity| maturity.registered_by_daa(&self.state, self.params.window_court(), ctx.daa_score));
         let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = self
             .state
             .bonds
@@ -19052,6 +19060,7 @@ impl<'a> TransitionBuilder<'a> {
                     && palw_bond_may_take_work_v2(bond, floor)
                     && palw_bond_may_judge_class_v2(bond, &base)
                     && bond.registered_daa < cutoff
+                    && matured_by.is_none_or(|by| bond.registered_daa <= by)
                     && Some(**key) != registrant
                     && Some(bond.operator_id) != registrant_operator
             })
@@ -34640,6 +34649,7 @@ pub(crate) mod tests {
                 grace_until_daa: 0,
                 admission_audit_period_daa: None,
                 readiness_v2_active: false,
+                bond_maturity: None,
             }
         }
 
@@ -38864,6 +38874,10 @@ pub(crate) mod tests {
             // ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): the pool through this
             // module's contested network.
             mod activation_pool_v1;
+
+            // Lane maturity-ext (post-launch, 2026-09-26): ADR-0065 D1 on this module's jury and on the
+            // registry's ready count.
+            mod bond_maturity_ext_v1;
 
             fn fold_step(
                 parent: &PalwChainStateV2,
@@ -64879,6 +64893,7 @@ mod review_fix12_readiness_reads_net_collateral {
             grace_until_daa: 0,
             admission_audit_period_daa: None,
             readiness_v2_active: false,
+            bond_maturity: None,
         };
         let class = Hash64::from_u64_word(0xC1A5);
         let key = PalwBondKeyV2(crate::tx::TransactionOutpoint {

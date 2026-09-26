@@ -40,6 +40,9 @@ pub enum PalwPanelHoldReasonV1 {
     ReadinessProofExpired,
     NotSelected,
     SegmentCheckpointMissing,
+    /// Lane maturity-ext (post-launch, 2026-09-26): the bond registered less than ADR-0065 D1's window
+    /// ago, so past `palw_bond_maturity_early` the registry does not count it ready yet.
+    BondImmature,
 }
 
 impl PalwPanelHoldReasonV1 {
@@ -55,6 +58,7 @@ impl PalwPanelHoldReasonV1 {
             Self::ReadinessProofExpired => "READINESS_PROOF_EXPIRED",
             Self::NotSelected => "NOT_SELECTED",
             Self::SegmentCheckpointMissing => "SEGMENT_CHECKPOINT_MISSING",
+            Self::BondImmature => "BOND_IMMATURE",
         }
     }
 
@@ -70,6 +74,7 @@ impl PalwPanelHoldReasonV1 {
             Self::ReadinessProofExpired => "the last possession proof is older than the readiness age",
             Self::NotSelected => "this seat is ready but the claim's panel did not draw it",
             Self::SegmentCheckpointMissing => "the assigned segment's SC01 checkpoint is not open, so a partial seat cannot resume",
+            Self::BondImmature => "the bond registered less than the seat-maturity window ago (ADR-0065 D1); it counts from its registration DAA plus the window",
         }
     }
 
@@ -81,6 +86,7 @@ impl PalwPanelHoldReasonV1 {
             "bond missing" | "bond inactive" => Some(Self::BondInactive),
             "below floor" | "collateral short" => Some(Self::CollateralInsufficient),
             "stale" => Some(Self::ReadinessProofExpired),
+            crate::palw_model_registry_v1::PALW_SEAT_NOT_READY_IMMATURE_V1 => Some(Self::BondImmature),
             _ => None,
         }
     }
