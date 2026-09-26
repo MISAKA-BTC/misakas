@@ -616,10 +616,15 @@ impl PalwHeartbeatMinerService {
         } else {
             0
         };
-        self.flow_context
-            .submit_rpc_block(session, block)
-            .await
-            .map_err(|e| format!("the chain refused a heartbeat this node mined: {e}"))?;
+        // T12-049: a submit past the exit signal waits on a stopped pipeline forever — so it yields to
+        // the signal, and the pass reads as the shutdown it is.
+        let Some(submitted) =
+            crate::palw_producer::palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
+                .await
+        else {
+            return Ok(PassOutcomeV1::Idle);
+        };
+        submitted.map_err(|e| format!("the chain refused a heartbeat this node mined: {e}"))?;
         Ok(PassOutcomeV1::Minted { hash, role, carriers })
     }
 }

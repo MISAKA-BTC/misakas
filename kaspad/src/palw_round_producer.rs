@@ -246,7 +246,11 @@ impl PalwRoundProducerService {
         let late = kaspa_core::time::unix_now().saturating_sub(header.timestamp) > PALW_EXEC_ROUND_MS;
         let block: kaspa_consensus_core::block::Block = adapted.block.to_immutable();
         let hash = block.hash();
-        self.flow_context.submit_rpc_block(session, block).await.map_err(|e| format!("the chain refused a round block: {e}"))?;
+        // T12-049: a submit past the exit signal waits on a stopped pipeline forever.
+        crate::palw_producer::palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
+            .await
+            .ok_or_else(|| format!("{}: round block {hash} was not submitted", crate::palw_producer::PALW_PRODUCER_EXITING))?
+            .map_err(|e| format!("the chain refused a round block: {e}"))?;
         if late {
             trace!("[{PALW_ROUND_PRODUCER}] round {round} submitted after its second");
         }

@@ -2098,11 +2098,11 @@ impl<'a> Wizard<'a> {
                 )),
             };
         }
+        // The newest line: the file holds the fee chain's lineage, newest first (T12-046).
         let persisted =
             std::fs::read_to_string(self.appdir.join(format!("misaka-{}", self.network)).join("palw-panel").join("palw-fee-outpoint"))
                 .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
+                .and_then(|s| crate::operator::profile::newest_fee_outpoint_line(&s));
         let remembered: Vec<(&str, String)> = persisted
             .into_iter()
             .map(|o| ("the panel's own, left by the registration", o))

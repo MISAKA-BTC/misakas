@@ -38,11 +38,15 @@ pub(crate) fn print_pipeline(reg: &RpcPalwModelRegistration) {
         String::new()
     };
     println!("included   {}{included_note}", tick(reg.included));
-    println!(
-        "folded     {}{}",
-        tick(reg.folded),
-        if reg.registry_state.is_empty() { String::new() } else { format!("  {}", reg.registry_state) }
-    );
+    let folded_note = if !reg.registry_state.is_empty() {
+        format!("  {}", reg.registry_state)
+    } else if reg.reject_code == PalwModelRegistrationCodeV1::RegistrationDropped.code() {
+        // Mined and dropped (testnet-12 lifecycle audit T12-030): the fold's refusal, by name.
+        format!("  {} — {}", reg.reject_code, if reg.drop_reason.is_empty() { &reg.processor_verdict } else { &reg.drop_reason })
+    } else {
+        String::new()
+    };
+    println!("folded     {}{folded_note}", tick(reg.folded));
 }
 
 fn connect(ctx: &Ctx) -> impl std::future::Future<Output = Result<crate::wallet::NodeView, CliError>> + '_ {
@@ -59,7 +63,7 @@ pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> C
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
         return Err(CliError::new(exit::CONFIG, format!("{net} has no PALW classes")));
     };
-    let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), net.to_string().into_bytes());
+    let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
     let loaded = sdk.load_artifact(&artifact).map_err(|e| CliError::new(exit::MODEL, e))?;
     if ctx.output == OutputFormat::Json {
         let pairings: Vec<_> = sdk
@@ -83,14 +87,22 @@ pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> C
     for (entry, paired) in sdk.pairings(&loaded) {
         match paired {
             Ok(root) => {
-                let canonical = entry.canonical_context();
+                // The job a registration on this network carries (the formula's past
+                // `palw_offence_attribution`), not the table's.
+                let canonical = sdk.registration_canonical_v1(&entry).unwrap_or_else(|_| entry.canonical_context());
                 let shape = palw_admission_shape_at_v1(&params, &bundle, &entry.profile, 0).ok();
                 let fit = shape.map(|s| {
                     palw_model_fit_v2(&entry.profile, &bundle, s.court, params.palw_prompt_ids_form_at(0), palw_fit_regime_for_v1(s.held, &entry.profile))
                 });
                 let court = fit.as_ref().and_then(|f| f.rows.iter().find(|r| r.wall == kaspa_consensus_core::palw_model_fit_v1::PalwFitWallV1::CourtWindow));
                 let geom = fit.as_ref().and_then(|f| f.rows.iter().find(|r| r.wall == kaspa_consensus_core::palw_model_fit_v1::PalwFitWallV1::GeometryCeiling));
-                let admission = shape.as_ref().and_then(|s| sdk.preflight_admission(&bundle, &entry, root, s).ok());
+                // The gate AND the attribution checks the processor asks beside it, through the SDK's
+                // one probe (testnet-12 lifecycle audit T12-030: this said ADMISSION_OK for a row the
+                // processor drops). Offline, so at the network's genesis rules (DAA 0).
+                let admission = match shape.as_ref() {
+                    Some(s) => sdk.preflight_admission(&bundle, &entry, root, s).map(|_| ()),
+                    None => Err("this ruleset's court has no shape at DAA 0".to_string()),
+                };
                 println!("class_id         {}", entry.class_id());
                 println!("model_id         {}  (ctx {})", entry.model_id, entry.profile.n_ctx);
                 println!("source root      {}", entry.lineage_id);
@@ -114,10 +126,10 @@ pub(crate) async fn inspect(ctx: &Ctx, profile: Profile, artifact: PathBuf) -> C
                 if let Some(row) = geom {
                     println!("FitsGlobalWindow {}", if row.verdict == kaspa_consensus_core::palw_model_fit_v1::PalwFitVerdictV1::Admitted { "✅" } else { "❌ GLOBAL_WINDOW_EXCEEDED" });
                 }
-                println!(
-                    "admission result {}",
-                    if admission.is_some() { "ADMISSION_OK".to_string() } else { "see palw-class inspect for the refusal".into() }
-                );
+                match &admission {
+                    Ok(()) => println!("admission result ADMISSION_OK"),
+                    Err(why) => println!("admission result REFUSED — {why}"),
+                }
                 println!();
             }
             Err(why) => println!("  no  {} — {why}", entry.model_id),
@@ -171,7 +183,7 @@ async fn local_registration_object(ctx: &Ctx, profile: &Profile, artifact: &Path
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
         return Err(CliError::new(exit::CONFIG, format!("{net} has no PALW classes")));
     };
-    let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), net.to_string().into_bytes());
+    let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
     let loaded = sdk.load_artifact(artifact).map_err(|e| CliError::new(exit::MODEL, e))?;
     let pairings: Vec<_> = sdk.pairings(&loaded).into_iter().filter_map(|(e, p)| p.ok().map(|root| (e, root))).collect();
     let (entry, root) = pairings.into_iter().next().ok_or_else(|| CliError::new(exit::MODEL, "this artifact pairs with no class this build knows"))?;
@@ -365,7 +377,7 @@ pub(crate) async fn certify(ctx: &Ctx, profile: Profile, class_id: String, yes: 
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode.clone() else {
         return Err(CliError::new(exit::CONFIG, format!("{net} has no PALW classes")));
     };
-    let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), net.to_string().into_bytes());
+    let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
     let class = palw_parse_or_err(&class_id)?;
     let entry = sdk.ledger().into_iter().find(|e| e.class_id() == class).ok_or_else(|| {
         CliError::new(exit::MODEL, "this class is not in this build's catalog — file a FamilyCertified with palw-certify")

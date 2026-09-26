@@ -1729,6 +1729,53 @@ pub fn storage_snapshot_v1(holdings: &[PalwLoadedArtifactV1]) -> PalwStorageSnap
     }
 }
 
+/// How often the draw's storage line is printed at most, per role — unless a draw read at least
+/// [`PALW_DRAW_LOG_HEAVY_MIB_V1`] (testnet-12 lifecycle audit: a floor producer drawing every
+/// ~0.27 s wrote this line every ~0.27 s, burying every other line of the log).
+pub const PALW_DRAW_LOG_PERIOD_V1: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A draw that read this many MiB from storage is always printed: the page-fault storm the line
+/// exists to show (ADR-0112 Decision 8) is never folded away.
+pub const PALW_DRAW_LOG_HEAVY_MIB_V1: u64 = 256;
+
+/// **The draw line's rate gate** — one per role: the first draw, then one a period, and every heavy
+/// draw; the folded draws are counted into the next printed line so no read is lost from the log.
+#[derive(Clone, Debug, Default)]
+pub struct PalwDrawLogGateV1 {
+    last: Option<std::time::Instant>,
+    folded: u64,
+    folded_mib: u64,
+}
+
+impl PalwDrawLogGateV1 {
+    /// `Some(suffix)` when this draw's line is printed — the suffix names the draws folded since the
+    /// last line — or `None` when it is folded into the next.
+    pub fn admit(&mut self, now: std::time::Instant, read_mib: Option<u64>) -> Option<String> {
+        let heavy = read_mib.is_some_and(|mib| mib >= PALW_DRAW_LOG_HEAVY_MIB_V1);
+        let due = self.last.is_none_or(|at| now.saturating_duration_since(at) >= PALW_DRAW_LOG_PERIOD_V1);
+        if !(heavy || due) {
+            self.folded += 1;
+            self.folded_mib = self.folded_mib.saturating_add(read_mib.unwrap_or(0));
+            return None;
+        }
+        let suffix = if self.folded > 0 {
+            format!(" ({} earlier draw line(s) folded into this one, which read {} MiB)", self.folded, self.folded_mib)
+        } else {
+            String::new()
+        };
+        *self = Self { last: Some(now), folded: 0, folded_mib: 0 };
+        Some(suffix)
+    }
+}
+
+fn draw_log_gate_admits_v1(role: &str, read_mib: Option<u64>) -> Option<String> {
+    use std::sync::{Mutex, OnceLock};
+    static GATES: OnceLock<Mutex<std::collections::HashMap<String, PalwDrawLogGateV1>>> = OnceLock::new();
+    let gates = GATES.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut gates = gates.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    gates.entry(role.to_string()).or_default().admit(std::time::Instant::now(), read_mib)
+}
+
 /// **The draw's storage line** (ADR-0112 Decision 8): what the process read from storage during
 /// the draw, and what the class loader read of it — with the loader's hit rate and what it holds.
 /// The number the fleet lacked: 12.8 GiB through 3 million page faults a draw was found with a
@@ -1745,8 +1792,13 @@ pub fn log_draw_storage_v1(role: &str, before: &PalwStorageSnapshotV1, holdings:
         (Some(a), Some(b)) => format!("{:.1} MiB", mib(b.saturating_sub(a))),
         _ => "an amount this platform does not count".to_string(),
     };
+    // Rate-gated (T12-lifecycle log finding): at most one line a period per role, every heavy draw
+    // always, the folded ones counted into the next.
+    let Some(folded) = draw_log_gate_admits_v1(role, process_mib) else {
+        return process_mib;
+    };
     if after.holdings.is_empty() {
-        info!("[{role}] this draw read {process} from storage (no mapped class holds a residency: the page cache decides)");
+        info!("[{role}] this draw read {process} from storage (no mapped class holds a residency: the page cache decides){folded}");
         return process_mib;
     }
     for (name, now) in &after.holdings {
@@ -1754,7 +1806,7 @@ pub fn log_draw_storage_v1(role: &str, before: &PalwStorageSnapshotV1, holdings:
         let lookups = now.hits.saturating_sub(then.hits) + now.misses.saturating_sub(then.misses);
         info!(
             "[{role}] this draw read {process} from storage; the loader for {name} read {:.1} MiB in {} misses of {lookups} expert \
-             lookups ({:.1} % hits), evicted {}, and holds {:.2} of {:.2} GiB of routed experts beside {:.2} GiB pinned",
+             lookups ({:.1} % hits), evicted {}, and holds {:.2} of {:.2} GiB of routed experts beside {:.2} GiB pinned{folded}",
             mib(now.bytes_read.saturating_sub(then.bytes_read)),
             now.misses.saturating_sub(then.misses),
             100.0 * now.hits.saturating_sub(then.hits) as f64 / lookups.max(1) as f64,
@@ -1816,6 +1868,30 @@ where
 /// serve) and this spelling stayed on v1, so the node was asserting that the chain registers a
 /// class the chain no longer registers. One spelling now, in the module that owns the geometry.
 pub use kaspa_consensus_core::palw_qwen36_profile::qwen36_class_id_v3 as qwen36_class_id_v1;
+
+#[cfg(test)]
+mod draw_log_gate_tests {
+    use super::{PALW_DRAW_LOG_HEAVY_MIB_V1, PALW_DRAW_LOG_PERIOD_V1, PalwDrawLogGateV1};
+
+    /// **The draw line once a period, not once a draw** — a floor producer draws every ~0.27 s — and
+    /// a heavy draw always; what was folded is counted into the next line.
+    #[test]
+    fn the_draw_line_is_rate_gated_and_a_heavy_draw_always_prints() {
+        let t0 = std::time::Instant::now();
+        let mut gate = PalwDrawLogGateV1::default();
+        assert_eq!(gate.admit(t0, Some(0)), Some(String::new()), "the first draw prints");
+        for i in 1..=100u64 {
+            // 27 s of draws, every ~0.27 s: all inside the period.
+            assert_eq!(gate.admit(t0 + std::time::Duration::from_millis(270 * i), Some(1)), None, "draw {i} is folded");
+        }
+        let heavy =
+            gate.admit(t0 + std::time::Duration::from_secs(30), Some(PALW_DRAW_LOG_HEAVY_MIB_V1)).expect("a heavy draw prints");
+        assert_eq!(heavy, " (100 earlier draw line(s) folded into this one, which read 100 MiB)");
+        assert_eq!(gate.admit(t0 + std::time::Duration::from_secs(31), None), None, "and restarts the period");
+        let later = gate.admit(t0 + std::time::Duration::from_secs(30) + PALW_DRAW_LOG_PERIOD_V1, Some(2)).expect("a period on");
+        assert!(later.contains("1 earlier draw line(s)"), "{later}");
+    }
+}
 
 #[cfg(test)]
 mod tests {

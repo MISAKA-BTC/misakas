@@ -105,6 +105,39 @@ pub(crate) fn covering_chain_family<'a>(
     families.iter().find(|f| f.lane == lane && reachable.is_subset(&f.family.kernel_ids))
 }
 
+/// **The SDK this CLI builds registrations with: the chain's attempt rule, as the node's.**
+///
+/// A node's SDK takes `palw_attempt_rules_of_params_v1(&params)` (`palw_backends::for_node_v1`),
+/// and past `palw_offence_attribution` that makes every registration it builds carry the formula
+/// canonical job (`registration_canonical_v1`) — the only one the processor admits. This CLI built
+/// `builtin_v1` bare, i.e. `Legacy`, so on testnet-12 `model add` registered a catalog row at its
+/// TABLE's canonical job — `(14, 2)` for `Qwen/Qwen2.5-1.5B` — which the processor dropped as "not
+/// the formula's (1, 2)" after the carrier was mined and paid for (lifecycle audit T12-030).
+pub(crate) fn chain_sdk(
+    params: &kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    network: &str,
+) -> misaka_palw_sdk::PalwClassSdk {
+    misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), network.as_bytes().to_vec())
+        .with_attempt_rules_v1(kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(params))
+        .with_held_answerability_v1(params.palw_held_answerability_v1())
+}
+
+/// **Is `entry` registrable on the chain at `daa`, by the gate and the checks the processor asks?**
+/// `Ok(())`, or the refusal in the SDK's words — nothing is signed or funded either way. The root is
+/// a placeholder: no check this asks reads it (the duplicate-root refusal is `model add`'s own).
+pub(crate) fn catalog_row_admissible(
+    params: &kaspa_consensus_core::config::params::Params,
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    sdk: &misaka_palw_sdk::PalwClassSdk,
+    entry: &misaka_palw_sdk::PalwClassEntryV1,
+    chain_certified: &[PalwE2eFamilyV1],
+    daa: u64,
+) -> Result<(), String> {
+    let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(params, bundle, &entry.profile, daa)?;
+    sdk.preflight_admission_with_chain(bundle, entry, Hash64::from_u64_word(1), chain_certified, &shape).map(|_| ())
+}
+
 /// **A signed `ClassRegistered`** — built twice by the SDK (the object, then the registrant's
 /// signature over its whole preimage), exactly as the panel builds one. `extension submit` and
 /// `model add` share it.
@@ -129,16 +162,19 @@ pub(crate) fn signed_class_registration(
         initial_target,
         pwu_rule,
         share_permille,
-        ..
+        admission: Some(carriage),
     } = &unsigned
     else {
-        return Err("the SDK did not build a registration".into());
+        return Err("the SDK did not build a registration with its admission carriage".into());
     };
     let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         params.net.to_string().as_bytes(),
         Some(params.genesis.hash),
     );
-    let canonical = candidate.entry.canonical_context();
+    // **The canonical job the OBJECT carries**, which is what the processor verifies the signature
+    // over (`carriage.canonical`) — never the table's, which under `CoreV1` is not the one the SDK
+    // registered (`registration_canonical_v1`), and a signature over it is "not signed by the bond".
+    let canonical = carriage.canonical.clone();
     let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
         network_domain,
         *class_id,
@@ -179,6 +215,54 @@ pub(crate) fn resolve_catalog<'a>(
             many.iter().map(|e| e.model_id).collect::<Vec<_>>().join(", ")
         )),
     }
+}
+
+/// A refusal, short: the machine token it names (`CLASS_NOT_ATTRIBUTABLE`, …) where its text carries
+/// one, else the gate's own sentence without the SDK's "nothing was signed or funded" preamble.
+fn refusal_code(why: &str) -> String {
+    let token = why
+        .split(|c: char| !(c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()))
+        .find(|w| w.len() > 6 && w.contains('_') && w.chars().next().is_some_and(|c| c.is_ascii_uppercase()));
+    if let Some(t) = token {
+        return t.to_string();
+    }
+    let reason = why.split_once("signed or funded: ").map(|(_, r)| r).unwrap_or(why);
+    let mut short: String = reason.chars().take(72).collect();
+    if reason.chars().count() > 72 {
+        short.push('…');
+    }
+    short
+}
+
+/// What one poll of a submitted registration means for `model add`'s wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RegistrationWaitStepV1 {
+    /// The class row is written: go on to the lanes.
+    Folded,
+    /// Keep waiting (to the deadline).
+    Wait,
+    /// Mined and dropped, read on [`REGISTRATION_DROPPED_POLLS`] polls running: stop with the reason.
+    Dropped,
+}
+
+/// How many polls running must read `REGISTRATION_DROPPED` before the wait stops on it.
+pub(crate) const REGISTRATION_DROPPED_POLLS: u32 = 3;
+
+/// **One poll of the registration wait**: `(step, the DROPPED streak after this poll)`.
+///
+/// Only `REGISTRATION_DROPPED`, read [`REGISTRATION_DROPPED_POLLS`] polls running, stops the wait;
+/// any other reading resets the streak and waits. `REGISTRATION_NOT_INCLUDED` in particular is every
+/// successful carrier's state for one block interval — mined (out of the mempool) and not yet folded
+/// by the next chain block (review of T12-030) — so it is never a verdict here.
+pub(crate) fn registration_wait_step(now: &kaspa_rpc_core::RpcPalwModelRegistration, streak: u32) -> (RegistrationWaitStepV1, u32) {
+    if now.folded {
+        return (RegistrationWaitStepV1::Folded, 0);
+    }
+    if now.reject_code != kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationDropped.code() {
+        return (RegistrationWaitStepV1::Wait, 0);
+    }
+    let streak = streak.saturating_add(1);
+    (if streak >= REGISTRATION_DROPPED_POLLS { RegistrationWaitStepV1::Dropped } else { RegistrationWaitStepV1::Wait }, streak)
 }
 
 fn lane_name(lane: PalwCertifiedLaneV1) -> &'static str {
@@ -318,7 +402,23 @@ pub(crate) async fn run(ctx: &crate::node::Ctx, profile: Profile, args: ModelAdd
         (None, Some(path)) => format!("misaka model add --manifest {}", path.display()),
         (None, None) => "misaka model add <model>".to_string(),
     };
-    flow.finish(result, "misaka.model.add.v1", "LIVE — weight-bearing from the next epoch", &resume, doc)
+    let done = done_line(doc.get("registry_state").and_then(|v| v.as_str()));
+    flow.finish(result, "misaka.model.add.v1", &done, &resume, doc)
+}
+
+/// **The closing line, from the registry's own state** (testnet-12 lifecycle audit T12-035): it read
+/// `LIVE — weight-bearing from the next epoch` for every run that reached the end, including a
+/// genesis class in `Prefetching` (0 of 7 seats ready, admitting no claim) and a class just
+/// registered as `Candidate`. LIVE is said only of a state that admits weight-bearing claims at
+/// full or limited cadence; any other state is named as it stands.
+fn done_line(registry_state: Option<&str>) -> String {
+    match registry_state {
+        Some(state) if state.starts_with("Active") => format!("LIVE — {state}: weight-bearing from the next epoch"),
+        Some(state) if !state.is_empty() => format!(
+            "REGISTERED — the registry holds it as {state}, which admits no weight yet; `misaka model status <class>` follows it"
+        ),
+        _ => "REGISTERED — the registry's state could not be read; `misaka model status <class>` follows it".to_string(),
+    }
 }
 
 async fn walk(
@@ -347,7 +447,7 @@ async fn walk(
     flow.ui.say(&paint::dim("  Each step reads what the chain already holds, so running this again resumes where it stopped."));
     flow.ui.say("");
     flow.ui.mark(Severity::Info, "catalog", "building this build's class table (it drills each family once, a few seconds)…");
-    let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), net.to_string().into_bytes());
+    let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
     let ledger = sdk.ledger();
 
     // No model named and no manifest: the catalog, and which of it the chain already holds.
@@ -360,23 +460,55 @@ async fn walk(
             }
             _ => Vec::new(),
         };
+        // **Which rows this chain would register at all** (testnet-12 lifecycle audit T12-030): the
+        // gate and the processor's attribution checks, at the node's DAA and against its certified
+        // families where a node answers, else at the network's genesis rules. A row refused here is
+        // one whose registration the processor drops after its carrier is paid for.
+        let chain_certified = match &node {
+            Some(n) if n.ops_0122 => match n.client().get_palw_registration_terms().await {
+                Ok(r) if r.available => decode_terms(&r).map(|(t, _)| t.chain_certified_families).unwrap_or_default(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        let daa = node.as_ref().map(|n| n.daa()).unwrap_or(0);
         let width = ledger.iter().map(|e| e.model_id.len()).max().unwrap_or(5) + 2;
-        flow.ui.say(&paint::dim(&format!("  {:<width$}{:<18}{:<12}{}", "MODEL", "LINEAGE", "CLASS", "ON CHAIN")));
+        flow.ui.say(&paint::dim(&format!("  {:<width$}{:<18}{:<12}{:<10}{}", "MODEL", "LINEAGE", "CLASS", "ON CHAIN", "REGISTRABLE")));
+        let mut refused = 0usize;
         for e in &ledger {
             let id = e.class_id().to_string();
+            let on_chain = if node.is_none() {
+                "?"
+            } else if held.contains(&id) {
+                "yes"
+            } else {
+                "no"
+            };
+            let registrable = if on_chain == "yes" {
+                "—".to_string()
+            } else {
+                match catalog_row_admissible(&params, &bundle, &sdk, e, &chain_certified, daa) {
+                    Ok(()) => "yes".to_string(),
+                    Err(why) => {
+                        refused += 1;
+                        paint::yellow(&format!("no — {}", refusal_code(&why)))
+                    }
+                }
+            };
             flow.ui.say(&format!(
-                "  {:<width$}{:<18}{:<12}{}",
+                "  {:<width$}{:<18}{:<12}{:<10}{}",
                 e.model_id,
                 e.lineage_id,
                 format!("{}…", &id[..8]),
-                if node.is_none() {
-                    "?"
-                } else if held.contains(&id) {
-                    "yes"
-                } else {
-                    "no"
-                }
+                on_chain,
+                registrable
             ));
+        }
+        if refused > 0 {
+            flow.ui.say(&paint::dim(&format!(
+                "  {refused} row(s) marked `no` would be refused or dropped by this chain's processor — `model add` refuses them before \
+                 paying anything"
+            )));
         }
         flow.ui.say(&paint::dim(
             "  misaka model add <model>   registers one and certifies its lanes; misaka model status <class> reads one",
@@ -538,6 +670,17 @@ async fn walk(
     } else {
         flow.row(Severity::Skip, "prompt lane", "not certified — optional: misaka model add … --prompt-lane");
     }
+    // The registry's own state, for the closing line (T12-035): LIVE only where it admits weight.
+    if let Ok(model) = walk.node.client().get_palw_model(kaspa_rpc_core::GetPalwModelRequest { class_id: class_hex.clone() }).await {
+        if model.found && !model.registry_state.is_empty() {
+            flow.row(
+                if model.registry_state.starts_with("Active") { Severity::Ok } else { Severity::Info },
+                "registry",
+                format!("{} · {} of {} ready seats", model.registry_state, model.ready_seats, model.required_ready_seats),
+            );
+            doc.insert("registry_state".into(), model.registry_state.into());
+        }
+    }
     doc.insert("next".into(), format!("misaka model market open {class_hex}").into());
     flow.ui.sub(&paint::dim(&format!(
         "next: misaka model market open {}…  ·  misaka mining setup --model {}…",
@@ -556,6 +699,20 @@ async fn register(
     terms: &PalwRegistrationTermsV2,
 ) -> Step {
     let class_hex = entry.class_id().to_string();
+    // **Refused before the artifact is read, anything is signed, or a fee is paid** (testnet-12
+    // lifecycle audit T12-030): the gate and the attribution checks the processor asks beside it, at
+    // the node's DAA. `model add Qwen/Qwen2.5-1.5B` paid a mined carrier the processor then dropped,
+    // waited for a row that could never be written, and paid again on every retry.
+    catalog_row_admissible(&walk.params, bundle, sdk, entry, &terms.chain_certified_families, walk.node.daa()).map_err(|why| {
+        Halt::Blocked(
+            Finding::error("E-MODEL-NOT-ADMISSIBLE", exit::MODEL, "This chain would not register this model's class")
+                .reason(
+                    "the processor refuses or drops this registration: its carrier would be mined and paid for, and no class row written",
+                )
+                .current(why)
+                .fix("misaka model add   (lists which catalog rows this chain registers)"),
+        )
+    })?;
     // The root: the artifact's own, computed from the file — the chain pins it, and a class whose
     // root is someone else's weights is a mispairing the admission gate refuses. A manifest states
     // its root (verified at Full depth against the artifact it names, where this machine holds it),
@@ -687,6 +844,20 @@ async fn register(
     } else {
         "share     0 ‰ — weightless until its block lane is certified (the next step)".to_string()
     });
+    // The job the class is registered (and attempted) at: past `palw_offence_attribution` the chain's
+    // formula, never the catalog table's (T12-030) — said, because it is what producers will run.
+    if let PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. } = &object {
+        let (p, d) = (carriage.canonical.declared_prefill_tokens, carriage.canonical.exact_decode_tokens);
+        flow.ui.sub(&if (p, d) == entry.canonical_job {
+            format!("job       prefill {p} / decode {d}")
+        } else {
+            format!(
+                "job       prefill {p} / decode {d} — the chain's formula job (n_ctx/8 − 1, 2); the catalog table's ({}, {}) is \
+                 not admissible past palw_offence_attribution",
+                entry.canonical_job.0, entry.canonical_job.1
+            )
+        });
+    }
     // The pool's P4 (user decision 2026-09-25): the registration sponsors its own listing, where
     // the chain arms a pool — one follow-up carrier once the registration folds.
     let pool_terms = walk.params.palw_activation_pool_at(walk.node.daa());
@@ -699,6 +870,18 @@ async fn register(
              folded (recommended pool {}, non-binding; --sponsor <MSK> changes it, --no-sponsor skips it)",
             crate::palw_model::msk(amount),
             crate::palw_model::msk(recommended)
+        ));
+    }
+    // **The registration's designed burn, disclosed before the yes** (testnet-12 lifecycle audit
+    // T12-032): past `palw_audit_2026_09_23` a bought registration burns
+    // `PALW_CLASS_REGISTRATION_BURN_SOMPI_V1` out of the registrant bond's collateral when it folds —
+    // recorded in the bond's `slashed` figure (the one debit path), though it is a price and no
+    // penalty. Nothing said so, and `bondSlashed` then read like a conviction.
+    if walk.params.palw_audit_2026_09_23_active_at(walk.node.daa()) {
+        flow.ui.sub(&format!(
+            "burn      {} out of the bond's collateral when it folds — the registration's price, never refunded; the bond's \
+             `slashed` figure records it (a price, not a penalty)",
+            crate::palw_model::msk(kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_BURN_SOMPI_V1)
         ));
     }
     flow.ask("Register it?", false, "the class was not registered").await?;
@@ -733,13 +916,42 @@ async fn register(
                 .current(tracked.reject_code),
         ));
     }
+    // **A mined carrier the processor dropped is a verdict, not a wait** (testnet-12 lifecycle audit
+    // T12-030): this loop waited for `included`, which a dropped registration never reaches, so the
+    // CLI sat there until Ctrl-C while the node's log said why — and every re-run paid again. The
+    // node now names a mined carrier with no row `REGISTRATION_DROPPED` (with the processor's reason);
+    // read on three polls running, that stops here with the reason.
+    //
+    // **`REGISTRATION_NOT_INCLUDED` is not a verdict here, and never stops the wait** (review of
+    // T12-030). A carrier leaves the mempool when the block that carries it is ADDED, and its row is
+    // written only when the next CHAIN block accepts that block and folds it — one block interval
+    // later, about 120 s on testnet-12 — so every registration that succeeds reads
+    // `REGISTRATION_NOT_INCLUDED` for that interval (and the node only says `REGISTRATION_DROPPED`
+    // from two DAA past the carrier's acceptance). Three 5 s polls of it stopped every successful
+    // `model add` with "left the mempool without being mined" and told the operator to re-run —
+    // which, inside that interval, paid a second carrier for a duplicate the chain drops. A carrier
+    // that really was evicted is waited out to the deadline, as before.
+    let settled_drop = std::cell::Cell::new(0u32);
     walk.wait_for(flow, "the registration to be mined", 20, || async {
         let now = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
-        Ok(now.folded || now.included)
+        let (step, streak) = registration_wait_step(&now, settled_drop.get());
+        settled_drop.set(streak);
+        match step {
+            RegistrationWaitStepV1::Folded => return Ok(true),
+            RegistrationWaitStepV1::Wait => return Ok(false),
+            RegistrationWaitStepV1::Dropped => {}
+        }
+        crate::palw_model_ops::print_pipeline(&now);
+        Err(Halt::Blocked(
+            Finding::error("E-MODEL-REGISTRATION-DROPPED", exit::MODEL, "The registration was mined and the chain dropped it")
+                .reason("the carrier's fee is spent and no class row was written; sending the same registration again pays again for the same drop")
+                .current(if now.drop_reason.is_empty() { now.processor_verdict.clone() } else { now.drop_reason.clone() })
+                .fix("misaka model add   (lists which catalog rows this chain registers)"),
+        ))
     })
     .await?;
     let included = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
-    if included.included {
+    if included.folded {
         flow.row(
             Severity::Ok,
             "registered",
@@ -885,6 +1097,65 @@ mod tests {
             covering: Default::default(),
         };
         ChainFamily { lane, digest: family.digest(), family }
+    }
+
+    fn poll(reject_code: &str, folded: bool) -> kaspa_rpc_core::RpcPalwModelRegistration {
+        use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1 as Code;
+        kaspa_rpc_core::RpcPalwModelRegistration {
+            submitted: true,
+            accepted: !reject_code.is_empty() || folded,
+            folded,
+            included: folded,
+            reject_code: reject_code.to_string(),
+            drop_reason: if reject_code == Code::RegistrationDropped.code() {
+                "CLASS_NOT_ATTRIBUTABLE: …".into()
+            } else {
+                String::new()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Runs `polls` through [`registration_wait_step`] the way the wait loop does: the step it stops
+    /// on and the poll index, or `None` when the polls run out still waiting.
+    fn run_wait(polls: &[kaspa_rpc_core::RpcPalwModelRegistration]) -> Option<(RegistrationWaitStepV1, usize)> {
+        let mut streak = 0;
+        for (i, now) in polls.iter().enumerate() {
+            let (step, next) = registration_wait_step(now, streak);
+            streak = next;
+            if step != RegistrationWaitStepV1::Wait {
+                return Some((step, i));
+            }
+        }
+        None
+    }
+
+    /// **Review of T12-030 (B1): a carrier mined and not yet folded does not stop the wait.** A
+    /// successful carrier reads `REGISTRATION_NOT_INCLUDED` for a whole block interval (~120 s on
+    /// testnet-12, 24 polls at 5 s) between leaving the mempool and its row being written; the wait
+    /// runs through it and ends on the fold. Three `REGISTRATION_DROPPED` polls running stop it; a
+    /// streak broken by any other reading starts again.
+    #[test]
+    fn b1_the_mined_but_not_yet_folded_window_never_stops_the_wait() {
+        use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1 as Code;
+        let (pooled, missing, dropped) = ("", Code::RegistrationNotIncluded.code(), Code::RegistrationDropped.code());
+        // Pooled for a while, mined, NOT_INCLUDED for the whole interval (and well past it), folded.
+        let mut polls = vec![poll(pooled, false); 4];
+        polls.extend(vec![poll(missing, false); 60]);
+        polls.push(poll(pooled, true));
+        assert_eq!(run_wait(&polls), Some((RegistrationWaitStepV1::Folded, 64)), "the success path waits to the fold");
+        // NOT_INCLUDED alone never stops it: the deadline does.
+        assert_eq!(run_wait(&vec![poll(missing, false); 240]), None, "an evicted carrier is waited out to the deadline");
+        // DROPPED three polls running stops it, on the third.
+        let mut drop = vec![poll(missing, false); 30];
+        drop.extend(vec![poll(dropped, false); 3]);
+        assert_eq!(run_wait(&drop), Some((RegistrationWaitStepV1::Dropped, 32)));
+        // Two, then another reading, then two: the streak restarts, and the wait goes on.
+        let broken =
+            vec![poll(dropped, false), poll(dropped, false), poll(missing, false), poll(dropped, false), poll(dropped, false)];
+        assert_eq!(run_wait(&broken), None, "a broken streak does not stop the wait");
+        assert_eq!(registration_wait_step(&poll(dropped, false), 2), (RegistrationWaitStepV1::Dropped, 3));
+        assert_eq!(registration_wait_step(&poll(missing, false), 2), (RegistrationWaitStepV1::Wait, 0));
     }
 
     /// The live terms decode to the type the SDK builds from, with each family on its own lane —

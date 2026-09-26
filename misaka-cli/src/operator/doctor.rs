@@ -290,8 +290,7 @@ async fn identity_checks(snap: &Snapshot, out: &mut Vec<Check>) {
     // `--palw-fee-outpoint` (without it the panel files receipts and carries nothing), then the
     // outpoint it persisted, then the named one, then any spendable output under the key's script.
     if p.produce || p.panel {
-        let persisted =
-            std::fs::read_to_string(p.persisted_fee_outpoint()).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let persisted = p.newest_persisted_fee_outpoint();
         let running_unfunded = p.kaspad.as_ref().is_some_and(|(_, args)| args.fee_outpoint.is_none());
         if running_unfunded && p.produce {
             out.push(Check::found(

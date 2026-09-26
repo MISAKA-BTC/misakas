@@ -520,11 +520,7 @@ pub async fn submit(
                         .ok_or_else(|| CliError::generic("the network's genesis registers no base class"))?
                 }
             };
-            let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(
-                bundle.court,
-                params.palw_prompt_ids_form_v1(),
-                net.to_string().into_bytes(),
-            );
+            let sdk = crate::operator::model_add::chain_sdk(&params, bundle, &net.to_string());
             let shape =
                 kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(&params, bundle, &inputs.profile, daa)
                     .map_err(CliError::generic)?;

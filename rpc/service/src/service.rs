@@ -580,14 +580,90 @@ impl RpcCoreService {
             registration.accepted = true;
             registration.mempool_accepted = true;
         } else if inclusion_known && !registration.included && !registration.folded {
-            registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
-                .code()
-                .to_string();
-            if registration.processor_verdict.is_empty() {
-                registration.processor_verdict = registration.reject_code.clone();
+            use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1 as Code;
+            if let Some((_mined_daa, verdict, reason)) = self.palw_registration_dropped_carrier(txid).await {
+                // **Mined, and no row: the processor dropped it** (testnet-12 lifecycle audit
+                // T12-030). The carrier's fee is spent and nothing will ever write the row, so this
+                // is a verdict, not a wait — and not `REGISTRATION_NOT_INCLUDED`, which read as "not
+                // mined" for a carrier two blocks had carried.
+                //
+                // **`included` stays false** (review of T12-030): a CLI from before this answer
+                // waits for `folded || included` and then prints "registered ✅" — for a dropped
+                // registration. The DAA it was mined at rides the reason instead.
+                registration.accepted = true;
+                registration.included = false;
+                registration.included_daa = 0;
+                registration.reject_code = Code::RegistrationDropped.code().to_string();
+                registration.processor_verdict = verdict;
+                registration.drop_reason = reason;
+            } else {
+                registration.reject_code = Code::RegistrationNotIncluded.code().to_string();
+                if registration.processor_verdict.is_empty() {
+                    registration.processor_verdict = registration.reject_code.clone();
+                }
             }
         }
         Ok(())
+    }
+
+    /// **A registration carrier the chain MINED and the processor dropped**: `(mined_daa, verdict,
+    /// reason)`, or `None` when that is not established.
+    ///
+    /// Mined is read off the virtual UTXO set: a lifecycle carrier's change is its output 0
+    /// (`build_palw_lifecycle_tx`), and an output stands there only once a block that accepted the
+    /// carrier is on the virtual's chain; its `block_daa_score` is the DAA it was accepted at. The
+    /// caller has already found no row, and the fold of that block has run once the virtual is two
+    /// DAA past it — so a mined carrier with no row was dropped. (A change output already spent is
+    /// not read as dropped: the caller then reports `REGISTRATION_NOT_INCLUDED`, as before.)
+    ///
+    /// The reason is the processor's refusal as this node's preflight re-derives it at the accepting
+    /// DAA — the gate and the attribution checks the processor asks beside it — read off the
+    /// carrier's own bytes in that block's acceptance data; where those are gone, the node's log
+    /// line is named instead.
+    async fn palw_registration_dropped_carrier(&self, carrier: kaspa_hashes::Hash64) -> Option<(u64, String, String)> {
+        use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1 as Code;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let change = kaspa_consensus_core::palw_model_registration_v1::palw_lifecycle_carrier_change_v1(carrier);
+        let entry = session.async_get_virtual_utxo_entry(change).await;
+        // The caller established "out of the mempool, no row"; the judgement is the core's.
+        let mined_daa = kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_dropped_v1(
+            false,
+            false,
+            entry.map(|e| e.block_daa_score),
+            session.get_virtual_daa_score(),
+        )?;
+        let unknown = (
+            Code::RegistrationDropped.code().to_string(),
+            "the processor dropped its object and this node could not re-read it — its log names the reason (\"a PALW \
+             lifecycle object was dropped\")"
+                .to_string(),
+        );
+        let object = match session
+            .async_get_transactions_by_accepting_daa_score(mined_daa, Some(vec![carrier]), TransactionType::Transaction)
+            .await
+        {
+            Ok(TransactionQueryResult::Transaction(txs)) => txs
+                .iter()
+                .find(|tx| tx.id() == carrier)
+                .and_then(|tx| kaspa_consensus_core::palw_model_registration_v1::palw_registration_carrier_object_v1(tx)),
+            _ => None,
+        };
+        let (verdict, reason) = match (object, palw_v2_bundle(&self.config.params)) {
+            (Some(object), Some(bundle)) => match self.palw_model_preflight_report(session, bundle, &object, mined_daa).await {
+                Ok((report, _)) if !report.reject_code.is_empty() => {
+                    let why = report
+                        .checks
+                        .iter()
+                        .find(|check| !check.ok)
+                        .map(|check| format!("{}: {}", check.code, check.message))
+                        .unwrap_or_else(|| report.reject_code.clone());
+                    (report.reject_code, why)
+                }
+                _ => unknown,
+            },
+            _ => unknown,
+        };
+        Some((mined_daa, verdict, format!("mined at DAA {mined_daa}, not folded — {reason}")))
     }
 
     /// **The class row a registration carrier wrote, read off the chain's own record** — see
@@ -1574,6 +1650,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     seats: row.seats.iter().map(outpoint).collect(),
                     deadline_daa: row.deadline_daa,
                     reserved_sompi: row.reserved.to_string(),
+                    // Empty where the figure overflows — no sentinel reads as an amount.
+                    committed_sompi: row.committed.map(|c| c.to_string()).unwrap_or_default(),
                     escrow_sompi: row.escrowed_reward,
                     payout_pending_sompi: row.payout_pending,
                     quanta: row.quanta,
@@ -1610,12 +1688,25 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     phase_daa: only.row.final_daa,
                     seats: only.row.seats.iter().map(|(seat, _)| outpoint(seat)).collect(),
                     reserved_sompi: "0".to_string(),
+                    committed_sompi: "0".to_string(),
                     escrow_sompi: only.row.escrowed_reward,
                     ..palw_claim_row_vesting_fields(Some(&stage), &bond)
                 }
             })
             .collect();
         let summary = read.bond.as_ref();
+        // T12-058: the bond's live locks, as the next block's fold judges them, and the withdrawal
+        // delay a retirement starts — so `bond status` / `bond retire` can say WHEN before paying.
+        let locks = read.locks.clone().unwrap_or_default();
+        let withdrawal_delay = palw_v2_bundle(&self.config.params)
+            .map(|bundle| {
+                kaspa_consensus_core::config::params::palw_v2_bond_withdrawal_delay_at_v1(
+                    bundle,
+                    self.config.params.palw_da_court,
+                    locks.at_daa.max(read.tip_daa),
+                )
+            })
+            .unwrap_or(0);
         Ok(GetPalwClaimsResponse {
             available: true,
             tip_daa: read.tip_daa,
@@ -1632,6 +1723,24 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             bond_capable_classes: summary.map(|b| b.capable_classes.iter().map(|c| c.to_string()).collect()).unwrap_or_default(),
             vesting_only_rows,
             vesting_only_truncated: read.vesting_only_truncated,
+            bond_locks_at_daa: locks.at_daa,
+            bond_live_lock_count: locks.live_count,
+            bond_live_locked_sompi: locks.live_locked.to_string(),
+            bond_locks: locks
+                .locks
+                .iter()
+                .map(|lock| kaspa_rpc_core::RpcPalwBondLock {
+                    claim_id: lock.claim_id.to_string(),
+                    amount_sompi: lock.amount.to_string(),
+                    expiry_daa: lock.expiry_daa,
+                    held_by_anchor_count: lock.held_by_anchor_count,
+                })
+                .collect(),
+            bond_locks_truncated: locks.truncated,
+            bond_lock_daa_clock_release: locks.daa_clock_release,
+            bond_lock_anchor_count_bound: locks.anchor_count_bound,
+            bond_retire_refused_while_locked: locks.retire_refused_while_locked,
+            bond_withdrawal_delay_daa: withdrawal_delay,
         })
     }
 
