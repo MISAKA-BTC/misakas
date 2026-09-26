@@ -67,9 +67,11 @@
 //!   may be either (their contradiction kind is not in the record), so they freeze for
 //!   `window_court` and are reported as undetermined; the rest are tier-capped. A
 //!   `PanelFalseValidV2` finding that ACTED on its claim (the claim, or its liability row, voided
-//!   for a conviction in the record's own block) charges the claim's producer by the same class as
-//!   the seat, as lane liab's `liable` list does. On `rcore/cap-int` the shadow reads lane liab's
-//!   rooted freeze map instead of re-deriving it.
+//!   `CourtFraud` in the record's own block — what a finding that proves the claim false writes)
+//!   charges the claim's producer by the same class as the seat, as lane liab's `liable` list does;
+//!   the kind-3 records a DA default writes on its covering signers (the claim voided
+//!   `ProducerWithholding` in the same block) charge the seats only. On `rcore/cap-int` the shadow
+//!   reads lane liab's rooted freeze map instead of re-deriving it.
 //!
 //! **Cost** (S-I3): one pass over the claims, the bonds, their locks, the duty rows, the DA sessions
 //! and the conviction records — `O(claims + bonds + locks + rows)` per call, with a sort of each
@@ -488,9 +490,11 @@ pub fn palw_capacity_conviction_freeze_class_v1(
 
 /// **The claim's producer, when a `PanelFalseValidV2` finding acted on its claim** (review of lane
 /// shadow, finding 3(c)): a finding that proves the claim false voids it (or reverses its `Final`)
-/// for a conviction in the record's own block, and lane liab then charges the producer by the
-/// seat's class. Read off the void the chain wrote at the record's DAA; `None` for any other kind,
-/// a finding that restated an earlier void, or a producer that is the accused itself.
+/// `CourtFraud` in the record's own block (`act_on_convicted_claim_v1`), and lane liab then charges
+/// the producer by the seat's class. Read off the void the chain wrote at the record's DAA; `None`
+/// for any other kind, a finding that restated an earlier void, the kind-3 records a DA default
+/// writes on its covering signers (their claim voids `ProducerWithholding`, and the producer is
+/// charged by the `DaDefault` record itself), or a producer that is the accused itself.
 pub fn palw_capacity_false_valid_producer_v1(
     offence: &PalwConsumedOffenceV1,
     claim: Option<&PalwClaimStateV2>,
@@ -500,7 +504,7 @@ pub fn palw_capacity_false_valid_producer_v1(
         return None;
     }
     let (voided_daa, reason) = conviction_void(claim, liability)?;
-    if voided_daa != offence.accepted_daa || palw_capacity_void_reason_keeps_obligation_v1(reason) {
+    if voided_daa != offence.accepted_daa || reason != PalwVoidReasonV2::CourtFraud {
         return None;
     }
     let producer = claim.map(|c| c.bond).or_else(|| liability.map(|row| row.executor_bond))?;
@@ -1551,11 +1555,15 @@ mod tests {
             .bond(22, 13_000 * MSK, false)
             .claim(0x92, floor_claim(22, voided(NOW - 3_500, PalwVoidReasonV2::CourtFraud), NOW - 3_600))
             // (c) bond 21's claim voided CourtFraud by a kind-3 against seat 101 in the same block; bond
-            // 23's claim voided by a DA default 50 DAA before a kind-3 against seat 102 restated it.
+            // 23's claim voided by a DA default 50 DAA before a kind-3 against seat 102 restated it;
+            // bond 24's DA default in one block: its DaDefault record, and the kind-3 record the
+            // default writes on covering signer 103, its claim voided ProducerWithholding.
             .bond(21, 13_000 * MSK, false)
             .claim(0x91, floor_claim(21, voided(NOW - 10, PalwVoidReasonV2::CourtFraud), NOW - 100))
             .bond(23, 13_000 * MSK, false)
             .claim(0x93, floor_claim(23, voided(NOW - 60, PalwVoidReasonV2::ProducerWithholding), NOW - 100))
+            .bond(24, 13_000 * MSK, false)
+            .claim(0x94, floor_claim(24, voided(NOW - 10, PalwVoidReasonV2::ProducerWithholding), NOW - 100))
             // (d)/(e) bond 3: a timed-out void and a convicted void inside h_obl, then a live claim.
             .bond(3, 13_000 * MSK, false)
             .claim(0xD0, floor_claim(3, voided(NOW - 20, PalwVoidReasonV2::ReceiptTimeout), NOW - 50))
@@ -1567,6 +1575,8 @@ mod tests {
             (0xC2, PalwOffenceKindV1::CourtConviction, 22, NOW - 3_500, h(0x92)),
             (0xC1, PalwOffenceKindV1::PanelFalseValidV2, 101, NOW - 10, h(0x91)),
             (0xC3, PalwOffenceKindV1::PanelFalseValidV2, 102, NOW - 10, h(0x93)),
+            (0xC4, PalwOffenceKindV1::DaDefault, 24, NOW - 10, h(0x94)),
+            (0xC5, PalwOffenceKindV1::PanelFalseValidV2, 103, NOW - 10, h(0x94)),
         ];
         for (key, kind, accused, daa, claim_id) in records {
             plant.extra.push(PalwDeltaEntryV2::ConsumedOffence { key: h(key), old: None, new: Some(offence(kind, accused, daa, claim_id)) });
@@ -1595,7 +1605,9 @@ mod tests {
         assert_eq!(frozen(21), (true, false, true, 1), "the producer of the claim the finding voided, by the seat's class");
         assert_eq!(frozen(102), (true, false, true, 1));
         assert_eq!(frozen(23), (false, false, false, 0), "a finding that restated an earlier void does not charge the producer");
-        assert_eq!(shadow.convictions_total, 4);
+        assert_eq!(frozen(24), (true, true, false, 1), "a DA default: the producer by its DaDefault record alone");
+        assert_eq!(frozen(103), (true, false, true, 1), "the default's covering signer");
+        assert_eq!(shadow.convictions_total, 6);
 
         // (d) and (e)
         let m = u128::from(E);

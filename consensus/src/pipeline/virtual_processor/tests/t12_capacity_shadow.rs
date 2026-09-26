@@ -3,26 +3,43 @@
 //!
 //! * [`s_t4_the_shadow_read_answers_on_a_testnet12_chain`] (fast, in the suite): the processor's
 //!   read (`palw_capacity_shadow_v1`, the one consensus-crate call of the shadow) answers on a real
-//!   testnet-12 chain — eight genesis cards as seats, `E` from the tip's subsidy, the reference
-//!   ramp's golden `N13k` — and moves nothing (the tip's state root is the same before and after).
+//!   testnet-12 chain — eight genesis cards as seats, `E` from the tip's subsidy, the default display
+//!   uncredited (q 0: a 13k bond still holds 2 at every ρ), the reference ramp's golden `N13k` only
+//!   when named — and moves nothing (the tip's state root is the same before and after).
+//! * [`s_t5_a8_the_alarm_fires_when_the_auditors_stop_and_clears_when_they_run`] (in the suite):
+//!   ADR-0160's A8 drill on a real testnet-12 chain. Two claims of the named O-3 bonds resolve `Final`
+//!   with nobody auditing them: measured q = 0, every step alarms (and a read naming no bond measures
+//!   nothing). Then an auditor accuses one of them, nobody answers, the chain convicts its producer
+//!   (`DaDefault`): q = 500‰ ≥ 2 × q_needed, the alarm clears, and the producer reads frozen for good.
 //! * [`s_t5_the_shadow_on_the_live_like_13k_floor_chain`] (a measurement run on the capacity
 //!   harness, `--ignored`): `L1_floor_13k_live` — one 13,000 MSK producer making floor claims with the
 //!   live licence mix (90.6 % all-five / 5.7 % three-seat / 3.8 % S2) and the live bind → licence
-//!   delays — read every 10 DAA. Each snapshot: the subject's `N_instant` is today's 2 and E-T3's
-//!   20 / 50 / 101 / 203 / 2,030; the identity step (ρ 1, q 0) reproduces every seat's A-1; the
+//!   delays — read every 10 DAA. Each snapshot: the subject's `N_instant` is today's 2, E-T3's
+//!   20 / 50 / 101 / 203 / 2,030 at the reference credit (q 143‰, conditional), and still 2 at
+//!   testnet-12's armed first step (ρ 10, q 0); the identity step (ρ 1, q 0) reproduces every seat's A-1; the
 //!   subject's provisional weight stays within its `W_cap` (2 FCW); the chain's own gate never holds
 //!   more unlicensed claims than today's `N_instant`. `CAP_SHADOW_DAA` (default 60) sets the length.
 
+use super::p2_mint_path::{Kind, Minting, beat, mined, sign};
 use super::t12_claim_capacity::{LicencePolicy, drive, expand, sim};
 use super::t12_round_lane_e2e::{t12_genesis_chain, t12_with_harness_cards};
 use kaspa_consensus_core::api::ConsensusApi;
+use kaspa_consensus_core::palw_state_v2::{
+    PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2, PalwVoidReasonV2,
+    palw_da_accusation_message_v2,
+};
+use kaspa_hashes::Hash64;
 use kaspa_consensus_core::palw_capacity_formulas_v1::{PALW_CAPACITY_FCW_V1, PALW_CAPACITY_REFERENCE_STEPS_V1, PalwCapacityStepV1};
 use kaspa_consensus_core::palw_capacity_shadow_v1::{PalwCapacityShadowOptionsV1, PalwCapacityShadowV1};
 
-/// The reference ramp plus the identity step (ρ 1, q 0: today's prices under the new structure).
+/// The reference ramp (indices 0–4, q 143‰: conditional on a measured attribution rate), the
+/// identity step (5: ρ 1, q 0 — today's prices under the new structure), and testnet-12's armed
+/// first step (6: ρ 10, q 0 — lane liab's `PALW_T12_CAPACITY_STEPS_V1`, what F-L would actually
+/// give on arming).
 fn steps_with_identity() -> Vec<PalwCapacityStepV1> {
     let mut steps = PALW_CAPACITY_REFERENCE_STEPS_V1.to_vec();
     steps.push(PalwCapacityStepV1 { from_daa: 0, rho: 1, q_credit_permille: 0 });
+    steps.push(PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 0 });
     steps
 }
 
@@ -68,6 +85,103 @@ async fn s_t4_the_shadow_read_answers_on_a_testnet12_chain() {
     assert!(conditional.steps.iter().all(|s| !s.seat_credit && s.seat_credit_if_d5), "143‰: lane liab's locks stay, D-5's would divide");
     // The same answer twice: the read is a function of the committed tip.
     assert_eq!(chain.ctx.consensus.palw_capacity_shadow_v1(options), Some(shadow));
+}
+
+/// The shadow of `m`'s tip as a node reads it, measuring q on `adversary` (an O-3 run's bonds).
+fn shadow_of(m: &Minting, adversary: &[PalwBondKeyV2]) -> PalwCapacityShadowV1 {
+    let options = PalwCapacityShadowOptionsV1 {
+        adversary_bonds: adversary.to_vec(),
+        block_mass_limit: m.chain.config.params.max_block_mass,
+        ..Default::default()
+    };
+    m.chain.ctx.consensus.palw_capacity_shadow_v1(options).expect("a ConsensusV2 node answers")
+}
+
+/// **A8 on a real testnet-12 chain** (ADR-0160 §8 A8, the drill the ADR assigns to S-T5 and gate
+/// G2: "the alarm fires in the drill when auditors are stopped"; review of lane shadow, finding 2).
+///
+/// Cards 0 and 7 are the O-3 run's bonds. Their claims A and B are licensed and reach `Final` with
+/// no auditor looking: both resolved, neither caught — measured q = 0 < 2 × q_needed at every step,
+/// so every step alarms and the line ends `q-ALARM`. A read that names no bond (a node without
+/// `--palw-capacity-shadow-adversary`) measures nothing and stays quiet. Then the auditors run:
+/// card 1 accuses B's row, nobody answers, the chain convicts card 7 (`DaDefault`, B voided
+/// `ProducerWithholding`) — one caught of two resolved, q = 500‰ ≥ 2 × 143‰, and the alarm clears;
+/// card 7 reads frozen for good (the intent class).
+#[tokio::test]
+async fn s_t5_a8_the_alarm_fires_when_the_auditors_stop_and_clears_when_they_run() {
+    let mut m = mined().await;
+    let a = m.step(Kind::Attempt(0)).await.claim.expect("card 0's attempt makes claim A");
+    let b = m.attempt_at_the_anchor_slot(a, 7).await;
+    m.license(a, 0).await;
+    let _c = m.attempt_at_the_anchor_slot(b, 6).await;
+    m.license(b, 7).await;
+    let is_final = |s: &PalwChainStateV2, id: &Hash64| matches!(s.claim(id).map(|c| &c.phase), Some(PalwClaimPhaseV2::Final { .. }));
+    m.beat_until(4 * m.sp().window_challenge_at(0) + 50, "A and B are Final", |s| is_final(s, &a) && is_final(s, &b)).await;
+    let o3 = [m.chain.bonds[0], m.chain.bonds[7]];
+    let floor = m.sp().base_class_id();
+    let adversary_of = |shadow: &PalwCapacityShadowV1| {
+        let row = shadow.attribution.iter().find(|r| r.class_id == floor).expect("the floor's row");
+        (row.adversary_claims, row.adversary_attributed, row.adversary_undetected, row.adversary_in_flight, row.q_measured_permille)
+    };
+
+    // The auditors are stopped: both claims resolved Final, nobody convicted.
+    let stopped = shadow_of(&m, &o3);
+    assert_eq!(adversary_of(&stopped), (2, 0, 2, 0, Some(0)), "two resolved, none caught");
+    assert!(stopped.steps.iter().all(|s| s.q_alarm), "q 0 < 2 × q_needed at every step");
+    assert!(stopped.summary().ends_with("q-ALARM"), "{}", stopped.summary());
+    eprintln!("[A8] auditors stopped, sink DAA {}: {}", m.sink_daa(), stopped.summary());
+    let unnamed = shadow_of(&m, &[]);
+    assert_eq!(unnamed.attribution.iter().find(|r| r.class_id == floor).unwrap().q_measured_permille, None);
+    assert!(unnamed.steps.iter().all(|s| !s.q_alarm), "a node that names no O-3 bond measures nothing");
+
+    // The auditors run: card 1 accuses B's row; nobody answers.
+    let accuser = m.chain.bonds[1];
+    let message = palw_da_accusation_message_v2(m.domain, &b, 0, &accuser);
+    let accusation = PalwConsensusObjectV2::DefaultAccused {
+        claim: b,
+        missing_event_index: 0,
+        accuser,
+        signature: sign(1, message.as_byte_slice(), PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT),
+    };
+    let carrier = m.carrier(1, accusation, None);
+    m.step(Kind::Heartbeat(vec![carrier])).await;
+    let opened = m.step(beat()).await;
+    let deadline =
+        opened.child.da_sessions_of(&b).find(|(who, _)| **who == accuser).expect("the accusation opens a session").1.deadline_daa;
+    let convicted = |s: &PalwChainStateV2| {
+        matches!(s.claim(&b).map(|c| &c.phase), Some(PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }))
+    };
+    m.beat_until(2 * (deadline - m.sink_daa()) + 20, "B's default", convicted).await;
+
+    let running = shadow_of(&m, &o3);
+    // B caught; A undetected while the state still holds it (a Final claim retires in time, and a
+    // retired claim leaves the denominator — the shadow measures the state it is given).
+    let (claims, caught, undetected, in_flight, q) = adversary_of(&running);
+    assert_eq!((caught, in_flight), (1, 0), "B caught");
+    assert!(
+        (claims, undetected, q) == (2, 1, Some(500)) || (claims, undetected, q) == (1, 0, Some(1_000)),
+        "A undetected or retired: {:?}",
+        adversary_of(&running)
+    );
+    assert!(running.steps.iter().all(|s| !s.q_alarm), "500‰ ≥ 2 × q_needed at every step: {}", running.summary());
+    let producer = running.bonds.iter().find(|row| row.bond == m.chain.bonds[7]).expect("card 7's row");
+    let (_, tip) = m.chain.tip_state();
+    let records: Vec<_> = tip.consumed_offences_iter().map(|(_, o)| (o.kind, o.accused, o.claim_id == b, o.accepted_daa)).collect();
+    // The default writes its DaDefault record on card 7 and a kind-3 record on each covering signer
+    // of B; only the first charges the producer.
+    assert!(
+        producer.frozen_would_be && producer.freeze_final && producer.convictions == 1,
+        "a DA default is intent-class: frozen for good, by its own record — {producer:?}; records {records:?}"
+    );
+    for (kind, accused, on_b, _) in &records {
+        if *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 && *on_b {
+            let seat = running.bonds.iter().find(|row| row.bond.0 == *accused).expect("a covering signer's row");
+            assert!(seat.frozen_would_be && seat.freeze_undetermined, "covering signer {accused:?}: held for window_court");
+        }
+    }
+    eprintln!("[A8] conviction records on the chain: {records:?}");
+    assert!(!running.bonds.iter().find(|row| row.bond == m.chain.bonds[0]).unwrap().frozen_would_be);
+    eprintln!("[A8] auditors running, sink DAA {}: {}", m.sink_daa(), running.summary());
 }
 
 /// Live public testnet-12 bind -> licence delays (DAA 140-170, 309 floor licences) — the
@@ -123,6 +237,10 @@ fn check_snapshot(shadow: &PalwCapacityShadowV1, subject: &kaspa_consensus_core:
     }
     // The subject's identity commitment differs from today's only by the weight J-1 no longer reserves.
     assert!(row.committed_new[identity] <= row.committed_today);
+    // testnet-12's armed first step credits no attribution: m_c = E, so a 13k bond still holds two.
+    let armed = shadow.steps.iter().position(|s| s.step.rho == 10 && s.step.q_credit_permille == 0).expect("the armed first step");
+    assert_eq!((row.n_instant_new[armed], shadow.steps[armed].n_instant_13k), (2, 2), "rel {rel}: ρ 10 at q 0 holds two");
+    assert!(!shadow.steps[armed].seat_credit, "rel {rel}: no lock credit at q 0");
     // A floor duty is λ-bound at E/5 (the harness's 640.17 MSK).
     if shadow.duty_rows > 0 {
         let e5 = shadow.reference_escrow / 5;
@@ -154,7 +272,8 @@ async fn s_t5_the_shadow_on_the_live_like_13k_floor_chain() {
         let row = shadow.bonds.iter().find(|b| b.bond == subject).unwrap();
         eprintln!(
             "[S-T5] rel {rel}: subject live {} unlicensed {} weight today {} → capped {} FCW, committed today {} → identity {} sompi; \
-             claims today/new(ρ=10) {}/{} sompi; seats {} duty rows {} (capped {}) locks {} sompi",
+             claims today/new(ρ=10@143) {}/{} sompi, new(ρ=10@0, armed) {} sompi; seats {} duty rows {} (capped {}) locks {} sompi; \
+             seatcap/DAA ×1000 today {} ρ10@143 {} (if D-5 {}) ρ10@0 {}",
             row.live_claims,
             row.unlicensed_claims,
             row.raw_immature_today / PALW_CAPACITY_FCW_V1,
@@ -163,10 +282,15 @@ async fn s_t5_the_shadow_on_the_live_like_13k_floor_chain() {
             row.committed_new[5],
             shadow.claims_commitment_today,
             shadow.steps[0].claims_commitment_total,
+            shadow.steps[6].claims_commitment_total,
             shadow.seats,
             shadow.duty_rows,
             shadow.duty_rows_capped,
             shadow.seat_lock_total_today,
+            shadow.seat_capacity_today_milli_per_daa,
+            shadow.steps[0].seat_capacity_milli_per_daa,
+            shadow.steps[0].seat_capacity_if_d5_milli_per_daa,
+            shadow.steps[6].seat_capacity_milli_per_daa,
         );
         check_snapshot(&shadow, &subject, rel);
     }
