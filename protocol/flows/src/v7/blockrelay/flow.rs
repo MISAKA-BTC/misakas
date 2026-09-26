@@ -644,7 +644,15 @@ impl HandleRelayInvsFlow {
     fn check_orphan_ibd_conditions(&self, orphan_daa_score: u64) -> bool {
         if let Some(ibd_daa_score) = self.ctx.ibd_relay_daa_score() {
             let max_orphans = self.ctx.max_orphans() as u64;
-            orphan_daa_score + max_orphans / 10 > ibd_daa_score && orphan_daa_score < ibd_daa_score + max_orphans / 2
+            // `orphan_daa_score` is a relay block's OWN declared DAA score, unvalidated here: an
+            // orphan reaches this heuristic on `MissingParents`, which `validate_header` returns
+            // before the DAA-score check (and before the PoW). Under the release profile's
+            // `overflow-checks`, `orphan_daa_score + max_orphans / 10` PANICKED (a remote node
+            // crash) for a header declaring a score near `u64::MAX` while an IBD was running.
+            // Saturating: at the ceiling the heuristic simply reads "far ahead of the relay", which
+            // is the truthful answer, and no honest score is anywhere near it.
+            orphan_daa_score.saturating_add(max_orphans / 10) > ibd_daa_score
+                && orphan_daa_score < ibd_daa_score.saturating_add(max_orphans / 2)
         } else {
             false
         }

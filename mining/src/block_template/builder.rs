@@ -132,6 +132,16 @@ impl BlockTemplateBuilder {
                 .expect("coinbase miner-script output index must be in range")
                 .script_public_key = new_miner_data.script_public_key.clone();
         }
+        // **The coinbase's cached id is re-derived from the bytes it now carries** (the 2026-09-26
+        // testnet-12 split at DAA 198). `Transaction::id()` returns a copy cached by `finalize`, and
+        // the edits above change the bytes it was taken from. Upstream this was harmless — a
+        // template always crossed RPC, whose conversion rebuilds every transaction — but the PALW
+        // producer submits the in-memory block, so the node stored the id of the OTHER miner's
+        // coinbase (the heartbeat miner's, which had built the cached template) while every peer
+        // computed the id of the bytes it relayed. The coinbase output entered the producer's UTXO
+        // set under the wrong outpoint, and the first chain block to merge it had a different
+        // `utxo_commitment` and `accepted_id_merkle_root` on that node than on the network.
+        coinbase_tx.finalize();
         // Update the hash merkle root according to the modified transactions
         block_template.block.header.hash_merkle_root = consensus.calc_transaction_hash_merkle_root(&block_template.block.transactions);
         // kaspa-pq EVM Lane v0.4 (§15): on a v2 (evm-active) template the EVM

@@ -763,4 +763,59 @@ mod lane_weight_tests {
             assert_eq!(palw_lane_blue_work_v1(lane.attempt_algo_id(), BITS, FENCE, None, None, BlueWorkType::from(0u64)), hash_priced);
         }
     }
+
+    /// **rcore/hf-pptake — what an attempt header weighs toward the pruning proof, as shipped.**
+    ///
+    /// `palw_lane_blue_work_v1` is a pure function of the header: the class-ticket lottery and the
+    /// bond are chain state it never sees, so a lottery winner and a free, unbonded attempt header
+    /// (one ML-DSA-87 signature on testnet-12) both weigh the 2²⁰ constant — live and at every proof
+    /// level — while a heartbeat weighs ε.
+    ///
+    /// **Why this lane does NOT reprice it inside the proof** (the withdrawn `palw_attempt_proof_weight`
+    /// fence did, keyed on each proof header's own peer-declared `daa_score`): the proof comparison
+    /// adds each side's pruning-period span, `relay.blue_work - pp.blue_work`, which the header sync
+    /// that follows the proof verifies with LIVE GHOSTDAG — where a free attempt weighs 2²⁰ — and an
+    /// attacker's pruning point must sit a full pruning depth below its sink anyway, so its free
+    /// attempts simply land after its pruning point. Repricing the level chains moves no decision;
+    /// it only breaks the one exact check the proof can make: at level 0 `level_work` is `0`, so a
+    /// level-0 proof rooted at genesis recomputes every header's `blue_work` with the same weights
+    /// the header pipeline used, and `ProofContext::from_proof` now holds the declared figures to
+    /// that recomputation (see `pruning_proof::validate`).
+    #[test]
+    fn pptake_a_losing_or_unbonded_attempt_header_carries_2_20_toward_the_pruning_proof() {
+        use super::palw_lane_blue_work_v1;
+        use kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
+        use kaspa_consensus_core::pow_layer0::{PALW_V2_ATTEMPT_BITS, PalwAttemptLaneV1};
+
+        // testnet-12 as shipped arms both lanes at genesis, so these are the rules a live node runs.
+        let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let attempt_work = t12.palw_attempt_work.map(|w| w.activation);
+        let heartbeat = t12.palw_heartbeat.map(|h| h.activation);
+        assert!(attempt_work.is_some_and(|f| f.is_active(0)), "t12 arms the attempt-work constant at genesis");
+        assert!(heartbeat.is_some_and(|f| f.is_active(0)), "t12 arms the heartbeat lane at genesis");
+
+        let attempt_id = PalwAttemptLaneV1::ExecutionArm.attempt_algo_id();
+        let epsilon = BlueWorkType::from(HEARTBEAT_BLUE_WORK_EPSILON);
+        let two_20 = BlueWorkType::from(1u64 << PALW_ATTEMPT_BLUE_WORK_LOG2);
+        let bits = PALW_V2_ATTEMPT_BITS;
+
+        // Live (`level_work == 0`) and at every proof level: the same 2²⁰, whatever DAA the header
+        // declares — no input here could carry the lottery outcome or the bond.
+        for level in [0u8, 1, 8, 20, 64] {
+            for daa in [0u64, 499, 500, 5_000] {
+                assert_eq!(
+                    palw_lane_blue_work_v1(attempt_id, bits, daa, heartbeat, attempt_work, level_work(level, 225)),
+                    two_20,
+                    "an attempt header weighs 2^20 at proof level {level}, declared DAA {daa}"
+                );
+            }
+        }
+        // Level 0 of the proof is priced exactly as live GHOSTDAG prices the chain — the property the
+        // proof's declared-work check stands on.
+        assert_eq!(level_work(0, 225), BlueWorkType::from(0u64), "level 0 of the proof carries no level shift");
+
+        let hb = palw_lane_blue_work_v1(PALW_HEARTBEAT_ALGO_ID, bits, 5_000, heartbeat, attempt_work, BlueWorkType::from(0u64));
+        assert_eq!(hb, epsilon, "a heartbeat weighs ε = 1");
+        assert_eq!(two_20 / hb, two_20, "a free attempt header outweighs a heartbeat 2^20:1, live and in the proof alike");
+    }
 }

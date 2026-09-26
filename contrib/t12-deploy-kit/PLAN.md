@@ -283,7 +283,14 @@ release build → fleet.env → 確認 → 配備 → explorer → seeder → �
 
 ## 6. Rollback
 
-host ごとに逆順（5.104 → .113 → ibm）: `./install-<host>.sh rollback`、.113 は先に `explorer-rollback`。
+**（2026-09-26 追記）この節は再 genesis の `switch` を戻す手順で、公開後は稼働中の chain を退役させる操作になった。**
+`rollback` は `CONFIRM_REGENESIS_ROLLBACK=yes` が無ければ何もせず止まり、`upgrade` を行った REV（`$STATE_DIR/upgrade-<REV>` がある）と
+ASIDE 行の無い switch log では常に拒否する。**`upgrade` の戻しは §15 の `upgrade-rollback` だけで、`rollback` は決して使わない**
+（旧 kit では upgrade が `switch-<REV>.log` を作ったため、`rollback` が全 node を止めて稼働中の appdir を `.rolledback-*` に移した）。
+REV を旧 release（`0e8ec984efc9`）に戻して `rollback` を打つと、09-25 の switch log に従い稼働中の chain を退避して退役した chain を戻す —
+それも `CONFIRM_REGENESIS_ROLLBACK=yes` が要り、upgrade 済みの host ではその旨をエラー文に出す。
+
+host ごとに逆順（5.104 → .113 → ibm）: `CONFIRM_REGENESIS_ROLLBACK=yes ./install-<host>.sh rollback`、.113 は先に `explorer-rollback`。
 - drop-in を消す／新規 unit を disable+削除 → daemon-reload → 新 chain の appdir は `.rolledback-<ts>` として残す → **旧 appdir（`OLD_APPDIRS` だけ）を元の名前に戻す** → switch で disable した unit（ibm の t11 node0）を enable に戻す → **最初の switch 前に active だった unit だけ**起動（.113・ibm の公開 node。5.104 の旧 seat は failed のままにする — 旧 `c-seatN.sh` は旧 binary で crash loop するため）。
 - 旧 script・旧 binary は一度も書き換えていないので、戻る先は切替直前の旧 chain（`fb1074b0…`、heartbeat のみの chain）そのもの。
 
@@ -340,7 +347,7 @@ host ごとに逆順（5.104 → .113 → ibm）: `./install-<host>.sh rollback`
 | file | どこで | 何をする |
 |---|---|---|
 | `fleet.env.example` → `fleet.env` | 全部 | release 値（placeholder）、禁止 genesis（全桁 6 本）と `DRILL_GENESES`、定数、8k artifact の sha。`fleet.env` は gitignore（`*.env`）なので Mac で写して埋める |
-| `lib.sh` | host | 共通: launch script/unit 生成（sha・flag 自己検査・duty 検査・drill flag / `KASPAD_*` 環境 / drill marker の拒否、exit 78）、preflight、stage、switch（fp・"PALW DRILL"・`PALW duties`・genesis の確認）、check、rollback、purge |
+| `lib.sh` | host | 共通: launch script/unit 生成（sha・flag 自己検査・duty 検査・drill flag / `KASPAD_*` 環境 / drill marker の拒否、exit 78）、preflight、stage、switch（fp・"PALW DRILL"・`PALW duties`・genesis の確認）、check、rollback、purge、**upgrade / upgrade-rollback**（稼働中 chain の binary 更新、§15） |
 | `install-ibm.sh` / `install-113.sh` / `install-5104.sh` | 各 host | node 表（share は §2）・旧 appdir・host 固有の拒否条件（.113 は explorer-apply/rollback も） |
 | `probe-identity-local.sh` | Mac | 出荷 commit の kaspad を隔離して起動し、`EXPECT_FP`・`EXPECT_GENESIS`・`PREMINE_TXID`（＋schedule id・rule manifest digest）を読み、genesis の class（id・artifact bytes・root）と bond outpoint を kit の写しと比べる（不一致は exit 4）。`--layout` で `t12_deploy_kit_constants`（premine の index 配置・class id・explorer の表）と 8k sidecar の sha も。`--drill-salt` で drill genesis も出す。リモートに触れない |
 | `SEEDERS.md`・`seeders/` | Mac | seeder 専用の手順と script（変更なし）。`fleet.env` の `SEEDER_SHA256`・`EXPECT_FP` を読む |
@@ -554,3 +561,56 @@ colima.yaml の `rosetta` が true になる = 設定の変更。Rosetta はこ�
 - ローカルで確認: 生成した launch script の `--check` が新 binary で OK、`ALWAYS-ON DUTY` を持たない binary（旧 binary の模擬）で
   `does not run --palw-panel as an always-on duty … refusing (exit 78)`。
 - **pre-t12**（`MISAKA-wt-b/pret12/lib.sh`）はまだ 3 つの flag を渡している。新 binary でも起動する（名指しした flag ごとに WARN が 1 行出るだけで、duty は flag によらず動く）。
+
+## 15. 稼働中の chain の binary 更新（`upgrade` / `upgrade-rollback`、2026-09-26、n5 緊急 hotfix）
+
+**何のためか**: 公開 t12（genesis `a27f8f44…`・fp `b8564b88…`、09-25 23:15 JST から release `0e8ec984efc9`）に、**同じ fingerprint・同じ
+genesis の node-only release**（`rcore/n5-emergency` @ `a4b76f8e4`）を **chain data を失わずに** 入れる。`switch` は再 genesis（appdir を
+退避して genesis から起動）なので使えない — 既存の appdir があると `switch` は `CONFIRM_REGENESIS=yes` 無しでは止まる。appdir を移すと
+bond の round 署名記録（`palw-panel/state/palw-round-last-signed`）も一緒に移り、同じ round に 2 度署名し得る（§14）。
+
+**`upgrade` がすること**（host ごと、node ごとに順番に。1 つでも gate に落ちたらそこで止まり、後の node は旧 release のまま動き続ける）:
+1. **事前確認（全 node、何も止めない）**: 新 REV の launch script の `--check`。今の unit / drop-in が kit のもの（header）で、その ExecStart が
+   `$REL_ROOT/<rev>/launch/b<N>.sh` で実在する。新旧 launch script の `ARGS=(…)` block が同一（node-only hotfix で変わるのは `BIN` と
+   `EXPECT_SHA` だけ。違えば diff を出して止まる。意図した変更なら `UPGRADE_ARGS_CHANGE_OK=1`）。unit に Environment が無い。
+   **稼働中の node** が `EXPECT_FP` を答え `EXPECT_GENESIS` を持ち（＝この release はこの appdir の chain のもの。違えば何も止めずに止まる）、
+   synced で peer ≥ 1。kit の chain 事実の写し（genesis bond 8 本・`CLASS_8K`・2M prefix）だけが合わないなら警告し、その node の再起動後の
+   gate からその部分を外す（bond の退役・除去は binary の問題ではない）。`UPGRADE_REQUIRE_UP`（host script）の他 host の node に TCP で
+   つながる。drill process が無い。
+2. **node ごと**: 他 host の node に再度 TCP 確認 → 稼働中の node の DAA を記録 → 今の unit / drop-in を
+   `$STATE_DIR/upgrade-<REV>/<unit>.{unit,dropin}.before` に保存（初回だけ）→ datadir に sentinel（`.deploy-t12-upgrade-<REV>`）→ stop
+   （`Result=timeout` なら SIGKILL された旨を警告）→ 新 REV の unit / drop-in を install → daemon-reload → start。
+3. **再起動後の gate**: fp 行（違えば stop）→ main process が `$REL/bin/kaspad`（後から sort される drop-in が ExecStart を上書きしていない）→
+   RPC が fp・genesis（と、事前に合っていれば chain 事実）を答える（~300 s。genesis を持たなくなった node は stop）→ **database が残っている**:
+   sentinel が消えていない・journal に `Deleting databases` 等が無い・`virtualDaaScore` ≥ 停止前（kaspad の `--yes` は「genesis が DB に無い」
+   「DB version が違う」で DB 全削除に自分で yes と答え、そのとき何も表示しない。これを見るのはこの確認だけ）→ `wait_duties`（警告のみ）→
+   **synced・peer ≥ 1・`virtualDaaScore` > 停止前**（network から新しい block を受け取った）を `UPGRADE_SYNC_TIMEOUT`（600 s）以内。
+   → gap（`START_GAP`）→ active のまま。wrong fp / genesis 以外の失敗では node を **止めない**（この chain を持って動いている）。
+4. 状態は upgrade 専用: `$STATE_DIR/upgrade-<REV>.log`（PRIOR・STOPPED・INSTALLED・UPGRADED・ROLLEDBACK）と `upgrade-<REV>/`。
+   **`switch-<REV>.log` には何も書かない**（`rollback` が読むのはそれ）。
+5. 再実行: すでにこの REV で動きこの chain を答える node は **再起動しない**（synced を待つだけ）。gate で止まった後、node が同期したら
+   もう一度 `upgrade` を打てば続きから進む。
+
+**`DRY_RUN=1`**: 読み取りの確認（上の 1、node ごとの TCP・baseline）は本当に実行し、状態を変える操作（systemctl stop/start/daemon-reload/
+reset-failed、install/cp/touch/rm、state の書き込み）は表示だけする。`DRY_RUN=1` は upgrade・upgrade-rollback（と読み取りだけの
+preflight・check・help）以外では拒否する（`switch` 等が半分だけ dry run になるのを防ぐ）。
+
+**`upgrade-rollback`**（同じ REV のまま）: `.before` のある node ごとに stop → `.before` を元の場所へ → daemon-reload → start → fp 行
+（journal）と synced を確認（**警告のみ、止めない**）。既に `.before` と同じ内容で active な node は触らない（2 回打っても再起動しない）。
+戻る先は 0e8ec984efc9 の launch script と binary（一度も書き換えていない）で、appdir は同じ。
+
+**順序と host 間の条件（1 host ずつ）**: ibm b0 と .113 b6 が唯一の heartbeat miner（両方止まると chain の時計が止まる）、b0 が唯一の 8k
+producer、8k class は ready 7/8（余裕 1）。kit は host をまたいだ lock を持てないので、`UPGRADE_REQUIRE_UP` の TCP 確認（ibm → .113:26311、
+.113 → ibm 26311・26321、5.104 → 3 つの公開 node）で「他 host の node が今止まっていない」ことだけを node の停止ごとに確かめる。**次の
+host に進むのは、前の host の `upgrade` が最後まで通り、`check` で全 node が synced・daa が進んでいるのを確かめてから**。
+
+| 順 | host | 何を | 次に進む条件 |
+|---|---|---|---|
+| 0 | Mac | hotfix の release build（IDENTITY の EXPECT_FP・EXPECT_GENESIS・PREMINE_TXID が fleet.env と同じ）→ `fleet.env` の `REV`・3 つの sha256 だけを差し替え → `./distribute-from-mac.sh kit` → `binaries`【確認】→ `./check-fleet.sh` | 8 node 全部 fp OK・synced・peer あり |
+| 1 | 各 host | `./install-<host>.sh stage` → `DRY_RUN=1 ./install-<host>.sh upgrade`（どちらも稼働中の service に触れない。3 台とも先に済ませてよい） | DRY_RUN が最後まで通る（ARGS の diff 無し） |
+| 2 | ibm【確認】 | `./install-ibm.sh upgrade`（b0 → 20 s → b1） | ibm の `check`、Mac の `CHECK_REGISTRY=1 ./check-fleet.sh` を 2〜3 分あけて 2 回: daa が進む・8k `readySeatsNow ≥ 7` |
+| 3 | .113【確認】 | `./install-113.sh upgrade`（b6） | 同上。加えて misakascan の filler・REST（b6 の gRPC 26312）が再接続して表示が進むこと |
+| 4 | 5.104【確認】 | `./install-5104.sh upgrade`（b2 → b3 → b4 → b5 → b7、30 s 間隔） | `CHECK_REGISTRY=1 ./check-fleet.sh` |
+
+**戻し**: 問題の出た host から（複数なら 5.104 → .113 → ibm の順）、fleet.env の REV は **upgrade の REV のまま** で
+`./install-<host>.sh upgrade-rollback`。`rollback` は使わない（§6）。
