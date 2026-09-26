@@ -16393,6 +16393,9 @@ mod t12_rcore_s7_reporter_gate;
 // past `palw_rcore_plus`, and nothing below it (M4 review, finding 1).
 mod t12_rcore_sr10_door_gate;
 mod t12_round_lane_e2e;
+// The 2026-09-26 testnet-12 IBD stall from DAA 316: a round lane ties on blue work, so blue-work
+// order is not topological; the node's sync paths order parents first (node-only).
+mod ibd_parents_first;
 // The 2026-09-26 testnet-12 split at DAA 198: a producer's in-process block with a stale cached
 // coinbase id forks that producer off the network; ids re-derived at submission keep it on.
 mod t12_split_stale_coinbase_id;

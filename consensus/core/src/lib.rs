@@ -456,6 +456,8 @@ pub mod sign;
 pub mod sortable_block;
 pub mod subnets;
 pub mod token;
+/// Parents-first ordering for the node's sync paths (the round lane makes blue work non-strict).
+pub mod topological_order;
 pub mod trusted;
 pub mod tx;
 pub mod utxo;

@@ -181,6 +181,15 @@ impl ConsensusSessionOwned {
     pub fn validate_and_insert_block_batch(&self, mut batch: Vec<Block>) -> BlockProcessingBatch {
         // Sort by blue work in order to ensure topological order
         batch.sort_by(|a, b| a.header.blue_work.partial_cmp(&b.header.blue_work).unwrap());
+        // ... which it is not on a round-lane network: a lane's blocks tie on blue work (ADR-0125) and
+        // a stable sort leaves ties in the caller's order — for the orphan pool, a hash set's. Put any
+        // child that still precedes a parent in this batch behind it; a batch whose blue-work order is
+        // already topological is left exactly as sorted.
+        let batch = kaspa_consensus_core::topological_order::stable_topological_order(
+            batch,
+            |block| block.hash(),
+            |block| block.header.direct_parents().to_vec(),
+        );
         let (block_tasks, virtual_state_tasks) = batch
             .iter()
             .map(|b| {

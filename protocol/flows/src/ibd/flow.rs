@@ -52,7 +52,7 @@ use std::{
 };
 use tokio::{sync::broadcast, time::sleep};
 
-use super::{HeadersChunk, IBD_BATCH_SIZE, PruningPointUtxosetChunkStream, progress::ProgressReporter};
+use super::{HeadersChunk, IBD_BATCH_SIZE, PruningPointUtxosetChunkStream, order::ParentFirstHeaders, progress::ProgressReporter};
 type BlockBody = Vec<Transaction>;
 
 /// How often a waiting proof fetch re-checks that its lease is still its own.
@@ -2258,21 +2258,31 @@ impl IbdFlow {
             ))
             .await?;
         let mut chunk_stream = HeadersChunkStream::new(&self.router, &mut self.incoming_route, self.header_format);
+        // Headers go to consensus parents-first, not in the order the syncer sent them: on a
+        // round-lane network the fleet's batches carry lanes child-first (see `super::order`). A
+        // batch that is already parents-first goes over exactly as received.
+        let mut parents_first = ParentFirstHeaders::new();
 
         if let Some(chunk) = chunk_stream.next().await? {
             let (mut prev_daa_score, mut prev_timestamp) = {
                 let last_header = chunk.last().expect("chunk is never empty");
                 (last_header.daa_score, last_header.timestamp)
             };
-            let mut prev_jobs: Vec<BlockValidationFuture> =
-                chunk.into_iter().map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task).collect();
+            let mut prev_jobs: Vec<BlockValidationFuture> = parents_first
+                .admit(consensus, chunk)
+                .await
+                .into_iter()
+                .map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task)
+                .collect();
 
             while let Some(chunk) = chunk_stream.next().await? {
                 let (current_daa_score, current_timestamp) = {
                     let last_header = chunk.last().expect("chunk is never empty");
                     (last_header.daa_score, last_header.timestamp)
                 };
-                let current_jobs = chunk
+                let current_jobs = parents_first
+                    .admit(consensus, chunk)
+                    .await
                     .into_iter()
                     .map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task)
                     .collect();
@@ -2286,6 +2296,14 @@ impl IbdFlow {
                 prev_jobs = current_jobs;
             }
 
+            // Anything still held waits for a parent the syncer never sent: hand it over anyway, so
+            // consensus refuses it exactly as it would have (`MissingParents`).
+            prev_jobs.extend(
+                parents_first
+                    .drain()
+                    .into_iter()
+                    .map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task),
+            );
             let prev_chunk_len = prev_jobs.len();
             try_join_all(prev_jobs).await?;
             progress_reporter.report_completion(prev_chunk_len);
@@ -2524,8 +2542,13 @@ impl IbdFlow {
 
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::BlockHeaders)?;
         let chunk: HeadersChunk = Versioned(self.header_format, msg).try_into()?;
+        // Parents first: an un-upgraded syncer answers `RequestAntipast` with tied round blocks
+        // child-first (see `super::order`). One chunk, so what cannot be placed goes over last.
+        let mut parents_first = ParentFirstHeaders::new();
+        let mut ordered = parents_first.admit(consensus, chunk).await;
+        ordered.extend(parents_first.drain());
         let jobs: Vec<BlockValidationFuture> =
-            chunk.into_iter().map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task).collect();
+            ordered.into_iter().map(|h| consensus.validate_and_insert_block(Block::from_header_arc(h)).virtual_state_task).collect();
         try_join_all(jobs).await?;
         dequeue_with_timeout!(self.incoming_route, Payload::DoneHeaders)?;
 

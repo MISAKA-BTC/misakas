@@ -155,4 +155,12 @@ impl<T: GhostdagStoreReader, U: ReachabilityStoreReader, V: RelationsStoreReader
 
         current
     }
+
+    /// The direct parents `hash` is stored with (the relations store, level 0), or none for a block
+    /// the store does not hold. What the node's sync paths order a batch parents-first by
+    /// (`kaspa_consensus_core::topological_order`): blue work alone does not, once a round lane
+    /// exists (ADR-0125).
+    pub fn direct_parents(&self, hash: BlockHash) -> Vec<BlockHash> {
+        self.relations_store.get_parents(hash).map(|parents| parents.iter().copied().collect()).unwrap_or_default()
+    }
 }

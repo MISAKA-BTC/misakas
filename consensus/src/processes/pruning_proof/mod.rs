@@ -405,7 +405,16 @@ impl PruningProofManager {
             .traversal_manager
             .anticone(pruning_point, virtual_parents, None)
             .expect("no error is expected when max_traversal_allowed is None");
-        let mut anticone = self.ghostdag_manager.sort_blocks(anticone);
+        // Blue-work order, then parents first: a syncing node processes this list as trusted blocks in
+        // order and keeps only the parents it already holds (`collect_known_direct_parents`), so a round
+        // block sent ahead of its round parent — the two tie on blue work (ADR-0125) — would be stored
+        // without that parent. Untouched wherever blue-work order is already topological; serving
+        // order only, nothing here is consensus.
+        let mut anticone = kaspa_consensus_core::topological_order::stable_topological_order(
+            self.ghostdag_manager.sort_blocks(anticone),
+            |hash| *hash,
+            |hash| self.traversal_manager.direct_parents(*hash),
+        );
         anticone.insert(0, pruning_point);
 
         let mut daa_window_blocks = BlockHashMap::new();
