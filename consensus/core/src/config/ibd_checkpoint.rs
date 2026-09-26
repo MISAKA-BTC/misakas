@@ -42,9 +42,20 @@ pub struct IbdCheckpoint {
 /// reported by [`builtin_ibd_checkpoints_unfilled`], never parsed as a checkpoint.
 pub const IBD_CHECKPOINT_PLACEHOLDER: &str = "__FILL_ME__";
 
-/// **OPERATOR FILL — testnet-12 (genesis a27f8f44…).** `"<daa-score>:<128-hex block hash>"` pairs
-/// of the LIVE public chain, read from a synced fleet node at the release build. Replace the
-/// `__FILL_ME__` entry; add as many lines as wanted, any order.
+/// **testnet-12 (genesis a27f8f44…): `"<daa-score>:<128-hex block hash>"` pairs of the LIVE public
+/// chain**, read from synced fleet nodes at the release build; any order, add lines as wanted.
+///
+/// Filled 2026-09-26 for the DAA-750 post-launch release, with the live sink at DAA 458 / blue score
+/// 2,130: each entry is the FIRST selected-chain block whose own header's `daaScore` is 100, 200 and
+/// 300 (blue scores 438, 879 and 1,172 — the shallowest 958 blue score below that sink, past the
+/// 600-blue-score finality depth), read off `getVirtualChainFromBlock` from genesis and confirmed by
+/// `getBlock` (`verboseData.isChainBlock == true`, the header's `daaScore` exactly the entry's) on two
+/// fleet nodes, the explorer's (`wss://misakascan.com/kaspa`) and ibm's, which agreed on every chain
+/// block around each score. Several chain blocks share a DAA score here (the attempt lane does not
+/// advance it); the check (`check_chain_checkpoints`) asks only that the named block sit at its score
+/// on the offered chain, so any one of them is a valid entry. They must be refreshed before the honest
+/// pruning point passes them by more than the pruning proof's level-0 window (see below; not before
+/// DAA ~75k).
 ///
 /// **Every entry must be a SELECTED-CHAIN block, and final.** On MISAKA many blocks share one DAA
 /// score (the attempt, receipt and round lanes do not advance it), so "the block at DAA X" read off
@@ -67,7 +78,11 @@ pub const IBD_CHECKPOINT_PLACEHOLDER: &str = "__FILL_ME__";
 ///
 /// Only the public genesis gets these ([`builtin_ibd_checkpoints`] keys on the genesis hash), so a
 /// drill chain (`--palw-drill-genesis-salt`) or any other network is untouched.
-pub const PALW_T12_IBD_CHECKPOINTS: &[&str] = &[IBD_CHECKPOINT_PLACEHOLDER];
+pub const PALW_T12_IBD_CHECKPOINTS: &[&str] = &[
+    "100:c8b193a22e8f3f60f9955374842ccd8382849a0a896dc68f547f0e327e5b055f6086b1133b034c7444ec847cf4ab89e129e43e12e550f5f2de3084dde082fc67",
+    "200:eb396297171cd59d8ecfd651ad2919dbe45589744a3e56e59de8f1ef2fe8ad8620b8a034ff497ab6e9f0c3774395a56a841be43a274457ff8865a3f6cd84f1ab",
+    "300:86426d61447712f8b152ef08e8c35178664acddcc854113a770bed7a16b08517a349651fe768c25c150a6c449f869c60f769a7f13244869f606098c9026e0913",
+];
 
 /// The built-in table: genesis hash → that chain's checkpoints.
 fn builtin_table(genesis_hash: Hash64) -> &'static [&'static str] {
@@ -295,6 +310,36 @@ mod tests {
         // Any other genesis (mainnet, testnet-11, a drill's salted genesis) gets none.
         assert!(builtin_ibd_checkpoints(h(1)).is_empty());
         assert_eq!(builtin_ibd_checkpoints_unfilled(h(1)), 0);
+    }
+
+    /// **The shipped testnet-12 list is FILLED** (the DAA-750 release): no `__FILL_ME__` placeholder is
+    /// left — so kaspad's startup warning about one is gone — every entry parses, the three live-chain
+    /// entries are exactly the ones read off the chain (`100`, `200`, `300`), each at a distinct DAA
+    /// score (`merge_ibd_checkpoints` refuses two blocks at one score), none at genesis (DAA 0 is the
+    /// genesis itself, not a checkpoint), and every one below the release's fence height, i.e. history
+    /// the fleet had finalized before the release was built.
+    #[test]
+    fn the_shipped_t12_list_is_filled_with_three_distinct_live_chain_entries() {
+        let t12 = super::super::genesis::PALW_T12_GENESIS.hash;
+        assert_eq!(builtin_ibd_checkpoints_unfilled(t12), 0, "no __FILL_ME__ placeholder ships");
+        assert!(PALW_T12_IBD_CHECKPOINTS.iter().all(|raw| *raw != IBD_CHECKPOINT_PLACEHOLDER));
+        let parsed = builtin_ibd_checkpoints(t12);
+        assert_eq!(parsed.len(), PALW_T12_IBD_CHECKPOINTS.len());
+        let scores: Vec<u64> = parsed.iter().map(|cp| cp.daa_score).collect();
+        assert_eq!(scores, vec![100, 200, 300], "the entries read off the live chain");
+        let mut distinct = scores.clone();
+        distinct.dedup();
+        assert_eq!(distinct, scores, "one block per DAA score");
+        for cp in &parsed {
+            assert!(cp.daa_score > 0 && cp.daa_score < crate::config::params::PALW_T12_POST_LAUNCH_FENCE_DAA, "{cp}");
+            assert_ne!(cp.block_hash, super::super::genesis::PALW_T12_GENESIS.hash, "{cp}: not the genesis");
+            assert_eq!(cp.to_string().parse::<IbdCheckpoint>().unwrap(), *cp, "{cp}: round-trips");
+            assert_eq!(cp.to_string().len(), cp.daa_score.to_string().len() + 1 + 128, "{cp}: a 128-hex hash");
+        }
+        assert_eq!(
+            parsed[0].block_hash.to_string(),
+            "c8b193a22e8f3f60f9955374842ccd8382849a0a896dc68f547f0e327e5b055f6086b1133b034c7444ec847cf4ab89e129e43e12e550f5f2de3084dde082fc67"
+        );
     }
 
     #[test]

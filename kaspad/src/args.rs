@@ -3082,18 +3082,19 @@ mod ibd_checkpoint_arg_tests {
         format!("{:02x}", n).repeat(64)
     }
 
-    /// `--checkpoint=<daa>:<hash>` is repeatable, lands in the config sorted and de-duplicated, and
-    /// moves no consensus identity (node policy only).
+    /// `--checkpoint=<daa>:<hash>` is repeatable, lands in the config sorted and de-duplicated beside
+    /// testnet-12's built-in list (DAA 100, 200 and 300 since the DAA-750 release), and moves no
+    /// consensus identity (node policy only).
     #[test]
     fn checkpoints_are_repeatable_node_policy_and_move_no_fingerprint() {
-        let (a, b) = (format!("--checkpoint=480:{}", hash(2)), format!("--checkpoint=300:{}", hash(1)));
+        let (a, b) = (format!("--checkpoint=480:{}", hash(2)), format!("--checkpoint=350:{}", hash(1)));
         let args = parse(&["--testnet", "--netsuffix=12", &a, &b, &b]);
         assert_eq!(args.checkpoints.len(), 3);
         let params: Params = args.network().into();
         let mut config = Config::new(params.clone());
         args.apply_to_config(&mut config);
         let daa: Vec<u64> = config.ibd_checkpoints.iter().map(|cp| cp.daa_score).collect();
-        assert_eq!(daa, vec![300, 480], "sorted, duplicate folded (built-in t12 list is still the placeholder)");
+        assert_eq!(daa, vec![100, 200, 300, 350, 480], "the built-in t12 list, then the flags; sorted, duplicate folded");
         assert_eq!(config.params.consensus_params_id(), params.consensus_params_id(), "the fingerprint does not move");
         let plain = parse(&["--testnet", "--netsuffix=12"]);
         let mut plain_config = Config::new(plain.network().into());
@@ -3109,5 +3110,12 @@ mod ibd_checkpoint_arg_tests {
             "two blocks at one DAA"
         );
         assert_eq!(merge_ibd_checkpoints(vec![], &[format!("300:{}", hash(1)), format!("300:{}", hash(1))]).unwrap().len(), 1);
+        // A flag that names another block at a built-in entry's score is refused; the built-in block itself folds.
+        let t12 = kaspa_consensus_core::config::ibd_checkpoint::builtin_ibd_checkpoints(
+            kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash,
+        );
+        assert_eq!(t12.len(), 3, "testnet-12's built-in list is filled");
+        assert!(merge_ibd_checkpoints(t12.clone(), &[format!("300:{}", hash(1))]).is_err(), "another block at a built-in score");
+        assert_eq!(merge_ibd_checkpoints(t12.clone(), &[t12[2].to_string()]).unwrap(), t12, "the built-in entry itself folds");
     }
 }
