@@ -245,13 +245,18 @@ async fn lane_run(fence: Option<ForkActivation>) -> LaneRun {
     };
 
     // The lane: r0 carries A; r1 names r0 alone, carries B, and sorts before r0 (its nonce ground).
-    let r0 = round_block_carrying(&ctx, &config, first_round, &payout, vec![a.clone()], 1);
+    // Slots by the hash's top bit, so the child sorts first whatever hashes the chain drew.
+    let r0 = (1..4096)
+        .map(|nonce| round_block_carrying(&ctx, &config, first_round, &payout, vec![a.clone()], nonce))
+        .find(|r0| r0.header.hash.as_bytes()[0] >= 0x80)
+        .expect("a nonce in the upper half");
     ctx.consensus.validate_and_insert_block(r0.clone().to_immutable()).virtual_state_task.await.expect("r0 is valid at the header");
     blocks.push(r0.clone().to_immutable());
-    let r1 = (2..256)
+    let r1 = (1..4096)
         .map(|nonce| round_block_carrying(&ctx, &config, first_round + 2, &payout, vec![b.clone()], nonce))
-        .find(|r1| r1.header.hash < r0.header.hash)
-        .expect("a nonce that sorts the child first");
+        .find(|r1| r1.header.hash.as_bytes()[0] < 0x80)
+        .expect("a nonce in the lower half");
+    assert!(r1.header.hash < r0.header.hash, "the child sorts first");
     assert_eq!(r1.header.direct_parents(), &[r0.header.hash], "r1 extends the lane from r0 alone");
     ctx.consensus.validate_and_insert_block(r1.clone().to_immutable()).virtual_state_task.await.expect("r1 is valid at the header");
     blocks.push(r1.clone().to_immutable());
@@ -507,7 +512,11 @@ async fn every_post_launch_fence_at_one_height_is_crossed_with_round_lanes_on_bo
         if (daa == H - 4 || daa == H + 2) && lanes.iter().all(|(merged_at, ..)| *merged_at != daa) {
             // A lane: a parent, and a child naming it alone that sorts first.
             let round = palw_execution_round_v1(chain.ctx.simulated_time, config.params.genesis.timestamp) + 2;
-            let parent = round_block(&chain, card % 8, round, 1);
+            // Slots by the hash's top bit, so the child sorts first whatever hashes the chain drew.
+            let parent = (1..4096)
+                .map(|nonce| round_block(&chain, card % 8, round, nonce))
+                .find(|parent| parent.header.hash.as_bytes()[0] >= 0x80)
+                .expect("a nonce in the upper half");
             chain
                 .ctx
                 .consensus
@@ -515,10 +524,11 @@ async fn every_post_launch_fence_at_one_height_is_crossed_with_round_lanes_on_bo
                 .virtual_state_task
                 .await
                 .expect("a round block");
-            let child = (2..256)
+            let child = (1..4096)
                 .map(|nonce| round_block(&chain, card % 8, round + 1, nonce))
-                .find(|child| child.header.hash < parent.header.hash)
-                .expect("a nonce that sorts the child first");
+                .find(|child| child.header.hash.as_bytes()[0] < 0x80)
+                .expect("a nonce in the lower half");
+            assert!(child.header.hash < parent.header.hash, "the child sorts first");
             assert_eq!(child.header.direct_parents(), &[parent.header.hash]);
             chain
                 .ctx

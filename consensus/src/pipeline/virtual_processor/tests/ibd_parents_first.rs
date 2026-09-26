@@ -98,22 +98,30 @@ fn parent_first(source: &TestConsensus, order: &[BlockHash]) -> bool {
     is_parent_first(order, |hash| *hash, |hash| source.get_header(*hash).unwrap().direct_parents().to_vec())
 }
 
-/// A round block of `round` that extends the lane from `parent` and sorts BEFORE it.
-fn round_block_sorting_before(
+/// A round block of `round` whose hash falls in the `slot`-th eighth of the hash space counted from
+/// the TOP (its first byte's top three bits are `7 - slot`), extending the lane from `parent` when one
+/// is given. Successive slots sort each child before its parent whatever hashes the chain drew — a
+/// grind toward "below the parent's hash" alone gets harder with every step (the hashes descend) and
+/// failed now and then in a parallel run.
+fn round_block_in_slot(
     ctx: &TestContext,
     config: &Config,
     round: u64,
     payout: &kaspa_consensus_core::tx::ScriptPublicKey,
-    parent: BlockHash,
+    parent: Option<BlockHash>,
+    slot: u8,
 ) -> MutableBlock {
-    for nonce in 0..256 {
+    assert!(slot < 8);
+    for nonce in 0..4096 {
         let block = adr0125_round_block(ctx, config, round, 0, payout.clone(), nonce);
-        assert_eq!(block.header.direct_parents(), &[parent], "the lane extends itself from its tip alone");
-        if block.header.hash < parent {
+        if let Some(parent) = parent {
+            assert_eq!(block.header.direct_parents(), &[parent], "the lane extends itself from its tip alone");
+        }
+        if block.header.hash.as_bytes()[0] >> 5 == 7 - slot {
             return block;
         }
     }
-    panic!("256 nonces without a hash below the parent's");
+    panic!("4096 nonces without a hash in slot {slot}");
 }
 
 #[tokio::test]
@@ -138,13 +146,14 @@ async fn ibd_across_a_round_lane_whose_blocks_tie_on_blue_work() {
     // before it by hash, which is the order `(blue_work, hash)` then puts them in.
     const LANE: usize = 6;
     let mut lane: Vec<BlockHash> = Vec::with_capacity(LANE);
-    let r0 = adr0125_round_block(&ctx, &config, first_round, 0, payout.clone(), 0);
+    let r0 = round_block_in_slot(&ctx, &config, first_round, &payout, None, 0);
     assert_eq!(r0.header.direct_parents(), &[anchor]);
     lane.push(r0.header.hash);
     ctx.consensus.validate_and_insert_block(r0.to_immutable()).virtual_state_task.await.expect("a signed round block is valid");
     for i in 1..LANE {
         let round = first_round + 2 * i as u64;
-        let block = round_block_sorting_before(&ctx, &config, round, &payout, *lane.last().unwrap());
+        let block = round_block_in_slot(&ctx, &config, round, &payout, Some(*lane.last().unwrap()), i as u8);
+        assert!(block.header.hash < *lane.last().unwrap(), "each child sorts before its parent");
         lane.push(block.header.hash);
         ctx.consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.expect("valid");
     }
