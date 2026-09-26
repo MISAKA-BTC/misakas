@@ -278,7 +278,10 @@ fn plan_is_exact(parent: &PalwChainStateV2, child: &PalwChainStateV2, notes: &[P
         && !notes.iter().any(|note| {
             matches!(
                 note,
-                PalwVestingNoteV1::Burned { .. } | PalwVestingNoteV1::ShareBurned { .. } | PalwVestingNoteV1::BuybackAtFinal { .. }
+                PalwVestingNoteV1::Burned { .. }
+                    | PalwVestingNoteV1::ShareBurned { .. }
+                    | PalwVestingNoteV1::ProducerLegBurned { .. }
+                    | PalwVestingNoteV1::BuybackAtFinal { .. }
             ) || matches!(note, PalwVestingNoteV1::Moved { source: PalwVestingSourceV1::Reporter { offence_id }, .. }
                     if !parent_awards.contains(offence_id))
         })
@@ -637,8 +640,9 @@ impl Minting {
                 PalwVestingNoteV1::Burned { claim_id, sompi, kind, .. } => {
                     self.books.burned.insert(*claim_id, (*sompi, *kind));
                 }
-                PalwVestingNoteV1::ShareBurned { claim_id, sompi, .. } => {
-                    panic!("{what}: no seat share of {claim_id} burns here ({sompi})")
+                PalwVestingNoteV1::ShareBurned { claim_id, sompi, .. }
+                | PalwVestingNoteV1::ProducerLegBurned { claim_id, sompi, .. } => {
+                    panic!("{what}: no single leg of {claim_id} burns here ({sompi})")
                 }
                 // An award written at step 2 and moved by step 3d in the same block never shows in
                 // `reporter_rewards`: it is counted from its move.

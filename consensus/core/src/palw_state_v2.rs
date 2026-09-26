@@ -16285,15 +16285,17 @@ impl<'a> TransitionBuilder<'a> {
     /// **R-2: a conviction's CLOSING** — the consumed record, written LAST, after every leg:
     /// `amount` the nominal tier summed over the conviction's legs (for audit: what the rules asked
     /// for), `collected` the debit actually taken from `counted` ([`Self::conviction_collected_v1`]),
-    /// `claim_id` the claim it binds (zero for Eq). `collected ≤ amount` always below ADR-0160's
-    /// fence. Returns `collected`.
+    /// `claim_id` the claim it binds (zero for Eq). `collected ≤ amount` always. Returns `collected`.
     ///
-    /// **ADR-0160 lane liab (F-L): every conviction's aggregate liability runs here first**
-    /// ([`Self::aggregate_on_conviction_v1`] over `liable`, each bond the conviction charges with the
-    /// class of what it was convicted of) — so the record's `collected` includes what an intent-class
-    /// forfeiture took from a bond whose exit was shut at the opening, and the reporter reward is
-    /// computed on it, "on the collected debit, as today" (§4.6). Past the fence `amount` stays the
-    /// nominal TIER and `collected` may exceed it by that forfeiture. A no-op below the fence.
+    /// **ADR-0160 lane liab (F-L): every conviction's aggregate liability runs here, after the
+    /// conviction's own legs and before its record** ([`Self::aggregate_on_conviction_v1`] over
+    /// `liable`, each bond the conviction charges with the class of what it was convicted of). The
+    /// record's `collected` is read BEFORE the funnel: it is the TIER debit the conviction's legs
+    /// took, exactly as below the fence, so the reporter reward stays "on the collected debit, as
+    /// today" (§4.6) — 10% of the tier, never 10% of a forfeited bond (lane liab review, finding 2:
+    /// counting the forfeiture turned forcing one DA default of a genesis producer into a ≈ 93,586 MSK
+    /// bounty, against ≈ 320 today). What the forfeiture took is the freeze record's
+    /// `forfeited_sompi`. Below the fence the funnel is a no-op and the order changes nothing.
     #[allow(clippy::too_many_arguments)]
     fn close_conviction_v1(
         &mut self,
@@ -16307,8 +16309,8 @@ impl<'a> TransitionBuilder<'a> {
         counted: &[PalwBondKeyV2],
         liable: &[(PalwBondKeyV2, crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1)],
     ) -> Result<u64, PalwStateV2Error> {
-        self.aggregate_on_conviction_v1(conv.now_daa, key, kind, liable)?;
         let collected = self.conviction_collected_v1(conv, counted);
+        self.aggregate_on_conviction_v1(conv.now_daa, key, kind, liable)?;
         self.write_consumed_offence(
             key,
             Some(crate::palw_offence_v1::PalwConsumedOffenceV1 {
@@ -16333,13 +16335,15 @@ impl<'a> TransitionBuilder<'a> {
     ///
     /// * **intent class** ([`crate::palw_aggregate_liability_v1::palw_offence_is_intent_class_v1`]) —
     ///   AG-2's forfeiture ([`Self::forfeit_bond_v1`]: every live claim voided `AggregateForfeit`, the
-    ///   posted collateral whole, every vesting row it is payee of that has not moved) and a FINAL
-    ///   freeze. A bond already final-frozen has nothing left to take and keeps its freeze;
+    ///   posted collateral whole, the bond's own legs of every vesting row that has not moved) and a
+    ///   FINAL freeze. A bond already final-frozen has nothing left to take and keeps its freeze;
     /// * **otherwise** — the tier its caller already charged, and a freeze from this DAA (written, or
     ///   re-dated by a later conviction; a final one stays final), with the bond's own unmatured
     ///   vesting rows re-keyed to the freeze's lift ([`Self::rekey_frozen_rows_v1`]).
     ///
-    /// It calls `void_claim`, `slash_bond` and `burn_vesting_row` and edits none of them.
+    /// It calls `void_claim` and `slash_bond` and edits neither; its vesting burns take only the
+    /// bond's own legs ([`Self::burn_vesting_producer_leg_v1`], [`Self::burn_vesting_seat_legs_v1`]),
+    /// never a whole row (`burn_vesting_row` stays the burn of a claim a conviction binds).
     fn aggregate_on_conviction_v1(
         &mut self,
         now_daa: u64,
@@ -16392,12 +16396,17 @@ impl<'a> TransitionBuilder<'a> {
     ///    reward is never minted, its sessions end (a filer's refuted exposure refunded, DA-6), its
     ///    seats leave duty, its commitment is released — into the collateral step 2 takes whole;
     /// 2. the posted collateral, whole (`slash_bond`, which saturates: never debt, AG-1);
-    /// 3. every vesting row the bond is payee of that has not moved (latched rows included): the
-    ///    rows it PRODUCED burned whole (`burn_vesting_row`), its seat legs in other producers' rows
-    ///    burned leg by leg ([`Self::burn_vesting_seat_legs_v1`]) — the producer and the other seats
-    ///    of those rows keep theirs.
+    /// 3. the bond's unmatured REWARD — every vesting row it is payee of that has not moved (latched
+    ///    rows included), and in each only the bond's OWN legs: the producer leg of every row it
+    ///    PRODUCED ([`Self::burn_vesting_producer_leg_v1`]) and its seat legs in other producers' rows
+    ///    ([`Self::burn_vesting_seat_legs_v1`]). Every other payee of those rows keeps its leg, and
+    ///    the reserve stays: the credited seats of a row the bond produced validated a claim no one
+    ///    proved false (this conviction binds ANOTHER claim), and they are other bonds — ADR-0160 §4.5
+    ///    "burns every unmatured reward of the bond", AG-4 (lane liab review, finding 1: burning the
+    ///    whole row with `burn_vesting_row` took the honest seats' 20% pool share, 640.17 MSK per
+    ///    floor row). The row stands, so a later conviction binding that claim still finds it (S3).
     ///
-    /// So A-I1: what it takes is at most the posted collateral plus the unmatured rows.
+    /// So A-I1: what it takes is at most the posted collateral plus the bond's own unmatured legs.
     fn forfeit_bond_v1(
         &mut self,
         bond: PalwBondKeyV2,
@@ -16425,7 +16434,7 @@ impl<'a> TransitionBuilder<'a> {
         let mut taken = self.slash_bond(bond, u128::from(collateral))?;
         let produced: Vec<Hash64> = self.state.vesting.iter().filter(|(_, row)| row.producer_bond == bond).map(|(id, _)| *id).collect();
         for id in produced {
-            taken = taken.saturating_add(self.burn_vesting_row(id, key, kind)?.unwrap_or(0));
+            taken = taken.saturating_add(self.burn_vesting_producer_leg_v1(id, bond, key, kind)?);
         }
         let sat: Vec<Hash64> =
             self.state.vesting.iter().filter(|(_, row)| row.seats.iter().any(|(seat, _)| *seat == bond)).map(|(id, _)| *id).collect();
@@ -16433,6 +16442,37 @@ impl<'a> TransitionBuilder<'a> {
             taken = taken.saturating_add(self.burn_vesting_seat_legs_v1(id, bond, key)?);
         }
         Ok(taken)
+    }
+
+    /// **ADR-0160 AG-2: burn the forfeited producer's own leg of a row it produced**, leaving the
+    /// row standing with `producer.amount = 0` — its credited seats' legs, its reserve, its clocks
+    /// and its attribution copies as they were, so it matures and moves the others' legs on its own
+    /// schedule (a zero leg takes no budget and writes nothing, [`PalwVestingLegV1::takes_budget`]).
+    /// The leg's sompi go to `vesting_burned` and are never minted; the note is
+    /// `ProducerLegBurned`. Returns the sompi burned (0, writing nothing, when the row is gone, is
+    /// not `bond`'s, or its producer leg is already 0).
+    ///
+    /// [`PalwVestingLegV1::takes_budget`]: crate::palw_vesting_v1::PalwVestingLegV1::takes_budget
+    fn burn_vesting_producer_leg_v1(
+        &mut self,
+        claim_id: Hash64,
+        bond: PalwBondKeyV2,
+        offence_id: Hash64,
+        kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    ) -> Result<u64, PalwStateV2Error> {
+        use crate::palw_vesting_v1::{PalwVestingNoteV1, PalwVestingRowV1};
+        let Some(row) = self.state.vesting.get(&claim_id).cloned() else { return Ok(0) };
+        if row.producer_bond != bond || row.producer.amount == 0 {
+            return Ok(0);
+        }
+        let sompi = row.producer.amount;
+        let mut counters = self.state.vesting_counters;
+        counters.burned = counters.burned.checked_add(u128::from(sompi)).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
+        let producer = PalwPayoutV2 { amount: 0, ..row.producer };
+        self.write_vesting(claim_id, Some(PalwVestingRowV1 { producer, ..row }));
+        self.write_vesting_counters(counters);
+        self.note_vesting(PalwVestingNoteV1::ProducerLegBurned { claim_id, producer: bond, offence_id, kind, sompi });
+        Ok(sompi)
     }
 
     /// **ADR-0160 AG-2 (AS-3): burn `bond`'s seat legs in another producer's vesting row**, leaving

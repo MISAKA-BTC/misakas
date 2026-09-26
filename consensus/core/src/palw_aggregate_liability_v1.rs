@@ -20,9 +20,12 @@
 //! * AG-1: the bond's posted collateral backs every one of its claims at once; nothing is ever debt
 //!   (`slash_bond` saturates).
 //! * AG-2: an INTENT-class conviction ([`palw_offence_is_intent_class_v1`]) forfeits, in one funnel,
-//!   the whole posted collateral, every vesting row the bond is payee of that has not moved (its own
-//!   rows burned whole, its seat legs in other producers' rows burned leg by leg), and every live
-//!   claim of the bond (voided `AggregateForfeit`: its withheld reward is never minted).
+//!   the whole posted collateral, the bond's own unmatured reward — its legs of every vesting row that
+//!   has not moved: the producer leg of each row it produced, its seat legs in other producers' rows;
+//!   every other payee of those rows keeps its leg — and every live claim of the bond (voided
+//!   `AggregateForfeit`: its withheld reward is never minted). The conviction's record keeps the
+//!   TIER debit as its `collected`, so the reporter reward is on the tier as today, never on the
+//!   forfeiture (which the freeze's `forfeited_sompi` records).
 //! * AG-3: the FIRST conviction of any producer or seat offence against a bond writes its freeze
 //!   ([`PalwBondFreezeV1`], the rooted map `bond_freezes`). While present: the bond's attempts and
 //!   free-prompt commitments are refused (`ProducerFrozen`, non-fatal for a block's own attempt), it
@@ -101,8 +104,10 @@ pub struct PalwCapacityStepOffsetV1 {
 /// **testnet-12's schedule** (ADR-0160 §9 stage 5, §10 D-9): the first step, ρ = 10, from the
 /// fence's height. `q_credit` is 0 until Stage 0's adversarial runs measure an attribution rate and
 /// the user credits half of it (D-8): at 0 the escrow lane keeps `m_c = E` and the seat lock keeps
-/// today's price, so the only live change of this step is the seat duty ÷ρ. Later steps are appended
-/// by later flag days, each with a drill that crosses it (one flag day per step, D-9).
+/// today's price, so the only live change of this step is the seat duty ÷ρ — the network's floor seat
+/// capital moves ×1.1 (0.94 → 1.03 claims/DAA, L-T4), not ×10, until a later step credits
+/// q ≥ [`PALW_CAPACITY_Q_SEAT_PERMILLE_V1`]. Later steps are appended by later flag days, each with a
+/// drill that crosses it (one flag day per step, D-9).
 pub const PALW_T12_CAPACITY_STEPS_V1: &[PalwCapacityStepOffsetV1] =
     &[PalwCapacityStepOffsetV1 { after_daa: 0, rho: 10, q_credit_permille: 0 }];
 
@@ -181,8 +186,23 @@ pub fn palw_capacity_step_at_v1(value: &PalwCapacityLiabilityV1, daa: u64) -> Op
 
 /// **AS-2's credit threshold `q_seat = E / (E + L_seat)`, in permille**, with `L_seat` the 3G tier a
 /// seat conviction definitely collects (ADR §4.7, D-5). `G = g_res + E ≥ E`, so `E/(E + 3G) ≤ 1/4`:
-/// 250‰ is the most any claim needs, and the seat lock is reduced only past it. (The whole-seat-bond
-/// `L_seat` of D-5's located-fault case would lower it to ≈ 24‰; this lane credits the smaller `L`.)
+/// 250‰ is the most any claim needs, and the seat lock is reduced only past it.
+///
+/// **Why not D-5's ≈ 24‰ (the whole seat bond, ≥ 130,000 MSK, as `L_seat`).** `L_seat` must be what
+/// the CHEAPEST route that convicts a fraud-backing seat collects, and for the naive fraud — roots
+/// with no material behind them, which the producer can only default on — that route is DA-7's
+/// covering-signer S4 ([`PalwConvictedOffenceV1::CoveringSigner`]: lock + `min(25%·C, 3G)`, the tier).
+/// It fires automatically at the DA deadline and takes the same (seat, claim) ledger key a later
+/// `PanelFalseValidV2` would, so the seat is charged once, at the tier. Whole-bond forfeiture of a
+/// seat for an `IdentityMismatch`/`OutputMismatch`/`ForgedOutputTiled`/`PromptNotAnchored` finding
+/// therefore does not raise the minimum `L_seat` above 3G; 24‰ would also need covering signers in
+/// the intent class — the honest-offline seat's risk, a user decision (lane liab review, finding 3).
+///
+/// **So the seat side's ×ρ is conditional**: at testnet-12's first step (ρ = 10, q_credit = 0,
+/// [`PALW_T12_CAPACITY_STEPS_V1`]) only the duty divides and the lock stays today's, so the eight
+/// genesis seats' network floor rate goes 0.94 → 1.03 claims/DAA (×1.1, L-T4), not ×10; the ×ρ rows
+/// (9.4 / 23.5 / 94) need a step crediting q ≥ 250‰, which D-8's half rule reaches only from a
+/// measured attribution rate of 500‰.
 pub const PALW_CAPACITY_Q_SEAT_PERMILLE_V1: u16 = 250;
 
 /// **May AS-2 reduce the seat lock under `step`?** `q_credit ≥ q_seat`.
@@ -322,6 +342,16 @@ pub enum PalwConvictedOffenceV1 {
 /// held dissection's verdict; Eq; a covering signer's S4. The same contradiction classes a seat's
 /// `PanelFalseValidV2` (AS-3): a `Valid` on a claim answering another job, output or prompt is
 /// attributable intent, one on an arithmetic fault is not (yet — D-5's burn-in extends the class).
+///
+/// **S1 here is the ADR's rule and an OPEN USER DECISION before F-L is armed** (lane liab review,
+/// finding 2). A DA default is how a fraud with no material behind its roots is convicted (the
+/// producer can only withhold), so the ρ ramp's `EV ≤ 0` (§4.5: one conviction loses `L = 3G` and
+/// every unmatured reward) rests on S1 reaching this funnel. But the same default is what an honest
+/// producer whose node is down through one `W_disclose` (1,200 DAA ≈ 40 h on testnet-12) incurs —
+/// operator nodes accuse "blind" every claim no operator can replay (free-prompt, C7, undeclared
+/// classes) — and past F-L it then loses its whole bond, where below it loses the claim's commitment.
+/// Consensus cannot tell the two apart. The reporter reward stays on the tier debit either way
+/// (`close_conviction_v1`), so forcing a default is not a bounty on the bond.
 pub fn palw_offence_is_intent_class_v1(offence: PalwConvictedOffenceV1) -> bool {
     match offence {
         PalwConvictedOffenceV1::DaDefault | PalwConvictedOffenceV1::CourtFraud => true,

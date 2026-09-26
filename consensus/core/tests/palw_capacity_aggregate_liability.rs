@@ -8,8 +8,9 @@
 //! the dormant chain:
 //!
 //! * **L-T1** — an intent-class conviction (a DA default, S1) past the fence forfeits the WHOLE bond:
-//!   collateral 0, every live claim voided `AggregateForfeit`, every vesting row it is payee of burned
-//!   (its seat legs in another producer's row leg by leg), a final freeze; below the fence (the same
+//!   collateral 0, every live claim voided `AggregateForfeit`, the bond's own legs of every unmoved
+//!   vesting row burned (its producer leg of each row it produced, its seat legs in another producer's
+//!   row; every other payee keeps its leg), a final freeze; below the fence (the same
 //!   chain, a default before the height) and on the dormant twin, only the S1 tier. A tier conviction
 //!   (Eq) freezes and debits only its tier; the freeze lifts `window_court` after the last conviction;
 //!   a later intent-class conviction makes it final.
@@ -222,9 +223,11 @@ fn license(c: &mut Chain, claim: Hash64, seats: &[(PalwBondKeyV2, Hash64)], sign
 /// commitment, a strike — its other claim B stays live, no freeze; and the armed chain's root is the
 /// dormant twin's (nothing below the fence moved). Past the fence P defaults on A′ with B′ bound and C′
 /// provisional: on the armed chain P's collateral goes to 0, B′ and C′ are voided `AggregateForfeit`
-/// (their withheld reward never minted, their seats off duty), the freeze is final and names the
-/// `DaDefault` record, whose `collected` is at least the collateral P posted (A-I1: never more than the
-/// posted collateral plus the unmatured rows); P's next attempt is skipped `ProducerFrozen` and
+/// (their withheld reward never minted, their seats off duty), the freeze is final, names the
+/// `DaDefault` record and counts the whole collateral P posted (A-I1: never more than the posted
+/// collateral plus the bond's own unmatured legs), while the record's `collected` — the reporter
+/// reward's base — is S1's tier debit exactly as on the dormant twin (review finding 2: never 10% of
+/// a forfeited bond); P's next attempt is skipped `ProducerFrozen` and
 /// admission refuses it; P's exit is shut. On the twin: S1 again, B′ and C′ live, P produces.
 #[test]
 fn l_t1_a_da_default_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_below_it() {
@@ -279,12 +282,21 @@ fn l_t1_a_da_default_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_be
             assert!(f.final_ && f.since_daa == at, "an intent-class freeze is final, dated at the conviction: {f:?}");
             assert_eq!(f.offence_key, palw_da_offence_id_v1(&producer.0, &a), "it names the DaDefault record");
             assert_eq!(u128::from(f.forfeited_sompi), u128::from(before) - commitment, "the forfeiture took what S1 left (no vesting row here)");
-            assert!(u128::from(record.collected) >= u128::from(before) - commitment, "A-I1: collected includes the whole posted collateral: {record:?}");
-            assert!(u128::from(record.collected) <= u128::from(c0), "A-I1: never more than the bond ever posted");
+            assert!(u128::from(f.forfeited_sompi) + u128::from(record.collected) <= u128::from(c0), "A-I1: never more than the bond ever posted");
+            assert_eq!(u128::from(record.collected), commitment, "the record's collected is S1's tier debit, as on the dormant twin");
+            assert!(record.collected <= record.amount, "collected ≤ amount, past the fence too");
+            let reward = c.s.reward_pending(&palw_da_offence_id_v1(&producer.0, &a)).expect("the accuser's reward is pending").amount;
+            assert_eq!(
+                reward,
+                kaspa_consensus_core::palw_state_v2::palw_reporter_reward_amount_v1(record.collected, 0),
+                "the accuser's reward is on the tier debit, not on the forfeiture"
+            );
             println!(
-                "armed: P posted {:.2} MSK before the default; collected {:.2} MSK; claims A′ {:?}, B′/C′ AggregateForfeit",
+                "armed: P posted {:.2} MSK before the default; forfeited {:.2} MSK; the record collected {:.2} MSK (tier) → reporter reward {:.2} MSK; claims A′ {:?}, B′/C′ AggregateForfeit",
                 before as f64 / MSK as f64,
+                f.forfeited_sompi as f64 / MSK as f64,
                 record.collected as f64 / MSK as f64,
+                reward as f64 / MSK as f64,
                 phase(c, &a)
             );
             assert!(exit_shut(c, &producer), "AG-3: the exit is shut");
@@ -583,6 +595,91 @@ fn l_t5_a_pre_committed_pool_is_forfeited_whole_and_a_seat_s_legs_burn_leg_by_le
     assert!(c.s.vesting_counters().burned >= u128::from(s_leg), "burned, never minted");
 }
 
+/// **AG-2 takes the forfeited producer's REWARD, never its seats' (review finding 1; AG-4, ADR §4.5
+/// "burns every unmatured reward of the bond").** X is a claim of the genesis producer P, licensed by
+/// five seats and taken to `Final`: its row pays P's leg and each credited seat's. P then defaults on
+/// a DIFFERENT claim D past the fence (intent class). On the armed chain X's row stands with P's leg
+/// at 0 — exactly that leg burned (`vesting_burned`, and counted in the freeze's forfeiture) — and
+/// every seat's leg, the reserve and the row's clocks as they were; on the dormant twin P keeps its
+/// leg. Both chains then settle the second clock's depth of anchors (bond 2's licensed claims) and run
+/// past X's expiry: X's row moves on both, and the armed chain moves exactly P's leg less — the
+/// honest seats are paid.
+#[test]
+fn l_t5b_a_producer_s_forfeiture_burns_its_own_leg_and_the_seats_keep_theirs() {
+    let mut rows = Vec::new();
+    let mut moved = Vec::new();
+    for armed in [true, false] {
+        let mut c = Chain::new(if armed { t12_fl(1_001) } else { t12() });
+        c.step(&[bond_obj(1, 50_000 * MSK), bond_obj(2, 500_000 * MSK)]);
+        let (producer, _, _) = floor_producer(&c.p);
+        let seats = c.floor_seats();
+        let x = c.floor_claim(0xF1);
+        let bound = c.bind(x, &seats);
+        license(&mut c, x, &seats, bound);
+        c.finalize(x);
+        let row = c.s.vesting_row(&x).expect("X's row").clone();
+        assert!(
+            row.producer_bond == producer
+                && row.producer.amount > 0
+                && row.seats.len() == seats.len()
+                && row.seats.iter().all(|(_, leg)| leg.amount > 0),
+            "the premise: X's row pays P and its five seats: {row:?}"
+        );
+        let burned_before = c.s.vesting_counters().burned;
+        let d = c.floor_claim(0xF2);
+        c.bind(d, &seats);
+        let at = da_default(&mut c, &[d], bond_key(1));
+        assert!(at > 1_001, "the default lands past the fence ({at})");
+        let after = c.s.vesting_row(&x).expect("X's row stands on both chains").clone();
+        let burned = c.s.vesting_counters().burned - burned_before;
+        assert_eq!(after.seats, row.seats, "armed={armed}: every credited seat keeps its leg");
+        assert_eq!(
+            (after.reserve, after.expiry_daa, after.settled_at_final, after.matured_at),
+            (row.reserve, row.expiry_daa, row.settled_at_final, row.matured_at),
+            "armed={armed}: the reserve and the row's clocks as they were"
+        );
+        if armed {
+            assert_eq!(after.producer.amount, 0, "P's own leg is burned");
+            assert_eq!(after.producer.payload, row.producer.payload, "the leg keeps its payee");
+            assert_eq!(burned, u128::from(row.producer.amount), "exactly P's leg went to vesting_burned");
+            let f = freeze(&c, &producer).expect("the final freeze");
+            assert!(f.final_ && f.forfeited_sompi >= row.producer.amount, "the forfeiture counts P's leg: {f:?}");
+        } else {
+            assert_eq!(after.producer, row.producer, "dormant: P keeps its leg");
+            assert_eq!(burned, 0, "dormant: X's row burns nothing");
+        }
+        println!(
+            "armed={armed}: X's row after P's default at {at}: producer {:.2} MSK (was {:.2}), {} seat legs {:.2} MSK, reserve {:.2}; burned {:.2} MSK",
+            after.producer.amount as f64 / 1e8,
+            row.producer.amount as f64 / 1e8,
+            after.seats.len(),
+            after.seats.iter().map(|(_, leg)| leg.amount).sum::<u64>() as f64 / 1e8,
+            after.reserve as f64 / 1e8,
+            burned as f64 / 1e8
+        );
+        // The second clock: `depth` anchors settle after X's Final (bond 2's licensed claims), then
+        // the DAA clock runs out and X's row latches and moves.
+        let depth = c.extras_at(c.daa + 1).settled_anchor_depth.expect("testnet-12 has a second clock");
+        for k in 0..=depth {
+            let id = claim_by(&mut c, 2, 0x5E00 + k);
+            let bound = c.bind(id, &seats);
+            license(&mut c, id, &seats, bound);
+        }
+        let moved_before = c.s.vesting_counters().moved;
+        run_to(&mut c, row.expiry_daa + 1);
+        assert!(c.s.vesting_row(&x).is_none(), "armed={armed}: X's row matured and moved");
+        moved.push(c.s.vesting_counters().moved - moved_before);
+        rows.push(row);
+    }
+    assert_eq!(rows[0], rows[1], "the same row on both chains before the default");
+    assert_eq!(
+        moved[1] - moved[0],
+        u128::from(rows[0].producer.amount),
+        "the armed chain moved exactly P's leg less: every seat's leg and the reserve were paid"
+    );
+    println!("moved at X's maturity: armed {:.2} MSK, dormant {:.2} MSK", moved[0] as f64 / 1e8, moved[1] as f64 / 1e8);
+}
+
 // ---------------------------------------------------------------------------------------------
 // L-T7: reorg, restart and IBD across a conviction and a lift; below the fence, the dormant root
 // ---------------------------------------------------------------------------------------------
@@ -685,8 +782,15 @@ fn l_t8_each_13k_piece_forfeits_its_own_whole_bond_and_no_other() {
     let record = c.s.consumed_offence(&palw_da_offence_id_v1(&bond_key(11).0, &first)).unwrap().clone();
     assert_eq!(collateral(&c, &bond_key(11)), 0, "the piece forfeits its whole bond");
     assert!(freeze(&c, &bond_key(11)).is_some_and(|f| f.final_), "and is frozen for good");
-    assert!(u128::from(record.collected) >= three_g.min(u128::from(before[0])), "≥ 3G per conviction (or the whole piece)");
-    println!("a 13k piece's conviction collects {:.2} MSK (3G = {:.2} MSK)", record.collected as f64 / 1e8, three_g as f64 / 1e8);
+    let lost = u128::from(before[0]);
+    assert!(lost >= three_g.min(u128::from(floor_msk)), "≥ 3G per conviction (or the whole piece)");
+    assert!(record.collected <= record.amount, "the record's collected is the tier debit (the reporter reward's base)");
+    println!(
+        "a 13k piece's conviction takes {:.2} MSK (3G = {:.2} MSK; the record's tier debit {:.2} MSK)",
+        lost as f64 / 1e8,
+        three_g as f64 / 1e8,
+        record.collected as f64 / 1e8
+    );
     for (i, (n, id)) in pieces.iter().enumerate() {
         assert_eq!(collateral(&c, &bond_key(*n)), before[i + 1], "piece {n} untouched");
         assert!(freeze(&c, &bond_key(*n)).is_none() && live(&c, id), "piece {n} neither frozen nor voided");
@@ -757,10 +861,16 @@ fn seat_prices(step: Option<(u32, u16)>) -> SeatPrices {
     }
 }
 
-/// **L-T4 — the seat side at each step, measured on the fold, and the network's floor seat capital.**
-/// Per floor claim the seats hold `5 · duty · 122 + 5 · lock · 3,000` MSK·DAA (ADR-0160 Appendix A: the
-/// duty bind → Final, the lock to F + 3,000); eight genesis seats post 8 × 469,531.6 MSK of work room,
-/// so the network licenses `3,756,253 / capital` floor claims per DAA — ≈ 0.94 today.
+/// **L-T4 — the seat side at each step, measured on the fold, and the network's floor seat capital
+/// DERIVED from it.** The duty and the lock are what the fold actually reserves at the bind and posts
+/// at the licence (read back from the seat ledger). The network rate is §5.4's Little's-law steady
+/// state over those prices, not a pipeline run: per floor claim the seats hold `5 · duty · 122 + 5 ·
+/// lock · 3,000` MSK·DAA (ADR-0160 Appendix A: the duty bind → Final, the lock to F + 3,000); eight
+/// genesis seats post 8 × 469,531.6 MSK of work room, so the network licenses `3,756,253 / capital`
+/// floor claims per DAA — ≈ 0.94 today. (The processor capacity harness — `A_floor_small` /
+/// `K_floor_big`, 160–200 DAA at ≈ 11 claims/DAA — cannot reach that steady state: the lock lives to
+/// F + 3,000, so a 160-DAA run shows no saturation at ρ = 10 whatever the credit, and licence
+/// carriage binds at ≈ 13/DAA before seat capital from ρ = 25 on.)
 ///
 /// * **This lane alone** (the commitment still `E + w`): the fold's duty is AS-1's
 ///   `duty_bind(⌈λ/ρ⌉, ⌈lock_2/ρ⌉, E + w, 5)` and its lock AS-2's `⌈lock/ρ⌉` once the credit reaches
@@ -768,8 +878,9 @@ fn seat_prices(step: Option<(u32, u16)>) -> SeatPrices {
 /// * **With the escrow lane's commitment** (`m_c = ⌈E/ρ⌉` at that credit, so `commitment′ = ⌈E/ρ⌉ + w`),
 ///   the duty the same formula gives and the lock measured here reach §5.4's rows 9.4 / 23.5 / 94 —
 ///   each within 10%.
-/// * With nothing credited (testnet-12's first step, q = 0) only the duty divides; the table prints
-///   what that buys.
+/// * **With nothing credited (testnet-12's first step as armed, q = 0) only the duty divides: ×1.1
+///   (0.94 → 1.03/DAA), asserted** — the ×ρ rows are conditional on a step crediting q ≥ q_seat
+///   (250‰), review finding 3.
 #[test]
 fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
     use kaspa_consensus_core::palw_aggregate_liability_v1::palw_seat_duty_v2;
@@ -804,7 +915,7 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
         let composed_duty = palw_seat_duty_v2(today.lambda, today.lock_2, composed_commitment, 5, Some(step));
         let composed = SEAT_ROOM_MSK / capital(composed_duty, m.lock);
         println!(
-            "ρ = {rho:>3}, q = {q:>3}‰: lane alone duty {:.4} lock {:.4} MSK → {:.2}/DAA (×{:.1}); with escrow's m_c = ⌈E/ρ⌉ duty {:.4} MSK → {:.2}/DAA (×{:.1})",
+            "ρ = {rho:>3}, q = {q:>3}‰: lane alone duty {:.4} lock {:.4} MSK (fold) → derived {:.2}/DAA (×{:.1}); with escrow's m_c = ⌈E/ρ⌉ duty {:.4} MSK → derived {:.2}/DAA (×{:.1})",
             m.duty as f64 / 1e8,
             m.lock as f64 / 1e8,
             alone,
@@ -818,6 +929,11 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
             assert!((composed - want).abs() / want < 0.10, "ρ = {rho}: §5.4's {want}/DAA within 10% ({composed:.2})");
         } else {
             assert_eq!(m.lock, today.lock, "AS-2: below q_seat the lock is today's");
+            // The shipped first step buys ×1.1, not ×ρ: the lock (to F + 3,000) dominates the capital.
+            for (what, rate) in [("lane alone", alone), ("with escrow", composed)] {
+                let gain = rate / today_rate;
+                assert!((1.0..1.2).contains(&gain), "ρ = {rho}, q = 0 ({what}): ×{gain:.3}, not ×ρ — the lock is today's");
+            }
         }
     }
 }
