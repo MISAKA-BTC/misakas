@@ -226,6 +226,11 @@ pub enum PalwAdmissionV2Error {
     /// a new key and operator identity, ADR §9.3 Q11) restores production.
     #[error("bond {bond:?} posts {collateral} sompi, below the producer floor of {floor}: top up before producing")]
     ProducerBelowFloor { bond: PalwBondKeyV2, collateral: u64, floor: u64 },
+    /// **ADR-0160 lane liab (AG-3): the producing bond is frozen by a conviction** past
+    /// `Params::palw_capacity_aggregate_liability` — for good once forfeited, until the freeze lifts
+    /// otherwise. The fold refuses the same attempt (`ProducerFrozen`).
+    #[error("bond {bond:?} is frozen by a conviction (ADR-0160 AG-3): it produces nothing until the freeze lifts")]
+    ProducerFrozen { bond: PalwBondKeyV2 },
     #[error("arithmetic overflow in {0}")]
     Overflow(&'static str),
     #[error("class {class_id} is registered but weightless until DAA {activation_daa} — it holds no cadence share yet")]
@@ -592,6 +597,13 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         if posted < floor {
             return Err(PalwAdmissionV2Error::ProducerBelowFloor { bond: bond_key, collateral: posted, floor });
         }
+    }
+    // 7c. **ADR-0160 lane liab (AG-3): a frozen bond produces nothing** — the fold refuses the same
+    //     attempt (`ProducerFrozen`, skipped there when the block's own objects froze the bond under it)
+    //     and the producer's facts carry it. The freeze map is empty below
+    //     `Params::palw_capacity_aggregate_liability`, so this refuses nothing there.
+    if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, &bond_key) {
+        return Err(PalwAdmissionV2Error::ProducerFrozen { bond: bond_key });
     }
 
     // 8. The exposure ceiling (closes P0-10): what this bond already backs, plus what this claim

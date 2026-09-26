@@ -149,6 +149,8 @@ pub(crate) fn own_claim_events_at_v1(
                     R::CourtDefault => "court_default",
                     // ADR-0152 §4-ter (F3, decision (B)): a held dissection's verdict, past `palw_offence_attribution`.
                     R::CourtHeldVerdict => "court_held_verdict",
+                    // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
+                    R::AggregateForfeit => "aggregate_forfeit",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }

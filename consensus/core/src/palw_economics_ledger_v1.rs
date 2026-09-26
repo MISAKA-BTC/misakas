@@ -353,6 +353,8 @@ pub fn palw_void_reason_name_v1(reason: &PalwVoidReasonV2) -> &'static str {
         PalwVoidReasonV2::CourtDefault => "court_default",
         // ADR-0152 §4-ter (F3, decision (B)): a held dissection's verdict, past `palw_offence_attribution`.
         PalwVoidReasonV2::CourtHeldVerdict => "court_held_verdict",
+        // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
+        PalwVoidReasonV2::AggregateForfeit => "aggregate_forfeit",
     }
 }
 

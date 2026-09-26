@@ -58,6 +58,11 @@ pub struct PalwProducerBondFactsV2 {
     /// `Params::palw_rcore_plus`, `0` below it. The work gate never lets `committed + accuser` pass
     /// the collateral (the S review's M1).
     pub accuser_exposure: u128,
+    /// **ADR-0160 lane liab (AG-3): the bond is frozen by a conviction**
+    /// (`palw_aggregate_liability_v1::palw_bond_is_frozen_v1` on the snapshot) — admission and the
+    /// fold refuse its attempts (`ProducerFrozen`) while it is. `false` on every chain below
+    /// `Params::palw_capacity_aggregate_liability`.
+    pub frozen: bool,
 }
 
 impl PalwProducerBondFactsV2 {
@@ -257,6 +262,10 @@ impl PalwProducerFactsV2 {
         if bond.producer_floor_shortfall.is_some() {
             return Err(PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2);
         }
+        // ADR-0160 lane liab (AG-3): admission refuses a frozen bond after the floor (`ProducerFrozen`).
+        if bond.frozen {
+            return Err(PALW_NOT_READY_BOND_FROZEN_V1);
+        }
         if self.class_admission_refusal.is_some() {
             return Err(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2);
         }
@@ -290,6 +299,11 @@ pub const PALW_NOT_READY_CLASS_NOT_ADMITTING_V2: &str = "the model registry admi
 /// refuses as `ProducerBelowFloor` on both lanes. A registered bond's collateral cannot be raised:
 /// the way out is a new bond at the floor under a new key.
 pub const PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2: &str = "the bond's posted collateral is below the producer floor";
+/// `ready_to_produce_v3` past ADR-0160's `palw_capacity_aggregate_liability`: the bond is frozen by a
+/// conviction (`PalwProducerBondFactsV2::frozen`), which admission and the fold refuse as
+/// `ProducerFrozen` — for good once its bond was forfeited, until the freeze lifts
+/// (`since + window_court`) otherwise.
+pub const PALW_NOT_READY_BOND_FROZEN_V1: &str = "the bond is frozen by a conviction";
 /// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).
 pub const PALW_NOT_READY_EPOCH_BUDGET_V2: &str = "this class's epoch budget is already spent";
 /// `ready_to_produce`: every sompi of the bond's exposure ceiling is reserved by live claims.
@@ -297,10 +311,11 @@ pub const PALW_NOT_READY_EXPOSURE_FULL_V2: &str = "the bond's exposure ceiling l
 
 /// Every sentence `ready_to_produce_v3` can return, in the order it checks them (the floor's only
 /// past `palw_rcore_plus`).
-pub const PALW_NOT_READY_REASONS_V2: [&str; 6] = [
+pub const PALW_NOT_READY_REASONS_V2: [&str; 7] = [
     PALW_NOT_READY_BOND_UNKNOWN_V2,
     PALW_NOT_READY_KEY_MISMATCH_V2,
     PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2,
+    PALW_NOT_READY_BOND_FROZEN_V1,
     PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
     PALW_NOT_READY_EPOCH_BUDGET_V2,
     PALW_NOT_READY_EXPOSURE_FULL_V2,
@@ -487,6 +502,7 @@ pub fn palw_producer_facts_v4(
             } else {
                 0
             },
+            frozen: crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, key),
         })
     });
     Some(PalwProducerFactsV2 {

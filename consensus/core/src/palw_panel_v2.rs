@@ -1125,6 +1125,12 @@ fn palw_panel_bonds_judging_v1<'a>(
         if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor) {
             continue;
         }
+        // **ADR-0160 lane liab (AG-3): a frozen bond is not drawn** — in every population, SW-10's base
+        // included, so a frozen stake neither sits nor counts against the eligible-stake floor. The map
+        // is empty below `Params::palw_capacity_aggregate_liability`, so every draw there is unchanged.
+        if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, bond_key) {
+            continue;
+        }
         // (SW-10's base, and the eligible list where the one-ledger seat filter asks the room
         // question instead, skip only this test: the headroom is the load.)
         if let Some(economy) = economy.filter(|_| headroom) {

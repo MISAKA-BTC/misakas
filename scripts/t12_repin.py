@@ -255,6 +255,7 @@ RESIL = "consensus/core/tests/palw_registry_resilience_is_t12_only.rs"
 HBSC = "consensus/core/tests/palw_hb_transparency_same_chain_fence.rs"
 SEATMAT = "consensus/core/tests/palw_bond_maturity_early_is_t12_only.rs"
 OPANCHOR = "consensus/core/tests/palw_operator_anchor_is_t12_only.rs"
+LIAB = "consensus/core/tests/palw_capacity_aggregate_liability_is_t12_only.rs"
 REORG = "consensus/core/tests/reorg_strict_win_fence.rs"
 MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
 EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
@@ -449,6 +450,10 @@ def registry() -> list[Pin]:
     # Lane A (the operator-anchor fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must not move.
     pins += _triple("opanchor.T12_RELEASE", "t12", OPANCHOR, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{OPANCHOR}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # ADR-0160 lane liab (F-L, the capacity redesign's aggregate liability, post-launch, dormant): testnet-12 as
+    # shipped, which the dormant fence must not move.
+    pins += _triple("liab.T12_RELEASE", "t12", LIAB, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{LIAB}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # Fork choice (the strict-economic-win reorg fence, post-launch, dormant): testnet-12 as shipped.
     pins += _triple("reorg.T12_LAUNCH_RELEASE", "t12", REORG, "const T12_LAUNCH_RELEASE: (&str, &str, &str) = (",
                     "shipped.testnet-12", (f"{REORG}::shipped_testnet_12_leaves_the_fence_dormant",))

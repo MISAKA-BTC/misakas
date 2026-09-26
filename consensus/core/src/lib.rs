@@ -153,6 +153,11 @@ pub mod palw_admission_v2;
 /// to repeat it as `#![cfg(test)]`, which is the same statement twice.
 #[cfg(test)]
 pub mod palw_adversarial;
+/// ADR-0160 lane liab (testnet-12, post-launch): aggregate bond liability — one shared pool per bond,
+/// forfeited whole on an intent-class conviction, frozen on the first conviction, and the seat side
+/// re-priced by the ramp factor. Consensus-inert while `Params::palw_capacity_aggregate_liability` is
+/// `None` (every shipped preset).
+pub mod palw_aggregate_liability_v1;
 /// ADR-0146: the committed search that reports the worst reward-per-MAC the derivation
 /// permits. No coefficient table, no fence — `cargo test palw_arbitrage_search` is the program.
 pub mod palw_arbitrage_search_v1;

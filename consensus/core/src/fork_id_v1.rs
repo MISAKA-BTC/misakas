@@ -645,6 +645,25 @@ mod tests {
                 let rule = params.palw_operator_anchor_of_genesis_bonds_v1(at).expect("the RC probe base is ConsensusV2");
                 params.palw_operator_anchor = Some(rule);
             }
+            // ADR-0160 lane liab (F-L): the height over testnet-12's schedule (its one step at the height);
+            // refused without R-core+ and the attribution fence at or below it by `validate_palw_v2`, which
+            // the probe does not run — it asks only the hashers and the schedule.
+            "palw_capacity_aggregate_liability" => {
+                params.palw_capacity_aggregate_liability = Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
+            }
+            // A later step's slot: the value (armed at 1,000 where absent, as a widening's lane is) grows to
+            // `slot` steps, the missing ones one DAA apart above the last, and step `slot` sits at `at`.
+            step if step.starts_with("palw_capacity_aggregate_liability_step_") => {
+                let slot: usize = step["palw_capacity_aggregate_liability_step_".len()..].parse().expect("a slot number");
+                let value = params.palw_capacity_aggregate_liability.get_or_insert_with(|| {
+                    crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(ForkActivation::new(1_000))
+                });
+                while value.steps.len() < slot {
+                    let last = *value.steps.last().expect("a value has its first step");
+                    value.steps.push(crate::palw_aggregate_liability_v1::PalwCapacityStepV1 { from_daa: last.from_daa + 1, ..last });
+                }
+                value.steps[slot - 1].from_daa = at.daa_score();
+            }
             // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
             // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
             // hashers and the schedule.
