@@ -12920,8 +12920,8 @@ impl PalwFoldReadV1<'_> {
         )
     }
 
-    /// [`Self::rcore_lock`] before ADR-0160's AS-2 — today's L-1 price, which AS-1's duty divides
-    /// by ρ whatever AS-2 says.
+    /// [`Self::rcore_lock`] before ADR-0160's AS-2 — today's L-1 price, which AS-2 re-prices (and
+    /// AS-1's duty reads through AS-2, `palw_seat_duty_v2`).
     fn rcore_lock_unreduced(&self, claim_id: &Hash64, claim: &PalwClaimStateV2, basis_k: u8) -> u128 {
         palw_rcore_lock_v1(
             self.rcore_g_res(claim_id, claim),
@@ -12942,8 +12942,10 @@ impl PalwFoldReadV1<'_> {
         now_daa: u64,
     ) -> PalwRcoreBindPricesV1 {
         // ADR-0160 AS-1/AS-2 (lane liab), keyed on the claim's `accepted_daa`: the lock a counted
-        // `Valid` posts is AS-2's; the duty divides λ and the UNREDUCED `lock_2` by ρ. With no step
-        // (every shipped preset, every claim accepted below the fence) both are today's.
+        // `Valid` posts is AS-2's; the duty divides λ by ρ and keeps AS-2's lock as its lock term
+        // (`palw_seat_duty_v2`, lane liab review 2, finding 3), so a bound seat is backed at the
+        // licence by construction whatever the credit. With no step (every shipped preset, every
+        // claim accepted below the fence) both are today's.
         let step = self.params.capacity_step_at(claim.accepted_daa);
         let lock_2_unreduced = self.rcore_lock_unreduced(claim_id, claim, PALW_RCORE_FINAL_BASIS_K_V1);
         let lock_2 = crate::palw_aggregate_liability_v1::palw_seat_lock_v2(lock_2_unreduced, step);
@@ -15766,12 +15768,33 @@ impl<'a> TransitionBuilder<'a> {
     /// the conviction's. A bond whose collateral already left through its release spend (its burn
     /// already paid) gains only a record — collateral on a registry row whose outpoint is spent,
     /// which nothing can spend again, so it is harmless: the money is gone, and nothing is minted in
-    /// its place. Called after a checkpoint conviction and after a DA-7 default.
+    /// its place. Called after a checkpoint conviction, after a DA-7 default, and (past ADR-0160 F-L)
+    /// by an aggregate forfeiture of the claim's producer ([`Self::forfeit_bond_v1`]).
+    ///
+    /// **ADR-0160 AG-2 (lane liab review 2, finding 1): a challenger forfeited whole keeps its
+    /// forfeiture final.** Past F-L an intent-class conviction takes a bond's whole posted collateral
+    /// and writes a FINAL freeze, and "a final freeze posts no collateral" is a load invariant
+    /// (`assert_bond_freezes_consistency_v1`, run by every carriage load: restart, pruning-point
+    /// import). Raising such a bond's collateral here wrote a tip no node could reload — the next sink
+    /// search panicked on every F-L node, on every restart. Had the wrong forfeit never been taken,
+    /// the forfeiture would have taken it with the rest; so the refund joins the forfeiture: `slashed`
+    /// and `collateral` stay, and the freeze's `forfeited_sompi` records it (entry 82). A tier freeze
+    /// leaves collateral, so its bond is refunded as any other. Below F-L no freeze exists.
     fn refund_held_forfeits_v1(&mut self, forfeits: &[PalwHeldForfeitV1]) {
         for record in forfeits {
             let Some(mut bond) = self.state.bonds.get(&record.challenger).cloned() else { continue };
             let refund = record.amount.min(bond.slashed);
             if refund == 0 {
+                continue;
+            }
+            if let Some(freeze) = self.state.bond_freezes.get(&record.challenger).copied().filter(|freeze| freeze.final_) {
+                self.write_bond_freeze_v1(
+                    record.challenger,
+                    Some(crate::palw_aggregate_liability_v1::PalwBondFreezeV1 {
+                        forfeited_sompi: freeze.forfeited_sompi.saturating_add(refund),
+                        ..freeze
+                    }),
+                );
                 continue;
             }
             bond.slashed -= refund;
@@ -16394,7 +16417,19 @@ impl<'a> TransitionBuilder<'a> {
     /// 1. every LIVE claim of the bond (`Provisional`, `PanelBound`, `ReceiptLicensed`; M3 retired
     ///    `DefaultDisputed` past R-core+) voided `AggregateForfeit` through `void_claim`: its withheld
     ///    reward is never minted, its sessions end (a filer's refuted exposure refunded, DA-6), its
-    ///    seats leave duty, its commitment is released — into the collateral step 2 takes whole;
+    ///    seats leave duty, its commitment is released — into the collateral step 2 takes whole — and
+    ///    every challenger holding a held forfeit on it (§4-ter.3 step 6) is made whole
+    ///    ([`Self::refund_held_forfeits_v1`], the records read before the void drops them; lane liab
+    ///    review 2, finding 2). The void closes both refund doors for good — the challenger's step-6
+    ///    demand (DA-7) and the checkpoint accusation need a live claim — and the forger chooses when
+    ///    it lands (any intent-class conviction of another of its claims: a default it arranges, a
+    ///    self-reported kind 4), so without this a forger expecting to lose its bond on the forged
+    ///    claim anyway would take the forfeiture through another claim first and keep the honest
+    ///    challenger's forfeit burned. The forfeited producer is treated as having withheld every
+    ///    demand it can no longer answer, as its void is charged as a conviction (DA-6 above). A
+    ///    challenger the refund reaches had lost a dissection on the claim of a bond now convicted of
+    ///    intent; at worst a challenger that was wrong recovers its own forfeit, never anyone's money;
+    ///    a challenger itself forfeited keeps the refund in its forfeiture (finding 1);
     /// 2. the posted collateral, whole (`slash_bond`, which saturates: never debt, AG-1);
     /// 3. the bond's unmatured REWARD — every vesting row it is payee of that has not moved (latched
     ///    rows included), and in each only the bond's OWN legs: the producer leg of every row it
@@ -16428,7 +16463,9 @@ impl<'a> TransitionBuilder<'a> {
             .map(|(id, claim)| (*id, claim.clone()))
             .collect();
         for (id, claim) in live {
+            let held: Vec<PalwHeldForfeitV1> = self.state.held_forfeits_of_claim(&id).map(|(_, record)| record.clone()).collect();
             self.void_claim(id, &claim, now_daa, PalwVoidReasonV2::AggregateForfeit)?;
+            self.refund_held_forfeits_v1(&held);
         }
         let collateral = self.state.bonds.get(&bond).map(|record| record.collateral).unwrap_or(0);
         let mut taken = self.slash_bond(bond, u128::from(collateral))?;

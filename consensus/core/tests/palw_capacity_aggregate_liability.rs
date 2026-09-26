@@ -28,6 +28,10 @@
 //! * **L-T4** — the seat side at ρ = 10 / 25 / 100: the duty the fold reserves at bind and the lock it
 //!   posts at licence, the seat capital one floor claim holds, and the network's floor claims per DAA
 //!   from the eight genesis seats — the lane's own measurement (printed), within 10% of §5.4's rows.
+//! * **Review 2** — a held-forfeit refund that reaches a challenger already forfeited whole joins its
+//!   forfeiture (the final freeze's load invariant holds, every node reloads the tip); the forger's
+//!   own forfeiture makes the honest challenger whole; a bound seat is backed at the licence under
+//!   every step (L-T4b); and L-T6 measured on the fold: one conviction's loss at 13k, by route.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test palw_capacity_aggregate_liability -- --nocapture
 
@@ -38,11 +42,16 @@ use common::*;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_admission_v2::{PalwAdmissionV2Error, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2};
 use kaspa_consensus_core::palw_aggregate_liability_v1::{
-    PalwBondFreezeV1, PalwCapacityLiabilityV1, PalwCapacityStepV1, palw_bond_is_frozen_v1,
+    PalwBondFreezeV1, PalwCapacityLiabilityV1, PalwCapacityStepV1, PalwConvictedOffenceV1, palw_bond_is_frozen_v1,
+    palw_producer_conviction_credits_q_v1,
 };
-use kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1;
+use kaspa_consensus_core::palw_da_rcore_v1::{
+    PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1, PalwDaClaimV1, PalwDaSessionV1, PalwDaStageV1, PalwDaUnitV1, palw_da_offence_id_v1,
+};
+use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
 use kaspa_consensus_core::palw_state_v2::{
-    PalwBlockContextV2, PalwVoidReasonV2, palw_bond_collateral_is_locked_v6, palw_claim_bond_reservation_v1,
+    PalwBlockContextV2, PalwHeldForfeitV1, PalwVoidReasonV2, palw_bond_collateral_is_locked_v6, palw_claim_bond_reservation_v1,
+    palw_da_disclose_window_daa_v1,
 };
 
 /// 1 MSK in sompi.
@@ -873,14 +882,17 @@ fn seat_prices(step: Option<(u32, u16)>) -> SeatPrices {
 /// carriage binds at ≈ 13/DAA before seat capital from ρ = 25 on.)
 ///
 /// * **This lane alone** (the commitment still `E + w`): the fold's duty is AS-1's
-///   `duty_bind(⌈λ/ρ⌉, ⌈lock_2/ρ⌉, E + w, 5)` and its lock AS-2's `⌈lock/ρ⌉` once the credit reaches
-///   `q_seat` (250‰) — both asserted against the formula, and the rate printed.
+///   `duty_bind(⌈λ/ρ⌉, lock′, E + w, 5)` with `lock′` AS-2's lock — `⌈lock/ρ⌉` once the credit
+///   reaches `q_seat` (250‰), today's lock below it — both asserted against the formula, and the rate
+///   printed.
 /// * **With the escrow lane's commitment** (`m_c = ⌈E/ρ⌉` at that credit, so `commitment′ = ⌈E/ρ⌉ + w`),
-///   the duty the same formula gives and the lock measured here reach §5.4's rows 9.4 / 23.5 / 94 —
-///   each within 10%.
-/// * **With nothing credited (testnet-12's first step as armed, q = 0) only the duty divides: ×1.1
-///   (0.94 → 1.03/DAA), asserted** — the ×ρ rows are conditional on a step crediting q ≥ q_seat
-///   (250‰), review finding 3.
+///   the duty the same formula gives (a seat reserving at least the lock it will post, as that lane's
+///   bind does) and the lock measured here reach §5.4's rows 9.4 / 23.5 / 94 — each within 10%.
+/// * **With nothing credited (testnet-12's first step as armed, q = 0) only the λ-term divides and the
+///   duty stops at the lock it backs: ×1.07 (0.94 → 1.00/DAA), asserted** — the ×ρ rows are
+///   conditional on a step crediting q ≥ q_seat (250‰), review finding 3; and the ×1.1 an AS-1 that
+///   divided the lock term too would print came from binds the licence could not back (review 2,
+///   finding 3: [`l_t4b_a_bound_seat_is_backed_at_the_licence_under_every_step`]).
 #[test]
 fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
     use kaspa_consensus_core::palw_aggregate_liability_v1::palw_seat_duty_v2;
@@ -911,11 +923,14 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
             "ρ = {rho}: AS-1's formula on the bind's own inputs"
         );
         let alone = SEAT_ROOM_MSK / capital(m.duty, m.lock);
+        assert!(m.duty >= m.lock, "ρ = {rho}, q = {q}: L-4b — the duty a bound seat reserves backs the lock it posts");
         let composed_commitment = today.escrow.div_ceil(u128::from(rho)) + today.weight;
-        let composed_duty = palw_seat_duty_v2(today.lambda, today.lock_2, composed_commitment, 5, Some(step));
+        // The escrow lane's bind reserves at least the lock (its eligibility) when the credit cuts the
+        // commitment under seats × lock.
+        let composed_duty = palw_seat_duty_v2(today.lambda, today.lock_2, composed_commitment, 5, Some(step)).max(m.lock);
         let composed = SEAT_ROOM_MSK / capital(composed_duty, m.lock);
         println!(
-            "ρ = {rho:>3}, q = {q:>3}‰: lane alone duty {:.4} lock {:.4} MSK (fold) → derived {:.2}/DAA (×{:.1}); with escrow's m_c = ⌈E/ρ⌉ duty {:.4} MSK → derived {:.2}/DAA (×{:.1})",
+            "ρ = {rho:>3}, q = {q:>3}‰: lane alone duty {:.4} lock {:.4} MSK (fold) → derived {:.2}/DAA (×{:.2}); with escrow's m_c = ⌈E/ρ⌉ duty {:.4} MSK → derived {:.2}/DAA (×{:.2})",
             m.duty as f64 / 1e8,
             m.lock as f64 / 1e8,
             alone,
@@ -929,10 +944,11 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
             assert!((composed - want).abs() / want < 0.10, "ρ = {rho}: §5.4's {want}/DAA within 10% ({composed:.2})");
         } else {
             assert_eq!(m.lock, today.lock, "AS-2: below q_seat the lock is today's");
-            // The shipped first step buys ×1.1, not ×ρ: the lock (to F + 3,000) dominates the capital.
+            assert_eq!(m.duty, today.lock_2, "AS-1 below q_seat: the duty stops at the lock it backs (λ/ρ < lock_2 < commitment/5)");
+            // The shipped first step buys ×1.07, not ×ρ: the lock (to F + 3,000) dominates the capital.
             for (what, rate) in [("lane alone", alone), ("with escrow", composed)] {
                 let gain = rate / today_rate;
-                assert!((1.0..1.2).contains(&gain), "ρ = {rho}, q = 0 ({what}): ×{gain:.3}, not ×ρ — the lock is today's");
+                assert!((1.0..1.1).contains(&gain), "ρ = {rho}, q = 0 ({what}): ×{gain:.3}, not ×ρ — the lock is today's");
             }
         }
     }
@@ -962,4 +978,522 @@ fn a_frozen_seat_cannot_be_bound() {
     let bind = PalwConsensusObjectV2::PanelBound { claim: x, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&other) };
     let (next, _, _) = c.try_fold(&c.s, &x_ctx, &[bind], PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
     assert!(matches!(next.claim(&x).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the other five bind it");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review 2, findings 1 and 2: held forfeits (§4-ter.3 step 6) across an aggregate forfeiture
+// ---------------------------------------------------------------------------------------------
+
+/// The anchor checkpoint a held dissection's bottom opened, and its chunk (review2's fixture).
+const ANCHOR_CHECKPOINT: u32 = 9;
+const CHUNK: u32 = 3;
+/// What the forger's acquittal kept from the challenger (review2's fixture).
+const HELD_FORFEIT: u64 = 3_744 * MSK;
+
+/// A floor claim of the genesis producer, licensed by the coverage door on the five floor seats.
+fn covered_floor_claim(c: &mut Chain, seed: u64) -> Hash64 {
+    let id = c.floor_claim(seed);
+    let seats = c.floor_seats();
+    let bound = c.bind(id, &seats);
+    let receipts = covered(id, c.anchor(&id), &seats, &[0, 1, 2, 3, 4], bound);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensedV2 { claim: id, receipts }]);
+    assert!(matches!(phase(c, &id), PalwClaimPhaseV2::ReceiptLicensed { .. }), "the coverage licence folds");
+    id
+}
+
+/// **review2's fixture: the forfeit a proven acquittal kept for `challenger` on `claim`** — written
+/// through the carriage the way `record_held_forfeit_v1` leaves the state: the debit out of
+/// `collateral` into `slashed`, and the record beside it.
+fn with_forfeit(c: &mut Chain, claim: Hash64, challenger: PalwBondKeyV2) {
+    c.s = edited(&c.sp, &c.s, |carriage| {
+        let bond = carriage.bonds.get_mut(&challenger).expect("the challenger's bond");
+        bond.collateral -= HELD_FORFEIT;
+        bond.slashed += HELD_FORFEIT;
+        carriage.held_forfeits.insert(
+            (claim, Hash64::from_u64_word(0x5E55)),
+            PalwHeldForfeitV1 {
+                challenger,
+                amount: HELD_FORFEIT,
+                anchor_leaf_hash: Hash64::from_u64_word(0xA7),
+                anchor_checkpoint: ANCHOR_CHECKPOINT,
+                narrowed_leaf: 4_750,
+                chunks: vec![CHUNK],
+                closed_daa: c.daa,
+                paused: false,
+            },
+        );
+    });
+    assert_eq!(c.s.held_forfeits_of_claim(&claim).count(), 1);
+}
+
+/// **review2's fixture: the challenger's step-6 demand of the record's anchor chunk** — a seat's
+/// session open from this block (the claim paused, DA-5), written through the carriage. Returns its
+/// deadline.
+fn with_seat_demand(c: &mut Chain, claim: Hash64, seat: PalwBondKeyV2) -> u64 {
+    let window = palw_da_disclose_window_daa_v1(&c.sp);
+    let opened = c.daa;
+    c.s = edited(&c.sp, &c.s, |carriage| {
+        carriage.da_sessions.insert(
+            (claim, seat),
+            PalwDaSessionV1 {
+                opened_daa: opened,
+                deadline_daa: opened + window,
+                accuser_is_seat: true,
+                exposure: 1_000,
+                units: vec![PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint: ANCHOR_CHECKPOINT, chunk: CHUNK })],
+                stage: PalwDaStageV1::Licensed,
+            },
+        );
+        carriage.da_claims.insert(
+            claim,
+            PalwDaClaimV1 {
+                open_seat_sessions: 1,
+                opened_by_seat: [(seat, 1)].into_iter().collect(),
+                paused_since: Some(opened),
+                ..Default::default()
+            },
+        );
+    });
+    opened + window
+}
+
+/// **One empty block at `daa` folded with the processor's extras** (DA-7's seat-answer rule landed,
+/// `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`), checked as `Chain::step_at` checks one — the delta
+/// re-applies and reverts, and the child's carriage reloads under its committed root, which is what
+/// every node's restart and pruning-point import run — and committed.
+fn step_landed(c: &mut Chain, daa: u64) {
+    let x = ctx(0xCA_0000 + daa, daa, daa, 0);
+    let mut e = c.extras_at(daa);
+    e.seat_da_answer_landed = PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1;
+    let parent = c.s.clone();
+    let (child, delta, _) =
+        fold_with(&c.p, &c.sp, &parent, &x, &[], PalwBlockWorkV3::None, Hash64::default(), &e).expect("the block folds");
+    assert_eq!(apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
+    assert_eq!(revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent, "DAA {daa}: the delta reverts");
+    let reloaded = PalwStateCarriageV2::from_state(&child)
+        .into_state(&c.sp, Some(child.state_root()))
+        .unwrap_or_else(|e| panic!("DAA {daa}: every node reloads the tip (restart, pruning-point import): {e}"));
+    assert_eq!(reloaded, child, "DAA {daa}: reload is the state");
+    c.s = child;
+    c.daa = daa;
+}
+
+/// **Review 2, finding 1 — a held-forfeit refund that reaches a challenger already forfeited whole
+/// joins its forfeiture, and every node reloads the tip.** Genesis seat X holds a held forfeit
+/// (3,744 MSK) on the genesis producer's licensed claim Y and the open step-6 demand of its anchor
+/// chunk. Before that demand runs out, X's OWN claim Z is DA-defaulted past F-L: X is forfeited whole
+/// (collateral 0) and final-frozen. Then a door refunds X's forfeit:
+/// * **DA-7**: Y's producer withholds the demanded chunk, and the default refunds the record;
+/// * **AG-2**: Y's producer is itself forfeited first — its other claim Z′ defaults — and the
+///   forfeiture voids Y and refunds the record (finding 2's door).
+///
+/// Either way, on the armed chain X's collateral stays 0 (a final freeze posts none: the load
+/// invariant), its `slashed` keeps the refund, the freeze's `forfeited_sompi` grows by exactly it, and
+/// each block's tip reloads under its root (before the fix the refund raised X's collateral and no
+/// F-L node could reload the tip: the sink search panicked, on every restart). On the dormant twin X is
+/// refunded into its collateral at Y's default, as review2 does.
+#[test]
+fn a_held_forfeit_refund_to_a_forfeited_challenger_joins_its_forfeiture_and_the_tip_reloads() {
+    for through_forfeiture in [false, true] {
+        let door = if through_forfeiture { "the producer's forfeiture" } else { "Y's DA-7 default" };
+        for armed in [true, false] {
+            let mut c = Chain::new(if armed { t12_fl(1_001) } else { t12() });
+            c.attribution = true;
+            c.step(&[bond_obj(1, 20_000 * MSK)]);
+            let x = genesis_keys(&c.p, 2).0;
+            assert_eq!(c.floor_seats()[1].0, x, "premise: floor seat 1 is genesis bond 2");
+            // X's own claim Z, on a panel without X, accused by bond 1.
+            let z = claim_by_genesis(&mut c, 2, 0x2A);
+            let gb = genesis_bonds(&c.p);
+            let z_seats: Vec<(PalwBondKeyV2, Hash64)> = [1usize, 3, 4, 5, 6].iter().map(|i| (gb[*i].0, gb[*i].1)).collect();
+            c.bind(z, &z_seats);
+            c.step(&[da_accuse(z, bond_key(1), 0)]);
+            let dz = c.s.da_session(&z, &bond_key(1)).expect("Z's session").deadline_daa;
+            // The producer's other claim Z′, accused just after Z (the forfeiture door only).
+            let z2 = through_forfeiture.then(|| {
+                let z2 = c.floor_claim(0x2B);
+                let seats = c.floor_seats();
+                c.bind(z2, &seats);
+                c.step(&[da_accuse(z2, bond_key(1), 0)]);
+                (z2, c.s.da_session(&z2, &bond_key(1)).expect("Z′'s session").deadline_daa)
+            });
+            // Y: X's held forfeit and its open step-6 demand.
+            let y = covered_floor_claim(&mut c, 0x6E);
+            with_forfeit(&mut c, y, x);
+            let dy = with_seat_demand(&mut c, y, x);
+            assert!(dz < dy && z2.is_none_or(|(_, d)| dz < d && d < dy), "premise: Z, then Z′, then Y's demand");
+            // Z defaults: on the armed chain X is forfeited whole.
+            run_to(&mut c, dz + 1);
+            let before = c.s.bond(&x).unwrap().clone();
+            let f0 = freeze(&c, &x);
+            if armed {
+                assert_eq!(before.collateral, 0, "{door}: X forfeited whole");
+                assert!(f0.is_some_and(|f| f.final_), "{door}: a final freeze");
+            }
+            // The door.
+            match z2 {
+                Some((_, d)) => run_to(&mut c, d + 1),
+                None => {
+                    run_to(&mut c, dy);
+                    step_landed(&mut c, dy + 1);
+                }
+            }
+            let after = c.s.bond(&x).unwrap().clone();
+            let yp = phase(&c, &y);
+            println!(
+                "armed={armed}, {door}: Y {yp:?}; X collateral {:.2} → {:.2} MSK, slashed {:.2} → {:.2} MSK, forfeited {:?} → {:?}",
+                before.collateral as f64 / 1e8,
+                after.collateral as f64 / 1e8,
+                before.slashed as f64 / 1e8,
+                after.slashed as f64 / 1e8,
+                f0.map(|f| f.forfeited_sompi as f64 / 1e8),
+                freeze(&c, &x).map(|f| f.forfeited_sompi as f64 / 1e8)
+            );
+            if armed {
+                assert_eq!(c.s.held_forfeits_of_claim(&y).count(), 0, "{door}: the record is gone with Y");
+                assert!(
+                    voided_by(&c, &y, if through_forfeiture { PalwVoidReasonV2::AggregateForfeit } else { PalwVoidReasonV2::ProducerWithholding }),
+                    "{door}: Y voided ({yp:?})"
+                );
+                assert_eq!(after.collateral, 0, "{door}: a final freeze posts no collateral, refund or not");
+                assert_eq!(after.slashed, before.slashed, "{door}: the refunded forfeit stays where the forfeiture keeps it");
+                let f = freeze(&c, &x).expect("still frozen");
+                assert!(f.final_, "{door}: still final");
+                assert_eq!(f.forfeited_sompi, f0.unwrap().forfeited_sompi + HELD_FORFEIT, "{door}: the refund joined the forfeiture");
+                // The tip every node restarts from, reloaded once more (step_at / step_landed did it per block).
+                PalwStateCarriageV2::from_state(&c.s).into_state(&c.sp, Some(c.s.state_root())).expect("the tip reloads");
+            } else {
+                if through_forfeiture {
+                    // The dormant twin forfeits nothing at Z′: Y's own DA-7 default refunds X.
+                    assert!(matches!(yp, PalwClaimPhaseV2::ReceiptLicensed { .. }) || voided_by(&c, &y, PalwVoidReasonV2::ProducerWithholding));
+                    run_to(&mut c, dy);
+                    step_landed(&mut c, dy + 1);
+                }
+                assert!(voided_by(&c, &y, PalwVoidReasonV2::ProducerWithholding), "dormant: Y defaulted");
+                assert_eq!(c.s.held_forfeits_of_claim(&y).count(), 0, "dormant: the record is gone with Y");
+                let refunded = c.s.bond(&x).unwrap().clone();
+                assert_eq!(refunded.collateral, before.collateral + HELD_FORFEIT, "dormant: X refunded into its collateral");
+                assert_eq!(refunded.slashed, before.slashed - HELD_FORFEIT, "dormant: out of slashed");
+                assert_eq!(freeze(&c, &x), None);
+            }
+        }
+    }
+}
+
+/// **Review 2, finding 2 — the forger's own forfeiture makes the honest challenger whole.** The
+/// genesis producer P (the forger) licensed Y; honest seat X lost a held dissection on Y (3,744 MSK
+/// held) and demands the anchor chunk. P's OTHER claim Z′ is DA-defaulted before that demand runs
+/// out — the forger choosing when to lose its bond. Past F-L the forfeiture voids Y
+/// `AggregateForfeit`, which closes both refund doors for good (the demand's DA-7 default and the
+/// checkpoint accusation need a live claim), and refunds X in the same block: X's collateral is back
+/// to what it posted, its `slashed` back to what it was, its demand closed with its exposure returned,
+/// and X neither frozen nor charged. On the dormant twin Y stays licensed and its DA-7 default refunds
+/// X at the demand's deadline. X's net loss is 0 on both (before the fix: 3,744 MSK armed).
+#[test]
+fn a_forgers_forfeiture_makes_the_honest_challenger_whole() {
+    let mut nets = Vec::new();
+    for armed in [true, false] {
+        let mut c = Chain::new(if armed { t12_fl(1_001) } else { t12() });
+        c.attribution = true;
+        c.step(&[bond_obj(1, 20_000 * MSK)]);
+        let (producer, _, _) = floor_producer(&c.p);
+        let x = genesis_keys(&c.p, 2).0;
+        let posted = collateral(&c, &x);
+        let slashed = c.s.bond(&x).unwrap().slashed;
+        // The forger's other claim Z′, bound and accused first.
+        let z = c.floor_claim(0x2B);
+        let seats = c.floor_seats();
+        c.bind(z, &seats);
+        c.step(&[da_accuse(z, bond_key(1), 0)]);
+        let dz = c.s.da_session(&z, &bond_key(1)).expect("Z′'s session").deadline_daa;
+        // Y: the forger's licensed claim; X lost a held dissection on it and demands the chunk.
+        let y = covered_floor_claim(&mut c, 0x6E);
+        with_forfeit(&mut c, y, x);
+        let dy = with_seat_demand(&mut c, y, x);
+        assert!(dz < dy, "premise: Z′ defaults before X's demand runs out");
+        run_to(&mut c, dz + 1);
+        if armed {
+            assert!(freeze(&c, &producer).is_some_and(|f| f.final_), "the forger is forfeited whole");
+            assert!(voided_by(&c, &y, PalwVoidReasonV2::AggregateForfeit), "Y voided with the forger's bond: {:?}", phase(&c, &y));
+            assert_eq!(c.s.held_forfeits_of_claim(&y).count(), 0, "the record went with the void");
+            assert!(c.s.da_session(&y, &x).is_none(), "X's demand closed with the void");
+            assert_eq!(collateral(&c, &x), posted, "X made whole in the forfeiture's block");
+            assert_eq!(c.s.bond(&x).unwrap().slashed, slashed, "the forfeit restored where it went");
+            assert_eq!(freeze(&c, &x), None, "X is neither convicted nor frozen");
+        } else {
+            assert!(matches!(phase(&c, &y), PalwClaimPhaseV2::ReceiptLicensed { .. }), "dormant: Y stands");
+            assert_eq!(c.s.held_forfeits_of_claim(&y).count(), 1, "dormant: the record stands");
+        }
+        run_to(&mut c, dy);
+        step_landed(&mut c, dy + 1);
+        let after = collateral(&c, &x);
+        println!(
+            "armed={armed}: Y {:?}; X posted {:.2} → {:.2} MSK (net {:.2})",
+            phase(&c, &y),
+            posted as f64 / 1e8,
+            after as f64 / 1e8,
+            (after as f64 - posted as f64) / 1e8
+        );
+        nets.push(posted as i128 - after as i128);
+    }
+    assert_eq!(nets, vec![0, 0], "the honest challenger's net loss (armed, dormant)");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review 2, finding 3: L-T4b — a bound seat is backed at the licence under every step
+// ---------------------------------------------------------------------------------------------
+
+/// Bond `bond`'s work room at `at`, the processor's inputs.
+fn work_room(c: &Chain, bond: &PalwBondKeyV2, at: u64) -> u128 {
+    let raw = c.extras_at(at).settled_anchor_depth;
+    kaspa_consensus_core::palw_state_v2::palw_rcore_gate_room_v1(
+        &c.s,
+        &c.sp,
+        bond,
+        at,
+        raw,
+        kaspa_consensus_core::palw_state_v2::PalwRcoreGateV1::Work,
+    )
+}
+
+/// **L-T4b (review 2, finding 3) — a bound seat is backed at the licence under every step (L-4b).**
+/// Two seats S1, S2 at the seat floor have their room held down to ≈ 981 MSK by their own live claims
+/// (bound on the genesis seats, kept live by a DA accusation). Fourteen test claims of the genesis
+/// producer are offered, one a block, to the panel {S1, S2, g1, g2, g3}; each binds if the fold admits
+/// it; then every bound claim is licensed in order by all five seats' coverage receipts. Under every
+/// step — dormant, testnet-12's first (ρ = 10, nothing credited) and ρ = 10 with `q_seat` credited —
+/// every bound claim licenses with both small seats' locks: the bind never admits a seat its room
+/// cannot back at the licence. The steps differ only in how many binds that room admits (a duty of
+/// 640.17, 240.13 and 64.02 MSK). The old AS-1 (`⌈lock_2/ρ⌉` as the duty's lock term) bound 12 of
+/// them at q = 0 on a 64.02 duty and could license 1: the other 11 would run into `ReceiptTimeout`,
+/// and a redraw onto saturated seats into the honest producer's S0′.
+#[test]
+fn l_t4b_a_bound_seat_is_backed_at_the_licence_under_every_step() {
+    let mut bound_per_step = Vec::new();
+    for step in [None, Some((10u32, 0u16)), Some((10, 250))] {
+        let what = format!("{step:?}");
+        let mut c = Chain::new(match step {
+            Some((rho, q)) => t12_with(1_001, &[(0, rho, q)]),
+            None => t12(),
+        });
+        let floor = kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(c.sp.min_collateral_sompi());
+        let small: [u64; 2] = [31, 32];
+        c.step(&[bond_obj(31, floor), bond_obj(32, floor), bond_obj(1, 200_000 * MSK)]);
+        let s_keys: Vec<(PalwBondKeyV2, Hash64)> = small
+            .iter()
+            .map(|n| (bond_key(*n), kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&operator_pubkey_of(*n))))
+            .collect();
+        let gseats = c.floor_seats();
+        // Pre-commit S1/S2's room with their own claims, bound on the genesis seats and held live by
+        // a DA accusation (a live claim's commitment stays reserved; a licence would release it).
+        let mut own = Vec::new();
+        for (i, n) in small.iter().enumerate() {
+            let mut k = 0u64;
+            while work_room(&c, &bond_key(*n), c.daa + 1) > 3_900 * u128::from(MSK) && k < 40 {
+                let id = claim_by(&mut c, *n, 0x3000 + (i as u64) * 100 + k);
+                c.bind(id, &gseats);
+                c.step(&[da_accuse(id, bond_key(1), 0)]);
+                own.push(id);
+                k += 1;
+            }
+        }
+        let room0 = work_room(&c, &s_keys[0].0, c.daa + 1);
+        // The test claims, each offered to {S1, S2, g1, g2, g3}.
+        let panel: Vec<(PalwBondKeyV2, Hash64)> = vec![s_keys[0], s_keys[1], gseats[0], gseats[1], gseats[2]];
+        let mut bound_ids = Vec::new();
+        let mut refused = 0;
+        for t in 0..14u64 {
+            let id = c.floor_claim(0x7000 + t);
+            let at = c.daa + 1;
+            let bind = PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&panel) };
+            let x_ctx = ctx(0xCA_0000 + at, at, at, 0);
+            let (next, _, _) = c.try_fold(&c.s, &x_ctx, &[bind.clone()], PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
+            if matches!(next.claim(&id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }) {
+                c.step(&[bind]);
+                bound_ids.push((id, c.daa));
+            } else {
+                refused += 1;
+                c.step(&[]);
+            }
+        }
+        // License each bound test claim in order with all five seats' coverage receipts.
+        let mut licensed = 0;
+        let mut backed_by_both = 0;
+        for (id, bound) in &bound_ids {
+            let receipts = covered(*id, c.anchor(id), &panel, &[0, 1, 2, 3, 4], *bound);
+            let at = c.daa + 1;
+            let x_ctx = ctx(0xCA_0000 + at, at, at, 0);
+            let obj = PalwConsensusObjectV2::ReceiptLicensedV2 { claim: *id, receipts };
+            let folded = c.try_fold(&c.s, &x_ctx, &[obj.clone()], PalwBlockWorkV3::None, Hash64::default());
+            let licenses = matches!(&folded, Ok((next, _, skips)) if skips.is_empty()
+                && matches!(next.claim(id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+            assert!(licenses, "{what}: bound claim {id} licenses (the bind never admits an unbacked seat): {:?}", folded.err());
+            c.step(&[obj]);
+            licensed += 1;
+            if c.s.slashable_lock(s_keys[0].0, *id).is_some() && c.s.slashable_lock(s_keys[1].0, *id).is_some() {
+                backed_by_both += 1;
+            }
+        }
+        println!(
+            "{what}: S1 room {:.2} MSK → {} bound ({} refused) → {} licensed, {} with both small seats' locks",
+            room0 as f64 / 1e8,
+            bound_ids.len(),
+            refused,
+            licensed,
+            backed_by_both
+        );
+        assert!(!bound_ids.is_empty(), "{what}: the premise — the small seats take at least one bind");
+        assert_eq!(backed_by_both, bound_ids.len(), "{what}: every bound claim is backed by both small seats' locks");
+        assert!(own.iter().all(|id| matches!(phase(&c, id), PalwClaimPhaseV2::PanelBound { .. })), "{what}: own claims still held");
+        bound_per_step.push(bound_ids.len());
+    }
+    assert!(
+        bound_per_step[0] < bound_per_step[1] && bound_per_step[1] < bound_per_step[2],
+        "the room admits more binds as the duty falls (640.17 → 240.13 → 64.02): {bound_per_step:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review 2, finding 4: L-T6 measured — one conviction's loss at 13k, by route
+// ---------------------------------------------------------------------------------------------
+
+/// A court's `ExecutorGuilty` close of `session_id` on an arithmetic proof (a `CourtFraud` verdict)
+/// or on a held dissection's bottom (`CourtHeldVerdict` past `palw_offence_attribution`) — the fold
+/// reads the verdict and the proof's form, never re-derives it (the acceptance layer adjudicated it):
+/// `court_cleared`'s skeleton, and `t12_aheld_held_court`'s dissection bottom over it.
+fn guilty_close(session_id: Hash64, dissection: bool) -> PalwConsensusObjectV2 {
+    use kaspa_consensus_core::palw_attn_court_v1::{
+        PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnDissectBottomV1, PalwAttnRowOpeningV1, PalwAttnTileEvidenceV1,
+    };
+    use kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2;
+    use kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2;
+    let PalwConsensusObjectV2::CourtClosed { proof, .. } = court_cleared(session_id) else { unreachable!("a close") };
+    let proof = if dissection {
+        let PalwCourtVerdictProofV2::Arithmetic { refutation, .. } = proof else { unreachable!("court_cleared's arithmetic skeleton") };
+        let tile = |index: u64| PalwAttnRowOpeningV1 {
+            leaf: refutation.output_preimage.clone(),
+            opening: kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1 { leaf_index: index, leaf_hash: h(0xBAD5), siblings: vec![] },
+        };
+        PalwCourtVerdictProofV2::AttnDissection {
+            binding: Box::new(refutation.binding.clone()),
+            bottom: Box::new(PalwAttnDissectBottomV1 {
+                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                session_id,
+                tile: 0,
+                query: tile(0),
+                anchor: None,
+                k: PalwAttnTileEvidenceV1::CacheWrites { rows: vec![] },
+                v: PalwAttnTileEvidenceV1::CacheWrites { rows: vec![] },
+                out_tile: tile(0),
+            }),
+            operand_openings: vec![],
+        }
+    } else {
+        proof
+    };
+    PalwConsensusObjectV2::CourtClosed { session_id, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof }
+}
+
+/// `EV(1) = (1−q)·[P·E − (1−P)·m] − q·L` (ADR-0160 §4.5), in MSK.
+fn ev1(q: f64, p: f64, e: f64, m: f64, l: f64) -> f64 {
+    (1.0 - q) * (p * e - (1.0 - p) * m) - q * l
+}
+
+/// **L-T6, measured on the fold (review 2, finding 4): what ONE producer conviction takes from a 13k
+/// bond, by route — and why only the whole-bond routes may count toward the credited q.** A 13,000
+/// MSK piece makes one floor claim (bound; licensed by the five floor seats for the court routes) and
+/// is convicted once past F-L, on its own chain per route:
+/// * **S1** — a DA default: intent;
+/// * **`CourtFraud`** — a court's `ExecutorGuilty` close on an arithmetic proof: intent;
+/// * **`CourtHeldVerdict`** — the same close on a held dissection's bottom: the TIER, and the same S2
+///   arm (`reserved + E + min(10%·C₀, 3G)`, plus the court time) every tier-class producer conviction
+///   of a live claim takes — kind 4's `StepArithmetic`, 6, 7, 8 and `LogitsNotStepOutput` void it
+///   `CourtFraud` through `act_on_convicted_claim_v1` and the funnel adds nothing (the unit
+///   `the_aggregate_funnel_by_offence_class`).
+///
+/// L is what the piece lost (collateral before less after; it has no vesting row yet). EV(1) at the
+/// ramp's gate — q = 0.143, P* = ½, ρ = 10, `m = max(m*(q), ⌈E/ρ⌉)` with `m*` on the normative
+/// `L = 3G` — with each route's MEASURED L, and for the tier also with the escrow lane's `m_c` in the
+/// escrow slot (the review's ≈ 1,620 MSK): the intent routes take the whole piece (≥ 3G) and EV ≤ 0;
+/// the tier route takes less than 3G and EV > 0. So `palw_producer_conviction_credits_q_v1` counts
+/// exactly the intent routes.
+#[test]
+fn l_t6_measured_one_conviction_at_13k_by_route_and_only_whole_bond_routes_credit_q() {
+    const PIECE: u64 = 13_000 * MSK;
+    const Q: f64 = 0.143;
+    const P_STAR: f64 = 0.5;
+    const RHO: u64 = 10;
+    for (route, offence) in [
+        ("S1 (DA default)", PalwConvictedOffenceV1::DaDefault),
+        ("CourtFraud (a verdict)", PalwConvictedOffenceV1::CourtFraud),
+        ("CourtHeldVerdict (a dissection's verdict)", PalwConvictedOffenceV1::CourtHeldVerdict),
+    ] {
+        let mut c = Chain::new(t12_fl(1_001));
+        c.attribution = true;
+        c.step(&[bond_obj(1, 50_000 * MSK), bond_obj(11, PIECE), bond_obj(61, 400_000 * MSK)]);
+        let piece = bond_key(11);
+        let id = claim_by(&mut c, 11, 0x6A00);
+        let claim = c.claim(&id);
+        let e_sompi = u128::from(claim.escrowed_reward);
+        let three_g = 3 * palw_claim_bond_reservation_v1(&c.sp, &claim).unwrap();
+        let seats = c.floor_seats();
+        let bound = c.bind(id, &seats);
+        let before = collateral(&c, &piece);
+        match offence {
+            PalwConvictedOffenceV1::DaDefault => {
+                da_default(&mut c, &[id], bond_key(1));
+            }
+            _ => {
+                license(&mut c, id, &seats, bound);
+                let before_open = collateral(&c, &piece);
+                c.step(&[court_opened(&c.s, id, bond_key(61))]);
+                let session = court_session_of(&c.s, id, bond_key(61));
+                assert_eq!(collateral(&c, &piece), before_open, "{route}: opening a court takes nothing from the executor");
+                c.step(&[guilty_close(session, offence == PalwConvictedOffenceV1::CourtHeldVerdict)]);
+                let want = if offence == PalwConvictedOffenceV1::CourtFraud { PalwVoidReasonV2::CourtFraud } else { PalwVoidReasonV2::CourtHeldVerdict };
+                assert!(voided_by(&c, &id, want), "{route}: the verdict voids the claim {want:?}: {:?}", phase(&c, &id));
+            }
+        }
+        assert_eq!(before, PIECE, "{route}: the premise — a whole 13k piece before its one conviction");
+        let lost = u128::from(before - collateral(&c, &piece));
+        let f = freeze(&c, &piece).expect("every producer conviction freezes");
+        let intent = palw_producer_conviction_credits_q_v1(offence);
+        assert_eq!(f.final_, intent, "{route}: a final freeze exactly for the credited class");
+        let msk = |sompi: u128| sompi as f64 / 1e8;
+        let e = msk(e_sompi);
+        let m = msk(e_sompi.div_ceil(u128::from(RHO))).max((e - 2.0 * Q * msk(three_g) / (1.0 - Q)).max(0.0));
+        let ev = ev1(Q, P_STAR, e, m, msk(lost));
+        let escrow_slot = msk(lost) - e + msk(e_sompi.div_ceil(u128::from(RHO)));
+        println!(
+            "{route}: the 13k piece lost {:.2} MSK (3G = {:.2}; E = {:.2}, m = {:.2}) → EV(1) at q = {Q}, ρ = {RHO}: {ev:+.1} MSK; \
+             credited: {intent}{}",
+            msk(lost),
+            msk(three_g),
+            e,
+            m,
+            if intent { String::new() } else { format!(" (with the escrow lane's m_c in the slot: L {escrow_slot:.2}, EV {:+.1})", ev1(Q, P_STAR, e, m, escrow_slot)) }
+        );
+        if intent {
+            assert_eq!(lost, u128::from(PIECE), "{route}: the whole piece");
+            assert!(lost >= three_g, "{route}: ≥ 3G");
+            assert!(ev <= 0.0, "{route}: EV(1) ≤ 0 at the gate ({ev:+.1})");
+        } else {
+            assert!(collateral(&c, &piece) > 0, "{route}: the tier leaves the rest of the piece");
+            assert!(lost < three_g, "{route}: the S2 tier alone, under 3G ({:.2} < {:.2})", msk(lost), msk(three_g));
+            assert!(ev > 0.0, "{route}: credited, this route would make a 13k garbage claim pay at the gate ({ev:+.1})");
+            assert!(ev1(Q, P_STAR, e, m, escrow_slot) > 0.0, "{route}: and with the escrow lane's m_c in the slot");
+        }
+    }
+    // Every contradiction tag: credited exactly where the funnel forfeits the whole bond.
+    for tag in 0..=u8::MAX {
+        let offence = PalwConvictedOffenceV1::Contradiction { tag };
+        assert_eq!(
+            palw_producer_conviction_credits_q_v1(offence),
+            kaspa_consensus_core::palw_aggregate_liability_v1::palw_offence_is_intent_class_v1(offence),
+            "tag {tag}"
+        );
+    }
+    for offence in [PalwConvictedOffenceV1::Equivocation, PalwConvictedOffenceV1::CoveringSigner, PalwConvictedOffenceV1::CourtHeldVerdict] {
+        assert!(!palw_producer_conviction_credits_q_v1(offence), "{offence:?} is not a whole-bond producer conviction");
+    }
 }
