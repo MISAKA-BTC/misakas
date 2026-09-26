@@ -11445,6 +11445,496 @@ impl Deserializer for GetPalwActivationPoolResponse {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0160 §7.5: the capacity shadow (op 201; node-only, lane shadow)
+// ---------------------------------------------------------------------------------------------
+
+/// One ramp step to price: from `from_daa` (informational in a shadow), the ramp factor `rho` and
+/// the credited attribution rate in permille.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwCapacityStep {
+    pub from_daa: u64,
+    pub rho: u32,
+    pub q_credit_permille: u32,
+}
+
+impl Serializer for RpcPalwCapacityStep {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.from_daa, writer)?;
+        store!(u32, &self.rho, writer)?;
+        store!(u32, &self.q_credit_permille, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwCapacityStep {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { from_daa: load!(u64, reader)?, rho: load!(u32, reader)?, q_credit_permille: load!(u32, reader)? })
+    }
+}
+
+/// **ADR-0160 §7.5: `getPalwCapacityShadow` (op 201)** — what the capacity formulas would reserve,
+/// weigh and allow for every live claim and bond of the tip, per ramp step, next to today's values.
+/// Node-only: no verdict reads it. **Op 201 is new: a node built before it drops the WebSocket on
+/// it**, so a client asks it last on a connection, or reconnects.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwCapacityShadowRequest {
+    /// The steps to price; empty for the reference ramp ρ 10 / 25 / 50 / 100 / 1000 at q 143‰.
+    pub steps: Vec<RpcPalwCapacityStep>,
+    /// `<txid>:<index>`: only this bond's row and claims; empty for every bond.
+    pub bond: String,
+    /// Bonds whose claims are adversarial (an O-3 run): their claims measure `q` per class.
+    pub adversary_bonds: Vec<String>,
+    /// Return the per-claim rows (the bond rows and totals always come).
+    pub include_claims: bool,
+    /// At most this many claim rows (and bond rows); 0 asks for the node's cap (500).
+    pub limit: u32,
+}
+
+impl Serializer for GetPalwCapacityShadowRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        serialize!(Vec<RpcPalwCapacityStep>, &self.steps, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(Vec<String>, &self.adversary_bonds, writer)?;
+        store!(bool, &self.include_claims, writer)?;
+        store!(u32, &self.limit, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwCapacityShadowRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            steps: deserialize!(Vec<RpcPalwCapacityStep>, reader)?,
+            bond: load!(String, reader)?,
+            adversary_bonds: load!(Vec<String>, reader)?,
+            include_claims: load!(bool, reader)?,
+            limit: load!(u32, reader)?,
+        })
+    }
+}
+
+/// The network under one step. `u128` quantities are decimal strings (sompi, or raw weight units).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwCapacityStepRow {
+    pub step: RpcPalwCapacityStep,
+    /// `m_c` of a reference floor claim, and the `q` its ramp term needs at `L = 3G` (permille).
+    pub m_floor_sompi: String,
+    pub q_needed_permille: u32,
+    /// `q_credit ≥ q_needed` (the ramp term binds) and AS-2's seat credit applies.
+    pub ramp_binds: bool,
+    pub seat_credit: bool,
+    pub claims_commitment_sompi: String,
+    pub committed_sompi: String,
+    pub seat_duty_sompi: String,
+    pub seat_lock_sompi: String,
+    /// §5.4: floor claims per DAA the seat capital sustains, in thousandths.
+    pub seat_capacity_milli_per_daa: u64,
+    /// Floor claims a fresh 13,000 MSK bond holds at once.
+    pub n_instant_13k: u64,
+    /// A8: a class's measured `q` is below `2 × q_needed`.
+    pub q_alarm: bool,
+}
+
+impl Serializer for RpcPalwCapacityStepRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        serialize!(RpcPalwCapacityStep, &self.step, writer)?;
+        store!(String, &self.m_floor_sompi, writer)?;
+        store!(u32, &self.q_needed_permille, writer)?;
+        store!(bool, &self.ramp_binds, writer)?;
+        store!(bool, &self.seat_credit, writer)?;
+        store!(String, &self.claims_commitment_sompi, writer)?;
+        store!(String, &self.committed_sompi, writer)?;
+        store!(String, &self.seat_duty_sompi, writer)?;
+        store!(String, &self.seat_lock_sompi, writer)?;
+        store!(u64, &self.seat_capacity_milli_per_daa, writer)?;
+        store!(u64, &self.n_instant_13k, writer)?;
+        store!(bool, &self.q_alarm, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwCapacityStepRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            step: deserialize!(RpcPalwCapacityStep, reader)?,
+            m_floor_sompi: load!(String, reader)?,
+            q_needed_permille: load!(u32, reader)?,
+            ramp_binds: load!(bool, reader)?,
+            seat_credit: load!(bool, reader)?,
+            claims_commitment_sompi: load!(String, reader)?,
+            committed_sompi: load!(String, reader)?,
+            seat_duty_sompi: load!(String, reader)?,
+            seat_lock_sompi: load!(String, reader)?,
+            seat_capacity_milli_per_daa: load!(u64, reader)?,
+            n_instant_13k: load!(u64, reader)?,
+            q_alarm: load!(bool, reader)?,
+        })
+    }
+}
+
+/// One claim, today and per step.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwCapacityClaimRow {
+    pub claim_id: String,
+    pub bond: String,
+    pub class_id: String,
+    /// `provisional`, `panel-bound`, `licensed`, `final`, `voided`, `disputed`.
+    pub phase: String,
+    /// ADR-0160 §4.2's weight stage: `created`, `anchored`, `licensed`, `licensed-partial`, …
+    pub stage: String,
+    pub accepted_daa: u64,
+    pub free_prompt: bool,
+    pub c7: bool,
+    pub raw_weight: String,
+    pub staged_weight: String,
+    pub reserved_today_sompi: String,
+    pub reserved_new_sompi: String,
+    pub commitment_today_sompi: String,
+    /// Per step, in the request's order.
+    pub commitment_new_sompi: Vec<String>,
+}
+
+impl Serializer for RpcPalwCapacityClaimRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.phase, writer)?;
+        store!(String, &self.stage, writer)?;
+        store!(u64, &self.accepted_daa, writer)?;
+        store!(bool, &self.free_prompt, writer)?;
+        store!(bool, &self.c7, writer)?;
+        store!(String, &self.raw_weight, writer)?;
+        store!(String, &self.staged_weight, writer)?;
+        store!(String, &self.reserved_today_sompi, writer)?;
+        store!(String, &self.reserved_new_sompi, writer)?;
+        store!(String, &self.commitment_today_sompi, writer)?;
+        store!(Vec<String>, &self.commitment_new_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwCapacityClaimRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            bond: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            phase: load!(String, reader)?,
+            stage: load!(String, reader)?,
+            accepted_daa: load!(u64, reader)?,
+            free_prompt: load!(bool, reader)?,
+            c7: load!(bool, reader)?,
+            raw_weight: load!(String, reader)?,
+            staged_weight: load!(String, reader)?,
+            reserved_today_sompi: load!(String, reader)?,
+            reserved_new_sompi: load!(String, reader)?,
+            commitment_today_sompi: load!(String, reader)?,
+            commitment_new_sompi: load!(Vec<String>, reader)?,
+        })
+    }
+}
+
+/// One bond, today and per step.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwCapacityBondRow {
+    pub bond: String,
+    pub collateral_sompi: u64,
+    pub seat: bool,
+    pub live_claims: u64,
+    pub unlicensed_claims: u64,
+    /// Today's immature weight of its claims, `W_cap`, `X_b` and `min(X_b, W_cap)` (raw units).
+    pub raw_immature: String,
+    pub w_cap: String,
+    pub x_b: String,
+    pub capped: String,
+    pub r_budget_sompi: String,
+    pub reserved_new_sompi: String,
+    pub committed_today_sompi: String,
+    pub own_claims_today_sompi: String,
+    pub committed_new_sompi: Vec<String>,
+    pub n_instant_today: u64,
+    pub n_instant_new: Vec<u64>,
+    pub n_more_today: u64,
+    pub n_more_new: Vec<u64>,
+    pub frozen_would_be: bool,
+    pub freeze_final: bool,
+    pub freeze_undetermined: bool,
+    pub convictions: u64,
+}
+
+impl Serializer for RpcPalwCapacityBondRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(u64, &self.collateral_sompi, writer)?;
+        store!(bool, &self.seat, writer)?;
+        store!(u64, &self.live_claims, writer)?;
+        store!(u64, &self.unlicensed_claims, writer)?;
+        store!(String, &self.raw_immature, writer)?;
+        store!(String, &self.w_cap, writer)?;
+        store!(String, &self.x_b, writer)?;
+        store!(String, &self.capped, writer)?;
+        store!(String, &self.r_budget_sompi, writer)?;
+        store!(String, &self.reserved_new_sompi, writer)?;
+        store!(String, &self.committed_today_sompi, writer)?;
+        store!(String, &self.own_claims_today_sompi, writer)?;
+        store!(Vec<String>, &self.committed_new_sompi, writer)?;
+        store!(u64, &self.n_instant_today, writer)?;
+        store!(Vec<u64>, &self.n_instant_new, writer)?;
+        store!(u64, &self.n_more_today, writer)?;
+        store!(Vec<u64>, &self.n_more_new, writer)?;
+        store!(bool, &self.frozen_would_be, writer)?;
+        store!(bool, &self.freeze_final, writer)?;
+        store!(bool, &self.freeze_undetermined, writer)?;
+        store!(u64, &self.convictions, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwCapacityBondRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            bond: load!(String, reader)?,
+            collateral_sompi: load!(u64, reader)?,
+            seat: load!(bool, reader)?,
+            live_claims: load!(u64, reader)?,
+            unlicensed_claims: load!(u64, reader)?,
+            raw_immature: load!(String, reader)?,
+            w_cap: load!(String, reader)?,
+            x_b: load!(String, reader)?,
+            capped: load!(String, reader)?,
+            r_budget_sompi: load!(String, reader)?,
+            reserved_new_sompi: load!(String, reader)?,
+            committed_today_sompi: load!(String, reader)?,
+            own_claims_today_sompi: load!(String, reader)?,
+            committed_new_sompi: load!(Vec<String>, reader)?,
+            n_instant_today: load!(u64, reader)?,
+            n_instant_new: load!(Vec<u64>, reader)?,
+            n_more_today: load!(u64, reader)?,
+            n_more_new: load!(Vec<u64>, reader)?,
+            frozen_would_be: load!(bool, reader)?,
+            freeze_final: load!(bool, reader)?,
+            freeze_undetermined: load!(bool, reader)?,
+            convictions: load!(u64, reader)?,
+        })
+    }
+}
+
+/// One class's attribution counters (`classId` empty: records whose claim the state no longer holds).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwCapacityAttributionRow {
+    pub class_id: String,
+    pub claims_live: u64,
+    pub claims_final: u64,
+    pub claims_voided: u64,
+    pub voids_attributed: u64,
+    /// `Reason=count`.
+    pub voids_by_reason: Vec<String>,
+    /// `kind=count` (the `PalwOffenceKindV1` discriminant).
+    pub convictions_by_kind: Vec<String>,
+    pub da_open_non_seat: u64,
+    pub da_open_seat: u64,
+    pub da_opened_non_seat_total: u64,
+    /// DAA from acceptance to conviction: < 10, 50, 100, 300, 600, 1,200, 3,000, and the rest.
+    pub conviction_latency_histogram: Vec<u64>,
+    pub adversary_claims: u64,
+    pub adversary_attributed: u64,
+    pub q_measured_permille: Option<u32>,
+}
+
+impl Serializer for RpcPalwCapacityAttributionRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(u64, &self.claims_live, writer)?;
+        store!(u64, &self.claims_final, writer)?;
+        store!(u64, &self.claims_voided, writer)?;
+        store!(u64, &self.voids_attributed, writer)?;
+        store!(Vec<String>, &self.voids_by_reason, writer)?;
+        store!(Vec<String>, &self.convictions_by_kind, writer)?;
+        store!(u64, &self.da_open_non_seat, writer)?;
+        store!(u64, &self.da_open_seat, writer)?;
+        store!(u64, &self.da_opened_non_seat_total, writer)?;
+        store!(Vec<u64>, &self.conviction_latency_histogram, writer)?;
+        store!(u64, &self.adversary_claims, writer)?;
+        store!(u64, &self.adversary_attributed, writer)?;
+        store!(Option<u32>, &self.q_measured_permille, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwCapacityAttributionRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            claims_live: load!(u64, reader)?,
+            claims_final: load!(u64, reader)?,
+            claims_voided: load!(u64, reader)?,
+            voids_attributed: load!(u64, reader)?,
+            voids_by_reason: load!(Vec<String>, reader)?,
+            convictions_by_kind: load!(Vec<String>, reader)?,
+            da_open_non_seat: load!(u64, reader)?,
+            da_open_seat: load!(u64, reader)?,
+            da_opened_non_seat_total: load!(u64, reader)?,
+            conviction_latency_histogram: load!(Vec<u64>, reader)?,
+            adversary_claims: load!(u64, reader)?,
+            adversary_attributed: load!(u64, reader)?,
+            q_measured_permille: load!(Option<u32>, reader)?,
+        })
+    }
+}
+
+/// **The `getPalwCapacityShadow` answer.** `u128` quantities are decimal strings.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwCapacityShadowResponse {
+    /// False off `ConsensusV2`, or before the node has PALW state.
+    pub available: bool,
+    /// The DAA the shadow is priced at (the next block's) and the committed tip's.
+    pub now_daa: u64,
+    pub tip_daa: u64,
+    /// The one-line summary kaspad logs every 10 DAA.
+    pub summary: String,
+    pub bounded_immature_today: String,
+    pub bounded_immature_new: String,
+    pub safe_weight: String,
+    pub w_cap_total: String,
+    /// The reference floor claim the network rows price: E, w, L = 3G, seats, duty and lock.
+    pub reference_escrow_sompi: String,
+    pub reference_w_floor_sompi: String,
+    pub reference_l_sompi: String,
+    pub reference_seats: u32,
+    pub reference_duty_sompi: String,
+    pub reference_lock_sompi: String,
+    pub claims_commitment_today_sompi: String,
+    pub committed_today_sompi: String,
+    pub seats: u64,
+    pub seat_usable_capital_sompi: String,
+    pub seat_duty_today_sompi: String,
+    pub seat_lock_today_sompi: String,
+    pub seat_capacity_today_milli_per_daa: u64,
+    pub duty_rows: u64,
+    /// Duty rows capped by `commitment / seats` at bind: their repriced duty is a lower bound.
+    pub duty_rows_capped: u64,
+    pub licence_queue: u64,
+    pub licence_queue_oldest_bound_daa: Option<u64>,
+    pub licensed_recent: u64,
+    pub carriers_per_block: u64,
+    pub carriage_blocks_to_drain: u64,
+    pub convictions_total: u64,
+    pub steps: Vec<RpcPalwCapacityStepRow>,
+    pub bonds: Vec<RpcPalwCapacityBondRow>,
+    /// Bond rows the query matched before the limit.
+    pub bonds_total: u64,
+    pub claims: Vec<RpcPalwCapacityClaimRow>,
+    /// Claim rows the query matched before the limit.
+    pub claims_total: u64,
+    pub attribution: Vec<RpcPalwCapacityAttributionRow>,
+}
+
+impl Serializer for GetPalwCapacityShadowResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.now_daa, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.summary, writer)?;
+        store!(String, &self.bounded_immature_today, writer)?;
+        store!(String, &self.bounded_immature_new, writer)?;
+        store!(String, &self.safe_weight, writer)?;
+        store!(String, &self.w_cap_total, writer)?;
+        store!(String, &self.reference_escrow_sompi, writer)?;
+        store!(String, &self.reference_w_floor_sompi, writer)?;
+        store!(String, &self.reference_l_sompi, writer)?;
+        store!(u32, &self.reference_seats, writer)?;
+        store!(String, &self.reference_duty_sompi, writer)?;
+        store!(String, &self.reference_lock_sompi, writer)?;
+        store!(String, &self.claims_commitment_today_sompi, writer)?;
+        store!(String, &self.committed_today_sompi, writer)?;
+        store!(u64, &self.seats, writer)?;
+        store!(String, &self.seat_usable_capital_sompi, writer)?;
+        store!(String, &self.seat_duty_today_sompi, writer)?;
+        store!(String, &self.seat_lock_today_sompi, writer)?;
+        store!(u64, &self.seat_capacity_today_milli_per_daa, writer)?;
+        store!(u64, &self.duty_rows, writer)?;
+        store!(u64, &self.duty_rows_capped, writer)?;
+        store!(u64, &self.licence_queue, writer)?;
+        store!(Option<u64>, &self.licence_queue_oldest_bound_daa, writer)?;
+        store!(u64, &self.licensed_recent, writer)?;
+        store!(u64, &self.carriers_per_block, writer)?;
+        store!(u64, &self.carriage_blocks_to_drain, writer)?;
+        store!(u64, &self.convictions_total, writer)?;
+        serialize!(Vec<RpcPalwCapacityStepRow>, &self.steps, writer)?;
+        serialize!(Vec<RpcPalwCapacityBondRow>, &self.bonds, writer)?;
+        store!(u64, &self.bonds_total, writer)?;
+        serialize!(Vec<RpcPalwCapacityClaimRow>, &self.claims, writer)?;
+        store!(u64, &self.claims_total, writer)?;
+        serialize!(Vec<RpcPalwCapacityAttributionRow>, &self.attribution, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwCapacityShadowResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            now_daa: load!(u64, reader)?,
+            tip_daa: load!(u64, reader)?,
+            summary: load!(String, reader)?,
+            bounded_immature_today: load!(String, reader)?,
+            bounded_immature_new: load!(String, reader)?,
+            safe_weight: load!(String, reader)?,
+            w_cap_total: load!(String, reader)?,
+            reference_escrow_sompi: load!(String, reader)?,
+            reference_w_floor_sompi: load!(String, reader)?,
+            reference_l_sompi: load!(String, reader)?,
+            reference_seats: load!(u32, reader)?,
+            reference_duty_sompi: load!(String, reader)?,
+            reference_lock_sompi: load!(String, reader)?,
+            claims_commitment_today_sompi: load!(String, reader)?,
+            committed_today_sompi: load!(String, reader)?,
+            seats: load!(u64, reader)?,
+            seat_usable_capital_sompi: load!(String, reader)?,
+            seat_duty_today_sompi: load!(String, reader)?,
+            seat_lock_today_sompi: load!(String, reader)?,
+            seat_capacity_today_milli_per_daa: load!(u64, reader)?,
+            duty_rows: load!(u64, reader)?,
+            duty_rows_capped: load!(u64, reader)?,
+            licence_queue: load!(u64, reader)?,
+            licence_queue_oldest_bound_daa: load!(Option<u64>, reader)?,
+            licensed_recent: load!(u64, reader)?,
+            carriers_per_block: load!(u64, reader)?,
+            carriage_blocks_to_drain: load!(u64, reader)?,
+            convictions_total: load!(u64, reader)?,
+            steps: deserialize!(Vec<RpcPalwCapacityStepRow>, reader)?,
+            bonds: deserialize!(Vec<RpcPalwCapacityBondRow>, reader)?,
+            bonds_total: load!(u64, reader)?,
+            claims: deserialize!(Vec<RpcPalwCapacityClaimRow>, reader)?,
+            claims_total: load!(u64, reader)?,
+            attribution: deserialize!(Vec<RpcPalwCapacityAttributionRow>, reader)?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod palw_model_market_wire_tests {
     use super::*;

@@ -2432,6 +2432,164 @@ mod mockery {
     }
     test!(GetPalwActivationPoolResponse);
 
+    // ADR-0160 §7.5: op 201 and its parts round-trip.
+    impl Mock for RpcPalwCapacityStep {
+        fn mock() -> Self {
+            RpcPalwCapacityStep { from_daa: mock(), rho: mock(), q_credit_permille: mock() }
+        }
+    }
+    test!(RpcPalwCapacityStep);
+
+    impl Mock for GetPalwCapacityShadowRequest {
+        fn mock() -> Self {
+            GetPalwCapacityShadowRequest {
+                steps: mock(),
+                bond: format!("{}:{}", mock_hex(), mock::<u32>()),
+                adversary_bonds: vec![format!("{}:{}", mock_hex(), mock::<u32>())],
+                include_claims: mock(),
+                limit: mock(),
+            }
+        }
+    }
+    test!(GetPalwCapacityShadowRequest);
+
+    impl Mock for RpcPalwCapacityStepRow {
+        fn mock() -> Self {
+            RpcPalwCapacityStepRow {
+                step: mock(),
+                m_floor_sompi: mock::<u64>().to_string(),
+                q_needed_permille: mock(),
+                ramp_binds: mock(),
+                seat_credit: mock(),
+                claims_commitment_sompi: mock::<u64>().to_string(),
+                committed_sompi: mock::<u64>().to_string(),
+                seat_duty_sompi: mock::<u64>().to_string(),
+                seat_lock_sompi: mock::<u64>().to_string(),
+                seat_capacity_milli_per_daa: mock(),
+                n_instant_13k: mock(),
+                q_alarm: mock(),
+            }
+        }
+    }
+    test!(RpcPalwCapacityStepRow);
+
+    impl Mock for RpcPalwCapacityClaimRow {
+        fn mock() -> Self {
+            RpcPalwCapacityClaimRow {
+                claim_id: mock_hex(),
+                bond: format!("{}:{}", mock_hex(), mock::<u32>()),
+                class_id: mock_hex(),
+                phase: "panel-bound".to_string(),
+                stage: "anchored".to_string(),
+                accepted_daa: mock(),
+                free_prompt: mock(),
+                c7: mock(),
+                raw_weight: mock::<u64>().to_string(),
+                staged_weight: mock::<u64>().to_string(),
+                reserved_today_sompi: mock::<u64>().to_string(),
+                reserved_new_sompi: mock::<u64>().to_string(),
+                commitment_today_sompi: mock::<u64>().to_string(),
+                commitment_new_sompi: vec![mock::<u64>().to_string(), mock::<u64>().to_string()],
+            }
+        }
+    }
+    test!(RpcPalwCapacityClaimRow);
+
+    impl Mock for RpcPalwCapacityBondRow {
+        fn mock() -> Self {
+            RpcPalwCapacityBondRow {
+                bond: format!("{}:{}", mock_hex(), mock::<u32>()),
+                collateral_sompi: mock(),
+                seat: mock(),
+                live_claims: mock(),
+                unlicensed_claims: mock(),
+                raw_immature: mock::<u64>().to_string(),
+                w_cap: mock::<u64>().to_string(),
+                x_b: mock::<u64>().to_string(),
+                capped: mock::<u64>().to_string(),
+                r_budget_sompi: mock::<u64>().to_string(),
+                reserved_new_sompi: mock::<u64>().to_string(),
+                committed_today_sompi: mock::<u64>().to_string(),
+                own_claims_today_sompi: mock::<u64>().to_string(),
+                committed_new_sompi: vec![mock::<u64>().to_string()],
+                n_instant_today: mock(),
+                n_instant_new: mock(),
+                n_more_today: mock(),
+                n_more_new: mock(),
+                frozen_would_be: mock(),
+                freeze_final: mock(),
+                freeze_undetermined: mock(),
+                convictions: mock(),
+            }
+        }
+    }
+    test!(RpcPalwCapacityBondRow);
+
+    impl Mock for RpcPalwCapacityAttributionRow {
+        fn mock() -> Self {
+            RpcPalwCapacityAttributionRow {
+                class_id: mock_hex(),
+                claims_live: mock(),
+                claims_final: mock(),
+                claims_voided: mock(),
+                voids_attributed: mock(),
+                voids_by_reason: vec!["CourtFraud=1".to_string()],
+                convictions_by_kind: vec!["5=1".to_string()],
+                da_open_non_seat: mock(),
+                da_open_seat: mock(),
+                da_opened_non_seat_total: mock(),
+                conviction_latency_histogram: vec![mock(), mock(), mock()],
+                adversary_claims: mock(),
+                adversary_attributed: mock(),
+                q_measured_permille: mock(),
+            }
+        }
+    }
+    test!(RpcPalwCapacityAttributionRow);
+
+    impl Mock for GetPalwCapacityShadowResponse {
+        fn mock() -> Self {
+            GetPalwCapacityShadowResponse {
+                available: mock(),
+                now_daa: mock(),
+                tip_daa: mock(),
+                summary: "capacity-shadow: daa=1".to_string(),
+                bounded_immature_today: mock::<u64>().to_string(),
+                bounded_immature_new: mock::<u64>().to_string(),
+                safe_weight: mock::<u64>().to_string(),
+                w_cap_total: mock::<u64>().to_string(),
+                reference_escrow_sompi: mock::<u64>().to_string(),
+                reference_w_floor_sompi: mock::<u64>().to_string(),
+                reference_l_sompi: mock::<u64>().to_string(),
+                reference_seats: mock(),
+                reference_duty_sompi: mock::<u64>().to_string(),
+                reference_lock_sompi: mock::<u64>().to_string(),
+                claims_commitment_today_sompi: mock::<u64>().to_string(),
+                committed_today_sompi: mock::<u64>().to_string(),
+                seats: mock(),
+                seat_usable_capital_sompi: mock::<u64>().to_string(),
+                seat_duty_today_sompi: mock::<u64>().to_string(),
+                seat_lock_today_sompi: mock::<u64>().to_string(),
+                seat_capacity_today_milli_per_daa: mock(),
+                duty_rows: mock(),
+                duty_rows_capped: mock(),
+                licence_queue: mock(),
+                licence_queue_oldest_bound_daa: mock(),
+                licensed_recent: mock(),
+                carriers_per_block: mock(),
+                carriage_blocks_to_drain: mock(),
+                convictions_total: mock(),
+                steps: mock(),
+                bonds: mock(),
+                bonds_total: mock(),
+                claims: mock(),
+                claims_total: mock(),
+                attribution: mock(),
+            }
+        }
+    }
+    test!(GetPalwCapacityShadowResponse);
+
     // ADR-0152 P2-10: op 199 and its parts round-trip.
     impl Mock for GetPalwVestingRequest {
         fn mock() -> Self {

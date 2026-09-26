@@ -1134,6 +1134,34 @@ async fn sanity_test() {
                     assert!(!read.available && !read.pool_armed && !read.has_pool);
                 })
             }
+            KaspadPayloadOps::GetPalwCapacityShadow => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // ADR-0160 §7.5 (op 201): a malformed step or bond is an error before any state
+                    // is read; a well-formed read on a network that is not ConsensusV2 answers
+                    // `available: false` with no rows.
+                    let zero_rho = GetPalwCapacityShadowRequest {
+                        steps: vec![RpcPalwCapacityStep { from_daa: 0, rho: 0, q_credit_permille: 143 }],
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_capacity_shadow_call(None, zero_rho).await.is_err());
+                    let big_q = GetPalwCapacityShadowRequest {
+                        steps: vec![RpcPalwCapacityStep { from_daa: 0, rho: 10, q_credit_permille: 1_001 }],
+                        ..Default::default()
+                    };
+                    assert!(rpc_client.get_palw_capacity_shadow_call(None, big_q).await.is_err());
+                    let bad_bond = GetPalwCapacityShadowRequest { bond: "x".to_string(), ..Default::default() };
+                    assert!(rpc_client.get_palw_capacity_shadow_call(None, bad_bond).await.is_err());
+                    let read = rpc_client
+                        .get_palw_capacity_shadow_call(
+                            None,
+                            GetPalwCapacityShadowRequest { include_claims: true, ..Default::default() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!read.available && read.bonds.is_empty() && read.claims.is_empty() && read.steps.is_empty());
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

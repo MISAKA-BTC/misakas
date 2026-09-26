@@ -2818,3 +2818,131 @@ message GetPalwActivationPoolResponseMessage {
   uint64 bonusCapSompi = 38;
   RPCError error = 1000;
 }
+
+// ADR-0160 §7.5 (lane shadow, node-only): the capacity shadow (op 201).
+message RpcPalwCapacityStep {
+  uint64 fromDaa = 1;
+  uint32 rho = 2;
+  uint32 qCreditPermille = 3;
+}
+
+message GetPalwCapacityShadowRequestMessage {
+  repeated RpcPalwCapacityStep steps = 1;
+  string bond = 2;
+  repeated string adversaryBonds = 3;
+  bool includeClaims = 4;
+  uint32 limit = 5;
+}
+
+message RpcPalwCapacityStepRow {
+  RpcPalwCapacityStep step = 1;
+  string mFloorSompi = 2;
+  uint32 qNeededPermille = 3;
+  bool rampBinds = 4;
+  bool seatCredit = 5;
+  string claimsCommitmentSompi = 6;
+  string committedSompi = 7;
+  string seatDutySompi = 8;
+  string seatLockSompi = 9;
+  uint64 seatCapacityMilliPerDaa = 10;
+  uint64 nInstant13k = 11;
+  bool qAlarm = 12;
+}
+
+message RpcPalwCapacityClaimRow {
+  string claimId = 1;
+  string bond = 2;
+  string classId = 3;
+  string phase = 4;
+  string stage = 5;
+  uint64 acceptedDaa = 6;
+  bool freePrompt = 7;
+  bool c7 = 8;
+  string rawWeight = 9;
+  string stagedWeight = 10;
+  string reservedTodaySompi = 11;
+  string reservedNewSompi = 12;
+  string commitmentTodaySompi = 13;
+  repeated string commitmentNewSompi = 14;
+}
+
+message RpcPalwCapacityBondRow {
+  string bond = 1;
+  uint64 collateralSompi = 2;
+  bool seat = 3;
+  uint64 liveClaims = 4;
+  uint64 unlicensedClaims = 5;
+  string rawImmature = 6;
+  string wCap = 7;
+  string xB = 8;
+  string capped = 9;
+  string rBudgetSompi = 10;
+  string reservedNewSompi = 11;
+  string committedTodaySompi = 12;
+  string ownClaimsTodaySompi = 13;
+  repeated string committedNewSompi = 14;
+  uint64 nInstantToday = 15;
+  repeated uint64 nInstantNew = 16;
+  uint64 nMoreToday = 17;
+  repeated uint64 nMoreNew = 18;
+  bool frozenWouldBe = 19;
+  bool freezeFinal = 20;
+  bool freezeUndetermined = 21;
+  uint64 convictions = 22;
+}
+
+message RpcPalwCapacityAttributionRow {
+  string classId = 1;
+  uint64 claimsLive = 2;
+  uint64 claimsFinal = 3;
+  uint64 claimsVoided = 4;
+  uint64 voidsAttributed = 5;
+  repeated string voidsByReason = 6;
+  repeated string convictionsByKind = 7;
+  uint64 daOpenNonSeat = 8;
+  uint64 daOpenSeat = 9;
+  uint64 daOpenedNonSeatTotal = 10;
+  repeated uint64 convictionLatencyHistogram = 11;
+  uint64 adversaryClaims = 12;
+  uint64 adversaryAttributed = 13;
+  optional uint32 qMeasuredPermille = 14;
+}
+
+message GetPalwCapacityShadowResponseMessage {
+  bool available = 1;
+  uint64 nowDaa = 2;
+  uint64 tipDaa = 3;
+  string summary = 4;
+  string boundedImmatureToday = 5;
+  string boundedImmatureNew = 6;
+  string safeWeight = 7;
+  string wCapTotal = 8;
+  string referenceEscrowSompi = 9;
+  string referenceWFloorSompi = 10;
+  string referenceLSompi = 11;
+  uint32 referenceSeats = 12;
+  string referenceDutySompi = 13;
+  string referenceLockSompi = 14;
+  string claimsCommitmentTodaySompi = 15;
+  string committedTodaySompi = 16;
+  uint64 seats = 17;
+  string seatUsableCapitalSompi = 18;
+  string seatDutyTodaySompi = 19;
+  string seatLockTodaySompi = 20;
+  uint64 seatCapacityTodayMilliPerDaa = 21;
+  uint64 dutyRows = 22;
+  uint64 dutyRowsCapped = 23;
+  uint64 licenceQueue = 24;
+  optional uint64 licenceQueueOldestBoundDaa = 25;
+  uint64 licensedRecent = 26;
+  uint64 carriersPerBlock = 27;
+  uint64 carriageBlocksToDrain = 28;
+  uint64 convictionsTotal = 29;
+  repeated RpcPalwCapacityStepRow steps = 30;
+  repeated RpcPalwCapacityBondRow bonds = 31;
+  uint64 bondsTotal = 32;
+  repeated RpcPalwCapacityClaimRow claims = 33;
+  uint64 claimsTotal = 34;
+  repeated RpcPalwCapacityAttributionRow attribution = 35;
+  RPCError error = 1000;
+}

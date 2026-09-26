@@ -1435,6 +1435,136 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwActivationPoolResponse>, protowire
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::RpcPalwCapacityStep, protowire::RpcPalwCapacityStep, {
+    Self { from_daa: item.from_daa, rho: item.rho, q_credit_permille: item.q_credit_permille }
+});
+from!(item: &kaspa_rpc_core::GetPalwCapacityShadowRequest, protowire::GetPalwCapacityShadowRequestMessage, {
+    Self {
+        steps: item.steps.iter().map(protowire::RpcPalwCapacityStep::from).collect(),
+        bond: item.bond.clone(),
+        adversary_bonds: item.adversary_bonds.clone(),
+        include_claims: item.include_claims,
+        limit: item.limit,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwCapacityStepRow, protowire::RpcPalwCapacityStepRow, {
+    Self {
+        step: Some(protowire::RpcPalwCapacityStep::from(&item.step)),
+        m_floor_sompi: item.m_floor_sompi.clone(),
+        q_needed_permille: item.q_needed_permille,
+        ramp_binds: item.ramp_binds,
+        seat_credit: item.seat_credit,
+        claims_commitment_sompi: item.claims_commitment_sompi.clone(),
+        committed_sompi: item.committed_sompi.clone(),
+        seat_duty_sompi: item.seat_duty_sompi.clone(),
+        seat_lock_sompi: item.seat_lock_sompi.clone(),
+        seat_capacity_milli_per_daa: item.seat_capacity_milli_per_daa,
+        n_instant13k: item.n_instant_13k,
+        q_alarm: item.q_alarm,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwCapacityClaimRow, protowire::RpcPalwCapacityClaimRow, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        bond: item.bond.clone(),
+        class_id: item.class_id.clone(),
+        phase: item.phase.clone(),
+        stage: item.stage.clone(),
+        accepted_daa: item.accepted_daa,
+        free_prompt: item.free_prompt,
+        c7: item.c7,
+        raw_weight: item.raw_weight.clone(),
+        staged_weight: item.staged_weight.clone(),
+        reserved_today_sompi: item.reserved_today_sompi.clone(),
+        reserved_new_sompi: item.reserved_new_sompi.clone(),
+        commitment_today_sompi: item.commitment_today_sompi.clone(),
+        commitment_new_sompi: item.commitment_new_sompi.clone(),
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwCapacityBondRow, protowire::RpcPalwCapacityBondRow, {
+    Self {
+        bond: item.bond.clone(),
+        collateral_sompi: item.collateral_sompi,
+        seat: item.seat,
+        live_claims: item.live_claims,
+        unlicensed_claims: item.unlicensed_claims,
+        raw_immature: item.raw_immature.clone(),
+        w_cap: item.w_cap.clone(),
+        x_b: item.x_b.clone(),
+        capped: item.capped.clone(),
+        r_budget_sompi: item.r_budget_sompi.clone(),
+        reserved_new_sompi: item.reserved_new_sompi.clone(),
+        committed_today_sompi: item.committed_today_sompi.clone(),
+        own_claims_today_sompi: item.own_claims_today_sompi.clone(),
+        committed_new_sompi: item.committed_new_sompi.clone(),
+        n_instant_today: item.n_instant_today,
+        n_instant_new: item.n_instant_new.clone(),
+        n_more_today: item.n_more_today,
+        n_more_new: item.n_more_new.clone(),
+        frozen_would_be: item.frozen_would_be,
+        freeze_final: item.freeze_final,
+        freeze_undetermined: item.freeze_undetermined,
+        convictions: item.convictions,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwCapacityAttributionRow, protowire::RpcPalwCapacityAttributionRow, {
+    Self {
+        class_id: item.class_id.clone(),
+        claims_live: item.claims_live,
+        claims_final: item.claims_final,
+        claims_voided: item.claims_voided,
+        voids_attributed: item.voids_attributed,
+        voids_by_reason: item.voids_by_reason.clone(),
+        convictions_by_kind: item.convictions_by_kind.clone(),
+        da_open_non_seat: item.da_open_non_seat,
+        da_open_seat: item.da_open_seat,
+        da_opened_non_seat_total: item.da_opened_non_seat_total,
+        conviction_latency_histogram: item.conviction_latency_histogram.clone(),
+        adversary_claims: item.adversary_claims,
+        adversary_attributed: item.adversary_attributed,
+        q_measured_permille: item.q_measured_permille,
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwCapacityShadowResponse>, protowire::GetPalwCapacityShadowResponseMessage, {
+    Self {
+        available: item.available,
+        now_daa: item.now_daa,
+        tip_daa: item.tip_daa,
+        summary: item.summary.clone(),
+        bounded_immature_today: item.bounded_immature_today.clone(),
+        bounded_immature_new: item.bounded_immature_new.clone(),
+        safe_weight: item.safe_weight.clone(),
+        w_cap_total: item.w_cap_total.clone(),
+        reference_escrow_sompi: item.reference_escrow_sompi.clone(),
+        reference_w_floor_sompi: item.reference_w_floor_sompi.clone(),
+        reference_l_sompi: item.reference_l_sompi.clone(),
+        reference_seats: item.reference_seats,
+        reference_duty_sompi: item.reference_duty_sompi.clone(),
+        reference_lock_sompi: item.reference_lock_sompi.clone(),
+        claims_commitment_today_sompi: item.claims_commitment_today_sompi.clone(),
+        committed_today_sompi: item.committed_today_sompi.clone(),
+        seats: item.seats,
+        seat_usable_capital_sompi: item.seat_usable_capital_sompi.clone(),
+        seat_duty_today_sompi: item.seat_duty_today_sompi.clone(),
+        seat_lock_today_sompi: item.seat_lock_today_sompi.clone(),
+        seat_capacity_today_milli_per_daa: item.seat_capacity_today_milli_per_daa,
+        duty_rows: item.duty_rows,
+        duty_rows_capped: item.duty_rows_capped,
+        licence_queue: item.licence_queue,
+        licence_queue_oldest_bound_daa: item.licence_queue_oldest_bound_daa,
+        licensed_recent: item.licensed_recent,
+        carriers_per_block: item.carriers_per_block,
+        carriage_blocks_to_drain: item.carriage_blocks_to_drain,
+        convictions_total: item.convictions_total,
+        steps: item.steps.iter().map(protowire::RpcPalwCapacityStepRow::from).collect(),
+        bonds: item.bonds.iter().map(protowire::RpcPalwCapacityBondRow::from).collect(),
+        bonds_total: item.bonds_total,
+        claims: item.claims.iter().map(protowire::RpcPalwCapacityClaimRow::from).collect(),
+        claims_total: item.claims_total,
+        attribution: item.attribution.iter().map(protowire::RpcPalwCapacityAttributionRow::from).collect(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetPalwVestingRequest, protowire::GetPalwVestingRequestMessage, {
     Self {
         bond: item.bond.clone(),
@@ -3404,6 +3534,139 @@ try_from!(item: &protowire::GetPalwActivationPoolResponseMessage, RpcResult<kasp
         bonus_cap_sompi: item.bonus_cap_sompi,
     }
 });
+try_from!(item: &protowire::RpcPalwCapacityStep, kaspa_rpc_core::RpcPalwCapacityStep, {
+    Self { from_daa: item.from_daa, rho: item.rho, q_credit_permille: item.q_credit_permille }
+});
+try_from!(item: &protowire::GetPalwCapacityShadowRequestMessage, kaspa_rpc_core::GetPalwCapacityShadowRequest, {
+    Self {
+        steps: item.steps.iter().map(kaspa_rpc_core::RpcPalwCapacityStep::try_from).collect::<RpcResult<Vec<_>>>()?,
+        bond: item.bond.clone(),
+        adversary_bonds: item.adversary_bonds.clone(),
+        include_claims: item.include_claims,
+        limit: item.limit,
+    }
+});
+try_from!(item: &protowire::RpcPalwCapacityStepRow, kaspa_rpc_core::RpcPalwCapacityStepRow, {
+    Self {
+        step: item.step.as_ref().map(kaspa_rpc_core::RpcPalwCapacityStep::try_from).transpose()?.unwrap_or_default(),
+        m_floor_sompi: item.m_floor_sompi.clone(),
+        q_needed_permille: item.q_needed_permille,
+        ramp_binds: item.ramp_binds,
+        seat_credit: item.seat_credit,
+        claims_commitment_sompi: item.claims_commitment_sompi.clone(),
+        committed_sompi: item.committed_sompi.clone(),
+        seat_duty_sompi: item.seat_duty_sompi.clone(),
+        seat_lock_sompi: item.seat_lock_sompi.clone(),
+        seat_capacity_milli_per_daa: item.seat_capacity_milli_per_daa,
+        n_instant_13k: item.n_instant13k,
+        q_alarm: item.q_alarm,
+    }
+});
+try_from!(item: &protowire::RpcPalwCapacityClaimRow, kaspa_rpc_core::RpcPalwCapacityClaimRow, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        bond: item.bond.clone(),
+        class_id: item.class_id.clone(),
+        phase: item.phase.clone(),
+        stage: item.stage.clone(),
+        accepted_daa: item.accepted_daa,
+        free_prompt: item.free_prompt,
+        c7: item.c7,
+        raw_weight: item.raw_weight.clone(),
+        staged_weight: item.staged_weight.clone(),
+        reserved_today_sompi: item.reserved_today_sompi.clone(),
+        reserved_new_sompi: item.reserved_new_sompi.clone(),
+        commitment_today_sompi: item.commitment_today_sompi.clone(),
+        commitment_new_sompi: item.commitment_new_sompi.clone(),
+    }
+});
+try_from!(item: &protowire::RpcPalwCapacityBondRow, kaspa_rpc_core::RpcPalwCapacityBondRow, {
+    Self {
+        bond: item.bond.clone(),
+        collateral_sompi: item.collateral_sompi,
+        seat: item.seat,
+        live_claims: item.live_claims,
+        unlicensed_claims: item.unlicensed_claims,
+        raw_immature: item.raw_immature.clone(),
+        w_cap: item.w_cap.clone(),
+        x_b: item.x_b.clone(),
+        capped: item.capped.clone(),
+        r_budget_sompi: item.r_budget_sompi.clone(),
+        reserved_new_sompi: item.reserved_new_sompi.clone(),
+        committed_today_sompi: item.committed_today_sompi.clone(),
+        own_claims_today_sompi: item.own_claims_today_sompi.clone(),
+        committed_new_sompi: item.committed_new_sompi.clone(),
+        n_instant_today: item.n_instant_today,
+        n_instant_new: item.n_instant_new.clone(),
+        n_more_today: item.n_more_today,
+        n_more_new: item.n_more_new.clone(),
+        frozen_would_be: item.frozen_would_be,
+        freeze_final: item.freeze_final,
+        freeze_undetermined: item.freeze_undetermined,
+        convictions: item.convictions,
+    }
+});
+try_from!(item: &protowire::RpcPalwCapacityAttributionRow, kaspa_rpc_core::RpcPalwCapacityAttributionRow, {
+    Self {
+        class_id: item.class_id.clone(),
+        claims_live: item.claims_live,
+        claims_final: item.claims_final,
+        claims_voided: item.claims_voided,
+        voids_attributed: item.voids_attributed,
+        voids_by_reason: item.voids_by_reason.clone(),
+        convictions_by_kind: item.convictions_by_kind.clone(),
+        da_open_non_seat: item.da_open_non_seat,
+        da_open_seat: item.da_open_seat,
+        da_opened_non_seat_total: item.da_opened_non_seat_total,
+        conviction_latency_histogram: item.conviction_latency_histogram.clone(),
+        adversary_claims: item.adversary_claims,
+        adversary_attributed: item.adversary_attributed,
+        q_measured_permille: item.q_measured_permille,
+    }
+});
+try_from!(item: &protowire::GetPalwCapacityShadowResponseMessage, RpcResult<kaspa_rpc_core::GetPalwCapacityShadowResponse>, {
+    Self {
+        available: item.available,
+        now_daa: item.now_daa,
+        tip_daa: item.tip_daa,
+        summary: item.summary.clone(),
+        bounded_immature_today: item.bounded_immature_today.clone(),
+        bounded_immature_new: item.bounded_immature_new.clone(),
+        safe_weight: item.safe_weight.clone(),
+        w_cap_total: item.w_cap_total.clone(),
+        reference_escrow_sompi: item.reference_escrow_sompi.clone(),
+        reference_w_floor_sompi: item.reference_w_floor_sompi.clone(),
+        reference_l_sompi: item.reference_l_sompi.clone(),
+        reference_seats: item.reference_seats,
+        reference_duty_sompi: item.reference_duty_sompi.clone(),
+        reference_lock_sompi: item.reference_lock_sompi.clone(),
+        claims_commitment_today_sompi: item.claims_commitment_today_sompi.clone(),
+        committed_today_sompi: item.committed_today_sompi.clone(),
+        seats: item.seats,
+        seat_usable_capital_sompi: item.seat_usable_capital_sompi.clone(),
+        seat_duty_today_sompi: item.seat_duty_today_sompi.clone(),
+        seat_lock_today_sompi: item.seat_lock_today_sompi.clone(),
+        seat_capacity_today_milli_per_daa: item.seat_capacity_today_milli_per_daa,
+        duty_rows: item.duty_rows,
+        duty_rows_capped: item.duty_rows_capped,
+        licence_queue: item.licence_queue,
+        licence_queue_oldest_bound_daa: item.licence_queue_oldest_bound_daa,
+        licensed_recent: item.licensed_recent,
+        carriers_per_block: item.carriers_per_block,
+        carriage_blocks_to_drain: item.carriage_blocks_to_drain,
+        convictions_total: item.convictions_total,
+        steps: item.steps.iter().map(kaspa_rpc_core::RpcPalwCapacityStepRow::try_from).collect::<RpcResult<Vec<_>>>()?,
+        bonds: item.bonds.iter().map(kaspa_rpc_core::RpcPalwCapacityBondRow::try_from).collect::<RpcResult<Vec<_>>>()?,
+        bonds_total: item.bonds_total,
+        claims: item.claims.iter().map(kaspa_rpc_core::RpcPalwCapacityClaimRow::try_from).collect::<RpcResult<Vec<_>>>()?,
+        claims_total: item.claims_total,
+        attribution: item
+            .attribution
+            .iter()
+            .map(kaspa_rpc_core::RpcPalwCapacityAttributionRow::try_from)
+            .collect::<RpcResult<Vec<_>>>()?,
+    }
+});
 try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {
     Self {
         bond: item.bond.clone(),
@@ -4407,5 +4670,142 @@ mod palw_derived_artifacts_tests {
         assert_eq!(back.verdict, "executor_guilty");
         // The wRPC half of the same wire is `the_declared_close_survives_the_wrpc_round_trip`, in
         // `rpc/core`, where the `Serializer`/`Deserializer` traits live.
+    }
+}
+
+#[cfg(test)]
+mod palw_capacity_shadow_grpc_tests {
+    use crate::protowire;
+    use kaspa_rpc_core::{
+        GetPalwCapacityShadowRequest, GetPalwCapacityShadowResponse, RpcPalwCapacityAttributionRow, RpcPalwCapacityBondRow,
+        RpcPalwCapacityClaimRow, RpcPalwCapacityStep, RpcPalwCapacityStepRow, RpcResult,
+    };
+
+    /// **`getPalwCapacityShadow` (op 201) survives the grpc wire, both ways** — every field crosses
+    /// `from!` / `try_from!` by hand, so each carries a distinct non-default value and a dropped one
+    /// would arrive as a default.
+    #[test]
+    fn every_capacity_shadow_field_survives_the_grpc_round_trip() {
+        let step = RpcPalwCapacityStep { from_daa: 7, rho: 100, q_credit_permille: 143 };
+        let request = GetPalwCapacityShadowRequest {
+            steps: vec![step.clone(), RpcPalwCapacityStep { from_daa: 0, rho: 1, q_credit_permille: 0 }],
+            bond: "b0".repeat(64) + ":1",
+            adversary_bonds: vec!["c0".repeat(64) + ":2"],
+            include_claims: true,
+            limit: 42,
+        };
+        let wire: protowire::GetPalwCapacityShadowRequestMessage = (&request).into();
+        let back: GetPalwCapacityShadowRequest = (&wire).try_into().unwrap();
+        assert_eq!(
+            (back.steps, back.bond, back.adversary_bonds, back.include_claims, back.limit),
+            (request.steps.clone(), request.bond.clone(), request.adversary_bonds.clone(), true, 42)
+        );
+        let response = GetPalwCapacityShadowResponse {
+            available: true,
+            now_daa: 11,
+            tip_daa: 10,
+            summary: "capacity-shadow: daa=11".to_string(),
+            bounded_immature_today: "13".to_string(),
+            bounded_immature_new: "2".to_string(),
+            safe_weight: "99".to_string(),
+            w_cap_total: "144".to_string(),
+            reference_escrow_sompi: "320084650080".to_string(),
+            reference_w_floor_sompi: "10752660".to_string(),
+            reference_l_sompi: "960286208220".to_string(),
+            reference_seats: 5,
+            reference_duty_sompi: "64016930016".to_string(),
+            reference_lock_sompi: "24010000000".to_string(),
+            claims_commitment_today_sompi: "3".to_string(),
+            committed_today_sompi: "4".to_string(),
+            seats: 8,
+            seat_usable_capital_sompi: "5".to_string(),
+            seat_duty_today_sompi: "6".to_string(),
+            seat_lock_today_sompi: "7".to_string(),
+            seat_capacity_today_milli_per_daa: 940,
+            duty_rows: 12,
+            duty_rows_capped: 1,
+            licence_queue: 9,
+            licence_queue_oldest_bound_daa: Some(3),
+            licensed_recent: 4,
+            carriers_per_block: 3,
+            carriage_blocks_to_drain: 3,
+            convictions_total: 2,
+            steps: vec![RpcPalwCapacityStepRow {
+                step,
+                m_floor_sompi: "3200846501".to_string(),
+                q_needed_permille: 142,
+                ramp_binds: true,
+                seat_credit: true,
+                claims_commitment_sompi: "8".to_string(),
+                committed_sompi: "9".to_string(),
+                seat_duty_sompi: "10".to_string(),
+                seat_lock_sompi: "11".to_string(),
+                seat_capacity_milli_per_daa: 94_094,
+                n_instant_13k: 203,
+                q_alarm: true,
+            }],
+            bonds: vec![RpcPalwCapacityBondRow {
+                bond: "b0".repeat(64) + ":1",
+                collateral_sompi: 1_300_000_000_000,
+                seat: true,
+                live_claims: 3,
+                unlicensed_claims: 2,
+                raw_immature: "12".to_string(),
+                w_cap: "13".to_string(),
+                x_b: "14".to_string(),
+                capped: "15".to_string(),
+                r_budget_sompi: "16".to_string(),
+                reserved_new_sompi: "17".to_string(),
+                committed_today_sompi: "18".to_string(),
+                own_claims_today_sompi: "19".to_string(),
+                committed_new_sompi: vec!["20".to_string(), "21".to_string()],
+                n_instant_today: 2,
+                n_instant_new: vec![203, 2],
+                n_more_today: 1,
+                n_more_new: vec![201, 1],
+                frozen_would_be: true,
+                freeze_final: true,
+                freeze_undetermined: true,
+                convictions: 1,
+            }],
+            bonds_total: 1,
+            claims: vec![RpcPalwCapacityClaimRow {
+                claim_id: "d0".repeat(64),
+                bond: "b0".repeat(64) + ":1",
+                class_id: "e0".repeat(64),
+                phase: "panel-bound".to_string(),
+                stage: "anchored".to_string(),
+                accepted_daa: 5,
+                free_prompt: true,
+                c7: true,
+                raw_weight: "22".to_string(),
+                staged_weight: "23".to_string(),
+                reserved_today_sompi: "24".to_string(),
+                reserved_new_sompi: "25".to_string(),
+                commitment_today_sompi: "26".to_string(),
+                commitment_new_sompi: vec!["27".to_string()],
+            }],
+            claims_total: 1,
+            attribution: vec![RpcPalwCapacityAttributionRow {
+                class_id: "e0".repeat(64),
+                claims_live: 1,
+                claims_final: 2,
+                claims_voided: 3,
+                voids_attributed: 4,
+                voids_by_reason: vec!["CourtFraud=1".to_string()],
+                convictions_by_kind: vec!["5=1".to_string()],
+                da_open_non_seat: 5,
+                da_open_seat: 6,
+                da_opened_non_seat_total: 7,
+                conviction_latency_histogram: vec![0, 1, 0, 0, 0, 0, 0, 2],
+                adversary_claims: 8,
+                adversary_attributed: 9,
+                q_measured_permille: Some(500),
+            }],
+        };
+        let wire: protowire::GetPalwCapacityShadowResponseMessage = Ok(&response).into();
+        assert!(wire.error.is_none());
+        let back: RpcResult<GetPalwCapacityShadowResponse> = (&wire).try_into();
+        assert_eq!(back.unwrap(), response);
     }
 }

@@ -8,6 +8,9 @@ pub mod palw_backends;
 /// The Activation Pool research's P3: a `Candidate` class is proved for its own admission audit
 /// (node policy).
 pub mod palw_candidate_proof_timing;
+/// ADR-0160 §7.5: the capacity shadow — every 10 DAA of the tip, what the capacity formulas would
+/// reserve, weigh and allow (node-only; logged, and served on demand by `getPalwCapacityShadow`).
+pub mod palw_capacity_shadow;
 pub mod palw_class_context;
 pub mod palw_drill;
 pub mod palw_dump;

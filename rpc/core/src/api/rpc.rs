@@ -1000,6 +1000,22 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwActivationPoolResponse::default())
     }
 
+    /// **ADR-0160 §7.5: the capacity shadow** (op 201; node-only) — per ramp step, what the
+    /// capacity formulas would reserve, weigh and allow for every live claim and bond of the tip.
+    /// A node built before op 201 drops the WebSocket on it: ask it last on a connection, or
+    /// reconnect.
+    async fn get_palw_capacity_shadow(&self, request: GetPalwCapacityShadowRequest) -> RpcResult<GetPalwCapacityShadowResponse> {
+        self.get_palw_capacity_shadow_call(None, request).await
+    }
+    async fn get_palw_capacity_shadow_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwCapacityShadowRequest,
+    ) -> RpcResult<GetPalwCapacityShadowResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwCapacityShadowResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

@@ -272,6 +272,10 @@ pub enum RpcApiOps {
     /// who was paid, the operators credited toward the activation bonus, the terms and the sink a
     /// top-up pays into. Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwActivationPool = 200,
+    /// ADR-0160 §7.5 (lane shadow, node-only): the capacity shadow — what the capacity formulas
+    /// would reserve, weigh and allow for every live claim and bond, per ramp step, next to today's
+    /// values. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwCapacityShadow = 201,
 }
 
 impl RpcApiOps {

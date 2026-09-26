@@ -2832,6 +2832,47 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     }
 
     // ------------------------------------------------------------------------------------------
+    // ADR-0160 §7.5 — the capacity shadow (op 201; node-only)
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_capacity_shadow_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwCapacityShadowRequest,
+    ) -> RpcResult<GetPalwCapacityShadowResponse> {
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        // Everything the caller sent is parsed before a byte of chain state is read (mainnet audit
+        // M-5): a malformed request is free, and an error.
+        let steps = palw_capacity_steps_of_request(&request.steps)?;
+        let bond = match request.bond.trim() {
+            "" => None,
+            b => Some(PalwBondKeyV2(parse_bond_outpoint(b)?)),
+        };
+        let adversary_bonds =
+            request.adversary_bonds.iter().map(|b| parse_bond_outpoint(b.trim()).map(PalwBondKeyV2)).collect::<RpcResult<Vec<_>>>()?;
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwCapacityShadowResponse::default());
+        }
+        let options = kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1 {
+            steps,
+            raw_depth: None,
+            adversary_bonds,
+            block_mass_limit: self.config.params.max_block_mass,
+            // The processor fills it from the fold's own carve at the next block's DAA.
+            reference_escrow_sompi: None,
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(shadow) = session.spawn_blocking(move |c| c.palw_capacity_shadow_v1(options)).await else {
+            return Ok(GetPalwCapacityShadowResponse::default());
+        };
+        let limit = match request.limit {
+            0 => PALW_CAPACITY_SHADOW_RPC_ROWS,
+            n => (n as usize).min(PALW_CAPACITY_SHADOW_RPC_ROWS_MAX),
+        };
+        Ok(palw_capacity_shadow_response_v1(&shadow, bond.as_ref(), request.include_claims, limit))
+    }
+
+    // ------------------------------------------------------------------------------------------
     // ADR-0152 P2-10 — the vesting table (op 199)
     // ------------------------------------------------------------------------------------------
 
@@ -4526,6 +4567,180 @@ impl AsyncService for RpcCoreService {
             trace!("{} stopped", Self::IDENT);
             Ok(())
         })
+    }
+}
+
+/// `getPalwCapacityShadow`'s default page of bond and claim rows, and the most a caller may ask.
+const PALW_CAPACITY_SHADOW_RPC_ROWS: usize = 500;
+const PALW_CAPACITY_SHADOW_RPC_ROWS_MAX: usize = 5_000;
+/// The most steps one request prices.
+const PALW_CAPACITY_SHADOW_RPC_STEPS_MAX: usize = 16;
+
+/// `getPalwCapacityShadow`'s steps, validated: `rho ≥ 1`, `q ≤ 1000‰`, at most 16; none is the
+/// reference ramp (the shadow's own default).
+fn palw_capacity_steps_of_request(
+    steps: &[RpcPalwCapacityStep],
+) -> RpcResult<Vec<kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1>> {
+    if steps.len() > PALW_CAPACITY_SHADOW_RPC_STEPS_MAX {
+        return Err(RpcError::General(format!("at most {PALW_CAPACITY_SHADOW_RPC_STEPS_MAX} steps per request")));
+    }
+    steps
+        .iter()
+        .map(|step| {
+            if step.rho == 0 {
+                return Err(RpcError::General("a step's rho must be at least 1".to_string()));
+            }
+            let q = u16::try_from(step.q_credit_permille)
+                .ok()
+                .filter(|q| *q <= 1_000)
+                .ok_or_else(|| RpcError::General(format!("q_credit_permille {} is above 1000", step.q_credit_permille)))?;
+            Ok(kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1 {
+                from_daa: step.from_daa,
+                rho: step.rho,
+                q_credit_permille: q,
+            })
+        })
+        .collect()
+}
+
+/// **The wire form of one shadow** — every total and step row, the bond rows (one bond's when
+/// `bond` names it), and the claim rows when asked, each list at most `limit` long.
+pub fn palw_capacity_shadow_response_v1(
+    shadow: &kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowV1,
+    bond: Option<&kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    include_claims: bool,
+    limit: usize,
+) -> GetPalwCapacityShadowResponse {
+    let outpoint = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
+    let text = |v: u128| v.to_string();
+    let texts = |v: &[u128]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let step = |s: &kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1| RpcPalwCapacityStep {
+        from_daa: s.from_daa,
+        rho: s.rho,
+        q_credit_permille: u32::from(s.q_credit_permille),
+    };
+    let bonds: Vec<&kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityBondShadowV1> =
+        shadow.bonds.iter().filter(|row| bond.is_none_or(|b| row.bond == *b)).collect();
+    let claims: Vec<&kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityClaimShadowV1> =
+        if include_claims { shadow.claims.iter().filter(|row| bond.is_none_or(|b| row.bond == *b)).collect() } else { Vec::new() };
+    GetPalwCapacityShadowResponse {
+        available: true,
+        now_daa: shadow.now_daa,
+        tip_daa: shadow.tip_daa,
+        summary: shadow.summary(),
+        bounded_immature_today: text(shadow.bounded_immature_today),
+        bounded_immature_new: text(shadow.bounded_immature_new),
+        safe_weight: text(shadow.safe_weight),
+        w_cap_total: text(shadow.w_cap_total),
+        reference_escrow_sompi: text(shadow.reference_escrow),
+        reference_w_floor_sompi: text(shadow.reference_w_floor),
+        reference_l_sompi: text(shadow.reference_l),
+        reference_seats: shadow.reference_seats,
+        reference_duty_sompi: text(shadow.reference_duty),
+        reference_lock_sompi: text(shadow.reference_lock),
+        claims_commitment_today_sompi: text(shadow.claims_commitment_today),
+        committed_today_sompi: text(shadow.committed_today_total),
+        seats: shadow.seats,
+        seat_usable_capital_sompi: text(shadow.seat_usable_capital),
+        seat_duty_today_sompi: text(shadow.seat_duty_total_today),
+        seat_lock_today_sompi: text(shadow.seat_lock_total_today),
+        seat_capacity_today_milli_per_daa: shadow.seat_capacity_today_milli_per_daa,
+        duty_rows: shadow.duty_rows,
+        duty_rows_capped: shadow.duty_rows_capped,
+        licence_queue: shadow.licence_queue,
+        licence_queue_oldest_bound_daa: shadow.licence_queue_oldest_bound_daa,
+        licensed_recent: shadow.licensed_recent,
+        carriers_per_block: shadow.carriers_per_block,
+        carriage_blocks_to_drain: shadow.carriage_blocks_to_drain,
+        convictions_total: shadow.convictions_total,
+        steps: shadow
+            .steps
+            .iter()
+            .map(|row| RpcPalwCapacityStepRow {
+                step: step(&row.step),
+                m_floor_sompi: text(row.m_floor),
+                q_needed_permille: u32::from(row.q_needed_permille),
+                ramp_binds: row.ramp_binds,
+                seat_credit: row.seat_credit,
+                claims_commitment_sompi: text(row.claims_commitment_total),
+                committed_sompi: text(row.committed_total),
+                seat_duty_sompi: text(row.seat_duty_total),
+                seat_lock_sompi: text(row.seat_lock_total),
+                seat_capacity_milli_per_daa: row.seat_capacity_milli_per_daa,
+                n_instant_13k: row.n_instant_13k,
+                q_alarm: row.q_alarm,
+            })
+            .collect(),
+        bonds_total: bonds.len() as u64,
+        bonds: bonds
+            .iter()
+            .take(limit)
+            .map(|row| RpcPalwCapacityBondRow {
+                bond: outpoint(&row.bond),
+                collateral_sompi: row.collateral,
+                seat: row.seat,
+                live_claims: row.live_claims,
+                unlicensed_claims: row.unlicensed_claims,
+                raw_immature: text(row.raw_immature_today),
+                w_cap: text(row.w_cap),
+                x_b: text(row.x_b),
+                capped: text(row.capped),
+                r_budget_sompi: text(row.r_budget),
+                reserved_new_sompi: text(row.reserved_new_total),
+                committed_today_sompi: text(row.committed_today),
+                own_claims_today_sompi: text(row.own_claims_today),
+                committed_new_sompi: texts(&row.committed_new),
+                n_instant_today: row.n_instant_today,
+                n_instant_new: row.n_instant_new.clone(),
+                n_more_today: row.n_more_today,
+                n_more_new: row.n_more_new.clone(),
+                frozen_would_be: row.frozen_would_be,
+                freeze_final: row.freeze_final,
+                freeze_undetermined: row.freeze_undetermined,
+                convictions: row.convictions,
+            })
+            .collect(),
+        claims_total: claims.len() as u64,
+        claims: claims
+            .iter()
+            .take(limit)
+            .map(|row| RpcPalwCapacityClaimRow {
+                claim_id: row.claim_id.to_string(),
+                bond: outpoint(&row.bond),
+                class_id: row.class_id.to_string(),
+                phase: row.phase.to_string(),
+                stage: row.stage.name().to_string(),
+                accepted_daa: row.accepted_daa,
+                free_prompt: row.free_prompt,
+                c7: row.c7,
+                raw_weight: text(row.raw_w),
+                staged_weight: text(row.staged_w),
+                reserved_today_sompi: text(row.reserved_today),
+                reserved_new_sompi: text(row.reserved_new),
+                commitment_today_sompi: text(row.commitment_today),
+                commitment_new_sompi: texts(&row.commitment_new),
+            })
+            .collect(),
+        attribution: shadow
+            .attribution
+            .iter()
+            .map(|row| RpcPalwCapacityAttributionRow {
+                class_id: if row.class_id == kaspa_hashes::Hash64::default() { String::new() } else { row.class_id.to_string() },
+                claims_live: row.claims_live,
+                claims_final: row.claims_final,
+                claims_voided: row.claims_voided,
+                voids_attributed: row.voids_attributed,
+                voids_by_reason: row.voids_by_reason.iter().map(|(reason, n)| format!("{reason}={n}")).collect(),
+                convictions_by_kind: row.convictions_by_kind.iter().map(|(kind, n)| format!("{kind}={n}")).collect(),
+                da_open_non_seat: row.da_open_non_seat,
+                da_open_seat: row.da_open_seat,
+                da_opened_non_seat_total: row.da_opened_non_seat_total,
+                conviction_latency_histogram: row.conviction_latency_histogram.to_vec(),
+                adversary_claims: row.adversary_claims,
+                adversary_attributed: row.adversary_attributed,
+                q_measured_permille: row.q_measured_permille.map(u32::from),
+            })
+            .collect(),
     }
 }
 
