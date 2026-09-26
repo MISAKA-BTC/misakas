@@ -153,6 +153,9 @@ pub(crate) struct KaspadArgs {
     pub(crate) listen: Option<String>,
     pub(crate) addpeers: Vec<String>,
     pub(crate) register_bond: bool,
+    /// `--palw-bond-collateral`, in sompi: what a `--palw-register-bond` node locks. `None` when the
+    /// flag is absent (the node then sizes its own default) or not a number.
+    pub(crate) bond_collateral: Option<u64>,
     pub(crate) enable_unsynced_mining: bool,
     /// The DNS-finality validator in-process (`--enable-validator`), and what it signs with.
     pub(crate) enable_validator: bool,
@@ -228,6 +231,7 @@ pub(crate) fn parse_kaspad_args(argv: &[String]) -> KaspadArgs {
             "palw-challenge" => a.challenge = value().is_none_or(|v| v != "false"),
             "utxoindex" => a.utxoindex = value().is_none_or(|v| v != "false"),
             "palw-register-bond" => a.register_bond = value().is_none_or(|v| v != "false"),
+            "palw-bond-collateral" => a.bond_collateral = take(&mut i).and_then(|v| v.trim().parse().ok()),
             "enable-unsynced-mining" => a.enable_unsynced_mining = value().is_none_or(|v| v != "false"),
             "enable-validator" => a.enable_validator = value().is_none_or(|v| v != "false"),
             "validator-key" => a.validator_key = take(&mut i),
