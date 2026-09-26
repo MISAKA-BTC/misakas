@@ -14,9 +14,12 @@
 //! the root of a Merkle tree whose leaves are its V3 receipt messages, each bound to the claim's panel
 //! anchor ([`palw_receipt_window_leaf_v1`]). A batch carries each root once
 //! ([`PalwSeatWindowRootV1`], its signature over [`palw_receipt_window_message_v1`]) and, per claim,
-//! each seat's receipt as its fields and a path ([`PalwBatchLicenceEntryV1`]). The per-claim cost
-//! falls from five signatures to five paths (≈ 10.7k mass at the node's window sizes), so a block
-//! holds ≈ 30 licences beside the roots (ADR-0160 V-T2).
+//! each seat's receipt as its fields and either a Merkle path or, where the root rides with its full
+//! leaf list, its index ([`PalwBatchLicenceEntryV1`], [`PalwSeatWindowRootV1`]). The per-claim cost
+//! falls from five signatures to five leaves. **Measured** (`t12_capacity_verify`, V-T2, real
+//! ML-DSA-87, the node's assembler, windows of 64 claims): **59 coverage licences in a 477,768-mass
+//! block at 16 seats** (the sixteen roots are 304k of it), 64 in 329,624 at 8 seats (the window
+//! bound), against 3 five-signature licences a block today.
 //!
 //! # The licensing rule is not restated here
 //!
@@ -118,6 +121,14 @@ fn finish(state: blake2b_simd::State) -> Hash64 {
 /// registered key and [`PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT`], over
 /// [`palw_receipt_window_message_v1`]. Every leaf proved into it must carry a `signed_daa` inside
 /// `[from_daa, to_daa]`.
+///
+/// **Two proof forms** (the signed message is the same for both):
+/// * **paths** — `leaves` empty: each receipt proved into the root carries its Merkle path;
+/// * **the full list** — `leaves` is every leaf hash of the window, in order (`count` of them): the
+///   root is recomputed from the list ONCE, and each receipt proved into it names its leaf by index
+///   with no path. 64 bytes a leaf instead of ≈ 64 × ⌈log₂ count⌉ a receipt: the form that keeps a
+///   16-seat batch's per-claim cost below the roots' (ADR-0160 V-T2 at 16 seats; the ×100 design's
+///   first step).
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwSeatWindowRootV1 {
     pub seat_bond: PalwBondKeyV2,
@@ -126,6 +137,7 @@ pub struct PalwSeatWindowRootV1 {
     pub root: Hash64,
     pub count: u32,
     pub signature: Vec<u8>,
+    pub leaves: Vec<Hash64>,
 }
 
 /// **One seat's receipt inside a batch entry**: the receipt's fields (the seat is the panel's seat
@@ -322,6 +334,8 @@ pub enum PalwBatchLicenceErrorV1 {
     RootBondMissing(PalwBondKeyV2),
     /// A root's signature does not verify under its seat's registered key.
     RootSignatureInvalid(PalwBondKeyV2),
+    /// A root's carried leaf list does not hash to the root it names.
+    RootListMismatch(PalwBondKeyV2),
     /// A live entry's receipt does not prove into its root.
     Proof { claim: Hash64, why: &'static str },
     /// A live entry does not license (or credit) as the single object would not.
@@ -335,6 +349,7 @@ impl std::fmt::Display for PalwBatchLicenceErrorV1 {
             Self::Shape(why) => write!(f, "a batch licence's shape is refused: {why}"),
             Self::RootBondMissing(bond) => write!(f, "a window root names bond {bond:?} this chain does not hold"),
             Self::RootSignatureInvalid(bond) => write!(f, "a window root is not signed by the bond it names ({bond:?})"),
+            Self::RootListMismatch(bond) => write!(f, "a window root's leaf list does not hash to its root ({bond:?})"),
             Self::Proof { claim, why } => write!(f, "claim {claim}: a batched receipt does not prove into its root: {why}"),
             Self::Entry { claim, why } => write!(f, "claim {claim}: the batched receipts do not license: {why}"),
         }
@@ -375,6 +390,9 @@ pub fn palw_batch_licence_shape_v1(roots: &[PalwSeatWindowRootV1], entries: &[Pa
         if roots[..i].iter().any(|other| other.seat_bond == root.seat_bond && other.root == root.root) {
             return Err(Shape("a window root twice"));
         }
+        if !root.leaves.is_empty() && root.leaves.len() != root.count as usize {
+            return Err(Shape("a window's leaf list is not its count"));
+        }
     }
     let mut claims = std::collections::BTreeSet::new();
     for entry in entries {
@@ -390,6 +408,9 @@ pub fn palw_batch_licence_shape_v1(roots: &[PalwSeatWindowRootV1], entries: &[Pa
             }
             if seat.path.len() > 20 {
                 return Err(Shape("a path longer than PALW_RECEIPT_WINDOW_MAX_LEAVES_V1's depth"));
+            }
+            if !roots[seat.root_index as usize].leaves.is_empty() && !seat.path.is_empty() {
+                return Err(Shape("a receipt carries a path into a root whose leaf list rides"));
             }
         }
     }
@@ -408,6 +429,9 @@ where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
     for root in roots {
+        if !root.leaves.is_empty() && palw_receipt_window_root_v1(&root.leaves) != Some(root.root) {
+            return Err(PalwBatchLicenceErrorV1::RootListMismatch(root.seat_bond));
+        }
         let bond = state.bond(&root.seat_bond).ok_or(PalwBatchLicenceErrorV1::RootBondMissing(root.seat_bond))?;
         let message = palw_receipt_window_message_v1(network_domain, &root.seat_bond, root.from_daa, root.to_daa, root.root, root.count);
         if !verify_mldsa87(&bond.pubkey, message.as_byte_slice(), &root.signature, PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT) {
@@ -439,8 +463,14 @@ fn palw_batch_entry_proofs_v1<'s>(
         }
         let message = palw_receipt_message_v3(network_domain, entry.claim, seat.verdict, seat.signed_daa, seat.mask);
         let leaf = palw_receipt_window_leaf_v1(message, entry.anchor_hash);
-        if palw_receipt_window_fold_v1(leaf, seat.leaf_index, root.count, &seat.path) != Some(root.root) {
-            return Err(refused("the path does not fold to the root"));
+        let proved = if root.leaves.is_empty() {
+            palw_receipt_window_fold_v1(leaf, seat.leaf_index, root.count, &seat.path) == Some(root.root)
+        } else {
+            // The list form: the list hashed to the root when the roots were verified.
+            root.leaves.get(seat.leaf_index as usize) == Some(&leaf)
+        };
+        if !proved {
+            return Err(refused("the leaf is not the root's (its path, or its place in the carried list)"));
         }
         let key = state.bond(bond).ok_or_else(|| refused("the seat's bond is gone"))?;
         proven.push((key.pubkey.as_slice(), message));
@@ -602,14 +632,20 @@ impl PalwSeatWindowV1 {
         let count = u32::try_from(hashes.len()).ok()?;
         let message = palw_receipt_window_message_v1(network_domain, &seat_bond, from_daa, to_daa, root, count);
         let signature = sign(message.as_byte_slice());
-        Some(Self { root: PalwSeatWindowRootV1 { seat_bond, from_daa, to_daa, root, count, signature }, leaves })
+        Some(Self { root: PalwSeatWindowRootV1 { seat_bond, from_daa, to_daa, root, count, signature, leaves: Vec::new() }, leaves })
     }
 
-    /// The batched receipt of leaf `index` (its path computed here), for seat `seat_index` of the
-    /// claim's panel, proved into root `root_index` of the batch.
-    fn batched(&self, network_domain: Hash64, index: usize, seat_index: u8, root_index: u16) -> Option<PalwBatchSeatReceiptV1> {
-        let hashes: Vec<Hash64> = self.leaves.iter().map(|leaf| leaf.leaf(network_domain)).collect();
+    /// The batched receipt of leaf `index`, for seat `seat_index` of the claim's panel, proved into
+    /// root `root_index` of the batch — with its path (`listed = false`) or, where the root rides in
+    /// its list form, by its index alone.
+    fn batched(&self, network_domain: Hash64, index: usize, seat_index: u8, root_index: u16, listed: bool) -> Option<PalwBatchSeatReceiptV1> {
         let leaf = self.leaves.get(index)?;
+        let path = if listed {
+            Vec::new()
+        } else {
+            let hashes: Vec<Hash64> = self.leaves.iter().map(|leaf| leaf.leaf(network_domain)).collect();
+            palw_receipt_window_path_v1(&hashes, index)?
+        };
         Some(PalwBatchSeatReceiptV1 {
             seat_index,
             root_index,
@@ -617,8 +653,13 @@ impl PalwSeatWindowV1 {
             mask: leaf.mask,
             signed_daa: leaf.signed_daa,
             leaf_index: u32::try_from(index).ok()?,
-            path: palw_receipt_window_path_v1(&hashes, index)?,
+            path,
         })
+    }
+
+    /// The window's root in its list form (every leaf hash carried).
+    pub fn listed_root(&self, network_domain: Hash64) -> PalwSeatWindowRootV1 {
+        PalwSeatWindowRootV1 { leaves: self.leaves.iter().map(|leaf| leaf.leaf(network_domain)).collect(), ..self.root.clone() }
     }
 }
 
@@ -652,7 +693,7 @@ pub fn palw_assemble_batch_licence_v1(
     independence_daa: Option<u64>,
     licenses: impl Fn(&Hash64, &[PalwSeatReceiptV3]) -> bool,
 ) -> Option<(Vec<PalwSeatWindowRootV1>, Vec<PalwBatchLicenceEntryV1>)> {
-    // (seat, claim, anchor) → (window index, leaf index) of that seat's Valid leaf, first window first.
+    // (seat, claim) → (window index, leaf index) of that seat's Valid leaf, first window first.
     let mut index: std::collections::HashMap<(PalwBondKeyV2, Hash64), (usize, usize)> = std::collections::HashMap::new();
     for (w, window) in windows.iter().enumerate() {
         for (l, leaf) in window.leaves.iter().enumerate() {
@@ -661,13 +702,16 @@ pub fn palw_assemble_batch_licence_v1(
             }
         }
     }
+    // Built in the path form; each candidate is sized in its compact form (every root carried as a
+    // list where that is cheaper than its receipts' paths, [`palw_batch_licence_compact_v1`]).
     let mut roots: Vec<PalwSeatWindowRootV1> = Vec::new();
+    let mut root_windows: Vec<usize> = Vec::new();
     let mut root_of_window: std::collections::HashMap<usize, u16> = std::collections::HashMap::new();
     let mut entries: Vec<PalwBatchLicenceEntryV1> = Vec::new();
     for claim in due {
         let Some(panel) = state.panel(claim) else { continue };
         let probe_entry = |roots: &[PalwSeatWindowRootV1], root_of_window: &std::collections::HashMap<usize, u16>| {
-            let mut new_roots: Vec<(usize, PalwSeatWindowRootV1)> = Vec::new();
+            let mut new_roots: Vec<usize> = Vec::new();
             let mut seats = Vec::new();
             for (seat_index, seat) in panel.seats.iter().enumerate() {
                 let Some(&(w, l)) = index.get(&(seat.bond, *claim)) else { continue };
@@ -677,21 +721,21 @@ pub fn palw_assemble_batch_licence_v1(
                 }
                 let root_index = match root_of_window.get(&w) {
                     Some(r) => *r,
-                    None => match new_roots.iter().position(|(nw, _)| *nw == w) {
+                    None => match new_roots.iter().position(|nw| *nw == w) {
                         Some(p) => (roots.len() + p) as u16,
                         None => {
-                            new_roots.push((w, window.root.clone()));
+                            new_roots.push(w);
                             (roots.len() + new_roots.len() - 1) as u16
                         }
                     },
                 };
-                seats.push(window.batched(network_domain, l, u8::try_from(seat_index).ok()?, root_index)?);
+                seats.push(window.batched(network_domain, l, u8::try_from(seat_index).ok()?, root_index, false)?);
             }
             (!seats.is_empty()).then(|| (PalwBatchLicenceEntryV1 { claim: *claim, anchor_hash: panel.anchor, seats }, new_roots))
         };
         let Some((entry, new_roots)) = probe_entry(&roots, &root_of_window) else { continue };
         let mut trial_roots = roots.clone();
-        trial_roots.extend(new_roots.iter().map(|(_, root)| root.clone()));
+        trial_roots.extend(new_roots.iter().map(|w| windows[*w].root.clone()));
         let live = palw_validate_batch_entries_v1(
             state,
             panel_params,
@@ -710,20 +754,71 @@ pub fn palw_assemble_batch_licence_v1(
         if !palw_batch_entry_receipts_v1(&entry, &seats).is_some_and(|receipts| licenses(claim, &receipts)) {
             continue;
         }
+        let mut trial_windows = root_windows.clone();
+        trial_windows.extend(new_roots.iter().copied());
         let mut trial_entries = entries.clone();
         trial_entries.push(entry);
-        if palw_batch_licence_bytes_v1(&trial_roots, &trial_entries) > max_bytes {
+        let (sized_roots, sized_entries) = palw_batch_licence_compact_v1(network_domain, windows, &trial_roots, &trial_windows, &trial_entries);
+        if palw_batch_licence_bytes_v1(&sized_roots, &sized_entries) > max_bytes {
             // Oldest first: a later claim may still fit where this one did not (fewer new roots), so
             // keep walking, but never reorder what was taken.
             continue;
         }
-        for (w, _) in &new_roots {
-            root_of_window.insert(*w, roots.len() as u16);
-            roots.push(windows[*w].root.clone());
+        for w in new_roots {
+            root_of_window.insert(w, roots.len() as u16);
+            roots.push(windows[w].root.clone());
+            root_windows.push(w);
         }
         entries = trial_entries;
     }
-    (!entries.is_empty()).then_some((roots, entries))
+    if entries.is_empty() {
+        return None;
+    }
+    Some(palw_batch_licence_compact_v1(network_domain, windows, &roots, &root_windows, &entries))
+}
+
+/// **The compact form of a path-form batch** (node policy): each root whose full leaf list costs no
+/// more than the paths its receipts carry (`64 · count + 4 ≤ Σ (4 + 64 · path)`) rides as its list
+/// ([`PalwSeatWindowV1::listed_root`]) and its receipts drop their paths; every other root keeps the
+/// path form. `root_windows[i]` is the window root `i` was taken from. Both forms license alike.
+pub fn palw_batch_licence_compact_v1(
+    network_domain: Hash64,
+    windows: &[PalwSeatWindowV1],
+    roots: &[PalwSeatWindowRootV1],
+    root_windows: &[usize],
+    entries: &[PalwBatchLicenceEntryV1],
+) -> (Vec<PalwSeatWindowRootV1>, Vec<PalwBatchLicenceEntryV1>) {
+    let mut path_bytes = vec![0usize; roots.len()];
+    for entry in entries {
+        for seat in &entry.seats {
+            if let Some(bytes) = path_bytes.get_mut(seat.root_index as usize) {
+                *bytes += 4 + 64 * seat.path.len();
+            }
+        }
+    }
+    let listed: Vec<bool> =
+        roots.iter().zip(&path_bytes).map(|(root, paths)| root.leaves.is_empty() && 4 + 64 * root.count as usize <= *paths).collect();
+    let compact_roots = roots
+        .iter()
+        .enumerate()
+        .map(|(i, root)| match (listed[i], root_windows.get(i).and_then(|w| windows.get(*w))) {
+            (true, Some(window)) => window.listed_root(network_domain),
+            _ => root.clone(),
+        })
+        .collect();
+    let compact_entries = entries
+        .iter()
+        .map(|entry| {
+            let mut entry = entry.clone();
+            for seat in &mut entry.seats {
+                if listed.get(seat.root_index as usize).copied().unwrap_or(false) {
+                    seat.path.clear();
+                }
+            }
+            entry
+        })
+        .collect();
+    (compact_roots, compact_entries)
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -774,6 +869,7 @@ impl PalwWindowedReceiptV1 {
     ) -> Option<Self> {
         let seat = entry.seats.iter().find(|seat| seat.seat_index == seat_index)?;
         let root = roots.get(seat.root_index as usize)?;
+        let path = if root.leaves.is_empty() { seat.path.clone() } else { palw_receipt_window_path_v1(&root.leaves, seat.leaf_index as usize)? };
         (root.seat_bond == seat_bond).then(|| Self {
             receipt: PalwSeatReceiptV3 {
                 receipt: PalwSeatReceiptV2 {
@@ -790,7 +886,7 @@ impl PalwWindowedReceiptV1 {
             to_daa: root.to_daa,
             count: root.count,
             leaf_index: seat.leaf_index,
-            path: seat.path.clone(),
+            path,
         })
     }
 }
@@ -889,7 +985,7 @@ mod tests {
         let window = PalwSeatWindowV1::sign(d, seat, 40, 40, leaves.clone(), |m| m.to_vec()).unwrap();
         // The "signature" is the message itself here: what the seat signed is recomputed exactly.
         for (i, leaf) in leaves.iter().enumerate() {
-            let batched = window.batched(d, i, 3, 0).unwrap();
+            let batched = window.batched(d, i, 3, 0, false).unwrap();
             let entry = PalwBatchLicenceEntryV1 { claim: leaf.claim, anchor_hash: leaf.anchor_hash, seats: vec![batched] };
             let windowed = PalwWindowedReceiptV1::of_batch_entry(std::slice::from_ref(&window.root), &entry, 3, seat).unwrap();
             assert_eq!(windowed.signed_message_v1(d).as_byte_slice(), window.root.signature.as_slice());

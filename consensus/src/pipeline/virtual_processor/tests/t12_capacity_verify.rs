@@ -69,7 +69,7 @@ fn key(n: u64) -> &'static MLDSA87KeyPair {
     }
     static KEYS: std::sync::OnceLock<Vec<MLDSA87KeyPair>> = std::sync::OnceLock::new();
     let all = KEYS.get_or_init(|| {
-        (0..96u64)
+        (0..160u64)
             .map(|i| {
                 let mut seed = [0xC5u8; 32];
                 seed[0] = 0x40u8.wrapping_add(i as u8);
@@ -741,10 +741,31 @@ async fn adr0160_vt1_a_batch_licenses_exactly_as_its_single_licences() {
     out_line(format!("{{\"vt1\":1,\"claims\":6,\"root\":\"{}\"}}", by_batch.state_root()));
 
     let Obj::ReceiptLicensedBatchV1 { roots, entries } = &batch else { unreachable!() };
+    assert!(roots.iter().any(|r| r.leaves.len() == r.count as usize), "the assembler carries a root's full list where it is cheaper");
+    for e in entries {
+        for seat in &e.seats {
+            assert_eq!(seat.path.is_empty(), !roots[seat.root_index as usize].leaves.is_empty(), "a path exactly where the root rides without its list");
+        }
+    }
+    // The same licences in the path form (the seats' windows, a Merkle path a receipt) license alike.
+    let by_paths = hand_batch(&s, &s.windows(&due), &due);
+    let accepted_paths = vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![by_paths.clone()], s.chain.sink());
+    assert_eq!(accepted_paths, vec![by_paths.clone()], "the gate takes the path form");
+    let folded_paths = vp.palw_v2_fold_accepted_for_tests(&tip, sp, &point, &accepted_paths).expect("the path form folds");
+    assert_eq!(folded_paths.state_root(), by_singles.state_root(), "V-I1 in the path form too");
     // A path that does not fold: the whole object is refused.
-    let mut bad_path = entries.clone();
+    let Obj::ReceiptLicensedBatchV1 { roots: path_roots, entries: path_entries } = &by_paths else { unreachable!() };
+    let mut bad_path = path_entries.clone();
     bad_path[0].seats[0].path[0] = Hash64::from_u64_word(0xBAD);
-    assert!(vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![Obj::ReceiptLicensedBatchV1 { roots: roots.clone(), entries: bad_path }], s.chain.sink()).is_empty(), "a path that does not fold is refused");
+    assert!(vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![Obj::ReceiptLicensedBatchV1 { roots: path_roots.clone(), entries: bad_path }], s.chain.sink()).is_empty(), "a path that does not fold is refused");
+    // A carried list that does not hash to its signed root: refused.
+    let mut bad_list = roots.clone();
+    bad_list[0].leaves[0] = Hash64::from_u64_word(0xBAD);
+    assert!(vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![Obj::ReceiptLicensedBatchV1 { roots: bad_list, entries: entries.clone() }], s.chain.sink()).is_empty(), "a list that is not the root's is refused");
+    // A receipt naming another leaf of a listed root: refused.
+    let mut wrong_leaf = entries.clone();
+    wrong_leaf[0].seats[0].leaf_index = (wrong_leaf[0].seats[0].leaf_index + 1) % roots[wrong_leaf[0].seats[0].root_index as usize].count;
+    assert!(vp.palw_v2_accepted_objects_for_tests(&tip, sp, &point, vec![Obj::ReceiptLicensedBatchV1 { roots: roots.clone(), entries: wrong_leaf }], s.chain.sink()).is_empty(), "another leaf of the list is refused");
     // A root signed by another bond's key: refused.
     let mut forged_roots = roots.clone();
     forged_roots[0].signature = sign(15, b"not the window message", PALW_RECEIPT_WINDOW_V1_MLDSA87_CONTEXT);
@@ -802,7 +823,9 @@ impl Sim {
             claim.execution_root = Hash64::from_u64_word(0x7300_0000 ^ (salt << 24) ^ i);
             claim.trace_chunk_count = template.trace_chunk_count;
             claim.trace_retention_daa = template.trace_retention_daa;
-            claim.immature_contribution = template.immature_contribution;
+            // No immature weight (the planted tip's `bounded_immature` is not re-summed here): the
+            // gates measured read none of it.
+            claim.immature_contribution = 0;
             let held = kaspa_consensus_core::palw_state_v2::palw_claim_bond_reservation_v1(&bundle.state, &claim).expect("a reservation");
             *carriage.reserved_exposure.entry(bond).or_insert(0) += held;
             let id = Hash64::from_u64_word(0x7F00_0000_0000 ^ (salt << 32) ^ i);
@@ -853,10 +876,16 @@ async fn adr0160_vt2_batch_carriage_per_block() {
     let per_daa: u64 = env_or("CAP_PER_DAA", 40);
     let lic_delay: u64 = env_or("CAP_LIC_DELAY", 1);
     let run = if batch { "vt2-batch" } else { "vt2-single" };
+    let extra_seats: u64 = env_or("CAP_EXTRA_SEATS", 0);
     let mut s = Sim::new(Some(0)).await;
     let base = s.base;
     s.beat_to(34).await;
-    let subject = s.plant_bonds(8, 1, 1_000_000, false)[0];
+    if extra_seats > 0 {
+        // More floor seats: every batch then carries more roots (one a seat touched).
+        s.plant_bonds(32, extra_seats, 939_063, true);
+    }
+    let bond_msk: u64 = env_or("CAP_BOND_MSK", 1_000_000);
+    let subject = s.plant_bonds(8, 1, bond_msk, false)[0];
     let started = std::time::Instant::now();
     let mut sent: BTreeSet<Hash64> = BTreeSet::new();
     let mut accepted: BTreeMap<Hash64, u64> = BTreeMap::new();
@@ -877,11 +906,14 @@ async fn adr0160_vt2_batch_carriage_per_block() {
                 accepted.insert(claim, s.daa());
             }
         }
-        // Licences: every due claim, oldest bind first.
+        // Licences: every due claim, oldest bind first; the seats sign one window over each group of
+        // `CAP_WINDOW` due claims (a seat's receipts of one replay round), the collector batches it.
         let mut due = s.due(lic_delay, &sent);
+        let window_size: usize = env_or("CAP_WINDOW", 64);
         while !due.is_empty() {
             if batch {
-                let Some(object) = s.batch_licence(&due, 480_000 / 4 - 8_000) else { break };
+                let group: Vec<Hash64> = due.iter().copied().take(window_size).collect();
+                let Some(object) = s.batch_licence(&group, 480_000 / 4 - 8_000) else { break };
                 let Obj::ReceiptLicensedBatchV1 { entries, .. } = &object else { unreachable!() };
                 let taken: BTreeSet<Hash64> = entries.iter().map(|e| e.claim).collect();
                 let Some(tx) = s.carrier(object.clone()) else { break };
@@ -941,7 +973,7 @@ async fn adr0160_vt2_batch_carriage_per_block() {
     }
     let mut blocks_entries: Vec<u64> = per_block.iter().map(|(_, n, _)| *n as u64).collect();
     out_line(format!(
-        "{{\"run\":\"{run}\",\"daa\":{daa_len},\"accepted\":{},\"licensed\":{licensed},\"max_licences_a_block\":{max_entries},\"p50_licences_a_block\":{},\"blocks_carrying\":{},\"max_mass\":{},\"accept_to_licence_p50\":{},\"p90\":{},\"p99\":{},\"max\":{},\"subject\":\"{subject:?}\",\"elapsed_s\":{}}}",
+        "{{\"run\":\"{run}\",\"extra_seats\":{extra_seats},\"daa\":{daa_len},\"accepted\":{},\"licensed\":{licensed},\"max_licences_a_block\":{max_entries},\"p50_licences_a_block\":{},\"blocks_carrying\":{},\"max_mass\":{},\"accept_to_licence_p50\":{},\"p90\":{},\"p99\":{},\"max\":{},\"subject\":\"{subject:?}\",\"elapsed_s\":{}}}",
         accepted.len(),
         percentile(&mut blocks_entries, 50),
         per_block.len(),
@@ -977,35 +1009,54 @@ async fn adr0160_vt3_c8k_at_sixteen_ready_seats() {
                 s.plant_bonds(32, extra, msk, true);
             }
             s.refresh_8k();
-            let subject = s.plant_bonds(8, 1, 1_000_000, false)[0];
-            // One real 8k claim for the reservation the fold records.
+            let subjects = s.plant_bonds(8, 2, 1_000_000, false);
+            // One real 8k claim for the reservation the fold records (it holds a room slot too).
             let (template_id, created) = s.attempt(Who::Card(0), k8, Vec::new()).await;
             assert!(created, "a card's 8k claim");
             let template = s.state().claim(&template_id).expect("the template").clone();
-            let mut n = 0u64;
-            let stop;
-            loop {
-                match s.ready(Who::Planted(8), k8) {
-                    Ok(()) => {
-                        s.plant_claims(k8, subject, 1, s.daa(), &template, 0x8C00 + n);
-                        n += 1;
-                        if n > 400 {
-                            stop = "stopped at 400".to_string();
-                            break;
+            // Both subjects take claims, alternating, until neither may: the network's room is what
+            // they hold plus the card's claim, and the last refusal names what bound.
+            let mut held = [0u64; 2];
+            let mut last = String::new();
+            for round in 0..400u64 {
+                let mut any = false;
+                for (j, bond) in subjects.iter().enumerate() {
+                    match s.ready(Who::Planted(8 + j as u64), k8) {
+                        Ok(()) => {
+                            s.plant_claims(k8, *bond, 1, s.daa(), &template, 0x8C00 + round * 4 + j as u64);
+                            held[j] += 1;
+                            any = true;
                         }
+                        Err(why) => last = why,
+                    }
+                }
+                if !any {
+                    break;
+                }
+            }
+            // Then the card that holds the template claim takes what its own share leaves: past F-R the
+            // cap reserves each active holder's share, so the room is full only once every holder has
+            // taken its part.
+            let mut card_held = 1u64;
+            for i in 0..400u64 {
+                match s.ready(Who::Card(0), k8) {
+                    Ok(()) => {
+                        s.plant_claims(k8, s.chain.bonds[0], 1, s.daa(), &template, 0x9C00 + i);
+                        card_held += 1;
                     }
                     Err(why) => {
-                        stop = why;
+                        last = why;
                         break;
                     }
                 }
             }
             let facts = s.facts(Who::Planted(8), k8);
+            let room_exhausted = last.contains("has no room");
             out_line(format!(
-                "{{\"run\":\"vt3\",\"armed\":{armed},\"seats\":\"{label}\",\"c8k_network\":{},\"subject_claims\":{n},\"share\":{:?},\"stop\":{:?}}}",
-                n + 1,
+                "{{\"run\":\"vt3\",\"armed\":{armed},\"seats\":\"{label}\",\"c8k_network\":{},\"held\":{held:?},\"card_held\":{card_held},\"share_first\":{:?},\"room_bound\":{room_exhausted},\"last_refusal\":{:?}}}",
+                held[0] + held[1] + card_held,
                 facts.bond_class_share,
-                stop
+                last.chars().take(260).collect::<String>()
             ));
         }
     }
@@ -1078,7 +1129,9 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
     let mut s = Sim::new(armed.then_some(0)).await;
     let base = s.base;
     s.beat_to(34).await;
-    s.plant_bonds(8, 1, 1_000_000, false);
+    // The flood's bond is large enough to outrun the seats' capital (10M MSK holds ≈ 1,560 unlicensed
+    // floor claims; eight genesis seats bind ≈ 1,170 at once).
+    s.plant_bonds(8, 1, env_or("CAP_BOND_MSK", 10_000_000), false);
     s.plant_bonds(9, 1, 13_000, false);
     let started = std::time::Instant::now();
     let mut sent: BTreeSet<Hash64> = BTreeSet::new();
@@ -1172,12 +1225,13 @@ async fn adr0160_vt5_the_floor_room_stops_the_flood() {
 async fn adr0160_v4_attempt_lane_with_parallel_producers() {
     let rounds_per_daa: u64 = env_or("CAP_ROUNDS", 4);
     let daa_len: u64 = env_or("CAP_DAA", 6);
-    for n in [4usize, 8, 16] {
+    for n in [4usize, 8, 16, 32] {
         let mut s = Sim::new(Some(0)).await;
         let base = s.base;
         s.beat_to(34).await;
-        s.plant_bonds(8, 8, 1_000_000, false);
-        let producers: Vec<Who> = (0..n).map(|i| if i < 8 { Who::Card(i) } else { Who::Planted(i as u64) }).collect();
+        s.plant_bonds(8, 26, 1_000_000, false);
+        // Card 0 merges each round; the racing producers are the other cards and planted bonds.
+        let producers: Vec<Who> = (1..=n).map(|i| if i < 8 { Who::Card(i) } else { Who::Planted(i as u64) }).collect();
         let before = s.state().claims_iter().count();
         let start_daa = s.daa();
         let mut siblings_total = 0u64;
@@ -1190,9 +1244,10 @@ async fn adr0160_v4_attempt_lane_with_parallel_producers() {
                     s.blocks += 1;
                     siblings_total += 1;
                 }
-                // The next chain block merges the round (its own attempt counted too).
-                let merge = s.chain.heartbeat(s.chain.config.params.target_time_per_block() / 50, Vec::new()).await;
-                s.inserted.push(merge);
+                // The next chain block merges the round: an attempt block (which does not move
+                // testnet-12's clock), its own claim counted too. A block names at most
+                // `max_block_parents` tips; the rest are merged by the next.
+                s.attempt(Who::Card(0), base, Vec::new()).await;
             }
             s.beat().await;
         }
@@ -1234,4 +1289,71 @@ async fn adr0160_v4_bind_cost_per_anchor_block() {
             elapsed.as_micros() / n.max(1) as u128
         ));
     }
+}
+
+/// **V-T3's throughput half: the 8k network at the ×10 room**, past F-R with 16 genesis-sized ready
+/// seats (the eight cards and eight planted seats, each proving 8k readiness): `CAP_BONDS` pure
+/// producers (default two of 1M) make 8k claims while the chain admits them for `CAP_DAA` DAA
+/// (default 80); a card anchors every DAA; every due 8k claim is licensed by batch at bind +
+/// `CAP_LIC_DELAY` (default 3, live testnet-12's 8k median). Counted: 8k claims accepted per 80 DAA
+/// network-wide (the ADR's target ≈ 174 at c = 50) and what held the producers.
+#[tokio::test]
+#[ignore = "a measurement run (ADR-0160 V-T3 throughput): tens of minutes; run with --ignored"]
+async fn adr0160_vt3_the_8k_network_at_the_x10_room() {
+    let daa_len: u64 = env_or("CAP_DAA", 80);
+    let lic_delay: u64 = env_or("CAP_LIC_DELAY", 3);
+    let bonds: u64 = env_or("CAP_BONDS", 2);
+    let armed = std::env::var("CAP_ARMED").map(|v| v != "0").unwrap_or(true);
+    let mut s = Sim::new(armed.then_some(0)).await;
+    let base = s.base;
+    let k8 = s.k8.expect("8k");
+    s.beat_to(34).await;
+    s.plant_bonds(32, 8, 939_063, true);
+    s.refresh_8k();
+    s.plant_bonds(8, bonds, 1_000_000, false);
+    let started = std::time::Instant::now();
+    let mut sent: BTreeSet<Hash64> = BTreeSet::new();
+    let mut accepted = 0u64;
+    let mut holds: BTreeMap<String, u64> = BTreeMap::new();
+    for rel in 0..daa_len {
+        if rel % 12 == 0 {
+            s.refresh_8k();
+        }
+        let txs = s.take_carriers();
+        s.attempt(Who::Card((rel % 8) as usize), base, txs).await;
+        for j in 0..bonds {
+            for _ in 0..16 {
+                match s.ready(Who::Planted(8 + j), k8) {
+                    Ok(()) => {
+                        let txs = s.take_carriers();
+                        let (_, created) = s.attempt(Who::Planted(8 + j), k8, txs).await;
+                        accepted += created as u64;
+                    }
+                    Err(why) => {
+                        *holds.entry(why.split(" (").next().unwrap_or("").chars().take(100).collect()).or_default() += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        let mut due = s.due(lic_delay, &sent);
+        while !due.is_empty() {
+            let Some(object) = s.batch_licence(&due, 480_000 / 4 - 8_000) else { break };
+            let Obj::ReceiptLicensedBatchV1 { entries, .. } = &object else { unreachable!() };
+            let taken: Vec<Hash64> = entries.iter().map(|e| e.claim).collect();
+            let Some(tx) = s.carrier(object.clone()) else { break };
+            sent.extend(taken.iter().copied());
+            due.retain(|c| !taken.contains(c));
+            s.queued.push(tx);
+        }
+        s.beat().await;
+        if rel % 10 == 0 {
+            eprintln!("[cap-verify] vt3-8k rel {rel} daa {} accepted {accepted} elapsed {:?}", s.daa(), started.elapsed());
+        }
+    }
+    let per_80 = accepted as f64 * 80.0 / daa_len as f64;
+    out_line(format!(
+        "{{\"run\":\"vt3-8k-network\",\"armed\":{armed},\"daa\":{daa_len},\"bonds\":{bonds},\"lic_delay\":{lic_delay},\"accepted_8k\":{accepted},\"per_80_daa\":{per_80:.1},\"holds\":{holds:?},\"elapsed_s\":{}}}",
+        started.elapsed().as_secs()
+    ));
 }
