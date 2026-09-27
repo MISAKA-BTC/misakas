@@ -169,6 +169,13 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_final_lock_life = Some(at);
             params.sync_palw_final_lock_life();
         }
+        // Lane F2-lock (the lock life applied retroactively, post-launch): the V2 bundle mirrors the height
+        // and `validate_palw_v2` refuses the two apart — set together; refused without lane V02's lock life
+        // at or below it.
+        "palw_final_lock_life_retro" => {
+            params.palw_final_lock_life_retro = Some(at);
+            params.sync_palw_final_lock_life_retro();
+        }
         // ADR-0152-adjacent (Activation Pool): genesis-only (R1 and R2 change how every class is
         // reclaimed and stepped), so a height is refused here by name. At genesis the terms this preset
         // carries are kept, and a preset that carries none takes the user's illustrative scale — the

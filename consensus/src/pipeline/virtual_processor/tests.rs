@@ -16436,6 +16436,9 @@ mod t12_seat_maturity_fence;
 // testnet-12's post-launch release (int-4): EVERY fence of PALW_T12_POST_LAUNCH_FENCES_V1 at one
 // height, crossed by one chain with the clock running — the combined crossing no lane ran alone.
 mod t12_post_launch_fences_combined;
+// Lane F2-lock (post-launch, 2026-09-27): `palw_final_lock_life_retro` crossed on a real chain — the crossing
+// block re-dates the long post-Final seat locks to max(F + 1,000, H), a Final past it dates exactly.
+mod t12_f2_lock_redate_crossing;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
