@@ -505,3 +505,99 @@ mod logit_bias_tests {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// §A.3 step 7 — the stop matcher
+// ---------------------------------------------------------------------------------------------
+
+impl DecodeConfigV4 {
+    /// **The canonical form of `stop_sequences`** (§A.2): at most 4, each `1..=16` token ids,
+    /// strictly ascending lexicographically (sorted, no duplicates).
+    pub fn validate_stop_sequences(&self) -> Result<(), PalwDecodeConfigV4Error> {
+        if self.stop_sequences.len() > PALW_DECODE_V4_MAX_STOP_SEQUENCES {
+            return Err(PalwDecodeConfigV4Error::TooManyStopSequences { got: self.stop_sequences.len() });
+        }
+        for (index, sequence) in self.stop_sequences.iter().enumerate() {
+            if sequence.is_empty() {
+                return Err(PalwDecodeConfigV4Error::EmptyStopSequence { index });
+            }
+            if sequence.len() > PALW_DECODE_V4_MAX_STOP_TOKENS {
+                return Err(PalwDecodeConfigV4Error::StopSequenceTooLong { index, got: sequence.len() });
+            }
+            if index > 0 && self.stop_sequences[index - 1] >= *sequence {
+                return Err(PalwDecodeConfigV4Error::StopSequencesNotAscending { index });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// **Step 7: does the committed answer END with a stop sequence?** — the index of the first stop
+/// sequence (in the canonical order) that the tail of `generated` equals, or `None`.
+///
+/// `generated` is the answer so far INCLUDING the token just committed; the prompt is never part
+/// of it, so a stop sequence cannot straddle the prompt. The stop tokens stay in the answer
+/// (cutting them from what a user sees is the gateway's display rule). A token id sequence, never
+/// a string: a string the tokenizer would split differently in context does not match, which is
+/// the documented cost of keeping the tokenizer out of consensus.
+pub fn decode_stop_match_v4(stop_sequences: &[Vec<u32>], generated: &[u32]) -> Option<usize> {
+    stop_sequences.iter().position(|sequence| !sequence.is_empty() && generated.ends_with(sequence))
+}
+
+/// **Where a finished answer's stop rule says it stops** — the length of the shortest prefix of
+/// `answer` whose tail is a stop sequence, or `None` when no prefix stops. A committed answer is
+/// canonical under step 7 exactly when this is `None` and it ran its whole budget, or when this is
+/// its own length (it stopped where the rule says, and not a token later).
+pub fn decode_first_stop_v4(stop_sequences: &[Vec<u32>], answer: &[u32]) -> Option<(usize, usize)> {
+    (1..=answer.len()).find_map(|end| decode_stop_match_v4(stop_sequences, &answer[..end]).map(|which| (end, which)))
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+
+    fn with(stops: Vec<Vec<u32>>) -> DecodeConfigV4 {
+        DecodeConfigV4 { stop_sequences: stops, ..DecodeConfigV4::NOOP }
+    }
+
+    #[test]
+    fn stop_sequences_are_bounded_non_empty_and_sorted() {
+        with(vec![vec![1], vec![1, 2], vec![2], vec![3, 0, 0]]).validate_stop_sequences().expect("canonical");
+        assert_eq!(with(vec![vec![]]).validate_stop_sequences(), Err(PalwDecodeConfigV4Error::EmptyStopSequence { index: 0 }));
+        assert_eq!(
+            with(vec![(0..17).collect()]).validate_stop_sequences(),
+            Err(PalwDecodeConfigV4Error::StopSequenceTooLong { index: 0, got: 17 })
+        );
+        with(vec![(0..16).collect()]).validate_stop_sequences().expect("16 tokens");
+        assert_eq!(
+            with(vec![vec![2], vec![1]]).validate_stop_sequences(),
+            Err(PalwDecodeConfigV4Error::StopSequencesNotAscending { index: 1 })
+        );
+        assert_eq!(
+            with(vec![vec![2], vec![2]]).validate_stop_sequences(),
+            Err(PalwDecodeConfigV4Error::StopSequencesNotAscending { index: 1 })
+        );
+        assert_eq!(
+            with(vec![vec![1], vec![2], vec![3], vec![4], vec![5]]).validate_stop_sequences(),
+            Err(PalwDecodeConfigV4Error::TooManyStopSequences { got: 5 })
+        );
+    }
+
+    #[test]
+    fn the_tail_matches_and_nothing_else_does() {
+        let stops = vec![vec![5, 6], vec![9]];
+        assert_eq!(decode_stop_match_v4(&stops, &[1, 5, 6]), Some(0));
+        assert_eq!(decode_stop_match_v4(&stops, &[1, 5, 6, 7]), None, "a stop earlier in the answer is not this step's");
+        assert_eq!(decode_stop_match_v4(&stops, &[9]), Some(1));
+        assert_eq!(decode_stop_match_v4(&stops, &[6]), None, "a partial match is no match");
+        assert_eq!(decode_stop_match_v4(&stops, &[]), None);
+        // Two sequences where one is the other's suffix: the canonical order decides the index.
+        let nested = vec![vec![1, 2], vec![2]];
+        assert_eq!(decode_stop_match_v4(&nested, &[1, 2]), Some(0));
+        assert_eq!(decode_stop_match_v4(&nested, &[3, 2]), Some(1));
+        // The first stop point of a finished answer.
+        assert_eq!(decode_first_stop_v4(&stops, &[1, 2, 5, 6, 9]), Some((4, 0)));
+        assert_eq!(decode_first_stop_v4(&stops, &[1, 2, 3]), None);
+        assert_eq!(decode_first_stop_v4(&[], &[1, 2, 3]), None);
+    }
+}
+
