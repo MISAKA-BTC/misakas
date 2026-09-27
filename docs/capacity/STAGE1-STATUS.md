@@ -1,6 +1,26 @@
-# ADR-0160 stage 1 (rcore/cap-s1) — status at the pause of 2026-09-27
+# ADR-0160 stage 1 (rcore/cap-s1) — status
 
-Paused by the coordinator (an urgent consensus fence for DAA ~1,300 needs this Mac). Resume from here.
+**Update (resumed 2026-09-27):** all five lanes are merged, each built and tested (weight b44b7900f,
+escrow b042b3c68, liab 70399f19b + decision 1 f53bdae9c, verify 88288c299, shadow d5e0a3a88). Target dir
+is now the shared `~/Downloads/MISAKA-wt-b/wt-int4-target`. In progress: the rho=1 state-diff harness and
+the six invariants. The sections below the next one are the pause-time notes (kept for history).
+
+## Where a later merge of rcore/int-5 (PALW_T12_POST_LAUNCH_FENCES_V2 at DAA 1,300) touches this branch
+
+* **params lists.** cap-s1 adds `PALW_T12_CAPACITY_FENCES_V1` (+ `palw_t12_arm_capacity_fences_v1`,
+  `palw_t12_capacity_params_v1`) right before `palw_t12_arm_post_launch_fences_v1`, and removed every
+  capacity entry from `PALW_T12_POST_LAUNCH_FENCES_V1`. int-5's V2 list and its arming call sit in the
+  same region (`palw_t12_params_with_registry_v1`): keep three lists — V1 (750), V2 (1,300), capacity
+  (dormant). The capacity fences' prerequisites (strict-win, lane A) are V1 entries; none is on V2.
+  The pins (`*_is_t12_only.rs` T12_RELEASE = dbbc9104…) move to int-5's fp 24e1aec3… in one re-pin.
+* **step 4c voids / the floor-refusal retry (`palw_floor_refusal_retry`).** Interactions with F-E / F-L
+  are listed in the final report and below (E-4's hold on a 4c void, AG-5 convictability, the retry's
+  re-anchor keeping the claim live so no E-4 hold starts).
+* **lock life (`palw_final_lock_life_retro`).** F-L's AS-1/AS-2 re-price the lock a counted `Valid`
+  posts and the duty at bind; the lock-life fences date the lock row. They compose (price vs life);
+  a retro re-dating of V02 locks does not read the capacity step. Re-run the liab suite's L-T4/L-T4b
+  and v_t5 after the merge.
+
 
 ## Base and plan
 
