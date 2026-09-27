@@ -6,8 +6,8 @@
 //! (rcore/cap-s1). So:
 //!
 //! * as shipped the field is `None` everywhere, testnet-12 included, the V2 bundle's mirror is `None`,
-//!   and testnet-12's three ids are the DAA-750 release's to the byte (`dbbc9104…` / `5de80e64…` /
-//!   `7c652212…`);
+//!   and testnet-12's three ids are the DAA-1,300 release's to the byte (`24e1aec3…` / `5de80e64…` /
+//!   `d263d7f2…`);
 //! * armed at a future height it moves `consensus_params_id` and `consensus_schedule_id` but NOT
 //!   `consensus_identity_id`, and a `Some(never())` collapses to absence (the fourth of the four places a
 //!   Some-only fence needs);
@@ -36,9 +36,9 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 /// pins `palw_operator_anchor_is_t12_only::T12_RELEASE` holds (rcore/cap-s1: the capacity fences do not
 /// move them).
 const T12_RELEASE: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
+    "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
 );
 
 /// Heights an operator might pick: a low one a drill crosses, the capacity release's own later one.

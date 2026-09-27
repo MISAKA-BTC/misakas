@@ -20,12 +20,12 @@ use kaspa_consensus_core::config::params::{
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
-/// testnet-12 as THIS build ships it — the DAA-750 post-launch release (`c3dbaee3c`), every capacity
+/// testnet-12 as THIS build ships it — the DAA-1,300 release (rcore/int-5), every capacity
 /// fence dormant (rcore/cap-s1): params, identity, schedule.
 const T12_RELEASE: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
+    "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
 );
 
 /// Heights an operator might pick for the capacity release's `H_cap`: a low one a drill crosses, and

@@ -323,6 +323,14 @@ pub struct Args {
     /// only, like the salt.
     #[serde(skip)]
     pub palw_drill_fence_at: Option<u64>,
+    /// **DRILL ONLY: cross testnet-12's SECOND post-launch flag day at this DAA** (lane F2, 2026-09-27) —
+    /// with the salt, every fence of `PALW_T12_POST_LAUNCH_FENCES_V2` is armed, or moved, to this height
+    /// on the drill chain, after `--palw-drill-fence-at`'s move and at a height of its own, and nothing
+    /// else is touched (`config::drill::palw_drill_post_launch_fences_v2_at_v1`). So a drill already
+    /// past its DAA-750 crossing crosses the next flag day with the shipping binary. Command line only,
+    /// like the salt.
+    #[serde(skip)]
+    pub palw_drill_fence2_at: Option<u64>,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
     /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
@@ -540,6 +548,7 @@ impl Default for Args {
             palw_drill_genesis_salt: None,
             palw_drill_write_keyring: None,
             palw_drill_fence_at: None,
+            palw_drill_fence2_at: None,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
@@ -685,6 +694,13 @@ impl Args {
             config.palw_drill_fence_moves =
                 kaspa_consensus_core::config::drill::palw_drill_post_launch_fences_at_v1(&mut config.params, at)
                     .unwrap_or_else(|e| panic!("--palw-drill-fence-at: {e} (validate_args refuses this first)"));
+        }
+        // **Lane F2: and the second flag day** (`--palw-drill-fence2-at`), after the first, on the same
+        // drill params — its moves printed beside the first's.
+        if let Some(at) = self.palw_drill_fence2_at {
+            let moves = kaspa_consensus_core::config::drill::palw_drill_post_launch_fences_v2_at_v1(&mut config.params, at)
+                .unwrap_or_else(|e| panic!("--palw-drill-fence2-at: {e} (validate_args refuses this first)"));
+            config.palw_drill_fence_moves.extend(moves);
         }
 
         // The floor-only devnet ruleset: the shipped devnet carries testnet-11's class set, so its
@@ -1472,6 +1488,19 @@ pub fn cli() -> Command {
                     "With --palw-drill-genesis-salt only: arm (or move) every fence testnet-12's post-launch release arms at DAA 500 \
                      at this DAA on the drill chain, so a drill crosses the release's flag day with the shipping binary. Nothing else \
                      moves; the node prints each fence it set. Refused without the salt, at 0, and at a height another fence uses.",
+                ),
+        )
+        .arg(
+            // No `.env(...)` on purpose, like the salt and --palw-drill-fence-at.
+            Arg::new("palw-drill-fence2-at")
+                .long("palw-drill-fence2-at")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "With --palw-drill-genesis-salt only: arm (or move) every fence of testnet-12's second post-launch flag day at \
+                     this DAA on the drill chain, after --palw-drill-fence-at, so a drill past its first crossing crosses the next \
+                     flag day with the shipping binary. Nothing else moves; the node prints each fence it set. Refused without the \
+                     salt, at 0, and at a height another fence uses.",
                 ),
         )
         .arg(
@@ -2394,6 +2423,7 @@ impl Args {
             palw_drill_genesis_salt: m.get_one::<String>("palw-drill-genesis-salt").cloned(),
             palw_drill_write_keyring: m.get_one::<String>("palw-drill-write-keyring").cloned(),
             palw_drill_fence_at: m.get_one::<u64>("palw-drill-fence-at").copied(),
+            palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m

@@ -30,7 +30,7 @@ use kaspa_consensus_core::config::drill::{PalwDrillSaltV1, palw_drill_post_launc
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
     devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
-    palw_t12_shipped_params,
+    palw_t12_release_v1_params, palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 
@@ -38,11 +38,11 @@ use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_
 /// `PALW_T12_POST_LAUNCH_FENCES_V1` (this one among them) at DAA 750, re-pinned by `scripts/t12-repin.sh`
 /// with it (the launch release was `b8564b88…` / `5de80e64…` / `93da24cc…`, which
 /// `palw_t12_launch_params_v1()` still hashes to): params, identity, schedule.
-// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was 1274ac12…, ae8cc4b7…)
+// re-pin 2026-09-27 @082a68ec102f: second post-launch flag day (2026-09-27): palw_floor_refusal_retry + palw_final_lock_life_retro armed at DAA 1,300 (was dbbc9104…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
+    "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
 );
 
 /// The post-launch release's height (DAA 750) and two more an operator might pick. Never 1,000 —
@@ -192,7 +192,11 @@ fn the_release_list_arms_it_and_the_drill_moves_it() {
         (fence.set)(&mut armed, Some(ForkActivation::new(750)));
     }
     armed.validate_palw_v2().expect("the release's list at DAA 750 is a runnable testnet-12 ruleset");
-    assert_eq!(format!("{armed:?}"), format!("{:?}", palw_t12_shipped_params()), "the shipped ruleset IS the list at 750");
+    assert_eq!(
+        format!("{armed:?}"),
+        format!("{:?}", palw_t12_release_v1_params()),
+        "the DAA-750 release IS the list at 750 (the second flag day's list, `PALW_T12_POST_LAUNCH_FENCES_V2`, rides on top)"
+    );
     assert!(armed.palw_lane_accept_parents_first_active_at(750) && !armed.palw_lane_accept_parents_first_active_at(749));
     let mut back = armed.clone();
     (entry.set)(&mut back, None);

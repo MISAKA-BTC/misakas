@@ -4,7 +4,7 @@
 //! One scripted scenario is folded twice through testnet-12's own V2 fold (`rcore_common::Chain`: every
 //! block's delta re-applies and reverts, and its carriage reloads under its committed root):
 //!
-//! * **shipped** — `palw_t12_shipped_params()`, the DAA-750 release (`dbbc9104…`), every capacity fence
+//! * **shipped** — `palw_t12_shipped_params()`, the DAA-1,300 release (`24e1aec3…`), every capacity fence
 //!   dormant;
 //! * **armed** — the same ruleset with every entry of `PALW_T12_CAPACITY_FENCES_V1` armed at [`H`]
 //!   (`palw_t12_arm_capacity_fences_v1`: F-W, F-E, F-L at stage 1's ρ = 1 / q = 0, F-B, F-R).

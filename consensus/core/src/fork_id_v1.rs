@@ -678,6 +678,10 @@ mod tests {
                 }
                 value.steps[slot - 1].from_daa = at.daa_score();
             }
+            // Lane F2-lock (the lock life applied retroactively, post-launch): refused without lane V02's
+            // lock life at or below it and an unsynced mirror by `validate_palw_v2`, which the probe does
+            // not run — it asks only the hashers and the schedule.
+            "palw_final_lock_life_retro" => params.palw_final_lock_life_retro = Some(at),
             // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
             // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
             // hashers and the schedule.
@@ -706,6 +710,10 @@ mod tests {
             // registry by `validate_palw_v2`, which the probe does not run — it asks only the hashers
             // and the schedule.
             "palw_registry_resilience" => params.palw_registry_resilience = Some(at),
+            // Lane F2 (the floor-refusal retry, post-launch): refused unsynced and without R-core+ at or
+            // below it by `validate_palw_v2`, which the probe does not run — it asks only the hashers and
+            // the schedule.
+            "palw_floor_refusal_retry" => params.palw_floor_refusal_retry = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),

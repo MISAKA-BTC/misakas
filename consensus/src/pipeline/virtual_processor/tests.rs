@@ -16414,6 +16414,10 @@ mod t12_capacity_verify;
 // testnet-12 and crossed by a real chain — the processor's mirror, a floor claim unchanged across the
 // height, and the no-capable-panel re-anchor at a real anchor block.
 mod t12_registry_resilience;
+// Lane F2 (post-launch, 2026-09-27): the floor-refusal retry armed on a copy of testnet-12 and crossed by a
+// real chain — the draw points the processor carries, and a floor-refused claim re-anchored at a real
+// anchor block and bound at the next one.
+mod t12_floor_refusal_retry;
 // Post-launch lane bind-deadlock (`palw_anchor_at_ceiling`): a producer at its exposure ceiling mines
 // no attempt, so nothing anchors its claims — measured on the released rule and closed past the fence.
 mod t12_bind_deadlock;
@@ -16444,6 +16448,9 @@ mod t12_seat_maturity_fence;
 // testnet-12's post-launch release (int-4): EVERY fence of PALW_T12_POST_LAUNCH_FENCES_V1 at one
 // height, crossed by one chain with the clock running — the combined crossing no lane ran alone.
 mod t12_post_launch_fences_combined;
+// Lane F2-lock (post-launch, 2026-09-27): `palw_final_lock_life_retro` crossed on a real chain — the crossing
+// block re-dates the long post-Final seat locks to max(F + 1,000, H), a Final past it dates exactly.
+mod t12_f2_lock_redate_crossing;
 // ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
 // carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
 mod t53_drill_isolation;
