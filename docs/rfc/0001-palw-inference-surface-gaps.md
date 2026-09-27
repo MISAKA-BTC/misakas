@@ -2,10 +2,120 @@
 
 | 項目 | 値 |
 |---|---|
-| Status | **Draft**(2026-09-27) |
+| Status | **§A(FP Job V4 リリース)= Implementation Frozen**(2026-09-27、G0)。§0〜§7 の P1〜P3 は Draft(次リリース以降) |
 | 対象 | testnet-12(R-core+)の free-prompt(FP)lane、`misaka-palw-gateway` / `misaka-palw-worker` / `misaka-palw-base0` / `misaka-palw-constraint`、Studio |
 | 関連 | ADR-0082 D10/D11(decode の分子とサンプラー)、ADR-0096(OpenAI 互換サーフェス)、ADR-0144(使う推論に払う)、ADR-0145 §6(キャッシュは実行事実)、ADR-0077 D1(常駐 worker)、ADR-0153(2M 分割)、ADR-0160(容量再設計) |
-| 実装ブランチ | `rcore/fp-sampler`(P0 のうち D10・D11・決定論 repeat_penalty) |
+| リリース列車 | `rcore/fp-sampler`(§A の範囲だけ。bisect できる小さな commit を積み、設計・統合・検証・公開は 1 つのリリースとして扱う) |
+
+---
+
+## §A. リリース「FP Job V4 — Deterministic Decode Pipeline」(Implementation Frozen)
+
+**この節の算法・表現・順序は凍結されている。** 実装中に変える場合は「コードを仕様に合わせる」のではなく、本 RFC の変更として明示し、golden vectors も同時に改訂する。
+
+### A.1 範囲
+
+含める:repeat_penalty、frequency / presence penalty、logit_bias、stop token sequences、ADR-0082 D10(decode leaf の分子)・D11(Gumbel-max サンプラー)、constraint を含む processor の順序。
+含めない(次リリース以降):KV キャッシュ、並行処理、embeddings、マルチモーダル、LoRA/adapter、JSON Schema の subset 拡張。
+
+### A.2 `DecodeConfigV4`(規範)
+
+```
+DecodeConfigV4 {
+    repeat_penalty_q:   u32,              // Q16 の有理数 p/2^16。65536 = 1.0 = 無効。許容 [65536, 262144](最大 4.0)
+    penalty_window:     u16,              // W。penalty がすべて無効なら 0、有効なら 1..=256
+    frequency_penalty_q: i32,             // Q24(logit 単位)。許容 [-2·2^24, 2·2^24]
+    presence_penalty_q:  i32,             // Q24(logit 単位)。許容 [-2·2^24, 2·2^24]
+    logit_bias:         Vec<(u32, i32)>,  // (token_id, bias_q)。token_id の狭義昇順(重複なし)、最大 300 件
+                                          // bias_q は Q24(logit 単位)、許容 [-100·2^24, 100·2^24]
+                                          // bias_q == -100·2^24 は「禁止」(hard mask)。0 の項目は置かない
+    stop_sequences:     Vec<Vec<u32>>,    // token id 列。最大 4 本、各 1..=16 token。重複なし、辞書順に整列
+}
+```
+
+* **no-op の正規形はただ 1 つ**:`repeat_penalty_q = 65536`、`penalty_window = 0`、`frequency_penalty_q = 0`、`presence_penalty_q = 0`、`logit_bias = []`、`stop_sequences = []`。同じ意味に複数の符号化を許さない(同じ挙動の job が別の job id を持たないため)。**`penalty_window` は、3 つの penalty のいずれかが無効値でないときだけ 1..=256 で、そうでなければ 0。**
+* 範囲外・並び順違反・重複・空の列・0 の bias 項目は、job の受理時に**名指しで拒否**する(ADR-0096 の原則)。
+
+### A.3 processor の定義(規範)
+
+位置 t の decode ステップで、エンジンが出す lane j の整数 logit を `v_j`(`i32`、クラスの固定小数点 Q24)とする。**生成済み token 列**(プロンプトは含めない)のうち直近 `W = penalty_window` 個の中の token j の出現数を `c_j(t)` とする。演算はすべて `i64` で行う。
+
+```
+1. repeat(乗算型、同じ token が window に複数回あっても 1 回だけ適用):
+     c_j(t) > 0 かつ v_j > 0 :  a_j = floor( v_j · 65536 / p_q )
+     c_j(t) > 0 かつ v_j ≤ 0 :  a_j = floor( v_j · p_q / 65536 )           // −∞ 方向(div_euclid)
+     c_j(t) = 0              :  a_j = v_j
+2. frequency / presence(同じ window):
+     b_j = a_j − c_j(t) · f_q − [c_j(t) > 0] · s_q
+3. logit_bias(禁止項目を除く):
+     d_j = b_j + bias_j                                                   // 項目がなければ bias_j = 0
+4. 飽和:
+     v''_j = clamp(d_j, i32::MIN + 1, i32::MAX)
+5. constraint(最終の hard mask):
+     許可集合 A(t) = { j : constraint(response_format のオートマトン)が許す } ∖ { logit_bias で禁止の j }
+     A(t) が空なら、そのステップで生成は終わる(理由を記録)
+6. selection:
+     committed_t = argmax_{j ∈ A(t)} decode_lane_key_v2(v''_j, seed, t, j, temperature_q)   // ties は最小 index
+7. stop:
+     committed 列の末尾がいずれかの stop 列に一致したら、そのステップで生成を終える(stop 列の token は回答に含む。
+     表示で切るのは gateway)。一致しなければ decode_token_limit まで続ける
+```
+
+* **frequency / presence の window は repeat と同じ W**(本 RFC の判断。OpenAI は全生成 token を数えるが、court の数え上げを W に抑えるため)。
+* **stop 文字列**は consensus に入れない。gateway が各文字列をその tokenizer 単独のエンコードで token 列に変換して `stop_sequences` に入れ、変換できない文字列は拒否する。文脈によって別の分割で生成された場合は一致しない(止まらない)ことを応答に明記する。
+* **反証(I-2)**:1〜4 の補正は「lane j の値」と「job・生成済み列から公開で決まる量」だけの関数なので、court は committed lane と beating lane の 2 tile、window 分の生成済み token 列、bias・mask の該当項目を開示すれば足りる。
+* **D10**:free-prompt claim の quanta は実行した decode leaf で数える(prefill は 0)。stop で早く止まった分は払わない。
+* **D11**:`temperature_q = 0` の V4 はサンプラーの雑音項が消え、greedy と同じ選択になる。
+
+### A.4 Job V4(wire)
+
+* `PalwFreePromptJobV4` = V3 の全フィールド + `decode: DecodeConfigV4`。`fp_job_id_v4` は V3 と別のドメイン分離タグで borsh 全体を hash する。
+* **有効化の境界(G10)**:fence `palw_fp_decode_rules`(D10・D11 と同じ 1 本)の高さ H 以降、新しい FP job は V4 だけを受理する。H より前に受理された V3 の claim は、H 以降も **V3 の検証器**で最後まで検証する(V3 のコードは次の cleanup リリースまで残す)。
+* **互換性(G7)**:no-op 正規形の V4 job は、同じ V3 job と**同じ token 列・同じ work**を出す。これが大量の入力で成り立たない限り flag day に進まない。
+
+### A.5 consensus vectors(仕様の実行可能版)
+
+`consensus-vectors/fp-v4/` に置き、sampler(consensus-core)・worker(produce)・panel(replay)のテストが**すべて同じファイルを読む**。
+
+```
+repeat_penalty.json      frequency_penalty.json   presence_penalty.json
+logit_bias.json          stop_sequences.json      processor_order.json
+job_v4_encoding.json     // 入力フィールド → 期待される borsh バイト列 → 期待される job hash
+v4_noop_equals_v3.json   // 同じ入力で V3 と V4 no-op の token 列が一致する例
+```
+
+### A.6 関門(gate)と commit 計画
+
+| Gate | 内容 | 通過条件 |
+|---|---|---|
+| G0 | RFC freeze | §A に未決事項なし(本節) |
+| G1 | sampler | 純粋・決定的な processor の実装(consensus-core) |
+| G2 | vectors | golden vectors 全通過 |
+| G3 | wire | Job V4 / borsh / hash |
+| G4 | execution | worker が V4 を実行 |
+| G5 | verification | panel が同じ claim を再現 |
+| G6 | gateway | API → 正規形 V4 への変換 |
+| G7 | compatibility | V4 no-op == V3 |
+| G8 | rehearsal | staging(salt 付きドリル)で flag day を再現、新旧 worker・新旧 job の境界 |
+| G9 | release | tag・binary・文書の公開 |
+| G10 | activation | V3 → V4 の fence を越える |
+
+commit(bisect できる粒度):`01 spec: freeze DecodeConfigV4` → `02 sampler: canonical penalty representation` → `03 repeat penalty` → `04 frequency/presence` → `05 logit bias` → `06 stop matcher` → `07 processor total ordering` → `08 test: consensus golden vectors` → `09 wire: FP Job V4` → `10 worker: execute V4` → `11 panel: verify V4` → `12 gateway: normalize to V4` → `13 test: V4-noop == V3` → `14 docs: migration / release / activation`。
+
+### A.7 公開と有効化は分ける
+
+コード公開 → tag・binary 公開 → ノード更新期間 → 更新率と動作の確認 → 有効化 fence。**リリースと有効化を同時にしない。**
+
+有効化の必須条件(すべて):golden vectors 全通過、V4 no-op == V3、worker == panel、繰り返し実行で bit 一致、staging での flag day 予行の成功、新旧混在の境界テスト通過、release binary の再現性。
+
+### A.8 rollback
+
+* 有効化前:V4 対応 binary → 旧 binary に戻せる(kit の `upgrade-rollback`)。
+* 有効化後:V3 へは戻さない。問題が出たら、V4 の緊急パッチ(node)または、重大なら V5 の緊急 fence で直す。
+
+### A.9 公開物(実装作業に含める)
+
+RFC-0001(本書)、必要な決定だけの ADR、Job V4 wire spec、consensus vectors、migration guide、release notes、有効化パラメータ、operator 向け更新手順(「何をいつまでに更新すればよいか」だけの 1 ページ)、rollback / 緊急手順。
 
 ---
 
@@ -51,6 +161,8 @@
 ---
 
 ## 2. 項目別の設計
+
+> **§2.1〜§2.3・§2.5 の生成制御は、§A(凍結仕様)が優先する。** 以下はその検討経緯で、食い違う箇所(プロンプトを window に含めるフラグ、stop 列の長さなど)は §A の値が正。
 
 ### 2.1 決定論的 repeat_penalty(新規実装・P0)
 
