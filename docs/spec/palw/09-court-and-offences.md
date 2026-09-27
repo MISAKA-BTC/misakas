@@ -1,52 +1,96 @@
 # PALW spec — 09. Court and offences
 
-> **Partly written (Phase 2).** §9.4 is normative. §9.1–§9.3 are completed in the chapter 09 pass.
-> [00-index.md](00-index.md) gives the conventions.
+> **Normative.** This chapter states the rules as they are on each network today. Reasoning:
+> [design/palw/court.md](../../design/palw/court.md). The code is the truth, and disagreements are
+> listed in [divergences.md](divergences.md).
 
-**Purpose.** A licensed claim can still be disputed until it is `Final`. A dispute bisects the
-committed execution down to one arithmetic step (or two adjacent tiles) that any node can
-recompute, and adjudicates that step. Fraud proofs are unilateral: no vote, and no challenge
-randomness. This chapter defines how a dispute is filed, answered and bisected, how it terminates,
-the special courts (attention, held context, fused rows, checkpoints, shards), and how a verdict is
-attributed to an offence. Chapter 10 has the amounts that offences slash.
+**Purpose.** A licensed claim can be disputed until it is `Final`, and in the ways chapter 08
+allows, after Final while its vesting row is unmatured. A dispute narrows the committed execution to
+one arithmetic step, or to two tiles of one decode row, that every node recomputes with the
+canonical integer arithmetic. There is no vote and no tolerance. This chapter defines how a dispute
+is opened, answered and narrowed, how it ends, and how a verdict becomes an offence. The amounts are
+in chapter 10.
 
 **Principles served:** §3 "ran as committed". P3: only the committed execution is on trial.
 
 ## 9.1 The adjudication contract
 
-- [ ] What a court opens, and the bound that makes it independent of model size: operands addressed in
-  bytes, terminal adjudication at tile level, admission that bounds the court (a registration
-  obligation, chapter 03), coverage over reachable coordinates, and decode adjudicated by challenge.
-  *Sources:* 0049 A–F (as amended 2026-08-26), 0053 D1 (the court is not optional), 0069/0070 (end
-  to end). *Code:* `core/palw_court_v2.rs`, `core/palw_dispute.rs`, `core/palw_terminal.rs`.
-- [ ] Unilateral fraud proofs are slash-terminal, with no BFT and no challenge randomness. *Sources:*
-  0027.
+- **PALW-CT-11 (one step, canonical arithmetic).** A court verdict MUST be decided by recomputing one
+  committed step (a tile) with the canonical reference arithmetic of chapter 04, reproduced by every
+  node. It MUST NOT use a tolerance, a vote or challenge randomness. Within a pinned class, equality is
+  full 64-byte equality. Across classes nothing is compared.
+- **PALW-CT-12 (refutation first).** Direct refutation of a committed step is the primary path.
+  Bisection (dissection) is the fallback when the challenger does not hold the step's inputs.
+- **PALW-CT-13 (operands).** Operands are addressed in bytes under a pinned canonical encoding. The
+  terminal adjudication is tile-local.
+- **PALW-CT-14 (admission bounds the court).** A class MUST be admitted only if its own geometry bounds
+  the court: every close fits `max_close_bytes` (80 KiB), checked by the ruleset's identity gate, and
+  the class's ladder fits the minted ladder (§9.2). Coverage is over the reachable coordinates of the
+  class, not over kernel ids.
+- **PALW-CT-15 (the court is not optional).** A class carries weight only if every reachable step can
+  be tried end to end (03 PALW weight gate). A fused class that no dissection can try is refused at
+  admission (`palw_fused_dissectable`).
+- **PALW-CT-16 (verdicts are terminal).** A proven verdict ends in a void or a reversed Final plus the
+  slash of chapter 10. Freezing a class is permissive; slashing is strict.
 
-## 9.2 Bisection and the close
+**Sources:** ADR-0027 D1–D6, ADR-0049 A–E (C as amended 2026-08-26), ADR-0026 D3, ADR-0053 D1, ADR-0069,
+ADR-0070, ADR-0093 D6. **Code:** `core/palw_court_v2.rs`, `core/palw_dispute.rs`, `core/palw_terminal.rs`,
+`core/palw_e2e_adjudicability.rs`.
 
-- [ ] The k-ary court, and a close that is flat in the context. *Sources:* 0082 (court decisions),
-  0080 (superseded in part). *Code:* `core/palw_bisect.rs`, `core/palw_court_deadline.rs`.
-- [ ] The close is assembled from what the executor served (a disputed tile, not a capture). The
-  interval opening carries the fold, not the leaves. *Sources:* 0085, 0086.
-- [ ] **The two-tile refutation.** When the flat pin is inadmissible, the two-tile disclosure decides
-  the step. Nothing vouches for the rows beyond the root. *Sources:* 0082, 0062 §(two-tile), 0093 §9.
-  *Code:* `core/palw_step_refute.rs`.
-- [ ] The court ladder is minted once, and the clock is what binds. Note the two fences:
-  `palw_court_ladder` is what the refutation walk reads, and `palw_context_ladder` is a separate
-  fence (ADR README, "Two labels"). *Sources:* 0092, 0084 U-08, 0077 Phase B. *Code:*
-  `core/palw_context_ladder.rs`.
+## 9.2 Dissection, the close and the ladder
 
-## 9.3 Special courts
+- **PALW-CT-17 (k-ary dissection).** A dispute over a range narrows by k-ary dissection, with k derived
+  from the move budget. Each rung MUST be answered within `court_turn_deadline` (42 DAA on testnet-12),
+  and the whole court within `window_court` (3,000). An unanswered rung, or a close declaration that
+  never assembles, is a **court default**. It is charged as a verdict and recorded `CourtDefault`
+  (07 §7.7).
+- **PALW-CT-18 (the close).** The bottom of a dissection is a close:
+  - It opens tiles and is assembled from the executor's interval opening, whose close annex is served
+    on the authenticated lane, together with the challenger's own replay.
+  - A V4 interval opening carries the fold's digests and the Merkle frontier, never the range's leaf
+    hashes.
+  - The court addresses a block first, then a leaf.
+  - A seat's recorded `Fault { leaf }` is a case it can prosecute.
+- **PALW-CT-19 (fused attention).** A fused attention leaf is refuted by dissection over its history.
+  The dissection's bottom proves the producer's own disclosure false, and it voids the claim
+  `CourtHeldVerdict` past `palw_offence_attribution` (`palw_court_verdict_void_reason_v1`). Its moves
+  are `CourtAttnRootClaimed(Anchored|Held)`, `CourtAttnDissected` and `CourtAttnChildChosen`.
+  Responder coverage for the root claim is fenced (`palw_court_responder_coverage`).
+- **PALW-CT-20 (the two-tile decode refutation).** For a tiled integer class, a decode token is
+  challenged with `PalwTiledDecodePinV1`, which opens two tiles of the selecting row:
+  - the tile that contains the committed token's lane;
+  - the tile that contains a higher value.
 
-- [ ] Attention is refuted by dissection. *Sources:* 0082. *Code:* `core/palw_attn_court_v1.rs`,
-  `core/palw_attn_dissect.rs`, `core/palw_attn_responder_v1.rs`, fence `palw_attn_anchored_root`.
-- [ ] Held context: a held class is walked at the regime's ladder. *Sources:* 0103, 0119, and 0152
-  (the held-class court, A-held). *Code:* `core/palw_held_context_v1.rs`.
-- [ ] Fused rows: the court can try a fused row, and the responder is a node duty (chapter 14).
-  *Sources:* 0093. *Code:* fence `palw_court_responder_coverage`.
-- [ ] Checkpoint courts. *Code:* `core/palw_checkpoint_court_v1.rs`. *Sources:* TODO, name the ADR.
-- [ ] The shard court: the one-move court, and the licence per shard. *Sources:* 0099 D5, 0100.
-  *Code:* `core/palw_shard_court_v1.rs`. Per-shard licensing is dormant on testnet-12.
+  No claimed value rides. Both values are read from the opened tiles, so a forged argmax is refuted in
+  O(tile + log vocabulary). The committed ids and the rows root are pinned by `PalwTiledDecodeTokensV1`.
+  A conviction by this route is `ForgedOutputTiled` (contradiction 11). Under
+  `palw_offence_attribution`, a `DecodeToken` or `DecodeTokenTiled` close is refused unless its
+  narrowed leaf is the call's head slot. A decode arm's `NoFaultFound` is `DecodeCloseCannotAcquit`,
+  never an acquittal.
+- **PALW-CT-21 (the ladder).** The court ladder is minted once per ruleset, and a class's admission
+  MUST fit it. A model too wide for the minted ladder is a new class on a new ruleset. The refutation
+  walk reads `palw_court_ladder`, not `palw_context_ladder`, which is a separate fence.
+
+**Sources:** ADR-0082 D1–D4, D6, D11; ADR-0085 D1–D4; ADR-0086 D1–D7; ADR-0092 D1–D5; ADR-0093 D1–D8;
+ADR-0152 J-8. **Code:** `core/palw_bisect.rs`, `core/palw_court_deadline.rs`, `core/palw_step_refute.rs`
+(`PalwTiledDecodePinV1`, `PalwTiledDecodeTokensV1`), `core/palw_attn_court_v1.rs`,
+`core/palw_attn_dissect.rs`, `core/palw_attn_responder_v1.rs`, `core/palw_context_ladder.rs`.
+
+## 9.3 One-move and special courts
+
+- **PALW-CT-22 (one-move courts).** The shard court (`ShardCourtAccused`) and the checkpoint court
+  (`CheckpointAccused`) decide in one move, with no session, and void `CourtFraud`. Under
+  `palw_offence_attribution`, a one-move verdict goes through `palw_one_move_verdict_bound_v2`, which
+  verifies the openings before it can return `NeedsDissection`. `NeedsDissection` is refused for
+  classes whose root evidence cannot be built. Per-shard licensing is dormant on testnet-12.
+- **PALW-CT-23 (held classes).** A held-context class is walked at its regime's ladder. The court reads
+  the class's held context: root, opening, logarithm (04 §4.5). A held leaf the executor withholds is a
+  DA default (08 §8.6), not a court verdict.
+- **PALW-CT-24 (responder duty).** The executor's node MUST answer a dissection's root claim and every
+  rung it owes (14 §14.1). Silence is a default, never an acquittal.
+
+**Sources:** ADR-0100 D3 (the one-move court), ADR-0099 D5, ADR-0103, ADR-0119, ADR-0093, ADR-0152 J-8.
+**Code:** `core/palw_shard_court_v1.rs`, `core/palw_checkpoint_court_v1.rs`, `core/palw_held_context_v1.rs`.
 
 ## 9.4 Offences and attribution (J)
 

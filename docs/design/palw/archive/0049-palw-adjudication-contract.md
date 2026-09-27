@@ -1,0 +1,422 @@
+> **Archived verbatim from `docs/adr/0049-palw-adjudication-contract.md`** on 2026-09-27, when the ADR was cut to a short decision
+> record ([INDEX.md](../../../INDEX.md) §4). Not normative. The decision record is
+> [ADR-0049](../../../adr/0049-palw-adjudication-contract.md); the rules are in [spec/palw/09](../../../spec/palw/09-court-and-offences.md), [spec/palw/03](../../../spec/palw/03-classes-and-registry.md); the reasoning is summarised in [design/palw/court.md](../court.md). Relative links were rewritten to resolve from here.
+
+# ADR-0049: The adjudication contract — what a court opens, and the bound that makes it model-size-independent
+
+Status: **Proposed.** Activates nothing, registers no class, and changes no proof-of-work. It
+specifies what a refutation may ask for, what the court may open to answer it, and the admission
+gate that makes both bounded by a class's own geometry rather than by its model's size.
+
+Date: 2026-08-21
+
+Relates to: ADR-0038 (PALW is the consensus work; assumption **A4**, catalog coverage, is the
+clause this ADR corrects), ADR-0030 (the step space and shape profile), ADR-0040 (`PALW-BASE-0`,
+whose all-`int8` operands are the reason Decision A's defect stayed invisible), ADR-0042 (the
+mainnet-candidate ruleset, whose court parameters gain four companions here), ADR-0046 (chain
+carriage and its size expectations, which this ADR is what makes achievable),
+`consensus/core/src/palw_step_refute.rs`, `consensus/core/src/palw_artifact.rs`,
+`consensus/core/src/palw_class_admission_v2.rs`.
+
+**Two premises this ADR does not touch, and is written to protect.** Block production stays a PALW
+lottery — hash-function-independent, algo-6, one solved attempt per block. And the free-prompt lane
+stays: a miner earns by running a *useful* inference for a real prompt. Every decision below exists
+because those two premises require a court whose cost does not grow with the model, and the court
+does not have one today.
+
+---
+
+> **Status as of the index reconciliation (2026-09-02).** The line above still says "Proposed …
+> activates nothing"; the body records otherwise and later ADRs built on it. Decision E is
+> implemented (`DecodeToken` close arm, 2026-08-22); Decision F landed (the canonical IR, 2026-08-26;
+> made unviolatable for interpreted classes by [ADR-0067](../../../adr/0067-classes-are-chain-data-kernels-are-the-build.md));
+> Decision C ships as `max_close_bytes = 80 KiB` and the RC identity gate (§Amendment); Decision H's
+> registration carriage is live on testnet-11 and is the path [ADR-0056](../../../adr/0056-palw-permissionless-class-admission-and-share-economy.md)
+> and [ADR-0075](../../../adr/0075-certification-is-a-consensus-object.md) extend (a weightless entrant, seated by
+> objects). Decision G's tied-head inventory is still the recorded open item. The carriage ADR this
+> file cites as ADR-0046 is [0046](../../../adr/0046-palw-v2-consensus-object-carriage.md) (renamed from a
+> colliding 0045 on 2026-09-02). Map: [`README.md`](../../../adr/README.md).
+
+## Context — the central claim was measured and does not hold
+
+ADR-0038 W1 says a full node adjudicates every dispute while holding no model. The mechanism is
+proof-carrying evidence: a refuter opens the operands it used against the class's registered
+`artifact_root`, and the node recomputes one step. `PalwNoWeightsV1` exists as a production type
+precisely so that "a node with no weights" is the normal case rather than a degradation.
+
+An external audit of the 2026-08-21 snapshot reported that this does not hold in the code, and
+every load-bearing part of that report reproduces on the integration branch:
+
+**The terminal adjudication opens the whole weight matrix.** `palw_step_refute.rs:459`:
+
+```rust
+let wanted = out_dim.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?;
+```
+
+`out_dim × in_len` is the entire matrix, and `:479`/`:494` reject an operand of any other length.
+The adjudicator then recomputes every output row and compares one tile at the end. Measured against
+real geometry:
+
+| matrix | whole-matrix opening | the tile actually disputed |
+|---|---|---|
+| BASE-0 `output` 4096 × 256 | 1.0 MiB | 16 KiB at `tile_len` 64 |
+| Qwen2.5-1.5B `unembed` 151,936 × 1,536 | ~223 MiB | 192 KiB at `tile_len` 128 |
+
+ADR-0046 sizes a court close well under 152 KB. The gap is two to three orders of magnitude, and it
+scales with the model — which is the one thing the design promised it would not do.
+
+**The operand API disagrees with itself about its unit.** The trait says
+(`palw_step_refute.rs:617`) *"Little-endian raw bytes of `elements` values … in the tensor's own
+dtype"*, so `elements` counts VALUES. The production oracle returns `elements` BYTES
+(`palw_artifact.rs:187`, `operand.bytes[..elements as usize]`). The two coincide for exactly one
+dtype width, and `PALW-BASE-0` is `int8` throughout — so the defect is invisible in the only class
+that exists. `Rescale`, `Requantize` and `RopeTable` read multi-byte parameters through this same
+oracle, so the first class with a wider operand adjudicates nothing and reports it as
+`InputSetNotCanonical` rather than as the API mismatch it is. The test double `FixedRow` returns the
+whole row regardless of the requested size, which is why no test sees it.
+
+**Coverage passes on a class with unadjudicable steps.** `palw_step_refute.rs:394`:
+
+```rust
+if coord.call_index != 0 {
+    return Err(PalwStepRefuteError::Unadjudicable);
+}
+```
+
+Embedding is adjudicable at prefill only, and the reason given is correct: a decode token is not in
+the prompt, so a challenger naming it freely would convict an honest producer. But BASE-0's own
+canonical job is prefill 8 / **decode 4** (`palw_base0_profile.rs:442`). So the liveness floor
+itself reaches steps its court refuses — while `verify_catalog_coverage_v1` reports 100 %, because
+it compares *kernel ids* and every kernel BASE-0 reaches is catalogued.
+
+**And four hand-written descriptions of one computation disagree.** The engine narrows after
+`RmsNorm`, after each projection, after `RopeTable` and after each residual add; the profile's node
+tables and the court's adjudicator carry only the un-narrowed op; the artifact inventory names
+`attn_norm.weight`, `ffn_norm.weight` and `output_norm.weight`, which neither the engine nor the
+court ever reads. Today that is inert because no worker commits real step legs. The moment one does,
+the court recomputes a different value than the producer committed — which is a false conviction of
+an honest producer, the one failure this court may never have.
+
+The through-line is a single mistake made four times: **the coverage gate answers "is this kernel in
+the catalog", and the question that decides whether a network works is "can the court close, on every
+coordinate a class can reach, inside a bounded opening".**
+
+---
+
+## Decision A — operands are addressed in bytes, and the canonical encoding is pinned
+
+`PalwWeightOracleV1::weight_row(tensor, layer, row_start, elements)` becomes
+
+```
+operand_bytes(tensor_name, layer, byte_offset: u64, byte_len: u32) -> Option<Vec<u8>>
+```
+
+Byte-addressed on both sides, with no dtype arithmetic anywhere in the oracle. Each catalogued
+kernel's descriptor pins the canonical byte encoding of the parameters it reads, so
+`byte_len` is a function of the node and its dtype rather than a number two implementations derive
+separately.
+
+*Why bytes and not "dtype + element count".* Either would remove the ambiguity. Bytes remove it in
+the layer that is easiest to get wrong: a Merkle opening proves BYTES, so an oracle that speaks
+bytes needs no conversion between what it proves and what it returns, and there is no second place
+for the conversion to be written differently.
+
+`FixedRow` and every other test double must honour `byte_len` exactly. A double that returns more
+than it was asked for is the reason this defect had no failing test, and a double that ignores its
+arguments is not a double of anything.
+
+## Decision B — the terminal adjudication is tile-local
+
+A refutation already names a coordinate `(call_index, node_slot, position, tile_index)`. The court
+must open, and must recompute, only what that coordinate depends on:
+
+* **operands:** the weight rows the tile's own outputs reduce over — `tile_len × in_len` values,
+  never `out_dim × in_len`;
+* **recomputation:** the tile's output lane only. Not every row followed by a comparison of one.
+
+For a reduction over the input (`MatMulQuant`, `DotI8`) the tile's outputs are a contiguous slice of
+output channels, so the opening is a contiguous row range and the Merkle path count is bounded by
+the tile, not by the matrix.
+
+This is the decision that makes ADR-0038 W1 true rather than aspirational, and it is what keeps a
+court close inside the carriage budget ADR-0046 assumed.
+
+## Decision C — admission bounds the court from the class's own geometry
+
+Coverage PASS stops being sufficient for admissible. `verify_class_admission_v2` derives four
+numbers from the shape profile and refuses a class that exceeds the ruleset's ceiling for any:
+
+| bound | derived from | why it must be checked at admission |
+|---|---|---|
+| max opening bytes, per refutation and per court close | widest tile × its `in_len` × dtype bytes, plus Merkle paths | a proof that cannot ride a transaction is a dispute nobody can raise |
+| max terminal MACs | the same tile's reduction length | terminal adjudication is a full node's own CPU cost, on peer-supplied input |
+| max operand count | the node's `input_refs` and its weight operand | bounds deserialization work before any arithmetic runs |
+| max Merkle path count | inventory depth × operand count | the same, for proof verification |
+
+Each ceiling joins `PalwCourtParamsV2` and therefore `palw_ruleset_id_v2`, beside
+`max_step_leaf_count`. They are frozen with the network for the same reason it is: a class deeper or
+heavier than the ceiling cannot join a running chain, so the ceiling must be chosen once, at genesis,
+for every class the network ever intends to admit.
+
+*This is deliberately the same shape as the existing ladder gate.* `max_step_leaf_count` bounds how
+many rounds a dispute takes; these bound how much each round costs. A ruleset that fixed one and left
+the other free was bounding the number of steps in a walk without bounding the length of a step.
+
+### Amendment, 2026-08-26 — the ceilings are numbers now, and the metric they are on changed
+
+Decision C shipped as three fields on `PalwCourtParamsV2` with generous defaults, gated nowhere. The
+road map called the result "the four cost ceilings … not yet gated", beside the ladder, under *the
+two decisions that expire*. Choosing them turned out to require fixing what they measure first.
+
+**What was measured, and what it should have been.** `derive_court_cost_v1` returned the artifact
+opening — the weight bytes of the widest tile. A close is not its weight bytes. Assembled from real
+executions of the shipped floor, one close weighed **750,716 bytes at a 64/64 job** against a derived
+32,768: the difference is the disputed step's own leaves, and above all the KV history, which an
+attention matmul reads at every position up to its own. A second arm was invisible the same way: a
+decode-position gather must carry every logits row so the court can recompute
+`base0_logits_trace_root_v1`, so it costs `decode_tokens × vocabulary × 4`. Both grow with the job,
+and nothing charges an attempt more for a longer job, so **an attacker picks the job length** — the
+rule `worst_case_step_leaf_count_v1` already states, applied to cost.
+
+So the field is `max_close_bytes` and it counts what `palw_court_v2::arithmetic_close_bytes_v2`
+counts on a real object: opened payload plus every Merkle path element proving it, artifact side and
+step side alike. The ADR's own table said as much ("per refutation and per court close … plus Merkle
+paths"); the implementation was narrower than the sentence.
+
+**The fourth ceiling is the byte ceiling.** "Max Merkle path count" is not a separate field: a path
+element is 64 bytes and both sides count it in the byte total, so a count would refuse exactly the
+set the byte bound already refuses. Three fields, four bounds.
+
+**The number, derived rather than chosen.** A close rides one `SUBNETWORK_ID_PALW_LIFECYCLE`
+transaction — no chunked-evidence path carries a `PalwConsensusObjectV2` — and transient mass is
+`size × 4` against a 480,000 standard limit, so a relayable transaction is 120,000 bytes. Allowing
+18,000 for a carrier and the measured ~1.2× encoding overhead gives ceiling ≤ 85,000;
+`DEFAULT_MAX_CLOSE_BYTES` is **80 KiB**. `assemble_palw_rc_identity_v2` gate 6 refuses an RC identity
+carrying any other value, exactly as gate 5 does for the ladder.
+
+**What it forecloses: nothing that was ever carriable.** Qwen2.5-1.5B's cheapest possible close is
+1,220,368 bytes at any tile length and any context, because one row of a 128,256-token vocabulary is
+513,024 bytes on its own — four times the largest standard transaction. A larger ceiling would not
+buy that class; it would admit a class whose disputes nobody could raise, which is what Decision C
+exists to refuse. Carrying a model at that scale needs an **openable** logits commitment (Decision E
+says "O(1) in vocabulary"; the root is a flat hash over every row) and a per-layer slice of the
+checkpoint the KV history arrives in. Both are code, not a bigger number in a genesis.
+
+**What it cost the floor.** `PALW_RC_BASE0_GEOMETRY` was `vocab_size` 4,096 / `n_ctx` 512, whose
+worst close is megabytes — the network's own liveness floor was coverage-clean, ladder-deep enough
+and unprosecutable at its longest jobs. It is `1,024` / `12` now, chosen by the rule *the largest
+pair whose worst close stays under 80% of the ceiling* (61,040 of 81,920), so that a later
+leg-format change cannot make the floor inadmissible on its own network. The canonical job — 8
+prefill, 4 decode — is unchanged.
+
+**ADR-0030 §3's checkpoint anchor does not change this**, and the reason is worth recording: a
+checkpoint covers a decode call, so a dispute at call `c` needs the one covering `c − 1`. None exists
+at a prefill position or at the first decode call — which is exactly where the worst job's worst step
+is. The anchor makes late-decode disputes cheap; the bound is over the coordinate that has no anchor.
+A first draft of this amendment bounded the anchored form and understated the floor by 2×, which
+`the_derived_close_cost_bounds_a_real_one` caught by assembling a real close and comparing.
+
+## Decision D — coverage is over reachable coordinates, not over kernel ids
+
+A class is adjudicable **iff every reachable `(call_index, node_slot, position, tile_index)`
+adjudicates.** The kernel-id set remains necessary and stops being sufficient.
+
+`verify_catalog_coverage_v1` keeps its job — it answers "can this build execute this kernel at all" —
+and gains a companion that asks the question A4 actually needs: enumerate the coordinate classes a
+profile reaches (prefill and decode calls, every node slot, the tile shapes each produces) and require
+an adjudicating arm for each. C-04 is exactly what this catches: every kernel id is catalogued and a
+whole call class is refused.
+
+## Decision E — decode is adjudicable, by challenging the argmax rather than proving it
+
+The `call_index != 0` refusal was right about the danger and wrong to stop there: on the free-prompt
+lane the **generated text is the product**, so a class whose decode steps cannot be adjudicated cannot
+carry the lane the network exists to sell.
+
+The producer commits, per decode position, the logits vector's Merkle root — it already computes the
+vector. The decode token is `argmax_lowest(logits)`, the tie rule the engine already pins. The court
+never verifies the argmax, which would cost the whole vocabulary. It adjudicates a **challenge** to
+it, and a challenge is one index:
+
+> A challenger names `j` and opens `logits[j]`. The token is refuted iff
+> `logits[j] > logits[token]`, or `logits[j] == logits[token] && j < token`.
+
+One opening, one comparison, independent of vocabulary size. The embedding step at a decode position
+then adjudicates against a token the chain has pinned, and the challenger who names a token freely is
+refuted by the same opening rather than believed.
+
+*Proving is expensive and refuting is cheap, so refute.* That is the same asymmetry the whole dispute
+model rests on, applied to the one place it had not been.
+
+> **Implemented 2026-08-22 — integer-first, both halves.** The selection rule is one pinned
+> function, `base0_decode_token_select_v1` (argmax, ties to the LOWEST index), which the engine's
+> decode loop and the court both call — the engine's `argmax_lowest` delegates to it, so
+> "selected" cannot mean two things. On-chain refutation is the new close arm
+> `PalwCourtVerdictProofV2::DecodeToken { binding, pin, position }` with fault
+> `PalwStepFaultV1::DecodeTokenMismatch { position }` (evidence kind 6): the pin carries the
+> integer class's logits rows and generated ids, authenticated by recomputing
+> `base0_logits_trace_root_v1` against the binding the claim's own `execution_root` pins — the
+> evidence is the commitment itself, no artifact opening involved. For BASE-0 the "one index"
+> economy is unnecessary: its vocabulary is small by construction, so the pin carries whole rows
+> (bounded by the court's opening-byte ceiling at the cost gate) and the court runs the whole
+> argmax. A `Float32` class is refused by name — its per-position openings arrive with the class
+> that needs them (Gate 3).
+>
+> The same pin closes the **integer-leg dispatch**: `full_logits_trace_root` is one header slot
+> with two occupants, and the step-refutation decode check used to recompute only the v2
+> event-tree root, so a BASE-0 decode-embed gather could never authenticate its generated ids —
+> 4 of the floor's 914 leaves ended `Unadjudicable`. The check now dispatches on the class's
+> registered `PalwStepLaneV1`, and the sweep
+> (`the_court_convicts_no_leaf_of_an_honest_execution`) demands **914/914 adjudicated, zero
+> unadjudicable** — a new hole fails the test by name. Money path verified end to end
+> (`palw_v2_a_lying_decode_token_convicts_through_the_court_close`): the lying claim voids as
+> `CourtFraud` and its bond is slashed; the honest one survives the same close with its stake.
+> Mutation-checked in both directions: reverting the dispatch reddens the sweep, and re-tying the
+> selection rule to the highest index reddens the tie test.
+
+## Decision F — the engine, the profile, the adjudicator and the inventory are projections of one description
+
+Decisions B and D require the engine's tile boundaries and the court's tile boundaries to be the same
+object, not two objects that agree. Four independently authored descriptions of one computation is
+how the narrowing steps came to exist in one and not the others.
+
+Each class carries one canonical execution description. The shape profile, the engine's op sequence,
+the adjudicator's node table and the artifact inventory are each **generated** from it, and a golden
+test asserts the four projections agree — node for node, tile for tile, tensor for tensor.
+
+Until the generator exists, the interim obligation is narrower and immediate: **no worker may commit a
+step leg for a class whose profile does not name every narrowing the engine performs.** A commitment
+the court cannot reproduce is a false conviction waiting for its first dispute.
+
+> **Landed (2026-08-26, `09bd647f` / `df63a916` / `de1b67c1`).** The generator exists and the interim
+> obligation is a gate rather than a rule.
+>
+> `misaka-palw-base0/src/plan.rs` compiles `BASE0_LAYER_IR` — and now `BASE0_PRE_IR` and
+> `BASE0_POST_IR` — into the engine's op sequence: which step runs, in what order, reading which
+> earlier step, against which operand, producing how many values. The kernels are untouched, because
+> that arithmetic is the class; what is generated is what the divergences were actually made of.
+> **No kernel is called in `engine.rs` any more.** `misaka-palw-base0/src/operands.rs` is the one
+> binding from an IR tensor name to an artifact's bytes, keyed the way the court asks (template name
+> + layer index), and the engine and the inventory both read through it. Both classes' profiles project
+> every table — neither file writes a `PalwStepNodeV1`.
+>
+> Three properties now fall out of the IR instead of being declared beside it: a step's output TYPE
+> (a narrowing emits codes, everything else accumulators — so feeding a Qk accumulator to a code
+> kernel is a compile-time refusal), where the cache is WRITTEN (from the node roles, both halves
+> committed together), and where the health diagnostics are measured.
+>
+> The interim obligation is enforced at `base0_execute_for_attempt_v1`: `base0_check_graph_v1` runs
+> before the first token, at `kv_len` 1 **and** 2, because at one position a per-head width and a
+> per-layer one are the same number. A class whose declared graph is not the graph this engine
+> performs produces nothing.
+>
+> **What building the generator found, and it was live.** The inventory held its own copy of the
+> name-to-field mapping, and one entry was already wrong: `attn_q.requant` served the tensor-wide
+> `layer.requant[0]` unconditionally, while the engine narrows through the per-channel table whenever
+> the artifact carries one — which is where a projection bias lives, in each channel's `zero`. Every
+> Qwen2.5 member carries one. The failure is not a refusal: `palw_step_refute.rs:719` asks for
+> `9 × channels` bytes, finds a nine-byte row, and **cycles it across every channel** — so the court
+> recomputes an honest step from parameters the producer never applied and convicts. Silently, and
+> only for classes with a bias, which is not the floor. Fixed by construction: the inventory serves
+> what the resolver returns.
+>
+> Byte-identical where it had to be. Both classes' `shape_profile_id` are unmoved — the floor's
+> `c185df95…` is in the RC genesis and a live testnet-12 — `the_engine_matches_its_golden_trace`
+> stands, and the floor's pinned `artifact_root` does not move (the floor has no per-channel table).
+>
+> **And it is not slower**, which was the open question: this engine is on the block-production path.
+> Measured A/B against the pre-change tree at the RC geometry, release, 160 forward passes each, twice:
+> **1.69–1.72 ms/token against 1.74–1.75 ms/token**, about 3% faster. Dispatching a step costs a row
+> copy that reading a local variable did not, and it is dominated by the projections — while the loop
+> this replaced computed the value-weighted attention dot products **twice**, once into `attn` and
+> once into the captured row, which the plan does once because the graph declares one node there.
+>
+> The golden test Decision F asks for is
+> `the_four_projections_agree_and_a_real_execution_agrees_with_them`, at two positions, over all three
+> tables, plus the live rows an execution produced. Its teeth are
+> `a_divergence_the_width_check_cannot_see_is_named`: five mutations of the profile — wrong operand,
+> wrong kernel, wrong input, wrong cache role, short table — each reported by slot and field. The
+> three the old shape guard could not see are the first three, and each is a court that recomputes an
+> honest step and convicts the producer.
+
+## Decision G — the canonical artifact inventory, and one meaning for "class id"
+
+`artifact_root` is the Merkle root over a canonical inventory manifest, one leaf per operand row.
+Each entry carries:
+
+```
+tensor name · layer · dtype · shape · byte_offset · byte_len · quantization record · order index
+```
+
+and the manifest is refused for any of: a duplicate entry, a missing tensor the profile names, an
+overlapping byte range, a byte of the artifact no entry covers, or a non-canonical order. "Every byte
+is covered exactly once, in one order" is what makes an opening's absence meaningful.
+
+> **Open, found by landing Decision F (2026-08-26): a tied-head class has no canonical inventory.**
+>
+> Qwen2.5 ties its embeddings, so its lm_head reads `token_embd.weight` and no `output.weight` exists.
+> `base0_inventory_v1` always emits the head as a tiled `output.weight`, so a tied class's inventory
+> carries a tensor no step can open — and the tensor its head *does* read is carried in the wrong row
+> shape. A gather emits one row per token id (`d_model` bytes); a `MatMulQuant` opening asks for
+> `tile_len × d_model` bytes at a tile offset; `operand_bytes` serves only an exact
+> `(name, layer, row_start)` match at exactly the requested length. So the head adjudicates
+> `Unadjudicable` at every tile, and `qwen25_admissible_geometry_v1` searches upward from `tile_len`
+> 64 — the one width where a gather row and a matmul tile coincide is never chosen.
+>
+> This is a Decision G question, not a Decision F one: one tensor cannot carry both row shapes
+> without overlapping rows, which the canonical layout refuses on purpose. Deciding it needs a rule —
+> a second row family under a derived name, or a head that opens through the gather's coordinates —
+> and that is a rule about what an opening addresses. What Decision F bought is that the class now
+> says so: `a_tied_head_class_is_named_by_the_check_rather_than_registering_quietly` reports it as
+> `RowNobodyOpens { "output.weight" }` instead of the class registering quietly and finding out at
+> its first dispute.
+
+This also settles the two things called a class id. **`execution_class_id` is the shape profile id** —
+a class is its graph, which is what the chain already keys on. The artifact digest is
+`artifact_root` and is a separate value with a separate job: the graph says what is computed, the root
+says what it is computed against. A flat hash of a whole artifact is neither, because nothing can be
+opened against it.
+
+## Decision H — post-genesis class registration is allowed, at the minimum share, gated by Decision C
+
+Three policies coexist today: the lifecycle carriage refuses `ClassRegistered` outright
+(`palw_lifecycle_objects_v2.rs:104`), `verify_class_admission_v2` would admit at the minimum grantable
+share, and the state machine implements a weightless activation clock. Consensus does not benefit from
+three answers.
+
+The carriage's objection is the correct one and it is a statement about *checking*, not about
+*forbidding*: a class entering a live chain moves the share table and brings its own `pwu_rule`, and
+nothing checked either. Decision C is that check. So:
+
+**a class may register post-genesis, at `min_grantable_share_permille`, iff it passes coverage over
+coordinates (D), the four cost bounds (C), and the derived-pwu rule the genesis loader already
+enforces.** The carriage's refusal is replaced by that gate rather than removed, and the object gains
+the shape profile the gate needs — which it must carry anyway, because nothing else on a running chain
+can tell the court what the class computes.
+
+---
+
+## Consequences
+
+* **The 1-tile claim becomes true, and must be re-measured before it is repeated.** Every statement
+  of the form "a full node adjudicates one tile without holding the model" is unsupported until
+  Decision B lands and the opening sizes are measured on real geometry.
+* **Four ruleset parameters are added, and freeze with the network.** Choosing them is a genesis
+  decision with the same expiry as the ladder: too small forecloses classes, too large admits a
+  proof nobody can verify in time.
+* **Existing golden values move.** The operand API change (A) and the inventory (G) both change what
+  is hashed. Nothing is registered yet, which is why this is the moment.
+* **`FixedRow`-style doubles must be re-written before they can witness anything.** A test double
+  that ignores the size it was asked for cannot detect a size defect, and one did not.
+* **The audit's NO-GO stands until B, C and D land.** A class can be coverage-PASS, ladder-admissible
+  and still have no closeable court, which is precisely the state measured today.
+
+## What this ADR does not decide
+
+* **The residual amplification.** Whether `BASE-0`'s residual add gains an amplifying `Rescale` is a
+  separate decision, pending its own measurement; it changes the arithmetic, not the adjudication
+  contract.
+* **Qwen3.6's MoE / GatedDeltaNet / SSM primitives.** New ops need their own accumulator and state
+  bounds, which is an ADR of its own. This one is a precondition for it: a new op set is not worth
+  specifying against an adjudication contract that does not close.
+* **Performance.** Nothing here is a throughput decision, and no bound below may be relaxed for one.

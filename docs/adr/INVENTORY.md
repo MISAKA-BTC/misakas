@@ -317,3 +317,4 @@ now Context / Decision / Consequences / Links.
 - **Chapter 07** written (anchor and bind, the retries, DL-1, settlement and payout, void charging). Slimmed: 0037. Kept with Links: 0129.
 - **Chapter 08** written (seed, SW, seats and readiness, Q, replay clocks, DA, panel pay). Slimmed: 0062, 0133, 0034, 0028, 0124, 0026, 0111, 0098. 0108 moved to chapter 14 (its receipts are extension receipts); 0130 moved to chapter 12.
 - **Chapter 10** completed (emission: premine cap, subsidy, the 720‰ carve, economic payout; ADR-0151 D1–D5; a bond in its first block). Chapter 08 §8.7 corrected: model-class panel pay is the derived share of `palw_economic_payout` on testnet-12. Slimmed: 0065, 0151, 0064, 0068. Kept with Links: 0059, 0061.
+- **Chapter 09** completed (the adjudication contract, dissection and the close, fused attention, the two-tile decode refutation, the ladder, one-move and held courts). Slimmed: 0093, 0049, 0086, 0027, 0092, 0085.
