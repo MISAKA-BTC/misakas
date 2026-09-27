@@ -564,3 +564,34 @@ fn a_credited_tape_reverts_ibds_restarts_and_reorgs_at_every_tier() {
         println!("determinism ×{}: {} credited claims, {} blocks, fork at {fork_at}", tier.rho(), ids.len(), t.len());
     }
 }
+
+/// **D-13 at every tier: the 2M row stays `c_2M = 1` and uncredited.** Under the ρ = 10 package (and the
+/// ready variants) one bond's 2M claim is admitted and another bond's is refused while it is live (the
+/// C7 row's static `max_inflight_claims`, which no ρ scales); it is never credited, its escrow slot is
+/// today's and its `G` today's (F1) — only its weight reservation is `⌈w/ρ⌉`, like every attempt's under
+/// F-W, the whole bond standing behind it (AG-2).
+#[test]
+fn the_2m_row_stays_capped_at_one_and_uncredited_at_every_tier() {
+    let producers = [(90, 1_000_000), (91, 1_000_000)];
+    let mut today = Sim::new(params_for(Class::M2, true), Class::M2, &producers);
+    let id_today = today.claim(90, 0x2A00).expect("a 2M claim at ρ = 1");
+    assert!(today.claim(91, 0x2A01).is_none(), "ρ = 1: the cap of one");
+    let t = today.c.claim(&id_today);
+    let g_today = palw_claim_g_v1(&today.c.s, &PalwCapacityGainScaleV1::of(&today.c.sp), &id_today).unwrap().g();
+    let slot_today = palw_escrow_term_v2(&today.c.sp, t.accepted_daa, t.escrowed_reward, &t.class_id);
+    for tier in Tier::ALL {
+        let rho = u128::from(tier.rho());
+        let mut sim = Sim::new(tier.params(Class::M2), Class::M2, &producers);
+        let id = sim.claim(90, 0x2A00).expect("one 2M claim");
+        let skipped = sim.skips.values().sum::<usize>();
+        assert!(sim.claim(91, 0x2A01).is_none(), "×{rho}: a second 2M claim is refused while the first is live");
+        assert!(sim.skips.values().sum::<usize>() > skipped, "×{rho}: refused, not lost");
+        let claim = sim.c.claim(&id);
+        assert!(!palw_capacity_claim_credited_v1(&sim.c.sp, &claim), "×{rho}: 2M is never credited");
+        assert_eq!(claim.reserved, t.reserved.div_ceil(rho), "×{rho}: the reservation ⌈w/ρ⌉ (F-W)");
+        let slot = palw_escrow_term_v2(&sim.c.sp, claim.accepted_daa, claim.escrowed_reward, &claim.class_id);
+        assert_eq!(slot, slot_today, "×{rho}: the escrow slot is today's");
+        let g = palw_claim_g_v1(&sim.c.s, &PalwCapacityGainScaleV1::of(&sim.c.sp), &id).unwrap().g();
+        assert!(g >= g_today && g < g_today + rho, "×{rho}: G {g} is today's {g_today}");
+    }
+}

@@ -341,8 +341,8 @@ impl PalwCapacityGainScaleV1 {
     pub fn scale_of(&self, claim: &PalwClaimStateV2) -> u32 {
         let accepted = claim.accepted_daa;
         if !matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt)
-            || !self.weight_cap_from.is_some_and(|from| accepted >= from)
-            || !self.liability_from.is_some_and(|from| accepted >= from)
+            || self.weight_cap_from.is_none_or(|from| accepted < from)
+            || self.liability_from.is_none_or(|from| accepted < from)
         {
             return 1;
         }
