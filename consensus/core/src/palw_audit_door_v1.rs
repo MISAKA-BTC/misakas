@@ -284,6 +284,76 @@ pub fn palw_audit_entry_kept_v1(
         && palw_audit_pool_of_claim_v1(state, params, &entry.claim_id, claim).contains(auditor)
 }
 
+/// **One claim an operator's audit duty may receipt** (§5.9 (h)): a credited licensed claim awaiting its
+/// audit, whose pool holds the asking bond and which that bond has not receipted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwAuditCandidateV1 {
+    pub claim_id: Hash64,
+    pub producer: PalwBondKeyV2,
+    /// The DAA of its licence — what the pool's turns count from.
+    pub licensed_daa: u64,
+    /// Its audit pool, ranked (`H(domain ‖ claim ‖ bond)`): the node's turn order.
+    pub pool: Vec<PalwBondKeyV2>,
+    /// Receipts it needs (`k_aud` at its acceptance's ρ) and the auditors that already posted one.
+    pub k_aud: usize,
+    pub receipted: Vec<PalwBondKeyV2>,
+    /// What the auditor replays: the job its block derives (lane B's descriptor).
+    pub job: crate::palw_operator_da_v1::PalwOperatorDaJobV1,
+}
+
+/// **The audit duty's read of the tip for `me`** (§5.9 (h)): every credited licensed claim awaiting its
+/// audit whose pool holds `me` and which `me` has not receipted, oldest licence first. Empty below F-Q. A
+/// read for node policy — the fold decides every receipt itself.
+pub fn palw_capacity_audit_candidates_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    me: &PalwBondKeyV2,
+) -> Vec<PalwAuditCandidateV1> {
+    if params.capacity_audit_operators().is_empty() || !params.capacity_audit_operators().contains(me) {
+        return Vec::new();
+    }
+    let mut out: Vec<PalwAuditCandidateV1> = state
+        .claims_iter()
+        .filter_map(|(claim_id, claim)| {
+            let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else { return None };
+            let status = state.audit_status_of_v1(claim_id);
+            if !palw_capacity_awaits_audit_v1(params, claim, status) || status.is_some_and(|s| s.has_v1(me)) {
+                return None;
+            }
+            let pool = palw_audit_pool_of_claim_v1(state, params, claim_id, claim);
+            if !pool.contains(me) {
+                return None;
+            }
+            let job = crate::palw_operator_da_v1::palw_operator_da_claim_facts_v1(state, claim_id)?.job;
+            Some(PalwAuditCandidateV1 {
+                claim_id: *claim_id,
+                producer: claim.bond,
+                licensed_daa,
+                pool,
+                k_aud: palw_capacity_claim_k_aud_v1(params, claim),
+                receipted: status.map(|s| s.receipts.iter().map(|(bond, _)| *bond).collect()).unwrap_or_default(),
+                job,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| (a.licensed_daa, a.claim_id).cmp(&(b.licensed_daa, b.claim_id)));
+    out
+}
+
+/// **Whether `me` is on turn to audit `candidate` at `now_daa`** (§5.9 (h), node policy): the pool's first
+/// `k_aud` members at once, and one more member every [`PALW_AUDIT_TURN_DAA_V1`] after the licence — so a
+/// member that is down is covered by the next in rank, and `k_aud` distinct receipts arrive without every
+/// member replaying every claim.
+pub fn palw_audit_on_turn_v1(candidate: &PalwAuditCandidateV1, me: &PalwBondKeyV2, now_daa: u64) -> bool {
+    let Some(rank) = candidate.pool.iter().position(|bond| bond == me) else { return false };
+    let turns = now_daa.saturating_sub(candidate.licensed_daa) / PALW_AUDIT_TURN_DAA_V1;
+    (rank as u64) < (candidate.k_aud as u64).saturating_add(turns)
+}
+
+/// One audit turn, in DAA (lane B's judge turn, `PALW_OPERATOR_DA_TURN_DAA_V1`): long enough for a light
+/// replay to return and its batch to land.
+pub const PALW_AUDIT_TURN_DAA_V1: u64 = 30;
+
 #[cfg(test)]
 mod tests {
     use super::*;

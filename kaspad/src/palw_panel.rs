@@ -79,6 +79,12 @@ mod palw_filer_replay;
 #[path = "palw_operator_da.rs"]
 mod palw_operator_da;
 
+/// ADR-0160 F-Q (stage 2, rcore/cap-s1): the operator's audit duty — an operator node in a credited
+/// claim's audit pool replays it and posts a receipt batch when it reproduces (a child module, so it
+/// reads the replay runner and the court queue's seams).
+#[path = "palw_audit_duty.rs"]
+mod palw_audit_duty;
+
 /// ADR-0160 lane verify V1: a seat's one window root a DAA, the collector's window pool and its batch
 /// licence (node policy; dormant below `palw_capacity_batch_licence`).
 #[allow(dead_code)]
@@ -6994,6 +7000,8 @@ impl PalwPanelService {
         // Lane B (panel-seed stopgap (B)): the operator's non-seat accusations; armed by identity alone.
         let mut operator_da =
             palw_operator_da::PalwOperatorDaBookV1::new(palw_operator_da::palw_operator_registrations_v1(&self.consensus_config.params));
+        // ADR-0160 F-Q (stage 2): the audit duty's book; armed by identity (a bond in a credited claim's pool).
+        let mut audit_duty = palw_audit_duty::PalwAuditDutyV1::new();
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -10728,6 +10736,23 @@ impl PalwPanelService {
                 &mut court_pending,
                 &mut court_due,
                 &mut court_moved,
+            )
+            .await;
+
+            // --- ADR-0160 F-Q (stage 2): the operator's audit duty (`palw_audit_duty`) ---
+            //
+            // Past `palw_capacity_audit_door` a credited claim reaches Final only through `k_aud` receipts
+            // from its pool; a node in a pool replays the claim on its turn and receipts it when it
+            // reproduces. Identity arms it (the chain's read is empty otherwise); no flag does.
+            self.audit_duty_tick_v1(
+                &session,
+                &mut audit_duty,
+                current_daa,
+                network_domain,
+                bond_key,
+                seat_replays.has_room(false),
+                &mut court_pending,
+                &mut court_due,
             )
             .await;
 

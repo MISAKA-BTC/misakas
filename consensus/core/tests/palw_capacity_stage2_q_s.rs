@@ -252,3 +252,83 @@ fn stage2_gate_mass_claims_keep_liability_rate_and_outstanding_controlled() {
     assert!(ids.iter().all(|id| sim.c.s.vesting_row(id).is_none()), "nothing paid before an audit");
     println!("stage 2 gate: 13k at ρ 100 issued {} claims in 30 DAA (per DAA {per_daa:?}), outstanding ≤ 200, J-1 held", ids.len());
 }
+
+/// **Q (§5.9 (h)): the audit duty's read** — a credited licensed claim awaiting its audit is offered to
+/// each member of its pool (and to nobody else), with its pool ranked, `k_aud` and its job; once a member
+/// receipts it, that member is offered it no more; once audited, nobody is.
+#[test]
+fn q_the_audit_duty_reads_its_candidates_off_the_chain() {
+    use kaspa_consensus_core::palw_audit_door_v1::{palw_audit_on_turn_v1, palw_capacity_audit_candidates_v1};
+    let mut sim = Sim::new(stage2_params(Class::Floor, 250, 250), Class::Floor, &[(90, 1_000_000)]);
+    let (id, licensed_at) = licensed_claim(&mut sim, 0xA0D7);
+    let claim = sim.c.claim(&id);
+    let pool = palw_audit_pool_of_claim_v1(&sim.c.s, &sim.c.sp, &id, &claim);
+    for member in &pool {
+        let offered = palw_capacity_audit_candidates_v1(&sim.c.s, &sim.c.sp, member);
+        assert_eq!(offered.len(), 1, "every pool member is offered the claim");
+        assert_eq!((offered[0].claim_id, offered[0].licensed_daa, offered[0].k_aud), (id, licensed_at, 2));
+        assert_eq!(offered[0].pool, pool);
+        assert_eq!(offered[0].job.execution_root, claim.execution_root, "the replay's target");
+    }
+    let seat = sim.c.s.panel(&id).unwrap().seats[0].bond;
+    assert!(palw_capacity_audit_candidates_v1(&sim.c.s, &sim.c.sp, &seat).is_empty(), "a seat is no auditor");
+    assert!(palw_capacity_audit_candidates_v1(&sim.c.s, &sim.c.sp, &bond_key(90)).is_empty(), "nor the producer");
+    let offered = palw_capacity_audit_candidates_v1(&sim.c.s, &sim.c.sp, &pool[0]);
+    assert!(palw_audit_on_turn_v1(&offered[0], &pool[0], licensed_at) && palw_audit_on_turn_v1(&offered[0], &pool[1], licensed_at));
+    assert!(!palw_audit_on_turn_v1(&offered[0], &pool[2], licensed_at), "k_aud 2: the third member waits a turn");
+    let r = root(&sim, &id);
+    sim.step(vec![receipt(pool[0], &[(id, r)])]);
+    assert!(palw_capacity_audit_candidates_v1(&sim.c.s, &sim.c.sp, &pool[0]).is_empty(), "receipted: not offered again");
+    assert_eq!(palw_capacity_audit_candidates_v1(&sim.c.s, &sim.c.sp, &pool[1]).len(), 1, "the others still are");
+    sim.step(vec![receipt(pool[1], &[(id, r)])]);
+    assert!(pool.iter().all(|m| palw_capacity_audit_candidates_v1(&sim.c.s, &sim.c.sp, m).is_empty()), "audited: offered to nobody");
+}
+
+/// **Q and S under reorg, restart and IBD** — a floor tape with the audit door and the slots armed at a
+/// credited ρ 10: credited claims, their binds and licences, receipt batches, a refused over-cap attempt,
+/// Finals through the audits; then every block reverted and re-applied, an IBD from the base, a restart at
+/// every tip, and a fork with a different receipt order reorged to and back — root for root.
+#[test]
+fn q_s_reorg_restart_and_ibd_are_deterministic() {
+    let mut c = Chain::new(stage2_params(Class::Floor, 10, 250));
+    c.attribution = true;
+    c.step(&[bond_obj(90, 13_000 * MSK), bond_obj(CHALLENGER, 400_000 * MSK)]);
+    let mut t = Tape::new(c);
+    let seats = t.c.floor_seats();
+    let mut ids = Vec::new();
+    for seed in 0..6u64 {
+        let (env, key, id) = floor_attempt_of(&t.c, 90, 0x7A00 + seed);
+        let anchor = floor_job_anchor(&t.c.p, bond_key(90), 0x10C0 + 0x7A00 + seed);
+        let daa = t.c.daa + 1;
+        t.block(daa, vec![], Some((env, key, anchor)), T12_BLOCK_SUBSIDY_SOMPI).expect("the block folds");
+        if t.c.s.claim(&id).is_some() {
+            ids.push(id);
+        }
+    }
+    assert!(ids.len() >= 4, "the burst (4 at ρ 10, 13k) admits at least four: {}", ids.len());
+    for id in &ids {
+        let bound = t.bind_to(*id, &seats);
+        t.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim: *id, receipts: seats.iter().map(|(k, _)| valid(*id, *k, bound)).collect() }]);
+    }
+    let fork_at = t.len();
+    let receipts = audit_receipts_for(&t.c.s, &t.c.sp, &ids);
+    assert!(!receipts.is_empty(), "the credited claims wait for receipts");
+    for batch in receipts.iter().cloned() {
+        t.step(vec![batch]);
+    }
+    let last = ids.iter().filter_map(|id| t.c.s.deadline_of(id)).max().expect("audited claims owe deadlines");
+    t.at(last + 1, vec![]);
+    assert!(ids.iter().all(|id| matches!(t.c.s.claim(id).map(|c| c.phase.clone()), Some(PalwClaimPhaseV2::Final { .. }))), "Final through the audits");
+    t.revert_to_base_and_reapply();
+    t.ibd_from(t.base.clone());
+    for j in 0..=t.len() {
+        t.restart_at(j);
+    }
+    // A fork at the licence tip: the receipts in the other order.
+    let mut fork = t.fork(fork_at);
+    for batch in audit_receipts_for(&fork.c.s, &fork.c.sp, &ids).into_iter().rev() {
+        fork.step(vec![batch]);
+    }
+    t.reorg_to(fork_at, &fork);
+    println!("Q/S determinism: {} claims, {} blocks, fork at {fork_at} with the receipts reversed", ids.len(), t.len());
+}

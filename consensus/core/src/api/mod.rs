@@ -971,6 +971,16 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **ADR-0160 F-Q (stage 2): the credited claims `me`'s audit duty may receipt** at the tip
+    /// ([`crate::palw_audit_door_v1::palw_capacity_audit_candidates_v1`]). A read for node policy, never
+    /// a block rule; empty off `ConsensusV2`, with no tip state, and below `palw_capacity_audit_door`.
+    fn palw_capacity_audit_candidates_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_audit_door_v1::PalwAuditCandidateV1> {
+        Vec::new()
+    }
+
     /// **Lane B: one operator bond's standing** at the tip, for the DAA the virtual's next block folds
     /// at ([`crate::palw_operator_da_v1::palw_operator_da_standing_v1`]: its collateral net of slashes,
     /// A-6's room on its free half, the DA exposure it holds) — what the node's seat reserve and its

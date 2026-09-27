@@ -4699,6 +4699,18 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_operator_da_v1::palw_operator_da_candidates_v1(&state, state_params, operators, candidate_daa)
     }
 
+    /// **ADR-0160 F-Q (stage 2): the credited claims `me`'s audit duty may receipt**, at the tip
+    /// (`palw_audit_door_v1::palw_capacity_audit_candidates_v1`). Empty with no tip state. A read: node
+    /// policy, never a block rule.
+    pub fn palw_capacity_audit_candidates_v1_impl(
+        &self,
+        me: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_audit_door_v1::PalwAuditCandidateV1> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return Vec::new() };
+        kaspa_consensus_core::palw_audit_door_v1::palw_capacity_audit_candidates_v1(&state, state_params, me)
+    }
+
     /// **Lane B: one operator bond's standing**, at the tip, for the DAA the virtual's next block folds
     /// at, over the second clock's raw depth there (`palw_operator_da_v1::palw_operator_da_standing_v1`).
     /// `None` with no tip state. A read: node policy, never a block rule.
