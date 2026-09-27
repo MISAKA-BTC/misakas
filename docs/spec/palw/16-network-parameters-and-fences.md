@@ -1,40 +1,44 @@
 # PALW spec — 16. Network parameters and fences
 
-> **Skeleton (Phase 1, 2026-09-27).** [00-index.md](00-index.md) gives the conventions. The fence
-> tables below are taken from `consensus/core/src/config/params.rs` at `55a7be02f` and from the
-> [launch note](../../t12-launch-2026-09-25.md) §000–§00. Phase 2 writes the values table and checks
-> every row against `palw_t12_shipped_params()`.
+> **Normative.** This chapter states what is armed where, with which values, and how a node proves
+> which ruleset it runs. Reasoning and history: [design/palw/lineage.md](../../design/palw/lineage.md).
+> The code is the truth, and disagreements are listed in [divergences.md](divergences.md).
 
-**Purpose.** This chapter is the reference for what is armed where. It covers each network's PALW
-ruleset, every fence and its height, the values the other chapters leave to it, the identity a node
-announces (params fingerprint, fork id, schedule id), and the rules for adding a fence without
-splitting the network silently.
+**Reconciled with code at:** `55a7be02f` (2026-09-27)
 
 ## 16.1 Networks
 
-| Network | PALW | Assembly |
-| --- | --- | --- |
-| mainnet | **Disabled** (`PalwConsensusMode::Disabled`). No genesis bonds or roots | `MAINNET_PARAMS` |
-| testnet-12 | R-core+ from genesis | `palw_t12_base_params` → `palw_t12_arm_every_rule_from_genesis` → `palw_t12_params_with_registry_v1` (arms `PALW_T12_POST_LAUNCH_FENCES_V1` at 750, then `_V2` at 1,300) → `palw_t12_shipped_params` |
-| testnet-11 | Retired lineage (build `1f98d3bf4`) | `TESTNET11_PARAMS` |
-| devnet / drill | Drill rulesets. A drill moves each post-launch list to a low height on a salted chain | `devnet_shipped_params`, `config/drill.rs` (`palw_drill_post_launch_fences_v2_at_v1`), `palw_t12_drill_params_v1` |
+- **PALW-NP-6.** Each network's PALW ruleset MUST be exactly what its assembly function returns:
 
-- [ ] **Mainnet.** State that PALW is off, and what arming it would take: one atomic activation
-  bundle, one fork choice, one fingerprint, with every model arriving by registration, drill and
-  binding. *Sources:* 0042 D1, 0036, 0075 §6–§7, `docs/mainnet-readiness.md`.
+  | Network | PALW | Assembly (`consensus/core/src/config/params.rs`) |
+  | --- | --- | --- |
+  | mainnet | **Disabled** (`PalwConsensusMode::Disabled`); `PALW_MAINNET_GENESIS_BONDS` is empty and the roots are zero | `MAINNET_PARAMS`, `mainnet_shipped_params`. When a genesis card is set, `mainnet_card_base_v1` states what it arms |
+  | testnet-12 | `ConsensusV2`, R-core+ from genesis | `palw_t12_base_params` → `palw_t12_arm_every_rule_from_genesis` → `palw_t12_params_with_registry_v1` (arms `PALW_T12_POST_LAUNCH_FENCES_V1` at 750, then `_V2` at 1,300) → `palw_t12_shipped_params` |
+  | testnet-11 | `ConsensusV2`, the RC bundle. Retired lineage; runs only on build `1f98d3bf4` | `palw_rc_shipped_params` (§16.9) |
+  | devnet / drills | drill rulesets. A drill moves each post-launch list to a low height on a salted chain (`--palw-drill-fence-at`, `--palw-drill-fence2-at`) | `devnet_shipped_params`, `palw_t12_drill_params_v1`, `config/drill.rs` |
+
+- **PALW-NP-7.** Arming PALW on mainnet MUST be one atomic activation bundle with one fork choice and
+  one fingerprint (ADR-0042 D1). Every model arrives by registration, drill and binding. Genesis is
+  floor-only (ADR-0075 §6–§7, ADR-0076 §4). The mainnet values of the testnet-12-only caps (the Eq cap,
+  X10) are separate decisions. Readiness: [mainnet-readiness.md](../../mainnet-readiness.md).
 
 ## 16.2 testnet-12: what is armed from genesis
 
-- [ ] Every consensus rule this binary knows is armed at DAA 0, except:
-  - `palw_bond_maturity`, at DAA 1,000.
-  - Six rules that stay dormant because validation refuses them or this build cannot carry them:
-    `palw_inactivity_leak`, `palw_frontier_provenance`, `palw_beacon_fold`, `palw_shard_licensing`,
-    `palw_fp_decode_rules`, `palw_fp_decode_constraint`.
+- **PALW-NP-8.** testnet-12 MUST arm at DAA 0 every consensus rule the binary knows, except:
+  - `palw_bond_maturity` (DAA 1,000);
+  - `palw_inactivity_leak`, `palw_frontier_provenance`, `palw_beacon_fold`, `palw_shard_licensing`,
+    `palw_fp_decode_rules` and `palw_fp_decode_constraint`, which stay dormant because validation
+    refuses them or this build cannot carry them;
+  - the post-launch lists (§16.3, §16.4).
 
-  *Code:* `palw_t12_arm_every_rule_from_genesis` (its doc comments give each exception's reason).
-- [ ] The genesis registry: the eight operator bonds (`PALW_T12_GENESIS_BONDS`), the genesis classes
-  and held rows (`PALW_T12_GENESIS_HELD_ROWS`; the Qwen2.5 A16 8k and 2M roots, and the hybrid at
-  n_ctx 512).
+  `palw_t12_arm_every_rule_from_genesis` gives each exception's reason in its doc comments.
+- **PALW-NP-9.** The genesis registry MUST hold:
+  - the eight operator bonds of `PALW_T12_GENESIS_BONDS` (939,063.21 MSK each);
+  - the genesis classes: the floor class, the Qwen2.5 A16 dense rows (8k and 2M, the held rows of
+    `PALW_T12_GENESIS_HELD_ROWS`) and the hybrid row at n_ctx 512.
+
+  The measured-row list `palw_class_verify_rows` is empty at genesis, so the 2M row is closed until
+  ADR-0153's flag day.
 
 ## 16.2a testnet-12: the R-core+ fences (ADR-0152)
 
@@ -65,84 +69,114 @@ splitting the network silently.
   `PALW_RCORE_VESTING_ROWS_LANDED_V1` is false (`palw_rcore_build_can_run_v1`). It MUST also refuse
   testnet-11 parameters or a testnet-11 datadir (state version 22 against 20).
 
-**Sources:** ADR-0152 §6 (archive 0152/08). **Code:** `config/params.rs` (`validate_palw_rcore_plus_v1`,
-`sync_palw_rcore_plus`, `palw_t12_arm_every_rule_from_genesis`).
+**Sources:** ADR-0152 §6 (archive 0152/08).
 
-## 16.3 testnet-12: the DAA-750 set (13 fences, release `c3dbaee3c`)
+## 16.3 testnet-12: the DAA-750 set (13 fences; ADR-0154; release `c3dbaee3c`)
 
-`PALW_T12_POST_LAUNCH_FENCES_V1`. It was armed at `PALW_T12_POST_LAUNCH_FENCE_DAA` = 750 and is
-shipped, so it never grows.
+- **PALW-NP-10.** `PALW_T12_POST_LAUNCH_FENCES_V1` MUST be armed at `PALW_T12_POST_LAUNCH_FENCE_DAA` =
+  750 (`palw_t12_arm_post_launch_fences_v1`). The list is shipped and MUST NOT grow.
 
 | # | Fence | Rule from DAA 750 | Chapter |
 | --: | --- | --- | --- |
-| 1 | `palw_registry_resilience` | A claim waiting to bind retries until its bind deadline instead of voiding when ready seats cannot fill the panel. A class returns to Probation only when probes from two or more distinct bonds fail | 07 §7.4, 03 §3.3 |
+| 1 | `palw_registry_resilience` | A claim waiting to bind retries until its bind deadline instead of voiding when ready seats cannot fill the panel. A class returns to Probation only when probes from two distinct bonds fail | 07 §7.4, 03 §3.3 |
 | 2 | `palw_panel_seed_execution` | The panel seed is the anchor attempt's execution commitment | 08 §8.1 |
 | 3 | `palw_heartbeat_transparent_same_chain` | Heartbeat transparency stops at the merging block's own chain | 13 §13.4 |
 | 4 | `palw_reorg_strict_economic_win` | A deep reorg needs a strict economic win. A tie keeps the incumbent unless it is at most two DAA ticks deep | 13 §13.2 |
 | 5 | `palw_bond_maturity_early` | The 1,000-DAA maturity window applies to non-genesis bonds before 1,000 | 10 §10.1 |
 | 6 | `palw_model_sink_bound` | A model sink output is valid only when bound | 15 §15.4 |
 | 7 | `palw_operator_anchor` | Only the genesis operator bonds' attempts anchor panels (stopgap) | 07 §7.3 |
-| 8 | `palw_final_lock_full_collateral` | A resolved lock is carried by the whole collateral, with a four-floor accuser reserve (V02 a) | 10 §10.3 |
+| 8 | `palw_final_lock_full_collateral` | A resolved lock is carried by the whole collateral, with a four-floor accuser reserve (V02 a) | 10 §10.4 |
 | 9 | `palw_final_lock_life` | A resolved `Valid` seat lock lives until F + 1,000, for claims licensed at or after 750 | 10 §10.3 |
 | 10 | `palw_anchor_at_ceiling` | An operator's own attempt at its exposure ceiling still anchors | 07 §7.3 |
 | 11 | `palw_slashing_evidence_utxo_genuine` | A DNS slash's UTXO side effect requires genuine evidence | 09 §9.4 |
 | 12 | `palw_pruning_proof_strict_economic_win` | A pruning-proof or IBD staging commit needs a strict economic win | 13 §13.2 |
 | 13 | `palw_lane_accept_parents_first` | A tied round lane is applied parents first, and a round block carries no EVM payload | 12 §12.3 |
 
-## 16.4 testnet-12: the DAA-1,300 set (2 fences, release `587cab2b0`)
+## 16.4 testnet-12: the DAA-1,300 set (2 fences; ADR-0155; release `587cab2b0`)
 
-`PALW_T12_POST_LAUNCH_FENCES_V2`, armed at `PALW_T12_POST_LAUNCH_FENCE_V2_DAA` = 1,300. The next
-flag day's fixes are added here.
+- **PALW-NP-11.** `PALW_T12_POST_LAUNCH_FENCES_V2` MUST be armed at `PALW_T12_POST_LAUNCH_FENCE_V2_DAA` =
+  1,300 (`palw_t12_arm_post_launch_fences_v2`), after the DAA-750 list and before `validate_palw_v2`.
+  A fix that goes behind the next flag day is added to this list, and to nothing else.
 
 | # | Fence | Rule from DAA 1,300 | Chapter |
 | --: | --- | --- | --- |
-| 1 | `palw_floor_refusal_retry` | A draw refused for eligibility re-anchors at the next slot instead of voiding | 07 §7.4 |
+| 1 | `palw_floor_refusal_retry` | A draw refused for eligibility at every seed re-anchors at the next slot instead of voiding | 07 §7.4 |
 | 2 | `palw_final_lock_life_retro` | At the crossing block, Final seat locks are re-dated to `min(expiry, max(F + 1,000, H))`. After it, locks are dated F + 1,000 | 10 §10.3 |
 
 ## 16.5 testnet-12: identity by release
 
-| Release | Change | Params fingerprint | Fence schedule |
+| Release | Change | Params fingerprint | Fence schedule | Schedule id |
+| --- | --- | --- | --- | --- |
+| `0e8ec984e` (launch, 2026-09-25) | genesis | `b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f` | 1000 | `93da24cc60f7a77e…` |
+| `8a0810992` (2026-09-26) | node only: hdrcrash, pptake, palw19, slash refusal, the DAA-198 split fix | same | 1000 | same |
+| `c3dbaee3c` (2026-09-27) | the DAA-750 set | `dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9` | 750, 1000 | `7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397` |
+| `587cab2b0` (2026-09-27) | the DAA-1,300 set | `24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff` | 750, 1000, 1300 | `d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a` |
+
+The genesis, the identity and the premine txid are unchanged across these releases
+([launch note](../../t12-launch-2026-09-25.md) §000–§0).
+
+## 16.6 Values (testnet-12)
+
+| Value | testnet-12 | Where it comes from | Used in |
 | --- | --- | --- | --- |
-| `0e8ec984e` (launch, 2026-09-25) | genesis | `b8564b88…` | 1000 |
-| `8a0810992` (2026-09-26) | node-only update (hdrcrash, pptake, palw19, slash refusal, split fix) | `b8564b88…` | 1000 |
-| `c3dbaee3c` (2026-09-27) | the DAA-750 set | `dbbc9104…` | 750, 1000 |
-| `587cab2b0` (2026-09-27) | the DAA-1,300 set | `24e1aec3…` | 750, 1000, 1300 |
-
-- [ ] Add the full fingerprints and schedule ids from the launch note, and keep this table current.
-
-## 16.6 Values (Phase 2)
-
-- [ ] One row per value, with its constant and the chapter that uses it. At least: cadence (120 s),
-  settled-anchor depth (`PALW_T12_SETTLED_ANCHOR_DEPTH` = 30), bond maturity window (1,000 DAA), draw
-  weight cap (`PALW_DRAW_WEIGHT_CAP_MSK_V1` = 1,000,000 MSK), eligible-stake floor (875 ‰), readiness
-  horizon (24), λ (5), execution-quantum maturity (120 DAA), genesis block subsidy
-  (`PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI`), n_ctx per row (`PALW_T12_DENSE_N_CTX`,
-  `PALW_T12_NARROW_DENSE_N_CTX` = 8,192, `PALW_T12_HYBRID_N_CTX` = 512), the seat and producer floors,
-  and the challenge window with the finality depth derived from it.
+| cadence | 120 s per PALW block | the schedule | 06 |
+| `window_bind` / `window_receipt` | 600 / 600 DAA | `PALW_RC_WINDOWS_V1` (`palw_fp_devnet_v3.rs`) | 07 |
+| `window_challenge` / `window_challenge_at` | 1,200 / 120 DAA (past `palw_short_challenge_window`) | `PALW_RC_WINDOWS_V1`, `PALW_SHORT_CHALLENGE_WINDOW_DAA_V1` | 07, 08 |
+| `window_court` / `claim_retirement` | 3,000 / 3,000 DAA | `PALW_RC_WINDOWS_V1` | 07, 09, 10 |
+| `anchor_delay` / `max_beacon_gap` | 20 / 400 DAA | `PALW_RC_WINDOWS_V1` | 07 |
+| `court_turn_deadline` | 42 DAA | `PALW_RC_WINDOWS_V1` | 09 |
+| `fp_abandon_hold` | 600 DAA | `PALW_RC_WINDOWS_V1` | 07, 10 |
+| withdrawal delay | 7,500 DAA (12,900 including the DA lattice) | `PALW_RC_WINDOWS_V1`, `palw_v2_bond_withdrawal_delay_at_v1` | 10 |
+| settled-anchor depth | 30 | `PALW_T12_SETTLED_ANCHOR_DEPTH` | 07 |
+| bond maturity window | 1,000 DAA | `PALW_T12_BOND_MATURITY_WINDOW_DAA` | 10 |
+| producer and registration floor / seat floor | 13,000 / 130,000 MSK | `min_collateral_sompi`; `palw_panel_economy_v1.rs` | 10 |
+| work ceiling | 500 ‰ of posted collateral | `fp_max_exposure_ratio_permille` | 10 |
+| draw weight cap / eligible-stake floor | 1,000,000 MSK / 875 ‰ | `PALW_DRAW_WEIGHT_CAP_MSK_V1`, `PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1` | 08 |
+| readiness-V2 horizon | 24 spans | `palw_readiness_v2_max_age_spans` | 08 |
+| execution-quantum maturity | 120 DAA | `palw_exec_quantum_maturity_daa` | 12 |
+| resolved `Valid` lock life (from 750) | 1,000 DAA | `PALW_FINAL_LOCK_LIFE_DAA_V1` | 10 |
+| C7 window | ≥ 1,000 spans | `PALW_RCORE_C7_WINDOW_SPANS_V1` | 10 |
+| Final basis | `basis_k ≥ 2` | `PALW_RCORE_FINAL_BASIS_K_V1` | 08 |
+| n_ctx (dense held / narrow dense / hybrid) | A16 held max / 8,192 / 512 | `PALW_T12_DENSE_N_CTX`, `PALW_T12_NARROW_DENSE_N_CTX`, `PALW_T12_HYBRID_N_CTX` | 03, 04 |
+| genesis block subsidy | 444,562,014,000 sompi | `PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI` | 10 |
 
 ## 16.7 Identity and handshake
 
-- [ ] The params fingerprint hashes every scheduled rule, not only its height. The rule manifest.
-  *Sources:* 0150, 0042. *Code:* `core/palw_rule_manifest_v1.rs`.
-- [ ] The fork id and the handshake: a node that has crossed a fence refuses peers that have not
-  ("Fork-id mismatch … this node has crossed fence 750"). The schedule id. *Code:*
-  `core/fork_id_v1.rs`, `kaspad/src/daemon.rs` (the start-up identity lines).
+- **PALW-NP-12.** A node's params fingerprint (`consensus_params_id`) MUST hash every scheduled rule
+  and, through the rule manifest, the rule itself, not only its height. Two builds with one fingerprint
+  MUST give one verdict for every block. *Sources:* ADR-0150, ADR-0042. *Code:*
+  `core/palw_rule_manifest_v1.rs`.
+- **PALW-NP-13.** A node MUST announce a fork id (`fork_id_v1(params, daa_score)`) and a fence schedule.
+  From the first fence height a peer has not crossed, the node MUST refuse that peer at the handshake
+  ("Fork-id mismatch … this node has crossed fence 750"). *Code:* `core/fork_id_v1.rs`,
+  `kaspad/src/daemon.rs` (the startup identity lines).
 
 ## 16.8 Adding a fence
 
-- [ ] A new testnet-12 fix goes behind a fence in the current post-launch list, as one entry that sets
-  the field and its mirror through the field's own `sync_*`.
-- [ ] Its height MUST be one that no other fence uses (not 750, 1,000 or 1,300). The fork id cannot
-  tell apart two flag days at one height.
-- [ ] It is hashed Some-only, with the `never()` collapse, so a dormant list leaves every shipped id
-  unchanged.
-- [ ] `DnsParams` is hashed whole, so a field never leaves it.
-- [ ] A release that arms a fence ships only after a drill that crosses the fence with the shipped
-  binary. *(release policy; the runbook has the procedure)*
+- **PALW-NP-14.** A new testnet-12 rule MUST go behind a fence in the current post-launch list, as one
+  `PalwPostLaunchFenceV1` entry that sets the field and its bundle mirror through the field's own
+  `sync_*`.
+- **PALW-NP-15.** Its height MUST NOT be a height another fence already uses (today 750, 1,000 and
+  1,300). The fork id cannot tell apart two flag days at one height.
+- **PALW-NP-16.** A fence MUST be hashed Some-only with the `never()` collapse, so a dormant field
+  leaves every shipped id unchanged. `DnsParams` is hashed whole, so a field never leaves it.
+- **PALW-NP-17 (release policy).** A release that arms a fence MUST ship only after a drill that crosses
+  the fence with the shipping binary. The rollout procedure is in the runbooks.
 
-## 16.9 testnet-11 (retired)
+## 16.9 testnet-11 (retired; recorded, not maintained)
 
-- [ ] The activation map (DAA 7,100 held regime and deep audit; 7,101 the `6001`-labelled bundle
-  including the one-permit execution lane; 7,200 Verification V2 and readiness multiproofs; 7,300 span
-  5 → 1 DAA; 7,301 the compute overlay retires), moved here from `adr/README.md` together with its
-  "Activation axis" section. Recorded, not maintained.
+testnet-11 (`palw_rc_shipped_params`, build `1f98d3bf4`) activates:
+
+| DAA | What it activates |
+| --: | --- |
+| 7,100 | the held regime and the deep-audit fixes |
+| 7,101 | the PALW upgrade bundle labelled `6001`, including ADR-0125's one-permit execution lane |
+| 7,200 | ADR-0133 Verification V2 and readiness multiproofs |
+| 7,300 | the execution-lane schedule span shortened from 5 DAA to 1 |
+| 7,301 | the compute overlay retires |
+
+`6000`, `6001`, `6100` and `6201` are rollout labels, not heights. The history is in
+[history/testnet-11.md](../../history/testnet-11.md) and in the ADR index's activation section.
+
+**Sources:** ADR-0035 (testnet-11 continued; class admission pinned), ADR-0036 (mainnet activation
+model), ADR-0042 D1 (one bundle, one fingerprint), ADR-0150, ADR-0152 §6, ADR-0154, ADR-0155.

@@ -260,7 +260,8 @@ rules testnet-12 runs today and the change it runs next, so they are Phase 2 pre
 | 0104 | Reserved for "a close too wide for one carrier is cut once" (the 0102 collision in README "Number hygiene"). ADR-0144 §9: "never written" | not written | Stays reserved |
 | 0048 | Unused on the live lineage (README "Number hygiene") | — | Stays unused |
 | 0113 | No file, and no citation in the tree | — | Unassigned. Record it in the index before anyone uses it |
-| 0154–0159 | No file, and no citation. 0160 was taken out of order | — | Free. The next number is 0154, recorded in README when 0152 and 0160 land |
+| 0154, 0155 | **Taken 2026-09-27**: the DAA-750 and DAA-1,300 flag-day ADRs (decision 4) | [0154](0154-testnet-12-flag-day-daa-750.md), [0155](0155-testnet-12-flag-day-daa-1300.md) | Done |
+| 0156–0159 | No file and no citation. 0160 is taken out of order | — | Free. The next number is 0156 (the DAA-1,500 flag day, when it comes) |
 | RFC-0001 | PALW inference surface gaps (FP Job V4) | branch `rcore/fp-sampler` | Reserved in [rfc/README.md](../rfc/README.md). Not copied |
 
 ## Plan for `README.md` (Phase 2)
@@ -301,3 +302,14 @@ index can hold, and the rest moves out:
    PALW spec skeleton uses all seven.
 6. Known and already recorded: 0020's "EVM is opt-in" is stale (0089 §2). 0065's filename keeps a
    withdrawn clause (README "Number hygiene").
+
+## Progress (Phase 2)
+
+One line per step. "Slimmed" means the body moved verbatim to `design/palw/archive/`, and the ADR is
+now Context / Decision / Consequences / Links.
+
+- **Mechanical moves.** The STATUS-AUDIT files moved to `audit/`, the ten frozen ADRs gained banners,
+  and the index gained 0150/0151.
+- **ADR-0152** imported and split: the archive is in `design/palw/archive/0152/`, the rules are in spec
+  02/07–10/13/16.
+- **Chapter 16** written. ADR-0154 and ADR-0155 were written. Slimmed: 0036, 0035.
