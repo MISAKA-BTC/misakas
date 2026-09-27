@@ -363,3 +363,145 @@ mod frequency_presence_tests {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// §A.3 step 3 — logit_bias (and its bans, which are step 5's)
+// ---------------------------------------------------------------------------------------------
+
+/// **What `logit_bias` says about one lane.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDecodeBiasV4 {
+    /// No entry: `bias_j = 0`.
+    None,
+    /// An additive entry, `bias_q ∈ [-100·2^24, 100·2^24] ∖ {0, -100·2^24}`.
+    Add(i32),
+    /// `bias_q == -100·2^24`: the lane leaves the admitted set at step 5.
+    Ban,
+}
+
+impl DecodeConfigV4 {
+    /// **The canonical form of `logit_bias`** (§A.2): at most 300 entries, token ids strictly
+    /// ascending (sorted, no duplicates), every bias inside `[-100·2^24, 100·2^24]` and non-zero.
+    pub fn validate_logit_bias(&self) -> Result<(), PalwDecodeConfigV4Error> {
+        if self.logit_bias.len() > PALW_DECODE_V4_MAX_BIAS_ENTRIES {
+            return Err(PalwDecodeConfigV4Error::TooManyBiasEntries { got: self.logit_bias.len() });
+        }
+        let mut previous: Option<u32> = None;
+        for (index, &(token, bias)) in self.logit_bias.iter().enumerate() {
+            if previous.is_some_and(|p| token <= p) {
+                return Err(PalwDecodeConfigV4Error::BiasNotAscending { index, token });
+            }
+            if !(-PALW_DECODE_V4_BIAS_Q_MAX..=PALW_DECODE_V4_BIAS_Q_MAX).contains(&bias) {
+                return Err(PalwDecodeConfigV4Error::BiasOutOfRange { index, token, got: bias });
+            }
+            if bias == 0 {
+                return Err(PalwDecodeConfigV4Error::ZeroBias { index, token });
+            }
+            previous = Some(token);
+        }
+        Ok(())
+    }
+
+    /// The entry `lane` has, by binary search over the canonical (ascending) list.
+    pub fn bias_of(&self, lane: u32) -> PalwDecodeBiasV4 {
+        match self.logit_bias.binary_search_by_key(&lane, |(token, _)| *token) {
+            Ok(i) => PalwDecodeBiasV4::of_q(self.logit_bias[i].1),
+            Err(_) => PalwDecodeBiasV4::None,
+        }
+    }
+
+    /// Does `logit_bias` ban EVERY lane of a `vocab`-wide row? Then no step can admit a lane, and
+    /// a job carrying it could not decode a single token — an executor refuses it before it runs.
+    /// (Without a constraint the admitted set is the same at every position, so this is the whole
+    /// question of step 5's emptiness.)
+    pub fn bans_cover_vocab(&self, vocab: u32) -> bool {
+        let banned = self.logit_bias.iter().filter(|(token, bias)| *token < vocab && *bias == PALW_DECODE_V4_BIAS_BAN_Q).count();
+        vocab > 0 && banned as u64 >= vocab as u64
+    }
+}
+
+impl PalwDecodeBiasV4 {
+    /// What one canonical `bias_q` means.
+    pub fn of_q(bias_q: i32) -> Self {
+        if bias_q == PALW_DECODE_V4_BIAS_BAN_Q {
+            Self::Ban
+        } else if bias_q == 0 {
+            Self::None
+        } else {
+            Self::Add(bias_q)
+        }
+    }
+}
+
+/// **Step 3: the additive bias** — `d_j = b_j + bias_j` (§A.3). Bans never reach here: a banned
+/// lane is removed from the admitted set at step 5 and its value is never read.
+pub fn decode_bias_v4(penalized: i64, bias: PalwDecodeBiasV4) -> i64 {
+    match bias {
+        PalwDecodeBiasV4::Add(q) => penalized + q as i64,
+        PalwDecodeBiasV4::None | PalwDecodeBiasV4::Ban => penalized,
+    }
+}
+
+#[cfg(test)]
+mod logit_bias_tests {
+    use super::*;
+
+    fn with(bias: Vec<(u32, i32)>) -> DecodeConfigV4 {
+        DecodeConfigV4 { logit_bias: bias, ..DecodeConfigV4::NOOP }
+    }
+
+    #[test]
+    fn the_bias_list_is_ascending_bounded_and_non_zero() {
+        with(vec![(1, 5), (2, -5), (900, PALW_DECODE_V4_BIAS_BAN_Q), (901, PALW_DECODE_V4_BIAS_Q_MAX)])
+            .validate_logit_bias()
+            .expect("canonical");
+        assert_eq!(
+            with(vec![(2, 5), (2, 6)]).validate_logit_bias(),
+            Err(PalwDecodeConfigV4Error::BiasNotAscending { index: 1, token: 2 })
+        );
+        assert_eq!(
+            with(vec![(3, 5), (2, 6)]).validate_logit_bias(),
+            Err(PalwDecodeConfigV4Error::BiasNotAscending { index: 1, token: 2 })
+        );
+        assert_eq!(with(vec![(3, 0)]).validate_logit_bias(), Err(PalwDecodeConfigV4Error::ZeroBias { index: 0, token: 3 }));
+        assert_eq!(
+            with(vec![(3, PALW_DECODE_V4_BIAS_Q_MAX + 1)]).validate_logit_bias(),
+            Err(PalwDecodeConfigV4Error::BiasOutOfRange { index: 0, token: 3, got: PALW_DECODE_V4_BIAS_Q_MAX + 1 })
+        );
+        assert_eq!(
+            with(vec![(3, PALW_DECODE_V4_BIAS_BAN_Q - 1)]).validate_logit_bias(),
+            Err(PalwDecodeConfigV4Error::BiasOutOfRange { index: 0, token: 3, got: PALW_DECODE_V4_BIAS_BAN_Q - 1 })
+        );
+        let full: Vec<(u32, i32)> = (0..300).map(|t| (t, 1)).collect();
+        with(full.clone()).validate_logit_bias().expect("300 entries");
+        let over: Vec<(u32, i32)> = (0..301).map(|t| (t, 1)).collect();
+        assert_eq!(with(over).validate_logit_bias(), Err(PalwDecodeConfigV4Error::TooManyBiasEntries { got: 301 }));
+    }
+
+    #[test]
+    fn a_lane_reads_its_entry_and_a_ban_is_not_a_bias() {
+        let cfg = with(vec![(4, 7), (9, PALW_DECODE_V4_BIAS_BAN_Q), (12, -3)]);
+        assert_eq!(cfg.bias_of(4), PalwDecodeBiasV4::Add(7));
+        assert_eq!(cfg.bias_of(9), PalwDecodeBiasV4::Ban);
+        assert_eq!(cfg.bias_of(12), PalwDecodeBiasV4::Add(-3));
+        assert_eq!(cfg.bias_of(5), PalwDecodeBiasV4::None);
+        assert_eq!(decode_bias_v4(10, PalwDecodeBiasV4::Add(-3)), 7);
+        assert_eq!(decode_bias_v4(10, PalwDecodeBiasV4::None), 10);
+        // +100 on the largest penalized value stays inside i64 and is saturated at step 4.
+        assert_eq!(
+            decode_bias_v4(i32::MAX as i64, PalwDecodeBiasV4::Add(PALW_DECODE_V4_BIAS_Q_MAX)),
+            i32::MAX as i64 + (100i64 << 24)
+        );
+    }
+
+    #[test]
+    fn bans_cover_a_vocab_only_when_every_lane_is_banned() {
+        let ban = PALW_DECODE_V4_BIAS_BAN_Q;
+        assert!(with((0..4).map(|t| (t, ban)).collect()).bans_cover_vocab(4));
+        assert!(!with((0..4).map(|t| (t, ban)).collect()).bans_cover_vocab(5));
+        assert!(!with(vec![(0, ban), (1, ban), (2, ban), (3, 1)]).bans_cover_vocab(4));
+        // An entry past the vocabulary bans nothing in it.
+        assert!(!with(vec![(0, ban), (1, ban), (2, ban), (7, ban)]).bans_cover_vocab(4));
+        assert!(!DecodeConfigV4::NOOP.bans_cover_vocab(0));
+    }
+}
+
