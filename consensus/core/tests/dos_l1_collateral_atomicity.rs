@@ -29,7 +29,6 @@
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PALW_T12_SETTLED_ANCHOR_DEPTH, Params, palw_v2_bond_withdrawal_delay_at_v1};
 use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
-use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_admission_v2::{PalwAdmissionParamsV2, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2};
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
@@ -50,8 +49,10 @@ use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 // testnet-12 ground truth
 // ---------------------------------------------------------------------------------------------
 
+/// The DAA-1,300 release: these probes build their chain by hand and carry none of the capacity package's
+/// objects (audit receipts, credited tapes), which testnet-12 arms at 1,500 — its own tests are `palw_capacity_*`.
 fn t12() -> Params {
-    Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))
+    kaspa_consensus_core::config::params::palw_t12_release_v2_params()
 }
 
 fn bundle(p: &Params) -> PalwConsensusParamsV2 {

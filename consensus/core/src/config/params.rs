@@ -29512,8 +29512,9 @@ mod post_launch_fence_arming_tests {
         // (`PALW_T12_POST_LAUNCH_FENCES_V2`); the DAA-750 release as the fleet ran it is 750 and 1,000 alone.
         let mut expected_schedule = vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA];
         expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V2_DAA);
+        expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V3_DAA);
         expected_schedule.sort_unstable();
-        assert_eq!(release.fence_schedule_v1(), expected_schedule, "750, D1's 1,000, then the second flag day");
+        assert_eq!(release.fence_schedule_v1(), expected_schedule, "750, D1's 1,000, then the second and third flag days");
         assert_eq!(
             palw_t12_release_v1_params().fence_schedule_v1(),
             vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA],
@@ -29544,7 +29545,8 @@ mod post_launch_fence_arming_tests {
         let mut alone = palw_t12_launch_params_v1();
         alone.palw_anchor_at_ceiling = Some(ForkActivation::new(900));
         refused(&alone, "lane A dormant");
-        let release = palw_t12_shipped_params();
+        // The DAA-1,300 release: the capacity fences (1,500) need lane A too, and would answer first.
+        let release = palw_t12_release_v2_params();
         let mut below = release.clone();
         below.palw_anchor_at_ceiling = Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA - 1));
         refused(&below, "one DAA below lane A");

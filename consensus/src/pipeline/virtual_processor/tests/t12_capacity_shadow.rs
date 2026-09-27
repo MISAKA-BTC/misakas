@@ -215,7 +215,14 @@ async fn s_t5_a8_the_alarm_fires_when_the_auditors_stop_and_clears_when_they_run
         }
     }
     eprintln!("[A8] conviction records on the chain: {records:?}");
-    assert!(!running.bonds.iter().find(|row| row.bond == m.chain.bonds[0]).unwrap().frozen_would_be);
+    // Card 0 produced A and is charged by nothing of its own — unless the draw seated it on B's panel, where
+    // it is a covering signer like any other (held above). Which cards B's panel drew is the chain's, not ours.
+    let card0 = m.chain.bonds[0];
+    let card0_covers_b = records.iter().any(|(kind, accused, on_b, _)| {
+        *kind == kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 && *on_b && *accused == card0.0
+    });
+    let card0_row = running.bonds.iter().find(|row| row.bond == card0).unwrap();
+    assert_eq!(card0_row.frozen_would_be, card0_covers_b, "card 0 is held only as a covering signer of B: {card0_row:?}");
     eprintln!("[A8] auditors running, sink DAA {}: {}", m.sink_daa(), running.summary());
 }
 

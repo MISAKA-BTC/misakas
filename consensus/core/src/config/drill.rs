@@ -1103,11 +1103,14 @@ mod tests {
     fn the_capacity_fence_list_is_dormant_everywhere_and_apart_from_the_post_launch_list() {
         use crate::config::params::{
             DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA,
-            PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_drill_params_v1, palw_t12_shipped_params,
+            PALW_T12_CAPACITY_RHO10_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS,
+            palw_t12_drill_params_v1, palw_t12_release_v2_params, palw_t12_shipped_params,
         };
         assert!(!PALW_T12_CAPACITY_FENCES_V1.is_empty());
         let drill = palw_t12_drill_params_v1(&salt(0x53));
-        let public = palw_t12_shipped_params();
+        // The DAA-1,300 release (every capacity entry dormant) is the "public" baseline here.
+        let public = palw_t12_release_v2_params();
+        let shipped = palw_t12_shipped_params();
         let height = |p: &crate::config::params::Params, name: &str| {
             p.palw_fences_v1().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is a fence")).1
         };
@@ -1118,9 +1121,15 @@ mod tests {
                 "{} is not on the DAA-750 list (that list is armed on the live chain)",
                 fence.name
             );
-            for preset in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS, &public, &drill] {
+            for preset in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS, &public] {
                 assert_eq!(height(preset, fence.name), None, "{} is dormant on {}", fence.name, preset.net);
             }
+            // testnet-12's third post-launch flag day arms the ρ = 10 package at 1,500 (the drill inherits it);
+            // the later ρ steps stay dormant there too.
+            let armed = PALW_T12_CAPACITY_RHO10_FENCES_V1.iter().any(|f| f.name == fence.name);
+            let expect = armed.then(|| ForkActivation::new(1_500));
+            assert_eq!(height(&shipped, fence.name), expect, "{} on testnet-12 as shipped", fence.name);
+            assert_eq!(height(&drill, fence.name), expect, "{} on the release's drill", fence.name);
             let original = format!("{public:?}");
             let fences = public.palw_fences_v1();
             let mut one = public.clone();
@@ -1160,7 +1169,9 @@ mod tests {
         let mut moved = drill.clone();
         let moves = palw_drill_capacity_fences_at_v1(&mut moved, 1_234).expect("past the release's fences");
         assert_eq!(moves.iter().map(|m| m.name).collect::<Vec<_>>(), PALW_T12_CAPACITY_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>());
-        assert!(moves.iter().all(|m| m.was.is_none() && m.at == 1_234 && m.to_string().contains("ARMED")));
+        let rho10 = |name: &str| crate::config::params::PALW_T12_CAPACITY_RHO10_FENCES_V1.iter().any(|f| f.name == name);
+        assert!(moves.iter().all(|m| m.at == 1_234
+            && if rho10(m.name) { m.was == Some(1_500) && !m.to_string().contains("ARMED") } else { m.was.is_none() && m.to_string().contains("ARMED") }));
         assert!(moved.palw_capacity_weight_cap_active_at(1_234) && !moved.palw_capacity_weight_cap_active_at(1_233));
         assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
         for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
@@ -1222,8 +1233,10 @@ mod tests {
         assert_eq!(moved.palw_reorg_strict_economic_win, Some(ForkActivation::new(40)), "the strict-economic-win reorg rule");
         // ADR-0160's capacity fences are NOT the post-launch release's (rcore/cap-s1): the release's drill
         // leaves them dormant; `palw_drill_capacity_fences_at_v1` crosses them.
-        assert_eq!(moved.palw_capacity_weight_cap, None, "the weight cap stays dormant under the release's drill");
-        assert_eq!(bundle.state.capacity_weight_cap_from_daa(), None, "and so does its fold mirror");
+        // The third flag day's capacity package keeps its own height (1,500) under this flag;
+        // `--palw-drill-fence3-at` moves it.
+        assert_eq!(moved.palw_capacity_weight_cap, Some(ForkActivation::new(1_500)), "the weight cap keeps the release's 1,500");
+        assert_eq!(bundle.state.capacity_weight_cap_from_daa(), Some(1_500), "and so does its fold mirror");
         assert_eq!(
             (moved.palw_bond_maturity_window_at(39), moved.palw_bond_maturity_window_at(40)),
             (None, Some(1_000)),
@@ -1241,9 +1254,11 @@ mod tests {
         assert!(moved.palw_anchor_at_ceiling_active_at(40) && !moved.palw_anchor_at_ceiling_active_at(39));
         assert!(moved.palw_slashing_evidence_utxo_genuine_at(40) && !moved.palw_slashing_evidence_utxo_genuine_at(39));
         assert!(moved.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(40) && !f.is_active(39)));
-        // ADR-0160 lane escrow (F-E) is a capacity fence, not the release's: dormant under the release's drill.
-        assert!(!moved.palw_capacity_escrow_active_at(40) && !moved.palw_capacity_escrow_active_at(u64::MAX));
-        assert_eq!(bundle.state.capacity_escrow_from_daa(), None, "the escrow lane's mirror stays dormant");
+        // ADR-0160 lane escrow (F-E) is a capacity fence, not the DAA-750 release's: it keeps the third flag
+        // day's 1,500 under this flag.
+        assert!(!moved.palw_capacity_escrow_active_at(40) && !moved.palw_capacity_escrow_active_at(1_499));
+        assert!(moved.palw_capacity_escrow_active_at(1_500));
+        assert_eq!(bundle.state.capacity_escrow_from_daa(), Some(1_500), "the escrow lane's mirror keeps 1,500");
         assert_eq!(
             moved.palw_operator_anchor.as_ref().map(|rule| rule.operators.len()),
             Some(8),
