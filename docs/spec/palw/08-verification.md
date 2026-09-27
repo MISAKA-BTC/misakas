@@ -84,9 +84,47 @@ processor's resolver `palw_panel_draw_policy_at`.
 
 ## 8.3 Seats and readiness
 
-*Completed in the chapter 08 pass.* Readiness V2 (0133 §11.2) and its horizon of 24 spans
-(`palw_readiness_v2_max_age_spans`); coverage (0098); shard seats (0099); leaf demand (0111);
-capability (0071 D3); routing (0034); maturity from DAA 750 (`palw_bond_maturity_early`, 10 §10.1).
+- **PALW-VF-26 (who may sit).** A bond MAY be drawn for a claim only if all of the following hold:
+  - it is `Active`, at or above the seat floor (130,000 MSK on testnet-12: ten producer floors,
+    `palw_panel_collateral_floor_v1`), and mature (10 PALW-CO-7);
+  - it was registered before the claim's anchor;
+  - it is not the executor's bond or operator;
+  - it is capable of the class (`palw_capability_bound`, ADR-0071 D3);
+  - it is ready for the class (below);
+  - its room covers `max(duty_bind, lock_2)` (10 PALW-CO-20).
+- **PALW-VF-27 (readiness V2).** A seat is ready for a class only if it holds a current
+  `SeatReadinessProvedV2` (tag 50). The proof opens `PALW_READINESS_V2_CHUNKS_V1` = 16 distinct leaves,
+  drawn from the whole artifact by `palw_readiness_v2_leaves_v1` under a seed that is a function of
+  (class, bond, span). The leaves are opened in one multiproof (`PalwArtifactMultiproofV1`), and the
+  proof is signed over the opened leaves' hashes, not only their indices. A proof counts for
+  `palw_readiness_v2_max_age_spans` spans: 24 on testnet-12
+  (`PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1`), 8 elsewhere. The V1 one-leaf proof is refused past
+  `palw_readiness_v2`.
+- **PALW-VF-28 (readiness terms).** Ready also requires:
+  - a matching artifact root;
+  - the chunks held;
+  - participation;
+  - collateral for `readiness_collateral_multiple` seat exposures;
+  - a probe verified within `readiness_probe_max_age_spans`.
+
+  (`palw_model_registry_v1.rs`.)
+- **PALW-VF-29 (class-local fail-closed).** A class whose bound claims cannot be served by its ready
+  seats stops only itself (`Held`, 03 §3.3). A class whose derived verification window does not fit
+  the receipt deadline is `Held`, never `Active`. Past `palw_class_receipt_window` its receipt
+  deadline is `bound_daa + max(window_receipt, verification_window_spans × span_daa)`
+  (`receipt_window_for_claim_v1`). On testnet-12 the class-derived deadline `D(c)` of
+  `palw_class_verify_deadline` (03 §3.6) governs.
+- **PALW-VF-30 (coverage and shards).** A class's coverage — the probability that the panel's checks
+  catch a lie of a given size — is a generated number (`palw_seat_coverage_v1`), reported, not
+  assumed. Shard seats and per-shard licensing (ADR-0099 D5, ADR-0100 D4) are dormant on testnet-12.
+- **PALW-VF-31 (routing).** Receipts carry the routing keys (execution-class family and model band),
+  and the registry, not the miner, gives them meaning (ADR-0034). Only the CPU integer family
+  adjudicates (ADR-0053).
+
+**Sources:** ADR-0133 §3 D3, §11.2, §11.3; ADR-0152 (readiness horizon 24); ADR-0124 D4; ADR-0071 D3;
+ADR-0098 D1; ADR-0034. **Code:** `core/palw_model_registry_v1.rs`, `core/palw_artifact.rs`
+(`PalwArtifactMultiproofV1`, `verify_artifact_multiproof_v1`), `core/palw_seat_coverage_v1.rs`,
+`core/palw_readiness_escalation_v1.rs`, `core/palw_routing.rs`.
 
 ## 8.4 Receipts and quorum (Q)
 
@@ -134,8 +172,34 @@ evidence). **Code:** `core/palw_receipt.rs`; `core/palw_state_v2.rs` (`palw_rece
 
 ## 8.5 Replay and verification clocks
 
-*Completed in the chapter 08 pass.* Verification V2 (0133), replay refutation and the replay budget,
-and sampling as a scheduler (0028).
+- **PALW-VF-32 (three clocks).** Verification MUST run on its own clock, apart from the execution round
+  (1 s) and the PALW anchor (120 s). A panel holds its claim across the receipt window (600 DAA on
+  testnet-12), not across one anchor.
+- **PALW-VF-33 (Verification V2, S1 segments).** Past `palw_verification_v2`:
+  - A job's leaves are cut into `K = seats − 1` equal segments (`palw_segment_leaf_range_v2`).
+  - The bind names one full-replay seat and gives every other seat its segments by a drawn rotation
+    (`palw_segment_assignment_v2`, a function of the bind and the stored seed).
+  - A V3 receipt names the segments it attests, and its signature covers the mask
+    (`palw_receipt_message_v3`).
+  - The coverage door (08 PALW-VF-13) needs every segment attested `Valid` at least twice
+    (`PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT` = 2).
+  - The assignment is a seat's duty, not a cap on what it may attest.
+- **PALW-VF-34 (a seat that found a fault).** A seat that proves a fault in a claim records it in its
+  fault ledger, and MUST file nothing else about that claim, in that round or any later one. Every
+  proven fault is recorded at the most specific address known: a checkpoint-root mismatch is `(0, 0)`,
+  and bisection finds the leaf. *(node policy)*
+- **PALW-VF-35 (leaf demand).** A seat that needs a committed leaf to judge first asks the executor off
+  chain. If no answer arrives within `PALW_LEAF_EVIDENCE_FAST_PATH_DAA_V1`, it demands the leaf on chain
+  (`DefaultAccusedHeld` with `StepLeaf`, or a DA session past `palw_rcore_plus`, 08 §8.6). The answer is
+  adjudicated by the one-move verdict. Below `palw_rcore_plus`, at most one demand per seat per claim,
+  for a leaf in that seat's sample (ADR-0111 D7).
+- **PALW-VF-36 (sampling schedules, never convicts).** Sampling decides who re-executes what and when.
+  A conviction needs a refutation or a DA default, never a sampling result. *Sources:* ADR-0028 §1,
+  §5, with windows restated by ADR-0133.
+
+**Sources:** ADR-0133 D1, §11.1; ADR-0098 D2–D3; ADR-0111; ADR-0028. **Code:**
+`core/palw_verification_v2.rs`, `core/palw_replay_refute_v1.rs`, `core/palw_leaf_evidence_v1.rs`,
+`core/palw_fp_interval_v1.rs`; node side `kaspad/src/palw_panel.rs`.
 
 ## 8.6 Data availability (DA)
 
@@ -195,9 +259,28 @@ fence, ADR-0062 SA-1…SA-7 and ADR-0111 D3 stand. **Code:** `core/palw_da_rcore
 `core/palw_state_v2.rs` (`sweep_da_sessions`, `da_default_charge_v1`), `core/palw_panel_da_v1.rs`,
 `core/palw_operator_da_v1.rs`, `core/palw_held_da_v1.rs`.
 
-## 8.7 What the panel is paid
+## 8.7 What the panel is paid, and what a seat holds
 
-*Completed in the chapter 08 pass.* Panel economy (0124); the amounts are in chapter 10.
+- **PALW-VF-37 (the pool).** Past `palw_panel_economy`, a `Final` claim's reward `R` is split: the panel
+  pool is `⌊R × 200 / 1000⌋` (`PALW_PANEL_POOL_PERMILLE_V1`), and the producer takes the exact rest.
+  `R` is the escrow after work pricing and after the buyback slice. Nothing is minted beyond the carve
+  the accepting block withheld.
+- **PALW-VF-38 (a seat's share).** Each drawn seat whose `Valid` (or `Sampled`) receipt the chain
+  credited inside the receipt window is paid one fixed share, `⌊pool / K⌋`, where K is the number of
+  seats drawn. Unpaid shares go to the panel reserve, never to the producer. On testnet-12 the shares
+  vest in the claim's row (10 §10.6).
+- **PALW-VF-39 (what a seat holds).**
+  - **testnet-12:** a seat's duty is `duty_bind` (10 PALW-CO-19), and its lock is L-1's. The earlier
+    `3 × claim.reserved` exposure is retired.
+  - **Other networks:** past `palw_panel_exposure_floor` a seat reserves
+    `max(3 × claim.reserved, λ × max_seat_reward)`. On testnet-12, λ = 5 (`reward_multiple_permille`
+    5,000), which enters `duty_bind`'s λ-term.
+- **PALW-VF-40 (work-priced reward).** Past `palw_work_priced_reward`, a model-class claim is paid
+  `⌊escrow × min(pwu, unit) / unit⌋`, where `unit` is the heaviest weight-bearing class's canonical
+  inference. The unnamed remainder is never minted (`palw_work_priced_reward_v1`).
+
+**Sources:** ADR-0124 D1–D4, D6 (D3 is superseded on testnet-12 by ADR-0152 A-4; D5 by SW); ADR-0130
+D1–D2. **Code:** `core/palw_panel_economy_v1.rs`, `core/palw_state_v2.rs` (`palw_panel_payout_key_v1`).
 
 **Activation.**
 

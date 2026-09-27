@@ -315,3 +315,4 @@ now Context / Decision / Consequences / Links.
 - **Chapter 16** written. ADR-0154 and ADR-0155 were written. Slimmed: 0036, 0035.
 - **Chapter 02** written. Slimmed: 0042, 0046. Kept with Links: 0043, 0058. Divergences 4 and 5 recorded.
 - **Chapter 07** written (anchor and bind, the retries, DL-1, settlement and payout, void charging). Slimmed: 0037. Kept with Links: 0129.
+- **Chapter 08** written (seed, SW, seats and readiness, Q, replay clocks, DA, panel pay). Slimmed: 0062, 0133, 0034, 0028, 0124, 0026, 0111, 0098. 0108 moved to chapter 14 (its receipts are extension receipts); 0130 moved to chapter 12.

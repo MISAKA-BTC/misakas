@@ -54,8 +54,14 @@ unit of data is contested in a DA session that the producer, or any locked signe
 ## 5. Measurements
 
 The figures behind the stake draw (`v3calc/v31_stake_draw.py` and `v31_review_numbers.py`, on branch
-`docs/adr-0152-v31-postedits`) are quoted in archive 0152/06. The measurements in the earlier ADRs
-move here as those ADRs are slimmed (Phase 2, chapter 08).
+`docs/adr-0152-v31-postedits`) are quoted in archive 0152/06. The earlier measurements are kept in the
+archived texts below:
+
+- the coverage of a one-token lie: 6.51 % with five seats and 3.96 % with three, on testnet-11's
+  300-token claim (0098 §1);
+- the capacity grid at 2.2 claims a span and seven seats (0133 §6);
+- the readiness proof's weakness before V2: one eight-leaf window answered every challenge (0133
+  §11.2).
 
 ## 6. Open questions
 
@@ -64,3 +70,14 @@ move here as those ADRs are slimmed (Phase 2, chapter 08).
 - Delivery-digest receipts.
 - A coverage basis of 3.
 - The weighted jury.
+
+## Source texts (archived ADR bodies)
+
+- [ADR-0062 — The data-availability court: stop a vote from taking a bond](archive/0062-data-availability-court.md)
+- [ADR-0133 — Verification is its own clock: a class verifies over spans, and a starved class stops only itself](archive/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md)
+- [ADR-0034: PALW re-verification routing — four execution-class families, five model bands, one deciding binding](archive/0034-palw-execution-class-model-band-routing.md)
+- [ADR-0028: PALW challenge sampling — a scheduler for re-execution, never a verdict](archive/0028-palw-challenge-sampling-protocol.md)
+- [ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the compute it certifies](archive/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)
+- [ADR-0026: PALW v2 verification architecture — borrow Ambient's shape, strengthen the proof](archive/0026-palw-v2-runtime-separated-verification.md)
+- [ADR-0111 — A seat may demand the committed leaf it needs to judge](archive/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md)
+- [ADR-0098 — The panel's coverage is a number, and a seat that found a lie files nothing else](archive/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md)
