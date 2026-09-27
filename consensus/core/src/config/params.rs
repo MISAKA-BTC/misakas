@@ -28169,7 +28169,17 @@ mod post_launch_fence_arming_tests {
         let gate = crate::fork_id_v1::fork_id_gate_fences_v1(&release);
         assert!(gate.contains(&AT), "the fork id gates on 750 ({gate:?})");
         assert!(!crate::fork_id_v1::fork_id_gate_fences_v1(&launch).contains(&AT));
-        assert_eq!(release.fence_schedule_v1(), vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA], "750, then D1's 1,000");
+        // The schedule: 750, D1's 1,000, and — on this build — the second flag day's own height
+        // (`PALW_T12_POST_LAUNCH_FENCES_V2`); the DAA-750 release as the fleet ran it is 750 and 1,000 alone.
+        let mut expected_schedule = vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA];
+        expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V2_DAA);
+        expected_schedule.sort_unstable();
+        assert_eq!(release.fence_schedule_v1(), expected_schedule, "750, D1's 1,000, then the second flag day");
+        assert_eq!(
+            palw_t12_release_v1_params().fence_schedule_v1(),
+            vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA],
+            "the DAA-750 release: 750, then D1's 1,000"
+        );
 
         // 1,000 — `palw_bond_maturity`'s own height — is refused by name.
         let mut at_maturity = release.clone();
