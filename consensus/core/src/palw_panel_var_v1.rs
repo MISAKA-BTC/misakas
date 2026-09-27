@@ -61,6 +61,21 @@ impl PalwClaimFraudFactsV1 {
         }
     }
 
+    /// **ADR-0160 stage 3 (F1): the facts at the claim's full weight** — `reserved` times `scale`, the ρ
+    /// F-W divided the reservation by (`palw_weight_cap_v1::PalwCapacityGainScaleV1::scale_of`), and the
+    /// weight term recovered from THAT (`⌊reserved·ρ / price⌋`, [`palw_claim_exposure_pwu_v1`]'s own
+    /// reading): never below today's (`⌈w/ρ⌉·ρ ≥ w`), where scaling the recovered `⌊⌈w/ρ⌉ / price⌋` would
+    /// lose up to `ρ` units of it. `scale = 1` changes nothing.
+    pub fn at_full_weight_v1(mut self, scale: u32) -> Self {
+        if scale > 1 {
+            self.reserved = self.reserved.saturating_mul(u128::from(scale));
+            if self.slash_value_per_pwu > 0 {
+                self.exposure_pwu = (self.reserved / u128::from(self.slash_value_per_pwu)).min(u128::from(u64::MAX)) as u64;
+            }
+        }
+        self
+    }
+
     /// **The rule below `Params::palw_audit_2026_09_23`, byte for byte**: the weight term carried
     /// the claim's RAW `pwu` — the derived MAC-eq statistical work — against the collateral-unit
     /// price. Kept so a chain point below the fence prices exactly what every lock already written

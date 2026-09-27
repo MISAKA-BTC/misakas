@@ -174,6 +174,7 @@ fn t08_fold_admission_producer_facts_and_draw_read_one_committed_number() {
         settled_anchor_depth: escaped,
         window_court: c.sp.window_court(),
         rcore: Some(PalwRcoreSeatFilterV1 {
+            gain_scale: Default::default(),
             eligibility,
             ceiling_permille: c.sp.fp_max_exposure_ratio_permille(),
             resolved_locks_off_ceiling: false,
@@ -221,6 +222,7 @@ fn draw_policy(c: &Chain, id: &Hash64, claim: &PalwClaimStateV2, daa: u64) -> Pa
         settled_anchor_depth: palw_second_clock_depth_of_v1(&c.s, sp, &e, daa),
         window_court: sp.window_court(),
         rcore: sp.rcore_plus_active_at(daa).then(|| PalwRcoreSeatFilterV1 {
+            gain_scale: Default::default(),
             eligibility: palw_rcore_bind_prices_v1(&c.s, sp, &e, id, claim, seat_count, daa).eligibility,
             ceiling_permille: sp.fp_max_exposure_ratio_permille(),
             // Lane V02: as the processor resolves it at the binding block.
@@ -571,6 +573,7 @@ fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
         settled_anchor_depth: None,
         window_court: c.sp.window_court(),
         rcore: Some(PalwRcoreSeatFilterV1 {
+            gain_scale: Default::default(),
             eligibility,
             ceiling_permille: c.sp.fp_max_exposure_ratio_permille(),
             resolved_locks_off_ceiling: false,

@@ -7961,19 +7961,26 @@ impl Params {
         let (audit, slots) = (armed(self.palw_capacity_audit_door), armed(self.palw_capacity_issuance_slots));
         let network = armed(self.palw_capacity_network_room);
         // A malformed value is refused by its own validator by name; the door's rule reads a well-formed one.
-        let credited_from = self.palw_capacity_aggregate_liability.as_ref().filter(|value| value.refusal_v1().is_none()).and_then(|value| {
-            value
-                .steps
-                .iter()
-                .filter(|step| {
-                    crate::palw_escrow_funding_v2::palw_escrow_credit_applies_v1(&crate::palw_escrow_funding_v2::PalwEscrowCreditV1 {
-                        rho: step.rho,
-                        q_credit_permille: step.q_credit_permille,
+        // A value armed at `never()` is no fence (the collapse's reading): it credits nothing.
+        let credited_from = self
+            .palw_capacity_aggregate_liability
+            .as_ref()
+            .filter(|value| value.activation != ForkActivation::never() && value.refusal_v1().is_none())
+            .and_then(|value| {
+                value
+                    .steps
+                    .iter()
+                    .filter(|step| {
+                        crate::palw_escrow_funding_v2::palw_escrow_credit_applies_v1(
+                            &crate::palw_escrow_funding_v2::PalwEscrowCreditV1 {
+                                rho: step.rho,
+                                q_credit_permille: step.q_credit_permille,
+                            },
+                        )
                     })
-                })
-                .map(|step| step.from_daa)
-                .min()
-        });
+                    .map(|step| step.from_daa)
+                    .min()
+            });
         if let Some(from) = credited_from
             && audit.is_none_or(|fence| fence.daa_score() > from)
         {
@@ -19121,94 +19128,202 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 pub const PALW_T12_POST_LAUNCH_FENCE_DAA: u64 = 750;
 
 /// **ADR-0160's capacity fences — the claim-capacity programme's own list, never the DAA-750 release's**
-/// (rcore/cap-s1, stage 1 of the user's staged-safety plan of 2026-09-26). Every entry is a
+/// (rcore/cap-s1, stage 1 of the user's staged-safety plan of 2026-09-26): the stage-1 PROOF list, F-L at
+/// ρ = 1 ([`crate::palw_aggregate_liability_v1::PALW_T12_CAPACITY_STEPS_V1`]) — what the stage gates and the
+/// drill ([`crate::config::drill::palw_drill_capacity_fences_at_v1`]) arm. Every entry is a
 /// testnet-12-only fence that ships DORMANT — `None` on every preset, testnet-12 included, so the
-/// release's params id (`dbbc9104…`) and schedule id (`7c652212…`) do not move — and that a future
-/// capacity flag day (`H_cap`, ADR-0160 v3 §10.3: not 500, 750 or 1,000, not a multiple of 250) arms
-/// all together through [`palw_t12_arm_capacity_fences_v1`]. Kept apart from
-/// [`PALW_T12_POST_LAUNCH_FENCES_V1`] on purpose: that list is armed at DAA 750 by
-/// [`palw_t12_arm_post_launch_fences_v1`] on every testnet-12 ruleset (public and drill), so an entry
-/// there would be ARMED on the live chain.
+/// release's params id and schedule id do not move. The capacity FLAG DAY takes
+/// [`PALW_T12_CAPACITY_RHO10_FENCES_V1`] instead (the same entries, F-L at the fixed ρ = 10), one entry at a
+/// time into its own flag-day list. Kept apart from [`PALW_T12_POST_LAUNCH_FENCES_V1`] and
+/// [`PALW_T12_POST_LAUNCH_FENCES_V2`] on purpose: those are armed on every testnet-12 ruleset (public and
+/// drill), so an entry there would be ARMED on the live chain.
 ///
 /// Each entry's `set` writes the field and every mirror of it the fold reads, exactly as the post-launch
-/// entries do, so a test, a drill ([`crate::config::drill::palw_drill_capacity_fences_at_v1`]) and the
-/// eventual release arm a fence in one place. The capacity fences' prerequisites include post-launch
-/// fences (F-W needs `palw_reorg_strict_economic_win` and lane A's `palw_operator_anchor` at or below
-/// it), so they are armed at or above [`PALW_T12_POST_LAUNCH_FENCE_DAA`] on the ASSEMBLED ruleset.
+/// entries do, so a test, a drill and the eventual release arm a fence in one place. The capacity fences'
+/// prerequisites include post-launch fences (F-W needs `palw_reorg_strict_economic_win` and lane A's
+/// `palw_operator_anchor` at or below it), so they are armed at or above [`PALW_T12_POST_LAUNCH_FENCE_DAA`]
+/// on the ASSEMBLED ruleset.
 pub const PALW_T12_CAPACITY_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
-    // ADR-0160 F-W (lane cap-weight): staged claim weight, the per-bond weight cap (J-1) and the capped
-    // reservation — the field and the V2 bundle's mirror the fold reads. Requires R-core+, strict-win
-    // (whose shallow-tie rule it uses, with the no-DAA-lowering check) and lane A at or below it.
-    PalwPostLaunchFenceV1 {
-        name: "palw_capacity_weight_cap",
-        set: |params, at| {
-            params.palw_capacity_weight_cap = at;
-            params.sync_palw_capacity_weight_cap();
-        },
-    },
-    // ADR-0160 F-E (lane cap-escrow): the escrow funding point — past it the bond holds `m_c` in a claim's
-    // escrow slot instead of `E` (m_c = E without a credit: at rho = 1 the slot is today's), and an
-    // unconvicted void keeps the obligation for h_obl. The field and the V2 bundle's mirror the fold reads.
-    PalwPostLaunchFenceV1 {
-        name: "palw_capacity_escrow_at_licence",
-        set: |params, at| {
-            params.palw_capacity_escrow_at_licence = at;
-            params.sync_palw_capacity_escrow();
-        },
-    },
-    // ADR-0160 F-L (lane cap-liab): aggregate bond liability — testnet-12's schedule from the height
-    // (`PALW_T12_CAPACITY_STEPS_V1`: stage 1's ρ = 1, nothing credited) and the V2 bundle's mirror the
-    // fold reads. Requires `palw_rcore_plus` and `palw_offence_attribution` at or below it (testnet-12
-    // arms both at genesis).
-    PalwPostLaunchFenceV1 {
-        name: "palw_capacity_aggregate_liability",
-        set: |params, at| {
-            params.palw_capacity_aggregate_liability = at.map(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1);
-            params.sync_palw_capacity_liability();
-        },
-    },
-    // ADR-0160 F-B and F-R (lane cap-verify): the batch licence (a licence list riding one object, a
-    // `Windowed` kind-3 receipt) and room v2 (the measured k = 2 class room, the stake-proportional share
-    // for T-2(a), the floor room J-6) — bare heights with the fold's mirrors.
-    PalwPostLaunchFenceV1 {
-        name: "palw_capacity_batch_licence",
-        set: |params, at| {
-            params.palw_capacity_batch_licence = at;
-            params.sync_palw_capacity_verify();
-        },
-    },
-    PalwPostLaunchFenceV1 {
-        name: "palw_capacity_verify_room",
-        set: |params, at| {
-            params.palw_capacity_verify_room = at;
-            params.sync_palw_capacity_verify();
-        },
-    },
-    // ADR-0160 stage 2 (rcore/cap-s1): F-Q the audit door and F-S the issuance slots — bare heights with
-    // the fold's mirrors (F-Q's carries lane A's operator bonds, its pool).
-    PalwPostLaunchFenceV1 {
-        name: "palw_capacity_audit_door",
-        set: |params, at| {
-            params.palw_capacity_audit_door = at;
-            params.sync_palw_capacity_stage2();
-        },
-    },
-    PalwPostLaunchFenceV1 {
-        name: "palw_capacity_issuance_slots",
-        set: |params, at| {
-            params.palw_capacity_issuance_slots = at;
-            params.sync_palw_capacity_stage2();
-        },
-    },
-    // ADR-0160 stage 4 (rcore/cap-s1): F-N the network level and the work-conserving fair share.
-    PalwPostLaunchFenceV1 {
-        name: "palw_capacity_network_room",
-        set: |params, at| {
-            params.palw_capacity_network_room = at;
-            params.sync_palw_capacity_stage2();
-        },
-    },
+    PALW_T12_CAPACITY_WEIGHT_CAP_V1,
+    PALW_T12_CAPACITY_ESCROW_AT_LICENCE_V1,
+    PALW_T12_CAPACITY_AGGREGATE_LIABILITY_RHO1_V1,
+    PALW_T12_CAPACITY_BATCH_LICENCE_V1,
+    PALW_T12_CAPACITY_VERIFY_ROOM_V1,
+    PALW_T12_CAPACITY_AUDIT_DOOR_V1,
+    PALW_T12_CAPACITY_ISSUANCE_SLOTS_V1,
+    PALW_T12_CAPACITY_NETWORK_ROOM_V1,
 ];
+
+/// **ADR-0160 stage 3 (rcore/cap-s1): the ρ = 10 capacity flag day, entry by entry** — the safe ×10
+/// architecture of stages 1, 2 and 4 with stage 3's FIXED ρ: J-1 (F-W), the escrow at licence (F-E), the
+/// aggregate liability at ρ = 10, credited (F-L,
+/// [`crate::palw_aggregate_liability_v1::PALW_T12_CAPACITY_STEPS_RHO10_V1`]), the batch licence and the
+/// verify room (F-B, F-R), the audit door (F-Q), the issuance slots (F-S) and the network's fair share
+/// (F-N). **Each is a named constant, armable by a one-entry addition to a future flag-day list** (every
+/// entry at that list's height, through its own `set`, mirrors included). The eight arm TOGETHER:
+/// `validate_palw_v2` refuses a list that leaves out an entry another one needs (F-L's credited step
+/// needs F-Q, F-Q needs F-L and F-B, F-E needs F-W and F-L, F-S needs F-W, F-L and F-E, F-N needs F-R
+/// and F-S). Nothing here is on any shipped list: testnet-12 ships every capacity fence dormant.
+///
+/// The ready ρ 25 / ρ 100 variants are later flag days' entries, each its own fence value
+/// ([`PALW_T12_CAPACITY_RHO25_STEP_2_V1`], then [`PALW_T12_CAPACITY_RHO100_STEP_3_V1`]; or
+/// [`PALW_T12_CAPACITY_RHO100_STEP_2_V1`] straight after ρ = 10); later stages' fences (riders, the
+/// breaker) are theirs.
+pub const PALW_T12_CAPACITY_RHO10_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    PALW_T12_CAPACITY_WEIGHT_CAP_V1,
+    PALW_T12_CAPACITY_ESCROW_AT_LICENCE_V1,
+    PALW_T12_CAPACITY_AGGREGATE_LIABILITY_RHO10_V1,
+    PALW_T12_CAPACITY_BATCH_LICENCE_V1,
+    PALW_T12_CAPACITY_VERIFY_ROOM_V1,
+    PALW_T12_CAPACITY_AUDIT_DOOR_V1,
+    PALW_T12_CAPACITY_ISSUANCE_SLOTS_V1,
+    PALW_T12_CAPACITY_NETWORK_ROOM_V1,
+];
+
+/// ADR-0160 F-W (lane cap-weight): staged claim weight, the per-bond weight cap (J-1) and the capped
+/// reservation — the field and the V2 bundle's mirror the fold reads. Requires R-core+, strict-win (whose
+/// shallow-tie rule it uses, with the no-DAA-lowering check) and lane A at or below it.
+pub const PALW_T12_CAPACITY_WEIGHT_CAP_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_weight_cap",
+    set: |params, at| {
+        params.palw_capacity_weight_cap = at;
+        params.sync_palw_capacity_weight_cap();
+    },
+};
+
+/// ADR-0160 F-E (lane cap-escrow): the escrow funding point — past it the bond holds `m_c` in a claim's
+/// escrow slot instead of `E` (m_c = E without a credit: at ρ = 1 the slot is today's), and an unconvicted
+/// void keeps the obligation for h_obl. The field and the V2 bundle's mirror the fold reads.
+pub const PALW_T12_CAPACITY_ESCROW_AT_LICENCE_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_escrow_at_licence",
+    set: |params, at| {
+        params.palw_capacity_escrow_at_licence = at;
+        params.sync_palw_capacity_escrow();
+    },
+};
+
+/// ADR-0160 F-L (lane cap-liab) as stage 1 proves it: aggregate bond liability on testnet-12's ρ = 1
+/// schedule from the height (`PALW_T12_CAPACITY_STEPS_V1`: nothing credited) and the V2 bundle's mirror the
+/// fold reads. Requires `palw_rcore_plus` and `palw_offence_attribution` at or below it (testnet-12 arms
+/// both at genesis).
+pub const PALW_T12_CAPACITY_AGGREGATE_LIABILITY_RHO1_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_aggregate_liability",
+    set: |params, at| {
+        params.palw_capacity_aggregate_liability = at.map(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1);
+        params.sync_palw_capacity_liability();
+    },
+};
+
+/// **ADR-0160 stage 3: F-L at the FIXED ρ = 10, credited** — the one entry the ρ = 10 flag day takes in
+/// place of [`PALW_T12_CAPACITY_AGGREGATE_LIABILITY_RHO1_V1`]. Moving it keeps a later flag day's appended
+/// steps (a ready ρ 25 / ρ 100 entry): only the fence's own first step moves, and `validate_palw_v2`
+/// refuses a move above one of them.
+pub const PALW_T12_CAPACITY_AGGREGATE_LIABILITY_RHO10_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_aggregate_liability",
+    set: |params, at| {
+        let later: Vec<_> =
+            params.palw_capacity_aggregate_liability.take().map(|old| old.steps.into_iter().skip(1).collect()).unwrap_or_default();
+        params.palw_capacity_aggregate_liability = at.map(|at| {
+            let mut value = crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::of_schedule_v1(
+                at,
+                crate::palw_aggregate_liability_v1::PALW_T12_CAPACITY_STEPS_RHO10_V1,
+            );
+            value.steps.extend(later);
+            value
+        });
+        params.sync_palw_capacity_liability();
+    },
+};
+
+/// ADR-0160 F-B (lane cap-verify): the batch licence (a licence list riding one object, a `Windowed`
+/// kind-3 receipt) — a bare height with the fold's mirrors.
+pub const PALW_T12_CAPACITY_BATCH_LICENCE_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_batch_licence",
+    set: |params, at| {
+        params.palw_capacity_batch_licence = at;
+        params.sync_palw_capacity_verify();
+    },
+};
+
+/// ADR-0160 F-R (lane cap-verify): room v2 (the measured k = 2 class room under ρ × the shipped room, the
+/// stake-proportional share for T-2(a), the floor room J-6) — a bare height with the fold's mirrors.
+pub const PALW_T12_CAPACITY_VERIFY_ROOM_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_verify_room",
+    set: |params, at| {
+        params.palw_capacity_verify_room = at;
+        params.sync_palw_capacity_verify();
+    },
+};
+
+/// ADR-0160 stage 2: F-Q the audit door — a bare height with the fold's mirror (which carries lane A's
+/// operator bonds, its pool).
+pub const PALW_T12_CAPACITY_AUDIT_DOOR_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_audit_door",
+    set: |params, at| {
+        params.palw_capacity_audit_door = at;
+        params.sync_palw_capacity_stage2();
+    },
+};
+
+/// ADR-0160 stage 2: F-S the issuance slots (with stage 4's burst: one DAA's refill) — a bare height with
+/// the fold's mirror.
+pub const PALW_T12_CAPACITY_ISSUANCE_SLOTS_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_issuance_slots",
+    set: |params, at| {
+        params.palw_capacity_issuance_slots = at;
+        params.sync_palw_capacity_stage2();
+    },
+};
+
+/// ADR-0160 stage 4: F-N the network level and the work-conserving fair share — a bare height with the
+/// fold's mirror.
+pub const PALW_T12_CAPACITY_NETWORK_ROOM_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_network_room",
+    set: |params, at| {
+        params.palw_capacity_network_room = at;
+        params.sync_palw_capacity_stage2();
+    },
+};
+
+/// **ADR-0160 stage 3: the ready ρ = 25 variant — F-L's second step** (`…_step_2`), at its own flag day's
+/// height above the ρ = 10 flag day's. Its own fence value, never dynamic: the fork id names the step's
+/// height, so a node that did not append it is refused from there.
+pub const PALW_T12_CAPACITY_RHO25_STEP_2_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_aggregate_liability_step_2",
+    set: |params, at| palw_t12_capacity_step_set_v1(params, 2, at, 25),
+};
+
+/// **ADR-0160 stage 3: the ready ρ = 100 variant after ρ = 25 — F-L's third step** (`…_step_3`).
+pub const PALW_T12_CAPACITY_RHO100_STEP_3_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_aggregate_liability_step_3",
+    set: |params, at| palw_t12_capacity_step_set_v1(params, 3, at, 100),
+};
+
+/// **ADR-0160 stage 3: the ready ρ = 100 variant straight after ρ = 10 — F-L's second step** (`…_step_2`).
+pub const PALW_T12_CAPACITY_RHO100_STEP_2_V1: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_capacity_aggregate_liability_step_2",
+    set: |params, at| palw_t12_capacity_step_set_v1(params, 2, at, 100),
+};
+
+/// A ready ρ variant's `set`: step `slot` of F-L at `at`, then the mirror. **Arming it on a ruleset whose
+/// F-L does not carry the earlier steps panics** — the flag day that appends a step must come after the
+/// ones it builds on, and a silently dropped step would leave a scheduled ρ unarmed; `None` (or
+/// `never()`) always succeeds.
+fn palw_t12_capacity_step_set_v1(params: &mut Params, slot: usize, at: Option<ForkActivation>, rho: u32) {
+    let carried = params
+        .palw_capacity_aggregate_liability
+        .as_ref()
+        .filter(|value| value.activation != ForkActivation::never())
+        .map_or(0, |value| value.steps.len());
+    if at.is_some_and(|at| at != ForkActivation::never()) && carried < slot - 1 {
+        panic!(
+            "palw_capacity_aggregate_liability_step_{slot} (ρ = {rho}) is armed on a ruleset whose F-L carries {carried} step(s): \
+             arm the flag days it builds on first"
+        );
+    }
+    crate::palw_aggregate_liability_v1::palw_capacity_step_append_v1(params.palw_capacity_aggregate_liability.as_mut(), slot, at, rho);
+    params.sync_palw_capacity_liability();
+}
 
 /// **Arm (or, with `None`, disarm) every capacity fence at one height** — each entry of
 /// [`PALW_T12_CAPACITY_FENCES_V1`] through its own `set`, on an ASSEMBLED testnet-12 ruleset, then

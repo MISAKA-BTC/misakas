@@ -1046,7 +1046,11 @@ pub fn palw_capacity_shadow_with_v1(
             let staged_w = palw_capacity_staged_weight_v1(stage, w_full);
             let escrow_term_today = params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward);
             let commitment_today = palw_claim_commitment_v1(params, claim, now_daa).unwrap_or(0);
-            let l_sompi = palw_capacity_conviction_l_v1(palw_claim_g_v1(state, &id).map(|g| g.g()).unwrap_or(0));
+            let l_sompi = palw_capacity_conviction_l_v1(
+                palw_claim_g_v1(state, &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(params), &id)
+                    .map(|g| g.g())
+                    .unwrap_or(0),
+            );
             let holds = holds_new_rule(claim, h_obl, now_daa);
             // Stage 1 (rcore/cap-s1): the fold reserves `⌈w / ρ⌉` at the step's ρ, a function of the
             // claim alone (no budget, no held reservation); a void inside its hold keeps the reservation
@@ -1184,7 +1188,12 @@ pub fn palw_capacity_shadow_with_v1(
         let (lambda_term, lock_2) = if free_prompt {
             (0, d)
         } else {
-            (d, palw_claim_g_v1(state, claim_id).map(|g| palw_rcore_lock_v1(g.g_res, g.escrowed_reward, 0, 2)).unwrap_or(0))
+            (
+                d,
+                palw_claim_g_v1(state, &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(params), claim_id)
+                    .map(|g| palw_rcore_lock_v1(g.g_res, g.escrowed_reward, 0, 2))
+                    .unwrap_or(0),
+            )
         };
         let per_step: Vec<u128> = steps
             .iter()

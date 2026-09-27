@@ -236,6 +236,10 @@ pub struct PalwRcoreSeatFilterV1 {
     /// the block folds held dissections at their charge (the fold's `accuser_ledger_v1`), `None` below
     /// it (the shipped count, `palw_accuser_exposure_v1`).
     pub held_charge_floor: Option<u64>,
+    /// **ADR-0160 stage 3 (F1): the scale `G`'s weight term reads** (the held surplus prices the sessions
+    /// a bond challenges at their claims' full weight) — the binding block's params'
+    /// (`PalwCapacityGainScaleV1::of`); the identity below F-W / F-L.
+    pub gain_scale: crate::palw_weight_cap_v1::PalwCapacityGainScaleV1,
 }
 
 impl PalwPanelValidLockV1 {
@@ -278,7 +282,7 @@ impl PalwPanelValidLockV1 {
             off_ceiling,
             filter.accuser_reserve,
             // Lane V02: past the fence the fold's accuser ledger (held dissections at their charge).
-            crate::palw_state_v2::palw_accuser_ledger_v1(state, bond, filter.held_charge_floor),
+            crate::palw_state_v2::palw_accuser_ledger_v1(state, &filter.gain_scale, bond, filter.held_charge_floor),
             crate::palw_state_v2::PalwRcoreGateV1::Work,
         ))
     }
@@ -7997,6 +8001,7 @@ mod tests {
                 settled_anchor_depth: None,
                 window_court: sp.window_court(),
                 rcore: Some(PalwRcoreSeatFilterV1 {
+                    gain_scale: Default::default(),
                     eligibility: 50_000 * MSK as u128,
                     ceiling_permille: 500,
                     resolved_locks_off_ceiling: false,
@@ -9443,6 +9448,7 @@ mod tests {
                     settled_anchor_depth: None,
                     window_court: sp.window_court(),
                     rcore: Some(PalwRcoreSeatFilterV1 {
+                        gain_scale: Default::default(),
                         eligibility,
                         ceiling_permille: 500,
                         resolved_locks_off_ceiling: false,
@@ -9488,6 +9494,7 @@ mod tests {
                     settled_anchor_depth: None,
                     window_court: sp.window_court(),
                     rcore: Some(PalwRcoreSeatFilterV1 {
+                        gain_scale: Default::default(),
                         eligibility: 50_000 * MSK as u128,
                         ceiling_permille: 500,
                         resolved_locks_off_ceiling: false,

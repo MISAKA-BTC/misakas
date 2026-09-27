@@ -3536,7 +3536,12 @@ pub fn palw_bond_accuser_reserve_v1(params: &PalwStateParamsV2, now_daa: u64) ->
 /// ([`palw_claim_g_v1`]). The fold's `held_accuser_surplus_v1` is this with `floor =
 /// min_collateral` where `palw_rcore_plus`, `palw_offence_attribution` and the held ladder are all in
 /// force, and 0 elsewhere — one expression.
-pub fn palw_held_accuser_surplus_of_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, floor: u64) -> u128 {
+pub fn palw_held_accuser_surplus_of_v1(
+    state: &PalwChainStateV2,
+    scale: &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1,
+    bond: &PalwBondKeyV2,
+    floor: u64,
+) -> u128 {
     let floor = u128::from(floor);
     state
         .courts_by_challenger
@@ -3546,7 +3551,7 @@ pub fn palw_held_accuser_surplus_of_v1(state: &PalwChainStateV2, bond: &PalwBond
         .filter_map(|session| state.claims.get(&session.claim).map(|claim| (session.claim, claim)))
         .filter(|(_, claim)| state.class_is_held_v1(&claim.class_id))
         .map(|(claim_id, claim)| {
-            let g = palw_claim_g_v1(state, &claim_id).map(|gains| gains.g()).unwrap_or(0);
+            let g = palw_claim_g_v1(state, scale, &claim_id).map(|gains| gains.g()).unwrap_or(0);
             claim.reserved.max(g).min(floor).saturating_sub(claim.reserved)
         })
         .fold(0u128, u128::saturating_add)
@@ -3555,10 +3560,15 @@ pub fn palw_held_accuser_surplus_of_v1(state: &PalwChainStateV2, bond: &PalwBond
 /// **Lane V02: the accuser ledger a work-gate reader outside the fold reads past the fence** —
 /// [`palw_accuser_exposure_v1`] plus, where `held_charge_floor` is `Some(floor)`, the held surplus
 /// ([`palw_held_accuser_surplus_of_v1`]): the fold's `accuser_ledger_v1`. `None` is the count alone.
-pub fn palw_accuser_ledger_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, held_charge_floor: Option<u64>) -> u128 {
+pub fn palw_accuser_ledger_v1(
+    state: &PalwChainStateV2,
+    scale: &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1,
+    bond: &PalwBondKeyV2,
+    held_charge_floor: Option<u64>,
+) -> u128 {
     let count = palw_accuser_exposure_v1(state, bond);
     match held_charge_floor {
-        Some(floor) => count.saturating_add(palw_held_accuser_surplus_of_v1(state, bond, floor)),
+        Some(floor) => count.saturating_add(palw_held_accuser_surplus_of_v1(state, scale, bond, floor)),
         None => count,
     }
 }
@@ -5317,21 +5327,31 @@ pub struct PalwClaimRcoreV1 {
 /// reserved receipt rights (`rights_reserved`: 0 for an attempt, whose execution rights exist only
 /// once a Final mints them) and `s = 0` (no buy before a licence) — never the live registry, extras or
 /// market. A pure function of the claim record.
-pub fn palw_claim_frozen_g_res_v1(claim: &PalwClaimStateV2) -> u128 {
-    if claim.rcore.licence_door.is_some() { claim.rcore.g_res_sompi } else { claim.reserved.saturating_add(claim.rights_reserved) }
+pub fn palw_claim_frozen_g_res_v1(scale: &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1, claim: &PalwClaimStateV2) -> u128 {
+    // ADR-0160 stage 3 (F1): the weight term at the claim's full weight (`reserved × ρ`; today's at ρ = 1).
+    if claim.rcore.licence_door.is_some() {
+        claim.rcore.g_res_sompi
+    } else {
+        scale.gain_reserved(claim).saturating_add(claim.rights_reserved)
+    }
 }
 
 /// **The conviction funnel's `G`, frozen** (S-SPEC §2 `claim_g_v1`; the S-4 review): the liability
 /// row's copy where the claim has one (written at its `Final` or void from the claim's frozen value,
 /// and what survives retirement), else the claim record's [`palw_claim_frozen_g_res_v1`]. A pure
-/// function of `state` — it reads no params, extras, registry row, lane or market — so the fold, a
-/// processor's pre-check and an RPC read one `G` at every point of the claim's life.
-pub fn palw_claim_g_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Option<PalwClaimGV1> {
+/// function of `state` and the ruleset's gain scale (ADR-0160 stage 3, F1: `reserved × ρ` for a claim
+/// F-W divided; the identity — `Default` — wherever ρ = 1) — it reads no extras, registry row, lane or
+/// market — so the fold, a processor's pre-check and an RPC read one `G` at every point of the claim's life.
+pub fn palw_claim_g_v1(
+    state: &PalwChainStateV2,
+    scale: &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1,
+    claim_id: &Hash64,
+) -> Option<PalwClaimGV1> {
     if let Some(row) = state.panel_liabilities.get(claim_id) {
         return Some(PalwClaimGV1 { g_res: row.g_res_sompi, escrowed_reward: row.escrowed_reward, basis_k: row.basis_k });
     }
     state.claims.get(claim_id).map(|claim| PalwClaimGV1 {
-        g_res: palw_claim_frozen_g_res_v1(claim),
+        g_res: palw_claim_frozen_g_res_v1(scale, claim),
         escrowed_reward: claim.escrowed_reward,
         basis_k: claim.rcore.basis_k,
     })
@@ -13585,7 +13605,7 @@ impl PalwFoldReadV1<'_> {
     /// escrowed_reward`. The builder's `claim_g_v1` is this read; read here so the accuser gates
     /// outside the builder price a held session with the same `G` (ADR-0152 §4-ter, the review's F7).
     fn claim_g_v1(&self, claim_id: &Hash64) -> Option<PalwClaimGV1> {
-        palw_claim_g_v1(self.state, claim_id)
+        palw_claim_g_v1(self.state, &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(self.params), claim_id)
     }
 
     /// **ADR-0152 §4-ter C4: what a held dissection's losing challenger is charged, before the
@@ -13624,7 +13644,12 @@ impl PalwFoldReadV1<'_> {
         if !self.held_charge_block_active_v1() {
             return 0;
         }
-        palw_held_accuser_surplus_of_v1(self.state, bond, self.params.min_collateral_sompi())
+        palw_held_accuser_surplus_of_v1(
+            self.state,
+            &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(self.params),
+            bond,
+            self.params.min_collateral_sompi(),
+        )
     }
 
     /// **The accuser ledger every gate reads past `palw_rcore_plus`** — [`palw_accuser_exposure_v1`]
@@ -13720,7 +13745,9 @@ impl PalwFoldReadV1<'_> {
         let full = palw_claim_bond_reservation_v1(self.params, claim).ok_or(PalwStateV2Error::Overflow("da reward base"))?;
         let producer_collateral = state.bonds.get(&claim.bond).map(|bond| bond.collateral).unwrap_or(0);
         // DA-6's base reads the frozen `G` the tiers read (the S-4 review), never the live gain.
-        let g = palw_claim_g_v1(state, claim_id).map(|gains| gains.g()).unwrap_or(0);
+        let g = palw_claim_g_v1(state, &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(self.params), claim_id)
+            .map(|gains| gains.g())
+            .unwrap_or(0);
         let exposure = palw_da_session_exposure_v1(palw_da_stage_reward_base_v1(stage, full, producer_collateral, g), floor);
         // A-6: the accuser's free half — a seat whose 500‰ is full of locks can still accuse, and no
         // bond accuses past its collateral (review M1: courts and the one ledger counted). Through
@@ -13908,7 +13935,9 @@ impl PalwFoldReadV1<'_> {
         // the 2M row's seat lock came to 119.19x the collateral any genesis bond posts, so no panel
         // could ever bind that class. Above it the term is what `reserved` already is.
         let mut facts = if self.extras.audit_2026_09_23_active {
+            // ADR-0160 stage 3 (F1): at the claim's full weight (`reserved × ρ`; today's at ρ = 1).
             crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash)
+                .at_full_weight_v1(crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(self.params).scale_of(claim))
         } else {
             crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim_pre_2026_09_23(claim, slash)
         };
@@ -13934,7 +13963,9 @@ impl PalwFoldReadV1<'_> {
     /// Both fences are R-core+ prerequisites; without the safety fold the reserved rights stand in.
     fn rcore_fraud_facts(&self, claim: &PalwClaimStateV2) -> crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
         let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
-        let mut facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash);
+        // ADR-0160 stage 3 (F1): at the claim's full weight (`reserved × ρ`; today's at ρ = 1).
+        let mut facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash)
+            .at_full_weight_v1(crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(self.params).scale_of(claim));
         facts.extra_economic_rights_sompi = match self.extras.economic_safety {
             Some(safety) => self.claim_realizable_rights_v1(claim, &safety).max(claim.rights_reserved),
             None => claim.rights_reserved,
@@ -14101,7 +14132,9 @@ impl PalwFoldReadV1<'_> {
     /// S-SPEC §2's `claim_g_v1` is the shared form S-3 lands for the licence arms.
     fn rcore_lock_required_v1(&self, claim: &PalwClaimStateV2, basis_k: u8) -> u128 {
         let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
-        let mut facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash);
+        // ADR-0160 stage 3 (F1): at the claim's full weight (`reserved × ρ`; today's at ρ = 1).
+        let mut facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash)
+            .at_full_weight_v1(crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(self.params).scale_of(claim));
         if let Some(safety) = self.extras.economic_safety {
             facts.extra_economic_rights_sompi = self.claim_realizable_rights_v1(claim, &safety).max(claim.rights_reserved);
         }
@@ -15315,6 +15348,8 @@ pub fn palw_panel_valid_lock_frame_v1(
         rcore: params.rcore_plus_active_at(now_daa).then(|| crate::palw_panel_v2::PalwRcoreSeatFilterV1 {
             eligibility: 0,
             ceiling_permille: params.fp_max_exposure_ratio_permille(),
+            // ADR-0160 stage 3 (F1): `G` at the claims' full weight in the held surplus.
+            gain_scale: crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(params),
             // Lane V02 (post-launch): the bind's own split room, at the binding block's DAA.
             resolved_locks_off_ceiling: params.final_lock_full_collateral_active_at(now_daa),
             // Lane V02 (review HIGH): the accuser reserve the bind's `gate_room` keeps (0 below).
@@ -19256,10 +19291,10 @@ impl<'a> TransitionBuilder<'a> {
         // priced the locks with, or its acceptance records' before one: the S-4 review's G freeze —
         // never recomputed here from this block's live inputs), so `G = g_res + escrowed_reward`
         // survives the claim record. Past `palw_rcore_plus` only.
-        let rcore_row = self
-            .params
-            .rcore_plus_active_at(now_daa)
-            .then(|| (claim.rcore.licence_door, claim.rcore.basis_k, palw_claim_frozen_g_res_v1(claim)));
+        let rcore_row = self.params.rcore_plus_active_at(now_daa).then(|| {
+            let scale = crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(self.params);
+            (claim.rcore.licence_door, claim.rcore.basis_k, palw_claim_frozen_g_res_v1(&scale, claim))
+        });
         let attribution = self.extras.offence_attribution_active;
         let segment_count = self
             .state

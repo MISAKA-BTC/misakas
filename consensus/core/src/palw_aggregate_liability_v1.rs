@@ -122,6 +122,29 @@ pub struct PalwCapacityStepOffsetV1 {
 pub const PALW_T12_CAPACITY_STEPS_V1: &[PalwCapacityStepOffsetV1] =
     &[PalwCapacityStepOffsetV1 { after_daa: 0, rho: 1, q_credit_permille: 0 }];
 
+/// **ADR-0160 stage 3 (rcore/cap-s1): the first capacity flag day's schedule — a FIXED ρ = 10, credited**
+/// (`q_credit = q_seat`: a credited floor claim commits `⌈E/10⌉` and reaches `Final` only through its
+/// audit, D-23). Never dynamic: a later ρ is its own flag day's appended step
+/// ([`palw_capacity_step_append_v1`], `Params`' `PALW_T12_CAPACITY_RHO25_STEP_2_V1` …).
+pub const PALW_T12_CAPACITY_STEPS_RHO10_V1: &[PalwCapacityStepOffsetV1] =
+    &[PalwCapacityStepOffsetV1 { after_daa: 0, rho: 10, q_credit_permille: PALW_CAPACITY_Q_SEAT_PERMILLE_V1 }];
+
+/// **ADR-0160 stage 3: set step `slot` of an armed F-L value** (2-based — the fork id's
+/// `palw_capacity_aggregate_liability_step_<slot>`) to `(at, ρ, q_seat)`, dropping every later step — the
+/// one mutation a ready ρ variant's flag-day entry makes. `at = None` (or `never()`) drops the step and
+/// every later one: the entry set back to dormant. A value that is absent or carries fewer than
+/// `slot − 1` steps is left alone (the entry's `set` refuses to ARM a step there, loudly).
+pub fn palw_capacity_step_append_v1(value: Option<&mut PalwCapacityLiabilityV1>, slot: usize, at: Option<ForkActivation>, rho: u32) {
+    let Some(value) = value else { return };
+    if slot < 2 || value.steps.len() < slot - 1 {
+        return;
+    }
+    value.steps.truncate(slot - 1);
+    if let Some(at) = at.filter(|at| *at != ForkActivation::never()) {
+        value.steps.push(PalwCapacityStepV1 { from_daa: at.daa_score(), rho, q_credit_permille: PALW_CAPACITY_Q_SEAT_PERMILLE_V1 });
+    }
+}
+
 impl PalwCapacityLiabilityV1 {
     /// The value armed at `activation` over a schedule written relative to it.
     pub fn of_schedule_v1(activation: ForkActivation, schedule: &[PalwCapacityStepOffsetV1]) -> Self {

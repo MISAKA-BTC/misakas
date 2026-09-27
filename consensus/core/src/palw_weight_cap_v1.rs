@@ -301,6 +301,60 @@ pub fn palw_claim_weight_reservation_of_v1(
     raw_w.div_ceil(u128::from(palw_capacity_rho_at_v1(params, accepted_daa)))
 }
 
+/// **ADR-0160 stage 3 (F1): what `G`'s weight term needs of the params, in a `Copy` form** — F-W's
+/// height and F-L's schedule (at most [`crate::palw_aggregate_liability_v1::PALW_CAPACITY_MAX_STEPS_V1`]
+/// steps), so every reader of a claim's fraud gain — the fold, the panel draw's seat filter, admission,
+/// the producer's facts, the shadow — scales it alike without holding the params.
+///
+/// **Why** (stage 1's finding F1): F-W reserves `⌈w/ρ⌉` for an attempt claim accepted past it, and every
+/// `G` read the reservation as the claim's weight term — at ρ > 1 an uncredited claim's seat lock and
+/// every conviction's `L` would have fallen by ρ with it, and AS-2's credited discount would have applied
+/// twice. A fraudulent `Final` inserts the claim's WEIGHT, not its collateral reservation, so `G` reads
+/// `reserved × ρ` (≥ `w`, the ceiling's rounding up): today's at any ρ, and AS-2 alone discounts a
+/// credited claim's lock. At ρ = 1 — every shipped preset, and stage 1 — the scale is 1, byte for byte.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwCapacityGainScaleV1 {
+    weight_cap_from: Option<u64>,
+    liability_from: Option<u64>,
+    steps: [(u64, u32); crate::palw_aggregate_liability_v1::PALW_CAPACITY_MAX_STEPS_V1],
+    len: u8,
+}
+
+impl PalwCapacityGainScaleV1 {
+    /// The scale `params` define (the identity where F-W or F-L is not armed).
+    pub fn of(params: &PalwStateParamsV2) -> Self {
+        let mut scale = Self { weight_cap_from: params.capacity_weight_cap_from_daa(), ..Self::default() };
+        if let Some(value) = params.capacity_liability()
+            && value.activation != crate::config::params::ForkActivation::never()
+        {
+            scale.liability_from = Some(value.activation.daa_score());
+            for (slot, step) in scale.steps.iter_mut().zip(value.steps.iter()) {
+                *slot = (step.from_daa, step.rho.max(1));
+            }
+            scale.len = value.steps.len().min(crate::palw_aggregate_liability_v1::PALW_CAPACITY_MAX_STEPS_V1) as u8;
+        }
+        scale
+    }
+
+    /// **The ρ F-W divided `claim`'s reservation by** — its acceptance DAA's step for an ATTEMPT claim
+    /// accepted past F-W ([`palw_claim_weight_reservation_of_v1`]'s own condition and ρ), 1 otherwise.
+    pub fn scale_of(&self, claim: &PalwClaimStateV2) -> u32 {
+        let accepted = claim.accepted_daa;
+        if !matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt)
+            || !self.weight_cap_from.is_some_and(|from| accepted >= from)
+            || !self.liability_from.is_some_and(|from| accepted >= from)
+        {
+            return 1;
+        }
+        self.steps[..usize::from(self.len)].iter().rev().find(|(from, _)| *from <= accepted).map_or(1, |(_, rho)| *rho)
+    }
+
+    /// **`G`'s weight term for `claim`**: `reserved × ρ` (today's `reserved` at ρ = 1).
+    pub fn gain_reserved(&self, claim: &PalwClaimStateV2) -> u128 {
+        claim.reserved.saturating_mul(u128::from(self.scale_of(claim)))
+    }
+}
+
 /// **ρ in force at `daa`** — the F-L ramp's step there (`Params::palw_capacity_aggregate_liability`),
 /// at least 1; 1 where the fence is not armed or not yet active (every shipped preset). The one reading
 /// every stage-1 ρ-scaled capacity term shares: the weight reservation, the class room and the

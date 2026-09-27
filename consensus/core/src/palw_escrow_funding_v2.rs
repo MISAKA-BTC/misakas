@@ -322,9 +322,13 @@ pub fn palw_escrow_term_v2(params: &PalwStateParamsV2, accepted_daa: u64, escrow
         let rho = crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(params, accepted_daa);
         return u128::from(escrowed_reward).div_ceil(u128::from(rho)).min(option_a);
     }
+    // Stage 3 (D-18): past the audit door a class the door does not credit is not credited here either —
+    // the sampled `m*(q)` would cut its commitment with nothing refusing its fraud before payment.
+    let creditable = !params.capacity_audit_active_at(accepted_daa)
+        || crate::palw_audit_door_v1::palw_capacity_class_creditable_v1(params, class_id);
     palw_monetary_prelicense_risk_v2(
         escrowed_reward,
-        params.capacity_escrow_credit_at_v1(accepted_daa).filter(palw_escrow_credit_applies_v1),
+        params.capacity_escrow_credit_at_v1(accepted_daa).filter(palw_escrow_credit_applies_v1).filter(|_| creditable),
         palw_claim_class_attributable_v1(params, class_id),
         params.capacity_escrow_conviction_floor_at_v1(accepted_daa, u128::from(escrowed_reward)),
         params.fp_max_exposure_ratio_permille(),

@@ -640,7 +640,7 @@ fn g_freeze_every_conviction_reads_the_licence_time_gain() {
     open_a_pair(&mut c, b, 0x6A_1000);
     let (e_a, e_b) = (c.claim(&a).escrowed_reward, c.claim(&b).escrowed_reward);
     assert!(live_g_res(&c, &a) > g_a && live_g_res(&c, &b) > g_b, "the live gain has moved (the pair's s, the lane's R)");
-    assert_eq!(palw_claim_g_v1(&c.s, &a).unwrap().g_res, g_a, "the frozen gain has not");
+    assert_eq!(palw_claim_g_v1(&c.s, &Default::default(), &a).unwrap().g_res, g_a, "the frozen gain has not");
 
     // Pre-Final: a seat of A's panel that signed nothing accuses (its session pauses the licensed claim).
     c.step(&[accuse(a, seats[3].0, 0)]);
@@ -708,6 +708,6 @@ fn g_freeze_every_conviction_reads_the_licence_time_gain() {
     let retire = c.s.deadline_of(&b).expect("the retirement");
     c.step_at(retire + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     assert!(c.s.claim(&b).is_none(), "the claim retired");
-    let frozen = palw_claim_g_v1(&c.s, &b).expect("the row outlives the claim");
+    let frozen = palw_claim_g_v1(&c.s, &Default::default(), &b).expect("the row outlives the claim");
     assert_eq!((frozen.g_res, frozen.escrowed_reward), (g_b, e_b), "post-retirement: the licence-time G");
 }

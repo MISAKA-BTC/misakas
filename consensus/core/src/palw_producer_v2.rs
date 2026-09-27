@@ -132,7 +132,12 @@ pub fn palw_producer_facts_apply_held_ledger_v1(
         return;
     };
     if let Some(bond_facts) = facts.bond.as_mut() {
-        bond_facts.accuser_exposure = crate::palw_state_v2::palw_accuser_ledger_v1(state, key, Some(floor));
+        bond_facts.accuser_exposure = crate::palw_state_v2::palw_accuser_ledger_v1(
+            state,
+            &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(state_params),
+            key,
+            Some(floor),
+        );
     }
 }
 

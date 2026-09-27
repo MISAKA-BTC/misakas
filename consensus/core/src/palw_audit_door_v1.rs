@@ -120,6 +120,15 @@ pub fn palw_capacity_claim_credited_v1(params: &PalwStateParamsV2, claim: &PalwC
         && palw_capacity_credited_at_v1(params, claim.accepted_daa, &claim.class_id, claim.escrowed_reward)
 }
 
+/// **May a claim of `class_id` be credited?** (ADR-0160 D-18, stage 3.) The floor only: its audit is a
+/// CPU replay every operator card runs; a model class's audit is a GPU replay whose operator capacity
+/// (`A_max(class)`) is not measured — crediting 8k before it would fill the one backlog the floor's
+/// credited claims wait on. A model class is priced as today at any ρ (its escrow `E`, its seats'
+/// duty and lock); it joins by a later credit-only step with its own `A_max`.
+pub fn palw_capacity_class_creditable_v1(params: &PalwStateParamsV2, class_id: &Hash64) -> bool {
+    *class_id == params.base_class_id()
+}
+
 /// [`palw_capacity_claim_credited_v1`] on a claim's acceptance facts — the escrow term's reading, which
 /// holds the DAA, the class and the reward but not the record (every claim it prices with a reward is an
 /// attempt: a free prompt escrows none).
@@ -127,6 +136,7 @@ pub fn palw_capacity_credited_at_v1(params: &PalwStateParamsV2, accepted_daa: u6
     params.capacity_audit_active_at(accepted_daa)
         && escrowed_reward > 0
         && crate::palw_escrow_funding_v2::palw_claim_class_attributable_v1(params, class_id)
+        && palw_capacity_class_creditable_v1(params, class_id)
         && params
             .capacity_escrow_credit_at_v1(accepted_daa)
             .is_some_and(|credit| crate::palw_escrow_funding_v2::palw_escrow_credit_applies_v1(&credit))

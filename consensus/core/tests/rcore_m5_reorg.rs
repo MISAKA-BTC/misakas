@@ -539,7 +539,7 @@ impl T07Oracle {
             if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) && !was_final {
                 cov.finals += 1;
                 let row = s.vesting_row(id).unwrap_or_else(|| panic!("DAA {now}: claim {id} went Final with no vesting row (V-2)"));
-                let g = palw_claim_g_v1(s, id).expect("a Final claim's G");
+                let g = palw_claim_g_v1(s, &Default::default(), id).expect("a Final claim's G");
                 assert_eq!(g.g_res, claim.rcore.g_res_sompi, "DAA {now}: the row's G_res is the one the licence froze");
                 self.rows.insert(
                     *id,

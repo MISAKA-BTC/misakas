@@ -742,6 +742,7 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
             // their charge; below it the shipped count.
             crate::palw_state_v2::palw_accuser_ledger_v1(
                 state,
+                &crate::palw_weight_cap_v1::PalwCapacityGainScaleV1::of(state_params),
                 &bond_key,
                 crate::palw_state_v2::palw_v02_held_charge_floor_v1(
                     state_params,
