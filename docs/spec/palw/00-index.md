@@ -1,10 +1,10 @@
 # PALW specification: index
 
-> **Skeleton (Phase 1, 2026-09-27).** The chapters below have their purposes, section outlines, the
-> rules still to be written (TODO items with their sources) and code pointers. Phase 2 writes the
-> normative text from the ADRs **and the current code**. Where the two disagree, the code is the
-> truth for what the rule is, and the disagreement goes to [divergences.md](divergences.md).
-> [INDEX.md](../../INDEX.md) explains how Spec, Design, RFC and ADR fit together.
+> **Normative (Phase 2, 2026-09-27).** The chapters were written from the ADRs and from the code at
+> `55a7be02f`. Where the two disagreed, the chapters state what the code does, and the disagreement is
+> listed in [divergences.md](divergences.md). [INDEX.md](../../INDEX.md) explains how Spec, Design,
+> RFC and ADR fit together, and [adr/INVENTORY.md](../../adr/INVENTORY.md) records which ADRs each
+> chapter slimmed.
 
 ## 1. What this specification is
 
@@ -81,20 +81,19 @@ item 5 is the rule for shrinking it. Chapter 06 states how far that has gone.
 
 - **Keywords.** MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119. A rule that only a producer
   or a node follows, and that no validator checks, is marked *(node policy)*.
-- **Rule IDs.** Each rule has an ID `PALW-<chapter code>-<n>`, assigned when its text is written in
-  Phase 2 and never reused. The chapter codes are PR 01, ST 02, CL 03, EX 04, WK 05, EL 06, LC 07,
-  VF 08, CT 09, CO 10, FP 11, XL 12, FC 13, ND 14, MK 15, NP 16.
+- **Rule IDs.** Each rule has an ID `PALW-<chapter code>-<n>`, stable and never reused. IDs are not in
+  file order. The chapter codes are PR 01, ST 02, CL 03, EX 04 (and 04a), WK 05, EL 06, LC 07, VF 08,
+  CT 09, CO 10, FP 11, XL 12, FC 13, ND 14, MK 15, NP 16.
 - **Sections.** Each section closes with **Activation** (one row per network), **Sources** (ADRs and
   clauses) and **Code** (paths and functions), as in [templates/spec.md](../../templates/spec.md).
 - **Code paths** are relative to the repository root. `consensus/core/src/` is abbreviated `core/`,
   and `consensus/src/` is abbreviated `cons/`.
-- **Activation rows in this skeleton** follow `palw_t12_arm_every_rule_from_genesis`: every rule at
-  DAA 0 except those it names, plus the two post-launch lists. Phase 2 checks every fence against
-  `palw_t12_shipped_params()` (and the drill-param tests in `params.rs`) before a row counts as
-  normative.
-- **Sources not on this branch.** ADR-0152 (R-core+ v3.1) is on `docs/adr-0152-v31-postedits`, and
-  ADR-0160 (claim capacity v3) is on `rcore/cap-spec2`. They are cited by clause, for example
-  "0152 SW-8". [adr/INVENTORY.md](../../adr/INVENTORY.md) has the plan to land them.
+- **Activation rows** follow `palw_t12_arm_every_rule_from_genesis`: every rule at DAA 0 except those
+  it names, plus the two post-launch lists (16 §16.2–§16.4). A rule that the RC base arms at a height is
+  moved to DAA 0 on testnet-12 by that function's second pass.
+- **ADR-0152** (R-core+ v3.1) is cited by its own rule labels (for example "0152 SW-8"). Its full text is
+  in [design/palw/archive/0152](../../design/palw/archive/0152/README.md). **ADR-0160** (claim capacity
+  v3) is imported after the int-6 integration, and 10 §10.10 is its placeholder.
 
 ## 6. Terms carried by code types
 
@@ -111,4 +110,4 @@ item 5 is the rule for shrinking it. Chapter 06 states how far that has gone.
 | panel draw policy | `core/palw_panel_v2.rs` `PalwPanelDrawPolicyV1` |
 | vesting row | `core/palw_vesting_v1.rs` `PalwVestingRowV1` |
 
-A glossary with one definition per term is written in Phase 2, in this file.
+The rules that use each term define it where it is first used.

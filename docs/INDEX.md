@@ -180,6 +180,6 @@ classifies them.
 
 | Phase | Scope | State |
 | --- | --- | --- |
-| 1 | This page, the templates, the ADR inventory, the PALW spec chapter skeletons | this change |
-| 2 | Write the PALW spec chapters from the ADRs and the code, list the divergences, move the rationale into `design/palw/`, slim the PALW ADRs, move `STATUS-AUDIT-*` into `audit/` | after Phase 1 is reviewed |
+| 1 | This page, the templates, the ADR inventory, the PALW spec chapter skeletons | done (2026-09-27) |
+| 2 | Write the PALW spec chapters from the ADRs and the code, list the divergences, move the rationale into `design/palw/`, slim the PALW ADRs, move `STATUS-AUDIT-*` into `audit/` | done (2026-09-27); ADR-0160 waits for int-6 |
 | 3 | The same for EVM, DNS-BFT, bridge, network and wallet | after Phase 2 |

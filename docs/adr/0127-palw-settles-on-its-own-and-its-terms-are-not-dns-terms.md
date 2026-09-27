@@ -79,3 +79,9 @@ not layered on it.
 ## 5. Tests
 
 The guard and its comment-and-literal stripper.
+
+## Links
+
+- Spec: [01 Principles and scope](../spec/palw/01-principles.md) PALW-PR-5 · [07 Claim lifecycle](../spec/palw/07-claim-lifecycle.md) §7.6 (PALW-LC-20…24)
+- Design: [design/palw/principles.md](../design/palw/principles.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

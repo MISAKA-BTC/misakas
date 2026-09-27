@@ -6,7 +6,7 @@ chapter.
 
 | Domain | Folder | State |
 | --- | --- | --- |
-| PALW | [palw/](palw/00-index.md) | Skeleton (Phase 1). The chapters are written in Phase 2 |
+| PALW | [palw/](palw/00-index.md) | Written (Phase 2, 2026-09-27): chapters 01–16 and 04a, plus [divergences](palw/divergences.md) |
 | EVM | `evm/` | Phase 3 |
 | DNS-BFT | `dns-bft/` | Phase 3 |
 | bridge | `bridge/` | Phase 3 |
