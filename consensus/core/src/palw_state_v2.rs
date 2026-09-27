@@ -15244,7 +15244,7 @@ pub fn palw_network_refusal_registers_v1(
 ) -> bool {
     params.capacity_network_active_at(now_daa)
         && palw_network_refusal_wants_a_unit_v1(refused)
-        && !state.network_demand_of_v1(bond, class_id).is_some_and(|until| until >= now_daa)
+        && state.network_demand_of_v1(bond, class_id).is_none_or(|until| until < now_daa)
 }
 
 /// **A `Provisional` attempt claim with only the fields a price reads** — the class, the bond, the
