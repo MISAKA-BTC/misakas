@@ -2224,7 +2224,7 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
         };
         let bonds = &self.bonds;
         // `palw_panel_bonds_judging_v1`'s predicates, over the census: the floor was taken at `new`.
-        let structural = |judges: &[bool], i: usize| judges[i] && !registered_by.is_some_and(|by| bonds[i].bond.registered_daa > by);
+        let structural = |judges: &[bool], i: usize| judges[i] && registered_by.is_none_or(|by| bonds[i].bond.registered_daa <= by);
         let not_executor = |b: &PalwStakeCensusBondV1| {
             !(*b.key == claim.bond || b.bond.operator_id == executor.operator_id || b.bond.pubkey == executor.pubkey)
         };

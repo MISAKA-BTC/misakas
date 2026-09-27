@@ -11190,6 +11190,11 @@ impl VirtualStateProcessor {
     /// and the shard fence. So the fold's retry verdict (step 2e′) asks the draw's question on the
     /// draw's inputs. Chain data only (headers, GHOSTDAG, reachability), so every node — reorg, IBD, a
     /// pruning-proof sync — carries one answer.
+    ///
+    /// `palw_transition_extras_for` builds the same value from its one anchor reading
+    /// ([`Self::palw_sw8_chain_anchor_v1`], [`Self::palw_sw8_draw_points_of_anchor_v1`]); this spelling is the
+    /// tests' reading of it.
+    #[cfg(test)]
     pub(super) fn palw_sw8_draw_inputs_for(
         &self,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
@@ -11208,6 +11213,7 @@ impl VirtualStateProcessor {
 
     /// [`Self::palw_sw8_draw_inputs_for`] without its fence: the draw points of any block that anchors
     /// past `palw_rcore_plus` — what lane A's displacement test holds to the anchor walk's own fact.
+    #[cfg(test)]
     pub(super) fn palw_sw8_draw_points_v1(
         &self,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
