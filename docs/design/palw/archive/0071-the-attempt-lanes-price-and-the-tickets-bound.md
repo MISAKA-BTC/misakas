@@ -1,0 +1,423 @@
+> **Archived verbatim from `docs/adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md`** on 2026-09-27, when the ADR was cut to a short decision
+> record ([INDEX.md](../../../INDEX.md) §4). Not normative. The decision record is
+> [ADR-0071](../../../adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md); the rules are in [spec/palw/06](../../../spec/palw/06-eligibility-and-block-production.md), [spec/palw/08](../../../spec/palw/08-verification.md); the reasoning is summarised in [design/palw/lottery.md](../lottery.md). Relative links were rewritten to resolve from here.
+
+# ADR-0071 — The attempt lane's price, the ticket's bound, and who may judge a class
+
+Status: **IMPLEMENTED WITH DECISION 1 WITHDRAWN (2026-09-02; proposed 2026-09-01).**
+Decision 1's target freeze shipped to the public testnet, was measured to remove the only control on
+block interval, and is reverted — see §3. Decisions 1a, 2 and 3 stand (Decision 2's pwu divisor is
+superseded by ADR-0072, which takes the nonce out of the ticket altogether; the bucket itself
+stands as the anchor's position field). The rest of this header
+records the other two places this ADR was wrong when written, on the same principle: the wrong
+version stays beside the right one.
+
+All Decisions are in code, and two
+of them are amended below because implementing them showed the original text was wrong — Decision 1a
+(an absolute retarget expectation would have reintroduced the unbounded walk three audit findings
+closed) and Decision 2's pwu formula (it priced the work the bucket covers, not the work the search
+required). §5's claim about what a false capability declaration costs was also wrong and is
+corrected in place. The wrong versions are kept beside the right ones, because the reasoning that
+produced them is the reasoning a future reader will produce again. Written against the mainnet-premise audit of ADR-0068 Phase 2,
+whose remaining findings do not fit inside a local fix: each one contradicts a decision some earlier
+ADR made deliberately, and says so in that decision's own comment. Builds on ADR-0038 (PALW is the
+consensus work), ADR-0045 (`DerivedV1`, the class economy), ADR-0054/0056 (share follows
+production), ADR-0060 (liveness doctrine), ADR-0065 (a bond must be earned and a seat must be
+someone else), ADR-0066 (the heartbeat lane out of header bits) and ADR-0067 (classes are chain
+data, kernels are the build). Consistent with the standing doctrine that consensus changes ship by
+activation, never by re-genesis.
+
+> **Security amendment appended (2026-09-02)** — see the last section: Decision 3's `capable_classes` is bounded and replaces; each declared class reserves exposure; a seat is drawn for a class only after a positive chain fact (production on it); §5's open item gets a chain-checkable form without judging silence.
+
+## 1. Why these four are one ADR
+
+The audit's premise was the user's: **a Qwen block's weight is given, and weight must not depend on
+hash computation.** Measured against that premise, live fork choice already passes — the attempt
+lane weighs a constant `1 << 20`, the receipt lane weighs zero, the heartbeat lane weighs
+epsilon = 1, and V2 admits no other algorithm, so `calc_work(bits)` is unreachable on a running V2
+chain. What does *not* pass is everything downstream of `bits`: the pruning proof priced history by
+it (fixed, `cbe5c002`), the lottery still meters *tries* rather than *executions*, the class
+difficulty feeds back through the same field, and a claim's collateral was priced on that difficulty
+(fixed, this train).
+
+The four items below are what remain. They share one shape: **a quantity that should describe
+LLM work is derived from, or bounded by, the hash lottery** — and in three of the four the code
+comment at the site states the coupling as an intentional choice. That makes them ADR material
+rather than patches, and it makes them one ADR rather than four, because Decision 1 and Decision 2
+move the same number in opposite directions and shipping either alone regresses the other.
+
+## 2. What already landed, so the scope is honest
+
+Recorded here because a reader arriving at this ADR needs to know which half of the audit is code
+and which is proposal:
+
+* **The pruning proof no longer prices history by `bits`.** `blue_work_diff` took
+  `.max(self.level_work)` on the attempt-lane arm, so adopting a heavier history was bought with
+  proof-of-work levels. Removed (`cbe5c002`), with a test asserting `level_work(1, 225)` is
+  `attempt × 4096` — the inequality that made the `.max()` load-bearing. Level *attainment* still
+  requires grinding, so history adoption is grinding-priced linearly rather than exponentially;
+  Decision 1 is what removes the remainder.
+* **A claim's collateral is no longer priced by difficulty.** `reserved` was
+  `attempt.pwu × slash_value_per_pwu`, and under `DerivedV1` `attempt.pwu` is
+  `expected_attempts(class_target) × pwu_per_inference` — so a class that retargeted harder reserved
+  more against unchanged collateral and locked its own producers out for succeeding. On the floor
+  class that is the chain stopping, because a refused attempt on a V2 network is
+  `StatusDisqualifiedFromChain` and DAA only advances when blocks are produced. Now
+  `palw_exposure_pwu_v1`: one inference's worth, at every site that prices it — admission's ceiling,
+  both state writes, the producer's own headroom prediction, and the genesis bind-window gate.
+* **The 120 s cadence is a set of fields, applied in one place.** `palw_v2_params_on_base` wrote
+  `target_time_per_block` alone, leaving the DAG parameters and the DNS windows counted for the
+  base's block rate. At 120 s an inherited `PRODUCTION_DNS_PARAMS.unbonding_period_blocks` states
+  14 days and means about 46 years, and `bond_spend_gate` enforces it in consensus. Now
+  `Params::with_two_minute_cadence` / `with_palw_v2_depths`, gated in `validate_palw_v2`.
+* **The court's close binds the registered class.** `adjudicate_close_proof_v2` accepted a close
+  whose `shape_profile` was not the class under judgement.
+* **The GDN replay has a ceiling on both arms**, not one.
+
+## 3. Decision 1 — The attempt lane's price comes off `header.bits`
+
+**What is true today.** ADR-0066 took the *heartbeat* lane's price out of `bits`, and its comment
+records exactly why: `bits` is the field the difficulty window averages, so a window of rows priced
+by their own lane raises the global demand to that lane's price and no other block can re-enter.
+The substitution lives in `consensus/pow/src/lib.rs` — the one place every PoW path goes through —
+and it covers `POW_ALGO_ID_HEARTBEAT_V1` only. The attempt lane, `POW_ALGO_ID_PALW_COMMITTED_V2`,
+still reads its target from `header.bits`, and `pre_pow_validation.rs` still enforces
+`header.bits == expected_bits` against the window for it.
+
+**Why that is the same defect.** The attempt lane's *weight* is already a constant, so the coupling
+does not show up in fork choice. It shows up in **admission**: `bits` sets the class target, the
+class target sets `expected_attempts`, and `expected_attempts` is the number of hash tries an
+inference must be paired with. A network that wants "weight does not depend on hash computation"
+cannot leave the *rate* of LLM work denominated in a hash difficulty that a window of blocks
+feeds back into.
+
+**Decision.** Extend the constant-target substitution in `consensus/pow/src/lib.rs` to
+`POW_ALGO_ID_PALW_COMMITTED_V2`, and add the matching bits lock in `pre_pow_validation.rs` so a V2
+header's `bits` is a fixed network value rather than a window output. The per-class lottery keeps
+its own target — `class_ticket_v2` against `state.class_target`, which is chain state and not a
+header field — so difficulty stays per-class and stays retargeted, but it stops riding the field
+the global window averages.
+
+### Decision 1 — WITHDRAWN after Relaunch 5 measured it (2026-09-02)
+
+**Shipped, run on the public testnet, and taken back out.** The freeze is reverted; what remains of
+this section is the record of why it was wrong, because the argument for it is one a reader will
+reconstruct.
+
+The premise was the user's: *block-generation weight must not depend on hash computation.* That was
+**already satisfied before this Decision** — ADR-0068 Phase 1 made an algo-6 block's blue work the
+constant `PALW_ATTEMPT_BLUE_WORK_LOG2`, so `bits` bought no weight. This Decision then froze the
+lane's *target* as well, on the reasoning that "a V2 network's throttle is the per-class ticket
+lottery, so the global target has no remaining job."
+
+**The codebase says what its remaining job is, in the function this Decision left untouched.**
+`retarget_over_span_v1`'s own doc:
+
+> `Σ_c expected_c = total`, so this loop only ever redistributes share BETWEEN classes. **Block
+> interval stays `DifficultyManager::calculate_difficulty_bits`'s job**, and the two retargets
+> cannot fight each other over one cadence.
+
+…and, three lines further on, that a single-class network is a **deliberate no-op** for it: at
+1000‰ with every block in the class, observed equals expected and the target never moves.
+
+So on a network where one class produces — which is every V2 network at launch, and was Relaunch 5
+for its whole first half hour — freezing `bits` left *nothing at all* controlling the block
+interval.
+
+**Measured on the live network, 2026-09-02.** The floor produced 47/54/52/53/46/41 blocks per minute
+across six consecutive one-minute samples against a target of **0.5/min** — flat, not converging.
+QWEN36 produced 0 blocks in 25 minutes and A16 produced 2, because a 33.27 GiB artifact on a 23 GB
+host runs at disk speed, so the census was single-class exactly as the no-op case describes. Two
+consequences followed: every claim voided at `BindTimeout` with its escrow destroyed, and the public
+entry node could never leave `CandidateReview` — it IBD-ed continuously, and each IBD re-armed the
+review floor through the `!ever_ready()` clause, which is the failure `flow_context.rs` already
+documents with its own measurement ("22 IBDs in 16 minutes").
+
+**What is kept.** Decision 1a's `converge_idle_target_v1`, Decision 2 and Decision 3 all stand; none
+of them depended on the freeze. `PALW_V2_ATTEMPT_BITS` survives as a documented constant with the
+test that pins it to `MAX_DIFFICULTY_TARGET` and to both V2 genesis blocks — that equality is worth
+asserting even though nothing enforces it any more.
+
+**The general lesson, since this ADR has now been wrong three times.** Each error was the same
+move: reasoning from what a value is *called* rather than from what reads it. "The lane's price
+comes from `bits`" was true and irrelevant; what mattered was the *other* caller of the same field.
+A Decision that removes a mechanism should have to name every consumer of that mechanism first.
+
+### Decision 1a — AMENDED at implementation: the expectation stays relative, and the repair is a ceiling
+
+**This ADR's first draft said the retarget's expectation must become absolute — `share × DAA span`
+rather than `share × realized total` — and that was wrong.** Recorded rather than quietly replaced,
+because the reasoning that produced it is the reasoning a future reader will produce again.
+
+`retarget_over_span_v1`'s renormalization is load-bearing. Three separate audit findings (H1, and
+F1/F10/F27) were the same shape: an expectation that does not sum back to the realized total gives
+*every* class the same one-directional multiplier at every boundary, with `max_factor` bounding each
+step and nothing bounding the walk. It was measured once at 4^12 over twelve boundaries, ending at
+a target of zero, from which `ZeroPreviousTarget` rejects every block and no node can rejoin. An
+absolute expectation reintroduces exactly that whenever the network produces more or fewer blocks
+than the span implies, which is always.
+
+The diagnosis was also narrower than the draft claimed. A class that produces *any* blocks is
+measured correctly: at 500‰ each, A producing 100 and B producing 20 gives A `observed 100 >
+expected 60` and B `observed 20 < expected 60`, so B eases. The blind spot is exactly one case wide
+— `observed == 0`.
+
+And that case cannot be repaired by easing. **Silence is not evidence of trying.** The chain sees
+block counts, never attempts, so "locked out" and "nobody ran it" are the same observation; a rule
+that eases on silence lets a registrant buy cadence with patience instead of work — register, wait
+for the target to walk to trivial, then take the class's whole epoch budget for free.
+
+**Decision.** An idle class converges toward the price the producing classes are actually paying,
+and never past it. `floor_price` is the hardest target any class that produced in this span holds.
+A class harder than that is paying more than anyone and losing, so it converges toward that price,
+`max_factor`-bounded per boundary, and stops there. A class already easier than that is not locked
+out and does not move. Nothing is ever priced below what a producing class pays, so patience buys
+the incumbent's terms and never better ones — which is what work buys.
+
+This is arithmetically independent of `retarget_over_span_v1`: an idle class is outside the
+`Σ expected = Σ observed` sum by construction, so the ceiling cannot disturb any producer's
+expectation. It is also the missing half of a rule the codebase already states elsewhere — an
+entrant's initial target is the base class's, "priced like the incumbent rather than by its
+registrant" — which was true at registration and never tracked the incumbent again.
+
+Implemented as `palw_class_daa::converge_idle_target_v1`, called from the epoch-close retarget where
+the `continue` used to be.
+
+## 4. Decision 2 — The ticket is bound to executions, not to tries
+
+**What is true today.** `palw_job_anchor_v1` hashes `(network domain, pre-pow hash, class, bond)`
+and deliberately **not** the nonce. Its own doc states the reasoning: binding the nonce "would price
+one full inference per PoW try", and job grinding by reshuffling the block "costs a full inference
+per try, which is the price the design means to charge." The consequence is measured:
+`palw_ticket_v1` is the first 16 bytes of the PoW digest, the producer sweeps
+`NONCES_PER_TEMPLATE = 4,000,000` nonces against one template, and so **one inference buys four
+million lottery tickets.**
+
+**Why the existing mitigation is not this one.** `palw_admission_v2`'s epoch budget refuses a class
+whose accepted blocks would exceed its share of the epoch, so hashing cannot move cadence *between*
+classes. It can still move producer share *within* a class, and — the part that matters for the
+premise — it means the quantity the chain calls "work" is metered in tries. A chain whose thesis is
+"blocks are paid for by actual LLM inference" cannot have its lottery denominated in a unit the
+inference does not produce.
+
+**Decision.** Two changes that must ship together:
+
+1. Add a **coarse nonce bucket** to `palw_job_anchor_v1`: include `nonce >> k`, so one inference
+   covers exactly `2^k` nonces rather than an unbounded sweep. `k` is a network constant carried by
+   the attempt-work fence, hence in `consensus_params_id`, hence a value two nodes cannot disagree
+   about.
+2. **Reprice `palw_pwu_v1` in executions**: a block's pwu becomes
+   `max(1, expected_attempts(target) >> k) × pwu_per_inference`.
+
+**AMENDED at implementation — the formula in this ADR's first draft was wrong.** It said
+`pwu = 2^k × pwu_per_inference`, which is the work the bucket *covers*, not the work the search
+*required*. The producer runs one execution per bucket and needs `expected_attempts / 2^k` buckets
+on average, so the executions a block cost are the tries divided by the bucket, and the draft's
+formula makes pwu a per-class constant — a class a thousand times harder would weigh exactly the
+same, which deletes the quantity per-class difficulty exists to express. The corrected form still
+removes what the premise objects to: before the bucket, the divisor was effectively `2^64` (one
+execution served an unbounded sweep) while pwu claimed the whole try count, over-stating a block's
+LLM cost by exactly the difficulty.
+
+Floored at one execution, because a block always carries the one inference it commits to; rounding
+a cheap class's work to zero would make its blocks weightless and its share unearnable.
+
+`k` is the whole design surface. `k = 0` is one inference per nonce, which is the honest extreme and
+almost certainly unaffordable. **`k = 22` ships**, and it is today's behaviour made enforceable
+rather than a change to it: `kaspad`'s producer already swept `NONCES_PER_TEMPLATE = 4,000,000`
+against one template, and that constant is node-local, so it bounded honest producers and nobody
+else. At `k = 22` an honest sweep fills exactly one bucket and its economics do not move, while a
+producer that swept 2^40 against one execution now builds an anchor no verifier derives. Lowering it
+is an economic measurement of inference cost against hash cost on the registered classes, and it
+moves by activation like every other rule here.
+
+One consequence is worth stating rather than discovering: at today's shipped targets every class's
+expected tries sit *below* one bucket, so pwu is `pwu_per_inference` for all of them and per-class
+difficulty does not differentiate weight until a class needs more than `2^k` tries per block. That
+is not a loss of information — it is the true statement that, at these difficulties, every block
+costs one inference.
+
+**Interaction with Decision 1, stated because it is the reason these are one ADR.** Decision 1
+removes `expected_attempts` from the *header*'s price; Decision 2 removes it from the *pwu*.
+Shipping Decision 2 alone leaves the class target still feeding the ticket rate through `bits`;
+shipping Decision 1 alone leaves pwu deriving from a target that no longer moves with the lane. The
+`DerivedV1` equality check in admission reads both, so the two must move in one activation.
+
+## 5. Decision 3 — A panel seat must be able to run the class it judges
+
+**What is true today.** `derive_panel_v2_with_maturity` draws seats by bond ticket, excluding the
+executor's bond, operator and key, and filtering on collateral and maturity. It does **not** filter
+on whether the drawn bond can execute the class under judgement — `PalwBondStateV2` carries no
+capability declaration at all (`pubkey`, `operator_id`, `collateral`, `slashed`, `status`,
+`registered_daa`, `payout_payload`, and nothing else).
+
+The V1 job panel has exactly this filter and states the rule the V2 draw is missing: a bond with no
+capability declaration is **excluded, never defaulted**, because "a validator that never declared
+one cannot be assigned to replay a class it may not have, and assigning it anyway would manufacture
+no-shows against honest operators."
+
+**Why it bites now and did not before.** While one floor class held all the weight, every seat could
+run every class by construction. ADR-0068 gives the model tiers 97.8% of cadence, and a 33 GiB
+artifact is not something a seat holds by default — so a panel drawn blind to capability seats
+validators who can only abstain, and a claim that cannot reach quorum voids. `palw_unavailable_abstains`
+turns that into an abstention rather than a false conviction, which is correct and is not a
+substitute: an abstaining panel still fails to license the claim.
+
+**Decision.** Give `PalwBondStateV2` a declared capability set — the class ids whose artifacts the
+operator has staked collateral on being able to run — set at registration and amendable by a
+lifecycle object, and filter the V2 claim-lane draw on it exactly as the V1 job panel filters on
+`runtime_class_id`. Undeclared is excluded, never defaulted.
+
+This is a state-schema change, so it carries the usual freight: a registration object field, a
+lifecycle amendment path, the genesis registry, carriage, IBD and pruning round-trips, and an
+activation. It is named here rather than patched because a capability the chain does not record
+cannot be filtered on, and inventing the record is a design decision about who attests to holding
+an artifact and what it costs to lie.
+
+**AMENDED at implementation, on two points.**
+
+*A node's own registration declares nothing.* At registration a node has proved it holds
+collateral; it has proved nothing about holding a 33 GiB artifact, and it has not yet read which
+classes the chain registers. Declaring there would be volunteering for duty it cannot perform, and
+the duty accounting convicts the seats the draw names. So `kaspad`'s self-registration ships an
+empty set and the operator declares separately — which is also what makes withdrawal work, since an
+operator who deletes an artifact must be able to stop being seated for it rather than choose between
+keeping the disk and being convicted.
+
+*Genesis is where capability is assigned rather than claimed*, for the same reason cadence is. The
+genesis registry has zero slack by construction (`seat_count + 1` bonds, executor excluded), so a
+genesis whose bonds declared nothing would be a network where every claim voids at `BindTimeout`
+with its escrow burned. Genesis bonds therefore declare the classes the genesis registers, and the
+class-registering assembly extends the declarations at the same moment it funds the tiers — the same
+shape as the collateral re-derivation that already sits one line above it.
+
+*And it is not a consensus gate.* ADR-0061 retired the "a genesis must seat a panel" refusal because
+an under-seated genesis is transitional: the heartbeat carries blocks, bonds arrive as transactions,
+licensing begins when the seats do. A class no seat declares is transitional in exactly the same
+way, so refusing it at genesis would re-impose the rule that ADR retired. What is asserted instead
+is a test over the real shipped assembly: every class the card funds has `seat_count + 1` distinct
+operators declaring it.
+
+**What it is not, stated because this ADR's first draft got it wrong.** A capability declaration is
+a claim, not a proof, and **lying about it is not punished on this chain today.** The draft said the
+thing making it expensive to lie is that "a declared seat which cannot serve is a seat that gets
+convicted". That is false here: ADR-0065 D4 turns an `Unavailable` receipt into an abstention rather
+than a conviction, and it is armed on every shipped preset — because silence is not checkable (a
+seat that says nothing is indistinguishable from a seat that was never asked), a doctrine this
+project reached by measurement and does not intend to reverse.
+
+So what a false declaration actually costs is nothing directly, and it costs the *network* a seat
+that can only abstain. What bounds the damage is the redraw — a panel that concludes nothing is
+revived once and binds a second — and what bounds the incentive is that a seat which never concludes
+earns nothing for sitting. That is weaker than "binding on the declarer", and the honest statement
+is that this Decision makes the draw **correct** (it stops seating validators who provably cannot run
+the class) without yet making the declaration **costly**.
+
+Making it costly is a separate question and it runs straight into the silence doctrine: any rule
+that punishes a declared seat for not answering punishes an offline honest operator identically. It
+is named here as the open item rather than assumed away — and it is the reason this Decision is not,
+by itself, a defence against a registrant who declares everything.
+
+## 6. Considered and rejected
+
+* **Leave the attempt lane on `bits` because its weight is already constant.** Rejected: the premise
+  the audit was run against is about the chain's *price*, not only its fork choice, and admission
+  reads the difficulty the window produces. "The coupling is unreachable from fork choice" is a
+  statement about today's lane set, which ADR-0066 already changed once.
+* **Solve the ticket problem by lowering `NONCES_PER_TEMPLATE`.** Rejected: that is a node-local
+  constant in `kaspad`, so it binds honest producers and nobody else. The bound has to be in the
+  anchor, which is consensus.
+* **Filter the panel by asking nodes at draw time whether they hold the artifact.** Rejected: the
+  draw must be a pure function of chain state at the anchor, or two nodes seat different panels for
+  one claim.
+* **Ship Decision 3 as a node-local preference in the producer.** Rejected for the same reason —
+  and because the duty accounting charges exactly the seats the consensus draw names, so a
+  node-local filter changes who shows up without changing who is blamed.
+
+## 7. Invariants to verify at each step
+
+1. **No V2 header's price is read from `bits`.** The substitution is on the algo id in
+   `pow/src/lib.rs`, `expected_bits` is frozen in `pre_pow_validation`, and the fence declares the
+   same constant `validate_palw_v2` demands. **Every producer of a header reads that same source**
+   — the virtual template, the test harness's builder, and the genesis. This one is not a
+   formality: the freeze arrived with three writers still computing `bits` from the difficulty
+   window, so a node built blocks its own header processor rejected with `UnexpectedDifficulty` on
+   its own work. The third writer was `VirtualState::from_genesis`, which is why a V2 network's
+   genesis must itself carry the frozen target and why `validate_palw_v2` now refuses one that does
+   not.
+2. **An idle class can enter, and cannot enter cheaply.** A class priced above every incumbent
+   converges to the incumbent price and stops there; a class already below it does not move; and
+   `Σ expected = Σ observed` is untouched for every class that produced. Asserted as the three
+   cases together, because a rule that only checks the first is the unbounded walk again.
+3. **One inference covers exactly `2^k` nonces.** Two attempts whose nonces differ above bit `k`
+   must have different job anchors; two differing below it must share one. Asserted in both
+   directions, because a test that only checks the first passes for an anchor that ignores the
+   nonce entirely — which is the state this Decision found.
+4. **pwu counts executions.** Below the bucket a tighter target buys no extra pwu; above it, eight
+   times the tries is eight times the pwu. Asserted as both, so a derivation that dropped the
+   difficulty term altogether cannot pass.
+5. **An undeclared bond is never seated**, asserted as a difference — the same registry, anchor and
+   claim, with only the declarations moved, seats a full panel in one case and fails closed in the
+   other. (The companion property a first draft asserted here — that a declared-but-silent seat is
+   convicted — is NOT true on this chain and must not be written as if it were; see §5.)
+6. **Activation, not re-genesis.** Each Decision moves `palw_ruleset_id_v2`; none moves a genesis
+   hash.
+
+## What landed
+
+**Decision 1 and Decision 1a.** The attempt lane's PoW target is substituted on the algo id in
+`consensus/pow/src/lib.rs` (the one place every PoW path goes through, so the pruning proof and
+trusted import cannot price the lane by forgetting to); `pre_pow_validation` freezes `expected_bits`
+so the window does not require a `bits` the PoW check will not use; the virtual template and the
+test harness's header builder read the same fence, and `validate_palw_v2` refuses a V2 network whose
+GENESIS does not carry the frozen target — `VirtualState::from_genesis` seeds the first template
+from it, so a mismatched genesis is a chain that rejects its own first block; `PalwAttemptWorkV1::pow_bits`
+carries the constant into `consensus_params_id` and `validate_palw_v2` refuses a fence that names a
+value this binary does not substitute. `converge_idle_target_v1` closes the `observed == 0` blind
+spot. Both V2 fingerprints move, which is what a rule change is supposed to do.
+
+**Decision 2.** `palw_job_anchor_v1` takes the nonce bucket, `palw_nonce_bucket_v1` is its one
+spelling, `PALW_TICKET_NONCE_BUCKET_LOG2 = 22` is the constant, `PalwAttemptWorkV1::ticket_bucket_log2`
+carries it into the fingerprint under the same lock as the other two prices, `palw_pwu_v1` counts
+executions, and `kaspad`'s producer derives its sweep from the same constant so an honest search
+uses exactly the bucket it paid for. The verifier reads the bucket off the accepted header, beside
+the four facts `job_anchor_for_claim` already read there.
+
+**Decision 3.** `PalwBondStateV2::capable_classes`, carried by `BondRegistered` and covered by its
+signature; `BondCapabilityDeclared` as the amendment object, admitted to the ride list on the same
+signature-present rule as retirement and authenticated against the bond's own registered key at
+acceptance; `palw_bond_may_judge_class_v2` as the one predicate; the filter in
+`derive_panel_v2_with_maturity`; genesis bonds declaring the classes their genesis registers, in
+both the base assembly and the tier-funding one. `PALW_STATE_V2_VERSION` 13 → 14, with both golden
+roots and the ADR-0043 second implementation moved together, per that test's own rule. The operator
+path is `misaka bond capability`, built the way `misaka bond retire` is — same ownership guard, same
+carrier, same dry-run — because an object an operator cannot send is a rule that only genesis obeys.
+
+All three Decisions are implemented. §2 is the part of the same audit that had already shipped when this was
+written, listed so the two are not confused.
+
+## Security amendment (2026-09-02) — Decision 3 gets a bound and a price, and §5's open item a chain-checkable form
+
+**SA-1 — The declared set is bounded and replaces.** `capable_classes.len() ≤
+PALW_MAX_CAPABLE_CLASSES` (proposed 16), and a new `BondCapabilityDeclared` replaces the previous
+set rather than growing it. The set is hashed into the state root (`palw_bond_capability_message_v2`)
+with no bound today, so an unbounded declaration is a state-growth lever priced only by transaction
+mass.
+
+**SA-2 — Each declared class reserves exposure.** Declaring `C` reserves `CAPABILITY_EXPOSURE_SOMPI`
+per class on the bond's exposure ledger (ADR-0056 Decision 3's shape: reserved, not burned;
+released when the class is undeclared or the bond retires). Declaring everything so as to be drawn
+everywhere becomes a cost proportional to the griefing surface, and "declare and abstain" — §5's
+defect — costs the abstainer capital without judging its silence (ADR-0065 Decision 4 stands).
+
+**SA-3 — Capability is proven by a positive chain fact before a seat is drawn.** A bond may be
+seated for class `C` only if it declared `C` **and** at least one accepted attempt block or
+free-prompt claim on `C` names it as producer or executor — possession proven by production, a fold
+fact — or `C` is a genesis class. Silence stays unjudged; production is judged instead.
+Consequence, stated: for a class only its registrant can run, the eligible seats are the
+registrant's own bonds — which is why ADR-0069 Decision 7 (an uncertified family's blocks weigh
+nothing) is the load-bearing rule and this one is a filter.
+
+**SA-4 — A declaration is a lifecycle object like the others:** fee = mass, signed under the network
+domain (already), refused for a class the chain does not have (already) and for a bond that is
+`Retiring`.

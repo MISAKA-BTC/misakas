@@ -75,3 +75,9 @@ changes which operand it touches — in the direction where an honest producer c
   read per claim under judgement on the panel's cadence.
 - No shipped preset carries `ConsensusV2`; a V2 bundle arrives with a network's genesis, so D3's
   window is chosen there.
+
+## Links
+
+- Spec: [06 Eligibility and block production](../spec/palw/06-eligibility-and-block-production.md) §6.2 (PALW-EL-7)
+- Design: [design/palw/lottery.md](../design/palw/lottery.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

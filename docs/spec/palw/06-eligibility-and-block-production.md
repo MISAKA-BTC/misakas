@@ -1,80 +1,119 @@
 # PALW spec — 06. Eligibility and block production
 
-> **Skeleton (Phase 1, 2026-09-27).** [00-index.md](00-index.md) gives the conventions.
+> **Normative.** This chapter states the rules as they are on each network today. Reasoning:
+> [design/palw/lottery.md](../../design/palw/lottery.md) and, for the clock,
+> [design/palw/liveness.md](../../design/palw/liveness.md). The code is the truth, and disagreements
+> are listed in [divergences.md](divergences.md).
 
-**Purpose.** This chapter decides which inferences are eligible, and so who produces blocks. Local
-inference is unlimited, but eligibility is scarce and assigned by the protocol (P6). It is assigned
-by a beacon that resolves after the work was committed (§4 of chapter 01). The ticket *is* the
-execution, so the only way to draw again is to run another inference. This chapter also defines
-`bits`, the difficulty window, and the two clocks every deadline in chapters 07–13 is read against:
-the DAA score (the anchor's clock) and the clock cursor.
+**Applies to:** mainnet (not active: PALW disabled) · testnet-12 (single lottery, work target, anchor
+clock, clock cursor and floor, all from genesis)
+**Reconciled with code at:** `55a7be02f` (2026-09-27)
+**Principles served:** P6 (eligibility is scarce and protocol-assigned); P3 (the ticket is the
+execution); chapter 01 §1.3 (the beacon resolves after the work is committed).
 
-**Principles served:** P6, P3 (the ticket is the execution), and the ordering of chapter 01 §1.3.
+Which inferences are eligible, and so who produces blocks. The ticket *is* the execution: the only way
+to draw again is to run another inference. This chapter also defines the two clocks every deadline is
+read against, the DAA score and the clock cursor.
 
 ## 6.1 The beacon
 
-- [ ] Only attempt-class blocks carry randomness, and every lottery draws from them. A beacon costs
-  one inference per re-roll. *Sources:* 0044 D4 (kept as law), 0074 D2. *Code:*
-  `core/palw_fp_beacon_v3.rs`. The beacon fold is dormant on testnet-12 (`palw_beacon_fold`, refused
-  by validation).
-- [ ] The beacon a claim consumes does not exist when the claim's fields are fixed. *Sources:* 0144
-  §4, 0072. *Code:* `core/palw_freeprompt_v3.rs`.
+- **PALW-EL-1.** Only attempt-class blocks carry randomness, and every lottery MUST draw from them. A
+  free-prompt quantum's ticket (`fp_quantum_ticket_v3`) consumes a beacon, an attempt-class chain block,
+  that does not exist when every field of the claim is fixed. A beacon costs one inference per re-roll.
+- **PALW-EL-2.** The beacon fold (`palw_beacon_fold`) is dormant on testnet-12: validation refuses it.
+
+**Sources:** ADR-0044 D4 (kept as law), ADR-0074 D1–D2, ADR-0144 §4. **Code:** `core/palw_fp_beacon_v3.rs`,
+`core/palw_freeprompt_v3.rs`.
 
 ## 6.2 The ticket is the execution
 
-- [ ] Both lotteries are priced in inferences, and a ticket is bound to the execution it came from.
-  *Sources:* 0072 (supersedes 0071 D2), 0071 D2 bucket (only as the anchor's position field).
-- [ ] A draw is one forward. *Sources:* 0117.
-- [ ] The attempt envelope (V2): fields, header pins and version. *Sources:* 0042 D3, 0055
-  (`PALW_ATTEMPT_V2_VERSION` 4 → 5). *Code:* `core/palw_attempt_v2.rs`,
-  `core/palw_attempt_rules_v1.rs`, fence `palw_attempt_header_pins`.
-- [ ] The attempt is a claim drawn by the chain. The canonical job is set by the block. *Sources:*
-  0074 D1–D5, 0055.
+- **PALW-EL-3 (the envelope).** An attempt MUST be a `PalwAttemptEnvelopeV2` of version
+  `PALW_ATTEMPT_V2_VERSION` = 6 in an attempt block (`algo_id` 6, or 9 for the execution family). Its
+  identity is `attempt_id`, and the commitment binds the PoW.
+- **PALW-EL-4 (the priced bytes).**
+  - The execution commitment is
+    `execution_commitment_v3(attempt, anchor) = H(domain ‖ anchor ‖ borsh(attempt with challenge := 0))`.
+  - Every other field is priced, and every priced field is pinned by a rule or it is the challenge
+    (`palw_attempt_header_pins`).
+  - The anchor is derived from the header, never carried:
+    `execution_anchor_v3(network, pre_pow_hash, class_id, bond, nonce)` = the job anchor at the nonce's
+    bucket (`PALW_TICKET_NONCE_BUCKET_LOG2` = 22).
+- **PALW-EL-5 (both draws come from one execution).** The class ticket is `class_ticket_v3(attempt, anchor)`,
+  the low 128 bits of `H(domain ‖ execution_commitment_v3)`. The Layer-0 digest is taken over the same
+  commitment. One draw is one execution: `pwu = max(1, expected_draws(target)) × per_inference`, which
+  past `palw_canonical_work` is the derivation (05 PALW-WK-7).
+- **PALW-EL-6 (a draw is one forward).** The prefill is one pass over the weights. Past
+  `palw_prefill_draw`, a draw's job is the prefill plus one decode step (`exact_decode_tokens` = 1 on
+  testnet-12).
+- **PALW-EL-7 (the job is set by the block).** The attempt's canonical job, and a receipt block's
+  question, are set by the chain from the anchor. A producer cannot choose them. Model classes have a
+  fixed canonical job (09 PALW-CT-8).
 
-## 6.3 The single lottery and `bits`
+**Sources:** ADR-0072 D1–D8, ADR-0042 D3, ADR-0055, ADR-0074 D1–D4, ADR-0117, ADR-0071 D2 (as the
+position field only). **Code:** `core/palw_attempt_v2.rs`, `core/palw_attempt_rules_v1.rs`
+(`palw_attempt_context_v1`, `palw_attempt_canonical_v1`).
 
-- [ ] One lottery. A winning attempt beats one network-wide target, and `bits` keeps the block
-  interval. *Sources:* 0132 (Upgrade S, §7.5), 0137 §7, 0071 §3 (why D1 was withdrawn). *Code:*
-  `core/palw_work_target_v1.rs`, `set_palw_single_lottery`.
-- [ ] What remains of the per-class retarget, if anything, past `palw_work_target`. Confirm in the
-  code whether `converge_idle_target_v1` (0071 D1a) still runs. *Sources:* 0071 D1a, 0137.
-- [ ] **The difficulty window counts only rows priced by `bits`.** Heartbeat rows carry `bits` and
-  bound the span, but are not counted. An empty count answers MAX. *Sources:* 0083 (amends 0066 D1).
-  *Code:* `cons/processes/difficulty.rs`, `cons/processes/window.rs`.
-- [ ] The attempt block's blue work is a constant (`1 << PALW_ATTEMPT_BLUE_WORK_LOG`). *Sources:*
-  0066 D3 through 0068. *Code:* fence `palw_attempt_work`.
+## 6.3 The single lottery
+
+- **PALW-EL-8.** Past `palw_single_lottery` (testnet-12 from genesis, set together with
+  `palw_anchor_clock` by `set_palw_single_lottery`), the class ticket is the whole lottery:
+  - a PALW attempt header passes Layer-0 unconditionally and derives block level 0;
+  - an attempt row does not price the difficulty window;
+  - the class ticket beats `MAX · min(1, CCU / max(W₀, W))`, where `W₀` is the block's escrow over the
+    rate and `W` is the rooted work target (05 PALW-WK-9, PALW-WK-10; `palw_work_lottery_floor_v1`).
+- **PALW-EL-9 (priced lanes).** Which lanes `bits` prices is `algo_id_is_priced_by_bits_v3`. On a
+  `ConsensusV2` network past the single lottery, no producible lane is priced by `bits`: attempt,
+  execution, receipt and round lanes are out, and every V1 PoW activation is `never()`. Heartbeat rows
+  carry `bits` and bound the span, but the difficulty window does not count them. An empty count
+  answers MAX.
+- **PALW-EL-10 (what remains of per-class targets).** Past `palw_work_target` a class has no target of
+  its own. The floor class keeps its own DAA and target as the residual (05 PALW-WK-11), with an idle
+  class converging toward the producing classes' price, never past it (`converge_idle_target_v1`).
+
+**Sources:** ADR-0132 §7.5 (Upgrade S), ADR-0137 D1–D3, ADR-0083 D1, ADR-0138, ADR-0071 D1a (D1
+withdrawn). **Code:** `core/palw_work_target_v1.rs`, `core/palw_class_daa.rs`,
+`cons/processes/difficulty.rs`, `cons/processes/window.rs`.
 
 ## 6.4 The clocks
 
-- [ ] **The DAA score is the anchor's clock.** A block advances the DAA score if and only if `bits`
-  priced it. Attempt, receipt and heartbeat blocks join the round lane outside the clock and stay
-  merged and paid. *Sources:* 0138. *Code:* `palw_anchor_clock`, `core/palw_class_daa.rs`.
-- [ ] **The consensus clock is a cursor.** A heartbeat consumes a slot. A block that does not advance
-  the clock may not postpone it. The clock floor was added by amendment on 2026-09-24. *Sources:*
-  0142 §4 and §9. *Code:* `core/palw_clock_cursor_v1.rs`, fence `palw_clock_floor`.
-- [ ] The cadence: one PALW block per 120 s, frozen. *Sources:* 0038, 0042, 0137. *Code:*
-  `core/palw_schedule.rs`.
-- [ ] Timestamp rules: the deviation tolerance, the clock lead cap (an audit fence), and the beat-stamp
-  cap (receiver clock + 132 s, operator decision of 2026-09-25). Confirm where each is enforced, and
-  whether it is a validity rule or node policy. *Code:* `palw_v2_timestamp_deviation_tolerance_v1`,
-  fence `palw_clock_lead_cap`.
+- **PALW-EL-11 (the DAA score is the anchor's clock).** Past `palw_anchor_clock`, a block MUST advance
+  the DAA score exactly when `bits` priced it. Attempt, receipt, heartbeat and round blocks join the
+  round lane outside the clock. They stay merged, blue where their lane is blue, paid and folded.
+  Because no producible lane is priced on testnet-12 (PALW-EL-9), the stand-in rule counts **exactly one
+  heartbeat** per mergeset that carries one, at most once per slot. testnet-12's DAA score therefore
+  ticks with the heartbeat clock (10 PALW-CO-44).
+- **PALW-EL-12 (the cursor).** The clock is a cursor (`PalwClockCursorV1 { next_slot_ms, slots_consumed }`):
+  - a heartbeat is admissible iff `header.timestamp ≥ next_slot_ms`;
+  - an admitted heartbeat moves the cursor to the first slot boundary strictly after its timestamp;
+    missed slots are lost, not banked;
+  - no other lane writes the cursor, so a block that does not advance the clock cannot postpone it.
+
+  The clock floor (amendment of 2026-09-24, `palw_clock_floor`) applies.
+- **PALW-EL-13 (cadence).** The PALW cadence is one block per 120 s, frozen for testnet and mainnet.
+- **PALW-EL-14 (timestamps).** A V2 header's timestamp MUST be within
+  `palw_v2_timestamp_deviation_tolerance_v1` and within the clock lead cap (`palw_clock_lead_cap`).
+
+**Sources:** ADR-0138 §2, ADR-0142 §4 and §9, ADR-0038 H, ADR-0151 D3. **Code:** `core/palw_clock_cursor_v1.rs`,
+`cons/processes/difficulty.rs` (`lane_advances_daa_at`, `daa_exempt_count`), `config/params.rs`
+(`palw_anchor_clock`, `palw_clock_floor`, `palw_clock_lead_cap`).
 
 ## 6.5 Who may produce
 
-- [ ] Production is PALW-only: no hash lane except the heartbeat clock lane of chapter 13. Two
-  `algo_id` values never share a role. *Sources:* 0039 D1/D2, 0007 (the cut-off rule), 0060, 0066.
-- [ ] Receipt blocks: chain position is earned, and the question is set by the block. *Sources:*
-  0044 D6, 0055.
-- [ ] Merged attempts count. *Sources:* 0058, 0149 §6.
-- [ ] **Attempt's role shrinks** (0144 §6 item 5). State how far that has gone: today the Attempt lane
-  is still the beacon source and the main reward path. *Non-normative note, with the measurements in
-  Design.*
+- **PALW-EL-15 (PALW-only).** Block production MUST be PALW work: attempt, receipt, execution and round
+  lanes. The heartbeat is the clock (13 §13.3). There is no hash production lane, and two `algo_id`
+  values never share a role. Total PALW unavailability halts production loudly; the clock keeps
+  moving, and nothing degrades to hash ordering.
+- **PALW-EL-16 (bonded, not permissioned).** Any bond at the producer floor MAY produce (10
+  PALW-CO-4). The floor class is the liveness floor, portable and integer-only (`PALW-BASE-0`).
+- **PALW-EL-17 (merged attempts count).** Attempts in merged blues are claims (02 PALW-ST-15).
+- **PALW-EL-18 (Attempt's role).** *Non-normative:* today the Attempt lane is both the beacon source and
+  most of the reward path. ADR-0144 §6 item 5 is the rule for shrinking it. Measure the mix in Design.
+
+**Sources:** ADR-0039 D1, D2, D4, D6; ADR-0038 A, E; ADR-0007 (the cut-off rule); ADR-0060; ADR-0058.
 
 **Activation.**
 
 | Network | Status |
 | --- | --- |
 | mainnet | not active (PALW disabled) |
-| testnet-12 | from genesis (single lottery, work target, anchor clock, clock cursor and floor, lead cap). `palw_beacon_fold` is dormant |
-
-**Design:** `design/palw/lottery.md`, and `design/palw/liveness.md` for the clock.
+| testnet-12 | from genesis: attempt header pins, prefill draw, single lottery, anchor clock, work target, clock cursor and floor, lead cap. `palw_beacon_fold` is dormant |

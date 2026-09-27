@@ -46,3 +46,4 @@ The doctrine (ADR-0060): **time is permissionless, weight is bonded, and finalit
 - [ADR-0066 — The heartbeat lane out of `header.bits`, and the inactivity leak out of node memory](archive/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)
 - [ADR-0060: The liveness doctrine — time is permissionless, weight is bonded, finality is an overlay](archive/0060-the-liveness-doctrine.md)
 - [ADR-0140 — The heartbeat is the emergency generator: it must not touch the economy or the difficulty while the chain is producing](archive/0140-the-heartbeat-is-the-emergency-generator.md)
+- [ADR-0142 — The consensus clock is a cursor: a heartbeat consumes a slot, and a block that does not advance the clock may not postpone it](archive/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md)

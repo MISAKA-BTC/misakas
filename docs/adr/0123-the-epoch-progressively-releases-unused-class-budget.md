@@ -51,3 +51,9 @@ The core tests cover a spent class borrowing unused capacity, no borrowing ahead
 slow companion class, stale counters, zero-length epochs, and the full-epoch liveness property.
 The processor and core crates compile with the named fence API, and the existing PALW test suites
 remain green.
+
+## Links
+
+- Spec: [05 Canonical work](../spec/palw/05-canonical-work.md) §5.4 (PALW-WK-15)
+- Design: [design/palw/work.md](../design/palw/work.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

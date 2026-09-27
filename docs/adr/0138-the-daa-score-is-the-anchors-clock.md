@@ -131,3 +131,9 @@ liveness and availability, with finality moving in the safe direction.
 
 `c472a17b…` → `48d1e31f…` on testnet-11 (the fence is hashed Some-only). The schedule is unchanged:
 6,001 was already a scheduled height.
+
+## Links
+
+- Spec: [06 Eligibility and block production](../spec/palw/06-eligibility-and-block-production.md) §6.4 (PALW-EL-11)
+- Design: [design/palw/liveness.md](../design/palw/liveness.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

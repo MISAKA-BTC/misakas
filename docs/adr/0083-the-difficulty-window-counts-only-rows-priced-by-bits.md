@@ -104,3 +104,9 @@ still visible in mergeset width, and ADR-0066's finding 3a — siblings share on
 timestamp — is still open); and whether `min_difficulty_window_size` should count priced rows (it
 counts all rows here, deliberately: a fresh chain's first 150 blocks stay at genesis bits, which on
 a V2 network is MAX already).
+
+## Links
+
+- Spec: [06 Eligibility and block production](../spec/palw/06-eligibility-and-block-production.md) §6.3 (PALW-EL-9)
+- Design: [design/palw/lottery.md](../design/palw/lottery.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

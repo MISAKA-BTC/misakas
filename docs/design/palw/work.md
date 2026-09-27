@@ -53,3 +53,4 @@ open direction. Record the live mix here as it is measured.
 - [ADR-0148 — The free-prompt lane prices compute, and prices it the same for every class](archive/0148-the-free-prompt-lane-prices-compute.md)
 - [ADR-0045: The class economy is chain state — derived PWU, block-denominated epoch budgets, and the registration-granted share table](archive/0045-palw-class-economy-on-chain.md)
 - [ADR-0145 — Canonical work is derived, not declared; admission is earned, not registered](archive/0145-canonical-work-is-derived-and-admission-is-earned.md)
+- [ADR-0132 — What a model is actually paid per forward it ran, and why the gap is liveness before it is price](archive/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md)
