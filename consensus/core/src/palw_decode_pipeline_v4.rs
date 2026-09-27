@@ -601,3 +601,457 @@ mod stop_tests {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// §A.3 — the processor's total order: 1 → 2 → 3 → 4 → 5 → 6 → 7
+// ---------------------------------------------------------------------------------------------
+
+use crate::palw_decode_select_v2::{PalwDecodeSamplingV2, decode_lane_beats_v2, decode_lane_key_v2, decode_token_select_v2};
+
+impl DecodeConfigV4 {
+    /// **The whole canonical form** (§A.2): the penalties and their window, `logit_bias`, and
+    /// `stop_sequences`, refused by name in that order. A job must pass this before anything
+    /// executes it, and every overflow bound this module relies on is one of its checks.
+    pub fn validate_canonical(&self) -> Result<(), PalwDecodeConfigV4Error> {
+        self.validate_penalties()?;
+        self.validate_logit_bias()?;
+        self.validate_stop_sequences()
+    }
+}
+
+/// **Step 4: saturation** — `v'' = clamp(d, i32::MIN + 1, i32::MAX)` (§A.3). `i32::MIN` itself is
+/// never a processed value.
+pub fn decode_saturate_v4(value: i64) -> i32 {
+    value.clamp(i32::MIN as i64 + 1, i32::MAX as i64) as i32
+}
+
+/// **Steps 1–4 for ONE lane** — the per-lane function a court recomputes from one opened tile:
+/// `v''_j` from the lane's engine value `v_j`, its window count `c_j(t)` and the job's config, or
+/// `None` when `logit_bias` bans the lane (it is not in `A(t)`, and its value is never read).
+pub fn decode_lane_value_v4(config: &DecodeConfigV4, value: i32, lane: u32, count: u32) -> Option<i32> {
+    let bias = config.bias_of(lane);
+    if bias == PalwDecodeBiasV4::Ban {
+        return None;
+    }
+    let repeated = decode_repeat_v4(value, count, config.repeat_penalty_q);
+    let penalized = decode_frequency_presence_v4(repeated, count, config.frequency_penalty_q, config.presence_penalty_q);
+    Some(decode_saturate_v4(decode_bias_v4(penalized, bias)))
+}
+
+/// **One lane's selection key under V4** — [`decode_lane_value_v4`] then ADR-0082 Decision 11's
+/// [`decode_lane_key_v2`] at position `t = generated_before.len()`. `None` for a banned lane.
+/// This and [`decode_lane_beats_v2`] are everything a two-tile refutation needs.
+pub fn decode_lane_key_v4(
+    config: &DecodeConfigV4,
+    sampling: &PalwDecodeSamplingV2,
+    generated_before: &[u32],
+    value: i32,
+    lane: u32,
+) -> Option<i64> {
+    let count = decode_window_count_v4(generated_before, config.penalty_window, lane);
+    let processed = decode_lane_value_v4(config, value, lane, count)?;
+    Some(decode_lane_key_v2(processed, &sampling.seed, generated_before.len() as u32, lane as usize, sampling.temperature_q))
+}
+
+/// **Steps 1–6 over a whole row: the committed lane at position `t = generated_before.len()`**, or
+/// `None` when `A(t)` is empty (every lane the constraint admits is banned — generation ends at
+/// this step, §A.3 step 5).
+///
+/// `admitted` is the decode constraint's mask (ADR-0096); a job without a constraint passes
+/// `|_| true`. The mask is the LAST filter before selection, after every value correction, and a
+/// `logit_bias` ban is part of it — so the order is repeat → frequency/presence → bias →
+/// saturation → mask (constraint ∖ bans) → Decision 11's key → argmax, ties to the lowest index.
+/// The value corrections read only `(v_j, c_j(t), bias_j)`, so this is exactly the argmax of
+/// [`decode_lane_key_v4`] over the admitted lanes; it merges the window's counts and the bias list
+/// (both ascending) against the row rather than searching per lane.
+pub fn decode_select_v4(
+    config: &DecodeConfigV4,
+    sampling: &PalwDecodeSamplingV2,
+    generated_before: &[u32],
+    values: &[i32],
+    admitted: &dyn Fn(usize) -> bool,
+) -> Option<usize> {
+    let position = generated_before.len() as u32;
+    let counts = decode_window_counts_v4(generated_before, config.penalty_window);
+    let (mut next_count, mut next_bias) = (0usize, 0usize);
+    let mut best: Option<(usize, i64)> = None;
+    for (lane, value) in values.iter().enumerate() {
+        let lane_id = lane as u32;
+        while next_count < counts.len() && counts[next_count].0 < lane_id {
+            next_count += 1;
+        }
+        while next_bias < config.logit_bias.len() && config.logit_bias[next_bias].0 < lane_id {
+            next_bias += 1;
+        }
+        let count = match counts.get(next_count) {
+            Some((id, count)) if *id == lane_id => *count,
+            _ => 0,
+        };
+        let bias = match config.logit_bias.get(next_bias) {
+            Some((id, bias_q)) if *id == lane_id => PalwDecodeBiasV4::of_q(*bias_q),
+            _ => PalwDecodeBiasV4::None,
+        };
+        if bias == PalwDecodeBiasV4::Ban || !admitted(lane) {
+            continue;
+        }
+        let repeated = decode_repeat_v4(*value, count, config.repeat_penalty_q);
+        let penalized = decode_frequency_presence_v4(repeated, count, config.frequency_penalty_q, config.presence_penalty_q);
+        let processed = decode_saturate_v4(decode_bias_v4(penalized, bias));
+        let key = decode_lane_key_v2(processed, &sampling.seed, position, lane, sampling.temperature_q);
+        best = match best {
+            Some((best_lane, best_key)) if !decode_lane_beats_v2(key, lane, best_key, best_lane) => Some((best_lane, best_key)),
+            _ => Some((lane, key)),
+        };
+    }
+    best.map(|(lane, _)| lane)
+}
+
+/// **Why a free-prompt run stopped where it did** — the reason the processor records (§A.3 steps
+/// 5 and 7, and the budget). Derived, never declared: the commitment carries only the canonical
+/// `PalwFpStopReasonV3` (`ExactBudgetReached` iff the budget was used up), and this finer reason is
+/// a pure function of the job and the committed answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PalwFpDecodeStopReasonV1 {
+    /// `decode_token_limit` tokens were committed and no stop sequence ended the answer earlier.
+    Budget,
+    /// The answer's tail equals `stop_sequences[index]` (the stop tokens are part of the answer).
+    StopSequence { index: u8 },
+    /// Step 5's admitted set was empty: every lane the constraint admits is banned.
+    NoAdmissibleLane,
+}
+
+/// Where a run stopped, and why.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PalwFpDecodeStopV1 {
+    /// Committed decode tokens — the claim's `decode_tokens_executed`.
+    pub executed: u32,
+    pub reason: PalwFpDecodeStopReasonV1,
+}
+
+/// **The one decoder every engine, seat and replay drives** — the V3 rule for a V3 job, the §A.3
+/// pipeline for a V4 job, one step per committed logits row, in row order.
+///
+/// An engine hands it each selecting row (row `t` is the row decode token `t` is chosen from:
+/// the last prefill position's row for `t = 0`, decode call `t`'s row after that) and feeds the
+/// returned lane into the next forward pass. The decoder keeps the committed answer and records
+/// the FIRST stop — a stop sequence completed (§A.3 step 7), an empty admitted set (step 5), or the
+/// budget. An engine whose capture must know its length before it begins can run once to the
+/// budget, read [`Self::stop`], and run again to exactly that length: selection depends only on
+/// the committed prefix, so the second run commits the same tokens. Past a stop the decoder keeps
+/// answering (Decision 11's rule over the raw row) so a fixed-length loop can finish; those lanes
+/// are never committed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpDecoderV1 {
+    /// `None` is the V3 rule: Decision 11's key over the raw row, no stop before the budget.
+    config: Option<DecodeConfigV4>,
+    sampling: PalwDecodeSamplingV2,
+    limit: u32,
+    generated: Vec<u32>,
+    stop: Option<PalwFpDecodeStopV1>,
+}
+
+impl PalwFpDecoderV1 {
+    /// The V3 rule: `decode_token_select_v2` under the job's sampling pair (the plain argmax at
+    /// the greedy temperature), to the budget. EOG is a display stop on this rule.
+    pub fn v3(sampling: PalwDecodeSamplingV2, limit: u32) -> Self {
+        Self { config: None, sampling, limit, generated: Vec::new(), stop: None }
+    }
+
+    /// The §A.3 pipeline under `config` (which the caller has validated as canonical).
+    pub fn v4(config: DecodeConfigV4, sampling: PalwDecodeSamplingV2, limit: u32) -> Self {
+        Self { config: Some(config), sampling, limit, generated: Vec::new(), stop: None }
+    }
+
+    /// **Resume after a committed prefix** — a replay that starts at position `history.len()`
+    /// (a seat's interval, a court's position) is exactly the decoder that committed `history`.
+    /// The stop rule is re-read over the prefix, so a history that already stopped is stopped.
+    pub fn resumed(mut self, history: &[u32]) -> Self {
+        for id in history {
+            if self.stop.is_some() {
+                break;
+            }
+            self.commit(*id);
+        }
+        self
+    }
+
+    /// Is this the §A.3 pipeline (a V4 job)?
+    pub fn is_v4(&self) -> bool {
+        self.config.is_some()
+    }
+
+    /// The committed answer so far (never past the first stop).
+    pub fn generated(&self) -> &[u32] {
+        &self.generated
+    }
+
+    /// The first stop, once one has happened.
+    pub fn stop(&self) -> Option<PalwFpDecodeStopV1> {
+        self.stop
+    }
+
+    /// **One step**: the lane to feed the engine's next forward pass, selected from `row`.
+    pub fn select(&mut self, row: &[i32]) -> u32 {
+        let position = self.generated.len() as u32;
+        let sampling = self.sampling;
+        let raw = move || decode_token_select_v2(row, &sampling.seed, position, sampling.temperature_q) as u32;
+        if self.stop.is_some() {
+            return raw();
+        }
+        let Some(config) = &self.config else {
+            let lane = raw();
+            self.commit(lane);
+            return lane;
+        };
+        match decode_select_v4(config, &self.sampling, &self.generated, row, &|_| true) {
+            Some(lane) => {
+                let lane = lane as u32;
+                self.commit(lane);
+                lane
+            }
+            None => {
+                self.stop = Some(PalwFpDecodeStopV1 { executed: position, reason: PalwFpDecodeStopReasonV1::NoAdmissibleLane });
+                raw()
+            }
+        }
+    }
+
+    fn commit(&mut self, lane: u32) {
+        self.generated.push(lane);
+        if let Some(config) = &self.config
+            && let Some(index) = decode_stop_match_v4(&config.stop_sequences, &self.generated)
+        {
+            self.stop = Some(PalwFpDecodeStopV1 {
+                executed: self.generated.len() as u32,
+                reason: PalwFpDecodeStopReasonV1::StopSequence { index: index as u8 },
+            });
+            return;
+        }
+        if self.generated.len() as u64 >= self.limit as u64 {
+            self.stop = Some(PalwFpDecodeStopV1 { executed: self.generated.len() as u32, reason: PalwFpDecodeStopReasonV1::Budget });
+        }
+    }
+}
+
+/// **Is a committed answer where the stop rule ends it?** — step 7 checked over a whole answer:
+/// no proper prefix ends in a stop sequence, and the answer either ends in one or runs the whole
+/// budget; and step 5 checked for the bans (no committed id is banned, and a run shorter than its
+/// budget that ends in no stop sequence is admissible only when the admitted set was empty).
+/// Pure in the job and the answer, so a seat, a court and a gateway ask it the same way. Returns
+/// the stop the answer encodes.
+pub fn decode_answer_stop_v4(
+    config: &DecodeConfigV4,
+    limit: u32,
+    vocab: u32,
+    answer: &[u32],
+) -> Result<PalwFpDecodeStopV1, &'static str> {
+    if answer.is_empty() {
+        return Err("an answer of no tokens decoded nothing");
+    }
+    if answer.len() as u64 > limit as u64 {
+        return Err("the answer is longer than its budget");
+    }
+    if answer.iter().any(|id| config.bias_of(*id) == PalwDecodeBiasV4::Ban) {
+        return Err("the answer commits a lane logit_bias bans");
+    }
+    match decode_first_stop_v4(&config.stop_sequences, answer) {
+        Some((end, index)) if end == answer.len() => {
+            Ok(PalwFpDecodeStopV1 { executed: end as u32, reason: PalwFpDecodeStopReasonV1::StopSequence { index: index as u8 } })
+        }
+        Some(_) => Err("the answer continues past a completed stop sequence"),
+        None if answer.len() as u64 == limit as u64 => {
+            Ok(PalwFpDecodeStopV1 { executed: limit, reason: PalwFpDecodeStopReasonV1::Budget })
+        }
+        // Without a constraint the admitted set is the same at every position, so an early end
+        // with no stop sequence is admissible only if that set is empty — and then no position
+        // could have committed anything, which the first check has already refused.
+        None if config.bans_cover_vocab(vocab) => Err("no lane is admissible, so no token could have been committed"),
+        None => Err("the answer stops before its budget with no stop sequence completed"),
+    }
+}
+
+#[cfg(test)]
+mod processor_tests {
+    use super::*;
+    use crate::palw_decode_select_v2::PALW_DECODE_T_ONE;
+    use crate::palw_step_refute::base0_decode_token_select_v1;
+
+    /// The same deterministic row generator the v2 tests use — no dev-dependency.
+    fn rows(seed: u64, count: usize, width: usize, spread: i32) -> Vec<Vec<i32>> {
+        let mut x = seed | 1;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        (0..count).map(|_| (0..width).map(|_| ((next() % (2 * spread as u64 + 1)) as i64 - spread as i64) as i32).collect()).collect()
+    }
+
+    fn hot() -> PalwDecodeSamplingV2 {
+        PalwDecodeSamplingV2 { seed: [7u8; 32], temperature_q: PALW_DECODE_T_ONE as u32 }
+    }
+
+    #[test]
+    fn the_noop_selects_what_v3_selects_on_every_row() {
+        // G7 at the processor: the no-op V4 is the V3 rule — greedy (Decision 11 at T = 0 is the
+        // shipped argmax) and sampled alike — on random rows, with random committed prefixes.
+        for (i, row) in rows(0x5eed, 400, 97, 1 << 26).into_iter().enumerate() {
+            let generated: Vec<u32> = rows(i as u64 + 3, 1, i % 40, 48)[0].iter().map(|v| v.unsigned_abs() % 97).collect();
+            for sampling in [PalwDecodeSamplingV2::GREEDY, hot()] {
+                let v3 = decode_token_select_v2(&row, &sampling.seed, generated.len() as u32, sampling.temperature_q);
+                let v4 = decode_select_v4(&DecodeConfigV4::NOOP, &sampling, &generated, &row, &|_| true);
+                assert_eq!(v4, Some(v3), "row {i}");
+            }
+            assert_eq!(
+                decode_select_v4(&DecodeConfigV4::NOOP, &PalwDecodeSamplingV2::GREEDY, &generated, &row, &|_| true),
+                Some(base0_decode_token_select_v1(&row)),
+                "row {i}: greedy no-op is the shipped argmax"
+            );
+        }
+    }
+
+    #[test]
+    fn the_row_form_is_the_argmax_of_the_per_lane_form() {
+        // I-2: whatever the row-wide merge does, it is the argmax of the per-lane key a court
+        // recomputes from one tile. Swept over penalties, bias (with bans) and both temperatures.
+        let ban = PALW_DECODE_V4_BIAS_BAN_Q;
+        let configs = [
+            DecodeConfigV4 { repeat_penalty_q: 98_304, penalty_window: 6, ..DecodeConfigV4::NOOP },
+            DecodeConfigV4 {
+                frequency_penalty_q: 1 << 23,
+                presence_penalty_q: -(1 << 22),
+                penalty_window: 16,
+                ..DecodeConfigV4::NOOP
+            },
+            DecodeConfigV4 { logit_bias: vec![(0, ban), (3, 5 << 24), (17, -(7 << 24)), (40, ban)], ..DecodeConfigV4::NOOP },
+            DecodeConfigV4 {
+                repeat_penalty_q: 262_144,
+                penalty_window: 256,
+                frequency_penalty_q: 2 << 24,
+                presence_penalty_q: 2 << 24,
+                logit_bias: vec![(1, 100 << 24), (2, ban)],
+                stop_sequences: vec![],
+            },
+        ];
+        for (c, config) in configs.iter().enumerate() {
+            config.validate_canonical().expect("the sweep uses canonical configs");
+            for (i, row) in rows(0xC0FFEE + c as u64, 120, 48, 1 << 25).into_iter().enumerate() {
+                let generated: Vec<u32> = rows(i as u64 + 11, 1, 30, 24)[0].iter().map(|v| v.unsigned_abs() % 48).collect();
+                for sampling in [PalwDecodeSamplingV2::GREEDY, hot()] {
+                    let picked = decode_select_v4(config, &sampling, &generated, &row, &|_| true);
+                    let mut best: Option<(usize, i64)> = None;
+                    for (lane, value) in row.iter().enumerate() {
+                        if let Some(key) = decode_lane_key_v4(config, &sampling, &generated, *value, lane as u32) {
+                            best = match best {
+                                Some((bl, bk)) if !decode_lane_beats_v2(key, lane, bk, bl) => Some((bl, bk)),
+                                _ => Some((lane, key)),
+                            };
+                        }
+                    }
+                    assert_eq!(picked, best.map(|(l, _)| l), "config {c}, row {i}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_processor_order_is_the_rfcs() {
+        // repeat before frequency: the repeat divides the RAW value, and the frequency subtracts
+        // from what the repeat left. Lane 1 was generated twice; W covers both.
+        let config = DecodeConfigV4 {
+            repeat_penalty_q: 131_072, // 2.0
+            penalty_window: 4,
+            frequency_penalty_q: 1 << 24,
+            presence_penalty_q: 1 << 23,
+            logit_bias: vec![(1, 3 << 24)],
+            stop_sequences: vec![],
+        };
+        let v = 10i32 << 24;
+        // a = 10/2 = 5; b = 5 − 2·1 − 0.5 = 2.5; d = 2.5 + 3 = 5.5 (in Q24)
+        assert_eq!(decode_lane_value_v4(&config, v, 1, 2), Some((11 << 24) / 2));
+        // bias after the penalties, not before: (10 + 3)/2 − 2.5 = 4 would be the wrong order.
+        assert_ne!(decode_lane_value_v4(&config, v, 1, 2), Some(4 << 24));
+        // saturation last among the value steps: +100 on i32::MAX saturates, −∞ stops at MIN + 1.
+        let big = DecodeConfigV4 { logit_bias: vec![(0, 100 << 24)], ..DecodeConfigV4::NOOP };
+        assert_eq!(decode_lane_value_v4(&big, i32::MAX, 0, 0), Some(i32::MAX));
+        let low = DecodeConfigV4 { logit_bias: vec![(0, -(99 << 24))], ..DecodeConfigV4::NOOP };
+        assert_eq!(decode_lane_value_v4(&low, i32::MIN, 0, 0), Some(i32::MIN + 1));
+        assert_eq!(decode_lane_value_v4(&DecodeConfigV4::NOOP, i32::MIN, 0, 0), Some(i32::MIN + 1));
+        // the mask after the values: a banned lane with the highest value is never selected, and
+        // the constraint composes with the bans.
+        let ban = DecodeConfigV4 { logit_bias: vec![(2, PALW_DECODE_V4_BIAS_BAN_Q)], ..DecodeConfigV4::NOOP };
+        let row = [1, 5, 9, 7];
+        assert_eq!(decode_select_v4(&ban, &PalwDecodeSamplingV2::GREEDY, &[], &row, &|_| true), Some(3));
+        assert_eq!(decode_select_v4(&ban, &PalwDecodeSamplingV2::GREEDY, &[], &row, &|lane| lane != 3), Some(1));
+        assert_eq!(decode_select_v4(&ban, &PalwDecodeSamplingV2::GREEDY, &[], &row, &|lane| lane == 2), None, "A(t) empty");
+        // ties to the lowest index, AFTER processing: the bias lifts lane 0 into the tie and wins it.
+        assert_eq!(decode_select_v4(&DecodeConfigV4::NOOP, &PalwDecodeSamplingV2::GREEDY, &[], &[5, 7, 7], &|_| true), Some(1));
+        let tie = DecodeConfigV4 { logit_bias: vec![(0, 2)], ..DecodeConfigV4::NOOP };
+        assert_eq!(decode_select_v4(&tie, &PalwDecodeSamplingV2::GREEDY, &[], &[5, 7, 7], &|_| true), Some(0));
+    }
+
+    #[test]
+    fn the_decoder_stops_at_the_first_stop_and_resumes_exactly() {
+        let config = DecodeConfigV4 { stop_sequences: vec![vec![2, 3]], ..DecodeConfigV4::NOOP };
+        // Rows whose argmax walks 1, 2, 3, 0 …
+        let row_for = |lane: usize| {
+            let mut r = vec![0i32; 4];
+            r[lane] = 10;
+            r
+        };
+        let mut decoder = PalwFpDecoderV1::v4(config.clone(), PalwDecodeSamplingV2::GREEDY, 8);
+        let fed: Vec<u32> = [1usize, 2, 3, 0, 1].iter().map(|l| decoder.select(&row_for(*l))).collect();
+        assert_eq!(fed, vec![1, 2, 3, 0, 1], "past the stop the loop is still fed");
+        assert_eq!(decoder.generated(), &[1, 2, 3]);
+        assert_eq!(
+            decoder.stop(),
+            Some(PalwFpDecodeStopV1 { executed: 3, reason: PalwFpDecodeStopReasonV1::StopSequence { index: 0 } })
+        );
+        // A replay from the committed prefix is the same decoder.
+        let resumed = PalwFpDecoderV1::v4(config.clone(), PalwDecodeSamplingV2::GREEDY, 8).resumed(&[1, 2]);
+        assert_eq!(resumed.generated(), &[1, 2]);
+        assert_eq!(resumed.stop(), None);
+        assert_eq!(
+            PalwFpDecoderV1::v4(config.clone(), PalwDecodeSamplingV2::GREEDY, 8).resumed(&[1, 2, 3, 9]).generated(),
+            &[1, 2, 3]
+        );
+        // The answer check agrees with the decoder, and refuses an answer that ran past its stop.
+        assert_eq!(decode_answer_stop_v4(&config, 8, 4, &[1, 2, 3]), Ok(decoder.stop().unwrap()));
+        assert!(decode_answer_stop_v4(&config, 8, 4, &[1, 2, 3, 0]).is_err());
+        assert!(decode_answer_stop_v4(&config, 8, 4, &[1, 2]).is_err(), "short of the budget with no stop");
+        assert_eq!(
+            decode_answer_stop_v4(&config, 2, 4, &[1, 2]),
+            Ok(PalwFpDecodeStopV1 { executed: 2, reason: PalwFpDecodeStopReasonV1::Budget })
+        );
+        // The budget stops the V3 rule and never anything earlier.
+        let mut v3 = PalwFpDecoderV1::v3(PalwDecodeSamplingV2::GREEDY, 2);
+        v3.select(&row_for(2));
+        assert_eq!(v3.stop(), None);
+        v3.select(&row_for(3));
+        assert_eq!(v3.stop(), Some(PalwFpDecodeStopV1 { executed: 2, reason: PalwFpDecodeStopReasonV1::Budget }));
+        // An empty admitted set stops before committing.
+        let all_banned =
+            DecodeConfigV4 { logit_bias: (0..4).map(|t| (t, PALW_DECODE_V4_BIAS_BAN_Q)).collect(), ..DecodeConfigV4::NOOP };
+        let mut stuck = PalwFpDecoderV1::v4(all_banned.clone(), PalwDecodeSamplingV2::GREEDY, 8);
+        stuck.select(&row_for(1));
+        assert_eq!(stuck.stop(), Some(PalwFpDecodeStopV1 { executed: 0, reason: PalwFpDecodeStopReasonV1::NoAdmissibleLane }));
+        assert!(stuck.generated().is_empty());
+        assert!(all_banned.bans_cover_vocab(4));
+    }
+
+    #[test]
+    fn a_penalty_moves_the_choice_off_a_repeated_lane() {
+        // The point of the release, in one row: greedy would repeat lane 0; the penalties do not.
+        let row = [10i32 << 24, 9 << 24, 1 << 24];
+        let generated = [0u32, 0, 0];
+        let greedy = decode_select_v4(&DecodeConfigV4::NOOP, &PalwDecodeSamplingV2::GREEDY, &generated, &row, &|_| true);
+        assert_eq!(greedy, Some(0));
+        let penalized = DecodeConfigV4 { repeat_penalty_q: 81_920, penalty_window: 8, ..DecodeConfigV4::NOOP };
+        assert_eq!(decode_select_v4(&penalized, &PalwDecodeSamplingV2::GREEDY, &generated, &row, &|_| true), Some(1));
+        let frequency = DecodeConfigV4 { frequency_penalty_q: 1 << 24, penalty_window: 8, ..DecodeConfigV4::NOOP };
+        assert_eq!(decode_select_v4(&frequency, &PalwDecodeSamplingV2::GREEDY, &generated, &row, &|_| true), Some(1));
+        // Outside the window the repetition is forgotten.
+        let narrow = DecodeConfigV4 { frequency_penalty_q: 1 << 24, penalty_window: 1, ..DecodeConfigV4::NOOP };
+        assert_eq!(decode_select_v4(&narrow, &PalwDecodeSamplingV2::GREEDY, &[0, 0, 1], &row, &|_| true), Some(0));
+    }
+}
