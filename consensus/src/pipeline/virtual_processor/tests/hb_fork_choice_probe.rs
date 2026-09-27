@@ -2540,8 +2540,9 @@ async fn capacity_probe_w_t6b_a_licence_only_the_private_branch_carries_wins_pas
 // and the refused sibling leaves the virtual's parents, so two honest nodes that saw sibling tips in
 // different orders keep different sinks, and every later block that ties keeps them apart. F-W makes
 // such ties the rule (a `Created` attempt weighs 0), so past F-W a SHALLOW tie is decided by GHOSTDAG's
-// own order (`palw_deep_reorg_capacity_v1`, `palw_capacity_shallow_ghostdag_win_v1`); a deeper one still
-// keeps the incumbent, which is strict-win's protection against a private branch's blue-work pile.
+// own order; a deeper one still keeps the incumbent, which is strict-win's protection against a private
+// branch's blue-work pile. rcore/cap-s1: the lane's copy of that rule is gone — the DAA-750 release's
+// strict-win carries it (with the no-DAA-lowering check), and past F-W it is the one rule.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// Whether the two nodes' sinks agree, printed with both nodes' PALW keys.
@@ -2601,11 +2602,11 @@ async fn honest_sibling_race(tag: &str, d: &mut Duel) -> Vec<bool> {
 ///   one never weighs the other, and the two re-converge only once a later block merges both. The
 ///   harness's block hashes differ run to run (the attempt signatures), so whether a given exchange
 ///   splits does too: measured both ways, `[T; 7]` and `[T, F, F, F, T, T, T]`.
-/// * strict-win alone (`palw_reorg_strict_economic_win`, the DAA-500 release's fence): the sibling
-///   attempts tie (one `Created` floor claim each), each node keeps the sibling it saw first, and the
-///   two sinks SPLIT at the first exchange. **Pinned as the finding, routed to the DAA-500 release's
-///   owner** — if this assertion fails, strict-win has been fixed there, and F-W's shallow rule
-///   (`palw_deep_reorg_capacity_v1`) should be reconciled with that fix when rcore/cap-int merges.
+/// * strict-win alone (`palw_reorg_strict_economic_win`): the lane measured the sibling attempts' tie
+///   SPLITTING the nodes at the first exchange under the DAA-500 strict-win. The DAA-750 release fixed
+///   strict-win with the same shallow-tie rule (plus the no-DAA-lowering check), and rcore/cap-s1 dropped
+///   F-W's copy of it, so here the ties agree; exchange (2) is not a tie without F-W and may split until
+///   the next exchange.
 /// * strict-win + lane A + F-W: every claim here is `Created` (nothing binds inside the anchor delay),
 ///   so every exchange is an all-economic tie, and every tie is shallow (a slot race): GHOSTDAG's order
 ///   decides it on both nodes alike, whatever the hashes — they agree after every exchange.
@@ -2624,10 +2625,14 @@ async fn capacity_probe_honest_sibling_forks_converge_past_the_cap() {
         eprintln!("[{tag}] agreed after each exchange: {agreed:?}");
         match (strict, cap) {
             (None, _) => {} // the shipped rule: printed for comparison (see above)
+            // rcore/cap-s1 — flipped on purpose: the DAA-750 release fixed strict-win (its shallow tie is
+            // GHOSTDAG's, rcore/f1-strictwin-tie), so the TIES agree — the sibling attempts (1) and every
+            // heartbeat round (3). Exchange (2), an attempt against a heartbeat, is not a tie without F-W
+            // (a `Created` attempt still weighs its floor claim) and may split until the next exchange
+            // heals it, as the release measured (3d9d6d3ba).
             (Some(_), None) => assert!(
-                !agreed[0],
-                "{tag}: the verify finding, pinned — strict-win keeps each node on the sibling it saw first. If this now \
-                 agrees, the DAA-500 release fixed strict-win: reconcile F-W's shallow rule with that fix"
+                agreed[0] && agreed[2..].iter().all(|a| *a),
+                "{tag}: strict-win's shallow tie converges every tie exchange: {agreed:?}"
             ),
             (Some(_), Some(_)) => {
                 assert!(agreed.iter().all(|a| *a), "{tag}: two honest nodes agree after every exchange: {agreed:?}")
@@ -2651,7 +2656,8 @@ async fn capacity_probe_the_release_set_converges_on_honest_siblings_with_the_ca
         if cap {
             assert!(agreed.iter().all(|a| *a), "{tag}: two honest nodes agree after every exchange: {agreed:?}");
         } else {
-            assert!(!agreed[0], "{tag}: the verify finding, pinned on the DAA-500 release's own fence set (see above)");
+            // rcore/cap-s1 — flipped on purpose: the release's own fence set converges every TIE (see above).
+            assert!(agreed[0] && agreed[2..].iter().all(|a| *a), "{tag}: the release set converges every tie exchange: {agreed:?}");
         }
     }
 }
@@ -2661,9 +2667,8 @@ async fn capacity_probe_the_release_set_converges_on_honest_siblings_with_the_ca
 /// sides) and is heavier on blue work (two-sibling layers and a merging holder), at the same DAA as the
 /// public tip. The public tip is `k` DAA ticks above the fork, X in its first slot, Y in the private one.
 ///
-/// * strict-win alone: every `k` is refused — the tie keeps the incumbent (the probe of the strict-win
-///   lane, `hb_probe_fence_refuses_…`, at ten slots).
-/// * strict-win + lane A + F-W: `k ≤ PALW_CAPACITY_SHALLOW_REORG_DAA_V1` is a slot race GHOSTDAG decides —
+/// * strict-win alone (the DAA-750 release's rule) and strict-win + lane A + F-W (rcore/cap-s1: the same
+///   one rule): `k ≤ PALW_CAPACITY_SHALLOW_REORG_DAA_V1` is a slot race GHOSTDAG decides —
 ///   the heavier private branch wins and Y lands; that is the price of convergence, stated and bounded:
 ///   a payment with at most `D` ticks of confirmation. At `D + 1` the tie keeps the incumbent and X
 ///   stands, as it does at every depth beyond.
@@ -2708,7 +2713,10 @@ async fn capacity_probe_a_shallow_tie_is_ghostdags_and_a_deep_tie_keeps_the_incu
             assert!(r.refused.is_empty(), "{tag}: every private block is valid");
             assert!(r.private_bw_max > r.public_bw && r.offered_at.is_some(), "{tag}: the private branch is heavier and offered");
             let (x, y) = payments(&tag, &d);
-            if cap.is_some() && k <= D {
+            // rcore/cap-s1 — flipped on purpose for strict-win alone: the release's strict-win has the shallow
+            // tie rule itself, so with or without F-W a tie within D ticks is GHOSTDAG's.
+            let _ = cap;
+            if k <= D {
                 assert!(r.flipped() && y && !x, "{tag}: a shallow tie is GHOSTDAG's — the heavier branch wins (the stated window)");
             } else {
                 assert!(!r.flipped() && x && !y, "{tag}: a tie {k} ticks deep keeps the incumbent — X stands");

@@ -1041,6 +1041,86 @@ mod tests {
         }
     }
 
+    /// **ADR-0160's capacity list (rcore/cap-s1): fences, dormant EVERYWHERE, never on the DAA-750 list.**
+    /// Every entry names a `Params::palw_fences_v1` fence, is listed once, is dormant on every preset —
+    /// public testnet-12 and a drill ruleset included, which the post-launch list is not — and is not an
+    /// entry of `PALW_T12_POST_LAUNCH_FENCES_V1` (armed at DAA 750 on every testnet-12 ruleset). Its `set`
+    /// moves its own fence alone and, set back, leaves the ruleset byte-identical.
+    #[test]
+    fn the_capacity_fence_list_is_dormant_everywhere_and_apart_from_the_post_launch_list() {
+        use crate::config::params::{
+            DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA,
+            PALW_T12_POST_LAUNCH_FENCES_V1, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_drill_params_v1, palw_t12_shipped_params,
+        };
+        assert!(!PALW_T12_CAPACITY_FENCES_V1.is_empty());
+        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        let public = palw_t12_shipped_params();
+        let height = |p: &crate::config::params::Params, name: &str| {
+            p.palw_fences_v1().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} is a fence")).1
+        };
+        for (i, fence) in PALW_T12_CAPACITY_FENCES_V1.iter().enumerate() {
+            assert!(PALW_T12_CAPACITY_FENCES_V1[..i].iter().all(|other| other.name != fence.name), "{} listed once", fence.name);
+            assert!(
+                PALW_T12_POST_LAUNCH_FENCES_V1.iter().all(|other| other.name != fence.name),
+                "{} is not on the DAA-750 list (that list is armed on the live chain)",
+                fence.name
+            );
+            for preset in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS, &public, &drill] {
+                assert_eq!(height(preset, fence.name), None, "{} is dormant on {}", fence.name, preset.net);
+            }
+            let original = format!("{public:?}");
+            let fences = public.palw_fences_v1();
+            let mut one = public.clone();
+            (fence.set)(&mut one, Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA + 1)));
+            for ((name, before), (_, after)) in fences.iter().zip(one.palw_fences_v1().iter()) {
+                if *name != fence.name && !name.starts_with(fence.name) {
+                    assert_eq!(before, after, "{}'s entry moved {name}", fence.name);
+                }
+            }
+            assert_ne!(one.consensus_params_id(), public.consensus_params_id(), "{} is in the fingerprint", fence.name);
+            (fence.set)(&mut one, None);
+            assert_eq!(format!("{one:?}"), original, "{}'s entry touches its own fence and mirrors alone", fence.name);
+        }
+    }
+
+    /// **A drill crosses the capacity flag day** ([`palw_drill_capacity_fences_at_v1`]): refused on public
+    /// testnet-12's genesis, at 0 / never, at another fence's height, and below the release's post-launch
+    /// fences the capacity fences require (strict-win and lane A are at 750 on the release's drill); at a
+    /// free height past them every capacity fence is ARMED, nothing else moves, the ruleset validates and
+    /// the params id moves. With `--palw-drill-fence-at` first (the release's fences at 40), a capacity
+    /// height of 60 is legal too.
+    #[test]
+    fn a_drill_crosses_the_capacity_flag_day_and_nothing_else_moves() {
+        use crate::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1, palw_t12_drill_params_v1, palw_t12_shipped_params};
+        let drill = palw_t12_drill_params_v1(&salt(0x53));
+        let mut public = palw_t12_shipped_params();
+        assert!(palw_drill_capacity_fences_at_v1(&mut public, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
+        for bad in [0, u64::MAX] {
+            let mut p = drill.clone();
+            assert!(palw_drill_capacity_fences_at_v1(&mut p, bad).is_err(), "{bad}");
+            assert_eq!(format!("{p:?}"), format!("{drill:?}"), "a refusal leaves the ruleset untouched");
+        }
+        let mut taken = drill.clone();
+        assert!(palw_drill_capacity_fences_at_v1(&mut taken, 750).unwrap_err().contains("already"), "750 is the release's height");
+        let mut early = drill.clone();
+        assert!(palw_drill_capacity_fences_at_v1(&mut early, 700).unwrap_err().contains("does not validate"), "below strict-win and lane A");
+        let mut moved = drill.clone();
+        let moves = palw_drill_capacity_fences_at_v1(&mut moved, 1_234).expect("past the release's fences");
+        assert_eq!(moves.iter().map(|m| m.name).collect::<Vec<_>>(), PALW_T12_CAPACITY_FENCES_V1.iter().map(|f| f.name).collect::<Vec<_>>());
+        assert!(moves.iter().all(|m| m.was.is_none() && m.at == 1_234 && m.to_string().contains("ARMED")));
+        assert!(moved.palw_capacity_weight_cap_active_at(1_234) && !moved.palw_capacity_weight_cap_active_at(1_233));
+        assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
+        for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
+            if !name.starts_with("palw_capacity_") {
+                assert_eq!(before, after, "{name} did not move");
+            }
+        }
+        let mut both = drill.clone();
+        palw_drill_post_launch_fences_at_v1(&mut both, 40).expect("the release's flag day at 40");
+        palw_drill_capacity_fences_at_v1(&mut both, 60).expect("the capacity flag day at 60, over the release's");
+        assert_eq!(both.palw_capacity_weight_cap, Some(ForkActivation::new(60)));
+    }
+
     /// **`--palw-drill-fence-at` on a drill ruleset: the release's fences at the drill's height, and
     /// nothing else.** Every listed fence is ARMED from the release's dormant state (or MOVED once the
     /// release arms it), each rule is live from the height on and not below it (the registry mirror

@@ -2,11 +2,12 @@
 //! shipped preset, and arming it is a scheduled fence like any other.**
 //!
 //! The per-bond weight cap (J-1: staged claim weight, `Σ_b min(X_b, ⌊C/6,500 MSK⌋ FCW)`, the capped
-//! reservation) is a LATER post-launch change — not the DAA-500 release. So:
+//! reservation) is a LATER change — the capacity programme's own flag day, never the DAA-750 release
+//! (rcore/cap-s1). So:
 //!
 //! * as shipped the field is `None` everywhere, testnet-12 included, the V2 bundle's mirror is `None`,
-//!   and testnet-12's three ids are the launch release's to the byte (`b8564b88…` / `5de80e64…` /
-//!   `93da24cc…`);
+//!   and testnet-12's three ids are the DAA-750 release's to the byte (`dbbc9104…` / `5de80e64…` /
+//!   `7c652212…`);
 //! * armed at a future height it moves `consensus_params_id` and `consensus_schedule_id` but NOT
 //!   `consensus_identity_id`, and a `Some(never())` collapses to absence (the fourth of the four places a
 //!   Some-only fence needs);
@@ -16,28 +17,32 @@
 //!   `palw_reorg_strict_economic_win` or `palw_operator_anchor` (lane A — ADR-0160 §8 A1: the anchor is
 //!   what keeps a private branch from staging claims the public branch cannot match) at or below it,
 //!   and with the bundle's mirror apart from the field;
-//! * it is an entry of `PALW_T12_POST_LAUNCH_FENCES_V1`, whose `set` moves the field and the mirror
-//!   together, so `--palw-drill-fence-at` crosses it with every other entry.
+//! * it is an entry of `PALW_T12_CAPACITY_FENCES_V1` — NOT of `PALW_T12_POST_LAUNCH_FENCES_V1`, which the
+//!   release arms at DAA 750 — whose `set` moves the field and the mirror together, and the capacity list
+//!   armed over the release validates (`palw_drill_capacity_fences_at_v1` crosses it on a drill).
 //!
 //! The rule itself is `palw_state_v2::tests::capacity_weight_cap_v1` (W-T1 … W-T9).
 
 use kaspa_consensus_core::config::params::{
-    ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
+    ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, Params,
+    SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_capacity_fences_v1,
+    palw_t12_shipped_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
-/// testnet-12 as the release ships it (`0e8ec984e`; pinned by the shipping re-pin `9c717c16d` as
-/// `palw_clock_lead_cap_is_t12_only::T12_WITH_THE_CAP`): params, identity, schedule.
+/// testnet-12 as THIS build ships it — the DAA-750 post-launch release (`c3dbaee3c`, every fence of
+/// `PALW_T12_POST_LAUNCH_FENCES_V1` at DAA 750), with F-W dormant: params, identity, schedule — the same
+/// pins `palw_operator_anchor_is_t12_only::T12_RELEASE` holds (rcore/cap-s1: the capacity fences do not
+/// move them).
 const T12_RELEASE: (&str, &str, &str) = (
-    "b8564b888e55bb5f797e708a3f65e7cd122065123a3ab09cbeb8d10c98715d8f",
+    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "93da24cc60f7a77e63c43106e96298d2979644a3fc0c3f82529c8849333127fd",
+    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
 );
 
 /// Heights an operator might pick: a low one a drill crosses, the capacity release's own later one.
-/// Never 500 (the DAA-500 release's) nor 1,000 (`palw_bond_maturity`'s) — a fence at a scheduled
+/// Never 750 (the post-launch release's) nor 1,000 (`palw_bond_maturity`'s) — a fence at a scheduled
 /// height is invisible to the fork id.
 const HEIGHTS: [u64; 3] = [60, 2_345, 50_000];
 
@@ -61,12 +66,15 @@ fn set(p: &mut Params, name: &str, at: Option<ForkActivation>) {
     (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name} is listed")).set)(p, at);
 }
 
-/// testnet-12 with F-W's prerequisites at `height` — the baseline F-W's own id moves are measured
-/// against.
+/// testnet-12 with F-W's prerequisites at or below `height` — the baseline F-W's own id moves are
+/// measured against. The release arms them at DAA 750 (with bind-deadlock, which needs lane A at or below
+/// it), so a height past 750 keeps the release's own ruleset and a lower one moves the three down to it.
 fn prerequisites_at(height: u64) -> Params {
     let mut p = palw_t12_shipped_params();
-    for name in PREREQUISITES {
-        set(&mut p, name, Some(ForkActivation::new(height)));
+    if height < PALW_T12_POST_LAUNCH_FENCE_DAA {
+        for name in PREREQUISITES {
+            set(&mut p, name, Some(ForkActivation::new(height)));
+        }
     }
     p
 }
@@ -231,28 +239,32 @@ fn the_weight_cap_needs_rcore_plus_strict_win_and_the_operator_anchor_at_or_belo
     armed_at(2_345).validate_palw_v2().expect("the prerequisites at the same height are at or below it");
 }
 
-/// **The post-launch list carries F-W**, and its `set` moves the field and the fold's mirror together;
-/// the whole list armed at one height (the drill's `--palw-drill-fence-at`; below 1,000, where lane
-/// maturity's entry must sit) validates — strict-win and lane A are on the list at the same height — and
-/// setting it back is the release byte for byte.
+/// **The capacity list carries F-W, and the DAA-750 list does not** (rcore/cap-s1): the capacity entry's
+/// `set` moves the field and the fold's mirror together; the capacity list armed over the release at one
+/// height at or past the release's (where its prerequisites strict-win and lane A are) validates, and
+/// setting it back is the release byte for byte. Below the release's height it is refused by the
+/// prerequisites' names.
 #[test]
-fn the_post_launch_list_sets_the_weight_cap_and_its_mirror_together() {
-    let entry = PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == "palw_capacity_weight_cap").expect("F-W is listed");
+fn the_capacity_list_sets_the_weight_cap_and_its_mirror_together() {
+    assert!(
+        PALW_T12_POST_LAUNCH_FENCES_V1.iter().all(|f| f.name != "palw_capacity_weight_cap"),
+        "F-W is never an entry of the DAA-750 release's list (that list is armed on the live chain)"
+    );
+    let entry = PALW_T12_CAPACITY_FENCES_V1.iter().find(|f| f.name == "palw_capacity_weight_cap").expect("F-W is listed");
     for name in PREREQUISITES {
-        assert!(PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|f| f.name == name), "and so is its prerequisite {name}");
+        assert!(PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|f| f.name == name), "its prerequisite {name} is the release's");
     }
     let release = palw_t12_shipped_params();
-    let mut armed = release.clone();
-    for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
-        (fence.set)(&mut armed, Some(ForkActivation::new(600)));
+    for at in [PALW_T12_POST_LAUNCH_FENCE_DAA + 1, 2_345] {
+        let mut armed = release.clone();
+        palw_t12_arm_capacity_fences_v1(&mut armed, Some(ForkActivation::new(at))).expect("the capacity list over the release");
+        assert_eq!((armed.palw_capacity_weight_cap, mirror(&armed)), (Some(ForkActivation::new(at)), Some(at)));
+        (entry.set)(&mut armed, None);
+        assert_eq!((armed.palw_capacity_weight_cap, mirror(&armed)), (None, None), "set to None clears both");
+        assert_eq!(format!("{armed:?}"), format!("{release:?}"), "the capacity list is the whole difference");
     }
-    armed.validate_palw_v2().expect("the list at one height is a runnable testnet-12 ruleset");
-    assert_eq!((armed.palw_capacity_weight_cap, mirror(&armed)), (Some(ForkActivation::new(600)), Some(600)));
-    (entry.set)(&mut armed, None);
-    assert_eq!((armed.palw_capacity_weight_cap, mirror(&armed)), (None, None), "set to None clears both");
-    let mut back = armed.clone();
-    for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
-        (fence.set)(&mut back, None);
-    }
-    assert_eq!(format!("{back:?}"), format!("{release:?}"), "the list is the whole difference");
+    let mut early = release.clone();
+    let why = palw_t12_arm_capacity_fences_v1(&mut early, Some(ForkActivation::new(PALW_T12_POST_LAUNCH_FENCE_DAA - 1)))
+        .expect_err("below the release's strict-win and lane A");
+    assert!(why.contains("at or below it"), "refused by a prerequisite's name: {why}");
 }
