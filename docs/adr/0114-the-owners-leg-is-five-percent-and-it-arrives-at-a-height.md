@@ -112,3 +112,9 @@ resolves `model_leg_v2_active` with the others.
   burn.
 * The fingerprint and fence-table tests run unchanged with the fence `None` everywhere (the shipped
   fingerprints do not move).
+
+## Links
+
+- Spec: [15 Model lines and market](../spec/palw/15-model-lines-and-market.md) §15.2 (PALW-MK-7)
+- Design: [design/palw/market.md](../design/palw/market.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

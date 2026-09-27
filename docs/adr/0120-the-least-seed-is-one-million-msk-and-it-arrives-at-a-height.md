@@ -63,3 +63,9 @@ differently on every node that re-validates it — so, like ADR-0114, the new fl
   would still open any pair at 100,000 MSK paid by any other client, so the rule would be a suggestion.
 * **Sharing 6,000**: one height for four fences, and a build missing one of them invisible to the gate
   (see Decision 6).
+
+## Links
+
+- Spec: [15 Model lines and market](../spec/palw/15-model-lines-and-market.md) §15.2 (PALW-MK-6)
+- Design: [design/palw/market.md](../design/palw/market.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)
