@@ -261,10 +261,14 @@ fence, ADR-0062 SA-1…SA-7 and ADR-0111 D3 stand. **Code:** `core/palw_da_rcore
 
 ## 8.7 What the panel is paid, and what a seat holds
 
-- **PALW-VF-37 (the pool).** Past `palw_panel_economy`, a `Final` claim's reward `R` is split: the panel
-  pool is `⌊R × 200 / 1000⌋` (`PALW_PANEL_POOL_PERMILLE_V1`), and the producer takes the exact rest.
-  `R` is the escrow after work pricing and after the buyback slice. Nothing is minted beyond the carve
-  the accepting block withheld.
+- **PALW-VF-37 (the panel's share).** The panel is paid out of the claim's own reward, never by
+  minting:
+  - **Model-class claims past `palw_economic_payout`** (testnet-12 from genesis): the panel's share is
+    `clamp(α·C_V / (C_P + α·C_V), S_min, S_max)`, where `C_V` is the verification compute and `C_P`
+    the producer's. On testnet-12, α = 100 ‰, `S_min` = 100 ‰ and `S_max` = 300 ‰.
+  - **The floor class, and every network below that fence** (`palw_panel_economy`): the pool is
+    `⌊R × 200 / 1000⌋` (`PALW_PANEL_POOL_PERMILLE_V1`), and the producer takes the exact rest.
+  - `R` is the escrow after pricing and after the buyback slice.
 - **PALW-VF-38 (a seat's share).** Each drawn seat whose `Valid` (or `Sampled`) receipt the chain
   credited inside the receipt window is paid one fixed share, `⌊pool / K⌋`, where K is the number of
   seats drawn. Unpaid shares go to the panel reserve, never to the producer. On testnet-12 the shares
@@ -275,12 +279,13 @@ fence, ADR-0062 SA-1…SA-7 and ADR-0111 D3 stand. **Code:** `core/palw_da_rcore
   - **Other networks:** past `palw_panel_exposure_floor` a seat reserves
     `max(3 × claim.reserved, λ × max_seat_reward)`. On testnet-12, λ = 5 (`reward_multiple_permille`
     5,000), which enters `duty_bind`'s λ-term.
-- **PALW-VF-40 (work-priced reward).** Past `palw_work_priced_reward`, a model-class claim is paid
-  `⌊escrow × min(pwu, unit) / unit⌋`, where `unit` is the heaviest weight-bearing class's canonical
-  inference. The unnamed remainder is never minted (`palw_work_priced_reward_v1`).
+- **PALW-VF-40 (priced reward).** A model-class claim is paid a priced fraction of its escrow. Past
+  `palw_economic_payout` that is `min(escrow, attempted_ccu × rate)` (10 PALW-CO-42). Below it, past
+  `palw_work_priced_reward`, it is `⌊escrow × min(pwu, unit) / unit⌋`, where `unit` is the heaviest
+  weight-bearing class's canonical inference. The unnamed remainder is never minted.
 
-**Sources:** ADR-0124 D1–D4, D6 (D3 is superseded on testnet-12 by ADR-0152 A-4; D5 by SW); ADR-0130
-D1–D2. **Code:** `core/palw_panel_economy_v1.rs`, `core/palw_state_v2.rs` (`palw_panel_payout_key_v1`).
+**Sources:** ADR-0124 D1–D4, D6 (D3 is superseded on testnet-12 by ADR-0152 A-4; D5 by SW); ADR-0132
+(Upgrade C); ADR-0130 D1–D2. **Code:** `core/palw_panel_economy_v1.rs`, `core/palw_state_v2.rs` (`palw_panel_payout_key_v1`).
 
 **Activation.**
 

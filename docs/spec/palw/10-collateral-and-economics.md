@@ -59,7 +59,14 @@ Symbols used below:
 - **PALW-CO-7 (maturity).** A non-genesis bond MUST NOT be drawn to a panel, or counted as a ready seat,
   until `registration DAA + 1,000` (`PALW_T12_BOND_MATURITY_WINDOW_DAA`). This applies from DAA 750
   (`palw_bond_maturity_early`) and from DAA 1,000 (`palw_bond_maturity`). The window counts from the
-  registration DAA even for bonds registered before 750. Genesis bonds are exempt.
+  registration DAA even for bonds registered before 750. Genesis bonds are exempt. Maturity is judged
+  at the claim's anchor DAA, not at the binding block (`palw_seat_maturity_floor_v1`, shared by the
+  assembler and acceptance).
+- **PALW-CO-49 (a bond in its first block).** Past `palw_bootstrap_activation` (testnet-12 from genesis),
+  a block's own attempt resolves its bond against the parent state's bonds plus any `BondRegistered`
+  in the block's own mergeset. A registration is therefore usable by the block that merges it, not only
+  by that block's child. A block's own body is never in its own mergeset, so this does not let a
+  lone producer bootstrap a stopped chain. The clock lane does that (13 §13.3).
 
 **Code:** `core/palw_state_v2.rs` (`PalwBondStateV2`, `PalwBondStatusV2`,
 `palw_bond_collateral_is_locked_v6`, `palw_bond_producer_floor_shortfall_v1`);
@@ -262,13 +269,56 @@ Charging on voids is stated with the void reasons in [07](07-claim-lifecycle.md)
 
 ## 10.8 Emission
 
-*Completed with the chapter 10 pass in Phase 2: the premine cap (0059), the block subsidy and issuance
-per unit of work (0137), the carves at Final (panel 0124, validator carve 0126, the 5 % pair buy 0091),
-and the floor class minimum (0068).*
+- **PALW-CO-39 (premine cap).** Genesis MUST mint one number, the premine, capped at 10,000,000,000 MSK.
+  Every other allocation — genesis bonds, community rows, operator wallets — is a carve of it, never
+  an addition.
+- **PALW-CO-40 (subsidy).** Each chain block's subsidy follows the network's schedule. On testnet-12 the
+  genesis block subsidy is 444,562,014,000 sompi (4,445.62 MSK at 10^8 sompi per MSK;
+  `PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI`). PALW reward MUST be a carve of that subsidy, never an
+  addition to it.
+- **PALW-CO-41 (the carve).** Past `palw_overlay_carve` (testnet-12 from genesis, `{2,000 bps, 720 ‰}`):
+  - the DNS validator pool is 20 % of the subsidy;
+  - a claim escrows `⌊subsidy × 720 / 1000⌋` of the block that carried its attempt (3,200.85 MSK at
+    genesis), and the coinbase withholds exactly that. Both are resolved at the lower of the carrying
+    block's and the paying block's DAA (`palw_overlay_escrow_carve_at_v1`).
+- **PALW-CO-42 (payout at Final).** A `Final` claim's escrow is paid as follows:
+  - **Model-class claims past `palw_economic_payout`** (testnet-12 from genesis) are paid
+    `min(escrow, attempted_ccu × rate)`. On testnet-12 the rate is 900,000,000 sompi per giga
+    MAC-eq, and the panel's share is `clamp(α·C_V / (C_P + α·C_V), 100 ‰, 300 ‰)` with α = 100 ‰
+    (08 PALW-VF-37). The claim snapshots its economics at acceptance. What the price leaves is never
+    minted.
+  - **The floor class** stays on the fixed split: 80 % to the producer and 20 % to the panel pool.
+  - **The buyback slice** (5 % of `E`) buys from the line's pair where one is open (15 §15.2).
+  - **Legs that vest** are the worker, seat and reserve legs (§10.6).
+- **PALW-CO-43 (the floor's minimum).** The floor class keeps its minimum cadence as the liveness floor.
+  Model classes carry the economy (ADR-0068, as superseded for shares by ADR-0137: a share is a
+  result, 05 §5.4).
+
+**Sources:** ADR-0059, ADR-0042 D10, ADR-0126 D1–D3 and §6a, ADR-0132 (Upgrade C), ADR-0124, ADR-0091,
+ADR-0068. **Code:** `config/params.rs` (`palw_overlay_carve`, `palw_economic_payout`),
+`core/palw_economic_payout_v1.rs`, `core/palw_reward_v2.rs`, `cons/processes/coinbase.rs`.
 
 ## 10.9 Liveness is structural; collateral covers fraud
 
-*Completed with the chapter 10 pass: ADR-0151 D1–D6.*
+- **PALW-CO-44 (ADR-0151 D3).** The clock MUST NOT depend on any bond's collateral. The heartbeat lane
+  is armed from genesis, and no `bits`-priced lane is producible, so the DAA advances every heartbeat
+  interval whatever any bond can afford (06 §6.4, 13 §13.3).
+- **PALW-CO-45 (D2).** The genesis gate MUST NOT require bonds to sustain `window_bind × dearest claim`
+  when the clock advances without a claim (`verify_palw_genesis_v2_with_clock_v1`). The other genesis
+  checks still run: a bond declares only what its outpoint holds, panels can be seated, and the
+  catalogue agrees.
+- **PALW-CO-46 (D1).** Genesis collateral is sized to reachable fraud liability: concurrency per
+  class, with liability per claim equal to `palw_max_fraud_gain_v1` = escrow + the fork weight a Valid
+  Final authorizes (`palw_v2_collateral_for_class_set_v1`). *The runtime half, the producer's live
+  reservation, is open.*
+- **PALW-CO-47 (D4).** Admission capacity (`reserved_exposure`, released at Final and at void alike) and
+  slash liability (`slashable_locks`) MUST be separate ledgers. On testnet-12 the liability ledger is
+  armed from DAA 0.
+- **PALW-CO-48 (D5).** Duration MUST NOT be weight. The payout has no term in windows or DAA, and a
+  claim's deadline is its class's own (08 PALW-VF-29).
+
+**Sources:** ADR-0151 D1–D6. **Code:** `core/palw_genesis_v2.rs` (`verify_palw_genesis_v2_with_clock_v1`,
+`palw_clock_advances_without_a_claim_v1`, `palw_v2_collateral_for_class_set_v1`), `core/palw_economic_payout_v1.rs`.
 
 ## 10.10 Claim capacity (ADR-0160)
 
@@ -280,6 +330,6 @@ are dormant until `H_cap`.
 | Network | Status |
 | --- | --- |
 | mainnet | not active (PALW disabled) |
-| testnet-12 | R-core+ (B, SR, L, A, S, R, V, T, W) from genesis (`palw_rcore_plus`, DAA 0). DAA 750: `palw_bond_maturity_early`, `palw_final_lock_full_collateral`, `palw_final_lock_life`. DAA 1,000: `palw_bond_maturity`. DAA 1,300: `palw_final_lock_life_retro`. X10 (`palw_rcore_attributed_charging`) is not declared |
+| testnet-12 | R-core+ (B, SR, L, A, S, R, V, T, W) from genesis (`palw_rcore_plus`, DAA 0); `palw_overlay_carve` and `palw_economic_payout` from genesis. DAA 750: `palw_bond_maturity_early`, `palw_final_lock_full_collateral`, `palw_final_lock_life`. DAA 1,000: `palw_bond_maturity`. DAA 1,300: `palw_final_lock_life_retro`. X10 (`palw_rcore_attributed_charging`) is not declared |
 
-**Sources:** ADR-0152 §3.1–§3.8, §2 (archive 0152/02–04); ADR-0154, ADR-0155; ADR-0151; ADR-0065 D1.
+**Sources:** ADR-0152 §3.1–§3.8, §2 (archive 0152/02–04); ADR-0154, ADR-0155; ADR-0151; ADR-0065 D1, D4–D5; ADR-0064; ADR-0059; ADR-0061 (testnet-11's collateral); ADR-0126; ADR-0132.

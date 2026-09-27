@@ -48,3 +48,4 @@ The archived bodies of history-heavy ADRs are listed below as each one is slimme
 
 - [ADR-0035: The public PALW testnet is testnet-11, continued — and it pins its determinism class at the door](archive/0035-palw-public-testnet-strategy.md)
 - [ADR-0036: PALW mainnet activation — lineage reconciliation and the model that governs](archive/0036-palw-mainnet-activation-model.md)
+- [ADR-0068: The LLM-primary economy — the floor retires to the doctrine's minimum](archive/0068-the-llm-primary-economy-and-the-floors-minimum.md)

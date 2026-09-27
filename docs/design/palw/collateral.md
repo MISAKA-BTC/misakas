@@ -127,3 +127,8 @@ at 200 s/DAA) in archive 03 V-4. The live figures after launch are in the launch
   - a stake-weighted admission jury
   - anchoring after K heartbeats
 - Claim capacity separated from collateral price: ADR-0160, imported after int-6 (`claim-capacity.md`).
+
+## Source texts (archived ADR bodies)
+
+- [ADR-0065 — A bond must be earned, and a failure is not a verdict](archive/0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
+- [ADR-0151 — Liveness is structural; collateral covers fraud](archive/0151-liveness-is-structural-collateral-covers-fraud.md)

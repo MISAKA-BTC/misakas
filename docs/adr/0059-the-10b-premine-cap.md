@@ -88,3 +88,9 @@ Add community entrants by APPENDING to `TESTNET11_COMMUNITY_ALLOCATIONS` (the ou
 is the table position). Do not touch the cap. The main wallet pays; the build fails if it
 cannot. If someone asks for a bigger genesis, the answer is this ADR and the operator, in
 that order.
+
+## Links
+
+- Spec: [10 Collateral and economics](../spec/palw/10-collateral-and-economics.md) §10.8 (PALW-CO-39) · [16 Network parameters and fences](../spec/palw/16-network-parameters-and-fences.md)
+- Design: [design/palw/collateral.md](../design/palw/collateral.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

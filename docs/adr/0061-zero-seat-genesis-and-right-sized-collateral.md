@@ -104,3 +104,9 @@ derived minimum itself rose (the redraw's extra bind+receipt pair belongs in
 register — 10,000 MSK admits `pwu_per_inference ≤ ~8.3M` against Qwen3.6's 2.69M, a 3.1× headroom,
 and exceeding it aborts every binary inside `Params::from`. Raising the carve is a supply decision
 under ADR-0059's cap.
+
+## Links
+
+- Spec: [10 Collateral and economics](../spec/palw/10-collateral-and-economics.md) §10.9 (testnet-12 replaced this collateral model with ADR-0151 and ADR-0152)
+- Design: [design/palw/collateral.md](../design/palw/collateral.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)
