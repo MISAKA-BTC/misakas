@@ -1,0 +1,410 @@
+> **Archived verbatim from `docs/adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md`** on 2026-09-27, when the ADR was cut to a short decision
+> record ([INDEX.md](../../../INDEX.md) §4). Not normative. The decision record is
+> [ADR-0135](../../../adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md); the rules are in [spec/palw/03](../../../spec/palw/03-classes-and-registry.md); the reasoning is summarised in [design/palw/registry.md](../registry.md). Relative links were rewritten to resolve from here.
+
+# ADR-0135 — A model is data: the permissionless registry derives its profile, proves its panel, and walks its lifecycle
+
+* Status: **PROPOSED 2026-09-17; the rule set built in shadow the same day, and Protocol Upgrade A built behind a
+  dormant fence the same evening** (`palw_model_registry_v1.rs`, `palw_state_v2.rs`; §7). No shipped preset arms
+  it: no parameter or fingerprint moves until the operator schedules `palw_model_registry` at a height.
+* Operator's direction, in the operator's words: "誰でもモデルを chain へ登録でき、検証時間・必要 Panel 数・claim 上限・
+  報酬係数までプロトコルが自動計算し、条件を満たしたら自動 activate"; "モデルをコードではなくデータとして追加する";
+  "実測値を consensus parameter にしない"; "Panel 側も permissionless — 自己申告だけではダメ"; "モデル登録から
+  activation まで全部 state machine"; "share も最終的には手動設定をなくしたい"; "既存 Canonical ML VM で表現可能 →
+  permissionless、新しい opcode が必要 → protocol upgrade".
+* Supersedes, in ADR-0133: Decision 2's *measured* p99 as an input to the profile (measurements become telemetry),
+  §9a's "profile freeze by the operator" and "tiny activation → ramp by the operator" (the lifecycle does both).
+  Keeps everything else of ADR-0133 (three clocks, Little's law, class-local fail-closed, the artifact options).
+* Builds on: [0133](../../../adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md),
+  [0132](../../../adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md),
+  [0131](../../../adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md) (economic compute from the
+  graph), [0049](../../../adr/0049-palw-adjudication-contract.md) (the canonical IR the VM boundary is drawn on), [0067](../../../adr/0067-classes-are-chain-data-kernels-are-the-build.md)
+  and [0078](../../../adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md) (the on-chain class registration and carriage this extends),
+  [0056](../../../adr/0056-palw-permissionless-class-admission-and-share-economy.md) (class admission is permissionless already; this ADR removes the share it kept), [0071](../../../adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md) (who may judge a class).
+
+## 0. The sentence this ADR is
+
+**A model is registered as data — a graph root, an artifact root and its bytes, a canonical job, a quantization,
+a runtime version, and a bond — and from that data every node derives the same verification window, prefetch,
+inflight cap, required ready seats, registration bond and claim cadence; seats count only when they prove the
+artifact, their participation, their collateral and a recent verification; the class walks REGISTERED →
+PREFETCHING → PROBATION → ACTIVE_LIMITED → ACTIVE on chain-visible facts and falls to HELD alone; and nothing —
+not a window, not a rate, not a share — is ever stated by a registrant, measured by an operator or committed to
+a source tree.**
+
+## 1. What today's path still needs a human for, and what stays a human's
+
+Today (ADR-0133 §9a): shadow measurement → the operator freezes a profile → a fence in `main` → a share set by
+hand → a release. Each step is a fork or a decision per model, and the p99 the operator would freeze is the
+measuring host's (an M4 200 s, an H100 50 s, a slow disk 500 s). This ADR removes every one of them **for a model
+the canonical ML VM already expresses** (matmul, attention, the mixture router and experts, the gated-delta
+recurrence, norms, rotations, the LM head — ADR-0049's IR at the class's `runtime_version`). What stays a
+protocol upgrade: a model that needs an instruction the VM lacks. That is not a model registration but a VM
+instruction-set change, and `palw_manifest_verdict_v1` says so (`UnsupportedOp`) rather than letting a node
+guess at an op's meaning.
+
+## 2. Decisions
+
+**Decision 1 — the manifest.** `PalwModelManifestV1 { graph_ir_root, artifact_root, artifact_bytes,
+canonical_prefill_tokens, canonical_decode_tokens, quantization_format, runtime_version }` with a registration
+bond. It is today's on-chain class registration (ADR-0067's carriage: the profile IR and the canonical job)
+plus the artifact's bytes — and nothing a human decides: no window, no reward, no share. A manifest is judged
+before it is a class: `Valid`, `UnsupportedOp` (the VM boundary), `EmptyArtifact`, `EmptyJob`, `ZeroWork`.
+
+**Decision 2 — the work, derived.** From the graph, every node computes `PalwModelWorkV1 { verification_ccu
+(ADR-0131's economic compute of the job a seat replays), economic_ccu_per_claim (the same over the class's
+expected draws, ADR-0132), artifact_bytes, working_set_bytes, ops_supported }`. Dense MACs, attention over the
+kv length, the recurrence, the active experts, the logits and the elementwise work are counted by the one
+versioned cost table; two nodes with one graph get one number.
+
+**Decision 3 — the profile, derived, never measured.** Against `PalwRegistryGlobalsV1` — one set of reference
+constants for every class, changed only by a fence:
+
+* `verification_window_spans = ⌈safety × verification_ccu / reference_work_per_span⌉ + receipt_allowance_spans`
+* `artifact_prefetch_spans = ⌈io_safety × artifact_bytes / reference_bytes_per_span⌉`
+* `required_ready_seats = max(seat_count + spare_seats, ⌈seat_count × verification_ccu / (utilization ×
+  reference_work_per_span)⌉)` — the panel plus the spare, or more where one claim a span already needs more
+  replay time than that many seats offer at the target utilization
+* `max_inflight_claims = ⌊utilization × required_ready_seats × window × reference_work_per_span / (seat_count ×
+  verification_ccu)⌋` — Little's law
+* `registration_bond = bond_per_span × verification_window_spans` — the burden a class puts on panels is what
+  its registrant bonds
+* `admission_claims_per_span = min(budget_ccu_per_span / economic_ccu_per_claim, max_inflight / window)` —
+  Decision 5
+
+The fleet's reference (ADR-0133): 4 G MAC-eq/s (2.4 T a span), 1 GB/s (600 GB a span), ×2 and ×2, one span of
+receipt allowance, five seats plus two spare, 70 %. On it the dense tier and the hybrid derive two spans (one of
+verification, one of allowance), one span of prefetch, seven ready seats; a Kimi-class of 1 T MAC-eq and 300 GiB
+derives two spans, two of prefetch, seven seats; a 10 T MAC-eq graph derives ten spans and more than seven seats
+— all from the same code, none from a decision. **Measured p95/p99 are telemetry**: op 185 keeps printing them
+so the fleet can see whether the derived window is being met; they enter no rule.
+
+**Decision 4 — readiness is evidence.** `PalwReadinessEvidenceV1 { artifact_root_matches, all_chunks_held,
+participation_ok, free_collateral_sompi, last_probe_ok_span }`; a seat is ready for a class only with the root
+matched, every chunk held (a possession proof over the manifest's chunks), its node participating (synced, not
+held), free collateral for `readiness_collateral_multiple` seat exposures, and a canonical probe verified within
+`readiness_probe_max_age_spans`. A declaration alone counts for nothing (the failure ADR-0132 found: every
+genesis bond "declared" the hybrid and one could run it). A seat that says `Incapable` is simply not ready and
+is not dealt the class until its evidence says otherwise.
+
+**Decision 5 — no share.** A class's claim cadence is `budget_ccu_per_span / economic_ccu_per_claim`, capped by
+what its window can hold: a heavy model claims rarely and is paid much a claim, a light one often and little, and
+the network's compute budget a span is what is constant. Under the single lottery (ADR-0132 S, ADR-0133 §9a Fence
+2) each class's share of draws is its admission over every class's (`palw_class_shares_from_admission_v1`); a
+new class takes its slice from all in proportion, a class with zero admission holds none. The reward stays
+ADR-0132's `f(EconomicAttempted, GlobalRate)` — no model's name enters it — and a per-claim escrow cap is not
+adjusted per model: cadence is what moves.
+
+**Decision 6 — the lifecycle.**
+
+```text
+REGISTERED ──manifest valid──▶ PREFETCHING ──ready seats ≥ required, collateral ok──▶ PROBATION
+PROBATION ──probation_claims probes passed, none failed──▶ ACTIVE_LIMITED (a tenth of admission)
+ACTIVE_LIMITED ──stable_epochs spans at target, nothing held──▶ ACTIVE (full admission)
+PROBATION / ACTIVE_LIMITED / ACTIVE ──panel not drawable (ready < seat_count) or utilization ≥ 1──▶ HELD
+HELD ──ready seats ≥ required, utilization < 1──▶ PROBATION (never straight back to ACTIVE)
+```
+
+Every arrow is `palw_lifecycle_step_v1` over `PalwLifecycleObservationV1` (ready seats, probes passed and
+failed, utilization, collateral, span stability) — chain-visible facts at a span boundary. `HELD` holds the
+class's own new claims and nothing else: another class on its own facts stays where it is, the execution lane
+schedules the classes with `Final`s, the anchor cadence is untouched (pinned).
+
+**Decision 7 — the boundary.** Registration is permissionless for a graph the canonical VM expresses at the
+manifest's `runtime_version`; a graph that needs a new op is refused as `UnsupportedOp` and its op is a protocol
+upgrade. The registry therefore never has to understand an operation it was not built to verify.
+
+## 3. What Kimi's registration looks like
+
+A third party submits the manifest and the bond. Every node derives `economic_ccu`, `verification_ccu`,
+`artifact 287 GiB`, `prefetch 2`, `verification 2`, `max inflight`, `required ready 7` (or more), the bond. Seven
+operators fetch the artifact, run the probe, and their evidence makes them ready. Ten probe claims finalize
+with none failing: limited activation at a tenth of the derived admission. Three stable spans: `ACTIVE`. Two
+operators leave: `HELD`; the dense tier and the lane continue; the operators return: `PROBATION` again. Nobody
+updates a repository.
+
+## 4. What this changes in ADR-0132 and ADR-0133
+
+* ADR-0133 Decision 2 (`warm_p99`/`cold_p99` as inputs): **superseded** — the shadow module keeps them as this
+  node's telemetry, the registry's profile ignores them.
+* ADR-0133 §9a Fence 1: **becomes Protocol Upgrade A**, the generic framework — manifest, derived profile,
+  readiness evidence, lifecycle, class-local capacity gate — armed once; no "Kimi activation" step exists after it.
+* ADR-0132 Decision 6 (a new model earns only after a shadow period): **becomes** the lifecycle's `PROBATION` and
+  `ACTIVE_LIMITED`, automatic.
+* ADR-0124 Decision 6's unit and ADR-0131's rate: **the rate is global** (ADR-0132 C); no class sets a unit.
+
+## 5. Security amendments
+
+* **SA-1 — the registrant cannot shrink its window**: the profile reads the graph, not the manifest's opinion
+  of it; under-reporting is impossible because nothing is reported.
+* **SA-2 — the registrant cannot flood**: the registration bond grows with the window it imposes, admission is
+  budgeted, and a class that cannot draw a panel is `HELD` at no cost to any other.
+* **SA-3 — a seat cannot fake readiness cheaply**: the possession proof is over the artifact root the manifest
+  names, the probe is a canonical verification the chain can check, and the collateral is real.
+* **SA-4 — a class cannot fork the network by existing**: a manifest the VM cannot express is refused at
+  registration; nothing about a registered class changes a rule any node runs.
+* **SA-5 — globals are one fence, not one per model**: the reference constants are consensus parameters a
+  fence moves for every class at once; a measured p99 never moves one.
+
+## 6. The road
+
+```text
+now      ADR-0132 / 0133 / 0135 in shadow: the CLI prints each class's derived profile beside its telemetry
+   A     Protocol Upgrade A — Permissionless Model Registry V1: manifest, derived profile, readiness evidence,
+         lifecycle, class-local capacity gate (ADR-0132 F1/F2 folded in); the dense tier and the hybrid walk it live
+   B     the single lottery, if adopted (ADR-0132 S): class shares from admission
+   C     EconomicAttempted + a global rate + budgeted admission (ADR-0132 Fence 3), no per-model cap
+         — built 2026-09-17 behind the dormant `palw_economic_payout` fence (ADR-0132 §7); armed after A's drill
+after    Kimi, Llama, a new mixture, a 100B model: a manifest and a bond, no fork
+```
+
+## 7. What is built — Protocol Upgrade A, behind a dormant fence (2026-09-17)
+
+**Armed for testnet-11 (prepared 2026-09-17 night, on `wip/arm-6001-registry-payout`, merged only on the
+operator's go after the devnet drill):** `palw_model_registry` at the 6,001 flag day, beside ADR-0132 Upgrade
+C (`palw_economic_payout`, ADR-0132 §7) and ADR-0137's work target (`palw_work_target`, which stops
+Decision 5's shares being read at the same height they would first be written — ADR-0137 §3.5 is why the
+two may not be a height apart). The fingerprint moves from `135b6ee0…` to `32c2e8e3… (`8af89f85…` since 2026-09-18, when the single lottery and the short challenge window joined the same day)`; the fork id's
+height set does not (6,001 was already scheduled), so the two builds are told apart by the fingerprint alone.
+Rows open at the first span boundary past 6,001 for every class the node can describe (the amendment
+below), the seats' proofs count after one readiness age (30 spans × 5 DAA = 150 DAA, ~30 h), and the classes
+walk the lifecycle from there.
+
+**Amended 2026-09-17 (evening), found by the devnet drill:** the fold's registry input named "the genesis
+classes' work, from the registrations the bundle carries" — but no shipped bundle registration carries an
+admission carriage (a genesis class's profile is the catalog's, of which the bundle holds only a root), so no
+genesis class had a work, no row opened for the floor or for testnet-11's three classes, and a class node-1
+registered before the fence had no row either (its carriage was consumed by the registration block). The
+node now describes a class from what it can prove it computes: a genesis class through the canonical class
+table the binary compiles (`canonical_classes_v1`, the same derivation the registration message uses), a
+registered class through the carriage the chain carried — before or after the fence — kept in the class
+carriage store and adopted by a syncing node before the block that needs it. A class the node cannot
+describe stays a legacy row. The fold itself is unchanged: it opens rows from the works it is handed.
+
+**Amended the same evening, the second drill finding:** a possession proof names the span it was made for
+and the fold took it only in that span or the next; on the devnet's two-DAA spans the carrier that brings it
+waited longer than that in mempools and for a block (every proof refused as "names span 11 at span 21").
+A proof now lands within `max(8 spans, 40 DAA)` of the span it names (`palw_readiness_landing_spans_v1`:
+eight spans on testnet-11's five-DAA spans, twenty on the devnet's two — phase 2 found eight spans still short
+of a chain of receipts on a bursty devnet; a future span is still refused), and the row it writes is dated at the named span's first DAA: a late proof is exactly as
+fresh as when it was made, a replayed one renews nothing, and the thirty-span readiness age bounds the rest; on testnet-11 (five-DAA spans, ~5 DAA an
+hour) the allowance is about eight hours of carrier latency.
+
+**Devnet drill, phase 1 — PASS (2026-09-17 14:45Z, VPS 95.111.236.186, seven mapped-artifact nodes, `LANE=0,2,2`,
+registry at DAA 20, node-1 registering `Qwen/Qwen2.5-1.5B/graph-v5@512`):** the fence crossed and the rows
+opened at the first boundary (floor `Active`, the registered class `Prefetching`), the class registered and
+its row opened, possession proofs landed, the grace passed with the floor `Active` and the chain producing
+(tip 82), node-2 restarted and re-read the same rows. The class-local verdict at the first governed boundary
+was `Prefetching` with two ready seats of seven required — the third drill finding: **a seat's proofs starve
+behind its own receipt traffic.** Every lifecycle carrier of a node chains on one rolling fee outpoint with
+eight unconfirmed at most, receipts for the floor's claims filled the chain for fifteen minutes at a time,
+and four of seven seats never got a proof out (three submitted once). The node now lets a proof that found
+no slot take the next one and holds its receipts until it lands (`readiness_waiting`), and asks for the
+proof again at once instead of after the thirty-second read throttle. Memory on the host: 1.75 GiB of
+file-backed pages once, 50–560 MiB anonymous per node, `MemAvailable` 9.8–10.8 GiB of 12 throughout.
+
+**Phase 2, first attempt — the fourth finding:** with proofs given precedence and the landing allowance in
+DAA, six of seven seats proved within a span of the restart and the seventh never could: the devnet mints
+six genesis bonds (`PALW_DEVNET_GENESIS_BONDS`) with six fee floats, so node-6 held a key the chain never
+bonded and no float to carry anything, while the registry's requirement is `seat_count + spare_seats = 7`
+ready seats for its five-seat panels. The devnet now mints eight bonds and eight floats (its genesis
+commitment and fingerprint move; a rehearsal network of public seeds, not a regenesis of anything
+deployed), the drills run eight nodes, and phase 1 is repeated on the eight-bond genesis before phase 2.
+
+**Phase 1 on the eight-bond genesis — PASS (2026-09-17 17:11Z, eight nodes):** the same six steps; the class
+`Prefetching` with two ready seats at the verdict, because — the fifth finding — the per-node carrier chain
+(eight in flight) took fifteen to twenty-five minutes to clear on an eight-node devnet: a child of an
+unconfirmed parent is dropped in relay, so only the origin's own blocks (one in eight) mine the tail, and
+every proof queued there (six of eight seats never got one out; `waits for a carrier slot` thirteen times
+each). `MAX_INFLIGHT_CARRIERS` is now one: a carrier that spends a confirmed output relays everywhere and is
+mined by anyone's next block, and a seat's throughput becomes one carrier a block, which testnet-11's
+cadence never approaches. Memory: 1.75 GiB of file-backed pages once, `MemAvailable` 9.7–10.4 GiB of 12
+with eight nodes.
+
+**Phase 2 on the eight-bond genesis, second attempt — the sixth finding:** with one carrier in flight every
+seat proved within a span (eight fresh proofs), the class entered PROBATION with an admission share of
+980 ‰ — and its producer held on "this class's epoch budget is already spent": the epoch budget (ADR-0039
+D5) is derived from the shares at the epoch's first block and read until the next, so a share the
+registry raises mid-epoch admitted nothing until the epoch turned. The boundary that moves a share now
+re-derives the current epoch's budgets (the produced counters stay); the fold test asserts Kimi's budget
+follows its admission share in the same epoch.
+
+**The seventh finding, behind the sixth:** with the budget following the admission share, the class in
+PROBATION still drew at a ticket of 3.6 × 10⁻³ — hours per claim on the devnet's forwards — and nothing
+moved it. The ticket was the floor's, exactly: op 180's terms seed a registration with the floor's current
+target, a price converged to the floor's microsecond draws, and a model whose draw is a whole forward sits
+hundreds of times too hard at it. The registry then holds the class weightless while it is REGISTERED or
+PREFETCHING and grants it 980 ‰ at admission, and no rule re-prices it: the retarget skips a class that
+produced nothing, and the idle convergence (ADR-0071) moves an idle class only toward the incumbent's
+price, which it already had. (The earlier reading — the class DAA cutting the target after a first
+epoch's over-production — was not the cause: the fresh-genesis run with the budget fix showed the same
+ticket, and the floor producer printed the same number.) ADR-0076 already answers this at the activation
+edge, for a weightless class seated at its activation DAA: *a class being seated is a class being
+priced*, from the share the table just wrote and the class's own counted work. The registry's admission
+is the same event, so at the first governed boundary a non-floor class holds a nonzero share in an
+admitted state its target becomes `attempt_target_seed_v1(share, pwu)` and the row records
+`priced_share_permille` — once; the class DAA owns the target from there, and every later share move is
+measured by the retarget against the history the class then has. The floor is never priced here (its
+target is the class DAA's, and it has history by definition). Op 186 prints the priced share. The
+boundary that seats a class reads the cap utilization at the price it walked in with; the next reads
+the seat's. The Upgrade C fixtures (ADR-0132 §7) now walk at the seated price — `MAX / 14 913` for the
+toy at 900 ‰ × 160 pwu, 14 913 forwards a claim, the panel share at its floor — and their numbers were
+re-derived. The drill is repeated from a fresh genesis with every fix in place.
+
+**The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
+(the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
+armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or
+below its height (it reads seat exposure and steps at the lane's span boundaries). Arming it is a
+height in one constant; the pins are `adr0135_the_registry_fence_is_dormant_everywhere_and_arms_by_height`.
+
+**On chain, past the fence** (`palw_state_v2.rs`, ADR-0135's rows in their own guarded root
+sub-block and carriage tail `0xAA`, delta entries 51/52):
+
+* `model_lifecycles: class → PalwModelLifecycleRowV1 { state, work, profile, since_span, probes, the
+  last boundary's reading, admission }` and `seat_readiness: (bond, class) → PalwSeatReadinessRowV1
+  { proved_daa, proved_span, leaf_index }`.
+* **Decision 1–3 — the profile from the graph.** `ClassRegistered` with its carriage opens the row:
+  `palw_model_work_from_carriage_v1(profile, canonical)` reads the verification compute and the
+  draw compute off the graph with ADR-0131's cost table (the artifact bytes are an estimate from the
+  dense weights until a manifest carries them — V2); the class starts `PREFETCHING`, or `REGISTERED`
+  where the graph derives no work (the VM boundary). The classes registered before the fence get
+  their work from the bundle's genesis registrations (`PalwModelRegistryFoldV1::genesis_works`, the
+  same on every node because the bundle is fingerprinted); a class registered before the fence
+  without a carriage keeps no row and is never gated. The profile is re-derived at every boundary
+  from the stored work and the class's live target (`palw_lifecycle_profile_v1`).
+* **Decision 4 — readiness is a possession proof.** `SeatReadinessProved { bond, class_id, span,
+  opening, signature }`: one leaf of the registered artifact root, at an index inside the window the
+  (class, bond, span) challenge names (`palw_readiness_challenge_seed_v1`, eight consecutive leaves),
+  the span current or just closed, signed by the bond's key (checked at acceptance like a
+  capability declaration; below the fence refused). A seat is ready for a class while its proof is
+  younger than 30 spans, it is active and above the floor, and its free collateral covers three
+  times the network's floor (`palw_model_registry_ready_seats_v1`). The probe half is the class's
+  own claims: a `Final` passes, a court fraud or a withholding fails (`note_model_probe`).
+* **Decision 6 — the lifecycle at the boundary.** `step_model_registry` at every span boundary
+  (before the lane's rotation): rows open, every row is observed (ready seats, claims in flight,
+  the span's probes, utilization = inflight × seats / (ready × window)) and stepped by
+  `palw_lifecycle_step_v1`; the base class is `ACTIVE` and never gated.
+* **The class-local gate** (ADR-0132 F1/F2). `apply_attempt` refuses a claim of a class whose row
+  does not admit (`ClassNotAdmitting`) or is at its inflight cap (`ClassInflightCapped`); a bind
+  window that closes with fewer ready seats than a panel voids as `NoCapablePanel` (void reason 4)
+  rather than `BindTimeout`; the draw and the fold's panel validation judge by evidence
+  (`palw_bond_may_judge_class_v4`, `PalwPanelDrawPolicyV1::readiness`): under the registry a seat
+  needs a fresh proof, not a declaration, and the base class stays open to every bond.
+* **Decision 5 — shares from admission.** At every boundary the shares of the rowed classes are
+  written from `admission_claims_per_span × admission_permille(state)` over the keys the table
+  already holds — the base class holding what is left and never below its floor, a class
+  registered before the fence without a row keeping the share it has. `PROBATION` admits at a twentieth (a class must be able to produce the claims that probe it —
+at zero it could never leave probation), `ACTIVE_LIMITED` at a tenth, `ACTIVE` in full; a class that
+admits anything holds at least the grant floor of one permille, so a target exists for it.
+
+**Read.** Op 186 `getPalwModelRegistry` (`misaka palw registry`): the fence, the globals, every
+class's row and its reading now, every proof and whether it is fresh.
+
+**Tests** (`palw_state_v2::tests::adr0135`, `palw_model_registry_v1::tests`, the fence pin): the
+boundary opens rows from the genesis work and the base class is active (and the delta reverts, the
+carriage round-trips, the root moves only with rows, the fold without the fence is byte-identical);
+readiness is a possession proof — a wrong leaf, a forged leaf, a stale span and the dormant fence
+are refused, six ready seats leave a class prefetching and the seventh admits it to probation, a
+thin bond does not count; a held class takes no claims while the base class keeps producing; the
+inflight cap refuses the claim after the cap; `NoCapablePanel` names the void and the class recovers
+through probation, and an operator outage (every proof aged out) holds it alone; the discriminant
+pins (void reason 4, the object as the enum's last variant, delta entries 51 and 52).
+
+**The seat's side, built the same night.** The panel service submits `SeatReadinessProved` on its
+own (`readiness_duties`): every thirty seconds it reads op 186; for each non-base class the
+registry is in force for it proves when the chain holds none of this bond's proofs for the class
+or the one it holds is past half the readiness age (`palw_readiness_duty_due_v1` — a restart
+re-reads the chain and never re-sends a fresh proof), never twice in a span; the leaf is the first
+under the opening cap inside the challenge's window, opened from the held artifact
+(`PalwExecutionBackendV1::artifact_row_opening`; every family roots its artifact in one
+streaming pass and opens one row by a second — the inventory is never materialised: eight nodes
+that materialised the A16 inventory to root it rebooted a 24 GiB host on 2026-09-17), rooted locally against the class's registered root
+before it is signed by the bond's key. **Fail-closed**: a class this node holds no artifact for, or
+holds under a different root, gets no proof and is named once in the log; a node in IBD or not near
+the tip proves nothing; a bond that is inactive, below the floor or without the readiness multiple of
+free collateral (op 186's `bonds`) proves nothing and says why once. A reorg that drops a proof's
+block leaves no row, and the next span's duty re-proves against the current challenge — an old
+span's proof is never resent (the fold refuses it). The producer reads the
+same op before a draw and holds (a log line, no rule) for a class the registry holds or has at its
+inflight cap. `--palw-model-registry-devnet=<daa>` arms the registry on a private devnet (with the
+panel economy it reads, where the devnet has none). The registry's seat count is the network's
+panel size (the bundle's panel params: five on testnet-11, so seven ready seats; the global
+constant is the fallback), never a number of its own. The drill is
+`scripts/misaka-palw-model-registry-devnet-drill.sh`: eight fixture nodes, the lane at 2-DAA spans,
+the registry armed at DAA 20, an artifact every node holds (`CLASS_ARTIFACT=`) so the seats prove
+for its genesis class; it waits for the fence, the rows, the proofs, the grace's end with the base
+class ACTIVE and the chain producing, and a restarted node's rows — the record is §7's last entry.
+
+**The activation grace.** Proofs are refused below the fence, so at the fence no seat is ready and
+every live class would be HELD at the first boundary. The fold therefore opens rows and takes
+proofs from the fence but steps no row, moves no share, judges no draw by evidence and names no
+`NoCapablePanel` until the fence is one readiness age old (`PalwModelRegistryFoldV1::grace_until_daa`,
+30 spans); the classes registered before the fence open in the state their history earns (ACTIVE
+with a `Final`, PREFETCHING without) and are governed from the grace's end. A test walks it.
+
+**What the review asked, answered.**
+
+* *Migration at activation*: nothing is migrated — the rows are derived at the first boundary from
+  the chain (the base class ACTIVE; a class with a `Final` ACTIVE; a class with work and no `Final`
+  PREFETCHING; a class the fence found without a carriage, none — never gated); the work comes
+  from the bundle's genesis registrations, the same on every node.
+* *Determinism*: the profile, the observation and the step read the state, the block context and
+  `PalwTransitionExtrasV1` built from `Params` — no clock, no local store, no RPC; the fold test
+  folds one block twice and compares roots, and the delta reverts to the parent.
+* *Expiry*: a proof counts for 30 spans of DAA and no longer; a bond that leaves `Active`, drops
+  below the floor or loses its collateral headroom stops counting at the next reading whatever its
+  proof says; a class's artifact is its registration — a new root is a new class and new rows.
+* *Inflight*: never a counter. Claims in flight are counted from the claims at every reading
+  (accepted, not terminal), so a `Final`, a void, a timeout or a reorg needs no decrement.
+* *NoCapablePanel*: named once per claim when its bind window closes without a panel; a HELD class
+  takes no new claim, so nothing loops; with zero eligible seats the claim voids and the class holds.
+* *Cadence*: shares move on the first block of a span (the lane's `opens_span`); a class enters the
+  lottery when its share is above zero — ACTIVE_LIMITED or ACTIVE — and its share key must already
+  exist (the registration grants it).
+* *Old nodes*: a build without the fence cannot decode `SeatReadinessProved`, and past the fence
+  computes no rows and no reasons — but it never gets there: the fork-id gate names the height, so
+  it is refused as a peer from the fence; below the fence the new build refuses the object, so no
+  block carries one.
+* *Observability*: op 186 prints each class's state with its reason (`held: ready 3 < 5 for a
+  panel …`, `probing 4/10 …`, `base class …`), `since_span`, the derived profile, ready seats and
+  claims in flight now against the cap, utilization, admission, `no_capable_panel_voids`, the
+  counts of classes by state, the bonds with headroom for a seat, and each proof's freshness with
+  the reason it does not count (`stale`, `bond inactive`, `below floor`, `collateral short`) — so
+  a HELD by the rule and a stop by a fault read differently.
+
+**`artifact_bytes` is not consensus-critical, and V2 lets the registrant state it (built
+2026-09-18).** V1 estimates it from the graph's dense weights, and only the prefetch allowance reads
+it; admission, the bond, the window and the inflight cap read the compute. **Manifest V2** is the
+object `PalwConsensusObjectV2::ClassManifestV2 { class_id, artifact_bytes, registrant_bond,
+signature }` (tag 48, appended last): the class's registrant bond signs
+`palw_class_manifest_message_v2` over the count, the acceptance layer checks the signature as it
+does a readiness proof's, and the transition puts the count on the class's registry row
+(`work.artifact_bytes`, and the working set where it equalled the estimate), re-deriving the profile
+so `artifact_prefetch_spans` reads the file rather than the graph. Refused while the registry is
+dormant, for a class without a row, from any bond but the registrant's, and for zero bytes; a
+genesis class has no registrant and keeps the catalog's estimate; a re-measured file is a new
+commitment. It is consensus-critical — the row it writes is rooted and its profile moves the
+lifecycle — and it is in the 6,001 bundle by construction: accepted only past `palw_model_registry`, the
+flag day. The CLI's `model-class` extension route builds and carries it beside the registration
+when the extension manifest names `artifact.bytes` or a readable `artifact.path` (the file's length,
+the meaning `artifact.bytes` already had), and withholds it below the fence. Not built: the node's
+own `--palw-register-class` route does not yet follow its registration with a manifest (the operator
+carries `<name>.class-manifest.borsh`).
+
+**Audit corrections (2026-09-18, `docs/palw-audit-2026-09-18-6001.md`).** The pre-arming audit
+refused the bundle as it stood and four of its seven blockers were this ADR's: the registry fold's
+work map read the node's own carriage store, so a class without a lifecycle row could be rowed on one
+node and not on another (a rooted divergence — the map is now the chain and the build alone); the
+panel-room check went live with the work target while a readiness proof is refused below the same
+height, so every class refused claims on the flag day (it now waits for `grace_until_daa`); the
+ready-seat counter used the network collateral floor while the panel draw demands ten times it; and
+the node's replay memory need was the largest artifact it held rather than the class it was proving.
+The possession proof's width is unchanged and remains this ADR's V1 limitation — the audit's H-6.
+
+**Not built, stated.** The possession proof's width (one leaf a proof, V1); a held class's existing
+claims run to their end untouched. The PALW state sync path (`PalwStateSyncV2`, unused by the live
+node) carries no lane and no registry.
+
+## 8. Number hygiene
+
+0135 was free when written; the next free number is 0136.
