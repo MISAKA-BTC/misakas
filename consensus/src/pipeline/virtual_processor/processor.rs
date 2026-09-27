@@ -5444,6 +5444,51 @@ impl VirtualStateProcessor {
         ))
     }
 
+    /// **ADR-0160 §7.5: the capacity shadow** — `palw_capacity_shadow_with_v1` over the committed
+    /// tip (`load_tip_cached`), at the next block's DAA with the RAW second-clock depth there, as
+    /// the vesting read asks. A read for `getPalwCapacityShadow` and kaspad's interval log; no rule
+    /// calls it (`palw_capacity_shadow_is_node_only` pins that this is the one consensus-crate call).
+    pub fn palw_capacity_shadow_v1_impl(
+        &self,
+        mut options: kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,
+    ) -> Option<kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let next_daa = self.palw_next_block_daa_for_reads(&state);
+        options.raw_depth = self.palw_settled_anchor_depth_at(next_daa);
+        // The default display (review of lane shadow, finding 1): the schedule F-L arms once the
+        // params carry one — `rcore/cap-int` passes `palw_capacity_aggregate_liability`'s steps here
+        // in place of `None` — else the uncredited ramp (q = 0, m_c = E). ADR-0160 v1's reference
+        // ramp (q = 143‰) is priced only when a caller names it, and prices as the uncredited one
+        // (below q_seat nothing is credited; review of lane shadow, round 2, finding 2).
+        if options.steps.is_empty() {
+            // rcore/cap-s1: the schedule F-L arms, once the params carry one (the shadow's own step type
+            // is the formulas module's; mapped field for field).
+            let armed: Option<Vec<kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1>> =
+                state_params.capacity_liability().map(|value| {
+                    value
+                        .steps
+                        .iter()
+                        .map(|step| kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1 {
+                            from_daa: step.from_daa,
+                            rho: step.rho,
+                            q_credit_permille: step.q_credit_permille,
+                        })
+                        .collect()
+                });
+            options.steps = kaspa_consensus_core::palw_capacity_shadow_v1::palw_capacity_display_steps_v1(armed.as_deref());
+        }
+        // `E` of a claim the next block would accept: the tip's subsidy under the carve the fold
+        // resolves at that DAA (ADR-0126's overlay on testnet-12), for a state with no claim to read.
+        let subsidy = state.last_point().map(|point| point.subsidy).unwrap_or(0);
+        options.reference_escrow_sompi = Some(kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+            state_params,
+            subsidy,
+            self.palw_escrow_carve_at(next_daa, next_daa),
+        ));
+        Some(kaspa_consensus_core::palw_capacity_shadow_v1::palw_capacity_shadow_with_v1(&state, state_params, next_daa, &options))
+    }
+
     pub fn palw_seat_duties_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],

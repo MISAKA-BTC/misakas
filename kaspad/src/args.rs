@@ -286,6 +286,13 @@ pub struct Args {
     pub palw_verify_class_manifest: bool,
     /// ADR-0067 Decision 6: `class-id:file` pairs whose declarations this node should adopt.
     pub palw_class_carriage: Vec<String>,
+    /// **ADR-0160 §9 Stage 0 / A8: the bonds of an O-3 run** (`<txid>:<index>[:<strategy>]`,
+    /// repeatable; `naive`, `garbage` or `borrowed`) — the adversarial bonds whose claims the capacity
+    /// shadow's every-10-DAA line measures the attribution rate `q` on, per (class, strategy), counting
+    /// only convictions the credit prices, and WARNs about (the A8 alarm) while it is below a step's
+    /// bar. Node-only; empty: no `q` is measured, and the node alarms only on a credited step. A
+    /// malformed outpoint or strategy, or a bond named with two strategies, refuses the start.
+    pub palw_capacity_shadow_adversary: Vec<String>,
     pub palw_bond_collateral: Option<u64>,
     /// **Produce for this class instead of the network's floor.**
     ///
@@ -526,6 +533,7 @@ impl Default for Args {
             palw_chain_classes: None,
             palw_verify_class_manifest: false,
             palw_class_carriage: Vec::new(),
+            palw_capacity_shadow_adversary: Vec::new(),
             palw_bond_collateral: None,
             palw_producer_class: None,
             palw_challenge: false,
@@ -1600,6 +1608,18 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-capacity-shadow-adversary")
+                .long("palw-capacity-shadow-adversary")
+                .action(ArgAction::Append)
+                .value_name("txid:index[:strategy]")
+                .help(
+                    "MISAKA PALW (ADR-0160 §9 Stage 0, A8): a bond of an O-3 adversarial run, with its strategy \
+                     (naive, garbage or borrowed). The capacity shadow's every-10-DAA line measures the attribution \
+                     rate q per (class, strategy) on the named bonds' resolved claims, counting only convictions the \
+                     credit prices, and WARNs while it is below a step's bar. Node-only; no verdict reads it. Repeatable.",
+                ),
+        )
+        .arg(
             Arg::new("palw-chain-classes")
                 .long("palw-chain-classes")
                 .num_args(0..=1)
@@ -2364,6 +2384,10 @@ impl Args {
                 .get_many::<String>("palw-class-carriage")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_carriage.clone()),
+            palw_capacity_shadow_adversary: m
+                .get_many::<String>("palw-capacity-shadow-adversary")
+                .map(|v| v.cloned().collect())
+                .unwrap_or(defaults.palw_capacity_shadow_adversary.clone()),
             palw_bond_collateral: m.get_one::<u64>("palw-bond-collateral").copied(),
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),

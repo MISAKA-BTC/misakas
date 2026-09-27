@@ -90,7 +90,7 @@ enum Producer {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LicencePolicy {
+pub(super) enum LicencePolicy {
     /// Every seat signs its V3 duty receipt; the coverage assembler licenses with all five.
     All5,
     /// The first three seats sign V2 full-mask receipts; the V1 quorum door licenses (k = 3) and
@@ -105,23 +105,23 @@ enum LicencePolicy {
     Mix(u16, u16, u16),
 }
 
-struct Subject {
+pub(super) struct Subject {
     label: String,
-    bond: PalwBondKeyV2,
+    pub(super) bond: PalwBondKeyV2,
     collateral: u64,
     claims: BTreeSet<Hash64>,
     accepted_total: u64,
     skipped_total: u64,
 }
 
-struct CapSim {
-    chain: T12Chain,
+pub(super) struct CapSim {
+    pub(super) chain: T12Chain,
     network_domain: Hash64,
     nonce: u64,
     class_id: Hash64,
     base_class: Hash64,
     k8_class: Option<Hash64>,
-    subjects: Vec<Subject>,
+    pub(super) subjects: Vec<Subject>,
     /// Spendable carrier funding: (outpoint, entry, card whose key signs it, usable from block #).
     wallet: Vec<(TransactionOutpoint, UtxoEntry, usize, u64)>,
     blocks: u64,
@@ -139,7 +139,7 @@ struct CapSim {
     assembler_checked: std::cell::Cell<bool>,
     /// `CAP_LIC_DELAY=live:<class>`: bind -> licence delays drawn from live public t12 (DAA 140-170),
     /// one entry per observed licence; the harness's carriage adds its own ~1 DAA.
-    lic_delays: Option<Vec<u64>>,
+    pub(super) lic_delays: Option<Vec<u64>>,
 }
 
 impl CapSim {
@@ -762,7 +762,7 @@ fn json_str(s: &str) -> String {
 }
 
 /// testnet-12 with harness cards, heartbeats past the registry grace, the floats fanned out.
-async fn sim(run: &str, class: &str, subjects: &[(String, u64)], policy: LicencePolicy, lic_delay: u64) -> CapSim {
+pub(super) async fn sim(run: &str, class: &str, subjects: &[(String, u64)], policy: LicencePolicy, lic_delay: u64) -> CapSim {
     kaspa_core::log::try_init_logger("warn");
     let (config, bundle, premine, floats) = t12_with_harness_cards();
     let mut chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
@@ -818,7 +818,7 @@ async fn sim(run: &str, class: &str, subjects: &[(String, u64)], policy: Licence
 /// The measurement loop: `daa_len` DAA; at each, one background floor attempt (the anchor source),
 /// then every subject makes claims of the class under test until its producer facts hold it (at
 /// most `max_per_daa`), then licences are signed and queued.
-async fn drive(s: &mut CapSim, daa_len: u64, max_per_daa: u64) {
+pub(super) async fn drive(s: &mut CapSim, daa_len: u64, max_per_daa: u64) {
     let start = s.daa();
     let started = std::time::Instant::now();
     let k8 = s.k8_class == Some(s.class_id);
@@ -879,7 +879,7 @@ async fn drive(s: &mut CapSim, daa_len: u64, max_per_daa: u64) {
 }
 
 /// A histogram (delay, count) as a table of delays, the harness's one-DAA carriage taken off.
-fn expand(hist: &[(u64, usize)]) -> Vec<u64> {
+pub(super) fn expand(hist: &[(u64, usize)]) -> Vec<u64> {
     hist.iter().flat_map(|(d, n)| std::iter::repeat(d.saturating_sub(1)).take(*n)).collect()
 }
 

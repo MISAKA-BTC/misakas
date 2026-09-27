@@ -34,6 +34,7 @@ mod node;
 mod operator;
 /// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
 mod palw_activation_pool;
+mod palw_capacity_shadow;
 mod palw_claim;
 mod palw_court;
 mod palw_da;
@@ -1088,6 +1089,11 @@ enum PalwCmd {
         #[arg(long)]
         json: bool,
     },
+    /// **ADR-0160: the capacity shadow** — what the capacity formulas would reserve, weigh and allow
+    /// on this chain per ramp step, next to today's values (fork weight under J-1, a 13k bond's
+    /// claims, seat capacity, licence queue, attribution). Node-only, no rule reads it. Read-only
+    /// (`getPalwCapacityShadow`, op 201: a node built before it drops the connection).
+    CapacityShadow(palw_capacity_shadow::CapacityShadowArgs),
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -2657,6 +2663,7 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Vesting { bond, address, claim, limit, after, json }) => {
             palw_vesting::run(&ctx, bond, address, claim, limit, after, json).await
         }
+        Command::Palw(PalwCmd::CapacityShadow(args)) => palw_capacity_shadow::run(&ctx, args).await,
         Command::Palw(PalwCmd::Economics {}) => palw_economics::run(&ctx).await,
         Command::Palw(PalwCmd::Registry {}) => palw_registry::run(&ctx).await,
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Status { class })) => palw_panel::status(&ctx, class.as_deref()).await,

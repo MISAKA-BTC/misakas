@@ -2380,6 +2380,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_vesting_v1_impl(query, limit, after)
     }
 
+    fn palw_capacity_shadow_v1(
+        &self,
+        options: kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,
+    ) -> Option<kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowV1> {
+        self.virtual_processor.palw_capacity_shadow_v1_impl(options)
+    }
+
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         self.virtual_processor.palw_v2_class_table_impl()
     }

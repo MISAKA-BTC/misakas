@@ -120,6 +120,7 @@ message KaspadRequest {
     GetPalwModelCertificationRequestMessage getPalwModelCertificationRequest = 1210;
     GetPalwVestingRequestMessage getPalwVestingRequest = 1212;
     GetPalwActivationPoolRequestMessage getPalwActivationPoolRequest = 1214;
+    GetPalwCapacityShadowRequestMessage getPalwCapacityShadowRequest = 1216;
   }
 }
 
@@ -239,6 +240,7 @@ message KaspadResponse {
     GetPalwModelCertificationResponseMessage getPalwModelCertificationResponse = 1211;
     GetPalwVestingResponseMessage getPalwVestingResponse = 1213;
     GetPalwActivationPoolResponseMessage getPalwActivationPoolResponse = 1215;
+    GetPalwCapacityShadowResponseMessage getPalwCapacityShadowResponse = 1217;
   }
 }
 
