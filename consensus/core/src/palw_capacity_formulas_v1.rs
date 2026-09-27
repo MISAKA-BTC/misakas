@@ -6,7 +6,9 @@
 //! This module is every one of those formulas, pure and integer-only, in one place:
 //!
 //! * §4.1 the reservation: [`palw_capacity_consensus_reservation_v1`] (`min(w_c, R_budget − held)`)
-//!   and [`palw_capacity_weight_budget_sompi_v1`] (`R_budget`);
+//!   and [`palw_capacity_weight_budget_sompi_v1`] (`R_budget`) — **withdrawn from the fold at stage 1**
+//!   (rcore/cap-s1), which reserves [`palw_capacity_consensus_reservation_s1_v1`] (`⌈w_c / ρ⌉`) instead;
+//!   the shadow prices every step with the stage-1 form and keeps these for their history;
 //! * §4.2 staged weight and the per-bond cap (J-1): [`PalwCapacityStageV1`],
 //!   [`palw_capacity_stage_of_claim_v1`], [`palw_capacity_weight_full_v1`],
 //!   [`palw_capacity_staged_weight_v1`], [`palw_capacity_weight_cap_v1`] (`W_cap`) and
@@ -301,6 +303,14 @@ pub fn palw_capacity_weight_budget_sompi_v1(collateral_sompi: u64) -> u128 {
 /// budget). `held` is `Σ reserved` of the bond's live new-rule claims before this one.
 pub fn palw_capacity_consensus_reservation_v1(w_c: u128, budget: u128, held: u128) -> u128 {
     w_c.min(budget.saturating_sub(held))
+}
+
+/// **Stage 1's consensus reservation (rcore/cap-s1)** — `⌈w_c / ρ⌉`, what the fold reserves past F-W at
+/// the step's ρ (`palw_weight_cap_v1::palw_claim_weight_reservation_of_v1`): today's `w_c` at ρ = 1, so ρ
+/// is the only capacity knob (the user's staged plan: no claim-count increase at ρ = 1). A function of
+/// the claim and the step alone — the bond's collateral and held reservation do not enter it.
+pub fn palw_capacity_consensus_reservation_s1_v1(w_c: u128, rho: u32) -> u128 {
+    w_c.div_ceil(u128::from(rho.max(1)))
 }
 
 // ---------------------------------------------------------------------------------------------

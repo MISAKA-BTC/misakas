@@ -129,7 +129,7 @@ use crate::palw_capacity_formulas_v1::{
     PALW_CAPACITY_COVERAGE_CARRIER_MASS_V1, PALW_CAPACITY_Q_SEAT_PERMILLE_V1, PALW_CAPACITY_SEAT_DUTY_HOLD_DAA_V1,
     PALW_CAPACITY_SOMPI_PER_MSK_V1, PALW_CAPACITY_UNCREDITED_STEPS_V1, PALW_CAPACITY_W_FCW_SOMPI_V1, PalwCapacityConvictionFloorV1,
     PalwCapacitySeatCapitalInputsV1, PalwCapacityStageV1, PalwCapacityStepV1, palw_capacity_bond_weight_term_v1,
-    palw_capacity_carriers_per_block_v1, palw_capacity_claims_per_daa_milli_v1, palw_capacity_consensus_reservation_v1,
+    palw_capacity_carriers_per_block_v1, palw_capacity_claims_per_daa_milli_v1, palw_capacity_consensus_reservation_s1_v1,
     palw_capacity_conviction_floor_v1, palw_capacity_conviction_l_v1, palw_capacity_escrow_credit_applies_v1, palw_capacity_h_obl_v1,
     palw_capacity_is_unlicensed_v1, palw_capacity_m_c_v1, palw_capacity_m_c_v2, palw_capacity_m_ramp_v1, palw_capacity_n_instant_v1,
     palw_capacity_q_needed_permille_v1, palw_capacity_q_needed_permille_v2, palw_capacity_seat_bind_reservation_v1,
@@ -322,7 +322,9 @@ pub struct PalwCapacityBondShadowV1 {
     /// `X_b = Σ` staged weight of its provisional claims, and `min(X_b, W_cap)`.
     pub x_b: u128,
     pub capped: u128,
+    /// The lane's `R_budget` (withdrawn at stage 1: the fold reserves `⌈w / ρ⌉`), for its history.
     pub r_budget: u128,
+    /// Σ of its live claims' stage-1 reservation at the first step's ρ.
     pub reserved_new_total: u128,
     /// A-1 today (`palw_bond_committed_raw_v1`), and of it the bond's own claims' commitments.
     pub committed_today: u128,
@@ -1031,13 +1033,11 @@ pub fn palw_capacity_shadow_with_v1(
     for (bond, mut ids) in by_bond {
         ids.sort_unstable();
         let collateral = state.bond(&bond).map(|b| b.collateral).unwrap_or(0);
-        let budget = palw_capacity_weight_budget_sompi_v1(collateral);
         let acc = accs.entry(bond).or_insert_with(|| BondAcc {
             own_new: vec![0; n_steps],
             duties_new: vec![0; n_steps],
             ..Default::default()
         });
-        let mut held = 0u128;
         for (_, id) in ids {
             let Some(claim) = state.claim(&id) else { continue };
             let free_prompt = matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. });
@@ -1049,19 +1049,19 @@ pub fn palw_capacity_shadow_with_v1(
             let commitment_today = palw_claim_commitment_v1(params, claim, now_daa).unwrap_or(0);
             let l_sompi = palw_capacity_conviction_l_v1(palw_claim_g_v1(state, &id).map(|g| g.g()).unwrap_or(0));
             let holds = holds_new_rule(claim, h_obl, now_daa);
-            // The budget is held by live claims only (lane weight's index); a void inside its hold
-            // keeps the `reserved` it was priced at in its commitment, without holding budget.
-            let reserved_new = if free_prompt {
-                claim.reserved
-            } else if holds {
-                let r = palw_capacity_consensus_reservation_v1(claim.reserved, budget, held);
-                if !claim.phase.is_terminal() {
-                    held = held.saturating_add(r);
+            // Stage 1 (rcore/cap-s1): the fold reserves `⌈w / ρ⌉` at the step's ρ, a function of the
+            // claim alone (no budget, no held reservation); a void inside its hold keeps the reservation
+            // it was priced at in its commitment.
+            let reserved_new_at = |rho: u32| -> u128 {
+                if free_prompt {
+                    claim.reserved
+                } else if holds {
+                    palw_capacity_consensus_reservation_s1_v1(claim.reserved, rho)
+                } else {
+                    0
                 }
-                r
-            } else {
-                0
             };
+            let reserved_new = reserved_new_at(steps.first().map_or(1, |step| step.rho));
             let e = u128::from(claim.escrowed_reward);
             let floor = palw_capacity_conviction_floor_v1(min_collateral, e);
             let mut m_new = Vec::with_capacity(n_steps);
@@ -1077,6 +1077,7 @@ pub fn palw_capacity_shadow_with_v1(
                 }
                 // Lane escrow's term: the q_seat gate, m* on the conviction floor, never above E.
                 let m = palw_capacity_m_c_v2(e, Some(step), !c7, floor, ratio);
+                let reserved_new = reserved_new_at(step.rho);
                 let full = m.saturating_add(reserved_new);
                 let commitment = match &claim.phase {
                     PalwClaimPhaseV2::Final { .. } => 0,
@@ -1103,6 +1104,9 @@ pub fn palw_capacity_shadow_with_v1(
             if !claim.phase.is_terminal() {
                 acc.raw_immature = acc.raw_immature.saturating_add(claim.immature_contribution);
             }
+            if !free_prompt && !claim.phase.is_terminal() {
+                acc.reserved_new_total = acc.reserved_new_total.saturating_add(reserved_new);
+            }
             if stage.is_provisional() {
                 acc.x_b = acc.x_b.saturating_add(staged_w);
             }
@@ -1112,9 +1116,7 @@ pub fn palw_capacity_shadow_with_v1(
                 acc.own_new[i] = acc.own_new[i].saturating_add(*c);
                 claims_commitment_new[i] = claims_commitment_new[i].saturating_add(*c);
             }
-            if !free_prompt && !claim.phase.is_terminal() {
-                acc.reserved_new_total = acc.reserved_new_total.saturating_add(reserved_new);
-            }
+
             bind_commitment_new.insert(id, bind_new);
             if !live {
                 continue;
@@ -1321,14 +1323,16 @@ pub fn palw_capacity_shadow_with_v1(
         let per_claim_today = reference_escrow.saturating_add(reference_w_floor);
         let n_instant_today = palw_capacity_n_instant_v1(room(committed_today.saturating_sub(acc.own_today)), per_claim_today, 0, 0);
         let n_more_today = palw_capacity_n_instant_v1(room(committed_today), per_claim_today, 0, 0);
+        // The lane's R_budget, withdrawn at stage 1 and shown for its history.
         let r_budget = palw_capacity_weight_budget_sompi_v1(collateral);
+        // Stage 1: each claim reserves `⌈w / ρ⌉` (no budget), so N identical claims cost N·(m + ⌈w/ρ⌉).
         let n_instant_new: Vec<u64> = (0..n_steps)
             .map(|i| {
                 palw_capacity_n_instant_v1(
                     room(committed_new[i].saturating_sub(acc.own_new[i])),
                     reference_steps_m[i],
-                    reference_w_floor,
-                    r_budget,
+                    palw_capacity_consensus_reservation_s1_v1(reference_w_floor, steps[i].rho),
+                    u128::MAX,
                 )
             })
             .collect();
@@ -1337,8 +1341,8 @@ pub fn palw_capacity_shadow_with_v1(
                 palw_capacity_n_instant_v1(
                     room(committed_new[i]),
                     reference_steps_m[i],
-                    reference_w_floor,
-                    r_budget.saturating_sub(acc.reserved_new_total),
+                    palw_capacity_consensus_reservation_s1_v1(reference_w_floor, steps[i].rho),
+                    u128::MAX,
                 )
             })
             .collect();
@@ -1497,7 +1501,12 @@ pub fn palw_capacity_shadow_with_v1(
                 seat_duty_total: seat_duty_total_new[i],
                 seat_lock_total: seat_lock_total_new[i],
                 seat_capacity_milli_per_daa: seat_capacity(reservation, lock),
-                n_instant_13k: palw_capacity_n_instant_v1(ceiling_13k, m_floor, reference_w_floor, budget_13k),
+                n_instant_13k: palw_capacity_n_instant_v1(
+                    ceiling_13k,
+                    m_floor,
+                    palw_capacity_consensus_reservation_s1_v1(reference_w_floor, step.rho),
+                    u128::MAX,
+                ),
                 m_floor_v1_superseded: m_floor_v1,
                 n_instant_13k_v1_superseded: palw_capacity_n_instant_v1(ceiling_13k, m_floor_v1, reference_w_floor, budget_13k),
                 q_needed_route_permille: q_needed_route,
@@ -1890,7 +1899,8 @@ mod tests {
 
     /// **W-I1 in the shadow: claims × N is not fork power × N.** A 13k bond's licensed floor claims
     /// weigh 1 FCW each today; under J-1 the bond's term is at most 2 FCW at every N, a 2M claim
-    /// included, and the weight reservation spends `R_budget` in acceptance order (W-I4).
+    /// included; and every claim reserves stage 1's `⌈w / ρ⌉` at the step's ρ (W-I4 as rcore/cap-s1
+    /// restates it: no budget, the fold's reservation).
     #[test]
     fn s_t1_claims_times_n_is_not_fork_power_times_n() {
         let licensed = |d| PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: d };
@@ -1906,13 +1916,12 @@ mod tests {
             assert_eq!(row.capped, u128::from(n.min(2)) * PALW_CAPACITY_FCW_V1, "N = {n}: capped at W_cap = 2 FCW");
             assert_eq!(shadow.bounded_immature_today, u128::from(n) * PALW_CAPACITY_FCW_V1, "today: additive");
             assert_eq!(shadow.bounded_immature_new, row.capped);
-            assert!(row.reserved_new_total <= row.r_budget, "W-I4");
-            assert_eq!(row.reserved_new_total, W_FLOOR * u128::from(n.min(2)));
-            let reserved: Vec<u128> = shadow.claims.iter().map(|c| c.reserved_new).collect();
-            assert_eq!(reserved.iter().filter(|r| **r == W_FLOOR).count() as u64, n.min(2), "the first two in acceptance order");
+            let rho = u128::from(PALW_CAPACITY_UNCREDITED_STEPS_V1[0].rho);
+            assert_eq!(row.reserved_new_total, u128::from(n) * W_FLOOR.div_ceil(rho), "W-I4 (stage 1): ⌈w / ρ⌉ each");
+            assert!(shadow.claims.iter().all(|c| c.reserved_new == W_FLOOR.div_ceil(rho)), "every claim alike, no budget order");
         }
-        // A 2M claim (C7 in these params) on the same bond: its reservation falls from 59,742.94 MSK
-        // to the budget, its Final weight to 8k's, and the bond's term stays 2 FCW.
+        // A 2M claim (C7 in these params) on the same bond: its reservation is ⌈59,742.94 MSK / ρ⌉ at
+        // each step (stage 1), its Final weight 8k's, and the bond's term stays 2 FCW.
         let state = eight_cards(Plant::new())
             .bond(1, 13_000 * MSK, false)
             .claim(0x2000, claim(1, two_m(), licensed(NOW - 1), W_2M, RAW_2M, NOW - 40))
@@ -1922,11 +1931,12 @@ mod tests {
         let big = claim_row(&shadow, 0x2000).unwrap();
         assert!(big.c7);
         assert_eq!(big.w_full, PALW_CAPACITY_C7_WEIGHT_CEILING_V1);
-        assert_eq!(big.reserved_new, 2 * W_FLOOR, "R_budget(13k) = 0.215 MSK, all to the first claim");
-        assert_eq!(claim_row(&shadow, 0x2001).unwrap().reserved_new, 0, "nothing left for the second");
+        let rhos: Vec<u128> = PALW_CAPACITY_UNCREDITED_STEPS_V1.iter().map(|step| u128::from(step.rho)).collect();
+        assert_eq!(big.reserved_new, W_2M.div_ceil(rhos[0]), "stage 1: ⌈w / ρ⌉ at the first step, no budget");
+        assert_eq!(claim_row(&shadow, 0x2001).unwrap().reserved_new, W_FLOOR.div_ceil(rhos[0]), "the second claim alike");
         assert_eq!(row_of(&shadow, 1).capped, 2 * PALW_CAPACITY_FCW_V1);
         assert_eq!(big.m_new, vec![u128::from(E); 5], "C7: m = E at every step");
-        assert_eq!(big.commitment_new, vec![u128::from(E) + 2 * W_FLOOR; 5]);
+        assert_eq!(big.commitment_new, rhos.iter().map(|rho| u128::from(E) + W_2M.div_ceil(*rho)).collect::<Vec<_>>());
         assert_eq!(big.commitment_today, u128::from(E) + W_2M);
         let credited = [PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: 500 }];
         let shadow = palw_capacity_shadow_v1(&state, &params(), NOW, &credited);
@@ -1959,12 +1969,14 @@ mod tests {
         let shadow = palw_capacity_shadow_v1(&state, &p, NOW, &steps);
         let m = M_AT_500;
         let full_today = u128::from(E) + W_FLOOR;
+        // Stage 1 (rcore/cap-s1): the reservation at ρ = 10 is ⌈w / 10⌉.
+        let w10 = W_FLOOR.div_ceil(10);
         let expect: [(u64, u128, u128); 5] = [
-            (1, full_today, m + W_FLOOR),
-            (2, full_today, m + W_FLOOR),
-            (3, W_FLOOR, W_FLOOR),
+            (1, full_today, m + w10),
+            (2, full_today, m + w10),
+            (3, W_FLOOR, w10),
             // E-4: an unconvicted void holds m_c + reserved for h_obl = 600 — today it holds nothing.
-            (4, 0, m + W_FLOOR),
+            (4, 0, m + w10),
             (7, W_FLOOR + 777, W_FLOOR + 777),
         ];
         for (id, today, new) in expect {
@@ -1981,11 +1993,11 @@ mod tests {
         let row = row_of(&shadow, 2);
         assert_eq!(row.committed_today, state.reserved_exposure(&bond_key(2)), "A-1 = the planted exposure");
         assert_eq!(row.own_claims_today, row.committed_today);
-        assert_eq!(row.committed_new, vec![2 * (m + W_FLOOR) + W_FLOOR + (m + W_FLOOR) + W_FLOOR + 777]);
-        // The void keeps its reserved in its hold but no budget (lane weight's index): three live
-        // attempt claims hold budget, each within R_budget(100k).
-        assert_eq!(claim_row(&shadow, 4).unwrap().reserved_new, W_FLOOR);
-        assert_eq!(row.reserved_new_total, 3 * W_FLOOR);
+        assert_eq!(row.committed_new, vec![2 * (m + w10) + w10 + (m + w10) + W_FLOOR + 777]);
+        // The void keeps its reservation in its hold; the three live attempt claims reserve ⌈w / 10⌉
+        // each (stage 1: no budget).
+        assert_eq!(claim_row(&shadow, 4).unwrap().reserved_new, w10);
+        assert_eq!(row.reserved_new_total, 3 * w10);
         assert_eq!(row.unlicensed_claims, 3, "provisional, panel-bound and the FP claim");
         assert_eq!(shadow.licence_queue, 1);
         assert_eq!(shadow.licence_queue_oldest_bound_daa, Some(NOW - 9));
@@ -2083,13 +2095,15 @@ mod tests {
             let r = claim_row(&shadow, id);
             r.map(|r| (r.reserved_new, r.commitment_new[0]))
         };
-        assert_eq!(d(0xD0), Some((W_FLOOR, m + W_FLOOR)), "E-4: a timed-out void holds m_c + reserved for h_obl");
+        // Stage 1 (rcore/cap-s1): every claim reserves ⌈w / ρ⌉ at the first display step (ρ 10).
+        let w10 = W_FLOOR.div_ceil(u128::from(PALW_CAPACITY_UNCREDITED_STEPS_V1[0].rho));
+        assert_eq!(d(0xD0), Some((w10, m + w10)), "E-4: a timed-out void holds m_c + reserved for h_obl");
         assert_eq!(d(0xD1), None, "a conviction's void is charged, not held");
-        assert_eq!(d(0xD2), Some((W_FLOOR, m + W_FLOOR)), "the void released the budget: the next live claim gets w");
-        assert_eq!(d(0xD3), Some((W_FLOOR, m + W_FLOOR)), "R_budget(13k) = 2 w, both to the live claims");
+        assert_eq!(d(0xD2), Some((w10, m + w10)), "a live claim reserves ⌈w / ρ⌉, whatever voided before it");
+        assert_eq!(d(0xD3), Some((w10, m + w10)), "and so does the next");
         let row = row_of(&shadow, 3);
-        assert_eq!(row.reserved_new_total, 2 * W_FLOOR, "W-I4 over the live claims");
-        assert_eq!(row.committed_new[0], 3 * (m + W_FLOOR));
+        assert_eq!(row.reserved_new_total, 2 * w10, "W-I4 (stage 1) over the live claims");
+        assert_eq!(row.committed_new[0], 3 * (m + w10));
     }
 
     /// **Seat duties and locks under lane liab's AS-1/AS-2 and lane escrow's bind**: the identity step

@@ -67,13 +67,19 @@ pub fn params_for(class: Class, armed: bool) -> Params {
     p
 }
 
-/// One recorded block: its parent, its delta and the child it left.
+/// One recorded block: its inputs, its parent, its delta and the child it left.
 #[derive(Clone)]
-pub struct TapeBlock {
+pub struct SimBlock {
+    pub daa: u64,
+    /// The block's blue score (the claims it accepts record it, so a replay must reuse it).
+    pub blue: u64,
+    pub objects: Vec<PalwConsensusObjectV2>,
+    /// The attempt the block carried, `(bond n, seed)`, if the fold took it into the block (an attempt
+    /// the fold refused at block level is not recorded: the block was folded without it).
+    pub attempt: Option<(u64, u64)>,
     pub parent: PalwChainStateV2,
     pub delta: PalwStateDeltaV2,
     pub child: PalwChainStateV2,
-    pub daa: u64,
 }
 
 /// A [`Chain`] folded with its own blue-score counter by any number of producer bonds.
@@ -84,7 +90,7 @@ pub struct Sim {
     /// The fold's skip messages ([`reason_key`]), counted, and block-level refusals.
     pub skips: BTreeMap<String, usize>,
     /// Every folded block, in order (from [`Sim::new`]'s registration block on).
-    pub tape: Vec<TapeBlock>,
+    pub tape: Vec<SimBlock>,
     /// The state before the registration block.
     pub base: PalwChainStateV2,
 }
@@ -153,6 +159,7 @@ impl Sim {
     pub fn block(&mut self, daa: u64, objects: Vec<PalwConsensusObjectV2>, attempt: Option<(u64, u64)>) -> Option<Hash64> {
         assert!(daa >= self.c.daa, "DAA never falls");
         self.reready();
+        let asked = attempt;
         let attempt = attempt.map(|(n, seed)| self.attempt(n, seed, daa));
         self.blue += 1;
         let c = &mut self.c;
@@ -168,14 +175,14 @@ impl Sim {
         let x = PalwBlockContextV2 { block: h(0xD1FF_0000_0000 + self.blue), daa_score: daa, blue_score: self.blue, subsidy };
         let parent = c.s.clone();
         let folded = fold_with(&c.p, &c.sp, &parent, &x, &objects, work, key, &e);
-        let (child, delta, skips, attempt) = match (folded, attempt) {
-            (Ok((child, delta, skips)), attempt) => (child, delta, skips, attempt),
+        let (child, delta, skips, attempt, carried) = match (folded, attempt) {
+            (Ok((child, delta, skips)), attempt) => (child, delta, skips, attempt, asked),
             (Err(err), Some(_)) => {
                 *self.skips.entry(format!("(block) {}", reason_key(&err.to_string()))).or_insert(0) += 1;
                 let e = c.extras_at(daa);
                 let (child, delta, skips) = fold_with(&c.p, &c.sp, &parent, &x, &objects, PalwBlockWorkV3::None, Hash64::default(), &e)
                     .unwrap_or_else(|err| panic!("the block at DAA {daa} folds without the attempt: {err}"));
-                (child, delta, skips, None)
+                (child, delta, skips, None, None)
             }
             (Err(err), None) => panic!("the block at DAA {daa} folds: {err}"),
         };
@@ -187,10 +194,52 @@ impl Sim {
         for (_, reason) in &skips {
             *self.skips.entry(reason_key(reason)).or_insert(0) += 1;
         }
-        self.tape.push(TapeBlock { parent, delta, child: child.clone(), daa });
+        self.tape.push(SimBlock { daa, blue: self.blue, objects, attempt: carried, parent, delta, child: child.clone() });
         c.s = child;
         c.daa = daa;
         attempt.and_then(|(_, _, id, _)| c.s.claim(&id).is_some().then_some(id))
+    }
+
+    /// **One block at `daa` with `objects` and no attempt, if the fold takes it**: `Err` (the fold's
+    /// refusal, the state untouched) where [`Sim::block`] would panic.
+    pub fn try_block(&mut self, daa: u64, objects: Vec<PalwConsensusObjectV2>) -> Result<(), String> {
+        self.reready();
+        let x = PalwBlockContextV2 { block: h(0xD1FF_0000_0000 + self.blue + 1), daa_score: daa, blue_score: self.blue + 1, subsidy: 0 };
+        let e = self.c.extras_at(daa);
+        fold_with(&self.c.p, &self.c.sp, &self.c.s, &x, &objects, PalwBlockWorkV3::None, Hash64::default(), &e).map_err(|err| err.to_string())?;
+        self.block(daa, objects, None);
+        Ok(())
+    }
+
+    /// A copy of this simulation standing on the same tip (the same rules, blue counter and model),
+    /// with an empty tape — a trial branch.
+    pub fn fork(&self) -> Sim {
+        let c = Chain { p: self.c.p.clone(), sp: self.c.sp.clone(), s: self.c.s.clone(), daa: self.c.daa, room: self.c.room, attribution: self.c.attribution };
+        Sim { c, blue: self.blue, model: self.model, skips: BTreeMap::new(), tape: Vec::new(), base: self.c.s.clone() }
+    }
+
+    /// **Back to tip `j`** (the state after the tape's `j`-th block; 0 = [`Sim::base`]'s successor is
+    /// not reachable, so `j ≥ 1`): the tape truncated there, the chain standing on that block's child.
+    /// Returns the blocks taken off, oldest first.
+    pub fn rewind_to(&mut self, j: usize) -> Vec<SimBlock> {
+        assert!(j >= 1 && j <= self.tape.len(), "tip {j} of {}", self.tape.len());
+        let off = self.tape.split_off(j);
+        let tip = &self.tape[j - 1];
+        self.c.s = tip.child.clone();
+        self.c.daa = tip.daa;
+        self.blue = tip.blue;
+        off
+    }
+
+    /// Fold `blocks` again, input for input (the same DAA, blue score and block hash), on the current
+    /// tip; each child must be the recorded one (root and state).
+    pub fn replay(&mut self, blocks: &[SimBlock]) {
+        for (i, b) in blocks.iter().enumerate() {
+            self.blue = b.blue - 1;
+            self.block(b.daa, b.objects.clone(), b.attempt);
+            assert_eq!(self.c.s.state_root(), b.child.state_root(), "replayed block {i} (DAA {}): the recorded root", b.daa);
+            assert_eq!(self.c.s, b.child, "replayed block {i} (DAA {}): the recorded state", b.daa);
+        }
     }
 
     /// The next block, with `objects`.

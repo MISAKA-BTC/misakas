@@ -40,8 +40,18 @@ fn w_of(class: u64) -> u128 {
     u128::from(class_row(class).1) * 5
 }
 
+/// The world's params with F-W at `fence`, and the 2M row on C7's list (as at testnet-12 genesis): the
+/// C7 ceiling applies to the list's classes only (rcore/cap-s1, stage 1's finding F2). R-core+ itself
+/// stays as `params()` has it.
 fn cp(fence: Option<u64>) -> PalwStateParamsV2 {
-    params().with_capacity_weight_cap_from_daa(fence)
+    let p = params();
+    let (from, delay) = (p.rcore_plus_from_daa(), p.withdrawal_delay_daa());
+    p.with_capacity_weight_cap_from_daa(fence).with_rcore_plus_mirrors(from, delay, vec![h64(M2)])
+}
+
+/// `W_full` of a `class` claim in this world: the C7 ceiling on the 2M row (C7's list), raw elsewhere.
+fn full_of(class: u64) -> u128 {
+    if class == M2 { raw_of(class).min(PALW_CAPACITY_C7_WEIGHT_CEILING_V1) } else { raw_of(class) }
 }
 
 fn class_registered(class: u64) -> PalwConsensusObjectV2 {
@@ -211,7 +221,7 @@ fn w_t2_the_staging_table_phase_by_phase() {
     let ids: Vec<(u64, Hash64)> = [FLOOR, K8, M2].into_iter().map(|class| (class, world.claim(101, class, 0x21))).collect();
     for (class, id) in ids {
         let claim = world.s.claim(&id).unwrap().clone();
-        let full = raw_of(class).min(PALW_CAPACITY_C7_WEIGHT_CEILING_V1);
+        let full = full_of(class);
         assert_eq!(claim.immature_contribution, raw_of(class), "the stored raw weight is today's, untouched (C is kept)");
         assert_eq!(palw_weight_full_v1(&p, &claim), full);
         let staged = |phase: PalwClaimPhaseV2, door: Option<PalwLicenceDoorTagV1>, basis_k: u8| {
@@ -309,16 +319,17 @@ fn pile(fence: Option<u64>, class: u64, n: u64) -> Pile {
 /// and 1,000 claims on a 13,000 MSK bond keep the bond's provisional weight at or under 2 FCW —
 /// floor, 8k and 2M alike — at every stage, where the dormant twin weighs `N × raw` at every stage.
 ///
-/// And **W-T9's reservation half**: the bond's whole weight reservation is at most `R_budget` =
-/// 0.215 MSK (a 2M claim's 59,742.94 MSK falls to ≤ 0.215 MSK; the floor's two claims fill it exactly,
-/// the third takes nothing), against `N × w` dormant. Printed as the lane's measurement.
+/// And **W-T9's reservation half, as stage 1 restates it** (rcore/cap-s1): every claim reserves
+/// `⌈w / ρ⌉` — this world arms no F-L step, so ρ = 1 and every claim reserves today's `w`, armed and
+/// dormant alike (the lane's `min(w, R_budget − held)` raised a model class's issuance at ρ = 1 and is
+/// withdrawn; J-1's weight cap, not the reservation, bounds fork power). Printed as a measurement.
 #[test]
 fn w_t1_claims_times_n_is_not_fork_power_times_n() {
     let cap = palw_bond_weight_cap_v1(13_000 * MSK);
     let budget = palw_bond_weight_budget_sompi_v1(13_000 * MSK);
     assert_eq!((cap, budget), (fcw(2), 21_505_320));
     for class in [FLOOR, K8, M2] {
-        let full = raw_of(class).min(PALW_CAPACITY_C7_WEIGHT_CEILING_V1);
+        let full = full_of(class);
         for n in [1u64, 10, 100, 1_000] {
             let armed = pile(Some(0), class, n);
             let dormant = pile(None, class, n);
@@ -338,8 +349,7 @@ fn w_t1_claims_times_n_is_not_fork_power_times_n() {
                 assert!(stage <= fcw(2), "W-I1: {class:#x} × {n} stays ≤ 2 FCW");
             }
             let total: u128 = armed.reserved.iter().sum();
-            assert!(total <= budget, "W-I4: {class:#x} × {n} reserves {total} ≤ R_budget {budget}");
-            assert_eq!(total, (n128 * w_of(class)).min(budget), "the budget fills in acceptance order, then nothing");
+            assert!(armed.reserved.iter().all(|r| *r == w_of(class)), "W-I4 (stage 1): {class:#x} × {n}, every claim reserves w at ρ = 1");
             assert_eq!(armed.state.capacity_weight_index().bond(&bond_key(0x21)).reserved_w, total);
             println!(
                 "W-T1 {:>5} × {n:>4} on 13k: provisional weight {:>10.2} FCW armed vs {:>14.2} FCW dormant; weight reservation {:.6} MSK armed vs {:.2} MSK dormant",
@@ -357,23 +367,19 @@ fn w_t1_claims_times_n_is_not_fork_power_times_n() {
     }
     // The 2M row by name: the reservation per claim.
     let one = pile(Some(0), M2, 2);
-    assert_eq!(one.reserved, vec![budget, 0], "a 2M claim reserves ≤ 0.215 MSK at 13k, the next nothing");
+    assert_eq!(one.reserved, vec![W_2M, W_2M], "stage 1: a 2M claim reserves today's w at ρ = 1, each");
     let floor = pile(Some(0), FLOOR, 3);
-    assert_eq!(floor.reserved, vec![W_FLOOR, W_FLOOR, 0], "the floor's two instant claims fill the budget exactly");
+    assert_eq!(floor.reserved, vec![W_FLOOR, W_FLOOR, W_FLOOR], "stage 1: the floor's claims reserve w each");
     assert_eq!(w_of(K8), W_8K);
     assert_eq!(w_of(M2), W_2M);
 }
 
 /// **W-T9's collateral half: concurrent claims on a 13,000 MSK bond with option A's escrow** (`E`
-/// reserved on the bond, the 500‰ ceiling, 6,500 MSK) — what this lane ALONE changes, before lane escrow
-/// takes `E` off the bond:
-///
-/// * floor: `E + 0.1075` a claim, 2 either way (E binds);
-/// * 8k: `E + 24.716` dormant, `E + ≤ 0.215` armed — 2 instantly either way, the pair committing 49.2 MSK
-///   less (the "1 sustained → 2" half needs R-core+'s licence release and the capacity harness
-///   `C_8k_13k`, audit/claim-capacity, not re-run here);
-/// * 2M: `E + 59,742.94` dormant — NOT ONE fits (the minimum collateral for one is 125,887.6 MSK) — and
-///   `E + ≤ 0.215` armed: two fit on 13k. (C7's network cap of one 2M claim is unchanged.)
+/// reserved on the bond, the 500‰ ceiling, 6,500 MSK), restated for stage 1 (rcore/cap-s1): at ρ = 1 the
+/// armed reservation is today's `w`, so the armed bond holds exactly today's claims at exactly today's
+/// commitment — floor `E + 0.1075` (2), 8k `E + 24.716` (2), 2M `E + 59,742.94` (none fits: the minimum
+/// collateral for one is 125,887.6 MSK). The lane's `E + ≤ 0.215` (two 2M claims on 13k) is withdrawn:
+/// only ρ, at a flag day, may raise what a bond holds.
 #[test]
 fn w_t9_a_13k_bond_holds_e_plus_at_most_the_budget_per_claim() {
     const SUBSIDY: u64 = 444_562_000_000;
@@ -409,20 +415,20 @@ fn w_t9_a_13k_bond_holds_e_plus_at_most_the_budget_per_claim() {
     let budget = palw_bond_weight_budget_sompi_v1(13_000 * MSK);
     for (class, name, dormant_n) in [(FLOOR, "floor", 2usize), (K8, "8k", 2), (M2, "2M", 0)] {
         let (dormant, armed) = (run(class, None), run(class, Some(0)));
-        assert_eq!((dormant.len(), armed.len()), (dormant_n, 2), "{name}: concurrent claims on 13k, dormant vs armed (E binds armed)");
+        assert_eq!(dormant.len(), dormant_n, "{name}: concurrent claims on 13k, dormant");
         if let Some(last) = dormant.last() {
             assert_eq!(*last, dormant_n as u128 * (e + w_of(class)), "{name} dormant: E + w each");
         }
-        let armed_w = (2 * w_of(class)).min(budget);
-        assert_eq!(armed[1], 2 * e + armed_w, "{name} armed: E each, and at most the budget once");
+        assert_eq!(armed, dormant, "{name}: stage 1 holds exactly today's claims at today's commitment (ρ = 1)");
+        let _ = budget;
         println!(
             "W-T9 {name:>5}: 13k holds {} dormant ({:.4} MSK committed) vs {} armed ({:.4} MSK committed); per-claim reserve {:.4} → ≤ {:.4} MSK",
             dormant.len(),
             dormant.last().copied().unwrap_or(0) as f64 / MSK as f64,
             armed.len(),
-            armed[1] as f64 / MSK as f64,
+            armed.last().copied().unwrap_or(0) as f64 / MSK as f64,
             (e + w_of(class)) as f64 / MSK as f64,
-            (e + w_of(class).min(budget)) as f64 / MSK as f64,
+            (e + w_of(class)) as f64 / MSK as f64,
         );
     }
 }
@@ -661,18 +667,11 @@ fn w_t3_a_random_lattice_on_three_bonds_keeps_every_invariant() {
                 && let Some(claim) = child.claim(id)
                 && claim.accepted_daa == daa
             {
-                let (before, after) = (parent.capacity_weight_index().bond(bond), child.capacity_weight_index().bond(bond));
-                let collateral = child.bond(bond).unwrap().collateral;
-                let budget = palw_bond_weight_budget_sompi_v1(collateral);
-                if after.reserved_w == before.reserved_w + claim.reserved && collateral == parent.bond(bond).unwrap().collateral {
-                    assert_eq!(claim.reserved, *predicted, "seed {seed} block {block}: SR-7, the parent's capped reading");
-                }
-                let unslashed = collateral == parent.bond(bond).unwrap().collateral;
-                assert!(claim.reserved <= budget || !unslashed, "W-I4: one claim never reserves past R_budget");
-                assert!(
-                    claim.reserved == 0 || !unslashed || after.reserved_w <= budget,
-                    "seed {seed} block {block}: W-I4 — a claim that took a reservation left the bond within R_budget"
-                );
+                // Stage 1 (rcore/cap-s1): the reservation is `⌈w / ρ⌉`, a function of the claim and the
+                // params alone, so the parent's reading is the stored value whatever the block moved.
+                let after = child.capacity_weight_index().bond(bond);
+                assert_eq!(claim.reserved, *predicted, "seed {seed} block {block}: SR-7 and W-I4 (stage 1), the parent's reading");
+                assert!(after.reserved_w >= claim.reserved, "seed {seed} block {block}: the index holds the new reservation");
             }
             // W-I2: live weight falls only where a claim voided, was redrawn, or a bond was slashed.
             let slashed = bonds
