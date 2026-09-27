@@ -50,6 +50,12 @@ a claim's weight counts only on the chain that wins.
 - [ ] A heartbeat never turns a bonded block red, and the clock steps aside for a draw that has
   landed. *Sources:* 0105.
 - [ ] The heartbeat consumes a clock slot (chapter 06 §6.4). *Sources:* 0142.
+- **PALW-FC-1 (H-1, heartbeat carriers).** Past `palw_rcore_plus`, a heartbeat block MUST be able to
+  carry every conviction-bearing, DA and reporter object, and the fold applies them at step 3. That
+  covers `ObjectiveOffence` (kinds 3 and 4), `ExecutorEquivocation`, `DefaultAccused`,
+  `DefaultAccusedHeld`, `MaterialDisclosedV2`, `ReporterCommitted`, `ReporterRevealed`, `CourtOpened`,
+  and court moves where the phase allows. The heartbeat miner MUST include them, and relay MUST NOT
+  drop a heartbeat for carrying them. *Sources:* ADR-0152 H-1 (archive 0152/03).
 
 ## 13.4 Heartbeat transparency
 

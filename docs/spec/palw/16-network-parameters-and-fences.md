@@ -36,6 +36,38 @@ splitting the network silently.
   and held rows (`PALW_T12_GENESIS_HELD_ROWS`; the Qwen2.5 A16 8k and 2M roots, and the hybrid at
   n_ctx 512).
 
+## 16.2a testnet-12: the R-core+ fences (ADR-0152)
+
+- **PALW-NP-1.** `palw_offence_attribution` MUST be armed at DAA 0 only, and only with
+  `palw_objective_offence`, `palw_audit_2026_09_23`, `palw_verification_v2`, `palw_economic_safety`
+  and `palw_prefill_draw` at 0.
+- **PALW-NP-2.** `palw_rcore_plus` MUST be armed at DAA 0 only (genesis only). `validate_palw_rcore_plus_v1`
+  refuses it unless all 14 prerequisites are armed at or below it:
+  - `palw_offence_attribution`, `palw_admission_independence`, `palw_audit_2026_09_23`,
+    `palw_audit_2026_09_11`, `palw_economic_safety`, `palw_objective_offence`, `palw_panel_economy`;
+  - `palw_panel_exposure_floor` (its `.activation`), `palw_unavailable_abstains`, `palw_clock_floor`,
+    `palw_clock_cursor`, `palw_verification_v2`, `palw_da_court`, `palw_operator_id_unique`.
+
+  It also refuses when:
+  - `palw_settled_anchor_depth` is missing;
+  - `palw_shard_licensing` is armed beside it;
+  - the signature-context root is not `PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5`;
+  - the panel quorum is not `PALW_PANEL_COLLUDING_QUORUM_V1`;
+  - the bundle's mirrors differ from the params. The mirrors are `rcore_plus_from_daa`,
+    `withdrawal_delay_daa` (the delay including the DA lattice) and `rcore_conservative_classes`, set by
+    `sync_palw_rcore_plus`.
+- **PALW-NP-3.** `palw_rcore_conservative_classes` (C7's list) MUST be non-empty only with
+  `palw_rcore_plus`, and MUST be a subset of `PALW_T12_GENESIS_HELD_ROWS`. On testnet-12 it holds the
+  2M class. It is hashed only when non-empty.
+- **PALW-NP-4.** `palw_rcore_attributed_charging` (X10) is not declared. When it is added, it is a
+  Some-only fence armed at or above `palw_rcore_plus` by a public flag day.
+- **PALW-NP-5.** A node MUST refuse to start a network that arms `palw_rcore_plus` from a build whose
+  `PALW_RCORE_VESTING_ROWS_LANDED_V1` is false (`palw_rcore_build_can_run_v1`). It MUST also refuse
+  testnet-11 parameters or a testnet-11 datadir (state version 22 against 20).
+
+**Sources:** ADR-0152 §6 (archive 0152/08). **Code:** `config/params.rs` (`validate_palw_rcore_plus_v1`,
+`sync_palw_rcore_plus`, `palw_t12_arm_every_rule_from_genesis`).
+
 ## 16.3 testnet-12: the DAA-750 set (13 fences, release `c3dbaee3c`)
 
 `PALW_T12_POST_LAUNCH_FENCES_V1`. It was armed at `PALW_T12_POST_LAUNCH_FENCE_DAA` = 750 and is

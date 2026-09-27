@@ -3,8 +3,9 @@
 > **Looking for how MISAKA works today?** Start with the
 > [architecture overview](../architecture/overview.md): it maps each part of the protocol to the
 > ADRs that govern it now. This index is the decision history, and its tables below stop at
-> ADR-0149. ADR-0152 (R-core+, what testnet-12 runs) is cited throughout the code but is not yet
-> committed here.
+> ADR-0149, with rows for 0150–0152 added on 2026-09-27. ADR-0152 (R-core+, what testnet-12 runs) was
+> imported on 2026-09-27 in its short form. Its full v3.1 text is in
+> [design/palw/archive/0152/](../design/palw/archive/0152/README.md).
 
 > **Restructure in progress (2026-09-27).** The ADRs are being split into Spec (the rules), Design
 > (the reasoning), RFC (proposals) and short ADRs (decisions), as [../INDEX.md](../INDEX.md) describes.
@@ -501,4 +502,6 @@ relation, and why the heartbeat lane needed its own `algo_id = 8` (ADR-0066) rat
 | [0149](0149-an-attempts-pwu-is-the-derivation.md) | IMPLEMENTED, **dormant** behind `palw_canonical_work`. An attempt's pwu is the derivation; the weight reads it directly. |
 | [0150](0150-the-fingerprint-must-see-the-rule-not-only-the-height.md) | ACCEPTED 2026-09-20; implemented behind no fence. The params fingerprint hashes a rule manifest, not only fence heights, so two builds with one `consensus_params_id` return one verdict for every block. |
 | [0151](0151-liveness-is-structural-collateral-covers-fraud.md) | 2026-09-22. D2–D5 in force on testnet-12 from genesis; D1's genesis half landed, its runtime half open; D6 partially. Liveness is structural and collateral covers fraud: retires the `window_bind × dearest claim` genesis requirement on testnet-12. |
+| [0152](0152-account-stake-staged-reserve-and-vested-rewards.md) | ACCEPTED for testnet-12 (operator, 2026-09-24; v3.1 with its post-edits and IA-1…IA-15); in force from genesis through `palw_rcore_plus`. R-core+: a bond is standing stake, a claim reserves until its licence, a reward vests until its conviction window closes; attribution, the DA court, quorum recount and the stake-weighted draw. Imported 2026-09-27 as a short record; full text in `design/palw/archive/0152/`. Amended by the SW-8 seed correction and ADR-0154/0155. |
+| 0153 | **Reserved.** The flag day that installs measured verification rows (long-D classes, the 2M split). Not written. |
 | 0160 | **Placeholder.** Claim capacity separated from collateral price (v3), on `rcore/cap-spec2`. Imported after the int-6 integration in its final form (decision 2026-09-27). |

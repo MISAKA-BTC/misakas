@@ -16,11 +16,12 @@ testnet-11 is live here, from genesis.
 
 > [!WARNING]
 > **Two gaps in the record.**
-> * **ADR-0152 is not in the repository.** It is R-core+ v3.1, the design testnet-12 runs: account
->   stake, the staged reserve, vested rewards, the stake-weighted panel draw and the Activation
->   Pool. The launch note, the launch checklist and many code comments cite it. Until it is
->   committed, the code in `consensus/core/src/config/params.rs` (`palw_rcore_plus`) and the
->   [launch note](../t12-launch-2026-09-25.md) are the only written record of it.
+> * **ADR-0152 was imported on 2026-09-27** as a short decision record
+>   ([0152](../adr/0152-account-stake-staged-reserve-and-vested-rewards.md)). Its rules are in
+>   [spec/palw](../spec/palw/00-index.md) chapters 07–10, and its full v3.1 text is in
+>   [design/palw/archive/0152](../design/palw/archive/0152/README.md). It is R-core+ v3.1, the
+>   design testnet-12 runs: account stake, the staged reserve, vested rewards, the stake-weighted panel
+>   draw and the Activation Pool.
 > * **The [ADR index](../adr/README.md) is not current past ADR-0149.** Its activation map is
 >   testnet-11's. The topic map below is the current view.
 

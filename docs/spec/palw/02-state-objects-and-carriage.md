@@ -19,8 +19,23 @@ what each object *means*. This chapter says how objects travel and when they tak
 - [ ] Consensus modes (`PalwConsensusMode`: `Disabled`, `LegacyTn11`, `ConsensusV2`), and what each
   network selects. *Code:* `core/palw_mode_v2.rs`.
 - [ ] Candidate-scoped state: which reads are taken at the candidate's own position. *Sources:* 0042 D5.
-- [ ] The schema version of the state (v22 on testnet-12), and the rule that a version is set by
-  fence and never by build. *Sources:* 0152 §6. *Code:* `palw_carriage_version_refusal_v1`.
+- **PALW-ST-1 (schema v22).** This lineage writes `PALW_STATE_V2_VERSION` 22, and the version is hashed
+  first into every state root. v22 appends:
+  - to the claim: `job_identity` and `claim.rcore`;
+  - to the liability record: `job_identity`, `free_prompt`, `trace_root`, `segment_count`,
+    `licence_door`, `basis_k`, `g_res_sompi` and `escrowed_reward`;
+  - to the lock: `attested` and `segments`;
+  - to the consumed offence: `collected` and `claim_id`;
+  - new rooted maps: `vesting`, `reporter_rewards`, `reward_pending`, `reporter_commitments`,
+    `da_sessions`, `da_claims` and `withholding_strikes`, plus the counters;
+  - offence kinds 3–6, contradictions 9–13, the receipt verdict `Sampled`, and the void reasons
+    `UnavailableQuorum` and `NotReplayBacked`;
+  - object tags 53–56;
+  - delta entries from 66 onward.
+
+  Everything is appended. No enum variant is inserted mid-enum. Fold *behaviour* is fence-gated, but
+  record *encodings* change on every network running this binary. *Sources:* ADR-0152 §6 (archive
+  0152/08). *Code:* `core/palw_state_v2.rs`; `palw_carriage_version_refusal_v1`.
 
 ## 2.2 Objects and their carriage
 
