@@ -803,6 +803,18 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0160 F-B: assemble a batch licence** of the `due` claims (oldest bind first) over the
+    /// pooled seats' signed `windows`, within `max_bytes`, or `None` while the fence is dormant or
+    /// nothing licenses (node policy: which licences a collector carries, never what a block accepts).
+    fn palw_v2_batch_licence_assemble(
+        &self,
+        _windows: Vec<crate::palw_batch_licence_v1::PalwSeatWindowV1>,
+        _due: Vec<crate::Hash64>,
+        _max_bytes: usize,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
     /// ADR-0133 S2: assemble an optimistic licence from V3 receipts, or `None` while the fence is
     /// dormant or the full-replay seat has not filed `Valid`.
     fn palw_v2_optimistic_assemble(

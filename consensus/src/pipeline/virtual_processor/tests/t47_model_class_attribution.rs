@@ -917,12 +917,12 @@ async fn t18u_holding_the_heavy_slot_costs_what_it_consumes() {
     // Another claim pays for the slot it takes.
     let attacker = h.refuted(y.claim_id, y.whole());
     h.refused(&walk, &attacker, &E::PromptHolds.to_string());
-    let rent = palw_object_rent_ceiling_v2(&attacker, true);
+    let rent = palw_object_rent_ceiling_v2(&attacker, true, false);
     assert_eq!(
         rent,
         palw_relay_fee_for_mass_v1(262_143 * kaspa_consensus_core::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)
     );
-    assert_eq!(rent, palw_object_rent_ceiling_v2(&honest, true), "the honest filer pays the same carriage");
+    assert_eq!(rent, palw_object_rent_ceiling_v2(&honest, true, false), "the honest filer pays the same carriage");
     let priced = |objects: Vec<(Obj, u64)>| {
         let point = walk.next();
         h.vp().palw_v2_accepted_priced_objects_for_tests(&walk.state, h.sp(), &point, objects, point.block).0
@@ -932,10 +932,10 @@ async fn t18u_holding_the_heavy_slot_costs_what_it_consumes() {
     assert_eq!(priced(vec![(honest.clone(), rent - 1)]), Vec::<Obj>::new(), "and the honest filer pays it too");
 
     // Fence-off parity: below `palw_offence_attribution` the rent is the v1 rent (nothing).
-    assert_eq!(palw_object_rent_ceiling_v2(&attacker, false), palw_object_rent_ceiling_v1(&attacker));
+    assert_eq!(palw_object_rent_ceiling_v2(&attacker, false, false), palw_object_rent_ceiling_v1(&attacker));
     assert_eq!(palw_object_rent_ceiling_v1(&attacker), 0);
     let tile = h.refuted(x.claim_id, x.tile(3));
-    assert_eq!(palw_object_rent_ceiling_v2(&tile, true), 0, "a Tile recomputes nothing");
+    assert_eq!(palw_object_rent_ceiling_v2(&tile, true, false), 0, "a Tile recomputes nothing");
 
     // And the honest conviction folds.
     let (before, _) = h.carry(&mut walk, vec![honest]);
@@ -956,6 +956,81 @@ async fn t18u_holding_the_heavy_slot_costs_what_it_consumes() {
         "and the executor refuted, in the same block"
     );
     assert!(licensed.bond(&h.cards[full]).unwrap().collateral > walk.state.bond(&h.cards[full]).unwrap().collateral);
+}
+
+/// **ADR-0160 F-B's below-fence twin of T18u′ (the lane-verify review's heavy-slot finding): a kind-3
+/// whose receipt is the lane's `Windowed` form is, below `palw_capacity_batch_licence`, the junk
+/// `0e8ec984e` reads** — its receipt tag (2) does not decode there — so it owes no prompt rent and
+/// takes no heavy slot: the honest Whole on another 2M claim behind it lands, exactly as it does
+/// behind the base's own reading of the same bytes. Before the fix the acceptance walk charged it
+/// against the block's one 2M slot (and the coinbase burned its carrier's prompt rent) ahead of the
+/// gate's refusal, so an upgraded node dropped the honest conviction the base admitted. The base's
+/// reading is reproduced with a receipt tag this build does not know either (3).
+#[tokio::test]
+async fn t18u_a_windowed_kind3_below_the_batch_fence_is_the_bases_junk() {
+    use kaspa_consensus_core::palw_batch_licence_v1::PalwWindowedReceiptV1;
+    use kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2;
+    let h = harness(true);
+    assert!(!h.sp().capacity_batch_active_at(u64::MAX), "F-B is dormant here (testnet-12 as the lane ships it)");
+    let profile = wide_profile();
+    let mut walk = h.genesis_walk();
+    seed_profile(&h, &mut walk, "2M-sized", &profile, Hash64::from_u64_word(WIDE_ARTIFACT_ROOT));
+    // X: a relabel an honest filer convicts by a Whole; Y: an honest 2M-sized claim.
+    let x = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0A11)), bucket(1));
+    let y = open_wide_claim(&h, &mut walk, &profile, None, bucket(2));
+    let honest = h.refuted(x.claim_id, x.whole());
+    let point = walk.next();
+    assert_eq!(h.accepted(&walk.state, &point, &[honest.clone()]), vec![honest.clone()], "the honest Whole alone lands");
+    // A bystander's kind-3 Whole on Y whose receipt rides in the Windowed form.
+    let mask = PalwSegmentMaskV2::full(4);
+    let PalwFalseValidReceiptV1::Segmented(signed) = h.v3_verdict(BYSTANDER, y.claim_id, PalwReceiptVerdictV2::Valid, walk.daa, mask) else {
+        unreachable!("v3_verdict is segmented")
+    };
+    let windowed = PalwFalseValidReceiptV1::Windowed(PalwWindowedReceiptV1 {
+        receipt: signed,
+        anchor_hash: Hash64::default(),
+        from_daa: walk.daa,
+        to_daa: walk.daa,
+        count: 1,
+        leaf_index: 0,
+        path: Vec::new(),
+    });
+    let payload = h.v2_payload(BYSTANDER, y.claim_id, windowed, y.whole());
+    let evidence = borsh::to_vec(&payload).unwrap();
+    let junk = offence(PalwOffenceKindV1::PanelFalseValidV2, h.cards[BYSTANDER], evidence.clone());
+    let why = h.validate(&walk.state, &point, &junk).expect_err("the gate refuses a Windowed receipt below F-B");
+    assert!(why.contains("Windowed"), "refused by name: {why}");
+    // The base's reading of the same bytes: the receipt's variant tag (after the version, the claim
+    // and the accused outpoint) set to one this build does not decode either.
+    let tag_at = borsh::to_vec(&payload.version).unwrap().len()
+        + borsh::to_vec(&payload.claim_id).unwrap().len()
+        + borsh::to_vec(&payload.accused_seat).unwrap().len();
+    assert_eq!(evidence[tag_at], 2, "the Windowed variant's tag");
+    let mut base_bytes = evidence.clone();
+    base_bytes[tag_at] = 3;
+    assert!(borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(&base_bytes).is_err(), "tag 3 decodes here as tag 2 does in the base");
+    let as_base = offence(PalwOffenceKindV1::PanelFalseValidV2, h.cards[BYSTANDER], base_bytes);
+    // The rent: nothing below F-B, as the base prices it (the coinbase burns the same on both builds);
+    // past F-B the form prices as any other Whole on a 2M claim.
+    assert_eq!(palw_object_rent_ceiling_v2(&junk, true, false), 0, "below F-B the Windowed Whole owes no prompt rent");
+    assert_eq!(palw_object_rent_ceiling_v2(&as_base, true, false), 0, "the base's reading");
+    assert_eq!(
+        palw_object_rent_ceiling_v2(&junk, true, true),
+        palw_object_rent_ceiling_v2(&honest, true, false),
+        "past F-B it pays the prompt's carriage like every Whole"
+    );
+    // The heavy slot: below F-B the junk is never charged, so the honest Whole behind it lands on
+    // this build exactly as behind the base's reading.
+    let with_windowed = h.accepted(&walk.state, &point, &[junk.clone(), honest.clone()]);
+    let with_undecodable = h.accepted(&walk.state, &point, &[as_base.clone(), honest.clone()]);
+    assert_eq!(with_undecodable, vec![honest.clone()], "the base's reading: the honest Whole lands");
+    assert_eq!(with_windowed, with_undecodable, "below F-B this build admits what the base admits");
+    // Priced walk (the rent check runs first): the junk with no rent paid is still no heavy charge.
+    let priced = h.vp().palw_v2_accepted_priced_objects_for_tests(&walk.state, h.sp(), &point, vec![(junk, 0), (honest.clone(), palw_object_rent_ceiling_v2(&honest, true, false))], point.block).0;
+    assert_eq!(priced, vec![honest.clone()], "priced: the honest Whole lands behind the unpriced Windowed junk");
+    // And the honest conviction folds.
+    let (before, _) = h.carry(&mut walk, vec![honest]);
+    assert_refuted_before_final(&h, &before, &walk.state, x.claim_id, walk.daa, Hash64::default());
 }
 
 /// **ADR-0152 v3.1 T18m's kind-3 and after-`Final` cells (F1-M, §8.3 item 1)** on this module's

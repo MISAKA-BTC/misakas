@@ -181,10 +181,7 @@ pub fn palw_false_valid_receipt_relied_v1(
     let relied = state.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &claim)).is_some()
         || match state.slashable_lock(seat, claim) {
             Some(lock) => {
-                let attested = match receipt {
-                    PalwFalseValidReceiptV1::Full(_) => PalwSegmentMaskV2::full(lock.segments),
-                    PalwFalseValidReceiptV1::Segmented(signed) => signed.segments,
-                };
+                let attested = receipt.attested_mask().unwrap_or(PalwSegmentMaskV2::full(lock.segments));
                 lock.segments == 0 || attested == lock.attested
             }
             None => state.panel_liability(&claim).is_some_and(|row| row.valid_signers.iter().any(|(s, _)| *s == seat.0)),
@@ -270,9 +267,9 @@ pub fn palw_false_valid_filing_check_v1(
     // F7's slot stays empty on testnet-12, as the gate and the fold both pass it.
     match palw_check_panel_false_valid_v2(state, accused, evidence, fp_decode_rules_active, false, rules, None) {
         Ok(finding) => {
-            let full_attestation = match &payload.receipt {
-                PalwFalseValidReceiptV1::Full(_) => true,
-                PalwFalseValidReceiptV1::Segmented(signed) => finding.target.segment_count.is_some_and(|k| signed.segments.is_full(k)),
+            let full_attestation = match payload.receipt.attested_mask() {
+                None => true,
+                Some(mask) => finding.target.segment_count.is_some_and(|k| mask.is_full(k)),
             };
             Check::File {
                 claim_id: finding.target.claim_id,
