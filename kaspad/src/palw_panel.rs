@@ -2169,6 +2169,35 @@ enum CloseFromServedV1 {
     Refused(String),
 }
 
+/// **`verify_material` of a free-prompt capture under its claim's decode rule** (RFC-0001 §A, G5):
+/// the capture's own job — bound to the claim by the id and pin the roots carry — decides the
+/// selection rule the seat rules check (T4): the shipped argmax for a V3 job, the job's pipeline over
+/// the capture's committed answer for a V4 job. Bytes that are not an FP capture are verified as
+/// they are, exactly as before.
+fn fp_verify_material_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    bytes: &[u8],
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+) -> kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1 {
+    match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes, prompt_ids_form) {
+        Some(payload) => fp_verify_capture_under_job_v1(backend, &payload.material.job, &payload.capture, roots),
+        None => backend.verify_material(bytes, roots),
+    }
+}
+
+/// [`fp_verify_material_v1`] for a capture already decoded: `job` is the claim's.
+fn fp_verify_capture_under_job_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    capture: &[u8],
+    roots: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+) -> kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1 {
+    let committed = misaka_palw_base0::fp_interval::base0_fp_capture_committed_ids_v1(capture).unwrap_or_default();
+    let rule = kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, &committed);
+    kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || backend.verify_material(capture, roots))
+}
+
 fn fp_capture_view(
     bytes: &[u8],
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
@@ -7565,7 +7594,7 @@ impl PalwPanelService {
                     .get(&duty.claim_id)
                     .map(|pool| {
                         pool.iter().any(|b| {
-                            backend.verify_material(&fp_capture_view(b, self.class_prompt_ids_form(duty.class_id)), roots)
+                            fp_verify_material_v1(backend.as_ref(), b, self.class_prompt_ids_form(duty.class_id), roots)
                                 == PalwMaterialVerdictV1::Matches
                         })
                     })
@@ -7573,7 +7602,7 @@ impl PalwPanelService {
                 let mut accused_held = pool_has_it;
                 if !accused_held
                     && let Some(bytes) = self.retained_capture(&duty.claim_id)
-                    && backend.verify_material(&fp_capture_view(&bytes, self.class_prompt_ids_form(duty.class_id)), roots)
+                    && fp_verify_material_v1(backend.as_ref(), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
                         == PalwMaterialVerdictV1::Matches
                 {
                     info!(
@@ -7620,7 +7649,7 @@ impl PalwPanelService {
                     };
                     match remade {
                         Some(bytes)
-                            if backend.verify_material(&fp_capture_view(&bytes, self.class_prompt_ids_form(duty.class_id)), roots)
+                            if fp_verify_material_v1(backend.as_ref(), &bytes, self.class_prompt_ids_form(duty.class_id), roots)
                                 == PalwMaterialVerdictV1::Matches =>
                         {
                             info!(
@@ -9463,7 +9492,10 @@ impl PalwPanelService {
                                     // ADR-0152 v3.1 J-1 (the 3a review's L-b): the pin the claim recorded.
                                     job_pin: duty.fp_job_pin_v1(),
                                 };
-                                if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
+                                // RFC-0001 §A: under the claim's decode rule (its job's, for a V4 claim).
+                                if fp_verify_capture_under_job_v1(backend.as_ref(), &payload.material.job, &payload.capture, roots)
+                                    != PalwMaterialVerdictV1::Matches
+                                {
                                     // P2-8, J1 auto: the claim's committed execution under another job?
                                     self.j1_auto_probe_v1(
                                         &session,
@@ -20966,5 +20998,80 @@ mod readiness_memory_and_stuck_carrier_tests {
         let write_back = tail.find("if !held {\n                    chained_funding = funding;").expect("the write-back");
         assert!(close < write_back, "a tick that sent nothing is held again before the chain is written back");
         assert!(tail[close..write_back].contains("inflight = MAX_INFLIGHT_CARRIERS;\n                        held = true;"));
+    }
+}
+
+/// **RFC-0001 §A (G5) on the material route**: a free-prompt capture is checked under its claim's
+/// decode rule — a V4 claim's penalized answer passes the seat rules only under its job's pipeline,
+/// never under the shipped argmax — and a V3 capture is checked exactly as before.
+#[cfg(test)]
+mod fp_job_v4_material_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwMaterialVerdictV1};
+    use kaspa_consensus_core::palw_decode_pipeline_v4::{DecodeConfigV4, PALW_DECODE_V4_BIAS_BAN_Q};
+    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFreePromptJobV3, fp_job_id_v3, palw_fp_capture_encode_v1};
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+
+    #[test]
+    fn a_v4_capture_verifies_under_its_jobs_rule_and_a_v3_capture_as_before() {
+        use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .unwrap();
+        let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").unwrap();
+        let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().unwrap();
+        let backend = misaka_palw_base0::backend::Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).unwrap());
+        let prompt: Vec<u32> = vec![5, 9, 21];
+        let usize_prompt: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+        let v3 = PalwFreePromptJobV3 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: backend.profile().shape_profile_id(),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+                0,
+            ),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt),
+            prompt_tokens: prompt.len() as u32,
+            decode_token_limit: 6,
+            max_context_tokens: backend.profile().n_ctx,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+        };
+        let greedy = backend.execute_free_prompt(&v3, &usize_prompt).unwrap();
+        let v4 = v3.clone().into_v4(DecodeConfigV4 {
+            logit_bias: vec![(greedy.output_token_ids[0], PALW_DECODE_V4_BIAS_BAN_Q)],
+            repeat_penalty_q: 262_144,
+            penalty_window: 16,
+            ..DecodeConfigV4::NOOP
+        });
+        for (job, penalized) in [(v3, false), (v4, true)] {
+            let run = backend.execute_free_prompt(&job, &usize_prompt).unwrap();
+            let roots = PalwClaimRootsV1 {
+                execution_root: run.outcome.execution_root,
+                trace_root: run.outcome.trace_root,
+                anchor: fp_job_id_v3(&job),
+                attempt_draw: None,
+                output_root: None,
+                job_pin: None,
+            };
+            let bytes = palw_fp_capture_encode_v1(&job, &prompt, &run.outcome.material);
+            assert_eq!(fp_verify_material_v1(&backend, &bytes, PalwPromptIdsFormV1::Flat, roots), PalwMaterialVerdictV1::Matches);
+            let unscoped = backend.verify_material(&run.outcome.material, roots);
+            if penalized {
+                assert_ne!(unscoped, PalwMaterialVerdictV1::Matches, "the argmax cannot vouch for a penalized answer");
+            } else {
+                assert_eq!(unscoped, PalwMaterialVerdictV1::Matches, "a V3 capture is checked as before");
+            }
+        }
     }
 }
