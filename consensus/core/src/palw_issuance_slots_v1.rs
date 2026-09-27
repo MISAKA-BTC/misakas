@@ -206,7 +206,7 @@ mod tests {
         let dry = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 0, Some(&row), 50);
         assert_eq!(dry.admits_v1(), Err(PalwIssuanceRefusalV1::Rate { tokens_milli: 0 }), "the burst is spent within a DAA");
         let later = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 0, Some(&row), 51);
-        assert_eq!(later.tokens_milli, 10_000.min(8_000), "a DAA refills 10 claims, capped at the depth 8");
+        assert_eq!(later.tokens_milli, 8_000, "a DAA refills 10 claims, capped at the depth 8");
         let full = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 0, Some(&row), 10_000);
         assert_eq!(full.tokens_milli, 8_000, "capped");
         let capped = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 200, None, 51);
