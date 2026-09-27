@@ -275,6 +275,25 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
     max_step_leaf_count: u64,
     on_token: &mut dyn FnMut(u32),
 ) -> Result<Base0ExecutionV1, ProduceError> {
+    base0_execute_streaming_select_capped_v1(artifact, profile, ctx, prompt, max_step_leaf_count, on_token, &mut |row| {
+        argmax_lowest(row) as u32
+    })
+}
+
+/// [`base0_execute_for_attempt_streaming_capped_v1`] with the selection rule the CALLER names:
+/// `select(row)` is the id fed to the next forward pass from each selecting row, in order. The
+/// attempt lane passes the shipped argmax; the free-prompt lane passes its job's decoder
+/// (`palw_decode_pipeline_v4::palw_fp_decode_run_v1`, RFC-0001 §A.3), so a V4 job's penalties,
+/// bias, stop and sampler are applied in the one loop this family has.
+pub fn base0_execute_streaming_select_capped_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    on_token: &mut dyn FnMut(u32),
+    select: &mut dyn FnMut(&[i32]) -> u32,
+) -> Result<Base0ExecutionV1, ProduceError> {
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
     if prefill == 0 || decode_tokens == 0 {
@@ -335,7 +354,7 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
         }
         last_logits = logits;
     }
-    let mut next = argmax_lowest(&last_logits);
+    let mut next = select(&last_logits) as usize;
     generated.push(next as u32);
     on_token(next as u32);
     logits_rows.push(last_logits);
@@ -348,7 +367,7 @@ pub fn base0_execute_for_attempt_streaming_capped_v1(
         let (logits, probe) = engine.forward_token_probed(&mut cache, next, cache_position).map_err(ProduceError::Engine)?;
         let rows: Vec<Base0CapturedRowV1> = base0_captured_rows_v1(&probe);
         capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(ProduceError::Leg)?;
-        next = argmax_lowest(&logits);
+        next = select(&logits) as usize;
         generated.push(next as u32);
         on_token(next as u32);
         logits_rows.push(logits);
@@ -1622,7 +1641,9 @@ pub fn base0_seat_rules_v1(
             return Err(R::TokenOutOfVocab { position });
         }
         // An empty row selects nothing; `base0_decode_token_select_v1` would answer 0 for it.
-        if row.is_empty() || kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u64 != u64::from(*id) {
+        // **The claim's rule, never the material's** (RFC-0001 §A): the shipped argmax, or — inside
+        // a seat's scope for a V4 claim — the job's pipeline over its committed answer.
+        if row.is_empty() || kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_replay_select_v1(row, position) != *id {
             return Err(R::TokenNotSelected { position });
         }
     }

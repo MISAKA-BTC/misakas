@@ -883,6 +883,30 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         PalwFpIntervalVerdictV1::Unverifiable
     }
 
+    /// **[`Self::verify_fp_interval_opening`] under the CLAIM's decode rule** (RFC-0001 §A, G5):
+    /// the replay derives each selecting row's id with the job's pipeline over its committed
+    /// answer — `job` and `committed_output_ids` are the claim's, authenticated by the caller
+    /// (the job by its id and pin, the answer by the claim's `output_root`), never the opening's.
+    /// A V3 job is exactly [`Self::verify_fp_interval_opening`]: V3 claims keep the V3 verifier.
+    /// Every family that replays through `palw_decode_pipeline_v4::palw_fp_replay_select_v1`
+    /// inherits this; a family that derives ids some other way must override it.
+    #[allow(clippy::too_many_arguments)]
+    fn verify_fp_interval_opening_under_job_v1(
+        &self,
+        opening: &[u8],
+        claim: PalwClaimRootsV1,
+        index: u32,
+        prompt_token_ids: &[u32],
+        work_leaves: u64,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        committed_output_ids: &[u32],
+    ) -> PalwFpIntervalVerdictV1 {
+        let rule = crate::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, committed_output_ids);
+        crate::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || {
+            self.verify_fp_interval_opening(opening, claim, index, prompt_token_ids, work_leaves)
+        })
+    }
+
     /// **ADR-0082 Decision 9: the seat's cache is RECOMPUTED from the prompt it holds, never
     /// fetched.** Run the job's prefill and its first `decode_calls` decode calls (the committed
     /// output ids, teacher-forced) with this family's own kernels, and return the checkpoint

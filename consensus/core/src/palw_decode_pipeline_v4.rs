@@ -1055,3 +1055,281 @@ mod processor_tests {
         assert_eq!(decode_select_v4(&narrow, &PalwDecodeSamplingV2::GREEDY, &[0, 0, 1], &row, &|_| true), Some(0));
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Engines and seats: one driver for a producer's run, one scoped rule for a replay
+// ---------------------------------------------------------------------------------------------
+
+/// **Run a free-prompt job under its decoder, to exactly where the decoder stops** — the one
+/// driver every free-prompt engine's producer calls (RFC-0001 §A.3 on the worker, G4).
+///
+/// `run(count, select, stream)` is ONE capture of the job at `count` decode tokens: the engine
+/// builds its job context for `count` (a step leaf binds the context, and the context binds the
+/// count, so hashing cannot begin before the count is fixed), feeds `select(row)`'s lane into its
+/// next forward pass for each selecting row in order, and calls `stream(id)` for each id it feeds.
+/// The driver runs it once at the job's budget; if the pipeline stopped earlier (a stop sequence
+/// completed, or no lane was admissible) it runs it again at exactly that count — selection is a
+/// pure function of the committed prefix, so the second run commits the same tokens, which is
+/// checked. Only committed ids are streamed, once. A V3 job never stops before its budget and runs
+/// exactly once, byte for byte as before. `committed_of` reads the ids a run committed.
+///
+/// Refused before anything runs: a V4 job whose `logit_bias` bans every lane of a `vocab`-wide row
+/// (no position could commit a token). Refused after the first run: a job that stops before its
+/// first token.
+pub fn palw_fp_decode_run_v1<R>(
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    vocab: u32,
+    on_token: &mut dyn FnMut(u32),
+    mut run: impl FnMut(u32, &mut dyn FnMut(&[i32]) -> u32, &mut dyn FnMut(u32)) -> Result<R, String>,
+    committed_of: impl Fn(&R) -> &[u32],
+) -> Result<(R, PalwFpDecodeStopV1), String> {
+    if let Some(decode) = job.decode.as_ref().filter(|_| job.is_v4())
+        && decode.bans_cover_vocab(vocab)
+    {
+        return Err("logit_bias bans every lane of this class's vocabulary: no position could commit a token".to_string());
+    }
+    let limit = job.decode_token_limit;
+    let decoder = std::cell::RefCell::new(job.decoder_v1());
+    let streamed = std::cell::Cell::new(0usize);
+    let first = {
+        let mut select = |row: &[i32]| decoder.borrow_mut().select(row);
+        let mut stream = |id: u32| {
+            if streamed.get() < decoder.borrow().generated().len() {
+                streamed.set(streamed.get() + 1);
+                on_token(id);
+            }
+        };
+        run(limit, &mut select, &mut stream)?
+    };
+    let decoder = decoder.into_inner();
+    let stop = decoder
+        .stop()
+        .unwrap_or(PalwFpDecodeStopV1 { executed: decoder.generated().len() as u32, reason: PalwFpDecodeStopReasonV1::Budget });
+    if stop.executed >= limit {
+        if committed_of(&first) != decoder.generated() {
+            return Err("the engine fed ids the decoder did not commit".to_string());
+        }
+        return Ok((first, stop));
+    }
+    if stop.executed == 0 {
+        return Err(
+            "no lane is admissible at the first decode position: the job's logit_bias bans every lane it could commit".to_string()
+        );
+    }
+    let again = std::cell::RefCell::new(job.decoder_v1());
+    let second = {
+        let mut select = |row: &[i32]| again.borrow_mut().select(row);
+        run(stop.executed, &mut select, &mut |_| {})?
+    };
+    if committed_of(&second) != decoder.generated() {
+        return Err(format!(
+            "the run at the stop ({} tokens) did not commit the tokens the budget run committed — selection is not a function of the prefix",
+            stop.executed
+        ));
+    }
+    Ok((second, stop))
+}
+
+/// **The rule a seat's replay applies, scoped to one verification** — the claim's decode rule
+/// and its committed answer, so the replay derives each selecting row's id exactly as the
+/// producer's pipeline did.
+///
+/// A replay step selects from row `r` with `c_j` counted over the committed ids `0..r` — the
+/// claim's own answer, which the seat authenticated against the claim before replaying (it is the
+/// answer whose `output_root` the chain holds). An honest producer's committed id at row `r` is
+/// then exactly what this selects, so the replayed rows are the committed ones; a producer that
+/// committed any other id diverges at that row and the seat files nothing.
+///
+/// **The executor's own replays are FORCED instead** ([`Self::forced`]): an executor re-deriving the
+/// leaves of its own retained capture (an interval opening, a segment checkpoint, a dense capture for
+/// the court) already holds the committed ids, and replays them rather than re-selecting — which is
+/// byte-identical for every V3 claim (its committed ids ARE the shipped argmax) and is the only
+/// replay that reproduces a V4 capture without the job's decode config at hand.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpReplayRuleV1 {
+    kind: PalwFpReplayKindV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PalwFpReplayKindV1 {
+    /// A seat's check: the claim's pipeline over its committed answer.
+    Pipeline { config: DecodeConfigV4, sampling: PalwDecodeSamplingV2, committed: Vec<u32> },
+    /// The executor's own replay: the committed ids, fed back.
+    Forced(Vec<u32>),
+}
+
+impl PalwFpReplayRuleV1 {
+    /// The rule of a V4 job over its committed answer; `None` for a V3 job, whose replay keeps the
+    /// shipped rule (the V3 verifier) byte for byte.
+    pub fn of_job(job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, committed: &[u32]) -> Option<Self> {
+        let config = job.decode.as_ref().filter(|_| job.is_v4())?.clone();
+        Some(Self { kind: PalwFpReplayKindV1::Pipeline { config, sampling: job.sampling_v2(), committed: committed.to_vec() } })
+    }
+
+    /// The executor's replay of its own retained answer: row `r` feeds committed id `r`.
+    pub fn forced(committed: &[u32]) -> Self {
+        Self { kind: PalwFpReplayKindV1::Forced(committed.to_vec()) }
+    }
+
+    /// The id row `row_index` selects: §A.3 over the committed prefix `0..row_index` (a seat), or
+    /// the committed id itself (the executor).
+    pub fn select(&self, row: &[i32], row_index: u32) -> u32 {
+        match &self.kind {
+            PalwFpReplayKindV1::Forced(committed) => committed
+                .get(row_index as usize)
+                .copied()
+                .unwrap_or_else(|| crate::palw_step_refute::base0_decode_token_select_v1(row) as u32),
+            PalwFpReplayKindV1::Pipeline { config, sampling, committed } => {
+                let before = &committed[..(row_index as usize).min(committed.len())];
+                match decode_select_v4(config, sampling, before, row, &|_| true) {
+                    Some(lane) => lane as u32,
+                    // An empty admitted set commits nothing; a replay step never reaches one on an
+                    // honest claim (the producer stopped there), and the raw rule keeps this total.
+                    None => decode_token_select_v2(row, &sampling.seed, row_index, sampling.temperature_q) as u32,
+                }
+            }
+        }
+    }
+}
+
+thread_local! {
+    static PALW_FP_REPLAY_RULE: std::cell::RefCell<Option<std::rc::Rc<PalwFpReplayRuleV1>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// **Run `f` with `rule` as this thread's replay rule** — the scope a seat opens around one
+/// verification of one claim (`PalwExecutionBackendV1::verify_fp_interval_opening_under_job_v1`).
+/// Restored on exit, panics included, so one claim's rule can never leak into the next check.
+/// `None` is the V3 verifier.
+pub fn palw_fp_with_replay_rule_v1<R>(rule: Option<PalwFpReplayRuleV1>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<std::rc::Rc<PalwFpReplayRuleV1>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            PALW_FP_REPLAY_RULE.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+    let previous = PALW_FP_REPLAY_RULE.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), rule.map(std::rc::Rc::new)));
+    let _restore = Restore(previous);
+    f()
+}
+
+/// **The id a replay derives from selecting row `row_index`** — the scoped V4 rule when a seat
+/// opened one ([`palw_fp_with_replay_rule_v1`]), otherwise the shipped rule
+/// (`base0_decode_token_select_v1`), which is what every V3 claim — and every attempt — commits.
+pub fn palw_fp_replay_select_v1(row: &[i32], row_index: u32) -> u32 {
+    let scoped = PALW_FP_REPLAY_RULE.with(|slot| slot.borrow().clone());
+    match scoped {
+        Some(rule) => rule.select(row, row_index),
+        None => crate::palw_step_refute::base0_decode_token_select_v1(row) as u32,
+    }
+}
+
+#[cfg(test)]
+mod engine_driver_tests {
+    use super::*;
+    use crate::palw_freeprompt_v3::{PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3};
+    use crate::tx::{TransactionId, TransactionOutpoint};
+
+    fn job(limit: u32) -> PalwFreePromptJobV3 {
+        PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: crate::Hash64::from_u64_word(1),
+            class_id: crate::Hash64::from_u64_word(2),
+            executor_bond: TransactionOutpoint { transaction_id: TransactionId::from_u64_word(3), index: 0 },
+            executor_pubkey: vec![4],
+            operator_id: crate::Hash64::from_u64_word(5),
+            anchor_block: crate::Hash64::from_u64_word(6),
+            anchor_daa: 7,
+            job_nonce: [8; 32],
+            tokenizer_id: crate::Hash64::from_u64_word(9),
+            prompt_token_ids_hash: crate::Hash64::from_u64_word(10),
+            prompt_tokens: 1,
+            decode_token_limit: limit,
+            max_context_tokens: 64,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            decode: None,
+        }
+    }
+
+    /// A toy engine: the logits row after feeding token `t` peaks at `(t + 1) % 4`, so the greedy
+    /// answer walks 1, 2, 3, 0, 1, … — `runs` counts captures.
+    fn engine(count: u32, select: &mut dyn FnMut(&[i32]) -> u32, stream: &mut dyn FnMut(u32), runs: &mut u32) -> Vec<u32> {
+        *runs += 1;
+        let mut fed = Vec::new();
+        let mut last = 0u32;
+        for _ in 0..count {
+            let mut row = vec![0i32; 4];
+            row[((last + 1) % 4) as usize] = 10;
+            let id = select(&row);
+            fed.push(id);
+            stream(id);
+            last = id;
+        }
+        fed
+    }
+
+    #[test]
+    fn a_v3_job_runs_once_to_its_budget() {
+        let (mut runs, mut streamed) = (0, Vec::new());
+        let (fed, stop) =
+            palw_fp_decode_run_v1(&job(6), 4, &mut |id| streamed.push(id), |n, s, t| Ok(engine(n, s, t, &mut runs)), |r| r).unwrap();
+        assert_eq!((fed.clone(), runs), (vec![1, 2, 3, 0, 1, 2], 1));
+        assert_eq!(streamed, fed);
+        assert_eq!(stop, PalwFpDecodeStopV1 { executed: 6, reason: PalwFpDecodeStopReasonV1::Budget });
+    }
+
+    #[test]
+    fn a_stop_sequence_reruns_at_the_stop_and_streams_each_committed_id_once() {
+        let v4 = job(8).into_v4(DecodeConfigV4 { stop_sequences: vec![vec![2, 3]], ..DecodeConfigV4::NOOP });
+        let (mut runs, mut streamed) = (0, Vec::new());
+        let (fed, stop) =
+            palw_fp_decode_run_v1(&v4, 4, &mut |id| streamed.push(id), |n, s, t| Ok(engine(n, s, t, &mut runs)), |r| r).unwrap();
+        assert_eq!(fed, vec![1, 2, 3], "the capture is at the stop");
+        assert_eq!(runs, 2, "the budget run, then the run at the stop");
+        assert_eq!(streamed, vec![1, 2, 3], "only committed ids, once");
+        assert_eq!(stop, PalwFpDecodeStopV1 { executed: 3, reason: PalwFpDecodeStopReasonV1::StopSequence { index: 0 } });
+        // A no-op V4 is the V3 run, once.
+        let (mut runs, mut streamed) = (0, Vec::new());
+        let (noop, _) = palw_fp_decode_run_v1(
+            &job(6).into_v4(DecodeConfigV4::NOOP),
+            4,
+            &mut |id| streamed.push(id),
+            |n, s, t| Ok(engine(n, s, t, &mut runs)),
+            |r| r,
+        )
+        .unwrap();
+        assert_eq!((noop, runs), (vec![1, 2, 3, 0, 1, 2], 1));
+    }
+
+    #[test]
+    fn a_job_that_can_commit_nothing_is_refused() {
+        let all = job(4)
+            .into_v4(DecodeConfigV4 { logit_bias: (0..4).map(|t| (t, PALW_DECODE_V4_BIAS_BAN_Q)).collect(), ..DecodeConfigV4::NOOP });
+        let mut runs = 0;
+        let err = palw_fp_decode_run_v1(&all, 4, &mut |_| {}, |n, s, t| Ok(engine(n, s, t, &mut runs)), |r| r).unwrap_err();
+        assert!(err.contains("bans every lane"), "{err}");
+        assert_eq!(runs, 0, "refused before anything runs");
+    }
+
+    #[test]
+    fn the_scoped_replay_rule_is_the_producers_and_does_not_leak() {
+        let v4 = job(8).into_v4(DecodeConfigV4 { repeat_penalty_q: 262_144, penalty_window: 4, ..DecodeConfigV4::NOOP });
+        let row = [10i32 << 24, 9 << 24, 0, 0];
+        assert_eq!(palw_fp_replay_select_v1(&row, 1), 0, "unscoped: the shipped rule");
+        let rule = PalwFpReplayRuleV1::of_job(&v4, &[0, 1]);
+        let inside = palw_fp_with_replay_rule_v1(rule, || palw_fp_replay_select_v1(&row, 1));
+        assert_eq!(inside, 1, "scoped: lane 0 was committed at row 0, so the repeat penalty moves row 1 off it");
+        assert_eq!(palw_fp_replay_select_v1(&row, 1), 0, "and the scope is gone afterwards");
+        assert!(PalwFpReplayRuleV1::of_job(&job(8), &[0]).is_none(), "a V3 job keeps the V3 verifier");
+        // Restored across a panic too.
+        let caught = std::panic::catch_unwind(|| {
+            palw_fp_with_replay_rule_v1(PalwFpReplayRuleV1::of_job(&v4, &[0]), || panic!("a replay that panics"))
+        });
+        assert!(caught.is_err());
+        assert_eq!(palw_fp_replay_select_v1(&row, 1), 0);
+    }
+}

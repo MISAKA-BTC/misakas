@@ -2646,7 +2646,9 @@ pub fn base0_fp_replay_interval_with_v1(
                     .map_err(|e| format!("{e}"))?;
             }
             if run_last == prefill {
-                next = Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits));
+                // Row 0 selects the first answer token — under the claim's rule (RFC-0001 §A: the
+                // shipped argmax, or a V4 claim's pipeline inside the seat's scope).
+                next = Some(kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_replay_select_v1(&logits, 0) as usize);
             }
             step = run_last + 1;
         } else {
@@ -2659,7 +2661,8 @@ pub fn base0_fp_replay_interval_with_v1(
             let (logits, rows) = engine.step(token, cache_position)?;
             crate::fp_capture::base0_position_tiles_v1(profile, prefill as u32, call, 0, &rows, &mut emit)
                 .map_err(|e| format!("{e}"))?;
-            next = Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits));
+            // Row `call` selects answer token `call`, under the claim's rule.
+            next = Some(kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_replay_select_v1(&logits, call) as usize);
             step += 1;
         }
     }
@@ -3123,7 +3126,9 @@ fn seed_row_from_tiles_v1(
     if row.is_empty() {
         return None;
     }
-    Some((kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&row) as u32, hashes))
+    // The seed row is row `call_index` (the prefill's last position is row 0): its id under the
+    // claim's rule (RFC-0001 §A).
+    Some((kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_replay_select_v1(&row, seed.0), hashes))
 }
 
 /// The range's edge outside its whole blocks — where a fault lives when every digest agrees and
@@ -3573,7 +3578,7 @@ fn seed_token_from_opened_row_v1(
     if row.is_empty() {
         return None;
     }
-    Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&row) as u32)
+    Some(kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_replay_select_v1(&row, seed.0))
 }
 
 /// The checkpoint the interval resumes from must be the one the CLAIM committed: its leaf opens
@@ -8525,4 +8530,29 @@ mod inspect_material {
             range.siblings.len()
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// RFC-0001 §A (FP Job V4): the executor's own replays feed its committed ids back
+// ---------------------------------------------------------------------------------------------
+
+/// **The committed answer of a retained capture** — the fold's or the dense material's ids, or
+/// `None` for bytes that are neither.
+pub fn base0_fp_capture_committed_ids_v1(capture: &[u8]) -> Option<Vec<u32>> {
+    match crate::produce::base0_material_decode_any_v1(capture).ok()? {
+        crate::produce::Base0RetentionV1::Folded(material) => Some(material.generated_token_ids),
+        crate::produce::Base0RetentionV1::Dense((_, _, _, generated, ..)) => Some(generated),
+    }
+}
+
+/// **Run an executor-side replay of `capture` with its own committed ids fed back**
+/// (`PalwFpReplayRuleV1::forced`). An executor opening its own retention (an interval, a segment
+/// checkpoint) re-derives leaves of the run it committed; for a V3 claim the committed ids are the
+/// shipped argmax, so this is byte-identical to re-selecting, and for a V4 claim it is the only
+/// replay that reproduces the capture — the executor's opening carries no decode config, and needs
+/// none, because it holds the answer. A seat never runs under this: it checks the selection.
+pub fn base0_fp_executor_replay_v1<R>(capture: &[u8], f: impl FnOnce() -> R) -> R {
+    let rule = base0_fp_capture_committed_ids_v1(capture)
+        .map(|ids| kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::forced(&ids));
+    kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, f)
 }

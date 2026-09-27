@@ -996,6 +996,7 @@ fn handle_chat(
         shape_profile_id: manifest.shape_profile_id,
         trace_scheme_id: manifest.trace_scheme_id,
         decode: None,
+        stop_texts: Vec::new(),
     };
 
     // **Decision 2: the answer streams as it is decoded; the commitment does not exist yet.**

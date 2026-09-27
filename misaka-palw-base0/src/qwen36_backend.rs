@@ -626,6 +626,7 @@ pub fn qwen36_execute_for_attempt_streaming_capped_v1(
         max_step_leaf_count,
         crate::legs::Base0CaptureKindV1::DenseTiles,
         on_token,
+        &mut |row: &[i32]| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32,
     )
 }
 
@@ -646,7 +647,7 @@ pub fn qwen36_execute_for_attempt_with_sink_v1(
     max_step_leaf_count: u64,
     kind: crate::legs::Base0CaptureKindV1,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
-    qwen36_execute_streaming_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, kind, &mut |_| {})
+    qwen36_execute_streaming_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, kind, &mut |_| {}, &mut |row: &[i32]| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32)
 }
 
 pub fn qwen36_execute_free_prompt_streaming_v1(
@@ -658,6 +659,22 @@ pub fn qwen36_execute_free_prompt_streaming_v1(
     max_step_leaf_count: u64,
     on_token: &mut dyn FnMut(u32),
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
+    qwen36_execute_free_prompt_select_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, on_token, &mut |row: &[i32]| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32)
+}
+
+/// [`qwen36_execute_free_prompt_streaming_v1`] under the selection rule the caller names — the
+/// job's decoder on the free-prompt producer (RFC-0001 §A.3, `palw_fp_decode_run_v1`).
+#[allow(clippy::too_many_arguments)]
+pub fn qwen36_execute_free_prompt_select_v1(
+    artifact: &Qwen36ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    on_token: &mut dyn FnMut(u32),
+    select: &mut dyn FnMut(&[i32]) -> u32,
+) -> Result<crate::produce::Base0ExecutionV1, String> {
     qwen36_execute_streaming_v1(
         artifact,
         profile,
@@ -667,6 +684,7 @@ pub fn qwen36_execute_free_prompt_streaming_v1(
         max_step_leaf_count,
         crate::legs::Base0CaptureKindV1::Fold,
         on_token,
+        select,
     )
 }
 
@@ -681,6 +699,8 @@ fn qwen36_execute_streaming_v1(
     max_step_leaf_count: u64,
     capture_kind: crate::legs::Base0CaptureKindV1,
     on_token: &mut dyn FnMut(u32),
+    // The id each selecting row feeds forward (RFC-0001 §A.3): the shipped argmax, or the job's decoder.
+    select: &mut dyn FnMut(&[i32]) -> u32,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
@@ -779,7 +799,7 @@ fn qwen36_execute_streaming_v1(
         }
     }
     bracket("prefill done", prefill, &cache, &capture, &checkpoints);
-    let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
+    let mut next = select(&last_logits);
     generated.push(next);
     on_token(next);
     logits_rows.push(last_logits);
@@ -794,7 +814,7 @@ fn qwen36_execute_streaming_v1(
             .map_err(|e| format!("decode at {cache_position}: {e}"))?;
         let rows = qwen36_captured_rows_v1(profile, &trace);
         capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
-        next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
+        next = select(&logits);
         generated.push(next);
         on_token(next);
         logits_rows.push(logits);
@@ -1489,6 +1509,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
 
     /// SEAT-S4: the authenticated `SC02` opening at this class's ladder.
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
+        // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
+        crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
         crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
             capture,
             seat_count,
@@ -1497,6 +1519,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             self.step_ladder_cap(),
         )
         .map_err(|e| e.to_string())
+        })
     }
 
     /// SEAT-S4: authenticated against `claim` and this seat's `job`; a resume restores the composed
@@ -1776,17 +1799,30 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         };
         // The pairing is derived from the executed count (ADR-0074 Decision 7); this producer runs
         // its declared ceiling, which is what it passes.
-        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
-
-        let run = qwen36_execute_free_prompt_streaming_v1(
-            &self.artifact,
-            profile,
-            plan,
-            &ctx,
-            prompt_tokens,
-            self.step_ladder_cap(),
+        //
+        // **RFC-0001 §A.3: the count is the job's decoder's** (`palw_fp_decode_run_v1`) — the budget
+        // for a V3 job (one run, as before), where a V4 job's pipeline stops otherwise (the capture
+        // at the budget, and once more at exactly the stop).
+        let ((run, shape), _stop) = kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_decode_run_v1(
+            job,
+            vocab as u32,
             on_token,
+            |count, select, stream| {
+                let shape = palw_fp_run_facts_for_executed_v1(job, count);
+                let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+                let run = qwen36_execute_free_prompt_select_v1(
+                    &self.artifact,
+                    profile,
+                    plan,
+                    &ctx,
+                    prompt_tokens,
+                    self.step_ladder_cap(),
+                    stream,
+                    select,
+                )?;
+                Ok((run, shape))
+            },
+            |(run, _)| run.generated_token_ids.as_slice(),
         )?;
 
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
@@ -2013,6 +2049,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        // RFC-0001 §A: the executor replays its own committed ids (a V4 answer is not re-selected).
+        crate::fp_interval::base0_fp_executor_replay_v1(capture, || -> Result<Vec<u8>, String> {
         let interval = self
             .checkpoint_interval()
             .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
@@ -2048,6 +2086,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
         }
         Ok(chunked)
+        })
     }
 
     fn fp_held_route_v1(&self, window_receipt_daa: u64) -> Option<kaspa_consensus_core::palw_held_context_v1::PalwHeldSeatRouteV1> {

@@ -2059,8 +2059,15 @@ pub struct PalwFpWorkerRequestV3 {
     pub runtime_class_id: Hash64,
     pub shape_profile_id: Hash64,
     pub trace_scheme_id: Hash64,
-    /// RFC-0001 §A.2: `Some` exactly on a V4 request, copied onto the job verbatim.
+    /// RFC-0001 §A.2: `Some` exactly on a V4 request, copied onto the job — its stop sequences
+    /// extended by `stop_texts`' tokenizations.
     pub decode: Option<DecodeConfigV4>,
+    /// **RFC-0001 §A.3's stop STRINGS, for the class's tokenizer to spell** (V4 only; empty on V3).
+    /// The gateway holds no tokenizer, so a string the API was given travels here and the worker —
+    /// which holds the class's — encodes each one ALONE (special tokens off) into a token-id stop
+    /// sequence of the job's decode config, refusing a string that encodes to nothing or past the
+    /// 16-token bound. Local to the gateway ↔ worker frame; never on chain: the job carries ids only.
+    pub stop_texts: Vec<Vec<u8>>,
 }
 
 impl borsh::BorshSerialize for PalwFpWorkerRequestV3 {
@@ -2088,6 +2095,7 @@ impl borsh::BorshSerialize for PalwFpWorkerRequestV3 {
         borsh::BorshSerialize::serialize(&self.trace_scheme_id, writer)?;
         if let Some(decode) = &self.decode {
             borsh::BorshSerialize::serialize(decode, writer)?;
+            borsh::BorshSerialize::serialize(&self.stop_texts, writer)?;
         }
         Ok(())
     }
@@ -2119,9 +2127,11 @@ impl borsh::BorshDeserialize for PalwFpWorkerRequestV3 {
             shape_profile_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
             trace_scheme_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
             decode: None,
+            stop_texts: Vec::new(),
         };
         if version == PALW_FP_V4_VERSION {
             request.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
+            request.stop_texts = borsh::BorshDeserialize::deserialize_reader(reader)?;
         }
         Ok(request)
     }
@@ -2195,7 +2205,23 @@ impl PalwFpWorkerResultV3 {
         if (self.job.version != PALW_FP_V3_VERSION && self.job.version != PALW_FP_V4_VERSION) || self.job.version != request.version {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.job.version, expected: request.version });
         }
-        if self.job.decode != request.decode
+        // The decode config is the request's, except that the worker spelled `stop_texts` into
+        // stop sequences with the class's tokenizer (which the caller does not hold): every other
+        // field equal, every requested id sequence kept, no more sequences than were asked for.
+        let decode_is_the_requests = match (&self.job.decode, &request.decode) {
+            (None, None) => request.stop_texts.is_empty(),
+            (Some(job), Some(asked)) => {
+                job.repeat_penalty_q == asked.repeat_penalty_q
+                    && job.penalty_window == asked.penalty_window
+                    && job.frequency_penalty_q == asked.frequency_penalty_q
+                    && job.presence_penalty_q == asked.presence_penalty_q
+                    && job.logit_bias == asked.logit_bias
+                    && asked.stop_sequences.iter().all(|s| job.stop_sequences.contains(s))
+                    && job.stop_sequences.len() <= asked.stop_sequences.len() + request.stop_texts.len()
+            }
+            _ => false,
+        };
+        if !decode_is_the_requests
             || self.job.sampling_seed != request.sampling_seed
             || self.job.temperature_q != request.temperature_q
             || self.job.prompt_mode != request.prompt_mode
@@ -3131,6 +3157,7 @@ mod tests {
             shape_profile_id: Hash64::from_u64_word(0x4),
             trace_scheme_id: Hash64::from_u64_word(0x5),
             decode: None,
+            stop_texts: Vec::new(),
         };
         let request_hash = fp_worker_request_hash_v3(&borsh::to_vec(&request).unwrap());
         let result = PalwFpWorkerResultV3 {
@@ -4350,6 +4377,7 @@ mod job_v4_tests {
             runtime_class_id: Hash64::from_u64_word(12),
             shape_profile_id: Hash64::from_u64_word(13),
             trace_scheme_id: Hash64::from_u64_word(14),
+            stop_texts: if decode.is_some() { vec![b"\n\n".to_vec()] } else { Vec::new() },
             decode,
         };
         let old = request(PALW_FP_V3_VERSION, None);
@@ -4358,7 +4386,8 @@ mod job_v4_tests {
         let new_bytes = borsh::to_vec(&new).unwrap();
         assert_eq!(borsh::from_slice::<PalwFpWorkerRequestV3>(&old_bytes).unwrap(), old);
         assert_eq!(borsh::from_slice::<PalwFpWorkerRequestV3>(&new_bytes).unwrap(), new);
-        let tail = borsh::to_vec(&rich()).unwrap();
+        let mut tail = borsh::to_vec(&rich()).unwrap();
+        tail.extend(borsh::to_vec(&vec![b"\n\n".to_vec()]).unwrap());
         assert!(new_bytes.ends_with(&tail));
         assert_eq!(new_bytes.len(), old_bytes.len() + tail.len(), "the tail is the only difference beside the version");
     }
