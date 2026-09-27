@@ -102,3 +102,9 @@ the EVM header's commitment.
 `o13_bench_ceiling_block_apply_and_reorg` also asserts the two things §3a's numbers rest on: that the
 block really filled the ceiling, and that every transfer created a fresh account, so the state-growth
 figure is the worst case and not an average.
+
+## Links
+
+- Spec: [12 Execution lane](../spec/palw/12-execution-lane.md) §12.2 (PALW-XL-10); the EVM half in `spec/evm` (Phase 3)
+- Design: [design/palw/exec-lane.md](../design/palw/exec-lane.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)
