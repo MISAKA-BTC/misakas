@@ -5709,15 +5709,27 @@ impl VirtualStateProcessor {
         if facts.class_admission_refusal.is_none()
             && let Some(outpoint) = bond
         {
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
             facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_bond_class_share_admits_v1(
                 &state,
                 state_params,
                 &extras,
-                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                &key,
                 &class_id,
                 candidate_daa,
             )
             .err()
+            // ADR-0160 stage 4 (F-N): an unregistered bond mines the refused attempt — it registers it.
+            .filter(|refusal| {
+                !kaspa_consensus_core::palw_state_v2::palw_network_refusal_registers_v1(
+                    &state,
+                    state_params,
+                    refusal,
+                    &key,
+                    &class_id,
+                    candidate_daa,
+                )
+            })
             .map(|refusal| refusal.to_string());
         }
         // **Lane bind-deadlock (`palw_anchor_at_ceiling`): would the candidate be a binder?** The
@@ -5764,16 +5776,61 @@ impl VirtualStateProcessor {
                 escrow,
                 &state_params.base_class_id(),
             ));
-            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_floor_room_admits_v1(
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
+            facts.class_admission_refusal =
+                kaspa_consensus_core::palw_state_v2::palw_floor_room_admits_v1(&state, state_params, &extras, &key, weight, escrow, candidate_daa)
+                    .err()
+                    // ADR-0160 stage 4 (F-N): an unregistered bond mines the refused attempt — it registers it.
+                    .filter(|refusal| {
+                        !kaspa_consensus_core::palw_state_v2::palw_network_refusal_registers_v1(
+                            &state,
+                            state_params,
+                            refusal,
+                            &key,
+                            &class_id,
+                            candidate_daa,
+                        )
+                    })
+                    .map(|refusal| refusal.to_string());
+        }
+        // **ADR-0160 F-N (stage 4): and a network unit** — lane N's level and work-conserving share, the
+        // fold's last check before its first write, over the same template. A refusal holds the producer
+        // back only while its bond's demand for the class stands registered through the candidate DAA: an
+        // unregistered bond mines the refused attempt anyway, because that refusal is what registers it
+        // (ADR-0160 v3 §7.2 — registering costs a refused attempt block every `H_L`), and a registered bond
+        // below its share is admitted whenever a unit is free. Past `palw_capacity_network_room` only.
+        if facts.class_admission_refusal.is_none()
+            && state_params.capacity_network_active_at(candidate_daa)
+            && let (Some(outpoint), Some(bond_facts)) = (bond, facts.bond.as_ref())
+        {
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
+            let escrow = kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                self.coinbase_manager.calc_block_subsidy(candidate_daa),
+                budget_fences.escrow_carve,
+            );
+            let weight = bond_facts.claim_exposure.saturating_sub(state_params.claim_escrow_term_v2(candidate_daa, escrow, &class_id));
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_network_room_admits_v1(
                 &state,
                 state_params,
                 &extras,
-                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                &key,
+                &class_id,
                 weight,
                 escrow,
                 candidate_daa,
             )
             .err()
+            .filter(|refusal| {
+                !kaspa_consensus_core::palw_state_v2::palw_network_refusal_registers_v1(
+                    &state,
+                    state_params,
+                    refusal,
+                    &key,
+                    &class_id,
+                    candidate_daa,
+                )
+            })
             .map(|refusal| refusal.to_string());
         }
         // The share and the tip's count beside the refusal — a read the producer adds its own

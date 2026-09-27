@@ -1435,6 +1435,13 @@ pub struct PalwStateParamsV2 {
     /// the same setter. `None` on every shipped preset; borsh-skipped likewise.
     #[borsh(skip)]
     capacity_slots_from_daa: Option<u64>,
+    /// **ADR-0160 F-N: `Params::palw_capacity_network_room`'s height and the panel's anchor delay** (stage 4,
+    /// lane N), mirrored by `Params::sync_palw_capacity_stage2` — `L_anchor` reads the delay. `None` on every
+    /// shipped preset; borsh-skipped likewise.
+    #[borsh(skip)]
+    capacity_network_from_daa: Option<u64>,
+    #[borsh(skip)]
+    capacity_network_anchor_delay: u64,
     /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
     /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
     /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
@@ -1682,6 +1689,8 @@ impl PalwStateParamsV2 {
             capacity_audit_from_daa: None,
             capacity_audit_operators: Vec::new(),
             capacity_slots_from_daa: None,
+            capacity_network_from_daa: None,
+            capacity_network_anchor_delay: 0,
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
@@ -2415,6 +2424,28 @@ impl PalwStateParamsV2 {
     /// `false` on every shipped preset.
     pub fn capacity_audit_active_at(&self, daa_score: u64) -> bool {
         self.capacity_audit_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **ADR-0160 F-N (stage 4): the mirror's setter** — the height and the panel's anchor delay.
+    pub fn with_capacity_network_mirror(mut self, from_daa: Option<u64>, anchor_delay: u64) -> Self {
+        self.capacity_network_from_daa = from_daa;
+        self.capacity_network_anchor_delay = if from_daa.is_some() { anchor_delay } else { 0 };
+        self
+    }
+
+    /// ADR-0160 F-N: `Params::palw_capacity_network_room`'s height, if armed (the mirror).
+    pub fn capacity_network_from_daa(&self) -> Option<u64> {
+        self.capacity_network_from_daa
+    }
+
+    /// **ADR-0160 F-N: does lane N judge an admission at `daa_score`?** `false` on every shipped preset.
+    pub fn capacity_network_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_network_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// ADR-0160 F-N: the panel's anchor delay `L_anchor` reads (0 where F-N is not armed).
+    pub fn capacity_network_anchor_delay(&self) -> u64 {
+        self.capacity_network_anchor_delay
     }
 
     /// ADR-0160 F-S: `Params::palw_capacity_issuance_slots`'s height, if armed (the mirror).
@@ -8788,6 +8819,15 @@ pub enum PalwStateV2Error {
     /// acceptance layer refuses it first; the fold refuses it by name.
     #[error("an audit receipt batch below palw_capacity_audit_door (ADR-0160 F-Q)")]
     CapacityAuditDoorDormant,
+    /// **ADR-0160 F-N (stage 4): the network has no unit for this bond** — no free unit under `L_net`,
+    /// or the bond holds at least its share while the registered bonds' deficit takes every free unit.
+    /// Non-fatal for the block's own attempt (step 4 skips it and REGISTERS the bond's demand for `H_L`);
+    /// a merged attempt is skipped and registers likewise. Past F-N the class room's refusals
+    /// (`FloorRoomExhausted`, `BondClassShareExceeded`) register the same way.
+    #[error(
+        "bond {bond:?} finds no network unit (ADR-0160 F-N): level {level}, unlicensed {unlicensed}, it holds {held} of its share {share}, the registered bonds are owed {deficit_others}"
+    )]
+    NetworkRoomExhausted { bond: PalwBondKeyV2, level: u64, unlicensed: u64, held: u64, share: u64, deficit_others: u64 },
     /// **ADR-0160 F-Q: an invalid audit receipt batch** ([`crate::palw_audit_door_v1::palw_audit_receipt_batch_refusal_v1`]).
     #[error("audit receipt batch by {auditor:?} refused: {why} (ADR-0160 F-Q)")]
     AuditReceiptRefused { auditor: PalwBondKeyV2, why: &'static str },
@@ -9421,6 +9461,16 @@ pub struct PalwChainStateV2 {
     /// written at each admission past F-S.
     issuance_buckets: BTreeMap<PalwBondKeyV2, crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
 
+    // ---- ADR-0160 stage 4 (rcore/cap-s1): lane N's registered demand and the operator-attempt ring ----
+    //
+    // ONE Some-only root block (`capacity_n/v1`) after stage 2's, ONE carriage tail (`0xBA`).
+    /// By (bond, class): the DAA through which the bond's unmet demand for a unit of that class is
+    /// registered (`t + H_L` at its last refusal for want of one — lane N's `NetworkRoomExhausted`, or F-R's
+    /// class room or share past F-N); an expired entry leaves at its bond's next admission of that class.
+    network_demand: BTreeMap<(PalwBondKeyV2, Hash64), u64>,
+    /// By DAA: the chain blocks whose own work was an operator's attempt, over the last 32 DAA (`ā_op`).
+    operator_ring: BTreeMap<u64, u32>,
+
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
     deadlines: BTreeSet<(u64, Hash64)>,
@@ -9578,6 +9628,8 @@ impl PalwChainStateV2 {
             audit_receipts: BTreeMap::new(),
             excluded_auditors: BTreeMap::new(),
             issuance_buckets: BTreeMap::new(),
+            network_demand: BTreeMap::new(),
+            operator_ring: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -11337,6 +11389,26 @@ impl PalwChainStateV2 {
         self.excluded_auditors.iter()
     }
 
+    /// **ADR-0160 F-N: the DAA through which `bond`'s unmet demand for `class_id` is registered**, if it is.
+    pub fn network_demand_of_v1(&self, bond: &PalwBondKeyV2, class_id: &Hash64) -> Option<u64> {
+        self.network_demand.get(&(*bond, *class_id)).copied()
+    }
+
+    /// **ADR-0160 F-N: is `bond` registered at `now_daa`** (for any class) — lane N's `Reg(t)`.
+    pub fn network_registered_v1(&self, bond: &PalwBondKeyV2, now_daa: u64) -> bool {
+        self.network_demand.range((*bond, Hash64::default())..).take_while(|((key, _), _)| key == bond).any(|(_, until)| *until >= now_daa)
+    }
+
+    /// ADR-0160 F-N: every registered demand ((bond, class) → until DAA).
+    pub fn network_demand_iter_v1(&self) -> impl Iterator<Item = (&(PalwBondKeyV2, Hash64), &u64)> {
+        self.network_demand.iter()
+    }
+
+    /// ADR-0160 F-N: the operator-attempt ring (DAA → chain blocks).
+    pub fn operator_ring_v1(&self) -> &BTreeMap<u64, u32> {
+        &self.operator_ring
+    }
+
     /// **ADR-0160 F-S: `bond`'s issuance bucket**, if it has one (a bond with none holds a full bucket).
     pub fn issuance_bucket_of_v1(&self, bond: &PalwBondKeyV2) -> Option<&crate::palw_issuance_slots_v1::PalwIssuanceBucketV1> {
         self.issuance_buckets.get(bond)
@@ -11660,6 +11732,12 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"audit_receipts", &self.audit_receipts).as_byte_slice());
             state.update(collection_root(b"excluded_auditors", &self.excluded_auditors).as_byte_slice());
             state.update(collection_root(b"issuance_buckets", &self.issuance_buckets).as_byte_slice());
+        }
+        // **ADR-0160 stage 4 (F-N): the registered demand and the operator ring, ONE Some-only block.**
+        if !self.network_demand.is_empty() || !self.operator_ring.is_empty() {
+            state.update(b"capacity_n/v1");
+            state.update(collection_root(b"network_demand", &self.network_demand).as_byte_slice());
+            state.update(collection_root(b"operator_ring", &self.operator_ring).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -12429,7 +12507,7 @@ impl PalwChainStateV2 {
                 return bad("its auditors are not distinct and in bond order");
             }
         }
-        for bond in self.excluded_auditors.keys().chain(self.issuance_buckets.keys()) {
+        for bond in self.excluded_auditors.keys().chain(self.issuance_buckets.keys()).chain(self.network_demand.keys().map(|(bond, _)| bond)) {
             if !self.bonds.contains_key(bond) {
                 return Err(PalwStateV2Error::CarriageInconsistent(format!("{bond:?}: an exclusion or a bucket of an unregistered bond")));
             }
@@ -13266,6 +13344,10 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
         new: Option<crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
     },
+    /// A bond's registered demand for a class was written or dropped (86; ADR-0160 F-N, stage 4).
+    NetworkDemand { key: (PalwBondKeyV2, Hash64), old: Option<u64>, new: Option<u64> },
+    /// The operator ring's count for a DAA was written or dropped (87; ADR-0160 F-N, stage 4).
+    OperatorRing { key: u64, old: Option<u32>, new: Option<u32> },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -14534,12 +14616,7 @@ impl PalwFoldReadV1<'_> {
         if !self.params.capacity_room_active_at(now_daa) {
             return self.bond_class_share_v1(class_id, now_daa);
         }
-        let room = self.class_capacity_v1(class_id, now_daa)?;
-        let rho = u64::from(crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(self.params, now_daa));
-        let room = match self.class_capacity_shipped_v1(class_id, now_daa) {
-            Some(shipped) => room.min(rho.saturating_mul(shipped.div_ceil(2))),
-            None => room,
-        };
+        let room = self.class_share_room_v1(class_id, now_daa)?;
         let held: BTreeMap<PalwBondKeyV2, u64> = self.with_inflight_index(|index| {
             index
                 .get(class_id)
@@ -14589,9 +14666,53 @@ impl PalwFoldReadV1<'_> {
         claim: &PalwClaimStateV2,
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
+        let Some((room, waiting)) = self.floor_room_reading_v1(claim_id, claim, now_daa) else { return Ok(()) };
+        let base = self.params.base_class_id();
+        let pending: u64 = waiting.values().sum();
+        if !room.admits_one() {
+            return Err(PalwStateV2Error::FloorRoomExhausted { pending, slots: room.slots });
+        }
+        let own_waiting = waiting.get(bond).copied().unwrap_or(0);
+        // The floor keeps its racing headroom out of the shares (the lane-verify review's racing
+        // finding): small bonds racing the same tip draw single units from it, so a producer whose
+        // pre-check passed at its tip is skipped — its withheld carve burned — only when more racers
+        // land ahead of it than its tip showed free units.
+        let capacity = room.capacity();
+        let headroom = crate::palw_verify_capacity_v1::palw_floor_room_race_headroom_v1(capacity);
+        // **ADR-0160 stage 4 (F-N): past F-N the pipeline is divided by lane N's rule** over the floor's
+        // registered demand (`class_share_n_v1`): split-neutral, work-conserving, no per-bond slack unit.
+        if self.params.capacity_network_active_at(now_daa) {
+            return self.class_share_n_v1(bond, &base, capacity, headroom, &waiting, now_daa);
+        }
+        let share = self.room_cap_v1(capacity, headroom, bond, &waiting);
+        if own_waiting.saturating_add(1) > share {
+            return Err(PalwStateV2Error::BondClassShareExceeded {
+                bond: *bond,
+                class: base,
+                unlicensed: own_waiting.min(u32::MAX as u64) as u32,
+                share,
+            });
+        }
+        Ok(())
+    }
+
+    /// **The floor room's capacity for `claim`** (J-6: the seats' free capital over its bind eligibility),
+    /// lane N's `L_seat` for the base class; `None` where J-6 is no rule.
+    fn floor_room_capacity_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> Option<u64> {
+        self.floor_room_reading_v1(&Hash64::default(), claim, now_daa).map(|(room, _)| room.capacity())
+    }
+
+    /// **J-6's reading for a floor `claim`**: the room over the seats' capital and the floor claims waiting
+    /// for a bind, by bond. `None` below `Params::palw_capacity_verify_room` and off the base class.
+    fn floor_room_reading_v1(
+        &self,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+        now_daa: u64,
+    ) -> Option<(crate::palw_verify_capacity_v1::PalwFloorRoomV1, BTreeMap<PalwBondKeyV2, u64>)> {
         let base = self.params.base_class_id();
         if !self.params.capacity_room_active_at(now_daa) || claim.class_id != base {
-            return Ok(());
+            return None;
         }
         let seat_count = self
             .extras
@@ -14641,26 +14762,170 @@ impl PalwFoldReadV1<'_> {
         }
         let pending: u64 = waiting.values().sum();
         let room = crate::palw_verify_capacity_v1::palw_floor_room_v1(rooms, eligibility, seat_count, pending);
-        if !room.admits_one() {
-            return Err(PalwStateV2Error::FloorRoomExhausted { pending, slots: room.slots });
+        Some((room, waiting))
+    }
+
+    /// **ADR-0160 F-N (stage 4): a class room divided by lane N's rule** — F-R's per-bond share past F-N.
+    /// F-R's own share (`room_cap_v1`: the stake share among the room's holders plus ONE slack unit a
+    /// bond, the floor's racing headroom drawn one unit a bond) lets ten 13k bonds take ten units where
+    /// their 130k whole takes one past its share — the split the user's stage-4 property forbids ("13k ×
+    /// 10 bonds never beats 130k × 1"). Past F-N the room is divided as lane N divides the network
+    /// ([`crate::palw_network_room_v1::palw_network_share_admits_v1`]): the shares (by 13k units) divide
+    /// `room − headroom` among the class's holders, the bonds whose demand for THIS class is registered and
+    /// the asker; a bond takes a unit when what the registered bonds are owed leaves one, and the most-owed
+    /// registered bond takes one whenever a unit is free — the headroom and the rounding slack are first
+    /// come, with no per-bond count. `held` is the class's count by bond on F-R's own basis (the floor's claims
+    /// waiting for a bind; a model class's unlicensed claims). A frozen bond takes nothing and is owed
+    /// nothing; its claims still occupy the room.
+    fn class_share_n_v1(
+        &self,
+        bond: &PalwBondKeyV2,
+        class_id: &Hash64,
+        room: u64,
+        headroom: u64,
+        held: &BTreeMap<PalwBondKeyV2, u64>,
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_network_room_v1 as n;
+        let held_b = held.get(bond).copied().unwrap_or(0);
+        let refused = |share: u64| PalwStateV2Error::BondClassShareExceeded {
+            bond: *bond,
+            class: *class_id,
+            unlicensed: held_b.min(u32::MAX as u64) as u32,
+            share,
+        };
+        let frozen = |key: &PalwBondKeyV2| crate::palw_verify_capacity_v1::palw_verify_bond_is_frozen_v1(self.state, key);
+        if frozen(bond) {
+            return Err(refused(0));
         }
-        let own_waiting = waiting.get(bond).copied().unwrap_or(0);
-        // The floor keeps its racing headroom out of the shares (the lane-verify review's racing
-        // finding): small bonds racing the same tip draw single units from it, so a producer whose
-        // pre-check passed at its tip is skipped — its withheld carve burned — only when more racers
-        // land ahead of it than its tip showed free units.
-        let capacity = room.capacity();
-        let headroom = crate::palw_verify_capacity_v1::palw_floor_room_race_headroom_v1(capacity);
-        let share = self.room_cap_v1(capacity, headroom, bond, &waiting);
-        if own_waiting.saturating_add(1) > share {
-            return Err(PalwStateV2Error::BondClassShareExceeded {
+        let units = |key: &PalwBondKeyV2| n::palw_network_units_v1(self.state.bonds.get(key).map_or(0, |record| record.collateral));
+        let unlicensed: u64 = held.values().fold(0u64, |sum, n| sum.saturating_add(*n));
+        // The class's holders divide the room; the bonds registered for THIS class (not frozen) are owed.
+        let mut others: BTreeMap<PalwBondKeyV2, n::PalwNetworkBondV1> = held
+            .iter()
+            .filter(|(_, n)| **n > 0)
+            .map(|(key, n)| (*key, n::PalwNetworkBondV1 { units: units(key), held: *n, registered: false }))
+            .collect();
+        for ((key, class), until) in self.state.network_demand.iter() {
+            if class == class_id && *until >= now_daa && !frozen(key) {
+                others
+                    .entry(*key)
+                    .or_insert(n::PalwNetworkBondV1 { units: units(key), held: 0, registered: true })
+                    .registered = true;
+            }
+        }
+        let b_registered = others.get(bond).is_some_and(|entry| entry.registered);
+        n::palw_network_share_admits_v1(room, room.saturating_sub(headroom), unlicensed, bond, units(bond), held_b, b_registered, &others)
+            .map_err(|refusal| refused(refusal.share))
+    }
+
+    /// **The room a model class's per-bond shares divide past F-R**: `min(c_v2, ρ·⌈c_ship/2⌉)` (stage 1's
+    /// clamp, [`Self::bond_class_share_for_v1`]); `None` where the share is no rule.
+    fn class_share_room_v1(&self, class_id: &Hash64, now_daa: u64) -> Option<u64> {
+        let room = self.class_capacity_v1(class_id, now_daa)?;
+        let rho = u64::from(crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(self.params, now_daa));
+        Some(match self.class_capacity_shipped_v1(class_id, now_daa) {
+            Some(shipped) => room.min(rho.saturating_mul(shipped.div_ceil(2))),
+            None => room,
+        })
+    }
+
+    /// **ADR-0160 F-N (stage 4): lane N's admission** — the network level `L_net` ([`Self::network_level_v1`]),
+    /// the network's unlicensed claims `U`, and the work-conserving share among the bonds whose demand is
+    /// registered at `now_daa` ([`crate::palw_network_room_v1::palw_network_admits_v1`]). `Ok` below
+    /// `Params::palw_capacity_network_room`.
+    fn check_network_room_v1(&self, bond: &PalwBondKeyV2, claim: &PalwClaimStateV2, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        use crate::palw_network_room_v1 as n;
+        if !self.params.capacity_network_active_at(now_daa) {
+            return Ok(());
+        }
+        let level = self.network_level_v1(claim, now_daa);
+        let mut held: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+        let mut unlicensed = 0u64;
+        for live in self.state.claims.values() {
+            if crate::palw_network_room_v1::palw_network_is_unlicensed_v1(live) {
+                unlicensed += 1;
+                *held.entry(live.bond).or_default() += 1;
+            }
+        }
+        let units = |key: &PalwBondKeyV2| n::palw_network_units_v1(self.state.bonds.get(key).map_or(0, |record| record.collateral));
+        // `Act(t)`: every bond holding an unlicensed claim, and every bond whose demand (for any class) is
+        // registered at `now_daa` — `Reg(t)`, the ones owed their deficit.
+        let mut others: BTreeMap<PalwBondKeyV2, n::PalwNetworkBondV1> = held
+            .iter()
+            .map(|(key, n)| (*key, n::PalwNetworkBondV1 { units: units(key), held: *n, registered: false }))
+            .collect();
+        for ((key, _), until) in self.state.network_demand.iter() {
+            if *until >= now_daa {
+                others
+                    .entry(*key)
+                    .or_insert(n::PalwNetworkBondV1 { units: units(key), held: 0, registered: true })
+                    .registered = true;
+            }
+        }
+        let b_registered = others.get(bond).is_some_and(|entry| entry.registered);
+        n::palw_network_admits_v1(level, unlicensed, bond, units(bond), held.get(bond).copied().unwrap_or(0), b_registered, &others).map_err(|refusal| {
+            PalwStateV2Error::NetworkRoomExhausted {
                 bond: *bond,
-                class: base,
-                unlicensed: own_waiting.min(u32::MAX as u64) as u32,
-                share,
-            });
-        }
-        Ok(())
+                level: refusal.level,
+                unlicensed: refusal.unlicensed,
+                held: refusal.held,
+                share: refusal.share,
+                deficit_others: refusal.deficit_others,
+            }
+        })
+    }
+
+    /// **`L_net = min(L_seat, L_carry, L_anchor)`** at `now_daa` (lane N, ADR-0160 v3 §7.1): the seats'
+    /// room for unlicensed claims ([`Self::network_seat_level_v1`]), the licences the carriage lands over
+    /// `H_L` and the binds the operator anchors make over an anchor delay, both over the operator ring's
+    /// `ā_op` (floored at one block a DAA).
+    fn network_level_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> u64 {
+        use crate::palw_network_room_v1 as n;
+        let lpb = if self.params.capacity_batch_active_at(now_daa) { n::PALW_NETWORK_LPB_BATCH_V1 } else { n::PALW_NETWORK_LPB_SINGLE_V1 };
+        n::palw_network_level_v1(
+            self.network_seat_level_v1(claim, now_daa),
+            n::palw_network_a_op_milli_v1(&self.state.operator_ring, now_daa),
+            lpb,
+            self.params.capacity_network_anchor_delay(),
+        )
+    }
+
+    /// **`L_seat`: the unlicensed claims the network's seats hold room for** — on `U`'s basis, summed over
+    /// the classes F-R prices: the floor's J-6 pipeline (the claims waiting for a bind and the ones still
+    /// bindable, priced at `claim`'s own bind eligibility when it is a floor claim and at a floor template
+    /// of its bond, DAA and escrow otherwise) plus the floor claims bound and not yet licensed (their seats'
+    /// capital already holds them); and each model class's room as its per-bond shares divide it
+    /// (`min(c_v2, ρ·⌈c_ship/2⌉)`). F-R keeps its per-class rooms and shares; this is the cross-class
+    /// level lane N's share divides.
+    fn network_seat_level_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> u64 {
+        let base = self.params.base_class_id();
+        let template;
+        let floor_claim = if claim.class_id == base {
+            claim
+        } else {
+            template = palw_claim_template_v1(base, claim.bond, now_daa, 0, claim.escrowed_reward);
+            &template
+        };
+        let floor = self.floor_room_capacity_v1(floor_claim, now_daa).unwrap_or(0);
+        let bound_floor = self
+            .state
+            .claims
+            .values()
+            .filter(|live| {
+                live.class_id == base
+                    && crate::palw_network_room_v1::palw_network_is_unlicensed_v1(live)
+                    && !matches!(live.phase, PalwClaimPhaseV2::Provisional)
+            })
+            .count() as u64;
+        let models: u64 = self
+            .state
+            .model_lifecycles
+            .keys()
+            .filter(|class_id| **class_id != base)
+            .filter_map(|class_id| self.class_share_room_v1(class_id, now_daa))
+            .fold(0u64, u64::saturating_add);
+        floor.saturating_add(bound_floor).saturating_add(models)
     }
 
     /// **ADR-0152 v3.1 T-2(a): no bond holds more than `⌈c_class / 2⌉` unlicensed claims of a
@@ -14683,6 +14948,18 @@ impl PalwFoldReadV1<'_> {
     fn check_bond_class_share(&self, bond: &PalwBondKeyV2, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
         // ADR-0160 F-R: past `palw_capacity_verify_room` the stake-proportional share replaces
         // T-2(a)'s `⌈c/2⌉` (`bond_class_share_for_v1`); below it this is T-2(a) byte for byte.
+        // ADR-0160 stage 4 (F-N): past F-N a model class's room is divided by lane N's rule over the class's
+        // registered demand (`class_share_n_v1`) — split-neutral, no per-bond slack unit.
+        if self.params.capacity_network_active_at(now_daa) && self.params.capacity_room_active_at(now_daa) {
+            let Some(room) = self.class_share_room_v1(class_id, now_daa) else { return Ok(()) };
+            let held: BTreeMap<PalwBondKeyV2, u64> = self.with_inflight_index(|index| {
+                index
+                    .get(class_id)
+                    .map(|tally| tally.unlicensed_by_bond.iter().map(|(holder, n)| (*holder, *n as u64)).collect())
+                    .unwrap_or_default()
+            });
+            return self.class_share_n_v1(bond, class_id, room, 0, &held, now_daa);
+        }
         let Some(share) = self.bond_class_share_for_v1(class_id, bond, now_daa) else { return Ok(()) };
         let unlicensed = self.bond_class_unlicensed(class_id, bond);
         if (unlicensed as u64).saturating_add(1) > share {
@@ -14917,6 +15194,57 @@ pub fn palw_floor_room_admits_v1(
     }
     let template = palw_claim_template_v1(params.base_class_id(), *bond, now_daa, reserved, escrowed_reward);
     PalwFoldReadV1::outside(state, params, extras).check_floor_room_v1(bond, &Hash64::default(), &template, now_daa)
+}
+
+/// **ADR-0160 F-N (stage 4): would the fold at a block with these `extras` find a network unit for one
+/// more claim of `class_id` by `bond`, escrowing `escrowed_reward`?** The fold's own lane-N question
+/// (`check_network_room_v1`) over a template of the claim, for a producer's pre-check. `Ok` below
+/// `Params::palw_capacity_network_room`.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_network_room_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    bond: &PalwBondKeyV2,
+    class_id: &Hash64,
+    reserved: u128,
+    escrowed_reward: u64,
+    now_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    if !params.capacity_network_active_at(now_daa) {
+        return Ok(());
+    }
+    let template = palw_claim_template_v1(*class_id, *bond, now_daa, reserved, escrowed_reward);
+    PalwFoldReadV1::outside(state, params, extras).check_network_room_v1(bond, &template, now_daa)
+}
+
+/// **ADR-0160 F-N: is `refused` a refusal for want of a unit** — lane N's `NetworkRoomExhausted`, or the
+/// class room's `FloorRoomExhausted` / `BondClassShareExceeded` (past F-N the class room is divided by
+/// lane N's rule)? Past F-N such a refusal of an attempt REGISTERS its bond's demand for the class.
+pub fn palw_network_refusal_wants_a_unit_v1(refused: &PalwStateV2Error) -> bool {
+    matches!(
+        refused,
+        PalwStateV2Error::NetworkRoomExhausted { .. } | PalwStateV2Error::FloorRoomExhausted { .. } | PalwStateV2Error::BondClassShareExceeded { .. }
+    )
+}
+
+/// **ADR-0160 F-N: should a producer mine an attempt the fold will refuse with `refused`, to register?**
+/// Past F-N a refusal for want of a unit ([`palw_network_refusal_wants_a_unit_v1`]) is what registers the
+/// bond's demand for the class (ADR-0160 v3 §7.2: registering costs a refused attempt block every `H_L`),
+/// so while `bond` is not registered for `class_id` through `now_daa` its producer mines the attempt
+/// anyway; once registered, the refusal holds it back (a registered bond below its share is admitted
+/// whenever a unit is free). `false` below `Params::palw_capacity_network_room` (node policy only).
+pub fn palw_network_refusal_registers_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    refused: &PalwStateV2Error,
+    bond: &PalwBondKeyV2,
+    class_id: &Hash64,
+    now_daa: u64,
+) -> bool {
+    params.capacity_network_active_at(now_daa)
+        && palw_network_refusal_wants_a_unit_v1(refused)
+        && !state.network_demand_of_v1(bond, class_id).is_some_and(|until| until >= now_daa)
 }
 
 /// **A `Provisional` attempt claim with only the fields a price reads** — the class, the bond, the
@@ -16765,6 +17093,28 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    /// **ADR-0160 F-N: the one writer of `network_demand`**, journaled `NetworkDemand` (86).
+    fn write_network_demand_v1(&mut self, key: (PalwBondKeyV2, Hash64), new: Option<u64>) {
+        let old = match new {
+            Some(until) => self.state.network_demand.insert(key, until),
+            None => self.state.network_demand.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::NetworkDemand { key, old, new });
+        }
+    }
+
+    /// **ADR-0160 F-N: the one writer of `operator_ring`**, journaled `OperatorRing` (87).
+    fn write_operator_ring_v1(&mut self, key: u64, new: Option<u32>) {
+        let old = match new {
+            Some(count) => self.state.operator_ring.insert(key, count),
+            None => self.state.operator_ring.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::OperatorRing { key, old, new });
+        }
+    }
+
     /// **ADR-0160 F-S: the one writer of `issuance_buckets`**, journaled `IssuanceBucket` (85).
     fn write_issuance_bucket_v1(&mut self, key: PalwBondKeyV2, new: Option<crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>) {
         let old = match new {
@@ -16774,6 +17124,52 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::IssuanceBucket { key, old, new });
         }
+    }
+
+    /// **ADR-0160 F-N: register the attempt's bond's unmet demand for its class** through `now + H_L`, when
+    /// `refused` is a refusal for want of a unit — lane N's `NetworkRoomExhausted`, or the class room's
+    /// `FloorRoomExhausted` / `BondClassShareExceeded` (which past F-N divides the room by lane N's rule) —
+    /// of its own or a merged attempt. Past `Params::palw_capacity_network_room` only; any other refusal
+    /// (the bond's own ceiling, slots, freeze, …) registers nothing.
+    fn register_network_demand_on_v1(
+        &mut self,
+        refused: &PalwStateV2Error,
+        attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+        now_daa: u64,
+    ) {
+        if palw_network_refusal_wants_a_unit_v1(refused) && self.params.capacity_network_active_at(now_daa) {
+            let key = (PalwBondKeyV2(attempt.executor_bond), attempt.class_id);
+            self.write_network_demand_v1(key, Some(now_daa.saturating_add(crate::palw_network_room_v1::PALW_NETWORK_H_L_DAA_V1)));
+        }
+    }
+
+    /// **ADR-0160 F-N: count an operator's attempt block in the ring** (the block's own work, accepted or
+    /// skipped): an attempt whose executor is one of the operator bonds under that bond's registered key.
+    /// Entries older than the ring's 32 DAA leave with it. Past `Params::palw_capacity_network_room` only.
+    fn note_operator_attempt_v1(&mut self, now_daa: u64, attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2) {
+        if !self.params.capacity_network_active_at(now_daa) {
+            return;
+        }
+        // Lane A's operator bonds (the mirror F-Q's pool reads too); the attempt's signature is the
+        // bond's registered key's, checked by admission before the fold.
+        let operator = self.params.capacity_audit_operators().contains(&PalwBondKeyV2(attempt.executor_bond));
+        let stale: Vec<u64> = self
+            .state
+            .operator_ring
+            .range(..now_daa.saturating_sub(crate::palw_network_room_v1::PALW_NETWORK_RING_DAA_V1 - 1))
+            .map(|(daa, _)| *daa)
+            .collect();
+        for daa in stale {
+            self.write_operator_ring_v1(daa, None);
+        }
+        if operator {
+            let count = self.state.operator_ring.get(&now_daa).copied().unwrap_or(0).saturating_add(1);
+            self.write_operator_ring_v1(now_daa, Some(count));
+        }
+    }
+
+    fn check_network_room_v1(&self, bond: &PalwBondKeyV2, claim: &PalwClaimStateV2, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        self.read().check_network_room_v1(bond, claim, now_daa)
     }
 
     /// **ADR-0160 lane liab (AG-3): the one writer of `bond_freezes`**, journaled `BondFreeze` (82).
@@ -24777,6 +25173,8 @@ pub fn apply_palw_transition_v7(
             // Audit #4 review, item 2: the room this attempt found at step 3's start is its room.
             builder.room_exempt_class =
                 (extras.audit_2026_09_23_active && builder.own_attempt_fit).then_some(envelope.attempt.class_id);
+            // ADR-0160 stage 4 (F-N): an operator's attempt block counts in the ring `ā_op` averages.
+            builder.note_operator_attempt_v1(ctx.daa_score, &envelope.attempt);
             let own = apply_attempt(
                 &mut builder,
                 ctx,
@@ -24826,8 +25224,12 @@ pub fn apply_palw_transition_v7(
                     // ADR-0160 stage 2: lane S's slot and bucket, lane Q's backlog — checked before
                     // `apply_attempt`'s first write, like the ceiling; unreachable below their fences.
                     | PalwStateV2Error::IssuanceCapped { .. }
-                    | PalwStateV2Error::AuditBacklogFull { .. }),
+                    | PalwStateV2Error::AuditBacklogFull { .. }
+                    // ADR-0160 stage 4: lane N's level and share (past F-N a refusal for want of a unit
+                    // registers the bond's demand for the class).
+                    | PalwStateV2Error::NetworkRoomExhausted { .. }),
                 ) => {
+                    builder.register_network_demand_on_v1(&refused, &envelope.attempt, ctx.daa_score);
                     merged_skips.push((ctx.block, refused.to_string()));
                 }
                 Err(other) => return Err(other),
@@ -24923,6 +25325,9 @@ pub fn apply_palw_transition_v7(
                                 Ok(()) => None,
                                 Err(refused) => {
                                     builder.restore(checkpoint);
+                                    // ADR-0160 stage 4 (F-N): a merged attempt's refusal for want of a unit
+                                    // registers its demand too.
+                                    builder.register_network_demand_on_v1(&refused, &envelope.attempt, ctx.daa_score);
                                     Some(refused.to_string())
                                 }
                             }
@@ -33444,10 +33849,19 @@ fn apply_attempt(
     if let Some(read) = &issuance {
         read.admits_v1().map_err(|refusal| PalwStateV2Error::IssuanceCapped { bond: issuance_bond, refusal: format!("{refusal:?}") })?;
     }
+    // **ADR-0160 stage 4 (F-N): the network level and the work-conserving share** — the last check, so
+    // only an attempt every other rule admits is refused for want of a network unit (and registers its
+    // bond's demand: step 4 skips a refused own attempt, 4b a merged one); before any write.
+    builder.check_network_room_v1(&claim.bond, &claim, ctx.daa_score)?;
     builder.reserve_for_claim(&claim)?;
     builder.write_claim(claim_id, Some(claim));
     if let Some(read) = issuance {
         builder.write_issuance_bucket_v1(issuance_bond, Some(read.spent_v1(ctx.daa_score)));
+    }
+    // ADR-0160 stage 4 (F-N): an expired registration leaves at its bond's next admission of the class.
+    let registration = (issuance_bond, attempt.class_id);
+    if builder.state.network_demand.get(&registration).is_some_and(|until| *until < ctx.daa_score) {
+        builder.write_network_demand_v1(registration, None);
     }
     // ADR-0132 Upgrade C: the claim snapshots its economics at acceptance (proposal B) — the
     // registry's work for its class, the class target and the carrying block's network draw — so
@@ -33705,6 +34119,9 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::AuditReceipts { key, old, new } => swap_write!(state.audit_receipts, key, old, new),
         PalwDeltaEntryV2::AuditorExcluded { key, old, new } => swap_write!(state.excluded_auditors, key, old, new),
         PalwDeltaEntryV2::IssuanceBucket { key, old, new } => swap_write!(state.issuance_buckets, key, old, new),
+        // ADR-0160 stage 4 (F-N): the registered demand and the operator ring, verify-then-install.
+        PalwDeltaEntryV2::NetworkDemand { key, old, new } => swap_write!(state.network_demand, key, old, new),
+        PalwDeltaEntryV2::OperatorRing { key, old, new } => swap_write!(state.operator_ring, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -34126,6 +34543,10 @@ pub struct PalwStateCarriageV2 {
     pub audit_receipts: BTreeMap<Hash64, crate::palw_audit_door_v1::PalwAuditStatusV1>,
     pub excluded_auditors: BTreeMap<PalwBondKeyV2, u64>,
     pub issuance_buckets: BTreeMap<PalwBondKeyV2, crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
+    /// **ADR-0160 stage 4 (F-N): the registered demand and the operator ring.** ONE tagged tail (`0xBA`),
+    /// encoded only when one of the two holds a row; rooted.
+    pub network_demand: BTreeMap<(PalwBondKeyV2, Hash64), u64>,
+    pub operator_ring: BTreeMap<u64, u32>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -34240,6 +34661,8 @@ const PALW_CARRIAGE_PROBATION_MEMORY_TAIL_V1: u8 = 0xB7;
 const PALW_CARRIAGE_BOND_FREEZES_TAIL_V1: u8 = 0xB8;
 /// ADR-0160 stage 2 (F-Q, F-S): the receipts, the exclusions and the buckets, one tail after the freezes'.
 const PALW_CARRIAGE_CAPACITY_QS_TAIL_V1: u8 = 0xB9;
+/// ADR-0160 stage 4 (F-N): the registered demand and the operator ring, one tail after stage 2's.
+const PALW_CARRIAGE_CAPACITY_N_TAIL_V1: u8 = 0xBA;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -34445,6 +34868,11 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.excluded_auditors.serialize(writer)?;
             self.issuance_buckets.serialize(writer)?;
         }
+        if !self.network_demand.is_empty() || !self.operator_ring.is_empty() {
+            PALW_CARRIAGE_CAPACITY_N_TAIL_V1.serialize(writer)?;
+            self.network_demand.serialize(writer)?;
+            self.operator_ring.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -34565,6 +34993,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut excluded_auditors = BTreeMap::new();
         let mut issuance_buckets = BTreeMap::new();
         let mut seen_capacity_qs = false;
+        let mut network_demand = BTreeMap::new();
+        let mut operator_ring = BTreeMap::new();
+        let mut seen_capacity_n = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -34698,6 +35129,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     excluded_auditors = BTreeMap::deserialize_reader(reader)?;
                     issuance_buckets = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_CAPACITY_N_TAIL_V1 if !seen_capacity_n => {
+                    seen_capacity_n = true;
+                    network_demand = BTreeMap::deserialize_reader(reader)?;
+                    operator_ring = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -34801,6 +35237,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             audit_receipts,
             excluded_auditors,
             issuance_buckets,
+            network_demand,
+            operator_ring,
         })
     }
 }
@@ -34882,6 +35320,8 @@ impl PalwStateCarriageV2 {
             audit_receipts: state.audit_receipts.clone(),
             excluded_auditors: state.excluded_auditors.clone(),
             issuance_buckets: state.issuance_buckets.clone(),
+            network_demand: state.network_demand.clone(),
+            operator_ring: state.operator_ring.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -35031,6 +35471,8 @@ impl PalwStateCarriageV2 {
             audit_receipts: self.audit_receipts,
             excluded_auditors: self.excluded_auditors,
             issuance_buckets: self.issuance_buckets,
+            network_demand: self.network_demand,
+            operator_ring: self.operator_ring,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -51585,6 +52027,9 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::AuditReceipts { .. } => "audit_receipts",
                     PalwDeltaEntryV2::AuditorExcluded { .. } => "auditor_excluded",
                     PalwDeltaEntryV2::IssuanceBucket { .. } => "issuance_bucket",
+                    // ADR-0160 stage 4: their round trips are the stage-4 suite's.
+                    PalwDeltaEntryV2::NetworkDemand { .. } => "network_demand",
+                    PalwDeltaEntryV2::OperatorRing { .. } => "operator_ring",
                 });
             }
         }
@@ -51702,6 +52147,9 @@ pub(crate) mod tests {
             (83, PalwDeltaEntryV2::AuditReceipts { key, old: None, new: None }),
             (84, PalwDeltaEntryV2::AuditorExcluded { key: bond_key(1), old: None, new: None }),
             (85, PalwDeltaEntryV2::IssuanceBucket { key: bond_key(1), old: None, new: None }),
+            // ADR-0160 stage 4, after stage 2's.
+            (86, PalwDeltaEntryV2::NetworkDemand { key: (bond_key(1), Hash64::default()), old: None, new: None }),
+            (87, PalwDeltaEntryV2::OperatorRing { key: 7, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -52318,6 +52766,9 @@ pub(crate) mod tests {
             audit_receipts: _,
             excluded_auditors: _,
             issuance_buckets: _,
+            // ADR-0160 stage 4: one Some-only block of two, empty here.
+            network_demand: _,
+            operator_ring: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -52397,6 +52848,13 @@ pub(crate) mod tests {
                     s.issuance_buckets.insert(bond_key(1), crate::palw_issuance_slots_v1::PalwIssuanceBucketV1 { tokens_milli: 1, last_daa: 9 });
                 }),
             ),
+            // ADR-0160 stage 4: each of the two is primary data (their one Some-only block).
+            ("network_demand", Box::new(|s| {
+                s.network_demand.insert((bond_key(1), Hash64::default()), 9);
+            })),
+            ("operator_ring", Box::new(|s| {
+                s.operator_ring.insert(9, 1);
+            })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),
             ("safe_frontier", Box::new(|s| s.safe_frontier = block(0xB9))),

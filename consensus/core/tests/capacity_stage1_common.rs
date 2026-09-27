@@ -62,6 +62,9 @@ pub const STAGE1_FENCES: [&str; 5] = [
     "palw_capacity_verify_room",
 ];
 
+/// **Stage 2's fences** — the audit door (F-Q) and the issuance slots (F-S).
+pub const STAGE2_FENCES: [&str; 2] = ["palw_capacity_audit_door", "palw_capacity_issuance_slots"];
+
 /// testnet-12 as shipped for `class` (the 2M row opened by its flag-day row, `t12_2m_flag_day_row`:
 /// at launch it takes no claim at all), and with stage 1's capacity fences ([`STAGE1_FENCES`]) armed at
 /// [`H`] where `armed`.

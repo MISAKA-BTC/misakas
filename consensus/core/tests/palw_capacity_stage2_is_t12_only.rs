@@ -63,10 +63,10 @@ fn entry(name: &str) -> &'static kaspa_consensus_core::config::params::PalwPostL
 }
 
 /// The release with every stage-1 capacity fence armed at `h` (F-W, F-E, F-L, F-B, F-R) and stage 2's
-/// two left dormant.
+/// two left dormant (and every later stage's: F-N needs F-S).
 fn stage1_at(h: u64) -> Params {
     let mut p = palw_t12_shipped_params();
-    for f in PALW_T12_CAPACITY_FENCES_V1.iter().filter(|f| !NAMES.contains(&f.name)) {
+    for f in PALW_T12_CAPACITY_FENCES_V1.iter().filter(|f| !NAMES.contains(&f.name) && f.name != "palw_capacity_network_room") {
         (f.set)(&mut p, Some(ForkActivation::new(h)));
     }
     p.validate_palw_v2().expect("stage 1's list validates over the release");

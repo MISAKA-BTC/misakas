@@ -220,7 +220,7 @@ pub(crate) fn not_ready(reason: &str, n: &HoldNumbers, bond: Option<&str>) -> Fi
         return Finding::error("E-ISSUANCE-CAPPED", exit::NOT_READY, "Not mining: the bond's issuance is capped for now")
             .reason(
                 "past ADR-0160's issuance slots a bond holds at most u·ρ outstanding claims (u = ⌊C / 6,500 MSK⌋) and issues from \
-                 a token bucket of depth max(4, ⌈u·ρ/25⌉) refilled u·ρ/20 a DAA — queue bounds, not a penalty",
+                 a token bucket refilled u·ρ/20 a DAA and one DAA's refill deep — queue bounds, not a penalty",
             )
             .current(format!("bond {bond} at its cap"))
             .required("a free slot (a counted licence, a Final, or a void's hold ending frees one) and a token")

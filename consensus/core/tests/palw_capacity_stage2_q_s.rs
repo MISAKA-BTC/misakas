@@ -15,7 +15,7 @@
 //!   good; an unaudited claim is never voided or charged while it waits.
 //! * **S** — the slot is held from acceptance to a counted licence (or a void's `h_obl`), the bucket
 //!   bursts `B` and refills `r` a DAA, and `N_out` caps the outstanding claims; at ρ 100 a 13,000 MSK
-//!   bond holds at most 200 outstanding, bursts 8 and issues 10 a DAA.
+//!   bond holds at most 200 outstanding and issues 10 a DAA (its burst: one DAA's refill).
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_capacity_stage2_q_s -- --nocapture`
 
@@ -30,10 +30,11 @@ use kaspa_consensus_core::palw_audit_door_v1::{
 };
 use kaspa_consensus_core::palw_issuance_slots_v1::palw_issuance_read_at_v1;
 
-/// testnet-12 with every capacity fence at [`H`] (stage 1's and stage 2's), F-L's one step `(ρ, q)`.
+/// testnet-12 with stage 1's and stage 2's capacity fences at [`H`] (every later stage's dormant), F-L's
+/// one step `(ρ, q)`.
 fn stage2_params(class: Class, rho: u32, q: u16) -> Params {
     let mut p = params_for(class, false);
-    for fence in PALW_T12_CAPACITY_FENCES_V1 {
+    for fence in PALW_T12_CAPACITY_FENCES_V1.iter().filter(|f| STAGE1_FENCES.contains(&f.name) || STAGE2_FENCES.contains(&f.name)) {
         (fence.set)(&mut p, Some(ForkActivation::new(H)));
     }
     p.palw_capacity_aggregate_liability = Some(PalwCapacityLiabilityV1 {
@@ -221,7 +222,7 @@ fn s_a_void_holds_its_slot_for_h_obl() {
 
 /// **Stage 2's gate — mass claims keep liability, rate and outstanding controlled.** A 13,000 MSK floor
 /// bond at ρ 100 with the credit, twelve attempt blocks a DAA for 30 DAA: it never holds more than 200
-/// slots, never issues more than its burst (8) in one DAA from a full bucket nor more than 10 a DAA after,
+/// slots, never issues more than its burst (10, one DAA's refill) in one DAA from a full bucket nor more than 10 a DAA after,
 /// its provisional weight never exceeds `W_cap`, and no credited claim is paid (no vesting row) before its
 /// audit — with none audited, none at all.
 #[test]
@@ -246,7 +247,8 @@ fn stage2_gate_mass_claims_keep_liability_rate_and_outstanding_controlled() {
         let term = sim.c.s.capacity_weight_index().term(&bond, Some(collateral));
         assert!(term <= w_cap, "J-1");
     }
-    assert!(per_daa[0] <= 8, "the first DAA: at most the burst (8), got {}", per_daa[0]);
+    assert!(per_daa[0] <= 10, "the first DAA: at most the burst (10), got {}", per_daa[0]);
+    assert!(per_daa.iter().take(20).all(|n| *n == 10), "10 a DAA is reached (the burst is one DAA's refill): {per_daa:?}");
     assert!(per_daa.iter().skip(1).all(|n| *n <= 10), "then at most 10 a DAA: {per_daa:?}");
     assert!(ids.len() <= 200, "at most N_out = 200 outstanding");
     assert!(ids.iter().all(|id| sim.c.s.vesting_row(id).is_none()), "nothing paid before an audit");
@@ -305,7 +307,7 @@ fn q_s_reorg_restart_and_ibd_are_deterministic() {
             ids.push(id);
         }
     }
-    assert!(ids.len() >= 4, "the burst (4 at ρ 10, 13k) admits at least four: {}", ids.len());
+    assert!(ids.len() >= 4, "one a DAA at ρ 10 (13k) admits at least four of six: {}", ids.len());
     for id in &ids {
         let bound = t.bind_to(*id, &seats);
         t.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim: *id, receipts: seats.iter().map(|(k, _)| valid(*id, *k, bound)).collect() }]);

@@ -3,8 +3,8 @@
 //!
 //! **What it bounds: queues, never safety** (ADR-0160 v3 §6). A bond's claims are admitted only while
 //! it holds fewer than `N_out` issuance slots and its token bucket holds a token; both scale with ρ, so
-//! at ρ = 100 a 13,000 MSK bond holds at most 200 outstanding claims, bursts 8 and refills 10 a DAA (the
-//! user's example). Nothing in the liability, the weight cap or the audit door reads these numbers:
+//! at ρ = 100 a 13,000 MSK bond holds at most 200 outstanding claims and issues 10 a DAA (the user's
+//! example: 200 outstanding, 10 a DAA; its burst is 10, inside the user's 8–16). Nothing in the liability, the weight cap or the audit door reads these numbers:
 //! J-1 bounds weight at any claim count, the audit door refuses every credited fraud individually, and
 //! each claim's liability is its own withheld reward plus the pool (§6.3, test S-T6 runs the attack
 //! battery with the caps at ∞). What they bound is the length of every queue a claim joins — the
@@ -13,11 +13,20 @@
 //! ```text
 //! u_b          = ⌊C_b / 6,500 MSK⌋                           (2 at 13k, 15 at 100k, 153 at 1M)
 //! N_out(b, t)  = u_b · ρ(t)                                   outstanding (slot-holding) claims
-//! B_b(t)       = max(4, ⌈u_b · ρ(t) / 25⌉)                    bucket depth (burst), claims
 //! r_b(t)       = u_b · ρ(t) / 20                              refill, claims a DAA (milli-claims: u·ρ·50)
+//! B_b(t)       = max(1, r_b(t))                               bucket depth (burst): one DAA's refill
 //! tokens_b(t)  = min(1,000·B, tokens(t0) + r_milli · (t − t0)) refilled at use; a claim costs 1,000
 //! admit        ⟺ outstanding_b < N_out(b, t)  ∧  tokens_b(t) ≥ 1,000
 //! ```
+//!
+//! **The depth is one DAA's refill (stage 4, rcore/cap-s1), not ADR-0160 v3 §6.1's `max(4, ⌈u·ρ/25⌉)`**,
+//! for two reasons found in stages 2 and 4. (1) The fold refills at DAA granularity, so a bond spends at
+//! most `B` a DAA: with `B < r` (every row from `u·ρ > 100`) the rate `r` was never reached — 13k at ρ 100
+//! issued 8 a DAA, not the example's 10. (2) The user's stage-4 property, "13k × 10 bonds never beats
+//! 130k × 1": the floor of 4 let ten 13k bonds burst 40 in a DAA where their 130k whole bursts 8 (ρ 10).
+//! `B = r` is linear in `u` (milli-claims), so pieces hold together no more depth and no more refill
+//! than their whole (`Σ⌊C_i/6,500⌋ ≤ ⌊ΣC_i/6,500⌋`); its one-claim floor binds only where `u·ρ < 20` —
+//! a 13k bond below ρ 10, no capacity step — where it keeps a small bond able to issue at all.
 //!
 //! **The slot** (S.1, S.5): a bond's new-rule ATTEMPT claims accepted past F-S hold one slot each from
 //! acceptance until a COUNTED licence (`basis_k ≥ 2`; an S2 licence keeps it to `Final`), `Final`, a
@@ -33,10 +42,8 @@ use crate::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2
 
 /// Collateral per issuance unit — lane weight's FCW unit (6,500 MSK), so `u_b` is `W_cap`'s count.
 pub const PALW_ISSUANCE_COLLATERAL_PER_UNIT_SOMPI_V1: u64 = crate::palw_weight_cap_v1::PALW_CAPACITY_COLLATERAL_PER_FCW_SOMPI_V1;
-/// The least bucket depth, in claims (B's floor).
-pub const PALW_ISSUANCE_BURST_FLOOR_V1: u64 = 4;
-/// `B = max(4, ⌈u·ρ / 25⌉)`.
-pub const PALW_ISSUANCE_BURST_DIVISOR_V1: u64 = 25;
+/// The least bucket depth, in milli-claims (B's floor: one claim).
+pub const PALW_ISSUANCE_BURST_FLOOR_MILLI_V1: u64 = 1_000;
 /// `r = u·ρ / 20` claims a DAA.
 pub const PALW_ISSUANCE_RATE_DIVISOR_V1: u64 = 20;
 /// One claim's cost in the bucket's fixed point (milli-claims).
@@ -52,14 +59,14 @@ pub fn palw_issuance_outstanding_cap_v1(units: u64, rho: u32) -> u64 {
     units.saturating_mul(u64::from(rho.max(1)))
 }
 
-/// **`B = max(4, ⌈u · ρ / 25⌉)`** — the bucket's depth, in claims.
-pub fn palw_issuance_burst_v1(units: u64, rho: u32) -> u64 {
-    palw_issuance_outstanding_cap_v1(units, rho).div_ceil(PALW_ISSUANCE_BURST_DIVISOR_V1).max(PALW_ISSUANCE_BURST_FLOOR_V1)
-}
-
 /// **`r` in milli-claims a DAA** — `u · ρ · 1,000 / 20`.
 pub fn palw_issuance_rate_milli_v1(units: u64, rho: u32) -> u64 {
     palw_issuance_outstanding_cap_v1(units, rho).saturating_mul(PALW_ISSUANCE_TOKEN_MILLI_V1) / PALW_ISSUANCE_RATE_DIVISOR_V1
+}
+
+/// **`B = max(1, r)`** — the bucket's depth in milli-claims: one DAA's refill, at least one claim.
+pub fn palw_issuance_burst_milli_v1(units: u64, rho: u32) -> u64 {
+    palw_issuance_rate_milli_v1(units, rho).max(PALW_ISSUANCE_BURST_FLOOR_MILLI_V1)
 }
 
 /// **A bond's token bucket** (S.3), rooted in `PalwChainStateV2::issuance_buckets`: the tokens (in
@@ -71,9 +78,9 @@ pub struct PalwIssuanceBucketV1 {
 }
 
 /// **The bucket's tokens at `now_daa`** (S-I2: a pure function of the row and the params): a bond with
-/// no row holds a full bucket; otherwise `min(1,000·B, tokens + r_milli · (now − last))`.
-pub fn palw_issuance_tokens_at_v1(bucket: Option<&PalwIssuanceBucketV1>, burst: u64, rate_milli: u64, now_daa: u64) -> u64 {
-    let full = burst.saturating_mul(PALW_ISSUANCE_TOKEN_MILLI_V1);
+/// no row holds a full bucket; otherwise `min(B, tokens + r_milli · (now − last))` (milli-claims).
+pub fn palw_issuance_tokens_at_v1(bucket: Option<&PalwIssuanceBucketV1>, burst_milli: u64, rate_milli: u64, now_daa: u64) -> u64 {
+    let full = burst_milli;
     match bucket {
         None => full,
         Some(row) => {
@@ -100,7 +107,7 @@ pub struct PalwIssuanceReadV1 {
     pub rho: u32,
     pub outstanding: u64,
     pub cap: u64,
-    pub burst: u64,
+    pub burst_milli: u64,
     pub rate_milli: u64,
     pub tokens_milli: u64,
 }
@@ -108,9 +115,17 @@ pub struct PalwIssuanceReadV1 {
 impl PalwIssuanceReadV1 {
     pub fn of_v1(collateral_sompi: u64, rho: u32, outstanding: u64, bucket: Option<&PalwIssuanceBucketV1>, now_daa: u64) -> Self {
         let units = palw_issuance_units_v1(collateral_sompi);
-        let (cap, burst, rate_milli) =
-            (palw_issuance_outstanding_cap_v1(units, rho), palw_issuance_burst_v1(units, rho), palw_issuance_rate_milli_v1(units, rho));
-        Self { units, rho, outstanding, cap, burst, rate_milli, tokens_milli: palw_issuance_tokens_at_v1(bucket, burst, rate_milli, now_daa) }
+        let (cap, burst_milli, rate_milli) =
+            (palw_issuance_outstanding_cap_v1(units, rho), palw_issuance_burst_milli_v1(units, rho), palw_issuance_rate_milli_v1(units, rho));
+        Self {
+            units,
+            rho,
+            outstanding,
+            cap,
+            burst_milli,
+            rate_milli,
+            tokens_milli: palw_issuance_tokens_at_v1(bucket, burst_milli, rate_milli, now_daa),
+        }
     }
 
     /// **S-I1 and the bucket**: `outstanding < N_out` and a whole token.
@@ -173,32 +188,48 @@ mod tests {
 
     const MSK: u64 = 100_000_000;
 
-    /// ADR-0160 v3 §6.2 (T5), the user's example at ρ 100 on a 13,000 MSK bond: 200 outstanding, a burst
-    /// of 8, 10 claims a DAA; and the 100k / 1M rows at ρ 10, 100 and 1000.
+    /// ADR-0160 v3 §6.2 (T5)'s `N_out` and `r`, the user's example at ρ 100 on a 13,000 MSK bond: 200
+    /// outstanding, 10 claims a DAA — and a burst of one DAA's refill (10, inside the user's 8–16).
     #[test]
-    fn the_caps_are_the_adrs_table() {
+    fn the_caps_are_the_adrs_table_with_one_daa_of_burst() {
         let row = |msk: u64, rho: u32| {
             let u = palw_issuance_units_v1(msk * MSK);
-            (palw_issuance_outstanding_cap_v1(u, rho), palw_issuance_burst_v1(u, rho), palw_issuance_rate_milli_v1(u, rho))
+            (palw_issuance_outstanding_cap_v1(u, rho), palw_issuance_burst_milli_v1(u, rho), palw_issuance_rate_milli_v1(u, rho))
         };
-        assert_eq!(row(13_000, 100), (200, 8, 10_000), "13k at ρ 100: 200 / 8 / 10 a DAA");
-        assert_eq!(row(13_000, 10), (20, 4, 1_000), "13k at ρ 10: 20 / 4 / 1 a DAA");
-        assert_eq!(row(13_000, 1_000), (2_000, 80, 100_000));
-        assert_eq!(row(100_000, 10), (150, 6, 7_500));
-        assert_eq!(row(100_000, 100), (1_500, 60, 75_000));
-        assert_eq!(row(1_000_000, 100), (15_300, 612, 765_000));
-        assert_eq!(row(1_000_000, 1_000), (153_000, 6_120, 7_650_000));
-        assert_eq!(row(13_000, 1), (2, 4, 100), "ρ = 1: two slots, one claim per ten DAA once the burst is spent");
+        assert_eq!(row(13_000, 100), (200, 10_000, 10_000), "13k at ρ 100: 200 / a burst of 10 / 10 a DAA");
+        assert_eq!(row(13_000, 10), (20, 1_000, 1_000), "13k at ρ 10: 20 / 1 / 1 a DAA");
+        assert_eq!(row(13_000, 25), (50, 2_500, 2_500), "13k at ρ 25: 2.5 a DAA, carried in milli-claims");
+        assert_eq!(row(13_000, 1_000), (2_000, 100_000, 100_000));
+        assert_eq!(row(100_000, 10), (150, 7_500, 7_500));
+        assert_eq!(row(100_000, 100), (1_500, 75_000, 75_000));
+        assert_eq!(row(1_000_000, 100), (15_300, 765_000, 765_000));
+        assert_eq!(row(1_000_000, 1_000), (153_000, 7_650_000, 7_650_000));
+        assert_eq!(row(13_000, 1), (2, 1_000, 100), "ρ = 1: two slots, a one-claim floor, one claim per ten DAA");
+    }
+
+    /// **Split-neutral (the user's stage-4 property):** ten 13k bonds hold no more slots, depth or refill
+    /// than one 130k bond, at every capacity step (the one-claim floor binds only below ρ 10 at 13k).
+    #[test]
+    fn ten_small_bonds_hold_no_more_slots_depth_or_refill_than_their_whole() {
+        for rho in [10u32, 25, 50, 100, 250, 500, 1_000] {
+            for (small, whole) in [(13_000u64, 130_000u64), (19_000, 190_000), (100_000, 1_000_000)] {
+                let piece = PalwIssuanceReadV1::of_v1(small * MSK, rho, 0, None, 7);
+                let one = PalwIssuanceReadV1::of_v1(whole * MSK, rho, 0, None, 7);
+                assert!(10 * piece.cap <= one.cap, "N_out at ρ {rho}: {small}");
+                assert!(10 * piece.burst_milli <= one.burst_milli, "B at ρ {rho}: {small}");
+                assert!(10 * piece.rate_milli <= one.rate_milli, "r at ρ {rho}: {small}");
+            }
+        }
     }
 
     /// The bucket: a missing row is full; a spend costs one token; the refill is linear and capped.
     #[test]
     fn the_bucket_refills_linearly_and_caps_at_its_depth() {
         let read = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 0, None, 50);
-        assert_eq!(read.tokens_milli, 8_000, "a bond with no row holds a full bucket");
+        assert_eq!(read.tokens_milli, 10_000, "a bond with no row holds a full bucket");
         let mut row = read.spent_v1(50);
-        assert_eq!(row, PalwIssuanceBucketV1 { tokens_milli: 7_000, last_daa: 50 });
-        for _ in 0..7 {
+        assert_eq!(row, PalwIssuanceBucketV1 { tokens_milli: 9_000, last_daa: 50 });
+        for _ in 0..9 {
             let r = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 0, Some(&row), 50);
             r.admits_v1().expect("the burst");
             row = r.spent_v1(50);
@@ -206,9 +237,9 @@ mod tests {
         let dry = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 0, Some(&row), 50);
         assert_eq!(dry.admits_v1(), Err(PalwIssuanceRefusalV1::Rate { tokens_milli: 0 }), "the burst is spent within a DAA");
         let later = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 0, Some(&row), 51);
-        assert_eq!(later.tokens_milli, 8_000, "a DAA refills 10 claims, capped at the depth 8");
+        assert_eq!(later.tokens_milli, 10_000, "a DAA refills 10 claims: the rate is reachable");
         let full = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 0, Some(&row), 10_000);
-        assert_eq!(full.tokens_milli, 8_000, "capped");
+        assert_eq!(full.tokens_milli, 10_000, "capped at one DAA's refill");
         let capped = PalwIssuanceReadV1::of_v1(13_000 * MSK, 100, 200, None, 51);
         assert_eq!(capped.admits_v1(), Err(PalwIssuanceRefusalV1::Outstanding { outstanding: 200, cap: 200 }), "S-I1");
     }
