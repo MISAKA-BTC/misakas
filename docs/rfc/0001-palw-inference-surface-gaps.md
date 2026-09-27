@@ -164,6 +164,21 @@ RFC-0001(本書)、必要な決定だけの ADR、Job V4 wire spec、consensus v
 
 > **§2.1〜§2.3・§2.5 の生成制御は、§A(凍結仕様)が優先する。** 以下はその検討経緯で、食い違う箇所(プロンプトを window に含めるフラグ、stop 列の長さなど)は §A の値が正。
 
+### 2.0 MINING レーンと Chat パスの線引き(2026-09-27 ユーザー確認)
+
+以下の各項目を「chain の規則が要るか」で読むときの線は、**MINING レーン**か**非 MINING の Chat パス**かで引く。
+
+| | MINING レーン | Chat パス(非 MINING) |
+|---|---|---|
+| 実体 | `misaka-palw-gateway` の FP レーン:job を commit し、claim を出し、panel が再実行し、court が審理する | 同じ worker・artifact でローカルに答えるだけ:job も claim も報酬もない |
+| 出力を変える制御(stop・logit_bias・sampling・penalty) | **chain の規則**(§A:FP Job V4、fence `palw_fp_decode_rules`、seat の再実行、court) | ノードの実装だけ(chain 変更なし)。§A と同じ関数を使ってよいが、何も commit しない |
+| 会話をまたぐ KV キャッシュ再利用 | **chain 変更は不要**:`palw_canonical_work_v1.rs` がすでに `reused_prefix_tokens` を価格に入れ、chain は払済みの prefix を自分の記録から読む(ADR-0145 §6、§2.6)。ノードの高速化は committed 計算を 1 bit も変えない限り自由 | 自由(ノードのみ) |
+| 並行処理(§2.7) | ノードのみ(1 推論 = 1 claim のまま) | ノードのみ |
+| embeddings(§2.8) | claim 化するなら新 job 種別(P3、別 ADR) | ローカルサービスとして自由(chain 変更なし) |
+| artifact の自己記述(§2.9) | 新しい artifact 形式と、**通常の permissionless なクラス登録**(新しい artifact は新しいクラス。既存クラスの identity は変えない) | 同左の artifact を読むだけ |
+
+つまり、**chain の規則として入れるのは「MINING レーンで committed token を変えるもの」だけ**で、それは §A(FP Job V4)で完結している。KV キャッシュ再利用・並行処理・embeddings・Chat での stop / logit_bias / sampling・artifact の自己記述は、どれも chain 変更なしで入る(artifact 形式の追加は既存のクラス登録の手続きで扱う)。
+
 ### 2.1 決定論的 repeat_penalty(新規実装・P0)
 
 **目的.** 小さなモデルは temperature 0 で少数の吸引子に崩れる(params.rs の実測:60 seed で min-entropy 約 3.1 bit)。D11 の Gumbel-max サンプラーだけでも改善するが、長い回答では同じ句の反復が残る。llama.cpp の `repeat_penalty` / `frequency_penalty` / `presence_penalty` に相当するものを、**乱数を使わない整数演算**で入れる。
