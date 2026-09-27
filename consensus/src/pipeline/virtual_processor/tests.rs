@@ -16405,6 +16405,11 @@ mod t12_split_stale_coinbase_id;
 // ADR-0152 M4: the stake-weighted draw where the chain draws — the one resolver (SW-1) and the
 // one-state, bind-only-in-the-anchor-block derivation (SW-8, T89) on a real testnet-12 chain.
 mod t12_stake_draw_integration;
+// audit/claim-capacity (2026-09-26): the bond x class claim-capacity profiler (ignored measurement runs).
+mod t12_claim_capacity;
+// ADR-0160 lane verify (F-B batch licence, F-R room v2): the fences crossed on a real testnet-12 chain,
+// and the ×10 step measured in the capacity harness.
+mod t12_capacity_verify;
 // Lane F1 (the 2026-09-25 sweep's V03/V05): the registry-resilience fence armed on a copy of
 // testnet-12 and crossed by a real chain — the processor's mirror, a floor claim unchanged across the
 // height, and the no-capable-panel re-anchor at a real anchor block.
@@ -16429,6 +16434,9 @@ mod t12_final_lock_full_collateral_fence;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;
+// ADR-0160 S-T5 (lane shadow): the capacity shadow read through the consensus API on a live-like
+// testnet-12 chain driven by the capacity harness.
+mod t12_capacity_shadow;
 // ADR-0152 Phase 2, P2-1: B-3's vesting term at every UTXO site (T23 processor half, T05 bond half).
 mod p2_b3_vesting_payee_gate;
 // ADR-0152 Phase 2, P2-2: the mint path on real testnet-12 blocks (T58, T03, T47, T25, T05, T29).

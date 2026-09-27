@@ -96,7 +96,7 @@ use kaspa_consensus_core::palw_false_valid_filing_v1::{
     PalwFalseValidFilingCheckV1, PalwFalseValidFilingV1, PalwFalseValidProofV1, palw_false_valid_admit_receipts_v1,
     palw_false_valid_filings_v1,
 };
-use kaspa_consensus_core::palw_offence_attribution_v1::{PalwFalseValidReceiptV1, palw_false_valid_receipts_of_licence_v1};
+use kaspa_consensus_core::palw_offence_attribution_v1::{PalwFalseValidReceiptV1, palw_false_valid_receipts_of_licence_for_v1};
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_core::{debug, info, warn};
 use kaspa_hashes::Hash64;
@@ -606,9 +606,8 @@ pub(crate) fn palw_false_valid_scan_v1(
     palw_false_valid_admit_receipts_v1(&mut receipts, claim_id, scan.receipts, relied);
     let span = current_daa.saturating_sub(scan.walk_from_daa).saturating_add(64).min(PALW_FALSE_VALID_MAX_WALK_BLOCKS_V1) as usize;
     crate::palw_panel::walk_accepted_lifecycle_objects_v1(consensus, scan.walk_from_daa, span, &mut |object| {
-        if let Some((claim, found)) = palw_false_valid_receipts_of_licence_v1(&object)
-            && claim == claim_id
-        {
+        // ADR-0160 F-B: a batch licence's entry for the claim reads as `Windowed` receipts.
+        if let Some(found) = palw_false_valid_receipts_of_licence_for_v1(&object, &claim_id) {
             palw_false_valid_admit_receipts_v1(&mut receipts, claim_id, found, relied);
         }
     });
@@ -1133,7 +1132,7 @@ mod tests {
                 .into_iter()
                 .map(|r| match r {
                     PalwFalseValidReceiptV1::Segmented(signed) => signed,
-                    PalwFalseValidReceiptV1::Full(_) => unreachable!(),
+                    PalwFalseValidReceiptV1::Full(_) | PalwFalseValidReceiptV1::Windowed(_) => unreachable!(),
                 })
                 .collect();
             let object = PalwConsensusObjectV2::ReceiptLicensedV2 { claim: claim(), receipts };

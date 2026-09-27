@@ -153,6 +153,11 @@ pub mod palw_admission_v2;
 /// to repeat it as `#![cfg(test)]`, which is the same statement twice.
 #[cfg(test)]
 pub mod palw_adversarial;
+/// ADR-0160 lane liab (testnet-12, post-launch): aggregate bond liability — one shared pool per bond,
+/// forfeited whole on an intent-class conviction, frozen on the first conviction, and the seat side
+/// re-priced by the ramp factor. Consensus-inert while `Params::palw_capacity_aggregate_liability` is
+/// `None` (every shipped preset).
+pub mod palw_aggregate_liability_v1;
 /// ADR-0146: the committed search that reports the worst reward-per-MAC the derivation
 /// permits. No coefficient table, no fence — `cargo test palw_arbitrage_search` is the program.
 pub mod palw_arbitrage_search_v1;
@@ -169,6 +174,12 @@ pub mod palw_base0;
 pub mod palw_base0_a16;
 pub mod palw_base0_ops;
 pub mod palw_base0_profile;
+/// ADR-0160 stage 2 lane Q: the audit door (F-Q, `Params::palw_capacity_audit_door`) — a credited
+/// claim reaches `Final` only with `k_aud` operator receipts from outside its panel.
+pub mod palw_audit_door_v1;
+/// ADR-0160 lane verify V1: the batch licence (F-B, `Params::palw_capacity_batch_licence`) — one
+/// signature per seat window, a Merkle path per claim, the coverage funnel unchanged.
+pub mod palw_batch_licence_v1;
 /// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
 /// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
 /// rung deadlines, attributable no-show offenses, log-bounded convergence to the terminal
@@ -186,6 +197,14 @@ pub mod palw_block_commitment;
 /// `Params::palw_prefill_draw` runs a different one. Behind `Params::palw_canonical_work`, `None`
 /// on every preset.
 pub mod palw_canonical_work_v1;
+/// ADR-0160 — the reference formulas of claim-capacity separation (staged weight and the per-bond
+/// cap, `m_c`, the seat repricing, the §5 targets). Pure; called by no consensus rule until a
+/// capacity lane's fence arms (`palw_capacity_shadow_is_node_only` enforces it).
+pub mod palw_capacity_formulas_v1;
+/// ADR-0160 §6.3 / §7.5 — shadow accounting: what the capacity formulas would reserve, weigh and
+/// allow for every live claim and bond, next to today's values. Node-only (`getPalwCapacityShadow`,
+/// kaspad's interval log); no consensus rule reads it.
+pub mod palw_capacity_shadow_v1;
 pub mod palw_class_identity_v1;
 /// MISAKA PALW chain carriage v1 (ADR-0029): the Stage-0 magic envelope, the five payload
 /// bodies, their caps, and the stateless validators that become the Stage-1 admission
@@ -237,6 +256,10 @@ pub mod palw_economic_safety_v1;
 pub mod palw_economic_locus_v1;
 pub mod palw_economic_payout_v1;
 pub mod palw_economics_ledger_v1;
+/// ADR-0160 lane escrow (testnet-12, post-launch): past `Params::palw_capacity_escrow_at_licence` the
+/// bond holds `m_c` in a claim's escrow slot instead of `E`, and an unconvicted void keeps the claim's
+/// commitment for `h_obl`. Consensus-inert while the fence is `None` (every shipped preset).
+pub mod palw_escrow_funding_v2;
 /// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
 /// permits) as pure functions; consensus-inert until the lane that reads them is built.
 pub mod palw_execution_lane_v1;
@@ -442,10 +465,19 @@ pub mod palw_transcendental;
 pub mod palw_v2;
 pub mod palw_verification_profile_v1;
 pub mod palw_verification_v2;
+/// ADR-0160 stage 2 lane S: the issuance slots (F-S, `Params::palw_capacity_issuance_slots`) —
+/// outstanding, burst and rate caps at the step's ρ; queue bounds, never the safety.
+pub mod palw_issuance_slots_v1;
+pub mod palw_network_room_v1;
+/// ADR-0160 lane verify V2: room v2 (F-R, `Params::palw_capacity_verify_room`) — the measured `k = 2`
+/// capacity, the stake-proportional bond share, the floor's seat-capital room.
+pub mod palw_verify_capacity_v1;
 /// ADR-0152 V-1…V-8, read side: `getPalwVesting` (op 199) and claim row v3 (phase2-plan P2-10).
 pub mod palw_vesting_read_v1;
 pub mod palw_vesting_v1;
 pub mod palw_weight;
+/// ADR-0160 F-W (lane cap-weight): staged claim weight and the per-bond weight cap (J-1).
+pub mod palw_weight_cap_v1;
 pub mod palw_work_target_v1;
 /// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
 /// helpers (see docs/adr/0007-layered-pow.md). Self-contained; the

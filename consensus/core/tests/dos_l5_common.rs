@@ -79,6 +79,50 @@ pub fn t12_2m_open() -> Params {
     p
 }
 
+/// **rcore/cap-s1 — ADR-0160 F-W armed at `at`, with its prerequisites at or below it** (strict-win, F1's
+/// execution seed and lane A's operator anchor, each through its post-launch entry, moved down to `at`
+/// where the ruleset has them dormant or higher). Every other capacity fence requires F-W at or below it
+/// (ADR-0160 v3 §10.1), so a lane suite that arms its own fence over [`t12`] (the launch ruleset, which
+/// leaves the post-launch fences dormant) arms this first. Moves no fold rule but F-W's: strict-win and
+/// lane A are processor rules, and F1's seed is read by the draw.
+pub fn arm_capacity_weight_cap(p: &mut Params, at: u64) {
+    use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1};
+    let fences = p.palw_fences_v1();
+    for name in ["palw_reorg_strict_economic_win", "palw_panel_seed_execution", "palw_operator_anchor"] {
+        let now = fences.iter().find(|(n, _)| *n == name).expect("a fence").1;
+        if now.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at) {
+            (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(p, Some(ForkActivation::new(at)));
+        }
+    }
+    p.palw_capacity_weight_cap = Some(ForkActivation::new(at));
+    p.sync_palw_capacity_weight_cap();
+}
+
+/// **Stage 2 (rcore/cap-s1): the audit door (F-Q) at `at` with its prerequisites** — lane A (and its
+/// own, as [`arm_capacity_weight_cap`] arms them) and F-B, each where it is not already armed at or below
+/// `at`. What a fixture arming a CREDITED F-L step needs: `validate_palw_v2` refuses a credit without the
+/// door (ADR-0160 v3 D-23), and past it a credited claim reaches `Final` only through its audit.
+pub fn arm_capacity_audit_door(p: &mut Params, at: u64) {
+    use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1};
+    let fences = p.palw_fences_v1();
+    let later = |name: &str| fences.iter().find(|(n, _)| *n == name).expect("a fence").1.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at);
+    for name in ["palw_reorg_strict_economic_win", "palw_panel_seed_execution", "palw_operator_anchor"] {
+        if later(name) {
+            (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(p, Some(ForkActivation::new(at)));
+        }
+    }
+    for name in ["palw_capacity_batch_licence", "palw_capacity_audit_door"] {
+        if later(name) {
+            (PALW_T12_CAPACITY_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(p, Some(ForkActivation::new(at)));
+        }
+    }
+}
+
+/// Whether a step `(ρ, q‰)` credits (the escrow lane's gate: `q ≥ q_seat`), so its fixture needs the door.
+pub fn step_credits(q_permille: u16) -> bool {
+    q_permille >= kaspa_consensus_core::palw_aggregate_liability_v1::PALW_CAPACITY_Q_SEAT_PERMILLE_V1
+}
+
 pub fn bundle(p: &Params) -> PalwConsensusParamsV2 {
     match &p.palw_consensus_mode {
         PalwConsensusMode::ConsensusV2(b) => b.clone(),

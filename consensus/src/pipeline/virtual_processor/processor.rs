@@ -4699,6 +4699,18 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_operator_da_v1::palw_operator_da_candidates_v1(&state, state_params, operators, candidate_daa)
     }
 
+    /// **ADR-0160 F-Q (stage 2): the credited claims `me`'s audit duty may receipt**, at the tip
+    /// (`palw_audit_door_v1::palw_capacity_audit_candidates_v1`). Empty with no tip state. A read: node
+    /// policy, never a block rule.
+    pub fn palw_capacity_audit_candidates_v1_impl(
+        &self,
+        me: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<kaspa_consensus_core::palw_audit_door_v1::PalwAuditCandidateV1> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else { return Vec::new() };
+        kaspa_consensus_core::palw_audit_door_v1::palw_capacity_audit_candidates_v1(&state, state_params, me)
+    }
+
     /// **Lane B: one operator bond's standing**, at the tip, for the DAA the virtual's next block folds
     /// at, over the second clock's raw depth there (`palw_operator_da_v1::palw_operator_da_standing_v1`).
     /// `None` with no tip state. A read: node policy, never a block rule.
@@ -5444,6 +5456,51 @@ impl VirtualStateProcessor {
         ))
     }
 
+    /// **ADR-0160 §7.5: the capacity shadow** — `palw_capacity_shadow_with_v1` over the committed
+    /// tip (`load_tip_cached`), at the next block's DAA with the RAW second-clock depth there, as
+    /// the vesting read asks. A read for `getPalwCapacityShadow` and kaspad's interval log; no rule
+    /// calls it (`palw_capacity_shadow_is_node_only` pins that this is the one consensus-crate call).
+    pub fn palw_capacity_shadow_v1_impl(
+        &self,
+        mut options: kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,
+    ) -> Option<kaspa_consensus_core::palw_capacity_shadow_v1::PalwCapacityShadowV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let next_daa = self.palw_next_block_daa_for_reads(&state);
+        options.raw_depth = self.palw_settled_anchor_depth_at(next_daa);
+        // The default display (review of lane shadow, finding 1): the schedule F-L arms once the
+        // params carry one — `rcore/cap-int` passes `palw_capacity_aggregate_liability`'s steps here
+        // in place of `None` — else the uncredited ramp (q = 0, m_c = E). ADR-0160 v1's reference
+        // ramp (q = 143‰) is priced only when a caller names it, and prices as the uncredited one
+        // (below q_seat nothing is credited; review of lane shadow, round 2, finding 2).
+        if options.steps.is_empty() {
+            // rcore/cap-s1: the schedule F-L arms, once the params carry one (the shadow's own step type
+            // is the formulas module's; mapped field for field).
+            let armed: Option<Vec<kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1>> =
+                state_params.capacity_liability().map(|value| {
+                    value
+                        .steps
+                        .iter()
+                        .map(|step| kaspa_consensus_core::palw_capacity_formulas_v1::PalwCapacityStepV1 {
+                            from_daa: step.from_daa,
+                            rho: step.rho,
+                            q_credit_permille: step.q_credit_permille,
+                        })
+                        .collect()
+                });
+            options.steps = kaspa_consensus_core::palw_capacity_shadow_v1::palw_capacity_display_steps_v1(armed.as_deref());
+        }
+        // `E` of a claim the next block would accept: the tip's subsidy under the carve the fold
+        // resolves at that DAA (ADR-0126's overlay on testnet-12), for a state with no claim to read.
+        let subsidy = state.last_point().map(|point| point.subsidy).unwrap_or(0);
+        options.reference_escrow_sompi = Some(kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+            state_params,
+            subsidy,
+            self.palw_escrow_carve_at(next_daa, next_daa),
+        ));
+        Some(kaspa_consensus_core::palw_capacity_shadow_v1::palw_capacity_shadow_with_v1(&state, state_params, next_daa, &options))
+    }
+
     pub fn palw_seat_duties_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
@@ -5652,15 +5709,27 @@ impl VirtualStateProcessor {
         if facts.class_admission_refusal.is_none()
             && let Some(outpoint) = bond
         {
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
             facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_bond_class_share_admits_v1(
                 &state,
                 state_params,
                 &extras,
-                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                &key,
                 &class_id,
                 candidate_daa,
             )
             .err()
+            // ADR-0160 stage 4 (F-N): an unregistered bond mines the refused attempt — it registers it.
+            .filter(|refusal| {
+                !kaspa_consensus_core::palw_state_v2::palw_network_refusal_registers_v1(
+                    &state,
+                    state_params,
+                    refusal,
+                    &key,
+                    &class_id,
+                    candidate_daa,
+                )
+            })
             .map(|refusal| refusal.to_string());
         }
         // **Lane bind-deadlock (`palw_anchor_at_ceiling`): would the candidate be a binder?** The
@@ -5685,6 +5754,85 @@ impl VirtualStateProcessor {
                 )
                 .is_empty()
             });
+        // **ADR-0160 F-R (J-6): and, on the floor, the seats' capital and the bond's share of it**,
+        // which the fold asks before the ceiling and skips the block's own attempt on — priced over a
+        // template of the claim this block would carry (its weight term and its escrow, the facts'
+        // own numbers). Past `palw_capacity_verify_room` only; below it this reads `Ok`.
+        if facts.class_admission_refusal.is_none()
+            && facts.is_base_class
+            && state_params.capacity_room_active_at(candidate_daa)
+            && let (Some(outpoint), Some(bond_facts)) = (bond, facts.bond.as_ref())
+        {
+            let escrow = kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                self.coinbase_manager.calc_block_subsidy(candidate_daa),
+                budget_fences.escrow_carve,
+            );
+            // rcore/cap-s1: the facts' `claim_exposure` is F-W's capped weight term plus F-E's escrow slot
+            // (`claim_escrow_term_v2`: `m_c` past F-E, option A's `E` below it), so the weight is what is left
+            // after THAT slot — the one the template's commitment re-reads.
+            let weight = bond_facts.claim_exposure.saturating_sub(state_params.claim_escrow_term_v2(
+                candidate_daa,
+                escrow,
+                &state_params.base_class_id(),
+            ));
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
+            facts.class_admission_refusal =
+                kaspa_consensus_core::palw_state_v2::palw_floor_room_admits_v1(&state, state_params, &extras, &key, weight, escrow, candidate_daa)
+                    .err()
+                    // ADR-0160 stage 4 (F-N): an unregistered bond mines the refused attempt — it registers it.
+                    .filter(|refusal| {
+                        !kaspa_consensus_core::palw_state_v2::palw_network_refusal_registers_v1(
+                            &state,
+                            state_params,
+                            refusal,
+                            &key,
+                            &class_id,
+                            candidate_daa,
+                        )
+                    })
+                    .map(|refusal| refusal.to_string());
+        }
+        // **ADR-0160 F-N (stage 4): and a network unit** — lane N's level and work-conserving share, the
+        // fold's last check before its first write, over the same template. A refusal holds the producer
+        // back only while its bond's demand for the class stands registered through the candidate DAA: an
+        // unregistered bond mines the refused attempt anyway, because that refusal is what registers it
+        // (ADR-0160 v3 §7.2 — registering costs a refused attempt block every `H_L`), and a registered bond
+        // below its share is admitted whenever a unit is free. Past `palw_capacity_network_room` only.
+        if facts.class_admission_refusal.is_none()
+            && state_params.capacity_network_active_at(candidate_daa)
+            && let (Some(outpoint), Some(bond_facts)) = (bond, facts.bond.as_ref())
+        {
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
+            let escrow = kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                self.coinbase_manager.calc_block_subsidy(candidate_daa),
+                budget_fences.escrow_carve,
+            );
+            let weight = bond_facts.claim_exposure.saturating_sub(state_params.claim_escrow_term_v2(candidate_daa, escrow, &class_id));
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_network_room_admits_v1(
+                &state,
+                state_params,
+                &extras,
+                &key,
+                &class_id,
+                weight,
+                escrow,
+                candidate_daa,
+            )
+            .err()
+            .filter(|refusal| {
+                !kaspa_consensus_core::palw_state_v2::palw_network_refusal_registers_v1(
+                    &state,
+                    state_params,
+                    refusal,
+                    &key,
+                    &class_id,
+                    candidate_daa,
+                )
+            })
+            .map(|refusal| refusal.to_string());
+        }
         // The share and the tip's count beside the refusal — a read the producer adds its own
         // unmerged attempts to (node policy; the fold's question above is unchanged).
         facts.bond_class_share = bond.and_then(|outpoint| {
@@ -7587,12 +7735,20 @@ impl VirtualStateProcessor {
             // Charged before the gate computes and kept when the gate then refuses; the object that
             // would breach the budget is dropped and the block stands. The fold charges by the same
             // function as its second lock.
+            //
+            // **ADR-0160 F-B (the lane-verify review's heavy-slot finding): both readers here run
+            // before the gate, so both read the batch fence.** Below it a kind-3 whose receipt is
+            // `Windowed` is what `0e8ec984e` reads — bytes that do not decode — so it owes no prompt
+            // rent and is charged nothing; the gate then refuses it by name. Read otherwise, an
+            // upgraded node spent the block's one 2M slot on it and dropped an honest Whole behind it
+            // that the base admitted.
+            let batch_licence = state_params.capacity_batch_active_at(point.daa_score);
             if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence, .. } =
                 &object
                 && self.palw_offence_attribution_at(point.daa_score)
             {
                 if rent_armed {
-                    let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(&object, true);
+                    let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(&object, true, batch_licence);
                     if carrier_fee < owed {
                         info!(
                             "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier paid \
@@ -7607,6 +7763,7 @@ impl VirtualStateProcessor {
                     *kind,
                     evidence,
                     self.palw_identity_rules_v1(point.daa_score),
+                    batch_licence,
                 ) && !heavy_prompt_claims.contains(&charge.claim_id)
                 {
                     let (heavy, budget) = (charge.prompt_ids, kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1);
@@ -8221,6 +8378,88 @@ impl VirtualStateProcessor {
             subsidy: 0,
         };
         self.palw_v2_receipt_coverage_assemble_on_v1(&state, state_params, panel_params, &point, claim, candidates)
+    }
+
+    /// **ADR-0160 F-B: a collector's batch licence** (node policy): the due claims of `due`, in the
+    /// order given (oldest bind first), licensed together over the pooled seats' `windows` —
+    /// `palw_assemble_batch_licence_v1` on the tip, each window's root verified here first (a window
+    /// that does not verify is left out), each entry kept only where acceptance would take it and the
+    /// fold of the equivalent single licence licenses its claim, the object within `max_bytes`. `None`
+    /// below `palw_capacity_batch_licence` (at the virtual's DAA) or when nothing is kept.
+    pub fn palw_v2_batch_licence_assemble_impl(
+        &self,
+        windows: &[kaspa_consensus_core::palw_batch_licence_v1::PalwSeatWindowV1],
+        due: &[kaspa_hashes::Hash64],
+        max_bytes: usize,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let panel_params = self.palw_panel_params_v2.as_ref()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        if !state_params.capacity_batch_active_at(virtual_state.daa_score) || !self.palw_verification_v2_at(virtual_state.daa_score) {
+            return None;
+        }
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        self.palw_v2_batch_licence_assemble_on_v1(&state, state_params, panel_params, &point, windows, due, max_bytes)
+    }
+
+    /// [`Self::palw_v2_batch_licence_assemble_impl`] on a given state and point (the tests fold their
+    /// own). The caller has checked the fences.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn palw_v2_batch_licence_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        windows: &[kaspa_consensus_core::palw_batch_licence_v1::PalwSeatWindowV1],
+        due: &[kaspa_hashes::Hash64],
+        max_bytes: usize,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_batch_licence_v1 as batch;
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let verified: Vec<batch::PalwSeatWindowV1> = windows
+            .iter()
+            .filter(|window| {
+                batch::palw_batch_licence_verify_roots_v1(
+                    state,
+                    network_domain,
+                    std::slice::from_ref(&window.root),
+                    Self::verify_mldsa87_with_context_bool,
+                )
+                .is_ok()
+            })
+            .cloned()
+            .collect();
+        let (roots, entries) = batch::palw_assemble_batch_licence_v1(
+            state,
+            panel_params,
+            state_params,
+            point,
+            network_domain,
+            &verified,
+            due,
+            max_bytes,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_admission_independence_daa(),
+            |claim, receipts| {
+                self.palw_v2_offered_licence_licenses_v1(
+                    state,
+                    state_params,
+                    point,
+                    &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim: *claim, receipts: receipts.to_vec() },
+                )
+            },
+        )?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedBatchV1 { roots, entries })
     }
 
     /// [`Self::palw_v2_receipt_coverage_assemble_impl`] on a given state and point — the tests fold
@@ -9957,6 +10196,15 @@ impl VirtualStateProcessor {
                                 if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
                                     return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
                                 }
+                                // ADR-0160 F-B: a batched receipt convicts only past the batch fence
+                                // (the fold asks the same predicate).
+                                if !state_params.capacity_batch_active_at(point.daa_score)
+                                    && kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_evidence_is_windowed_v1(
+                                        evidence,
+                                    )
+                                {
+                                    return Err("a Windowed receipt below palw_capacity_batch_licence (ADR-0160 F-B)".to_string());
+                                }
                                 let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_v2(
                                     state,
                                     accused,
@@ -10154,6 +10402,71 @@ impl VirtualStateProcessor {
                         kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Supplementary { .. } => {
                             return Err(format!("claim {claim}: supplementary receipts ride the V1 object"));
                         }
+                    }
+                }
+                // **ADR-0160 F-B: the batch licence** (tag 59). Past `palw_capacity_batch_licence`
+                // only: every root's signature once, then each live entry through the single
+                // licence's own validator with its paths standing for the signatures
+                // (`palw_validate_batch_licence_v1`). An inert entry is skipped here and in the fold
+                // by one predicate; any other fault drops the object, the block standing.
+                Obj::ReceiptLicensedBatchV1 { roots, entries } => {
+                    // The fence through the bundle's mirror (`Params::sync_palw_capacity_verify`), which
+                    // `validate_palw_v2` holds equal to it: the fold reads the same copy.
+                    if !state_params.capacity_batch_active_at(point.daa_score) {
+                        return Err(kaspa_consensus_core::palw_batch_licence_v1::PalwBatchLicenceErrorV1::Dormant.to_string());
+                    }
+                    kaspa_consensus_core::palw_batch_licence_v1::palw_validate_batch_licence_v1(
+                        state,
+                        panel_params,
+                        state_params,
+                        point,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        self.palw_verification_v2_at(point.daa_score),
+                        roots,
+                        entries,
+                        Self::verify_mldsa87_with_context_bool,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                        self.palw_admission_independence_daa(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                // **ADR-0160 F-Q: an audit receipt batch** (tag 60). Past `palw_capacity_audit_door` only
+                // (the bundle's mirror): the auditor's ML-DSA-87 signature under its genesis-registered key
+                // (lane A's operator rule holds the operators' keys), then the fold's own refusals asked
+                // first (`palw_audit_receipt_batch_refusal_v1`), so a miner never carries a block-invalid
+                // batch; the entries the door does not keep are the fold's skips.
+                Obj::AuditReceiptBatchV1 { auditor, entries, signature } => {
+                    if !state_params.capacity_audit_active_at(point.daa_score) {
+                        return Err("an audit receipt batch below palw_capacity_audit_door (ADR-0160 F-Q)".to_string());
+                    }
+                    let key = self
+                        .palw_operator_anchor
+                        .as_ref()
+                        .and_then(|rule| rule.operators().find(|(bond, _)| *bond == auditor).map(|(_, key)| key.to_vec()))
+                        .ok_or_else(|| format!("audit receipt batch: {auditor:?} is not an operator bond"))?;
+                    let message = kaspa_consensus_core::palw_audit_door_v1::palw_audit_receipt_batch_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        auditor,
+                        entries,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &key,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_audit_door_v1::PALW_AUDIT_RECEIPT_V1_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("audit receipt batch: not signed by {auditor:?}'s registered key"));
+                    }
+                    if let Some(why) =
+                        kaspa_consensus_core::palw_audit_door_v1::palw_audit_receipt_batch_refusal_v1(state, state_params, auditor, entries)
+                    {
+                        return Err(format!("audit receipt batch by {auditor:?}: {why}"));
                     }
                 }
                 Obj::OptimisticLicensed { claim, receipts } => {
@@ -14652,6 +14965,13 @@ impl VirtualStateProcessor {
                     // above the fork point spans at most `PALW_REORG_SHALLOW_TIE_DAA_V1` DAA ticks, the
                     // incumbent kept deeper. The depth walk runs only on a tie, keyed as the fence is
                     // (the incumbent's DAA), and answers `false` on any read it cannot make.
+                    //
+                    // **rcore/cap-s1 — ADR-0160 F-W has no tie rule of its own.** The capacity lane's copy
+                    // (`palw_deep_reorg_capacity_v1` behind `palw_capacity_weight_cap`) was this rule
+                    // without the no-DAA-lowering check; cap-s1 keeps this one only. F-W requires
+                    // strict-win at or below it (and a build whose rule keeps the check,
+                    // `PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`), so wherever F-W is active this
+                    // branch runs, with the check.
                     let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
                     let decision = if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
                         kaspa_consensus_core::palw_fork_authority_v2::palw_reorg_strict_economic_win_v1(
@@ -14895,15 +15215,18 @@ impl VirtualStateProcessor {
     /// is `false` (the tie keeps the incumbent, the strict answer). Reads only this node's committed
     /// stores, so every node holding the same DAG answers the same.
     ///
-    /// **Shared with the capacity lane.** rcore/cap-weight (3aa4abec4) carries this exact body as
-    /// `palw_capacity_shallow_ghostdag_win_v1`, over its own copies of the two constants, for F-W — which
-    /// requires this fence at or below it, so past F-W this function already answers. rcore/cap-int
-    /// keeps this one and drops that copy (see `palw_fork_authority_v2::palw_reorg_strict_economic_win_v1`).
+    /// **The one copy** (rcore/cap-s1). rcore/cap-weight (3aa4abec4) carried this body without (2) as
+    /// `palw_capacity_shallow_ghostdag_win_v1` for ADR-0160 F-W; cap-s1 dropped that copy, so past F-W —
+    /// which requires strict-win at or below it — this function answers, (2) included, and F-W is never
+    /// armable on a build whose rule lacks (2) (`PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`, read
+    /// below and by `Params::validate_palw_capacity_weight_cap_v1`).
     ///
     /// [`PALW_REORG_SHALLOW_TIE_DAA_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1
     /// [`PALW_REORG_SHALLOW_TIE_WALK_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_WALK_V1
     pub(crate) fn palw_reorg_shallow_ghostdag_win_v1(&self, candidate: BlockHash, prev_sink: BlockHash, incumbent_daa: u64) -> bool {
-        use kaspa_consensus_core::palw_fork_authority_v2::{PALW_REORG_SHALLOW_TIE_DAA_V1, PALW_REORG_SHALLOW_TIE_WALK_V1};
+        use kaspa_consensus_core::palw_fork_authority_v2::{
+            PALW_REORG_SHALLOW_TIE_DAA_V1, PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1, PALW_REORG_SHALLOW_TIE_WALK_V1,
+        };
         let heavier = match (self.ghostdag_store.get_blue_work(candidate), self.ghostdag_store.get_blue_work(prev_sink)) {
             (Ok(c), Ok(p)) => SortableBlock::new(candidate, c) > SortableBlock::new(prev_sink, p),
             _ => false,
@@ -14918,7 +15241,7 @@ impl VirtualStateProcessor {
         // DAA a tie ever moved the sink to. Siblings on one parent set share one DAA, so an honest slot
         // race moves the sink sideways, never back.
         let Ok(candidate_daa) = self.headers_store.get_daa_score(candidate) else { return false };
-        if candidate_daa < incumbent_daa {
+        if PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1 && candidate_daa < incumbent_daa {
             return false;
         }
         let floor = incumbent_daa.saturating_sub(PALW_REORG_SHALLOW_TIE_DAA_V1);
@@ -17956,6 +18279,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::SeatReadinessProved { .. } => "SeatReadinessProved",
         O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
+        O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
+        O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",
