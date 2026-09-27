@@ -54,6 +54,9 @@ fn base_at(height: u64) -> Params {
     }
     p.palw_capacity_weight_cap = Some(ForkActivation::new(height));
     p.sync_palw_capacity_weight_cap();
+    // rcore/cap-s1 (ADR-0160 v3 §10.1): F-E's credit is F-L's step, so F-L is armed at or below it.
+    let fl = PALW_T12_CAPACITY_FENCES_V1.iter().find(|f| f.name == "palw_capacity_aggregate_liability").expect("F-L is listed");
+    (fl.set)(&mut p, Some(ForkActivation::new(height)));
     p
 }
 

@@ -452,8 +452,9 @@ fn dos_g2_below_the_fence_a_conviction_after_final_leaves_the_final() {
 /// takes back exactly the C7-scaled weight the `Final` added — through the real fold, on testnet-12's own
 /// params with F-W's mirror armed from genesis.**
 ///
-/// The attempt carries a 2M-scale pwu (the fold's C7 ceiling is class-blind — it reads the claim's raw
-/// weight — so a floor-class record at that pwu is priced exactly as a 2M claim would be), so
+/// The attempt carries a 2M-scale pwu and the floor class is put on the C7 list's mirror (the fold's C7
+/// ceiling reads the list — rcore/cap-s1's stage-1 finding F2 — and the claim's raw weight, so a
+/// floor-class record at that pwu on the list is priced exactly as a 2M claim would be), so
 /// `finalize_claim` adds its contribution scaled by `ceiling / raw`. `reverse_convicted_final` used to
 /// subtract the UNSCALED amount and saturate `safe_weight` to zero, stripping every other `Final` — here the
 /// older history's retired weight, written first so the over-subtraction cannot hide at zero. testnet-12
@@ -467,6 +468,12 @@ fn dos_g2_capacity_a_conviction_after_a_capped_final_takes_back_exactly_its_scal
     let mut p = t12();
     p.palw_capacity_weight_cap = Some(ForkActivation::new(0));
     p.sync_palw_capacity_weight_cap();
+    if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode {
+        let (from, delay) = (bundle.state.rcore_plus_from_daa(), bundle.state.withdrawal_delay_daa());
+        let mut c7 = bundle.state.rcore_conservative_classes().to_vec();
+        c7.push(bundle.state.base_class_id());
+        bundle.state = bundle.state.clone().with_rcore_plus_mirrors(from, delay, c7);
+    }
     let f = drive_to_final_on(p, true, Some(3_357_310_000_000_000), RETIRED);
     let (p, sp) = (&f.p, &f.sp);
     assert_eq!(sp.capacity_weight_cap_from_daa(), Some(0), "the fold runs F-W");

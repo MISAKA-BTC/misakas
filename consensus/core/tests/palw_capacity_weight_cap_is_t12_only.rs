@@ -261,6 +261,9 @@ fn the_capacity_list_sets_the_weight_cap_and_its_mirror_together() {
         assert_eq!((armed.palw_capacity_weight_cap, mirror(&armed)), (Some(ForkActivation::new(at)), Some(at)));
         (entry.set)(&mut armed, None);
         assert_eq!((armed.palw_capacity_weight_cap, mirror(&armed)), (None, None), "set to None clears both");
+        for other in PALW_T12_CAPACITY_FENCES_V1 {
+            (other.set)(&mut armed, None);
+        }
         assert_eq!(format!("{armed:?}"), format!("{release:?}"), "the capacity list is the whole difference");
     }
     let mut early = release.clone();
