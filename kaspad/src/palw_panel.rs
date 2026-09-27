@@ -9343,6 +9343,26 @@ impl PalwPanelService {
                             // early. Built at the CEILING it excluded every `EndOfGeneration`
                             // claim from this lane by making its surplus interval indices
                             // unopenable by construction.
+                            // **RFC-0001 §A.3 step 7, before any interval is replayed**: a V4 answer
+                            // must end exactly where its stop rule ends it (or run its whole budget)
+                            // and commit no banned id. Pure in the job and the answer, which the chain
+                            // already bound; an answer that fails it is not one this seat vouches for.
+                            if let Some(output_ids) = output_ids.as_ref()
+                                && let Some(decode) = material.job.decode.as_ref().filter(|_| material.job.is_v4())
+                                && let Err(why) = kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(
+                                    decode,
+                                    material.job.decode_token_limit,
+                                    u32::MAX,
+                                    output_ids,
+                                )
+                            {
+                                warn!(
+                                    "[{PALW_PANEL}] claim {}: the V4 answer does not stop where its job's stop rule ends it ({why}) — \
+                                     filing nothing",
+                                    duty.claim_id
+                                );
+                                break 'verdict None;
+                            }
                             if let Some(output_ids) = output_ids
                                 && let Some(ctx) = resolved
                                     .fp_job_context_for_executed_v1(&material.job, output_ids.len().min(u32::MAX as usize) as u32)
@@ -9357,6 +9377,7 @@ impl PalwPanelService {
                                         &prompt_ids,
                                         &output_ids,
                                         &interval_openings,
+                                        Some(&material.job),
                                     )
                                     .await
                                 // SEAT-R: the sampled intervals find faults; they license nothing.
@@ -10238,6 +10259,7 @@ impl PalwPanelService {
                                     &prompt_ids,
                                     &output_ids,
                                     &interval_openings,
+                                    None,
                                 )
                                 .await
                             // SEAT-R: the sampled intervals find faults; they license nothing.
@@ -13138,6 +13160,10 @@ impl PalwPanelService {
         prompt_ids: &[u32],
         output_ids: &[u32],
         openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        // RFC-0001 §A (G5): a free-prompt claim's JOB — its id is the claim's, so its decode rule is
+        // the claim's — and `None` for an attempt. A V4 job's intervals are replayed under its
+        // pipeline over `output_ids`; a V3 job keeps the V3 verifier byte for byte.
+        fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>,
     ) -> Option<PalwReceiptVerdictV2> {
         use crate::palw_fp_seat::PalwFpChainCountsV1;
         use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
@@ -13378,9 +13404,16 @@ impl PalwPanelService {
                 let (candidate, prompt_owned) = (bytes.clone(), prompt_ids.to_vec());
                 let work_leaves = duty.work_leaves;
                 let interval = *index;
-                let Ok((returned, verdict)) =
-                    offload(backend, move |b| b.verify_fp_interval_opening(&candidate, roots, interval, &prompt_owned, work_leaves))
-                        .await
+                // RFC-0001 §A (G5): a V4 claim's rows are replayed under the claim's rule — its job's
+                // pipeline over the committed answer — and a V3 claim's under the V3 verifier.
+                let v4 = fp_job.filter(|job| job.is_v4()).cloned().map(|job| (job, output_ids.to_vec()));
+                let Ok((returned, verdict)) = offload(backend, move |b| match &v4 {
+                    Some((job, answer)) => {
+                        b.verify_fp_interval_opening_under_job_v1(&candidate, roots, interval, &prompt_owned, work_leaves, job, answer)
+                    }
+                    None => b.verify_fp_interval_opening(&candidate, roots, interval, &prompt_owned, work_leaves),
+                })
+                .await
                 else {
                     return None;
                 };
