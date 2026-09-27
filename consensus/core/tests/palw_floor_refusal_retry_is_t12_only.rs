@@ -5,12 +5,12 @@
 //! Past its height a claim whose stake draw its anchor block refuses for eligibility at every seed —
 //! SW-10's floor, fewer eligible operators than seats after the load filters, no eligible outsider — is
 //! re-anchored at its next slot instead of voiding (the user's decision of 2026-09-27; public testnet-12
-//! voided 172 such claims between DAA ~624 and 749). The list's height
-//! (`PALW_T12_POST_LAUNCH_FENCE_V2_DAA`) is `None` on this build, so the fence is `None` on every preset,
-//! testnet-12 included, and hashed Some-only in every writer: every shipped id — testnet-12's DAA-750
-//! release pins among them — is byte-identical to the build before the field existed. These tests arm
-//! it on a copy of the DAA-750 release (`palw_t12_release_v1_params()`, the ruleset the fleet runs) and
-//! pin what that does:
+//! voided 169 such claims between DAA ~624 and 749). The list's height
+//! (`PALW_T12_POST_LAUNCH_FENCE_V2_DAA`) is DAA 1,300 on this build (the second flag day), so testnet-12
+//! as shipped arms it there; every other preset — and the DAA-750 release, `palw_t12_release_v1_params()`,
+//! the ruleset the fleet runs until it upgrades — carries `None`, hashed Some-only in every writer, so
+//! those ids are byte-identical to the build before the field existed. These tests arm it on a copy of
+//! the DAA-750 release and pin what that does:
 //!
 //! * it moves `consensus_params_id` and `consensus_schedule_id`, never `consensus_identity_id`
 //!   (the identity normalises a future height — and `Some(never())` — to absence);
@@ -123,26 +123,33 @@ fn armed(at: ForkActivation) -> Params {
 /// **Dormant everywhere as shipped** — testnet-12 included — with an empty mirror, and the second list's
 /// height unset, so the shipped ruleset IS the DAA-750 release.
 #[test]
-fn the_fence_ships_dormant_on_every_preset() {
-    assert_eq!(PALW_T12_POST_LAUNCH_FENCE_V2_DAA, None, "the second flag day is dormant on this build");
+fn the_fence_is_dormant_below_the_second_flag_day_and_testnet12_arms_it_there() {
+    // The DAA-750 release (the baseline `shipped("testnet-12")` names) and every other preset: dormant.
     for name in ["testnet-12", "testnet-11", "devnet", "mainnet", "testnet-10", "simnet"] {
         let p = shipped(name);
-        assert_eq!(p.palw_floor_refusal_retry, None, "{name}: the fence ships dormant");
-        assert_eq!(mirror(&p), None, "{name}: and so does the bundle's mirror");
+        assert_eq!(p.palw_floor_refusal_retry, None, "{name}: the fence is dormant");
+        assert_eq!(mirror(&p), None, "{name}: and so is the bundle's mirror");
     }
+    // testnet-12 as this build ships it: the second flag day (the user's decision of 2026-09-27) arms the
+    // fence at the list's height, mirrored; the identity is the release's (a future height is absence).
+    let at = PALW_T12_POST_LAUNCH_FENCE_V2_DAA.expect("the second flag day's height is set on this build");
     let t12 = palw_t12_shipped_params();
-    assert_eq!(t12.palw_floor_refusal_retry, None, "testnet-12 as shipped");
-    assert_eq!(ids(&t12), ids(&palw_t12_release_v1_params()), "the shipped ruleset is the DAA-750 release");
+    assert_eq!(t12.palw_floor_refusal_retry, Some(ForkActivation::new(at)), "testnet-12 as shipped arms it");
+    assert_eq!(mirror(&t12), Some(at), "and mirrors it");
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
+    let release = palw_t12_release_v1_params();
+    assert_ne!(t12.consensus_params_id(), release.consensus_params_id(), "the flag day moves the ruleset");
+    assert_ne!(t12.consensus_schedule_id(), release.consensus_schedule_id(), "and the schedule");
+    assert_eq!(t12.consensus_identity_id(), release.consensus_identity_id(), "never the identity");
 }
 
 /// **testnet-12's release ids and every other preset's are byte-identical to the build before the
 /// field** — hashed Some-only in every writer; and testnet-12 as launched still hashes to the launch.
 #[test]
 fn every_shipped_id_is_the_release_ones() {
-    let t12 = ids(&palw_t12_shipped_params());
-    println!("testnet-12: {t12:?}");
-    assert_eq!((t12.0.as_str(), t12.1.as_str(), t12.2.as_str()), T12_RELEASE, "testnet-12 announces the DAA-750 release's ids");
+    let t12 = ids(&palw_t12_release_v1_params());
+    println!("testnet-12 (the DAA-750 release): {t12:?}");
+    assert_eq!((t12.0.as_str(), t12.1.as_str(), t12.2.as_str()), T12_RELEASE, "the DAA-750 release keeps its ids");
     let launch = ids(&palw_t12_launch_params_v1());
     assert_eq!((launch.0.as_str(), launch.1.as_str(), launch.2.as_str()), T12_LAUNCH, "testnet-12 as launched is the launch");
     let mut moved = Vec::new();
@@ -296,7 +303,13 @@ fn the_second_flag_day_list_is_the_one_place_its_fences_are_set() {
     let mut drill = palw_t12_drill_params_v1(&salt);
     palw_drill_post_launch_fences_at_v1(&mut drill, 40).expect("the first flag day moves to 40");
     let moves = palw_drill_post_launch_fences_v2_at_v1(&mut drill, 60).expect("the second arms at 60");
-    assert_eq!(moves.iter().map(|m| (m.name, m.was, m.at)).collect::<Vec<_>>(), vec![(NAME, None, 60)], "ARMED, from dormant");
+    // Every entry of the second list moves together, from the height this build ships it at.
+    let shipped_at = PALW_T12_POST_LAUNCH_FENCE_V2_DAA;
+    assert_eq!(
+        moves.iter().map(|m| (m.name, m.was, m.at)).collect::<Vec<_>>(),
+        PALW_T12_POST_LAUNCH_FENCES_V2.iter().map(|f| (f.name, shipped_at, 60)).collect::<Vec<_>>(),
+        "every entry moved to the drill's height, from the list's own"
+    );
     assert_eq!(drill.palw_floor_refusal_retry, Some(ForkActivation::new(60)));
     assert_eq!(mirror(&drill), Some(60), "the mirror follows");
     let why = palw_drill_post_launch_fences_v2_at_v1(&mut drill.clone(), 40).unwrap_err();

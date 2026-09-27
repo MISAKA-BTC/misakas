@@ -8,9 +8,9 @@
 //! crossing block, and dates every `Final` past it exactly `F + 1,000`. It ships dormant and joins
 //! testnet-12's NEXT flag day (the list that follows `PALW_T12_POST_LAUNCH_FENCES_V1`), so:
 //!
-//! * as this build ships, the field is `None` everywhere, testnet-12 included, the bundle's mirror is
-//!   `None`, and testnet-12's three ids are the DAA-750 release's to the byte (`dbbc9104…` /
-//!   `5de80e64…` / `7c652212…`, the fleet's `c3dbaee3c`) — every other preset's too;
+//! * the field is `None` on every preset but testnet-12 as this build ships it (the second flag day arms
+//!   it at `PALW_T12_POST_LAUNCH_FENCE_V2_DAA`), and on the DAA-750 release (`palw_t12_release_v1_params()`,
+//!   the fleet's `c3dbaee3c`) whose three ids stay `dbbc9104…` / `5de80e64…` / `7c652212…` to the byte;
 //! * armed at a future height over the DAA-750 release it moves `consensus_params_id` and
 //!   `consensus_schedule_id` but NOT `consensus_identity_id`, so an armed node and a fleet node stay
 //!   peers until the height (and a `Some(never())` collapses to absence);
@@ -23,7 +23,8 @@
 
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_POST_LAUNCH_FENCE_DAA, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_launch_params_v1, palw_t12_release_v1_params,
+    palw_t12_shipped_params, PALW_T12_POST_LAUNCH_FENCE_V2_DAA,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -54,7 +55,7 @@ fn mirror(p: &Params) -> Option<u64> {
 
 /// The fleet's ruleset (the DAA-750 release) with lane F2-lock armed at `height`, re-mirrored.
 fn armed_at(height: u64) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v1_params();
     p.palw_final_lock_life_retro = Some(ForkActivation::new(height));
     p.sync_palw_final_lock_life_retro();
     p
@@ -62,7 +63,7 @@ fn armed_at(height: u64) -> Params {
 
 fn presets() -> Vec<(&'static str, Params)> {
     vec![
-        ("testnet-12 as the fleet runs it (DAA-750 release)", palw_t12_shipped_params()),
+        ("testnet-12 as the fleet runs it (DAA-750 release)", palw_t12_release_v1_params()),
         ("testnet-12 as launched", palw_t12_launch_params_v1()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
@@ -86,7 +87,7 @@ fn the_retro_life_is_dormant_on_every_preset_and_testnet12_is_the_daa750_release
             "{name}: the fence is on the list fork_id_v1 and the schedule walk read"
         );
     }
-    let t12 = palw_t12_shipped_params();
+    let t12 = palw_t12_release_v1_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     assert_eq!(
         t12.palw_final_lock_life,
@@ -97,13 +98,21 @@ fn the_retro_life_is_dormant_on_every_preset_and_testnet12_is_the_daa750_release
     println!("testnet-12 on this build: {now:?}");
     assert_eq!((now.0.as_str(), now.1.as_str(), now.2.as_str()), T12_RELEASE, "testnet-12 is the DAA-750 release, to the id");
     // A `Some(never())` is absence, in all three ids.
-    let mut never = palw_t12_shipped_params();
+    let mut never = palw_t12_release_v1_params();
     never.palw_final_lock_life_retro = Some(ForkActivation::never());
     never.sync_palw_final_lock_life_retro();
     never.validate_palw_v2().expect("a never-armed fence is no fence");
     assert_eq!(never.palw_final_lock_life_retro_fence(), None);
     assert_eq!(mirror(&never), None, "never() mirrors nothing");
     assert_eq!(never.consensus_identity_id().to_string(), T12_RELEASE.1, "Some(never()) is absence in the identity");
+    // **The second flag day's release arms it** (the user's decision of 2026-09-27): testnet-12 as this
+    // build ships it carries the fence at `PALW_T12_POST_LAUNCH_FENCE_V2_DAA`, mirrored, and validates.
+    let at = PALW_T12_POST_LAUNCH_FENCE_V2_DAA.expect("the second flag day's height is set on this build");
+    let shipped = palw_t12_shipped_params();
+    assert_eq!(shipped.palw_final_lock_life_retro, Some(ForkActivation::new(at)), "testnet-12 as shipped arms it");
+    assert_eq!(mirror(&shipped), Some(at), "and mirrors it");
+    shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
+    assert_eq!(shipped.consensus_identity_id().to_string(), T12_RELEASE.1, "a future height is absence in the identity");
 }
 
 /// **Armed at a future height: the ruleset and the schedule name it, the identity does not** — so an
@@ -111,7 +120,7 @@ fn the_retro_life_is_dormant_on_every_preset_and_testnet12_is_the_daa750_release
 /// lane V02 there) it is a rule in force from block one, and the identity separates the two.
 #[test]
 fn arming_the_retro_life_moves_the_params_and_schedule_ids_but_not_the_identity() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v1_params();
     let (params_id, identity_id, schedule_id) = ids(&shipped);
     let mut seen = std::collections::BTreeSet::new();
     for height in HEIGHTS {
@@ -140,7 +149,7 @@ fn arming_the_retro_life_moves_the_params_and_schedule_ids_but_not_the_identity(
 /// in BOTH directions; from it the armed build refuses the fleet's.
 #[test]
 fn an_armed_build_below_the_retro_life_handshakes_with_the_fleet_build() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v1_params();
     let shipped_gate = fork_id_gate_fences_v1(&shipped);
     for height in HEIGHTS {
         let armed = armed_at(height);
@@ -173,14 +182,14 @@ fn the_retro_life_needs_the_v02_lock_life_at_or_below_it_and_a_synced_mirror() {
         assert!(p.validate_palw_v2().is_err(), "{needle}: validate_palw_v2 asks it");
     };
     // Unsynced: the field without the mirror, and the mirror without the field.
-    let mut unsynced = palw_t12_shipped_params();
+    let mut unsynced = palw_t12_release_v1_params();
     unsynced.palw_final_lock_life_retro = Some(ForkActivation::new(1_300));
     named(&unsynced, "disagrees with the V2 bundle's mirror");
     let mut stale = armed_at(1_300);
     stale.palw_final_lock_life_retro = None;
     named(&stale, "without palw_final_lock_life_retro armed");
     // `sync_palw_rcore_plus` re-mirrors it (every site that assembles or re-fences a bundle calls it).
-    let mut via_rcore = palw_t12_shipped_params();
+    let mut via_rcore = palw_t12_release_v1_params();
     via_rcore.palw_final_lock_life_retro = Some(ForkActivation::new(1_300));
     via_rcore.sync_palw_rcore_plus();
     assert_eq!(mirror(&via_rcore), Some(1_300));

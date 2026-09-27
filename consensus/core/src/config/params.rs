@@ -18054,12 +18054,6 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     },
 ];
 
-// TODO(integration, lane F2-lock — rcore/f2-lock-redate): `palw_final_lock_life_retro` is NOT a DAA-750
-// fence; it joins the NEXT flag day's list (`PALW_T12_POST_LAUNCH_FENCES_V2`, rcore/f2-floor-retry) as
-// `PalwPostLaunchFenceV1 { name: "palw_final_lock_life_retro", set: |params, at| {
-// params.palw_final_lock_life_retro = at; params.sync_palw_final_lock_life_retro(); } }` — its
-// prerequisite `palw_final_lock_life` (DAA 750) is below any height that list takes.
-
 /// **testnet-12's post-launch fence height: DAA 750** (the user's decision of 2026-09-26, with the live
 /// chain at DAA ~457): every entry of [`PALW_T12_POST_LAUNCH_FENCES_V1`] arms here. Not 500 (the height
 /// first planned), and never 1,000 — `palw_bond_maturity`'s height, where a second fence would be
@@ -18103,6 +18097,9 @@ fn palw_t12_arm_post_launch_fences_v1(params: &mut Params) {
 /// Entries (lane · fence):
 /// * lane F2 · `palw_floor_refusal_retry` — a stake draw refused for eligibility at every seed on
 ///   the anchor block's pre-object base re-anchors at the next slot instead of voiding.
+/// * lane F2-lock · `palw_final_lock_life_retro` — at the crossing block every Valid seat lock of a
+///   `Final` claim re-dates to `min(expiry, max(F + 1,000, H))`, and past it a `Final` dates its seat
+///   locks at `F + 1,000` (its prerequisite `palw_final_lock_life`, DAA 750, is below this height).
 pub const PALW_T12_POST_LAUNCH_FENCES_V2: &[PalwPostLaunchFenceV1] = &[
     // Lane F2 (the floor-refusal retry): the field and the V2 bundle's mirror the fold reads.
     PalwPostLaunchFenceV1 {
@@ -18112,13 +18109,22 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V2: &[PalwPostLaunchFenceV1] = &[
             params.sync_palw_floor_refusal_retry();
         },
     },
+    // Lane F2-lock (the retroactive seat-lock life): the field and the V2 bundle's mirror.
+    PalwPostLaunchFenceV1 {
+        name: "palw_final_lock_life_retro",
+        set: |params, at| {
+            params.palw_final_lock_life_retro = at;
+            params.sync_palw_final_lock_life_retro();
+        },
+    },
 ];
 
-/// **testnet-12's second post-launch flag day's height: `None` — the list is DORMANT on this build.**
-/// The integration that ships [`PALW_T12_POST_LAUNCH_FENCES_V2`] sets it (a height no other fence
-/// uses — never 750 or 1,000, where the fork id could not tell the flag days apart — with the
-/// release deployed well below it) and re-pins testnet-12's ids.
-pub const PALW_T12_POST_LAUNCH_FENCE_V2_DAA: Option<u64> = None;
+/// **testnet-12's second post-launch flag day: DAA 1,300** (the user's decision of 2026-09-27, with the
+/// live chain at DAA ~853: the seats' room runs out again at DAA ~1,350–1,575, so both fences of
+/// [`PALW_T12_POST_LAUNCH_FENCES_V2`] arm before that). A height no other fence uses — not 750 and
+/// not 1,000, where the fork id could not tell the flag days apart. A node on the DAA-750 release
+/// keeps peering below this height and is refused by an upgraded one from it.
+pub const PALW_T12_POST_LAUNCH_FENCE_V2_DAA: Option<u64> = Some(1_300);
 
 /// **The second flag day, armed** — every entry of [`PALW_T12_POST_LAUNCH_FENCES_V2`] at
 /// [`PALW_T12_POST_LAUNCH_FENCE_V2_DAA`] through its own `set`, on the ASSEMBLED ruleset, after the

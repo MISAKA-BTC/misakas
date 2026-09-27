@@ -59,19 +59,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was 3c5aaf66…, 8d17b2f7…)
+// re-pin 2026-09-27 @082a68ec102f: second post-launch flag day (2026-09-27): palw_floor_refusal_retry + palw_final_lock_life_retro armed at DAA 1,300 (was 3eff3b96…, a60b8189…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "3eff3b961ad3dd004ccb2a11aa5d7d9157258e04f70513cbbf7cfd22fa2f62dc",
+    "d7a1ec84057d410b16c8faa9b73097881c9acb59978b1a8cfa986bc8cece13d1",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "a60b81898000f7603c8c3cd8511611de2a22887d0fc68a5af50534444e65108c",
+    "f9eacabd950f57084f13fc69b73a4a8a3d2d7c565d63f05388e86f6e3eff67f9",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was 1274ac12…, ae8cc4b7…)
+// re-pin 2026-09-27 @082a68ec102f: second post-launch flag day (2026-09-27): palw_floor_refusal_retry + palw_final_lock_life_retro armed at DAA 1,300 (was dbbc9104…, 7c652212…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
+    "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
 );
 
 fn shipped(name: &str) -> Params {

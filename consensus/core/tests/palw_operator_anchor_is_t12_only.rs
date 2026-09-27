@@ -47,11 +47,11 @@ use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was 1274ac12…, ae8cc4b7…)
+// re-pin 2026-09-27 @082a68ec102f: second post-launch flag day (2026-09-27): palw_floor_refusal_retry + palw_final_lock_life_retro armed at DAA 1,300 (was dbbc9104…, 7c652212…)
 const T12_RELEASE: (&str, &str, &str) = (
-    "dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9",
+    "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397",
+    "d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a",
 );
 
 /// Heights an operator might pick after launch. Never 1,000 — `palw_bond_maturity`'s height on
