@@ -580,10 +580,48 @@ pub fn palw_drill_post_launch_fences_at_v1(
     params: &mut crate::config::params::Params,
     at: u64,
 ) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
-    use crate::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1};
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_V1)
+}
+
+/// **A drill crosses testnet-12's SECOND post-launch flag day at a low height** (lane F2, 2026-09-27)
+/// — [`palw_drill_post_launch_fences_at_v1`] for
+/// [`crate::config::params::PALW_T12_POST_LAUNCH_FENCES_V2`] (`--palw-drill-fence2-at`): ARMS the
+/// list's fences (dormant while the list's height is `None`) or MOVES them, each through its entry's
+/// own `set`, and nothing else. Every refusal of the DAA-750 move applies, named for this flag; a
+/// height another fence uses — a DAA-750 fence's included, wherever `--palw-drill-fence-at` put it —
+/// is refused, so a drill already past its first crossing crosses this one at a height of its own.
+pub fn palw_drill_post_launch_fences_v2_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_V2)
+}
+
+/// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
+struct PalwDrillFlagDayV1 {
+    list: &'static [crate::config::params::PalwPostLaunchFenceV1],
+    flag: &'static str,
+}
+
+/// The DAA-750 release's flag day (`--palw-drill-fence-at`).
+const PALW_DRILL_FLAG_DAY_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_POST_LAUNCH_FENCES_V1, flag: "--palw-drill-fence-at" };
+
+/// The second flag day (`--palw-drill-fence2-at`, lane F2).
+const PALW_DRILL_FLAG_DAY_V2: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_POST_LAUNCH_FENCES_V2, flag: "--palw-drill-fence2-at" };
+
+/// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
+fn palw_drill_move_fences_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+    day: &PalwDrillFlagDayV1,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    use crate::config::params::ForkActivation;
+    let (list, flag) = (day.list, day.flag);
     if params.net != palw_drill_network_v1() {
         return Err(format!(
-            "the post-launch fences are testnet-12's release, and this ruleset is {}: --palw-drill-fence-at runs on a salted \
+            "the post-launch fences are testnet-12's release, and this ruleset is {}: {flag} runs on a salted \
              testnet-12 drill only",
             params.net
         ));
@@ -595,15 +633,15 @@ pub fn palw_drill_post_launch_fences_at_v1(
     }
     if at == 0 || at == u64::MAX {
         return Err(format!(
-            "--palw-drill-fence-at={at}: a drill CROSSES the release's flag day, so the fences need a height with blocks below and \
+            "{flag}={at}: a drill CROSSES the release's flag day, so the fences need a height with blocks below and \
              above it — not genesis (0) and not never"
         ));
     }
-    let listed = |name: &str| PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|fence| fence.name == name);
+    let listed = |name: &str| list.iter().any(|fence| fence.name == name);
     let before = params.palw_fences_v1();
     if let Some((other, _)) = before.iter().find(|(name, fence)| !listed(name) && fence.is_some_and(|fence| fence.daa_score() == at)) {
         return Err(format!(
-            "--palw-drill-fence-at={at}: DAA {at} is already {other}'s height on this ruleset. The fork id names heights, not \
+            "{flag}={at}: DAA {at} is already {other}'s height on this ruleset. The fork id names heights, not \
              fences, so a drill node started without the flag would peer across it and fork silently — pick a height no other \
              fence uses"
         ));
@@ -611,8 +649,8 @@ pub fn palw_drill_post_launch_fences_at_v1(
     // Set on a copy, installed only once every check below has passed: a refusal leaves `params`
     // exactly as it came.
     let mut moved = params.clone();
-    let mut moves = Vec::with_capacity(PALW_T12_POST_LAUNCH_FENCES_V1.len());
-    for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+    let mut moves = Vec::with_capacity(list.len());
+    for fence in list {
         let Some((_, was)) = before.iter().find(|(name, _)| *name == fence.name) else {
             return Err(format!("{} is not a fence of this ruleset (Params::palw_fences_v1 does not name it)", fence.name));
         };
@@ -639,7 +677,7 @@ pub fn palw_drill_post_launch_fences_at_v1(
     }
     if moves.iter().all(|m| m.was == Some(at)) {
         return Err(format!(
-            "--palw-drill-fence-at={at}: every post-launch fence is already at DAA {at} on the shipping release — the flag would \
+            "{flag}={at}: every post-launch fence is already at DAA {at} on the shipping release — the flag would \
              move nothing; drop it"
         ));
     }

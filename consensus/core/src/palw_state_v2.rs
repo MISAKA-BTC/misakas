@@ -1431,6 +1431,15 @@ pub struct PalwStateParamsV2 {
     /// what the params and schedule ids name, Some-only, and the life value is a constant beside it.
     #[borsh(skip)]
     final_lock_life_from_daa: Option<u64>,
+    /// **Lane F2 (post-launch): `Params::palw_floor_refusal_retry`'s height**, mirrored here by
+    /// `Params::sync_palw_floor_refusal_retry` because the fold that retries a refused draw, and the
+    /// load-time re-derivation of a retried claim's bind deadline, hold only these params. `None` on
+    /// every shipped preset, testnet-12 included, until its flag day arms it; read through
+    /// [`Self::floor_refusal_retry_active_at`]. Skipped by borsh for `registry_resilience_from_daa`'s
+    /// reason: the fence is what `Params::consensus_params_id` hashes (Some-only), and
+    /// `validate_palw_v2` refuses a bundle whose copy disagrees with it.
+    #[borsh(skip)]
+    floor_refusal_retry_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1624,6 +1633,7 @@ impl PalwStateParamsV2 {
             readiness_v2_max_age_spans: None,
             registry_resilience_from_daa: None,
             final_lock_life_from_daa: None,
+            floor_refusal_retry_from_daa: None,
         })
     }
 
@@ -1771,6 +1781,28 @@ impl PalwStateParamsV2 {
     /// Lane F1: `Params::palw_registry_resilience`'s height, if the network arms it (the mirror).
     pub fn registry_resilience_from_daa(&self) -> Option<u64> {
         self.registry_resilience_from_daa
+    }
+
+    /// **Lane F2: the floor-refusal-retry mirror** — written by `Params::sync_palw_floor_refusal_retry`
+    /// and by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_floor_refusal_retry_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.floor_refusal_retry_from_daa = from_daa;
+        self
+    }
+
+    /// Lane F2: `Params::palw_floor_refusal_retry`'s height, if the network arms it (the mirror).
+    pub fn floor_refusal_retry_from_daa(&self) -> Option<u64> {
+        self.floor_refusal_retry_from_daa
+    }
+
+    /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
+    /// Past it a claim its anchor block did not bind, whose stake draw refused for eligibility at every
+    /// seed on the anchor block's pre-object base, is re-based on the anchor block and retried at its
+    /// next anchor slot until the bind window's backstop ([`palw_floor_retry_is_due_v1`]). Asked at the
+    /// ANCHOR BLOCK's DAA, and — for a retried claim — at its own `rebound_daa`
+    /// ([`palw_claim_awaits_ncp_retry_v1`]).
+    pub fn floor_refusal_retry_active_at(&self, daa_score: u64) -> bool {
+        self.floor_refusal_retry_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F1: are the registry-resilience rules in force at `daa_score`?** `false` on every shipped

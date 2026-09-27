@@ -680,6 +680,10 @@ mod tests {
             // registry by `validate_palw_v2`, which the probe does not run — it asks only the hashers
             // and the schedule.
             "palw_registry_resilience" => params.palw_registry_resilience = Some(at),
+            // Lane F2 (the floor-refusal retry, post-launch): refused unsynced and without R-core+ at or
+            // below it by `validate_palw_v2`, which the probe does not run — it asks only the hashers and
+            // the schedule.
+            "palw_floor_refusal_retry" => params.palw_floor_refusal_retry = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),

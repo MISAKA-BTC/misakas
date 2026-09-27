@@ -199,6 +199,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_registry_resilience = Some(at);
             params.sync_palw_registry_resilience();
         }
+        // Lane F2 (the floor-refusal retry, post-launch): the V2 bundle mirrors the height the fold reads,
+        // and `validate_palw_v2` refuses the two apart — set together; refused below R-core+.
+        "palw_floor_refusal_retry" => {
+            params.palw_floor_refusal_retry = Some(at);
+            params.sync_palw_floor_refusal_retry();
+        }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
         "palw_objective_offence" => params.palw_objective_offence = Some(at),
