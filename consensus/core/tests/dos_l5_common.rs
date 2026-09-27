@@ -79,6 +79,25 @@ pub fn t12_2m_open() -> Params {
     p
 }
 
+/// **rcore/cap-s1 — ADR-0160 F-W armed at `at`, with its prerequisites at or below it** (strict-win, F1's
+/// execution seed and lane A's operator anchor, each through its post-launch entry, moved down to `at`
+/// where the ruleset has them dormant or higher). Every other capacity fence requires F-W at or below it
+/// (ADR-0160 v3 §10.1), so a lane suite that arms its own fence over [`t12`] (the launch ruleset, which
+/// leaves the post-launch fences dormant) arms this first. Moves no fold rule but F-W's: strict-win and
+/// lane A are processor rules, and F1's seed is read by the draw.
+pub fn arm_capacity_weight_cap(p: &mut Params, at: u64) {
+    use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_POST_LAUNCH_FENCES_V1};
+    let fences = p.palw_fences_v1();
+    for name in ["palw_reorg_strict_economic_win", "palw_panel_seed_execution", "palw_operator_anchor"] {
+        let now = fences.iter().find(|(n, _)| *n == name).expect("a fence").1;
+        if now.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at) {
+            (PALW_T12_POST_LAUNCH_FENCES_V1.iter().find(|f| f.name == name).expect("listed").set)(p, Some(ForkActivation::new(at)));
+        }
+    }
+    p.palw_capacity_weight_cap = Some(ForkActivation::new(at));
+    p.sync_palw_capacity_weight_cap();
+}
+
 pub fn bundle(p: &Params) -> PalwConsensusParamsV2 {
     match &p.palw_consensus_mode {
         PalwConsensusMode::ConsensusV2(b) => b.clone(),

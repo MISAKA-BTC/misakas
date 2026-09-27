@@ -1188,6 +1188,9 @@ mod tests {
         assert!(moved.palw_anchor_at_ceiling_active_at(40) && !moved.palw_anchor_at_ceiling_active_at(39));
         assert!(moved.palw_slashing_evidence_utxo_genuine_at(40) && !moved.palw_slashing_evidence_utxo_genuine_at(39));
         assert!(moved.palw_pruning_proof_strict_economic_win.is_some_and(|f| f.is_active(40) && !f.is_active(39)));
+        // ADR-0160 lane escrow (F-E) is a capacity fence, not the release's: dormant under the release's drill.
+        assert!(!moved.palw_capacity_escrow_active_at(40) && !moved.palw_capacity_escrow_active_at(u64::MAX));
+        assert_eq!(bundle.state.capacity_escrow_from_daa(), None, "the escrow lane's mirror stays dormant");
         assert_eq!(
             moved.palw_operator_anchor.as_ref().map(|rule| rule.operators.len()),
             Some(8),
