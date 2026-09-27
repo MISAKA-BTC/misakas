@@ -806,7 +806,14 @@ async fn adr0160_vt1_a_batch_licenses_exactly_as_its_single_licences() {
     assert!(roots.iter().any(|r| r.leaves.len() == r.count as usize), "the assembler carries a root's full list where it is cheaper");
     for e in entries {
         for seat in &e.seats {
-            assert_eq!(seat.path.is_empty(), !roots[seat.root_index as usize].leaves.is_empty(), "a path exactly where the root rides without its list");
+            let root = &roots[seat.root_index as usize];
+            if root.count > 1 {
+                assert_eq!(seat.path.is_empty(), !root.leaves.is_empty(), "a path exactly where the root rides without its list");
+            } else {
+                // A one-leaf window's Merkle path is empty whether or not its list rides (the heartbeat
+                // clock decides which seats share a window, so a run may or may not draw one).
+                assert!(seat.path.is_empty(), "a one-leaf root needs no path");
+            }
         }
     }
     // The same licences in the path form (the seats' windows, a Merkle path a receipt) license alike.
