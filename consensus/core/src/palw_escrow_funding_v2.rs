@@ -47,21 +47,19 @@
 //!   the term is priced by [`palw_escrow_m_star_v2`] on the floor the params name
 //!   ([`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_conviction_floor_at_v1`]).
 //!
-//! **What `rcore/cap-int` rewires, and nothing else** (every line here reads the claim's
-//! `accepted_daa`, so the load re-derivation stays exact):
+//! **Rewired on `rcore/cap-s1`** (every line reads the claim's `accepted_daa`, so the load
+//! re-derivation stays exact):
 //!
 //! 1. [`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_credit_at_v1`] → liab's
-//!    `capacity_step_at`; the stand-in `capacity_escrow_credits` and its setter go.
+//!    `capacity_step_at` (F-L's step); the stand-in schedule is gone.
 //! 2. [`palw_escrow_credit_applies_v1`] → liab's `palw_seat_credit_applies_v1(step)`, so the escrow
 //!    credit and AS-2's lock cut read one threshold.
-//! 3. [`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_conviction_floor_at_v1`] → the floor
-//!    F-L gives the claim: `Tier(`[`palw_escrow_tier_at_min_bond_v1`]`)` while any producer route stays
-//!    tier-capped (D-5 not taken), [`PalwEscrowConvictionFloorV1::WholeBond`] only once every producer
-//!    route is in F-L's intent class.
+//! 3. [`crate::palw_state_v2::PalwStateParamsV2::capacity_escrow_conviction_floor_at_v1`] → the user's
+//!    decision 2 (2026-09-26 17:50): `Tier(palw_credit_conviction_floor_v1)`, the smallest collection
+//!    over the producer routes a fraud can take (with decision 1 — S1 stays tier-class — a first DA
+//!    default's 0, so `Tier(0)`; kind 12's tier is 1,300 MSK at 13k).
 //! 4. [`palw_escrow_bind_reserves_the_lock_v1`] → also true where F-L's step is in force at the claim's
-//!    `accepted_daa` (AS-1 divides the duty by `ρ` at every step while AS-2 keeps the lock below
-//!    `q_seat`), unless `validate_palw_v2` holds F-L and F-E to one height: a claim accepted between
-//!    the two would otherwise bind under `lock_2` exactly as finding 1 did.
+//!    `accepted_daa`; `validate_palw_v2` holds F-W and F-L at or below F-E.
 
 use crate::palw_state_v2::{
     PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwClaimStateV2, PalwStateParamsV2, PalwStateV2Error, PalwVoidReasonV2,
@@ -87,29 +85,10 @@ pub struct PalwEscrowCreditV1 {
     pub q_credit_permille: u16,
 }
 
-/// **A step of the credit schedule, keyed on the claim's `accepted_daa`** — the shape of F-L's
-/// `PalwCapacityStepV1 { from_daa, rho, q_credit_permille }`, field for field, so `rcore/cap-int`
-/// replaces it with that type without a conversion. On `rcore/cap-escrow` alone it is the stand-in
-/// mirror's element ([`PalwStateParamsV2::with_capacity_escrow_credits_v1`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PalwEscrowCreditStepV1 {
-    pub from_daa: u64,
-    pub rho: u32,
-    pub q_credit_permille: u16,
-}
-
-impl PalwEscrowCreditStepV1 {
-    pub fn credit(&self) -> PalwEscrowCreditV1 {
-        PalwEscrowCreditV1 { rho: self.rho, q_credit_permille: self.q_credit_permille }
-    }
-}
-
-/// **The step in force at `daa`**: the last of `steps` (sorted by `from_daa`) whose `from_daa ≤ daa`;
-/// `None` before the first step. The ramp only ever APPENDS a step (one flag day per `ρ`, ADR-0160
-/// D-9), and a claim is priced by the step of its own `accepted_daa` for its whole life.
-pub fn palw_escrow_credit_in_force_v1(steps: &[PalwEscrowCreditStepV1], daa: u64) -> Option<PalwEscrowCreditV1> {
-    steps.iter().rev().find(|step| step.from_daa <= daa).map(PalwEscrowCreditStepV1::credit)
-}
+// rcore/cap-s1: the stand-in credit schedule (`PalwEscrowCreditStepV1`, `palw_escrow_credit_in_force_v1`,
+// `PalwStateParamsV2::with_capacity_escrow_credits_v1`) is gone — the credit is F-L's step in force at the
+// claim's `accepted_daa` (`PalwStateParamsV2::capacity_escrow_credit_at_v1` over lane liab's
+// `capacity_step_at`), one schedule for the escrow slot and the seat side.
 
 /// **`m*(q)`: the smallest pre-licence commitment that makes one fraudulent claim unprofitable**
 /// (ADR-0160 §4.5), in integer permille arithmetic, rounded UP:
@@ -178,14 +157,21 @@ pub fn palw_monetary_prelicense_risk_v1(e_sompi: u64, credit: Option<PalwEscrowC
 /// caps the duty by; below this rate the lock is not lowered with it, so the duty would fall under
 /// `lock_2` and a seat could bind panels it cannot back (finding 1). `rcore/cap-int` replaces the
 /// comparison in [`palw_escrow_credit_applies_v1`] with liab's `palw_seat_credit_applies_v1(step)`, so
-/// the two sides can never read two thresholds. A constant: changing it is a new fence.
-pub const PALW_ESCROW_Q_SEAT_PERMILLE_V1: u16 = 250;
+/// the two sides can never read two thresholds. A constant: changing it is a new fence. rcore/cap-s1:
+/// an alias of liab's constant, and the gate below is liab's predicate.
+pub const PALW_ESCROW_Q_SEAT_PERMILLE_V1: u16 = crate::palw_aggregate_liability_v1::PALW_CAPACITY_Q_SEAT_PERMILLE_V1;
 
 /// **Does a ramp step's credit lower the escrow slot at all?** Only at `q_credit ≥ q_seat`
 /// ([`PALW_ESCROW_Q_SEAT_PERMILLE_V1`]): the escrow and the seat lock are divided by the same `ρ` or
 /// neither is. Below it the slot stays `E`, which is option A's slot and option A's seat backing.
+/// rcore/cap-s1: lane liab's `palw_seat_credit_applies_v1` on the same step, so the escrow credit and
+/// AS-2's lock cut read one threshold.
 pub fn palw_escrow_credit_applies_v1(credit: &PalwEscrowCreditV1) -> bool {
-    credit.q_credit_permille >= PALW_ESCROW_Q_SEAT_PERMILLE_V1
+    crate::palw_aggregate_liability_v1::palw_seat_credit_applies_v1(&crate::palw_aggregate_liability_v1::PalwCapacityStepV1 {
+        from_daa: 0,
+        rho: credit.rho,
+        q_credit_permille: credit.q_credit_permille,
+    })
 }
 
 /// **What one conviction of a claim can be counted on to collect, beyond the claim's own forfeit**
@@ -371,7 +357,10 @@ pub fn palw_escrow_term_v2(params: &PalwStateParamsV2, accepted_daa: u64, escrow
 /// * **C7 and the free-prompt lane keep ADR-0152 L-4b's accepted residual** (their lock exceeds the
 ///   duty by design — 2M's `lock_2` would pin 2.65× its forfeit — and neither is ever credited).
 pub fn palw_escrow_bind_reserves_the_lock_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> bool {
-    params.capacity_escrow_active_at(claim.accepted_daa)
+    // rcore/cap-s1: also where F-L's step is in force at the claim's `accepted_daa` (AS-1 divides the
+    // duty's λ-term by ρ at every step, AS-2 the lock only from q_seat), so a claim accepted between F-L
+    // and F-E is bound as one past both (`validate_palw_v2` holds F-L at or below F-E).
+    (params.capacity_escrow_active_at(claim.accepted_daa) || params.capacity_liability_active_at(claim.accepted_daa))
         && matches!(claim.source, PalwClaimSourceV2::Attempt)
         && claim.escrowed_reward > 0
         && palw_claim_class_attributable_v1(params, &claim.class_id)
@@ -400,10 +389,13 @@ pub fn palw_void_reason_keeps_obligation_v1(reason: PalwVoidReasonV2) -> bool {
         | PalwVoidReasonV2::ReceiptTimeout
         | PalwVoidReasonV2::UnavailableQuorum
         | PalwVoidReasonV2::NotReplayBacked => true,
+        // rcore/cap-s1: lane liab's AG-2 void — the bond's forfeiture took the commitment with the collateral
+        // (charged, not held).
         PalwVoidReasonV2::CourtFraud
         | PalwVoidReasonV2::ProducerWithholding
         | PalwVoidReasonV2::CourtDefault
-        | PalwVoidReasonV2::CourtHeldVerdict => false,
+        | PalwVoidReasonV2::CourtHeldVerdict
+        | PalwVoidReasonV2::AggregateForfeit => false,
     }
 }
 
@@ -741,18 +733,27 @@ mod tests {
         assert_eq!(palw_escrow_tier_at_min_bond_v1(0, E), 0);
     }
 
-    /// The stand-in schedule is found by `from_daa`, last step wins, nothing before the first.
+    /// rcore/cap-s1: the credit is F-L's step at the claim's `accepted_daa` (the stand-in is gone), and the
+    /// escrow gate is liab's `q_seat` predicate on it.
     #[test]
-    fn the_step_in_force_is_the_last_one_at_or_below_the_daa() {
-        let steps = [
-            PalwEscrowCreditStepV1 { from_daa: 100, rho: 10, q_credit_permille: 150 },
-            PalwEscrowCreditStepV1 { from_daa: 500, rho: 25, q_credit_permille: 150 },
-        ];
-        assert_eq!(palw_escrow_credit_in_force_v1(&steps, 99), None);
-        assert_eq!(palw_escrow_credit_in_force_v1(&steps, 100).map(|c| c.rho), Some(10));
-        assert_eq!(palw_escrow_credit_in_force_v1(&steps, 499).map(|c| c.rho), Some(10));
-        assert_eq!(palw_escrow_credit_in_force_v1(&steps, 500).map(|c| c.rho), Some(25));
-        assert_eq!(palw_escrow_credit_in_force_v1(&[], 500), None);
+    fn the_credit_is_f_l_s_step_and_its_gate_is_liab_s() {
+        use crate::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepV1};
+        let value = PalwCapacityLiabilityV1 {
+            activation: crate::config::params::ForkActivation::new(100),
+            steps: vec![
+                PalwCapacityStepV1 { from_daa: 100, rho: 10, q_credit_permille: 150 },
+                PalwCapacityStepV1 { from_daa: 500, rho: 25, q_credit_permille: 300 },
+            ],
+        };
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0)
+            .expect("fixture params")
+            .with_capacity_liability(Some(value));
+        assert_eq!(params.capacity_escrow_credit_at_v1(99), None);
+        assert_eq!(params.capacity_escrow_credit_at_v1(100), Some(PalwEscrowCreditV1 { rho: 10, q_credit_permille: 150 }));
+        assert_eq!(params.capacity_escrow_credit_at_v1(499).map(|c| c.rho), Some(10));
+        assert_eq!(params.capacity_escrow_credit_at_v1(500), Some(PalwEscrowCreditV1 { rho: 25, q_credit_permille: 300 }));
+        assert!(!palw_escrow_credit_applies_v1(&PalwEscrowCreditV1 { rho: 10, q_credit_permille: 249 }));
+        assert!(palw_escrow_credit_applies_v1(&PalwEscrowCreditV1 { rho: 10, q_credit_permille: 250 }));
     }
 
     /// Every reason is placed: the unconvicted ones hold, the convictions charge.
@@ -762,7 +763,7 @@ mod tests {
         for r in [BindTimeout, NoCapablePanel, ReceiptTimeout, UnavailableQuorum, NotReplayBacked] {
             assert!(palw_void_reason_keeps_obligation_v1(r), "{r:?}");
         }
-        for r in [CourtFraud, ProducerWithholding, CourtDefault, CourtHeldVerdict] {
+        for r in [CourtFraud, ProducerWithholding, CourtDefault, CourtHeldVerdict, AggregateForfeit] {
             assert!(!palw_void_reason_keeps_obligation_v1(r), "{r:?}");
         }
     }

@@ -447,6 +447,8 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::CourtDefault => "court_default",
                 // ADR-0152 §4-ter (F3, decision (B)): a held dissection's verdict, past `palw_offence_attribution`.
                 R::CourtHeldVerdict => "court_held_verdict",
+                // ADR-0160 lane liab (AG-2): voided by its bond's aggregate forfeiture.
+                R::AggregateForfeit => "aggregate_forfeit",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }

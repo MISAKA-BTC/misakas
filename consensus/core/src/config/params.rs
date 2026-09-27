@@ -2965,6 +2965,30 @@ pub struct Params {
     /// carries the field fingerprints and peers exactly as one that does not until it is armed.
     pub palw_operator_anchor: Option<crate::palw_operator_anchor_v1::PalwOperatorAnchorV1>,
     // ---- end lane A ----------------------------------------------------------------------------
+    // ---- ADR-0160 lane liab (post-launch, after the DAA-500 release): aggregate bond liability --
+    /// **ADR-0160 F-L — aggregate bond liability (testnet-12 only; the capacity redesign's lane liab,
+    /// user design 2026-09-26: "per-claim担保からaggregate bond liabilityへ").** Past `activation`:
+    ///
+    /// * a conviction's funnel (`close_conviction_v1`), resolved at the CONVICTION's DAA, forfeits the
+    ///   convicted bond WHOLE on an intent-class offence (DA default, `CourtFraud`, contradictions 9,
+    ///   10, 11, 13): its posted collateral, every vesting row it is payee of that has not moved, and
+    ///   every live claim (voided `AggregateForfeit`); every conviction freezes the bond (rooted
+    ///   `bond_freezes`): no attempt, no draw, no backed `Valid`, no exit, no maturity — final after an
+    ///   intent-class conviction, lifted `window_court` after the last conviction otherwise;
+    /// * the seat side, resolved at the CLAIM's `accepted_daa`, is re-priced by the step's ramp factor
+    ///   ρ: the bind duty `⌈λ/ρ⌉`/`⌈lock_2/ρ⌉` (AS-1), the `Valid` lock `max(1, ⌈lock/ρ⌉)` once the
+    ///   step's credited attribution reaches 250‰ (AS-2).
+    ///
+    /// The value carries its own schedule (`steps`: `{ from_daa, rho, q_credit_permille }`, the first
+    /// at the fence, strictly increasing — the D1 rule: a later flag day appends a step), and is
+    /// hashed WHOLE, Some-only; every step's height is on the schedule the fork id reads; it collapses
+    /// from `Some(never())` with the other fences. Refused by `validate_palw_v2` without
+    /// `palw_rcore_plus` and `palw_offence_attribution` at or below it, off ConsensusV2, with a value
+    /// [`crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::refusal_v1`] refuses, or with the
+    /// bundle's mirror (`sync_palw_capacity_liability`) unsynced. Dormant (`None`) on every shipped
+    /// preset, testnet-12 included — not part of the DAA-500 release.
+    pub palw_capacity_aggregate_liability: Option<crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1>,
+    // ---- end ADR-0160 lane liab ------------------------------------------------------------------
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -4460,7 +4484,9 @@ impl Params {
             // Lane V02's lock life (post-launch): over R-core+, mirrored.
             self.validate_palw_final_lock_life_v1()?;
             // Lane A (the operator anchor, post-launch): over R-core+, likewise.
-            return self.validate_palw_operator_anchor_v1();
+            self.validate_palw_operator_anchor_v1()?;
+            // ADR-0160 lane liab (F-L): over R-core+ and the attribution fence, likewise.
+            return self.validate_palw_capacity_liability_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -5307,7 +5333,9 @@ impl Params {
         // Lane F1 (the panel seed, post-launch): over R-core+, which names its own refusals first.
         self.validate_palw_panel_seed_execution_v1()?;
         // Lane A (the operator anchor, post-launch): over R-core+, likewise.
-        self.validate_palw_operator_anchor_v1()
+        self.validate_palw_operator_anchor_v1()?;
+        // ADR-0160 lane liab (F-L): over R-core+ and the attribution fence, likewise.
+        self.validate_palw_capacity_liability_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -5606,6 +5634,16 @@ impl Params {
         // collapse — a build that schedules it and one that does not share an identity until the height.
         if self.palw_final_lock_life == Some(ForkActivation::never()) {
             self.palw_final_lock_life = None;
+        }
+        // ADR-0160 lane liab (F-L): Some-only hashed (the value whole), so the same collapse — the
+        // steps go with the height. A step whose own height the identity visitor normalised to
+        // `never()` (a FUTURE flag day's appended step on a fence armed at genesis) leaves the value
+        // too, so two builds that differ only in a step nobody has reached are one network.
+        if self.palw_capacity_aggregate_liability.as_ref().is_some_and(|value| value.activation == ForkActivation::never()) {
+            self.palw_capacity_aggregate_liability = None;
+        }
+        if let Some(value) = self.palw_capacity_aggregate_liability.as_mut() {
+            value.steps.retain(|step| step.from_daa != u64::MAX);
         }
         // ADR-0152 §4-quater's class-verify-deadline fence: Some-only hashed, so the same collapse.
         if self.palw_class_verify_deadline == Some(ForkActivation::never()) {
@@ -6030,9 +6068,9 @@ impl Params {
     /// * on a network that retires claims, `claim_retirement_daa > window_receipt` — a claim's E-4 hold
     ///   (`voided + window_receipt`) must end before its retirement is due.
     ///
-    /// **Wired on `rcore/cap-s1` (ADR-0160 v3 §10.1):** F-W (`palw_capacity_weight_cap`) at or below it
-    /// (and F-L, `palw_capacity_aggregate_liability`, with lane liab's merge). Without a credit `m_c = E`,
-    /// and F-E alone changes only E-4.
+    /// **Wired on `rcore/cap-s1` (ADR-0160 v3 §10.1):** F-W (`palw_capacity_weight_cap`) and F-L
+    /// (`palw_capacity_aggregate_liability`) at or below it. Without a credit `m_c = E`, and F-E then
+    /// changes only E-4.
     pub fn validate_palw_capacity_escrow_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         use crate::palw_mode_v2::PalwModeV2Error::Invalid;
         let mirror = match &self.palw_consensus_mode {
@@ -6073,6 +6111,15 @@ impl Params {
             return Err(Invalid(
                 "palw_capacity_escrow_at_licence is armed without palw_capacity_weight_cap (F-W) at or below it: the escrow \
                  slot is priced beside the capped weight reservation (ADR-0160 v3 §5.1, §10.1)",
+            ));
+        }
+        // rcore/cap-s1 (ADR-0160 v3 §10.1): F-L at or below F-E — the credit the slot reads is F-L's step
+        // (`capacity_escrow_credit_at_v1`), and a claim accepted between the two must be bound as one past
+        // both (`palw_escrow_bind_reserves_the_lock_v1`).
+        if !at_or_below(self.palw_capacity_aggregate_liability.as_ref().map(|value| value.activation)) {
+            return Err(Invalid(
+                "palw_capacity_escrow_at_licence is armed without palw_capacity_aggregate_liability (F-L) at or below it: the \
+                 escrow slot's credit is F-L's step (ADR-0160 v3 §10.1)",
             ));
         }
         if mirror.flatten() != Some(fence.daa_score()) {
@@ -7952,6 +7999,89 @@ impl Params {
     }
     // ---- end lane A ------------------------------------------------------------------------
 
+    // ---- ADR-0160 lane liab (F-L): aggregate bond liability — the mirror and what the fence refuses ----
+
+    /// **F-L's step in force at `daa`** (ADR-0160 §4.5): `None` where the fence is absent, `never()`,
+    /// not yet active at `daa`, or the network is not ConsensusV2 — the one accessor the escrow and
+    /// shadow lanes read beside the fold's mirror (`PalwStateParamsV2::capacity_step_at`).
+    pub fn palw_capacity_step_at_v1(&self, daa: u64) -> Option<crate::palw_aggregate_liability_v1::PalwCapacityStepV1> {
+        if !matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+            return None;
+        }
+        self.palw_capacity_aggregate_liability
+            .as_ref()
+            .and_then(|value| crate::palw_aggregate_liability_v1::palw_capacity_step_at_v1(value, daa))
+    }
+
+    /// Whether F-L is in force at `daa`. `false` on every shipped preset.
+    pub fn palw_capacity_aggregate_liability_active_at(&self, daa: u64) -> bool {
+        self.palw_capacity_step_at_v1(daa).is_some()
+    }
+
+    /// **F-L's mirror** (ADR-0160 lane liab): the `#[borsh(skip)]` copy on `PalwStateParamsV2` the fold
+    /// reads — the conviction funnel, the seat pricing, and every view that holds no transition extras.
+    /// Written here and nowhere else; `None` where the fence is not armed (or `never()`). Call it
+    /// wherever the fence is set on an assembled ruleset; `validate_palw_v2` refuses a ruleset whose
+    /// copy disagrees, so a missed call is a startup refusal rather than a fold on the old rules.
+    pub fn sync_palw_capacity_liability(&mut self) {
+        let value = self.palw_capacity_aggregate_liability.clone().filter(|value| value.activation != ForkActivation::never());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_capacity_liability(value);
+        }
+    }
+
+    /// **What F-L refuses** (ADR-0160 §6.1, the contract's validation): arming it off ConsensusV2 (there
+    /// is no V2 fold to forfeit in); without `palw_rcore_plus` (the conviction funnel, the one ledger
+    /// and the seat prices it re-prices are R-core+'s) and `palw_offence_attribution` (the intent class
+    /// is read off the attribution route's contradictions) armed at or below it; a value
+    /// [`crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::refusal_v1`] refuses (no step, a
+    /// first step off the fence's height, heights not strictly increasing, ρ = 0, q > 1000‰); and a
+    /// bundle mirror that disagrees with the field. Below the fence it checks only that the mirror is
+    /// `None`. Any height is admissible otherwise; on a live testnet-12 the capacity release arms it at
+    /// the one common height `H_cap` (§6.4).
+    pub fn validate_palw_capacity_liability_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.capacity_liability().cloned()),
+            _ => None,
+        };
+        let Some(value) = self.palw_capacity_aggregate_liability.as_ref().filter(|value| value.activation != ForkActivation::never())
+        else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries an aggregate-liability value without palw_capacity_aggregate_liability armed: mirror \
+                     the fence with Params::sync_palw_capacity_liability after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_capacity_aggregate_liability is armed on a network that is not ConsensusV2: there is no V2 fold whose \
+                 convictions it could aggregate",
+            ));
+        };
+        let at_or_below = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= value.activation.daa_score());
+        if !(at_or_below(self.palw_rcore_plus) && at_or_below(self.palw_offence_attribution)) {
+            return Err(Invalid(
+                "palw_capacity_aggregate_liability is armed without palw_rcore_plus and palw_offence_attribution both armed at or \
+                 below it: the conviction funnel, the one ledger and the seat prices it re-prices are R-core+'s, and its intent \
+                 class is read off the attribution route's contradictions",
+            ));
+        }
+        if let Some(why) = value.refusal_v1() {
+            return Err(Invalid(why));
+        }
+        if mirror.as_ref() != Some(value) {
+            return Err(Invalid(
+                "palw_capacity_aggregate_liability disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_capacity_liability after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end ADR-0160 lane liab --------------------------------------------------------------
+
     /// ADR-0152 §4-quater's class-verify-deadline fence, resolved off a ConsensusV2 ruleset.
     pub fn palw_class_verify_deadline_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_class_verify_deadline) {
@@ -8249,6 +8379,8 @@ impl Params {
             palw_panel_seed_execution,
             // Lane A (the operator anchor, post-launch).
             palw_operator_anchor,
+            // ADR-0160 lane liab (F-L).
+            palw_capacity_aggregate_liability,
             palw_rcore_conservative_classes: _,
             // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
             palw_final_lock_full_collateral,
@@ -8396,6 +8528,40 @@ impl Params {
             // Lane V02 (post-launch): a top-level fence an un-upgraded peer does not implement, so it
             // is on the schedule and gates the fork id like every other.
             ("palw_final_lock_life", *palw_final_lock_life),
+            // ADR-0160 lane liab (F-L): the height only — on the schedule and the fork-id gate like every
+            // top-level fence an un-upgraded peer does not implement (its later steps' heights are on the
+            // schedule through `for_each_fence`).
+            ("palw_capacity_aggregate_liability", palw_capacity_aggregate_liability.as_ref().map(|value| value.activation)),
+            // Every later step's height as its own named slot (at most eight steps), so the fork-id gate
+            // names an appended step as it names a widening of the execution lane.
+            (
+                "palw_capacity_aggregate_liability_step_2",
+                crate::palw_aggregate_liability_v1::palw_capacity_step_fence_v1(palw_capacity_aggregate_liability.as_ref(), 2),
+            ),
+            (
+                "palw_capacity_aggregate_liability_step_3",
+                crate::palw_aggregate_liability_v1::palw_capacity_step_fence_v1(palw_capacity_aggregate_liability.as_ref(), 3),
+            ),
+            (
+                "palw_capacity_aggregate_liability_step_4",
+                crate::palw_aggregate_liability_v1::palw_capacity_step_fence_v1(palw_capacity_aggregate_liability.as_ref(), 4),
+            ),
+            (
+                "palw_capacity_aggregate_liability_step_5",
+                crate::palw_aggregate_liability_v1::palw_capacity_step_fence_v1(palw_capacity_aggregate_liability.as_ref(), 5),
+            ),
+            (
+                "palw_capacity_aggregate_liability_step_6",
+                crate::palw_aggregate_liability_v1::palw_capacity_step_fence_v1(palw_capacity_aggregate_liability.as_ref(), 6),
+            ),
+            (
+                "palw_capacity_aggregate_liability_step_7",
+                crate::palw_aggregate_liability_v1::palw_capacity_step_fence_v1(palw_capacity_aggregate_liability.as_ref(), 7),
+            ),
+            (
+                "palw_capacity_aggregate_liability_step_8",
+                crate::palw_aggregate_liability_v1::palw_capacity_step_fence_v1(palw_capacity_aggregate_liability.as_ref(), 8),
+            ),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
             // Lane bind-deadlock (post-launch): a top-level fence an un-upgraded peer does not implement,
             // so it is on the schedule and gates the fork id like every other.
@@ -8823,6 +8989,17 @@ impl Params {
             h.write(b"palw_final_lock_life");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0160 lane liab (F-L), NAMED for the same reason and Some-only, with every step's height:
+        // it changes what a conviction takes and what a seat reserves, so an operator reading the
+        // schedule must see it and each flag day that appends a step.
+        if let Some(value) = &self.palw_capacity_aggregate_liability {
+            h.write(b"palw_capacity_aggregate_liability");
+            h.write(value.activation.daa_score().to_le_bytes());
+            h.write((value.steps.len() as u64).to_le_bytes());
+            for step in value.steps.iter() {
+                h.write(step.from_daa.to_le_bytes());
+            }
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence, NAMED for the same reason and Some-only: it
         // changes which claims a block may carry and when a licensed claim may Final.
         if let Some(activation) = self.palw_class_verify_deadline {
@@ -9106,6 +9283,8 @@ impl Params {
             palw_panel_seed_execution,
             // Lane A (the operator anchor, post-launch).
             palw_operator_anchor,
+            // ADR-0160 lane liab (F-L).
+            palw_capacity_aggregate_liability,
             palw_rcore_conservative_classes: _,
             // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
             palw_final_lock_full_collateral,
@@ -9501,6 +9680,18 @@ impl Params {
         // `normalize_values_a_scheduled_fence_drags_with_it`.
         if let Some(activation) = palw_final_lock_life.as_mut() {
             fork(activation, visit);
+        }
+        // ADR-0160 lane liab (F-L): the height and EVERY step's height, SOME-ONLY, for the floor's
+        // reason — a step appended by a later flag day is a rule change at its own height, so the fork
+        // id must see it (the memory rule "a fence at a scheduled height is invisible to the fork id").
+        // The whole value collapses from `Some(never())` in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(value) = palw_capacity_aggregate_liability.as_mut() {
+            fork(&mut value.activation, visit);
+            for step in value.steps.iter_mut() {
+                let mut at = ForkActivation::new(step.from_daa);
+                fork(&mut at, visit);
+                step.from_daa = at.daa_score();
+            }
         }
         // ADR-0152 §4-quater's class-verify-deadline fence: SOME-ONLY, as the floor above and for its
         // reason.
@@ -10147,6 +10338,8 @@ impl Params {
             palw_panel_seed_execution,
             // Lane A (the operator anchor, post-launch).
             palw_operator_anchor,
+            // ADR-0160 lane liab (F-L).
+            palw_capacity_aggregate_liability,
             palw_rcore_conservative_classes,
             // Lane V02 (a resolved claim's lock off the work ceiling, post-launch).
             palw_final_lock_full_collateral,
@@ -10524,6 +10717,22 @@ impl Params {
         if let Some(activation) = palw_final_lock_full_collateral {
             h.write(b"palw_final_lock_full_collateral");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0160 lane liab (F-L): the value WHOLE — the height, the rule's domain beside it (the rule's
+        // version rides its fence) and every step in order (`validate_palw_v2` holds them strictly
+        // increasing, so one schedule has one spelling) — so two builds arming different schedules at
+        // one height announce different rulesets. Some-only (and collapsed from `Some(never())` for the
+        // identity), so a build that leaves it dormant fingerprints byte-identically to one without it.
+        if let Some(value) = palw_capacity_aggregate_liability {
+            h.write(b"palw_capacity_aggregate_liability");
+            h.write(value.activation.daa_score().to_le_bytes());
+            h.write(crate::palw_aggregate_liability_v1::PALW_CAPACITY_LIABILITY_DOMAIN_V1);
+            h.write((value.steps.len() as u64).to_le_bytes());
+            for step in value.steps.iter() {
+                h.write(step.from_daa.to_le_bytes());
+                h.write(step.rho.to_le_bytes());
+                h.write(step.q_credit_permille.to_le_bytes());
+            }
         }
         if !palw_rcore_conservative_classes.is_empty() {
             h.write(b"palw_rcore_conservative_classes");
@@ -11409,6 +11618,8 @@ impl Params {
             palw_panel_seed_execution: self.palw_panel_seed_execution,
             // Lane A (the operator anchor, post-launch): CARRIED beside its one prerequisite.
             palw_operator_anchor: self.palw_operator_anchor.clone(),
+            // ADR-0160 lane liab (F-L): CARRIED beside its two prerequisites, which are carried too.
+            palw_capacity_aggregate_liability: self.palw_capacity_aggregate_liability.clone(),
             palw_rcore_conservative_classes: self.palw_rcore_conservative_classes,
             // Lane V02 (post-launch): CARRIED with R-core+, whose ledger it splits, and with the bundle
             // whose mirror it matches.
@@ -12470,6 +12681,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_rcore_plus: None,
     palw_panel_seed_execution: None,
     palw_operator_anchor: None,
+    palw_capacity_aggregate_liability: None,
     palw_rcore_conservative_classes: &[],
     palw_final_lock_full_collateral: None,
     palw_final_lock_life: None,
@@ -12711,6 +12923,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_rcore_plus: None,
     palw_panel_seed_execution: None,
     palw_operator_anchor: None,
+    palw_capacity_aggregate_liability: None,
     palw_rcore_conservative_classes: &[],
     palw_final_lock_full_collateral: None,
     palw_final_lock_life: None,
@@ -12934,6 +13147,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_rcore_plus: None,
     palw_panel_seed_execution: None,
     palw_operator_anchor: None,
+    palw_capacity_aggregate_liability: None,
     palw_rcore_conservative_classes: &[],
     palw_final_lock_full_collateral: None,
     palw_final_lock_life: None,
@@ -18146,6 +18360,17 @@ pub const PALW_T12_CAPACITY_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
             params.sync_palw_capacity_escrow();
         },
     },
+    // ADR-0160 F-L (lane cap-liab): aggregate bond liability — testnet-12's schedule from the height
+    // (`PALW_T12_CAPACITY_STEPS_V1`: stage 1's ρ = 1, nothing credited) and the V2 bundle's mirror the
+    // fold reads. Requires `palw_rcore_plus` and `palw_offence_attribution` at or below it (testnet-12
+    // arms both at genesis).
+    PalwPostLaunchFenceV1 {
+        name: "palw_capacity_aggregate_liability",
+        set: |params, at| {
+            params.palw_capacity_aggregate_liability = at.map(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1);
+            params.sync_palw_capacity_liability();
+        },
+    },
 ];
 
 /// **Arm (or, with `None`, disarm) every capacity fence at one height** — each entry of
@@ -19409,6 +19634,9 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_registry_resilience();
     // Lane cap-weight (ADR-0160 F-W), for the same reason and in the same place.
     params.sync_palw_capacity_weight_cap();
+    // ADR-0160 lane liab (F-L), for the registry-resilience mirror's reason and in the same place: a
+    // base that set the fence before it had a bundle has its value re-mirrored onto the one just built.
+    params.sync_palw_capacity_liability();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -19566,6 +19794,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_rcore_plus: None,
     palw_panel_seed_execution: None,
     palw_operator_anchor: None,
+    palw_capacity_aggregate_liability: None,
     palw_rcore_conservative_classes: &[],
     palw_final_lock_full_collateral: None,
     palw_final_lock_life: None,

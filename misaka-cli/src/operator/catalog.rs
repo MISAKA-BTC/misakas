@@ -8,8 +8,9 @@
 use crate::exit;
 use crate::operator::finding::Finding;
 use kaspa_consensus_core::palw_producer_v2::{
-    PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2, PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
-    PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2, PALW_NOT_READY_KEY_MISMATCH_V2,
+    PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2, PALW_NOT_READY_BOND_FROZEN_V1, PALW_NOT_READY_BOND_UNKNOWN_V2,
+    PALW_NOT_READY_CLASS_NOT_ADMITTING_V2, PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2,
+    PALW_NOT_READY_KEY_MISMATCH_V2,
 };
 
 const JOIN: &str = "docs/testnet11-join-mining.md";
@@ -202,6 +203,18 @@ pub(crate) fn not_ready(reason: &str, n: &HoldNumbers, bond: Option<&str>) -> Fi
                   (misaka key gen --out <new seed>, then misaka mining setup --key-file <new seed>) and produce with that one",
             )
             .fix("misaka bond retire releases what this bond still holds");
+    }
+    if reason.starts_with(PALW_NOT_READY_BOND_FROZEN_V1) {
+        return Finding::error("E-BOND-FROZEN", exit::NOT_READY, "Not mining: the bond is frozen by a conviction")
+            .reason(
+                "past ADR-0160's aggregate liability the first conviction of a bond freezes it: the chain refuses its attempts \
+                 and free-prompt commitments (ProducerFrozen), does not draw it onto panels and holds its exit",
+            )
+            .current(format!("bond {bond} frozen"))
+            .required("an unfrozen bond")
+            .fix("a tier freeze lifts window_court (3,000 DAA) after the last conviction; wait it out")
+            .fix("an intent-class conviction forfeited the bond whole and never lifts: register a new bond under a NEW key")
+            .docs(DOCS_BOND);
     }
     if reason.starts_with(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2) {
         let mut f =

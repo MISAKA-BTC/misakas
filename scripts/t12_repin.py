@@ -256,6 +256,7 @@ HBSC = "consensus/core/tests/palw_hb_transparency_same_chain_fence.rs"
 CAPESC = "consensus/core/tests/palw_capacity_escrow_at_licence_is_t12_only.rs"
 SEATMAT = "consensus/core/tests/palw_bond_maturity_early_is_t12_only.rs"
 OPANCHOR = "consensus/core/tests/palw_operator_anchor_is_t12_only.rs"
+LIAB = "consensus/core/tests/palw_capacity_aggregate_liability_is_t12_only.rs"
 REORG = "consensus/core/tests/reorg_strict_win_fence.rs"
 CAPWEIGHT = "consensus/core/tests/palw_capacity_weight_cap_is_t12_only.rs"
 MNV = "consensus/core/tests/t12_mainnet_values_moved_only_these.rs"
@@ -470,6 +471,10 @@ def registry() -> list[Pin]:
     # shipped, which the dormant fence must not move.
     pins += _triple("capweight.T12_RELEASE", "t12", CAPWEIGHT, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{CAPWEIGHT}::the_weight_cap_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
+    # ADR-0160 lane liab (F-L, the capacity redesign's aggregate liability, post-launch, dormant): testnet-12 as
+    # shipped, which the dormant fence must not move.
+    pins += _triple("liab.T12_RELEASE", "t12", LIAB, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{LIAB}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # The mainnet values (2026-09-25): testnet-12 with the three values set back (and the later fences taken away).
     pins += _triple("mnv.PARENT_WITHOUT_THE_ATTRIBUTION", "t12", MNV, "const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
                     "twin.mnv_parent", (f"{MNV}::the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",))
