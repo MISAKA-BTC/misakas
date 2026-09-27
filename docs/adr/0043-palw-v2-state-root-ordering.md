@@ -202,3 +202,9 @@ H( version_le(2)                                                            # = 
 
 `the_state_root_preimage_is_exactly_the_adr_0043_list` restates this listing and holds it equal to
 `PalwChainStateV2::state_root`; `the_version_17_state_root_golden_vectors` pins both roots.
+
+## Links
+
+- Spec: [02 State, objects and carriage](../spec/palw/02-state-objects-and-carriage.md) §2.5 (PALW-ST-17)
+- Design: [design/palw/state-and-carriage.md](../design/palw/state-and-carriage.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

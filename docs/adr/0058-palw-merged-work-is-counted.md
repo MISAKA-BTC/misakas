@@ -112,3 +112,9 @@ Qwen3.6 blocks measured above are reds. A blues-only rule would have measured no
 * **Count merged blocks into the counters without applying claims.** Difficulty would ease and
   share would grow for work nobody verified and nobody can slash — production without
   accountability, worse than the defect.
+
+## Links
+
+- Spec: [02 State, objects and carriage](../spec/palw/02-state-objects-and-carriage.md) §2.4 (PALW-ST-15) · [13 Fork choice and heartbeat](../spec/palw/13-fork-choice-and-heartbeat.md) §13.1
+- Design: [design/palw/state-and-carriage.md](../design/palw/state-and-carriage.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

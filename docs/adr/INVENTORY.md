@@ -313,3 +313,4 @@ now Context / Decision / Consequences / Links.
 - **ADR-0152** imported and split: the archive is in `design/palw/archive/0152/`, the rules are in spec
   02/07–10/13/16.
 - **Chapter 16** written. ADR-0154 and ADR-0155 were written. Slimmed: 0036, 0035.
+- **Chapter 02** written. Slimmed: 0042, 0046. Kept with Links: 0043, 0058. Divergences 4 and 5 recorded.
