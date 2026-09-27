@@ -329,3 +329,37 @@ mod repeat_tests {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// §A.3 step 2 — frequency / presence (additive, over the SAME window)
+// ---------------------------------------------------------------------------------------------
+
+/// **Step 2: frequency and presence** — `b_j = a_j − c_j(t)·f_q − [c_j(t) > 0]·s_q` (§A.3).
+///
+/// Over the same window `W` as the repeat penalty (the RFC's decision: OpenAI counts every
+/// generated token, and a court that had to count the whole answer would pay for it; bounding the
+/// count to `W` bounds the disclosure). `c ≤ 256` and `|f_q|, |s_q| ≤ 2^25` keep every term far
+/// inside `i64`.
+pub fn decode_frequency_presence_v4(repeated: i64, count: u32, frequency_penalty_q: i32, presence_penalty_q: i32) -> i64 {
+    let presence = if count > 0 { presence_penalty_q as i64 } else { 0 };
+    repeated - (count as i64) * (frequency_penalty_q as i64) - presence
+}
+
+#[cfg(test)]
+mod frequency_presence_tests {
+    use super::*;
+
+    #[test]
+    fn frequency_scales_with_the_count_and_presence_fires_once() {
+        let q = 1i64 << 24;
+        assert_eq!(decode_frequency_presence_v4(5 * q, 0, 1 << 24, 1 << 24), 5 * q, "absent: untouched");
+        assert_eq!(decode_frequency_presence_v4(5 * q, 1, 1 << 24, 1 << 24), 3 * q);
+        assert_eq!(decode_frequency_presence_v4(5 * q, 3, 1 << 24, 1 << 24), q);
+        assert_eq!(decode_frequency_presence_v4(5 * q, 3, 0, 1 << 24), 4 * q, "presence is a flag, not a count");
+        // Negative penalties reward repetition, as OpenAI's do.
+        assert_eq!(decode_frequency_presence_v4(0, 2, -(1 << 24), -(1 << 23)), 2 * q + q / 2);
+        // The extremes: W = 256 at ±2.0 is ±2^33 — nothing near i64's edge.
+        let low = decode_frequency_presence_v4(i32::MIN as i64 * 4, 256, 2 << 24, 2 << 24);
+        assert_eq!(low, i32::MIN as i64 * 4 - 256 * (2i64 << 24) - (2i64 << 24));
+    }
+}
+
