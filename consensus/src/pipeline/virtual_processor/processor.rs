@@ -11155,13 +11155,24 @@ impl VirtualStateProcessor {
     /// header the store does not hold (none that the pipeline folds) answers `None`: its claims wait
     /// out the bind window's backstop.
     fn palw_sw8_anchor_for(&self, point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2) -> Option<(u64, u64)> {
+        self.palw_sw8_chain_anchor_v1(point).map(|(anchor_delay, _, anchor)| (anchor_delay, anchor.reach))
+    }
+
+    /// [`Self::palw_sw8_anchor_for`]'s one reading of the block — `(anchor_delay, the block's DAA score,
+    /// how it stands as an anchor)` — which `palw_transition_extras_for` shares with lane F2's draw
+    /// points ([`Self::palw_sw8_draw_points_of_anchor_v1`]), so the block's header and mergeset are read
+    /// once per extras.
+    fn palw_sw8_chain_anchor_v1(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Option<(u64, u64, PalwChainAnchorV1)> {
         if !self.palw_rcore_plus_at(point.daa_score) {
             return None;
         }
         let panel = self.palw_panel_params_v2.as_ref()?;
         let header = self.headers_store.get_header(point.block).ok()?;
-        let reach = self.palw_anchor_reach_of_v1(point.block, &header)?;
-        Some((panel.anchor_delay(), reach))
+        let anchor = self.palw_chain_block_as_anchor_v1(point.block, &header)??;
+        Some((panel.anchor_delay(), header.daa_score, anchor))
     }
 
     /// **Lane F2 (`Params::palw_floor_refusal_retry`): `PalwTransitionExtrasV1::sw8_draw` for the block
@@ -11183,14 +11194,35 @@ impl VirtualStateProcessor {
         &self,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
     ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwSw8DrawInputsV1> {
-        let state_params = self.palw_state_params_v2.as_ref()?;
-        if !state_params.floor_refusal_retry_active_at(point.daa_score) || !self.palw_rcore_plus_at(point.daa_score) {
+        if !self.palw_floor_refusal_retry_at(point.daa_score) {
             return None;
         }
+        self.palw_sw8_draw_points_v1(point)
+    }
+
+    /// Lane F2: is the floor-refusal retry in force at `daa_score` (the bundle's mirror, the one the fold
+    /// reads)? `false` on every shipped preset.
+    fn palw_floor_refusal_retry_at(&self, daa_score: u64) -> bool {
+        self.palw_state_params_v2.as_ref().is_some_and(|params| params.floor_refusal_retry_active_at(daa_score))
+    }
+
+    /// [`Self::palw_sw8_draw_inputs_for`] without its fence: the draw points of any block that anchors
+    /// past `palw_rcore_plus` — what lane A's displacement test holds to the anchor walk's own fact.
+    pub(super) fn palw_sw8_draw_points_v1(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwSw8DrawInputsV1> {
+        let (_, block_daa, anchor) = self.palw_sw8_chain_anchor_v1(point)?;
+        self.palw_sw8_draw_points_of_anchor_v1(block_daa, &anchor)
+    }
+
+    /// [`Self::palw_sw8_draw_points_v1`] of a block already read: its DAA score and its anchor answer.
+    fn palw_sw8_draw_points_of_anchor_v1(
+        &self,
+        block_daa: u64,
+        anchor: &PalwChainAnchorV1,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwSw8DrawInputsV1> {
         let panel = self.palw_panel_params_v2.as_ref()?;
-        let header = self.headers_store.get_header(point.block).ok()?;
-        let anchor = self.palw_chain_block_as_anchor_v1(point.block, &header)??;
-        let block_daa = header.daa_score;
         let reach = anchor.reach;
         // The slot ranges and their draw DAAs, as the anchor walk would name them.
         let ranges: Vec<(u64, u64)> = if self.palw_operator_anchor_at(block_daa) {
@@ -11200,7 +11232,7 @@ impl VirtualStateProcessor {
             thresholds.dedup();
             let mut ranges = Vec::with_capacity(thresholds.len());
             for max_slot in thresholds {
-                let (source_daa, _) = self.palw_operator_seed_source_v1(&anchor, max_slot)??;
+                let (source_daa, _) = self.palw_operator_seed_source_v1(anchor, max_slot)??;
                 ranges.push((max_slot, source_daa.min(block_daa)));
             }
             ranges
@@ -11615,8 +11647,16 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
     ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
         let daa_score = point.daa_score;
-        // SW-8's step 4c, read once: `(anchor_delay, reach)` where the block anchors a panel.
-        let sw8 = self.palw_sw8_anchor_for(point);
+        // SW-8's step 4c, read once: `(anchor_delay, reach)` where the block anchors a panel — and, past
+        // lane F2's fence, the same reading's draw points (the header and mergeset are read once).
+        let sw8_anchor = self.palw_sw8_chain_anchor_v1(point);
+        let sw8 = sw8_anchor.as_ref().map(|(anchor_delay, _, anchor)| (*anchor_delay, anchor.reach));
+        let sw8_draw = match &sw8_anchor {
+            Some((_, block_daa, anchor)) if self.palw_floor_refusal_retry_at(daa_score) => {
+                self.palw_sw8_draw_points_of_anchor_v1(*block_daa, anchor)
+            }
+            _ => None,
+        };
         kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
@@ -11798,7 +11838,7 @@ impl VirtualStateProcessor {
             // **Lane F2: the block's draw points**, where it anchors and the floor-refusal retry is in force
             // at it. Written explicitly for the reason every line above gives: a default here would void,
             // in its anchor block, a claim no seed could have seated.
-            sw8_draw: sw8.and_then(|_| self.palw_sw8_draw_inputs_for(point)),
+            sw8_draw,
         }
     }
 
@@ -13225,7 +13265,11 @@ impl VirtualStateProcessor {
     /// [`Self::palw_v2_derive_panel_binding_v1`]), no later state exists on which a failed or
     /// dropped draw could be retried: a claim this block does not bind voids `BindTimeout` at the end
     /// of this very block (the fold's step 4c, `PalwTransitionExtrasV1::sw8_anchor_delay`; S0: no
-    /// forfeit; a free-prompt claim starts its abandon hold there).
+    /// forfeit; a free-prompt claim starts its abandon hold there) — unless the fold re-anchors it at
+    /// its next slot: lane F1's V03(1) where its class could not seat a panel, and lane F2's
+    /// floor-refusal retry where its stake draw refused for eligibility at every seed on this block's
+    /// pre-object base (`palw_sw8_thin_draws_v1`, asked below on the same base for the log line). The
+    /// same draw on a LATER state is never retried: the retry is a new anchor, a new seed, a new draw.
     ///
     /// **Most blocks bind nothing, and cost nothing here** (M4 review finding 6). Past
     /// `palw_rcore_plus` a panel anchors only on an attempt block

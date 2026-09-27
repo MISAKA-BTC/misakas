@@ -17804,6 +17804,9 @@ impl std::fmt::Debug for PalwPostLaunchFenceV1 {
 /// **Armed on testnet-12 at [`PALW_T12_POST_LAUNCH_FENCE_DAA`]** by
 /// [`palw_t12_arm_post_launch_fences_v1`] (so on every drill ruleset too, which
 /// `--palw-drill-fence-at` then MOVES), and dormant (`None`) on every other preset.
+///
+/// **Shipped; it does not grow again.** A fix for the NEXT flag day goes in
+/// [`PALW_T12_POST_LAUNCH_FENCES_V2`] (lane F2, 2026-09-27).
 pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     // Lane F1, registry resilience (V03/V05): the field and the V2 bundle's mirror the fold reads.
     PalwPostLaunchFenceV1 {
