@@ -16409,6 +16409,10 @@ mod t12_stake_draw_integration;
 // testnet-12 and crossed by a real chain — the processor's mirror, a floor claim unchanged across the
 // height, and the no-capable-panel re-anchor at a real anchor block.
 mod t12_registry_resilience;
+// Lane F2 (post-launch, 2026-09-27): the floor-refusal retry armed on a copy of testnet-12 and crossed by a
+// real chain — the draw points the processor carries, and a floor-refused claim re-anchored at a real
+// anchor block and bound at the next one.
+mod t12_floor_refusal_retry;
 // Post-launch lane bind-deadlock (`palw_anchor_at_ceiling`): a producer at its exposure ceiling mines
 // no attempt, so nothing anchors its claims — measured on the released rule and closed past the fence.
 mod t12_bind_deadlock;

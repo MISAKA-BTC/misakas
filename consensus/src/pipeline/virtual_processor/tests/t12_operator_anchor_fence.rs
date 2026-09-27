@@ -606,6 +606,22 @@ async fn displacing_an_operator_attempt_binds_the_claim_in_the_next_block_on_the
         assert_eq!(fact.anchor_block, b.header.hash, "round {round}: the binding block is the anchor (SW-8)");
         assert_eq!(fact.anchor_daa, o.header.daa_score, "round {round}: the draw's clock is the displaced attempt's DAA");
         assert_eq!(fact.panel_seed(&claim), seed_o, "round {round}: the fact keys O's seed");
+        // Lane F2: the draw point the processor carries for this block (`sw8_draw`, where the
+        // floor-refusal retry is armed) names the same draw DAA for the claim's slot — so the retry
+        // verdict is asked on the draw's own clock, the displaced attempt's.
+        let draw = run
+            .chain
+            .vp()
+            .palw_sw8_draw_points_v1(&PalwBlockContextV2 {
+                block: b.header.hash,
+                daa_score: b.header.daa_score,
+                blue_score: b.header.blue_score,
+                subsidy: 0,
+            })
+            .expect("an anchor block has draw points");
+        let (_, point) = draw.point_of(slot).expect("the block reaches the claim's slot");
+        assert_eq!(point.draw_daa, fact.anchor_daa, "round {round}: lane F2's draw point reads the draw at the anchor fact's DAA");
+        assert_eq!(point.policy, run.chain.vp().palw_panel_draw_policy_at(fact.anchor_daa), "round {round}: and its policy");
         eprintln!(
             "[t12-lane-a] round {round}: claim by card {claimant}; O (card {operator}, DAA {}) displaced by card {displacer}; bound by {merger:?} at DAA {} on O's seed {seed_o}, seats {:?}",
             o.header.daa_score,
