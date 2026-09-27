@@ -11179,7 +11179,7 @@ impl VirtualStateProcessor {
     /// and the shard fence. So the fold's retry verdict (step 2e′) asks the draw's question on the
     /// draw's inputs. Chain data only (headers, GHOSTDAG, reachability), so every node — reorg, IBD, a
     /// pruning-proof sync — carries one answer.
-    fn palw_sw8_draw_inputs_for(
+    pub(super) fn palw_sw8_draw_inputs_for(
         &self,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
     ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwSw8DrawInputsV1> {
