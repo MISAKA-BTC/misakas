@@ -59,6 +59,13 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // rcore/hf-pptake2 (post-launch): a bare height — a pruning-proof / IBD staging commit needs a
         // strict economic win past it, read at the incumbent's DAA.
         "palw_pruning_proof_strict_economic_win" => params.palw_pruning_proof_strict_economic_win = Some(at),
+        // lane rcore/cap-weight (ADR-0160 F-W, post-launch): the V2 bundle mirrors the height the fold
+        // reads, and `validate_palw_v2` refuses the two apart — set together. Needs R-core+, the
+        // strict-economic-win reorg rule and lane A's operator anchor at or below it.
+        "palw_capacity_weight_cap" => {
+            params.palw_capacity_weight_cap = Some(at);
+            params.sync_palw_capacity_weight_cap();
+        }
         "palw_heartbeat" => {
             companion(&mut params.palw_heartbeat, name, "work_log2 and the mergeset bound", at, |f, at| f.activation = at)?
         }

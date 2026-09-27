@@ -650,6 +650,62 @@ pub fn palw_drill_post_launch_fences_at_v1(
     Ok(moves)
 }
 
+/// **A drill crosses ADR-0160's capacity flag day** (rcore/cap-s1) — the sibling of
+/// [`palw_drill_post_launch_fences_at_v1`] for [`crate::config::params::PALW_T12_CAPACITY_FENCES_V1`],
+/// which no shipped ruleset arms (the memory rule "a flag day needs a drill that crosses it"). ARMS
+/// every capacity fence at `at` on a salted testnet-12 drill ruleset, each through its entry's own
+/// `set`, and moves nothing else — checked on the ruleset it returns. Refused (`Err`, `params`
+/// untouched) on: any network but testnet-12 and public testnet-12's own genesis; `at` 0 or `never()`;
+/// `at` equal to another (non-capacity) fence's height, which the fork id could not tell apart; a
+/// result `validate_palw_v2` refuses — among them a height below the post-launch fences the capacity
+/// fences require (strict-win and lane A for F-W: combine with `--palw-drill-fence-at` at or below
+/// `at`). Not wired to a kaspad flag yet: stage 3's drill does that with the release that arms them.
+pub fn palw_drill_capacity_fences_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    use crate::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1};
+    if params.net != palw_drill_network_v1() {
+        return Err(format!("the capacity fences are testnet-12's, and this ruleset is {}: a salted testnet-12 drill only", params.net));
+    }
+    if params.genesis.hash == PALW_T12_GENESIS.hash {
+        return Err("this ruleset runs PUBLIC testnet-12's genesis: the capacity fences are crossed on a salted drill chain only".to_owned());
+    }
+    if at == 0 || at == u64::MAX {
+        return Err(format!("capacity fences at {at}: a drill CROSSES the flag day, so not genesis (0) and not never"));
+    }
+    let listed = |name: &str| PALW_T12_CAPACITY_FENCES_V1.iter().any(|fence| fence.name == name);
+    let before = params.palw_fences_v1();
+    if let Some((other, _)) = before.iter().find(|(name, fence)| !listed(name) && fence.is_some_and(|fence| fence.daa_score() == at)) {
+        return Err(format!(
+            "capacity fences at {at}: DAA {at} is already {other}'s height on this ruleset — the fork id names heights, not fences"
+        ));
+    }
+    let mut moved = params.clone();
+    let mut moves = Vec::with_capacity(PALW_T12_CAPACITY_FENCES_V1.len());
+    for fence in PALW_T12_CAPACITY_FENCES_V1 {
+        let Some((_, was)) = before.iter().find(|(name, _)| *name == fence.name) else {
+            return Err(format!("{} is not a fence of this ruleset (Params::palw_fences_v1 does not name it)", fence.name));
+        };
+        (fence.set)(&mut moved, Some(ForkActivation::new(at)));
+        moves.push(PalwDrillFenceMoveV1 { name: fence.name, was: was.filter(|was| *was != ForkActivation::never()).map(|was| was.daa_score()), at });
+    }
+    for ((name, was), (_, now)) in before.iter().zip(moved.palw_fences_v1().iter()) {
+        if listed(name) {
+            // A valued fence may name later steps' slots after its own height (F-L's schedule): the
+            // entry's own name is at `at`.
+            if PALW_T12_CAPACITY_FENCES_V1.iter().any(|fence| fence.name == *name) && *now != Some(ForkActivation::new(at)) {
+                return Err(format!("{name}'s entry did not set it to DAA {at} (it reads {now:?})"));
+            }
+        } else if was != now && !name.starts_with("palw_capacity_") {
+            return Err(format!("arming the capacity fences moved {name} too ({was:?} -> {now:?}): the drill moves them and nothing else"));
+        }
+    }
+    moved.validate_palw_v2().map_err(|e| format!("the drill ruleset with the capacity fences at DAA {at} does not validate: {e}"))?;
+    *params = moved;
+    Ok(moves)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1031,6 +1087,10 @@ mod tests {
             "under a live transparency rule"
         );
         assert_eq!(moved.palw_reorg_strict_economic_win, Some(ForkActivation::new(40)), "the strict-economic-win reorg rule");
+        // ADR-0160's capacity fences are NOT the post-launch release's (rcore/cap-s1): the release's drill
+        // leaves them dormant; `palw_drill_capacity_fences_at_v1` crosses them.
+        assert_eq!(moved.palw_capacity_weight_cap, None, "the weight cap stays dormant under the release's drill");
+        assert_eq!(bundle.state.capacity_weight_cap_from_daa(), None, "and so does its fold mirror");
         assert_eq!(
             (moved.palw_bond_maturity_window_at(39), moved.palw_bond_maturity_window_at(40)),
             (None, Some(1_000)),

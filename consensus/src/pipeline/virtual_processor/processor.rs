@@ -14546,6 +14546,13 @@ impl VirtualStateProcessor {
                     // above the fork point spans at most `PALW_REORG_SHALLOW_TIE_DAA_V1` DAA ticks, the
                     // incumbent kept deeper. The depth walk runs only on a tie, keyed as the fence is
                     // (the incumbent's DAA), and answers `false` on any read it cannot make.
+                    //
+                    // **rcore/cap-s1 — ADR-0160 F-W has no tie rule of its own.** The capacity lane's copy
+                    // (`palw_deep_reorg_capacity_v1` behind `palw_capacity_weight_cap`) was this rule
+                    // without the no-DAA-lowering check; cap-s1 keeps this one only. F-W requires
+                    // strict-win at or below it (and a build whose rule keeps the check,
+                    // `PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`), so wherever F-W is active this
+                    // branch runs, with the check.
                     let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
                     let decision = if self.palw_reorg_strict_economic_win.is_some_and(|f| f.is_active(incumbent_daa)) {
                         kaspa_consensus_core::palw_fork_authority_v2::palw_reorg_strict_economic_win_v1(
@@ -14789,15 +14796,18 @@ impl VirtualStateProcessor {
     /// is `false` (the tie keeps the incumbent, the strict answer). Reads only this node's committed
     /// stores, so every node holding the same DAG answers the same.
     ///
-    /// **Shared with the capacity lane.** rcore/cap-weight (3aa4abec4) carries this exact body as
-    /// `palw_capacity_shallow_ghostdag_win_v1`, over its own copies of the two constants, for F-W — which
-    /// requires this fence at or below it, so past F-W this function already answers. rcore/cap-int
-    /// keeps this one and drops that copy (see `palw_fork_authority_v2::palw_reorg_strict_economic_win_v1`).
+    /// **The one copy** (rcore/cap-s1). rcore/cap-weight (3aa4abec4) carried this body without (2) as
+    /// `palw_capacity_shallow_ghostdag_win_v1` for ADR-0160 F-W; cap-s1 dropped that copy, so past F-W —
+    /// which requires strict-win at or below it — this function answers, (2) included, and F-W is never
+    /// armable on a build whose rule lacks (2) (`PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`, read
+    /// below and by `Params::validate_palw_capacity_weight_cap_v1`).
     ///
     /// [`PALW_REORG_SHALLOW_TIE_DAA_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1
     /// [`PALW_REORG_SHALLOW_TIE_WALK_V1`]: kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_WALK_V1
     pub(crate) fn palw_reorg_shallow_ghostdag_win_v1(&self, candidate: BlockHash, prev_sink: BlockHash, incumbent_daa: u64) -> bool {
-        use kaspa_consensus_core::palw_fork_authority_v2::{PALW_REORG_SHALLOW_TIE_DAA_V1, PALW_REORG_SHALLOW_TIE_WALK_V1};
+        use kaspa_consensus_core::palw_fork_authority_v2::{
+            PALW_REORG_SHALLOW_TIE_DAA_V1, PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1, PALW_REORG_SHALLOW_TIE_WALK_V1,
+        };
         let heavier = match (self.ghostdag_store.get_blue_work(candidate), self.ghostdag_store.get_blue_work(prev_sink)) {
             (Ok(c), Ok(p)) => SortableBlock::new(candidate, c) > SortableBlock::new(prev_sink, p),
             _ => false,
@@ -14812,7 +14822,7 @@ impl VirtualStateProcessor {
         // DAA a tie ever moved the sink to. Siblings on one parent set share one DAA, so an honest slot
         // race moves the sink sideways, never back.
         let Ok(candidate_daa) = self.headers_store.get_daa_score(candidate) else { return false };
-        if candidate_daa < incumbent_daa {
+        if PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1 && candidate_daa < incumbent_daa {
             return false;
         }
         let floor = incumbent_daa.saturating_sub(PALW_REORG_SHALLOW_TIE_DAA_V1);

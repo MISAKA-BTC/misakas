@@ -1219,6 +1219,50 @@ pub struct Params {
     /// attacker-chosen. A **bare fence with no companion value**, the [`Self::palw_frontier_provenance`]
     /// rule for its reason.
     pub palw_pruning_proof_strict_economic_win: Option<ForkActivation>,
+    // ─── lane: rcore/cap-weight — ADR-0160 F-W, the per-bond weight cap (J-1) ───
+    /// **ADR-0160 F-W: claims × N is not fork power × N.** `None` on every shipped preset — a
+    /// testnet-12-only capacity fence ([`PALW_T12_CAPACITY_FENCES_V1`]), dormant until the capacity
+    /// release's own flag day arms it (never with the DAA-750 list).
+    ///
+    /// Below the fence every non-terminal claim adds its whole stored `immature_contribution`
+    /// (β·pwu) to `bounded_immature`, so 100 claims weigh 100× and one 2M claim weighs 555,611
+    /// floor claims — before any panel has looked at it. Past it, for an ATTEMPT claim whose
+    /// `accepted_daa` is at or past the height (`crate::palw_weight_cap_v1`):
+    /// * the claim's weight is STAGED by its lifecycle — Created 0, Anchored 10‰, Licensed full
+    ///   (S2 250‰), Final full into `safe_weight`, void 0 — and its full weight is `min(raw, C7
+    ///   ceiling)` (ADR-0160 D-3);
+    /// * a bond's provisional weight is capped at `⌊C/6,500 MSK⌋` floor-claim weights, so a 13k
+    ///   bond's live claims weigh at most two floor claims whatever their number or class;
+    /// * the claim's weight reservation (`claim.reserved`) is `min(w, R_budget − held)`, the bond's
+    ///   budget `⌊C/6,500 MSK⌋ × w_floor`.
+    ///
+    /// Keyed on the claim's `accepted_daa` (the ADR-0145 precedent), so a claim accepted below the
+    /// height keeps today's accounting for its whole life. Requires `palw_rcore_plus`,
+    /// `palw_reorg_strict_economic_win` (staged weight makes economic ties common; without
+    /// strict-win a tie would fall to the hash) and `palw_operator_anchor` (lane A) at or below it.
+    /// The operator anchor is what keeps a private branch's post-fork claims at Created (weight 0):
+    /// staged weight moves the weight a claim buys from its acceptance to its bind and licence, and a
+    /// private branch that may anchor its own panels (the P0-10 seed-grinding hole the anchor stops)
+    /// self-licenses up to `Σ W_cap` of its bonds' caps that the public branch cannot match — its
+    /// own post-fork claims weigh 0 until bound, and its pre-fork licences are importable — so the
+    /// strict-win gate would ALLOW the deep reorg (ADR-0160 §8 A1). Until the structural P0-10 fix
+    /// retires the stopgap, F-W does not arm without it. The fold reads it through the V2 bundle's
+    /// mirror (`Self::sync_palw_capacity_weight_cap`). A bare fence.
+    ///
+    /// **Fork choice past it is strict-win's own rule, and only that** (rcore/cap-s1, stage 1 of the
+    /// capacity programme: ONE shallow-tie rule). The lane (rcore/cap-weight 3aa4abec4) carried its own
+    /// copy of the shallow-tie rule behind this fence; the DAA-750 release shipped the same rule as
+    /// `palw_reorg_strict_economic_win`'s (rcore/f1-strictwin-tie, merged at 19e732712) WITH the
+    /// no-DAA-lowering check (a shallow tie never moves the sink to a lower DAA, so chained tie releases
+    /// stay within two ticks), and cap-s1 dropped the copy: past F-W the deep-reorg gate runs
+    /// `palw_fork_authority_v2::palw_reorg_strict_economic_win_v1` with the processor's
+    /// `palw_reorg_shallow_ghostdag_win_v1`, exactly as below it. Staged weight makes all-economic ties
+    /// COMMON (a `Created` claim weighs 0, a bond at its cap gains nothing), and the lane's own analysis
+    /// found the tie ratchet worse under F-W without the no-DAA-lowering check — so **F-W is never
+    /// armable without it**: [`Self::validate_palw_capacity_weight_cap_v1`] refuses F-W unless strict-win
+    /// is armed at or below it, and refuses it on a build whose strict-win rule lacks the check
+    /// (`palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1`).
+    pub palw_capacity_weight_cap: Option<ForkActivation>,
 
     /// **ADR-0066 Decision 1 — the heartbeat lane.** `None` on every shipped preset.
     ///
@@ -4372,6 +4416,8 @@ impl Params {
         self.validate_palw_anchor_at_ceiling_v1()?;
         // Lane accept-order (post-launch): ConsensusV2 with the execution lane at or below it, on both paths.
         self.validate_palw_lane_accept_parents_first_v1()?;
+        // Lane cap-weight (ADR-0160 F-W): over R-core+ and the strict-win reorg rule, mirrored.
+        self.validate_palw_capacity_weight_cap_v1()?;
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -5410,6 +5456,11 @@ impl Params {
         // Some-only fingerprint below is only safe with this collapse.
         if self.palw_pruning_proof_strict_economic_win == Some(ForkActivation::never()) {
             self.palw_pruning_proof_strict_economic_win = None;
+        }
+        // lane: rcore/cap-weight (ADR-0160 F-W), a bare fence: same collapse, same reason
+        // (a-some-only-fence-needs-its-never-collapse).
+        if self.palw_capacity_weight_cap == Some(ForkActivation::never()) {
+            self.palw_capacity_weight_cap = None;
         }
         // ADR-0066 Decisions 1 and 4. Both carry a value beside the fence, so both take the whole
         // option — the D1 rule, for the D1 reason. The value does not vanish: ADR-0066 SA-4 folds
@@ -7155,6 +7206,113 @@ impl Params {
         matches!(self.palw_model_evm_fence(), Some(fence) if fence.is_active(daa_score))
     }
 
+    // ---- lane cap-weight (ADR-0160 F-W): the per-bond weight cap (J-1) -------------------------
+
+    /// **ADR-0160 F-W** ([`Self::palw_capacity_weight_cap`]), resolved off a ConsensusV2 ruleset with
+    /// `never()` read as absence. `None` on every shipped preset until the capacity release arms it.
+    pub fn palw_capacity_weight_cap_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capacity_weight_cap) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a claim ACCEPTED at `accepted_daa` is accounted under the weight cap. The fold reads
+    /// the V2 bundle's mirror ([`crate::palw_state_v2::PalwStateParamsV2::capacity_weight_cap_applies_at`]),
+    /// which `validate_palw_v2` holds equal to this.
+    pub fn palw_capacity_weight_cap_active_at(&self, accepted_daa: u64) -> bool {
+        self.palw_capacity_weight_cap_fence().is_some_and(|fence| fence.is_active(accepted_daa))
+    }
+
+    /// **Mirror F-W's height into the V2 bundle** — the `#[borsh(skip)]` copy the fold and its load-time
+    /// re-derivation read (`capacity_weight_cap_from_daa`). Called by the post-launch list's `set` and by
+    /// the assembly (a base that set the fence before it had a bundle is re-mirrored there);
+    /// `validate_palw_v2` refuses the two apart.
+    pub fn sync_palw_capacity_weight_cap(&mut self) {
+        let from_daa = self.palw_capacity_weight_cap.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_capacity_weight_cap_from_daa(from_daa);
+        }
+    }
+
+    /// **What F-W refuses.** Called by `validate_palw_v2`, public so a test can name each refusal.
+    /// Dormant: the bundle's mirror must be `None`. Armed: ConsensusV2 only; `palw_rcore_plus` at or
+    /// below it (the staged weight reads R-core+'s licence record, and J-1 caps what R-core+'s
+    /// reservation prices); `palw_reorg_strict_economic_win` at or below it (staged weight lowers every
+    /// candidate's live total, so all-economic ties become common, and without strict-win a tie is
+    /// decided by the hash — the grinding hole that fence closes); `palw_operator_anchor` (lane A) at or
+    /// below it (a private branch that anchors its own panels self-licenses up to its bonds' caps, a
+    /// staging the public branch cannot match inside the lead — ADR-0160 §8 A1); the mirror equal to the
+    /// height. Any height is legal otherwise — the rule is keyed on each claim's `accepted_daa`, written
+    /// to be crossed on a live chain.
+    pub fn validate_palw_capacity_weight_cap_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.capacity_weight_cap_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_capacity_weight_cap.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a capacity weight-cap height without palw_capacity_weight_cap armed: mirror the \
+                     fence with Params::sync_palw_capacity_weight_cap after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_capacity_weight_cap is armed on a network that is not ConsensusV2: the weight it caps is the V2 fold's \
+                 bounded_immature",
+            ));
+        };
+        let at_or_below = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score());
+        if !at_or_below(self.palw_rcore_plus) {
+            return Err(Invalid(
+                "palw_capacity_weight_cap is armed without palw_rcore_plus at or below it: the staged weight reads R-core+'s \
+                 licence record and the cap bounds the reservation R-core+ prices (ADR-0160 §6.1)",
+            ));
+        }
+        if !at_or_below(self.palw_reorg_strict_economic_win) {
+            return Err(Invalid(
+                "palw_capacity_weight_cap is armed without palw_reorg_strict_economic_win at or below it: staged weight makes \
+                 all-economic ties common, and without strict-win a deep reorg on a tie is decided by the hash (ADR-0160 §4.2)",
+            ));
+        }
+        // rcore/cap-s1 — ONE shallow-tie rule, and F-W never without its no-DAA-lowering check. Past F-W the
+        // deep-reorg gate is strict-win's own rule (the DAA-750 release's), whose shallow tie never moves the
+        // sink to a lower DAA; staged weight makes all-economic ties common, and without that check chained
+        // tie releases walk the sink back past the published two ticks (worse under F-W: an attempt-only
+        // branch ties at zero ticks). A build whose strict-win rule dropped the check cannot arm F-W.
+        if !crate::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_NEVER_LOWERS_SINK_DAA_V1 {
+            return Err(Invalid(
+                "palw_capacity_weight_cap is armed on a build whose strict-win shallow-tie rule may LOWER the sink's DAA: \
+                 F-W makes all-economic ties common and is never armable without the no-DAA-lowering check (rcore/cap-s1)",
+            ));
+        }
+        // ADR-0160 §8 A1 (the lane's verify finding 3): past F-W a private branch gains live weight only by
+        // STAGING claims (bind, licence) the public branch has not staged, and the public branch's own
+        // post-fork claims weigh 0 until bound (≥ anchor_delay later) while its licences of pre-fork claims
+        // can be imported — so the honest chain's un-importable gain inside a short lead is ~0, and any
+        // positive private staging wins strict-win. The operator anchor is what stops a private branch
+        // anchoring (and grinding) its own panels. Required until the structural P0-10 fix replaces it.
+        if !at_or_below(self.palw_operator_anchor.as_ref().map(|rule| rule.activation)) {
+            return Err(Invalid(
+                "palw_capacity_weight_cap is armed without palw_operator_anchor at or below it: staged weight lets a private \
+                 branch that anchors its own panels self-license up to its bonds' caps, which the public branch cannot \
+                 match inside the lead, so strict-win would allow the deep reorg (ADR-0160 §8 A1)",
+            ));
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_capacity_weight_cap disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_capacity_weight_cap after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane cap-weight -----------------------------------------------------------------
+
     // ---- lane sink (post-launch, 2026-09-26): a model sink is block-valid only bound ------------
 
     /// **Lane sink's fence** ([`Self::palw_model_sink_bound`]), resolved off a ConsensusV2 ruleset with
@@ -7927,6 +8085,7 @@ impl Params {
             palw_frontier_provenance,
             palw_reorg_strict_economic_win,
             palw_pruning_proof_strict_economic_win,
+            palw_capacity_weight_cap,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -8062,6 +8221,8 @@ impl Params {
             ("palw_reorg_strict_economic_win", *palw_reorg_strict_economic_win),
             // lane: rcore/hf-pptake2 — feeds fork_id_gate_fences_v1 automatically.
             ("palw_pruning_proof_strict_economic_win", *palw_pruning_proof_strict_economic_win),
+            // lane: rcore/cap-weight (ADR-0160 F-W) — feeds fork_id_gate_fences_v1 automatically.
+            ("palw_capacity_weight_cap", *palw_capacity_weight_cap),
             ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
             ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
             ("palw_attempt_activation", *palw_attempt_activation),
@@ -8770,6 +8931,7 @@ impl Params {
             palw_frontier_provenance,
             palw_reorg_strict_economic_win,
             palw_pruning_proof_strict_economic_win,
+            palw_capacity_weight_cap,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -8992,6 +9154,11 @@ impl Params {
         // fence changes nothing an operator can observe. Absence cannot alias a present value:
         // consensus_params_id writes this fence again under its own NAME when it is Some.
         if let Some(activation) = palw_pruning_proof_strict_economic_win.as_mut() {
+            fork(activation, visit);
+        }
+        // lane: rcore/cap-weight (ADR-0160 F-W). A bare fence, visited SOME-ONLY for the same
+        // reason: dormant, the release's schedule id is untouched.
+        if let Some(activation) = palw_capacity_weight_cap.as_mut() {
             fork(activation, visit);
         }
         // ADR-0066 Decisions 1 and 4. **Only the activation is visited.** `work_log2` and
@@ -9798,6 +9965,7 @@ impl Params {
             palw_frontier_provenance,
             palw_reorg_strict_economic_win,
             palw_pruning_proof_strict_economic_win,
+            palw_capacity_weight_cap,
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
@@ -10062,6 +10230,12 @@ impl Params {
         // normalize collapse above keeps a scheduled `never()` from writing either.
         if let Some(activation) = palw_pruning_proof_strict_economic_win {
             h.write(b"palw_pruning_proof_strict_economic_win");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // lane: rcore/cap-weight (ADR-0160 F-W). Some-only, with its never() collapse in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_capacity_weight_cap {
+            h.write(b"palw_capacity_weight_cap");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0071 SA-1..SA-4, Some-only for the ADR-0065 D4 reason: an unset fence writes
@@ -11035,6 +11209,7 @@ impl Params {
             palw_frontier_provenance: self.palw_frontier_provenance,
             palw_reorg_strict_economic_win: self.palw_reorg_strict_economic_win, // lane: rcore/f1-forkchoice-attacks
             palw_pruning_proof_strict_economic_win: self.palw_pruning_proof_strict_economic_win, // lane: rcore/hf-pptake2
+            palw_capacity_weight_cap: self.palw_capacity_weight_cap, // lane: rcore/cap-weight (ADR-0160 F-W)
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_attempt_activation: self.palw_attempt_activation,
@@ -12102,6 +12277,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_frontier_provenance: None,
     palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
     palw_pruning_proof_strict_economic_win: None, // lane: rcore/hf-pptake2
+    palw_capacity_weight_cap: None,       // lane: rcore/cap-weight (ADR-0160 F-W)
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -12341,6 +12517,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_frontier_provenance: None,
     palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
     palw_pruning_proof_strict_economic_win: None, // lane: rcore/hf-pptake2
+    palw_capacity_weight_cap: None,       // lane: rcore/cap-weight (ADR-0160 F-W)
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -12562,6 +12739,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_frontier_provenance: None,
     palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
     palw_pruning_proof_strict_economic_win: None, // lane: rcore/hf-pptake2
+    palw_capacity_weight_cap: None,       // lane: rcore/cap-weight (ADR-0160 F-W)
     palw_heartbeat: None,
     palw_attempt_work: None,
     // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
@@ -17765,6 +17943,55 @@ pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
 /// that has not upgraded keeps peering below this height and is refused by an upgraded one from it.
 pub const PALW_T12_POST_LAUNCH_FENCE_DAA: u64 = 750;
 
+/// **ADR-0160's capacity fences — the claim-capacity programme's own list, never the DAA-750 release's**
+/// (rcore/cap-s1, stage 1 of the user's staged-safety plan of 2026-09-26). Every entry is a
+/// testnet-12-only fence that ships DORMANT — `None` on every preset, testnet-12 included, so the
+/// release's params id (`dbbc9104…`) and schedule id (`7c652212…`) do not move — and that a future
+/// capacity flag day (`H_cap`, ADR-0160 v3 §10.3: not 500, 750 or 1,000, not a multiple of 250) arms
+/// all together through [`palw_t12_arm_capacity_fences_v1`]. Kept apart from
+/// [`PALW_T12_POST_LAUNCH_FENCES_V1`] on purpose: that list is armed at DAA 750 by
+/// [`palw_t12_arm_post_launch_fences_v1`] on every testnet-12 ruleset (public and drill), so an entry
+/// there would be ARMED on the live chain.
+///
+/// Each entry's `set` writes the field and every mirror of it the fold reads, exactly as the post-launch
+/// entries do, so a test, a drill ([`crate::config::drill::palw_drill_capacity_fences_at_v1`]) and the
+/// eventual release arm a fence in one place. The capacity fences' prerequisites include post-launch
+/// fences (F-W needs `palw_reorg_strict_economic_win` and lane A's `palw_operator_anchor` at or below
+/// it), so they are armed at or above [`PALW_T12_POST_LAUNCH_FENCE_DAA`] on the ASSEMBLED ruleset.
+pub const PALW_T12_CAPACITY_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
+    // ADR-0160 F-W (lane cap-weight): staged claim weight, the per-bond weight cap (J-1) and the capped
+    // reservation — the field and the V2 bundle's mirror the fold reads. Requires R-core+, strict-win
+    // (whose shallow-tie rule it uses, with the no-DAA-lowering check) and lane A at or below it.
+    PalwPostLaunchFenceV1 {
+        name: "palw_capacity_weight_cap",
+        set: |params, at| {
+            params.palw_capacity_weight_cap = at;
+            params.sync_palw_capacity_weight_cap();
+        },
+    },
+];
+
+/// **Arm (or, with `None`, disarm) every capacity fence at one height** — each entry of
+/// [`PALW_T12_CAPACITY_FENCES_V1`] through its own `set`, on an ASSEMBLED testnet-12 ruleset, then
+/// `validate_palw_v2`. What a capacity flag day will call; today only tests and the drill do (every
+/// preset leaves the list dormant). `Err` names the refusal (a height below a prerequisite, say).
+pub fn palw_t12_arm_capacity_fences_v1(params: &mut Params, at: Option<ForkActivation>) -> Result<(), String> {
+    for fence in PALW_T12_CAPACITY_FENCES_V1 {
+        (fence.set)(params, at);
+    }
+    params.validate_palw_v2().map_err(|e| format!("the capacity fences at {at:?} do not validate: {e}"))
+}
+
+/// **testnet-12 as shipped with every capacity fence armed at `at`** (`at ≥`
+/// [`PALW_T12_POST_LAUNCH_FENCE_DAA`], the prerequisites' height) — the "armed" side of stage 1's twin
+/// comparison, whose other side is [`palw_t12_shipped_params`] itself. Panics on a height the
+/// validation refuses: a fixture, not a node path.
+pub fn palw_t12_capacity_params_v1(at: u64) -> Params {
+    let mut params = palw_t12_shipped_params();
+    palw_t12_arm_capacity_fences_v1(&mut params, Some(ForkActivation::new(at))).unwrap_or_else(|e| panic!("{e}"));
+    params
+}
+
 /// **The post-launch release, armed** — every entry of [`PALW_T12_POST_LAUNCH_FENCES_V1`] at
 /// [`PALW_T12_POST_LAUNCH_FENCE_DAA`], each through its own `set` so every mirror follows (the V2
 /// bundle's registry-resilience and V02 copies, lane A's operator list over the genesis registry).
@@ -19000,6 +19227,8 @@ pub fn palw_v2_params_on_base(
     // `palw_t12_base_params`'s pass 2) had its mirror written into no bundle, and `validate_palw_v2`
     // below refused the ruleset — the int-4 phase-1 audit's LOW. Re-mirrored here, it follows.
     params.sync_palw_registry_resilience();
+    // Lane cap-weight (ADR-0160 F-W), for the same reason and in the same place.
+    params.sync_palw_capacity_weight_cap();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -19115,6 +19344,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_frontier_provenance: None,
     palw_reorg_strict_economic_win: None, // lane: rcore/f1-forkchoice-attacks
     palw_pruning_proof_strict_economic_win: None, // lane: rcore/hf-pptake2
+    palw_capacity_weight_cap: None,       // lane: rcore/cap-weight (ADR-0160 F-W)
     // **ADR-0068 Phase 1, armed on the drill network and nowhere else.** Devnet is the network
     // these fences exist to be drilled on: the heartbeat lane (fixed 2^24-hash price, width-bounded
     // mergesets) and the attempt lane's constant blue work, both live from genesis. Every other
