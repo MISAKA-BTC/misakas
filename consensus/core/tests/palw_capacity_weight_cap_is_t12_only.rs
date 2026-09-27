@@ -26,7 +26,7 @@
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCE_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, Params,
     SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_capacity_fences_v1,
-    palw_t12_shipped_params,
+    palw_t12_release_v2_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -35,6 +35,7 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 /// `PALW_T12_POST_LAUNCH_FENCES_V1` at DAA 750), with F-W dormant: params, identity, schedule — the same
 /// pins `palw_operator_anchor_is_t12_only::T12_RELEASE` holds (rcore/cap-s1: the capacity fences do not
 /// move them).
+// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day: capacity tests judge their fence against the DAA-1,300 release (release_v2) (was cbe9152f…, f78b02ad…)
 const T12_RELEASE: (&str, &str, &str) = (
     "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -70,7 +71,7 @@ fn set(p: &mut Params, name: &str, at: Option<ForkActivation>) {
 /// measured against. The release arms them at DAA 750 (with bind-deadlock, which needs lane A at or below
 /// it), so a height past 750 keeps the release's own ruleset and a lower one moves the three down to it.
 fn prerequisites_at(height: u64) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v2_params();
     if height < PALW_T12_POST_LAUNCH_FENCE_DAA {
         for name in PREREQUISITES {
             set(&mut p, name, Some(ForkActivation::new(height)));
@@ -89,7 +90,7 @@ fn armed_at(height: u64) -> Params {
 
 fn presets() -> Vec<(&'static str, Params)> {
     vec![
-        ("testnet-12", palw_t12_shipped_params()),
+        ("testnet-12", palw_t12_release_v2_params()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
         ("mainnet", mainnet_shipped_params()),
@@ -113,7 +114,7 @@ fn the_weight_cap_is_dormant_on_every_shipped_preset_and_testnet12_is_the_releas
         );
         assert_eq!(p.validate_palw_capacity_weight_cap_v1(), Ok(()), "{name}");
     }
-    let t12 = palw_t12_shipped_params();
+    let t12 = palw_t12_release_v2_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     let now = ids(&t12);
     println!("testnet-12 on this build: {now:?}");
@@ -125,7 +126,7 @@ fn the_weight_cap_is_dormant_on_every_shipped_preset_and_testnet12_is_the_releas
 /// so the move is F-W's own. A `Some(never())` is absence; at genesis the identity separates.
 #[test]
 fn arming_the_weight_cap_moves_the_params_and_schedule_ids_but_not_the_identity() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v2_params();
     let (_, identity_id, _) = ids(&shipped);
     let mut seen = std::collections::BTreeSet::new();
     for height in HEIGHTS {
@@ -162,7 +163,7 @@ fn arming_the_weight_cap_moves_the_params_and_schedule_ids_but_not_the_identity(
 /// it the armed build refuses the shipped one.
 #[test]
 fn an_armed_build_below_the_weight_cap_handshakes_with_the_shipped_build() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v2_params();
     let shipped_gate = fork_id_gate_fences_v1(&shipped);
     for height in HEIGHTS {
         let armed = armed_at(height);
@@ -222,7 +223,7 @@ fn the_weight_cap_needs_rcore_plus_strict_win_and_the_operator_anchor_at_or_belo
     let mut unmirrored = prerequisites_at(2_345);
     unmirrored.palw_capacity_weight_cap = Some(ForkActivation::new(2_345));
     refused(unmirrored, "disagrees with the V2 bundle's mirror");
-    let mut orphan = palw_t12_shipped_params();
+    let mut orphan = palw_t12_release_v2_params();
     orphan.palw_capacity_weight_cap = Some(ForkActivation::new(2_345));
     orphan.sync_palw_capacity_weight_cap();
     orphan.palw_capacity_weight_cap = None;
@@ -254,7 +255,7 @@ fn the_capacity_list_sets_the_weight_cap_and_its_mirror_together() {
     for name in PREREQUISITES {
         assert!(PALW_T12_POST_LAUNCH_FENCES_V1.iter().any(|f| f.name == name), "its prerequisite {name} is the release's");
     }
-    let release = palw_t12_shipped_params();
+    let release = palw_t12_release_v2_params();
     for at in [PALW_T12_POST_LAUNCH_FENCE_DAA + 1, 2_345] {
         let mut armed = release.clone();
         palw_t12_arm_capacity_fences_v1(&mut armed, Some(ForkActivation::new(at))).expect("the capacity list over the release");

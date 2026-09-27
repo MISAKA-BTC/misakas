@@ -461,7 +461,7 @@ def registry() -> list[Pin]:
     pins += _triple("hbsc.T12_RELEASED", "t12", HBSC, "const T12_RELEASED: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{HBSC}::the_same_chain_fence_is_dormant_on_every_other_preset_and_t12_arms_it_at_750",))
     # ADR-0160 lane escrow (F-E, the capacity release's escrow funding point, dormant): testnet-12 as shipped.
-    pins += _triple("capesc.T12_RELEASE", "t12", CAPESC, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+    pins += _triple("capesc.T12_RELEASE", "t12", CAPESC, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{CAPESC}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # Lane maturity (ADR-0065 D1 brought forward to the post-launch fence, dormant): testnet-12 as shipped,
     # which the dormant fence must not move.
@@ -475,11 +475,11 @@ def registry() -> list[Pin]:
                     "shipped.testnet-12", (f"{REORG}::shipped_testnet_12_arms_the_fence_at_750",))
     # Lane cap-weight (ADR-0160 F-W, the capacity release's per-bond weight cap, dormant): testnet-12 as
     # shipped, which the dormant fence must not move.
-    pins += _triple("capweight.T12_RELEASE", "t12", CAPWEIGHT, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+    pins += _triple("capweight.T12_RELEASE", "t12", CAPWEIGHT, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{CAPWEIGHT}::the_weight_cap_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # ADR-0160 lane liab (F-L, the capacity redesign's aggregate liability, post-launch, dormant): testnet-12 as
     # shipped, which the dormant fence must not move.
-    pins += _triple("liab.T12_RELEASE", "t12", LIAB, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+    pins += _triple("liab.T12_RELEASE", "t12", LIAB, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{LIAB}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # The mainnet values (2026-09-25): testnet-12 with the three values set back (and the later fences taken away).
     pins += _triple("mnv.PARENT_WITHOUT_THE_ATTRIBUTION", "t12", MNV, "const PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (",
@@ -530,15 +530,15 @@ def registry() -> list[Pin]:
                     (f"{LANEORDER}::the_fence_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
     # ADR-0160 lane verify (F-R room v2, F-B batch licence; post-launch, later than DAA 500, dormant): testnet-12 as
     # shipped, which the dormant fences must not move.
-    pins += _triple("caproom.T12_RELEASE", "t12", CAPROOM, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+    pins += _triple("caproom.T12_RELEASE", "t12", CAPROOM, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{CAPROOM}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
-    pins += _triple("capbatch.T12_RELEASE", "t12", CAPBATCH, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+    pins += _triple("capbatch.T12_RELEASE", "t12", CAPBATCH, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{CAPBATCH}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # ADR-0160 stage 2 (rcore/cap-s1: F-Q the audit door, F-S the issuance slots; dormant): testnet-12 as shipped.
-    pins += _triple("capqs.T12_RELEASE", "t12", CAPQS, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+    pins += _triple("capqs.T12_RELEASE", "t12", CAPQS, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{CAPQS}::the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
     # ADR-0160 stage 4 (rcore/cap-s1: F-N the network level and the fair share; dormant): testnet-12 as shipped.
-    pins += _triple("capn.T12_RELEASE", "t12", CAPN, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+    pins += _triple("capn.T12_RELEASE", "t12", CAPN, "const T12_RELEASE: (&str, &str, &str) = (", "release_v2.testnet-12",
                     (f"{CAPN}::the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release",))
 
     # ---- testnet-12's classes ------------------------------------------------------------------------

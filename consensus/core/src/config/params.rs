@@ -18920,7 +18920,7 @@ pub fn palw_t12_launch_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
     // DAA-750 list: testnet-12 as it launched carries neither.
-    for fence in PALW_T12_POST_LAUNCH_FENCES_V2.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V1) {
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V3.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V2).chain(PALW_T12_POST_LAUNCH_FENCES_V1) {
         (fence.set)(&mut params, None);
     }
     params
@@ -19421,13 +19421,45 @@ fn palw_t12_arm_post_launch_fences_v2(params: &mut Params) {
     }
 }
 
+/// **testnet-12's THIRD post-launch flag day: the capacity architecture at a fixed ρ = 10** (ADR-0160 stages
+/// 1, 2, 4 and stage 3's fixed ρ; the user's decision of 2026-09-27). Exactly
+/// [`PALW_T12_CAPACITY_RHO10_FENCES_V1`] — all eight entries arm TOGETHER (`validate_palw_v2` refuses a list
+/// that leaves out any but F-N, and F-N rides anyway: it is the fair-share property). ρ 25 / ρ 100 and the
+/// FP Job V4 fence are later flag days' entries.
+pub const PALW_T12_POST_LAUNCH_FENCES_V3: &[PalwPostLaunchFenceV1] = PALW_T12_CAPACITY_RHO10_FENCES_V1;
+
+/// **testnet-12's third post-launch flag day: DAA 1,500** (the user's decision of 2026-09-27, with the live
+/// chain at DAA ~1,100). A height no other fence uses — not 750, 1,000 or 1,300.
+pub const PALW_T12_POST_LAUNCH_FENCE_V3_DAA: Option<u64> = Some(1_500);
+
+/// **The third flag day, armed** — every entry of [`PALW_T12_POST_LAUNCH_FENCES_V3`] at
+/// [`PALW_T12_POST_LAUNCH_FENCE_V3_DAA`] through its own `set`, on the ASSEMBLED ruleset, after the DAA-750
+/// and DAA-1,300 lists (F-W's prerequisites are the DAA-750 list's; F-Q reads lane A's operators).
+fn palw_t12_arm_post_launch_fences_v3(params: &mut Params) {
+    let Some(at) = PALW_T12_POST_LAUNCH_FENCE_V3_DAA else { return };
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V3 {
+        (fence.set)(params, Some(ForkActivation::new(at)));
+    }
+}
+
+/// **testnet-12 as its DAA-1,300 release (`587cab2b0`) ships it** — [`palw_t12_shipped_params`] with every
+/// fence of [`PALW_T12_POST_LAUNCH_FENCES_V3`] set back to dormant: the ruleset a node that has not taken
+/// the third flag day's release runs, and the baseline the capacity package is judged against.
+pub fn palw_t12_release_v2_params() -> Params {
+    let mut params = palw_t12_shipped_params();
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V3 {
+        (fence.set)(&mut params, None);
+    }
+    params
+}
+
 /// **testnet-12 as its DAA-750 post-launch release ships it** — [`palw_t12_shipped_params`] with every
 /// fence of [`PALW_T12_POST_LAUNCH_FENCES_V2`] set back to dormant through its own `set`: the
 /// ruleset a node that has not taken the second flag day's release runs, and the baseline that
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_POST_LAUNCH_FENCES_V2 {
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V3.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V2) {
         (fence.set)(&mut params, None);
     }
     params
@@ -19468,6 +19500,9 @@ fn palw_t12_params_with_registry_v1(
     // `PALW_T12_POST_LAUNCH_FENCES_V2` at `PALW_T12_POST_LAUNCH_FENCE_V2_DAA` — dormant while that height
     // is `None` — on the same assembled ruleset, after the DAA-750 list whose fences it builds on.
     palw_t12_arm_post_launch_fences_v2(&mut params);
+    // **The third post-launch flag day** (the capacity architecture at ρ = 10, 2026-09-27): every fence of
+    // `PALW_T12_POST_LAUNCH_FENCES_V3` at `PALW_T12_POST_LAUNCH_FENCE_V3_DAA`, after the first two lists.
+    palw_t12_arm_post_launch_fences_v3(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or

@@ -35,11 +35,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-09-27 @082a68ec102f: second post-launch flag day (2026-09-27): palw_floor_refusal_retry + palw_final_lock_life_retro armed at DAA 1,300 (was 49ac20b0…, df25a3eb…)
+// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day (2026-09-27): the capacity architecture at rho 10 (ADR-0160 F-W, F-E, F-L, F-B, F-R, F-Q, F-S, F-N) armed at DAA 1,500 (was 48d99eec…, 4ab9a32d…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "48d99eecfed92d925a1d896faa9680905a57a1069cc6034c2380e065ed6d90c5",
+    "9d65a3f93ca2303d349f2c8a2813bffbbe59be1ea13204b23561dd1a44dee335",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "4ab9a32d261fb61fe75ba9f460a6efb66cda0b3a4940e6dc5e3e3d9be6fab914",
+    "f81b411ff1737f9bdea49561471410e075251f77c0e64ad71957aa81b77de3c8",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the

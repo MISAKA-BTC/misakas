@@ -80,6 +80,8 @@ fn print_every_value_the_pins_hold() {
     ids("shipped.testnet-12", &palw_t12_shipped_params());
     // …and testnet-12 as the DAA-750 release (the second flag day's list dormant), the baseline its lanes pin.
     ids("release_v1.testnet-12", &palw_t12_release_v1_params());
+    // …and as the DAA-1,300 release (the third flag day's list dormant), the capacity lanes' baseline.
+    ids("release_v2.testnet-12", &palw_t12_release_v2_params());
     ids("shipped.devnet", &devnet_shipped_params());
     // …and as the raw consts (`palw_the_release_did_not_move` reads `MAINNET_PARAMS` itself).
     ids("const.mainnet", &MAINNET_PARAMS);

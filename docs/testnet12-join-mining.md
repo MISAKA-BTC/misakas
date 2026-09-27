@@ -89,8 +89,8 @@ The node bootstraps from the built-in DNS seeders. `--addpeer` takes IP addresse
 Check the startup log for these lines:
 
 ```text
-Consensus params fingerprint: 24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff (network testnet-12)
-Consensus fence schedule: 750, 1000 (schedule id d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a)
+Consensus params fingerprint: cbe9152fa73e1c57737918bbea1e48c3f57a53ca9ab36273cbfb3407c15e257f (network testnet-12)
+Consensus fence schedule: 750, 1000 (schedule id f78b02adad83fbd4e02790142a2a03462dddb8ec4df13ad9f613f21d2dd9294a)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a

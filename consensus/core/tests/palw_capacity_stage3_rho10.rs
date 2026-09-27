@@ -29,7 +29,8 @@ use stage1::*;
 use kaspa_consensus_core::config::params::{
     PALW_T12_CAPACITY_AGGREGATE_LIABILITY_RHO10_V1, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_CAPACITY_RHO10_FENCES_V1,
     PALW_T12_CAPACITY_RHO25_STEP_2_V1, PALW_T12_CAPACITY_RHO100_STEP_2_V1, PALW_T12_CAPACITY_RHO100_STEP_3_V1,
-    PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2, PalwPostLaunchFenceV1,
+    PALW_T12_POST_LAUNCH_FENCE_V3_DAA, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
+    PALW_T12_POST_LAUNCH_FENCES_V3, PalwPostLaunchFenceV1,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1;
@@ -149,18 +150,25 @@ fn the_rho10_list_is_the_capacity_list_with_f_l_at_a_fixed_rho10() {
 /// **This build ships the package dormant**: testnet-12 as shipped is the release (every capacity entry
 /// dormant — the flag day's build flips exactly this assertion), and no entry is on a shipped list.
 #[test]
-fn testnet12_ships_the_package_dormant() {
+fn testnet12_ships_the_package_armed_at_1500_over_the_daa1300_release() {
     let shipped = palw_t12_shipped_params();
-    assert_eq!(ids(&shipped), ids(&release()), "testnet-12 as shipped arms no capacity entry");
-    for f in PALW_T12_CAPACITY_RHO10_FENCES_V1.iter().chain(STEPS) {
-        assert_eq!(fence_at(&shipped, f.name), None, "{}: dormant", f.name);
+    // The third post-launch flag day (2026-09-27): testnet-12 as shipped IS the package armed at 1,500 over
+    // the DAA-1,300 release, entry by entry, and nothing else differs.
+    assert_eq!(PALW_T12_POST_LAUNCH_FENCE_V3_DAA, Some(1_500), "the flag day's height");
+    assert_eq!(ids(&shipped), ids(&arm_rho10(release(), FLAG_DAY)), "testnet-12 as shipped arms the package at 1,500");
+    for f in PALW_T12_CAPACITY_RHO10_FENCES_V1 {
+        assert_eq!(fence_at(&shipped, f.name), Some(ForkActivation::new(1_500)), "{}: armed at 1,500", f.name);
+        assert!(PALW_T12_POST_LAUNCH_FENCES_V3.iter().any(|g| g.name == f.name), "{}: on the third list", f.name);
         assert!(
             !PALW_T12_POST_LAUNCH_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V2).any(|g| g.name == f.name),
-            "{}: on no shipped list",
+            "{}: on no earlier list",
             f.name
         );
     }
-    assert!(shipped.palw_capacity_step_at_v1(u64::MAX - 1).is_none(), "no ρ at any height");
+    for f in STEPS {
+        assert_eq!(fence_at(&shipped, f.name), None, "{}: the later rho steps stay dormant", f.name);
+    }
+    shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
 }
 
 /// **The flag day at DAA 1,500**: the eight entries over the DAA-1,300 release validate together; the

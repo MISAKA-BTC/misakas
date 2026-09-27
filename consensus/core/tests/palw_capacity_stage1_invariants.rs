@@ -3,7 +3,7 @@
 //!
 //! Every test folds testnet-12's own V2 fold (`rcore_common::Chain`, driven by the stage-1 fixture's
 //! [`Sim`] or by `rcore_common::Tape`): every block's delta re-applies and reverts, its carriage reloads
-//! under its committed root. "Armed" is `palw_t12_shipped_params()` (the DAA-750 release) with
+//! under its committed root. "Armed" is `palw_t12_release_v2_params()` (the DAA-750 release) with
 //! `PALW_T12_CAPACITY_FENCES_V1` armed at [`H`] (F-W, F-E, F-L at ρ = 1 / q = 0, F-B, F-R); "shipped" is
 //! the release itself. The families are deterministic: seeded [`Rng`] scripts (splitmix64) and small
 //! exhaustive grids; a failure prints its seed.

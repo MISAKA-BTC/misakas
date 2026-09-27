@@ -13,7 +13,7 @@
 mod common;
 pub use common::*;
 
-pub use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1, palw_t12_shipped_params};
+pub use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1, palw_t12_release_v2_params};
 pub use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwStateDeltaV2, PalwVoidReasonV2, palw_bond_committed_raw_v1};
 pub use std::collections::BTreeMap;
 
@@ -69,7 +69,7 @@ pub const STAGE2_FENCES: [&str; 2] = ["palw_capacity_audit_door", "palw_capacity
 /// at launch it takes no claim at all), and with stage 1's capacity fences ([`STAGE1_FENCES`]) armed at
 /// [`H`] where `armed`.
 pub fn params_for(class: Class, armed: bool) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v2_params();
     if class == Class::M2 {
         p.palw_class_verify_rows = Box::leak(Box::new([t12_2m_flag_day_row()]));
         p.sync_palw_class_verify_deadline();

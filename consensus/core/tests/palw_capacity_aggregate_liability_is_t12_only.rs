@@ -20,7 +20,7 @@
 
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepV1};
@@ -28,6 +28,7 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as THIS build ships it — the DAA-1,300 release (rcore/int-5), every capacity
 /// fence dormant: params, identity, schedule (`palw_operator_anchor_is_t12_only::T12_RELEASE`'s triple).
+// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day: capacity tests judge their fence against the DAA-1,300 release (release_v2) (was cbe9152f…, f78b02ad…)
 const T12_RELEASE: (&str, &str, &str) = (
     "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -48,7 +49,7 @@ fn step(from_daa: u64, rho: u32, q: u16) -> PalwCapacityStepV1 {
 
 /// testnet-12 as shipped with `value` installed and mirrored.
 fn with_value(value: Option<PalwCapacityLiabilityV1>) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v2_params();
     p.palw_capacity_aggregate_liability = value;
     p.sync_palw_capacity_liability();
     p
@@ -66,7 +67,7 @@ fn mirror(p: &Params) -> Option<PalwCapacityLiabilityV1> {
 
 fn presets() -> Vec<(&'static str, Params)> {
     vec![
-        ("testnet-12", palw_t12_shipped_params()),
+        ("testnet-12", palw_t12_release_v2_params()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
         ("mainnet", mainnet_shipped_params()),
@@ -88,7 +89,7 @@ fn the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
             "{name}: the fence is on the list fork_id_v1 and the schedule walk read"
         );
     }
-    let t12 = palw_t12_shipped_params();
+    let t12 = palw_t12_release_v2_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     let now = ids(&t12);
     println!("testnet-12 on this build: {now:?}");
@@ -116,12 +117,12 @@ fn testnet12_s_value_is_rho_1_from_the_height_and_the_fold_s_mirror_follows_it()
     assert!(!bundle.state.capacity_liability_active_at(1_233) && bundle.state.capacity_liability_active_at(1_234));
     // The list's entry: the same value and mirror; set back, the release byte for byte.
     let entry = PALW_T12_CAPACITY_FENCES_V1.iter().find(|f| f.name == "palw_capacity_aggregate_liability").expect("listed");
-    let mut listed = palw_t12_shipped_params();
+    let mut listed = palw_t12_release_v2_params();
     (entry.set)(&mut listed, Some(ForkActivation::new(1_234)));
     assert_eq!(listed.palw_capacity_aggregate_liability, Some(value));
     assert_eq!(format!("{listed:?}"), format!("{armed:?}"), "the entry sets the field and its mirror, nothing else");
     (entry.set)(&mut listed, None);
-    assert_eq!(format!("{listed:?}"), format!("{:?}", palw_t12_shipped_params()), "set back: the release");
+    assert_eq!(format!("{listed:?}"), format!("{:?}", palw_t12_release_v2_params()), "set back: the release");
 }
 
 /// **Armed at a future height: the ruleset and the schedule name it, the identity does not** — and a
@@ -129,7 +130,7 @@ fn testnet12_s_value_is_rho_1_from_the_height_and_the_fold_s_mirror_follows_it()
 /// absence; at genesis it is a rule from block one.
 #[test]
 fn arming_or_appending_a_step_moves_the_params_and_schedule_ids_but_not_the_identity() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v2_params();
     let (params_id, identity_id, schedule_id) = ids(&shipped);
     let mut seen = std::collections::BTreeSet::new();
     for height in HEIGHTS {
@@ -188,7 +189,7 @@ fn arming_or_appending_a_step_moves_the_params_and_schedule_ids_but_not_the_iden
 /// and a build that appended a step refuses one that did not from the step's height.
 #[test]
 fn the_fork_id_gates_the_height_and_every_appended_step() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v2_params();
     let shipped_gate = fork_id_gate_fences_v1(&shipped);
     for height in HEIGHTS {
         let armed = armed_at(height);
@@ -260,7 +261,7 @@ fn the_fence_needs_rcore_plus_the_attribution_fence_a_legal_schedule_and_its_mir
     refuse(vec![step(1_234, 0, 0)], "rho = 0");
     refuse(vec![step(1_234, 10, 1_001)], "1000‰");
     // The mirror: armed and unsynced, or synced and then disarmed, is refused by name.
-    let mut unsynced = palw_t12_shipped_params();
+    let mut unsynced = palw_t12_release_v2_params();
     unsynced.palw_capacity_aggregate_liability = Some(PalwCapacityLiabilityV1::t12_at_v1(ForkActivation::new(1_234)));
     assert!(unsynced.validate_palw_v2().is_err_and(|e| format!("{e:?}").contains("disagrees with the V2 bundle's mirror")));
     let mut stale = armed_at(1_234);

@@ -8,10 +8,10 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > **Current status (2026-09-25).** The public network is **`testnet-12`** (R-core+, ADR-0152 v3.1),
 > launched on 2026-09-25/26 JST from release commit **`0e8ec984e`** (current `main`). Run it with
 > `kaspad --testnet --netsuffix=12` or `misaka --network testnet-12` (the CLI's default) and verify:
-> * consensus params fingerprint **`24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff`** — the
+> * consensus params fingerprint **`cbe9152fa73e1c57737918bbea1e48c3f57a53ca9ab36273cbfb3407c15e257f`** — the
 >   post-launch release, which arms every post-launch fence **from DAA 750** (fence schedule `750, 1000`); a node
 >   still on the launch release (`b8564b88…`) is refused by upgraded peers from DAA 750
-> * genesis `a27f8f44fe4d91a5…` and schedule id `d263d7f2971f4e20…`
+> * genesis `a27f8f44fe4d91a5…` and schedule id `f78b02adad83fbd4…`
 >
 > Read **[docs/t12-launch-2026-09-25.md](docs/t12-launch-2026-09-25.md)** before relying on it: what the
 > release contains, the known issues (two CRITICAL ones are fixed by post-launch activation fences),

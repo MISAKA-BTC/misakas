@@ -12,7 +12,7 @@
 
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS,
-    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_capacity_fences_v1, palw_t12_shipped_params,
+    devnet_shipped_params, mainnet_shipped_params, palw_rc_shipped_params, palw_t12_arm_capacity_fences_v1, palw_t12_release_v2_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_v1};
 use kaspa_consensus_core::palw_aggregate_liability_v1::{PalwCapacityLiabilityV1, PalwCapacityStepV1};
@@ -20,6 +20,7 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as THIS build ships it — the DAA-1,300 release (rcore/int-5), every capacity
 /// fence dormant (rcore/cap-s1): params, identity, schedule.
+// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day: capacity tests judge their fence against the DAA-1,300 release (release_v2) (was cbe9152f…, f78b02ad…)
 const T12_RELEASE: (&str, &str, &str) = (
     "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -37,7 +38,7 @@ fn ids(p: &Params) -> (String, String, String) {
 
 fn presets() -> Vec<(&'static str, Params)> {
     vec![
-        ("testnet-12", palw_t12_shipped_params()),
+        ("testnet-12", palw_t12_release_v2_params()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
         ("mainnet", mainnet_shipped_params()),
@@ -65,7 +66,7 @@ fn entry(name: &str) -> &'static kaspa_consensus_core::config::params::PalwPostL
 /// The release with every stage-1 capacity fence armed at `h` (F-W, F-E, F-L, F-B, F-R) and stage 2's
 /// two left dormant (and every later stage's: F-N needs F-S).
 fn stage1_at(h: u64) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v2_params();
     for f in PALW_T12_CAPACITY_FENCES_V1.iter().filter(|f| !NAMES.contains(&f.name) && f.name != "palw_capacity_network_room") {
         (f.set)(&mut p, Some(ForkActivation::new(h)));
     }
@@ -84,7 +85,7 @@ fn the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release()
             assert!(p.palw_fences_v1().iter().any(|(n, f)| *n == fence && f.is_none()), "{name}: {fence} is on the fork-id list");
         }
     }
-    let t12 = palw_t12_shipped_params();
+    let t12 = palw_t12_release_v2_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     let now = ids(&t12);
     println!("testnet-12 on this build: {now:?}");
@@ -96,7 +97,7 @@ fn the_fences_are_dormant_on_every_shipped_preset_and_testnet12_is_the_release()
 /// gates on the height.
 #[test]
 fn arming_either_fence_moves_the_params_and_schedule_ids_but_not_the_identity() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v2_params();
     let (_, identity, _) = ids(&shipped);
     for h in HEIGHTS {
         let base = stage1_at(h);
@@ -149,11 +150,11 @@ fn the_fences_need_their_prerequisites_their_mirrors_and_a_credit_needs_the_door
         assert!(p.validate_palw_v2().is_err(), "{needle}: validate_palw_v2 asks it");
     };
     // F-Q without F-L / F-B / lane A at or below it.
-    let mut q = palw_t12_shipped_params();
+    let mut q = palw_t12_release_v2_params();
     (entry("palw_capacity_audit_door").set)(&mut q, Some(ForkActivation::new(h)));
     refused(&q, "palw_capacity_audit_door is armed without");
     // F-S without F-W / F-L / F-E at or below it.
-    let mut s = palw_t12_shipped_params();
+    let mut s = palw_t12_release_v2_params();
     (entry("palw_capacity_issuance_slots").set)(&mut s, Some(ForkActivation::new(h)));
     refused(&s, "palw_capacity_issuance_slots is armed without");
     // A mirror that disagrees.
@@ -191,7 +192,7 @@ fn the_capacity_list_carries_both_and_arms_whole() {
         assert!(PALW_T12_POST_LAUNCH_FENCES_V1.iter().all(|f| f.name != name), "{name} is never on the DAA-750 list");
         assert!(PALW_T12_CAPACITY_FENCES_V1.iter().any(|f| f.name == name), "{name} is on the capacity list");
     }
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v2_params();
     palw_t12_arm_capacity_fences_v1(&mut p, Some(ForkActivation::new(1_001))).expect("the whole capacity list at one height");
     assert_eq!(mirrors(&p), (Some(1_001), 8, Some(1_001)));
 }

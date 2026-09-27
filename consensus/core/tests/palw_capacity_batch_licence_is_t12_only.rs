@@ -13,13 +13,14 @@
 
 use kaspa_consensus_core::config::params::{
     ForkActivation, MAINNET_PARAMS, PALW_T12_CAPACITY_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V1, Params, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params,
-    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_shipped_params,
+    mainnet_shipped_params, palw_rc_shipped_params, palw_t12_release_v2_params,
 };
 use kaspa_consensus_core::fork_id_v1::{evaluate_fork_id_v1, fork_id_gate_fences_v1, fork_id_v1};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
 /// testnet-12 as THIS build ships it — the DAA-1,300 release (rcore/int-5), every capacity
 /// fence dormant (rcore/cap-s1): params, identity, schedule.
+// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day: capacity tests judge their fence against the DAA-1,300 release (release_v2) (was cbe9152f…, f78b02ad…)
 const T12_RELEASE: (&str, &str, &str) = (
     "24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
@@ -36,7 +37,7 @@ fn ids(p: &Params) -> (String, String, String) {
 
 fn presets() -> Vec<(&'static str, Params)> {
     vec![
-        ("testnet-12", palw_t12_shipped_params()),
+        ("testnet-12", palw_t12_release_v2_params()),
         ("testnet-11", palw_rc_shipped_params()),
         ("devnet", devnet_shipped_params()),
         ("mainnet", mainnet_shipped_params()),
@@ -53,7 +54,7 @@ fn mirrors(p: &Params) -> (Option<u64>, Option<u64>) {
 }
 
 fn armed_at(height: u64) -> Params {
-    let mut p = palw_t12_shipped_params();
+    let mut p = palw_t12_release_v2_params();
     p.palw_capacity_batch_licence = Some(ForkActivation::new(height));
     p.sync_palw_capacity_verify();
     p
@@ -73,7 +74,7 @@ fn the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
             "{name}: the fence is on the list fork_id_v1 and the schedule walk read"
         );
     }
-    let t12 = palw_t12_shipped_params();
+    let t12 = palw_t12_release_v2_params();
     t12.validate_palw_v2().expect("testnet-12 as shipped validates");
     let now = ids(&t12);
     println!("testnet-12 on this build: {now:?}");
@@ -81,7 +82,7 @@ fn the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
     // rcore/cap-s1: F-B is a capacity fence, never the DAA-750 release's.
     assert!(PALW_T12_POST_LAUNCH_FENCES_V1.iter().all(|f| f.name != "palw_capacity_batch_licence"), "not on the 750 list");
     let entry = PALW_T12_CAPACITY_FENCES_V1.iter().find(|f| f.name == "palw_capacity_batch_licence").expect("F-B is a capacity fence");
-    let mut set = palw_t12_shipped_params();
+    let mut set = palw_t12_release_v2_params();
     (entry.set)(&mut set, Some(ForkActivation::new(1_500)));
     assert_eq!(set.palw_capacity_batch_licence, Some(ForkActivation::new(1_500)));
     set.validate_palw_v2().expect("the entry sets the field AND the fold's mirror");
@@ -96,7 +97,7 @@ fn the_fence_is_dormant_on_every_shipped_preset_and_testnet12_is_the_release() {
 /// from block one. A `Some(never())` is absence (`a-some-only-fence-needs-its-never-collapse`).
 #[test]
 fn arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v2_params();
     let (params_id, identity_id, schedule_id) = ids(&shipped);
     let mut seen = std::collections::BTreeSet::new();
     for height in HEIGHTS {
@@ -138,7 +139,7 @@ fn arming_the_fence_moves_the_params_and_schedule_ids_but_not_the_identity() {
 /// day, never a silent fork.
 #[test]
 fn an_armed_build_below_the_fence_handshakes_with_the_shipped_build() {
-    let shipped = palw_t12_shipped_params();
+    let shipped = palw_t12_release_v2_params();
     let shipped_gate = fork_id_gate_fences_v1(&shipped);
     for height in HEIGHTS {
         let armed = armed_at(height);
@@ -177,7 +178,7 @@ fn validate_names_the_prerequisites_and_the_mirror() {
     refused(&|p| {
         p.palw_capacity_batch_licence = Some(ForkActivation::new(1_600));
     }, "disagrees with the V2 bundle's mirror");
-    let mut stale = palw_t12_shipped_params();
+    let mut stale = palw_t12_release_v2_params();
     stale.palw_capacity_batch_licence = Some(ForkActivation::new(1_500));
     stale.sync_palw_capacity_verify();
     stale.palw_capacity_batch_licence = None;
