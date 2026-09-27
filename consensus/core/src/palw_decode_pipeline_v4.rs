@@ -269,3 +269,63 @@ mod representation_tests {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// §A.3 step 1 — repeat (multiplicative, applied once)
+// ---------------------------------------------------------------------------------------------
+
+/// **Step 1: the repeat penalty of one lane** — `a_j` from `v_j`, `c_j(t)` and `p_q` (§A.3).
+///
+/// ```text
+///   c > 0, v > 0 :  a = floor(v · 65536 / p_q)
+///   c > 0, v ≤ 0 :  a = floor(v · p_q / 65536)       (toward −∞: div_euclid by a positive divisor)
+///   c = 0        :  a = v
+/// ```
+///
+/// Multiplicative and applied ONCE however many times the lane occurs in the window: a positive
+/// logit shrinks toward zero and a non-positive one moves away from it, so a penalty never makes a
+/// repeated lane MORE likely. `p_q = 65536` is the identity on both arms. In `i64`: `|v| ≤ 2^31`
+/// and `p_q ≤ 2^18` bound both products below `2^50`. A zero `p_q` is not canonical and cannot
+/// reach here past admission; it answers `v` rather than dividing by zero, so no input panics.
+pub fn decode_repeat_v4(value: i32, count: u32, repeat_penalty_q: u32) -> i64 {
+    let v = value as i64;
+    if count == 0 || repeat_penalty_q == 0 {
+        return v;
+    }
+    let p = repeat_penalty_q as i64;
+    let one = PALW_DECODE_V4_REPEAT_Q_ONE as i64;
+    if v > 0 { (v * one) / p } else { (v * p).div_euclid(one) }
+}
+
+#[cfg(test)]
+mod repeat_tests {
+    use super::*;
+
+    #[test]
+    fn repeat_is_the_identity_off_the_window_and_at_one() {
+        for v in [i32::MIN, -7, -1, 0, 1, 7, i32::MAX] {
+            assert_eq!(decode_repeat_v4(v, 0, 4 << 16), v as i64, "c = 0 leaves the lane alone");
+            for c in [1, 2, 256] {
+                assert_eq!(decode_repeat_v4(v, c, PALW_DECODE_V4_REPEAT_Q_ONE), v as i64, "p = 1.0 is the identity");
+            }
+        }
+    }
+
+    #[test]
+    fn repeat_divides_positives_multiplies_non_positives_and_floors() {
+        // p = 1.5 (98304): 10 → floor(10·65536/98304) = floor(6.67) = 6; −10 → floor(−15) = −15.
+        assert_eq!(decode_repeat_v4(10, 1, 98_304), 6);
+        assert_eq!(decode_repeat_v4(-10, 1, 98_304), -15);
+        // p = 1.25 (81920): −3 → floor(−3.75) = −4 (toward −∞, not toward zero).
+        assert_eq!(decode_repeat_v4(-3, 1, 81_920), -4);
+        // v = 0 takes the non-positive arm and stays 0.
+        assert_eq!(decode_repeat_v4(0, 3, 262_144), 0);
+        // Applied once: the count does not compound it.
+        assert_eq!(decode_repeat_v4(1 << 24, 1, 131_072), decode_repeat_v4(1 << 24, 200, 131_072));
+        // p = 4.0 at the extremes stays inside i64 and lands where the formula says.
+        assert_eq!(decode_repeat_v4(i32::MAX, 1, PALW_DECODE_V4_REPEAT_Q_MAX), (i32::MAX as i64) / 4);
+        assert_eq!(decode_repeat_v4(i32::MIN, 1, PALW_DECODE_V4_REPEAT_Q_MAX), (i32::MIN as i64) * 4);
+        // A non-canonical zero divisor answers the value rather than panicking.
+        assert_eq!(decode_repeat_v4(5, 1, 0), 5);
+    }
+}
+
