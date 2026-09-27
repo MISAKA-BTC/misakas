@@ -1,5 +1,7 @@
 # ADR-0029: PALW chain carriage — the objects ride the rails the fork already built
 
+> **Superseded by [ADR-0046](0046-palw-v2-consensus-object-carriage.md)** (the V2 object set; the Stage-1 shape was reused). Kept as a record; not normative. The current rule is [spec/palw/02](../spec/palw/02-state-objects-and-carriage.md). (Banner added 2026-09-27.)
+
 Status: **Proposed (draft for review).** Activates nothing. This ADR decides how ADR-0028's
 objects — job commitments, attestations, opening calls and answers, refutations — become
 on-chain facts, in two stages whose first requires **zero node changes** and realizes the

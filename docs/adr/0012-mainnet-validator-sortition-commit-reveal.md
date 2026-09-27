@@ -1,5 +1,7 @@
 # ADR-0012: Mainnet Validator Sortition via On-Chain Commit-Reveal
 
+> **Superseded by [ADR-0017](0017-all-active-staker-attestation.md) (in whole).** Kept as a record; not normative. The current rule is ADR-0017, specified in `spec/dns-bft` (Phase 3). (Banner added 2026-09-27.)
+
 Status: **Superseded by [ADR-0017](0017-all-active-staker-attestation.md)** — the
         commit-reveal sortition committee was removed; PoS participation is now
         permissionless-by-stake with every active bond attesting (no committee,

@@ -1,5 +1,7 @@
 # ADR-0021: PALW LLM proof-of-work (`algo_id = 4`/`5`), at one block per 120 s
 
+> **Superseded by [ADR-0026](0026-palw-v2-runtime-separated-verification.md), [ADR-0038](0038-palw-is-the-consensus-work.md) and [ADR-0039](0039-palw-only-block-production.md)** (reward and PoW activation; the verification shape). Kept as a record; not normative. The current rules are [spec/palw/06](../spec/palw/06-eligibility-and-block-production.md) and [spec/palw/08](../spec/palw/08-verification.md). (Banner added 2026-09-27.)
+
 Status: **SUPERSEDED FOR REWARD/POW ACTIVATION** — historical implementation record only.
 The Ollama path was disabled by `9736aec` after its output-text commitment was empirically shown
 forgeable without model execution. The worker full-logits path is now experimental and limited to

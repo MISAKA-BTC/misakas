@@ -46,9 +46,15 @@ kept dormant.
 | `keep` | Already a short decision record. It gains a Links section. Its normative sentences are copied into the Spec and stay here as the decision |
 | `frozen` | Superseded, or a dormant lineage. The body is kept verbatim with a banner at the top ([INDEX.md](../INDEX.md) §4). It contributes nothing to the Spec. Its reasoning is cited from Design as history |
 
-Every other row is **slimmed**: its normative clauses move to the Spec, its reasoning, measurements
-and review logs move to Design, and the ADR keeps Context / Decision / Consequences / Links plus a
-"body moved" banner.
+Every other row is **slimmed**: its normative clauses are written into the Spec, its body moves
+verbatim to `design/palw/archive/NNNN-<slug>.md` (reasoning, measurements, review logs and security
+amendments as written), the topic's Design document summarises and links it, and the ADR keeps
+Context / Decision / Consequences / Links plus a "body moved" banner.
+
+**Decisions of 2026-09-27 (Phase 1 review).** (1) Superseded ADRs are frozen: the body stays, a
+banner goes at the top, nothing is shortened. (2) ADR-0152 is imported and split in one change.
+(3) ADR-0160 waits for the int-6 integration and is imported in its final form; its row below is a
+placeholder. (4) One short ADR per post-launch flag day (DAA 750, DAA 1,300; DAA 1,500 later).
 
 ## Summary
 
@@ -237,9 +243,9 @@ are frozen (9 PALW). PALW ADRs hold 2.7 MB of the 3.2 MB of ADR text, not counti
 | --- | --: | --- | --- | --- |
 | [0134-testnet-11-subnetwork-census-2026-09-17.json](0134-testnet-11-subnetwork-census-2026-09-17.json) | <1 | DNS-BFT | evidence (ADR-0134) | stays next to ADR-0134, or evidence/ with a link |
 | [README.md](README.md) | 145 | all | index | slim in Phase 2 (below) |
-| [STATUS-AUDIT-2026-09-18.md](STATUS-AUDIT-2026-09-18.md) | 114 | PALW | audit | audit/2026-09-18-status.md · stub left |
-| [STATUS-AUDIT-2026-09-19-llm-mining-reward.md](STATUS-AUDIT-2026-09-19-llm-mining-reward.md) | 14 | PALW | audit | audit/2026-09-19-llm-mining-reward.md (beside audit/2026-09-19-llm-mining/) · stub left |
-| [STATUS-AUDIT-2026-09-20-reward-reaudit.md](STATUS-AUDIT-2026-09-20-reward-reaudit.md) | 11 | PALW | audit | audit/2026-09-20-reward-reaudit.md · stub left |
+| [STATUS-AUDIT-2026-09-18.md](STATUS-AUDIT-2026-09-18.md) | 114 | PALW | audit | **moved 2026-09-27** → [audit/2026-09-18-status.md](../audit/2026-09-18-status.md) · stub left |
+| [STATUS-AUDIT-2026-09-19-llm-mining-reward.md](STATUS-AUDIT-2026-09-19-llm-mining-reward.md) | 14 | PALW | audit | **moved 2026-09-27** → [audit/2026-09-19-llm-mining-reward.md](../audit/2026-09-19-llm-mining-reward.md) · stub left |
+| [STATUS-AUDIT-2026-09-20-reward-reaudit.md](STATUS-AUDIT-2026-09-20-reward-reaudit.md) | 11 | PALW | audit | **moved 2026-09-27** → [audit/2026-09-20-reward-reaudit.md](../audit/2026-09-20-reward-reaudit.md) · stub left |
 
 ## Cited, but not on this branch
 
@@ -249,7 +255,7 @@ rules testnet-12 runs today and the change it runs next, so they are Phase 2 pre
 | Number | What it is | Where it is | Plan |
 | --- | --- | --- | --- |
 | **0152** | R-core+ v3.1: account stake, the staged reservation, vested rewards, seat locks, the action-based slash schedule, attribution (J), the redesigned DA court, quorum counting (Q), the deadline function (DL) and the stake-weighted panel draw (SW-1…SW-10). **It is what testnet-12 runs.** Code cites it about 1,400 times | branch `docs/adr-0152-v31-postedits` at `9ed1adced` (2026-09-24). One file of 469 KB. An earlier copy is on `handoff/t12-rcore-20260924` | Land it on this branch and split it in the same change. The §3 rule families B, SR, V, L, A, S, T, W, J, DA, Q, DL and SW go to `S palw/07`–`10`. §1, §4 and §5 (motivation, the invariant per attacker strategy, the comparison) go to `D palw/collateral` and `D palw/verification`. The changelogs and review dispositions go to `D palw/lineage` or `audit/`. The ADR keeps its decision |
-| **0160** | Claim capacity separated from collateral price (v3): the bond is one shared guarantee split four ways, ρ is a risk tier, and a credited claim is paid only after an independent audit. An accepted design, being implemented (`rcore/cap-*`, the cap-s1 merges) | branch `rcore/cap-spec2` at `ccd5499c8` (2026-09-26). 121 KB, plus `docs/adr/0160-capacity/` (calculators and numbers) | A short ADR-0160, the body to `D palw/claim-capacity`, and its fences (dormant until `H_cap`) to `S palw/10` and `16` |
+| **0160** | Claim capacity separated from collateral price (v3): the bond is one shared guarantee split four ways, ρ is a risk tier, and a credited claim is paid only after an independent audit. An accepted design, being implemented (`rcore/cap-*`, the cap-s1 merges) | branch `rcore/cap-spec2` at `ccd5499c8` (2026-09-26). 121 KB, plus `docs/adr/0160-capacity/` (calculators and numbers) | **Placeholder — WAIT** (decision 2026-09-27): imported after the int-6 integration in its final form (stage 4 of the implementation departed from the design). Then: a short ADR-0160, the body to `D palw/claim-capacity`, its fences to `S palw/10` and `16` |
 | 0153 | Reserved: the flag day that installs measured verification rows (long-D classes, the 2M split). Cited by `palw_class_verify_deadline_v1.rs`, `palw_state_v2.rs` and RFC-0001 | not written | Stays reserved |
 | 0104 | Reserved for "a close too wide for one carrier is cut once" (the 0102 collision in README "Number hygiene"). ADR-0144 §9: "never written" | not written | Stays reserved |
 | 0048 | Unused on the live lineage (README "Number hygiene") | — | Stays unused |

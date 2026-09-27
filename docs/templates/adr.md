@@ -34,8 +34,8 @@ each item links its Spec section.>
 Banners for existing ADRs (docs/INDEX.md §4). Put them directly under the title.
 
 Slimmed:
-> **Body moved (YYYY-MM-DD).** Normative rules → spec/…; rationale and measurements → design/…;
-> review log → audit/…. Full original text: git show <commit>:docs/adr/<file>.
+> **Body moved (YYYY-MM-DD).** Normative rules → spec/…; the full text as written →
+> design/<domain>/archive/NNNN-<slug>.md; reasoning summarised in design/<domain>/<topic>.md.
 
 Superseded:
 > **Superseded by ADR-MMMM (in whole | in part: D2), YYYY-MM-DD.** Kept as a record; not normative.

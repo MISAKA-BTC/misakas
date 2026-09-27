@@ -1,5 +1,7 @@
 # ADR-0032: PALW fee-bond escrow — pricing calls and paying challengers without new covenants
 
+> **Dormant lineage (the credit overlay), not on the V2 path.** Kept as a record; not normative. On the V2 lineage, escrow, void and slash are ADR-0042 D6/D10 and ADR-0152, specified in [spec/palw/07](../spec/palw/07-claim-lifecycle.md) and [spec/palw/10](../spec/palw/10-collateral-and-economics.md). (Banner added 2026-09-27.)
+
 Status: **Accepted (design; activates nothing).** This decides HOW opening-call fees and
 challenger bounties work — the piece ADR-0029 §7 deferred "needs the bond-UTXO covenant
 discipline". The decision is that Stage 1 needs **no new covenant machinery at all**, and

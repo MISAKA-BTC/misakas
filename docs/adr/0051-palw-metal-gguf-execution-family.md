@@ -1,5 +1,7 @@
 # ADR-0051: The Metal/GGUF execution family — native-speed inference as half the work, quorum-verified beside the deterministic floor
 
+> **Superseded by [ADR-0053](0053-palw-one-execution-family.md) (in whole).** Kept as a record; not normative. The current rule is [spec/palw/04](../spec/palw/04-execution-semantics.md) §4.1. (Banner added 2026-09-27.)
+
 Status: **SUPERSEDED by [ADR-0053](0053-palw-one-execution-family.md) (2026-08-26).** Withdrawn
 four days after it was written, for two reasons that arrived together. Its **motive expired**:
 ADR-0052 put Qwen3.6's forty layers through the integer runtime with 100 % kernel-catalog coverage,

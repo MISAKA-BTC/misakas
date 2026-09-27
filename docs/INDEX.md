@@ -132,14 +132,17 @@ The restructure has one rule: **every paragraph that leaves an ADR lands in a Sp
 document, or is listed as obsolete with the reason.** To slim an ADR:
 
 1. Move its normative clauses into the Spec chapter as rules, with the ADR in **Sources**.
-2. Move its rationale, rejected alternatives, measurements and review logs into Design, under a
-   heading that names the ADR and clause.
+2. Move its body **verbatim** into `design/<domain>/archive/NNNN-<slug>.md` (only relative link
+   targets are rewritten so they still resolve). The archive holds the rationale, rejected
+   alternatives, measurements, review logs and security amendments exactly as written. The topic's
+   Design document (`design/<domain>/<topic>.md`) summarises the reasoning and links each archive
+   file.
 3. Leave the ADR as Context / Decision / Consequences / Links. At the top, add a banner:
 
    ```
    > **Body moved (YYYY-MM-DD).** Normative rules → spec/palw/08-verification.md §8.3;
-   > rationale and measurements → design/palw/verification.md §4; review log → audit/….
-   > Full original text: git show <commit>:docs/adr/<file>.
+   > the full text as written → design/palw/archive/NNNN-<slug>.md; reasoning summarised in
+   > design/palw/verification.md.
    ```
 
 4. Superseded ADRs are not slimmed. They get this banner at the top:

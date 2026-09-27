@@ -1,5 +1,7 @@
 # ADR-0033: The credit gate, wired — how `credit(C)` becomes a consensus fact
 
+> **Dormant lineage (the credit overlay), not on the V2 path.** Kept as a record; not normative. On the V2 lineage the block is the unit of credit. See [spec/palw/07](../spec/palw/07-claim-lifecycle.md). (Banner added 2026-09-27.)
+
 Status: **Accepted (design; activates nothing, and cannot be activated until its stated
 preconditions are met).** ADR-0028 §1 defined `credit(C)` as a predicate. This ADR decides
 **where it is evaluated, what state it reads, how it survives reorgs, and what happens the

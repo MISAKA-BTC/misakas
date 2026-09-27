@@ -1,5 +1,7 @@
 # ADR-0080: The answer is long; the verified unit is short
 
+> **Superseded in part by [ADR-0082](0082-the-close-is-flat-in-the-context.md)** (§3 withdrawn in full; §1's measurement and what 0082 builds on survive there). Kept as a record; not normative. The current rules are [spec/palw/09](../spec/palw/09-court-and-offences.md) and [spec/palw/04](../spec/palw/04-execution-semantics.md). (Banner added 2026-09-27.)
+
 **Status: SUPERSEDED IN PART by [ADR-0082](0082-the-close-is-flat-in-the-context.md), 2026-09-03,
 later the same day.** §3 — one job as N verification segments — is withdrawn in full and is not to
 be implemented; the refutation below is the reason and it stands. Three things here survive and are

@@ -1,5 +1,7 @@
 # ADR-0107 — A class's share grows on work that reached Final, not on blocks that were accepted
 
+> **Superseded by [ADR-0137](0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md)** (a share is a result; Final-only share growth survives as the fence `palw_share_growth_final`). Kept as a record; not normative. The current rules are [spec/palw/05](../spec/palw/05-canonical-work.md) §5.4 and [spec/palw/13](../spec/palw/13-fork-choice-and-heartbeat.md) §13.1. (Banner added 2026-09-27.)
+
 > **Status amendment (2026-09-18, ADR-0137):** past `Params::palw_work_target` — testnet-11's DAA 6,001 flag day —
 > a class's *share* is a **result**, not a lottery input. The class target, the class DAA, the epoch budget, the
 > admission-derived share and the seat price this ADR specifies are **not read** past the fence: a block draws

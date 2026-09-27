@@ -1,5 +1,7 @@
 # ADR-0076: The attempt lane's seed is the retarget's own equilibrium
 
+> **Superseded by [ADR-0137](0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md) past `palw_work_target`.** Kept as a record; not normative. The current rules are [spec/palw/05](../spec/palw/05-canonical-work.md) §5.4 and [spec/palw/06](../spec/palw/06-eligibility-and-block-production.md). (Banner added 2026-09-27.)
+
 > **Status amendment (2026-09-18, ADR-0137):** past `Params::palw_work_target` — testnet-11's DAA 6,001 flag day —
 > a class's *share* is a **result**, not a lottery input. The class target, the class DAA, the epoch budget, the
 > admission-derived share and the seat price this ADR specifies are **not read** past the fence: a block draws
