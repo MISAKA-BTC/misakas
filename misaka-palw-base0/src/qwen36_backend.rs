@@ -1048,14 +1048,28 @@ impl Qwen36Backend {
             return Err(why);
         }
         let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
-        let run = qwen36_execute_for_attempt_streaming_capped_v1(
+        // The arithmetic re-derived, the token choices the fold's own (RFC-0001 §A): identical for
+        // every honest V3 fold, and the only way to re-derive a V4 one. A wrong choice is the decode
+        // close's question, not this conversion's.
+        let mut row_index = 0usize;
+        let run = qwen36_execute_streaming_v1(
             &self.artifact,
             &material.binding.shape_profile,
             plan,
             &material.binding.job_context,
             &prompt,
             self.materialize_cap(),
+            crate::legs::Base0CaptureKindV1::DenseTiles,
             &mut |_| {},
+            &mut |row: &[i32]| {
+                let id = material
+                    .generated_token_ids
+                    .get(row_index)
+                    .copied()
+                    .unwrap_or_else(|| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32);
+                row_index += 1;
+                id
+            },
         )?;
         if run.binding.committed_execution_root != material.binding.committed_execution_root {
             return Err("the retained fold and its re-execution are not one execution".to_string());

@@ -1452,17 +1452,26 @@ impl Qwen25A16Backend {
         let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
         // An HONEST dense re-execution, in this instance's own cache representation: a fold is judged
         // by re-deriving it, and a re-derivation that reproduced a lie would be evidence of nothing.
-        let run = a16_execute_in_storage_v1(
-            &self.artifact,
-            &material.binding.shape_profile,
-            self.plan.as_ref(),
-            &material.binding.job_context,
-            &prompt,
-            self.materialize_cap(),
-            crate::legs::Base0CaptureKindV1::DenseTiles,
-            &mut |_| {},
-            None,
-            self.runtime_profile,
+        // **The committed ids are fed back** (RFC-0001 §A): the arithmetic is re-derived, the token
+        // choices are the fold's own — which is what every honest V3 fold committed anyway (the
+        // shipped argmax) and the only way to re-derive a V4 fold, whose tokens follow its job's
+        // pipeline. A wrong token choice is the decode close's question, not this conversion's.
+        let run = kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(
+            Some(kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpReplayRuleV1::forced(&material.generated_token_ids)),
+            || {
+                a16_execute_in_storage_v1(
+                    &self.artifact,
+                    &material.binding.shape_profile,
+                    self.plan.as_ref(),
+                    &material.binding.job_context,
+                    &prompt,
+                    self.materialize_cap(),
+                    crate::legs::Base0CaptureKindV1::DenseTiles,
+                    &mut |_| {},
+                    None,
+                    self.runtime_profile,
+                )
+            },
         )?;
         if run.binding.committed_execution_root != material.binding.committed_execution_root {
             return Err("the retained fold and its re-execution are not one execution".to_string());
@@ -7994,6 +8003,7 @@ mod aheld_end_to_end {
             // ADR-0152 v3.1 §4-bis.9's decode-close door (`palw_offence_attribution`): read by a
             // decode-token close only, never by an attention bottom.
             true,
+            None,
         )
     }
 
