@@ -973,8 +973,13 @@ fn handle_chat(
     // model is loaded, so a refusal cost a 4xx rather than an inference.
     let (sampling_seed, temperature_q) = admitted.sampling;
 
+    // **RFC-0001 §A: past the decode-rules fence every job is FP Job V4** — its controls in the one
+    // canonical form `admit_request` normalized (the no-op when nothing was asked), its stop strings
+    // for the worker to spell with the class's tokenizer; below it, a V3 job exactly as before.
+    let request_version =
+        if admitted.decode.is_some() { kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V4_VERSION } else { PALW_FP_V3_VERSION };
     let request = PalwFpWorkerRequestV3 {
-        version: PALW_FP_V3_VERSION,
+        version: request_version,
         network_domain: identity.network_domain,
         class_id: identity.class_id,
         executor_bond: identity.executor_bond,
@@ -995,13 +1000,19 @@ fn handle_chat(
         runtime_class_id: manifest.runtime_class_id,
         shape_profile_id: manifest.shape_profile_id,
         trace_scheme_id: manifest.trace_scheme_id,
-        decode: None,
-        stop_texts: Vec::new(),
+        decode: admitted.decode.clone(),
+        stop_texts: admitted.stop_texts.iter().map(|t| t.as_bytes().to_vec()).collect(),
     };
 
     // **Decision 2: the answer streams as it is decoded; the commitment does not exist yet.**
+    // A V4 job with stop strings holds its last 16 ids back: a stop sequence ends the run, so it is
+    // always the stream's tail, and it is cut from the display once the result names it.
     let eog: BTreeSet<u32> = manifest.eog_token_ids.iter().copied().collect();
-    let mut stream = AnswerStream::new();
+    let mut stream = if admitted.stop_texts.is_empty() {
+        AnswerStream::new()
+    } else {
+        AnswerStream::with_stop_holdback(kaspa_consensus_core::palw_decode_pipeline_v4::PALW_DECODE_V4_MAX_STOP_TOKENS)
+    };
     let result = {
         let mut on_token = |token_id: u32, rendered: &[u8]| {
             if let Some(delta) = stream.push(token_id, rendered, &eog) {
@@ -1010,7 +1021,30 @@ fn handle_chat(
         };
         worker.run(&request, facts.prompt_ids_form(), &mut on_token)?
     };
-    if let Some(delta) = stream.finish() {
+    // RFC-0001 §A.3 step 7: where the job's own stop rule ended the answer — derived from the job
+    // the worker bound and the ids it committed, never taken from the worker's word.
+    let v4_stop = result.job.decode.as_ref().filter(|_| result.job.is_v4()).map(|decode| {
+        (
+            decode.clone(),
+            kaspa_consensus_core::palw_decode_pipeline_v4::decode_answer_stop_v4(
+                decode,
+                result.job.decode_token_limit,
+                u32::MAX,
+                &result.output_token_ids,
+            ),
+        )
+    });
+    let stop_len = match &v4_stop {
+        Some((decode, Ok(stop))) => match stop.reason {
+            kaspa_consensus_core::palw_decode_pipeline_v4::PalwFpDecodeStopReasonV1::StopSequence { index } => {
+                decode.stop_sequences.get(index as usize).map(Vec::len)
+            }
+            _ => None,
+        },
+        Some((_, Err(why))) => return Err(format!("the worker's V4 answer does not end where its job's stop rule ends it: {why}")),
+        None => None,
+    };
+    if let Some(delta) = stream.finish_with_stop(stop_len) {
         sink.delta(&delta);
     }
 
@@ -1261,6 +1295,8 @@ fn handle_chat(
 
     let finish_reason = if !parsed.calls.is_empty() {
         "tool_calls" // ADR-0096 Decision 2: OpenAI's word for an answer that made calls
+    } else if stop_len.is_some() {
+        "stop" // RFC-0001 §A.3: a stop sequence ended the run
     } else {
         match result.stop_reason {
             PalwFpStopReasonV3::EndOfGeneration => "stop",
@@ -1287,6 +1323,15 @@ fn handle_chat(
             "palw_fp_decode_rules is not armed on this network (ADR-0082 Decision 11): the seat replays a greedy decode and nothing else"
         },
         "not_a_rule_on_this_lane": admitted.not_a_rule_on_this_lane,
+        // RFC-0001 §A: the job's decode controls as the chain holds them (V4 only), and what the
+        // stop strings are — token sequences, matched only as they tokenize alone.
+        "decode_v4": result.job.decode.as_ref().filter(|_| result.job.is_v4()).map(|decode| serde_json::json!({
+            "config": decode,
+            "stop": v4_stop.as_ref().and_then(|(_, stop)| stop.as_ref().ok()).map(|stop| serde_json::json!(stop)),
+            "stop_strings": admitted.stop_texts,
+            "stop_note": "each stop string is the token sequence it encodes to ALONE under this class's tokenizer; generated \
+                          text that tokenizes the same characters differently does not match and does not stop",
+        })),
     });
     let tool_choice = (admitted.tool_choice_given || !admitted.tools.is_empty())
         .then(|| serde_json::json!({ "requested": admitted.tool_choice.requested_json(), "enforcement": "advisory" }));

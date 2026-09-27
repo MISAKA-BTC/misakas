@@ -184,6 +184,10 @@ pub struct ChatRequest {
     pub frequency_penalty: Option<f64>,
     #[serde(default)]
     pub presence_penalty: Option<f64>,
+    /// **RFC-0001 §A.2's `penalty_window`** under llama.cpp's name: how many of the most recent
+    /// GENERATED tokens the three penalties count (1..=256). Absent with a penalty active is 64.
+    #[serde(default)]
+    pub repeat_last_n: Option<u32>,
     #[serde(default)]
     pub logit_bias: Option<Value>,
     #[serde(default)]
@@ -373,6 +377,12 @@ pub struct AdmittedRequest {
     pub sampling_requested: serde_json::Map<String, Value>,
     /// The identity-valued knobs that were sent — reported as `not_a_rule_on_this_lane`.
     pub not_a_rule_on_this_lane: Vec<&'static str>,
+    /// **RFC-0001 §A: the job's decode controls, normalized to the canonical `DecodeConfigV4`** —
+    /// `Some` exactly where the network is past `Params::palw_fp_decode_rules` (every new job is V4
+    /// there, the no-op form when nothing was asked), `None` below it (a V3 job).
+    pub decode: Option<kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4>,
+    /// The `stop` strings, for the worker to spell with the class's tokenizer (V4 only).
+    pub stop_texts: Vec<String>,
     /// Accepted fields that changed nothing, by name.
     pub ignored_fields: Vec<String>,
     pub include_usage: bool,
@@ -487,23 +497,50 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
         sampling_requested.insert("seed".into(), serde_json::json!(seed));
     }
     let mut not_a_rule_on_this_lane = Vec::new();
+    // **RFC-0001 §A: past the decode-rules fence the penalties, `logit_bias` and `stop` are rules**,
+    // normalized here to the one canonical `DecodeConfigV4`; everything outside §A.2 stays refused
+    // by name. Below the fence the shipped surface stands, word for word.
+    let (decode, stop_texts) = if facts.fp_decode_rules_armed {
+        let (decode, stop_texts) = decode_config_from_request_v1(chat, &mut sampling_requested, &mut ignored)?;
+        (Some(decode), stop_texts)
+    } else {
+        (None, Vec::new())
+    };
     let knobs = [chat.top_p, chat.top_k, chat.min_p, chat.repeat_penalty, chat.frequency_penalty, chat.presence_penalty];
     for ((name, identity), sent) in IDENTITY_KNOBS.iter().zip(knobs) {
+        if decode.is_some() && matches!(*name, "repeat_penalty" | "frequency_penalty" | "presence_penalty") {
+            continue;
+        }
         if let Some(value) = sent {
             if value != *identity {
-                return Err(not_a_rule(name, value));
+                return Err(if decode.is_some() {
+                    format!(
+                        "{name} {value} is not part of FP Job V4 (RFC-0001 §A.2 names repeat, frequency and presence penalties, logit_bias and stop): refused by name"
+                    )
+                } else {
+                    not_a_rule(name, value)
+                });
             }
             sampling_requested.insert((*name).to_string(), serde_json::json!(value));
             not_a_rule_on_this_lane.push(*name);
         }
     }
-    if let Some(bias) = &chat.logit_bias
+    if decode.is_none()
+        && let Some(n) = chat.repeat_last_n
+    {
+        return Err(not_a_rule("repeat_last_n", n));
+    }
+    if decode.is_some() {
+        // Handled above, as §A.2's controls.
+    } else if let Some(bias) = &chat.logit_bias
         && !matches!(bias, Value::Null)
         && bias.as_object().is_none_or(|m| !m.is_empty())
     {
         return Err(not_a_rule("logit_bias", bias));
     }
-    if let Some(stop) = &chat.stop {
+    if decode.is_some() {
+        // `stop` is §A.2's too, spelled into token ids by the worker.
+    } else if let Some(stop) = &chat.stop {
         let empty = match stop {
             Value::Null => true,
             Value::String(s) => s.is_empty(),
@@ -720,6 +757,8 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
         sampling,
         sampling_requested,
         not_a_rule_on_this_lane,
+        decode,
+        stop_texts,
         ignored_fields: ignored,
         include_usage,
     })
@@ -757,6 +796,105 @@ fn flatten_content(i: usize, content: Option<&Value>) -> Result<String, String> 
         }
         Some(other) => Err(format!("messages[{i}].content is {} where a string or a list of parts was expected", kind_of(other))),
     }
+}
+
+/// **RFC-0001 §A.2: an OpenAI/llama.cpp-shaped request's decode controls, as the one canonical
+/// `DecodeConfigV4`** (RFC-0001 §A, G6). Floats are mapped once, by rounding to the nearest step
+/// of the fixed point (`repeat_penalty` in Q16, the rest in Q24); a range violation is refused by
+/// name; entries that ask for nothing are dropped and listed (a zero `logit_bias`, a window with no
+/// penalty), because the canonical form has one spelling of "nothing"; `logit_bias` is sorted by
+/// token id and `stop` strings are de-duplicated. The `stop` strings travel as text: the worker
+/// holds the class's tokenizer and spells each one alone (`decode_with_stop_texts_v1`).
+pub fn decode_config_from_request_v1(
+    chat: &ChatRequest,
+    requested: &mut serde_json::Map<String, Value>,
+    ignored: &mut Vec<String>,
+) -> Result<(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4, Vec<String>), String> {
+    use kaspa_consensus_core::palw_decode_pipeline_v4::{
+        DecodeConfigV4, PALW_DECODE_V4_MAX_BIAS_ENTRIES, PALW_DECODE_V4_MAX_STOP_SEQUENCES, PALW_DECODE_V4_Q24_ONE,
+        PALW_DECODE_V4_REPEAT_Q_ONE,
+    };
+    let finite = |name: &str, v: f64, lo: f64, hi: f64| -> Result<f64, String> {
+        if v.is_nan() || v < lo || v > hi {
+            return Err(format!("{name} {v} is outside [{lo}, {hi}] (RFC-0001 §A.2)"));
+        }
+        Ok(v)
+    };
+    let mut decode = DecodeConfigV4::NOOP;
+    if let Some(p) = chat.repeat_penalty {
+        decode.repeat_penalty_q = (finite("repeat_penalty", p, 1.0, 4.0)? * PALW_DECODE_V4_REPEAT_Q_ONE as f64).round() as u32;
+        requested.insert("repeat_penalty".into(), serde_json::json!(p));
+    }
+    if let Some(f) = chat.frequency_penalty {
+        decode.frequency_penalty_q = (finite("frequency_penalty", f, -2.0, 2.0)? * PALW_DECODE_V4_Q24_ONE as f64).round() as i32;
+        requested.insert("frequency_penalty".into(), serde_json::json!(f));
+    }
+    if let Some(s) = chat.presence_penalty {
+        decode.presence_penalty_q = (finite("presence_penalty", s, -2.0, 2.0)? * PALW_DECODE_V4_Q24_ONE as f64).round() as i32;
+        requested.insert("presence_penalty".into(), serde_json::json!(s));
+    }
+    if decode.penalties_active() {
+        let window = chat.repeat_last_n.unwrap_or(64);
+        if !(1..=256).contains(&window) {
+            return Err(format!("repeat_last_n {window} is outside 1..=256 (RFC-0001 §A.2's penalty_window)"));
+        }
+        decode.penalty_window = window as u16;
+    } else if let Some(window) = chat.repeat_last_n {
+        ignored.push(format!("repeat_last_n ({window}: no penalty is active, so there is no window)"));
+    }
+    if let Some(bias) = &chat.logit_bias
+        && !bias.is_null()
+    {
+        let map =
+            bias.as_object().ok_or_else(|| format!("logit_bias must be an object of token id -> bias; got {}", kind_of(bias)))?;
+        let mut entries: Vec<(u32, i32)> = Vec::with_capacity(map.len());
+        for (key, value) in map {
+            let token: u32 = key.parse().map_err(|_| format!("logit_bias key {key:?} is not a token id"))?;
+            let v = value.as_f64().ok_or_else(|| format!("logit_bias[{key}] is {} where a number was expected", kind_of(value)))?;
+            let q = (finite(&format!("logit_bias[{key}]"), v, -100.0, 100.0)? * PALW_DECODE_V4_Q24_ONE as f64).round() as i32;
+            if q == 0 {
+                ignored.push(format!("logit_bias[{key}] (a zero bias is no bias)"));
+                continue;
+            }
+            entries.push((token, q));
+        }
+        entries.sort_unstable_by_key(|(token, _)| *token);
+        if entries.len() > PALW_DECODE_V4_MAX_BIAS_ENTRIES {
+            return Err(format!(
+                "logit_bias carries {} entries; at most {PALW_DECODE_V4_MAX_BIAS_ENTRIES} (RFC-0001 §A.2)",
+                entries.len()
+            ));
+        }
+        requested.insert("logit_bias".into(), bias.clone());
+        decode.logit_bias = entries;
+    }
+    let mut stop_texts: Vec<String> = match &chat.stop {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::Array(items)) => items
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                v.as_str().map(str::to_string).ok_or_else(|| format!("stop[{i}] is {} where a string was expected", kind_of(v)))
+            })
+            .collect::<Result<_, _>>()?,
+        Some(other) => return Err(format!("stop must be a string or an array of strings; got {}", kind_of(other))),
+    };
+    if stop_texts.iter().any(String::is_empty) {
+        return Err(
+            "stop carries an empty string, which would stop before any token (RFC-0001 §A.2: each sequence is 1..=16 ids)".to_string()
+        );
+    }
+    stop_texts.sort();
+    stop_texts.dedup();
+    if stop_texts.len() > PALW_DECODE_V4_MAX_STOP_SEQUENCES {
+        return Err(format!("stop carries {} strings; at most {PALW_DECODE_V4_MAX_STOP_SEQUENCES} (RFC-0001 §A.2)", stop_texts.len()));
+    }
+    if !stop_texts.is_empty() {
+        requested.insert("stop".into(), serde_json::json!(stop_texts));
+    }
+    decode.validate_canonical().map_err(|e| format!("the decode controls are not canonical (RFC-0001 §A.2): {e}"))?;
+    Ok((decode, stop_texts))
 }
 
 /// `response_format` (ADR-0096 Decision 3): `text` asks nothing; `json_object` and `json_schema`
@@ -996,6 +1134,68 @@ pub fn refusal_body(message: &str) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// **RFC-0001 §A, G6: past the decode-rules fence the API's controls become ONE canonical
+    /// `DecodeConfigV4`.** Floats mapped to the fixed point by rounding; `logit_bias` sorted and its
+    /// zero entry dropped (and listed); `stop` strings de-duplicated and handed to the worker as text;
+    /// a penalty with no `repeat_last_n` counts 64 ids. Below the fence the same request is refused
+    /// by name, word for word as the shipped surface refuses it; and past it everything §A.2 does not
+    /// name is still refused by name.
+    #[test]
+    fn past_the_fence_the_controls_normalize_to_one_canonical_v4_config() {
+        use kaspa_consensus_core::palw_decode_pipeline_v4::{DecodeConfigV4, PALW_DECODE_V4_BIAS_BAN_Q};
+        let armed = ChainFacts { fp_decode_rules_armed: true, ..Default::default() };
+        let admit_armed =
+            |request: Value| parse_and_admit(&serde_json::to_vec(&request).unwrap(), &armed).map(|(_, admitted)| admitted);
+        let request = json!({
+            "messages": user("hi"), "repeat_penalty": 1.3, "frequency_penalty": 0.5, "presence_penalty": -0.5,
+            "logit_bias": { "42": 5, "7": -100, "9": 0 }, "stop": ["\n\n", "END", "END"]
+        });
+        let admitted = admit_armed(request.clone()).expect("§A.2's controls are rules past the fence");
+        let decode = admitted.decode.clone().expect("a V4 job");
+        assert_eq!(
+            decode,
+            DecodeConfigV4 {
+                repeat_penalty_q: 85_197,
+                penalty_window: 64,
+                frequency_penalty_q: 1 << 23,
+                presence_penalty_q: -(1 << 23),
+                logit_bias: vec![(7, PALW_DECODE_V4_BIAS_BAN_Q), (42, 5 << 24)],
+                stop_sequences: vec![],
+            }
+        );
+        decode.validate_canonical().expect("canonical");
+        assert_eq!(admitted.stop_texts, vec!["\n\n".to_string(), "END".to_string()], "sorted, de-duplicated");
+        assert!(admitted.ignored_fields.iter().any(|f| f.starts_with("logit_bias[9]")), "{:?}", admitted.ignored_fields);
+        // Nothing asked is the no-op — every job past the fence is V4.
+        assert_eq!(admit_armed(json!({ "messages": user("hi") })).unwrap().decode, Some(DecodeConfigV4::NOOP));
+        // A window with no penalty is dropped (one spelling of "off"), a window with one is taken.
+        let quiet = admit_armed(json!({ "messages": user("hi"), "repeat_last_n": 8 })).unwrap();
+        assert_eq!(quiet.decode, Some(DecodeConfigV4::NOOP));
+        let windowed = admit_armed(json!({ "messages": user("hi"), "presence_penalty": 1, "repeat_last_n": 8 })).unwrap();
+        assert_eq!(windowed.decode.unwrap().penalty_window, 8);
+        // Out of range, out of bound, or outside §A.2: refused by name.
+        for (bad, needle) in [
+            (json!({ "messages": user("hi"), "repeat_penalty": 4.5 }), "repeat_penalty"),
+            (json!({ "messages": user("hi"), "frequency_penalty": -2.5 }), "frequency_penalty"),
+            (json!({ "messages": user("hi"), "logit_bias": { "3": 101 } }), "logit_bias[3]"),
+            (json!({ "messages": user("hi"), "logit_bias": { "x": 1 } }), "logit_bias key"),
+            (json!({ "messages": user("hi"), "stop": ["a", "b", "c", "d", "e"] }), "stop carries 5"),
+            (json!({ "messages": user("hi"), "stop": [""] }), "empty string"),
+            (json!({ "messages": user("hi"), "presence_penalty": 1, "repeat_last_n": 300 }), "repeat_last_n"),
+            (json!({ "messages": user("hi"), "top_p": 0.9 }), "not part of FP Job V4"),
+            (json!({ "messages": user("hi"), "top_k": 40 }), "not part of FP Job V4"),
+        ] {
+            let err = admit_armed(bad.clone()).expect_err("refused");
+            assert!(err.contains(needle), "{bad}: {err}");
+        }
+        let many: serde_json::Map<String, Value> = (0..301).map(|t| (t.to_string(), json!(1))).collect();
+        assert!(admit_armed(json!({ "messages": user("hi"), "logit_bias": many })).unwrap_err().contains("at most 300"));
+        // Below the fence: the shipped refusals, and no V4 job.
+        assert!(admit(request).is_err(), "below the fence these are not rules");
+        assert_eq!(admit(json!({ "messages": user("hi") })).unwrap().decode, None);
+        assert!(admit(json!({ "messages": user("hi"), "repeat_last_n": 8 })).unwrap_err().contains("repeat_last_n"));
+    }
 
     fn dormant() -> ChainFacts {
         ChainFacts::default()
