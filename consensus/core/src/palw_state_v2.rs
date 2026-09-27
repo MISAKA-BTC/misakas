@@ -1301,7 +1301,22 @@ pub struct PalwStateParamsV2 {
     /// height in the params is a value every node reads the same way at every DAA score.
     ///
     /// `None` is byte-identical to the transition before the field existed.
+    ///
+    /// **Retired as a carrier of the height, and always `None`** (RFC-0001 §A, 2026-09-27): this
+    /// field is inside the bundle's borsh and therefore inside `palw_ruleset_id_v2`, which the
+    /// identity id reads UNNORMALISED — a height written here would part every upgraded node from
+    /// every un-upgraded one at deploy, not at the fence. The height lives in the borsh-skipped
+    /// mirror [`Self::fp_decode_rules_from_daa`] below (the post-launch fences' shape), and
+    /// `validate_palw_v2` refuses a bundle that sets this one. Kept, and kept `None`, because
+    /// removing it would move every V2 network's ruleset id.
     fp_decode_rules_daa: Option<u64>,
+    /// **`Params::palw_fp_decode_rules`'s height, mirrored** by `Params::sync_palw_fp_decode_rules`
+    /// (ADR-0082 D10 + D11 + RFC-0001 §A's "V4 from here"): past it a free-prompt claim is credited
+    /// its DECODE work only and a new job is V4. Skipped by borsh for the post-launch fences'
+    /// reason — the fence itself is what the params and schedule ids name, Some-only — and checked
+    /// equal to the fence by `validate_palw_v2`.
+    #[borsh(skip)]
+    fp_decode_rules_from_daa: Option<u64>,
     /// **The short challenge window's fence height** (`Params::palw_short_challenge_window`,
     /// ADR-0132 §7.6). A claim licensed at or past it is challengeable for
     /// [`PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`] DAA instead of `window_challenge`; `None` is the rule
@@ -1630,6 +1645,7 @@ impl PalwStateParamsV2 {
             // `with_class_share_growth_v1`.
             class_growth_permille: 0,
             fp_decode_rules_daa: None,
+            fp_decode_rules_from_daa: None,
             class_receipt_window: None,
             escrow_backed_exposure_from_daa: None,
             rcore_plus_from_daa: None,
@@ -2086,15 +2102,28 @@ impl PalwStateParamsV2 {
     /// **ADR-0082 Decisions 10/11: arm the lane's decode rules at this DAA score.**
     /// `Params::palw_fp_decode_rules_fence().map(|f| f.daa_score())` is the one value a caller
     /// should pass; no preset passes anything.
+    ///
+    /// Writes the borsh-skipped mirror (`Params::sync_palw_fp_decode_rules` is the one caller a
+    /// node has), never the retired serialized field.
     pub fn with_fp_decode_rules_v1(mut self, activation_daa: Option<u64>) -> Self {
-        self.fp_decode_rules_daa = activation_daa;
+        self.fp_decode_rules_from_daa = activation_daa;
         self
+    }
+
+    /// The mirrored height, as `validate_palw_v2` compares it with the fence.
+    pub fn fp_decode_rules_from_daa(&self) -> Option<u64> {
+        self.fp_decode_rules_from_daa
+    }
+
+    /// The retired serialized height — `None` on every bundle `validate_palw_v2` admits.
+    pub fn fp_decode_rules_serialized_daa(&self) -> Option<u64> {
+        self.fp_decode_rules_daa
     }
 
     /// Are ADR-0082's decode rules in force at `daa_score`? `false` on every shipped preset, and
     /// on every caller that has not armed it.
     pub fn fp_decode_rules_at(&self, daa_score: u64) -> bool {
-        self.fp_decode_rules_daa.is_some_and(|at| daa_score >= at)
+        self.fp_decode_rules_from_daa.is_some_and(|at| daa_score >= at)
     }
 
     pub fn class_growth_permille(&self) -> u16 {
@@ -29908,14 +29937,15 @@ fn apply_object(
             // against the capture's own count, and the attempt lane reads it — but past the fence
             // it is not what the claim is PAID for.
             //
-            // The chain cannot enumerate the decode half today; see
-            // `FreePromptDecodeLeavesUnavailable` for exactly which two inputs are missing and
-            // what closing it costs. Refusing is the fail-closed direction and is unreachable on
-            // every shipped preset.
-            let decode_rules = builder.params.fp_decode_rules_at(ctx.daa_score);
-            if decode_rules {
-                return Err(PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: *claim_id, class: *class_id });
-            }
+            // **The decode half is enumerated where the work is DERIVED** (RFC-0001 §A.3 D10):
+            // past the fence the price reads the class's published graph and the run's two
+            // committed counts (ADR-0145 §5 — `validate_palw_v2` arms the decode rules only over
+            // `palw_fp_derived_work` at or below them), and credits the run as if its whole
+            // prompt were already paid for — the prefill is priced at zero and the decode calls
+            // that ran are what earn; an answer a stop sequence ended early earns for the tokens it
+            // decoded and no more. `palw_fp_commitment_price_from_state_v1` below is that one
+            // spelling; `FreePromptDecodeLeavesUnavailable` is its answer for a ruleset that armed
+            // the rules without the derivation, which no assembled ruleset is.
             // **ADR-0145 §5 and §6: the work is DERIVED, and a prefix already paid for is not paid
             // again.** The 2026-09-19 reward audit's F2.
             //
@@ -30346,7 +30376,18 @@ pub fn palw_fp_commitment_price_from_state_v1(
         // ruleset (the same reason `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` exists at all).
         let ladder = state.class_step_ladder_v1(class_id, crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
         let already_paid = state.fp_claimed_prompt_ids_of(class_id, inputs.daa_score);
-        let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid);
+        // **ADR-0082 Decision 10 / RFC-0001 §A.3 D10: past the decode rules the WHOLE prompt is
+        // accounted as paid** — the prefill of a user-chosen prompt is priced at zero, so the
+        // derivation below credits the decode calls alone, in leaves (`total − prefill(prompt)`)
+        // and in compute (the generated positions only). One line, because D10 is exactly ADR-0145
+        // §6's cache rule with the prefix taken to be the prompt; the prefix-STATE rule still
+        // applies (a consumed state can only lower the credit, and here there is nothing left of
+        // the prefill to lower).
+        let accounted = if decode_rules {
+            prompt_tokens
+        } else {
+            crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid)
+        };
         let work = crate::palw_freeprompt_v3::fp_derive_work_from_state_v1(
             &profile,
             prompt_tokens,
@@ -30432,7 +30473,13 @@ pub fn palw_fp_commitment_price_from_state_v1(
     } else {
         let credited = match &derived {
             Some((work, _)) => work.credited_leaves,
-            None => crate::palw_freeprompt_v3::fp_credited_leaves_v1(decode_rules, work_leaves, 0),
+            // Below the derivation the chain holds no graph to split the capture with, so the
+            // decode rules cannot price this claim: refused by name (unreachable on an assembled
+            // ruleset — `validate_palw_v2` arms the rules only over `palw_fp_derived_work`).
+            None if decode_rules => {
+                return Err(PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: *claim_id, class: *class_id });
+            }
+            None => crate::palw_freeprompt_v3::fp_credited_leaves_v1(false, work_leaves, 0),
         };
         let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(class.pwu_rule.canonical_leaves_v1(), per_job);
         let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(credited, quantum, cap);
@@ -47979,6 +48026,62 @@ pub(crate) mod tests {
         assert_eq!(
             apply_derived(&published, &p, &ctx(4, 103, 4), &[idless], &armed).unwrap_err(),
             PalwStateV2Error::FreePromptPromptNotAccountable { claim: h64(0xFE), carried: 0 }
+        );
+    }
+
+    /// **RFC-0001 §A.3 D10 (ADR-0082 Decision 10): past the decode rules a free-prompt claim is
+    /// credited its DECODE work only.** The same commitment, folded below the fence and past it:
+    /// below, the whole run's leaves; past it, the run less its prefill — the prompt priced at zero
+    /// — so a stop that ends an answer early earns for what was decoded and nothing more. And a
+    /// ruleset that armed the rules WITHOUT the derivation refuses by name (the arm `validate_palw_v2`
+    /// makes unassemblable), rather than quietly keeping the old numerator.
+    #[test]
+    fn past_the_decode_rules_a_claim_is_credited_its_decode_work_only() {
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+        let prompt: Vec<u32> = (0..8).collect();
+        let quantum = 1_000u64;
+        let leaves =
+            |decode: u32| crate::palw_step::step_leaf_count_of_tokens_capped_v1(&derived_profile(), 8, decode, 1 << 26).unwrap();
+        let prefill = crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&derived_profile(), 8, 1 << 26).unwrap();
+        let (long, short) = (12u32, 6u32);
+        assert!(leaves(short) - prefill >= quantum, "the fixture's short answer still decodes a quantum");
+        let cap = p.fp_max_quanta_per_receipt as u64;
+        let priced = |credited: u64| (credited / quantum).min(cap) * quantum;
+        assert!(leaves(long) / quantum < cap, "the fixture stays under the per-receipt cap, so the numerator is what shows");
+
+        // Below the fence (armed at DAA 104, folded at DAA 103): the whole run, exactly as the shipped lane.
+        let later = p.clone().with_fp_decode_rules_v1(Some(104));
+        let (below, _) =
+            apply_derived(&published, &later, &ctx(4, 103, 4), &[derived_commit(0xFC, &prompt, long, leaves(long))], &armed).unwrap();
+        assert_eq!(below.claim(&h64(0xFC)).unwrap().pwu, priced(leaves(long)), "dormant: every leaf of the run");
+
+        // At it (DAA 103): the prefill is priced at zero.
+        let at = p.clone().with_fp_decode_rules_v1(Some(103));
+        let (past, _) =
+            apply_derived(&published, &at, &ctx(4, 103, 4), &[derived_commit(0xFC, &prompt, long, leaves(long))], &armed).unwrap();
+        let claim = past.claim(&h64(0xFC)).unwrap();
+        assert_eq!(claim.work_leaves, leaves(long), "the record keeps the capture's own count");
+        assert_eq!(claim.pwu, priced(leaves(long) - prefill), "credited: the decode leaves");
+        assert!(claim.pwu < below.claim(&h64(0xFC)).unwrap().pwu);
+        // A stop that ended the answer early earns for what it decoded.
+        let (stopped, _) =
+            apply_derived(&published, &at, &ctx(4, 103, 4), &[derived_commit(0xFD, &prompt, short, leaves(short))], &armed).unwrap();
+        assert_eq!(stopped.claim(&h64(0xFD)).unwrap().pwu, priced(leaves(short) - prefill));
+        assert!(stopped.claim(&h64(0xFD)).unwrap().pwu < claim.pwu);
+        // Declared work is still the graph's answer, past the decode rules as before them.
+        assert_eq!(
+            apply_derived(&published, &at, &ctx(4, 103, 4), &[derived_commit(0xFE, &prompt, long, leaves(long) + 1)], &armed)
+                .unwrap_err(),
+            PalwStateV2Error::FreePromptWorkLeavesMismatch { claim: h64(0xFE), declared: leaves(long) + 1, derived: leaves(long) }
+        );
+        // Without the derivation the rules cannot price a claim, and say so by name.
+        let underived = PalwTransitionExtrasV1::default();
+        assert_eq!(
+            apply_derived(&published, &at, &ctx(4, 103, 4), &[derived_commit(0xFC, &prompt, long, leaves(long))], &underived)
+                .unwrap_err(),
+            PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: h64(0xFC), class }
         );
     }
 
