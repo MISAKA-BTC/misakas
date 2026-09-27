@@ -112,7 +112,7 @@ mac/start-local-web-ui.command
 - 現在状態に合わせた「次に押すボタン」の1操作表示
 - minerの採掘成功block数とcoinbase maturity目安
 - validatorのattestation送信成功表示
-- エラー提出用support reportのコピー / `.txt`保存
+- 状態とエラーを確認できる診断レポートのコピー / `.txt`保存
 
 ローカル版では裏側の実行だけ `systemd` ではなく `scripts/misaka-desktop-node.sh` のPID管理になります。
 
@@ -246,8 +246,8 @@ scripts/misaka-desktop-node.sh status
 # 詳細診断
 scripts/misaka-desktop-node.sh doctor
 
-# supportへ共有する診断bundle作成
-scripts/misaka-desktop-node.sh collect-support-log
+# 状態とログを端末内へ保存する診断bundle作成
+scripts/misaka-desktop-node.sh collect-diagnostic-log
 
 # validator準備をまとめて進める
 scripts/misaka-desktop-node.sh auto-validator

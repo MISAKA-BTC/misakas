@@ -522,11 +522,11 @@
 
         <section class="band">
           <div class="band-header">
-            <div><h2 data-i18n="supportTitle">提出用サポート情報</h2><p data-i18n="supportBody">秘匿情報を除いた状態とエラーを、管理者やサポート窓口へ共有できます。</p></div>
+            <div><h2 data-i18n="supportTitle">診断レポート</h2><p data-i18n="supportBody">nodeの状態とエラーを、秘匿情報を除いて確認できます。レポートは自動送信されません。</p></div>
           </div>
           <div class="success-callout" id="supportError">現在エラーは記録されていません。</div>
           <div class="support-actions">
-            <button class="button primary" id="copySupportBtn" type="button" data-i18n="copySupport">提出用レポートをコピー</button>
+            <button class="button primary" id="copySupportBtn" type="button" data-i18n="copySupport">診断レポートをコピー</button>
             <button class="button" id="saveSupportBtn" type="button" data-i18n="saveSupport">レポートを保存 (.txt)</button>
           </div>
         </section>
@@ -557,8 +557,8 @@
         syncMaturityTitle: '同期と成熟', syncMaturityBody: 'DAAとcoinbase maturityの目安です。', updatedAt: '更新時刻', bondMaturity: 'Bond用成熟目安', visibleBalance: '表示残高',
         minerBody: '採掘が動いているか、どのaddressへ掘っているかを確認します。', minedBlocks: '今回の採掘block数', lastMinedDaa: '直近の採掘DAA', logSummary: 'ログ要約',
         validatorLogsBody: 'attestation送信の根拠を確認します。', nextTitle: '次にすること', nextBody: '現在状態に必要な1操作を出します。', evidenceTitle: '確認できた根拠', evidenceBody: 'OK判断の材料です。',
-        supportTitle: '提出用サポート情報', supportBody: '秘匿情報を除いた状態とエラーを、管理者やサポート窓口へ共有できます。', copySupport: '提出用レポートをコピー', saveSupport: 'レポートを保存 (.txt)',
-        footer: 'このページは読み取り専用です。秘密鍵やvalidator seedは表示しません。', supportNoError: '現在エラーは記録されていません。', supportCopied: '提出用レポートをコピーしました。',
+        supportTitle: '診断レポート', supportBody: 'nodeの状態とエラーを、秘匿情報を除いて確認できます。レポートはこの端末内でコピーまたは保存され、自動送信されません。', copySupport: '診断レポートをコピー', saveSupport: 'レポートを保存 (.txt)',
+        footer: 'このページは読み取り専用です。秘密鍵やvalidator seedは表示しません。', supportNoError: '現在エラーは記録されていません。', supportCopied: '診断レポートをコピーしました。',
         attestationWaiting: 'attestation成功待ち', attestationWaitingBody: 'validatorログを30秒ごとに確認します。RUNNINGだけでは成功と判定しません。', attestationSuccess: 'attestation送信成功', attestationSuccessBody: 'epoch {epoch} の送信を確認しました。',
         maturityUnknown: 'miner開始DAAをまだ取得できません。', maturityReady: '目安到達。実際の成熟UTXOはBond作成時に確認します。', maturityProgress: '残り約 {remaining} blocks（{percent}%）', balanceUnknown: '未確認',
         noMinerLogs: 'minerログはまだありません。', minedSuccess: 'block #{block} の採掘成功を確認しました。', noValidatorLogs: 'validatorログはまだありません。',
@@ -580,8 +580,8 @@
         syncMaturityTitle: 'Sync and maturity', syncMaturityBody: 'DAA and the coinbase-maturity estimate.', updatedAt: 'Updated at', bondMaturity: 'Bond maturity estimate', visibleBalance: 'Visible balance',
         minerBody: 'See whether mining is running and which address receives rewards.', minedBlocks: 'Blocks mined this run', lastMinedDaa: 'Latest mined DAA', logSummary: 'Log summary',
         validatorLogsBody: 'Evidence for attestation submission.', nextTitle: 'Next action', nextBody: 'Shows the single action required for the current state.', evidenceTitle: 'Observed evidence', evidenceBody: 'Facts used for the status judgment.',
-        supportTitle: 'Support report for submission', supportBody: 'Share a redacted state and error report with the maintainer or support channel.', copySupport: 'Copy report for submission', saveSupport: 'Save report (.txt)',
-        footer: 'This page is read-only. It never displays the private key or validator seed.', supportNoError: 'No error is currently recorded.', supportCopied: 'Support report copied.',
+        supportTitle: 'Diagnostic report', supportBody: 'Creates a redacted report of the node state and errors. It can be copied or saved locally and is never sent automatically.', copySupport: 'Copy diagnostic report', saveSupport: 'Save report (.txt)',
+        footer: 'This page is read-only. It never displays the private key or validator seed.', supportNoError: 'No error is currently recorded.', supportCopied: 'Diagnostic report copied.',
         attestationWaiting: 'Waiting for attestation success', attestationWaitingBody: 'Validator logs are checked every 30 seconds. RUNNING alone is not treated as success.', attestationSuccess: 'Attestation submitted successfully', attestationSuccessBody: 'Submission for epoch {epoch} was found.',
         maturityUnknown: 'The miner starting DAA is not available yet.', maturityReady: 'Estimate reached. Actual mature UTXOs are verified during bond creation.', maturityProgress: 'About {remaining} blocks left ({percent}%)', balanceUnknown: 'Not checked',
         noMinerLogs: 'No miner logs yet.', minedSuccess: 'Successfully mined block #{block}.', noValidatorLogs: 'No validator logs yet.',
@@ -924,7 +924,7 @@
 
     function supportReportText() {
       return redactSensitive([
-        'MISAKA participation dashboard support report',
+        'MISAKA participation dashboard diagnostic report',
         `generatedAt: ${new Date().toISOString()}`,
         `page: ${window.location.pathname}`,
         `language: ${lang}`,
@@ -959,7 +959,7 @@
       const href = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = href;
-      link.download = `misaka-support-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+      link.download = `misaka-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
       document.body.appendChild(link);
       link.click();
       link.remove();
