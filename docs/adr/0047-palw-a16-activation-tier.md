@@ -91,3 +91,9 @@ runtime-scale plumbing through every op signature).
   tiling, head-tiled rope) bit-for-bit; a full per-node replay of an entire job through
   `a16_row` remains future hardening.
 * Decode-position embedding (G5d's second half) is inherited unchanged from the int8 record.
+
+## Links
+
+- Spec: [04 Execution semantics](../spec/palw/04-execution-semantics.md) §4.2; its Decision is transcribed in [04a](../spec/palw/04a-integer-arithmetic.md)
+- Design: [design/palw/execution.md](../design/palw/execution.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

@@ -48,7 +48,7 @@ to the claim from then until it is paid (07–10). After those come the two lane
 | 01 | [Principles and scope](01-principles.md) | P1–P7, what is and is not verified, execute now and settle later | 0144, 0127 |
 | 02 | [State, objects and carriage](02-state-objects-and-carriage.md) | The PALW fold, object kinds and subnetworks, validation layers, acceptance order, the state root | 0042, 0043, 0046, 0058 |
 | 03 | [Classes and registry](03-classes-and-registry.md) | Class identity, registration as a listing, lifecycle and earned admission, certification, artifact ownership, the Activation Pool | 0056, 0067, 0075, 0135, 0143, 0145, 0147, 0152 |
-| 04 | [Execution semantics](04-execution-semantics.md) | The one execution family, BASE-0 and its tiers, kernels, the step function, held context | 0030, 0031, 0040, 0047, 0052, 0053, 0082, 0103 |
+| 04 | [Execution semantics](04-execution-semantics.md) (+ [04a integer arithmetic](04a-integer-arithmetic.md)) | The one execution family, BASE-0 and its tiers, kernels, the step function, held context | 0030, 0031, 0040, 0047, 0052, 0053, 0082, 0103 |
 | 05 | [Canonical work](05-canonical-work.md) | The CanonicalWorkVector, one derivation for both lanes, pwu, the work target W, the coefficient rule | 0137, 0145, 0146, 0148, 0149 |
 | 06 | [Eligibility and block production](06-eligibility-and-block-production.md) | The beacon, the ticket, the single lottery, `bits`, the DAA and anchor clock, the clock cursor | 0072, 0074, 0083, 0137, 0138, 0142 |
 | 07 | [Claim lifecycle](07-claim-lifecycle.md) | Attempt → claim → anchor/bind → panel → licence → Final. Voids and retries, escrow, settlement and payout | 0042, 0124, 0127, 0129, 0152 |

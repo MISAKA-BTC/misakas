@@ -29,3 +29,7 @@ wherever compute cannot be avoided, at contexts up to 2M tokens.
 - [ADR-0110 — A context limit is activated from reproducible public vectors, not the maintainer's workstation](archive/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md)
 - [ADR-0118 — The held regime arrives at a height, and a held class carries its own prompt form](archive/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md)
 - [ADR-0119 — A held class is walked at the regime's ladder, and the chain records which classes those are](archive/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md)
+- [ADR-0082: The close is flat in the context — attention is refuted by dissection, the capture is a fold, and the answer is what earns](archive/0082-the-close-is-flat-in-the-context.md)
+- [ADR-0103 — The context is held off the chain, and the chain carries a root, an opening and a logarithm](archive/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
+- [ADR-0081: Long context — the input is a state chain](archive/0081-long-context-the-input-is-a-state-chain.md)
+- [ADR-0116 — An attention history is the class's, and the held regime reduces over its own width](archive/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md)

@@ -64,3 +64,5 @@ The measured failure of the central claim (ADR-0049 §Context) and the close-siz
 - [ADR-0027: PALW-S — unilateral fraud proofs; no BFT, no challenge randomness, slash-terminal](archive/0027-palw-slash-unilateral-fraud-proofs.md)
 - [ADR-0092 — The ladder is minted once, and the wall clock is what binds](archive/0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md)
 - [ADR-0085: The close is assembled from what the executor served — a disputed tile, not a capture](archive/0085-the-close-is-assembled-from-what-was-served.md)
+- [ADR-0082: The close is flat in the context — attention is refuted by dissection, the capture is a fold, and the answer is what earns](archive/0082-the-close-is-flat-in-the-context.md) (its court decisions, Part A)
+- [ADR-0103: The context is held off the chain, and the chain carries a root, an opening and a logarithm](archive/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md) (the named-leaf court, D1 and D5)
