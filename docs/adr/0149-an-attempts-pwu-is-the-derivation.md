@@ -139,3 +139,9 @@ finding (a) — the ceiling and the ledger pricing one claim differently — for
 
 ADR-0146's search reports 1.000000× — P4 does not forbid this fence. It stays `None` on every
 shipped preset. Choosing a height is a different commit (0144 item 0).
+
+## Links
+
+- Spec: [05 Canonical work](../spec/palw/05-canonical-work.md) §5.3 (PALW-WK-7)
+- Design: [design/palw/work.md](../design/palw/work.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

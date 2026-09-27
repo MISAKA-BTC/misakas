@@ -1,284 +1,33 @@
 # ADR-0146 — A coefficient is justified by the arbitrage it permits, not by being right
 
-**Status:** SEARCH IMPLEMENTED 2026-09-21. No coefficient table, no fence, no `Params` field.
-`palw_arbitrage_search_v1` is the committed program Rule R7 asked for (`cargo test -p
-kaspa-consensus-core palw_arbitrage_search`). The bound it reports for the derivation is
-1.000000× across the four shipped classes and across the admissible declaration space of one
-class, so there is no table to write and no scalar to arm. §6 (resident vs paged) stays an open
-cost question, not a price lever.
+> **Body moved (2026-09-27).** Normative rules → [spec/palw/05](../spec/palw/05-canonical-work.md); the full text as written → [design/palw/archive/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md](../design/palw/archive/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md); the reasoning is summarised in [design/palw/work.md](../design/palw/work.md).
 
-ADR-0145 named the coefficient table its hardest open question and deferred it here.
+* Status: **Search implemented, 2026-09-21. The bound measured 1.000000×.** There is no coefficient
+  table, no fence and no `Params` field. A scalar CCU is not to be armed (ADR-0131 D3–D6). ADR-0147,
+  0148 and 0149 may arm without contradicting P4.
+* Date: 2026-09-21
 
----
+## Context
 
-## 1. The trap this ADR exists to avoid
+The trap this ADR exists to avoid is choosing coefficients because they look right. The right
+question is what arbitrage a coefficient would permit a miner who shapes work to exploit it.
 
-ADR-0145 says canonical work is a vector and that "the coefficients that turn a vector into an
-economic unit are protocol-set". That sentence hides a problem: **a coefficient table is a place
-where somebody decides numbers**, and the operator's standing rule forbids hand-written per-model
-multipliers. A table of hand-picked weights is the same object one level up — it just spreads the
-decision across operations instead of across models.
+## Decision
 
-The existing table already understood this and took a position (`palw_economic_compute_v1.rs`):
+- **§2 — Most dimensions need no coefficient at all.**
+- **§3 — The remaining coefficients cannot be validated by being "right".** Only a bound on the
+  arbitrage they permit can justify them.
+- **§4 — What the bound must be, and what happens if none is reached:** no coefficient.
+- **§5 — Governance** of any future coefficient.
+- **§9 — The bound was measured, and the answer was not a table.** → spec 05 PALW-WK-4.
 
-> Chosen from the arithmetic each kernel performs at the integer engine's batch of one, **not from
-> any host's timing**.
+## Consequences
 
-Every entry is a **count**, not a preference. That is why it has survived review, and it is also
-exactly why it fails: arithmetic counts do not see memory traffic, so a 35B mixture activating 3B
-and a 1.5B dense row can execute the same MAC-equivalents and cost very different amounts.
+- The controlled cross-hardware experiment (§6) cannot be run on this fleet. The full text says why,
+  and what would be needed.
 
-So the table cannot be fixed by picking better numbers. It has to be fixed by deciding **what makes
-any number legitimate.**
+## Links
 
----
-
-## 2. Most dimensions need no coefficient at all
-
-The first result is that the free-parameter problem is much smaller than it looks, because most of
-the vector is derivable from facts already on chain.
-
-**The existing unit already doubles as a byte count.** `matmul_mac` is "one 8-bit weight × integer
-activation multiply–accumulate, which at the integer engine's batch of one is also **one weight byte
-streamed**". So for 8-bit weights, arithmetic and traffic coincide — and they diverge exactly in
-proportion to the quantisation format, which the canonical class descriptor carries (ADR-0145 §3).
-
-```
-traffic_term = MAC-eq × real_bits_per_weight / 8
-```
-
-Q4_K_M streams half a byte per weight; W8A16 streams one. **No new trusted input, no hand-picked
-number** — the format is a declared-and-verified property of the artifact, not a preference. This is
-the red-team's C9 and it closes the one gap the current table is known to have.
-
-The same holds elsewhere. A routed expert row's cost follows from how many experts the row activates
-— a graph fact. Attention follows from heads × head dimension × true KV length — an execution fact.
-KV read and write follow from the cache the receipt commits to (ADR-0145 §6).
-
-**Rule R1.** A dimension that can be derived from the canonical graph, the artifact's declared and
-verified format, or the execution facts MUST be derived. A coefficient is permitted only where no
-derivation exists.
-
-That leaves far fewer free parameters than "a coefficient table" suggests: essentially the
-**relative price between dimensions** when the vector is collapsed into one economic unit.
-
----
-
-## 3. The coefficients that remain cannot be validated by being "right"
-
-Nobody can demonstrate that a dense MAC is worth 1.0 and a KV byte 0.31. Any such claim is a
-measurement on one host, one runtime and one batch size, and ADR-0038 Decision D already refuses to
-let a wall-clock second reach fork choice.
-
-So this ADR does not ask for correct coefficients. It asks for a **bound**.
-
-**The requirement is not that reward tracks cost. It is that no participant can choose a
-configuration whose reward-per-real-cost materially beats another's.**
-
-That is a property of the table *over the space of admissible configurations*, and unlike
-correctness it is checkable — by exactly the method the 2026-09-19 red-team used: enumerate the
-admissible space and search it for the extreme.
-
-**Rule R2.** A coefficient table is accompanied by its **measured arbitrage bound**: the maximum
-ratio of reward-per-unit-real-cost between any two admissible configurations, found by adversarial
-search over profiles, quantisations, canonical jobs and execution modes. The table is proposed
-together with the search that produced the bound, and the search is committed and re-runnable.
-
-The table is not "the right numbers". It is "numbers whose worst case somebody measured, and here is
-the program that measures it".
-
-For scale, the bounds on the basis in force today, from the audit's own probes:
-
-| basis | measured spread | what the spread is over |
-|---|---|---|
-| STEP leaves | **427×** | admissible canonical jobs, one graph |
-| STEP leaves | **101×** | tilings of one graph |
-| STEP leaves | **6.8×** | the four live classes, monotone in model width |
-
-A candidate table is not an improvement because it is better reasoned. It is an improvement when its
-number in that column is smaller, measured the same way.
-
----
-
-## 4. What the bound must be, and what happens if none is reachable
-
-**Rule R3.** An arbitrage bound is acceptable only if it is **smaller than the efficiency gains the
-protocol intends to reward**. If representation choice can move reward-per-cost by 10× while a
-genuinely better model moves it by 3×, the economy rewards representation over engineering, and the
-table fails no matter how principled its derivation.
-
-This gives a concrete target rather than a wish: the bound must sit below the spread of real
-efficiency across the models the network expects to run. That spread is itself measurable, and
-measuring it is part of proposing a table.
-
-**If no coefficient vector reaches an acceptable bound, the vector must not be collapsed.** The
-fallback is to keep the dimensions separate and give each its own eligibility budget, so a
-configuration that is extreme in one dimension exhausts that dimension's budget rather than
-converting it into a general claim on the reward pool. Collapsing to one number is a convenience,
-not a requirement, and this ADR declines to assume it is achievable.
-
----
-
-## 5. Governance
-
-**Rule R4 — nobody in the economy sets them.** Not miners, not class registrants, not panel seats,
-not model owners. A coefficient is never a field in any object a participant signs. This is
-ADR-0145's I1 and I2 applied to the table itself.
-
-**Rule R5 — a table is versioned whole, never edited.** The current table already states this ("a
-change to any entry is a new version, never an edit") and it stays. A claim records the table
-version it was priced under, so history stays re-verifiable and no repricing is retroactive.
-
-**Rule R6 — a new version is a consensus change.** Its own fence, its own drill that crosses that
-fence, its own adversarial review, and its arbitrage bound re-measured and published with it. Per
-ADR-0144 §6 item 0 and this repo's own working rule: the height is chosen after the evidence, not
-before.
-
-**Rule R7 — the bound is a gate, not a note.** A version that does not ship with a re-runnable
-search and a bound does not arm. "We reasoned about it carefully" is what the current table did, and
-the current table is 427× wide.
-
----
-
-## 6. The experiment that has not been run
-
-ADR-0145 says any coefficient today is "a guess wearing a number", and that remains true until this
-runs:
-
-> Both live classes' draw jobs replayed warm on **one host**, with the artifact fully resident, and
-> then not resident. If the gap survives residency, MAC-equivalents need the traffic term of §2.
-
-**It must be run on one host** precisely because a comparison across hosts measures the hosts. And
-the figures that looked like this experiment were not: the red-team established that the 13.7× gap
-cited earlier came from `#[cfg(test)]` fixtures in `palw_verification_profile_v1.rs`, and that the
-production path overrides a measured p99 with a reference-rate estimate. That correction is why this
-section exists rather than a table.
-
-### It cannot be run on this fleet, and that is the more useful result
-
-Measured 2026-09-19 across every host the network runs on:
-
-| host | RAM | `qwen36.palwq36` | `qwen25-1.5b-a16.palwart` |
-|---|---|---|---|
-| 169.58.232.113 | 23 G | 34.0 G | 1.7 G |
-| 5.104.81.23 | 23 G | 34.0 G | 1.7 G |
-| 169.58.39.220 (ibm) | 23 G | present | present |
-| 95.111.236.186 | 11 G | absent | 1.7 G |
-
-**No host can hold the hybrid class resident.** The artifact is 34 G on machines with 23 G, and
-ADR-0112's loader takes at most a fifth of the artifact's weights within what the host has past a
-reserve — so on this fleet roughly four fifths of every Qwen3.6 inference is read from disk, every
-time, while the 1.7 G dense class is resident on every host.
-
-So the residency question §6 poses is not open on this network: **residency is binary here and the
-two live classes sit on opposite sides of it.** The cost difference between them is not a subtle
-memory-traffic term to be calibrated, it is RAM against disk — and neither the leaf basis nor the
-MAC basis contains a term that can express it. ADR-0131's table says as much about itself: its
-entries are counts of arithmetic, "not from any host's timing".
-
-Two consequences for this ADR:
-
-* the traffic term of §2 is necessary and still not sufficient — it distinguishes Q4 from W8 but not
-  resident from paged, and `artifact_bytes` against a host's cache budget is the quantity that does.
-  Whether a HOST-dependent quantity may reach the price at all is a real question: ADR-0038 Decision
-  D refuses wall-clock, and artifact size is not wall-clock, but the budget it is compared against
-  is a property of a machine. **This is the open design question the experiment would have refined
-  and did not create.**
-* §4's fallback moves from contingency toward the likely answer. When two classes differ by whether
-  they fit in memory, one scalar relating their work is unlikely to bound arbitrage below the
-  efficiency spread the protocol wants to reward.
-
-**And the experiment was not run rather than run badly.** The bench harness exists
-(`palw-worker-iso-bench --mode v2-replay-bench`, fleet-measured at p50 2,885 ms for 16 decode tokens
-and 84,513 ms for 512 — a marginal 164.6 ms per decode token on a 2B model). Running it against the
-34 G artifact would mean thrashing the page cache of a host carrying two live testnet-11 nodes,
-while a third fleet node was already 330 DAA behind. A measurement that costs the network its
-liveness is not evidence, and the number would have described one machine anyway.
-
-**What it needs:** a host that can hold 34 G resident and carries no fleet node. Until one exists,
-§2's derived terms ship and §4's bound is measured over the admissible space — which needs no host
-at all, because it is arithmetic over profiles.
-
-**What the experiment decides.** If residency explains the gap, §2's derived traffic term is
-sufficient and the collapse may have no free parameters at all. If it does not, there is a real
-dimension neither arithmetic nor bytes captures, and §4's fallback — separate budgets — becomes the
-likely answer rather than the contingency.
-
----
-
-## 7. What this ADR does not decide
-
-The dimensions (ADR-0145 §4 holds them provisional), the numbers, and any height. It decides what a
-proposal must carry to be considered: a derivation for every dimension that admits one, a search
-program, a measured bound, and a comparison of that bound against real efficiency spread.
-
----
-
-## 8. Done means
-
-> No coefficient is set by anyone in the economy. Every dimension that can be derived is derived.
-> The few that cannot ship with a committed program that searches the admissible space and reports
-> the worst arbitrage they permit, and that number is smaller than the efficiency differences the
-> protocol means to reward. If no such table exists, the vector is not collapsed.
-
-The test of this ADR is not whether the numbers look reasonable. It is whether, a year from now,
-somebody can re-run one command and find out whether they still are.
-
----
-
-## 9. The bound was measured, and the answer was not a table (2026-09-20)
-
-This ADR was written expecting to need coefficients and a search that bounds what they permit.
-It got neither, because the spread it set out to bound turned out not to be a coefficient problem.
-
-§3's table recorded the basis in force: 427× over admissible canonical jobs, 101× over tilings
-(corrected by the red team to a 134.9× band — re-tiling the shipped row can only go DOWN, since
-tiles finer than 24 push the worst case past 2^26 and admission refuses them), and 6.8× across the
-four live classes. §2's first result was that most dimensions need no coefficient at all. The
-second result, which this section records, is that the collapse needed none either.
-
-**Measured past the ADR-0145 economic bundle**, across the whole declaration space of one class and
-across all four shipped classes:
-
-| quantity | before | after |
-|---|---|---|
-| fork-choice weight per executed MAC-equivalent | **24,572×** | **1.000000×** |
-| pay per giga-MAC-equivalent executed | 6.8× spread, monotone in width | **899,999,999 sompi, identical** |
-
-The pay figure is ADR-0132's `rate_sompi_per_giga` — one protocol constant, kept one by the
-operator's standing rule that there are no per-model multipliers.
-
-**Why there was no table to write.** Leaves count ACTIVATIONS and the cost table counts WEIGHTS, so
-the declared basis diverges from arithmetic monotonically in model width. A coefficient vector
-would have been an attempt to *correct* that divergence. Pricing on the arithmetic directly
-*removes* it. §4's fallback — keep the dimensions separate, give each its own budget — was written
-as the likely answer if no vector reached an acceptable bound. It is not needed, and not because a
-vector was found.
-
-**R2 and R7 are satisfied differently than they expected.** The bound is not the output of an
-adversarial search over a candidate table; it is a property of the derivation, asserted at every
-point of the admissible space by a test that runs in the suite
-(`the_better_model_is_paid_less_is_neutralised`, `no_registrant_writable_field_increases_the_weight`,
-`legal_representations_of_one_inference_must_price_identically`). The re-runnable program R7 demands
-exists; it is `cargo test`.
-
-**§6 stays open, and stays honest.** MAC-equivalents carry no memory-traffic term. Two classes
-running equal arithmetic against unequal residency cost their operators unequally, and on this
-fleet that is RAM against disk. §2's derived `real_bits_per_weight` distinguishes Q4 from W8 and
-does not distinguish resident from paged. What changed is the shape of the question: that residual
-is a difference between classes in COST, not a lever a registrant can pull in PRICE. An arbitrage
-would block the bundle. A cost asymmetry the protocol does not price is an open design question,
-and it is recorded here rather than closed.
-
----
-
-## 10. Implementation (2026-09-21)
-
-The committed program Rule R7 asked for is `palw_arbitrage_search_v1`
-(`cargo test -p kaspa-consensus-core palw_arbitrage_search`). It reports a 1.000000× bound
-across the four shipped classes and across the admissible declaration space of one class, and
-the provisional scalar did not swallow traffic. There is therefore **no coefficient table to
-write and no scalar to arm**. ADR-0144 P4 is satisfied: 0147–0149 may arm without contradicting
-representation-neutral accounting. They stay `None` on every shipped preset — choosing a height
-is a different commit from knowing the height would be legal. §6 (resident vs paged) remains
-the open cost question this ADR already recorded.
+- Spec: [05 Canonical work](../spec/palw/05-canonical-work.md)
+- Design: [design/palw/work.md](../design/palw/work.md)
+- Full text as written: [design/palw/archive/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md](../design/palw/archive/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md)
