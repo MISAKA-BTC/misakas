@@ -264,7 +264,7 @@ rules testnet-12 runs today and the change it runs next, so they are Phase 2 pre
 | 0156–0159 | No file and no citation. 0160 is taken out of order | — | Free. The next number is 0156 (the DAA-1,500 flag day, when it comes) |
 | RFC-0001 | PALW inference surface gaps (FP Job V4) | branch `rcore/fp-sampler` | Reserved in [rfc/README.md](../rfc/README.md). Not copied |
 
-## Plan for `README.md` (Phase 2)
+## Plan for `README.md` (Phase 2) — done 2026-09-27
 
 The index is 145 KB because it carries history as well as the index. It keeps the parts only an
 index can hold, and the rest moves out:
@@ -328,3 +328,4 @@ now Context / Decision / Consequences / Links.
 - **Chapter 14** written (duties always on, the duty list, SEAT-R, the fault ledger, licence assembly, producing, readiness, pending transactions, parents-first IBD, mapped artifacts, the read budget, streamed inventories, held captures, backends, fit, the sandbox, extensions, the operator interface). Slimmed: 0122, 0079, 0097, 0112, 0121, 0106, 0057, 0108. Kept with Links: 0136.
 - **Chapter 15** written (lines, versions and roles; whole positions with no transfer; the constant-product curve; the locked seed, least seed and multi-transaction seeds; the legs; the reward buying the pair; memberships and their proof; the model sink; the EVM window). Slimmed: 0089, 0088, 0087, 0091, 0095, 0090, 0094, 0101. Kept with Links: 0114, 0120.
 - **Chapter 01** written (P1–P7 as constraints, no judgement of content, execute now and settle later, the enforcement matrix, scope rules). Slimmed: 0144. Kept with Links: 0127. The spec index and status tables are updated.
+- **`README.md` → a pure index** (151 KB → 76 KB): one table of every ADR (domain, status, form, spec chapters), the supersede map with seven testnet-12 rows added, and number hygiene with the new reservations (next number 0156). The removed sections are kept verbatim in `design/palw/archive/adr-index-2026-09-27.md`.

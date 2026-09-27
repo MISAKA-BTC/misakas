@@ -29,6 +29,14 @@
   redone against it.
 - **testnet-12 launched on R-core+** (0152), and was amended by two post-launch flag days (0154, 0155).
 
+## 1a. The direction, as the ADR index recorded it
+
+Until 2026-09-27 the ADR index carried the load-bearing chain of decisions ("The direction that
+governs the PALW lineage", 2026-09-02). It also carried the activation axis, the open items, the
+0144-alignment build order and the security amendments. They are kept verbatim in
+[archive/adr-index-2026-09-27.md](archive/adr-index-2026-09-27.md), the historical record of how the
+direction was read at each reconciliation.
+
 ## 2. Flag days and fences on testnet-12
 
 - **Why a flag day and not a series of fences.** Each fence height enters the fork id and the fence
