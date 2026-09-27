@@ -14024,6 +14024,95 @@ pub fn palw_panel_valid_lock_required_v1(
     PalwFoldReadV1::outside(state, params, extras).panel_valid_lock_required(claim)
 }
 
+/// **The bind's Valid-lock question for the draw, whole** (the 2026-09-23 route-matrix audit's #3):
+/// what one `Valid` signature on `claim` must lock and the clocks a bond's free collateral is read
+/// at, from the BINDING block's fold inputs (`extras`, `now_daa`) — the ones the fold's
+/// `require_panel_lock_eligible` reads, so the draw never seats a bond the bind would refuse. `None`
+/// below `palw_audit_2026_09_23` or where the lock ledger is not armed. The processor's draw
+/// (`palw_panel_valid_lock_of_v1`) and lane F2's retry verdict both take it from here, so the two
+/// cannot price one claim's lock two ways.
+pub fn palw_panel_valid_lock_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    now_daa: u64,
+    // The panel's seat count: what `duty_bind` divides the claim's commitment by.
+    seat_count: usize,
+) -> Option<crate::palw_panel_v2::PalwPanelValidLockV1> {
+    let mut lock = palw_panel_valid_lock_frame_v1(state, params, extras, now_daa)?;
+    // The quorum-door price: what the bind's `require_panel_lock_eligible` demands of every seat after
+    // the 2026-09-23 audit #6's door pricing (S2 and shard doors price their load-bearing signers at
+    // the licence, not at the bind).
+    lock.required = palw_panel_valid_lock_required_v1(state, params, extras, claim);
+    if let Some(filter) = lock.rcore.as_mut() {
+        // ADR-0152 L-4b / SR-7: past `palw_rcore_plus` the draw asks the bind's own room question —
+        // `committed + max(duty_bind, lock_2)` under the 500‰ ceiling — at the binding block.
+        filter.eligibility = palw_rcore_bind_prices_v1(state, params, extras, claim_id, claim, seat_count, now_daa).eligibility;
+    }
+    Some(lock)
+}
+
+/// **[`palw_panel_valid_lock_v1`]'s claim-independent half** — the lock with both per-claim prices
+/// zero ([`crate::palw_panel_v2::PalwPanelValidLockV1::frame_v1`] of every claim's lock at this
+/// block): the clocks (`now_daa`, the ESCAPED second-clock depth of the 2026-09-24 DoS audit,
+/// `window_court`) and, past `palw_rcore_plus`, the one-ledger filter's terms (the 500‰ ceiling and
+/// lane V02's split, reserve and held-charge floor at the binding block).
+pub fn palw_panel_valid_lock_frame_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+) -> Option<crate::palw_panel_v2::PalwPanelValidLockV1> {
+    if !(extras.audit_2026_09_23_active && extras.objective_offence_at(now_daa)) {
+        return None;
+    }
+    Some(crate::palw_panel_v2::PalwPanelValidLockV1 {
+        required: 0,
+        now_daa,
+        settled_anchor_depth: palw_second_clock_depth_of_v1(state, params, extras, now_daa),
+        window_court: params.window_court(),
+        rcore: params.rcore_plus_active_at(now_daa).then(|| crate::palw_panel_v2::PalwRcoreSeatFilterV1 {
+            eligibility: 0,
+            ceiling_permille: params.fp_max_exposure_ratio_permille(),
+            // Lane V02 (post-launch): the bind's own split room, at the binding block's DAA.
+            resolved_locks_off_ceiling: params.final_lock_full_collateral_active_at(now_daa),
+            // Lane V02 (review HIGH): the accuser reserve the bind's `gate_room` keeps (0 below).
+            accuser_reserve: palw_bond_accuser_reserve_v1(params, now_daa),
+            // Lane V02 (review MEDIUM): the fold's accuser ledger past the fence — held dissections at
+            // their charge, from the very extras the bind folds with; `None` below it.
+            held_charge_floor: palw_v02_held_charge_floor_v1(
+                params,
+                now_daa,
+                extras.offence_attribution_active && extras.held_context_ladder.is_some(),
+            ),
+        }),
+    })
+}
+
+/// **ADR-0065 D1's window on both clocks, on `state`** — `window` (`Params::palw_bond_maturity`'s, in
+/// force at `anchor_daa`) widened so the maturity floor is no later than the second clock's
+/// (`palw_settled_anchor_floor_daa_v1`), the second clock's depth being `raw_depth` (the params'
+/// depth at `anchor_daa`) after the liveness escape over `state`'s anchor ring. `None` where no window
+/// is in force. The processor's `palw_bond_maturity_window_at` and lane F2's retry verdict both read
+/// it from here.
+pub fn palw_bond_maturity_window_on_state_v1(
+    state: &PalwChainStateV2,
+    window_court: Option<u64>,
+    anchor_daa: u64,
+    window: Option<u64>,
+    raw_depth: Option<u64>,
+) -> Option<u64> {
+    let window = window?;
+    let depth = match window_court {
+        Some(window_court) => palw_second_clock_depth_v1(raw_depth, state.recent_anchor_daas(), anchor_daa, window_court),
+        None => raw_depth,
+    };
+    let floor = depth.and_then(|depth| crate::palw_panel_v2::palw_settled_anchor_floor_daa_v1(state, anchor_daa, depth));
+    Some(crate::palw_panel_v2::palw_bond_maturity_window_v2(anchor_daa, window, floor))
+}
+
 /// **Would the fold at a block with these `extras` accept a new claim of `class_id` at `now_daa`?**
 /// The fold's own class gate (`check_class_admits_claim`: the registry row's lifecycle, then the
 /// panel room or the inflight cap), for a caller that must answer before it spends an inference —
@@ -23329,6 +23418,21 @@ pub fn apply_palw_transition_v7(
         }
         _ => BTreeSet::new(),
     };
+    // 2e′. **Lane F2 (`Params::palw_floor_refusal_retry`): the claims this block anchors whose stake draw
+    //      refuses for ELIGIBILITY at every seed on the same pre-object base** — SW-10's floor, fewer
+    //      eligible operators than seats after the load filters, or no eligible outsider, with the
+    //      draw's own inputs at each claim's anchor fact (`extras.sw8_draw`). Taken here, before
+    //      anything this block carries, for V03(1)'s reason: no object, merged work or attempt the
+    //      anchor producer chooses can turn a draw into a retry, and a verdict that holds at every seed
+    //      left no panel to discard. Empty below the fence (and off anchor blocks), where every claim
+    //      step 4c reaches voids as before.
+    let thin_at_draw: BTreeSet<Hash64> = match extras.sw8_anchor_delay {
+        Some(anchor_delay) if extras.sw8_draw.is_some() && builder.params.floor_refusal_retry_active_at(ctx.daa_score) => {
+            let reach = extras.sw8_anchor_reach.map_or(ctx.daa_score, |reach| reach.min(ctx.daa_score));
+            palw_sw8_thin_draws_v1(&builder.state, builder.params, extras, ctx.daa_score, anchor_delay, reach)
+        }
+        _ => BTreeSet::new(),
+    };
     if extras.audit_2026_09_23_active
         && let PalwBlockWorkV3::Attempt(envelope) = &block_work
     {
@@ -23578,10 +23682,12 @@ pub fn apply_palw_transition_v7(
     //     `accepted + window_bind` (`palw_ncp_retry_is_due_v1`); every other claim still voids here.
     //     Past lane A the block anchors only the slots at or below `sw8_anchor_reach` (the latest
     //     operator attempt it is or merges), so a claim whose slot falls after that attempt waits —
-    //     neither voided nor retried here.
+    //     neither voided nor retried here. **Past lane F2's floor-refusal retry a claim whose stake
+    //     draw refused for eligibility at every seed on that same base (2e′) is re-based the same way**
+    //     (`palw_floor_retry_is_due_v1`).
     if let Some(anchor_delay) = extras.sw8_anchor_delay {
         let reach = extras.sw8_anchor_reach.map_or(ctx.daa_score, |reach| reach.min(ctx.daa_score));
-        palw_void_claims_unbound_in_their_anchor_block_v1(&mut builder, ctx, anchor_delay, reach, &ncp_at_draw)?;
+        palw_void_claims_unbound_in_their_anchor_block_v1(&mut builder, ctx, anchor_delay, reach, &ncp_at_draw, &thin_at_draw)?;
     }
 
     // 5. Frontier observation — the definition `palw_fork_choice` states and this used to miss:
@@ -26256,8 +26362,13 @@ pub fn palw_claim_awaits_ncp_retry_v1(
     claim_id: &Hash64,
     claim: &PalwClaimStateV2,
 ) -> bool {
+    // Lane F2: a floor-refusal retry (`palw_floor_retry_is_due_v1`) is written the same way, by an
+    // anchor block its own fence governs, and waits out the same backstop — so it is recognised by the
+    // same rooted state against its own height.
     matches!(claim.phase, PalwClaimPhaseV2::Provisional)
-        && claim.rebound_daa.is_some_and(|rebased| params.registry_resilience_active_at(rebased))
+        && claim
+            .rebound_daa
+            .is_some_and(|rebased| params.registry_resilience_active_at(rebased) || params.floor_refusal_retry_active_at(rebased))
         && !state.panels.contains_key(claim_id)
 }
 
@@ -26311,12 +26422,117 @@ pub fn palw_ncp_retry_is_due_v1(
 ) -> bool {
     params.registry_resilience_active_at(anchor_daa)
         && could_not_seat_at_draw
-        && matches!(claim.phase, PalwClaimPhaseV2::Provisional)
+        && palw_retry_fits_its_bind_window_v1(state, params, claim_id, claim, anchor_daa, anchor_delay)
+}
+
+/// What V03(1)'s and lane F2's retries both ask of the claim itself: `Provisional`, never held a panel
+/// (a redrawn claim has had its second window), and its next slot, `anchor_daa + anchor_delay`,
+/// inside the bind window measured from acceptance.
+fn palw_retry_fits_its_bind_window_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    anchor_daa: u64,
+    anchor_delay: u64,
+) -> bool {
+    matches!(claim.phase, PalwClaimPhaseV2::Provisional)
         && !state.panels.contains_key(claim_id)
         && anchor_daa
             .checked_add(anchor_delay.max(1))
             .zip(claim.accepted_daa.checked_add(params.window_bind))
             .is_some_and(|(next_slot, backstop)| next_slot <= backstop)
+}
+
+/// **Lane F2 (`Params::palw_floor_refusal_retry`): may a claim its anchor block did not bind retry at
+/// its next anchor slot because its stake draw refused for ELIGIBILITY?** V03(1)'s rule
+/// ([`palw_ncp_retry_is_due_v1`]) with lane F2's key: the fence in force at the ANCHOR block's DAA;
+/// the claim's stake draw refusing at every seed on the anchor block's pre-object base
+/// (`refused_for_eligibility_at_draw` — step 2e's [`palw_sw8_thin_draws_v1`]: SW-10's floor, fewer
+/// eligible operators than seats after the load filters, or no eligible outsider); never held a panel;
+/// the next slot inside the bind window measured from acceptance. Any other refusal — the gate's or
+/// the fold's of a derived binding, or a draw some seed would have seated — still voids in the anchor
+/// block, SW-8's rule.
+///
+/// **No free re-draw.** The verdict is taken on the state the draw read, before any object, merged work
+/// or attempt of the anchor block folds, and it holds at every seed — the outsider included — so no
+/// panel existed at this slot for anyone to see and discard; a producer that saw the panel it drew
+/// cannot reach this arm. **It cannot loop and it keeps the obligation**, as V03(1): the backstop
+/// `accepted_daa + window_bind` never moves ([`palw_provisional_bind_deadline_v1`], which recognises
+/// the retry from rooted state, [`palw_claim_awaits_ncp_retry_v1`]), every retry moves the slot at
+/// least `anchor_delay` on, and the claim keeps its reservation, escrow and retention while it waits.
+pub fn palw_floor_retry_is_due_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    refused_for_eligibility_at_draw: bool,
+    anchor_daa: u64,
+    anchor_delay: u64,
+) -> bool {
+    params.floor_refusal_retry_active_at(anchor_daa)
+        && refused_for_eligibility_at_draw
+        && palw_retry_fits_its_bind_window_v1(state, params, claim_id, claim, anchor_daa, anchor_delay)
+}
+
+/// **Lane F2, step 2e: the claims this anchor block anchors whose stake draw refuses for eligibility at
+/// every seed, on `state`** — the anchor block's pre-object base (the fold's state after step 2, the
+/// processor's `palw_v2_pre_object_base_v1`), with the draw's own inputs: the draw point
+/// `extras.sw8_draw` names for the claim's slot, the maturity floor over `state`'s anchor ring at that
+/// point's DAA, and the claim's Valid lock at the binding block `now_daa`
+/// ([`palw_panel_valid_lock_v1`]). Empty below the fence, off anchor blocks, and wherever the processor
+/// carried no draw points.
+///
+/// Only a claim that could retry is judged — `Provisional` with its slot at or below `reach`, never
+/// held a panel, its next slot inside the backstop — so the cost is one census per draw point
+/// ([`crate::palw_panel_v2::PalwStakeDrawCensusV1`]: one walk of the bonds and their locks, each judged
+/// class's seat predicate once) and integer work per claim, shared by claims that price alike. The
+/// processor's derivation asks the same function on the same base to say which way an unbound claim
+/// went.
+pub fn palw_sw8_thin_draws_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+    anchor_delay: u64,
+    reach: u64,
+) -> BTreeSet<Hash64> {
+    let mut thin = BTreeSet::new();
+    let Some(draw) = extras.sw8_draw.as_ref() else { return thin };
+    if !params.floor_refusal_retry_active_at(now_daa) {
+        return thin;
+    }
+    let frame = palw_panel_valid_lock_frame_v1(state, params, extras, now_daa);
+    let mut censuses: Vec<Option<crate::palw_panel_v2::PalwStakeDrawCensusV1<'_>>> = draw.points.iter().map(|_| None).collect();
+    for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(state, reach, anchor_delay) {
+        let Some(claim) = state.claims.get(&claim_id) else { continue };
+        if !palw_retry_fits_its_bind_window_v1(state, params, &claim_id, claim, now_daa, anchor_delay) {
+            continue;
+        }
+        let Some((index, point)) = draw.point_of(claim.bind_base_daa().saturating_add(anchor_delay)) else { continue };
+        let census = censuses[index].get_or_insert_with(|| {
+            let window = palw_bond_maturity_window_on_state_v1(
+                state,
+                Some(params.window_court()),
+                point.draw_daa,
+                point.bond_maturity_window,
+                point.settled_anchor_depth,
+            );
+            crate::palw_panel_v2::PalwStakeDrawCensusV1::new(
+                state,
+                draw.seat_count,
+                params.min_collateral_sompi(),
+                point,
+                crate::palw_panel_v2::palw_seat_maturity_floor_v1(point.draw_daa, window),
+                frame,
+            )
+        });
+        let lock = palw_panel_valid_lock_v1(state, params, extras, &claim_id, claim, now_daa, draw.seat_count as usize);
+        if census.refuses_at_every_seed(&claim_id, lock.as_ref()) {
+            thin.insert(claim_id);
+        }
+    }
+    thin
 }
 
 /// **ADR-0152 SW-8 (M4): the claims `state` holds `Provisional` whose anchor slot
@@ -26363,6 +26579,7 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
     anchor_delay: u64,
     reach: u64,
     ncp_at_draw: &BTreeSet<Hash64>,
+    thin_at_draw: &BTreeSet<Hash64>,
 ) -> Result<(), PalwStateV2Error> {
     for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, reach, anchor_delay) {
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
@@ -26370,14 +26587,25 @@ fn palw_void_claims_unbound_in_their_anchor_block_v1(
         // next anchor slot** (past the registry-resilience fence): re-based on this block, its deadline
         // left at `accepted_daa + window_bind` — [`palw_ncp_retry_is_due_v1`] says when, why it cannot
         // loop, and why it is no re-draw. `ncp_at_draw` is empty below the fence, so there every claim
-        // here voids exactly as before.
+        // here voids exactly as before. **Lane F2: so does a claim whose stake draw refused for
+        // eligibility at every seed** (past the floor-refusal retry, [`palw_floor_retry_is_due_v1`];
+        // `thin_at_draw` is empty below it).
         let could_not_seat_at_draw = ncp_at_draw.contains(&claim_id);
+        let refused_for_eligibility_at_draw = thin_at_draw.contains(&claim_id);
         if palw_ncp_retry_is_due_v1(
             &builder.state,
             builder.params,
             &claim_id,
             &claim,
             could_not_seat_at_draw,
+            ctx.daa_score,
+            anchor_delay,
+        ) || palw_floor_retry_is_due_v1(
+            &builder.state,
+            builder.params,
+            &claim_id,
+            &claim,
+            refused_for_eligibility_at_draw,
             ctx.daa_score,
             anchor_delay,
         ) {
@@ -30578,6 +30806,16 @@ pub struct PalwTransitionExtrasV1 {
     /// byte the rule before the field existed. Resolved by the processor from the same per-block
     /// answer its anchor walk and its one-state pre-check read (`palw_anchor_reach_of_v1`).
     pub sw8_anchor_reach: Option<u64>,
+    /// **Lane F2 (`Params::palw_floor_refusal_retry`): the draw points of this anchor block** — `Some`
+    /// only where [`Self::sw8_anchor_delay`] is `Some` and the fence is in force at the block, resolved
+    /// by the processor from the same anchor answer as [`Self::sw8_anchor_reach`]: for each range of
+    /// slots the block anchors, the DAA the claim's anchor fact reads its draw at and the draw inputs
+    /// the processor's derivation resolves there
+    /// ([`crate::palw_panel_v2::PalwSw8DrawPointV1`]). Step 2e asks, on the anchor block's pre-object
+    /// base, which unbound claims the stake draw refuses for eligibility at every seed
+    /// ([`palw_sw8_thin_draws_v1`]); step 4c re-anchors those instead of voiding them. `None` — by
+    /// `Default`, below the fence and on every other network — leaves step 4c the void it always was.
+    pub sw8_draw: Option<crate::palw_panel_v2::PalwSw8DrawInputsV1>,
 }
 
 /// What each `Valid` signer of one set locks: `every` seat's price, except the one seat a door
@@ -59386,6 +59624,7 @@ pub(crate) mod tests {
                 own_job_anchor: Hash64::default(),
                 sw8_anchor_delay: None,
                 sw8_anchor_reach: None,
+                sw8_draw: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -59637,6 +59876,7 @@ pub(crate) mod tests {
                 own_job_anchor: Hash64::default(),
                 sw8_anchor_delay: None,
                 sw8_anchor_reach: None,
+                sw8_draw: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,

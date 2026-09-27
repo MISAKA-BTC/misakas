@@ -248,39 +248,66 @@ impl PalwPanelValidLockV1 {
         if let Some(filter) = self.rcore {
             // The one invariant's work gate (the S review's M1): the room is the 500‰ ceiling less
             // `committed`, never past `collateral − committed − accuser`, as the bind measures it.
-            let Some(record) = state.bond(bond) else { return false };
-            let committed =
-                crate::palw_state_v2::palw_bond_committed_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court);
-            // Lane V02: past `palw_final_lock_full_collateral` the resolved locks leave the ceiling,
-            // exactly as the bind's `gate_room` reads them (same DAA, same escaped depth).
-            let off_ceiling = if filter.resolved_locks_off_ceiling {
-                crate::palw_state_v2::palw_bond_resolved_locks_v1(
-                    state,
-                    bond,
-                    self.now_daa,
-                    self.settled_anchor_depth,
-                    self.window_court,
-                )
-            } else {
-                0
-            };
-            let room = crate::palw_state_v2::palw_rcore_gate_room_split_of_v1(
-                record.collateral,
-                filter.ceiling_permille,
-                committed,
-                off_ceiling,
-                filter.accuser_reserve,
-                // Lane V02: past the fence the fold's accuser ledger (held dissections at their charge).
-                crate::palw_state_v2::palw_accuser_ledger_v1(state, bond, filter.held_charge_floor),
-                crate::palw_state_v2::PalwRcoreGateV1::Work,
-            );
-            return filter.eligibility <= room;
+            return self.rcore_room_v1(&filter, state, bond).is_some_and(|room| filter.eligibility <= room);
         }
         let posted = state.bond(bond).map(|b| b.collateral as u128).unwrap_or(0);
         if posted < self.required {
             return false;
         }
         state.palw_slashable_available_v1(bond, self.now_daa, self.settled_anchor_depth, self.window_court) >= self.required
+    }
+
+    /// The one-ledger seat filter's work room for `bond` (`None` for a bond the state does not hold) —
+    /// [`Self::admits`]'s measure under `filter`, which reads nothing of the claim but
+    /// `filter.eligibility`.
+    fn rcore_room_v1(&self, filter: &PalwRcoreSeatFilterV1, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> Option<u128> {
+        let record = state.bond(bond)?;
+        let committed =
+            crate::palw_state_v2::palw_bond_committed_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court);
+        // Lane V02: past `palw_final_lock_full_collateral` the resolved locks leave the ceiling,
+        // exactly as the bind's `gate_room` reads them (same DAA, same escaped depth).
+        let off_ceiling = if filter.resolved_locks_off_ceiling {
+            crate::palw_state_v2::palw_bond_resolved_locks_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court)
+        } else {
+            0
+        };
+        Some(crate::palw_state_v2::palw_rcore_gate_room_split_of_v1(
+            record.collateral,
+            filter.ceiling_permille,
+            committed,
+            off_ceiling,
+            filter.accuser_reserve,
+            // Lane V02: past the fence the fold's accuser ledger (held dissections at their charge).
+            crate::palw_state_v2::palw_accuser_ledger_v1(state, bond, filter.held_charge_floor),
+            crate::palw_state_v2::PalwRcoreGateV1::Work,
+        ))
+    }
+
+    /// **Lane F2: the lock's claim-independent half** — this lock with its two per-claim prices
+    /// (`required`, and the one-ledger filter's `eligibility`) zeroed. Every claim a block binds reads
+    /// the same frame (the block's clocks and the filter's terms); two locks with one frame admit a
+    /// bond exactly when each one's [`Self::threshold_v1`] is at or below its [`Self::room_v1`].
+    pub fn frame_v1(&self) -> Self {
+        Self { required: 0, rcore: self.rcore.map(|filter| PalwRcoreSeatFilterV1 { eligibility: 0, ..filter }), ..*self }
+    }
+
+    /// Lane F2: the per-claim price [`Self::admits`] compares — the one-ledger filter's `eligibility`
+    /// where it is armed, else `required`.
+    pub fn threshold_v1(&self) -> u128 {
+        self.rcore.map_or(self.required, |filter| filter.eligibility)
+    }
+
+    /// **Lane F2: what `bond` has for this lock, whatever the claim** — `admits(state, bond) ==
+    /// room_v1(state, bond).is_some_and(|room| threshold_v1() <= room)` for every lock of one frame:
+    /// under the one-ledger filter its work room (`None` for a bond the state does not hold), else the
+    /// lesser of its posted collateral and its slashable-available amount. Computed once per bond
+    /// and anchor block by [`PalwStakeDrawCensusV1`], never per claim.
+    pub fn room_v1(&self, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> Option<u128> {
+        if let Some(filter) = self.rcore {
+            return self.rcore_room_v1(&filter, state, bond);
+        }
+        let posted = state.bond(bond).map(|b| b.collateral as u128).unwrap_or(0);
+        Some(posted.min(state.palw_slashable_available_v1(bond, self.now_daa, self.settled_anchor_depth, self.window_court)))
     }
 }
 
@@ -1904,12 +1931,22 @@ pub fn palw_panel_stake_entries_v1(
 /// weights (the same `W` the race keys on, so the floor and the race cannot weigh one operator
 /// two ways). Operators are counted once however many bonds they hold on the list.
 pub fn palw_panel_stake_weight_v1(population: &[(&PalwBondKeyV2, &PalwBondStateV2)], stake: &PalwPanelStakeDrawV1) -> u128 {
+    palw_panel_stake_operator_weights_v1(population.iter().map(|(_, bond)| *bond), stake).into_values().map(u128::from).sum()
+}
+
+/// **SW-10's weight, per operator** — each operator of `population` with SW-2's capped whole-MSK
+/// weight over its bonds on the list; [`palw_panel_stake_weight_v1`] is the sum of the values. Lane
+/// F2's census reads the map to take one operator out of a population without re-walking it.
+pub fn palw_panel_stake_operator_weights_v1<'a>(
+    population: impl IntoIterator<Item = &'a PalwBondStateV2>,
+    stake: &PalwPanelStakeDrawV1,
+) -> std::collections::BTreeMap<Hash64, u64> {
     let mut posted: std::collections::BTreeMap<Hash64, u128> = std::collections::BTreeMap::new();
-    for (_, bond) in population {
+    for bond in population {
         let sum = posted.entry(bond.operator_id).or_insert(0);
         *sum = sum.saturating_add((bond.collateral / crate::constants::SOMPI_PER_KASPA) as u128);
     }
-    posted.into_values().map(|sum| palw_draw_operator_weight_msk_v1(sum, stake.weight_cap_msk) as u128).sum()
+    posted.into_iter().map(|(operator, sum)| (operator, palw_draw_operator_weight_msk_v1(sum, stake.weight_cap_msk))).collect()
 }
 
 /// **ADR-0152 SW-10: the eligible-stake floor**, `1000 · eligible ≥ floor‰ · base`, else
@@ -1980,6 +2017,291 @@ fn palw_panel_stake_race_with_v1(
         .take(needed as usize)
         .map(|entry| PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id })
         .collect())
+}
+
+// ---- lane F2 (post-launch, 2026-09-27): a stake draw refused for eligibility at every seed --------
+
+/// **Lane F2 (`Params::palw_floor_refusal_retry`): one draw point of an anchor block** — the inputs the
+/// processor's derivation resolves at a claim's anchor fact, for the claims whose anchor slot falls
+/// at or below `max_slot` and above the previous point's. `draw_daa` is the fact's `anchor_daa`, the
+/// DAA every DAA-keyed draw input is read at: the anchor block's own below lane A, past it the operator
+/// attempt the claim's seed is read off (`palw_operator_seed_source_v1`), so one anchor block that
+/// merges a displaced operator attempt has two points. Carried on
+/// `PalwTransitionExtrasV1::sw8_draw` so the fold asks the draw's own question on the draw's own inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwSw8DrawPointV1 {
+    /// The highest anchor slot this point draws.
+    pub max_slot: u64,
+    /// The anchor fact's `anchor_daa` for those slots.
+    pub draw_daa: u64,
+    /// `palw_panel_draw_policy_at(draw_daa)`, `valid_lock` left `None`: the lock is the BINDING
+    /// block's, priced per claim ([`crate::palw_state_v2::palw_panel_valid_lock_v1`]).
+    pub policy: PalwPanelDrawPolicyV1,
+    /// `Params::palw_bond_maturity`'s window in force at `draw_daa`, before the second clock widens it
+    /// (the processor's `palw_bond_maturity_at`).
+    pub bond_maturity_window: Option<u64>,
+    /// The second clock's RAW depth at `draw_daa` (`None` below `palw_audit_2026_09_23`).
+    pub settled_anchor_depth: Option<u64>,
+    /// ADR-0071 SA-3 at `draw_daa`.
+    pub capability_proof: bool,
+    /// ADR-0100's per-shard licensing at `draw_daa`: a class with a shard plan draws stratified there,
+    /// and this lane never retries a stratified draw.
+    pub shard_licensing: bool,
+}
+
+/// **Lane F2: an anchor block's draw points and the panel they draw** — `Some` on
+/// `PalwTransitionExtrasV1::sw8_draw` only where `sw8_anchor_delay` is and the floor-refusal retry is in
+/// force at the block.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwSw8DrawInputsV1 {
+    /// `PalwPanelParamsV2::seat_count`.
+    pub seat_count: u16,
+    /// Ascending `max_slot`; the last one's is the block's reach.
+    pub points: Vec<PalwSw8DrawPointV1>,
+}
+
+impl PalwSw8DrawInputsV1 {
+    /// The point that draws a claim whose anchor slot is `slot` — the first whose `max_slot` is at or
+    /// above it — and its index; `None` past the block's reach.
+    pub fn point_of(&self, slot: u64) -> Option<(usize, &PalwSw8DrawPointV1)> {
+        self.points.iter().enumerate().find(|(_, point)| slot <= point.max_slot)
+    }
+}
+
+/// One bond of a census: what every list of the draw asks of it, whatever the claim.
+struct PalwStakeCensusBondV1<'a> {
+    key: &'a PalwBondKeyV2,
+    bond: &'a PalwBondStateV2,
+    /// `reserved_exposure + registration_exposure` — the economy's headroom question reads it.
+    backed: u128,
+    /// The lock's room ([`PalwPanelValidLockV1::room_v1`]); `None` where no lock is armed.
+    room: Option<u128>,
+}
+
+/// What decides one claim's verdict on a census: claims that agree on it share it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PalwStakeCensusKeyV1 {
+    class_id: Hash64,
+    executor: PalwBondKeyV2,
+    governed: bool,
+    threshold: Option<u128>,
+    seat_stake: Option<u128>,
+}
+
+/// **Lane F2: one anchor block's census of the stake draw's population, at one draw point, and the
+/// draw's eligibility verdict from it** (`Params::palw_floor_refusal_retry`).
+///
+/// [`derive_panel_v2_with_policy`] under `policy.stake` refuses for eligibility in exactly three ways —
+/// no eligible outsider (`NoOutsider`), fewer eligible operators than seats after the load filters
+/// (`InsufficientEligibleBonds`), and SW-10's floor over the class's or the outsider's population
+/// (`InsufficientEligibleStake`) — and none of them reads the seed, save through WHICH operator sits as
+/// an outsider-judged claim's outsider (the class's lists are drawn without it). So "refuses at every
+/// seed" is decidable without a ticket: for a claim with no outsider it is the draw's own refusal; for
+/// an outsider-judged one it is an empty outsider population, the outsider's floor, or — for EVERY
+/// operator that could sit as the outsider — the class's count or floor without that operator.
+/// [`Self::refuses_at_every_seed`] answers exactly that, so a `true` names a claim no seed could have
+/// seated: there was no panel for anyone, the anchor producer included, to see and discard.
+///
+/// **The cost is the census, once per anchor block** (per draw point: one past the operator anchor
+/// only when the block merges a displaced operator attempt). [`Self::new`] walks the bonds once,
+/// taking each bond's floor test, exposure and lock room — the lock room is the one-ledger
+/// `palw_bond_committed_v1` walk of the bond's locks, the only per-bond cost that is not a lookup — and
+/// each class's seat predicate (`palw_bond_may_judge_class_v4`) is taken once, on first use. A claim
+/// then costs one pass of integer filters over the census and two operator maps, and claims that
+/// agree on class, executor, outsider rule and prices share one verdict. The draw itself pays the lock
+/// walk once per bond per list per claim (three lists, six with an outsider).
+pub struct PalwStakeDrawCensusV1<'a> {
+    state: &'a PalwChainStateV2,
+    seat_count: u16,
+    policy: PalwPanelDrawPolicyV1,
+    maturity_floor: Option<u64>,
+    capability_proof: bool,
+    shard_licensing: bool,
+    frame: Option<PalwPanelValidLockV1>,
+    bonds: Vec<PalwStakeCensusBondV1<'a>>,
+    judges: std::collections::BTreeMap<Hash64, Vec<bool>>,
+    verdicts: std::collections::BTreeMap<PalwStakeCensusKeyV1, bool>,
+}
+
+impl<'a> PalwStakeDrawCensusV1<'a> {
+    /// The census of `state` for a draw at `point`: `maturity_floor` is the draw's
+    /// `palw_seat_maturity_floor_v1(point.draw_daa, window)` on `state`, and `frame` the binding block's
+    /// lock with its prices zeroed ([`PalwPanelValidLockV1::frame_v1`]; `None` where no lock is armed).
+    pub fn new(
+        state: &'a PalwChainStateV2,
+        seat_count: u16,
+        min_collateral_sompi: u64,
+        point: &PalwSw8DrawPointV1,
+        maturity_floor: Option<u64>,
+        frame: Option<PalwPanelValidLockV1>,
+    ) -> Self {
+        let policy = PalwPanelDrawPolicyV1 { valid_lock: None, ..point.policy };
+        // The seat floor every list asks first (`palw_panel_bonds_judging_v1`): the panel's past the
+        // economy, the registry's below it.
+        let floor = policy.economy.map(|economy| economy.panel_floor_sompi).unwrap_or(min_collateral_sompi);
+        let bonds = state
+            .bonds_iter()
+            .filter(|(_, bond)| crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor))
+            .map(|(key, bond)| PalwStakeCensusBondV1 {
+                key,
+                bond,
+                backed: state.reserved_exposure(key).saturating_add(state.registration_exposure(key)),
+                room: frame.and_then(|lock| lock.room_v1(state, key)),
+            })
+            .collect();
+        Self {
+            state,
+            seat_count,
+            policy,
+            maturity_floor,
+            capability_proof: point.capability_proof,
+            shard_licensing: point.shard_licensing,
+            frame: frame.map(|lock| lock.frame_v1()),
+            bonds,
+            judges: std::collections::BTreeMap::new(),
+            verdicts: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Each census bond's seat predicate for `class_id`, taken once.
+    fn ensure_judges(&mut self, class_id: &Hash64) {
+        if self.judges.contains_key(class_id) {
+            return;
+        }
+        let (state, capability, readiness) = (self.state, self.capability_proof, self.policy.readiness);
+        let judged = self
+            .bonds
+            .iter()
+            .map(|b| crate::palw_state_v2::palw_bond_may_judge_class_v4(state, b.key, b.bond, class_id, capability, readiness))
+            .collect();
+        self.judges.insert(*class_id, judged);
+    }
+
+    /// **Would `claim_id`'s stake draw refuse for ELIGIBILITY at every seed?** `lock` is the claim's own
+    /// Valid lock at the binding block (`crate::palw_state_v2::palw_panel_valid_lock_v1`), which must be
+    /// of this census's frame. `false` — never a retry — below the stake draw, for a claim the state
+    /// does not hold or whose executor bond it does not (`SeatBondMissing`), for a stratified draw, and
+    /// for a lock of another frame.
+    pub fn refuses_at_every_seed(&mut self, claim_id: &Hash64, lock: Option<&PalwPanelValidLockV1>) -> bool {
+        let Some(stake) = self.policy.stake else { return false };
+        let state = self.state;
+        let Some(claim) = state.claim(claim_id) else { return false };
+        if self.shard_licensing && state.class_shard_plan(&claim.class_id).is_some() {
+            return false;
+        }
+        if lock.map(PalwPanelValidLockV1::frame_v1) != self.frame {
+            return false;
+        }
+        let Some(executor) = state.bond(&claim.bond) else { return false };
+        let independence = self.policy.independence.filter(|independence| independence.governs(claim));
+        // The economy's headroom is asked only where the one-ledger filter is not
+        // (`derive_panel_v2_with_policy`'s `headroom`), of the seat stake THIS claim prices.
+        let headroom = self.policy.economy.filter(|_| self.frame.and_then(|lock| lock.rcore).is_none()).map(|economy| {
+            (
+                economy.max_exposure_ratio_permille,
+                economy.seat_exposure(claim.reserved, claim.escrowed_reward, self.seat_count as usize),
+            )
+        });
+        let key = PalwStakeCensusKeyV1 {
+            class_id: claim.class_id,
+            executor: claim.bond,
+            governed: independence.is_some(),
+            threshold: lock.map(PalwPanelValidLockV1::threshold_v1),
+            seat_stake: headroom.map(|(_, seat_stake)| seat_stake),
+        };
+        if let Some(verdict) = self.verdicts.get(&key) {
+            return *verdict;
+        }
+        let outsider = independence
+            .filter(|independence| crate::palw_state_v2::palw_claim_is_outsider_judged_v1(state, claim, Some(independence.from_daa)));
+        self.ensure_judges(&claim.class_id);
+        if let Some(independence) = outsider {
+            self.ensure_judges(&independence.base_class_id);
+        }
+        let registered_by = match independence {
+            Some(independence) => Some(independence.registered_by_daa(self.maturity_floor)),
+            None => self.maturity_floor,
+        };
+        let bonds = &self.bonds;
+        // `palw_panel_bonds_judging_v1`'s predicates, over the census: the floor was taken at `new`.
+        let structural = |judges: &[bool], i: usize| judges[i] && !registered_by.is_some_and(|by| bonds[i].bond.registered_daa > by);
+        let not_executor = |b: &PalwStakeCensusBondV1| {
+            !(*b.key == claim.bond || b.bond.operator_id == executor.operator_id || b.bond.pubkey == executor.pubkey)
+        };
+        let has_headroom = |b: &PalwStakeCensusBondV1| {
+            headroom.is_none_or(|(ratio, seat_stake)| {
+                crate::palw_panel_economy_v1::palw_seat_has_headroom_v1(b.bond.collateral, b.backed, seat_stake, ratio)
+            })
+        };
+        let threshold = key.threshold;
+        let admits = |b: &PalwStakeCensusBondV1| threshold.is_none_or(|threshold| b.room.is_some_and(|room| threshold <= room));
+        // The three lists of one judged class: the eligible list (every predicate, the lock applied),
+        // SW-10's base (no load filter) and its executor term (the executor clause inverted).
+        let lists = |judges: &[bool], keep: &dyn Fn(&PalwStakeCensusBondV1) -> bool| {
+            let mut eligible = Vec::new();
+            let mut base = Vec::new();
+            let mut executor_term = Vec::new();
+            for (i, b) in bonds.iter().enumerate() {
+                if !structural(judges, i) || !keep(b) {
+                    continue;
+                }
+                if b.bond.operator_id == executor.operator_id {
+                    executor_term.push(b.bond);
+                }
+                if not_executor(b) {
+                    base.push(b.bond);
+                    if has_headroom(b) && admits(b) {
+                        eligible.push(b.bond);
+                    }
+                }
+            }
+            (
+                palw_panel_stake_operator_weights_v1(eligible, &stake),
+                palw_panel_stake_operator_weights_v1(base, &stake),
+                palw_panel_stake_operator_weights_v1(executor_term, &stake).into_values().map(u128::from).sum::<u128>(),
+            )
+        };
+        let sum = |weights: &std::collections::BTreeMap<Hash64, u64>| weights.values().copied().map(u128::from).sum::<u128>();
+        let floor_holds =
+            |eligible: u128, base: u128| palw_panel_stake_floor_v1(eligible, base, stake.eligible_floor_permille).is_ok();
+        let (eligible, base, executor_weight) = lists(&self.judges[&claim.class_id], &|_| true);
+        let verdict = match outsider {
+            // No outsider: the draw's own refusal, which reads no seed.
+            None => {
+                eligible.len() < self.seat_count as usize
+                    || !floor_holds(sum(&eligible).saturating_add(executor_weight), sum(&base).saturating_add(executor_weight))
+            }
+            Some(independence) => {
+                let registrant = state.class(&claim.class_id).and_then(|record| record.registrant_bond);
+                let registrant_operator = registrant.and_then(|key| state.bond(&key)).map(|bond| bond.operator_id);
+                let not_registrant =
+                    |b: &PalwStakeCensusBondV1| Some(*b.key) != registrant && Some(b.bond.operator_id) != registrant_operator;
+                let (outsiders, outsider_base, outsider_executor) = lists(&self.judges[&independence.base_class_id], &not_registrant);
+                let needed = self.seat_count.saturating_sub(1) as usize;
+                let (eligible_weight, base_weight) = (sum(&eligible), sum(&base));
+                // No outsider (`NoOutsider`), or the outsider's own floor — whoever sits — refuses;
+                // else the class draw must refuse without EVERY operator that could sit as the outsider.
+                outsiders.is_empty()
+                    || !floor_holds(
+                        sum(&outsiders).saturating_add(outsider_executor),
+                        sum(&outsider_base).saturating_add(outsider_executor),
+                    )
+                    || outsiders.keys().all(|operator| {
+                        let count = eligible.len() - usize::from(eligible.contains_key(operator));
+                        let without = |weights: &std::collections::BTreeMap<Hash64, u64>, total: u128| {
+                            total - weights.get(operator).copied().map_or(0, u128::from)
+                        };
+                        count < needed
+                            || !floor_holds(
+                                without(&eligible, eligible_weight).saturating_add(executor_weight),
+                                without(&base, base_weight).saturating_add(executor_weight),
+                            )
+                    })
+            }
+        };
+        self.verdicts.insert(key, verdict);
+        verdict
+    }
 }
 
 /// **ADR-0152 SW-9: the rate room's effective ready count** —
@@ -8653,6 +8975,556 @@ mod tests {
                 let (outside, co) = sw_state(&genesis_and_small(0), &[2]);
                 assert_eq!(executor_weight(&outside, &co), 0, "an executor below the panel floor could not sit: no term");
                 assert!(draw(&outside, &co, anchor(0), sw_policy()).is_ok(), "eight genesis seats, one saturated: 7/8 binds");
+            }
+        }
+
+        // ---- lane F2 (post-launch, 2026-09-27): a draw refused for eligibility re-anchors -------------
+
+        /// **Lane F2 (`Params::palw_floor_refusal_retry`) at the fold and at the draw.** The fold's step
+        /// 2e′ asks [`PalwStakeDrawCensusV1`] which unbound claims the stake draw refuses for eligibility
+        /// at EVERY seed on the anchor block's pre-object base, and step 4c re-anchors those instead of
+        /// voiding them. The fixture is testnet-12's shape on the live chain between DAA ~624 and 749:
+        /// the executor one of eight genesis seats, two other seats standing behind live locks of their
+        /// whole collateral, so the draw refuses on SW-10's floor at `6g / 8g` (the executor's term on
+        /// both sides) — every class could still seat a panel, so V03(1) never reached them.
+        mod f2_floor_refusal_retry {
+            use super::*;
+            use crate::palw_panel_var_v1::PalwSlashableLockV1;
+            use crate::palw_state_v2::{
+                PalwBondStatusV2, PalwClaimPhaseV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwTransitionExtrasV1, PalwVoidReasonV2,
+                apply_delta_v2, apply_palw_transition_v2_with_extras, palw_claim_awaits_ncp_retry_v1, palw_panel_valid_lock_v1,
+                revert_delta_v2,
+            };
+
+            const G: u128 = 939_063;
+
+            fn key(b: u64) -> PalwBondKeyV2 {
+                PalwBondKeyV2(bond_outpoint(b))
+            }
+
+            /// The fixture's state params with the floor-refusal retry's mirror at `armed`.
+            fn sp(armed: Option<u64>) -> PalwStateParamsV2 {
+                state_params().with_fp_exposure_ceiling(500).unwrap().with_floor_refusal_retry_from_daa(armed)
+            }
+
+            /// One draw point at the anchor block `at` (below lane A the block's own DAA reaches every
+            /// slot), with testnet-12's stake policy.
+            fn draw_inputs(at: u64) -> PalwSw8DrawInputsV1 {
+                PalwSw8DrawInputsV1 {
+                    seat_count: five().seat_count,
+                    points: vec![PalwSw8DrawPointV1 {
+                        max_slot: at,
+                        draw_daa: at,
+                        policy: sw_policy(),
+                        bond_maturity_window: None,
+                        settled_anchor_depth: None,
+                        capability_proof: false,
+                        shard_licensing: false,
+                    }],
+                }
+            }
+
+            /// A block past the lock ledger (2026-09-23 audit, objective offences) and the panel
+            /// economy: seats go on duty, and a seat is drawn only where it can post the claim's lock.
+            fn ledger_extras() -> PalwTransitionExtrasV1 {
+                PalwTransitionExtrasV1 {
+                    panel_economy_active: true,
+                    audit_2026_09_23_active: true,
+                    objective_offence_daa: Some(0),
+                    ..Default::default()
+                }
+            }
+
+            /// The anchor block at `at`: SW-8's step 4c armed (`sw8_anchor_delay`) and its draw points.
+            fn anchor_extras(at: u64) -> PalwTransitionExtrasV1 {
+                PalwTransitionExtrasV1 {
+                    sw8_anchor_delay: Some(five().anchor_delay()),
+                    sw8_draw: Some(draw_inputs(at)),
+                    ..ledger_extras()
+                }
+            }
+
+            /// testnet-12's shape: the executor bond 1 (key 7, operator 0x21) a genesis seat beside the
+            /// seven others (bonds 2..=8), its 40-pwu floor claim accepted at DAA 101 (slot 105, backstop
+            /// 111) — and each bond of `locked` standing behind a live lock of its WHOLE collateral until
+            /// DAA `until` (`is_live` below it), so it can post no Valid lock and the draw skips it.
+            fn t12_shaped(locked: &[u64], until: u64) -> (PalwChainStateV2, Hash64) {
+                let sp = sp(None);
+                let mut objects = vec![adr0130_class(), adr0130_bond(1, 7, 0x21, GENESIS_SEAT)];
+                objects.extend((2..=8u64).map(|b| adr0130_bond(b, 30 + b as u8, 0x40 + b, GENESIS_SEAT)));
+                let (state, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+                let (state, claim_id) = fold_attempt(&state, &sp, 101, 1, 7, 0x21, h64(1), h64(11), 40);
+                (with_locks(&state, locked, until), claim_id)
+            }
+
+            /// `state` with a live lock of the whole collateral on each bond of `locked` until `until`.
+            fn with_locks(state: &PalwChainStateV2, locked: &[u64], until: u64) -> PalwChainStateV2 {
+                let mut carriage = PalwStateCarriageV2::from_state(state);
+                for b in locked {
+                    let claim = h64(0xF2_0000 + b);
+                    carriage.slashable_locks.insert(
+                        (key(*b), claim),
+                        PalwSlashableLockV1 {
+                            claim,
+                            amount: GENESIS_SEAT as u128,
+                            expiry_daa: until,
+                            settled_at_final: 0,
+                            attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                            segments: 0,
+                        },
+                    );
+                }
+                carriage.into_state(&sp(None), None).expect("consistent")
+            }
+
+            /// The draw the chain derives in the anchor block `at` on `state` (the processor's
+            /// `palw_v2_derive_panel_binding_v1`): testnet-12's stake policy with the claim's Valid
+            /// lock priced at the binding block.
+            fn chain_draw(
+                state: &PalwChainStateV2,
+                claim_id: &Hash64,
+                at: u64,
+                seed: u64,
+            ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+                let claim = state.claim(claim_id).unwrap();
+                let lock = palw_panel_valid_lock_v1(state, &sp(None), &ledger_extras(), claim_id, claim, at, 5);
+                assert!(lock.is_some_and(|lock| lock.required > 0), "the premise: the ledger prices a lock no locked seat can post");
+                derive_panel_v2_with_policy(
+                    state,
+                    &five(),
+                    claim_id,
+                    BlockHash::from_u64_word(seed),
+                    100,
+                    None,
+                    false,
+                    PalwPanelDrawPolicyV1 { valid_lock: lock, ..sw_policy() },
+                )
+            }
+
+            fn fold(
+                parent: &PalwChainStateV2,
+                p: &PalwStateParamsV2,
+                at: u64,
+                objects: &[PalwConsensusObjectV2],
+                extras: &PalwTransitionExtrasV1,
+            ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+                let (next, delta) = apply_palw_transition_v2_with_extras(
+                    parent,
+                    p,
+                    &ctx(0xF200 + at, at, at),
+                    objects,
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    extras,
+                )
+                .unwrap();
+                next.assert_deadline_consistency(p).expect("the deadline index is the claims' recomputed deadlines");
+                (next, delta)
+            }
+
+            /// Restart and reorg reproduce `child`: the carriage round trip (decode, rebuild the deadline
+            /// index, every load check) gives its root and deadlines, and its delta reverts to `parent`
+            /// and re-applies to it.
+            fn restart_and_reorg_reproduce(
+                parent: &PalwChainStateV2,
+                child: &PalwChainStateV2,
+                delta: &PalwStateDeltaV2,
+                p: &PalwStateParamsV2,
+            ) {
+                // Every claim's deadline, as the index holds it (the index itself is the state's own).
+                let deadlines = |s: &PalwChainStateV2| s.claims_iter().map(|(id, _)| (*id, s.deadline_of(id))).collect::<Vec<_>>();
+                let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(child)).unwrap();
+                let reloaded = borsh::from_slice::<PalwStateCarriageV2>(&bytes)
+                    .unwrap()
+                    .into_state(p, Some(child.state_root()))
+                    .expect("reloads");
+                assert_eq!(reloaded.state_root(), child.state_root(), "a restart reloads the same root");
+                assert_eq!(deadlines(&reloaded), deadlines(child), "…and re-derives the same deadlines");
+                reloaded.assert_deadline_consistency(p).expect("the reloaded index is the claims' recomputed deadlines");
+                let back = revert_delta_v2(child, delta, p).expect("reverts");
+                assert_eq!(back.state_root(), parent.state_root(), "a reorg reverts the block to its parent");
+                assert_eq!(deadlines(&back), deadlines(parent));
+                let again = apply_delta_v2(parent, delta, p).expect("re-applies");
+                assert_eq!(again.state_root(), child.state_root(), "…and re-applying it is the child");
+                assert_eq!(deadlines(&again), deadlines(child));
+            }
+
+            /// **A floor refusal re-anchors, keeps everything the claim owed, and binds at a later slot
+            /// once the room is back.** Two other seats locked until DAA 107: at the claim's anchor slot
+            /// (105) the draw refuses `InsufficientEligibleStake { 6g, 8g }` at every seed, and past the
+            /// fence the anchor block re-bases the claim on itself — `Provisional`, `rebound_daa` 105,
+            /// reservation, escrow and the backstop `accepted + window_bind` (111) untouched, the retry
+            /// recognised from rooted state, a restart and a reorg reproducing it. The locks lapse, and
+            /// the anchor block of the next slot (109) draws a full jury that binds; the bound claim keeps
+            /// its one redraw (`rebound_daa` back to `None`). Below the fence the same anchor block voids it
+            /// `BindTimeout`, SW-8's rule, as the live chain did 172 times.
+            #[test]
+            fn f2_a_floor_refusal_re_anchors_and_binds_at_a_later_slot_once_room_frees() {
+                let (s1, claim_id) = t12_shaped(&[2, 3], 107);
+                let claim = s1.claim(&claim_id).unwrap().clone();
+                let slot = claim.bind_base_daa() + five().anchor_delay();
+                assert_eq!((claim.accepted_daa, slot, s1.deadline_of(&claim_id)), (101, 105, Some(111)), "the premise's clock");
+                for seed in 0..16u64 {
+                    assert_eq!(
+                        chain_draw(&s1, &claim_id, slot, 0xF2A0 + seed),
+                        Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 6 * G, base: 8 * G }),
+                        "seed {seed}: two locked seats refuse the draw on SW-10's floor, whatever the seed"
+                    );
+                }
+                // Below the fence: SW-8's void in the anchor block, as shipped.
+                let (below, _) = fold(&s1, &sp(None), slot, &[], &anchor_extras(slot));
+                assert_eq!(
+                    below.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: slot, reason: PalwVoidReasonV2::BindTimeout },
+                    "below the fence the anchor block voids the claim it could not bind"
+                );
+                // Past it: re-anchored.
+                let p = sp(Some(0));
+                let reserved = s1.reserved_exposure(&key(1));
+                let (s2, d2) = fold(&s1, &p, slot, &[], &anchor_extras(slot));
+                let retried = s2.claim(&claim_id).unwrap().clone();
+                assert_eq!((retried.phase.clone(), retried.rebound_daa), (PalwClaimPhaseV2::Provisional, Some(slot)), "re-anchored");
+                assert_eq!(retried.escrowed_reward, claim.escrowed_reward, "the escrow stays with the claim");
+                assert_eq!(s2.reserved_exposure(&key(1)), reserved, "so does the executor's reservation");
+                assert_eq!(s2.deadline_of(&claim_id), Some(111), "the backstop does not move with the retry");
+                assert!(palw_claim_awaits_ncp_retry_v1(&s2, &p, &claim_id, &retried), "the retry is read off rooted state");
+                assert!(s2.panel(&claim_id).is_none());
+                restart_and_reorg_reproduce(&s1, &s2, &d2, &p);
+                // The locks lapse at 107; the anchor block of the next slot (109) binds a full jury.
+                let next = slot + five().anchor_delay();
+                let seats = chain_draw(&s2, &claim_id, next, 0xF2B0).expect("the room is back: the draw seats a panel");
+                assert_eq!(seats.len(), 5);
+                let bind = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(0xF2B0), seats };
+                let (s3, d3) = fold(&s2, &p, next, &[bind], &anchor_extras(next));
+                let bound = s3.claim(&claim_id).unwrap();
+                assert_eq!(bound.phase, PalwClaimPhaseV2::PanelBound { bound_daa: next }, "bound at the later slot");
+                assert_eq!(bound.rebound_daa, None, "a floor retry is not the one redraw");
+                assert_eq!(bound.escrowed_reward, claim.escrowed_reward, "the escrow rides to the bind, nothing burned");
+                restart_and_reorg_reproduce(&s2, &s3, &d3, &p);
+            }
+
+            /// **Repeated refusals void only at the backstop, labelled as today.** With the locks standing
+            /// past the whole bind window, the claim re-anchors at 105 (next slot 109 ≤ 111) and then, at
+            /// 109, its next slot (113) would pass the backstop: that anchor block voids it `BindTimeout`,
+            /// SW-8's label. With no anchor block after 105 the window's sweep voids it at 112, the
+            /// backstop's own label. Neither charges anything (S0) and both release the reservation.
+            #[test]
+            fn f2_repeated_refusals_void_only_at_the_backstop_with_todays_label() {
+                let (s1, claim_id) = t12_shaped(&[2, 3], 1_000);
+                let p = sp(Some(0));
+                let (s2, _) = fold(&s1, &p, 105, &[], &anchor_extras(105));
+                assert_eq!(s2.claim(&claim_id).unwrap().rebound_daa, Some(105), "the premise: re-anchored once");
+                let collateral = |s: &PalwChainStateV2| (1..=8u64).map(|b| s.bond(&key(b)).unwrap().collateral).collect::<Vec<_>>();
+                let (s3, _) = fold(&s2, &p, 109, &[], &anchor_extras(109));
+                assert_eq!(
+                    s3.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: 109, reason: PalwVoidReasonV2::BindTimeout },
+                    "the next slot would pass the backstop: this anchor block voids it"
+                );
+                assert_eq!(collateral(&s3), collateral(&s1), "S0: nothing charged");
+                assert!(s3.reserved_exposure(&key(1)) < s2.reserved_exposure(&key(1)), "the reservation is released");
+                let (swept, _) = fold(&s2, &p, 112, &[], &ledger_extras());
+                assert_eq!(
+                    swept.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: 112, reason: PalwVoidReasonV2::BindTimeout },
+                    "with no anchor block the backstop's sweep voids it"
+                );
+                assert_eq!(collateral(&swept), collateral(&s1), "S0 at the backstop too");
+            }
+
+            /// **A claim that has held a panel is never retried.** Bound at 109 (the first test's path),
+            /// its panel says nothing, and the receipt timeout redraws it once (`rebound_daa` 120, its
+            /// first panel's record kept). At its new slot (124) two seats are locked again and the draw
+            /// refuses on the floor — and the anchor block voids it: its second window was the redraw.
+            #[test]
+            fn f2_a_claim_that_held_a_panel_is_not_retried() {
+                let (s1, claim_id) = t12_shaped(&[2, 3], 107);
+                let p = sp(Some(0));
+                let (s2, _) = fold(&s1, &p, 105, &[], &anchor_extras(105));
+                let seats = chain_draw(&s2, &claim_id, 109, 0xF2C0).unwrap();
+                let bind = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(0xF2C0), seats };
+                let (s3, _) = fold(&s2, &p, 109, &[bind], &anchor_extras(109));
+                let receipt_deadline = s3.deadline_of(&claim_id).expect("a receipt deadline");
+                let (s4, _) = fold(&s3, &p, receipt_deadline + 1, &[], &ledger_extras());
+                let redrawn = s4.claim(&claim_id).unwrap().clone();
+                assert_eq!(
+                    (redrawn.phase.clone(), redrawn.rebound_daa),
+                    (PalwClaimPhaseV2::Provisional, Some(receipt_deadline + 1)),
+                    "the premise: the one redraw"
+                );
+                assert!(s4.panel(&claim_id).is_some(), "the first panel's record stays");
+                assert!(!palw_claim_awaits_ncp_retry_v1(&s4, &p, &claim_id, &redrawn), "a redrawn claim is no retry");
+                let slot = redrawn.bind_base_daa() + five().anchor_delay();
+                let locked = with_locks(&s4, &[2, 3], 10_000);
+                assert!(
+                    matches!(chain_draw(&locked, &claim_id, slot, 0xF2C1), Err(PalwPanelV2Error::InsufficientEligibleStake { .. })),
+                    "the premise: the redraw's draw refuses on the floor"
+                );
+                let (s5, _) = fold(&locked, &p, slot, &[], &anchor_extras(slot));
+                assert_eq!(
+                    s5.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: slot, reason: PalwVoidReasonV2::BindTimeout },
+                    "a claim that held a panel voids in its anchor block"
+                );
+            }
+
+            /// **The verdict is the pre-object base's, never what the anchor block carries.** (a) Drawable
+            /// before the block's objects — no lock — and made thin by them (three seats retire in the
+            /// anchor block): voided `BindTimeout`, so no object the anchor producer carries turns a draw
+            /// it dislikes into a retry. (b) Thin before them, and made drawable by them (eight fresh
+            /// genesis-sized seats register in the anchor block): still re-anchored, so no object turns a
+            /// retry into a void. (c) Without its draw points (`sw8_draw: None`) the armed fold judges
+            /// nothing and voids, as below the fence.
+            #[test]
+            fn f2_the_verdict_reads_the_pre_object_base_not_what_the_anchor_block_carries() {
+                let p = sp(Some(0));
+                let retire = |b: u64| PalwConsensusObjectV2::BondRetireRequested { bond: key(b), signature: vec![1] };
+                let (open, claim_id) = t12_shaped(&[], 0);
+                assert!(chain_draw(&open, &claim_id, 105, 0xF2D0).is_ok(), "the premise (a): drawable before the objects");
+                let (a, _) = fold(&open, &p, 105, &[retire(2), retire(3), retire(4)], &anchor_extras(105));
+                assert!(
+                    [2u64, 3, 4].iter().all(|b| matches!(a.bond(&key(*b)).unwrap().status, PalwBondStatusV2::Retiring { .. })),
+                    "the premise (a): the anchor block's own objects retire three seats"
+                );
+                assert_eq!(
+                    a.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: 105, reason: PalwVoidReasonV2::BindTimeout },
+                    "(a) drawable at the draw: the block's own retirements buy no retry"
+                );
+                let (thin, claim_id) = t12_shaped(&[2, 3], 1_000);
+                // Eight genesis-sized seats: `(6 + 8) / (8 + 8)` = 875‰ binds (fewer would not).
+                let fresh: Vec<PalwConsensusObjectV2> =
+                    (20..28u64).map(|b| adr0130_bond(b, 30 + b as u8, 0x40 + b, GENESIS_SEAT)).collect();
+                let (b, _) = fold(&thin, &p, 105, &fresh, &anchor_extras(105));
+                assert!((20..28u64).all(|n| b.bond(&key(n)).is_some()), "the premise (b): eight seats register in the block");
+                assert!(chain_draw(&b, &claim_id, 105, 0xF2D1).is_ok(), "the premise (b): drawable after the objects");
+                assert_eq!(
+                    (b.claim(&claim_id).unwrap().phase.clone(), b.claim(&claim_id).unwrap().rebound_daa),
+                    (PalwClaimPhaseV2::Provisional, Some(105)),
+                    "(b) thin at the draw: re-anchored, though the block's own registrations made it drawable after"
+                );
+                let (c, _) = fold(&thin, &p, 105, &[], &PalwTransitionExtrasV1 { sw8_draw: None, ..anchor_extras(105) });
+                assert_eq!(
+                    c.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: 105, reason: PalwVoidReasonV2::BindTimeout },
+                    "(c) no draw points: nothing judged, SW-8's void"
+                );
+            }
+
+            /// **Below the fence the fold is byte for byte the shipped one.** At the anchor block the
+            /// armed-later params (the mirror at 200), the dormant params and the dormant params without
+            /// draw points fold one state and one delta — a refused draw voided `BindTimeout` in all three.
+            #[test]
+            fn f2_below_the_fence_the_fold_is_the_shipped_one() {
+                let (s1, claim_id) = t12_shaped(&[2, 3], 1_000);
+                let later = fold(&s1, &sp(Some(200)), 105, &[], &anchor_extras(105));
+                let dormant = fold(&s1, &sp(None), 105, &[], &anchor_extras(105));
+                let shipped = fold(&s1, &sp(None), 105, &[], &PalwTransitionExtrasV1 { sw8_draw: None, ..anchor_extras(105) });
+                for (label, (state, delta)) in [("armed later", &later), ("dormant", &dormant)] {
+                    assert_eq!(state.state_root(), shipped.0.state_root(), "{label}: the shipped root");
+                    assert_eq!(delta, &shipped.1, "{label}: the shipped delta");
+                }
+                assert_eq!(
+                    shipped.0.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: 105, reason: PalwVoidReasonV2::BindTimeout }
+                );
+            }
+
+            /// **The census answers the draw's own question at every seed** — over T88's corpus under
+            /// the stake draw (the lottery's policies with `stake: Some`, its posted-collateral locks and
+            /// ADR-0147's outsider seats included) and under S-3's one-ledger filter on the locked and
+            /// saturated genesis states: where the census says "refuses at every seed", 24 draws refuse
+            /// with an eligibility error (`InsufficientEligibleStake`, `InsufficientEligibleBonds`,
+            /// `NoOutsider`); where it says otherwise, a claim with no outsider binds at all 24, and an
+            /// outsider-judged one binds at one seed at least. Both answers occur, and so do all three
+            /// refusal kinds, so the comparison is not vacuous.
+            #[test]
+            fn f2_the_census_answers_the_draws_question_at_every_seed() {
+                let eligibility = |e: &PalwPanelV2Error| {
+                    matches!(
+                        e,
+                        PalwPanelV2Error::InsufficientEligibleStake { .. }
+                            | PalwPanelV2Error::InsufficientEligibleBonds { .. }
+                            | PalwPanelV2Error::NoOutsider(_)
+                    )
+                };
+                let (mut refused, mut drawable, mut outsider_drawable) = (0usize, 0usize, 0usize);
+                let mut kinds = std::collections::HashSet::new();
+                let mut check = |label: &str,
+                                 state: &PalwChainStateV2,
+                                 params: &PalwPanelParamsV2,
+                                 claim_id: &Hash64,
+                                 policy: PalwPanelDrawPolicyV1| {
+                    let point = PalwSw8DrawPointV1 {
+                        max_slot: u64::MAX,
+                        draw_daa: 0,
+                        policy,
+                        bond_maturity_window: None,
+                        settled_anchor_depth: None,
+                        capability_proof: false,
+                        shard_licensing: false,
+                    };
+                    let lock = policy.valid_lock;
+                    let mut census =
+                        PalwStakeDrawCensusV1::new(state, params.seat_count, 100, &point, None, lock.map(|lock| lock.frame_v1()));
+                    let verdict = census.refuses_at_every_seed(claim_id, lock.as_ref());
+                    assert_eq!(
+                        census.refuses_at_every_seed(claim_id, lock.as_ref()),
+                        verdict,
+                        "{label}: a shared verdict is the verdict"
+                    );
+                    let draws: Vec<_> = (0..24u64)
+                        .map(|i| {
+                            derive_panel_v2_with_policy(
+                                state,
+                                params,
+                                claim_id,
+                                BlockHash::from_u64_word(0xF2E0 + i),
+                                100,
+                                None,
+                                false,
+                                policy,
+                            )
+                        })
+                        .collect();
+                    let outsider = policy.independence.is_some_and(|independence| {
+                        independence.governs(state.claim(claim_id).unwrap())
+                            && crate::palw_state_v2::palw_claim_is_outsider_judged_v1(
+                                state,
+                                state.claim(claim_id).unwrap(),
+                                Some(independence.from_daa),
+                            )
+                    });
+                    if verdict {
+                        refused += 1;
+                        for drawn in &draws {
+                            match drawn {
+                                Err(e) if eligibility(e) => {
+                                    kinds.insert(std::mem::discriminant(e));
+                                }
+                                other => panic!("{label}: the census says every seed refuses, a draw gave {other:?}"),
+                            }
+                        }
+                    } else if outsider {
+                        outsider_drawable += 1;
+                        assert!(
+                            draws.iter().any(|d| d.is_ok()),
+                            "{label}: the census says a seed seats it, no draw did: {:?}",
+                            draws[0]
+                        );
+                    } else {
+                        drawable += 1;
+                        for drawn in &draws {
+                            assert!(drawn.is_ok(), "{label}: no outsider, drawable at one seed is drawable at all: {drawn:?}");
+                        }
+                    }
+                };
+                let stake = |policy: PalwPanelDrawPolicyV1| PalwPanelDrawPolicyV1 { stake: Some(PalwPanelStakeDrawV1::V1), ..policy };
+                for fixture in t88_corpus() {
+                    for (i, policy) in fixture.policies.iter().enumerate() {
+                        check(&format!("{} #{i}", fixture.name), &fixture.state, &fixture.params, &fixture.claim_id, stake(*policy));
+                    }
+                }
+                // S-3's one-ledger filter, on testnet-12's shape: seats loaded by live locks or by their
+                // own claims' reservations, from none to four, under a spread of eligibility prices.
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let filter = |eligibility: u128| PalwPanelValidLockV1 {
+                    required: u128::MAX,
+                    now_daa: 103,
+                    settled_anchor_depth: None,
+                    window_court: sp.window_court(),
+                    rcore: Some(PalwRcoreSeatFilterV1 {
+                        eligibility,
+                        ceiling_permille: 500,
+                        resolved_locks_off_ceiling: false,
+                        accuser_reserve: 0,
+                        held_charge_floor: None,
+                    }),
+                };
+                for loaded in [vec![], vec![2u64], vec![2, 3], vec![2, 3, 4], vec![2, 3, 4, 5]] {
+                    let (state, claim_id) = t12_shaped(&loaded, 1_000);
+                    for eligibility in [1u128, 50_000 * MSK as u128, 469_000 * MSK as u128, 470_000 * MSK as u128] {
+                        let policy = PalwPanelDrawPolicyV1 { valid_lock: Some(filter(eligibility)), ..sw_policy() };
+                        check(&format!("locked {loaded:?}, eligibility {eligibility}"), &state, &five(), &claim_id, policy);
+                    }
+                    if loaded.len() <= 2 {
+                        let (state, claim_id) = sw_state(&genesis_and_small(3), &loaded);
+                        let policy = PalwPanelDrawPolicyV1 { valid_lock: Some(filter(50_000 * MSK as u128)), ..sw_policy() };
+                        check(&format!("saturated {loaded:?}"), &state, &five(), &claim_id, policy);
+                    }
+                }
+                println!(
+                    "census vs draw: {refused} refused at every seed, {drawable} drawable, {outsider_drawable} outsider-judged drawable"
+                );
+                assert!(refused > 0 && drawable > 0 && outsider_drawable > 0, "both answers occur");
+                assert_eq!(
+                    kinds.len(),
+                    3,
+                    "every eligibility refusal occurs: InsufficientEligibleStake, InsufficientEligibleBonds, NoOutsider"
+                );
+            }
+
+            /// **The census walks the bonds once per anchor block, not once per claim** — measured, not
+            /// asserted by construction: over a registry of the eight genesis seats and 120 floor-sized
+            /// operators, one census answering 64 claims is compared with the draw the chain derives for
+            /// those claims (which walks every bond's lock ledger per list per claim). Printed for the
+            /// report; the assertion is only that the census is the cheaper of the two.
+            #[test]
+            fn f2_the_census_costs_one_walk_per_anchor_block() {
+                let (state, claim_id) = sw_state(&genesis_and_small(120), &[2, 3]);
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let lock = PalwPanelValidLockV1 {
+                    required: u128::MAX,
+                    now_daa: 103,
+                    settled_anchor_depth: None,
+                    window_court: sp.window_court(),
+                    rcore: Some(PalwRcoreSeatFilterV1 {
+                        eligibility: 50_000 * MSK as u128,
+                        ceiling_permille: 500,
+                        resolved_locks_off_ceiling: false,
+                        accuser_reserve: 0,
+                        held_charge_floor: None,
+                    }),
+                };
+                let policy = PalwPanelDrawPolicyV1 { valid_lock: Some(lock), ..sw_policy() };
+                let point = PalwSw8DrawPointV1 {
+                    max_slot: u64::MAX,
+                    draw_daa: 0,
+                    policy,
+                    bond_maturity_window: None,
+                    settled_anchor_depth: None,
+                    capability_proof: false,
+                    shard_licensing: false,
+                };
+                const CLAIMS: usize = 64;
+                let started = std::time::Instant::now();
+                let mut census = PalwStakeDrawCensusV1::new(&state, 5, 100, &point, None, Some(lock.frame_v1()));
+                let built = started.elapsed();
+                // Distinct prices, so no claim shares another's verdict: the per-claim cost, measured.
+                for i in 0..CLAIMS {
+                    let priced = PalwPanelValidLockV1 {
+                        rcore: lock.rcore.map(|f| PalwRcoreSeatFilterV1 { eligibility: f.eligibility + i as u128, ..f }),
+                        ..lock
+                    };
+                    census.refuses_at_every_seed(&claim_id, Some(&priced));
+                }
+                let census_total = started.elapsed();
+                let started = std::time::Instant::now();
+                for i in 0..CLAIMS {
+                    let _ = derive_panel_v2_with_policy(&state, &five(), &claim_id, anchor(i as u64), 100, None, false, policy);
+                }
+                let draws = started.elapsed();
+                println!(
+                    "[f2 cost] {} bonds: census build {:?}, census + {CLAIMS} verdicts {:?}; {CLAIMS} chain draws {:?}",
+                    state.bonds_iter().count(),
+                    built,
+                    census_total,
+                    draws
+                );
+                assert!(census_total < draws, "one census and {CLAIMS} verdicts cost less than {CLAIMS} draws");
             }
         }
     }
