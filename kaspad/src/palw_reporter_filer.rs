@@ -2616,7 +2616,8 @@ mod tests {
         let hooks: Vec<usize> = source.match_indices("self.j1_auto_probe_v1(").map(|(at, _)| at).collect();
         assert_eq!(hooks.len(), 2, "two hooks");
         for (hook, refused) in hooks.iter().zip([
-            "if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {",
+            // RFC-0001 §A: the capture is checked under its claim's decode rule (`fp_verify_capture_under_job_v1`).
+            "if fp_verdict != PalwMaterialVerdictV1::Matches {",
             "if arm == PalwMaterialArmV1::Nothing {",
         ]) {
             let arm = source.find(refused).unwrap_or_else(|| panic!("{refused}"));

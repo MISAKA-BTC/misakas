@@ -6300,6 +6300,12 @@ impl PalwPanelService {
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
         };
+        // **RFC-0001 §A.4: past `Params::palw_fp_decode_rules` every new free-prompt job is FP Job
+        // V4** — the network's own canonical job too, as the no-op V4 (it decodes exactly what the
+        // V3 job decodes, with the same work). Below the fence it stays V3, byte for byte.
+        if self.consensus_config.params.palw_fp_decode_rules_active_at(current_daa) {
+            job = job.into_v4(kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4::NOOP);
+        }
         // The anchor is a function of the job's own facts, not of its prompt — so the prompt
         // can be derived from it and then written into the job.
         let (canonical_ctx, prompt) = backend.job_for_anchor(fp_canonical_anchor_v1(&job))?;
@@ -9493,9 +9499,9 @@ impl PalwPanelService {
                                     job_pin: duty.fp_job_pin_v1(),
                                 };
                                 // RFC-0001 §A: under the claim's decode rule (its job's, for a V4 claim).
-                                if fp_verify_capture_under_job_v1(backend.as_ref(), &payload.material.job, &payload.capture, roots)
-                                    != PalwMaterialVerdictV1::Matches
-                                {
+                                let fp_verdict =
+                                    fp_verify_capture_under_job_v1(backend.as_ref(), &payload.material.job, &payload.capture, roots);
+                                if fp_verdict != PalwMaterialVerdictV1::Matches {
                                     // P2-8, J1 auto: the claim's committed execution under another job?
                                     self.j1_auto_probe_v1(
                                         &session,
