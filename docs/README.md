@@ -2,6 +2,10 @@
 
 The code, current `main` CLI `--help` and ADR decisions are authoritative. This index separates live operator instructions from dated engineering evidence.
 
+> **Design documentation is being restructured** into four types: Spec (the rules), Design (the
+> reasoning), RFC (proposals) and ADR (short decision records). [INDEX.md](INDEX.md) explains the four
+> types and the plan.
+
 ## Current Testnet-12 documents
 
 - [Architecture overview](architecture/overview.md) — the protocol as it is now, topic by topic, with the ADRs that govern each part and where its code lives
