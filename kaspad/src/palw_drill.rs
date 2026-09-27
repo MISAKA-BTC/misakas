@@ -1120,7 +1120,11 @@ mod tests {
             argv.extend_from_slice(extra);
             parse(&argv)
         };
-        assert!(palw_drill_validate_args_v1(&with(&[&flag, "--palw-drill-fence2-at=60"])).is_ok(), "a drill crossing DAA 60");
+        // Alone below the first flag day's height the second is refused at start-up: lane F2-lock's retroactive
+        // lock life needs lane V02's lock life (a DAA-750 fence) at or below it — move the first flag day too.
+        let alone_low = palw_drill_validate_args_v1(&with(&[&flag, "--palw-drill-fence2-at=60"])).unwrap_err();
+        assert!(alone_low.to_string().contains("palw_final_lock_life at or below it"), "{alone_low}");
+        assert!(palw_drill_validate_args_v1(&with(&[&flag, "--palw-drill-fence2-at=800"])).is_ok(), "alone, above the first flag day");
         assert!(
             palw_drill_validate_args_v1(&with(&[&flag, "--palw-drill-fence-at=40", "--palw-drill-fence2-at=60"])).is_ok(),
             "a drill crossing both flag days"
@@ -1184,7 +1188,7 @@ mod tests {
         };
         let first = config(&["--palw-drill-fence-at=40"]);
         let both = config(&["--palw-drill-fence-at=40", "--palw-drill-fence2-at=60"]);
-        let second = config(&["--palw-drill-fence2-at=60"]);
+        let second = config(&["--palw-drill-fence2-at=800"]);
         assert_eq!(both.params.genesis.hash, first.params.genesis.hash, "the salt's genesis");
         assert_eq!(both.palw_drill_fence_moves.len(), PALW_T12_POST_LAUNCH_FENCES_V1.len() + PALW_T12_POST_LAUNCH_FENCES_V2.len());
         assert_eq!(second.palw_drill_fence_moves.len(), PALW_T12_POST_LAUNCH_FENCES_V2.len());
@@ -1207,11 +1211,17 @@ mod tests {
         let lines = palw_drill_fence_lines_v1(&both);
         assert_eq!(lines.len(), 1 + both.palw_drill_fence_moves.len(), "{lines:#?}");
         assert!(lines[0].contains("--palw-drill-fence2-at") && lines[0].contains(&both.params.consensus_params_id().to_string()));
-        assert!(lines.iter().any(|line| line.contains("palw_floor_refusal_retry") && line.contains("ARMED at DAA 60")), "{lines:#?}");
+        // Public testnet-12 ships the second flag day armed at its own height, so the drill MOVES it to 60.
+        assert!(lines.iter().any(|line| line.contains("palw_floor_refusal_retry") && line.contains("DAA 60")), "{lines:#?}");
+        assert!(lines.iter().any(|line| line.contains("palw_final_lock_life_retro") && line.contains("DAA 60")), "{lines:#?}");
 
         let public = config_of(&parse(&base));
         assert!(public.palw_drill_fence_moves.is_empty());
-        assert_eq!(public.params.palw_floor_refusal_retry, None, "public testnet-12 ships the second flag day dormant");
+        assert_eq!(
+            public.params.palw_floor_refusal_retry,
+            kaspa_consensus_core::config::params::PALW_T12_POST_LAUNCH_FENCE_V2_DAA.map(ForkActivation::new),
+            "public testnet-12 ships the second flag day at its own height"
+        );
 
         // The keyring export names the fingerprint the node on the same command line announces.
         let dir = tempfile::tempdir().unwrap();
