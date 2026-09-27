@@ -8,9 +8,9 @@
 use crate::exit;
 use crate::operator::finding::Finding;
 use kaspa_consensus_core::palw_producer_v2::{
-    PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2, PALW_NOT_READY_BOND_FROZEN_V1, PALW_NOT_READY_BOND_UNKNOWN_V2,
-    PALW_NOT_READY_CLASS_NOT_ADMITTING_V2, PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2,
-    PALW_NOT_READY_KEY_MISMATCH_V2,
+    PALW_NOT_READY_AUDIT_BACKLOG_V1, PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2, PALW_NOT_READY_BOND_FROZEN_V1,
+    PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_CLASS_NOT_ADMITTING_V2, PALW_NOT_READY_EPOCH_BUDGET_V2,
+    PALW_NOT_READY_EXPOSURE_FULL_V2, PALW_NOT_READY_ISSUANCE_CAPPED_V1, PALW_NOT_READY_KEY_MISMATCH_V2,
 };
 
 const JOIN: &str = "docs/testnet11-join-mining.md";
@@ -215,6 +215,28 @@ pub(crate) fn not_ready(reason: &str, n: &HoldNumbers, bond: Option<&str>) -> Fi
             .fix("a tier freeze lifts window_court (3,000 DAA) after the last conviction; wait it out")
             .fix("an intent-class conviction forfeited the bond whole and never lifts: register a new bond under a NEW key")
             .docs(DOCS_BOND);
+    }
+    if reason.starts_with(PALW_NOT_READY_ISSUANCE_CAPPED_V1) {
+        return Finding::error("E-ISSUANCE-CAPPED", exit::NOT_READY, "Not mining: the bond's issuance is capped for now")
+            .reason(
+                "past ADR-0160's issuance slots a bond holds at most u·ρ outstanding claims (u = ⌊C / 6,500 MSK⌋) and issues from \
+                 a token bucket of depth max(4, ⌈u·ρ/25⌉) refilled u·ρ/20 a DAA — queue bounds, not a penalty",
+            )
+            .current(format!("bond {bond} at its cap"))
+            .required("a free slot (a counted licence, a Final, or a void's hold ending frees one) and a token")
+            .fix("wait: licences free slots and the bucket refills every DAA")
+            .docs(DOCS_BOND);
+    }
+    if reason.starts_with(PALW_NOT_READY_AUDIT_BACKLOG_V1) {
+        return Finding::error("E-AUDIT-BACKLOG", exit::NOT_READY, "Not mining: credited claims wait for their audits")
+            .reason(
+                "past ADR-0160's audit door a credited claim reaches Final only after operator audits; while the claims awaiting \
+                 one number A_max, no new credited claim is admitted — a queue bound, never a charge",
+            )
+            .current("the audit backlog is full".to_string())
+            .required("the operators' audits to catch up")
+            .fix("wait: each audit receipt frees a place")
+            .docs(DOCS_CLASS);
     }
     if reason.starts_with(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2) {
         let mut f =

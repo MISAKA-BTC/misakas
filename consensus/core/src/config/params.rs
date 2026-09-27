@@ -2426,6 +2426,30 @@ pub struct Params {
     /// with the `never()` collapse.
     pub palw_capacity_verify_room: Option<ForkActivation>,
     // ---- end ADR-0160 lane verify -------------------------------------------------------------------
+    // ---- ADR-0160 stage 2 (rcore/cap-s1): lane Q the audit door, lane S the issuance slots ---------
+    /// **ADR-0160 F-Q: the audit door** (lane Q, testnet-12 only; ADR-0160 v3 §5.9, D-23). Past it a
+    /// CREDITED claim — one whose escrow slot a ramp step's credit cut below its reward — reaches `Final`
+    /// only once `k_aud` distinct members of its audit pool (the operator bonds that are neither its
+    /// producer nor a seat of its panel, nor frozen, nor excluded) have posted a receipt that its roots
+    /// reproduce (`PalwConsensusObjectV2::AuditReceiptBatchV1`, tag 60); `k_aud` is 1 below ρ 250 and 2
+    /// from it ([`crate::palw_audit_door_v1`]). An unaudited credited claim waits — never voided, burned
+    /// or charged for it. Refused by `validate_palw_v2` off ConsensusV2 and without
+    /// `palw_capacity_aggregate_liability` (F-L), `palw_capacity_batch_licence` (F-B) and
+    /// `palw_operator_anchor` (whose operator bonds are the pool) at or below it; and F-L's value is
+    /// refused where a CREDITED step starts below F-Q. Mirrored for the fold by
+    /// [`Self::sync_palw_capacity_stage2`]. Dormant (`None`) on every shipped preset; hashed Some-only
+    /// with the `never()` collapse.
+    pub palw_capacity_audit_door: Option<ForkActivation>,
+    /// **ADR-0160 F-S: the issuance slots** (lane S, testnet-12 only; ADR-0160 v3 §6). Past it a bond's
+    /// attempt is admitted only while it holds fewer than `N_out = u·ρ` issuance slots and its token
+    /// bucket (depth `max(4, ⌈u·ρ/25⌉)`, refill `u·ρ/20` a DAA) holds a token
+    /// ([`crate::palw_issuance_slots_v1`]) — DoS and queue bounds, never the safety. Refused by
+    /// `validate_palw_v2` off ConsensusV2 and without `palw_capacity_weight_cap` (F-W),
+    /// `palw_capacity_aggregate_liability` (F-L) and `palw_capacity_escrow_at_licence` (F-E) at or
+    /// below it. Mirrored by [`Self::sync_palw_capacity_stage2`]; dormant on every shipped preset;
+    /// hashed Some-only with the `never()` collapse.
+    pub palw_capacity_issuance_slots: Option<ForkActivation>,
+    // ---- end ADR-0160 stage 2 ----------------------------------------------------------------------
     /// **ADR-0075 Decision 14 — only a chunk that can complete a group may spend the block's
     /// certification cap.** `None` on every shipped preset, so the behaviour is byte-identical to
     /// not having the field.
@@ -3746,6 +3770,9 @@ impl Params {
         self.validate_palw_model_sink_bound_v1()?;
         // ADR-0160 lane verify (F-B, F-R): over R-core+'s funnel, the audit fence and their mirrors.
         self.validate_palw_capacity_verify_v1()?;
+        // ADR-0160 stage 2 (F-Q, F-S): over F-L, F-B, lane A (Q) and F-W, F-L, F-E (S), and a credited step
+        // only past the audit door.
+        self.validate_palw_capacity_stage2_v1()?;
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
         // **ADR-0093 Decision 8 needs the court it is a move of.** A root claim is a dissection's
         // first move; a fence armed where the k-ary court is not has no dissection to anchor. Asked
@@ -5812,6 +5839,13 @@ impl Params {
         if self.palw_capacity_verify_room == Some(ForkActivation::never()) {
             self.palw_capacity_verify_room = None;
         }
+        // ADR-0160 stage 2 (F-Q, F-S): Some-only hashed, so the same collapse, each.
+        if self.palw_capacity_audit_door == Some(ForkActivation::never()) {
+            self.palw_capacity_audit_door = None;
+        }
+        if self.palw_capacity_issuance_slots == Some(ForkActivation::never()) {
+            self.palw_capacity_issuance_slots = None;
+        }
         // ADR-0075 D14, a bare fence: the D2 collapse, for the D2 reason.
         if self.palw_chunk_cap_charge == Some(ForkActivation::never()) {
             self.palw_chunk_cap_charge = None;
@@ -7628,6 +7662,143 @@ impl Params {
         self.palw_capacity_verify_room_fence().is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **F-Q's fence** ([`Self::palw_capacity_audit_door`]), resolved like F-B's.
+    pub fn palw_capacity_audit_door_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capacity_audit_door) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// **F-S's fence** ([`Self::palw_capacity_issuance_slots`]), resolved like F-B's.
+    pub fn palw_capacity_issuance_slots_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capacity_issuance_slots) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// **The fold's mirrors of F-Q and F-S** (ADR-0160 stage 2): F-Q's height with the operator bonds
+    /// its audit pool draws from (`palw_operator_anchor`'s list — empty where lane A is not armed, and
+    /// then `validate_palw_v2` refuses F-Q), and F-S's height, on the `#[borsh(skip)]` copies of
+    /// `PalwStateParamsV2`. Written here and nowhere else; call it wherever either fence (or lane A) is
+    /// set on an assembled ruleset.
+    pub fn sync_palw_capacity_stage2(&mut self) {
+        let at = |fence: Option<ForkActivation>| fence.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        let (audit, slots) = (at(self.palw_capacity_audit_door), at(self.palw_capacity_issuance_slots));
+        let operators = match (&audit, &self.palw_operator_anchor) {
+            (Some(_), Some(anchor)) => anchor.operators.clone(),
+            _ => Vec::new(),
+        };
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_capacity_stage2_mirrors(audit, operators, slots);
+        }
+    }
+
+    /// **What F-Q and F-S refuse** (ADR-0160 v3 §10.1). Called by `validate_palw_v2`, public so a test
+    /// can name each refusal. Below both fences it checks only that the bundle's mirrors are empty.
+    ///
+    /// * F-Q: ConsensusV2; `palw_capacity_aggregate_liability` (the steps whose credit it gates),
+    ///   `palw_capacity_batch_licence` (a receipt batch rides beside the licence lists) and
+    ///   `palw_operator_anchor` (the pool is its operator bonds) at or below it; the mirror equal.
+    /// * F-S: ConsensusV2; `palw_capacity_weight_cap`, `palw_capacity_aggregate_liability` and
+    ///   `palw_capacity_escrow_at_licence` at or below it (the slot's life is the stage commitment's);
+    ///   the mirror equal.
+    /// * **A credited step needs the audit door** (D-23, v3 D.3): every step of F-L's schedule whose
+    ///   credit applies (`palw_escrow_credit_applies_v1`: the step's credit reaches `q_seat`) starts at
+    ///   or past F-Q — a credit without the door would pay a fraud that commits less than its reward.
+    pub fn validate_palw_capacity_stage2_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let armed = |fence: Option<ForkActivation>| fence.filter(|fence| *fence != ForkActivation::never());
+        let (audit, slots) = (armed(self.palw_capacity_audit_door), armed(self.palw_capacity_issuance_slots));
+        // A malformed value is refused by its own validator by name; the door's rule reads a well-formed one.
+        let credited_from = self.palw_capacity_aggregate_liability.as_ref().filter(|value| value.refusal_v1().is_none()).and_then(|value| {
+            value
+                .steps
+                .iter()
+                .filter(|step| {
+                    crate::palw_escrow_funding_v2::palw_escrow_credit_applies_v1(&crate::palw_escrow_funding_v2::PalwEscrowCreditV1 {
+                        rho: step.rho,
+                        q_credit_permille: step.q_credit_permille,
+                    })
+                })
+                .map(|step| step.from_daa)
+                .min()
+        });
+        if let Some(from) = credited_from
+            && audit.is_none_or(|fence| fence.daa_score() > from)
+        {
+            return Err(Invalid(
+                "palw_capacity_aggregate_liability credits a step without palw_capacity_audit_door (F-Q) at or below it: a \
+                 credited claim commits less than its reward, so it must reach Final only through its audit (ADR-0160 v3 D-23)",
+            ));
+        }
+        let bundle = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle),
+            _ => None,
+        };
+        if audit.is_none() && slots.is_none() {
+            if let Some(bundle) = bundle
+                && (bundle.state.capacity_audit_from_daa().is_some() || bundle.state.capacity_slots_from_daa().is_some())
+            {
+                return Err(Invalid(
+                    "the V2 bundle mirrors palw_capacity_audit_door or palw_capacity_issuance_slots without the fence armed: \
+                     mirror them with Params::sync_palw_capacity_stage2 after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        }
+        let Some(bundle) = bundle else {
+            return Err(Invalid(
+                "palw_capacity_audit_door or palw_capacity_issuance_slots is armed on a network that is not ConsensusV2: the \
+                 claims they gate are the V2 fold's",
+            ));
+        };
+        let at_or_below = |fence: Option<ForkActivation>, height: u64| armed(fence).is_some_and(|f| f.daa_score() <= height);
+        if let Some(audit) = audit {
+            let h = audit.daa_score();
+            let liability_at = self.palw_capacity_aggregate_liability.as_ref().map(|value| value.activation);
+            if !(at_or_below(liability_at, h)
+                && at_or_below(self.palw_capacity_batch_licence, h)
+                && at_or_below(self.palw_operator_anchor.as_ref().map(|anchor| anchor.activation), h))
+            {
+                return Err(Invalid(
+                    "palw_capacity_audit_door is armed without palw_capacity_aggregate_liability, palw_capacity_batch_licence and \
+                     palw_operator_anchor at or below it: the door gates F-L's credited steps, its receipts ride beside the batch \
+                     licences, and its pool is lane A's operator bonds (ADR-0160 v3 §10.1)",
+                ));
+            }
+        }
+        if let Some(slots) = slots {
+            let h = slots.daa_score();
+            let liability_at = self.palw_capacity_aggregate_liability.as_ref().map(|value| value.activation);
+            if !(at_or_below(self.palw_capacity_weight_cap, h)
+                && at_or_below(liability_at, h)
+                && at_or_below(self.palw_capacity_escrow_at_licence, h))
+            {
+                return Err(Invalid(
+                    "palw_capacity_issuance_slots is armed without palw_capacity_weight_cap, palw_capacity_aggregate_liability and \
+                     palw_capacity_escrow_at_licence at or below it: the slot lives as long as the stage commitment and is priced \
+                     at the step's ρ (ADR-0160 v3 §10.1)",
+                ));
+            }
+        }
+        let operators = match (&audit, &self.palw_operator_anchor) {
+            (Some(_), Some(anchor)) => anchor.operators.clone(),
+            _ => Vec::new(),
+        };
+        if bundle.state.capacity_audit_from_daa() != audit.map(|f| f.daa_score())
+            || bundle.state.capacity_audit_operators() != operators.as_slice()
+            || bundle.state.capacity_slots_from_daa() != slots.map(|f| f.daa_score())
+        {
+            return Err(Invalid(
+                "palw_capacity_audit_door or palw_capacity_issuance_slots disagrees with the V2 bundle's mirror: mirror them \
+                 with Params::sync_palw_capacity_stage2 after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+
     /// **The fold's mirrors of F-B and F-R** (ADR-0160 §6.2): the `#[borsh(skip)]` copies on
     /// `PalwStateParamsV2` the fold, its load-time re-derivations and every outside reader take
     /// (`capacity_batch_active_at`, `capacity_room_active_at`). Written here and nowhere else; `None`
@@ -8604,6 +8775,8 @@ impl Params {
             // ADR-0160 lane verify (F-B, F-R).
             palw_capacity_batch_licence,
             palw_capacity_verify_room,
+            palw_capacity_audit_door,
+            palw_capacity_issuance_slots,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -8825,6 +8998,8 @@ impl Params {
             // ADR-0160 lane verify (F-B, F-R): top-level fences an un-upgraded peer does not implement.
             ("palw_capacity_batch_licence", *palw_capacity_batch_licence),
             ("palw_capacity_verify_room", *palw_capacity_verify_room),
+            ("palw_capacity_audit_door", *palw_capacity_audit_door),
+            ("palw_capacity_issuance_slots", *palw_capacity_issuance_slots),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
             ("palw_kary_court", *palw_kary_court),
@@ -9329,6 +9504,15 @@ impl Params {
             h.write(b"palw_capacity_verify_room");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0160 stage 2 (F-Q, F-S), NAMED and Some-only: each changes what a block may carry or admit.
+        if let Some(activation) = self.palw_capacity_audit_door {
+            h.write(b"palw_capacity_audit_door");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_capacity_issuance_slots {
+            h.write(b"palw_capacity_issuance_slots");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decision 11's complete context set (mainnet audit 2026-09-06, M-8). Some-only,
         // at the tail, for the reason its siblings are: it is genesis-only, so an operator reading
         // the schedule sees a rule in force from block one rather than a height to cross.
@@ -9513,6 +9697,8 @@ impl Params {
             // ADR-0160 lane verify (F-B, F-R).
             palw_capacity_batch_licence,
             palw_capacity_verify_room,
+            palw_capacity_audit_door,
+            palw_capacity_issuance_slots,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -10065,6 +10251,13 @@ impl Params {
         if let Some(activation) = palw_capacity_verify_room.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0160 stage 2 (F-Q, F-S): Some-only, collapsed from `Some(never())`.
+        if let Some(activation) = palw_capacity_audit_door.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_capacity_issuance_slots.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0069 Decision 7. A pure fence with no payload, so visiting it is safe — the same
         // shape as D2 beside it.
         match palw_uncertified_weightless.as_mut() {
@@ -10579,6 +10772,8 @@ impl Params {
             // ADR-0160 lane verify (F-B, F-R).
             palw_capacity_batch_licence,
             palw_capacity_verify_room,
+            palw_capacity_audit_door,
+            palw_capacity_issuance_slots,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
             palw_kary_court,
@@ -11190,6 +11385,15 @@ impl Params {
         }
         if let Some(activation) = palw_capacity_verify_room {
             h.write(b"palw_capacity_verify_room");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0160 stage 2 (F-Q, F-S): Some-only.
+        if let Some(activation) = palw_capacity_audit_door {
+            h.write(b"palw_capacity_audit_door");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_capacity_issuance_slots {
+            h.write(b"palw_capacity_issuance_slots");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0075 D14, Some-only like its siblings: an unset fence writes nothing, so every
@@ -11887,6 +12091,8 @@ impl Params {
             // they need (carried too); the bundle's mirrors ride the carried bundle.
             palw_capacity_batch_licence: self.palw_capacity_batch_licence,
             palw_capacity_verify_room: self.palw_capacity_verify_room,
+            palw_capacity_audit_door: self.palw_capacity_audit_door,
+            palw_capacity_issuance_slots: self.palw_capacity_issuance_slots,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_kary_court: self.palw_kary_court,
@@ -12935,6 +13141,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_sink_bound: None,
     palw_capacity_batch_licence: None,
     palw_capacity_verify_room: None,
+    palw_capacity_audit_door: None,
+    palw_capacity_issuance_slots: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -13179,6 +13387,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_sink_bound: None,
     palw_capacity_batch_licence: None,
     palw_capacity_verify_room: None,
+    palw_capacity_audit_door: None,
+    palw_capacity_issuance_slots: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -13405,6 +13615,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_sink_bound: None,
     palw_capacity_batch_licence: None,
     palw_capacity_verify_room: None,
+    palw_capacity_audit_door: None,
+    palw_capacity_issuance_slots: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
     palw_kary_court: None,
@@ -18609,6 +18821,22 @@ pub const PALW_T12_CAPACITY_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
             params.sync_palw_capacity_verify();
         },
     },
+    // ADR-0160 stage 2 (rcore/cap-s1): F-Q the audit door and F-S the issuance slots — bare heights with
+    // the fold's mirrors (F-Q's carries lane A's operator bonds, its pool).
+    PalwPostLaunchFenceV1 {
+        name: "palw_capacity_audit_door",
+        set: |params, at| {
+            params.palw_capacity_audit_door = at;
+            params.sync_palw_capacity_stage2();
+        },
+    },
+    PalwPostLaunchFenceV1 {
+        name: "palw_capacity_issuance_slots",
+        set: |params, at| {
+            params.palw_capacity_issuance_slots = at;
+            params.sync_palw_capacity_stage2();
+        },
+    },
 ];
 
 /// **Arm (or, with `None`, disarm) every capacity fence at one height** — each entry of
@@ -20093,6 +20321,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_sink_bound: None,
     palw_capacity_batch_licence: None,
     palw_capacity_verify_room: None,
+    palw_capacity_audit_door: None,
+    palw_capacity_issuance_slots: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
     // bytes against a one-carrier budget of 83,333, so the Merkle form buys nothing and arming it

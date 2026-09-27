@@ -134,6 +134,9 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ReceiptLicensedV2 { .. }
         // ADR-0160 F-B (tag 59): a batch licence is a licence, as the single one beside it.
         | O::ReceiptLicensedBatchV1 { .. }
+        // ADR-0160 F-Q (tag 60): an audit receipt batch is the licence's second half for a credited
+        // claim — market traffic like the licence, not a conviction a halt must let through.
+        | O::AuditReceiptBatchV1 { .. }
         | O::SeatReadinessProvedV2 { .. }
         | O::OptimisticLicensed { .. }
         | O::PanelUnavailableQuorum { .. }

@@ -13,7 +13,7 @@
 mod common;
 pub use common::*;
 
-pub use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_arm_capacity_fences_v1, palw_t12_shipped_params};
+pub use kaspa_consensus_core::config::params::{ForkActivation, PALW_T12_CAPACITY_FENCES_V1, palw_t12_shipped_params};
 pub use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwStateDeltaV2, PalwVoidReasonV2, palw_bond_committed_raw_v1};
 pub use std::collections::BTreeMap;
 
@@ -52,8 +52,19 @@ impl Class {
     }
 }
 
+/// **Stage 1's fences** — the capacity list's lanes the stage integrates (F-W, F-E, F-L at ρ = 1, F-B,
+/// F-R); stage 2's F-Q and F-S (and every later stage's fence) stay dormant in a stage-1 twin.
+pub const STAGE1_FENCES: [&str; 5] = [
+    "palw_capacity_weight_cap",
+    "palw_capacity_escrow_at_licence",
+    "palw_capacity_aggregate_liability",
+    "palw_capacity_batch_licence",
+    "palw_capacity_verify_room",
+];
+
 /// testnet-12 as shipped for `class` (the 2M row opened by its flag-day row, `t12_2m_flag_day_row`:
-/// at launch it takes no claim at all), and with every capacity fence armed at [`H`] where `armed`.
+/// at launch it takes no claim at all), and with stage 1's capacity fences ([`STAGE1_FENCES`]) armed at
+/// [`H`] where `armed`.
 pub fn params_for(class: Class, armed: bool) -> Params {
     let mut p = palw_t12_shipped_params();
     if class == Class::M2 {
@@ -62,7 +73,10 @@ pub fn params_for(class: Class, armed: bool) -> Params {
         p.validate_palw_v2().expect("the 2M flag-day fixture validates on the shipped release");
     }
     if armed {
-        palw_t12_arm_capacity_fences_v1(&mut p, Some(ForkActivation::new(H))).expect("the capacity list over the release");
+        for fence in PALW_T12_CAPACITY_FENCES_V1.iter().filter(|f| STAGE1_FENCES.contains(&f.name)) {
+            (fence.set)(&mut p, Some(ForkActivation::new(H)));
+        }
+        p.validate_palw_v2().expect("stage 1's capacity fences over the release");
     }
     p
 }

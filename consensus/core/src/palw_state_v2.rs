@@ -1421,6 +1421,20 @@ pub struct PalwStateParamsV2 {
     /// `Windowed` receipt read it). `None` on every shipped preset; borsh-skipped likewise.
     #[borsh(skip)]
     capacity_batch_from_daa: Option<u64>,
+    /// **ADR-0160 F-Q: `Params::palw_capacity_audit_door`'s height** (stage 2, lane Q), mirrored by
+    /// `Params::sync_palw_capacity_stage2` for the fold's `Final` gate, its receipt arm and the deadline
+    /// rebuild at load. `None` on every shipped preset; borsh-skipped for `short_challenge_window_from_daa`'s
+    /// reason.
+    #[borsh(skip)]
+    capacity_audit_from_daa: Option<u64>,
+    /// **ADR-0160 F-Q: the operator bonds an audit pool draws from** — `Params::palw_operator_anchor`'s
+    /// list (testnet-12's eight genesis cards), mirrored with F-Q's height; empty where F-Q is not armed.
+    #[borsh(skip)]
+    capacity_audit_operators: Vec<PalwBondKeyV2>,
+    /// **ADR-0160 F-S: `Params::palw_capacity_issuance_slots`'s height** (stage 2, lane S), mirrored by
+    /// the same setter. `None` on every shipped preset; borsh-skipped likewise.
+    #[borsh(skip)]
+    capacity_slots_from_daa: Option<u64>,
     /// **ADR-0152 §4-quater: `Params::palw_class_verify_deadline`'s height**, mirrored here by
     /// `Params::sync_palw_class_verify_deadline` because every rule it gates — the receipt window,
     /// the Final floor, the class gate, the lock at licence — is read by the rebuild at load and by
@@ -1665,6 +1679,9 @@ impl PalwStateParamsV2 {
             final_lock_full_collateral_from_daa: None,
             capacity_room_from_daa: None,
             capacity_batch_from_daa: None,
+            capacity_audit_from_daa: None,
+            capacity_audit_operators: Vec::new(),
+            capacity_slots_from_daa: None,
             class_verify_deadline_from_daa: None,
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
@@ -2367,6 +2384,53 @@ impl PalwStateParamsV2 {
     /// `Windowed` receipt, [`crate::palw_batch_licence_v1`])? `false` on every shipped preset.
     pub fn capacity_batch_active_at(&self, daa_score: u64) -> bool {
         self.capacity_batch_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **ADR-0160 stage 2: F-Q's and F-S's mirrors**, written by `Params::sync_palw_capacity_stage2` and
+    /// by nothing else (and by fixtures); `None` / empty where a fence is not armed.
+    pub fn with_capacity_stage2_mirrors(
+        mut self,
+        audit_from_daa: Option<u64>,
+        audit_operators: Vec<PalwBondKeyV2>,
+        slots_from_daa: Option<u64>,
+    ) -> Self {
+        self.capacity_audit_from_daa = audit_from_daa;
+        self.capacity_audit_operators = audit_operators;
+        self.capacity_slots_from_daa = slots_from_daa;
+        self
+    }
+
+    /// ADR-0160 F-Q: `Params::palw_capacity_audit_door`'s height, if armed (the mirror).
+    pub fn capacity_audit_from_daa(&self) -> Option<u64> {
+        self.capacity_audit_from_daa
+    }
+
+    /// ADR-0160 F-Q: the operator bonds an audit pool draws from (the mirror; empty below the fence).
+    pub fn capacity_audit_operators(&self) -> &[PalwBondKeyV2] {
+        &self.capacity_audit_operators
+    }
+
+    /// **ADR-0160 F-Q: is the audit door in force at `daa_score`?** — a block may carry audit receipts,
+    /// and a claim ACCEPTED at or past it is credited under the door ([`crate::palw_audit_door_v1`]).
+    /// `false` on every shipped preset.
+    pub fn capacity_audit_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_audit_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// ADR-0160 F-S: `Params::palw_capacity_issuance_slots`'s height, if armed (the mirror).
+    pub fn capacity_slots_from_daa(&self) -> Option<u64> {
+        self.capacity_slots_from_daa
+    }
+
+    /// **ADR-0160 F-S: does lane S judge an admission at `daa_score`?** `false` on every shipped preset.
+    pub fn capacity_slots_active_at(&self, daa_score: u64) -> bool {
+        self.capacity_slots_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **ADR-0160 F-S: does a claim ACCEPTED at `accepted_daa` hold an issuance slot?** (S.1: past the
+    /// fence's height, a claim keeps one accounting for its whole life, ADR-0145's keying.)
+    pub fn capacity_slots_applies_at(&self, accepted_daa: u64) -> bool {
+        self.capacity_slots_active_at(accepted_daa)
     }
 
     /// ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn (the
@@ -4205,7 +4269,14 @@ pub fn palw_rcore_deadline_v1(
             {
                 floor = floor.max(receipt_deadline.checked_add(1).ok_or(PalwStateV2Error::Overflow("replay gate"))?);
             }
-            Some(floor.max(last_daa.unwrap_or(0)))
+            // **ADR-0160 F-Q: a credited claim reaches `Final` only through its audit** — no deadline
+            // while unaudited (it waits, never voided or charged for it), and none before the DAA of its
+            // `k_aud`-th receipt. The receipts are primary data, so the rebuild at rest reads the same.
+            match crate::palw_audit_door_v1::palw_capacity_audit_gate_v1(params, claim, state.audit_status_of_v1(claim_id)) {
+                Some(None) => None,
+                Some(Some(audited)) => Some(floor.max(audited).max(last_daa.unwrap_or(0))),
+                None => Some(floor.max(last_daa.unwrap_or(0))),
+            }
         }
         PalwClaimPhaseV2::DefaultDisputed { accused_daa, .. } => Some(
             accused_daa
@@ -6847,6 +6918,19 @@ pub enum PalwConsensusObjectV2 {
         roots: Vec<crate::palw_batch_licence_v1::PalwSeatWindowRootV1>,
         entries: Vec<crate::palw_batch_licence_v1::PalwBatchLicenceEntryV1>,
     },
+    // ---- ADR-0160 stage 2 (rcore/cap-s1): tag 60, the next free after the batch licence's 59. ----
+    /// **ADR-0160 F-Q: an audit receipt batch** (tag 60): an operator bond's attestation, over
+    /// [`crate::palw_audit_door_v1::palw_audit_receipt_batch_message_v1`] under its genesis-registered
+    /// key, that each entry's claim reproduced to `reproduced_root` on its replay. A credited claim
+    /// reaches `Final` only with `k_aud` distinct such receipts from its audit pool
+    /// ([`crate::palw_audit_door_v1`]). Accepted only past `Params::palw_capacity_audit_door`; refused
+    /// by name below it by the acceptance layer and the fold, so every other network and testnet-12
+    /// before the fence fold exactly as before this variant existed.
+    AuditReceiptBatchV1 {
+        auditor: PalwBondKeyV2,
+        entries: Vec<crate::palw_audit_door_v1::PalwAuditEntryV1>,
+        signature: Vec<u8>,
+    },
 }
 
 /// **The name of a v22-skeleton object (ADR-0152 v3.1 §6 row 24, tags 53–56)**, or `None` for
@@ -8690,6 +8774,23 @@ pub enum PalwStateV2Error {
     /// acceptance layer refuses it first; the block stands and nothing folds.
     #[error("a batch licence below palw_capacity_batch_licence (ADR-0160 F-B)")]
     CapacityBatchLicenceDormant,
+    /// **ADR-0160 F-S (S.2): the bond's issuance is capped** — it holds `N_out` slots, or its bucket
+    /// holds no whole token at this DAA. Non-fatal for the block's own attempt (step 4 skips it, as it
+    /// skips `AttemptExposureCeiling`), skipped for merged work.
+    #[error("bond {bond:?}'s issuance is capped (ADR-0160 F-S): {refusal}")]
+    IssuanceCapped { bond: PalwBondKeyV2, refusal: String },
+    /// **ADR-0160 F-Q (§5.9 (f)): the audit backlog is full** — `backlog` credited licensed claims wait
+    /// for their audit, at most `max`, so a new credited claim of `class` waits too. Non-fatal for the
+    /// block's own attempt; skipped for merged work.
+    #[error("{backlog} credited claims await their audit (at most {max}, ADR-0160 F-Q): a credited claim of class {class} waits")]
+    AuditBacklogFull { class: Hash64, backlog: u64, max: u64 },
+    /// **ADR-0160 F-Q: an audit receipt batch (tag 60) below `Params::palw_capacity_audit_door`.** The
+    /// acceptance layer refuses it first; the fold refuses it by name.
+    #[error("an audit receipt batch below palw_capacity_audit_door (ADR-0160 F-Q)")]
+    CapacityAuditDoorDormant,
+    /// **ADR-0160 F-Q: an invalid audit receipt batch** ([`crate::palw_audit_door_v1::palw_audit_receipt_batch_refusal_v1`]).
+    #[error("audit receipt batch by {auditor:?} refused: {why} (ADR-0160 F-Q)")]
+    AuditReceiptRefused { auditor: PalwBondKeyV2, why: &'static str },
     /// **ADR-0160 F-R (J-6): the floor's seat capital is spoken for.** Past
     /// `Params::palw_capacity_verify_room`, a floor claim is admitted only while the seats' free
     /// capital can bind every floor claim not yet bound plus this one
@@ -9304,6 +9405,22 @@ pub struct PalwChainStateV2 {
     /// sweep), a final one never. Every key is a registered bond (the registry is append-only).
     bond_freezes: BTreeMap<PalwBondKeyV2, crate::palw_aggregate_liability_v1::PalwBondFreezeV1>,
 
+    // ---- ADR-0160 stage 2 (rcore/cap-s1): lane Q's receipts and exclusions, lane S's buckets ----
+    //
+    // ONE Some-only root block (`capacity_qs/v1`) after the freezes', and ONE carriage tail (`0xB9`,
+    // after the freezes' `0xB8`), written only when one of the three holds a row — so a state holding
+    // none (every state below `Params::palw_capacity_audit_door` and `palw_capacity_issuance_slots`,
+    // the only things that write them) roots and carries exactly as before.
+    /// By claim: the audit receipts it holds ([`crate::palw_audit_door_v1::PalwAuditStatusV1`]). Written
+    /// by a kept `AuditReceiptBatchV1` entry past F-Q; leaves with its claim's retirement.
+    audit_receipts: BTreeMap<Hash64, crate::palw_audit_door_v1::PalwAuditStatusV1>,
+    /// By bond: the DAA at which a conviction of a claim it receipted excluded it from every audit pool
+    /// (§5.9 (g)). Only a flag day removes one.
+    excluded_auditors: BTreeMap<PalwBondKeyV2, u64>,
+    /// By bond: its issuance token bucket ([`crate::palw_issuance_slots_v1::PalwIssuanceBucketV1`]),
+    /// written at each admission past F-S.
+    issuance_buckets: BTreeMap<PalwBondKeyV2, crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
+
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
     deadlines: BTreeSet<(u64, Hash64)>,
@@ -9458,6 +9575,9 @@ impl PalwChainStateV2 {
             held_forfeits: BTreeMap::new(),
             probation_memory: BTreeMap::new(),
             bond_freezes: BTreeMap::new(),
+            audit_receipts: BTreeMap::new(),
+            excluded_auditors: BTreeMap::new(),
+            issuance_buckets: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -11197,6 +11317,31 @@ impl PalwChainStateV2 {
         self.bond_freezes.iter()
     }
 
+    /// **ADR-0160 F-Q: `claim`'s audit receipts**, if it holds any.
+    pub fn audit_status_of_v1(&self, claim: &Hash64) -> Option<&crate::palw_audit_door_v1::PalwAuditStatusV1> {
+        self.audit_receipts.get(claim)
+    }
+
+    /// ADR-0160 F-Q: every claim's receipts, in claim order.
+    pub fn audit_receipts_iter_v1(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_audit_door_v1::PalwAuditStatusV1)> {
+        self.audit_receipts.iter()
+    }
+
+    /// **ADR-0160 F-Q (§5.9 (g)): is `bond` excluded from every audit pool?**
+    pub fn auditor_excluded_v1(&self, bond: &PalwBondKeyV2) -> bool {
+        self.excluded_auditors.contains_key(bond)
+    }
+
+    /// ADR-0160 F-Q: every excluded auditor with the DAA of its exclusion.
+    pub fn excluded_auditors_iter_v1(&self) -> impl Iterator<Item = (&PalwBondKeyV2, &u64)> {
+        self.excluded_auditors.iter()
+    }
+
+    /// **ADR-0160 F-S: `bond`'s issuance bucket**, if it has one (a bond with none holds a full bucket).
+    pub fn issuance_bucket_of_v1(&self, bond: &PalwBondKeyV2) -> Option<&crate::palw_issuance_slots_v1::PalwIssuanceBucketV1> {
+        self.issuance_buckets.get(bond)
+    }
+
     /// **4-ter.3 step 6: every held forfeit**, by `(claim, session)`.
     pub fn held_forfeits_iter(&self) -> impl Iterator<Item = (&(Hash64, Hash64), &PalwHeldForfeitV1)> + '_ {
         self.held_forfeits.iter()
@@ -11506,6 +11651,15 @@ impl PalwChainStateV2 {
         if !self.bond_freezes.is_empty() {
             state.update(b"bond_freezes/v1");
             state.update(collection_root(b"bond_freezes", &self.bond_freezes).as_byte_slice());
+        }
+        // **ADR-0160 stage 2 (F-Q, F-S): the receipts, the exclusions and the buckets, ONE Some-only
+        // block** after the freezes' — hashed only when one of them holds a row, so every state below
+        // both fences roots exactly as before.
+        if !self.audit_receipts.is_empty() || !self.excluded_auditors.is_empty() || !self.issuance_buckets.is_empty() {
+            state.update(b"capacity_qs/v1");
+            state.update(collection_root(b"audit_receipts", &self.audit_receipts).as_byte_slice());
+            state.update(collection_root(b"excluded_auditors", &self.excluded_auditors).as_byte_slice());
+            state.update(collection_root(b"issuance_buckets", &self.issuance_buckets).as_byte_slice());
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -12028,12 +12182,20 @@ impl PalwChainStateV2 {
         self.assert_probation_memory_consistency_v1()?;
         // ADR-0160 lane liab (F-L): every freeze names a registered bond.
         self.assert_bond_freezes_consistency_v1()?;
+        // ADR-0160 stage 2 (F-Q, F-S): receipts name live claims, buckets and exclusions registered bonds.
+        self.assert_capacity_qs_consistency_v1()?;
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
             // ADR-0152 DA-5 (M3): a live claim a seat session pauses owes none (DL-1's DA row).
             if self.da_claims.get(id).is_some_and(|record| record.open_seat_sessions > 0) {
+                continue;
+            }
+            // ADR-0160 F-Q: a credited licensed claim awaiting its audit owes none (DL-1's audit row).
+            if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
+                && matches!(crate::palw_audit_door_v1::palw_capacity_audit_gate_v1(params, claim, self.audit_receipts.get(id)), Some(None))
+            {
                 continue;
             }
             if let Some(deadline) = expected_deadline(claim, self.open_courts_by_claim.get(id).copied().unwrap_or(0)) {
@@ -12251,6 +12413,30 @@ impl PalwChainStateV2 {
     /// **ADR-0160 lane liab (AG-3, A-I2): a freeze names a registered bond, and a FINAL freeze one
     /// whose posted collateral is gone** — the forfeiture took it whole, and a registered bond's
     /// collateral is never raised. Empty on every network but a testnet-12 past F-L.
+    /// **ADR-0160 stage 2: the receipts name held claims** (a receipt leaves with its claim's retirement),
+    /// each with at least one receipt, distinct auditors in bond order; an exclusion and a bucket name
+    /// registered bonds. Empty on every network but a testnet-12 past F-Q / F-S.
+    pub(crate) fn assert_capacity_qs_consistency_v1(&self) -> Result<(), PalwStateV2Error> {
+        for (claim_id, status) in &self.audit_receipts {
+            let bad = |why: &str| Err(PalwStateV2Error::CarriageInconsistent(format!("audit receipts of {claim_id}: {why}")));
+            if !self.claims.contains_key(claim_id) {
+                return bad("its claim is not held");
+            }
+            if status.receipts.is_empty() {
+                return bad("an empty status is no row");
+            }
+            if !status.receipts.windows(2).all(|pair| pair[0].0 < pair[1].0) {
+                return bad("its auditors are not distinct and in bond order");
+            }
+        }
+        for bond in self.excluded_auditors.keys().chain(self.issuance_buckets.keys()) {
+            if !self.bonds.contains_key(bond) {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!("{bond:?}: an exclusion or a bucket of an unregistered bond")));
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn assert_bond_freezes_consistency_v1(&self) -> Result<(), PalwStateV2Error> {
         for (bond, freeze) in &self.bond_freezes {
             let bad = |why: &str| Err(PalwStateV2Error::CarriageInconsistent(format!("bond freeze {bond:?}: {why}")));
@@ -13066,6 +13252,20 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_aggregate_liability_v1::PalwBondFreezeV1>,
         new: Option<crate::palw_aggregate_liability_v1::PalwBondFreezeV1>,
     },
+    /// A claim's audit receipts were written or dropped (83; ADR-0160 F-Q, rcore/cap-s1 stage 2).
+    AuditReceipts {
+        key: Hash64,
+        old: Option<crate::palw_audit_door_v1::PalwAuditStatusV1>,
+        new: Option<crate::palw_audit_door_v1::PalwAuditStatusV1>,
+    },
+    /// An auditor was excluded (84; ADR-0160 F-Q §5.9 (g)): the DAA of its exclusion.
+    AuditorExcluded { key: PalwBondKeyV2, old: Option<u64>, new: Option<u64> },
+    /// A bond's issuance bucket was written (85; ADR-0160 F-S, rcore/cap-s1 stage 2).
+    IssuanceBucket {
+        key: PalwBondKeyV2,
+        old: Option<crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
+        new: Option<crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -13554,7 +13754,7 @@ impl PalwFoldReadV1<'_> {
     fn rcore_lock(&self, claim_id: &Hash64, claim: &PalwClaimStateV2, basis_k: u8) -> u128 {
         crate::palw_aggregate_liability_v1::palw_seat_lock_v2(
             self.rcore_lock_unreduced(claim_id, claim, basis_k),
-            self.params.capacity_step_at(claim.accepted_daa),
+            crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim),
         )
     }
 
@@ -13584,7 +13784,8 @@ impl PalwFoldReadV1<'_> {
         // (`palw_seat_duty_v2`, lane liab review 2, finding 3), so a bound seat is backed at the
         // licence by construction whatever the credit. With no step (every shipped preset, every
         // claim accepted below the fence) both are today's.
-        let step = self.params.capacity_step_at(claim.accepted_daa);
+        // Stage 2 (v3 AS-1′): the step prices a CREDITED claim only; every other claim is priced as today.
+        let step = crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim);
         let lock_2_unreduced = self.rcore_lock_unreduced(claim_id, claim, PALW_RCORE_FINAL_BASIS_K_V1);
         let lock_2 = crate::palw_aggregate_liability_v1::palw_seat_lock_v2(lock_2_unreduced, step);
         let lambda_term = crate::palw_panel_economy_v1::palw_panel_seat_reward_floor_v1(
@@ -13687,7 +13888,7 @@ impl PalwFoldReadV1<'_> {
         // ADR-0160 AS-2 (lane liab): the supplementary set's price, re-priced as the licence's is.
         crate::palw_aggregate_liability_v1::palw_seat_lock_v2(
             palw_rcore_lock_v1(g_res, claim.escrowed_reward, 0, basis_k),
-            self.params.capacity_step_at(claim.accepted_daa),
+            crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim),
         )
     }
 
@@ -16542,6 +16743,39 @@ impl<'a> TransitionBuilder<'a> {
 
     /// **The 2026-09-25 sweep's V03(2)/V05: write or drop a class's probation memory** — the rooted
     /// write and its delta entry (81). An empty memory is no row.
+    /// **ADR-0160 F-Q: the one writer of `audit_receipts`**, journaled `AuditReceipts` (83).
+    fn write_audit_receipts_v1(&mut self, key: Hash64, new: Option<crate::palw_audit_door_v1::PalwAuditStatusV1>) {
+        let old = match new.clone() {
+            Some(status) => self.state.audit_receipts.insert(key, status),
+            None => self.state.audit_receipts.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::AuditReceipts { key, old, new });
+        }
+    }
+
+    /// **ADR-0160 F-Q (§5.9 (g)): the one writer of `excluded_auditors`**, journaled `AuditorExcluded` (84).
+    fn write_auditor_excluded_v1(&mut self, key: PalwBondKeyV2, new: Option<u64>) {
+        let old = match new {
+            Some(daa) => self.state.excluded_auditors.insert(key, daa),
+            None => self.state.excluded_auditors.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::AuditorExcluded { key, old, new });
+        }
+    }
+
+    /// **ADR-0160 F-S: the one writer of `issuance_buckets`**, journaled `IssuanceBucket` (85).
+    fn write_issuance_bucket_v1(&mut self, key: PalwBondKeyV2, new: Option<crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>) {
+        let old = match new {
+            Some(bucket) => self.state.issuance_buckets.insert(key, bucket),
+            None => self.state.issuance_buckets.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::IssuanceBucket { key, old, new });
+        }
+    }
+
     /// **ADR-0160 lane liab (AG-3): the one writer of `bond_freezes`**, journaled `BondFreeze` (82).
     fn write_bond_freeze_v1(&mut self, key: PalwBondKeyV2, new: Option<crate::palw_aggregate_liability_v1::PalwBondFreezeV1>) {
         let old = match new {
@@ -17318,6 +17552,15 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<u64, PalwStateV2Error> {
         let collected = self.conviction_collected_v1(conv, counted);
         self.aggregate_on_conviction_v1(conv.now_daa, key, kind, liable)?;
+        // **ADR-0160 F-Q (§5.9 (g)): a conviction of a claim that holds audit receipts excludes every
+        // auditor that receipted it** from every pool, for good (only a flag day removes one).
+        if let Some(status) = self.state.audit_status_of_v1(&claim_id).cloned() {
+            for (auditor, _) in status.receipts {
+                if !self.state.auditor_excluded_v1(&auditor) {
+                    self.write_auditor_excluded_v1(auditor, Some(conv.now_daa));
+                }
+            }
+        }
         self.write_consumed_offence(
             key,
             Some(crate::palw_offence_v1::PalwConsumedOffenceV1 {
@@ -17814,8 +18057,9 @@ impl<'a> TransitionBuilder<'a> {
         // out so the recorded input is the priced one.
         let g_res = self.read().rcore_g_res(&claim_id, claim);
         let buyback = self.read().rcore_buyback_bound(&claim_id, claim);
-        // ADR-0160 AS-2 (lane liab): the licence's lock re-priced at the claim's `accepted_daa`.
-        let step = self.params.capacity_step_at(claim.accepted_daa);
+        // ADR-0160 AS-2 (lane liab): the licence's lock re-priced at the claim's `accepted_daa` — for a
+        // credited claim only (stage 2, v3 AS-1′).
+        let step = crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim);
         let lock_at = |basis_k: u8| {
             crate::palw_aggregate_liability_v1::palw_seat_lock_v2(palw_rcore_lock_v1(g_res, claim.escrowed_reward, buyback, basis_k), step)
         };
@@ -23272,6 +23516,10 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0152 DA-6 (M3): the claim's DA record retires with it, burning unrefunded exposure.
         self.da_retire_v1(id)?;
         self.write_claim(id, None);
+        // ADR-0160 F-Q: the claim's audit receipts retire with it.
+        if self.state.audit_status_of_v1(&id).is_some() {
+            self.write_audit_receipts_v1(id, None);
+        }
         if self.state.panels.contains_key(&id) {
             self.write_panel(id, None);
         }
@@ -24574,7 +24822,11 @@ pub fn apply_palw_transition_v7(
                     // ADR-0160 F-R (J-6): the floor room, for the share's reason — this block's own
                     // objects move the seats' capital under the producer — and checked, like it,
                     // before `apply_attempt`'s first write. Unreachable below the fence.
-                    | PalwStateV2Error::FloorRoomExhausted { .. }),
+                    | PalwStateV2Error::FloorRoomExhausted { .. }
+                    // ADR-0160 stage 2: lane S's slot and bucket, lane Q's backlog — checked before
+                    // `apply_attempt`'s first write, like the ceiling; unreachable below their fences.
+                    | PalwStateV2Error::IssuanceCapped { .. }
+                    | PalwStateV2Error::AuditBacklogFull { .. }),
                 ) => {
                     merged_skips.push((ctx.block, refused.to_string()));
                 }
@@ -27990,6 +28242,39 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
 /// **The `ReceiptLicensedV2` arm of [`apply_object`]** (ADR-0133 Verification V2), as a function so
 /// ADR-0160's batch licence (`ReceiptLicensedBatchV1`) folds each live entry through exactly this
 /// code — one licensing rule, two carriages (ADR-0160 V-I1). Moved verbatim from the arm.
+/// **ADR-0160 F-Q: one audit receipt batch** (tag 60, past `Params::palw_capacity_audit_door`). An
+/// invalid batch ([`crate::palw_audit_door_v1::palw_audit_receipt_batch_refusal_v1`]: not an operator,
+/// excluded, a malformed list, a root that is not the claim's) refuses the block; every other entry the
+/// door does not keep is skipped. A kept entry appends `(auditor, daa)`; the entry that makes its claim
+/// audited (its `k_aud`-th distinct receipt) re-arms the claim's `Final` deadline at
+/// `max(floor, audit_daa)` through DL-1's one function.
+fn apply_audit_receipt_batch_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    auditor: &PalwBondKeyV2,
+    entries: &[crate::palw_audit_door_v1::PalwAuditEntryV1],
+) -> Result<(), PalwStateV2Error> {
+    if let Some(why) = crate::palw_audit_door_v1::palw_audit_receipt_batch_refusal_v1(&builder.state, builder.params, auditor, entries) {
+        return Err(PalwStateV2Error::AuditReceiptRefused { auditor: *auditor, why });
+    }
+    for entry in entries {
+        if !crate::palw_audit_door_v1::palw_audit_entry_kept_v1(&builder.state, builder.params, auditor, entry) {
+            continue;
+        }
+        let claim = builder.state.claims.get(&entry.claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(entry.claim_id))?;
+        let k_aud = crate::palw_audit_door_v1::palw_capacity_claim_k_aud_v1(builder.params, &claim);
+        let status = builder.state.audit_status_of_v1(&entry.claim_id).cloned().unwrap_or_default();
+        let was = status.audited_at_v1(k_aud).is_some();
+        let next = status.with_v1(*auditor, ctx.daa_score);
+        let now = next.audited_at_v1(k_aud).is_some();
+        builder.write_audit_receipts_v1(entry.claim_id, Some(next));
+        if now && !was {
+            builder.rearm_claim_deadline_dl1_v1(entry.claim_id, ctx.daa_score)?;
+        }
+    }
+    Ok(())
+}
+
 fn apply_receipt_licensed_v2(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -30055,6 +30340,15 @@ fn apply_object(
                     .ok_or(PalwStateV2Error::WrongPhase { claim: entry.claim, edge: "ReceiptLicensedBatchV1" })?;
                 apply_receipt_licensed_v2(builder, ctx, &entry.claim, &receipts)?;
             }
+        }
+        // **ADR-0160 F-Q: an audit receipt batch** (tag 60), past `Params::palw_capacity_audit_door`
+        // only (the mirror). The acceptance layer verified its signature; the fold refuses what makes it
+        // invalid and skips the entries it does not keep (`palw_audit_door_v1`).
+        PalwConsensusObjectV2::AuditReceiptBatchV1 { auditor, entries, signature: _ } => {
+            if !builder.params.capacity_audit_active_at(ctx.daa_score) {
+                return Err(PalwStateV2Error::CapacityAuditDoorDormant);
+            }
+            apply_audit_receipt_batch_v1(builder, ctx, auditor, entries)?;
         }
         // **ADR-0152 v3.1 R-3 (S-7): a reporter's commitment (tag 53).** Past
         // `Params::palw_rcore_plus` only; below it (every network but testnet-12, and testnet-12
@@ -33124,8 +33418,37 @@ fn apply_attempt(
             return Err(PalwStateV2Error::AttemptExposureCeiling { bond: claim.bond, backed, claim: adding, ceiling });
         }
     }
+    // **ADR-0160 stage 2 (F-Q §5.9 (f)): a credited claim waits for room in the audit backlog** — a
+    // queue bound, never the safety (an unaudited claim is never paid). Before any write, so step 4
+    // skips a refused own attempt (`AuditBacklogFull` joins the finding-17 arm).
+    if crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(builder.params, &claim) {
+        let backlog = crate::palw_audit_door_v1::palw_capacity_audit_backlog_v1(&builder.state, builder.params);
+        let max = crate::palw_audit_door_v1::palw_capacity_audit_backlog_max_v1(&claim.class_id);
+        if backlog >= max {
+            return Err(PalwStateV2Error::AuditBacklogFull { class: claim.class_id, backlog, max });
+        }
+    }
+    // **ADR-0160 stage 2 (F-S): the issuance slot and the bucket** — `outstanding < N_out` and a whole
+    // token, read by the one function admission and the producer's facts read (S.4). Before any write.
+    let issuance_bond = claim.bond;
+    let issuance = match builder.state.bonds.get(&issuance_bond) {
+        Some(record) => crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(
+            &builder.state,
+            builder.params,
+            &issuance_bond,
+            record.collateral,
+            ctx.daa_score,
+        ),
+        None => None,
+    };
+    if let Some(read) = &issuance {
+        read.admits_v1().map_err(|refusal| PalwStateV2Error::IssuanceCapped { bond: issuance_bond, refusal: format!("{refusal:?}") })?;
+    }
     builder.reserve_for_claim(&claim)?;
     builder.write_claim(claim_id, Some(claim));
+    if let Some(read) = issuance {
+        builder.write_issuance_bucket_v1(issuance_bond, Some(read.spent_v1(ctx.daa_score)));
+    }
     // ADR-0132 Upgrade C: the claim snapshots its economics at acceptance (proposal B) — the
     // registry's work for its class, the class target and the carrying block's network draw — so
     // its `Final` is priced on what was true when it was accepted. Never for the liveness floor.
@@ -33378,6 +33701,10 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ProbationMemory { key, old, new } => swap_write!(state.probation_memory, key, old, new),
         // ADR-0160 lane liab (AG-3): the bond freezes, verify-then-install.
         PalwDeltaEntryV2::BondFreeze { key, old, new } => swap_write!(state.bond_freezes, key, old, new),
+        // ADR-0160 stage 2 (F-Q, F-S): the receipts, the exclusions and the buckets, verify-then-install.
+        PalwDeltaEntryV2::AuditReceipts { key, old, new } => swap_write!(state.audit_receipts, key, old, new),
+        PalwDeltaEntryV2::AuditorExcluded { key, old, new } => swap_write!(state.excluded_auditors, key, old, new),
+        PalwDeltaEntryV2::IssuanceBucket { key, old, new } => swap_write!(state.issuance_buckets, key, old, new),
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -33793,6 +34120,12 @@ pub struct PalwStateCarriageV2 {
     /// **ADR-0160 lane liab (AG-3): the bond freezes.** A tagged tail (`0xB8`, after the probation
     /// memory's `0xB7`), encoded only when a freeze exists (the root block's own guard); rooted.
     pub bond_freezes: BTreeMap<PalwBondKeyV2, crate::palw_aggregate_liability_v1::PalwBondFreezeV1>,
+    /// **ADR-0160 stage 2 (F-Q, F-S): the receipts, the exclusions and the buckets.** ONE tagged tail
+    /// (`0xB9`, after the freezes' `0xB8`), encoded only when one of the three holds a row (the root
+    /// block's own guard); rooted.
+    pub audit_receipts: BTreeMap<Hash64, crate::palw_audit_door_v1::PalwAuditStatusV1>,
+    pub excluded_auditors: BTreeMap<PalwBondKeyV2, u64>,
+    pub issuance_buckets: BTreeMap<PalwBondKeyV2, crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -33905,6 +34238,8 @@ const PALW_CARRIAGE_PROBATION_MEMORY_TAIL_V1: u8 = 0xB7;
 /// `Params::palw_capacity_aggregate_liability`). Rooted. Absent on every chain without one, so its
 /// carriage is byte-identical to one before this tail.
 const PALW_CARRIAGE_BOND_FREEZES_TAIL_V1: u8 = 0xB8;
+/// ADR-0160 stage 2 (F-Q, F-S): the receipts, the exclusions and the buckets, one tail after the freezes'.
+const PALW_CARRIAGE_CAPACITY_QS_TAIL_V1: u8 = 0xB9;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -34104,6 +34439,12 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_BOND_FREEZES_TAIL_V1.serialize(writer)?;
             self.bond_freezes.serialize(writer)?;
         }
+        if !self.audit_receipts.is_empty() || !self.excluded_auditors.is_empty() || !self.issuance_buckets.is_empty() {
+            PALW_CARRIAGE_CAPACITY_QS_TAIL_V1.serialize(writer)?;
+            self.audit_receipts.serialize(writer)?;
+            self.excluded_auditors.serialize(writer)?;
+            self.issuance_buckets.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -34220,6 +34561,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_probation_memory = false;
         let mut bond_freezes = BTreeMap::new();
         let mut seen_bond_freezes = false;
+        let mut audit_receipts = BTreeMap::new();
+        let mut excluded_auditors = BTreeMap::new();
+        let mut issuance_buckets = BTreeMap::new();
+        let mut seen_capacity_qs = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -34347,6 +34692,12 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_bond_freezes = true;
                     bond_freezes = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_CAPACITY_QS_TAIL_V1 if !seen_capacity_qs => {
+                    seen_capacity_qs = true;
+                    audit_receipts = BTreeMap::deserialize_reader(reader)?;
+                    excluded_auditors = BTreeMap::deserialize_reader(reader)?;
+                    issuance_buckets = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -34447,6 +34798,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             held_forfeits,
             probation_memory,
             bond_freezes,
+            audit_receipts,
+            excluded_auditors,
+            issuance_buckets,
         })
     }
 }
@@ -34525,6 +34879,9 @@ impl PalwStateCarriageV2 {
             held_forfeits: state.held_forfeits.clone(),
             probation_memory: state.probation_memory.clone(),
             bond_freezes: state.bond_freezes.clone(),
+            audit_receipts: state.audit_receipts.clone(),
+            excluded_auditors: state.excluded_auditors.clone(),
+            issuance_buckets: state.issuance_buckets.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -34671,6 +35028,9 @@ impl PalwStateCarriageV2 {
             held_forfeits: self.held_forfeits,
             probation_memory: self.probation_memory,
             bond_freezes: self.bond_freezes,
+            audit_receipts: self.audit_receipts,
+            excluded_auditors: self.excluded_auditors,
+            issuance_buckets: self.issuance_buckets,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -51221,6 +51581,10 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ProbationMemory { .. } => "probation_memory",
                     // ADR-0160 lane liab: its round trip is the aggregate-liability suite's.
                     PalwDeltaEntryV2::BondFreeze { .. } => "bond_freeze",
+                    // ADR-0160 stage 2: their round trips are the stage-2 suite's.
+                    PalwDeltaEntryV2::AuditReceipts { .. } => "audit_receipts",
+                    PalwDeltaEntryV2::AuditorExcluded { .. } => "auditor_excluded",
+                    PalwDeltaEntryV2::IssuanceBucket { .. } => "issuance_bucket",
                 });
             }
         }
@@ -51334,6 +51698,10 @@ pub(crate) mod tests {
             (81, PalwDeltaEntryV2::ProbationMemory { key, old: None, new: None }),
             // ADR-0160 lane liab (AG-3), after the probation memory.
             (82, PalwDeltaEntryV2::BondFreeze { key: bond_key(1), old: None, new: None }),
+            // ADR-0160 stage 2 (rcore/cap-s1), after the freeze.
+            (83, PalwDeltaEntryV2::AuditReceipts { key, old: None, new: None }),
+            (84, PalwDeltaEntryV2::AuditorExcluded { key: bond_key(1), old: None, new: None }),
+            (85, PalwDeltaEntryV2::IssuanceBucket { key: bond_key(1), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -51946,6 +52314,10 @@ pub(crate) mod tests {
             // ADR-0160 lane liab: its own Some-only block, empty here (the aggregate-liability suite
             // pins its place and its separation).
             bond_freezes: _,
+            // ADR-0160 stage 2: one Some-only block of three, empty here.
+            audit_receipts: _,
+            excluded_auditors: _,
+            issuance_buckets: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -52006,6 +52378,23 @@ pub(crate) mod tests {
                             final_: false,
                         },
                     );
+                }),
+            ),
+            // ADR-0160 stage 2: each of the three is primary data (their one Some-only block).
+            (
+                "audit_receipts",
+                Box::new(|s| {
+                    let claim = *s.claims.keys().next().expect("the fixture holds a claim");
+                    s.audit_receipts.insert(claim, crate::palw_audit_door_v1::PalwAuditStatusV1 { receipts: vec![(bond_key(1), 9)] });
+                }),
+            ),
+            ("excluded_auditors", Box::new(|s| {
+                s.excluded_auditors.insert(bond_key(1), 9);
+            })),
+            (
+                "issuance_buckets",
+                Box::new(|s| {
+                    s.issuance_buckets.insert(bond_key(1), crate::palw_issuance_slots_v1::PalwIssuanceBucketV1 { tokens_milli: 1, last_daa: 9 });
                 }),
             ),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),

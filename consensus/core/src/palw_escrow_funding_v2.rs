@@ -314,6 +314,14 @@ pub fn palw_claim_class_attributable_v1(params: &PalwStateParamsV2, class_id: &H
 /// ceiling. Every input is the record's or the params', so the load re-derivation returns the same slot.
 pub fn palw_escrow_term_v2(params: &PalwStateParamsV2, accepted_daa: u64, escrowed_reward: u64, class_id: &Hash64) -> u128 {
     let option_a = params.claim_escrow_reservation_v1(accepted_daa, escrowed_reward);
+    // **Stage 2 (rcore/cap-s1), ADR-0160 v3 §5.3: a claim credited under the audit door commits ⌈E/ρ⌉.**
+    // Its fraud reaches no payment without `k_aud` receipts that its roots reproduce (d = 1000‰ by
+    // construction), so the refusal before payment — not a sampled q's expected collection — is the
+    // deterrent, and the slot is the ramp's floor alone.
+    if crate::palw_audit_door_v1::palw_capacity_credited_at_v1(params, accepted_daa, class_id, escrowed_reward) {
+        let rho = crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(params, accepted_daa);
+        return u128::from(escrowed_reward).div_ceil(u128::from(rho)).min(option_a);
+    }
     palw_monetary_prelicense_risk_v2(
         escrowed_reward,
         params.capacity_escrow_credit_at_v1(accepted_daa).filter(palw_escrow_credit_applies_v1),

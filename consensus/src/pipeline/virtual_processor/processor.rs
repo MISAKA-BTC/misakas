@@ -10364,6 +10364,42 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| e.to_string())?;
                 }
+                // **ADR-0160 F-Q: an audit receipt batch** (tag 60). Past `palw_capacity_audit_door` only
+                // (the bundle's mirror): the auditor's ML-DSA-87 signature under its genesis-registered key
+                // (lane A's operator rule holds the operators' keys), then the fold's own refusals asked
+                // first (`palw_audit_receipt_batch_refusal_v1`), so a miner never carries a block-invalid
+                // batch; the entries the door does not keep are the fold's skips.
+                Obj::AuditReceiptBatchV1 { auditor, entries, signature } => {
+                    if !state_params.capacity_audit_active_at(point.daa_score) {
+                        return Err("an audit receipt batch below palw_capacity_audit_door (ADR-0160 F-Q)".to_string());
+                    }
+                    let key = self
+                        .palw_operator_anchor
+                        .as_ref()
+                        .and_then(|rule| rule.operators().find(|(bond, _)| *bond == auditor).map(|(_, key)| key.to_vec()))
+                        .ok_or_else(|| format!("audit receipt batch: {auditor:?} is not an operator bond"))?;
+                    let message = kaspa_consensus_core::palw_audit_door_v1::palw_audit_receipt_batch_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        auditor,
+                        entries,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &key,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_audit_door_v1::PALW_AUDIT_RECEIPT_V1_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("audit receipt batch: not signed by {auditor:?}'s registered key"));
+                    }
+                    if let Some(why) =
+                        kaspa_consensus_core::palw_audit_door_v1::palw_audit_receipt_batch_refusal_v1(state, state_params, auditor, entries)
+                    {
+                        return Err(format!("audit receipt batch by {auditor:?}: {why}"));
+                    }
+                }
                 Obj::OptimisticLicensed { claim, receipts } => {
                     if !self.palw_verification_s2_at(point.daa_score) {
                         return Err(format!("claim {claim}: an optimistic licence below Verification S2's fence (ADR-0133)"));
@@ -18069,6 +18105,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
+        O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",

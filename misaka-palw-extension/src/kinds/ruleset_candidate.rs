@@ -114,6 +114,15 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_capacity_verify_room = Some(at);
             params.sync_palw_capacity_verify();
         }
+        // ADR-0160 stage 2 (F-Q, F-S): bare heights with the fold's mirrors.
+        "palw_capacity_audit_door" => {
+            params.palw_capacity_audit_door = Some(at);
+            params.sync_palw_capacity_stage2();
+        }
+        "palw_capacity_issuance_slots" => {
+            params.palw_capacity_issuance_slots = Some(at);
+            params.sync_palw_capacity_stage2();
+        }
         "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
         "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
         "palw_kary_court" => params.palw_kary_court = Some(at),

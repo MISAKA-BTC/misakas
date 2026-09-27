@@ -103,6 +103,9 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // ADR-0160 F-B (tag 59): each window root carries its seat's signature, checked at
         // acceptance against the bond's registered key, like the single licence's receipts.
         | PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. }
+        // ADR-0160 F-Q (tag 60): the auditor's signature is checked at acceptance against its genesis
+        // key (lane A's operator rule), like a licence's.
+        | PalwConsensusObjectV2::AuditReceiptBatchV1 { .. }
         | PalwConsensusObjectV2::OptimisticLicensed { .. }
         | PalwConsensusObjectV2::ProducerDefaulted { .. }
         | PalwConsensusObjectV2::CourtOpened { .. }

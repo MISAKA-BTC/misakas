@@ -54,6 +54,10 @@ fn armed(at: u64, credits: &[(u64, u32, u16)]) -> Params {
     with_credits(&mut p, at, credits);
     p.palw_capacity_escrow_at_licence = Some(ForkActivation::new(at));
     p.sync_palw_capacity_escrow();
+    // Stage 2 (rcore/cap-s1, D-23): a credited step needs the audit door at or below it.
+    if credits.iter().any(|(_, _, q)| step_credits(*q)) {
+        arm_capacity_audit_door(&mut p, at);
+    }
     p.validate_palw_v2().expect("F-E on testnet-12 validates");
     p
 }
@@ -208,7 +212,13 @@ fn lifecycle(p: Params) -> Vec<DoorRow> {
         })
         .max()
         .unwrap();
-    t.at(last + 1, vec![]);
+    // Stage 2 (rcore/cap-s1): a credited claim reaches `Final` only through its audit (F-Q, armed with the
+    // credited step): the pool's receipts first, in one block.
+    let receipts = audit_receipts_for(&t.c.s, &t.c.sp, &ids);
+    if !receipts.is_empty() {
+        t.step(receipts);
+    }
+    t.at(last.max(t.c.daa) + 1, vec![]);
     for id in ids {
         assert!(matches!(t.c.s.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "{id} Final");
         let row = t.c.s.vesting_row(&id).expect("a Final writes its vesting row");
@@ -900,7 +910,10 @@ fn e_t8_crossing_old_rule_claims_keep_w_plus_e() {
         t.step(vec![v1(id, &seats, &[0, 1, 2, 3, 4], &[], bound)]);
         assert_eq!(before - t.c.s.reserved_exposure(&producer), want, "the licence releases the claim's own slot");
     }
-    // The licensed pair reach Final first, so the ledger's fall below is the voids' alone.
+    // The licensed pair reach Final first, so the ledger's fall below is the voids' alone. Stage 2: the
+    // new (credited) one through its audit.
+    let receipts = audit_receipts_for(&t.c.s, &t.c.sp, &[new_licensed]);
+    t.step(receipts);
     let finals = [old_licensed, new_licensed]
         .iter()
         .map(|id| t.c.s.deadline_of(id).expect("a licensed claim owes its Final deadline"))
@@ -956,6 +969,8 @@ fn x_i5_c7_keeps_the_whole_escrow_and_an_unlisted_long_window_class_is_refused()
     p.palw_capacity_escrow_at_licence = Some(ForkActivation::new(1_000));
     p.sync_palw_capacity_escrow();
     with_credits(&mut p, 1_000, &[(0, 1_000, 1_000)]);
+    // Stage 2 (rcore/cap-s1, D-23): a credited step needs the audit door at or below it.
+    arm_capacity_audit_door(&mut p, 1_000);
     p.validate_palw_v2().expect("the flag-day fixture with F-E validates");
     let (_, id2m) = model_classes(&p);
     let mut c = model_chain(p.clone(), id2m, 1);
@@ -999,30 +1014,29 @@ fn x_i5_c7_keeps_the_whole_escrow_and_an_unlisted_long_window_class_is_refused()
 // saturated panel never charging an honest producer.
 // =============================================================================================
 
-/// **`N_instant` at 13,000 MSK and ρ = 10 by credited `q`** (findings 1 and 2): below `q_seat` (250‰)
-/// the step credits nothing (the lane's old fixture rate, 150‰, is option A's two claims); from it
-/// `m_c = max(m*(q), ⌈E/ρ⌉)` against this branch's conviction floor `Tier(0)` — `(1−q)E/(1+q)` —
-/// so 250‰ holds 3 claims, 500‰ holds 6, and `⌈E/10⌉` binds only from 819‰ (20). The fold's count is
-/// the formula's and the producer's facts predict each refusal (`n_instant`).
+/// **`N_instant` at 13,000 MSK and ρ = 10 by credited `q`** (findings 1 and 2), as stage 2 prices it
+/// (rcore/cap-s1, ADR-0160 v3 §5.3 and D-23): below `q_seat` (250‰) the step credits nothing (option A's
+/// two claims); from it the step credits, the fixture arms the audit door with it (a credit without the
+/// door is refused), and a credited claim commits `⌈E/ρ⌉` — its fraud is refused before payment — so
+/// every credited q holds 20. (Before the door, `m_c = max(m*(q), ⌈E/ρ⌉)` against `Tier(0)` held 3 / 6 /
+/// 20 at 250 / 500 / 819‰.) The fold's count is the formula's and the producer's facts predict each
+/// refusal (`n_instant`).
 #[test]
 fn e_t3_n_instant_at_13k_by_credited_q() {
     use kaspa_consensus_core::palw_escrow_funding_v2::{PALW_ESCROW_P_STAR_PERMILLE_V1, PALW_ESCROW_Q_SEAT_PERMILLE_V1, palw_escrow_m_star_v2};
     let bond_13k = 13_000 * MSK;
     let mut rows = Vec::new();
-    for (q, want) in [(150u16, 2usize), (249, 2), (250, 3), (500, 6), (818, 20), (819, 20), (1_000, 20)] {
+    for (q, want) in [(150u16, 2usize), (249, 2), (250, 20), (500, 20), (818, 20), (819, 20), (1_000, 20)] {
         let (n, _, next, w) = n_instant(armed(1_000, &[(0, 10, q)]), bond_13k, 2_100);
         let m = next - w;
-        let priced = if q < PALW_ESCROW_Q_SEAT_PERMILLE_V1 {
-            E
-        } else {
-            palw_escrow_m_star_v2(E, q, 0, PALW_ESCROW_P_STAR_PERMILLE_V1, 500).max(E.div_ceil(10)).min(E)
-        };
+        let priced = if q < PALW_ESCROW_Q_SEAT_PERMILLE_V1 { E } else { E.div_ceil(10) };
+        let _pre_door = palw_escrow_m_star_v2(E, q, 0, PALW_ESCROW_P_STAR_PERMILLE_V1, 500).max(E.div_ceil(10)).min(E);
         println!("13k rho 10 at q = {q:>4}‰: m_c = {:>9.2} MSK, N = {n}", msk(m));
         assert_eq!(m, priced, "q {q}: the fold's slot is the priced m_c");
         assert_eq!(n, want, "q {q}");
         rows.push((q, n, m));
     }
-    assert!(rows[4].2 > E.div_ceil(10) && rows[5].2 == E.div_ceil(10), "⌈E/10⌉ binds from 819‰, not 818‰: {rows:?}");
+    assert!(rows[2..].iter().all(|row| row.2 == E.div_ceil(10)), "under the door ⌈E/10⌉ from q_seat on: {rows:?}");
 }
 
 /// **V-T5 / E-T5b: seats at saturation never turn into an honest producer's S0′** (finding 1; the
@@ -1143,9 +1157,8 @@ fn v_t5_saturated_seats_never_charge_an_honest_producer() {
     }
     println!("bound by the seats, and what each seat reserved a claim (off, no credit, 150‰, 250‰, then rho 10 … 1000 at 1000‰): {runs:?}");
     assert_eq!(runs[1], runs[0], "without a credit (F-L at stage 1's ρ = 1) F-E binds and reserves exactly as option A");
-    // ρ 10 below q_seat: AS-1's λ-term ÷10 — the seat reserves the lock it must back, less than option A's
-    // duty, and binds more claims (the ×1.07 of the network's floor seat capital, ADR-0160 v1 §5.4).
-    assert!(runs[2].1 < runs[0].1 && runs[2].0 > runs[0].0, "ρ 10 below q_seat: AS-1's duty is the lock: {runs:?}");
+    // ρ 10 below q_seat: uncredited, so (stage 2, v3 AS-1′) its seats are priced exactly as today.
+    assert_eq!(runs[2], runs[0], "ρ 10 below q_seat: an uncredited claim's seats are today's: {runs:?}");
     // From q_seat AS-2 divides the lock too: each seat reserves less again.
     assert!(runs[3].1 < runs[2].1 && runs[3].0 >= runs[2].0, "ρ 10 at q_seat: AS-2's lock: {runs:?}");
 }

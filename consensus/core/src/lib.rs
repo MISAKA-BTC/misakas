@@ -174,6 +174,9 @@ pub mod palw_base0;
 pub mod palw_base0_a16;
 pub mod palw_base0_ops;
 pub mod palw_base0_profile;
+/// ADR-0160 stage 2 lane Q: the audit door (F-Q, `Params::palw_capacity_audit_door`) — a credited
+/// claim reaches `Final` only with `k_aud` operator receipts from outside its panel.
+pub mod palw_audit_door_v1;
 /// ADR-0160 lane verify V1: the batch licence (F-B, `Params::palw_capacity_batch_licence`) — one
 /// signature per seat window, a Merkle path per claim, the coverage funnel unchanged.
 pub mod palw_batch_licence_v1;
@@ -462,6 +465,9 @@ pub mod palw_transcendental;
 pub mod palw_v2;
 pub mod palw_verification_profile_v1;
 pub mod palw_verification_v2;
+/// ADR-0160 stage 2 lane S: the issuance slots (F-S, `Params::palw_capacity_issuance_slots`) —
+/// outstanding, burst and rate caps at the step's ρ; queue bounds, never the safety.
+pub mod palw_issuance_slots_v1;
 /// ADR-0160 lane verify V2: room v2 (F-R, `Params::palw_capacity_verify_room`) — the measured `k = 2`
 /// capacity, the stake-proportional bond share, the floor's seat-capital room.
 pub mod palw_verify_capacity_v1;

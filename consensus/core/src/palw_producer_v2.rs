@@ -72,6 +72,13 @@ pub struct PalwProducerBondFactsV2 {
     /// fold refuse its attempts (`ProducerFrozen`) while it is. `false` on every chain below
     /// `Params::palw_capacity_aggregate_liability`.
     pub frozen: bool,
+    /// **ADR-0160 F-S (stage 2): the bond's issuance is capped at the candidate DAA** — `N_out` slots
+    /// held or no whole token in its bucket (`palw_issuance_slots_v1::palw_issuance_read_at_v1`, the one
+    /// reading the fold and admission ask). `false` below `Params::palw_capacity_issuance_slots`.
+    pub issuance_capped: bool,
+    /// **ADR-0160 F-Q (stage 2): a claim of this class would be credited and the audit backlog is full**
+    /// (`palw_audit_door_v1`, §5.9 (f)). `false` below `Params::palw_capacity_audit_door`.
+    pub audit_backlog_full: bool,
 }
 
 impl PalwProducerBondFactsV2 {
@@ -331,6 +338,14 @@ impl PalwProducerFactsV2 {
         if !bond.has_committed_room() {
             return Err(PALW_NOT_READY_EXPOSURE_FULL_V2);
         }
+        // ADR-0160 stage 2: lane S's slot and bucket, then lane Q's audit backlog — admission's 8b, after
+        // the ceiling.
+        if bond.issuance_capped {
+            return Err(PALW_NOT_READY_ISSUANCE_CAPPED_V1);
+        }
+        if bond.audit_backlog_full {
+            return Err(PALW_NOT_READY_AUDIT_BACKLOG_V1);
+        }
         Ok(())
     }
 }
@@ -360,6 +375,12 @@ pub const PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2: &str = "the bond's posted coll
 /// `ProducerFrozen` — for good once its bond was forfeited, until the freeze lifts
 /// (`since + window_court`) otherwise.
 pub const PALW_NOT_READY_BOND_FROZEN_V1: &str = "the bond is frozen by a conviction";
+/// `ready_to_produce_v3` (ADR-0160 F-S, stage 2): the bond holds `N_out` issuance slots, or its token
+/// bucket holds no whole token at the candidate DAA — admission and the fold refuse it (`IssuanceCapped`).
+pub const PALW_NOT_READY_ISSUANCE_CAPPED_V1: &str = "the bond's issuance is capped (outstanding slots or the token bucket)";
+/// `ready_to_produce_v3` (ADR-0160 F-Q, stage 2): this class's claim would be credited and the credited
+/// claims awaiting their audit are at `A_max` — admission and the fold refuse it (`AuditBacklogFull`).
+pub const PALW_NOT_READY_AUDIT_BACKLOG_V1: &str = "the audit backlog is full: a credited claim waits for audits";
 /// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).
 pub const PALW_NOT_READY_EPOCH_BUDGET_V2: &str = "this class's epoch budget is already spent";
 /// `ready_to_produce`: every sompi of the bond's exposure ceiling is reserved by live claims.
@@ -573,6 +594,14 @@ pub fn palw_producer_facts_v4(
             // Lane V02 (review HIGH): 0 below the fence.
             accuser_reserve: crate::palw_state_v2::palw_bond_accuser_reserve_v1(state_params, daa_score),
             frozen: crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, key),
+            issuance_capped: crate::palw_issuance_slots_v1::palw_issuance_read_at_v1(state, state_params, key, bond_state.collateral, daa_score)
+                .is_some_and(|read| read.admits_v1().is_err()),
+            audit_backlog_full: state_params.capacity_audit_active_at(daa_score) && {
+                let template = crate::palw_state_v2::palw_claim_template_v1(class_id, *key, daa_score, 0, claim_escrow);
+                crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(state_params, &template)
+                    && crate::palw_audit_door_v1::palw_capacity_audit_backlog_v1(state, state_params)
+                        >= crate::palw_audit_door_v1::palw_capacity_audit_backlog_max_v1(&class_id)
+            },
         })
     });
     Some(PalwProducerFactsV2 {

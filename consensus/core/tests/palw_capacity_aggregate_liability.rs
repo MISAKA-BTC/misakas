@@ -74,6 +74,10 @@ fn t12_with(at: u64, steps: &[(u64, u32, u16)]) -> Params {
             .collect(),
     });
     p.sync_palw_capacity_liability();
+    // Stage 2 (rcore/cap-s1, D-23): a credited step needs the audit door at or below it.
+    if steps.iter().any(|(_, _, q)| step_credits(*q)) {
+        arm_capacity_audit_door(&mut p, at);
+    }
     p.validate_palw_v2().unwrap_or_else(|e| panic!("F-L at {at}: {e:?}"));
     p
 }
@@ -998,11 +1002,11 @@ fn seat_prices(step: Option<(u32, u16)>) -> SeatPrices {
 /// * **With the escrow lane's commitment** (`m_c = ⌈E/ρ⌉` at that credit, so `commitment′ = ⌈E/ρ⌉ + w`),
 ///   the duty the same formula gives (a seat reserving at least the lock it will post, as that lane's
 ///   bind does) and the lock measured here reach §5.4's rows 9.4 / 23.5 / 94 — each within 10%.
-/// * **With nothing credited (testnet-12's first step as armed, q = 0) only the λ-term divides and the
-///   duty stops at the lock it backs: ×1.07 (0.94 → 1.00/DAA), asserted** — the ×ρ rows are
-///   conditional on a step crediting q ≥ q_seat (250‰), review finding 3; and the ×1.1 an AS-1 that
-///   divided the lock term too would print came from binds the licence could not back (review 2,
-///   finding 3: [`l_t4b_a_bound_seat_is_backed_at_the_licence_under_every_step`]).
+/// * **With nothing credited (q = 0) the claim's seats are priced exactly as today, ×1.00** — stage 2
+///   (rcore/cap-s1, ADR-0160 v3 AS-1′): the step prices a CREDITED claim's seats only, and a credit rides
+///   the audit door (D-23; the fixture arms it with a credited step). The lane's AS-1 divided the λ-term
+///   of every claim at every step (×1.07 at q = 0); the ×ρ rows stay conditional on a step crediting
+///   q ≥ q_seat (250‰), review finding 3.
 #[test]
 fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
     use kaspa_consensus_core::palw_aggregate_liability_v1::palw_seat_duty_v2;
@@ -1027,9 +1031,11 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
     for (rho, q, want) in [(10u32, 250u16, 9.4), (25, 250, 23.5), (100, 250, 94.0), (10, 0, 0.0), (100, 0, 0.0)] {
         let step = kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityStepV1 { from_daa: 1_001, rho, q_credit_permille: q };
         let m = seat_prices(Some((rho, q)));
+        // Stage 2 (v3 AS-1′): the step prices the credited claim's seats; an uncredited claim's are today's.
+        let credited = q >= 250;
         assert_eq!(
             m.duty,
-            palw_seat_duty_v2(today.lambda, today.lock_2, today.commitment, 5, Some(step)),
+            palw_seat_duty_v2(today.lambda, today.lock_2, today.commitment, 5, credited.then_some(step)),
             "ρ = {rho}: AS-1's formula on the bind's own inputs"
         );
         let alone = SEAT_ROOM_MSK / capital(m.duty, m.lock);
@@ -1037,7 +1043,7 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
         let composed_commitment = today.escrow.div_ceil(u128::from(rho)) + today.weight;
         // The escrow lane's bind reserves at least the lock (its eligibility) when the credit cuts the
         // commitment under seats × lock.
-        let composed_duty = palw_seat_duty_v2(today.lambda, today.lock_2, composed_commitment, 5, Some(step)).max(m.lock);
+        let composed_duty = palw_seat_duty_v2(today.lambda, today.lock_2, composed_commitment, 5, credited.then_some(step)).max(m.lock);
         let composed = SEAT_ROOM_MSK / capital(composed_duty, m.lock);
         println!(
             "ρ = {rho:>3}, q = {q:>3}‰: lane alone duty {:.4} lock {:.4} MSK (fold) → derived {:.2}/DAA (×{:.2}); with escrow's m_c = ⌈E/ρ⌉ duty {:.4} MSK → derived {:.2}/DAA (×{:.2})",
@@ -1053,13 +1059,10 @@ fn l_t4_the_seat_side_at_rho_10_25_100_and_the_network_floor_seat_capital() {
             assert_eq!(m.lock, today.lock.div_ceil(u128::from(rho)).max(1), "AS-2: the lock ÷ρ once credited");
             assert!((composed - want).abs() / want < 0.10, "ρ = {rho}: §5.4's {want}/DAA within 10% ({composed:.2})");
         } else {
-            assert_eq!(m.lock, today.lock, "AS-2: below q_seat the lock is today's");
-            assert_eq!(m.duty, today.lock_2, "AS-1 below q_seat: the duty stops at the lock it backs (λ/ρ < lock_2 < commitment/5)");
-            // The shipped first step buys ×1.07, not ×ρ: the lock (to F + 3,000) dominates the capital.
-            for (what, rate) in [("lane alone", alone), ("with escrow", composed)] {
-                let gain = rate / today_rate;
-                assert!((1.0..1.1).contains(&gain), "ρ = {rho}, q = 0 ({what}): ×{gain:.3}, not ×ρ — the lock is today's");
-            }
+            assert_eq!(m.lock, today.lock, "AS-2: an uncredited claim's lock is today's");
+            assert_eq!(m.duty, today.duty, "v3 AS-1′ (stage 2): an uncredited claim's duty is today's");
+            let gain = alone / today_rate;
+            assert!((gain - 1.0).abs() < 1e-9, "ρ = {rho}, q = 0: ×{gain:.3} — an uncredited step moves no seat price");
         }
     }
 }
@@ -1375,9 +1378,10 @@ fn work_room(c: &Chain, bond: &PalwBondKeyV2, at: u64) -> u128 {
 /// step — dormant, testnet-12's first (ρ = 10, nothing credited) and ρ = 10 with `q_seat` credited —
 /// every bound claim licenses with both small seats' locks: the bind never admits a seat its room
 /// cannot back at the licence. The steps differ only in how many binds that room admits (a duty of
-/// 640.17, 240.13 and 64.02 MSK). The old AS-1 (`⌈lock_2/ρ⌉` as the duty's lock term) bound 12 of
-/// them at q = 0 on a 64.02 duty and could license 1: the other 11 would run into `ReceiptTimeout`,
-/// and a redraw onto saturated seats into the honest producer's S0′.
+/// 640.17, 640.17 and 64.02 MSK — stage 2, v3 AS-1′: the uncredited step prices seats as today). The old
+/// AS-1 (`⌈lock_2/ρ⌉` as the duty's lock term) bound 12 of them at q = 0 on a 64.02 duty and could license
+/// 1: the other 11 would run into `ReceiptTimeout`, and a redraw onto saturated seats into the honest
+/// producer's S0′.
 #[test]
 fn l_t4b_a_bound_seat_is_backed_at_the_licence_under_every_step() {
     let mut bound_per_step = Vec::new();
@@ -1459,8 +1463,8 @@ fn l_t4b_a_bound_seat_is_backed_at_the_licence_under_every_step() {
         bound_per_step.push(bound_ids.len());
     }
     assert!(
-        bound_per_step[0] < bound_per_step[1] && bound_per_step[1] < bound_per_step[2],
-        "the room admits more binds as the duty falls (640.17 → 240.13 → 64.02): {bound_per_step:?}"
+        bound_per_step[0] == bound_per_step[1] && bound_per_step[1] < bound_per_step[2],
+        "the room admits more binds only where the credit cuts the duty (640.17 → 640.17 → 64.02): {bound_per_step:?}"
     );
 }
 
