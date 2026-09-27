@@ -362,30 +362,28 @@ pub enum PalwConvictedOffenceV1 {
     CoveringSigner,
 }
 
-/// **The intent class** (ADR-0160 §4.6 AG-2, D-5): the convictions that forfeit the WHOLE bond — DA
-/// default (S1), `IdentityMismatch` (9), `OutputMismatch` (10), `ForgedOutputTiled` (11),
+/// **The intent class** (ADR-0160 §4.6 AG-2, D-5, and the user's decision 1): the convictions that
+/// forfeit the WHOLE bond — `IdentityMismatch` (9), `OutputMismatch` (10), `ForgedOutputTiled` (11),
 /// `PromptNotAnchored` (13) and a proven court verdict (`CourtFraud`). Everything else keeps the
-/// ADR-0152 §3.6 tier (capped at 3G) plus a lifting freeze: `StepArithmetic` (5) and
-/// `LogitsNotStepOutput` (12), which an engine non-determinism could produce on an honest node; the
+/// ADR-0152 §3.6 tier (capped at 3G) plus a lifting freeze: the DA default (S1); `StepArithmetic` (5)
+/// and `LogitsNotStepOutput` (12), which an engine non-determinism could produce on an honest node; the
 /// structural and flat-output refutations (6, 7, 8); the named voids a kind 3 restates (2, 4); a
 /// held dissection's verdict; Eq; a covering signer's S4. The same contradiction classes a seat's
 /// `PanelFalseValidV2` (AS-3): a `Valid` on a claim answering another job, output or prompt is
 /// attributable intent, one on an arithmetic fault is not (yet — D-5's burn-in extends the class).
 ///
-/// **S1 here is the ADR's rule and an OPEN USER DECISION before F-L is armed** (lane liab review,
-/// finding 2). A DA default is how a fraud with no material behind its roots is convicted (the
-/// producer can only withhold), so the ρ ramp's `EV ≤ 0` (§4.5: one conviction loses at least
-/// `L = 3G` and every unmatured reward — true of this class only,
-/// [`palw_producer_conviction_credits_q_v1`]) rests on S1 reaching this funnel. But the same default
-/// is what an honest producer whose node is down through one `W_disclose` (1,200 DAA ≈ 40 h on
-/// testnet-12) incurs — operator nodes accuse "blind" every claim no operator can replay
-/// (free-prompt, C7, undeclared classes) — and past F-L it then loses its whole bond, where below it
-/// loses the claim's commitment.
-/// Consensus cannot tell the two apart. The reporter reward stays on the tier debit either way
-/// (`close_conviction_v1`), so forcing a default is not a bounty on the bond.
+/// **S1 is TIER-class — the user's decision 1 (2026-09-26 17:50), applied on rcore/cap-s1.** The lane
+/// left it an open decision (review finding 2): a DA default is how a fraud with no material behind its
+/// roots is convicted, but it is also what an honest producer whose node is down through one
+/// `W_disclose` (1,200 DAA ≈ 40 h on testnet-12) incurs — operator nodes accuse "blind" every claim no
+/// operator can replay — and consensus cannot tell the two apart. The user chose the tier: an honest
+/// producer offline through one DA window never loses its whole bond (it loses the defaulted claims'
+/// stage commitments, X11's tier at most once per three strikes, and is frozen until the lift).
+/// Revisit only after auto-DA answering is measured robust. The credit's price follows (decision 2:
+/// [`palw_credit_conviction_floor_v1`] — a first default collects the commitment alone).
 pub fn palw_offence_is_intent_class_v1(offence: PalwConvictedOffenceV1) -> bool {
     match offence {
-        PalwConvictedOffenceV1::DaDefault | PalwConvictedOffenceV1::CourtFraud => true,
+        PalwConvictedOffenceV1::CourtFraud => true,
         PalwConvictedOffenceV1::Contradiction { tag } => matches!(
             tag,
             PALW_CONTRADICTION_IDENTITY_MISMATCH_V1
@@ -393,7 +391,10 @@ pub fn palw_offence_is_intent_class_v1(offence: PalwConvictedOffenceV1) -> bool 
                 | PALW_CONTRADICTION_FORGED_OUTPUT_TILED_V1
                 | PALW_CONTRADICTION_PROMPT_NOT_ANCHORED_V1
         ),
-        PalwConvictedOffenceV1::CourtHeldVerdict | PalwConvictedOffenceV1::Equivocation | PalwConvictedOffenceV1::CoveringSigner => false,
+        PalwConvictedOffenceV1::DaDefault
+        | PalwConvictedOffenceV1::CourtHeldVerdict
+        | PalwConvictedOffenceV1::Equivocation
+        | PalwConvictedOffenceV1::CoveringSigner => false,
     }
 }
 
@@ -608,11 +609,12 @@ mod tests {
         assert_eq!(palw_seat_duty_v2(lambda, lock, 3_201 * MSK, 5, Some(step(0, 10, 0))), lock, "now: the lock itself");
     }
 
-    /// **The intent class, by name** — the contract's list and nothing else.
+    /// **The intent class, by name** — the contract's list and nothing else; the DA default is TIER
+    /// (the user's decision 1, rcore/cap-s1).
     #[test]
-    fn the_intent_class_is_the_da_default_the_court_fraud_and_contradictions_9_10_11_13() {
+    fn the_intent_class_is_the_court_fraud_and_contradictions_9_10_11_13_and_s1_is_tier() {
         use PalwConvictedOffenceV1 as O;
-        assert!(palw_offence_is_intent_class_v1(O::DaDefault));
+        assert!(!palw_offence_is_intent_class_v1(O::DaDefault), "decision 1: S1 keeps the tier");
         assert!(palw_offence_is_intent_class_v1(O::CourtFraud));
         for tag in 0..=20u8 {
             let intent = palw_offence_is_intent_class_v1(O::Contradiction { tag });
@@ -691,10 +693,11 @@ mod tests {
         assert!(ev(1, q, 0.5, e, m, c0) <= 0.0, "the whole piece: EV(1) ≤ 0 at the gate");
         assert!(s2(e) < three_g && ev(1, q, 0.5, e, m, s2(e)) > 0.0, "the S2 tier alone: under 3G, EV(1) > 0");
         assert!(ev(1, q, 0.5, e, m, s2((e / rho).ceil())) > 0.0, "and with the escrow lane's m_c in the slot");
-        for offence in [O::DaDefault, O::CourtFraud, O::Contradiction { tag: 9 }, O::Contradiction { tag: 13 }] {
+        for offence in [O::CourtFraud, O::Contradiction { tag: 9 }, O::Contradiction { tag: 13 }] {
             assert!(palw_producer_conviction_credits_q_v1(offence), "{offence:?} forfeits the whole bond: counted");
         }
         for offence in [
+            O::DaDefault,
             O::CourtHeldVerdict,
             O::Equivocation,
             O::CoveringSigner,
@@ -706,6 +709,55 @@ mod tests {
             O::Contradiction { tag: u8::MAX },
         ] {
             assert!(!palw_producer_conviction_credits_q_v1(offence), "{offence:?} takes the tier: not counted");
+        }
+    }
+
+    /// **Decision 2's route table, golden** (rcore/cap-s1): at a 13k bond and testnet-12's `E`, one kind
+    /// 12 conviction takes the claim's `w + m_c` plus S2's `min(10%·C_min, 3E)` = 1,300 MSK — ≈ 1,620 MSK at
+    /// ρ 10's `m_c = ⌈E/10⌉` (the user's figure) — a first DA default the commitment alone (decision 1,
+    /// X11), an intent-class route the whole bond; the credit's floor is the cheapest, 0. And at that
+    /// floor the escrow lane's `m*` makes every route's one-claim EV ≤ 0 at a credited step in the model
+    /// decision 2 states (`m_c = max(E − 2qL/(1−q), ⌈E/ρ⌉)`, i.e. `EV(1) = (1−q)·[P*·E − (1−P*)·m] − q·L`
+    /// with `L = w + m + X` the route's actual collection): fraud is never profitable at a credited step,
+    /// whatever route the fraudster picks. (ADR-0160 v3 §5.3 corrects this model — `X` only on the
+    /// licensed branch — and moves the credit's safety onto the audit door, stage 2; stage 1 credits
+    /// nothing, ρ = 1.)
+    #[test]
+    fn decision_2_prices_the_credit_on_the_cheapest_route_s_actual_collection() {
+        use PalwConvictedOffenceV1 as O;
+        let e: u128 = 320_084_650_080;
+        let w: u128 = 10_752_660;
+        let c_min: u64 = 13_000 * 100_000_000;
+        let tier = crate::palw_escrow_funding_v2::palw_escrow_tier_at_min_bond_v1(c_min, e);
+        assert_eq!(tier, 1_300 * MSK, "S2's tier at 13k");
+        assert_eq!(palw_producer_route_extra_collection_v1(O::Contradiction { tag: 12 }, c_min, e), tier);
+        assert_eq!(palw_producer_route_extra_collection_v1(O::Contradiction { tag: 5 }, c_min, e), tier);
+        assert_eq!(palw_producer_route_extra_collection_v1(O::DaDefault, c_min, e), 0, "decision 1 + X11: a first S1");
+        assert_eq!(palw_producer_route_extra_collection_v1(O::CourtFraud, c_min, e), u128::from(c_min), "intent: the whole bond");
+        assert_eq!(palw_producer_route_extra_collection_v1(O::Contradiction { tag: 13 }, c_min, e), u128::from(c_min));
+        let kind12_at_rho10 = w + e.div_ceil(10) + tier;
+        assert!((1_620 * MSK..1_621 * MSK).contains(&kind12_at_rho10), "≈ 1,620 MSK: {kind12_at_rho10}");
+        assert_eq!(palw_credit_conviction_floor_v1(c_min, e), 0, "the cheapest route: a first default");
+        // Fraud never pays at a credited step, on any route, at the priced m_c.
+        let p = u128::from(crate::palw_escrow_funding_v2::PALW_ESCROW_P_STAR_PERMILLE_V1);
+        for rho in [1u32, 10, 25, 100, 1_000] {
+            for q in [250u16, 500, 819, 900, 1_000] {
+                let m = crate::palw_escrow_funding_v2::palw_monetary_prelicense_risk_v2(
+                    e as u64,
+                    Some(crate::palw_escrow_funding_v2::PalwEscrowCreditV1 { rho, q_credit_permille: q }),
+                    true,
+                    crate::palw_escrow_funding_v2::PalwEscrowConvictionFloorV1::Tier(palw_credit_conviction_floor_v1(c_min, e)),
+                    500,
+                );
+                for route in PALW_PRODUCER_FRAUD_ROUTES_V1 {
+                    let x = palw_producer_route_extra_collection_v1(route, c_min, e);
+                    let q = u128::from(q);
+                    // EV × 10⁶ in decision 2's model: (1−q)·P*·E against (1−q)·(1−P*)·m + q·(w + m + X).
+                    let gain = (1_000 - q) * p * e;
+                    let loss = (1_000 - q) * (1_000 - p) * m + q * 1_000 * (w + m + x);
+                    assert!(gain <= loss, "ρ {rho}, q {q}‰, {route:?}: EV(1) ≤ 0 (m_c {m}, X {x})");
+                }
+            }
         }
     }
 }

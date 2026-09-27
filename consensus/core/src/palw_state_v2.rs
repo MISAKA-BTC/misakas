@@ -62648,16 +62648,16 @@ pub(crate) mod tests {
         }
 
         /// **The funnel over every offence class** (L-T1's unit half): an intent-class conviction
-        /// (DA default, `CourtFraud`, contradictions 9 / 10 / 11 / 13) forfeits the whole bond — collateral
-        /// 0, every live claim voided `AggregateForfeit`, a final freeze; a tier one (5, 12, 6, 7, 8, a
-        /// held verdict, Eq, a covering signer) freezes only; below the fence nothing at all. A bond named
-        /// twice takes the stronger class; a final freeze stays final under a later tier conviction; the
-        /// delta reverts every one.
+        /// (`CourtFraud`, contradictions 9 / 10 / 11 / 13) forfeits the whole bond — collateral 0, every
+        /// live claim voided `AggregateForfeit`, a final freeze; a tier one (the DA default — the user's
+        /// decision 1, rcore/cap-s1 —, 5, 12, 6, 7, 8, a held verdict, Eq, a covering signer) freezes
+        /// only; below the fence nothing at all. A bond named twice takes the stronger class; a final
+        /// freeze stays final under a later tier conviction; the delta reverts every one.
         #[test]
         fn the_aggregate_funnel_by_offence_class() {
             use PalwConvictedOffenceV1 as O;
             let offences = [
-                (O::DaDefault, true),
+                (O::DaDefault, false),
                 (O::CourtFraud, true),
                 (O::Contradiction { tag: 9 }, true),
                 (O::Contradiction { tag: 10 }, true),

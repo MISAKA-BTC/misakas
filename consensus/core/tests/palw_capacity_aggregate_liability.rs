@@ -7,7 +7,8 @@
 //! low height beside its twin with the fence `None`, so every test crosses the fence or compares against
 //! the dormant chain:
 //!
-//! * **L-T1** — an intent-class conviction (a DA default, S1) past the fence forfeits the WHOLE bond:
+//! * **L-T1** — an intent-class conviction (a proven verdict, `CourtFraud`; the user's decision 1 keeps
+//!   the DA default, S1, in the TIER class — its own L-T1 test) past the fence forfeits the WHOLE bond:
 //!   collateral 0, every live claim voided `AggregateForfeit`, the bond's own legs of every unmoved
 //!   vesting row burned (its producer leg of each row it produced, its seat legs in another producer's
 //!   row; every other payee keeps its leg), a final freeze; below the fence (the same
@@ -226,27 +227,45 @@ fn license(c: &mut Chain, claim: Hash64, seats: &[(PalwBondKeyV2, Hash64)], sign
 // L-T1 / A-I1 / A-I2: the intent class forfeits the whole bond; below the fence, the tier alone
 // ---------------------------------------------------------------------------------------------
 
-/// **L-T1 (intent class, DA default) with the fence crossed on one chain, beside its dormant twin.**
-///
-/// The genesis producer P (a 939,063 MSK card) defaults on claim A BELOW the fence: S1 only — the
-/// commitment, a strike — its other claim B stays live, no freeze; and the armed chain's root is the
-/// dormant twin's (nothing below the fence moved). Past the fence P defaults on A′ with B′ bound and C′
-/// provisional: on the armed chain P's collateral goes to 0, B′ and C′ are voided `AggregateForfeit`
-/// (their withheld reward never minted, their seats off duty), the freeze is final, names the
-/// `DaDefault` record and counts the whole collateral P posted (A-I1: never more than the posted
-/// collateral plus the bond's own unmatured legs), while the record's `collected` — the reporter
-/// reward's base — is S1's tier debit exactly as on the dormant twin (review finding 2: never 10% of
-/// a forfeited bond); P's next attempt is skipped `ProducerFrozen` and
-/// admission refuses it; P's exit is shut. On the twin: S1 again, B′ and C′ live, P produces.
+/// **An intent-class conviction of `id`'s producer** — rcore/cap-s1: the user's decision 1 keeps a DA
+/// default (S1) in the TIER class, so this suite's whole-bond route is a proven court verdict
+/// (`CourtFraud`: a court's `ExecutorGuilty` close on an arithmetic proof, L-T6's route): `id` licensed
+/// by `seats` if it is still bound, a court opened on it by `challenger`, closed guilty. Returns the
+/// conviction's DAA.
+fn court_fraud(c: &mut Chain, id: Hash64, seats: &[(PalwBondKeyV2, Hash64)], challenger: PalwBondKeyV2) -> u64 {
+    if let PalwClaimPhaseV2::PanelBound { .. } = phase(c, &id) {
+        let bound = c.s.panel(&id).expect("bound").bound_daa;
+        license(c, id, seats, bound);
+    }
+    c.step(&[court_opened(&c.s, id, challenger)]);
+    let session = court_session_of(&c.s, id, challenger);
+    c.step(&[guilty_close(session, false)]);
+    assert!(voided_by(c, &id, PalwVoidReasonV2::CourtFraud), "the verdict voids {id} CourtFraud: {:?}", phase(c, &id));
+    c.daa
+}
+
+/// The court challenger the suite's intent-class convictions use (L-T6's bond 61).
+fn court_challenger() -> PalwConsensusObjectV2 {
+    bond_obj(61, 400_000 * MSK)
+}
+
+/// **L-T1 (decision 1) — a DA default past the fence takes its S1 and a LIFTING freeze, never the
+/// bond.** The genesis producer P (a 939,063 MSK card) defaults on claim A below the fence and on A′ past
+/// it, on the armed chain beside its dormant twin. Below the fence both chains are one (roots equal).
+/// Past it the default charges exactly what it charges on the twin — the claim's commitment (a first
+/// strike adds no tier, X11) — P's other claims B′ (bound) and C′ (provisional) live on, and on the armed
+/// chain the default writes a TIER freeze (not final) naming the `DaDefault` record: P's next attempt is
+/// skipped `ProducerFrozen` and admission refuses it by name, its exit is shut, and the freeze lifts at
+/// `since + window_court`, after which P produces again. The reporter reward is on the record's tier
+/// debit on both chains. (Before decision 1 the lane forfeited P whole here — its intent class.)
 #[test]
-fn l_t1_a_da_default_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_below_it() {
+fn l_t1_a_da_default_takes_its_s1_and_a_lifting_freeze_past_the_fence_decision_1() {
     let w = da_window();
     let fence = 1_020 + w + 20;
     println!("DA window {w} DAA; F-L at {fence}");
     let mut chains = [Chain::new(t12_fl(fence)), Chain::new(t12())];
     let (producer, _, _) = floor_producer(&chains[0].p);
     let accuser = bond_key(1);
-    let c0 = collateral(&chains[0], &producer);
     // Below the fence, on both chains alike.
     let mut below = Vec::new();
     for c in chains.iter_mut() {
@@ -266,7 +285,8 @@ fn l_t1_a_da_default_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_be
         below.push(c.s.state_root());
     }
     assert_eq!(below[0], below[1], "below the fence the armed chain IS the dormant one (the empty map is not hashed)");
-    // Past the fence.
+    // Past the fence (a new aligned 1,000-DAA epoch, so this default is a strike of its own: X11).
+    let mut charges = Vec::new();
     for (armed, c) in [true, false].into_iter().zip(chains.iter_mut()) {
         run_to(c, fence + 1);
         let a = c.floor_claim(0xA2);
@@ -274,7 +294,6 @@ fn l_t1_a_da_default_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_be
         c.bind(a, &seats);
         let commitment = palw_claim_bond_reservation_v1(&c.sp, &c.claim(&a)).unwrap();
         let deadline = da_accuse_all(c, &[a], accuser);
-        // The bond's other claims, made just before the default so no window of their own closes first.
         run_to(c, deadline - 6);
         let b = c.floor_claim(0xB2);
         c.bind(b, &seats);
@@ -282,6 +301,100 @@ fn l_t1_a_da_default_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_be
         let before = collateral(c, &producer);
         let at = da_run_out(c, &[a], deadline);
         let record = c.s.consumed_offence(&palw_da_offence_id_v1(&producer.0, &a)).expect("the DaDefault record").clone();
+        let lost = u128::from(before - collateral(c, &producer));
+        charges.push((lost, record.collected));
+        assert!(collateral(c, &producer) > 0, "armed={armed}: decision 1 — a DA default never takes the whole bond");
+        assert!(live(c, &b) && live(c, &cc), "armed={armed}: the bond's other claims live on (a tier freeze voids nothing)");
+        assert_eq!(lost, commitment, "armed={armed}: the first strike in its epoch: the commitment alone (X11)");
+        let reward = c.s.reward_pending(&palw_da_offence_id_v1(&producer.0, &a)).expect("the accuser's reward is pending").amount;
+        assert_eq!(
+            reward,
+            kaspa_consensus_core::palw_state_v2::palw_reporter_reward_amount_v1(record.collected, 0),
+            "armed={armed}: the reporter reward is 10% of the tier debit (decision 4)"
+        );
+        if !armed {
+            assert_eq!(freeze(c, &producer), None, "dormant: no freeze");
+            let id = c.floor_claim(0xA3);
+            assert!(c.s.claim(&id).is_some(), "dormant: the producer produces");
+            continue;
+        }
+        let f = freeze(c, &producer).expect("AG-3: the first conviction freezes");
+        assert!(!f.final_ && f.since_daa == at && f.forfeited_sompi == 0, "a TIER freeze, dated at the default: {f:?}");
+        assert_eq!(f.offence_key, palw_da_offence_id_v1(&producer.0, &a), "it names the DaDefault record");
+        assert!(exit_shut(c, &producer), "AG-3: the exit is shut while frozen");
+        let (floor, _, _, _) = genesis_classes(&c.p)[0];
+        let (bond, pubkey, operator) = genesis_keys(&c.p, 0);
+        let (env, key, id) = junk_attempt(floor, bond, pubkey, &operator, c.floor_pwu(c.daa + 1), 0xA3, 0x10C0 + 0xA3);
+        let x = PalwBlockContextV2 { block: h(0x7E_0000 + c.daa + 1), daa_score: c.daa + 1, blue_score: c.daa + 1, subsidy: 0 };
+        let (next, _, skips) = c.try_fold(&c.s, &x, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands");
+        assert!(next.claim(&id).is_none() && skips[0].1.contains("frozen"), "the attempt is skipped ProducerFrozen: {skips:?}");
+        let mut env = env;
+        env.attempt.artifact_root = c.s.class(&floor).expect("the floor").artifact_root;
+        let refused = check_palw_attempt_admission_v2(&c.s, &c.sp, &bundle(&c.p).admission, &x, &env, fences(&c.p, x.daa_score));
+        assert!(matches!(refused, Err(PalwAdmissionV2Error::ProducerFrozen { bond: b }) if b == producer), "{refused:?}");
+        // The lift: since + window_court, then P produces again.
+        let wc = c.sp.window_court();
+        run_to(c, at + wc);
+        assert_eq!(freeze(c, &producer), None, "a tier freeze lifts at since + window_court");
+        let id = c.floor_claim(0xA4);
+        assert!(c.s.claim(&id).is_some(), "lifted: the producer produces");
+    }
+    assert_eq!(charges[0], charges[1], "the default charges the same on both chains: decision 1's tier, not the bond");
+}
+
+/// **L-T1 (intent class) with the fence crossed on one chain, beside its dormant twin** — rcore/cap-s1:
+/// the intent route is a proven court verdict (`CourtFraud`), decision 1 having left S1 in the tier.
+///
+/// The genesis producer P is convicted `CourtFraud` on claim A BELOW the fence: the verdict's charge
+/// only — its other claim B stays live, no freeze; and the armed chain's root is the dormant twin's.
+/// Past the fence P is convicted on A′ with B′ bound and C′ provisional: on the armed chain P's collateral
+/// goes to 0, B′ and C′ are voided `AggregateForfeit` (their withheld reward never minted, their seats
+/// off duty), the freeze is final, names the conviction's record and counts what the verdict left of the
+/// collateral (A-I1: never more than the bond posted), while the record's `collected` — the reporter
+/// reward's base — is the verdict's tier debit exactly as on the dormant twin (decision 4: never 10% of
+/// a forfeited bond); P's next attempt is skipped (a forfeited bond posts nothing: the producer floor
+/// names it) and admission refuses it; P's exit is shut; the voided claims stay convictable through
+/// `h_obl` (AG-5); the final freeze never lifts. On the twin: the verdict's charge again, B′ and C′ live,
+/// P produces.
+#[test]
+fn l_t1_an_intent_conviction_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_below_it() {
+    let fence = 1_100;
+    let mut chains = [Chain::new(t12_fl(fence)), Chain::new(t12())];
+    let (producer, _, _) = floor_producer(&chains[0].p);
+    let challenger = bond_key(61);
+    let c0 = collateral(&chains[0], &producer);
+    let mut below = Vec::new();
+    for c in chains.iter_mut() {
+        c.step(&[bond_obj(1, 50_000 * MSK), court_challenger()]);
+        let seats = c.floor_seats();
+        let a = c.floor_claim(0xA1);
+        c.bind(a, &seats);
+        let b = c.floor_claim(0xB1);
+        c.bind(b, &seats);
+        let before = collateral(c, &producer);
+        let at = court_fraud(c, a, &seats, challenger);
+        assert!(at < fence, "the first conviction lands below the fence ({at} < {fence})");
+        assert!(collateral(c, &producer) > 0 && collateral(c, &producer) < before, "below the fence: the verdict's charge alone");
+        assert!(live(c, &b), "below the fence: the bond's other claim lives on");
+        assert_eq!(freeze(c, &producer), None, "below the fence: no freeze");
+        below.push(c.s.state_root());
+    }
+    assert_eq!(below[0], below[1], "below the fence the armed chain IS the dormant one (the empty map is not hashed)");
+    let mut debits = Vec::new();
+    for (armed, c) in [true, false].into_iter().zip(chains.iter_mut()) {
+        run_to(c, fence + 1);
+        let seats = c.floor_seats();
+        let a = c.floor_claim(0xA2);
+        c.bind(a, &seats);
+        let b = c.floor_claim(0xB2);
+        c.bind(b, &seats);
+        let cc = c.floor_claim(0xC2);
+        let before = collateral(c, &producer);
+        let at = court_fraud(c, a, &seats, challenger);
+        let key = kaspa_consensus_core::palw_state_v2::palw_court_conviction_offence_id_v1(&producer.0, &a);
+        let record = c.s.consumed_offence(&key).expect("the verdict's CourtConviction record").clone();
+        debits.push(record.collected);
+        let reward = c.s.reward_pending(&key).map(|r| r.amount);
         if armed {
             assert_eq!(collateral(c, &producer), 0, "AG-2: the posted collateral, whole");
             assert!(voided_by(c, &b, PalwVoidReasonV2::AggregateForfeit), "AG-2: the bound claim, voided with the bond");
@@ -289,41 +402,34 @@ fn l_t1_a_da_default_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_be
             assert!(c.s.panel_duty_row_of(&b).is_none(), "its seats left duty with it");
             let f = freeze(c, &producer).expect("AG-3: the freeze");
             assert!(f.final_ && f.since_daa == at, "an intent-class freeze is final, dated at the conviction: {f:?}");
-            assert_eq!(f.offence_key, palw_da_offence_id_v1(&producer.0, &a), "it names the DaDefault record");
-            assert_eq!(u128::from(f.forfeited_sompi), u128::from(before) - commitment, "the forfeiture took what S1 left (no vesting row here)");
+            assert_eq!(f.offence_key, key, "it names the conviction's record");
+            assert!(u128::from(f.forfeited_sompi) <= u128::from(before), "the forfeiture took at most what the verdict left");
             assert!(u128::from(f.forfeited_sompi) + u128::from(record.collected) <= u128::from(c0), "A-I1: never more than the bond ever posted");
-            assert_eq!(u128::from(record.collected), commitment, "the record's collected is S1's tier debit, as on the dormant twin");
             assert!(record.collected <= record.amount, "collected ≤ amount, past the fence too");
-            let reward = c.s.reward_pending(&palw_da_offence_id_v1(&producer.0, &a)).expect("the accuser's reward is pending").amount;
-            assert_eq!(
-                reward,
-                kaspa_consensus_core::palw_state_v2::palw_reporter_reward_amount_v1(record.collected, 0),
-                "the accuser's reward is on the tier debit, not on the forfeiture"
-            );
+            if let Some(reward) = reward {
+                assert_eq!(
+                    reward,
+                    kaspa_consensus_core::palw_state_v2::palw_reporter_reward_amount_v1(record.collected, 0),
+                    "decision 4: the reward is on the tier debit, not on the forfeiture"
+                );
+            }
             println!(
-                "armed: P posted {:.2} MSK before the default; forfeited {:.2} MSK; the record collected {:.2} MSK (tier) → reporter reward {:.2} MSK; claims A′ {:?}, B′/C′ AggregateForfeit",
+                "armed: P posted {:.2} MSK before the verdict; forfeited {:.2} MSK; the record collected {:.2} MSK (tier); B′/C′ AggregateForfeit",
                 before as f64 / MSK as f64,
                 f.forfeited_sompi as f64 / MSK as f64,
                 record.collected as f64 / MSK as f64,
-                reward as f64 / MSK as f64,
-                phase(c, &a)
             );
             assert!(exit_shut(c, &producer), "AG-3: the exit is shut");
-            // AG-3: P produces nothing — the fold skips its attempt and admission refuses it.
             let (floor, _, _, _) = genesis_classes(&c.p)[0];
             let (bond, pubkey, operator) = genesis_keys(&c.p, 0);
             let (env, key, id) = junk_attempt(floor, bond, pubkey, &operator, c.floor_pwu(c.daa + 1), 0xA3, 0x10C0 + 0xA3);
             let x = PalwBlockContextV2 { block: h(0x7E_0000 + c.daa + 1), daa_score: c.daa + 1, blue_score: c.daa + 1, subsidy: 0 };
-            // (A forfeited bond posts nothing, so the producer floor — checked first — names the refusal; a
-            // tier freeze, which leaves collateral, is refused `ProducerFrozen` by name: the Eq test.)
             let (next, _, skips) = c.try_fold(&c.s, &x, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands");
             assert!(next.claim(&id).is_none() && skips.len() == 1, "the attempt is skipped: {skips:?}");
             let mut env = env;
             env.attempt.artifact_root = c.s.class(&floor).expect("the floor").artifact_root;
             let refused = check_palw_attempt_admission_v2(&c.s, &c.sp, &bundle(&c.p).admission, &x, &env, fences(&c.p, x.daa_score));
             assert!(matches!(refused, Err(PalwAdmissionV2Error::ProducerBelowFloor { bond: b, collateral: 0, .. }) if b == producer), "{refused:?}");
-            // AG-5: the voided claims stay convictable through h_obl — the record (and so a conviction's
-            // target) stands until retirement, which is past h_obl on testnet-12.
             let h_obl = c.sp.window_receipt();
             assert!(c.sp.claim_retirement_daa() >= h_obl, "AG-5: claims retire no sooner than h_obl");
             run_to(c, at + h_obl);
@@ -333,19 +439,18 @@ fn l_t1_a_da_default_forfeits_the_whole_bond_past_the_fence_and_only_its_tier_be
                     "AG-5: {id} is still a conviction's target at voided + h_obl"
                 );
             }
-            // The freeze outlives window_court: a final freeze never lifts.
             let wc = c.sp.window_court();
             run_to(c, at + wc + 10);
             assert!(freeze(c, &producer).is_some_and(|f| f.final_), "final: never lifted");
         } else {
-            assert_eq!(u128::from(before - collateral(c, &producer)), commitment, "dormant: S1's forfeit alone");
+            assert!(collateral(c, &producer) > 0, "dormant: the verdict's charge alone");
             assert!(live(c, &b) && live(c, &cc), "dormant: the bond's other claims live on");
             assert_eq!(freeze(c, &producer), None);
-            assert!(record.collected as u128 <= commitment + 1, "dormant: collected is the tier");
             let id = c.floor_claim(0xA3);
             assert!(c.s.claim(&id).is_some(), "dormant: the producer produces");
         }
     }
+    assert_eq!(debits[0], debits[1], "the record's collected is the verdict's tier debit on both chains (decision 4's base)");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -365,7 +470,7 @@ fn l_t1_an_equivocation_freezes_by_its_tier_lifts_after_window_court_and_an_inte
         let mut c = Chain::new(if armed { t12_fl(1_001) } else { t12() });
         let (floor, _, _, _) = genesis_classes(&c.p)[0];
         let q = bond_key(7);
-        c.step(&[bond_obj(7, 50_000 * MSK), bond_obj(1, 50_000 * MSK)]);
+        c.step(&[bond_obj(7, 50_000 * MSK), bond_obj(1, 50_000 * MSK), court_challenger()]);
         let q1 = claim_by(&mut c, 7, 0x71);
         let seats = c.floor_seats();
         c.bind(q1, &seats);
@@ -407,9 +512,9 @@ fn l_t1_an_equivocation_freezes_by_its_tier_lifts_after_window_court_and_an_inte
         assert_eq!(c.daa, second + wc);
         assert_eq!(freeze(&c, &q), None, "lifted at the end of the block at since + window_court");
         let q2 = claim_by(&mut c, 7, 0x74);
-        // A later intent-class conviction: final, whole.
+        // A later intent-class conviction (a proven verdict; decision 1 left S1 in the tier): final, whole.
         c.bind(q2, &seats);
-        let at = da_default(&mut c, &[q2], bond_key(1));
+        let at = court_fraud(&mut c, q2, &seats, bond_key(61));
         let f = freeze(&c, &q).expect("frozen again");
         assert!(f.final_ && f.since_daa == at, "an intent-class conviction makes it final: {f:?}");
         assert_eq!(collateral(&c, &q), 0, "and takes the rest of the bond");
@@ -559,14 +664,14 @@ fn l_t3_griefing_an_honest_bond_costs_its_stage_commitments_and_never_freezes_it
 /// **L-T5 — a pool pre-committed as seat locks and claim commitments is forfeited whole (AG-2 takes
 /// the POSTED collateral), and a seat's legs in another producer's row are burned leg by leg.** A
 /// genesis seat S sits on the producer's claim X, which is licensed (S locks) and reaches `Final` (S's
-/// seat leg in X's row), and holds its own claims; its committed ledger is far above zero. S defaults
-/// on its own claim (intent class): S's collateral goes to 0 whatever it had committed; its seat leg in
-/// X's row is burned (the producer's and the other seats' legs stand); its other live claim is voided
-/// `AggregateForfeit`.
+/// seat leg in X's row), and holds its own claims; its committed ledger is far above zero. S is convicted
+/// on its own claim (intent class: a proven verdict, rcore/cap-s1's decision-1 route): S's collateral
+/// goes to 0 whatever it had committed; its seat leg in X's row is burned (the producer's and the other
+/// seats' legs stand); its other live claim is voided `AggregateForfeit`.
 #[test]
 fn l_t5_a_pre_committed_pool_is_forfeited_whole_and_a_seat_s_legs_burn_leg_by_leg() {
     let mut c = Chain::new(t12_fl(1_001));
-    c.step(&[bond_obj(1, 50_000 * MSK)]);
+    c.step(&[bond_obj(1, 50_000 * MSK), court_challenger()]);
     let seats = c.floor_seats();
     let s = seats[0].0;
     let x = c.floor_claim(0xF1);
@@ -588,7 +693,7 @@ fn l_t5_a_pre_committed_pool_is_forfeited_whole_and_a_seat_s_legs_burn_leg_by_le
     assert!(committed > 0, "the premise: S's pool is committed (claims, duties, the lock on X)");
     let posted = collateral(&c, &s);
     println!("S posts {:.2} MSK with {:.2} MSK committed before the conviction", posted as f64 / 1e8, committed as f64 / 1e8);
-    da_default(&mut c, &[d], bond_key(1));
+    court_fraud(&mut c, d, &own_seats, bond_key(61));
     assert_eq!(collateral(&c, &s), 0, "AG-2 takes the posted collateral, whatever was committed");
     assert!(voided_by(&c, &e, PalwVoidReasonV2::AggregateForfeit), "S's other live claim goes with it");
     let burned = c.s.vesting_row(&x).expect("X's row stands").clone();
@@ -606,8 +711,8 @@ fn l_t5_a_pre_committed_pool_is_forfeited_whole_and_a_seat_s_legs_burn_leg_by_le
 
 /// **AG-2 takes the forfeited producer's REWARD, never its seats' (review finding 1; AG-4, ADR §4.5
 /// "burns every unmatured reward of the bond").** X is a claim of the genesis producer P, licensed by
-/// five seats and taken to `Final`: its row pays P's leg and each credited seat's. P then defaults on
-/// a DIFFERENT claim D past the fence (intent class). On the armed chain X's row stands with P's leg
+/// five seats and taken to `Final`: its row pays P's leg and each credited seat's. P is then convicted
+/// on a DIFFERENT claim D past the fence (intent class: a proven verdict, rcore/cap-s1). On the armed chain X's row stands with P's leg
 /// at 0 — exactly that leg burned (`vesting_burned`, and counted in the freeze's forfeiture) — and
 /// every seat's leg, the reserve and the row's clocks as they were; on the dormant twin P keeps its
 /// leg. Both chains then settle the second clock's depth of anchors (bond 2's licensed claims) and run
@@ -619,7 +724,7 @@ fn l_t5b_a_producer_s_forfeiture_burns_its_own_leg_and_the_seats_keep_theirs() {
     let mut moved = Vec::new();
     for armed in [true, false] {
         let mut c = Chain::new(if armed { t12_fl(1_001) } else { t12() });
-        c.step(&[bond_obj(1, 50_000 * MSK), bond_obj(2, 500_000 * MSK)]);
+        c.step(&[bond_obj(1, 50_000 * MSK), bond_obj(2, 500_000 * MSK), court_challenger()]);
         let (producer, _, _) = floor_producer(&c.p);
         let seats = c.floor_seats();
         let x = c.floor_claim(0xF1);
@@ -637,8 +742,8 @@ fn l_t5b_a_producer_s_forfeiture_burns_its_own_leg_and_the_seats_keep_theirs() {
         let burned_before = c.s.vesting_counters().burned;
         let d = c.floor_claim(0xF2);
         c.bind(d, &seats);
-        let at = da_default(&mut c, &[d], bond_key(1));
-        assert!(at > 1_001, "the default lands past the fence ({at})");
+        let at = court_fraud(&mut c, d, &seats, bond_key(61));
+        assert!(at > 1_001, "the conviction lands past the fence ({at})");
         let after = c.s.vesting_row(&x).expect("X's row stands on both chains").clone();
         let burned = c.s.vesting_counters().burned - burned_before;
         assert_eq!(after.seats, row.seats, "armed={armed}: every credited seat keeps its leg");
@@ -694,10 +799,11 @@ fn l_t5b_a_producer_s_forfeiture_burns_its_own_leg_and_the_seats_keep_theirs() {
 // ---------------------------------------------------------------------------------------------
 
 /// The scripted run L-T7 records: bond 7 produces and equivocates (a tier freeze), the chain runs past
-/// the lift, bond 7 produces again; then the genesis producer defaults (the intent class, final).
+/// the lift, bond 7 produces again; then the genesis producer is convicted by a proven verdict (the
+/// intent class — rcore/cap-s1's decision-1 route — final).
 fn l_t7_script(t: &mut Tape) -> (usize, usize, usize) {
     let (floor, _, _, _) = genesis_classes(&t.c.p)[0];
-    t.step(vec![bond_obj(7, 50_000 * MSK), bond_obj(1, 50_000 * MSK)]);
+    t.step(vec![bond_obj(7, 50_000 * MSK), bond_obj(1, 50_000 * MSK), court_challenger()]);
     let q1 = t.attempt(Some(7), 0x71);
     t.bind(q1);
     let before_conviction = t.len();
@@ -712,9 +818,12 @@ fn l_t7_script(t: &mut Tape) -> (usize, usize, usize) {
     let a = t.attempt(None, 0x7A);
     t.bind(a);
     t.attempt(None, 0x7B);
-    t.step(vec![da_accuse(a, bond_key(1), 0)]);
-    let deadline = t.c.s.da_session(&a, &bond_key(1)).expect("the session").deadline_daa;
-    t.at(deadline + 1, vec![]);
+    let seats = t.c.floor_seats();
+    let bound = t.c.s.panel(&a).expect("bound").bound_daa;
+    t.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim: a, receipts: seats.iter().map(|(k, _)| valid(a, *k, bound)).collect() }]);
+    t.step(vec![court_opened(&t.c.s, a, bond_key(61))]);
+    let session = court_session_of(&t.c.s, a, bond_key(61));
+    t.step(vec![guilty_close(session, false)]);
     (before_conviction, after_lift, t.len())
 }
 
@@ -762,7 +871,8 @@ fn l_t7_reorg_restart_and_ibd_agree_across_a_conviction_a_lift_and_a_forfeiture(
 // ---------------------------------------------------------------------------------------------
 
 /// **L-T8 — splitting into 13,000 MSK pieces buys no escape from the per-conviction loss.** Four
-/// pieces at the producer floor each make a claim; one piece defaults (intent class): that piece
+/// pieces at the producer floor each make a claim; one piece is convicted by a proven verdict (the
+/// intent class; rcore/cap-s1's decision-1 route): that piece
 /// forfeits its whole 13,000 MSK — at least 3G of its claim, the L §4.5 credits per conviction — and
 /// the other three pieces are untouched (not frozen, their collateral and claims as they were). The
 /// same 52,000 MSK as one bond with four claims forfeits all 52,000 MSK and voids the other three.
@@ -777,18 +887,20 @@ fn l_t8_each_13k_piece_forfeits_its_own_whole_bond_and_no_other() {
         bond_obj(13, floor_msk),
         bond_obj(14, floor_msk),
         bond_obj(20, 4 * floor_msk),
+        court_challenger(),
     ]);
     let seats = c.floor_seats();
     let first = claim_by(&mut c, 11, 0xB0B);
     c.bind(first, &seats);
     let three_g = 3 * palw_claim_bond_reservation_v1(&c.sp, &c.claim(&first)).unwrap();
-    let deadline = da_accuse_all(&mut c, &[first], bond_key(1));
-    // The other pieces' claims, made just before the default so no window of their own closes first.
-    run_to(&mut c, deadline - 10);
     let pieces: Vec<(u64, Hash64)> = (12..=14).map(|n| (n, claim_by(&mut c, n, 0xB00 + n))).collect();
     let before: Vec<u64> = (11..=14).map(|n| collateral(&c, &bond_key(n))).collect();
-    da_run_out(&mut c, &[first], deadline);
-    let record = c.s.consumed_offence(&palw_da_offence_id_v1(&bond_key(11).0, &first)).unwrap().clone();
+    court_fraud(&mut c, first, &seats, bond_key(61));
+    let record = c
+        .s
+        .consumed_offence(&kaspa_consensus_core::palw_state_v2::palw_court_conviction_offence_id_v1(&bond_key(11).0, &first))
+        .unwrap()
+        .clone();
     assert_eq!(collateral(&c, &bond_key(11)), 0, "the piece forfeits its whole bond");
     assert!(freeze(&c, &bond_key(11)).is_some_and(|f| f.final_), "and is frozen for good");
     let lost = u128::from(before[0]);
@@ -807,12 +919,10 @@ fn l_t8_each_13k_piece_forfeits_its_own_whole_bond_and_no_other() {
     // The same 52,000 MSK as ONE bond: one conviction takes all of it, and voids its other claims.
     let whole = claim_by(&mut c, 20, 0xC00);
     c.bind(whole, &seats);
-    let deadline = da_accuse_all(&mut c, &[whole], bond_key(1));
-    run_to(&mut c, deadline - 10);
     let others: Vec<Hash64> = (1..4).map(|i| claim_by(&mut c, 20, 0xC00 + i)).collect();
     let whole_before = collateral(&c, &bond_key(20));
     assert!(whole_before > 3 * floor_msk, "the premise: the whole bond is worth more than three pieces");
-    da_run_out(&mut c, &[whole], deadline);
+    court_fraud(&mut c, whole, &seats, bond_key(61));
     assert_eq!(collateral(&c, &bond_key(20)), 0, "one bond: the whole of it");
     for id in &others {
         assert!(voided_by(&c, id, PalwVoidReasonV2::AggregateForfeit), "and its other claims go with it");
@@ -1081,11 +1191,12 @@ fn step_landed(c: &mut Chain, daa: u64) {
 /// **Review 2, finding 1 — a held-forfeit refund that reaches a challenger already forfeited whole
 /// joins its forfeiture, and every node reloads the tip.** Genesis seat X holds a held forfeit
 /// (3,744 MSK) on the genesis producer's licensed claim Y and the open step-6 demand of its anchor
-/// chunk. Before that demand runs out, X's OWN claim Z is DA-defaulted past F-L: X is forfeited whole
-/// (collateral 0) and final-frozen. Then a door refunds X's forfeit:
+/// chunk. Before that demand runs out, X's OWN claim Z is convicted past F-L by a proven verdict (the
+/// intent class — rcore/cap-s1's route since decision 1 left the DA default in the tier): X is
+/// forfeited whole (collateral 0) and final-frozen. Then a door refunds X's forfeit:
 /// * **DA-7**: Y's producer withholds the demanded chunk, and the default refunds the record;
-/// * **AG-2**: Y's producer is itself forfeited first — its other claim Z′ defaults — and the
-///   forfeiture voids Y and refunds the record (finding 2's door).
+/// * **AG-2**: Y's producer is itself forfeited first — its other claim Z′ convicted by a verdict — and
+///   the forfeiture voids Y and refunds the record (finding 2's door).
 ///
 /// Either way, on the armed chain X's collateral stays 0 (a final freeze posts none: the load
 /// invariant), its `slashed` keeps the refund, the freeze's `forfeited_sompi` grows by exactly it, and
@@ -1099,31 +1210,28 @@ fn a_held_forfeit_refund_to_a_forfeited_challenger_joins_its_forfeiture_and_the_
         for armed in [true, false] {
             let mut c = Chain::new(if armed { t12_fl(1_001) } else { t12() });
             c.attribution = true;
-            c.step(&[bond_obj(1, 20_000 * MSK)]);
+            c.step(&[bond_obj(1, 20_000 * MSK), court_challenger()]);
             let x = genesis_keys(&c.p, 2).0;
             assert_eq!(c.floor_seats()[1].0, x, "premise: floor seat 1 is genesis bond 2");
-            // X's own claim Z, on a panel without X, accused by bond 1.
+            // X's own claim Z, on a panel without X.
             let z = claim_by_genesis(&mut c, 2, 0x2A);
             let gb = genesis_bonds(&c.p);
             let z_seats: Vec<(PalwBondKeyV2, Hash64)> = [1usize, 3, 4, 5, 6].iter().map(|i| (gb[*i].0, gb[*i].1)).collect();
             c.bind(z, &z_seats);
-            c.step(&[da_accuse(z, bond_key(1), 0)]);
-            let dz = c.s.da_session(&z, &bond_key(1)).expect("Z's session").deadline_daa;
-            // The producer's other claim Z′, accused just after Z (the forfeiture door only).
+            // The producer's other claim Z′ (the forfeiture door only).
             let z2 = through_forfeiture.then(|| {
                 let z2 = c.floor_claim(0x2B);
                 let seats = c.floor_seats();
                 c.bind(z2, &seats);
-                c.step(&[da_accuse(z2, bond_key(1), 0)]);
-                (z2, c.s.da_session(&z2, &bond_key(1)).expect("Z′'s session").deadline_daa)
+                z2
             });
             // Y: X's held forfeit and its open step-6 demand.
             let y = covered_floor_claim(&mut c, 0x6E);
             with_forfeit(&mut c, y, x);
             let dy = with_seat_demand(&mut c, y, x);
-            assert!(dz < dy && z2.is_none_or(|(_, d)| dz < d && d < dy), "premise: Z, then Z′, then Y's demand");
-            // Z defaults: on the armed chain X is forfeited whole.
-            run_to(&mut c, dz + 1);
+            // Z convicted by a verdict: on the armed chain X is forfeited whole, before Y's demand runs out.
+            let at = court_fraud(&mut c, z, &z_seats, bond_key(61));
+            assert!(at < dy, "premise: X is convicted before its demand's deadline ({at} < {dy})");
             let before = c.s.bond(&x).unwrap().clone();
             let f0 = freeze(&c, &x);
             if armed {
@@ -1132,7 +1240,10 @@ fn a_held_forfeit_refund_to_a_forfeited_challenger_joins_its_forfeiture_and_the_
             }
             // The door.
             match z2 {
-                Some((_, d)) => run_to(&mut c, d + 1),
+                Some(z2) => {
+                    let seats = c.floor_seats();
+                    court_fraud(&mut c, z2, &seats, bond_key(61));
+                }
                 None => {
                     run_to(&mut c, dy);
                     step_landed(&mut c, dy + 1);
@@ -1182,8 +1293,9 @@ fn a_held_forfeit_refund_to_a_forfeited_challenger_joins_its_forfeiture_and_the_
 
 /// **Review 2, finding 2 — the forger's own forfeiture makes the honest challenger whole.** The
 /// genesis producer P (the forger) licensed Y; honest seat X lost a held dissection on Y (3,744 MSK
-/// held) and demands the anchor chunk. P's OTHER claim Z′ is DA-defaulted before that demand runs
-/// out — the forger choosing when to lose its bond. Past F-L the forfeiture voids Y
+/// held) and demands the anchor chunk. P's OTHER claim Z′ is convicted by a proven verdict (the intent
+/// class; rcore/cap-s1's route since decision 1) before that demand runs out — the forger choosing when
+/// to lose its bond. Past F-L the forfeiture voids Y
 /// `AggregateForfeit`, which closes both refund doors for good (the demand's DA-7 default and the
 /// checkpoint accusation need a live claim), and refunds X in the same block: X's collateral is back
 /// to what it posted, its `slashed` back to what it was, its demand closed with its exposure returned,
@@ -1195,23 +1307,22 @@ fn a_forgers_forfeiture_makes_the_honest_challenger_whole() {
     for armed in [true, false] {
         let mut c = Chain::new(if armed { t12_fl(1_001) } else { t12() });
         c.attribution = true;
-        c.step(&[bond_obj(1, 20_000 * MSK)]);
+        c.step(&[bond_obj(1, 20_000 * MSK), court_challenger()]);
         let (producer, _, _) = floor_producer(&c.p);
         let x = genesis_keys(&c.p, 2).0;
         let posted = collateral(&c, &x);
         let slashed = c.s.bond(&x).unwrap().slashed;
-        // The forger's other claim Z′, bound and accused first.
+        // The forger's other claim Z′, bound first.
         let z = c.floor_claim(0x2B);
         let seats = c.floor_seats();
         c.bind(z, &seats);
-        c.step(&[da_accuse(z, bond_key(1), 0)]);
-        let dz = c.s.da_session(&z, &bond_key(1)).expect("Z′'s session").deadline_daa;
         // Y: the forger's licensed claim; X lost a held dissection on it and demands the chunk.
         let y = covered_floor_claim(&mut c, 0x6E);
         with_forfeit(&mut c, y, x);
         let dy = with_seat_demand(&mut c, y, x);
-        assert!(dz < dy, "premise: Z′ defaults before X's demand runs out");
-        run_to(&mut c, dz + 1);
+        // Z′ convicted by a verdict before X's demand runs out.
+        let at = court_fraud(&mut c, z, &seats, bond_key(61));
+        assert!(at < dy, "premise: Z′ is convicted before X's demand runs out ({at} < {dy})");
         if armed {
             assert!(freeze(&c, &producer).is_some_and(|f| f.final_), "the forger is forfeited whole");
             assert!(voided_by(&c, &y, PalwVoidReasonV2::AggregateForfeit), "Y voided with the forger's bond: {:?}", phase(&c, &y));
@@ -1403,7 +1514,8 @@ fn ev1(q: f64, p: f64, e: f64, m: f64, l: f64) -> f64 {
 /// bond, by route — and why only the whole-bond routes may count toward the credited q.** A 13,000
 /// MSK piece makes one floor claim (bound; licensed by the five floor seats for the court routes) and
 /// is convicted once past F-L, on its own chain per route:
-/// * **S1** — a DA default: intent;
+/// * **S1** — a DA default: the TIER (the user's decision 1, rcore/cap-s1: a first default takes the
+///   claim's commitment alone, X11);
 /// * **`CourtFraud`** — a court's `ExecutorGuilty` close on an arithmetic proof: intent;
 /// * **`CourtHeldVerdict`** — the same close on a held dissection's bottom: the TIER, and the same S2
 ///   arm (`reserved + E + min(10%·C₀, 3G)`, plus the court time) every tier-class producer conviction
