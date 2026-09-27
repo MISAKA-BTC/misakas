@@ -1422,6 +1422,15 @@ pub struct PalwStateParamsV2 {
     /// hashes (Some-only), and `validate_palw_v2` refuses a bundle whose copy disagrees with it.
     #[borsh(skip)]
     registry_resilience_from_daa: Option<u64>,
+    /// **Lane F2-lock (post-launch): `Params::palw_final_lock_life_retro`'s height `H`**, mirrored here
+    /// by `Params::sync_palw_final_lock_life_retro` because the fold that re-dates the long post-`Final`
+    /// seat locks at the crossing block, and dates a `Final` past `H` exactly, holds only these params.
+    /// `None` on every shipped preset, testnet-12 included, until its flag day arms it; read through
+    /// [`Self::final_lock_life_retro_active_at`] and [`palw_final_lock_life_retro_crossing_v1`].
+    /// Skipped by borsh for `final_lock_life_from_daa`'s reason: the fence itself is what the params
+    /// and schedule ids name, Some-only.
+    #[borsh(skip)]
+    final_lock_life_retro_from_daa: Option<u64>,
     /// **Lane V02 (post-launch): `Params::palw_final_lock_life`'s height**, mirrored here by
     /// `Params::sync_palw_final_lock_life` because the state machine that dates a `Valid` seat's lock
     /// holds only the bundle's `PalwStateParamsV2`, never the outer `Params`. `None` on every shipped
@@ -1622,6 +1631,7 @@ impl PalwStateParamsV2 {
             class_verify_rows: Vec::new(),
             held_unanswerable_classes: Vec::new(),
             readiness_v2_max_age_spans: None,
+            final_lock_life_retro_from_daa: None,
             registry_resilience_from_daa: None,
             final_lock_life_from_daa: None,
         })
@@ -2268,6 +2278,28 @@ impl PalwStateParamsV2 {
     /// `false` wherever the fence is not armed, so both read exactly as before it.
     pub fn final_lock_life_active_at(&self, now_daa: u64) -> bool {
         self.final_lock_life_from_daa.is_some_and(|from| now_daa >= from)
+    }
+
+    /// **Lane F2-lock (post-launch): the mirror's setter** — written by
+    /// `Params::sync_palw_final_lock_life_retro` and by nothing else (fixtures aside), so the copy
+    /// cannot drift from `Params::palw_final_lock_life_retro`. `None` where the fence is not armed.
+    pub fn with_final_lock_life_retro_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.final_lock_life_retro_from_daa = from_daa;
+        self
+    }
+
+    /// Lane F2-lock (post-launch): `Params::palw_final_lock_life_retro`'s height `H`, if the network
+    /// arms it (the mirror).
+    pub fn final_lock_life_retro_from_daa(&self) -> Option<u64> {
+        self.final_lock_life_retro_from_daa
+    }
+
+    /// **Lane F2-lock (post-launch): is `Params::palw_final_lock_life_retro` in force at `now_daa`?**
+    /// Read by a `Final` at `now_daa` (past `H` its seat locks are dated to exactly `F + 1,000`, never
+    /// kept longer) — the crossing block's one-time re-date is keyed on the crossing itself
+    /// ([`palw_final_lock_life_retro_crossing_v1`]). `false` wherever the fence is not armed.
+    pub fn final_lock_life_retro_active_at(&self, now_daa: u64) -> bool {
+        self.final_lock_life_retro_from_daa.is_some_and(|from| now_daa >= from)
     }
 
     pub fn base_class_id(&self) -> Hash64 {
@@ -2947,6 +2979,81 @@ pub fn palw_false_valid_lock_slashable_v1(
     !params.final_lock_life_active_at(now_daa)
         || palw_lock_is_committed_v1(state, claim_id, lock, now_daa, escaped_depth, params.window_court)
 }
+
+// ---- lane F2-lock (post-launch, 2026-09-27): the F + 1,000 seat-lock life, applied retroactively ----
+
+/// **Lane F2-lock: is the block at `now_daa`, whose parent chain block stood at `parent_daa`, the
+/// crossing block of `Params::palw_final_lock_life_retro`?** — the first chain block whose DAA is at
+/// least the height `H`: `parent_daa < H ≤ now_daa` (a block whose parent is the genesis state, which
+/// has no last point, crosses when `H ≤ now_daa`). A chain's DAA never decreases, so exactly one chain
+/// block crosses; it is a fact of the block and its parent — the parent state's `last_point` — so a
+/// restart, an IBD and a reorg onto another chain each find their own crossing block where the fold
+/// does. `false` wherever the fence is not armed.
+pub fn palw_final_lock_life_retro_crossing_v1(params: &PalwStateParamsV2, parent_daa: Option<u64>, now_daa: u64) -> bool {
+    params.final_lock_life_retro_from_daa().is_some_and(|h| now_daa >= h && parent_daa.is_none_or(|parent| parent < h))
+}
+
+/// **Lane F2-lock: the `Final` DAA `F` of `claim_id`, read from the rooted state, when its seat locks
+/// may take the retroactive life** — `None` for any claim whose locks must keep their expiry.
+///
+/// **The source of `F` is the claim's panel-liability record.** `persist_panel_liability` writes it
+/// at the claim's `Final` with `voided_daa = None` and `expiry_daa = F + window_court`
+/// (`palw_panel_liability_expiry_v1(F, window_court)`); nothing moves that expiry afterwards (a
+/// conviction that reverses the `Final` only MARKS the record, `mark_liability_convicted`), the record
+/// outlives the claim row (it prunes with its locks, `sweep_panel_obligations`), and `window_court` is
+/// a constant of the bundle. So `F = record.expiry_daa − window_court`, for a claim still in the claim
+/// map and for one retired from it alike. Where the claim row still lives it must say the same —
+/// `Final { final_daa: F }` — or the claim is left alone.
+///
+/// `None` (the locks keep their expiry) for:
+/// * **no record** — the claim has not resolved (a lock is written at the licence, the record at the
+///   claim's `Final` or void), so its locks are committed whatever their clocks say until then;
+/// * **a void, or a `Final` a conviction reversed** (`voided_daa` or `void_reason` set) — a conviction
+///   naming that void still binds the co-signers through their locks;
+/// * **a claim with data-availability history** — `da_claims` holds its record from the first session
+///   until the claim row retires (DA-2), and DA-5's re-keys (`da_rekey_v1`) hold every lock of the
+///   claim behind `deadline + window_challenge` of each session, which the rooted state does not keep
+///   once a session closes. (A retired claim's DA record is gone; a re-key that still binds is then
+///   visible on the lock itself, past its record's expiry — [`palw_final_lock_retro_expiry_v1`].)
+pub fn palw_lock_final_daa_retro_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, claim_id: &Hash64) -> Option<u64> {
+    let record = state.panel_liabilities.get(claim_id)?;
+    if record.voided_daa.is_some() || record.void_reason.is_some() {
+        return None;
+    }
+    let final_daa = record.expiry_daa.checked_sub(params.window_court)?;
+    if let Some(claim) = state.claims.get(claim_id)
+        && !matches!(claim.phase, PalwClaimPhaseV2::Final { final_daa: at } if at == final_daa)
+    {
+        return None;
+    }
+    if state.da_claims.contains_key(claim_id) {
+        return None;
+    }
+    Some(final_daa)
+}
+
+/// **Lane F2-lock: the expiry the crossing block gives one seat lock** — `min(expiry, max(F + life, H))`
+/// for a lock on an honest `Final` ([`palw_lock_final_daa_retro_v1`]), with `life` the lane V02 life
+/// in force at the crossing (`PALW_FINAL_LOCK_LIFE_DAA_V1`) and `H` the fence's height; the lock's own
+/// expiry for every other lock, and for a lock a DA re-key raised past its record's `F +
+/// window_court` (only `da_rekey_v1` writes a lock expiry beyond its record's). Never later than the
+/// lock's expiry, so a lock's expiry stays at or below its record's and the sweep's group prune is
+/// unchanged; a lock whose `F + life` is below `H` ends at `H` — expired at the crossing block itself.
+pub fn palw_final_lock_retro_expiry_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    lock: &crate::palw_panel_var_v1::PalwSlashableLockV1,
+    height: u64,
+    life: u64,
+) -> u64 {
+    let Some(final_daa) = palw_lock_final_daa_retro_v1(state, params, claim_id) else { return lock.expiry_daa };
+    if lock.expiry_daa > final_daa.saturating_add(params.window_court) {
+        return lock.expiry_daa;
+    }
+    lock.expiry_daa.min(final_daa.saturating_add(life).max(height))
+}
+// ---- end lane F2-lock ----
 
 /// [`palw_bond_committed_v1`] from the second clock's RAW depth: the escape is computed here, from
 /// the state's anchor ring and `params.window_court()`, exactly as the fold's
@@ -17287,6 +17394,16 @@ impl<'a> TransitionBuilder<'a> {
         // `lock_expiry_daa ≤ expiry_daa` keeps the sweep's group-prune invariant (a lock's expiry is
         // at most its liability's), so lock and record still prune together at the record's horizon.
         let lock_expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.final_lock_life_at(now_daa));
+        // Lane F2-lock (post-launch, `Params::palw_final_lock_life_retro`): past its height an honest
+        // `Final` dates its seat locks to EXACTLY `F + final_lock_life_at(F)` — a lock stamped
+        // `L + window_court` at a licence below lane V02's fence is shortened, not kept — so such a claim
+        // ends where the crossing block's re-date ends the ones already `Final`. Not for a void (extend-only,
+        // as below the height), and not for a claim with data-availability history: DA-5's re-keys hold its
+        // locks behind a session's end (`da_rekey_v1`, only ever raising), and a closed session's end is
+        // not in the rooted state — such a claim keeps lane V02's extend-only re-date. A shortened lock
+        // restarts both clocks here, as an extended one does: its liability begins at the `Final`.
+        let exact =
+            voided.is_none() && self.params.final_lock_life_retro_active_at(now_daa) && !self.state.da_claims.contains_key(&claim_id);
         let mut valid_signers: Vec<(crate::tx::TransactionOutpoint, Hash64)> = Vec::new();
         let mut locked_sompi = 0u128;
         let keys: Vec<(PalwBondKeyV2, Hash64)> = self.state.slashable_locks.keys().filter(|(_, c)| *c == claim_id).copied().collect();
@@ -17294,7 +17411,7 @@ impl<'a> TransitionBuilder<'a> {
             if let Some(lock) = self.state.slashable_locks.get(&key).copied() {
                 locked_sompi = locked_sompi.saturating_add(lock.amount);
                 valid_signers.push((key.0.0, key.1));
-                if lock.expiry_daa < lock_expiry_daa {
+                if lock.expiry_daa < lock_expiry_daa || (exact && lock.expiry_daa > lock_expiry_daa) {
                     // The liability begins at the Final: both clocks start here.
                     self.write_slashable_lock(
                         key,
@@ -22849,6 +22966,9 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_da_sessions(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
+    // Lane F2-lock (post-launch): the crossing block's re-date, right after the court sweeps as in the
+    // fold's step 2, so the draw and the acceptance rehearsal read the locks the fold's step 3 reads.
+    apply_final_lock_life_retro(&mut builder, parent, ctx);
     apply_artifact_root_ownership_migration(&mut builder);
     apply_class_retargets(&mut builder, parent, ctx)?;
     // ADR-0145 §6 / ADR-0148: the epoch boundary sweeps the paid-prompt rows whose retention ran
@@ -23225,6 +23345,11 @@ pub fn apply_palw_transition_v7(
     // the whole prosecution did.
     sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
+    // 2a′. Lane F2-lock (post-launch, `Params::palw_final_lock_life_retro`): the crossing block re-dates
+    //      the long post-`Final` seat locks to `max(F + 1,000, H)`, once — after the sweeps (a claim this
+    //      block finalizes is dated past `H` already) and before anything reads a bond's room. Mirrored in
+    //      `palw_v2_pre_object_base_v1` at the same place. A no-op off the crossing block.
+    apply_final_lock_life_retro(&mut builder, parent, ctx);
 
     // 2b. Per-class retarget (PR-09): crossing a global epoch boundary closes the previous
     //     epoch as one span and retargets every share-bearing, unfrozen class against it. Runs
@@ -25441,6 +25566,46 @@ fn apply_work_target_shadow(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
         closed_model_blocks: model_blocks,
         closed_expected_blocks: expected,
     }));
+}
+
+/// **Lane F2-lock (post-launch, 2026-09-27): the crossing block re-dates the long post-`Final` seat
+/// locks, once** (`Params::palw_final_lock_life_retro`, the user's decision of 2026-09-27).
+///
+/// At the first chain block whose DAA reaches the height `H`
+/// ([`palw_final_lock_life_retro_crossing_v1`]) every seat lock on an honest `Final` is re-dated to
+/// `min(expiry, max(F + 1,000, H))` ([`palw_final_lock_retro_expiry_v1`], `F` from the claim's
+/// liability record, [`palw_lock_final_daa_retro_v1`]); every other field — `amount`, the attested
+/// mask, `settled_at_final` (the second clock still applies) — is kept, and every other lock is left
+/// as it is. Every rewrite goes through `write_slashable_lock`, so the block's delta carries each old
+/// lock and a reorg across `H` restores it exactly; it runs once because only the crossing block
+/// satisfies `parent < H ≤ now`. It runs in the fold's step 2 right after the court sweeps and at the
+/// same place in [`palw_v2_pre_object_base_v1`], so the draw, the acceptance rehearsal and the fold
+/// all read the re-dated locks in the crossing block, and every later reader reads the one stored
+/// expiry — the room gates, the withdrawal gate, the sweep's prune, the slash predicate
+/// ([`palw_false_valid_lock_slashable_v1`], lane V02's rule, in force since that fence), the RPC's
+/// `bondRoomSompi` and the bond status.
+///
+/// Cost: one pass over `slashable_locks` with three map lookups per lock (the record, the claim row,
+/// the DA record) and one delta entry per rewrite — measured by the lane's test on a state of
+/// testnet-12's size at DAA ~1,300.
+fn apply_final_lock_life_retro(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+    let Some(height) = builder.params.final_lock_life_retro_from_daa() else { return };
+    if !palw_final_lock_life_retro_crossing_v1(builder.params, parent.last_point.map(|point| point.daa_score), ctx.daa_score) {
+        return;
+    }
+    let life = builder.params.final_lock_life_at(ctx.daa_score);
+    let rewrites: Vec<((PalwBondKeyV2, Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1)> = builder
+        .state
+        .slashable_locks
+        .iter()
+        .filter_map(|(key, lock)| {
+            let expiry_daa = palw_final_lock_retro_expiry_v1(&builder.state, builder.params, &key.1, lock, height, life);
+            (expiry_daa < lock.expiry_daa).then_some((*key, crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa, ..*lock }))
+        })
+        .collect();
+    for (key, lock) in rewrites {
+        builder.write_slashable_lock(key, Some(lock));
+    }
 }
 
 /// **ADR-0137 / ADR-0132 S: the chain's work target, stepped at the epoch boundary.** The same

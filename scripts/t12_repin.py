@@ -261,6 +261,7 @@ EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 SINK = "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs"
 V02 = "consensus/core/tests/palw_final_lock_full_collateral_is_t12_only.rs"
 V02LIFE = "consensus/core/tests/palw_final_lock_life_is_t12_only.rs"
+RETROLIFE = "consensus/core/tests/palw_final_lock_life_retro_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 BINDER = "consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs"
 PPSTRICT = "consensus/core/tests/pruning_proof_strict_economic_fence.rs"
@@ -475,6 +476,10 @@ def registry() -> list[Pin]:
     # the dormant fence must not move.
     pins += _triple("v02life.T12_RELEASE", "t12", V02LIFE, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{V02LIFE}::the_shortening_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Lane F2-lock (the F + 1,000 lock life applied retroactively, post-launch, dormant): testnet-12 as shipped,
+    # which the dormant fence must not move.
+    pins += _triple("retrolife.T12_RELEASE", "t12", RETROLIFE, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
+                    (f"{RETROLIFE}::the_retro_life_is_dormant_on_every_preset_and_testnet12_is_the_daa750_release",))
     # Lane bind-deadlock (the anchor-at-ceiling fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must
     # not move.
     pins += _triple("binder.T12_RELEASE", "t12", BINDER, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
