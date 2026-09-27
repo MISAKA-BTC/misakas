@@ -41,3 +41,8 @@ The doctrine (ADR-0060): **time is permissionless, weight is bonded, and finalit
 ## Source texts (archived ADR bodies)
 
 - [ADR-0064 — Trustless recovery from a total producer stop: the bond becomes usable in the block that registers it](archive/0064-trustless-recovery-from-a-total-stop.md)
+- [ADR-0105 — A heartbeat never turns a bonded block red, and the clock steps aside for a draw that has landed](archive/0105-a-heartbeat-never-turns-a-bonded-block-red.md)
+- [ADR-0041: PALW pruning-proof verification — exhaustive and amortised, not sampled](archive/0041-palw-pruning-proof-verification.md)
+- [ADR-0066 — The heartbeat lane out of `header.bits`, and the inactivity leak out of node memory](archive/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)
+- [ADR-0060: The liveness doctrine — time is permissionless, weight is bonded, finality is an overlay](archive/0060-the-liveness-doctrine.md)
+- [ADR-0140 — The heartbeat is the emergency generator: it must not touch the economy or the difficulty while the chain is producing](archive/0140-the-heartbeat-is-the-emergency-generator.md)

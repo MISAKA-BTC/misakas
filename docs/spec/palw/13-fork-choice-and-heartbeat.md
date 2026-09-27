@@ -1,55 +1,82 @@
 # PALW spec — 13. Fork choice and heartbeat
 
-> **Skeleton (Phase 1, 2026-09-27).** [00-index.md](00-index.md) gives the conventions. The DNS stake
-> reorg gate, the one coupling to DNS finality that stays (0126), is specified in `spec/dns-bft`.
+> **Normative.** This chapter states the rules as they are on each network today. Reasoning:
+> [design/palw/liveness.md](../../design/palw/liveness.md). The code is the truth, and disagreements
+> are listed in [divergences.md](divergences.md). The DNS stake reorg gate, the one coupling to DNS
+> finality that stays (ADR-0126), is specified in `spec/dns-bft`.
 
-**Purpose.** This chapter defines which chain wins. Weight comes from bonded, verified work. Time is
-permissionless: a near-weightless heartbeat lane keeps the clock moving when nothing is produced, and
-it must not touch the economy, the difficulty, the fork choice or the clock while the chain is
-producing. A deep reorg needs a **strict economic win**, and a tie keeps the incumbent, except within
-two DAA ticks, where GHOSTDAG's order decides. The same strictness applies to a pruning-proof or IBD
-switch. This chapter also defines heartbeat transparency, and where it stops.
+**Applies to:** mainnet (not active: PALW disabled) · testnet-12 (heartbeat lane from genesis; the
+DAA-750 fork-choice fences)
+**Reconciled with code at:** `55a7be02f` (2026-09-27)
 
-**Principles served:** none of P1–P7 directly. This chapter protects what the other chapters pay for:
-a claim's weight counts only on the chain that wins.
+Which chain wins. The doctrine: **time is permissionless, weight is bonded, and finality is an
+overlay.** A near-weightless heartbeat lane keeps the clock moving when nothing is produced. It must
+not touch the economy, the difficulty, fork choice or the clock while the chain is producing.
 
 ## 13.1 Weight
 
-- [ ] Chain weight: what counts (merged claims, settled work), and the two derived weights that replace
-  hash work in fork choice. *Sources:* 0039 W4′/W6′, 0038 (amended), 0058, 0149 (the weight reads the
-  derivation). *Code:* `core/palw_chain_weight.rs`, `core/palw_weight.rs`, `core/palw_fork_choice.rs`.
-- [ ] Attempt blue work is a constant, and heartbeats add no economic weight. *Sources:* 0066 D3, 0068
-  F2/F3a/F5.
-- [ ] Share growth counts only Final work. *Sources:* 0107 → 0137. *Code:* fence
-  `palw_share_growth_final`.
+- **PALW-FC-2 (the comparator).** Every chain-selection site MUST order PALW candidates by the one pure
+  comparator `compare_palw_candidates_v1`. Its keys, in order:
+  1. the safe frontier: the blue score of the deepest settled anchor;
+  2. the safe weight;
+  3. the live total;
+  4. the candidate hash, as the last tie-break.
 
-## 13.2 Reorg authority: the strict economic win
+  Weight is a function of the state only, so equal DAGs give equal weights (02 PALW-ST-4).
+- **PALW-FC-3 (what weighs).**
+  - Settled PALW work weighs, and merged claims count (02 PALW-ST-15).
+  - An attempt block's blue work is the constant `1 << PALW_ATTEMPT_BLUE_WORK_LOG` (`palw_attempt_work`).
+  - A heartbeat's blue work is ε, and it adds no economic weight.
+  - A class's share grows only on work that reached `Final` (`palw_share_growth_final`).
+- **PALW-FC-4 (no hash lane).** No lane that `bits` prices is producible on a `ConsensusV2` network, and
+  block production is PALW work (06 §6.5). The heartbeat is a clock, never a production path.
 
-- [ ] **A deep reorg needs a strict economic win, and a tie keeps the incumbent.** The exception: a tie
-  at most two DAA ticks deep on the incumbent's side is decided by GHOSTDAG's order, so honest slot
-  races converge. A switch never lowers the sink's DAA. *Fence:* `palw_reorg_strict_economic_win`
-  (DAA 750). *Sources:* the post-launch audit (lane `rcore/f1-strictwin-tie`), the launch note §00
-  and §3. There is no ADR yet. *Code:* `core/palw_fork_authority_v2.rs`
-  `palw_reorg_strict_economic_win_v1`, `cons/pipeline/virtual_processor/processor.rs`.
-- [ ] **Pruning proof and IBD.** A staging commit from a pruning proof or IBD needs a strict economic
-  win, read at the incumbent's DAA. A node syncing from genesis is exempt, so first sync stays with the
-  operators' public nodes. *Fence:* `palw_pruning_proof_strict_economic_win` (DAA 750, hf-pptake2).
-  *Code:* `core/palw_fork_authority_v2.rs`, `protocol/flows/src/ibd/flow.rs`.
-- [ ] Pruning-proof verification is exhaustive and amortised, not sampled. *Sources:* 0041 (D1′).
-- [ ] Frontier provenance at the deep-reorg gate is dormant on testnet-12 (`palw_frontier_provenance`,
-  refused by validation). *Sources:* 0065 D2a.
-- [ ] How PALW fork choice composes with the DNS stake reorg gate (a pointer). *Sources:* 0126, 0128.
+**Sources:** ADR-0042 D9, ADR-0039 W4′/W6′, ADR-0058, ADR-0066 D3 and ADR-0068 F2, ADR-0107 → ADR-0137.
+**Code:** `core/palw_fork_choice.rs` (`compare_palw_candidates_v1`), `core/palw_chain_weight.rs`,
+`core/palw_weight.rs`.
+
+## 13.2 Reorg authority
+
+- **PALW-FC-5 (deep reorg).** A reorg deeper than the finality depth MUST be allowed only if the
+  challenger is `Greater` under the comparator (`decide_deep_reorg_v2`).
+- **PALW-FC-6 (strict economic win, from DAA 750).** Past `palw_reorg_strict_economic_win`, a deep reorg
+  MUST also strictly exceed the incumbent on at least one economic key (the first three keys of
+  PALW-FC-2). An all-economic tie keeps the incumbent, whatever the hash, with one exception: a tie at
+  most `PALW_REORG_SHALLOW_TIE_DAA_V1` = 2 DAA ticks deep on the incumbent's side is decided by
+  GHOSTDAG's order (`palw_reorg_shallow_ghostdag_win_v1`), so honest slot races converge. A switch
+  never lowers the sink's DAA. (`palw_reorg_strict_economic_win_v1`.)
+- **PALW-FC-7 (pruning proof and IBD, from DAA 750).** Past `palw_pruning_proof_strict_economic_win`, a
+  staging commit from a pruning proof or IBD MUST strictly win on economics, read at the incumbent's
+  DAA. A node syncing from genesis has no incumbent and is exempt, so first sync should use trusted
+  public nodes.
+- **PALW-FC-8 (pruning-proof verification).** Pruning-proof PoW verification MUST be exhaustive, not
+  sampled. Its per-header cost is amortised by keeping the model resident across jobs (ADR-0041 D1′).
+- **PALW-FC-9 (dormant).** Frontier provenance at the deep-reorg gate (`palw_frontier_provenance`,
+  ADR-0065 D2a) and the finality inactivity leak (`palw_inactivity_leak`, ADR-0060 D4 / 0066 D4) are
+  dormant on testnet-12, and validation refuses them.
+- **PALW-FC-10 (the DNS gate).** The DNS stake reorg gate may additionally refuse a reorg past a
+  validator-confirmed anchor (ADR-0126, ADR-0128). It never enables one that PALW fork choice would
+  refuse.
+
+**Sources:** ADR-0042 D9; ADR-0127 D1/D3; ADR-0154 (D4, D12); ADR-0041; ADR-0065 D2a; ADR-0060 D4.
+**Code:** `core/palw_fork_authority_v2.rs` (`decide_deep_reorg_v2`, `palw_reorg_strict_economic_win_v1`,
+`PALW_REORG_SHALLOW_TIE_DAA_V1`), `cons/pipeline/virtual_processor/processor.rs`,
+`protocol/flows/src/ibd/flow.rs`.
 
 ## 13.3 The heartbeat lane
 
-- [ ] The doctrine: time is permissionless, weight is bonded, and finality is an overlay. *Sources:*
-  0060 (in 0066's form), 0140 (the heartbeat is the emergency generator: the five invariant claims).
-- [ ] The lane's own algorithm (`algo_id = 8`), a fixed target, and at most four heartbeats per
-  mergeset or chain. *Sources:* 0066 D1–D2, 0068 F3a/F5. *Code:* `core/palw_heartbeat_v1.rs`,
-  `core/palw_heartbeat_carriers_v1.rs`, fence `palw_heartbeat`.
-- [ ] A heartbeat never turns a bonded block red, and the clock steps aside for a draw that has
-  landed. *Sources:* 0105.
-- [ ] The heartbeat consumes a clock slot (chapter 06 §6.4). *Sources:* 0142.
+- **PALW-FC-11 (the lane).** Heartbeats use their own algorithm id (`algo_id` 8) with a fixed target
+  that never touches `bits`. The slot rule is one block deep. At most four heartbeats may sit in one
+  mergeset or chain. A heartbeat is admissible unconditionally: no bonded signature, and no rule keyed
+  on whether the chain is producing.
+- **PALW-FC-12 (the cursor).** A heartbeat consumes a clock slot. A block that does not advance the
+  clock may not postpone it (06 §6.4).
+- **PALW-FC-13 (non-interference).** While the chain is producing, the heartbeat MUST NOT touch the
+  economy, the difficulty, fork choice or the clock. It carries no claim, no reward and no economic
+  weight, and it is not counted by the difficulty window. When the chain stops, the heartbeat alone
+  keeps the DAA moving (10 PALW-CO-44).
+- **PALW-FC-14 (when to mine).** When to mine heartbeats is node policy: the heartbeat miner steps
+  aside for a draw that has landed. *(node policy)*
 - **PALW-FC-1 (H-1, heartbeat carriers).** Past `palw_rcore_plus`, a heartbeat block MUST be able to
   carry every conviction-bearing, DA and reporter object, and the fold applies them at step 3. That
   covers `ObjectiveOffence` (kinds 3 and 4), `ExecutorEquivocation`, `DefaultAccused`,
@@ -57,25 +84,32 @@ a claim's weight counts only on the chain that wins.
   and court moves where the phase allows. The heartbeat miner MUST include them, and relay MUST NOT
   drop a heartbeat for carrying them. *Sources:* ADR-0152 H-1 (archive 0152/03).
 
+**Sources:** ADR-0060 (the doctrine), ADR-0066 D1–D2, ADR-0068 F3a/F5, ADR-0140 D1–D5, ADR-0142.
+**Code:** `core/palw_heartbeat_v1.rs`, `core/palw_heartbeat_carriers_v1.rs`, `core/palw_clock_cursor_v1.rs`;
+node side `kaspad/src/palw_heartbeat_miner.rs`.
+
 ## 13.4 Heartbeat transparency
 
-- [ ] What heartbeat transparency lets through (fence `palw_heartbeat_transparent`, testnet-12 only).
-  *Sources:* 0105 (as armed on testnet-12). *Code:* `palw_heartbeat_transparent_fence`.
-- [ ] **Transparency stops at the merging block's own chain.** It closes the double spend by an
-  unbonded heartbeat miner absorbing public attempts within the merge depth. *Fence:*
-  `palw_heartbeat_transparent_same_chain` (DAA 750, CRITICAL). *Code:*
-  `cons/processes/ghostdag/protocol.rs`, `palw_heartbeat_transparent_same_chain_fence`.
+- **PALW-FC-15 (transparency).** Past `palw_heartbeat_transparent` (testnet-12 from genesis), GHOSTDAG
+  colours each mergeset candidate by one of three rules, chosen by the candidate's own header
+  (`LaneColoring`):
+  - **Classic:** the k-cluster rule, used below the fence.
+  - **Weighted:** used for a non-heartbeat block. Heartbeats are invisible to it: they are neither
+    counted in its anticone nor enlarge its count.
+  - **Heartbeat:** used for a heartbeat. It is counted against every blue as before, but it never
+    enlarges a non-heartbeat block's recorded count.
 
-## 13.5 What stays dormant
+  The exemption stops at the merge-depth window. A heartbeat therefore never turns a bonded block red.
+- **PALW-FC-16 (same chain, from DAA 750).** Past `palw_heartbeat_transparent_same_chain`, the
+  transparency MUST stop at the merging block's own chain. This closes the double spend by which an
+  unbonded heartbeat miner could absorb public attempts within the merge depth.
 
-- [ ] The finality inactivity leak (`palw_inactivity_leak`): dormant on testnet-12 and refused by
-  validation. State the rule it would add, and why it cannot be armed. *Sources:* 0060 D4, 0066 D4.
+**Sources:** ADR-0105 D1; ADR-0154 (D3). **Code:** `cons/processes/ghostdag/protocol.rs` (`LaneColoring`),
+`config/params.rs` (`palw_heartbeat_transparent_fence`, `palw_heartbeat_transparent_same_chain_fence`).
 
 **Activation.**
 
 | Network | Status |
 | --- | --- |
 | mainnet | not active (PALW disabled) |
-| testnet-12 | heartbeat lane and transparency from genesis. DAA 750: `palw_reorg_strict_economic_win`, `palw_pruning_proof_strict_economic_win`, `palw_heartbeat_transparent_same_chain`. Dormant: `palw_inactivity_leak`, `palw_frontier_provenance` |
-
-**Design:** `design/palw/liveness.md`.
+| testnet-12 | heartbeat lane, attempt work and transparency from genesis. DAA 750: `palw_reorg_strict_economic_win`, `palw_pruning_proof_strict_economic_win`, `palw_heartbeat_transparent_same_chain`. Dormant: `palw_inactivity_leak`, `palw_frontier_provenance` |
