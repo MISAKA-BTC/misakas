@@ -135,15 +135,38 @@ voided. The panel is specified in chapter 08, the court in 09, and reservations,
   DA session MUST become `Final` at its deadline (`palw_claim_final_floor_v1`). At Final the escrow and
   shares are written into a vesting row (10 PALW-CO-29), and the panel's liability record is
   persisted.
-- **PALW-LC-20 (settlement).** PALW MUST settle on its own anchors. A payment is settled at the
-  settled-anchor depth (30 on testnet-12, `palw_settled_anchor_depth`), and settlement does not depend
-  on DNS finality. *Completed in the chapter 07 pass: 0127, 0129, the anchor-depth derivation.*
-- **PALW-LC-21 (payout).** *Completed in the chapter 07 pass:* the pending-payout queue, payout keys,
-  and the carves (10 §10.8).
+- **PALW-LC-20 (settlement terms).** A **PALW settlement anchor** is a selected-chain block carrying
+  an attempt. It is **settled** when its claim is `Final`, and so is everything the selected chain
+  accepted at or below it. These terms MUST be kept apart from DNS terms (finalized, attested,
+  validator), which never appear on the PALW path. Execution (round) blocks and heartbeats are never
+  anchors.
+- **PALW-LC-21 (settlement depth).** A payment accepted by the chain block at DAA `d` has **settlement
+  depth** equal to the number of settled anchors at or after `d` on the node's chain. Execution blocks
+  add no depth. The node MUST answer it through `getPalwSettlement` (op 182).
+  `misaka palw settlement --daa d --min-depth N` exits non-zero until depth N is reached.
+- **PALW-LC-22 (fork choice follows settlement).** The safe frontier (the deepest settled anchor) is
+  the fork-choice comparator's first key (13 §13.2). A branch replaces the public chain only by
+  settling deeper.
+- **PALW-LC-23 (settled-anchor depth).** The weight a claim contributes and the second clock read the
+  settled-anchor depth (`palw_settled_anchor_depth`, 30 on testnet-12; `palw_settled_anchor_depth_v1`).
+- **PALW-LC-24 (independence from DNS).** No part of the settlement path may read DNS finality, a
+  validator or a beacon. That covers the producer, the claim, the anchor, the panel, receipts, the
+  court, `Final`, the safe frontier and fork choice. A consensus-core test fails if a settlement module
+  mentions them.
+- **PALW-LC-25 (payout).** At Final nothing is paid directly. The worker, seat and reserve legs are
+  written into the claim's vesting row (10 PALW-CO-29) and minted through the pending-payout queue
+  when they mature (10 PALW-CO-32). What does not vest is queued at Final: the buyback slice, which
+  buys from the line's pair (15 §15.2), and the work-price remainder. PALW reward MUST be a carve of the
+  scheduled subsidy, never an addition to it. The carves are in 10 §10.8.
+
+**Sources:** ADR-0127 D1–D3, ADR-0129 D2–D3, ADR-0042 D10, ADR-0152 V. **Code:**
+`core/palw_settlement_v1.rs` (`palw_settlement_v1`), `core/palw_state_v2.rs`
+(`palw_settled_anchor_depth_v1`, `settled_attempt_finals`, `pending_payout`, `pending_payouts_iter`),
+`core/palw_fork_choice.rs`.
 
 ## 7.7 Void reasons and what each costs
 
-- **PALW-LC-22.** Each void reason (`PalwVoidReasonV2`) MUST be charged as follows.
+- **PALW-LC-26.** Each void reason (`PalwVoidReasonV2`) MUST be charged as follows.
   - "First panel" and "second panel" count redraws.
   - Before X10 (`palw_rcore_attributed_charging`, not declared on testnet-12), S0′ applies as listed.
   - C7 classes are always charged S0′ where the table says S0′.
@@ -158,9 +181,9 @@ voided. The panel is specified in chapter 08, the court in 09, and reservations,
   | `ProducerWithholding` | a DA default (08 PALW-VF-24) | S1 |
   | `CourtFraud` | a court verdict, `ExecutorRefuted`, or a `PanelFalseValidV2` that acts on the claim | S2 |
   | `CourtDefault` | an unanswered court rung, or a close that never assembles | as S2; writes no `CourtConviction` record and opens no reward |
-  | `CourtHeldVerdict` | a held-class court verdict | *confirm in the chapter 07 pass* |
+  | `CourtHeldVerdict` | a proven verdict at the bottom of a court dissection (`AttnDissection` close). It proves the producer's disclosure false, not the committed execution. Past `palw_offence_attribution` only; below it such verdicts are `CourtFraud` | as S2, with a `CourtConviction` record and the challenger's reward. Kind 3 refuses a contradiction that names it |
 
-- **PALW-LC-23.** A redraw never closes an open DA session. A post-licence S1 or S2 on a claim whose
+- **PALW-LC-27.** A redraw never closes an open DA session. A post-licence S1 or S2 on a claim whose
   escrow was released also takes `E` from uncommitted stake.
 
 **Code:** `core/palw_state_v2.rs` (`void_and_slash_at`, `palw_court_verdict_void_reason_v1`,

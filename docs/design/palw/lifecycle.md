@@ -48,3 +48,4 @@ The design is asymmetric about failure:
 ## Source texts (archived ADR bodies)
 
 - [ADR-0042: The PALW mainnet-candidate ruleset — one atomic activation, one fork choice, one fingerprint](archive/0042-palw-mainnet-candidate-ruleset.md)
+- [ADR-0037: PALW off the block-critical path — an asynchronous, budgeted job state machine over a permanent hash floor](archive/0037-palw-async-job-state-machine.md)

@@ -126,3 +126,9 @@ Execution blocks leave the fork-choice inputs unchanged (Decision 1); the bindin
 UTXO commitment (Decision 4); two blocks spending one output accept one spend (Decision 6); the
 settlement read, its RPC round trip and `--min-depth` (Decision 2); and the existing permit-equivocation,
 one-ticket draw and frontier-first comparator tests (Decisions 3, 5, 7).
+
+## Links
+
+- Spec: [07 Claim lifecycle](../spec/palw/07-claim-lifecycle.md) §7.6 (PALW-LC-20…22) · [12 Execution lane](../spec/palw/12-execution-lane.md) §12.4
+- Design: [design/palw/lifecycle.md](../design/palw/lifecycle.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)
