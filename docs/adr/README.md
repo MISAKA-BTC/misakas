@@ -6,6 +6,11 @@
 > ADR-0149. ADR-0152 (R-core+, what testnet-12 runs) is cited throughout the code but is not yet
 > committed here.
 
+> **Restructure in progress (2026-09-27).** The ADRs are being split into Spec (the rules), Design
+> (the reasoning), RFC (proposals) and short ADRs (decisions), as [../INDEX.md](../INDEX.md) describes.
+> [INVENTORY.md](INVENTORY.md) has one row per file here, saying where its content goes. Numbers and
+> filenames do not change.
+
 One list, maintained. Every ADR that has been superseded, amended or withdrawn — in whole or in
 part — is named here together with the ADR (or the measurement) that moved it and the clause that
 actually moved. If a decision you are about to rely on is not in the "still governing" section,
