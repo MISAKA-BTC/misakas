@@ -1611,6 +1611,45 @@ pub struct Params {
     /// common post-launch height; hashed Some-only in every writer with the `never()` collapse.
     pub palw_final_lock_life: Option<ForkActivation>,
     // ---- end lane V02 -------------------------------------------------------------------------------
+    // ---- lane F2-lock (post-launch, 2026-09-27): the F + 1,000 seat-lock life, applied retroactively ----
+    /// **Lane F2-lock: the `F + 1,000` seat-lock life of [`Self::palw_final_lock_life`] reaches the
+    /// locks that fence left long** (the user's decision of 2026-09-27; live testnet-12 at DAA 816:
+    /// every genesis seat still carried 959–1,583 `Valid` locks dated `F + window_court` by `Final`s
+    /// below DAA 750, the first of them expiring at DAA ≈ 3,142, while each seat takes ~2 new locks a
+    /// DAA — so the draw's room (`palw_rcore_gate_room_v1`'s `C − R − committed`) closes again around
+    /// DAA 1,350–1,575 and ADR-0152 SW-10's eligible-stake floor refuses every draw, voiding the
+    /// claims and burning their escrow, as it did at DAA 600–749).
+    ///
+    /// The lane V02 fence dates a lock at its OWN dating block and re-dates it at `Final` extend-only
+    /// (`persist_panel_liability`), so a lock stamped `F + window_court` below that fence keeps it.
+    /// Past this one, at height `H`, both halves:
+    ///
+    /// 1. **The crossing block** — the first chain block whose DAA is at least `H`
+    ///    ([`crate::palw_state_v2::palw_final_lock_life_retro_crossing_v1`]) — re-dates, once, every
+    ///    seat lock whose claim is an honest `Final` to `min(expiry, max(F + 1,000, H))`, `F` being
+    ///    the claim's `Final` DAA as the rooted state records it
+    ///    ([`crate::palw_state_v2::palw_lock_final_daa_retro_v1`]); every other field of the lock,
+    ///    `settled_at_final` included, is kept, so the second clock still applies. Each rewrite is the
+    ///    lock's own `SlashableLock` delta entry in that block, so a reorg across `H` restores the old
+    ///    expiries, and every reader of the lock (the room gates, the withdrawal gate, the sweep, the
+    ///    slash, the RPC's `bondRoomSompi`) reads the one stored expiry on both sides of the crossing.
+    /// 2. **A `Final` at `F ≥ H` re-dates its seat locks to exactly `F + 1,000`**, not extend-only,
+    ///    so a claim licensed below DAA 750 (its lock stamped `L + window_court`) that finalizes past
+    ///    `H` gets `F + 1,000` too.
+    ///
+    /// Neither touches a lock of a claim with data-availability history (DA-5's re-keys hold its
+    /// locks behind a session's end, which the rooted state does not keep once the session closes),
+    /// of a claim voided or of a `Final` a conviction reversed, or of a claim not yet `Final`. The
+    /// liability RECORD, its `window_court` expiry and every producer-side clock (the vesting row's
+    /// `E` clawback to `F + window_court`) are untouched; a lock always ends at or before its record,
+    /// so the sweep's group prune is unchanged. Refused by `validate_palw_v2` off ConsensusV2, without
+    /// `palw_final_lock_life` armed at or below it (whose rule — a lock stops being slashable when it
+    /// stops being committed — is what keeps a released lock from being taken twice), or with the
+    /// bundle's mirror (`sync_palw_final_lock_life_retro`, which `sync_palw_rcore_plus` also calls)
+    /// unsynced. Dormant (`None`) on every shipped preset, testnet-12 included, until testnet-12's next
+    /// flag day arms it; hashed Some-only in every writer with the `never()` collapse.
+    pub palw_final_lock_life_retro: Option<ForkActivation>,
+    // ---- end lane F2-lock ---------------------------------------------------------------------------
     /// **ADR-0152 §4-quater: class-derived verification deadlines.** Past it a claim's
     /// compute-bearing deadline `D(c)` is its class's, in the registry's own units
     /// ([`crate::palw_class_verify_deadline_v1`]): the receipt window is `max(window_receipt, D(c))`
@@ -1729,6 +1768,36 @@ pub struct Params {
     /// identity. `validate_palw_v2` refuses it off ConsensusV2, below `palw_rcore_plus` or
     /// `palw_model_registry`, or with the bundle's mirror (`sync_palw_registry_resilience`) unsynced.
     pub palw_registry_resilience: Option<ForkActivation>,
+    // ---- lane F2 (post-launch, 2026-09-27): a draw the eligible population refuses re-anchors ----
+    /// **Lane F2: a claim whose stake draw its anchor block refuses for ELIGIBILITY re-anchors at its
+    /// next slot instead of voiding** (the user's decision of 2026-09-27, "void の代わりに次の slot で
+    /// anchor し直す"; public testnet-12 voided 172 claims between DAA ~624 and 749 — 168 on SW-10's
+    /// eligible-stake floor, 4 on "not enough eligible bonds for a panel" — destroying 550,545.60 MSK of
+    /// escrowed worker reward, while every class could still seat a panel).
+    ///
+    /// Past it — keyed on the ANCHOR block's own DAA, like V03(1) — a claim its anchor block did not bind
+    /// is re-based on that block and retried at its next anchor slot, exactly as lane F1's V03(1)
+    /// retries a `NoCapablePanel` claim (the same state: `Provisional`, `rebound_daa` the anchor block's
+    /// DAA, no panel record; the same backstop `accepted_daa + window_bind`; the same obligation kept),
+    /// iff its stake draw refuses for eligibility at EVERY seed on the anchor block's pre-object base —
+    /// SW-10's floor (`InsufficientEligibleStake`), fewer eligible operators than seats after the load
+    /// filters (`InsufficientEligibleBonds`), or no eligible outsider (`NoOutsider`), with the draw's
+    /// own inputs at the claim's anchor fact
+    /// ([`crate::palw_panel_v2::PalwStakeDrawCensusV1`], [`crate::palw_state_v2::palw_sw8_thin_draws_v1`]).
+    /// The state the draw read is fixed before anything the anchor producer carries, and a verdict
+    /// that holds at every seed leaves no panel anyone could have seen and discarded, so no free
+    /// re-draw exists. Every other refusal still voids in the anchor block, and a claim that has held
+    /// a panel never retries.
+    ///
+    /// An entry of [`PALW_T12_POST_LAUNCH_FENCES_V2`], testnet-12's next flag day. Refused by
+    /// `validate_palw_v2` off ConsensusV2, without `palw_rcore_plus` (the stake draw and SW-8's
+    /// anchor-block void it narrows) armed at or below it, or with the bundle's mirror
+    /// (`sync_palw_floor_refusal_retry`) unsynced. Dormant (`None`) on every shipped preset, testnet-12
+    /// included, until the next flag day arms it; hashed Some-only in every writer with the `never()`
+    /// collapse, so a build that carries the field fingerprints and peers exactly as one that does not
+    /// until the fence is armed.
+    pub palw_floor_refusal_retry: Option<ForkActivation>,
+    // ---- end lane F2 ------------------------------------------------------------------------------
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -4366,6 +4435,8 @@ impl Params {
         self.validate_palw_readiness_v2_max_age_v1()?;
         // Lane F1 (registry resilience, V03/V05): over R-core+ and the registry, mirrored.
         self.validate_palw_registry_resilience_v1()?;
+        // Lane F2 (post-launch): a draw the eligible population refuses re-anchors — over R-core+, mirrored.
+        self.validate_palw_floor_refusal_retry_v1()?;
         // Lane maturity (post-launch, 2026-09-26): ADR-0065 D1 brought forward, on both paths.
         self.validate_palw_bond_maturity_early_v1()?;
         // Lane bind-deadlock (post-launch): ConsensusV2 with R-core+ at or below it, on both paths.
@@ -4385,6 +4456,8 @@ impl Params {
             self.validate_palw_final_lock_full_collateral_v1()?;
             // Lane V02's lock life (post-launch): over R-core+, mirrored.
             self.validate_palw_final_lock_life_v1()?;
+            // Lane F2-lock (post-launch): the lock life applied retroactively — over lane V02's, mirrored.
+            self.validate_palw_final_lock_life_retro_v1()?;
             // Lane A (the operator anchor, post-launch): over R-core+, likewise.
             return self.validate_palw_operator_anchor_v1();
         };
@@ -5225,6 +5298,8 @@ impl Params {
         // Lane V02 (post-launch): over R-core+, mirrored.
         self.validate_palw_final_lock_full_collateral_v1()?;
         self.validate_palw_final_lock_life_v1()?;
+        // Lane F2-lock (post-launch): over lane V02's lock life, which names its own refusals first.
+        self.validate_palw_final_lock_life_retro_v1()?;
         self.validate_palw_held_answerability_v1()?;
         // ADR-0151's stated maturity (user decision 2026-09-25), after every fence's own refusal: it
         // rides `palw_economic_safety`, so a missing bundle is named by the rules that need it first.
@@ -5528,6 +5603,11 @@ impl Params {
         if self.palw_final_lock_life == Some(ForkActivation::never()) {
             self.palw_final_lock_life = None;
         }
+        // Lane F2-lock (post-launch, the lock life applied retroactively): Some-only hashed, so the same
+        // collapse — a build that schedules it and one that does not share an identity until the height.
+        if self.palw_final_lock_life_retro == Some(ForkActivation::never()) {
+            self.palw_final_lock_life_retro = None;
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence: Some-only hashed, so the same collapse.
         if self.palw_class_verify_deadline == Some(ForkActivation::never()) {
             self.palw_class_verify_deadline = None;
@@ -5556,6 +5636,11 @@ impl Params {
         // schedules it and one that does not must share an identity until the height.
         if self.palw_registry_resilience == Some(ForkActivation::never()) {
             self.palw_registry_resilience = None;
+        }
+        // Lane F2 (the floor-refusal retry, post-launch): Some-only hashed, so the same collapse — a build
+        // that schedules it and one that does not must share an identity until the height.
+        if self.palw_floor_refusal_retry == Some(ForkActivation::never()) {
+            self.palw_floor_refusal_retry = None;
         }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
@@ -6122,6 +6207,9 @@ impl Params {
         // vesting rows are what cover `E` while a seat's lock is released early, so the two are armed
         // together.
         self.sync_palw_final_lock_life();
+        // Lane F2-lock (post-launch): the lock life applied retroactively rides the same re-mirror, beside
+        // the lane V02 fence it extends.
+        self.sync_palw_final_lock_life_retro();
     }
 
     // ---- lane V02 (post-launch, 2026-09-26): a resolved claim's lock is carried by the whole collateral ----
@@ -6268,6 +6356,83 @@ impl Params {
         Ok(())
     }
     // ---- end lane V02 -------------------------------------------------------------------------------
+
+    // ---- lane F2-lock (post-launch, 2026-09-27): the F + 1,000 seat-lock life, applied retroactively ----
+
+    /// **Lane F2-lock's fence** ([`Self::palw_final_lock_life_retro`]), `never()` read as absence,
+    /// folded with the mode. `None` on every shipped preset until testnet-12's next flag day arms it.
+    pub fn palw_final_lock_life_retro_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_final_lock_life_retro) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(fence)) if fence != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// Whether a block at `daa_score` is at or past lane F2-lock's height: the crossing block re-dates
+    /// the long post-`Final` seat locks, and a `Final` there dates its locks to exactly `F + 1,000`.
+    /// `false` on every shipped preset.
+    pub fn palw_final_lock_life_retro_active_at(&self, daa_score: u64) -> bool {
+        self.palw_final_lock_life_retro_fence().is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Lane F2-lock's mirror**: the `#[borsh(skip)]` copy on `PalwStateParamsV2` the fold reads
+    /// (`final_lock_life_retro_from_daa`) — the fold holds only the state params, never the outer
+    /// `Params`. Written here and nowhere else; `None` where the fence is not armed. Called by
+    /// `sync_palw_rcore_plus` (so every site that assembles or re-fences a bundle re-mirrors it) and
+    /// callable alone; `validate_palw_v2` refuses a ruleset whose copy disagrees, so a missed call is a
+    /// startup refusal.
+    pub fn sync_palw_final_lock_life_retro(&mut self) {
+        let from_daa =
+            self.palw_final_lock_life_retro.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_final_lock_life_retro_from_daa(from_daa);
+        }
+    }
+
+    /// **What lane F2-lock's fence refuses.** Called by `validate_palw_v2` after lane V02's own
+    /// refusals, public so a test can name each. Below the fence it checks only that the bundle's
+    /// mirror is `None`. Past it: ConsensusV2 only; `palw_final_lock_life` armed at or below its height
+    /// (the locks it re-dates take that fence's life, and past that fence a lock stops being slashable
+    /// when it stops being committed — without it a lock this fence releases to new work would still
+    /// be taken by a conviction, one unit of collateral answering two `Valid`s); the mirror equal to
+    /// the height. Any height is admissible, genesis included (a chain born with it has no long lock
+    /// to re-date).
+    pub fn validate_palw_final_lock_life_retro_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.final_lock_life_retro_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_final_lock_life_retro.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a retroactive lock-life height without palw_final_lock_life_retro armed: mirror \
+                     the fence with Params::sync_palw_final_lock_life_retro after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_final_lock_life_retro is armed on a network that is not ConsensusV2: the locks it re-dates are \
+                 R-core+'s",
+            ));
+        };
+        if !self.palw_final_lock_life.is_some_and(|life| life != ForkActivation::never() && life.daa_score() <= fence.daa_score()) {
+            return Err(Invalid(
+                "palw_final_lock_life_retro is armed without palw_final_lock_life at or below it: the locks it re-dates \
+                 take that fence's life, and only past it does a lock stop being slashable when it stops being committed",
+            ));
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_final_lock_life_retro disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_final_lock_life_retro after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+    // ---- end lane F2-lock ---------------------------------------------------------------------------
 
     /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
     /// [`crate::palw_state_v2::palw_held_unanswerable_classes_of_v1`] over the bundle's genesis rows
@@ -6715,6 +6880,63 @@ impl Params {
             return Err(Invalid(
                 "palw_registry_resilience disagrees with the V2 bundle's mirror: mirror it with \
                  Params::sync_palw_registry_resilience after the bundle is assembled",
+            ));
+        }
+        Ok(())
+    }
+
+    // ---- lane F2: the floor-refusal retry — the mirror and what the fence refuses ----
+
+    /// **The floor-refusal retry's mirror** (lane F2): the `#[borsh(skip)]` copy on `PalwStateParamsV2`
+    /// the fold reads (`floor_refusal_retry_active_at`) — a retried claim's bind deadline is re-derived
+    /// at load, where only the params the fold is handed are at hand. Written here and nowhere else;
+    /// `None` where the fence is not armed. Call it wherever the fence is set on an assembled ruleset;
+    /// `validate_palw_v2` refuses a ruleset whose copy disagrees, so a missed call is a startup refusal
+    /// rather than a fold on the old rules.
+    pub fn sync_palw_floor_refusal_retry(&mut self) {
+        let from_daa = self.palw_floor_refusal_retry.filter(|fence| *fence != ForkActivation::never()).map(|fence| fence.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_floor_refusal_retry_from_daa(from_daa);
+        }
+    }
+
+    /// **What `palw_floor_refusal_retry` refuses** (lane F2). Called by `validate_palw_v2`, public so a
+    /// test can name each refusal. Below the fence it checks only that the bundle's mirror is `None`.
+    /// Past it: ConsensusV2 only; `palw_rcore_plus` — the stake draw whose refusals it retries and
+    /// SW-8's anchor-block void it narrows — armed at or below its height; the mirror equal to the
+    /// height. Any height is admissible, genesis included — the rule is written to be crossed on a live
+    /// chain.
+    pub fn validate_palw_floor_refusal_retry_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let mirror = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.floor_refusal_retry_from_daa()),
+            _ => None,
+        };
+        let Some(fence) = self.palw_floor_refusal_retry.filter(|fence| *fence != ForkActivation::never()) else {
+            if mirror.flatten().is_some() {
+                return Err(Invalid(
+                    "the V2 bundle carries a floor-refusal-retry height without palw_floor_refusal_retry armed: mirror the \
+                     fence with Params::sync_palw_floor_refusal_retry after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        let Some(mirror) = mirror else {
+            return Err(Invalid(
+                "palw_floor_refusal_retry is armed on a network that is not ConsensusV2: the draw it retries is the V2 \
+                 stake draw and the void it narrows is SW-8's",
+            ));
+        };
+        if !self.palw_rcore_plus.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score()) {
+            return Err(Invalid(
+                "palw_floor_refusal_retry is armed without palw_rcore_plus armed at or below it: the refusals it retries are \
+                 the stake draw's, and the void it narrows is SW-8's anchor-block void",
+            ));
+        }
+        if mirror != Some(fence.daa_score()) {
+            return Err(Invalid(
+                "palw_floor_refusal_retry disagrees with the V2 bundle's mirror: mirror it with \
+                 Params::sync_palw_floor_refusal_retry after the bundle is assembled",
             ));
         }
         Ok(())
@@ -7959,6 +8181,8 @@ impl Params {
             palw_final_lock_full_collateral,
             // Lane V02 (the shortened post-Final lock life, post-launch).
             palw_final_lock_life,
+            // Lane F2-lock (the lock life applied retroactively, post-launch).
+            palw_final_lock_life_retro,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
             // Lane bind-deadlock (post-launch).
@@ -7968,6 +8192,8 @@ impl Params {
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_registry_resilience,
+            // Lane F2 (the floor-refusal retry, post-launch).
+            palw_floor_refusal_retry,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -8097,6 +8323,9 @@ impl Params {
             // Lane V02 (post-launch): a top-level fence an un-upgraded peer does not implement, so it
             // is on the schedule and gates the fork id like every other.
             ("palw_final_lock_life", *palw_final_lock_life),
+            // Lane F2-lock (post-launch): a top-level fence an un-upgraded peer does not implement, so it
+            // is on the schedule and gates the fork id like every other.
+            ("palw_final_lock_life_retro", *palw_final_lock_life_retro),
             ("palw_class_verify_deadline", *palw_class_verify_deadline),
             // Lane bind-deadlock (post-launch): a top-level fence an un-upgraded peer does not implement,
             // so it is on the schedule and gates the fork id like every other.
@@ -8108,6 +8337,9 @@ impl Params {
             ("palw_readiness_v2_max_age_spans", palw_readiness_v2_max_age_spans.map(|horizon| horizon.activation)),
             // Lane F1 (registry resilience, V03/V05).
             ("palw_registry_resilience", *palw_registry_resilience),
+            // Lane F2 (the floor-refusal retry, post-launch): a top-level fence an un-upgraded peer does
+            // not implement, so it is on the schedule and gates the fork id like every other.
+            ("palw_floor_refusal_retry", *palw_floor_refusal_retry),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -8521,6 +8753,13 @@ impl Params {
             h.write(b"palw_final_lock_life");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane F2-lock (post-launch), NAMED and Some-only: at its height the crossing block re-dates every
+        // long post-Final seat lock, so an operator reading the schedule must see it, and a preset that
+        // leaves it `None` prints the id of a build without the field.
+        if let Some(activation) = self.palw_final_lock_life_retro {
+            h.write(b"palw_final_lock_life_retro");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence, NAMED for the same reason and Some-only: it
         // changes which claims a block may carry and when a licensed claim may Final.
         if let Some(activation) = self.palw_class_verify_deadline {
@@ -8559,6 +8798,13 @@ impl Params {
         // their anchor slot and how a probation is judged, so an operator reading the schedule must see it.
         if let Some(activation) = self.palw_registry_resilience {
             h.write(b"palw_registry_resilience");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane F2 (the floor-refusal retry, post-launch), NAMED and Some-only: it changes which claims void
+        // in their anchor block past its height, so an operator reading the schedule must see it, and a
+        // preset that leaves it `None` prints the id of a build without the field.
+        if let Some(activation) = self.palw_floor_refusal_retry {
+            h.write(b"palw_floor_refusal_retry");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
@@ -8802,6 +9048,8 @@ impl Params {
             palw_final_lock_full_collateral,
             // Lane V02 (the shortened post-Final lock life, post-launch).
             palw_final_lock_life,
+            // Lane F2-lock (the lock life applied retroactively, post-launch).
+            palw_final_lock_life_retro,
             palw_class_verify_deadline,
             palw_class_verify_rows: _,
             // Lane bind-deadlock (post-launch).
@@ -8811,6 +9059,8 @@ impl Params {
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_registry_resilience,
+            // Lane F2 (the floor-refusal retry, post-launch).
+            palw_floor_refusal_retry,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -9186,6 +9436,12 @@ impl Params {
         if let Some(activation) = palw_final_lock_life.as_mut() {
             fork(activation, visit);
         }
+        // Lane F2-lock (post-launch): SOME-ONLY, as R-core+ above — a `None` visited through a sentinel
+        // would move every preset's schedule id — and its `Some(never())` collapses in
+        // `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_final_lock_life_retro.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0152 §4-quater's class-verify-deadline fence: SOME-ONLY, as the floor above and for its
         // reason.
         if let Some(activation) = palw_class_verify_deadline.as_mut() {
@@ -9213,6 +9469,11 @@ impl Params {
         }
         // Lane F1 (registry resilience, V03/V05): SOME-ONLY, as the horizon above and for its reason.
         if let Some(activation) = palw_registry_resilience.as_mut() {
+            fork(activation, visit);
+        }
+        // Lane F2 (the floor-refusal retry, post-launch): SOME-ONLY, as the horizon above and for its
+        // reason; its `Some(never())` collapses in `normalize_values_a_scheduled_fence_drags_with_it`.
+        if let Some(activation) = palw_floor_refusal_retry.as_mut() {
             fork(activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
@@ -9830,6 +10091,8 @@ impl Params {
             palw_final_lock_full_collateral,
             // Lane V02 (the shortened post-Final lock life, post-launch).
             palw_final_lock_life,
+            // Lane F2-lock (the lock life applied retroactively, post-launch).
+            palw_final_lock_life_retro,
             palw_class_verify_deadline,
             palw_class_verify_rows,
             // Lane bind-deadlock (post-launch).
@@ -9839,6 +10102,8 @@ impl Params {
             palw_activation_pool,
             palw_readiness_v2_max_age_spans,
             palw_registry_resilience,
+            // Lane F2 (the floor-refusal retry, post-launch).
+            palw_floor_refusal_retry,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -10209,6 +10474,13 @@ impl Params {
             h.write(b"palw_final_lock_life");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // Lane F2-lock (post-launch): the height, Some-only (and collapsed from `Some(never())` for the
+        // identity), so a build that leaves it dormant fingerprints byte-identically to one without the
+        // field.
+        if let Some(activation) = palw_final_lock_life_retro {
+            h.write(b"palw_final_lock_life_retro");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0152 §4-quater: the fence's height only, Some-only, for the floor's reason; and the
         // measured rows only when non-empty, every field of each in declaration order, so every other
         // preset — and testnet-12 at launch, whose rows are empty — hashes no row bytes at all.
@@ -10261,6 +10533,13 @@ impl Params {
         // it unset — all of them as shipped — fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_registry_resilience {
             h.write(b"palw_registry_resilience");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // Lane F2 (the floor-refusal retry, post-launch): the height only, Some-only, so every preset that
+        // leaves it unset — all of them as shipped, testnet-12 included — fingerprints byte-identically to
+        // a build without the field.
+        if let Some(activation) = palw_floor_refusal_retry {
+            h.write(b"palw_floor_refusal_retry");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
@@ -11079,6 +11358,9 @@ impl Params {
             // Lane V02 (post-launch): CARRIED with R-core+, whose vesting rows cover E while a lock is
             // released early, and with the bundle whose mirror it matches.
             palw_final_lock_life: self.palw_final_lock_life,
+            // Lane F2-lock (post-launch): CARRIED with lane V02's lock life, its one prerequisite, and with
+            // the bundle whose mirror it matches.
+            palw_final_lock_life_retro: self.palw_final_lock_life_retro,
             // ADR-0152 §4-quater: CARRIED like R-core+, never reset — an overridden testnet-12 then fails
             // `validate_palw_v2` on a prerequisite the override dropped instead of silently reopening
             // the 2M row.
@@ -11099,6 +11381,9 @@ impl Params {
             palw_readiness_v2_max_age_spans: self.palw_readiness_v2_max_age_spans,
             // Lane F1: CARRIED with the bundle whose mirror it matches.
             palw_registry_resilience: self.palw_registry_resilience,
+            // Lane F2 (post-launch): CARRIED with the bundle whose mirror it matches, beside its one
+            // prerequisite (R-core+), which is carried too.
+            palw_floor_refusal_retry: self.palw_floor_refusal_retry,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -12133,6 +12418,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_final_lock_full_collateral: None,
     palw_final_lock_life: None,
+    palw_final_lock_life_retro: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_anchor_at_ceiling: None,
@@ -12140,6 +12426,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_registry_resilience: None,
+    palw_floor_refusal_retry: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -12372,6 +12659,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_final_lock_full_collateral: None,
     palw_final_lock_life: None,
+    palw_final_lock_life_retro: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_anchor_at_ceiling: None,
@@ -12379,6 +12667,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_registry_resilience: None,
+    palw_floor_refusal_retry: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -12593,6 +12882,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_final_lock_full_collateral: None,
     palw_final_lock_life: None,
+    palw_final_lock_life_retro: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_anchor_at_ceiling: None,
@@ -12600,6 +12890,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_registry_resilience: None,
+    palw_floor_refusal_retry: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -17561,7 +17852,9 @@ pub fn palw_t12_shipped_params() -> Params {
 /// against the build it replaces.
 pub fn palw_t12_launch_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
-    for fence in PALW_T12_POST_LAUNCH_FENCES_V1 {
+    // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
+    // DAA-750 list: testnet-12 as it launched carries neither.
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V2.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V1) {
         (fence.set)(&mut params, None);
     }
     params
@@ -17674,6 +17967,9 @@ impl std::fmt::Debug for PalwPostLaunchFenceV1 {
 /// **Armed on testnet-12 at [`PALW_T12_POST_LAUNCH_FENCE_DAA`]** by
 /// [`palw_t12_arm_post_launch_fences_v1`] (so on every drill ruleset too, which
 /// `--palw-drill-fence-at` then MOVES), and dormant (`None`) on every other preset.
+///
+/// **Shipped; it does not grow again.** A fix for the NEXT flag day goes in
+/// [`PALW_T12_POST_LAUNCH_FENCES_V2`] (lane F2, 2026-09-27).
 pub const PALW_T12_POST_LAUNCH_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     // Lane F1, registry resilience (V03/V05): the field and the V2 bundle's mirror the fold reads.
     PalwPostLaunchFenceV1 {
@@ -17776,6 +18072,82 @@ fn palw_t12_arm_post_launch_fences_v1(params: &mut Params) {
     }
 }
 
+/// **The fences testnet-12's SECOND post-launch flag day arms at one height** (the user's decision of
+/// 2026-09-27: the seats saturate again past the DAA-750 release, so the retry that keeps a refused
+/// draw's escrow alive ships in a flag day of its own) — the ONE list of them, the DAA-750 list's
+/// successor. [`PALW_T12_POST_LAUNCH_FENCES_V1`] is the shipped DAA-750 set and never grows again; a
+/// lane that puts a fix behind the next flag day adds its entry HERE, one `PalwPostLaunchFenceV1`
+/// line (a bare height, or the field and its mirror through the field's own `sync_*`), and nothing
+/// else moves:
+///
+/// * the release arms exactly these at [`PALW_T12_POST_LAUNCH_FENCE_V2_DAA`] in
+///   [`palw_t12_params_with_registry_v1`], after the DAA-750 list and before `validate_palw_v2`
+///   ([`palw_t12_arm_post_launch_fences_v2`]) — so on every drill ruleset too;
+/// * a drill's `--palw-drill-fence2-at` moves exactly these to a low height on a salted drill chain
+///   ([`crate::config::drill::palw_drill_post_launch_fences_v2_at_v1`]), so a drill already past its
+///   DAA-750 crossing crosses this flag day with the shipping binary;
+/// * [`palw_t12_launch_params_v1`] sets them back to dormant with the DAA-750 list (testnet-12 as it
+///   launched), and [`palw_t12_release_v1_params`] sets back these alone (the DAA-750 release as the
+///   fleet runs it — the baseline each of this list's lanes judges its own fence against).
+///
+/// Every entry is hashed Some-only with the `never()` collapse, so while the height is `None` the
+/// list is dormant and every shipped id — testnet-12's `dbbc9104…` among them — is the DAA-750
+/// release's, byte for byte.
+///
+/// Entries (lane · fence):
+/// * lane F2 · `palw_floor_refusal_retry` — a stake draw refused for eligibility at every seed on
+///   the anchor block's pre-object base re-anchors at the next slot instead of voiding.
+/// * lane F2-lock · `palw_final_lock_life_retro` — at the crossing block every Valid seat lock of a
+///   `Final` claim re-dates to `min(expiry, max(F + 1,000, H))`, and past it a `Final` dates its seat
+///   locks at `F + 1,000` (its prerequisite `palw_final_lock_life`, DAA 750, is below this height).
+pub const PALW_T12_POST_LAUNCH_FENCES_V2: &[PalwPostLaunchFenceV1] = &[
+    // Lane F2 (the floor-refusal retry): the field and the V2 bundle's mirror the fold reads.
+    PalwPostLaunchFenceV1 {
+        name: "palw_floor_refusal_retry",
+        set: |params, at| {
+            params.palw_floor_refusal_retry = at;
+            params.sync_palw_floor_refusal_retry();
+        },
+    },
+    // Lane F2-lock (the retroactive seat-lock life): the field and the V2 bundle's mirror.
+    PalwPostLaunchFenceV1 {
+        name: "palw_final_lock_life_retro",
+        set: |params, at| {
+            params.palw_final_lock_life_retro = at;
+            params.sync_palw_final_lock_life_retro();
+        },
+    },
+];
+
+/// **testnet-12's second post-launch flag day: DAA 1,300** (the user's decision of 2026-09-27, with the
+/// live chain at DAA ~853: the seats' room runs out again at DAA ~1,350–1,575, so both fences of
+/// [`PALW_T12_POST_LAUNCH_FENCES_V2`] arm before that). A height no other fence uses — not 750 and
+/// not 1,000, where the fork id could not tell the flag days apart. A node on the DAA-750 release
+/// keeps peering below this height and is refused by an upgraded one from it.
+pub const PALW_T12_POST_LAUNCH_FENCE_V2_DAA: Option<u64> = Some(1_300);
+
+/// **The second flag day, armed** — every entry of [`PALW_T12_POST_LAUNCH_FENCES_V2`] at
+/// [`PALW_T12_POST_LAUNCH_FENCE_V2_DAA`] through its own `set`, on the ASSEMBLED ruleset, after the
+/// DAA-750 list; a no-op while the height is `None`.
+fn palw_t12_arm_post_launch_fences_v2(params: &mut Params) {
+    let Some(at) = PALW_T12_POST_LAUNCH_FENCE_V2_DAA else { return };
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V2 {
+        (fence.set)(params, Some(ForkActivation::new(at)));
+    }
+}
+
+/// **testnet-12 as its DAA-750 post-launch release ships it** — [`palw_t12_shipped_params`] with every
+/// fence of [`PALW_T12_POST_LAUNCH_FENCES_V2`] set back to dormant through its own `set`: the
+/// ruleset a node that has not taken the second flag day's release runs, and the baseline that
+/// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
+pub fn palw_t12_release_v1_params() -> Params {
+    let mut params = palw_t12_shipped_params();
+    for fence in PALW_T12_POST_LAUNCH_FENCES_V2 {
+        (fence.set)(&mut params, None);
+    }
+    params
+}
+
 /// **testnet-12's assembly over a given genesis registry** — the one body [`palw_t12_shipped_params`]
 /// and [`palw_t12_drill_params_v1`] share, so a drill cannot run a ruleset the network does not.
 fn palw_t12_params_with_registry_v1(
@@ -17807,6 +18179,10 @@ fn palw_t12_params_with_registry_v1(
     // the registry this body just installed) and before the validation below, which holds their
     // prerequisites among themselves (lane A over F1's seed, bind-deadlock over lane A).
     palw_t12_arm_post_launch_fences_v1(&mut params);
+    // **The second post-launch flag day** (lane F2 and its successors, 2026-09-27): every fence of
+    // `PALW_T12_POST_LAUNCH_FENCES_V2` at `PALW_T12_POST_LAUNCH_FENCE_V2_DAA` — dormant while that height
+    // is `None` — on the same assembled ruleset, after the DAA-750 list whose fences it builds on.
+    palw_t12_arm_post_launch_fences_v2(&mut params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -19000,6 +19376,8 @@ pub fn palw_v2_params_on_base(
     // `palw_t12_base_params`'s pass 2) had its mirror written into no bundle, and `validate_palw_v2`
     // below refused the ruleset — the int-4 phase-1 audit's LOW. Re-mirrored here, it follows.
     params.sync_palw_registry_resilience();
+    // Lane F2's floor-refusal-retry height, for the same reason and in the same place.
+    params.sync_palw_floor_refusal_retry();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -19159,6 +19537,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_rcore_conservative_classes: &[],
     palw_final_lock_full_collateral: None,
     palw_final_lock_life: None,
+    palw_final_lock_life_retro: None,
     palw_class_verify_deadline: None,
     palw_class_verify_rows: &[],
     palw_anchor_at_ceiling: None,
@@ -19166,6 +19545,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_activation_pool: None,
     palw_readiness_v2_max_age_spans: None,
     palw_registry_resilience: None,
+    palw_floor_refusal_retry: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -27789,7 +28169,17 @@ mod post_launch_fence_arming_tests {
         let gate = crate::fork_id_v1::fork_id_gate_fences_v1(&release);
         assert!(gate.contains(&AT), "the fork id gates on 750 ({gate:?})");
         assert!(!crate::fork_id_v1::fork_id_gate_fences_v1(&launch).contains(&AT));
-        assert_eq!(release.fence_schedule_v1(), vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA], "750, then D1's 1,000");
+        // The schedule: 750, D1's 1,000, and — on this build — the second flag day's own height
+        // (`PALW_T12_POST_LAUNCH_FENCES_V2`); the DAA-750 release as the fleet ran it is 750 and 1,000 alone.
+        let mut expected_schedule = vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA];
+        expected_schedule.extend(PALW_T12_POST_LAUNCH_FENCE_V2_DAA);
+        expected_schedule.sort_unstable();
+        assert_eq!(release.fence_schedule_v1(), expected_schedule, "750, D1's 1,000, then the second flag day");
+        assert_eq!(
+            palw_t12_release_v1_params().fence_schedule_v1(),
+            vec![AT, PALW_T12_BOND_MATURITY_WINDOW_DAA],
+            "the DAA-750 release: 750, then D1's 1,000"
+        );
 
         // 1,000 — `palw_bond_maturity`'s own height — is refused by name.
         let mut at_maturity = release.clone();

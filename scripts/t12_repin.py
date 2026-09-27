@@ -261,6 +261,8 @@ EVM = "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs"
 SINK = "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs"
 V02 = "consensus/core/tests/palw_final_lock_full_collateral_is_t12_only.rs"
 V02LIFE = "consensus/core/tests/palw_final_lock_life_is_t12_only.rs"
+RETROLIFE = "consensus/core/tests/palw_final_lock_life_retro_is_t12_only.rs"
+FLOOR2 = "consensus/core/tests/palw_floor_refusal_retry_is_t12_only.rs"
 RELEASE = "consensus/core/tests/palw_the_release_did_not_move.rs"
 BINDER = "consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs"
 PPSTRICT = "consensus/core/tests/pruning_proof_strict_economic_fence.rs"
@@ -475,6 +477,27 @@ def registry() -> list[Pin]:
     # the dormant fence must not move.
     pins += _triple("v02life.T12_RELEASE", "t12", V02LIFE, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",
                     (f"{V02LIFE}::the_shortening_is_dormant_on_every_other_preset_and_testnet12_arms_it_at_750",))
+    # Lane F2-lock (the F + 1,000 lock life applied retroactively, post-launch, dormant): testnet-12 as shipped,
+    # which the dormant fence must not move.
+    pins += _triple("retrolife.T12_RELEASE", "t12", RETROLIFE, "const T12_RELEASE: (&str, &str, &str) = (",
+                    "release_v1.testnet-12",
+                    (f"{RETROLIFE}::the_retro_life_is_dormant_on_every_preset_and_testnet12_is_the_daa750_release",))
+    # Lane F2 (the floor-refusal retry, second flag day): the DAA-750 release it is armed over, testnet-12 as
+    # launched (history), and every other preset at the release (testnet-10 / simnet as history).
+    floor2_tests = (f"{FLOOR2}::every_shipped_id_is_the_release_ones",)
+    pins += _triple("floor2.T12_RELEASE", "t12", FLOOR2, "const T12_RELEASE: (&str, &str, &str) = (", "release_v1.testnet-12",
+                    floor2_tests)
+    pins += [Pin(key=f"floor2.T12_LAUNCH.{what}", scope="history", file=FLOOR2,
+                 anchors=[re.escape("const T12_LAUNCH: (&str, &str, &str) = (")], nth=i_, length=64, until=r"^\);", value=None,
+                 tests=floor2_tests)
+             for i_, what in enumerate(["params_id", "identity_id", "schedule_id"])]
+    floor2_others = "const OTHERS_AT_THE_RELEASE: &[(&str, &str, &str, &str)] = &["
+    pins += _rows("floor2.OTHERS_AT_THE_RELEASE", _net_scope, FLOOR2, floor2_others, _shipped, floor2_tests)
+    for net_ in ("testnet-10", "simnet"):
+        pins += [Pin(key=f"floor2.OTHERS_AT_THE_RELEASE.{net_}.{what}", scope="history", file=FLOOR2,
+                     anchors=[re.escape(floor2_others), rf'"{re.escape(net_)}",'], nth=i_, length=64, until=r"^\];", value=None,
+                     tests=floor2_tests)
+                 for i_, what in enumerate(["params_id", "identity_id", "schedule_id"])]
     # Lane bind-deadlock (the anchor-at-ceiling fence, post-launch, dormant): testnet-12 as shipped, which the dormant fence must
     # not move.
     pins += _triple("binder.T12_RELEASE", "t12", BINDER, "const T12_RELEASE: (&str, &str, &str) = (", "shipped.testnet-12",

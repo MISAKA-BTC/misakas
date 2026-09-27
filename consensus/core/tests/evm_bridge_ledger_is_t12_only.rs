@@ -35,11 +35,11 @@ fn ids(p: &Params) -> (String, String, String) {
 ///
 /// **Re-pinned 2026-09-25 for the lead cap** (`palw_clock_lead_cap`, armed from genesis on testnet-12,
 /// hashed Some-only into all three ids). Previous: `58c04756…` / `6388b87b…` / `2c2f7c0e…`.
-// re-pin 2026-09-26 @762784f40e9b: the DAA-750 post-launch release gains its 13th fence, palw_lane_accept_parents_first, armed at DAA 750 with the rest (params + schedule move; identity, genesis, premine unchanged) (was ac41a9d5…, be669e4c…)
+// re-pin 2026-09-27 @082a68ec102f: second post-launch flag day (2026-09-27): palw_floor_refusal_retry + palw_final_lock_life_retro armed at DAA 1,300 (was 49ac20b0…, df25a3eb…)
 const T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "49ac20b01df84215bc11e501c7f3eca415d864d2e70f30eaa0183dc01b685ae3",
+    "48d99eecfed92d925a1d896faa9680905a57a1069cc6034c2380e065ed6d90c5",
     "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
-    "df25a3eb9edd78bd66100ab0d4171d272ce908ad7ac5dc10fe31f2267be1faf6",
+    "4ab9a32d261fb61fe75ba9f460a6efb66cda0b3a4940e6dc5e3e3d9be6fab914",
 );
 
 /// **The ledger is the only thing this change moved on testnet-12.** Take it away (and the
