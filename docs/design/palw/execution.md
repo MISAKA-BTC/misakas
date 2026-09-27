@@ -33,3 +33,4 @@ free to run faster: P5 says efficiency is rewarded.
 - [ADR-0117 — A draw is one forward](archive/0117-a-draw-is-one-forward.md)
 - [ADR-0052: `PALW-QWEN36` — the integer arithmetic for Qwen3.6's hybrid graph](archive/0052-palw-qwen36-hybrid-class.md)
 - [ADR-0050: The BASE-0 residual site — the narrowing that was never declared, and the amplification that was](archive/0050-palw-base0-residual-site.md)
+- [ADR-0057: BASE-0 runtime acceleration — backends below the semantic boundary](archive/0057-palw-base0-runtime-acceleration.md)

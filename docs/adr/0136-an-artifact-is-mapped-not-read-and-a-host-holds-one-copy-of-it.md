@@ -109,3 +109,9 @@ hold what it proves.
 ## 6. Number hygiene
 
 0136 was free when written; the next free number is 0137.
+
+## Links
+
+- Spec: [14 Node duties](../spec/palw/14-node-duties.md) §14.4 (PALW-ND-10)
+- Design: [design/palw/node.md](../design/palw/node.md)
+- (Kept as a short record, 2026-09-27; [INDEX.md](../INDEX.md) §4.)

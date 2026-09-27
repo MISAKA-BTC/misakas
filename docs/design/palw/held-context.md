@@ -33,3 +33,4 @@ wherever compute cannot be avoided, at contexts up to 2M tokens.
 - [ADR-0103 — The context is held off the chain, and the chain carries a root, an opening and a logarithm](archive/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
 - [ADR-0081: Long context — the input is a state chain](archive/0081-long-context-the-input-is-a-state-chain.md)
 - [ADR-0116 — An attention history is the class's, and the held regime reduces over its own width](archive/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md)
+- [ADR-0121 — A held capture is served from its fold as the replay streams, and a node holds two ladders](archive/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md)
