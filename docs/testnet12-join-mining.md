@@ -1,9 +1,9 @@
 # Joining Testnet-12 as a PALW producer
 
 **testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`). On
-2026-09-26 the public fleet moved to the node-only update `8a0810992`; the post-launch fence release `c3dbaee3c`
-(published 2026-09-27; launch note §00) replaced it on the fleet by 02:15 JST that day, and its 13 fences have been
-active since DAA 750 (2026-09-27 07:29 JST) — **build `c3dbaee3c`**. The identity values below were checked against that release. Read
+2026-09-26 the public fleet moved to the node-only update `8a0810992`; the post-launch fence release `c3dbaee3c` activated 13
+fences at DAA 750 (2026-09-27 07:29 JST); the second flag day's release `587cab2b0` (launch note §000) runs on the fleet since
+2026-09-27 19:37 JST and activates 2 fences at DAA 1,300 (≈ 2026-09-28 05:25 JST) — **build `587cab2b0` and run it before DAA 1,300**. The identity values below were checked against that release. Read
 [`t12-launch-2026-09-25.md`](t12-launch-2026-09-25.md) first: it lists what the release contains, the
 known issues (two CRITICAL ones are fixed by post-launch activation fences) and when a payment may be
 treated as final.
@@ -46,13 +46,14 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 1. Build
 
-Use commit `c3dbaee3c` — the post-launch fence release the public fleet runs (kaspad sha256 of its x86_64 Linux
-release build `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571`). Its 13 fences have been active since
-DAA 750: an older node (`0e8ec984e`, `8a0810992`) is refused at the handshake, and one that crossed DAA 750 on an
-older build must move its datadir aside and resync. It also fixes IBD: an older build cannot sync a fresh node past DAA 316.
+Use commit `587cab2b0` — the release the public fleet runs (kaspad sha256 of its x86_64 Linux
+release build `84b8c8c931de24ed57a9197b26e11692989ce4c15e2029c8e99aef0121926f2e`). It must be running before DAA 1,300,
+where its two fences activate: from DAA 1,300 a node on `c3dbaee3c` or older is refused at the handshake, and one that
+crosses DAA 1,300 on an older build must move its datadir aside and resync. The DAA-750 fences of `c3dbaee3c` are in it too,
+and so is the IBD fix (an older build than `c3dbaee3c` cannot sync a fresh node past DAA 316).
 
 ```bash
-git checkout c3dbaee3c
+git checkout 587cab2b0
 ```
 
 The docs inside that checkout are the older copies; keep following this page on `main`.
@@ -101,7 +102,7 @@ Check the startup log for these lines:
 
 ```text
 Consensus params fingerprint: 24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff (network testnet-12)
-Consensus fence schedule: 750, 1000 (schedule id d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a)
+Consensus fence schedule: 750, 1000, 1300 (schedule id d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a)
 ```
 
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a

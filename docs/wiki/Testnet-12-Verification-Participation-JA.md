@@ -2,7 +2,7 @@
 
 このページは、testnet-12 に PALW の検証席(panel seat / verifier)として参加する手順です。検証席は、他の参加者が出した PALW claim を再実行し、その結果(receipt)をチェーンに提出します。検証席は block を採掘しませんが、claim を Final に進めるのに欠かせない役割です。
 
-対象は **testnet-12 と、その現行ビルド `c3dbaee3c`**(2026-09-27 の post-launch fence release。13 本の fence が DAA 750 で有効になった)です。network id や consensus fingerprint が違う node は参加できません。
+対象は **testnet-12 と、その現行ビルド `587cab2b0`**(2026-09-27 の 2 回目の post-launch flag day のリリース。2 本の fence が DAA 1,300 で有効になる。DAA 750 の 13 本も含む)です。network id や consensus fingerprint が違う node は参加できません。
 
 ## testnet-11 からの主な変更
 
@@ -30,7 +30,7 @@
 ```bash
 git switch main
 git pull --ff-only
-git checkout c3dbaee3c
+git checkout 587cab2b0
 cargo build --release -p kaspad -p misaka-cli
 ```
 

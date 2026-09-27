@@ -25,21 +25,21 @@
 </header>
 
 <details class="upgrade-note" id="upgradeNote">
-  <summary>testnet-12 is live <span>2026-09-25 launch · fence release c3dbaee3c in force since DAA 750 (2026-09-27) · when a payment is final &mdash; expand</span></summary>
+  <summary>testnet-12 is live <span>2026-09-25 launch · run 587cab2b0 before DAA 1,300 (≈ 2026-09-28 05:25 JST) · when a payment is final &mdash; expand</span></summary>
   <div class="upgrade-body">
   <b>This explorer shows testnet-12</b> (R-core+, ADR-0152 v3.1), launched 2026-09-25 about 23:15 JST
-  from release <span class="mono">0e8ec984e</span>; since 2026-09-27 the post-launch fence release <span class="mono">c3dbaee3c</span>. A node on this
+  from release <span class="mono">0e8ec984e</span>; since 2026-09-27 19:37 JST the fleet runs the second flag day's release <span class="mono">587cab2b0</span>. A node on this
   network prints params fingerprint
-  <span class="mono" style="word-break:break-all">dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9</span>
-  and fence schedule <span class="mono">750, 1000</span> (schedule id <span class="mono">7c652212&hellip;</span>): the
-  post-launch release, whose 13 fences have been in force since DAA 750 (2026-09-27 07:29 JST). A node still
-  printing the launch release's <span class="mono">b8564b88&hellip;</span> is refused by upgraded peers; if it
-  crossed DAA 750 on that build, move its datadir aside and resync with <span class="mono">c3dbaee3c</span>.
+  <span class="mono" style="word-break:break-all">24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff</span>
+  and fence schedule <span class="mono">750, 1000, 1300</span> (schedule id <span class="mono">d263d7f2&hellip;</span>): the
+  second post-launch flag day: its two fences activate at DAA 1,300 (the 13 of DAA 750 are in force since 2026-09-27 07:29 JST).
+  A node on <span class="mono">c3dbaee3c</span> (<span class="mono">dbbc9104&hellip;</span>) keeps peering below DAA 1,300 and is refused from it;
+  if it crosses DAA 1,300 on that build, move its datadir aside and resync with <span class="mono">587cab2b0</span>.
   Genesis <span class="mono" title="a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23">a27f8f44fe4d91a5&hellip;</span>;
   the eight genesis bonds are outputs 0&ndash;7 of premine txid
   <span class="mono" title="5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669">5e0d5f1b&hellip;</span>.
   <br/><br/>
-  <b>Join.</b> Build <span class="mono">c3dbaee3c</span> and run
+  <b>Join.</b> Build <span class="mono">587cab2b0</span> and run
   <span class="mono">kaspad --testnet --netsuffix=12</span>; the CLI is
   <span class="mono">misaka --network testnet-12</span> (its default). Peers come from the DNS seeders
   <span class="mono">seeder1&ndash;4.misakascan.com</span>; the P2P port is <span class="mono">26311</span>.
@@ -57,7 +57,8 @@
     <li><b>Fixed at DAA 750 &mdash; panel-seed grinding (was CRITICAL):</b> the panel seed is now the anchor attempt's execution commitment. As a stopgap, only the eight genesis bonds' attempts anchor a panel, so the panel draw trusts the operator for now; per-operator panel skew is monitored.</li>
     <li><b>Fixed at DAA 750 &mdash; full seats:</b> Valid locks after Final filled the genesis seats' 500&permil; room from about DAA 624, and claims whose panel could not be drawn were voided (their escrowed worker reward is destroyed, not paid; no collateral was taken). From DAA 750 those locks count against the whole collateral, and a lock and its slashable window end at Final + 1,000 DAA for claims licensed from DAA 750 (earlier locks keep licence + 3,000).</li>
     <li><b>Also at DAA 750:</b> registry resilience (a claim waits for its bind deadline instead of voiding), bond maturity for non-genesis bonds, model sinks bound to objects, a strict economic win for reorgs (ties within 2 DAA ticks follow GHOSTDAG order), the same rule for pruning-proof IBD, mergesets accepted parents first, slashing evidence that cannot be verified no longer spends stake, and an operator bond at its exposure ceiling can still anchor.</li>
-    <li><b>Fixed in the node (<span class="mono">c3dbaee3c</span>):</b> IBD past DAA 316 (older builds cannot sync a fresh node), unlicensed claims (V04: collectors now license in bind-age order), a remote header crash and pruning-proof IBD hardening.</li>
+    <li><b>Fix at DAA 1,300 (release <span class="mono">587cab2b0</span>):</b> a claim whose panel draw the eligible-stake floor refuses is re-anchored at its next slot instead of voided (DAA 600&ndash;749 lost 540,943 MSK of escrowed reward to such voids), and seat locks written before DAA 750 take the F + 1,000 life, so the seats' room does not run out again.</li>
+    <li><b>Fixed in the node (<span class="mono">c3dbaee3c</span>, kept in <span class="mono">587cab2b0</span>):</b> IBD past DAA 316 (older builds cannot sync a fresh node), unlicensed claims (V04: collectors now license in bind-age order), a remote header crash and pruning-proof IBD hardening.</li>
     <li><b>DNS finality is in Bootstrap:</b> validators are funded after launch; until then the DNS reorg gate does not act, and the EVM bridge's deposit claims wait for it.</li>
     <li><b>8k readiness:</b> a stalled 8k seat can drop the class to Held, which voids its unbound claims. Partly fixed; the rest follows by fence and node update.</li>
     <li><b>Scheduled fixes:</b> the bridge audit (BR-1&ndash;BR-7), position fixes.</li>

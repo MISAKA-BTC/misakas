@@ -25,9 +25,9 @@
 | 項目 | 値 |
 |---|---|
 | network | `testnet-12`(R-core+) |
-| release commit | `c3dbaee3c`(2026-09-27 の post-launch fence release。13 本の fence が DAA 750(2026-09-27 07:29 JST)で有効になった) |
-| consensus params fingerprint | `dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9`(`c3dbaee3c`。それ以前のビルドは `b8564b88…`) |
-| fence schedule | `750, 1000`(schedule id `7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397`) |
+| release commit | `587cab2b0`(2026-09-27 の 2 回目の post-launch flag day のリリース。2 本の fence が DAA 1,300(2026-09-28 05:25 JST 前後)で有効になる。DAA 1,300 より前に動かしておくこと) |
+| consensus params fingerprint | `24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff`(`587cab2b0`。`c3dbaee3c` は `dbbc9104…`、それ以前のビルドは `b8564b88…`) |
+| fence schedule | `750, 1000, 1300`(schedule id `d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a`) |
 | genesis | `a27f8f44fe4d91a5…`(全体は公開ノートに記載) |
 | premine txid | `5e0d5f1b37a71288…`(genesis の bond と fee float はこの txid の上にある) |
 | node の起動 | `kaspad --testnet --netsuffix=12` |
@@ -41,7 +41,7 @@
 | Explorer | [misakascan.com](https://misakascan.com/)(testnet-12 を表示) |
 | Faucet | **未定**(testnet-12 の資金はまだ入っていない) |
 
-testnet-12 のルールは、DAA 750 で有効になった 13 本の post-launch fence(`c3dbaee3c`、公開ノート §00)と DAA 1,000 の bond maturity window(ADR-0065 D1)を除き、**DAA 0 から有効**です。古いビルド(`0e8ec984e`・`8a0810992`)のノードは DAA 750 から handshake で拒否されるので、`c3dbaee3c` に入れ替えてください。
+testnet-12 のルールは、DAA 750 で有効になった 13 本の post-launch fence(`c3dbaee3c`、公開ノート §00)、DAA 1,300 で有効になる 2 本(`587cab2b0`、公開ノート §000)と DAA 1,000 の bond maturity window(ADR-0065 D1)を除き、**DAA 0 から有効**です。古いビルド(`0e8ec984e`・`8a0810992`)のノードは DAA 750 から handshake で拒否されるので、`c3dbaee3c` に入れ替えてください。
 
 ## 重要な区別
 

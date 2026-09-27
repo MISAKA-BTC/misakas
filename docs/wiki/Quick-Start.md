@@ -1,6 +1,6 @@
 # Quick Start — testnet-12
 
-対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の post-launch fence release `c3dbaee3c` です。13 本の fence が DAA 750(2026-09-27 07:29 JST)で有効になりました。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
+対象は公開テストネット `testnet-12` です。ビルドする commit は 2026-09-27 の 2 回目の post-launch flag day のリリース `587cab2b0` です。2 本の fence が DAA 1,300(2026-09-28 05:25 JST 前後)で有効になるので、それより前に動かしてください。詳しい手順の正本は [testnet12-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/main/docs/testnet12-join-mining.md) です。
 
 ## 1. Build
 
@@ -9,13 +9,13 @@ git clone https://github.com/MISAKA-BTC/misakas.git
 cd misakas
 git switch main
 git pull --ff-only
-git checkout c3dbaee3c
+git checkout 587cab2b0
 cargo build --release -p kaspad -p misaka-cli
 ```
 
 `misaka-cli` から作られるバイナリは `target/release/misaka` です。以下では `target/release` を PATH に加えた前提で書きます。加えない場合は `./target/release/kaspad` と `./target/release/misaka` と読み替えてください。
 
-公開 fleet は 2026-09-27 02:15 JST に `c3dbaee3c` の x86_64 Linux release build へ入れ替えました(kaspad の sha256 は `0233f845aa19a5e1edca47f786f4d45bb6a49d7af9d5f011c77301cc31ad2571`)。DAA 750 で 13 本の fence が有効になり、`0e8ec984e`・`8a0810992` のノードは handshake で拒否されます。古いビルドのまま DAA 750 を越えたノードは `<appdir>/misaka-testnet-12/datadir` を退避し、`c3dbaee3c` で同期し直します(公開ノート §00)。
+公開 fleet は 2026-09-27 19:37 JST に `587cab2b0` の x86_64 Linux release build へ入れ替えました(kaspad の sha256 は `84b8c8c931de24ed57a9197b26e11692989ce4c15e2029c8e99aef0121926f2e`)。DAA 1,300 で 2 本の fence が有効になり、`c3dbaee3c` 以前のノードは DAA 1,300 から handshake で拒否されます。古いビルドのまま DAA 1,300 を越えたノードは `<appdir>/misaka-testnet-12/datadir` を退避し、`587cab2b0` で同期し直します(公開ノート §000)。
 
 > 現行 `main` のビルドは testnet-11 に参加できません。testnet-11 を続ける場合は commit `1f98d3bf4` をビルドします。
 
@@ -45,8 +45,8 @@ kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default \
 起動ログに次の 2 行が出ることを確認します。
 
 ```text
-Consensus params fingerprint: dbbc9104a2ee754f0f053a6e1614118979fd2c3dc87cbe6bffcf6dcaf4bd59c9 (network testnet-12)
-Consensus fence schedule: 750, 1000 (schedule id 7c652212ab5337bda9508deeee2d2e119331856fce0bd27897f19dd66e552397)
+Consensus params fingerprint: 24e1aec3e9a102fa40d559cd28005ad5944c32caa485d685bed65c52e4c056ff (network testnet-12)
+Consensus fence schedule: 750, 1000, 1300 (schedule id d263d7f2971f4e20b57b26d7b7428bd8f9346c3728bbb6927341d8b36b0c1c3a)
 ```
 
 最初の testnet-12(genesis `a8cabac4…`)の datadir を使うと、起動時に genesis mismatch で拒否されます。その datadir は削除せずに別名へ退避し、新しい node には使わないでください。
