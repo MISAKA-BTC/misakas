@@ -14107,32 +14107,48 @@ impl PalwFoldReadV1<'_> {
         // and every other class's term alike. Below it: `seat_count` full replays at the reference,
         // the expression below byte for byte.
         let room_v2 = self.params.capacity_room_active_at(now_daa);
-        let replicas = if room_v2 {
-            crate::palw_verify_capacity_v1::palw_replay_pricing_v1(true, g).replicas
-        } else {
-            g.seat_count as u128
-        };
-        let (owed, terms) = self.with_inflight_index(|index| {
+        let shipped_replicas = g.seat_count as u128;
+        let replicas =
+            if room_v2 { crate::palw_verify_capacity_v1::palw_replay_pricing_v1(true, g).replicas } else { shipped_replicas };
+        let (owed, terms, shipped_terms) = self.with_inflight_index(|index| {
             let owed = palw_panel_owed_v1(self.state, self.params, index, self.own_attempt_class, extra);
             let terms = palw_panel_terms_v1(self.state, replicas, &owed);
-            (owed, terms)
+            let shipped_terms = room_v2.then(|| palw_panel_terms_v1(self.state, shipped_replicas, &owed));
+            (owed, terms, shipped_terms)
         });
         // ADR-0152 SW-9 (T-2(a) amended): past `palw_rcore_plus`, a class outside C7 counts
         // effective ready operators over capped weights — the capacity the stake draw leaves it.
         let ready = self.model_registry_room_ready_v1(class_id, row, now_daa, fold) as u128;
+        let shipped_per_span = palw_panel_shipped_per_span_v1(ready, g);
         let per_span = if room_v2 {
             ready.saturating_mul(crate::palw_verify_capacity_v1::palw_replay_pricing_v1(true, g).per_seat_per_span)
         } else {
-            ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000
+            shipped_per_span
         };
-        PalwPanelRateV1::read(
-            class_id,
-            per_span,
-            row.profile.verification_window_spans as u64,
-            row.work.economic_ccu_per_claim.saturating_mul(replicas),
-            &owed,
-            &terms,
-        )
+        let window = row.profile.verification_window_spans as u64;
+        let mut rate =
+            PalwPanelRateV1::read(class_id, per_span, window, row.work.economic_ccu_per_claim.saturating_mul(replicas), &owed, &terms);
+        // **Stage 1 (rcore/cap-s1): F-R's room is never above ρ × the shipped room.** The measured
+        // pricing (`k = 2` at the measured speed) holds ≈ 6× the claims of the shipped one at the same
+        // ready seats (the stage-1 state diff: 8k at 1,000,000 MSK, 3 → 29 claims at ρ = 1), and the
+        // user's plan admits more claims only through ρ. So past the fence the class's capacity is the
+        // lesser of the measured reading and the shipped reading of a panel whose replay budget is ρ
+        // times today's (`per_span × ρ`, every class's load priced as today) — at ρ = 1 today's
+        // capacity exactly. One clamp for the gate, the pooled check, the own attempt's room and the
+        // producer's pre-check alike (they all read this function).
+        if let Some(shipped_terms) = shipped_terms {
+            let rho = u128::from(crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(self.params, now_daa));
+            let shipped = PalwPanelRateV1::read(
+                class_id,
+                shipped_per_span.saturating_mul(rho),
+                window,
+                row.work.economic_ccu_per_claim.saturating_mul(shipped_replicas),
+                &owed,
+                &shipped_terms,
+            );
+            rate.capacity = rate.capacity.min(shipped.capacity);
+        }
+        rate
     }
 
     fn model_registry_ready_seats(
@@ -14269,6 +14285,33 @@ impl PalwFoldReadV1<'_> {
         })
     }
 
+    /// **Stage 1 (rcore/cap-s1): `c_class` as the SHIPPED pricing reads it** — [`Self::class_capacity_v1`]
+    /// below `Params::palw_capacity_verify_room`, byte for byte (`seat_count` full replays at the
+    /// reference work a span), at any height: the unit of the per-bond share's ρ clamp.
+    fn class_capacity_shipped_v1(&self, class_id: &Hash64, now_daa: u64) -> Option<u64> {
+        if !self.params.rcore_plus_active_at(now_daa) {
+            return None;
+        }
+        let fold = self.extras.model_registry.as_ref()?;
+        if *class_id == self.params.base_class_id() || !(self.extras.work_target_active && fold.governs_at(now_daa)) {
+            return None;
+        }
+        let row = self.state.model_lifecycles.get(class_id)?;
+        Some(if palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
+            row.profile.max_inflight_claims as u64
+        } else {
+            let ready = self.model_registry_room_ready_v1(class_id, row, now_daa, fold) as u128;
+            let per_span = palw_panel_shipped_per_span_v1(ready, &fold.globals);
+            let cost = row.work.economic_ccu_per_claim.saturating_mul(fold.globals.seat_count as u128);
+            crate::palw_work_target_v1::palw_panel_capacity_by_rate_v1(
+                per_span,
+                0,
+                (row.profile.verification_window_spans as u64).max(1),
+                cost,
+            )
+        })
+    }
+
     /// **The share `bond` may hold of `class_id`'s unlicensed claims**: T-2(a)'s `⌈c/2⌉` below
     /// `Params::palw_capacity_verify_room`, and past it ADR-0160's cap over the same `c_class`
     /// ([`crate::palw_verify_capacity_v1::palw_bond_room_cap_v1`]): the bond's stake-proportional share
@@ -14276,11 +14319,26 @@ impl PalwFoldReadV1<'_> {
     /// this one) — the whole room when it holds alone — guaranteed against the others, plus whatever
     /// rounding slack no holder has taken; none for a frozen bond. C7 keeps its static cap as the room
     /// (V-I6: c_2M = 1).
+    ///
+    /// **Stage 1 (rcore/cap-s1): the room the shares divide is never above ρ × T-2(a)'s shipped share**
+    /// (`ρ · ⌈c_ship / 2⌉`, [`Self::class_capacity_shipped_v1`]). The stake share lets a bond holding
+    /// alone take the whole room, which the measured pricing makes ≈ 6× today's `c_class` — at ρ = 1 a
+    /// lone 100,000 MSK bond went from T-2(a)'s 3 claims of 8k to 15. Dividing `ρ · ⌈c_ship / 2⌉` instead
+    /// keeps a lone bond at today's share at ρ = 1, and keeps the rule split-neutral (the shares of k
+    /// holders divide the same room one holder of their total stake would take whole) — where T-2(a)
+    /// itself was not: under it two bonds held up to the class's whole `c` and one bond of their total
+    /// stake `⌈c / 2⌉`. At ρ = 1 the class's holders together therefore hold at most today's per-bond
+    /// share, which is less than today's `c_class`: stage 1's "equal or less".
     fn bond_class_share_for_v1(&self, class_id: &Hash64, bond: &PalwBondKeyV2, now_daa: u64) -> Option<u64> {
         if !self.params.capacity_room_active_at(now_daa) {
             return self.bond_class_share_v1(class_id, now_daa);
         }
         let room = self.class_capacity_v1(class_id, now_daa)?;
+        let rho = u64::from(crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(self.params, now_daa));
+        let room = match self.class_capacity_shipped_v1(class_id, now_daa) {
+            Some(shipped) => room.min(rho.saturating_mul(shipped.div_ceil(2))),
+            None => room,
+        };
         let held: BTreeMap<PalwBondKeyV2, u64> = self.with_inflight_index(|index| {
             index
                 .get(class_id)
@@ -15377,6 +15435,14 @@ impl PalwPanelRateV1 {
             .map(|scaled| scaled.div_ceil(crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1))
             .unwrap_or(u128::MAX)
     }
+}
+
+/// **The shipped panel's replay a span** — `ready` seats at the reference work a span and the
+/// utilization (`palw_panel_rate_v1`'s expression below `Params::palw_capacity_verify_room`, byte for
+/// byte). Past the fence it is still read: stage 1's clamp holds F-R's measured room under ρ × this
+/// reading (rcore/cap-s1).
+pub fn palw_panel_shipped_per_span_v1(ready: u128, g: &crate::palw_model_registry_v1::PalwRegistryGlobalsV1) -> u128 {
+    ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000
 }
 
 /// **The rate rule for a reader outside the fold** (op 186, the producer's pre-check): each class's

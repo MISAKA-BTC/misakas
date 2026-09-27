@@ -1886,6 +1886,11 @@ pub fn palw_model_registry_read_v2(
     } else {
         Default::default()
     };
+    // Stage 1 (rcore/cap-s1): past F-R the fold holds the measured room under ρ × the shipped room
+    // (`panel_rate_v1`'s clamp), so the readout reads the shipped demand beside it.
+    let shipped_demand = (rate_rule && room_v2)
+        .then(|| crate::palw_state_v2::palw_panel_demand_read_v1(state, params, u32::from(g.seat_count)));
+    let rho = u128::from(crate::palw_weight_cap_v1::palw_capacity_rho_at_v1(params, tip_daa));
     let (panel_inflight_replay, panel_horizon_spans) = if rate_rule {
         (terms.values().copied().fold(0u128, u128::saturating_add).div_ceil(wt::PALW_PANEL_DEMAND_SCALE_V1), 1)
     } else {
@@ -1914,7 +1919,7 @@ pub fn palw_model_registry_read_v2(
                     ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000
                 };
                 if rate_rule {
-                    crate::palw_state_v2::palw_panel_room_read_v1(
+                    let room = crate::palw_state_v2::palw_panel_room_read_v1(
                         state,
                         params,
                         class_id,
@@ -1922,7 +1927,19 @@ pub fn palw_model_registry_read_v2(
                         ccu_of(class_id).saturating_mul(if room_v2 { pricing.replicas } else { seat_count }),
                         &owed,
                         &terms,
-                    )
+                    );
+                    match &shipped_demand {
+                        Some((shipped_owed, shipped_terms)) => room.min(crate::palw_state_v2::palw_panel_room_read_v1(
+                            state,
+                            params,
+                            class_id,
+                            crate::palw_state_v2::palw_panel_shipped_per_span_v1(ready, &g).saturating_mul(rho),
+                            ccu_of(class_id).saturating_mul(seat_count),
+                            shipped_owed,
+                            shipped_terms,
+                        )),
+                        None => room,
+                    }
                 } else {
                     wt::palw_panel_room_v1(
                         per_span,

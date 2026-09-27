@@ -11,13 +11,26 @@
 //!
 //! ```text
 //! x_c      = staged weight of c            (Created 0, Anchored 10‰, Licensed 1000‰ / S2 250‰, Final → safe)
-//! W_full   = min(raw_c, C7 ceiling)        (the ceiling is 8k's raw weight: ADR-0160 D-3)
+//! W_full   = min(raw_c, C7 ceiling) for a class on the C7 list, raw_c otherwise   (ADR-0160 D-3)
 //! X_b      = Σ x_c over b's live new-rule claims
 //! W_cap(b) = ⌊C_b / 6,500 MSK⌋ × FCW       (FCW = one genesis-target floor claim's raw weight)
 //! bounded_immature = Σ_{old-rule live claims} raw_c  +  Σ_b min(X_b, W_cap(b))
-//! reserved(c) = min(w_c, R_budget(b) − Σ reserved of b's live new-rule claims),
-//! R_budget(b) = ⌊C_b / 6,500 MSK⌋ × w_FCW
+//! reserved(c) = ⌈w_c / ρ(accepted_daa)⌉    (ρ = F-L's ramp step there; 1 where F-L is not in force)
 //! ```
+//!
+//! # Stage 1 (rcore/cap-s1): ρ is the only capacity knob
+//!
+//! The user's staged-safety plan (2026-09-26) integrates the lanes at ρ = 1 with **no claim-count
+//! increase**: every rule that admits more claims must do so through ρ, which moves only by a flag day.
+//! The lane's reservation `min(w_c, R_budget(b) − held)` (ADR-0160 v3 §5.1, `R_budget = ⌊C/6,500 MSK⌋ ×
+//! w_FCW`) raised a model class's issuance at ρ = 1 — the stage-1 state diff measured 8k at 13,000 MSK
+//! 1 → 2 claims and 2M at 13,000 / 100,000 MSK 0 → 1 — because it priced a claim's weight at 0.215 MSK
+//! whatever the weight. The reservation is therefore the weight's shipped price divided by ρ: at ρ = 1
+//! exactly today's, at ρ it buys ρ× the claims (the escrow's `⌈E/ρ⌉` floor, ADR-0160 §5.3, divides the
+//! other half the same way). Fork power is not what this prices: J-1's `W_cap` bounds it at any
+//! reservation. The withdrawn formula's helpers ([`palw_bond_weight_budget_sompi_v1`],
+//! [`palw_capped_weight_reservation_v1`]) stay for the shadow's comparison and the tests of what they
+//! computed.
 //!
 //! `bounded_immature` stays the ONE rooted scalar fork choice reads (`PalwCandidateOrderV1::new`), so
 //! the comparator is unchanged; only the value past the fence changes. The per-bond sums live in
@@ -71,7 +84,8 @@
 //!   weight falls only on a void, a slash (the cap), a redraw or a conviction.
 //! * **W-I3** — the running value equals [`palw_bounded_immature_v2`] after every block, on reorg
 //!   and at load.
-//! * **W-I4** — at every acceptance, `Σ reserved of b's live new-rule claims ≤ R_budget(b)`.
+//! * **W-I4** (stage 1) — every new-rule claim reserves `⌈w_c / ρ⌉` at its acceptance's ρ: today's
+//!   reservation at ρ = 1, never less than `w_c / ρ` at any ρ.
 //! * **W-I5** — old-rule claims are byte-identical in accounting (a dormant fence moves nothing).
 //! * **W-I6** — no underflow on slash, void or redraw.
 
@@ -101,13 +115,18 @@ pub const PALW_CAPACITY_ANCHORED_PERMILLE_V1: u16 = 10;
 /// seat's `Valid` alone), in permille of its full weight.
 pub const PALW_CAPACITY_S2_PERMILLE_V1: u16 = 250;
 
-/// **The C7 ceiling (ADR-0160 D-3): a claim's full weight never exceeds the raw weight of the heaviest
-/// ATTRIBUTABLE class, 8k** (229.86 FCW) — until ADR-0153 gives the 2M class a conviction route.
+/// **The C7 ceiling (ADR-0160 D-3): a C7 claim's full weight never exceeds the raw weight of the
+/// heaviest ATTRIBUTABLE class, 8k** (229.86 FCW) — until ADR-0153 gives the 2M class a conviction route.
 ///
-/// Applied class-blind, deliberately: a class-blind rule keeps [`palw_weight_full_v1`] a pure function of
-/// the claim record — the C7 predicate (`palw_rcore_class_is_c7_v1`) also reads `model_lifecycles`, which
-/// moves after a claim is accepted, and a weight that changes under a live claim is one the
-/// re-derivation cannot reproduce.
+/// **Applied to the classes on the C7 list only** (`Params::palw_rcore_conservative_classes`, the
+/// mirror — at testnet-12 genesis exactly the 2M row), rcore/cap-s1's stage-1 finding F2: the lane
+/// applied it class-blind, and a class-blind constant clips 8k itself whenever 8k's class target sits
+/// above the point the constant was measured at — the stage-1 state diff, at the genesis class target,
+/// measured 8k's raw weight at 2,777,853,944,832 (20× this) and its `Final` clipped to 1/20, which D-3
+/// ("capped at 8k raw weight") does not intend. The list is a params mirror, so
+/// [`palw_weight_full_v1`] stays a pure function of the params and the claim record (the reason the lane
+/// avoided `palw_rcore_class_is_c7_v1`, which also reads `model_lifecycles`); a long-D class outside the
+/// list is not capped (none is open: ADR-0152 §4-quater K-1).
 ///
 /// **It moves nothing for an attributable claim whose raw weight is at or below it — which is a fact
 /// about the work floor, not a guarantee.** A model class's pwu is `expected_attempts × derived`, with
@@ -203,10 +222,11 @@ pub fn palw_weight_cap_applies_v1(params: &PalwStateParamsV2, claim: &PalwClaimS
 }
 
 /// **W_full(c)** — the claim's full weight in `immature_contribution` units: its stored raw weight
-/// (already ADR-0069 D7-gated at acceptance) under the C7 ceiling where the fence applies, the raw
-/// weight itself where it does not.
+/// (already ADR-0069 D7-gated at acceptance) under the C7 ceiling where the fence applies and the
+/// claim's class is on the C7 list ([`PALW_CAPACITY_C7_WEIGHT_CEILING_V1`]), the raw weight itself
+/// otherwise.
 pub fn palw_weight_full_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> u128 {
-    if palw_weight_cap_applies_v1(params, claim) {
+    if palw_weight_cap_applies_v1(params, claim) && params.rcore_conservative_classes().contains(&claim.class_id) {
         claim.immature_contribution.min(PALW_CAPACITY_C7_WEIGHT_CEILING_V1)
     } else {
         claim.immature_contribution
@@ -248,7 +268,8 @@ pub fn palw_capped_weight_reservation_v1(raw_w: u128, budget: u128, held: u128) 
 /// **The weight reservation a claim accepted at `accepted_daa` on `bond` takes** — the ONE reading the
 /// fold's `apply_attempt`, the admission ceiling (`palw_admission_v2`) and the producer's headroom
 /// (`palw_producer_facts_v4`) share (ADR-0152 SR-7), so the gate can never admit a claim the ledger
-/// would record at a different number. Below the fence (every shipped preset) it is `raw_w` itself.
+/// would record at a different number. Below the fence (every shipped preset) it is `raw_w` itself;
+/// past it `⌈raw_w / ρ⌉` at `accepted_daa`'s ρ ([`palw_claim_weight_reservation_of_v1`]).
 pub fn palw_claim_weight_reservation_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -261,19 +282,31 @@ pub fn palw_claim_weight_reservation_v1(
 }
 
 /// [`palw_claim_weight_reservation_v1`] over a bond record the caller already resolved — the admission
-/// gate's bootstrap bond (a registration the parent state does not hold yet) has no row in the state,
-/// so its collateral is handed in; `held` is its index row's `reserved_w` (0 for a bond with no claim).
+/// gate's bootstrap bond (a registration the parent state does not hold yet) has no row in the state.
+/// **Stage 1 (rcore/cap-s1): `⌈raw_w / ρ⌉`** with ρ the F-L ramp's step at `accepted_daa`
+/// ([`palw_capacity_rho_at_v1`]; 1 where F-L is not in force), so the reservation is today's at ρ = 1
+/// and the bond's collateral and held reservation no longer enter it (the module's stage-1 note: the
+/// withdrawn `min(w, R_budget − held)` raised a model class's issuance at ρ = 1). The two arguments are
+/// kept so the three SR-7 sites keep one signature.
 pub fn palw_claim_weight_reservation_of_v1(
     params: &PalwStateParamsV2,
-    collateral_sompi: u64,
-    held: u128,
+    _collateral_sompi: u64,
+    _held: u128,
     raw_w: u128,
     accepted_daa: u64,
 ) -> u128 {
     if !params.capacity_weight_cap_applies_at(accepted_daa) {
         return raw_w;
     }
-    palw_capped_weight_reservation_v1(raw_w, palw_bond_weight_budget_sompi_v1(collateral_sompi), held)
+    raw_w.div_ceil(u128::from(palw_capacity_rho_at_v1(params, accepted_daa)))
+}
+
+/// **ρ in force at `daa`** — the F-L ramp's step there (`Params::palw_capacity_aggregate_liability`),
+/// at least 1; 1 where the fence is not armed or not yet active (every shipped preset). The one reading
+/// every stage-1 ρ-scaled capacity term shares: the weight reservation, the class room and the
+/// per-bond share (`palw_state_v2`'s F-R clamp).
+pub fn palw_capacity_rho_at_v1(params: &PalwStateParamsV2, daa: u64) -> u32 {
+    params.capacity_step_at(daa).map_or(1, |step| step.rho.max(1))
 }
 
 /// **The `safe_weight` a `Final` claim contributes, under the C7 ceiling (ADR-0160 D-3).** `contribution`

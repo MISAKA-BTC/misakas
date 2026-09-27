@@ -32,67 +32,16 @@
 //!
 //! Run: `cargo test -p kaspa-consensus-core --test palw_capacity_stage1_state_diff -- --nocapture`
 
-#[path = "rcore_common.rs"]
-mod common;
-use common::*;
+#[path = "capacity_stage1_common.rs"]
+mod stage1;
+use stage1::*;
 
-use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_arm_capacity_fences_v1, palw_t12_shipped_params};
-use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwVoidReasonV2, palw_bond_committed_raw_v1};
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-/// 1 MSK in sompi.
-const MSK: u64 = 100_000_000;
-/// The capacity fences' height on the armed twin — above the release's 750 (their prerequisites) and
-/// below every block the script folds (the chain starts at DAA 1,000).
-const H: u64 = 1_001;
 /// The subject producer bond.
 const SUBJECT: u64 = 90;
-/// The court challenger of the conviction stage (L-T6's bond 61).
-const CHALLENGER: u64 = 61;
 /// The three bond sizes (MSK).
 const BONDS: [u64; 3] = [13_000, 100_000, 1_000_000];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Class {
-    Floor,
-    K8,
-    M2,
-}
-
-impl Class {
-    fn label(self) -> &'static str {
-        match self {
-            Class::Floor => "floor",
-            Class::K8 => "8k",
-            Class::M2 => "2M",
-        }
-    }
-
-    /// Attempt blocks in the fill: past the largest ceiling any twin reaches (156 floor or 8k claims at
-    /// 1M by the 500‰ ceiling; the 2M row's C7 cap is one).
-    fn fill_blocks(self) -> u64 {
-        match self {
-            Class::Floor | Class::K8 => 164,
-            Class::M2 => 6,
-        }
-    }
-}
-
-/// testnet-12 as shipped for `class` (the 2M row opened by its flag-day row on both twins), and with the
-/// capacity list armed at [`H`] where `armed`.
-pub fn params_for(class: Class, armed: bool) -> Params {
-    let mut p = palw_t12_shipped_params();
-    if class == Class::M2 {
-        p.palw_class_verify_rows = Box::leak(Box::new([t12_2m_flag_day_row()]));
-        p.sync_palw_class_verify_deadline();
-        p.validate_palw_v2().expect("the 2M flag-day fixture validates on the shipped release");
-    }
-    if armed {
-        palw_t12_arm_capacity_fences_v1(&mut p, Some(ForkActivation::new(H))).expect("the capacity list over the release");
-    }
-    p
-}
 
 /// One claim's components at a stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,127 +85,6 @@ pub struct Run {
     pub windows: (u64, u64, u64),
     /// Why the fill's refused attempts were skipped (the fold's messages, first 60 characters), counted.
     pub skips: BTreeMap<String, usize>,
-}
-
-/// A [`Chain`] folded with its own blue-score counter, so several blocks may share a DAA (the fill runs
-/// four attempts a DAA) while every block stays a strict chain step. Every block is checked as
-/// `Chain::step_at` checks one: the delta re-applies and reverts, the carriage reloads under its root.
-pub struct Sim {
-    pub c: Chain,
-    blue: u64,
-    model: Option<Hash64>,
-    /// The fold's skip messages (first 60 characters), counted.
-    skips: BTreeMap<String, usize>,
-}
-
-impl Sim {
-    /// The subject's and the court's bonds, and (for a model class) the class made `Active` and its seats
-    /// ready — the same objects on both twins.
-    fn new(p: Params, class: Class, collateral: u64) -> Sim {
-        let mut c = Chain::new(p);
-        c.attribution = true;
-        let model = match class {
-            Class::Floor => None,
-            Class::K8 => Some(model_classes(&c.p).0),
-            Class::M2 => Some(model_classes(&c.p).1),
-        };
-        if let Some(class_id) = model {
-            c.room = true;
-            let honest = honest(&c.p);
-            c.s = readied(&c.sp, &activated(&c.sp, &c.s, class_id), &honest, class_id, c.daa);
-        }
-        let blue = c.daa;
-        let mut sim = Sim { c, blue, model, skips: BTreeMap::new() };
-        let daa = sim.c.daa + 1;
-        sim.block(daa, vec![bond_obj(SUBJECT, collateral * MSK), bond_obj(CHALLENGER, 400_000 * MSK), bond_obj(1, 50_000 * MSK)], None);
-        sim
-    }
-
-    /// Re-prove the genesis cards ready for the model class (testnet-12's readiness horizon).
-    fn reready(&mut self) {
-        if let Some(class_id) = self.model {
-            let honest = honest(&self.c.p);
-            self.c.s = readied(&self.c.sp, &self.c.s, &honest, class_id, self.c.daa);
-        }
-    }
-
-    /// One block at `daa` (≥ the tip's) with `objects` and, optionally, the subject's attempt `seed`.
-    /// Returns the attempt's claim id if the fold recorded it; a skip is counted, the block stands.
-    fn block(&mut self, daa: u64, objects: Vec<PalwConsensusObjectV2>, seed: Option<u64>) -> Option<Hash64> {
-        assert!(daa >= self.c.daa, "DAA never falls");
-        self.reready();
-        let c = &mut self.c;
-        let attempt = seed.map(|seed| match self.model {
-            None => {
-                let (env, key, id) = floor_attempt_of(c, SUBJECT, seed);
-                (env, key, id, floor_job_anchor(&c.p, bond_key(SUBJECT), 0x10C0 + seed))
-            }
-            Some(class_id) => {
-                let pwu = class_pwu(&c.p, &c.s, class_id, daa);
-                let (env, key, id) =
-                    junk_attempt(class_id, bond_key(SUBJECT), pubkey_of(SUBJECT), &operator_pubkey_of(SUBJECT), pwu, seed, 0x5_0000 + seed);
-                (env, key, id, Hash64::default())
-            }
-        });
-        self.blue += 1;
-        let mut e = c.extras_at(daa);
-        let (work, key) = match &attempt {
-            Some((env, key, _, anchor)) => {
-                e.own_job_anchor = *anchor;
-                (PalwBlockWorkV3::Attempt(env), *key)
-            }
-            None => (PalwBlockWorkV3::None, Hash64::default()),
-        };
-        let subsidy = if attempt.is_some() { T12_BLOCK_SUBSIDY_SOMPI } else { 0 };
-        let x = PalwBlockContextV2 { block: h(0xD1FF_0000_0000 + self.blue), daa_score: daa, blue_score: self.blue, subsidy };
-        let parent = c.s.clone();
-        let folded = fold_with(&c.p, &c.sp, &parent, &x, &objects, work, key, &e);
-        // An attempt the fold refuses at BLOCK level (the class gate's `ClassNotAdmitting`: a producer's
-        // pre-check never mines it) is counted as refused, and the block is folded without it.
-        let (child, delta, skips, attempt) = match (folded, attempt) {
-            (Ok((child, delta, skips)), attempt) => (child, delta, skips, attempt),
-            (Err(err), Some(_)) => {
-                *self.skips.entry(format!("(block) {}", err.to_string().chars().take(52).collect::<String>())).or_insert(0) += 1;
-                let e = c.extras_at(daa);
-                let (child, delta, skips) = fold_with(&c.p, &c.sp, &parent, &x, &objects, PalwBlockWorkV3::None, Hash64::default(), &e)
-                    .unwrap_or_else(|err| panic!("the block at DAA {daa} folds without the attempt: {err}"));
-                (child, delta, skips, None)
-            }
-            (Err(err), None) => panic!("the block at DAA {daa} folds: {err}"),
-        };
-        assert_eq!(apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
-        assert_eq!(revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent, "DAA {daa}: the delta reverts");
-        let reloaded =
-            PalwStateCarriageV2::from_state(&child).into_state(&c.sp, Some(child.state_root())).expect("the carriage reloads");
-        assert_eq!(reloaded, child, "DAA {daa}: reload is the state");
-        for (_, reason) in &skips {
-            *self.skips.entry(reason.chars().take(60).collect()).or_insert(0) += 1;
-        }
-        c.s = child;
-        c.daa = daa;
-        attempt.and_then(|(_, _, id, _)| c.s.claim(&id).is_some().then_some(id))
-    }
-
-    /// The next block, with `objects`.
-    fn step(&mut self, objects: Vec<PalwConsensusObjectV2>) {
-        let daa = self.c.daa + 1;
-        self.block(daa, objects, None);
-    }
-
-    /// `claim` bound to `seats` in the next block; the bind's DAA.
-    fn bind(&mut self, claim: Hash64, seats: &[(PalwBondKeyV2, Hash64)]) -> u64 {
-        let anchor = h(0xAC_0000 + self.c.daa);
-        self.step(vec![PalwConsensusObjectV2::PanelBound { claim, anchor, seats: seats_of(seats) }]);
-        assert!(matches!(self.c.claim(&claim).phase, PalwClaimPhaseV2::PanelBound { .. }), "the panel binds");
-        self.c.daa
-    }
-
-    /// `claim` licensed by a `Valid` from each of `seats` in the next block.
-    fn license(&mut self, claim: Hash64, seats: &[(PalwBondKeyV2, Hash64)], bound: u64) {
-        self.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: seats.iter().map(|(k, _)| valid(claim, *k, bound)).collect() }]);
-        assert!(matches!(self.c.claim(&claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the licence folds");
-    }
-
 }
 
 fn snap(c: &Chain, stage: &'static str, ids: &[Hash64], refused: usize) -> Snap {
@@ -326,26 +154,11 @@ fn snap(c: &Chain, stage: &'static str, ids: &[Hash64], refused: usize) -> Snap 
     }
 }
 
-/// The seats a panel of `class` binds: the floor's five genesis seats, or five ready genesis cards.
-fn panel_seats(c: &Chain, model: Option<Hash64>) -> Vec<(PalwBondKeyV2, Hash64)> {
-    match model {
-        None => c.floor_seats(),
-        Some(_) => honest_seats(&c.p, 5),
-    }
-}
-
-/// `guilty_close` of the liab suite: a court's `ExecutorGuilty` close on an arithmetic proof (the fold
-/// reads the verdict, never the proof).
-fn guilty_close(session_id: Hash64) -> PalwConsensusObjectV2 {
-    let PalwConsensusObjectV2::CourtClosed { proof, .. } = court_cleared(session_id) else { unreachable!("a close") };
-    PalwConsensusObjectV2::CourtClosed { session_id, verdict: kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty, proof }
-}
-
 /// **The scripted scenario on both twins in lockstep**: every block is folded on the shipped and the
 /// armed twin at the same DAA (a step one twin has nothing for is an empty block there), so their
 /// snapshots line up stage by stage.
 pub fn run_twins(class: Class, collateral_msk: u64) -> (Run, Run) {
-    let mut sims = [Sim::new(params_for(class, false), class, collateral_msk), Sim::new(params_for(class, true), class, collateral_msk)];
+    let mut sims = [Sim::new(params_for(class, false), class, &[(SUBJECT, collateral_msk)]), Sim::new(params_for(class, true), class, &[(SUBJECT, collateral_msk)])];
     let windows = (sims[0].c.sp.window_bind(), sims[0].c.sp.window_receipt(), sims[0].c.sp.window_challenge_at(sims[0].c.daa));
     let mut snaps: [Vec<Snap>; 2] = [Vec::new(), Vec::new()];
     let mut ids: [Vec<Hash64>; 2] = [Vec::new(), Vec::new()];
@@ -359,7 +172,7 @@ pub fn run_twins(class: Class, collateral_msk: u64) -> (Run, Run) {
     let base = sims[0].c.daa;
     for k in 0..class.fill_blocks() {
         for t in 0..2 {
-            match sims[t].block(base + 1 + k / 4, vec![], Some(0x5_1000 + k)) {
+            match sims[t].block(base + 1 + k / 4, vec![], Some((SUBJECT, 0x5_1000 + k))) {
                 Some(id) => ids[t].push(id),
                 None => refused[t] += 1,
             }
@@ -416,7 +229,7 @@ pub fn run_twins(class: Class, collateral_msk: u64) -> (Run, Run) {
     for k in 0..4u64 {
         let daa = sims[0].c.daa + 1;
         for t in 0..2 {
-            if let Some(id) = sims[t].block(daa, vec![], Some(0x5_2000 + k)) {
+            if let Some(id) = sims[t].block(daa, vec![], Some((SUBJECT, 0x5_2000 + k))) {
                 more[t].push(id);
             }
         }
@@ -471,30 +284,24 @@ pub enum Verdict {
     Unexpected,
 }
 
-/// **The findings of stage 1's state diff** — differences the armed rules make at ρ = 1 that ADR-0160
-/// (v1 + v3) does not intend, reported rather than silently allowed:
+/// **The findings of stage 1's state diff** — differences the armed rules made at ρ = 1 that ADR-0160
+/// (v1 + v3) does not intend, reported rather than silently allowed. Both first-run findings are fixed
+/// on rcore/cap-s1, so the list is empty and a new finding changes this test:
 ///
-/// * **F1 — the Valid lock (and every `G`) reads the capped reservation.** L-1's lock is priced on
-///   `G_res = palw_max_fraud_gain_v1(facts) − E + s`, whose weight term is `claim.reserved` (the
-///   collateral-unit exposure, `palw_claim_exposure_pwu_v1`). F-W caps `claim.reserved` per bond
-///   (`min(w, R_budget − held)`), so the lock loses the weight term while the fraud's Final weight
-///   gain does not shrink (J-1 caps PROVISIONAL weight; a fraudulent `Final` still adds `W_full`).
-///   Measured: an 8k Valid locks 178.25 instead of 359.42 MSK a seat; a 2M Valid 406.38 instead of
-///   22,306.09 MSK a seat. v3 §5.6 (AS-1′) says an uncredited claim is priced exactly as today. The same
-///   `G` feeds the S-tiers' `3G` and SA-7's court bound. Fix (lane D): freeze the uncapped `w` at
-///   acceptance in the price record and price `G`'s weight term on `w · W_full / raw`.
-/// * **F2 — the C7 ceiling clips 8k itself.** `PALW_CAPACITY_C7_WEIGHT_CEILING_V1` (138,892,697,241)
-///   was derived as "8k's raw weight at testnet-12's launch W₀" with one attempt a claim; at the genesis
-///   class target an 8k claim carries 20 attempts, raw 2,777,853,944,832, so F-W's D-3 ceiling cuts each
-///   8k `Final` to 1/20 of today's safe weight (D-3 caps the 2M row AT 8k's raw weight, not 8k). Fix:
-///   derive the ceiling from the 8k row's weight at the canonical work (or measure it on the live chain
-///   and re-derive) before F-W arms.
-pub const FINDINGS: [(&str, &str); 2] = [
-    ("F1", "G's weight term reads the F-W-capped reservation: Valid locks / 3G / SA-7 fall for 8k and 2M"),
-    ("F2", "the C7 ceiling (D-3) clips 8k's own Final weight at this class target"),
-];
+/// * **F1 (fixed) — the Valid lock (and every `G`) read the capped reservation.** L-1's lock is priced
+///   on `G_res`, whose weight term is `claim.reserved`; F-W's `min(w, R_budget − held)` cut an 8k Valid's
+///   lock from 359.42 to 178.25 MSK a seat and a 2M Valid's from 22,306.09 to 406.38. Fixed by stage 1's
+///   reservation `⌈w / ρ⌉` (`palw_weight_cap_v1`): at ρ = 1 it is today's `w`, so `G` and every lock are
+///   today's. At ρ > 1 `G` must read `reserved × ρ` (the stage that first arms ρ > 1 carries that).
+/// * **F2 (fixed) — the C7 ceiling clipped 8k itself.** At the genesis class target an 8k claim's raw
+///   weight is 2,777,853,944,832, twenty times `PALW_CAPACITY_C7_WEIGHT_CEILING_V1`, and the class-blind
+///   ceiling cut each 8k `Final` to 1/20. Fixed by applying the ceiling to the C7 list's classes only
+///   (`Params::palw_rcore_conservative_classes`, a params mirror, so `W_full` stays a pure function).
+pub const FINDINGS: [(&str, &str); 0] = [];
 
-/// **The differences ADR-0160 intends at ρ = 1**, by component, with the direction it names.
+/// **The differences ADR-0160 intends at ρ = 1**, by component, with the direction it names. A
+/// difference in the number of claims admitted is never one of them (the stage-1 plan: ρ = 1, no
+/// claim-count increase — and none of the rules may admit fewer on one bond alone either).
 pub fn intended(class: Class, stage: &str, component: &str, shipped: u128, armed: u128) -> Verdict {
     use Verdict::*;
     if stage == "convicted" {
@@ -518,22 +325,12 @@ pub fn intended(class: Class, stage: &str, component: &str, shipped: u128, armed
         }
     }
     match component {
-        "claim.reserved" if armed <= shipped => Intended("v3 §5.1 / v1 §4.1: J-1's capped reservation min(w, R_budget − held)"),
         "claim.commitment" | "bond.reserved_exposure" | "bond.committed" if stage == "voided" && armed > shipped => {
             Intended("v3 §5.4 / v1 §4.4 E-4: an unconvicted void keeps m_c + reserved for h_obl")
         }
-        "claim.commitment" | "bond.reserved_exposure" | "bond.committed" if armed < shipped => {
-            Intended("v3 §5.1: the capped reservation in the commitment")
-        }
         "weights.bounded_immature" if armed <= shipped => Intended("v3 §5.2 / v1 §4.2: staged weight and W_cap (J-1)"),
         "weights.safe_weight" if armed <= shipped && class == Class::M2 => Intended("v3 §5.2, D-3: the C7 Final ceiling (8k raw weight)"),
-        "weights.safe_weight" if armed <= shipped && class == Class::K8 => Finding("F2"),
-        "claims.accepted" if armed >= shipped && class != Class::Floor => Intended(
-            "v3 §5.1 J-1 reservation (w capped) and v1 §7.4 V2 room v2 (k = 2, measured speed, stake share); D-13 keeps 2M at 1",
-        ),
-        "claims.refused" if armed <= shipped && class != Class::Floor => Intended("(the refusals the extra admissions replace)"),
-        "claim.duty" if armed <= shipped => Intended("v3 §5.6 AS-1: the duty is capped by the (capped) commitment over the seats"),
-        "claim.locks" if armed < shipped => Finding("F1"),
+        "claim.duty" if armed <= shipped => Intended("v3 §5.6 AS-1: the duty is capped by the commitment over the seats"),
         _ => Unexpected,
     }
 }
@@ -681,7 +478,8 @@ fn render(class: Class, collateral_msk: u64, shipped: &Run, armed: &Run, d: &[Di
 /// **Stage 1's gate (a): the ρ = 1 state diff**, over {floor, 8k, 2M} × {13k, 100k, 1M}. Every
 /// difference is classed; the test fails on any `Unexpected` one and prints the table with
 /// `--nocapture`. Pinned beside it: the escrow slot is `E` on both twins at every stage short of the
-/// conviction (ρ = 1 credits nothing); the floor admits exactly as many claims on both twins; the 2M row
+/// conviction (ρ = 1 credits nothing); every class admits and refuses exactly as many claims on both
+/// twins at every stage (the stage-1 plan's "no claim-count increase"); the 2M row
 /// never holds more than one claim (D-13's C7 cap); the armed bond's live weight never exceeds its
 /// `W_cap` (J-1); and the findings the diff reports are exactly [`FINDINGS`] (so a fixed finding, or a
 /// new one, changes this test).
@@ -710,8 +508,14 @@ fn stage1_the_rho_1_state_diff_shows_only_intended_differences() {
                     _ => {}
                 }
             }
-            if class == Class::Floor {
-                assert_eq!(shipped.snaps[0].accepted, armed.snaps[0].accepted, "floor @ {collateral}: no claim-count increase at ρ = 1");
+            for (s, a) in shipped.snaps.iter().zip(&armed.snaps) {
+                assert_eq!(
+                    (s.accepted, s.refused),
+                    (a.accepted, a.refused),
+                    "{} @ {collateral} [{}]: no claim-count change at ρ = 1",
+                    class.label(),
+                    s.stage
+                );
             }
             if class == Class::M2 {
                 for run in [&shipped, &armed] {
