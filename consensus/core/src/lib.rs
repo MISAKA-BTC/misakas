@@ -255,6 +255,7 @@ pub mod palw_fp_devnet_v3;
 pub mod palw_fp_execution_v3;
 pub mod palw_fp_interval_v1;
 pub mod palw_fp_objects_v3;
+pub mod palw_fp_v4_vectors;
 pub mod palw_freeprompt_v3;
 pub mod palw_genesis_v2;
 pub mod palw_heartbeat_v1;
