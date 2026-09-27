@@ -198,7 +198,10 @@ impl ConsensusServices {
         .with_activation_pool_fence(params.palw_activation_pool_fence().map(|pool| pool.activation))
         // Lane sink (the model sink binding, post-launch): past its height an unbound model sink is
         // refused in the header context. `None` on every shipped preset until the operator arms it.
-        .with_model_sink_bound_fence(params.palw_model_sink_bound_fence());
+        .with_model_sink_bound_fence(params.palw_model_sink_bound_fence())
+        // RFC-0001 §A.4 (FP Job V4): the V4 job's two doors, where the ruleset carries the decode-rules
+        // fence. `None` on every shipped preset, which keeps each network's transaction validity as is.
+        .with_fp_decode_rules_fence(params.palw_fp_decode_rules_fence());
 
         let pruning_point_manager = PruningPointManager::new(
             params.pruning_depth(),

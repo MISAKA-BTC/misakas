@@ -1913,6 +1913,7 @@ async fn t46g_fp_claim() {
         prompt_mode: PALW_FP_PROMPT_MODE_USER,
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
     };
     let honest = h.backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
     let (hb, tiles, ..) = base0_material_decode_v1(&honest.outcome.material).expect("decodes");

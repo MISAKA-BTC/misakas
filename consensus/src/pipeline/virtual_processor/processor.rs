@@ -563,6 +563,10 @@ pub struct VirtualStateProcessor {
     /// the acceptance rehearsal, the fold (through the extras' ladder) and the court's shape all
     /// read it through that, so a node cannot admit a move its fold refuses.
     pub(super) palw_held_context: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0082 D10/D11 + RFC-0001 §A.4: `Params::palw_fp_decode_rules_fence()`** — the height
+    /// from which a new free-prompt job is V4 only (and below which it is V3 only), read by the
+    /// extraction walk at the accepting block's DAA. `None` on every shipped preset.
+    pub(super) palw_fp_decode_rules: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1121,6 +1125,7 @@ impl VirtualStateProcessor {
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
+            palw_fp_decode_rules: params.palw_fp_decode_rules_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
@@ -6763,6 +6768,7 @@ impl VirtualStateProcessor {
             self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
             self.palw_held_context_at(block_daa),
             self.palw_prompt_ids_form_at(block_daa),
+            self.palw_fp_decode_rules_at(block_daa),
             Self::verify_mldsa87_with_context_bool,
         )
     }
@@ -12031,6 +12037,17 @@ impl VirtualStateProcessor {
         self.palw_held_context.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **RFC-0001 §A.4, resolved in exactly one place**: which free-prompt job versions the
+    /// extraction walk admits at `daa_score`.
+    pub(super) fn palw_fp_decode_rules_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1 {
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::at(
+            self.palw_fp_decode_rules
+                .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+                .map(|fence| fence.daa_score()),
+            daa_score,
+        )
+    }
+
     /// **ADR-0099 Decision 5 / ADR-0100, resolved in exactly one place**, for the DA court's
     /// reason. The fold does not read this: it reads the ladder [`Self::palw_transition_extras_at`]
     /// carries, which is `Some` exactly when this is true.
@@ -13619,6 +13636,10 @@ impl VirtualStateProcessor {
             // standard transaction.
             self.palw_held_context_at(block_daa),
             self.palw_prompt_ids_form_at(block_daa),
+            // RFC-0001 §A.4 at the ACCEPTING block: V3 jobs below `Params::palw_fp_decode_rules`,
+            // V4 jobs from it. A V3 claim accepted before the fence is already state and keeps
+            // the V3 verifier; this decides only what a new commitment may be.
+            self.palw_fp_decode_rules_at(block_daa),
             // Who authored the commitment. Unverified, a 0x4a transaction from any stranger created
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.
             Self::verify_mldsa87_with_context_bool,

@@ -39,6 +39,7 @@
 
 use crate::Hash64;
 use crate::palw_attempt_v2::PALW_ATTEMPT_V2_L1_TAG_BYTES;
+use crate::palw_decode_pipeline_v4::DecodeConfigV4;
 use crate::tx::TransactionOutpoint;
 use blake2b_simd::Params;
 
@@ -51,6 +52,15 @@ use blake2b_simd::Params;
 /// identity the executor signed, is a seed the executor can change after the fact.
 /// A node on the old wire cannot decode the new payload, and must not.
 pub const PALW_FP_V3_VERSION: u16 = 5;
+
+/// **RFC-0001 §A.4: the FP Job V4 version** — a [`PalwFreePromptJobV3`] at this version is a
+/// `PalwFreePromptJobV4`: every V3 field, then [`DecodeConfigV4`], hashed under its own domain
+/// ([`fp_job_id_v4`]). Not 6: version 6 is ADR-0096 Decision 8's constraint job, named and
+/// unbuilt, and a version is never reused. Admitted only past `Params::palw_fp_decode_rules`
+/// ([`PalwFpDecodeRulesV1`]); every other wrapper (payload, commitment, worker result) keeps
+/// [`PALW_FP_V3_VERSION`] because its own layout does not change — the job it carries says which
+/// job it is.
+pub const PALW_FP_V4_VERSION: u16 = 7;
 
 /// **The widest `work_leaves` any RULESET may make prosecutable** — the bound a caller that holds
 /// no bundle uses, and the only honest one for a context-free door (ADR-0082 Decision 1).
@@ -90,6 +100,9 @@ pub const PALW_FP_PRIVACY_PUBLIC_DA: u8 = 1;
 pub const PALW_FP_PRIVACY_PANEL_DA: u8 = 2;
 
 pub const PALW_FP_V3_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-v3/job-id/v1";
+/// **RFC-0001 §A.4: the V4 job id's domain** — a different tag from the V3 job id's, so no V4 job
+/// can ever hash to a V3 job's id whatever its bytes.
+pub const PALW_FP_V4_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-v4/job-id/v1";
 /// **v2, because the commitment gained `execution_root`.** The golden-vector rule this module
 /// states — "a field addition moves these bytes, and moving them is a NEW object family (a new
 /// domain suffix), never an in-place edit" — is followed rather than waived: a v1 claim id and a
@@ -136,6 +149,7 @@ pub const PALW_FP_V3_DOMAIN_POOLED_RECEIPT_KEY: &[u8] = b"misaka-palw/fp-v3/pool
 /// Every domain this module keys, so a duplicate is a test failure rather than a silent collision.
 pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_DOMAIN_JOB_ID,
+    PALW_FP_V4_DOMAIN_JOB_ID,
     PALW_FP_V3_DOMAIN_CLAIM_ID,
     PALW_FP_V3_DOMAIN_QUANTUM_TICKET,
     PALW_FP_V3_DOMAIN_SPEND_ID,
@@ -231,7 +245,15 @@ fn canonical_id(domain: &[u8], object_bytes: &[u8]) -> Hash64 {
 /// identity, never in the token stream — so PALW on or off, the model consumes byte-identical
 /// input and the user's answer cannot depend on mining metadata. The legacy VLT executor's
 /// DAA-suffix (`new_job_input`) must never be ported to this path.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+///
+/// **One Rust type carries both job versions** (RFC-0001 §A.4). At [`PALW_FP_V3_VERSION`] it is
+/// the V3 job, byte for byte as it always was (`decode` is `None` and nothing is written for it).
+/// At [`PALW_FP_V4_VERSION`] it IS `PalwFreePromptJobV4` — every V3 field, then `decode` — and
+/// its borsh is exactly that concatenation (`job_v4_encoding.json` pins it). Carrying V4 in the
+/// same type is what lets every path that moves a job — the payload, the commitment, the worker
+/// frames, the seat's material, the answer — move a V4 job without a second copy of each: the
+/// version the bytes carry decides whether the tail is read.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwFreePromptJobV3 {
     pub version: u16,
     /// The network's domain separator — the same value the attempt lane binds, so a testnet job
@@ -313,12 +335,127 @@ pub struct PalwFreePromptJobV3 {
     /// user who asked for a temperature and silently got greedy has been told a false thing about
     /// what ran.
     pub temperature_q: u32,
+    /// **RFC-0001 §A.2: the V4 decode pipeline's controls** — `Some` exactly at
+    /// [`PALW_FP_V4_VERSION`] and `None` at [`PALW_FP_V3_VERSION`]; validation refuses any other
+    /// pairing ([`PalwFpV3Error::DecodeConfigVersionMismatch`]). Serialized after every V3 field
+    /// and only when present, so a V3 job's bytes are unchanged.
+    pub decode: Option<DecodeConfigV4>,
 }
 
-/// `H(canonical(job))` — every field, no exceptions.
+/// **RFC-0001 §A.4's `PalwFreePromptJobV4`**: a [`PalwFreePromptJobV3`] at
+/// [`PALW_FP_V4_VERSION`], whose borsh is every V3 field followed by its [`DecodeConfigV4`].
+pub type PalwFreePromptJobV4 = PalwFreePromptJobV3;
+
+impl borsh::BorshSerialize for PalwFreePromptJobV3 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        borsh::BorshSerialize::serialize(&self.version, writer)?;
+        borsh::BorshSerialize::serialize(&self.network_domain, writer)?;
+        borsh::BorshSerialize::serialize(&self.class_id, writer)?;
+        borsh::BorshSerialize::serialize(&self.executor_bond, writer)?;
+        borsh::BorshSerialize::serialize(&self.executor_pubkey, writer)?;
+        borsh::BorshSerialize::serialize(&self.operator_id, writer)?;
+        borsh::BorshSerialize::serialize(&self.anchor_block, writer)?;
+        borsh::BorshSerialize::serialize(&self.anchor_daa, writer)?;
+        borsh::BorshSerialize::serialize(&self.job_nonce, writer)?;
+        borsh::BorshSerialize::serialize(&self.tokenizer_id, writer)?;
+        borsh::BorshSerialize::serialize(&self.prompt_token_ids_hash, writer)?;
+        borsh::BorshSerialize::serialize(&self.prompt_tokens, writer)?;
+        borsh::BorshSerialize::serialize(&self.decode_token_limit, writer)?;
+        borsh::BorshSerialize::serialize(&self.max_context_tokens, writer)?;
+        borsh::BorshSerialize::serialize(&self.privacy_mode, writer)?;
+        borsh::BorshSerialize::serialize(&self.prompt_mode, writer)?;
+        borsh::BorshSerialize::serialize(&self.sampling_seed, writer)?;
+        borsh::BorshSerialize::serialize(&self.temperature_q, writer)?;
+        // The V4 tail, written exactly when it is present. Never an error: an id is computed over
+        // whatever the struct holds, and a job whose version and tail disagree is refused by
+        // validation (`DecodeConfigVersionMismatch`), not by a panic in a hash.
+        if let Some(decode) = &self.decode {
+            borsh::BorshSerialize::serialize(decode, writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let version: u16 = borsh::BorshDeserialize::deserialize_reader(reader)?;
+        let mut job = PalwFreePromptJobV3 {
+            version,
+            network_domain: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            class_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            executor_bond: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            executor_pubkey: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            operator_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            anchor_block: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            anchor_daa: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            job_nonce: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            tokenizer_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            prompt_token_ids_hash: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            prompt_tokens: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            decode_token_limit: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            max_context_tokens: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            privacy_mode: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            prompt_mode: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            sampling_seed: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            temperature_q: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            decode: None,
+        };
+        // The version decides whether the tail exists: a V3 job's bytes end at `temperature_q`.
+        if version == PALW_FP_V4_VERSION {
+            job.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
+        }
+        Ok(job)
+    }
+}
+
+impl PalwFreePromptJobV3 {
+    /// This job as a V4 job under `decode`: [`PALW_FP_V4_VERSION`] and the tail set.
+    pub fn into_v4(mut self, decode: DecodeConfigV4) -> Self {
+        self.version = PALW_FP_V4_VERSION;
+        self.decode = Some(decode);
+        self
+    }
+
+    /// Is this a V4 job (RFC-0001 §A.4)?
+    pub fn is_v4(&self) -> bool {
+        self.version == PALW_FP_V4_VERSION
+    }
+
+    /// The job's ADR-0082 Decision 11 sampler inputs.
+    pub fn sampling_v2(&self) -> crate::palw_decode_select_v2::PalwDecodeSamplingV2 {
+        crate::palw_decode_select_v2::PalwDecodeSamplingV2 { seed: self.sampling_seed, temperature_q: self.temperature_q }
+    }
+
+    /// **The decoder this job's committed tokens obey** — the V3 rule for a V3 job, RFC-0001
+    /// §A.3's pipeline for a V4 job — to the job's budget. What every engine's decode loop, every
+    /// seat's replay and the gateway's display rule drive (`PalwFpDecoderV1`).
+    pub fn decoder_v1(&self) -> crate::palw_decode_pipeline_v4::PalwFpDecoderV1 {
+        match (&self.decode, self.is_v4()) {
+            (Some(decode), true) => {
+                crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v4(decode.clone(), self.sampling_v2(), self.decode_token_limit)
+            }
+            _ => crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v3(self.sampling_v2(), self.decode_token_limit),
+        }
+    }
+}
+
+/// `H(canonical(job))` — every field, no exceptions — **under the domain of the job's own
+/// version**: a V4 job ([`PALW_FP_V4_VERSION`]) is [`fp_job_id_v4`], every other job the V3 id.
+/// The one job-id function every path calls (the trace binding, the seat's anchor, the court's
+/// context), so a V4 job is named by its V4 id everywhere without a second spelling.
 pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
+    if job.version == PALW_FP_V4_VERSION {
+        return fp_job_id_v4(job);
+    }
     let bytes = borsh::to_vec(job).expect("PalwFreePromptJobV3 is borsh-serializable");
     canonical_id(PALW_FP_V3_DOMAIN_JOB_ID, &bytes)
+}
+
+/// **RFC-0001 §A.4: `fp_job_id_v4`** — the whole borsh of the V4 job (every V3 field, then the
+/// [`DecodeConfigV4`]) under [`PALW_FP_V4_DOMAIN_JOB_ID`].
+pub fn fp_job_id_v4(job: &PalwFreePromptJobV4) -> Hash64 {
+    let bytes = borsh::to_vec(job).expect("PalwFreePromptJobV4 is borsh-serializable");
+    canonical_id(PALW_FP_V4_DOMAIN_JOB_ID, &bytes)
 }
 
 /// **The prompt ids a commitment's carrier holds** — and therefore the ids the transition reads
@@ -1309,6 +1446,25 @@ pub enum PalwFpV3Error {
         "sampling (temperature_q {temperature_q}) is not armed on this network — ADR-0082 Decision 11 arms at a height through Params::palw_fp_decode_rules, and this network has none; the greedy defaults are temperature_q 0 with a zero seed"
     )]
     SamplingNotArmed { temperature_q: u32 },
+    /// **RFC-0001 §A.4: a V4 job below `Params::palw_fp_decode_rules`** (or on a network that
+    /// never arms it). The fence that admits V4 is the one that arms D10 and D11 with it.
+    #[error(
+        "a V4 free-prompt job (version 7) is not admitted here — FP Job V4 arms at a height through Params::palw_fp_decode_rules, and this network is below it (or has none)"
+    )]
+    DecodeRulesNotArmed,
+    /// **RFC-0001 §A.4: a NEW V3 job past `Params::palw_fp_decode_rules`.** From the fence only V4
+    /// jobs are admitted; a V3 claim accepted before it is verified to the end by the V3 verifier.
+    #[error(
+        "a V3 free-prompt job (version 5) is not admitted past Params::palw_fp_decode_rules — from the fence every new job is FP Job V4 (version 7)"
+    )]
+    V3JobPastDecodeRules,
+    /// The job's version and its V4 tail disagree: a V4 job without a `DecodeConfigV4`, or a V3 job
+    /// carrying one. One job, one encoding.
+    #[error("job version {version} does not match its decode config (present: {present}) — version 7 carries one, version 5 none")]
+    DecodeConfigVersionMismatch { version: u16, present: bool },
+    /// **RFC-0001 §A.2: the V4 job's `DecodeConfigV4` is not in canonical form**, by name.
+    #[error("the V4 job's decode config is not canonical: {0}")]
+    DecodeConfigNotCanonical(crate::palw_decode_pipeline_v4::PalwDecodeConfigV4Error),
     /// A mode-2 payload that carries the prompt anyway. Refused rather than trimmed: an executor
     /// that published a prompt the user asked to keep off chain has already done the harm, and a
     /// claim built on that payload would be one the chain quietly blessed.
@@ -1374,6 +1530,91 @@ pub enum PalwFpV3Error {
     BeaconNotFirst { prev_attempt_daa: u64, slot: u64 },
 }
 
+/// **Which free-prompt job versions a caller admits** — `Params::palw_fp_decode_rules` as the
+/// validators need it (RFC-0001 §A.4, ADR-0082 D10/D11).
+///
+/// * [`Self::Dormant`] — below the fence, or a network that never arms it: V3 jobs only, and the
+///   sampler's fields must be the greedy defaults (`SamplingNotArmed`). Every pre-V4 entry point
+///   passes this, which is exactly the rule they applied before.
+/// * [`Self::Scheduled`] — a HEIGHT-FREE door on a ruleset that schedules the fence (transaction
+///   isolation): both versions pass the shape rules, and the header-context door
+///   (`palw_fp_job_version_refusal_v1`) decides which one the containing block's height takes. A
+///   build that schedules the fence and one that does not therefore agree on every transaction
+///   before the fence.
+/// * [`Self::Active`] — at or past the fence: V4 jobs only. A V3 claim accepted before the fence
+///   is never re-validated by an admission path; it runs to the end under the V3 verifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwFpDecodeRulesV1 {
+    Dormant,
+    Scheduled,
+    Active,
+}
+
+impl PalwFpDecodeRulesV1 {
+    /// The rule at `daa_score` under the fence's height (`Params::palw_fp_decode_rules_fence`).
+    pub fn at(fence_daa: Option<u64>, daa_score: u64) -> Self {
+        match fence_daa {
+            Some(at) if daa_score >= at => Self::Active,
+            _ => Self::Dormant,
+        }
+    }
+
+    /// The height-free door's rule: `Scheduled` wherever the ruleset carries the fence at all.
+    pub fn door(fence_daa: Option<u64>) -> Self {
+        if fence_daa.is_some() { Self::Scheduled } else { Self::Dormant }
+    }
+
+    /// Does this rule admit a V3 job?
+    pub fn admits_v3(self) -> bool {
+        !matches!(self, Self::Active)
+    }
+
+    /// Does this rule admit a V4 job?
+    pub fn admits_v4(self) -> bool {
+        !matches!(self, Self::Dormant)
+    }
+
+    /// **The version rule on one job** — the check every validator runs first after the version
+    /// itself: which versions this rule admits, the V4 tail's pairing and canonical form, and the
+    /// sampler's arming (a V3 job is greedy; a V4 job carries ADR-0082 Decision 11 with it).
+    pub fn check_job(self, job: &PalwFreePromptJobV3) -> Result<(), PalwFpV3Error> {
+        match job.version {
+            PALW_FP_V3_VERSION => {
+                if job.decode.is_some() {
+                    return Err(PalwFpV3Error::DecodeConfigVersionMismatch { version: job.version, present: true });
+                }
+                if !self.admits_v3() {
+                    return Err(PalwFpV3Error::V3JobPastDecodeRules);
+                }
+                if job.temperature_q != crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY
+                    || job.sampling_seed != crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY
+                {
+                    return Err(PalwFpV3Error::SamplingNotArmed { temperature_q: job.temperature_q });
+                }
+                Ok(())
+            }
+            PALW_FP_V4_VERSION => {
+                let Some(decode) = &job.decode else {
+                    return Err(PalwFpV3Error::DecodeConfigVersionMismatch { version: job.version, present: false });
+                };
+                if !self.admits_v4() {
+                    return Err(PalwFpV3Error::DecodeRulesNotArmed);
+                }
+                decode.validate_canonical().map_err(PalwFpV3Error::DecodeConfigNotCanonical)?;
+                // The seed decides nothing at a greedy temperature, so a non-zero one there is a
+                // second encoding of one job (the V3 rule's reason, kept).
+                if job.temperature_q == crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY
+                    && job.sampling_seed != crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY
+                {
+                    return Err(PalwFpV3Error::SamplingNotArmed { temperature_q: job.temperature_q });
+                }
+                Ok(())
+            }
+            other => Err(PalwFpV3Error::UnsupportedVersion { got: other, expected: PALW_FP_V3_VERSION }),
+        }
+    }
+}
+
 impl PalwFreePromptCommitmentEnvelopeV3 {
     /// Stateless admission: everything checkable without chain state, in refusal-first order.
     /// The CU claim is recomputed under the bundle's weights and a mismatch is named — never
@@ -1382,7 +1623,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         // **`PanelDa` disarmed, because a caller that passed no arming has armed nothing**
         // (ADR-0077 Decision 16). This entry predates the mode; every one of its callers refuses
         // mode 2 today and keeps refusing it until it starts passing the answer.
-        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
+        self.validate_v3(Some(network_domain), false, PalwFpDecodeRulesV1::Dormant, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The same rules **under this network's arming** — the entry that can admit a `PanelDa`
@@ -1390,7 +1631,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// at the point the caller is judging; a caller that cannot resolve it calls
     /// [`Self::validate_stateless_v3`] and gets the disarmed answer.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
+        self.validate_v3(Some(network_domain), panel_da_armed, PalwFpDecodeRulesV1::Dormant, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The same rules **under this network's arming AND its ruleset's ladder** (ADR-0082
@@ -1404,7 +1645,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         max_step_leaf_count: u64,
         ruleset_caps: Option<(u32, u32)>,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count, ruleset_caps)
+        self.validate_v3(Some(network_domain), panel_da_armed, PalwFpDecodeRulesV1::Dormant, max_step_leaf_count, ruleset_caps)
     }
 
     /// **The half a context-free caller can run: everything except the two checks that need the
@@ -1436,13 +1677,13 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// Mode 2's own shape rule, that the payload carries no ids, needs no arming at all and is
     /// checked under both answers.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
+        self.validate_v3(None, false, PalwFpDecodeRulesV1::Dormant, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The shape half under a known arming — the door on a network that carries the rule, and
     /// what a builder asks before it spends an inference on a job the chain will refuse.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
+        self.validate_v3(None, panel_da_armed, PalwFpDecodeRulesV1::Dormant, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The shape half **under a ruleset's ladder** — for a builder that holds the bundle and wants
@@ -1457,20 +1698,46 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         max_step_leaf_count: u64,
         ruleset_caps: Option<(u32, u32)>,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count, ruleset_caps)
+        self.validate_v3(None, panel_da_armed, PalwFpDecodeRulesV1::Dormant, max_step_leaf_count, ruleset_caps)
+    }
+
+    /// [`Self::validate_stateless_under_ruleset_v3`] **under the network's decode rules**
+    /// (RFC-0001 §A.4): `decode_rules` is [`PalwFpDecodeRulesV1::at`] the judged DAA, so below
+    /// `Params::palw_fp_decode_rules` this is the V3 entry exactly and past it only V4 jobs pass.
+    pub fn validate_stateless_under_ruleset_v4(
+        &self,
+        network_domain: Hash64,
+        panel_da_armed: bool,
+        max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
+        decode_rules: PalwFpDecodeRulesV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), panel_da_armed, decode_rules, max_step_leaf_count, ruleset_caps)
+    }
+
+    /// [`Self::validate_shape_under_ruleset_v3`] under the network's decode rules — the door
+    /// passes [`PalwFpDecodeRulesV1::door`], a builder the rule at the DAA it will land at.
+    pub fn validate_shape_under_ruleset_v4(
+        &self,
+        panel_da_armed: bool,
+        max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
+        decode_rules: PalwFpDecodeRulesV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed, decode_rules, max_step_leaf_count, ruleset_caps)
     }
 
     fn validate_v3(
         &self,
         network_domain: Option<Hash64>,
         panel_da_armed: bool,
-        decode_rules_armed: bool,
+        decode_rules: PalwFpDecodeRulesV1,
         max_step_leaf_count: u64,
         ruleset_caps: Option<(u32, u32)>,
     ) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
-        if job.version != PALW_FP_V3_VERSION {
+        if job.version != PALW_FP_V3_VERSION && job.version != PALW_FP_V4_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: job.version, expected: PALW_FP_V3_VERSION });
         }
         if let Some(network_domain) = network_domain
@@ -1503,12 +1770,12 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         // so a non-zero seed with a greedy temperature is refused too: it is a field claiming to
         // decide something that decides nothing, and admitting it would let two jobs with the same
         // execution carry two different ids.
-        if !decode_rules_armed
-            && (job.temperature_q != crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY
-                || job.sampling_seed != crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY)
-        {
-            return Err(PalwFpV3Error::SamplingNotArmed { temperature_q: job.temperature_q });
-        }
+        //
+        // RFC-0001 §A.4: the rule is now per job VERSION — a V3 job is greedy and admitted below
+        // the fence; a V4 job carries Decision 11 with it and is admitted only past the fence
+        // (or at a height-free door that schedules it). `PalwFpDecodeRulesV1::check_job` is the
+        // one spelling.
+        decode_rules.check_job(job)?;
         if job.executor_pubkey.is_empty() {
             return Err(PalwFpV3Error::MissingPublicKey);
         }
@@ -1754,7 +2021,11 @@ pub enum PalwFpWorkerInputV3 {
 /// runtime it is not), plus the input. The worker builds the job, binds the trace to
 /// [`fp_job_id_v3`] — a value a replayer can rebuild from CHAIN data alone, which is the whole
 /// requirement — and hands the job back for the gateway to cross-check field by field.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+///
+/// **A V4 request** ([`PALW_FP_V4_VERSION`], RFC-0001 §A.4) carries the job's [`DecodeConfigV4`]
+/// as a tail after every V3 field, exactly as the job does; the worker copies it onto the job
+/// verbatim, and a V3 request's bytes are unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwFpWorkerRequestV3 {
     pub version: u16,
     pub network_domain: Hash64,
@@ -1788,6 +2059,72 @@ pub struct PalwFpWorkerRequestV3 {
     pub runtime_class_id: Hash64,
     pub shape_profile_id: Hash64,
     pub trace_scheme_id: Hash64,
+    /// RFC-0001 §A.2: `Some` exactly on a V4 request, copied onto the job verbatim.
+    pub decode: Option<DecodeConfigV4>,
+}
+
+impl borsh::BorshSerialize for PalwFpWorkerRequestV3 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        borsh::BorshSerialize::serialize(&self.version, writer)?;
+        borsh::BorshSerialize::serialize(&self.network_domain, writer)?;
+        borsh::BorshSerialize::serialize(&self.class_id, writer)?;
+        borsh::BorshSerialize::serialize(&self.executor_bond, writer)?;
+        borsh::BorshSerialize::serialize(&self.executor_pubkey, writer)?;
+        borsh::BorshSerialize::serialize(&self.operator_id, writer)?;
+        borsh::BorshSerialize::serialize(&self.anchor_block, writer)?;
+        borsh::BorshSerialize::serialize(&self.anchor_daa, writer)?;
+        borsh::BorshSerialize::serialize(&self.job_nonce, writer)?;
+        borsh::BorshSerialize::serialize(&self.decode_token_limit, writer)?;
+        borsh::BorshSerialize::serialize(&self.max_context_tokens, writer)?;
+        borsh::BorshSerialize::serialize(&self.privacy_mode, writer)?;
+        borsh::BorshSerialize::serialize(&self.prompt_mode, writer)?;
+        borsh::BorshSerialize::serialize(&self.sampling_seed, writer)?;
+        borsh::BorshSerialize::serialize(&self.temperature_q, writer)?;
+        borsh::BorshSerialize::serialize(&self.input, writer)?;
+        borsh::BorshSerialize::serialize(&self.model_profile_id, writer)?;
+        borsh::BorshSerialize::serialize(&self.runtime_manifest_hash, writer)?;
+        borsh::BorshSerialize::serialize(&self.runtime_class_id, writer)?;
+        borsh::BorshSerialize::serialize(&self.shape_profile_id, writer)?;
+        borsh::BorshSerialize::serialize(&self.trace_scheme_id, writer)?;
+        if let Some(decode) = &self.decode {
+            borsh::BorshSerialize::serialize(decode, writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl borsh::BorshDeserialize for PalwFpWorkerRequestV3 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let version: u16 = borsh::BorshDeserialize::deserialize_reader(reader)?;
+        let mut request = PalwFpWorkerRequestV3 {
+            version,
+            network_domain: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            class_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            executor_bond: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            executor_pubkey: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            operator_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            anchor_block: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            anchor_daa: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            job_nonce: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            decode_token_limit: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            max_context_tokens: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            privacy_mode: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            prompt_mode: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            sampling_seed: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            temperature_q: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            input: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            model_profile_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            runtime_manifest_hash: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            runtime_class_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            shape_profile_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            trace_scheme_id: borsh::BorshDeserialize::deserialize_reader(reader)?,
+            decode: None,
+        };
+        if version == PALW_FP_V4_VERSION {
+            request.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
+        }
+        Ok(request)
+    }
 }
 
 /// `H(domain ‖ len ‖ raw-frame)` — computed over the exact bytes read, echoed in the result, and
@@ -1849,8 +2186,21 @@ impl PalwFpWorkerResultV3 {
         request_hash: Hash64,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        if self.version != PALW_FP_V3_VERSION || self.job.version != PALW_FP_V3_VERSION {
+        if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
+        }
+        // The job is the request's version (V3 or V4, RFC-0001 §A.4), with the request's decode
+        // tail and sampler inputs verbatim: a worker that ran another decode config, seed or
+        // temperature bound its trace to a job id the caller never asked for.
+        if (self.job.version != PALW_FP_V3_VERSION && self.job.version != PALW_FP_V4_VERSION) || self.job.version != request.version {
+            return Err(PalwFpV3Error::UnsupportedVersion { got: self.job.version, expected: request.version });
+        }
+        if self.job.decode != request.decode
+            || self.job.sampling_seed != request.sampling_seed
+            || self.job.temperature_q != request.temperature_q
+            || self.job.prompt_mode != request.prompt_mode
+        {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the returned job's decode rule is not the request's"));
         }
         if self.request_hash != request_hash {
             return Err(PalwFpV3Error::WorkerResultMismatch("the result echoes a different request"));
@@ -2046,7 +2396,14 @@ impl PalwFpCommitmentTxPayloadV3 {
         network_domain: Hash64,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
+        self.validate_v3(
+            Some(network_domain),
+            false,
+            PalwFpDecodeRulesV1::Dormant,
+            PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+            None,
+            prompt_ids_form,
+        )
     }
 
     /// The same, **under this network's arming** — the entry the extraction walk uses, and the
@@ -2058,7 +2415,14 @@ impl PalwFpCommitmentTxPayloadV3 {
         panel_da_armed: bool,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
+        self.validate_v3(
+            Some(network_domain),
+            panel_da_armed,
+            PalwFpDecodeRulesV1::Dormant,
+            PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+            None,
+            prompt_ids_form,
+        )
     }
 
     /// The same **under the ruleset's ladder as well as its arming** — what the extraction walk
@@ -2072,14 +2436,21 @@ impl PalwFpCommitmentTxPayloadV3 {
         ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+        self.validate_v3(
+            Some(network_domain),
+            panel_da_armed,
+            PalwFpDecodeRulesV1::Dormant,
+            max_step_leaf_count,
+            ruleset_caps,
+            prompt_ids_form,
+        )
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
     /// why the transaction validator can only run this one, and why the arming it asks is the
     /// height-free one.
     pub fn validate_shape_v3(&self, prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
+        self.validate_v3(None, false, PalwFpDecodeRulesV1::Dormant, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The shape half under a known arming — `Params::palw_panel_da_admissible` at the door.
@@ -2088,7 +2459,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         panel_da_armed: bool,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
+        self.validate_v3(None, panel_da_armed, PalwFpDecodeRulesV1::Dormant, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The shape half under a ruleset's ladder — for a builder holding the bundle.
@@ -2099,7 +2470,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+        self.validate_v3(None, panel_da_armed, PalwFpDecodeRulesV1::Dormant, max_step_leaf_count, ruleset_caps, prompt_ids_form)
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -2119,11 +2490,38 @@ impl PalwFpCommitmentTxPayloadV3 {
             .validate_signature_v3(verify_mldsa87)
     }
 
+    /// [`Self::validate_stateless_under_ruleset_v3`] **under the network's decode rules** at the
+    /// accepting block (RFC-0001 §A.4) — what the extraction walk runs.
+    pub fn validate_stateless_under_ruleset_v4(
+        &self,
+        network_domain: Hash64,
+        panel_da_armed: bool,
+        max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        decode_rules: PalwFpDecodeRulesV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), panel_da_armed, decode_rules, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+    }
+
+    /// [`Self::validate_shape_under_ruleset_v3`] **under the network's decode rules** — the
+    /// isolation door passes [`PalwFpDecodeRulesV1::door`], a builder the rule where it lands.
+    pub fn validate_shape_under_ruleset_v4(
+        &self,
+        panel_da_armed: bool,
+        max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        decode_rules: PalwFpDecodeRulesV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed, decode_rules, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+    }
+
     fn validate_v3(
         &self,
         network_domain: Option<Hash64>,
         panel_da_armed: bool,
-        decode_rules_armed: bool,
+        decode_rules: PalwFpDecodeRulesV1,
         max_step_leaf_count: u64,
         ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
@@ -2132,7 +2530,7 @@ impl PalwFpCommitmentTxPayloadV3 {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
         let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_v3(network_domain, panel_da_armed, decode_rules_armed, max_step_leaf_count, ruleset_caps)?;
+        envelope.validate_v3(network_domain, panel_da_armed, decode_rules, max_step_leaf_count, ruleset_caps)?;
         // **`PanelDa` carries NO ids, and the check is a REQUIREMENT, not a tolerance** (ADR-0077
         // Decision 16). Placed before the canonical arm because the privacy mode decides what the
         // chain may hold and the prompt mode decides where the ids come from: a mode-2 payload
@@ -2218,6 +2616,7 @@ mod tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
         }
     }
 
@@ -2731,6 +3130,7 @@ mod tests {
             runtime_class_id: Hash64::from_u64_word(0x3),
             shape_profile_id: Hash64::from_u64_word(0x4),
             trace_scheme_id: Hash64::from_u64_word(0x5),
+            decode: None,
         };
         let request_hash = fp_worker_request_hash_v3(&borsh::to_vec(&request).unwrap());
         let result = PalwFpWorkerResultV3 {
@@ -3245,6 +3645,7 @@ mod fp_material_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
         }
     }
 
@@ -3456,6 +3857,7 @@ mod fp_answer_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
         }
     }
 
@@ -3774,5 +4176,338 @@ mod fp_answer_tests {
         let b =
             PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0x51), prefix_tokens: 80, class_id: Hash64::from_u64_word(0xC2) };
         assert_ne!(a.id(), b.id());
+    }
+}
+
+/// **RFC-0001 §A.4 — FP Job V4 on the wire** (G3): the V3 bytes unchanged, the V4 bytes every V3
+/// field then the decode config, the V4 id under its own domain, the version rule by height, and
+/// `consensus-vectors/fp-v4/job_v4_encoding.json` (input fields → borsh → job hash).
+#[cfg(test)]
+mod job_v4_tests {
+    use super::*;
+    use crate::palw_decode_pipeline_v4::{PALW_DECODE_V4_BIAS_BAN_Q, PalwDecodeConfigV4Error};
+    use crate::tx::TransactionId;
+    use std::str::FromStr;
+
+    const JOB_V4_ENCODING: &str = include_str!("../../../consensus-vectors/fp-v4/job_v4_encoding.json");
+
+    fn v3() -> PalwFreePromptJobV3 {
+        PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0x4e45_5431),
+            class_id: Hash64::from_u64_word(0xC1A5),
+            executor_bond: TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xB0D), index: 3 },
+            executor_pubkey: vec![0xAB; 48],
+            operator_id: Hash64::from_u64_word(0x0FE),
+            anchor_block: Hash64::from_u64_word(0xA11C),
+            anchor_daa: 1_234_567,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::from_u64_word(0x70C),
+            prompt_token_ids_hash: Hash64::from_u64_word(0x1D5),
+            prompt_tokens: 17,
+            decode_token_limit: 64,
+            max_context_tokens: 512,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0u8; 32],
+            temperature_q: 0,
+            decode: None,
+        }
+    }
+
+    fn rich() -> DecodeConfigV4 {
+        DecodeConfigV4 {
+            repeat_penalty_q: 81_920,
+            penalty_window: 64,
+            frequency_penalty_q: 1 << 22,
+            presence_penalty_q: -(1 << 21),
+            logit_bias: vec![(13, 5 << 24), (151_643, PALW_DECODE_V4_BIAS_BAN_Q)],
+            stop_sequences: vec![vec![198, 198], vec![151_645]],
+        }
+    }
+
+    /// The V3 fields in declaration order, each through its own borsh — the layout the derive
+    /// produced before V4 existed.
+    fn v3_fields_bytes(job: &PalwFreePromptJobV3) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend(borsh::to_vec(&job.version).unwrap());
+        out.extend(borsh::to_vec(&job.network_domain).unwrap());
+        out.extend(borsh::to_vec(&job.class_id).unwrap());
+        out.extend(borsh::to_vec(&job.executor_bond).unwrap());
+        out.extend(borsh::to_vec(&job.executor_pubkey).unwrap());
+        out.extend(borsh::to_vec(&job.operator_id).unwrap());
+        out.extend(borsh::to_vec(&job.anchor_block).unwrap());
+        out.extend(borsh::to_vec(&job.anchor_daa).unwrap());
+        out.extend(borsh::to_vec(&job.job_nonce).unwrap());
+        out.extend(borsh::to_vec(&job.tokenizer_id).unwrap());
+        out.extend(borsh::to_vec(&job.prompt_token_ids_hash).unwrap());
+        out.extend(borsh::to_vec(&job.prompt_tokens).unwrap());
+        out.extend(borsh::to_vec(&job.decode_token_limit).unwrap());
+        out.extend(borsh::to_vec(&job.max_context_tokens).unwrap());
+        out.extend(borsh::to_vec(&job.privacy_mode).unwrap());
+        out.extend(borsh::to_vec(&job.prompt_mode).unwrap());
+        out.extend(borsh::to_vec(&job.sampling_seed).unwrap());
+        out.extend(borsh::to_vec(&job.temperature_q).unwrap());
+        out
+    }
+
+    #[test]
+    fn a_v3_job_encodes_byte_for_byte_as_before() {
+        let job = v3();
+        let bytes = borsh::to_vec(&job).unwrap();
+        assert_eq!(bytes, v3_fields_bytes(&job), "no tail on a V3 job");
+        assert_eq!(borsh::from_slice::<PalwFreePromptJobV3>(&bytes).unwrap(), job);
+        assert_eq!(fp_job_id_v3(&job), canonical_id(PALW_FP_V3_DOMAIN_JOB_ID, &bytes), "the V3 id is the V3 id");
+        // A V3 job's bytes never read a tail: trailing bytes are refused, not parsed as one.
+        let mut padded = bytes.clone();
+        padded.extend(borsh::to_vec(&DecodeConfigV4::NOOP).unwrap());
+        assert!(borsh::from_slice::<PalwFreePromptJobV3>(&padded).is_err());
+    }
+
+    #[test]
+    fn a_v4_job_is_every_v3_field_then_its_decode_config() {
+        for decode in [DecodeConfigV4::NOOP, rich()] {
+            let job = v3().into_v4(decode.clone());
+            assert!(job.is_v4());
+            let bytes = borsh::to_vec(&job).unwrap();
+            let mut expected = v3_fields_bytes(&job);
+            expected.extend(borsh::to_vec(&decode).unwrap());
+            assert_eq!(bytes, expected);
+            assert_eq!(borsh::from_slice::<PalwFreePromptJobV4>(&bytes).unwrap(), job);
+            assert_eq!(fp_job_id_v3(&job), fp_job_id_v4(&job), "the one job-id function names a V4 job by its V4 id");
+            assert_eq!(fp_job_id_v4(&job), canonical_id(PALW_FP_V4_DOMAIN_JOB_ID, &bytes));
+            assert_ne!(fp_job_id_v4(&job), canonical_id(PALW_FP_V3_DOMAIN_JOB_ID, &bytes), "domain-separated");
+            // Every field of the tail is inside the id.
+            let mut moved = job.clone();
+            moved.decode.as_mut().unwrap().penalty_window ^= 1;
+            assert_ne!(fp_job_id_v4(&moved), fp_job_id_v4(&job));
+        }
+        // The no-op V4 is not the V3 job: a different job, a different id — the same tokens (G7).
+        assert_ne!(fp_job_id_v3(&v3().into_v4(DecodeConfigV4::NOOP)), fp_job_id_v3(&v3()));
+    }
+
+    #[test]
+    fn the_decode_rules_admit_one_version_at_a_time() {
+        use PalwFpDecodeRulesV1::*;
+        let (old, new) = (v3(), v3().into_v4(rich()));
+        assert_eq!(Dormant.check_job(&old), Ok(()));
+        assert_eq!(Dormant.check_job(&new), Err(PalwFpV3Error::DecodeRulesNotArmed));
+        assert_eq!(Scheduled.check_job(&old), Ok(()));
+        assert_eq!(Scheduled.check_job(&new), Ok(()));
+        assert_eq!(Active.check_job(&old), Err(PalwFpV3Error::V3JobPastDecodeRules));
+        assert_eq!(Active.check_job(&new), Ok(()));
+        assert_eq!(PalwFpDecodeRulesV1::at(Some(1_500), 1_499), Dormant);
+        assert_eq!(PalwFpDecodeRulesV1::at(Some(1_500), 1_500), Active);
+        assert_eq!(PalwFpDecodeRulesV1::at(None, u64::MAX), Dormant);
+        assert_eq!(PalwFpDecodeRulesV1::door(Some(1_500)), Scheduled);
+        assert_eq!(PalwFpDecodeRulesV1::door(None), Dormant);
+        // A V4 job carries Decision 11: a temperature is admitted with it, a stray seed is not.
+        let hot = PalwFreePromptJobV3 { temperature_q: 1 << 24, sampling_seed: [9; 32], ..new.clone() };
+        assert_eq!(Active.check_job(&hot), Ok(()));
+        let stray = PalwFreePromptJobV3 { sampling_seed: [9; 32], ..new.clone() };
+        assert_eq!(Active.check_job(&stray), Err(PalwFpV3Error::SamplingNotArmed { temperature_q: 0 }));
+        // …and a V3 job never does, on either side of the fence.
+        let hot_v3 = PalwFreePromptJobV3 { temperature_q: 1 << 24, sampling_seed: [9; 32], ..old.clone() };
+        assert_eq!(Scheduled.check_job(&hot_v3), Err(PalwFpV3Error::SamplingNotArmed { temperature_q: 1 << 24 }));
+        // One job, one encoding: the version and the tail agree.
+        let tailless = PalwFreePromptJobV3 { decode: None, ..new.clone() };
+        assert_eq!(Active.check_job(&tailless), Err(PalwFpV3Error::DecodeConfigVersionMismatch { version: 7, present: false }));
+        let tailed = PalwFreePromptJobV3 { decode: Some(DecodeConfigV4::NOOP), ..old.clone() };
+        assert_eq!(Dormant.check_job(&tailed), Err(PalwFpV3Error::DecodeConfigVersionMismatch { version: 5, present: true }));
+        // The canonical form is refused by name.
+        let windowed = v3().into_v4(DecodeConfigV4 { penalty_window: 3, ..DecodeConfigV4::NOOP });
+        assert_eq!(
+            Active.check_job(&windowed),
+            Err(PalwFpV3Error::DecodeConfigNotCanonical(PalwDecodeConfigV4Error::PenaltyWindowWithoutPenalty { got: 3 }))
+        );
+        assert_eq!(
+            Active.check_job(&PalwFreePromptJobV3 { version: 6, ..old }),
+            Err(PalwFpV3Error::UnsupportedVersion { got: 6, expected: PALW_FP_V3_VERSION })
+        );
+    }
+
+    #[test]
+    fn the_worker_request_carries_the_tail_exactly_on_v4() {
+        let request = |version: u16, decode: Option<DecodeConfigV4>| PalwFpWorkerRequestV3 {
+            version,
+            network_domain: Hash64::from_u64_word(1),
+            class_id: Hash64::from_u64_word(2),
+            executor_bond: TransactionOutpoint { transaction_id: TransactionId::from_u64_word(3), index: 0 },
+            executor_pubkey: vec![4; 8],
+            operator_id: Hash64::from_u64_word(5),
+            anchor_block: Hash64::from_u64_word(6),
+            anchor_daa: 7,
+            job_nonce: [8; 32],
+            decode_token_limit: 9,
+            max_context_tokens: 64,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: [0; 32],
+            temperature_q: 0,
+            input: PalwFpWorkerInputV3::TokenIds(vec![1, 2, 3]),
+            model_profile_id: Hash64::from_u64_word(10),
+            runtime_manifest_hash: Hash64::from_u64_word(11),
+            runtime_class_id: Hash64::from_u64_word(12),
+            shape_profile_id: Hash64::from_u64_word(13),
+            trace_scheme_id: Hash64::from_u64_word(14),
+            decode,
+        };
+        let old = request(PALW_FP_V3_VERSION, None);
+        let new = request(PALW_FP_V4_VERSION, Some(rich()));
+        let old_bytes = borsh::to_vec(&old).unwrap();
+        let new_bytes = borsh::to_vec(&new).unwrap();
+        assert_eq!(borsh::from_slice::<PalwFpWorkerRequestV3>(&old_bytes).unwrap(), old);
+        assert_eq!(borsh::from_slice::<PalwFpWorkerRequestV3>(&new_bytes).unwrap(), new);
+        let tail = borsh::to_vec(&rich()).unwrap();
+        assert!(new_bytes.ends_with(&tail));
+        assert_eq!(new_bytes.len(), old_bytes.len() + tail.len(), "the tail is the only difference beside the version");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // job_v4_encoding.json — input fields → borsh bytes → job hash
+    // -----------------------------------------------------------------------------------------
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct EncodingFile {
+        spec: String,
+        cases: Vec<EncodingCase>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct EncodingCase {
+        name: String,
+        version: u16,
+        network_domain: String,
+        class_id: String,
+        executor_bond_txid: String,
+        executor_bond_index: u32,
+        executor_pubkey: String,
+        operator_id: String,
+        anchor_block: String,
+        anchor_daa: u64,
+        job_nonce: String,
+        tokenizer_id: String,
+        prompt_token_ids_hash: String,
+        prompt_tokens: u32,
+        decode_token_limit: u32,
+        max_context_tokens: u32,
+        privacy_mode: u8,
+        prompt_mode: u8,
+        sampling_seed: String,
+        temperature_q: u32,
+        decode: Option<DecodeConfigV4>,
+        borsh_hex: String,
+        job_id: String,
+    }
+
+    fn hex_of(bytes: &[u8]) -> String {
+        faster_hex::hex_string(bytes)
+    }
+
+    fn bytes_of<const N: usize>(hex: &str) -> [u8; N] {
+        let mut out = [0u8; N];
+        faster_hex::hex_decode(hex.as_bytes(), &mut out).expect("hex");
+        out
+    }
+
+    fn case_of(name: &str, job: &PalwFreePromptJobV3) -> EncodingCase {
+        EncodingCase {
+            name: name.to_string(),
+            version: job.version,
+            network_domain: job.network_domain.to_string(),
+            class_id: job.class_id.to_string(),
+            executor_bond_txid: job.executor_bond.transaction_id.to_string(),
+            executor_bond_index: job.executor_bond.index,
+            executor_pubkey: hex_of(&job.executor_pubkey),
+            operator_id: job.operator_id.to_string(),
+            anchor_block: job.anchor_block.to_string(),
+            anchor_daa: job.anchor_daa,
+            job_nonce: hex_of(&job.job_nonce),
+            tokenizer_id: job.tokenizer_id.to_string(),
+            prompt_token_ids_hash: job.prompt_token_ids_hash.to_string(),
+            prompt_tokens: job.prompt_tokens,
+            decode_token_limit: job.decode_token_limit,
+            max_context_tokens: job.max_context_tokens,
+            privacy_mode: job.privacy_mode,
+            prompt_mode: job.prompt_mode,
+            sampling_seed: hex_of(&job.sampling_seed),
+            temperature_q: job.temperature_q,
+            decode: job.decode.clone(),
+            borsh_hex: hex_of(&borsh::to_vec(job).unwrap()),
+            job_id: fp_job_id_v3(job).to_string(),
+        }
+    }
+
+    fn job_of(case: &EncodingCase) -> PalwFreePromptJobV3 {
+        let mut pubkey = vec![0u8; case.executor_pubkey.len() / 2];
+        faster_hex::hex_decode(case.executor_pubkey.as_bytes(), &mut pubkey).expect("hex");
+        PalwFreePromptJobV3 {
+            version: case.version,
+            network_domain: Hash64::from_str(&case.network_domain).unwrap(),
+            class_id: Hash64::from_str(&case.class_id).unwrap(),
+            executor_bond: TransactionOutpoint {
+                transaction_id: TransactionId::from_str(&case.executor_bond_txid).unwrap(),
+                index: case.executor_bond_index,
+            },
+            executor_pubkey: pubkey,
+            operator_id: Hash64::from_str(&case.operator_id).unwrap(),
+            anchor_block: Hash64::from_str(&case.anchor_block).unwrap(),
+            anchor_daa: case.anchor_daa,
+            job_nonce: bytes_of::<32>(&case.job_nonce),
+            tokenizer_id: Hash64::from_str(&case.tokenizer_id).unwrap(),
+            prompt_token_ids_hash: Hash64::from_str(&case.prompt_token_ids_hash).unwrap(),
+            prompt_tokens: case.prompt_tokens,
+            decode_token_limit: case.decode_token_limit,
+            max_context_tokens: case.max_context_tokens,
+            privacy_mode: case.privacy_mode,
+            prompt_mode: case.prompt_mode,
+            sampling_seed: bytes_of::<32>(&case.sampling_seed),
+            temperature_q: case.temperature_q,
+            decode: case.decode.clone(),
+        }
+    }
+
+    fn encoding_cases() -> Vec<EncodingCase> {
+        let hot = PalwFreePromptJobV3 { temperature_q: 3 << 23, sampling_seed: [0x77; 32], ..v3() };
+        vec![
+            case_of("v3-reference", &v3()),
+            case_of("v4-noop", &v3().into_v4(DecodeConfigV4::NOOP)),
+            case_of("v4-penalties-bias-stop", &v3().into_v4(rich())),
+            case_of("v4-sampled", &hot.into_v4(rich())),
+            case_of(
+                "v4-bans-only",
+                &v3().into_v4(DecodeConfigV4 { logit_bias: vec![(0, PALW_DECODE_V4_BIAS_BAN_Q)], ..DecodeConfigV4::NOOP }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn job_v4_encoding_is_the_vector() {
+        let file: EncodingFile = serde_json::from_str(JOB_V4_ENCODING).expect("job_v4_encoding.json parses");
+        assert!(file.cases.len() >= 5);
+        for case in &file.cases {
+            let job = job_of(case);
+            assert_eq!(hex_of(&borsh::to_vec(&job).unwrap()), case.borsh_hex, "{}: the borsh bytes", case.name);
+            assert_eq!(fp_job_id_v3(&job).to_string(), case.job_id, "{}: the job hash", case.name);
+            let mut bytes = vec![0u8; case.borsh_hex.len() / 2];
+            faster_hex::hex_decode(case.borsh_hex.as_bytes(), &mut bytes).unwrap();
+            assert_eq!(borsh::from_slice::<PalwFreePromptJobV3>(&bytes).unwrap(), job, "{}: the bytes decode back", case.name);
+        }
+        // The file is exactly what this build writes — a regeneration that changed a byte fails here.
+        let rendered =
+            serde_json::to_string_pretty(&EncodingFile { spec: file.spec.clone(), cases: encoding_cases() }).unwrap() + "\n";
+        assert_eq!(rendered, JOB_V4_ENCODING, "consensus-vectors/fp-v4/job_v4_encoding.json is stale");
+    }
+
+    /// `cargo test -p kaspa-consensus-core --lib -- --ignored regenerate_job_v4_encoding_vector`
+    #[test]
+    #[ignore]
+    fn regenerate_job_v4_encoding_vector() {
+        let file = EncodingFile {
+            spec: "RFC-0001 §A.4: FP Job V4 = every V3 field, then DecodeConfigV4; fp_job_id_v4 hashes the whole borsh under misaka-palw/fp-v4/job-id/v1 (the V3 reference case keeps the V3 domain)".to_string(),
+            cases: encoding_cases(),
+        };
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../consensus-vectors/fp-v4/job_v4_encoding.json");
+        std::fs::write(path, serde_json::to_string_pretty(&file).unwrap() + "\n").unwrap();
     }
 }

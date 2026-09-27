@@ -819,6 +819,7 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         // bind its trace to a job id nobody else can rebuild.
         sampling_seed: request.sampling_seed,
         temperature_q: request.temperature_q,
+        decode: None,
     };
     let binding = fp_job_id_v3(&job);
 
@@ -1274,6 +1275,7 @@ mod tests {
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            decode: None,
         };
         let root_of = |b: &Qwen36Backend| {
             let out = b.execute_free_prompt(&job, &prompt).expect("the free prompt runs").outcome;
@@ -1411,6 +1413,7 @@ mod tests {
             runtime_class_id: manifest.runtime_class_id,
             shape_profile_id: manifest.shape_profile_id,
             trace_scheme_id: manifest.trace_scheme_id,
+            decode: None,
         }
     }
 

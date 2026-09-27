@@ -108,6 +108,13 @@ pub struct TransactionValidator {
     /// the header context. `None` on every shipped preset (testnet-12 included until the operator
     /// arms it), which keeps every network's transaction validity byte for byte.
     palw_model_sink_bound_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **ADR-0082 D10/D11 + RFC-0001 §A.4: `Params::palw_fp_decode_rules_fence()`** (`never()` read
+    /// as absence). Isolation asks the height-free question (`.is_some()`: the V4 job's shape passes
+    /// where the ruleset schedules the fence at all); the header-context door refuses a V4
+    /// commitment below the height and a new V3 one at or past it. `None` on every shipped preset,
+    /// which keeps every network's transaction validity byte for byte.
+    palw_fp_decode_rules_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl TransactionValidator {
@@ -163,7 +170,17 @@ impl TransactionValidator {
             palw_round_lane_declared: false,
             palw_activation_pool_fence: None,
             palw_model_sink_bound_fence: None,
+            palw_fp_decode_rules_fence: None,
         }
+    }
+
+    /// ADR-0082 D10/D11 + RFC-0001 §A.4: declare the decode-rules fence
+    /// (`Params::palw_fp_decode_rules_fence()`), which admits the V4 job's shape at isolation and
+    /// splits V3 from V4 by the containing block's height in the header context.
+    pub fn with_fp_decode_rules_fence(mut self, fence: Option<kaspa_consensus_core::config::params::ForkActivation>) -> Self {
+        self.palw_fp_decode_rules_fence =
+            fence.filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never());
+        self
     }
 
     /// ADR-0152-adjacent (Activation Pool): declare the pool's fence
@@ -235,6 +252,8 @@ impl TransactionValidator {
             palw_activation_pool_fence: None,
             // Every shipped preset's door: the model sink binding is dormant.
             palw_model_sink_bound_fence: None,
+            // Every shipped preset's door: FP Job V4 is dormant, so a V4 job is refused at isolation.
+            palw_fp_decode_rules_fence: None,
         }
     }
 

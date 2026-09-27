@@ -450,6 +450,7 @@ fn main() {
             sampling_seed: [0u8; 32],
             temperature_q: 0,
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            decode: None,
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
             use kaspa_consensus_core::palw_fp_execution_v3::{
