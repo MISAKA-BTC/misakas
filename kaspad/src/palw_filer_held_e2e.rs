@@ -452,6 +452,7 @@ fn adjudicate(state: &PalwChainStateV2, sid: Hash64, proof: &PalwCourtVerdictPro
         PalwPromptIdsFormV1::MerkleV1,
         true,
         true,
+        None,
     )
 }
 

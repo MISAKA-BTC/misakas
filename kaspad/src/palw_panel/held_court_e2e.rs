@@ -480,6 +480,7 @@ fn adjudicate(state: &PalwChainStateV2, sid: Hash64, proof: &PalwCourtVerdictPro
         true,
         // ADR-0152 v3.1 §4-bis.9's decode-close door: read by a decode-token close only.
         true,
+        None,
     )
 }
 

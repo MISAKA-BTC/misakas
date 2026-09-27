@@ -4403,6 +4403,8 @@ impl VirtualStateProcessor {
             self.palw_held_context_at(daa_score),
             // ADR-0152 v3.1 addendum §4-bis.9: the court door.
             self.palw_offence_attribution_at(daa_score),
+            // RFC-0001 §A: a decode-token close does not try an FP Job V4 claim.
+            self.palw_fp_decode_rules.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()).map(|f| f.daa_score()),
         )
         .ok()
     }
@@ -8917,6 +8919,8 @@ impl VirtualStateProcessor {
                                 self.palw_held_context_at(point.daa_score),
                                 // ADR-0152 v3.1 addendum §4-bis.9: the court door.
                                 self.palw_offence_attribution_at(point.daa_score),
+                                // RFC-0001 §A: a decode-token close does not try an FP Job V4 claim.
+                                self.palw_fp_decode_rules.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()).map(|f| f.daa_score()),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -9239,6 +9243,8 @@ impl VirtualStateProcessor {
                         self.palw_held_context_at(point.daa_score),
                         // ADR-0152 v3.1 addendum §4-bis.9: the court door.
                         self.palw_offence_attribution_at(point.daa_score),
+                        // RFC-0001 §A: a decode-token close does not try an FP Job V4 claim.
+                        self.palw_fp_decode_rules.filter(|f| *f != kaspa_consensus_core::config::params::ForkActivation::never()).map(|f| f.daa_score()),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {

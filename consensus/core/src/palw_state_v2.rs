@@ -56792,6 +56792,7 @@ pub(crate) mod tests {
                 // ADR-0152 v3.1 §4-bis.9's decode-close door (`palw_offence_attribution`): read by a
                 // decode-token close only, never by an attention bottom.
                 true,
+                None,
             )
         }
 

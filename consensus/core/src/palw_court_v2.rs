@@ -186,6 +186,15 @@ pub fn court_session_id_v2(
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwCourtV2Error {
+    /// **RFC-0001 §A: a free-prompt claim accepted past `Params::palw_fp_decode_rules` commits its
+    /// tokens under its job's V4 pipeline**, which the decode-token closes (the shipped argmax,
+    /// flat and tiled) do not apply. Refused rather than tried: trying it by the argmax would
+    /// convict an honest penalized, biased, stopped or sampled token. The claim's selection is the
+    /// seats' replay to check (they replay under the claim's rule); every arithmetic close stands.
+    #[error(
+        "claim {0} commits its tokens under FP Job V4's pipeline (RFC-0001 §A.3), which the decode-token close does not apply — that close is refused for a claim accepted past Params::palw_fp_decode_rules"
+    )]
+    DecodeCloseIsNotTheClaimsRule(Hash64),
     #[error("a rung message's signature does not verify under the party it is attributed to")]
     RungSignatureInvalid,
     #[error("claim {0} does not exist at this chain point")]
@@ -822,7 +831,24 @@ pub fn adjudicate_court_close_v2(
     step_ladder: u64,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    adjudicate_court_close_v3(state, session_id, proof, court, step_ladder, prompt_ids_form, false, false)
+    adjudicate_court_close_v3(state, session_id, proof, court, step_ladder, prompt_ids_form, false, false, None)
+}
+
+/// **RFC-0001 §A: may a decode-token close try this claim?** Not a free-prompt claim accepted at or
+/// past `Params::palw_fp_decode_rules` (`fp_decode_rules_from_daa`): from the fence every new
+/// free-prompt claim is an FP Job V4 claim, whose committed token is the V4 pipeline's and not the
+/// argmax these closes compare. Every attempt, and every free-prompt claim accepted before the
+/// fence (V3, greedy), is tried exactly as before.
+pub fn palw_decode_close_admits_claim_v1(
+    claim_id: Hash64,
+    free_prompt: bool,
+    accepted_daa: u64,
+    fp_decode_rules_from_daa: Option<u64>,
+) -> Result<(), PalwCourtV2Error> {
+    if free_prompt && fp_decode_rules_from_daa.is_some_and(|from| accepted_daa >= from) {
+        return Err(PalwCourtV2Error::DecodeCloseIsNotTheClaimsRule(claim_id));
+    }
+    Ok(())
 }
 
 /// **The court door's two rules, on their own** (ADR-0152 v3.1 addendum §4-bis.9), so each is
@@ -891,6 +917,9 @@ pub fn adjudicate_court_close_v3(
     // close is then judged only at the head of its call and never acquits
     // ([`palw_decode_close_door_v1`], [`palw_decode_close_verdict_v1`]).
     decode_close_convicts_only: bool,
+    // RFC-0001 §A: `Params::palw_fp_decode_rules`'s height — a decode-token close does not try a
+    // free-prompt claim accepted at or past it ([`palw_decode_close_admits_claim_v1`]).
+    fp_decode_rules_from_daa: Option<u64>,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
@@ -898,6 +927,14 @@ pub fn adjudicate_court_close_v3(
     // the ceiling, and that is the right answer — the object was inadmissible on its face.
     check_close_cost_v2(proof, court)?;
     let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    if matches!(proof, PalwCourtVerdictProofV2::DecodeToken { .. } | PalwCourtVerdictProofV2::DecodeTokenTiled { .. }) {
+        palw_decode_close_admits_claim_v1(
+            session.claim,
+            matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+            claim.accepted_daa,
+            fp_decode_rules_from_daa,
+        )?;
+    }
     // **A close is a move IN this session, not a fresh argument beside it.**
     //
     // The session used to be resolved and thrown away (`let (_session, claim) = …`), so nothing
@@ -3276,5 +3313,23 @@ mod tests {
             bytes: vec![1],
         };
         assert!(palw_attn_move_is_admissible_v2(&other, false).is_ok(), "the fence does not reach objects it is not about");
+    }
+}
+
+#[cfg(test)]
+mod decode_close_v4_tests {
+    use super::*;
+
+    /// **RFC-0001 §A: the argmax closes do not try an FP Job V4 claim** — a free-prompt claim
+    /// accepted at or past the decode-rules fence is refused by name; one accepted before it (V3),
+    /// every attempt, and every claim on a network without the fence are tried as before.
+    #[test]
+    fn a_decode_close_does_not_try_a_claim_accepted_past_the_decode_rules() {
+        let id = Hash64::from_u64_word(0xC1);
+        assert_eq!(palw_decode_close_admits_claim_v1(id, true, 1_500, Some(1_500)), Err(PalwCourtV2Error::DecodeCloseIsNotTheClaimsRule(id)));
+        assert_eq!(palw_decode_close_admits_claim_v1(id, true, 9_999, Some(1_500)), Err(PalwCourtV2Error::DecodeCloseIsNotTheClaimsRule(id)));
+        assert_eq!(palw_decode_close_admits_claim_v1(id, true, 1_499, Some(1_500)), Ok(()), "a V3 claim keeps its verifier");
+        assert_eq!(palw_decode_close_admits_claim_v1(id, false, 9_999, Some(1_500)), Ok(()), "an attempt is greedy");
+        assert_eq!(palw_decode_close_admits_claim_v1(id, true, u64::MAX, None), Ok(()), "no fence, no V4");
     }
 }
