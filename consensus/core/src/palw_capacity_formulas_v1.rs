@@ -1219,12 +1219,12 @@ mod tests {
         assert_eq!(palw_capacity_seat_lock_liab_v1(1, Some(&PalwCapacityStepV1 { rho: 1_000, ..credited })), 1, "never 0");
         // Lane liab's AS-1: the lock term is AS-2's lock, so below q_seat a floor duty is lock_2,
         // not λ/ρ; the commitment cap still binds under a credited m_c; at q_seat both divide.
-        let (lambda, lock_2, seats) = (u128::from(E) / 5, lock, 5usize);
-        let full = u128::from(E) + 10_752_660;
+        let (lambda, lock_2, seats) = (E / 5, lock, 5usize);
+        let full = E + 10_752_660;
         let step = |q| PalwCapacityStepV1 { from_daa: 0, rho: 10, q_credit_permille: q };
         assert_eq!(palw_capacity_seat_duty_liab_v1(lambda, lock_2, full, seats, None), lambda, "today: λ binds");
         assert_eq!(palw_capacity_seat_duty_liab_v1(lambda, lock_2, full, seats, Some(&step(0))), lock_2, "q 0: lock_2, not λ/ρ");
-        let credited_commitment = u128::from(E).div_ceil(10) + 10_752_660;
+        let credited_commitment = E.div_ceil(10) + 10_752_660;
         assert_eq!(
             palw_capacity_seat_duty_liab_v1(lambda, lock_2, credited_commitment, seats, Some(&step(143))),
             credited_commitment / 5,

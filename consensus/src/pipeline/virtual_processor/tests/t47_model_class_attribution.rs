@@ -980,7 +980,7 @@ async fn t18u_a_windowed_kind3_below_the_batch_fence_is_the_bases_junk() {
     let y = open_wide_claim(&h, &mut walk, &profile, None, bucket(2));
     let honest = h.refuted(x.claim_id, x.whole());
     let point = walk.next();
-    assert_eq!(h.accepted(&walk.state, &point, &[honest.clone()]), vec![honest.clone()], "the honest Whole alone lands");
+    assert_eq!(h.accepted(&walk.state, &point, std::slice::from_ref(&honest)), vec![honest.clone()], "the honest Whole alone lands");
     // A bystander's kind-3 Whole on Y whose receipt rides in the Windowed form.
     let mask = PalwSegmentMaskV2::full(4);
     let PalwFalseValidReceiptV1::Segmented(signed) = h.v3_verdict(BYSTANDER, y.claim_id, PalwReceiptVerdictV2::Valid, walk.daa, mask) else {

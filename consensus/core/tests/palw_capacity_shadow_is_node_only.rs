@@ -77,7 +77,7 @@ fn module_imports(code: &str) -> Vec<((usize, usize), Result<Vec<String>, String
             continue;
         }
         let names: Vec<String> = tail
-            .split(|c: char| c == ',' || c == '{' || c == '}')
+            .split([',', '{', '}'])
             .filter_map(|part| {
                 let part = part.trim().trim_start_matches("::").trim();
                 let bound = match part.split_once(" as ") {

@@ -479,7 +479,7 @@ fn l_t1_an_equivocation_freezes_by_its_tier_lifts_after_window_court_and_an_inte
         c.step(&[eq]);
         let first = c.daa;
         let record = c.s.consumed_offence(&equivocation_key(q, evidence)).expect("the Eq record").clone();
-        assert_eq!(u64::from(before - collateral(&c, &q)), record.collected, "armed={armed}: Eq's tier, and only it");
+        assert_eq!(before - collateral(&c, &q), record.collected, "armed={armed}: Eq's tier, and only it");
         assert!(collateral(&c, &q) > 0, "armed={armed}: a tier conviction leaves the rest of the bond");
         assert!(live(&c, &q1), "armed={armed}: a tier freeze voids nothing");
         let wc = c.sp.window_court();
@@ -958,7 +958,7 @@ fn seat_prices(step: Option<(u32, u16)>) -> SeatPrices {
     let claim = c.claim(&x);
     let inputs = kaspa_consensus_core::palw_state_v2::palw_rcore_bind_prices_v1(&c.s, &c.sp, &c.extras_at(at), &x, &claim, seats.len(), at);
     let bound = c.bind(x, &seats);
-    let duty = u128::from(c.s.panel_duty_row_of(&x).expect("the duty row").seat_exposure);
+    let duty = c.s.panel_duty_row_of(&x).expect("the duty row").seat_exposure;
     assert_eq!(duty, inputs.duty_bind, "the fold reserves the bind's own price");
     let commitment = palw_claim_bond_reservation_v1(&c.sp, &claim).unwrap();
     assert!(duty * seats.len() as u128 <= commitment, "A-I5: seats × duty′ ≤ commitment′");
@@ -1078,7 +1078,7 @@ fn a_frozen_seat_cannot_be_bound() {
     let at = c.daa + 1;
     let x_ctx = ctx(0xCA_0000 + at, at, at, 0);
     let bind = PalwConsensusObjectV2::PanelBound { claim: x, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&seats) };
-    let (next, _, _) = c.try_fold(&c.s, &x_ctx, &[bind.clone()], PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
+    let (next, _, _) = c.try_fold(&c.s, &x_ctx, std::slice::from_ref(&bind), PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
     assert!(
         matches!(next.claim(&x).unwrap().phase, PalwClaimPhaseV2::Provisional) && next.panel(&x).is_none(),
         "past the 2026-09-23 fence a panel naming a frozen seat is inert: the claim stays Provisional"
@@ -1418,7 +1418,7 @@ fn l_t4b_a_bound_seat_is_backed_at_the_licence_under_every_step() {
             let at = c.daa + 1;
             let bind = PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xAC_0000 + c.daa), seats: seats_of(&panel) };
             let x_ctx = ctx(0xCA_0000 + at, at, at, 0);
-            let (next, _, _) = c.try_fold(&c.s, &x_ctx, &[bind.clone()], PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
+            let (next, _, _) = c.try_fold(&c.s, &x_ctx, std::slice::from_ref(&bind), PalwBlockWorkV3::None, Hash64::default()).expect("the block stands");
             if matches!(next.claim(&id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }) {
                 c.step(&[bind]);
                 bound_ids.push((id, c.daa));
@@ -1435,7 +1435,7 @@ fn l_t4b_a_bound_seat_is_backed_at_the_licence_under_every_step() {
             let at = c.daa + 1;
             let x_ctx = ctx(0xCA_0000 + at, at, at, 0);
             let obj = PalwConsensusObjectV2::ReceiptLicensedV2 { claim: *id, receipts };
-            let folded = c.try_fold(&c.s, &x_ctx, &[obj.clone()], PalwBlockWorkV3::None, Hash64::default());
+            let folded = c.try_fold(&c.s, &x_ctx, std::slice::from_ref(&obj), PalwBlockWorkV3::None, Hash64::default());
             let licenses = matches!(&folded, Ok((next, _, skips)) if skips.is_empty()
                 && matches!(next.claim(id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
             assert!(licenses, "{what}: bound claim {id} licenses (the bind never admits an unbacked seat): {:?}", folded.err());

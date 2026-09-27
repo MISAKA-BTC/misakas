@@ -626,9 +626,9 @@ fn e_t4_t4_t5_a_hundred_redraw_cycles_are_bounded_by_the_held_capacity() {
                 t.c.s
                     .claims_iter()
                     .filter(|(_, c)| c.bond == producer)
-                    .filter_map(|(_, c)| match c.phase {
-                        PalwClaimPhaseV2::Voided { voided_daa, .. } => Some(voided_daa + t.c.sp.window_receipt() + 1),
-                        _ => Some(c.accepted_daa + life),
+                    .map(|(_, c)| match c.phase {
+                        PalwClaimPhaseV2::Voided { voided_daa, .. } => voided_daa + t.c.sp.window_receipt() + 1,
+                        _ => c.accepted_daa + life,
                     })
                     .filter(|d| *d > daa)
                     .min()
@@ -918,7 +918,7 @@ fn e_t8_crossing_old_rule_claims_keep_w_plus_e() {
     }
     assert_eq!(palw_claim_obligation_release_at_v1(t.c.s.claim(&old_voided).unwrap(), &t.c.sp), None, "old rule: no E-4 hold");
     assert_eq!(before - t.c.s.reserved_exposure(&producer), old_stage, "the old-rule void released w + E at once; the new one holds");
-    let released = t.c.s.claim(&new_voided).map(|c| palw_claim_obligation_release_at_v1(c, &t.c.sp)).flatten().expect("E-4");
+    let released = t.c.s.claim(&new_voided).and_then(|c| palw_claim_obligation_release_at_v1(c, &t.c.sp)).expect("E-4");
     t.at(released + 1, vec![]);
     assert_eq!(before - t.c.s.reserved_exposure(&producer), old_stage + new_stage, "and the new one after h_obl");
     restart_everywhere(&t);

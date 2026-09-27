@@ -1032,7 +1032,6 @@ pub fn palw_capacity_shadow_with_v1(
     let mut claims_commitment_new = vec![0u128; n_steps];
     for (bond, mut ids) in by_bond {
         ids.sort_unstable();
-        let collateral = state.bond(&bond).map(|b| b.collateral).unwrap_or(0);
         let acc = accs.entry(bond).or_insert_with(|| BondAcc {
             own_new: vec![0; n_steps],
             duties_new: vec![0; n_steps],

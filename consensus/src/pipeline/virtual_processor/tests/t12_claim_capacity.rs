@@ -526,14 +526,16 @@ impl CapSim {
             if claim.rcore.escrow_released {
                 entry[3].get_or_insert(now);
             }
-            if entry[1].is_some() && !self.licensed_sent.contains(&claim_id) && !self.receipts_due.contains_key(&claim_id) {
-                if matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. }) {
-                    let delay = match &self.lic_delays {
-                        Some(table) => table[(u64::from_le_bytes(claim_id.as_byte_slice()[8..16].try_into().unwrap()) as usize) % table.len()],
-                        None => self.lic_delay,
-                    };
-                    self.receipts_due.insert(claim_id, now + delay);
-                }
+            if entry[1].is_some()
+                && !self.licensed_sent.contains(&claim_id)
+                && !self.receipts_due.contains_key(&claim_id)
+                && matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. })
+            {
+                let delay = match &self.lic_delays {
+                    Some(table) => table[(u64::from_le_bytes(claim_id.as_byte_slice()[8..16].try_into().unwrap()) as usize) % table.len()],
+                    None => self.lic_delay,
+                };
+                self.receipts_due.insert(claim_id, now + delay);
             }
         }
     }
@@ -601,10 +603,10 @@ impl CapSim {
         }
         if k8 {
             let k8_class = self.k8_class.expect("an 8k row");
-            if let Some(row) = carriage.model_lifecycles.get_mut(&k8_class) {
-                if !row.state.admits_claims() {
-                    row.state = PalwModelLifecycleV1::Probation { probes_passed: 0 };
-                }
+            if let Some(row) = carriage.model_lifecycles.get_mut(&k8_class)
+                && !row.state.admits_claims()
+            {
+                row.state = PalwModelLifecycleV1::Probation { probes_passed: 0 };
             }
             for card in &self.chain.bonds {
                 carriage
@@ -629,10 +631,10 @@ impl CapSim {
                 .seat_readiness
                 .insert((*card, k8_class), PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now, leaf_index: 0, proof_version: 2, chunks: 8 });
         }
-        if let Some(row) = carriage.model_lifecycles.get_mut(&k8_class) {
-            if !row.state.admits_claims() {
-                row.state = PalwModelLifecycleV1::Probation { probes_passed: 0 };
-            }
+        if let Some(row) = carriage.model_lifecycles.get_mut(&k8_class)
+            && !row.state.admits_claims()
+        {
+            row.state = PalwModelLifecycleV1::Probation { probes_passed: 0 };
         }
         let planted: PalwChainStateV2 = carriage.into_state(&bundle.state, None).expect("consistent");
         vp.palw_state_v2_store.write().set_tip_for_tests(sink, &planted).expect("the refresh becomes the tip");
@@ -880,12 +882,12 @@ pub(super) async fn drive(s: &mut CapSim, daa_len: u64, max_per_daa: u64) {
 
 /// A histogram (delay, count) as a table of delays, the harness's one-DAA carriage taken off.
 pub(super) fn expand(hist: &[(u64, usize)]) -> Vec<u64> {
-    hist.iter().flat_map(|(d, n)| std::iter::repeat(d.saturating_sub(1)).take(*n)).collect()
+    hist.iter().flat_map(|(d, n)| std::iter::repeat_n(d.saturating_sub(1), *n)).collect()
 }
 
 fn subjects_from_env() -> Vec<(String, u64)> {
     let spec = std::env::var("CAP_BONDS").unwrap_or_else(|_| "13000".to_string());
-    spec.split(',').map(|b| (format!("{b}"), b.parse::<u64>().expect("a bond in MSK"))).collect()
+    spec.split(',').map(|b| (b.to_string(), b.parse::<u64>().expect("a bond in MSK"))).collect()
 }
 
 fn policy_from_env() -> LicencePolicy {
@@ -1314,15 +1316,16 @@ async fn t12_capacity_collateral_study() {
             let bundle = s.chain.bundle.clone();
             let (sink, tip) = s.chain.tip_state();
             let mut carriage = PalwStateCarriageV2::from_state(&tip);
-            if *div > 1 && class != base {
-                if let Some(row) = carriage.model_lifecycles.get_mut(&class) {
-                    row.work.economic_ccu_per_claim /= *div;
-                    row.work.verification_ccu /= *div;
-                    // The registry re-derives the profile from the work (palw_model_registry_v1.rs:173, 229).
-                    let g = kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1(&bundle);
-                    row.profile.verification_window_spans = kaspa_consensus_core::palw_model_registry_v1::palw_verification_window_spans_v1(&row.work, &g);
-                    row.profile.max_inflight_claims = kaspa_consensus_core::palw_model_registry_v1::palw_max_inflight_claims_v1(&row.work, &g, true);
-                }
+            if *div > 1
+                && class != base
+                && let Some(row) = carriage.model_lifecycles.get_mut(&class)
+            {
+                row.work.economic_ccu_per_claim /= *div;
+                row.work.verification_ccu /= *div;
+                // The registry re-derives the profile from the work (palw_model_registry_v1.rs:173, 229).
+                let g = kaspa_consensus_core::palw_model_registry_v1::palw_registry_globals_of_bundle_v1(&bundle);
+                row.profile.verification_window_spans = kaspa_consensus_core::palw_model_registry_v1::palw_verification_window_spans_v1(&row.work, &g);
+                row.profile.max_inflight_claims = kaspa_consensus_core::palw_model_registry_v1::palw_max_inflight_claims_v1(&row.work, &g, true);
             }
             if let Some(v) = svp {
                 for cs in carriage.classes.values_mut() {

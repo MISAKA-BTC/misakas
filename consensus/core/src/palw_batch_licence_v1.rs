@@ -828,7 +828,7 @@ pub fn palw_assemble_batch_licence_v1(
                 };
                 seats.push(window.batched(network_domain, l, u8::try_from(seat_index).ok()?, root_index, false)?);
             }
-            (!seats.is_empty()).then(|| (PalwBatchLicenceEntryV1 { claim: *claim, anchor_hash: panel.anchor, seats }, new_roots))
+            (!seats.is_empty()).then_some((PalwBatchLicenceEntryV1 { claim: *claim, anchor_hash: panel.anchor, seats }, new_roots))
         };
         let Some((entry, new_roots)) = probe_entry(&roots, &root_of_window) else { continue };
         let mut trial_roots = roots.clone();

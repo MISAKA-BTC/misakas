@@ -657,11 +657,11 @@ mod tests {
     /// q = 0.11, P = 0.5, m = 32, L = 13,000 gives −20, −193, −1,317, −4,006, −12,999, −13,000.
     #[test]
     fn l_t6_the_campaign_ev_is_never_positive_at_p_up_to_p_star() {
-        let e = 3_200.8465;
+        let e = 3_200.846_5;
         for l in [9_602.9, 13_000.0] {
             for q in [0.0, 0.05, 0.08, 0.10, 0.11, 0.13, 0.143, 0.2, 0.3, 0.5] {
                 for rho in [1.0, 10.0, 25.0, 50.0, 100.0, 1_000.0] {
-                    let m = m_star(e, q, l).max((e / rho as f64).ceil());
+                    let m = m_star(e, q, l).max((e / rho).ceil());
                     for p in [0.0, 0.1, 0.25, 0.4, 0.5] {
                         for k in [1u32, 2, 10, 100, 1_000] {
                             let v = ev(k, q, p, e, m, l);
@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn l_t6_only_whole_bond_producer_convictions_may_be_counted_in_q() {
         use PalwConvictedOffenceV1 as O;
-        let (e, w, c0): (f64, f64, f64) = (3_200.8465, 0.1075266, 13_000.0);
+        let (e, w, c0): (f64, f64, f64) = (3_200.846_5, 0.107_526_6, 13_000.0);
         let three_g = 3.0 * (e + w);
         let (q, rho): (f64, f64) = (0.143, 10.0);
         let m = m_star(e, q, three_g).max((e / rho).ceil());

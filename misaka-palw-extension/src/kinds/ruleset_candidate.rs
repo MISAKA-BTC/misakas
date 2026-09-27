@@ -293,6 +293,19 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
                 ));
             }
         }
+        // ADR-0160 lane liab (F-L, rcore/cap-s1): a value fence — its value is the ramp's schedule, so
+        // the height is set where the preset carries one (and the fold's mirror re-synced); each later
+        // step's slot is a step of that schedule, which a height alone cannot spell.
+        "palw_capacity_aggregate_liability" => {
+            companion(&mut params.palw_capacity_aggregate_liability, name, "the ramp's schedule", at, |f, at| f.activation = at)?;
+            params.sync_palw_capacity_liability();
+        }
+        step if step.starts_with("palw_capacity_aggregate_liability_step_") => {
+            return Err(format!(
+                "`{step}` carries a companion value (the step's ρ and credit) this preset does not set — the candidate needs a \
+                 build before it needs a height"
+            ));
+        }
         other => return Err(format!("this build has no fence `{other}`: the candidate needs a build before it needs a height")),
     }
     Ok(())

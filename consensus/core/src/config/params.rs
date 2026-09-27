@@ -7682,13 +7682,13 @@ impl Params {
         };
         let at_or_below =
             |f: Option<ForkActivation>, h: ForkActivation| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= h.daa_score());
-        if let Some(fence) = batch {
-            if !(at_or_below(self.palw_rcore_plus, fence) && at_or_below(self.palw_verification_v2, fence)) {
-                return Err(Invalid(
-                    "palw_capacity_batch_licence is armed without palw_rcore_plus and palw_verification_v2 both at or below it: \
-                     a batch entry is R-core+'s coverage licence, fed to the same funnel",
-                ));
-            }
+        if let Some(fence) = batch
+            && !(at_or_below(self.palw_rcore_plus, fence) && at_or_below(self.palw_verification_v2, fence))
+        {
+            return Err(Invalid(
+                "palw_capacity_batch_licence is armed without palw_rcore_plus and palw_verification_v2 both at or below it: \
+                 a batch entry is R-core+'s coverage licence, fed to the same funnel",
+            ));
         }
         if let Some(fence) = room {
             if !(at_or_below(self.palw_rcore_plus, fence)
