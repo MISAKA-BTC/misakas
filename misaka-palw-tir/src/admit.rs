@@ -209,8 +209,9 @@ pub struct StateCkptV1 {
     pub closure: Vec<u16>,
     /// Independent groups along axis 0 (1 when the replay is not provably split).
     pub groups: u64,
-    /// One group's replay of one position: the update cones of the closure, whole, divided by the
-    /// group count.
+    /// One group's replay of one position: over the closure's update cones (a node two cones share
+    /// counted in each), the aligned nodes' cost divided among the groups (`⌈a / G⌉`) plus every
+    /// free node's whole; unsplit, the whole sum.
     pub per_position: CostV1,
     /// `C_j`: the most positions one group's replay fits the terminal ceiling for (capped).
     pub interval: u32,
@@ -514,29 +515,36 @@ enum Locality {
     Mixed,
 }
 
-fn replay_groups(p: &TirProgramV1, block: usize, closure: &[u16], cones: &[(usize, Vec<u16>)]) -> u64 {
+/// `(G, every node's locality)`: the groups a replay of `closure` splits into (1 when it does not)
+/// and, over the union of the closure's update cones, which nodes are aligned and which free — the
+/// two sums the per-group cost is made of (spec 04b §10.3).
+fn replay_groups(p: &TirProgramV1, block: usize, closure: &[u16], cones: &[(usize, Vec<u16>)]) -> (u64, Vec<Locality>) {
     let b = &p.blocks[block];
+    let mut loc = vec![Locality::Free; b.nodes.len()];
     let g = match p.states[closure[0] as usize].shape.first() {
         Some(g) if *g > 1 => *g as u64,
-        _ => return 1,
+        _ => return (1, loc),
     };
     if closure.iter().any(|s| p.states[*s as usize].shape.first().map(|d| *d as u64) != Some(g)) {
-        return 1;
+        return (1, loc);
     }
-    let mut loc = vec![Locality::Free; b.nodes.len()];
     let lead = |t: &TensorType| t.shape.first().copied() == Some(Dim::Fixed(g as u32));
     let mut nodes: Vec<usize> = cones.iter().flat_map(|(_, c)| c.iter().map(|i| *i as usize)).collect();
     nodes.sort_unstable();
     nodes.dedup();
-    let in_cones: std::collections::BTreeSet<usize> = nodes.iter().copied().collect();
     for &i in &nodes {
         let n = &b.nodes[i];
         let out_rank = n.out.rank();
+        // A closure state is aligned; a COMMIT POINT is a free leaf — the court opens it at every
+        // replayed position, whatever node it is (another member's committed `StateWrite` too);
+        // every other node an update cone reads is in that cone (a cone stops only at commit
+        // points), so it has been classified already.
         let operand = |r: Ref| -> (Locality, Cow<'_, TensorType>) {
             let t = ref_type(p, block, r);
             let l = match r {
                 Ref::State(s) if closure.contains(&s) => Locality::Aligned,
-                Ref::Node(j) if in_cones.contains(&(j as usize)) => loc[j as usize],
+                Ref::Node(j) if b.nodes[j as usize].commit => Locality::Free,
+                Ref::Node(j) => loc[j as usize],
                 _ => Locality::Free,
             };
             (l, t)
@@ -569,8 +577,10 @@ fn replay_groups(p: &TirProgramV1, block: usize, closure: &[u16], cones: &[(usiz
         };
         loc[i] = if ok { Locality::Aligned } else { Locality::Mixed };
     }
-    let all_aligned = cones.iter().all(|(w, _)| loc[*w] == Locality::Aligned);
-    if all_aligned { g } else { 1 }
+    // A free node never blocks the split — it reads no closure state, so every group can compute it
+    // from what the court opens — and a mixed one always does.
+    let split = nodes.iter().all(|i| loc[*i] != Locality::Mixed);
+    (if split { g } else { 1 }, loc)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -588,6 +598,9 @@ pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<T
     }
     if !(1..=1 << 16).contains(&inputs.h_chunk) || !inputs.h_chunk.is_power_of_two() {
         return Err(TirAdmitError::Inputs("h_chunk is not a power of two in [1, 2^16]"));
+    }
+    if inputs.ceilings.max_checkpoint_interval == 0 {
+        return Err(TirAdmitError::Inputs("max_checkpoint_interval is 0"));
     }
     let p = TirProgramV1::decode_canonical(program_bytes)?;
     let info = validate(&p)?;
@@ -688,10 +701,10 @@ pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<T
         }
         position.peak_live_bytes = position.peak_live_bytes.max(u64::try_from(peak).unwrap_or(u64::MAX));
     }
-    exceeds("position MACs", "the position", position.cost.macs, ceil.max_position_macs)?;
-    exceeds("position transcendentals", "the position", position.cost.transcendentals, ceil.max_position_transcendentals)?;
-    exceeds("state bytes", "the run", position.state_bytes, ceil.max_state_bytes)?;
-    exceeds("step leaves per position", "the position", position.step_leaves, ceil.max_step_leaves)?;
+    exceeds("max_position_macs", "the position", position.cost.macs, ceil.max_position_macs)?;
+    exceeds("max_position_transcendentals", "the position", position.cost.transcendentals, ceil.max_position_transcendentals)?;
+    exceeds("max_state_bytes", "the run", position.state_bytes, ceil.max_state_bytes)?;
+    exceeds("max_step_leaves", "the position", position.step_leaves, ceil.max_step_leaves)?;
 
     // §10.2–10.3: every commit point's cone. Admission's own work is counted as it goes and
     // refused at its ceiling before the cone is costed, so no program costs more than the cap.
@@ -699,7 +712,7 @@ pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<T
     let mut count_work = |nodes: &[u16], bi: usize, at: &dyn Fn() -> String| -> Result<(), TirAdmitError> {
         let refs: u64 = nodes.iter().map(|i| p.blocks[bi].nodes[*i as usize].inputs.len() as u64).sum();
         work = work.saturating_add(nodes.len() as u64).saturating_add(refs);
-        exceeds("cone work", at(), work, ceil.max_cone_work)
+        exceeds("max_cone_work", at(), work, ceil.max_cone_work)
     };
     let mut cones = Vec::new();
     for (bi, b) in p.blocks.iter().enumerate() {
@@ -756,10 +769,10 @@ pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<T
             };
             let at = format!("block {bi} commit point {ni}");
             let t = *cone.terminal();
-            exceeds("tile MACs", at.clone(), t.macs, ceil.max_tile_macs)?;
-            exceeds("tile transcendentals", at.clone(), t.transcendentals, ceil.max_tile_transcendentals)?;
-            exceeds("tile opened bytes", at.clone(), cone.terminal_opened_bytes(), ceil.max_tile_opened_bytes)?;
-            exceeds("tile operands", at, cone.operands, ceil.max_tile_operands)?;
+            exceeds("max_tile_macs", at.clone(), t.macs, ceil.max_tile_macs)?;
+            exceeds("max_tile_transcendentals", at.clone(), t.transcendentals, ceil.max_tile_transcendentals)?;
+            exceeds("max_tile_opened_bytes", at.clone(), cone.terminal_opened_bytes(), ceil.max_tile_opened_bytes)?;
+            exceeds("max_tile_operands", at, cone.operands, ceil.max_tile_operands)?;
             cones.push(cone);
         }
     }
@@ -807,25 +820,41 @@ pub fn tir_admit_v1(program_bytes: &[u8], inputs: &TirAdmitInputsV1) -> Result<T
             }
             let closure: Vec<u16> = (0..p.states.len() as u16).filter(|t| members >> t & 1 == 1).collect();
             let cones_of: Vec<(usize, Vec<u16>)> = closure.iter().filter_map(|t| updates[bi][*t as usize].clone()).collect();
-            let mut total = CostV1::default();
+            let (groups, loc) = replay_groups(&p, bi, &closure, &cones_of);
+            // One group's replay of one position: the aligned nodes' cost divided among the groups,
+            // and every free node whole — each group computes it for itself. Unsplit, the whole sum.
+            // Summed per update cone, so a node two cones share counts in each.
+            let (mut total, mut aligned, mut free) = (CostV1::default(), CostV1::default(), CostV1::default());
             for (_, c) in &cones_of {
                 for i in c {
-                    total.add(&node_costs[bi][*i as usize]);
+                    let cost = &node_costs[bi][*i as usize];
+                    total.add(cost);
+                    match loc[*i as usize] {
+                        Locality::Free => free.add(cost),
+                        _ => aligned.add(cost),
+                    }
                 }
             }
-            let groups = replay_groups(&p, bi, &closure, &cones_of);
-            let per_position = total.div_ceil(groups);
+            let per_position = if groups > 1 {
+                let mut split = aligned.div_ceil(groups);
+                split.add(&free);
+                split
+            } else {
+                total
+            };
             let fit = |cap: u64, per: u64| if per == 0 { u64::MAX } else { cap / per };
             let interval = fit(ceil.max_tile_macs, per_position.macs)
                 .min(fit(ceil.max_tile_transcendentals, per_position.transcendentals))
                 .min(ceil.max_checkpoint_interval as u64) as u32;
             if interval == 0 {
-                return Err(TirAdmitError::Exceeds {
-                    limit: "one position's state replay (MACs or transcendentals)",
-                    at: format!("state {} in block {bi}", s.name),
-                    value: per_position.macs.max(per_position.transcendentals),
-                    cap: ceil.max_tile_macs.min(ceil.max_tile_transcendentals),
-                });
+                // The component past its cap, MACs first (`max_checkpoint_interval ≥ 1` is an input
+                // rule, so one of the two is).
+                let (limit, value, cap) = if per_position.macs > ceil.max_tile_macs {
+                    ("max_tile_macs", per_position.macs, ceil.max_tile_macs)
+                } else {
+                    ("max_tile_transcendentals", per_position.transcendentals, ceil.max_tile_transcendentals)
+                };
+                return Err(TirAdmitError::Exceeds { limit, at: format!("the state replay of {} in block {bi}", s.name), value, cap });
             }
             let candidate = StateCkptV1 { state: j, closure, groups, per_position, interval };
             if worst.as_ref().is_none_or(|w| candidate.interval < w.interval) {

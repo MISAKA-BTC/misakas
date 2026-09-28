@@ -100,8 +100,10 @@ pub const LIBRARY_V1: &[LibraryEntry] = &[
     ("q36_rope_partial", "legacy", "q36_rope_partial"),
     ("q36_ssm_conv", "legacy", "q36_ssm_conv"),
     ("l2_norm_q15", "legacy", "q36_l2_norm"),
+    ("l2_unit_q15 (the 17-node form)", "legacy", "q36_l2_norm"),
     ("q36_gate_apply / q36_mul_wide / q36_rescale_row", "legacy", "q36_gate_apply, q36_mul_wide, q36_rescale_row"),
     ("rms_norm_wide_q36", "legacy", "q36_rms_norm_wide"),
+    ("rms_unit_q24 (the 21-node form, one i64 eps)", "legacy", "q36_rms_norm_wide"),
     ("router_topk_q36", "legacy", "q36_router_topk"),
     ("moe_combine_q36", "legacy", "q36_moe_combine"),
     ("softplus_q36 / exp_refined_q36 / decay_q36", "legacy", "q36_softplus, q36_exp_refined, q36_decay"),
@@ -148,11 +150,18 @@ impl BlockBuilder<'_> {
     /// through the pinned `Pow2` table) and an optional `z`.
     pub fn narrow(&mut self, x: Ref, n: &Narrowing, lo: i64, hi: i64, dtype: DType) -> Ref {
         let p2 = self.pow2_of(n.s);
-        let z = match n.z {
-            Some(z) => z,
-            None => self.c(DType::I64, 0),
-        };
-        self.narrow_a16(x, n.m, p2, z, lo, hi, dtype)
+        match n.z {
+            Some(z) => self.narrow_a16(x, n.m, p2, z, lo, hi, dtype),
+            // **Without a zero term, three nodes**: the template's `Clamp_i64 → Add 0 → Clamp[lo, hi]`
+            // is exactly `Clamp[lo, hi]` — `[lo, hi] ⊆ i64`, so clamping into `i64` first changes
+            // nothing a clamp into `[lo, hi]` keeps — two nodes fewer, every value identical
+            // (`misaka-palw-tir-conformance` holds the two forms and the live kernel equal).
+            None => {
+                let p = self.mul(x, n.m, DType::I128);
+                let q = self.div(p, p2, crate::prim::Rounding::HalfAwayFromZero, DType::I128);
+                self.clamp(q, lo, hi, dtype)
+            }
+        }
     }
 
     /// [`Self::narrow`] to A16 codes (`i16`, `±32767`).
