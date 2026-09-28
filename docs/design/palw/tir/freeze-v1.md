@@ -7,9 +7,9 @@ and what is still open. It is written on `tir/lower` and cites the other lanes a
 | lane | branch | head cited |
 | --- | --- | --- |
 | IR, library, admission, conformance | `tir/core` | `23c6d4efd` (lean forms), `b9d75a4e5` (admission A1–A7) |
-| independent second implementation | `tir/ref2` | `564546f52` (merged `b9d75a4e5`), `addbe3971`, `a287e413d` |
+| independent second implementation | `tir/ref2` | `834591ebd` (A1–A7 resolved, demand D1–D5), `a287e413d` |
 | typed backend (node) | `tir/node` | `a944fadf6`, `a62de02b8`, `b966a4b29` |
-| consensus integration | `tir/phase-f` | `0b22fd8e4` (F5), `23cf9235c` (04b §9.4) |
+| consensus integration | `tir/phase-f` | `0b22fd8e4` (F5), `23cf9235c` and `827187f34` (04b §9.4) |
 | HF lowerer, F3, F10, D-F1 offline | `tir/lower` | this commit |
 
 `prim_set_id` of the candidate: `PRIM_SET_ID_V1` = `61fa4aa57adfc79053c5e517515e50c7…` (BLAKE2b-512
@@ -27,9 +27,8 @@ keyed `misaka-palw/tir-prim-set-id/v1` over the descriptor `rev2`, `misaka-palw-
 | 6 | legacy conformance | **holds** | 38 integer catalogue kernels + `RequantizeByToken` byte-identical on the live code; the whole dense A16 tier by D-F1 |
 | 7 | static verifiability | **holds with one stated window** | `tir_admit_v1` admits every corpus and HF-lowered program at the legacy court's ceilings; DeepSeek-V3 needs a window ≤ `2^16` |
 
-Open before the freeze (§8): real-checkpoint fidelity for the remaining families, the recurrence
-drift column, ref2's admission differential re-run against the A1 rule, and Gemma-3 / Mamba-2 real
-checkpoints (none available under the download rules).
+Open before the freeze (§8): the real-checkpoint rows still running, and Gemma-3 / Mamba-2 / RWKV-4
+real checkpoints (none available under the download rules).
 
 ## 1. Criterion 1 — no model-specific primitive
 
@@ -105,15 +104,15 @@ every backend that ships (misaka-palw-tir-exec)`, byte for byte, at every commit
 | random differential, reference vs exec | exec `6c175bd41`, `4771e27c0` | 20,000 programs × up to 8 steps and 6,000 mid-run starts; every value, success and failure class equal |
 | corpus programs on exec | exec `ce76d93ee` | the 5 corpus programs at every node (61k node values), hostile full-range weights, 48-position runs, 510 mutated programs |
 | node leg and resumption | exec `ecf752c84`, `a62de02b8` | 52 jobs, 10,167 leaves equal to the reference's through the consensus builder; 416 resumed runs, 41,566 leaves equal |
-| demand evaluation (the court) | ref2 `a287e413d`, `addbe3971`; phase-f `23cf9235c` | 672 demand vectors reproduced; black-box demand differential |
+| demand evaluation (the court) | ref2 `a287e413d`, `addbe3971`, `834591ebd`; phase-f `23cf9235c`, `827187f34` | 672/672 demand vectors; x25 differential of 776,251 cases, 0 disagreements; the text gaps D1–D5 decided in 04b §9.4 |
 | **the HF-lowered programs on all three** | tir/lower `9fd31c36f` (`tests/three_way.rs`) | **57 architectures × 32 positions = 1,824 positions: logits and every commit (slot, block, layer, node, value) equal on reference, ref2 and exec** |
 | **the legacy A16 engine and its IR program (D-F1)** | tir/lower `53d396a11` (`palw-tir-equiv`) | testnet-12's genesis `graph-v7@8192` artifact: see §6 |
 
 Admission (criterion 7's function) was also implemented twice: ref2's `tir_admit_v1` from 04b §10.3
 agreed with the first on 487,500 random, range-safe and mutated admissions except the replay group
 rule (A1: 30,319 cases, 22 verdicts), decided in 04b by tir/core `b9d75a4e5` and pinned by
-`consensus-vectors/tir-v1/admission.json`. **Open:** ref2 has merged the rule (`564546f52`) but its
-admission differential against it is not yet reported.
+`consensus-vectors/tir-v1/admission.json`; after it, ref2 reproduces the 29/29 admission vectors and
+the 487,500 x25 cases with 0 disagreements, refusals equal in limit and value (`834591ebd`).
 
 ## 5. Criterion 5 — fidelity against the float original
 
@@ -206,13 +205,13 @@ provisional `palw_tir_v1` ceilings (`max_macs_per_position` 2^37, `max_cone_work
 
 1. **Real-checkpoint fidelity** for C3, C5, C6-adjacent, C7 and the gated-delta family (§5.2, §9),
    and the **recurrence drift** column for C4–C7 (a 4,096-token evaluation each).
-2. **ref2's admission differential against the A1 rule** (`b9d75a4e5`), which ref2 has merged but
-   not yet re-reported.
-3. **No real checkpoint under the download rules** for Gemma-3 (every official checkpoint is gated)
-   and Mamba-2 (no official HF-format checkpoint of ≤ 3B: `mistralai/Mamba-Codestral-7B-v0.1` is 7B,
-   `state-spaces/mamba2-*` are `mamba_ssm` checkpoints in `.bin`). Their fixtures pass (§5.1); a real
-   run needs the user to accept Gemma's licence or to allow a larger or community-ported Mamba-2.
-4. RWKV-5/6/7 fidelity cannot be measured offline (§1).
+2. **No real checkpoint under the download rules** for Gemma-3 (every official checkpoint is gated),
+   Mamba-2 (no official HF-format checkpoint of ≤ 3B: `mistralai/Mamba-Codestral-7B-v0.1` is 7B,
+   `state-spaces/mamba2-*` are `mamba_ssm` checkpoints in `.bin`) and RWKV-4 (every official `RWKV/`
+   repository is `pytorch_model*.bin` only). Their fixtures pass (§5.1); a real run needs the user to
+   accept Gemma's licence, or to allow a converted `.bin` (loaded without pickle) or a larger or
+   community-ported checkpoint.
+3. RWKV-5/6/7 fidelity cannot be measured offline (§1).
 
 ## 9. Real checkpoints: the list, and what was downloaded
 
