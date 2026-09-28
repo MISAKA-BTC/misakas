@@ -657,3 +657,64 @@ Not built. The analysis:
      leaves against `input_root` (RFC-0003 II.5).
   3. Optionally, stages with more than one output node. That would avoid concatenating the
      per-layer K/V into one tensor, but the concatenation works today.
+
+## 15. LoRA adapters (RFC-0004: candidate = parent + adapter)
+
+`crate::lora`, `lower::lower_lora`, `tests/lora.rs`, `tools/gen_hf_lora_fixtures.py`. A PEFT adapter
+(`adapter_config.json` + `adapter_model.safetensors`) is read directly, with no `peft` installed.
+Every targeted projection keeps its parent weight and adds an unmerged path:
+
+```
+y = W·x (+ b) + (num/den) · B·(A·x)        A: [r, in], B: [out, r]
+num/den = lora_alpha / r  (rsLoRA: / √r, a square rank)   — an exact rational
+```
+
+**The integer path.**
+1. `A·x` is one exact `i32 × i16` product over the parent projection's input codes. `A` is stored
+   as `A' = A·diag(s_x/s_x0)` at per-row `i32` codes, so a split input needs no extra columns. It is
+   narrowed to `i16` at its calibrated site `{site}.lora_a`.
+2. `B·a` uses per-row `i16` codes, exact in `i64`.
+3. The rational is applied as an integer `Mul` by `num` and a rounded `Div` by `den`.
+4. One narrowing takes the result into the projection's output scale, then an `Add` and a `Clamp`.
+
+The node stays a `Linear`, so no pattern of the lowering changes. It adds about 20 nodes per adapted
+projection.
+
+**The parent reused.** `lower::adapter_params_last` puts every adapter param behind the parent's.
+The candidate is materialised with the parent's calibration plus the adapter's own `lora_a` sites.
+Its params `0..P` are then the parent program's, and their tensors the parent artifact's, byte for
+byte. Params `P..` are the adapter section.
+
+| fixture (parent) | targets | r | scale | float vs HF merged | integer vs HF merged: top-1, KL (parent vs merged) | adapter section | MACs a position |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `llama_r16` (llama) | q, k, v, o, gate, up, down | 16 | 32/16 = 2 | 2.9e-7 | 1.000, 5e-5 (0.083) | 42 params, 55.8 KB | 33,792 → 50,176 |
+| `qwen2_all_r4` (qwen2_sliding) | `all-linear` | 4 | 12/4 = 3 | 3.0e-7 | 1.000, 5e-5 (0.101) | 84 params, 26.1 KB | 41,728 → 47,872 |
+| `phi_rs_r64` (phi) | q, k, v, dense, fc1, fc2 | 64 | rsLoRA 16/8 = 2 | 2.3e-7 | 1.000, 3e-5 (0.029) | 36 params, 183 KB | 30,208 → 87,552 |
+| `mistral_qv_r8` (mistral_window) | q, v | 8 | 16.5/8 = 33/16 | 2.9e-7 | 1.000, 5e-5 (0.030) | 12 params, 9.2 KB | 34,304 → 36,864 |
+
+All four candidates are equal on the reference evaluator, ref2 and exec (`three_way.rs`), and
+`tir_admit_v1` admits them.
+- The MAC share is large only because the fixtures are 32 wide. The adapter adds `r·(in + out)`
+  per projection, about 2 % of a 1,536-wide model at `r = 16`.
+- **Refused by name:** DoRA, trained biases (`bias ≠ none`, `lora_bias`), `modules_to_save`,
+  `layers_to_transform`/`layers_pattern`, targets on fused projections (`qkv_proj`, `gate_up_proj`,
+  `c_attn`), `fan_in_fan_out`, rsLoRA at a non-square rank, and module-specific rank or alpha
+  patterns.
+
+**What the lowering needs from RFC-0004.**
+1. **An artifact root that composes.** The candidate's `artifact_root` should commit to the
+   parent's artifact root plus the adapter section's root, for example two leaves or a section
+   tree, so the parent's tensors are never re-committed. The candidate program itself is new, with
+   its own `graph_ir_root`: the parent's nodes plus the adapter path's.
+2. **A class id that binds four things:** the parent (its class id, or its program digest and
+   artifact root), the candidate's `graph_ir_root`, the adapter root, and `P`, the index where the
+   adapter section starts.
+3. **A calibration rule.** The adapter's own narrowing params come from a calibration of the
+   candidate on some set. RFC-0004 pins that set, or treats the params as data in the adapter root,
+   which they already are. The parent's scales are reused, so an adapter that moves activations
+   past the parent's calibrated headroom (2×) clips. RFC-0004 must either bound the adapter's
+   effect or allow recalibration, and recalibration changes parent-side narrowing params, which
+   gives up "parent reused".
+4. **The node budget.** At about 20 nodes per adapted projection, `all-linear` on the largest
+   blocks (MoE and gated-delta hybrids at 468 of 512) does not fit. A leaner adapter form or a
+   target limit is needed there.

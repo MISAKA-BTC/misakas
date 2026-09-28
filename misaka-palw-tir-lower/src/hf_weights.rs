@@ -119,6 +119,17 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
         seen.push(ls);
         layer(&mut m, spec, ls, rescale)?;
     }
+    // A LoRA adapter's A and B, from the adapter's own tensors (`base_model.model.<module>.lora_*`).
+    if let Some(ad) = &spec.adapter {
+        for d in &prog.params {
+            for (suffix, b) in [(".lora_a", false), (".lora_b", true)] {
+                if let Some(role) = d.name.strip_suffix(suffix) {
+                    let t = ad.tensor(role, b).ok_or_else(|| LowerError::eval(format!("internal: adapter role `{role}` has no module")))?;
+                    m.put(d.name.clone(), Src::t(t))?;
+                }
+            }
+        }
+    }
     let mut srcs = Vec::with_capacity(prog.params.len());
     for d in &prog.params {
         srcs.push(

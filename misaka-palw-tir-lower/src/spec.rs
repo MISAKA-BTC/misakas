@@ -475,6 +475,8 @@ pub struct ArchSpec {
     pub head: HeadSpec,
     /// Logits, or an encoder's embedding.
     pub output: OutputSpec,
+    /// A LoRA adapter over this model (`crate::lora`): the candidate = parent + adapter.
+    pub adapter: Option<crate::lora::LoraAdapter>,
     /// How the checkpoint stores the weights. Read only by `crate::hf_weights`; the HL builder
     /// never looks at it, so the HL graph is the same whichever frontend produced the spec.
     pub hf: HfStorage,

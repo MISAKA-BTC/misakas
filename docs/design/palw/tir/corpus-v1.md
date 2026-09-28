@@ -669,13 +669,17 @@ useful, never whether a claim is valid.
 
 **The drift column, as measured and decided** (the RFC-0002 coordinator, 2026-09-29):
 
-- "KL at 128" is the mean KL over positions 64–192, and "KL at 4,096" the mean over positions
-  3,968–4,096, of each 4,096-token held-out sequence (`palw-tir-fidelity --drift`).
-- A row passes when the late KL is at most 1.5 × the early KL, **or** when the late KL is at most
-  **0.01 nats** (an absolute floor).
-- The floor exists because a ratio of two KLs near zero is not a meaningful gate. Mamba-370m's
-  final lowering cut both windows' KL 12–19× (to 2.1e-4 and 3.5e-4), and the ratio rose from
-  ×1.11 to ×1.67.
+- **Drift is measured like-for-like**: the same target tokens, scored at full context and at short
+  context.
+  - "KL at 4,096" is the mean KL over positions 3,968–4,096 of a 4,096-token held-out sequence.
+  - "KL at short context" is the mean KL over the same tokens, scored as positions 128–256 of a
+    256-token sequence made of the document's last 256 tokens.
+  - A change of text difficulty along the document is not drift.
+- **A row passes** when KL at 4,096 ≤ 1.5 × KL at short context. As a secondary rule it also
+  passes when KL at 4,096 ≤ **0.01 nats**, an absolute floor, because a ratio of two KLs near zero
+  is not a meaningful gate.
+- The mean KL over positions 64–192 (the early window) is reported alongside, but it is not the
+  gate. It scores different tokens.
 - A recurrent program must be calibrated on at least one sequence as long as the evaluated context
   (freeze-v1 §5.2).
 

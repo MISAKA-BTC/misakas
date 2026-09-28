@@ -861,8 +861,8 @@ fn w16_inputs_unsplit(blk: &hl::Block, lb: &mut Lb) {
             }
         }
     }
-    for j in 0..blk.nodes.len() {
-        if lb.split[j] > 0 && !readers[j].is_empty() && readers[j].iter().all(|c| lb.w16[*c]) {
+    for (j, rd) in readers.iter().enumerate() {
+        if lb.split[j] > 0 && !rd.is_empty() && rd.iter().all(|c| lb.w16[*c]) {
             lb.split[j] = 0;
         }
     }
@@ -1082,7 +1082,7 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let v = lower_row_lookup(b, cx, lb, tp, at, &site, &want)?;
             one(v)
         }
-        Op::Linear { bias } => {
+        Op::Linear { bias, lora } => {
             let x = operand(lb, node.inputs[0])?;
             let wide_in = matches!(node.inputs[0], hl::Ref::Node(j, 0) if lb.wide[j as usize]);
             let x = if wide_in { x } else { codes(b, cx, lb, &x)? };
@@ -1091,7 +1091,15 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             lb.w16_now = lb.w16[i];
             let v = lower_linear(b, cx, lb, &x, w, bp, &site, &want);
             lb.w16_now = false;
-            one(v?)
+            let v = v?;
+            match lora {
+                Some(l) => {
+                    let at = if *bias { 3 } else { 2 };
+                    let (ap, bpp) = (pidx(node.inputs[at])?, pidx(node.inputs[at + 1])?);
+                    one(lower_lora(b, cx, lb, &x, v, *l, ap, bpp, &site, &want)?)
+                }
+                None => one(v),
+            }
         }
         Op::Add | Op::Sub => {
             let a = operand(lb, node.inputs[0])?;
@@ -1502,6 +1510,155 @@ fn inject_image_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: 
     let r = b.select(inside, row, v.r, DType::I32);
     b.commit(r);
     Ok(Val { r, ..v })
+}
+
+/// The names of a LoRA path's params all carry this marker ([`adapter_params_last`] moves them
+/// behind the parent's).
+pub const LORA_MARK: &str = ".lora_";
+
+/// **An unmerged LoRA path** added to a projection's lowered output `base` (RFC-0004):
+/// `y = base + N(⌊(B·N(A·x))·num / den⌉)`, where `num/den` is `alpha/r` exactly.
+/// * `A·x`: `x`'s codes carry per-channel scales when `x` is split, so `A` is stored with those
+///   scales folded into its columns, `A'[j,c] = A[j,c]·s_x[c]/s_x`, at per-row `i32` codes. That is
+///   one exact `i32 × i16` product over the same codes the parent projection reads. It is narrowed
+///   to `i16` codes at its calibrated site `{site}.lora_a`.
+/// * `B·a`: per-row `i16` codes, exact in `i64`, then the rational scale as an integer `Mul` and a
+///   rounded `Div`, then one narrowing into the projection's own output scale.
+///
+/// The parent's params are declared by `lower_linear` exactly as without the adapter. The adapter
+/// adds params of its own, and no change of scale that would renumber a parent param.
+#[allow(clippy::too_many_arguments)]
+fn lower_lora(
+    b: &mut BlockBuilder<'_>,
+    cx: &mut Cx<'_>,
+    lb: &mut Lb,
+    x: &Val,
+    base: Val,
+    l: hl::LoraOp,
+    ap: u32,
+    bp: u32,
+    site: &str,
+    want: &Want,
+) -> Result<Val> {
+    let hl = cx.hl;
+    let (r, inp) = (hl.params[ap as usize].shape[0], hl.params[ap as usize].shape[1]);
+    let out = hl.params[bp as usize].shape[0];
+    if r != l.rank || hl.params[bp as usize].shape[1] != r || (x.len != 0 && x.len != inp) || base.len != out {
+        return Err(LowerError::eval(format!("internal: LoRA `{site}`: A {:?}, B {:?}, x {}", hl.params[ap as usize].shape, hl.params[bp as usize].shape, x.len)));
+    }
+    let pl = per_layer(lb);
+    let kx = x.key.clone();
+    // A' (the per-channel activation scales folded in), per-row i32 codes and row scales.
+    let a_prime = move |c: &FillCtx<'_>, kx: &ScaleKey| -> Result<(Vec<i32>, Vec<f64>)> {
+        let a = c.f(ap)?;
+        let sv = c.scale_vec(kx, inp)?;
+        let s0 = c.scale(kx)?;
+        let mut codes = Vec::with_capacity(r * inp);
+        let mut scales = Vec::with_capacity(r);
+        for j in 0..r {
+            let row: Vec<f64> = (0..inp).map(|ci| a.data[j * inp + ci] as f64 * sv[ci] / s0).collect();
+            let mx = row.iter().fold(0f64, |m, v| m.max(v.abs()));
+            let s = if mx > 0.0 { mx / i32::MAX as f64 } else { 1.0 };
+            scales.push(s);
+            codes.extend(row.iter().map(|v| (v / s).round().clamp(-(i32::MAX as f64), i32::MAX as f64) as i32));
+        }
+        Ok((codes, scales))
+    };
+    let a_prime = Arc::new(a_prime);
+    let (fa, fm) = (a_prime.clone(), a_prime);
+    let (k1, k2) = (kx.clone(), kx.clone());
+    let aw = decl(
+        b,
+        cx,
+        lb,
+        &format!("{site}.lora_a.w"),
+        DType::I32,
+        &[r, inp],
+        pl,
+        Arc::new(move |c| Ok(IntTensor::i32(vec![r, inp], fa(c, &k1)?.0))),
+    )?;
+    let ka = ScaleKey::site(vec![format!("{site}.lora_a")], false);
+    let ka1 = ka.clone();
+    let (ma, sa) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.lora_a"),
+        r,
+        Arc::new(move |c| {
+            let (_, rs) = fm(c, &k2)?;
+            let (s0, s_a) = (c.scale(&k2)?, c.scale(&ka1)?);
+            Ok(rs.iter().map(|rsj| rsj * s0 / s_a).collect())
+        }),
+    )?;
+    let xc = b.reshape_fixed(x.r, &[inp as u32, 1]);
+    let acc = b.matmul(aw, xc, DType::I64);
+    let acc = b.reshape_fixed(acc, &[r as u32]);
+    let a = narrow(b, acc, ma, sa, None, DType::I16);
+    let a = b.commit(a);
+    cx.site_nodes.entry((b.pb.blocks.len() as u8, match a {
+        tir::Ref::Node(n) => n,
+        _ => 0,
+    }))
+    .or_insert((format!("{site}.lora_a"), ka.clone(), r));
+    // B·a, per-row i16, then the exact rational scale.
+    let bw = decl(b, cx, lb, &format!("{site}.lora_b.w"), DType::I16, &[out, r], pl, table_codes(bp))?;
+    let ac = b.reshape_fixed(a, &[r as u32, 1]);
+    let bacc = b.matmul(bw, ac, DType::I64);
+    let bacc = b.reshape_fixed(bacc, &[out as u32]);
+    let num = b.c(DType::I64, l.num as i128);
+    let scaled = b.mul(bacc, num, DType::I128);
+    let den = b.c(DType::I64, l.den as i128);
+    let scaled = b.div(scaled, den, Rounding::HalfAwayFromZero, DType::I64);
+    let (ka2, ky) = (ka, want.key.clone());
+    let (mb, sb) = decl_ms(
+        b,
+        cx,
+        lb,
+        &format!("{site}.lora_b"),
+        out,
+        Arc::new(move |c| {
+            let sbw = c.rows16(bp)?.scales.clone();
+            let (s_a, sy) = (c.scale(&ka2)?, c.scale_vec(&ky, out)?);
+            Ok((0..out).map(|o| sbw[o] * s_a / sy[o]).collect())
+        }),
+    )?;
+    let delta = narrow(b, scaled, mb, sb, None, want.dt);
+    let sum = b.add(base.r, delta, DType::I64);
+    let (lo, hi) = code_bounds(want.dt);
+    let r = b.clamp(sum, lo, hi, want.dt);
+    if want.dt == DType::I16 {
+        b.commit(r);
+    }
+    Ok(Val { r, ..base })
+}
+
+/// Move every adapter param ([`LORA_MARK`]) behind the parent's, keeping both orders: the
+/// candidate's params `0 .. P` are then the parent program's, and `P ..` the adapter's section.
+/// Returns `P`.
+pub fn adapter_params_last(lw: &mut Lowered) -> Result<usize> {
+    let n = lw.program.params.len();
+    let is_ad: Vec<bool> = lw.program.params.iter().map(|p| p.name.contains(LORA_MARK)).collect();
+    let order: Vec<usize> = (0..n).filter(|i| !is_ad[*i]).chain((0..n).filter(|i| is_ad[*i])).collect();
+    let mut new_of = vec![0u16; n];
+    for (new, old) in order.iter().enumerate() {
+        new_of[*old] = new as u16;
+    }
+    let params = order.iter().map(|i| lw.program.params[*i].clone()).collect();
+    lw.program.params = params;
+    for blk in &mut lw.program.blocks {
+        for node in &mut blk.nodes {
+            for r in &mut node.inputs {
+                if let tir::Ref::Param(j) = r {
+                    *j = new_of[*j as usize];
+                }
+            }
+        }
+    }
+    let mut fills: Vec<Option<FillFn>> = lw.fills.drain(..).map(Some).collect();
+    lw.fills = order.iter().map(|i| fills[*i].take().expect("each fill moves once")).collect();
+    tir::validate::validate(&lw.program).map_err(|e| LowerError::eval(format!("internal: reordered program: {e}")))?;
+    Ok(is_ad.iter().filter(|a| !**a).count())
 }
 
 /// Per-row `i16` codes of a gathered table (and of a head tied to it).
