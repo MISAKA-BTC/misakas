@@ -24,7 +24,7 @@ use misaka_palw_tir_exec::node::TirArtifactV1;
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwTirClassEntryV1};
 
 /// The IR backend and its capture, for the node's IR-only verbs (the IR court's close proofs).
-pub use misaka_palw_tir_exec::node::{TirBackendV1, TirCaptureV1};
+pub use misaka_palw_tir_exec::node::{TirBackendV1, TirCaptureV1, tir_trace_event_disclosure_of_capture_v1};
 
 /// The lineage's id.
 pub const TIR_LINEAGE_ID_V1: &str = "palw-tir-v1";

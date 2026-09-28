@@ -13,7 +13,7 @@ pub mod run;
 pub mod tree;
 
 pub use artifact::TirArtifactV1;
-pub use backend::{TIR_CAPTURE_MAGIC_V1, TirBackendV1, TirCaptureV1};
+pub use backend::{TIR_CAPTURE_MAGIC_V1, TirBackendV1, TirCaptureV1, tir_trace_event_disclosure_of_capture_v1};
 pub use drill::{
     TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_family_drill_v1, tir_prim_kernel_id_v1,
 };

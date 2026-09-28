@@ -542,3 +542,78 @@ fn a_planted_lie_in_an_ir_claim_is_convicted_by_the_ir_court() {
         assert!(collateral(&s, PRODUCER) < before, "tiled {tiled}: the producer is charged");
     }
 }
+
+/// **An IR claim answers its data-availability demands in the IR form** (F6 D): the node's own
+/// answering path (`palw_da_claim_answers_v1`: the kept capture verified against the claim, then each
+/// unit) discloses a trace event of an IR claim as a `TirEvent` — the row's tile opened under the
+/// class's scheme, or every row at once under the flat scheme, or `OutOfRange` for an event outside
+/// the run — and the chain's checker (`check_tir_trace_event_disclosure_v1`) takes every answer as
+/// refuting the accusation. A held unit is the legacy families' and is refused by name.
+#[test]
+fn an_ir_claims_trace_events_are_answered_in_the_ir_form() {
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+    use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+    use kaspa_consensus_core::palw_tir_court_v1::{PalwTirTraceEventDisclosureV1, check_tir_trace_event_disclosure_v1};
+    for tiled in [false, true] {
+        let ir = ir_class(if tiled { "da-tiled" } else { "da-flat" }, tiled);
+        let backend = ir.backend();
+        let claim = produce(&ir, 3, None);
+        let facts = super::PalwDaClaimFactsV1 {
+            claim_id: claim.id,
+            class_id: ir.class_id,
+            executor_bond: bond_key(PRODUCER),
+            execution_root: claim.env.attempt.execution_root,
+            trace_root: claim.env.attempt.trace_root,
+            work_leaves: 0,
+            form: FORM,
+            lane: super::PalwDaLaneV1::Attempt {
+                anchor: claim.job.job_id,
+                attempt_draw: Some(false),
+                job: Some((claim.job.clone(), claim.prompt.clone())),
+            },
+            job_pin: None,
+        };
+        let rows = claim.job.exact_decode_tokens;
+        let units = vec![
+            PalwDaUnitV1::Event { row: rows - 1, tile: 0 },
+            PalwDaUnitV1::Event { row: 0, tile: 0 },
+            PalwDaUnitV1::Event { row: rows + 3, tile: 0 },
+            PalwDaUnitV1::Event { row: 0, tile: 200 },
+        ];
+        let answered =
+            super::palw_da_claim_answers_v1(backend.as_ref(), &facts, vec![claim.material.clone()], |_| {}, &units, rows, false)
+                .expect("the kept capture answers");
+        assert!(!answered.remade, "answered from the kept capture");
+        let (mut checked, mut out_of_range) = (0, 0);
+        for (unit, answer) in units.iter().zip(answered.answers) {
+            let PalwDaUnitV1::Event { row, tile } = *unit else { unreachable!() };
+            let Some(answer) = answer else {
+                assert!(!tiled, "only a flat answer covers the other in-run events");
+                continue;
+            };
+            let Ok(PalwDaAnswerV1::TirEvent(disclosure)) = answer else { panic!("tiled {tiled}: an IR event answer, got {answer:?}") };
+            if matches!(*disclosure, PalwTirTraceEventDisclosureV1::OutOfRange { .. }) {
+                out_of_range += 1;
+            } else {
+                assert_eq!(disclosure.is_flat(), !tiled, "the class's scheme");
+            }
+            check_tir_trace_event_disclosure_v1(
+                claim.env.attempt.trace_root,
+                claim.env.attempt.execution_root,
+                row,
+                tile,
+                &disclosure,
+                LADDER,
+            )
+            .unwrap_or_else(|e| panic!("tiled {tiled}: event ({row}, {tile}) is answered: {e}"));
+            checked += 1;
+        }
+        assert!(checked >= 2 && out_of_range >= 1, "tiled {tiled}: {checked} checked, {out_of_range} out of range");
+        // A held unit is not an IR claim's to answer.
+        let held = [PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf: 0 })];
+        let answered =
+            super::palw_da_claim_answers_v1(backend.as_ref(), &facts, vec![claim.material.clone()], |_| {}, &held, rows, false)
+                .expect("the kept capture");
+        assert!(matches!(&answered.answers[0], Some(Err(why)) if why.contains("held unit")), "{:?}", answered.answers[0]);
+    }
+}

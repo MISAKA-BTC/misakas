@@ -2059,8 +2059,19 @@ pub(crate) fn palw_da_unit_answer_v1(
         PalwDaCaptureV1::FreePrompt(payload) => &payload.capture,
         PalwDaCaptureV1::Attempt(capture) => capture,
     };
+    // RFC-0002 Phase F (F6 D): an IR claim's material is an IR capture, and its events are disclosed
+    // in the IR form (`PalwDaAnswerV1::TirEvent`), from the capture's own binding, rows and ids.
+    let tir_capture = capture.starts_with(&misaka_palw_sdk::lineages::tir::TirCaptureV1::MAGIC);
     let missing = match unit {
-        PalwDaUnitV1::Event { row, tile } => return backend.disclose_trace_event(capture, row, tile).map(PalwDaAnswerV1::Event),
+        PalwDaUnitV1::Event { row, tile } => {
+            if let Some(answer) = misaka_palw_sdk::lineages::tir::tir_trace_event_disclosure_of_capture_v1(capture, row, tile) {
+                return answer.map(|disclosure| PalwDaAnswerV1::TirEvent(Box::new(disclosure)));
+            }
+            return backend.disclose_trace_event(capture, row, tile).map(PalwDaAnswerV1::Event);
+        }
+        PalwDaUnitV1::Held(_) if tir_capture => {
+            return Err("an IR claim answers no held unit: the held regime's units are the legacy families' (RFC-0002 Phase F)".into());
+        }
         PalwDaUnitV1::Held(missing) => missing,
     };
     let (binding, disclosure) = match (material, &facts.lane) {
@@ -2131,7 +2142,8 @@ pub(crate) fn palw_da_claim_answers_v1(
             continue;
         }
         let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit);
-        flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })));
+        flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })))
+            || matches!(&answer, Ok(PalwDaAnswerV1::TirEvent(disclosure)) if disclosure.is_flat());
         answers.push(Some(answer));
     }
     Ok(PalwDaClaimAnswersV1 { remade, answers })

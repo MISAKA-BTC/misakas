@@ -69,6 +69,9 @@ pub struct TirCaptureV1 {
 }
 
 impl TirCaptureV1 {
+    /// The 8-byte head of an encoded capture ([`TIR_CAPTURE_MAGIC_V1`]).
+    pub const MAGIC: [u8; 8] = TIR_CAPTURE_MAGIC_V1;
+
     pub fn encode(&self) -> Vec<u8> {
         let mut out = TIR_CAPTURE_MAGIC_V1.to_vec();
         borsh::to_writer(&mut out, self).expect("a Vec writer does not fail");
@@ -83,6 +86,26 @@ impl TirCaptureV1 {
     pub fn is_dense(&self) -> bool {
         !self.leaves.is_empty()
     }
+}
+
+/// **An IR capture's answer to a trace-event demand** (RFC-0002 Phase F, F6 D): the event `(row,
+/// tile)` of the committed logits trace, disclosed in the IR form from the capture's own binding,
+/// rows and ids (`tir_logits_event_disclosure_v1`) — or `OutOfRange` over the binding alone when the
+/// event is not in the run. No execution: the answer is the committed trace, opened. `None` when the
+/// bytes are not an IR capture (a legacy family answers them).
+pub fn tir_trace_event_disclosure_of_capture_v1(
+    capture: &[u8],
+    row: u32,
+    tile: u8,
+) -> Option<Result<kaspa_consensus_core::palw_tir_court_v1::PalwTirTraceEventDisclosureV1, String>> {
+    use kaspa_consensus_core::palw_tir_court_v1::{PalwTirTraceEventDisclosureV1, tir_logits_event_disclosure_v1};
+    if !capture.starts_with(&TIR_CAPTURE_MAGIC_V1) {
+        return None;
+    }
+    Some(TirCaptureV1::decode(capture).map(|c| {
+        tir_logits_event_disclosure_v1(&c.binding, &c.logits_rows, &c.generated, row, tile)
+            .unwrap_or_else(|| PalwTirTraceEventDisclosureV1::OutOfRange { binding: Box::new(c.binding) })
+    }))
 }
 
 /// One IR class served from a mapped artifact.

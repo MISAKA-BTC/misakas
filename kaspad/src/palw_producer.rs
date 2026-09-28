@@ -167,11 +167,6 @@ pub struct PalwProducerService {
 }
 
 /// `<txid>:<index>`, the same spelling `--stake-bond` uses.
-/// **Does this build answer a trace-event accusation against an IR class?** Not yet: the IR
-/// variants of `PalwTraceEventDisclosureV1` are consensus's (Phase F); until they land, the producer
-/// refuses IR claims where the data-availability court is in force.
-pub(crate) const PALW_TIR_TRACE_EVENT_DISCLOSURE_V1: bool = false;
-
 pub(crate) fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, String> {
     let (txid, index) = s.split_once(':').ok_or_else(|| format!("'{s}' is not <txid>:<index>"))?;
     let transaction_id: kaspa_consensus_core::tx::TransactionId =
@@ -1348,20 +1343,6 @@ impl PalwProducerService {
                     facts.class_id
                 ));
             }
-        }
-        // **RFC-0002 Phase F (F6): an IR class answers no trace-event accusation yet.** The IR
-        // disclosure (`PalwTraceEventDisclosureV1`'s IR variants) is consensus's to add; until this
-        // build carries it, a claim of an IR class on a chain whose data-availability court is in
-        // force is a claim any accuser defaults for the price of one accusation.
-        if self.backends().resolve_tir_v1(facts.class_id, facts.artifact_root).is_some()
-            && !PALW_TIR_TRACE_EVENT_DISCLOSURE_V1
-            && palw_da_court_in_force_v1(&self.consensus_config, template.block.header.daa_score)
-        {
-            return Err(format!(
-                "this node will not produce for IR class {}: this build answers no trace-event accusation for an IR class \
-                 and this chain's data-availability court is in force (RFC-0002 Phase F, F6)",
-                facts.class_id
-            ));
         }
         // **ADR-0093 as built: the same refusal for the dissection's turn** — and, past
         // `palw_offence_attribution`, for a held class this build cannot answer inside the court's
