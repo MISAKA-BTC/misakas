@@ -1236,7 +1236,11 @@ the commit point, unless every dissected cone meets:
   carry `H` has a data operand that depends (through computed nodes of the cone) on a reduction over
   `H`, and no computed `Select` whose condition carries `H` has a value operand (`a` or `b`) that
   does — the two reads whose element is chosen by a history-varying VALUE rather than by the output
-  index. An `H`-free read is the same at every history index, so only these matter; with O-2 the
+  index (a `Select` reads its condition, then only the chosen operand, §9.4). A value operand the
+  condition reads itself at the same element is exempt: the condition a `Compare` of the `Select`'s
+  shape with that operand, of the same shape, as a direct input — a shifted softmax's
+  clamp-by-select `select(x − m < floor, floor, x − m)` reads `m` through its condition whichever it
+  chooses. An `H`-free read is the same at every history index, so only these matter; with O-2 the
   one-index probe of §9.5.3 names every element any history index reads, and the element closure is
   exact.
 - **O-3 (`H`-free totals).** Every reduction over `H` of the cone has an `H`-free output.

@@ -310,4 +310,15 @@ fn the_obligations_are_refused_by_name() {
         b.reduce_sum(v, 0, DType::I32)
     });
     assert!(matches!(&refused, Err(E::TirDissection { why, .. }) if why.contains("Select")), "{refused:?}");
+    // …but a Select whose condition reads that operand itself, at the same element, reads what its
+    // condition reads whichever it chooses — a shifted softmax's clamp-by-select is admitted.
+    let admitted = admit_body(|b, rows| {
+        let m = b.reduce_max(rows, 0); // [1, 4]
+        let d = b.sub(rows, m, DType::I32); // [H, 4]
+        let floor = b.c(DType::I32, -100);
+        let c = b.compare(d, floor, Cmp::Lt); // [H, 4], reads d
+        let v = b.select(c, floor, d, DType::I32);
+        b.reduce_sum(v, 0, DType::I32)
+    });
+    assert!(admitted.is_ok(), "{admitted:?}");
 }

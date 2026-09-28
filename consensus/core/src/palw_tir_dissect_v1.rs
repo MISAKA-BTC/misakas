@@ -212,9 +212,9 @@ pub enum PalwTirDissectObligationV1 {
     #[error("the cone reduces over the history {got} times; at most {max}")]
     TooManyReductions { got: usize, max: usize },
     /// O-2: a `Gather` whose indices carry `H` reads data that depends on a reduction over `H`, or a
-    /// `Select` whose condition carries `H` chooses between operands one of which does — the element
-    /// read would be chosen by a value that varies along the history, so the one-index probe of the
-    /// element closure would not name it.
+    /// `Select` whose condition carries `H` chooses between operands one of which does (and which its
+    /// condition does not read itself) — the element read would be chosen by a value that varies
+    /// along the history, so the one-index probe of the element closure would not name it.
     #[error("node {node} ({prim}) chooses by a history-varying value between reads of a reduction's output")]
     DataDependentRead { node: u16, prim: &'static str },
     /// O-3: a reduction over `H` whose output still carries `H` (its total is not one value per
@@ -256,13 +256,28 @@ pub fn palw_tir_dissect_obligations_v1(block: &Block, node: u16) -> Result<(), P
         Some(Ref::CarryIn(k)) => block.carry_in.get(*k as usize).is_some_and(|t| t.has_h()),
         _ => false,
     };
+    // A `Select` reads its condition, then ONLY the chosen operand (spec 04b §9.4) — so a value
+    // operand that depends on a reduction is a history-varying read unless the condition reads it
+    // anyway, at the same element: the condition a `Compare` of the `Select`'s shape with that
+    // operand, of the same shape, as a direct input (a shifted softmax's clamp-by-select,
+    // `select(x − m < floor, floor, x − m)`, whose read set is its condition's).
+    let read_by_the_condition = |select: &misaka_palw_tir::Node, operand: &Ref| -> bool {
+        let (Some(Ref::Node(c)), Ref::Node(j)) = (select.inputs.first(), operand) else { return false };
+        let (Some(condition), Some(value)) = (block.nodes.get(*c as usize), block.nodes.get(*j as usize)) else { return false };
+        matches!(condition.prim, Prim::Compare { .. })
+            && condition.inputs.contains(operand)
+            && condition.out.shape == select.out.shape
+            && value.out.shape == select.out.shape
+    };
     for (i, n) in block.nodes.iter().enumerate() {
         if !computed[i] {
             continue;
         }
         let bad = match n.prim {
             Prim::Gather { .. } => (carries_h(n.inputs.get(1)) && n.inputs.first().is_some_and(depends)).then_some("Gather"),
-            Prim::Select => (carries_h(n.inputs.first()) && n.inputs.iter().skip(1).any(depends)).then_some("Select"),
+            Prim::Select => (carries_h(n.inputs.first())
+                && n.inputs.iter().skip(1).any(|r| depends(r) && !read_by_the_condition(n, r)))
+            .then_some("Select"),
             _ => None,
         };
         if let Some(prim) = bad {
