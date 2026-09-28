@@ -6182,6 +6182,8 @@ dependencies = [
  "kaspa-pq-validator-core",
  "kaspa-txscript",
  "misaka-palw-base0",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
  "serde_json",
 ]
 

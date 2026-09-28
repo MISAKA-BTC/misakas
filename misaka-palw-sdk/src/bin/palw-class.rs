@@ -44,7 +44,9 @@ or a signature that does not verify.
 
 `manifest` writes `<artifact-path>.palwmanifest`: the inventory root of every class this artifact
 pairs with, derived through the SAME call a producer's class resolve uses, plus the artifact digest
-that binds the file to the sidecar. It exists so nobody types an inventory root into a genesis card
+that binds the file to the sidecar. For a PALWTIR1 (PALW-TIR) artifact it records the one
+inventory root over the program's params (streamed through the consensus inventory) and the
+program's graph_ir_root. It exists so nobody types an inventory root into a genesis card
 again — that substitution (the flat artifact digest where the operand-inventory root belonged) shut
 the dense tier of testnet-11 and then of testnet-12. `--check` recomputes an existing sidecar and
 exits 1 on any disagreement instead of writing.
@@ -284,6 +286,9 @@ fn ledger(view: &NetworkView) {
 /// serve a registered class. A manifest built any other way would be the second mapping this is
 /// replacing rather than a record of the first.
 fn manifest(view: &NetworkView, path: &std::path::Path, out: Option<PathBuf>, check: bool) -> Result<(), String> {
+    if misaka_palw_sdk::tir_manifest::PalwTirManifestV1::sniff(path) {
+        return tir_manifest(path, out, check);
+    }
     let sdk = sdk_for(view);
     let artifact = sdk.load_artifact(path)?;
     let bytes = std::fs::metadata(path).map(|m| m.len()).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -318,6 +323,32 @@ fn manifest(view: &NetworkView, path: &std::path::Path, out: Option<PathBuf>, ch
         println!("  {}  class {}  root {}{note}", r.model_id, r.class_id, r.inventory_root);
     }
     std::fs::write(&target, derived.to_json()).map_err(|e| format!("{}: {e}", target.display()))?;
+    println!("wrote {}", target.display());
+    Ok(())
+}
+
+/// A `PALWTIR1` artifact (RFC-0002 Phase F, F3): ONE inventory root over the program's params,
+/// whatever layouts its registrations declare, so the sidecar records it once.
+fn tir_manifest(path: &std::path::Path, out: Option<PathBuf>, check: bool) -> Result<(), String> {
+    use misaka_palw_sdk::tir_manifest::PalwTirManifestV1;
+    let target = out.unwrap_or_else(|| misaka_palw_sdk::PalwClassManifestFileV1::path_beside(path));
+    if check {
+        let text = std::fs::read_to_string(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+        let on_disk = PalwTirManifestV1::from_json(&text)?;
+        on_disk.check(path)?;
+        println!(
+            "{}: agrees with {} — inventory root re-derived over {} leaves",
+            target.display(),
+            path.display(),
+            on_disk.leaf_count
+        );
+        return Ok(());
+    }
+    let m = PalwTirManifestV1::derive(path)?;
+    println!("PALWTIR1 artifact {} ({} bytes, program {} bytes)", path.display(), m.artifact_bytes, m.program_bytes);
+    println!("  graph_ir_root   {}", m.graph_ir_root);
+    println!("  inventory root  {} over {} leaves", m.inventory_root, m.leaf_count);
+    std::fs::write(&target, m.to_json()).map_err(|e| format!("{}: {e}", target.display()))?;
     println!("wrote {}", target.display());
     Ok(())
 }

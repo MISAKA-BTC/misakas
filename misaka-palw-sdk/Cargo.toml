@@ -13,6 +13,9 @@ repository.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 misaka-palw-base0.workspace = true
+# RFC-0002 Phase F: IR artifacts (the PALWTIR1 container) and their manifest.
+misaka-palw-tir.workspace = true
+misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
 # ADR-0100 `palw-class measure` / `verify`: the Measured Model Artifact is JSON, signed by the
 # adder's bond key and verified by anyone holding the public key.
 kaspa-pq-validator-core.workspace = true
