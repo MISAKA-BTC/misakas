@@ -61,11 +61,26 @@ CONFIGS = {
                               size=(56, 56), mean=CLIP_MEAN, std=CLIP_STD, layout="qwen2vl"),
     "llava": dict(cfg=("LlavaConfig", None), model="LlavaForConditionalGeneration", size=(28, 28), mean=CLIP_MEAN,
                   std=CLIP_STD, layout="nchw"),
+    # Whole VLMs for the text stage (RFC-0003 §II.2.1): tower + merger + the M-RoPE language model.
+    "qwen2_vl": dict(cfg=("Qwen2VLConfig", None), model="Qwen2VLForConditionalGeneration", size=(28, 28), mean=CLIP_MEAN,
+                     std=CLIP_STD, layout="qwen2vl"),
+    "qwen2_5_vl": dict(cfg=("Qwen2_5_VLConfig", None), model="Qwen2_5_VLForConditionalGeneration", size=(56, 56),
+                       mean=CLIP_MEAN, std=CLIP_STD, layout="qwen2vl"),
 }
+NEW_TOKENS = 8
 
 
 def build_config(name, spec):
     cls, kw = spec["cfg"]
+    if name in ("qwen2_vl", "qwen2_5_vl"):
+        q25 = name == "qwen2_5_vl"
+        text = dict(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=4,
+                    num_key_value_heads=2, max_position_embeddings=128, rms_norm_eps=1e-6, tie_word_embeddings=False,
+                    rope_parameters={"rope_type": "default", "rope_theta": 10000.0, "mrope_section": [2, 1, 1]})
+        vis = CONFIGS["qwen2_5_vl_vision" if q25 else "qwen2_vl_vision"]["cfg"][1] | {"out_hidden_size" if q25 else "hidden_size": 32}
+        cfg = getattr(transformers, cls)(text_config=text, vision_config=vis, image_token_id=63, vision_start_token_id=62,
+                                         vision_end_token_id=61, video_token_id=60, tie_word_embeddings=False)
+        return cfg
     if name == "llava":
         vis = transformers.CLIPVisionConfig(**TINY_CLIP)
         txt = transformers.LlamaConfig(vocab_size=V, hidden_size=32, intermediate_size=64, num_hidden_layers=2,
@@ -108,8 +123,10 @@ def make(name):
     model = cls(cfg)
     model.eval()
     hidden = getattr(cfg, "hidden_size", None) if name != "llava" else cfg.text_config.hidden_size
-    if name.startswith("qwen2_vl"):
+    if name.startswith("qwen2_vl") and name.endswith("_vision"):
         hidden = cfg.embed_dim
+    if name in ("qwen2_vl", "qwen2_5_vl"):
+        hidden = cfg.text_config.hidden_size
     randomise(model, hidden, seed)
     d = os.path.join(FIX, name)
     os.makedirs(d, exist_ok=True)
@@ -123,7 +140,8 @@ def make(name):
     with torch.no_grad():
         for _ in range(2):
             img = rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8)
-            pv, grid = pixel_values(img, spec, cfg if name != "llava" else cfg.vision_config)
+            vcfg = cfg.vision_config if name in ("llava", "qwen2_vl", "qwen2_5_vl") else cfg
+            pv, grid = pixel_values(img, spec, vcfg)
             out = {}
             if name == "clip_vision":
                 o = fresh(pixel_values=pv)
@@ -131,16 +149,40 @@ def make(name):
             elif name == "siglip_vision":
                 o = fresh(pixel_values=pv)
                 out = {"pooler_output": o.pooler_output[0].tolist(), "last_hidden_state": o.last_hidden_state[0].tolist()}
-            elif name.startswith("qwen2"):
+            elif name in ("qwen2_vl_vision", "qwen2_5_vl_vision"):
                 o = fresh(pv, grid_thw=grid)
                 out = {"merged": o.pooler_output.tolist(), "last_hidden_state": o.last_hidden_state.tolist()}
+            elif name in ("qwen2_vl", "qwen2_5_vl"):
+                vc = cfg.vision_config
+                n_img = (grid[0, 1] * grid[0, 2] // (vc.spatial_merge_size ** 2)).item()
+                ids = [5, 62] + [63] * n_img + [61, 7, 9]
+                t = torch.tensor([ids])
+                mm = (t == 63).int()
+                gen = fresh.generate(input_ids=t, pixel_values=pv, image_grid_thw=grid, mm_token_type_ids=mm,
+                                     max_new_tokens=NEW_TOKENS, do_sample=False)[0, len(ids):].tolist()
+                stream = torch.tensor([ids + gen[:-1]])
+                # The processor's mm_token_type_ids: 1 on the prompt's image rows only.
+                smm = torch.zeros_like(stream, dtype=torch.int32)
+                smm[0, :len(ids)] = mm[0]
+                o = fresh(input_ids=stream, pixel_values=pv, image_grid_thw=grid, mm_token_type_ids=smm)
+                pos, deltas = fresh.model.get_rope_index(stream, mm_token_type_ids=smm, image_grid_thw=grid)
+                rows = fresh.model.get_image_features(pv, grid)
+                rows = rows.pooler_output if hasattr(rows, "pooler_output") else rows
+                rows = torch.cat(list(rows), 0) if isinstance(rows, (list, tuple)) else rows
+                out = {"input_ids": ids, "generated": gen, "logits": o.logits[0].tolist(), "image_rows": rows.tolist(),
+                       "mrope_positions": pos[:, 0].tolist(), "grid": grid[0].tolist()}
             elif name == "llava":
                 n_img = (h // cfg.vision_config.patch_size) * (w // cfg.vision_config.patch_size)
                 ids = [1, 5] + [63] * n_img + [7, 9, 11, 13]
                 o = fresh(input_ids=torch.tensor([ids]), pixel_values=pv)
                 vt = fresh.model.vision_tower(pv, output_hidden_states=True)
                 feats = fresh.model.multi_modal_projector(vt.hidden_states[-2][:, 1:])
-                out = {"input_ids": ids, "image_start": 2, "logits": o.logits[0].tolist(), "image_rows": feats[0].tolist()}
+                gen = fresh.generate(input_ids=torch.tensor([ids]), pixel_values=pv, max_new_tokens=NEW_TOKENS,
+                                     do_sample=False)[0, len(ids):].tolist()
+                stream = torch.tensor([ids + gen[:-1]])
+                so = fresh(input_ids=stream, pixel_values=pv)
+                out = {"input_ids": ids, "image_start": 2, "logits": o.logits[0].tolist(), "image_rows": feats[0].tolist(),
+                       "generated": gen, "stream_logits": so.logits[0].tolist()}
             recs.append({"hwc": img.reshape(-1).tolist(), "outputs": out})
     meta = {"images": recs, "size": [h, w], "mean": spec["mean"], "std": spec["std"],
             "transformers": transformers.__version__, "torch": torch.__version__, "seed": seed,

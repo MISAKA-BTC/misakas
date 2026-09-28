@@ -618,13 +618,8 @@ one position over a fixed patch axis. The canonical image enters as `input.image
 | LLaVA tower (feature layer −2, CLS dropped) + projector | image rows `[16, 32]` | 3.3e-7 | 0.99988 |
 | CLIP behind a ×2 box downscale (56×56 input, pixels replicated 2×2) | `image_embeds` | — | 0.99991 |
 
-**Image + text → logits, off-chain** (`llava_image_and_text_to_logits_matches_hf_off_chain`):
-1. The tower's integer rows go to an LM version-2 program through `LowerOpts::image_rows`. It reads
-   `input.image_rows` and `input.image_start` and applies II.4's
-   `Select(is_image_pos, Gather(img, pos − start), token embedding)`, with a `Logits` output.
-2. Against `LlavaForConditionalGeneration`: top-1 22/22, mean KL 0.00013.
-3. On chain, the LM stage belongs to the FP job version RFC-0003 II.2 plans. A pipeline cannot
-   carry a `Logits` stage today, by design.
+**Image + text → generated ids** is the two-stage text pipeline of §16 (the off-chain check this
+paragraph described is superseded by it).
 
 ## 14. Next: cross-attention (T5, Whisper) — what `TirProgramV2` needs
 
@@ -651,8 +646,8 @@ Not built. The analysis:
   - attention runs over the encoder axis, which is `Fixed` (not `H`), under the same cone ceilings
     as §12, masked by `StageRowCount`/`JobTokenCount`.
 - **What V2 lacks for it:**
-  1. A `Logits` stage: T5 and Whisper generate. As with the VLM, that is RFC-0003 II.2's FP job
-     over a one-stage text pipeline, and neither exists yet.
+  1. A `Logits` stage: T5 and Whisper generate. RFC-0003 §II.2.1's text stage (`TextStream`) is
+     that stage now (§16); the decoder would be it, bound to the encoder stage's K/V.
   2. For Whisper, an audio input binding. It is `JobImage`'s pattern with PCM `i16` and 2-byte
      leaves against `input_root` (RFC-0003 II.5).
   3. Optionally, stages with more than one output node. That would avoid concatenating the
@@ -718,3 +713,50 @@ All four candidates are equal on the reference evaluator, ref2 and exec (`three_
 4. **The node budget.** At about 20 nodes per adapted projection, `all-linear` on the largest
    blocks (MoE and gated-delta hybrids at 468 of 512) does not fit. A leaner adapter form or a
    target limit is needed there.
+
+## 16. The VLM text stage (RFC-0003 §II.2.1)
+
+`LowerOpts::image_rows` (`lower::ImageRows`), `tests/vision.rs` (`text_stage`),
+`tools/gen_hf_vision_fixtures.py` (`llava`, `qwen2_vl`, `qwen2_5_vl`: whole tiny VLMs, 8 greedy ids).
+A VLM class is two stages: the tower (§13) over `JobImage { index: 0 }` (`Fixed { n: 1 }`), then
+the LM as the text stage — a `Logits` program over `TripRule::TextStream` — with its one external
+input `input.image_rows` (`i32 [rows, d]`) bound by `StageFinal { stage: 0 }`. The input's
+interval is the tower's output interval.
+
+**Placement by a cursor (no job field).** The pre block keeps a `Fixed` state `image.cursor`
+(`i32 [1]`, `[0, rows]`). At a position whose token is the placeholder id while `cursor < rows`,
+the LM reads row `cursor` (narrowed from the tower's unit to the residual scale) instead of its
+token embedding, and the cursor advances. Once every row is placed, the placeholder is an ordinary
+token, as HF embeds a generated one.
+- **This differs from RFC-0003 §II.2.1's text** ("one with more re-reads the last":
+  `Gather(image_rows, min(cursor, N_img − 1))` at every placeholder). The two agree on every prompt
+  with at most `N_img` placeholders, which the class's chat template guarantees. They differ on a
+  placeholder id after the `N_img`-th, including one the model generates: HF embeds that as a token
+  (its image features enter only at the prefill). Switching to the RFC's rule is one condition in
+  `lower::image_token`.
+
+**M-RoPE (Qwen2-VL, Qwen2.5-VL), exact.** `get_rope_index` for one image: image token `i` at
+`(s, s + i / W, s + i % W)` with `s` its first row's stream position and `(H, W)` the merged grid;
+every later token at `p − rows + max(H, W)` in all three components. A layer block reads only
+per-layer states (NF-15), so each layer keeps its own copy `image.cursor.layer` and advances it by
+the pre block's rule. Each component's cos/sin come from the two-level tables, and each frequency
+takes its component through two `Select`s with pinned masks. `rope::MRope` carries both HF layouts:
+Qwen2-VL's contiguous sections and Qwen3-VL's/Qwen3.5's interleaved one (unit-tested against HF's
+index map; the interleaved layout has no VLM fixture yet). Text-only programs are unchanged.
+
+| VLM | float LM vs HF over the stream (HF's rows) | greedy ids vs HF `generate` | teacher-forced top-1, mean KL, logits rel | nodes: tower / LM (max per block) | pipeline admission at `max_trip` 64: MACs, step leaves |
+| --- | --- | --- | --- | --- | --- |
+| LLaVA (Llama LM, 16 rows) | 2.9e-7 | 16/16 | 58/58, 1.1e-4, 1.4e-2 | 225 / 333 (266) | 2.43M, 2,131 |
+| Qwen2-VL (4 rows, grid 2×2) | 2.6–2.9e-7 | 16/16 | 32/32, 5e-5, 1.1–1.2e-2 | 237 / 405 (338) | 2.61M, 2,242 |
+| Qwen2.5-VL (16 rows, grid 4×4, window tower) | 2.4–2.5e-7 | 8/16 | 54/56, 5e-5, 1.0–1.2e-2 | 411 / 405 (338) | 4.63M, 3,272 |
+
+- Qwen2.5-VL's second image departs at its first id, where HF's own top-2 margin is 0.0070. Both
+  teacher-forced misses are at HF margins ≤ 0.0146. The test requires every difference to sit at a
+  near-tie (HF margin < 0.05).
+- **The M-RoPE control.** The same float LM with 1-D positions is 0.13–0.16 rel from HF, against
+  the integer stage's 0.010–0.012. The integer positions are HF's.
+- Every run replays exactly: `run_pipeline` with `job.generated` gives `run_text_pipeline`'s output.
+- The fixture's `mrope_positions` (HF's `get_rope_index`, with the processor's `mm_token_type_ids`)
+  equal the placement's at every position of every stream.
+- Out of scope here: several images or videos (`video_grid_thw`, the temporal component), Qwen2.5-VL's
+  `second_per_grid_t` (videos only), and a VLM whose tower size varies by job.

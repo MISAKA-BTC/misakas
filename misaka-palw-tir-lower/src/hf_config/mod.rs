@@ -292,6 +292,7 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         "Qwen3_5ForCausalLM" => hybrid::qwen3_5_text(&mut p, false, "model.", "lm_head", vec![])?,
         "Qwen3_5MoeForCausalLM" => hybrid::qwen3_5_text(&mut p, true, "model.", "lm_head", vec![])?,
         "Qwen3_5ForConditionalGeneration" | "Qwen3_5MoeForConditionalGeneration" => vlm_text(&mut p, &arch)?,
+        "Qwen2VLForConditionalGeneration" | "Qwen2_5_VLForConditionalGeneration" => vlm_text(&mut p, &arch)?,
         "JambaForCausalLM" => hybrid::jamba(&mut p)?,
         "MambaForCausalLM" => hybrid::mamba(&mut p, false)?,
         "FalconMambaForCausalLM" => hybrid::mamba(&mut p, true)?,
@@ -348,9 +349,19 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
     // Both HF weight layouts exist on the hub: `language_model.model.*` (≤ 4.51) and
     // `model.language_model.*` (≥ 4.52, and every checkpoint of a newer family).
     let qwen35 = tmt.starts_with("qwen3_5");
-    let (prefix, lm_head) =
-        if qwen35 { ("model.language_model.", "lm_head") } else { ("language_model.model.", "language_model.lm_head") };
-    let aliases = if qwen35 {
+    // Qwen2-VL and Qwen2.5-VL: `model.language_model.*` (≥ 4.52) or the plain Qwen2 names `model.*`
+    // their original checkpoints (and transformers 5's save) use.
+    let qwen2vl = matches!(tmt, "qwen2_vl_text" | "qwen2_5_vl_text");
+    let (prefix, lm_head) = if qwen35 {
+        ("model.language_model.", "lm_head")
+    } else if qwen2vl {
+        ("model.", "lm_head")
+    } else {
+        ("language_model.model.", "language_model.lm_head")
+    };
+    let aliases = if qwen2vl {
+        vec![("model.".to_string(), "model.language_model.".to_string())]
+    } else if qwen35 {
         vec![
             ("model.language_model.".to_string(), "language_model.model.".to_string()),
             ("lm_head".to_string(), "language_model.lm_head".to_string()),
@@ -388,7 +399,7 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
         "gemma3_text" => dense::gemma3_text(&mut sub, prefix, lm_head, aliases)?,
         "qwen3_5_text" => hybrid::qwen3_5_text(&mut sub, false, prefix, lm_head, aliases)?,
         "qwen3_5_moe_text" => hybrid::qwen3_5_text(&mut sub, true, prefix, lm_head, aliases)?,
-        "llama" | "mistral" | "qwen2" => {
+        "llama" | "mistral" | "qwen2" | "qwen2_vl_text" | "qwen2_5_vl_text" => {
             let flavor = match tmt {
                 "llama" => Flavor::Llama,
                 "mistral" => Flavor::Mistral,

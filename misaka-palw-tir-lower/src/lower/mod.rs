@@ -76,8 +76,8 @@ pub use fill::{FillCtx, IntData, IntParams, IntTensor, Materialised, materialise
 pub struct LowerOpts {
     /// `2^18` (the default) or `2^21`.
     pub history_bound: u32,
-    /// A multimodal LM: image rows placed at the positions `start .. start + rows` (RFC-0003 II.4:
-    /// `Select(is_image_pos, Gather(img, pos − start), token embedding)`).
+    /// A multimodal LM: image rows placed at the prompt's placeholder ids by a cursor
+    /// ([`ImageRows`], RFC-0003 §II.2.1).
     pub image_rows: Option<ImageRows>,
     /// The longest history window any block keeps (`None`: the history bound, or the NF-8 cap).
     /// A class whose layout bounds its jobs below the history bound can keep a shorter window —
@@ -91,20 +91,30 @@ impl Default for LowerOpts {
     }
 }
 
-/// Image rows an LM reads in place of its token embedding at the image's positions: `rows` rows of
-/// `width` (the LM's hidden size) in the fixed point `unit` (the vision stage's output, `2^−q`).
-/// They arrive as the input `input.image_rows` (`i32 [rows, width]`), and the first image position
-/// as `input.image_start` (`idx []`), a job scalar.
+/// Image rows an LM reads in place of its token embedding (RFC-0003 §II.2.1's placement): at each
+/// position whose token is `placeholder`, the next of `rows` rows of `width` (the LM's hidden size),
+/// counted by a `Fixed` cursor over the stream (no job field). The rows arrive as the input
+/// `input.image_rows` (`i32 [rows, width]`, bound to the vision stage's `Final` output), in that
+/// stage's fixed point `unit` (`2^−q`). Once every row is placed, a placeholder id is an ordinary
+/// token again (a generated one, as HF embeds it).
+///
+/// `mrope` (Qwen2-VL, Qwen2.5-VL): the image's merged grid `(h, w)`. The LM's M-RoPE positions then
+/// follow `get_rope_index` for one image: an image token `i` sits at `(s, s + i / w, s + i % w)`
+/// with `s` its first row's stream position, and every later token at `p − rows + max(h, w)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImageRows {
     pub rows: usize,
     pub width: usize,
     pub unit: f64,
+    pub placeholder: u32,
+    pub mrope: Option<(u32, u32)>,
 }
 
-/// The input params of [`ImageRows`].
+/// The input param of [`ImageRows`], and its cursor state.
 pub const IMAGE_ROWS_PARAM: &str = "input.image_rows";
-pub const IMAGE_START_PARAM: &str = "input.image_start";
+pub const IMAGE_CURSOR_STATE: &str = "image.cursor";
+/// The cursor's per-layer copy (M-RoPE only): every layer advances its own by the same rule.
+pub const IMAGE_CURSOR_LAYER_STATE: &str = "image.cursor.layer";
 
 /// What a scale is made of; resolved per occurrence at materialisation ([`FillCtx::scale`]).
 #[derive(Clone, Debug, PartialEq)]
@@ -307,6 +317,8 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         shared,
         tables,
         image_rows: opts.image_rows,
+        image_cursor: None,
+        image_cursor_layer: None,
         split_max_readers: usize::MAX,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -439,6 +451,11 @@ struct Cx<'h> {
     tables: std::collections::BTreeSet<u32>,
     /// [`LowerOpts::image_rows`].
     image_rows: Option<ImageRows>,
+    /// The image cursor state, once the pre block declared it.
+    image_cursor: Option<u16>,
+    /// Its per-layer copy, which a layer block reads for M-RoPE (a layer block reads only per-layer
+    /// states, NF-15), declared by the first block that needs it.
+    image_cursor_layer: Option<u16>,
     /// Split a value's outlier channels only when at most this many projections read it: each
     /// split projection costs 9 nodes more, and a block has 512 (NF-12).
     split_max_readers: usize,
@@ -529,6 +546,8 @@ struct Lb {
     w16: Vec<bool>,
     /// Set by the `Linear` dispatch for the node being lowered: its weights are per-row `i16`.
     w16_now: bool,
+    /// The M-RoPE positions of this block, once computed (its per-layer cursor is written once).
+    mrope_pos: Option<[tir::Ref; 3]>,
     /// Name suffix for per-layer params whose base name another block already declared.
     suffix: String,
 }
@@ -567,6 +586,7 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         wide: wide_products(blk),
         w16: scan_param_linears(blk),
         w16_now: false,
+        mrope_pos: None,
         suffix,
     };
     gdn_patterns(hl, blk, &mut lb)?;
@@ -1485,31 +1505,97 @@ fn lower_row_lookup(
     Ok(v)
 }
 
-/// RFC-0003 II.4's placement: at positions `start .. start + rows` the LM reads the image's row
-/// `pos − start`, narrowed from the vision stage's fixed point to the residual scale; elsewhere its
-/// token embedding. The embedding must be the value the pre block carries out (residual scale).
+/// RFC-0003 §II.2.1's placement ([`ImageRows`]): at a placeholder position, while rows remain, the
+/// LM reads row `cursor` — narrowed from the vision stage's fixed point to the residual scale — in
+/// place of its token embedding, and the cursor advances. The embedding must be the value the pre
+/// block carries out (residual scale).
 fn inject_image_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: Val, img: ImageRows) -> Result<Val> {
     if !v.key.same(&ScaleKey::resid()) || v.dt != DType::I32 || v.len != img.width {
         return Err(LowerError::not_lowerable("image rows into a pre block that does more than look up the token embedding"));
     }
     let (n, w) = (img.rows, img.width);
     let rows = decl(b, cx, lb, IMAGE_ROWS_PARAM, DType::I32, &[n, w], false, bidir::input_fill(DType::I32, vec![n, w]))?;
-    let start = decl(b, cx, lb, IMAGE_START_PARAM, DType::Idx, &[], false, bidir::input_fill(DType::Idx, vec![]))?;
-    let rel = b.sub(tir::Ref::Input(INPUT_POS), start, DType::I64);
-    let zero = b.c(DType::I64, 0);
-    let top = b.c(DType::I64, n as i128);
-    let ge = b.compare(rel, zero, tir::Cmp::Ge);
-    let lt = b.compare(rel, top, tir::Cmp::Lt);
-    let off = b.c(DType::I8, 0);
-    let inside = b.select(ge, lt, off, DType::I8);
-    let at = b.clamp(rel, 0, n as i64 - 1, DType::Idx);
+    let cursor = b.pb.fixed_state(IMAGE_CURSOR_STATE, DType::I32, &[1], 0, n as i64, false);
+    cx.image_cursor = Some(cursor);
+    let c = tir::Ref::State(cursor);
+    let is_img = image_token(b, c, img);
+    let at = b.clamp(c, 0, n as i64 - 1, DType::Idx);
     let row = b.gather(rows, at, 0, 0);
+    let row = b.reshape_fixed(row, &[w as u32]);
     let unit = img.unit;
     let (m, s) = decl_ms(b, cx, lb, "image_rows", 1, Arc::new(move |c| Ok(vec![unit / c.scale(&ScaleKey::resid())?])))?;
     let row = narrow(b, row, m, s, None, DType::I32);
-    let r = b.select(inside, row, v.r, DType::I32);
+    let r = b.select(is_img, row, v.r, DType::I32);
     b.commit(r);
+    let step = b.cast(is_img, DType::I32);
+    let next = b.add(c, step, DType::I32);
+    let next = b.clamp(next, 0, n as i64, DType::I32);
+    b.state_write(cursor, next);
     Ok(Val { r, ..v })
+}
+
+/// `1` when this position's token is an image placeholder with rows left (`[1]`, `i8`).
+fn image_token(b: &mut BlockBuilder<'_>, cursor: tir::Ref, img: ImageRows) -> tir::Ref {
+    let ph = b.c(DType::Idx, img.placeholder as i128);
+    let is_ph = b.compare(tir::Ref::Input(INPUT_TOKEN), ph, tir::Cmp::Eq);
+    let nn = b.c(DType::I32, img.rows as i128);
+    let room = b.compare(cursor, nn, tir::Cmp::Lt);
+    let zero = b.c(DType::I8, 0);
+    b.select(is_ph, room, zero, DType::I8)
+}
+
+/// Qwen2-VL's M-RoPE positions `(t, h, w)` at this position, from the stream position and the image
+/// cursor as this step starts (the image rows placed before this position). A layer block reads its
+/// own per-layer copy of the cursor and advances it by the pre block's rule, so every layer's copy
+/// equals the pre block's. Each position is an `idx [1]` for the rotary tables.
+fn mrope_positions(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, img: ImageRows) -> Result<[tir::Ref; 3]> {
+    if let Some(p) = lb.mrope_pos {
+        return Ok(p);
+    }
+    let (gh, gw) = img.mrope.ok_or_else(|| LowerError::eval("internal: M-RoPE without a grid"))?;
+    if cx.image_cursor.is_none() {
+        return Err(LowerError::eval("internal: M-RoPE before the pre block placed the image"));
+    }
+    let n = img.rows as i64;
+    let cursor = match (lb.role, cx.image_cursor_layer) {
+        (BlockRole::Layer, Some(k)) => k,
+        (BlockRole::Layer, None) => {
+            let k = b.pb.fixed_state(IMAGE_CURSOR_LAYER_STATE, DType::I32, &[1], 0, n, true);
+            cx.image_cursor_layer = Some(k);
+            k
+        }
+        _ => return Err(LowerError::not_lowerable("M-RoPE outside a layer block")),
+    };
+    let c = tir::Ref::State(cursor);
+    let is_img = image_token(b, c, img);
+    let step = b.cast(is_img, DType::I32);
+    let next = b.add(c, step, DType::I32);
+    let next = b.clamp(next, 0, n, DType::I32);
+    b.state_write(cursor, next);
+    let p = b.cast(tir::Ref::Input(INPUT_POS), DType::I64);
+    // An image token `i = cursor`: `s = p − i`, rows `i / w`, columns `i % w`.
+    let s = b.sub(p, c, DType::I64);
+    let wc = b.c(DType::I64, gw as i128);
+    let row = b.div(c, wc, Rounding::Floor, DType::I64);
+    let rw = b.mul(row, wc, DType::I64);
+    let col = b.sub(c, rw, DType::I64);
+    let ih = b.add(s, row, DType::I64);
+    let iw = b.add(s, col, DType::I64);
+    // Any other token: `p`, less `rows − max(h, w)` once the image is complete.
+    let nc = b.c(DType::I32, n as i128);
+    let done = b.compare(c, nc, tir::Cmp::Ge);
+    let shift = b.c(DType::I64, n as i128 - gh.max(gw) as i128);
+    let zero = b.c(DType::I64, 0);
+    let off = b.select(done, shift, zero, DType::I64);
+    let tp = b.sub(p, off, DType::I64);
+    let hb = cx.history_bound as i64 - 1;
+    let mut out = [tir::Ref::Input(INPUT_POS); 3];
+    for (k, img_pos) in [s, ih, iw].into_iter().enumerate() {
+        let v = b.select(is_img, img_pos, tp, DType::I64);
+        out[k] = b.clamp(v, 0, hb, DType::Idx);
+    }
+    lb.mrope_pos = Some(out);
+    Ok(out)
 }
 
 /// The names of a LoRA path's params all carry this marker ([`adapter_params_last`] moves them
@@ -2102,6 +2188,49 @@ fn rope_angles(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, t: u32) -
     }
     let hl = cx.hl;
     let f = hl.rope_tables[t as usize].clone();
+    // M-RoPE with an image: three positions, each rotating its own frequencies.
+    if let (Some(mr), Some(img @ ImageRows { mrope: Some(_), .. })) = (f.mrope, cx.image_rows) {
+        if f.dynamic.is_some() || f.longrope.is_some() {
+            return Err(LowerError::not_lowerable("M-RoPE with position-dependent frequencies"));
+        }
+        let half = f.inv_freq.len();
+        let hb = cx.history_bound as usize;
+        let lo_bits = hb.trailing_zeros().div_ceil(2);
+        let (lo_rows, hi_rows) = (1usize << lo_bits, hb >> lo_bits);
+        let mk = |rows: usize, step: u32, sin: bool| -> FillFn {
+            let inv = f.inv_freq.clone();
+            Arc::new(move |_c| {
+                let mut v = Vec::with_capacity(rows * inv.len());
+                for r in 0..rows {
+                    for th in &inv {
+                        let ang = (r as f64) * (1u64 << step) as f64 * (*th as f64);
+                        v.push(q24(if sin { ang.sin() } else { ang.cos() }));
+                    }
+                }
+                Ok(IntTensor::i32(vec![rows, inv.len()], v))
+            })
+        };
+        let ch = decl(b, cx, lb, &format!("rope{t}.cos_hi"), DType::I32, &[hi_rows, half], false, mk(hi_rows, lo_bits, false))?;
+        let sh = decl(b, cx, lb, &format!("rope{t}.sin_hi"), DType::I32, &[hi_rows, half], false, mk(hi_rows, lo_bits, true))?;
+        let cl = decl(b, cx, lb, &format!("rope{t}.cos_lo"), DType::I32, &[lo_rows, half], false, mk(lo_rows, 0, false))?;
+        let sl = decl(b, cx, lb, &format!("rope{t}.sin_lo"), DType::I32, &[lo_rows, half], false, mk(lo_rows, 0, true))?;
+        let pos = mrope_positions(b, cx, lb, img)?;
+        let mut cs = Vec::with_capacity(3);
+        for p in pos {
+            let p = b.reshape_fixed(p, &[]);
+            cs.push(b.rope_angles_two_level(p, ch, sh, cl, sl, lo_bits));
+        }
+        // Each frequency from its component: `h` where the mask says so, else `w`, else `t`.
+        let mask = |k: usize| -> Vec<i128> { (0..half).map(|j| i128::from(mr.component(j) == k)).collect() };
+        let (mh, mw) = (b.pb.konst(DType::I8, &[half as u32], &mask(1)), b.pb.konst(DType::I8, &[half as u32], &mask(2)));
+        let c = b.select(mw, cs[2].0, cs[0].0, DType::I32);
+        let c = b.select(mh, cs[1].0, c, DType::I32);
+        let s = b.select(mw, cs[2].1, cs[0].1, DType::I32);
+        let s = b.select(mh, cs[1].1, s, DType::I32);
+        let out = (c, s);
+        lb.angles.insert(t, out);
+        return Ok(out);
+    }
     let half = f.inv_freq.len();
     let hb = cx.history_bound as usize;
     let per_position = f.dynamic.is_some() || f.longrope.is_some();

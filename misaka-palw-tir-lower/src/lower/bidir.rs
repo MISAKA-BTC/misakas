@@ -133,6 +133,8 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
         shared: Default::default(),
         tables: Default::default(),
         image_rows: None,
+        image_cursor: None,
+        image_cursor_layer: None,
         split_max_readers: 0,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -214,6 +216,7 @@ fn bidir_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, a: &Arch, c
         wide: vec![false; n],
         w16: vec![false; n],
         w16_now: false,
+        mrope_pos: None,
         suffix,
     };
     let tb = pb.blocks.len() as u8;

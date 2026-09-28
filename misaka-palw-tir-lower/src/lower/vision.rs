@@ -276,8 +276,15 @@ pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f
                 names,
             }
         }
-        "Qwen2VisionTransformerPretrainedModel" | "Qwen2_5_VisionTransformerPretrainedModel" => {
-            let v = &root;
+        "Qwen2VisionTransformerPretrainedModel"
+        | "Qwen2_5_VisionTransformerPretrainedModel"
+        | "Qwen2VLForConditionalGeneration"
+        | "Qwen2_5_VLForConditionalGeneration" => {
+            // A whole VLM keeps its tower under `visual.` (transformers 5 saves the original names;
+            // `model.visual.` is aliased at binding).
+            let whole = arch.ends_with("ForConditionalGeneration");
+            let v = if whole { &root["vision_config"] } else { &root };
+            let vp = if whole { "visual." } else { "" };
             let q25 = arch.starts_with("Qwen2_5");
             let (h, w) = size.ok_or_else(|| LowerError::bad("a Qwen2-VL tower needs the class's declared input size"))?;
             let d = if q25 { cfg_usize(v, "hidden_size", 1280) } else { cfg_usize(v, "embed_dim", 1280) };
@@ -286,8 +293,8 @@ pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f
             let inter = if q25 { cfg_usize(v, "intermediate_size", 3420) } else { d * cfg_usize(v, "mlp_ratio", 4) };
             let out = if q25 { cfg_usize(v, "out_hidden_size", 3584) } else { cfg_usize(v, "hidden_size", 3584) };
             let theta = v.get("rope_parameters").and_then(|r| r.get("rope_theta")).and_then(Value::as_f64).unwrap_or(10000.0);
-            put("patch.w", "patch_embed.proj.weight".into());
-            let l = "blocks.{L}.".to_string();
+            put("patch.w", format!("{vp}patch_embed.proj.weight"));
+            let l = format!("{vp}blocks.{{L}}.");
             put("norm1", format!("{l}norm1"));
             put("norm2", format!("{l}norm2"));
             put("attn.qkv", format!("{l}attn.qkv"));
@@ -300,9 +307,9 @@ pub fn parse_vision(config: &str, size: Option<(u32, u32)>, mean_std: Option<([f
                 put("mlp.up", format!("{l}mlp.fc1"));
                 put("mlp.down", format!("{l}mlp.fc2"));
             }
-            put("merger.norm", "merger.ln_q".into());
-            put("merger.up", "merger.mlp.0".into());
-            put("merger.down", "merger.mlp.2".into());
+            put("merger.norm", format!("{vp}merger.ln_q"));
+            put("merger.up", format!("{vp}merger.mlp.0"));
+            put("merger.down", format!("{vp}merger.mlp.2"));
             let merge = cfg_usize(v, "spatial_merge_size", 2) as u32;
             let patch = cfg_usize(v, "patch_size", 14) as u32;
             let window = if q25 {
@@ -533,7 +540,13 @@ pub fn hl_program(s: &VisionSpec) -> Result<(HlProgram, Binding)> {
         }
         ignored.push("language_model.".into());
     }
-    let binding = Binding { srcs: table.into_iter().map(|(_, _, _, src)| src).collect(), aliases: vec![], ignored_prefixes: ignored };
+    let mut aliases = vec![];
+    if s.architecture.ends_with("VLForConditionalGeneration") {
+        // A whole Qwen2-VL checkpoint: the language model is another stage's.
+        ignored.extend(["model.layers.", "model.embed_tokens.", "model.norm.", "model.language_model.", "lm_head."].map(String::from));
+        aliases.push(("visual.".to_string(), "model.visual.".to_string()));
+    }
+    let binding = Binding { srcs: table.into_iter().map(|(_, _, _, src)| src).collect(), aliases, ignored_prefixes: ignored };
     Ok((hl, binding))
 }
 
@@ -940,6 +953,8 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
         shared: Default::default(),
         tables: Default::default(),
         image_rows: None,
+        image_cursor: None,
+        image_cursor_layer: None,
         split_max_readers: 0,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -993,6 +1008,7 @@ fn new_lb(hl: &HlProgram, hbk: usize) -> Lb {
         wide: vec![false; n],
         w16: vec![false; n],
         w16_now: false,
+        mrope_pos: None,
         suffix,
     }
 }

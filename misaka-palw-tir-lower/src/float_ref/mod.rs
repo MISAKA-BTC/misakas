@@ -196,11 +196,24 @@ pub struct Session<'a> {
     /// Rows that replace the pre block's output at their positions (an image's rows in a
     /// multimodal LM, RFC-0003 II.4).
     pub overrides: BTreeMap<usize, Vec<f32>>,
+    /// M-RoPE position components `(t, h, w)` by position (Qwen2-VL's `get_rope_index`); a
+    /// position absent here reads its own index in all three.
+    pub mrope_pos: BTreeMap<usize, [usize; 3]>,
 }
 
 impl<'a> Session<'a> {
     pub fn new(prog: &'a HlProgram, params: &'a ParamStore) -> Self {
-        Session { prog, params, fixed: BTreeMap::new(), hist: BTreeMap::new(), pos: 0, sites: None, trace: None, overrides: BTreeMap::new() }
+        Session {
+            prog,
+            params,
+            fixed: BTreeMap::new(),
+            hist: BTreeMap::new(),
+            pos: 0,
+            sites: None,
+            trace: None,
+            overrides: BTreeMap::new(),
+            mrope_pos: BTreeMap::new(),
+        }
     }
     pub fn with_site_stats(mut self) -> Self {
         self.sites = Some(BTreeMap::new());
@@ -421,7 +434,14 @@ impl<'a> Session<'a> {
             }
             Op::Rope { heads, head_dim, rotary_dim, offset, style, table } => {
                 let f = &self.prog.rope_tables[*table as usize];
-                let (c, s) = f.cos_sin(pos);
+                let (c, s) = match (f.mrope, self.mrope_pos.get(&pos)) {
+                    // M-RoPE: each frequency at its own position component.
+                    (Some(mr), Some(tri)) => {
+                        let parts: Vec<(Vec<f32>, Vec<f32>)> = tri.iter().map(|p| f.cos_sin(*p)).collect();
+                        (0..parts[0].0.len()).map(|j| (parts[mr.component(j)].0[j], parts[mr.component(j)].1[j])).unzip()
+                    }
+                    _ => f.cos_sin(pos),
+                };
                 one(rope(x(0)?, *heads, *head_dim, *rotary_dim, *offset, *style, &c, &s))
             }
             Op::HistAppend => {
