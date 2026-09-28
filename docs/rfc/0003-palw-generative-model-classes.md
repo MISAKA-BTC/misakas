@@ -1149,14 +1149,17 @@ dormant on `rfc3/fp-v5` (2026-09-29), behind the fence `palw_fp_job_v5`, which r
 
 - The image rows enter the text stage through one `StageFinal` edge from the vision stage: rows
   `[N_img, d_text]`, every slot's rows concatenated in slot order.
-- The LM program places them itself. A `Fixed` state `cursor` counts the class's image placeholder id
-  (a constant of the program) as it passes. At a position whose token is the placeholder, the input
-  embedding is `Gather(image_rows, min(cursor, N_img − 1))` and the cursor advances. At any other
-  position it is the token's embedding.
+- The LM program places them itself. A `Fixed` state `cursor` counts the image rows placed so far.
+  At a position whose token is the class's image placeholder id (a constant of the program) **while
+  `cursor < N_img`**, the input embedding is `Gather(image_rows, cursor)` and the cursor advances.
+  At any other position — including **a placeholder after the `N_img`-th, which is an ordinary token,
+  embedded as a token** — the input embedding is the token's embedding.
 - Placement is therefore a total, deterministic function of the prompt ids. It needs no job field
   and no acceptance rule, and a court replays it like any other state. A prompt with fewer
-  placeholders than image rows uses fewer rows; one with more re-reads the last. The class's chat
-  template (the gateway's) emits exactly `N_img`.
+  placeholders than image rows uses fewer rows. A placeholder past the last row is embedded as a
+  token, as HF embeds a generated placeholder, and as the lowering does (`rfc3/lower` 4c25416a5,
+  hf-coverage §16). The two readings agree whenever a prompt has at most `N_img` placeholders, which
+  chat templates guarantee; the class's chat template (the gateway's) emits exactly `N_img`.
 
 **The step tree and the court.** One tree, stage-major (PALW-GEN-3): the image stages' leaves, then
 the text stage's.
@@ -1166,6 +1169,27 @@ the text stage's.
   a dispute over the vision stage's leaf, adjudicated at the first divergent leaf.
 - The vision stage's own cones read image lanes from tiles proven under `input_root`
   (PALW-TIR-48).
+- **As built** (`rfc3/fp-v5`, 2026-09-29, dormant; library level):
+  - the tree is structural, from the programs, the layouts and the trip counts. Per position: every
+    commit point in slot order, cut into its commit tile. The text stage's logits are leaves only
+    where the decode consumes them. After every `C`-th position, every `Fixed` state not written in
+    `post`. Keyed leaves, a Merkle root per stage bound with its count, and one step root over the
+    stage roots;
+  - the worker runs the stages and then the text stage through FP Job V4's decoder. The panel
+    re-executes and names a changed answer, a changed stage root or an unbound root;
+  - the court adjudicates any leaf of any stage from the carried leaves before it (earlier stages
+    entirely), the class's params, `R`, the job's facts, edges read under PALW-TIR-33 and image
+    lanes from proven tiles. The decode door holds each generated id to the V4 selection over the
+    committed logits row;
+  - V5 rides the lane's job type as version 8, its images after the V4 tail (the same bytes as the
+    wrapper). The commitment, the payload, the claim id and the signed message carry it with no
+    layout change. The V4 validators refuse it, and the V5 validator applies V4's commitment rules
+    to its V4 view past `palw_fp_job_v5`.
+
+  Not yet built: the pipeline admission and the generative class registry that a V5 claim resolves
+  its class against; the node's worker and seat loops (kaspad, `misaka-palw-base0`) calling these;
+  the close proofs as consensus objects (`PalwCourtVerdictProofV2` 10/11); and the params' openings
+  against the artifact root (Phase F's inventory, for pipelines).
 
 **Order of implementation for this path.**
 
