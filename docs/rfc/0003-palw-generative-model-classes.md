@@ -1106,16 +1106,34 @@ randomness. That makes it the smoke-test class for the drills.
 
 ## II.4 Multimodal input (vision canonicalisation)
 
-**Job fields.** `images: [ImageInputRefV1 { input_root, h, w }]`, at most the class's maximum.
+**Job fields.** `images: [ImageInputRefV1 { input_root, h, w }]`, exactly one per image slot of the
+class.
 
-- An image input is `u8` HWC RGB at one of the class's declared input sizes. `input_root` is §I.3.2's
-  construction applied to input bytes, over the class's input tiles.
+- **Image slots.** The class declares its image slots in its offers: slot `i` is `{ h, w, tile_len }`,
+  at most 16 slots, each input tile `tile_len ∈ [4, 2^16]` bytes. The class id covers the slots. A
+  job carries exactly one image per slot, at the slot's size (`ImageCount`, `ImageSizeNotOffered`).
+  Every slot is read (NF-P10), so no image is optional; a class that takes fewer images is another
+  class, as a class at another resolution is.
+- An image input is `u8` HWC RGB at its slot's size. `input_root` is §I.3.2's construction applied to
+  the image's bytes: header `ImageRgb8 [h, w, 3]`, the slot's `tile_len`, index-bound tile leaves,
+  keyed nodes. An input root and an output root of the same bytes are the same commitment.
 - Decoding, EXIF orientation, colour management, alpha and **arbitrary-size resampling** are outside
   consensus: the gateway resizes or letterboxes to a declared size and says so.
 - Image bytes are far larger than a transaction. They travel like `PanelDa` prompt ids (with the
   capture to the panel), the chain carries `input_root`, and a dispute opens tiles.
 
 **Canonical output.** Per the consuming profile: text through FP (§II.2), or an embedding (§II.3).
+
+**Binding** (04b §15.6, NF-P10). A stage reads image `i` through `JobImage { index: i }` (binding tag 6),
+into an `External` input `i16 [h, w, 3]` whose interval contains `[0, 255]`. `i16`, because program
+inputs have no `u8` and every pixel is exact in it. One image is bound at one size wherever it is
+bound, and the bound images are `0 … n − 1`.
+
+**Admission and court** (04b §15.4, §15.9, PALW-TIR-48). Admission opens an image input at **1 byte a
+lane**, and counts it as an operand of its own (it is opened by tiles with their paths). The court
+never holds an image. It reads an image lane only from an input tile that the parties carry, after
+verifying the tile against the job's `input_root`. A tile not proven under the root is refused
+evidence and convicts nobody. A lane whose tile nobody carried fails the evaluation (`Missing`).
 
 **Mapping onto the TIR scan.** A single-position **preprocessing stage** in integer TIR:
 
@@ -1272,6 +1290,10 @@ A new chapter `spec/palw/04c-generative-classes.md`, plus additions to 04b. Appl
   network's ceilings for the profile.
 - **PALW-GEN-9 (image job).** An image job MUST satisfy §II.1.1's table.
 - **PALW-GEN-10 (text).** Text generation is RFC-0001 §A (FP Job V4). This chapter adds no text rule.
+- **PALW-GEN-11 (job images).** A job MUST carry exactly one `ImageInputRefV1` per image slot of its
+  class, at the slot's size. An image's `input_root` MUST be §I.3.2's construction over its bytes
+  (`ImageRgb8 [h, w, 3]`, the slot's `tile_len`). A court MUST read image lanes only from tiles
+  proven under `input_root` (PALW-TIR-48).
 
 ## Alternatives
 
@@ -1386,7 +1408,7 @@ output kinds (§I.3.3).
 | 8 | **Drills**: devnet, then a salted t12 chain; register tiny image and embedding classes; jobs; replay; disputes (a partial-sum cone included); crossing the fence on the shipping binary | — | RFC-0002 Phase F's D-F1…D-F4 pattern | 3 weeks |
 | 9 | **testnet-12**: arm `palw_gen_v1` after `palw_tir_v1`; the first Example-C-sized image class | fence | registration → panel → `Final` | — |
 | 10 | **RFC-0002 Phase G**: GPU integer backend, exact two-pass attention, GPU leaf hashing; then a 4B-class distilled image class | node releases | F-4 gates per backend; the throughput report | — |
-| 11 | **Multimodal input** (§II.4), then image-editing bodies | fence value | — | — |
+| 11 | **Multimodal input** (§II.4), then image-editing bodies. Built on `rfc3/impl` (2026-09-29), dormant: `JobImage`, the slots, the image leaf, the court's tile reading | fence value | — | — |
 | 12 | **Audio** (§II.5) | fence value | — | — |
 | 13 | **Generalised dissection** (§II.1.5.6, court version 3), then **video** (§II.6), subject to open question 6 | fence | — | — |
 
