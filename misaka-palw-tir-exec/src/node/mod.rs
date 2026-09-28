@@ -4,6 +4,8 @@
 //! `kaspa-consensus-core`; the executor itself does not need them, so this layer is a feature.
 
 pub mod artifact;
+pub mod backend;
+pub mod drill;
 pub mod evidence;
 pub mod inventory;
 pub mod mapped;
@@ -11,6 +13,12 @@ pub mod run;
 pub mod tree;
 
 pub use artifact::TirArtifactV1;
+pub use backend::{
+    TIR_CAPTURE_MAGIC_V1, TirBackendV1, TirCaptureV1, tir_attempt_canonical_v1, tir_job_context_v1, tir_job_for_anchor_v1,
+};
+pub use drill::{
+    TirDrillCallV1, TirDrillUnitKindV1, TirDrillUnitV1, TirFamilyCertificateV1, tir_family_drill_v1, tir_prim_kernel_id_v1,
+};
 pub use evidence::{TirEvidenceV1, TirRetainedJobV1, tir_bisect_prefix_state_v1, tir_first_divergence_v1};
 pub use inventory::{TirHeldInventoryV1, TirInventoryTreeV1, TirParamOpenerV1, TirParamsSourceV1};
 pub use run::{TirClassRunnerV1, TirJobRunV1, TirLeafOutV1, TirRangeRunV1, TirResumePointV1};
