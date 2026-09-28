@@ -53,7 +53,7 @@ impl TirLineageV1 {
     pub fn open_entry(path: &Path) -> Result<PalwTirClassEntryV1, String> {
         let artifact = Arc::new(TirArtifactV1::open(path)?);
         let class = artifact.class().map_err(|e| {
-            format!("{}: {e} — an IR class needs a declared layout (`palw-class check-architecture` derives one)", path.display())
+            format!("{}: {e} — an IR class needs a declared layout (`palw-class declare-layout` writes one)", path.display())
         })?;
         let (artifact_root, _) = artifact.inventory_root().map_err(|e| format!("{}: {e}", path.display()))?;
         let canonical_job = palw_tir_attempt_canonical_v1(&class).ok_or_else(|| {

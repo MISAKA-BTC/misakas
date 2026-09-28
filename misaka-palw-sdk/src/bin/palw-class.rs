@@ -37,6 +37,20 @@ USAGE:
     palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--tile-len N] [--h-chunk N] [--json]
     palw-class check-architecture --network <id> --tir <program.tir> [--tile-len N] [--h-chunk N] [--json]
     palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
+    palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
+                         [--logits-scheme tiled|flat] [--model-id <model-id>] <lowered.palwtir>
+
+`declare-layout` (RFC-0002 Phase F) makes a lowered artifact a class: `palw-tir-fidelity --artifact-out`
+writes the program and its integer tensors with no layout, and an IR class is its program under a
+declared layout. It tiles every commit point and state at --tile-len (the logits node at the tiled
+scheme's 4,096 lanes), the history at --h-chunk rows (64 and 64 unless given), the context at
+--max-context (the widest the program and the network admit unless given), and declares the widest
+checkpoint interval admission v10 accepts (tir_admit_v1's min C_j, halved until the gate admits),
+then writes the container to --out with --model-id in its provenance. The class commits its logits
+under --logits-scheme (the program's own if it names one, else tiled: the lowerer leaves it unset,
+and a class under no scheme has no decode court). The path from a Hugging Face
+checkpoint to a registration: check-architecture → palw-tir-fidelity → declare-layout → preflight →
+kaspad --palw-class-artifact <out> --palw-register-class <model-id>.
 
 `certify` (RFC-0002 Phase F) drills an IR (PALWTIR1) class end to end — a lie planted at a leaf of
 every committed unit, prefill and decode, convicted by the IR court, and the honest run acquitted —
@@ -205,6 +219,29 @@ fn run(args: &[String]) -> Result<(), String> {
                 true => Ok(()),
                 false => std::process::exit(2),
             }
+        }
+        "declare-layout" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let out = take_flag(&mut args, "--out").ok_or(USAGE)?;
+            let model_id = take_flag(&mut args, "--model-id");
+            let number = |v: Option<String>, name: &str| -> Result<Option<u32>, String> {
+                v.map(|v| v.parse::<u32>().map_err(|e| format!("{name} {v}: {e}"))).transpose()
+            };
+            let default = misaka_palw_sdk::tir_layout::TirLayoutChoiceV1::default();
+            let choice = misaka_palw_sdk::tir_layout::TirLayoutChoiceV1 {
+                max_context: number(take_flag(&mut args, "--max-context"), "--max-context")?,
+                tile_len: number(take_flag(&mut args, "--tile-len"), "--tile-len")?.unwrap_or(default.tile_len),
+                h_chunk: number(take_flag(&mut args, "--h-chunk"), "--h-chunk")?.unwrap_or(default.h_chunk),
+                logits_scheme: match take_flag(&mut args, "--logits-scheme") {
+                    Some(s) => Some(
+                        misaka_palw_sdk::tir_layout::TirLogitsSchemeV1::parse(&s)
+                            .ok_or_else(|| format!("--logits-scheme {s}: tiled or flat"))?,
+                    ),
+                    None => None,
+                },
+            };
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            declare_layout(&view, &path, &PathBuf::from(out), &choice, model_id.as_deref())
         }
         "certify" => {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
@@ -539,6 +576,40 @@ fn inspect(view: &NetworkView, path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `declare-layout`: a lowered artifact written again under a declared layout, judged by the gate.
+fn declare_layout(
+    view: &NetworkView,
+    input: &std::path::Path,
+    output: &std::path::Path,
+    choice: &misaka_palw_sdk::tir_layout::TirLayoutChoiceV1,
+    model_id: Option<&str>,
+) -> Result<(), String> {
+    let d = misaka_palw_sdk::tir_layout::tir_declare_layout_v1(&view.params, &view.bundle, input, output, choice, model_id)?;
+    let l = &d.layout;
+    println!("wrote {} (file digest {})", output.display(), Hash64::from_bytes(d.file_digest));
+    println!(
+        "  layout          max_context {}, checkpoint interval {}, h_tile {}, {} commit tiles ({:?} distinct), {} state tiles",
+        l.max_context,
+        l.checkpoint_interval,
+        l.h_tile,
+        l.commit_tiles.len(),
+        l.commit_tiles.iter().collect::<std::collections::BTreeSet<_>>(),
+        l.state_tiles.len()
+    );
+    println!("  class id        {}", d.class_id);
+    println!("  inventory root  {}", d.artifact_root);
+    match &d.admission {
+        Ok(()) => {
+            println!("  ADMISSIBLE      admission v10 {}", d.admission_at);
+            Ok(())
+        }
+        Err(why) => {
+            println!("  REFUSED         admission v10 {}: {why}", d.admission_at);
+            Err("the declared class would be refused — nothing should be signed or funded for it".to_string())
+        }
+    }
+}
+
 /// `certify`: the IR class's drill as the chain's `FamilyCertified { TirAttempt }` object, graded
 /// here first, and the lane object that seats the class once the family is certified.
 fn certify(
@@ -624,11 +695,14 @@ fn preflight(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>) -
     let tir = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&artifact));
     if !tir.is_empty() {
         let mut refused = false;
+        // The gate the registration will meet: at the fence's height where `palw_tir_v1` is armed,
+        // else (testnet-12, whose IR fence is a flag day not yet scheduled) as if it were.
+        let gate = misaka_palw_sdk::tir_layout::TirOfflineGateV1::of(&view.params);
         for entry in tir.iter().filter(|e| wanted.is_none_or(|w| w == e.model_id)) {
             inspect_tir(view, entry);
             // The registration a `--palw-register-class` run would build, judged by admission v10 at
             // the point the fence arms (the genesis terms: the base class's pricing, weightless).
-            let at = view.params.palw_tir_v1_fence().map(|f| f.activation.daa_score()).unwrap_or(0);
+            let at = gate.daa;
             let terms = kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2 {
                 min_grantable_share_permille: 0,
                 slash_value_per_pwu: 1,
@@ -642,7 +716,7 @@ fn preflight(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>) -
                 0,
             ));
             match misaka_palw_sdk::tir_registration::build_tir_registration_v1(
-                &view.params,
+                &gate.params,
                 &view.bundle,
                 entry,
                 &terms,
@@ -652,8 +726,10 @@ fn preflight(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>) -
                 at,
             ) {
                 Ok(_) => println!(
-                    "  ADMISSIBLE (admission v10 at DAA {at}; the live chain's terms decide the rest)  {}  root {}",
-                    entry.model_id, entry.artifact_root
+                    "  ADMISSIBLE (admission v10 {}; the live chain's terms decide the rest)  {}  root {}",
+                    gate.note(),
+                    entry.model_id,
+                    entry.artifact_root
                 ),
                 Err(why) => {
                     refused = true;

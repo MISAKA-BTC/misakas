@@ -1151,6 +1151,106 @@ mod t12_walk {
         assert!(after < before, "the producer is charged");
     }
 
+    /// **A Hugging Face model through the operator's path, to a registration on testnet-12's fold**
+    /// (the operator surface, RFC-0002 Phase F): the tiny `llama` fixture's config is ADMISSIBLE by
+    /// `check-architecture`'s IR mode; the converter's library (`fidelity::prepare`, calibration,
+    /// `materialise`, `artifact::write` — what `palw-tir-fidelity --artifact-out` runs, with the
+    /// class's window) writes its integer artifact; `declare-layout` makes it a class admission v10
+    /// admits; the SDK's IR lineage loads it, its backend runs the canonical job a seat checks; and
+    /// the node's registration folds to a `Candidate` row.
+    #[test]
+    fn a_tiny_hf_model_is_checked_lowered_declared_and_registered_on_testnet_12() {
+        use misaka_palw_tir_lower::float_ref::ParamStore;
+        use misaka_palw_tir_lower::float_ref::stream::Resident;
+        use misaka_palw_tir_lower::lower::{LowerOpts, materialise};
+        use misaka_palw_tir_lower::quant::QuantPolicy;
+        use misaka_palw_tir_lower::weights::Checkpoint;
+        use misaka_palw_tir_lower::{artifact, fidelity};
+        const CONTEXT: u32 = 64;
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../misaka-palw-tir-lower/tests/fixtures/hf/llama");
+        if !fixture.join("model.safetensors").exists() {
+            eprintln!("the llama fixture is missing: skipped");
+            return;
+        }
+        let mut c = rcore::Chain::new(armed());
+        c.room = true;
+        let bundle = rcore::bundle(&c.p);
+        let config = std::fs::read_to_string(fixture.join("config.json")).unwrap();
+
+        // 1. check-architecture (IR mode): lowerable and admitted by tir_admit_v1 on this network.
+        let report = misaka_palw_sdk::check_architecture::check_ir_config_v1(&c.p, &config, false);
+        assert!(report.verdict.is_admissible(), "{}", report.verdict);
+
+        // 2. The converter: lowered at the class's window, calibrated, materialised, written.
+        let opts = LowerOpts { max_window: Some(CONTEXT), ..Default::default() };
+        let prep = fidelity::prepare(&config, &opts).expect("lowered");
+        let ck = Checkpoint::open(&fixture).unwrap();
+        let (params, _) = ParamStore::from_source(&prep.hl, &prep.binding, &ck).unwrap();
+        let loader = Resident(std::sync::Arc::new(params));
+        let calib = fidelity::random_sequences(prep.hl.vocab, 4, 32, 7);
+        let quiet = |_: usize, _: usize| {};
+        let stats = fidelity::calibrate(&prep.hl, &loader, &calib, &quiet).unwrap();
+        let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &QuantPolicy::default(), &quiet).unwrap();
+        let dir = std::env::temp_dir().join(format!("kaspad-tir-hf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lowered = dir.join("llama.palwtir");
+        artifact::write(&lowered, &prep.lowered.program, &mat.params, [3u8; 64], serde_json::json!({})).unwrap();
+
+        // 3. declare-layout: the class admission v10 admits (at this chain's fence).
+        let declared = dir.join("llama.class.palwtir");
+        let choice = misaka_palw_sdk::tir_layout::TirLayoutChoiceV1 { max_context: Some(CONTEXT), ..Default::default() };
+        let d =
+            misaka_palw_sdk::tir_layout::tir_declare_layout_v1(&c.p, &bundle, &lowered, &declared, &choice, Some("test/llama-tiny"))
+                .expect("declared");
+        assert_eq!(d.admission, Ok(()), "admission v10 {}", d.admission_at);
+        assert_eq!(d.layout.max_context, CONTEXT);
+
+        // 4. The node's holding: the IR lineage loads it; its backend runs the job a seat checks.
+        let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(&declared).expect("an IR class");
+        assert_eq!((entry.class_id(), entry.model_id.as_str()), (d.class_id, "test/llama-tiny"));
+        let form = c.p.palw_prompt_ids_form_v1();
+        let backend = misaka_palw_sdk::lineages::tir::TirLineageV1::backend(&entry, &bundle.court, form).expect("its backend");
+        let (job, prompt) = PalwExecutionBackendV1::job_for_anchor(&backend, rcore::h(0xF00D)).expect("a job");
+        let run = PalwExecutionBackendV1::execute(&backend, &job, &prompt).expect("the canonical job runs");
+        let roots = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor: rcore::h(0xF00D),
+            attempt_draw: None,
+            output_root: None,
+            job_pin: None,
+        };
+        assert_eq!(PalwExecutionBackendV1::verify_material(&backend, &run.material, roots), PalwMaterialVerdictV1::Matches);
+
+        // 5. The registration, built and gated by the SDK as `--palw-register-class` builds it, folds.
+        let (registrant, _, _) = rcore::floor_producer(&c.p);
+        let (floor, _, target, slash) = rcore::genesis_classes(&c.p)[0];
+        let terms = PalwRegistrationTermsV2 {
+            min_grantable_share_permille: 0,
+            slash_value_per_pwu: slash,
+            initial_target: c.s.class_target(&floor).map(|t| t.target).unwrap_or(target),
+            registered_class_ids: rcore::genesis_classes(&c.p).iter().map(|g| g.0).collect(),
+            registered_artifact_roots: Vec::new(),
+            chain_certified_families: Vec::new(),
+        };
+        let object = misaka_palw_sdk::tir_registration::build_tir_registration_v1(
+            &c.p,
+            &bundle,
+            &entry,
+            &terms,
+            AT,
+            registrant,
+            vec![9; 16],
+            AT,
+        )
+        .expect("admission v10 admits the lowered class");
+        step(&mut c, AT, &[object], PalwBlockWorkV3::None, Hash64::default(), 0);
+        empty(&mut c, AT + 1);
+        assert!(c.s.tir_class_v1(&d.class_id).is_some(), "the tir_classes row");
+        assert_eq!(lifecycle(&c, &d.class_id), Some(PalwModelLifecycleV1::Candidate), "a registered HF model opens Candidate");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// Re-prove every non-registrant genesis seat's readiness for the current span, unless their
     /// rows are already this span's.
     fn keep_ready(c: &mut rcore::Chain, ir: &Ir, registrant: PalwBondKeyV2) {
