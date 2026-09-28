@@ -497,6 +497,8 @@ struct Lb {
     gdn: BTreeMap<usize, GdnInputs>,
     /// For each scan node (Mamba, Mamba2): where its step size comes from.
     ssm: BTreeMap<usize, SsmDt>,
+    /// Products carried on the `i32` rail into their projection ([`wide_products`]).
+    wide: Vec<bool>,
     /// Name suffix for per-layer params whose base name another block already declared.
     suffix: String,
 }
@@ -532,11 +534,13 @@ fn lower_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize) -> Result<(
         absorbed: vec![false; blk.nodes.len()],
         gdn: BTreeMap::new(),
         ssm: BTreeMap::new(),
+        wide: wide_products(blk),
         suffix,
     };
     gdn_patterns(hl, blk, &mut lb)?;
     ssm_patterns(blk, &mut lb)?;
     concat_wants(blk, &mut lb);
+    wide_wants(blk, &mut lb);
     let tb = pb.blocks.len() as u8;
     let mut b = pb.block(&blk.name, if blk.role == BlockRole::Pre { vec![] } else { carry_sig });
     for (i, node) in blk.nodes.iter().enumerate() {
@@ -717,6 +721,63 @@ fn split_plan(hl: &HlProgram, blk: &hl::Block, shared: &std::collections::BTreeS
             if capable && all_linear && consumers[i].len() <= max_readers { split_size(width) } else { 0 }
         })
         .collect()
+}
+
+/// Headroom of a recurrence's output path on the `i32` rail, over the `i32` policy headroom. A
+/// scan's output grows with the context it has integrated. Calibrated on shorter contexts, one
+/// static 16-bit scale saturates. Mamba-370m's layer-29 gated product reached 4.5x its calibrated
+/// absmax at position 3,569 of a 4,096-token document, drifting x5.6. The `i32` rail has the bits:
+/// at x256 its unit is still 2^14 finer than the 16-bit code it replaces.
+const WIDE_RECURRENT_HEADROOM: f64 = 256.0;
+
+/// The products carried on the `i32` rail into their projection. A recurrence's output (a
+/// selective scan) gated by an elementwise product, `y · silu(z)`, feeding projections only. The
+/// product of the scan's `i32` value and the gate's code is exact in `i64`, is narrowed ONCE to
+/// `i32`, and the projection reads it wide (`i8 × i32` into `i64`).
+fn wide_products(blk: &hl::Block) -> Vec<bool> {
+    let n = blk.nodes.len();
+    let mut consumers: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+    for (i, node) in blk.nodes.iter().enumerate() {
+        for (k, r) in node.inputs.iter().enumerate() {
+            if let hl::Ref::Node(j, _) = r {
+                consumers[*j as usize].push((i, k));
+            }
+        }
+    }
+    let outputs: std::collections::BTreeSet<usize> =
+        blk.outputs.iter().filter_map(|o| if let hl::Ref::Node(j, _) = o { Some(*j as usize) } else { None }).collect();
+    (0..n)
+        .map(|i| {
+            let node = &blk.nodes[i];
+            let from_scan = matches!(node.inputs.first(), Some(hl::Ref::Node(j, 0))
+                if matches!(blk.nodes[*j as usize].op, Op::SelectiveScan { .. }) && consumers[*j as usize].len() == 1);
+            matches!(node.op, Op::Mul)
+                && from_scan
+                && !outputs.contains(&i)
+                && !consumers[i].is_empty()
+                && consumers[i].iter().all(|(c, k)| *k == 0 && matches!(blk.nodes[*c].op, Op::Linear { .. }))
+        })
+        .collect()
+}
+
+/// The wide rail's key for site `site`.
+fn wide_key(site: &str) -> ScaleKey {
+    ScaleKey::site(vec![site.to_string()], true).times(WIDE_RECURRENT_HEADROOM)
+}
+
+/// A wide product's scan delivers its output on the `i32` rail too.
+fn wide_wants(blk: &hl::Block, lb: &mut Lb) {
+    for i in 0..blk.nodes.len() {
+        if !lb.wide[i] {
+            continue;
+        }
+        lb.split[i] = 0;
+        if let Some(hl::Ref::Node(j, 0)) = blk.nodes[i].inputs.first() {
+            let j = *j as usize;
+            let site = blk.nodes[j].site.clone().unwrap_or_default();
+            lb.wants[j] = Some(Want { dt: DType::I32, key: wide_key(&site) });
+        }
+    }
 }
 
 /// How many outlier channels a projection input of `n` channels splits off.
@@ -912,7 +973,8 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         }
         Op::Linear { bias } => {
             let x = operand(lb, node.inputs[0])?;
-            let x = codes(b, cx, lb, &x)?;
+            let wide_in = matches!(node.inputs[0], hl::Ref::Node(j, 0) if lb.wide[j as usize]);
+            let x = if wide_in { x } else { codes(b, cx, lb, &x)? };
             let w = pidx(node.inputs[1])?;
             let bp = if *bias { Some(pidx(node.inputs[2])?) } else { None };
             one(lower_linear(b, cx, lb, &x, w, bp, &site, &want)?)
@@ -963,6 +1025,22 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
             let x = operand(lb, node.inputs[0])?;
             let x = codes(b, cx, lb, &x)?;
             one(lower_table(b, cx, lb, i, &x, TableFn::Clamp(*lo, *hi), &site)?)
+        }
+        Op::Mul if lb.wide[i] => {
+            // `y · g`: the scan's `i32` value times the gate's code, exact in `i64`, narrowed once.
+            let a = operand(lb, node.inputs[0])?;
+            let c = operand(lb, node.inputs[1])?;
+            let c = codes(b, cx, lb, &c)?;
+            if a.dt != DType::I32 {
+                return Err(LowerError::eval(format!("internal: the wide product `{site}` reads a {:?} scan", a.dt)));
+            }
+            let p = b.mul(a.r, c.r, DType::I64);
+            let key = wide_key(&site);
+            let (ka, kc, ko) = (a.key.clone(), c.key.clone(), key.clone());
+            let (m, s) = decl_ms(b, cx, lb, &site, 1, Arc::new(move |f| Ok(vec![f.scale(&ka)? * f.scale(&kc)? / f.scale(&ko)?])))?;
+            let r = narrow(b, p, m, s, None, DType::I32);
+            b.commit(r);
+            one(Val { r, dt: DType::I32, key, len: out_len, site })
         }
         Op::Mul => {
             let a = operand(lb, node.inputs[0])?;
