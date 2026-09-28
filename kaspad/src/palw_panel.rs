@@ -2456,6 +2456,12 @@ pub(crate) fn palw_carrier_replaceable_v1(tx: &Transaction) -> bool {
                 | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
                 | PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }
                 | PalwConsensusObjectV2::FreePromptCommitted { .. }
+                // RFC-0004: a candidate, a dataset and a licence register something, and a pool
+                // deposit moves money.
+                | PalwConsensusObjectV2::CandidateSubmitted { .. }
+                | PalwConsensusObjectV2::DatasetRegistered { .. }
+                | PalwConsensusObjectV2::TeacherLicenceRegistered { .. }
+                | PalwConsensusObjectV2::ImprovementPoolFunded { .. }
         ),
         Err(_) => false,
     }
@@ -12386,6 +12392,21 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtTirDissected { .. } => "CourtTirDissected",
         PalwConsensusObjectV2::CourtTirChildChosen { .. } => "CourtTirChildChosen",
         PalwConsensusObjectV2::DefaultAccusedTirLeaf { .. } => "DefaultAccusedTirLeaf",
+        // RFC-0004 (tags 70–82): the chain drops each until its admission lands, and no path in this
+        // node builds one yet.
+        PalwConsensusObjectV2::ModelLineImprovementPolicySet { .. } => "ModelLineImprovementPolicySet",
+        PalwConsensusObjectV2::HardCaseSubmitted { .. } => "HardCaseSubmitted",
+        PalwConsensusObjectV2::DataUseOptIn { .. } => "DataUseOptIn",
+        PalwConsensusObjectV2::SetterSetCommitted { .. } => "SetterSetCommitted",
+        PalwConsensusObjectV2::SetterSetRevealed { .. } => "SetterSetRevealed",
+        PalwConsensusObjectV2::SetterKeysRevealed { .. } => "SetterKeysRevealed",
+        PalwConsensusObjectV2::DatasetRegistered { .. } => "DatasetRegistered",
+        PalwConsensusObjectV2::TeachingArtifactCommitted { .. } => "TeachingArtifactCommitted",
+        PalwConsensusObjectV2::TeachingArtifactRevealed { .. } => "TeachingArtifactRevealed",
+        PalwConsensusObjectV2::TeacherLicenceRegistered { .. } => "TeacherLicenceRegistered",
+        PalwConsensusObjectV2::CandidateSubmitted { .. } => "CandidateSubmitted",
+        PalwConsensusObjectV2::LineageHeadRolledBack { .. } => "LineageHeadRolledBack",
+        PalwConsensusObjectV2::ImprovementPoolFunded { .. } => "ImprovementPoolFunded",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
         // path in this node builds one yet.

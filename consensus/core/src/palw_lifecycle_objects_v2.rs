@@ -289,6 +289,24 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // is checkable whenever it is admitted. It RIDES at every height, as the IR registration does
         // (A-2), and the acceptance walk drops it by name until the pipeline admission lands.
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => Ok(()),
+        // RFC-0004 (tags 70–82): every improvement object RIDES at every height, as the IR and
+        // generative registrations do (A-2) — a block carrying one must be valid on this build and on
+        // an older one that skips it undecoded — and the acceptance walk drops it by name until its
+        // admission lands past `palw_improvement_v1`. Its signature, where it carries one, is the
+        // acceptance layer's, where the registry is in hand.
+        PalwConsensusObjectV2::ModelLineImprovementPolicySet { .. }
+        | PalwConsensusObjectV2::HardCaseSubmitted { .. }
+        | PalwConsensusObjectV2::DataUseOptIn { .. }
+        | PalwConsensusObjectV2::SetterSetCommitted { .. }
+        | PalwConsensusObjectV2::SetterSetRevealed { .. }
+        | PalwConsensusObjectV2::SetterKeysRevealed { .. }
+        | PalwConsensusObjectV2::DatasetRegistered { .. }
+        | PalwConsensusObjectV2::TeachingArtifactCommitted { .. }
+        | PalwConsensusObjectV2::TeachingArtifactRevealed { .. }
+        | PalwConsensusObjectV2::TeacherLicenceRegistered { .. }
+        | PalwConsensusObjectV2::CandidateSubmitted { .. }
+        | PalwConsensusObjectV2::LineageHeadRolledBack { .. }
+        | PalwConsensusObjectV2::ImprovementPoolFunded { .. } => Ok(()),
         // RFC-0002 Phase F (tag 62): an IR one-move accusation rides signed and shaped (its proof
         // an IR close about the roots it names) at every height, as the registration does; the
         // ruleset's close ceiling and the verdict are the acceptance layer's.

@@ -1546,6 +1546,13 @@ pub struct PalwStateParamsV2 {
     /// the admission rules and the DA court's IR unit from it). `None` on every shipped preset.
     #[borsh(skip)]
     tir_fence2_from_daa: Option<u64>,
+    /// **RFC-0004: `Params::palw_improvement_v1`'s height**, mirrored by
+    /// `Params::sync_palw_improvement_v1` because the fold that admits an improvement object holds
+    /// only these params: below the fence the fold refuses one by name, as the second lock behind the
+    /// acceptance walk's drop. `None` on every shipped preset; skipped by borsh for `tir_from_daa`'s
+    /// reason, and `validate_palw_v2` refuses a copy that disagrees.
+    #[borsh(skip)]
+    improve_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1755,6 +1762,7 @@ impl PalwStateParamsV2 {
             tir_from_daa: None,
             gen_from_daa: None,
             tir_fence2_from_daa: None,
+            improve_from_daa: None,
         })
     }
 
@@ -1965,6 +1973,23 @@ impl PalwStateParamsV2 {
     /// **Is the second IR fence in force at `daa_score`?** `false` on every shipped preset.
     pub fn tir_fence2_active_at(&self, daa_score: u64) -> bool {
         self.tir_fence2_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// **RFC-0004: the improvement fence's mirror** — written by `Params::sync_palw_improvement_v1` and
+    /// by nothing else (and by fixtures); `None` where the fence is not armed.
+    pub fn with_improve_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.improve_from_daa = from_daa;
+        self
+    }
+
+    /// `Params::palw_improvement_v1`'s height, if the network arms it (the mirror).
+    pub fn improve_from_daa(&self) -> Option<u64> {
+        self.improve_from_daa
+    }
+
+    /// **Is `palw_improvement_v1` in force at `daa_score`?** `false` on every shipped preset.
+    pub fn improve_active_at(&self, daa_score: u64) -> bool {
+        self.improve_from_daa.is_some_and(|from| daa_score >= from)
     }
 
     /// **Lane F2: is the floor-refusal retry in force at `daa_score`?** `false` on every shipped preset.
@@ -7351,6 +7376,94 @@ pub enum PalwConsensusObjectV2 {
         arity: u8,
         signature: Vec<u8>,
     },
+    // ---- RFC-0004, the Model Improvement Protocol (`Params::palw_improvement_v1`): tags 70–82 ----
+    //
+    // Appended so no earlier discriminant moves: an older build on a ruleset that declared
+    // `palw_audit_2026_09_11` cannot decode them and skips them (A-2). This build lets every one ride
+    // (the stateless gate says yes, as it must for a block to be valid on both), drops every one by
+    // name in the acceptance walk ([`palw_object_is_improvement_v1`]) — below the fence, and until
+    // each object's admission lands above it too — and the fold refuses every one as the second lock
+    // (`ImprovementObjectRefused`). Spec 17 §17.0 holds the table.
+    /// **Tag 70: a line opts in to the improvement protocol, or changes its policy between epochs**
+    /// (RFC-0004 §3; PALW-MIP-3). Signed by the line's owner.
+    ModelLineImprovementPolicySet {
+        payload: Box<crate::palw_improve_state_v1::PalwImprovementPolicySetV1>,
+        signature: Vec<u8>,
+    },
+    /// **Tag 71: a hard case** (RFC-0004 §5.1) enters the current epoch state's pool. Signed by its
+    /// bonded submitter.
+    HardCaseSubmitted {
+        payload: Box<crate::palw_improve_material_v1::PalwHardCaseV1>,
+        submitter: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **Tag 72: a job's prompt made usable as a hard case** (RFC-0004 §10; PALW-MIP-19). Signed by the
+    /// job's committer.
+    DataUseOptIn {
+        payload: Box<crate::palw_improve_material_v1::PalwDataUseOptInV1>,
+        signature: Vec<u8>,
+    },
+    /// **Tag 73: a private evaluation set, committed before `t_close`** (RFC-0004 §7.1). Signed by its
+    /// bonded steward.
+    SetterSetCommitted {
+        payload: Box<crate::palw_improve_material_v1::PalwSetterSetCommitmentV1>,
+        setter: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **Tag 74: a setter set's prompts, disclosed at `Drawn`.** Unsigned: it opens the committed
+    /// `prompts_commitment`, which only the setter's salt opens.
+    SetterSetRevealed {
+        payload: Box<crate::palw_improve_material_v1::PalwSetterSetRevealV1>,
+    },
+    /// **Tag 75: a setter set's keys and references, after every subject's outputs are final.**
+    /// Unsigned: it opens the committed `keys_commitment`.
+    SetterKeysRevealed {
+        payload: Box<crate::palw_improve_material_v1::PalwSetterKeysRevealV1>,
+    },
+    /// **Tag 76: a registered dataset** (RFC-0004 §5.3): its content root, licence classes, teacher
+    /// classes and provenance commitment. Signed by its bonded contributor.
+    DatasetRegistered {
+        payload: Box<crate::palw_improve_material_v1::PalwDatasetV1>,
+        registrant: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **Tag 77: a teaching artifact's commitment** (RFC-0004 §5.3, §8.1), `H(artifact ‖ salt)`. Signed
+    /// by its bonded teacher; commit order decides the S1 bounty.
+    TeachingArtifactCommitted {
+        payload: Box<crate::palw_improve_material_v1::PalwTeachingArtifactCommitV1>,
+        teacher: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **Tag 78: a teaching artifact, revealed.** Unsigned: it opens its commitment.
+    TeachingArtifactRevealed {
+        payload: Box<crate::palw_improve_material_v1::PalwTeachingArtifactV1>,
+    },
+    /// **Tag 79: a rights holder's licence for `LICENSED_DISTILL`** (RFC-0004 §9; PALW-MIP-18). Signed
+    /// by the payload's `rights_holder_key`.
+    TeacherLicenceRegistered {
+        payload: Box<crate::palw_improve_material_v1::PalwTeacherLicenceV1>,
+        signature: Vec<u8>,
+    },
+    /// **Tag 80: a candidate** (RFC-0004 §6; PALW-MIP-8): an admitted IR class of the parent's family,
+    /// its declarations, fees and bond, in `[t_fix, t_close)`. Signed by its bonded submitter.
+    CandidateSubmitted {
+        payload: Box<crate::palw_improve_candidate_v1::PalwCandidateSubmissionV1>,
+        submitter: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **Tag 81: a promotion rolled back** (RFC-0004 §7.6; PALW-MIP-14): the previous version is current
+    /// again. Signed by `filer` — the line's owner within `rollback_epochs`, or any bond with a proof
+    /// of §7.6's kinds.
+    LineageHeadRolledBack {
+        payload: Box<crate::palw_improve_state_v1::PalwLineageRollbackV1>,
+        filer: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **Tag 82: a sponsor's deposit into a governed line's pool** (RFC-0004 §8.5), bound to its
+    /// carrier's sink output as `ModelBuy` is. Unsigned, as `ModelBuy` is.
+    ImprovementPoolFunded {
+        payload: Box<crate::palw_improve_state_v1::PalwImprovementPoolFundingV1>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7399,6 +7512,37 @@ pub fn palw_object_is_gen_v1(object: &PalwConsensusObjectV2) -> bool {
         PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } | PalwConsensusObjectV2::CourtGenRootClaimed { .. } => true,
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_gen_v1(),
         _ => false,
+    }
+}
+
+/// **Is this object an RFC-0004 improvement move** (tags 70–82) — an appended variant an older build
+/// cannot decode and skips (A-2)? Below `palw_improvement_v1` the acceptance walk drops every such
+/// object by name before any slot, rent or budget is charged for it, and the fold refuses it as the
+/// second lock. Until each object's admission lands, the walk drops it above the fence too.
+pub fn palw_object_is_improvement_v1(object: &PalwConsensusObjectV2) -> bool {
+    palw_improvement_object_name_v1(object).is_some()
+}
+
+/// **The name and tag of an RFC-0004 improvement object**, or `None` for every other object. One
+/// function for the predicate, the fold's refusal and the processor's drop, so the three cannot
+/// disagree about which objects are the protocol's.
+pub fn palw_improvement_object_name_v1(object: &PalwConsensusObjectV2) -> Option<&'static str> {
+    use PalwConsensusObjectV2 as O;
+    match object {
+        O::ModelLineImprovementPolicySet { .. } => Some("ModelLineImprovementPolicySet (tag 70)"),
+        O::HardCaseSubmitted { .. } => Some("HardCaseSubmitted (tag 71)"),
+        O::DataUseOptIn { .. } => Some("DataUseOptIn (tag 72)"),
+        O::SetterSetCommitted { .. } => Some("SetterSetCommitted (tag 73)"),
+        O::SetterSetRevealed { .. } => Some("SetterSetRevealed (tag 74)"),
+        O::SetterKeysRevealed { .. } => Some("SetterKeysRevealed (tag 75)"),
+        O::DatasetRegistered { .. } => Some("DatasetRegistered (tag 76)"),
+        O::TeachingArtifactCommitted { .. } => Some("TeachingArtifactCommitted (tag 77)"),
+        O::TeachingArtifactRevealed { .. } => Some("TeachingArtifactRevealed (tag 78)"),
+        O::TeacherLicenceRegistered { .. } => Some("TeacherLicenceRegistered (tag 79)"),
+        O::CandidateSubmitted { .. } => Some("CandidateSubmitted (tag 80)"),
+        O::LineageHeadRolledBack { .. } => Some("LineageHeadRolledBack (tag 81)"),
+        O::ImprovementPoolFunded { .. } => Some("ImprovementPoolFunded (tag 82)"),
+        _ => None,
     }
 }
 
@@ -9484,6 +9628,12 @@ pub enum PalwStateV2Error {
     /// step-leaf demand the fold does not open.
     #[error("the second IR fence refuses this move: {0}")]
     TirFence2Refused(&'static str),
+    // ---- RFC-0004 ----
+    /// **An improvement object the fold does not take** (tags 70–82): any below
+    /// `Params::palw_improvement_v1` (the bundle's mirror), and — until its admission lands — any
+    /// above it. The acceptance walk drops it by name first; this is the second lock.
+    #[error("an improvement object is refused: {object}: {why}")]
+    ImprovementObjectRefused { object: &'static str, why: &'static str },
     /// **An IR step-leaf demand past the claim's committed leaves.**
     #[error("claim {claim}: step leaf {index} is past the {count} its execution commits")]
     TirLeafOutOfRange { claim: Hash64, index: u64, count: u64 },
@@ -10033,6 +10183,16 @@ pub struct PalwChainStateV2 {
     /// carriage tail (`0xC2`): empty below `palw_gen_v1`, so every network roots and carries exactly
     /// as before.
     gen_classes: BTreeMap<Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>,
+    /// **RFC-0004: every governed line's improvement row**, by line id — its policy, head history,
+    /// usage baseline, epoch counter and pool ([`crate::palw_improve_state_v1::PalwImprovementLineV1`]).
+    /// Written only past `palw_improvement_v1`, so every network roots and carries exactly as before:
+    /// the Some-only root block `improvement/v1` and carriage tail `0xC3`.
+    improvement_lines: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementLineV1>,
+    /// **RFC-0004: every improvement epoch**, by `(line id, epoch)` — its state, times, material,
+    /// candidates, items, results, counts, outcome and grants
+    /// ([`crate::palw_improve_state_v1::PalwImprovementEpochV1`]). Written only past the fence: the
+    /// same root block and carriage tail `0xC4`.
+    improvement_epochs: BTreeMap<(Hash64, u64), crate::palw_improve_state_v1::PalwImprovementEpochV1>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -10196,6 +10356,8 @@ impl PalwChainStateV2 {
             tir_classes: BTreeMap::new(),
             tir_dissections: BTreeMap::new(),
             gen_classes: BTreeMap::new(),
+            improvement_lines: BTreeMap::new(),
+            improvement_epochs: BTreeMap::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -12355,6 +12517,13 @@ impl PalwChainStateV2 {
             state.update(b"gen_classes/v1");
             state.update(palw_gen_classes_root_v1(&self.gen_classes).as_byte_slice());
         }
+        // **RFC-0004: the governed lines and their epochs, ONE Some-only block** — empty until a line
+        // opts in, which nothing below `palw_improvement_v1` can do.
+        if !self.improvement_lines.is_empty() || !self.improvement_epochs.is_empty() {
+            state.update(b"improvement/v1");
+            state.update(collection_root(b"improvement_lines", &self.improvement_lines).as_byte_slice());
+            state.update(collection_root(b"improvement_epochs", &self.improvement_epochs).as_byte_slice());
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -14037,6 +14206,20 @@ pub enum PalwDeltaEntryV2 {
         key: Hash64,
         old: Option<crate::palw_gen_class_v1::PalwGenClassRecordV1>,
         new: Option<crate::palw_gen_class_v1::PalwGenClassRecordV1>,
+    },
+    /// A governed line's improvement row was written or dropped (91; RFC-0004,
+    /// [`crate::palw_improve_state_v1::PalwImprovementLineV1`]).
+    ImprovementLine {
+        key: Hash64,
+        old: Option<Box<crate::palw_improve_state_v1::PalwImprovementLineV1>>,
+        new: Option<Box<crate::palw_improve_state_v1::PalwImprovementLineV1>>,
+    },
+    /// An improvement epoch's row was written or dropped (92; RFC-0004,
+    /// [`crate::palw_improve_state_v1::PalwImprovementEpochV1`]).
+    ImprovementEpoch {
+        key: (Hash64, u64),
+        old: Option<Box<crate::palw_improve_state_v1::PalwImprovementEpochV1>>,
+        new: Option<Box<crate::palw_improve_state_v1::PalwImprovementEpochV1>>,
     },
 }
 
@@ -17930,6 +18113,34 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::GenClass { key, old, new });
+        }
+    }
+
+    /// **RFC-0004: the one writer of `improvement_lines`**, journaled `ImprovementLine` (91).
+    #[allow(dead_code)] // the epoch machine's (A2/A3); the skeleton declares the one writer first
+    pub(crate) fn write_improvement_line(&mut self, key: Hash64, new: Option<crate::palw_improve_state_v1::PalwImprovementLineV1>) {
+        let old = match new.clone() {
+            Some(row) => self.state.improvement_lines.insert(key, row),
+            None => self.state.improvement_lines.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ImprovementLine { key, old: old.map(Box::new), new: new.map(Box::new) });
+        }
+    }
+
+    /// **RFC-0004: the one writer of `improvement_epochs`**, journaled `ImprovementEpoch` (92).
+    #[allow(dead_code)] // the epoch machine's (A3); the skeleton declares the one writer first
+    pub(crate) fn write_improvement_epoch(
+        &mut self,
+        key: (Hash64, u64),
+        new: Option<crate::palw_improve_state_v1::PalwImprovementEpochV1>,
+    ) {
+        let old = match new.clone() {
+            Some(row) => self.state.improvement_epochs.insert(key, row),
+            None => self.state.improvement_epochs.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ImprovementEpoch { key, old: old.map(Box::new), new: new.map(Box::new) });
         }
     }
 
@@ -30628,7 +30839,39 @@ fn apply_object(
     if palw_object_is_tir_fence2_v1(object) && !builder.params.tir_fence2_active_at(ctx.daa_score) {
         return Err(PalwStateV2Error::TirFence2Refused("a move before palw_tir_fence2 is in force"));
     }
+    // **RFC-0004: an improvement object is refused by name, before any arm reads it** — below
+    // `palw_improvement_v1`, and above it until the object's admission lands. The acceptance walk
+    // drops it first (an older build cannot decode it and skips it), so this is the second lock,
+    // and every network folds exactly as before these variants existed.
+    if let Some(name) = palw_improvement_object_name_v1(object) {
+        let why = if builder.params.improve_active_at(ctx.daa_score) {
+            "its admission has not landed (RFC-0004 step 0)"
+        } else {
+            "before palw_improvement_v1 is in force (RFC-0004)"
+        };
+        return Err(PalwStateV2Error::ImprovementObjectRefused { object: name, why });
+    }
     match object {
+        // RFC-0004: refused by name above, before any arm reads it; the arms land with each object's
+        // admission (the candidates lane's A4/A5, this lane's A2/A9).
+        PalwConsensusObjectV2::ModelLineImprovementPolicySet { .. }
+        | PalwConsensusObjectV2::HardCaseSubmitted { .. }
+        | PalwConsensusObjectV2::DataUseOptIn { .. }
+        | PalwConsensusObjectV2::SetterSetCommitted { .. }
+        | PalwConsensusObjectV2::SetterSetRevealed { .. }
+        | PalwConsensusObjectV2::SetterKeysRevealed { .. }
+        | PalwConsensusObjectV2::DatasetRegistered { .. }
+        | PalwConsensusObjectV2::TeachingArtifactCommitted { .. }
+        | PalwConsensusObjectV2::TeachingArtifactRevealed { .. }
+        | PalwConsensusObjectV2::TeacherLicenceRegistered { .. }
+        | PalwConsensusObjectV2::CandidateSubmitted { .. }
+        | PalwConsensusObjectV2::LineageHeadRolledBack { .. }
+        | PalwConsensusObjectV2::ImprovementPoolFunded { .. } => {
+            return Err(PalwStateV2Error::ImprovementObjectRefused {
+                object: palw_improvement_object_name_v1(object).unwrap_or("an improvement object"),
+                why: "its admission has not landed (RFC-0004 step 0)",
+            });
+        }
         PalwConsensusObjectV2::BondRegistered {
             bond,
             pubkey,
@@ -35939,6 +36182,15 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::TirClass { key, old, new } => swap_write!(state.tir_classes, key, old, new),
         PalwDeltaEntryV2::TirDissection { key, old, new } => swap_write!(state.tir_dissections, key, old, new),
         PalwDeltaEntryV2::GenClass { key, old, new } => swap_write!(state.gen_classes, key, old, new),
+        // RFC-0004: the rows ride boxed in the delta and unboxed in the tables.
+        PalwDeltaEntryV2::ImprovementLine { key, old, new } => {
+            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
+            swap_write!(state.improvement_lines, key, &old, &new)
+        }
+        PalwDeltaEntryV2::ImprovementEpoch { key, old, new } => {
+            let (old, new) = (old.as_deref().cloned(), new.as_deref().cloned());
+            swap_write!(state.improvement_epochs, key, &old, &new)
+        }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -36373,6 +36625,12 @@ pub struct PalwStateCarriageV2 {
     /// **RFC-0003: the generative classes.** A tagged tail (`0xC2`, after the IR dissections'),
     /// encoded only when non-empty; rooted (each row without its class, which its hashes commit to).
     pub gen_classes: BTreeMap<Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>,
+    /// **RFC-0004: the governed lines.** A tagged tail (`0xC3`, after the generative classes'),
+    /// encoded only when non-empty; rooted.
+    pub improvement_lines: BTreeMap<Hash64, crate::palw_improve_state_v1::PalwImprovementLineV1>,
+    /// **RFC-0004: the improvement epochs.** A tagged tail (`0xC4`, after the lines'), encoded only
+    /// when non-empty; rooted.
+    pub improvement_epochs: BTreeMap<(Hash64, u64), crate::palw_improve_state_v1::PalwImprovementEpochV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -36498,6 +36756,11 @@ const PALW_CARRIAGE_TIR_DISSECTIONS_TAIL_V1: u8 = 0xC1;
 /// RFC-0003: the generative classes' tail (Phase F's allocation), encoded only when one has
 /// registered — a carriage with none is byte-identical to one before this tail existed.
 const PALW_CARRIAGE_GEN_CLASSES_TAIL_V1: u8 = 0xC2;
+/// RFC-0004: the governed lines' tail, encoded only when a line is governed — a carriage with none
+/// is byte-identical to one before this tail existed.
+const PALW_CARRIAGE_IMPROVEMENT_LINES_TAIL_V1: u8 = 0xC3;
+/// RFC-0004: the improvement epochs' tail, encoded only when an epoch exists.
+const PALW_CARRIAGE_IMPROVEMENT_EPOCHS_TAIL_V1: u8 = 0xC4;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -36720,6 +36983,14 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_GEN_CLASSES_TAIL_V1.serialize(writer)?;
             self.gen_classes.serialize(writer)?;
         }
+        if !self.improvement_lines.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_LINES_TAIL_V1.serialize(writer)?;
+            self.improvement_lines.serialize(writer)?;
+        }
+        if !self.improvement_epochs.is_empty() {
+            PALW_CARRIAGE_IMPROVEMENT_EPOCHS_TAIL_V1.serialize(writer)?;
+            self.improvement_epochs.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -36849,6 +37120,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_tir_dissections = false;
         let mut gen_classes = BTreeMap::new();
         let mut seen_gen_classes = false;
+        let mut improvement_lines = BTreeMap::new();
+        let mut seen_improvement_lines = false;
+        let mut improvement_epochs = BTreeMap::new();
+        let mut seen_improvement_epochs = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -36999,6 +37274,14 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_gen_classes = true;
                     gen_classes = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_IMPROVEMENT_LINES_TAIL_V1 if !seen_improvement_lines => {
+                    seen_improvement_lines = true;
+                    improvement_lines = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_IMPROVEMENT_EPOCHS_TAIL_V1 if !seen_improvement_epochs => {
+                    seen_improvement_epochs = true;
+                    improvement_epochs = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -37107,6 +37390,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             tir_classes,
             tir_dissections,
             gen_classes,
+            improvement_lines,
+            improvement_epochs,
         })
     }
 }
@@ -37193,6 +37478,8 @@ impl PalwStateCarriageV2 {
             tir_classes: state.tir_classes.clone(),
             tir_dissections: state.tir_dissections.clone(),
             gen_classes: state.gen_classes.clone(),
+            improvement_lines: state.improvement_lines.clone(),
+            improvement_epochs: state.improvement_epochs.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -37283,6 +37570,24 @@ impl PalwStateCarriageV2 {
                 return Err(PalwStateV2Error::CarriageInconsistent(format!("generative class {class_id}: a row under another id")));
             }
         }
+        // RFC-0004: every row sits under its own key, and every epoch under a governed line.
+        for (line_id, row) in &self.improvement_lines {
+            if row.line_id != *line_id {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!("improvement line {line_id}: a row under another id")));
+            }
+        }
+        for ((line_id, epoch), row) in &self.improvement_epochs {
+            if row.line_id != *line_id || row.epoch != *epoch {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "improvement epoch {line_id}/{epoch}: a row under another key"
+                )));
+            }
+            if !self.improvement_lines.contains_key(line_id) {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "improvement epoch {line_id}/{epoch}: no governed line holds it"
+                )));
+            }
+        }
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,
@@ -37362,6 +37667,8 @@ impl PalwStateCarriageV2 {
             tir_classes: self.tir_classes,
             tir_dissections: self.tir_dissections,
             gen_classes: self.gen_classes,
+            improvement_lines: self.improvement_lines,
+            improvement_epochs: self.improvement_epochs,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -53980,6 +54287,9 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::TirDissection { .. } => "tir_dissection",
                     // RFC-0003: its round trip is the generative registration suite's.
                     PalwDeltaEntryV2::GenClass { .. } => "gen_class",
+                    // RFC-0004: their round trips are the improvement suites' (A2, A3).
+                    PalwDeltaEntryV2::ImprovementLine { .. } => "improvement_line",
+                    PalwDeltaEntryV2::ImprovementEpoch { .. } => "improvement_epoch",
                 });
             }
         }
@@ -54106,6 +54416,9 @@ pub(crate) mod tests {
             (89, PalwDeltaEntryV2::TirDissection { key, old: None, new: None }),
             // RFC-0003, from Phase F's allocation, after F7's.
             (90, PalwDeltaEntryV2::GenClass { key, old: None, new: None }),
+            // RFC-0004, after RFC-0003's: a governed line and an epoch.
+            (91, PalwDeltaEntryV2::ImprovementLine { key, old: None, new: None }),
+            (92, PalwDeltaEntryV2::ImprovementEpoch { key: (key, 1), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -54730,6 +55043,8 @@ pub(crate) mod tests {
             tir_dissections: _,
             // RFC-0003: its own Some-only block, empty here.
             gen_classes: _,
+            improvement_lines: _,
+            improvement_epochs: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -54826,6 +55141,17 @@ pub(crate) mod tests {
             ("gen_classes", Box::new(|s| {
                 let row = crate::palw_gen_class_v1::PalwGenClassRecordV1::test_row_v1(0xC2);
                 s.gen_classes.insert(row.class_id, row);
+            })),
+            // RFC-0004: a governed line, and an epoch under it — each alone moves the root.
+            ("improvement_lines", Box::new(|s| {
+                let row = crate::palw_improve_state_v1::test_rows::line_v1(0xC3);
+                s.improvement_lines.insert(row.line_id, row);
+            })),
+            ("improvement_epochs", Box::new(|s| {
+                let line = crate::palw_improve_state_v1::test_rows::line_v1(0xC4);
+                let epoch = crate::palw_improve_state_v1::test_rows::epoch_v1(0xC4);
+                s.improvement_lines.insert(line.line_id, line);
+                s.improvement_epochs.insert((epoch.line_id, epoch.epoch), epoch);
             })),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),
@@ -69711,5 +70037,119 @@ mod review_fix12_readiness_reads_net_collateral {
             palw_bond_free_collateral_v1(&paid, 0, false),
             needed.saturating_sub(PALW_CLASS_REGISTRATION_BURN_SOMPI_V1 as u128)
         );
+    }
+}
+
+/// **RFC-0004 step 0: the improvement tables' layout** — empty tables leave the root and the carriage
+/// exactly as they were, rows ride the tails `0xC3`/`0xC4` after everything an older build writes, the
+/// carriage refuses rows under the wrong key or an epoch no governed line holds, and the two delta
+/// entries replay and revert. The fold never writes a row before A2/A3 land; these tests write them
+/// directly.
+#[cfg(test)]
+mod improvement_skeleton_tests {
+    use super::*;
+    use crate::palw_improve_state_v1::test_rows;
+
+    fn params() -> PalwStateParamsV2 {
+        let p = crate::config::params::palw_t12_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is V2") };
+        bundle.state.clone()
+    }
+
+    fn governed(seed: u8) -> PalwChainStateV2 {
+        let mut s = PalwChainStateV2::genesis();
+        let line = test_rows::line_v1(seed);
+        let epoch = test_rows::epoch_v1(seed);
+        s.improvement_lines.insert(line.line_id, line);
+        s.improvement_epochs.insert((epoch.line_id, epoch.epoch), epoch);
+        s
+    }
+
+    #[test]
+    fn empty_tables_leave_the_root_and_the_carriage_and_rows_ride_their_own_tails() {
+        let genesis = PalwChainStateV2::genesis();
+        let empty_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&genesis)).unwrap();
+        let s = governed(0x31);
+        assert_ne!(s.state_root(), genesis.state_root(), "a governed line is state");
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+        assert!(bytes.starts_with(&empty_bytes), "the rows ride after everything a build without them writes");
+        assert_eq!(bytes[empty_bytes.len()], PALW_CARRIAGE_IMPROVEMENT_LINES_TAIL_V1);
+        let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("this build decodes its own tails");
+        let back = decoded.into_state(&params(), Some(s.state_root())).expect("an honest carriage loads");
+        assert_eq!(back, s, "the restored state is the state");
+        // A lines-only state writes the lines' tail alone; an emptied state is genesis, root and bytes.
+        let mut lines_only = s.clone();
+        lines_only.improvement_epochs.clear();
+        let lines_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&lines_only)).unwrap();
+        assert!(bytes.starts_with(&lines_bytes) && bytes[lines_bytes.len()] == PALW_CARRIAGE_IMPROVEMENT_EPOCHS_TAIL_V1);
+        let mut emptied = s.clone();
+        emptied.improvement_lines.clear();
+        emptied.improvement_epochs.clear();
+        assert_eq!(emptied.state_root(), genesis.state_root(), "no row, no root block");
+        assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&emptied)).unwrap(), empty_bytes, "no row, no tail");
+        // A tail twice is refused, as every tail is.
+        let mut doubled = bytes.clone();
+        doubled.extend_from_slice(&bytes[lines_bytes.len()..]);
+        assert!(borsh::from_slice::<PalwStateCarriageV2>(&doubled).is_err(), "the epochs' tail twice");
+    }
+
+    #[test]
+    fn the_carriage_refuses_a_misfiled_row_and_an_epoch_without_its_line() {
+        let s = governed(0x32);
+        let p = params();
+        let honest = PalwStateCarriageV2::from_state(&s);
+        let refused =
+            |carriage: PalwStateCarriageV2| matches!(carriage.into_state(&p, None), Err(PalwStateV2Error::CarriageInconsistent(_)));
+        let mut orphan = honest.clone();
+        orphan.improvement_lines.clear();
+        assert!(refused(orphan), "an epoch no governed line holds");
+        let mut moved = honest.clone();
+        let ((line_id, epoch), row) = moved.improvement_epochs.pop_first().unwrap();
+        moved.improvement_epochs.insert((line_id, epoch + 1), row);
+        assert!(refused(moved), "an epoch row under another epoch number");
+        let mut misfiled = honest.clone();
+        let (_, row) = misfiled.improvement_lines.pop_first().unwrap();
+        misfiled.improvement_lines.insert(Hash64::from_bytes([0xEE; 64]), row);
+        assert!(refused(misfiled), "a line row under another line id");
+        assert!(honest.into_state(&p, Some(s.state_root())).is_ok());
+    }
+
+    #[test]
+    fn the_two_delta_entries_replay_and_revert() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let line = test_rows::line_v1(0x33);
+        let epoch = test_rows::epoch_v1(0x33);
+        let mut next = epoch.clone();
+        next.state = crate::palw_improve_state_v1::PalwEpochStateV1::Submission;
+        next.dataset_root = Some(Hash64::from_bytes([0x44; 64]));
+        let point = PalwBlockContextV2 { block: Default::default(), daa_score: 1, blue_score: 1, subsidy: 0 };
+        let open = PalwStateDeltaV2 {
+            point,
+            entries: vec![
+                PalwDeltaEntryV2::ImprovementLine { key: line.line_id, old: None, new: Some(Box::new(line.clone())) },
+                PalwDeltaEntryV2::ImprovementEpoch { key: (epoch.line_id, 1), old: None, new: Some(Box::new(epoch.clone())) },
+            ],
+        };
+        let child = apply_delta_v2(&genesis, &open, &p).expect("the rows install");
+        assert_eq!(child.improvement_lines.get(&line.line_id), Some(&line));
+        assert_eq!(child.improvement_epochs.get(&(epoch.line_id, 1)), Some(&epoch));
+        assert!(apply_delta_v2(&child, &open, &p).is_err(), "a delta whose `old` the state does not hold is refused");
+        let fix = PalwStateDeltaV2 {
+            point,
+            entries: vec![PalwDeltaEntryV2::ImprovementEpoch {
+                key: (epoch.line_id, 1),
+                old: Some(Box::new(epoch.clone())),
+                new: Some(Box::new(next.clone())),
+            }],
+        };
+        let grandchild = apply_delta_v2(&child, &fix, &p).expect("the epoch moves");
+        assert_eq!(grandchild.improvement_epochs.get(&(epoch.line_id, 1)), Some(&next));
+        assert_eq!(revert_delta_v2(&grandchild, &fix, &p).unwrap(), child, "…and moves back");
+        assert_eq!(revert_delta_v2(&child, &open, &p).unwrap(), genesis, "…and the rows leave");
+        for delta in [&open, &fix] {
+            let bytes = borsh::to_vec(delta).unwrap();
+            assert_eq!(&borsh::from_slice::<PalwStateDeltaV2>(&bytes).unwrap(), delta, "the journal round-trips");
+        }
     }
 }
