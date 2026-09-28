@@ -436,7 +436,8 @@ def build(name):
     cfg = CONFIG_MAPPING[model_type](**kw)
     cfg.architectures = [hf_arch]
     torch.manual_seed(seed)
-    model = AutoModelForCausalLM.from_config(cfg)
+    # Eager attention is the defining math: sdpa silently drops Gemma-2's score soft-cap.
+    model = AutoModelForCausalLM.from_config(cfg, attn_implementation="eager")
     model.eval()
     g = torch.Generator().manual_seed(seed + 1)
     with torch.no_grad():
