@@ -8,7 +8,7 @@
 //! `tokenizer.json`, offline). Without them, seeded random sequences are used (tiny models).
 
 use clap::Parser;
-use misaka_palw_tir_lower::float_ref::stream::Streamed;
+use misaka_palw_tir_lower::float_ref::stream::{OccParams, Streamed};
 use misaka_palw_tir_lower::lower::{LowerOpts, materialise, program_summary};
 use misaka_palw_tir_lower::quant::QuantPolicy;
 use misaka_palw_tir_lower::weights::Checkpoint;
@@ -70,6 +70,10 @@ struct Args {
     /// reference evaluator and refuse unless every logit is equal.
     #[arg(long, default_value_t = 0)]
     cross_check: usize,
+    /// Evaluate a recurrent program beyond its longest calibration sequence anyway (the
+    /// calibration-length rule is refused otherwise; the result records the waiver).
+    #[arg(long)]
+    allow_short_calibration: bool,
     /// Report the recurrence drift: the mean KL over positions [64, 192) against the last 128
     /// (corpus-v1 §9: at 4,096 positions, within 1.5×).
     #[arg(long)]
@@ -129,6 +133,17 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     let calib = cut(calib, a.calib_seqs);
     let (eval, eval_src) = tokens(&a.eval, vocab, 2, 29)?;
     let eval = cut(eval, a.eval_seqs);
+    // The calibration-length rule: a recurrent program is calibrated on a sequence as long as the
+    // context it is evaluated at (with --stats-in, the statistics come from the --calib file).
+    let context = eval.iter().map(Vec::len).max().unwrap_or(0);
+    let calibrated = match fidelity::check_calibration_length(&prep.hl, &calib, context) {
+        Ok(v) => serde_json::json!({ "rule": if v.is_some() { "met" } else { "not recurrent" }, "longest": v, "context": context }),
+        Err(e) if a.allow_short_calibration => {
+            log(format!("WAIVED: {e}"));
+            serde_json::json!({ "rule": "waived", "longest": calib.iter().map(Vec::len).max(), "context": context })
+        }
+        Err(e) => return Err(format!("{e}; pass --allow-short-calibration to measure anyway")),
+    };
     let progress = |what: &'static str| {
         move |d: usize, n: usize| {
             if d == n || d.is_multiple_of(8) {
@@ -170,6 +185,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             "logits_scale": mat.logits_scale,
             "policy": { "headroom16": policy.headroom16, "headroom32": policy.headroom32, "headroom_resid": policy.headroom_resid },
             "calibration": calib_src,
+            "calibrated_context": calib.iter().map(Vec::len).max(),
         });
         // The checkpoint's tokenizer.json binds the artifact to its tokenizer (zero when absent).
         let tokenizer_id = match std::fs::read(a.model.join("tokenizer.json")) {
@@ -179,16 +195,33 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         digest = Some(artifact::write(p, &prep.lowered.program, &mat.params, tokenizer_id, meta).map_err(|e| e.to_string())?);
     }
     log(format!("float reference on {} sequences", eval.len()));
-    let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &progress("float")).map_err(|e| e.to_string())?;
+    // On the typed backend both sides are compared a position at a time: the float reference runs
+    // to the post block's inputs and the post block (stateless) is evaluated per position.
+    let (fl, post_in) = if a.exec {
+        let post_in = misaka_palw_tir_lower::float_ref::stream::run_to_post(&prep.hl, &loader, &eval, &progress("float"))
+            .map_err(|e| e.to_string())?;
+        (Vec::new(), post_in)
+    } else {
+        (fidelity::float_logits(&prep.hl, &loader, &eval, &progress("float")).map_err(|e| e.to_string())?, Vec::new())
+    };
     // On the typed backend the integer rows are compared as they are made (a long evaluation
     // would otherwise hold both sides' rows); on the reference evaluator they are kept.
     let (m, drift) = if a.exec {
         log("integer program on the typed backend (misaka-palw-tir-exec)".into());
         let mut acc = fidelity::Accumulator::new((64, 192), 128);
         let mut first: Vec<Vec<f64>> = Vec::new();
+        let post_store = loader.load(prep.hl.post, None).map_err(|e| e.to_string())?;
+        let mut float_err: Option<String> = None;
         for (si, s) in eval.iter().enumerate() {
             fidelity::int_logits_exec_each(&prep.lowered.program, &mat.params, s, mat.logits_scale, &mut |p, row| {
-                acc.push(p, s.len(), &fl[si][p], row, s.get(p + 1).copied());
+                let f = match misaka_palw_tir_lower::float_ref::stream::post_logits(&prep.hl, &post_store, &post_in[si][p], s[p], p) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        float_err.get_or_insert(e.to_string());
+                        return;
+                    }
+                };
+                acc.push(p, s.len(), &f, row, s.get(p + 1).copied());
                 if si == 0 && p < a.cross_check {
                     first.push(row.to_vec());
                 }
@@ -197,6 +230,9 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
                 }
             })
             .map_err(|e| e.to_string())?;
+            if let Some(e) = float_err.take() {
+                return Err(format!("float reference, post block: {e}"));
+            }
         }
         if a.cross_check > 0 {
             let s = &eval[0][..a.cross_check.min(eval[0].len())];
@@ -258,7 +294,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         "program_digest": artifact::program_digest(&prep.lowered.program),
         "artifact_digest": digest,
         "artifact_bytes": mat.params.bytes(),
-        "calibration": { "source": calib_src, "sequences": calib.len(), "positions": calib.iter().map(Vec::len).sum::<usize>() },
+        "calibration": { "source": calib_src, "sequences": calib.len(), "positions": calib.iter().map(Vec::len).sum::<usize>(), "length_rule": calibrated },
         "evaluation": { "source": eval_src, "sequences": eval.len(), "positions": eval.iter().map(Vec::len).sum::<usize>() },
         "metrics": m,
         "drift": drift,

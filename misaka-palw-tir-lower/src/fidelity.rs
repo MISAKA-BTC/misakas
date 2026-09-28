@@ -116,6 +116,28 @@ pub fn int_logits_exec(
     Ok(out)
 }
 
+/// **The calibration-length rule** (freeze-v1 §5.2): a program with a recurrence — any `Fixed`
+/// state: a selective scan, a gated delta rule, a WKV state, a conv window, a token shift — is
+/// calibrated on at least one sequence as long as the longest context it is evaluated or served at.
+/// A recurrence's state and long-context activations otherwise get static scales sized on
+/// short-context magnitudes: Jamba-tiny-dev drifted ×193 at 4,096 positions with a 128-token
+/// calibration, ×0.45 with one 4,096-token sequence added. `Ok(None)` when the program has no
+/// recurrence (the rule does not apply), `Ok(Some(longest))` when it is met.
+pub fn check_calibration_length(hl: &HlProgram, calib: &[Vec<usize>], context: usize) -> std::result::Result<Option<usize>, String> {
+    let recurrent = hl.states.iter().any(|s| matches!(s.kind, crate::hl::StateKind::Fixed));
+    if !recurrent {
+        return Ok(None);
+    }
+    let longest = calib.iter().map(Vec::len).max().unwrap_or(0);
+    if longest < context {
+        return Err(format!(
+            "a recurrent program is calibrated on at least one sequence as long as the context it is evaluated at: \
+             the longest calibration sequence has {longest} tokens, the context {context} (freeze-v1 §5.2)"
+        ));
+    }
+    Ok(Some(longest))
+}
+
 /// Fidelity of one set of sequences.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Metrics {
