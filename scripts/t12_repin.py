@@ -93,6 +93,7 @@ HARVEST_TARGETS = [
     "palw_exec_maturity_is_t12_only",
     "palw_clock_lead_cap_is_t12_only",
     "t12_mainnet_values_moved_only_these",
+    "palw_tir_fences_are_dormant",
 ]
 HARVEST_FILTERS = [
     "print_every_value_the_pins_hold",
@@ -108,6 +109,7 @@ HARVEST_FILTERS = [
     "the_maturity_moves_testnet12s_fingerprint_and_nothing_else_did",
     "the_cap_moves_testnet12s_fingerprint_and_a_never_collapses",
     "the_three_mainnet_values_are_the_only_thing_that_moved_testnet12",
+    "every_shipped_ruleset_keeps_its_three_ids",
 ]
 # The one lib test whose value is only visible in its own failure message (or, when it passes, is
 # the pin itself): run alone, so its result line is unambiguous.
@@ -231,6 +233,44 @@ def _triple(prefix, scope, file, const, value_prefix, tests, until=r"^\);"):
     return [Pin(key=f"{prefix}.{what}", scope=scope, file=file, anchors=[re.escape(const)], nth=i, length=64, until=until,
                 value=f"{value_prefix}.{what}", tests=tests)
             for i, what in enumerate(["params_id", "identity_id", "schedule_id"])]
+
+
+# RFC-0002 Phase F: `palw_tir_fences_are_dormant` pins every ruleset's three ids, row by row, as its test
+# prints them (`REPIN tirdorm.<slug>.<id>`). testnet-12's rows are this re-pin's to move (the IR flag day's
+# rows are pinned with that list dormant, so they move only when testnet-12 itself does); every other row is
+# its network's (a drift there is refused, mainnet's aside).
+TIRDORM = "consensus/core/tests/palw_tir_fences_are_dormant.rs"
+TIRDORM_ROWS = [
+    ("MAINNET_PARAMS", "mainnet"), ("TESTNET_PARAMS", "testnet-10"), ("TESTNET11_PARAMS", "testnet-11"),
+    ("DEVNET_PARAMS", "devnet"), ("SIMNET_PARAMS", "simnet"),
+    ("from(mainnet)", "mainnet"), ("from(testnet-10)", "testnet-10"), ("from(testnet-11)", "testnet-11"),
+    ("from(testnet-12) − IR flag day", "t12"), ("from(devnet)", "devnet"), ("from(simnet)", "simnet"),
+    ("mainnet_shipped_params", "mainnet"), ("devnet_shipped_params", "devnet"), ("palw_rc_shipped_params", "testnet-11"),
+    ("palw_t12_shipped_params − IR flag day", "t12"), ("palw_t12_launch_params_v1", "t12"),
+    ("palw_t12_release_v1_params", "t12"), ("palw_t12_release_v2_params", "t12"), ("palw_t12_release_v3_params", "t12"),
+    ("palw_t12_drill_params_v1 − IR flag day", "t12"),
+]
+
+
+def _tirdorm_slug(name: str) -> str:
+    out = ""
+    for c in name:
+        if c.isascii() and c.isalnum():
+            out += c.lower()
+        elif not out.endswith("_"):
+            out += "_"
+    return out.strip("_")
+
+
+def _tirdorm() -> list:
+    out = []
+    for row, scope in TIRDORM_ROWS:
+        for i, what in enumerate(["params_id", "identity_id", "schedule_id"]):
+            out.append(Pin(key=f"tirdorm.{_tirdorm_slug(row)}.{what}", scope=scope, file=TIRDORM,
+                           anchors=[re.escape("const PINS: &[(&str, &str, &str, &str)] = &["), rf'"{re.escape(row)}",'],
+                           nth=i, length=64, until=r"^\];", value=f"tirdorm.{_tirdorm_slug(row)}.{what}",
+                           tests=(f"{TIRDORM}::every_shipped_ruleset_keeps_its_three_ids",)))
+    return out
 
 
 def _genesis(const, net, scope):
@@ -693,6 +733,8 @@ def registry() -> list[Pin]:
                     fmt="abbr", comment=None))
     pins.append(Pin("monitor_doc.sample_fp", "copy", MONITOR_DOC, [r'^PANEL_BIAS \{"status":"OK","time":\.\.\.,"tip":70,"fp":"'],
                     lambda c: c["from.testnet-12.params_id"][:16], fmt="token", length=16, comment=None))
+    # RFC-0002 Phase F: every ruleset's ids as the IR dormancy pins hold them.
+    pins += _tirdorm()
     return pins
 
 

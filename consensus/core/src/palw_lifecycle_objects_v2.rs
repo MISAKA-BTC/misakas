@@ -117,6 +117,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // transition, and the class binding is checked against the class's own profile hash.
         | PalwConsensusObjectV2::FamilyCertified { .. }
         | PalwConsensusObjectV2::ClassLaneCertified { .. }
+        // RFC-0002 Phase F (tag 63): the IR class's lane certification, checked the same way.
+        | PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. }
         | PalwConsensusObjectV2::ObjectChunk { .. }
         // **ADR-0080 design A: the split close.** The declaration carries the signature of one of
         // the two bonds the session id binds, checked at acceptance against that bond's registered
@@ -246,6 +248,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // covers, fits the ladder, costs what the ruleset allows and counts the pwu it declares is
         // `verify_class_admission_v2`'s, at acceptance, where the bundle is in hand.
         PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. } => Ok(()),
+        // RFC-0002 Phase F (tag 61): an IR registration carries its program, so it is checkable
+        // whenever it is admitted. It RIDES at every height — a block carrying it must be valid on
+        // this build and on an older one that skips it undecoded (A-2) — and the acceptance walk
+        // drops it by name until `palw_tir_v1` is armed.
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => Ok(()),
+        // RFC-0002 Phase F (tag 62): an IR one-move accusation rides signed and shaped (its proof
+        // an IR close about the roots it names) at every height, as the registration does; the
+        // ruleset's close ceiling and the verdict are the acceptance layer's.
+        PalwConsensusObjectV2::TirShardCourtAccused { accusation } => crate::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(accusation),
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
         ),

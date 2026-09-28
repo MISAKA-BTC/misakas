@@ -71,9 +71,11 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
     use PalwConsensusObjectV2 as O;
     match object {
         O::ObjectiveOffence { kind, .. } => match kind {
-            PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted => {
-                true
-            }
+            PalwOffenceKindV1::ExecutorEquivocation
+            | PalwOffenceKindV1::PanelFalseValidV2
+            | PalwOffenceKindV1::ExecutorRefuted
+            // RFC-0002 Phase F: the IR executor's identity conviction, kind 4's twin.
+            | PalwOffenceKindV1::TirIdentityMismatch => true,
             PalwOffenceKindV1::PanelFalseValid
             | PalwOffenceKindV1::CourtExecutorGuilty
             | PalwOffenceKindV1::DaDefault
@@ -96,10 +98,14 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::CourtAttnChildChosen { .. } => true,
         // ADR-0152 §4-ter: the held dissection's opening and step 6's checkpoint conviction.
         O::ShardCourtAccused { .. } | O::CheckpointAccused { .. } => true,
+        // RFC-0002 Phase F (tag 62): the IR one-move accusation, a court opening like the one above.
+        O::TirShardCourtAccused { .. } => true,
         O::BondRegistered { .. }
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
         | O::ClassRegistered { .. }
+        // RFC-0002 Phase F (tag 61): an IR registration is a registration, like the one above.
+        | O::ClassRegisteredTirV1 { .. }
         | O::ClassFrozen(..)
         | O::PanelBound { .. }
         | O::ReceiptLicensed { .. }
@@ -107,6 +113,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::FreePromptCommitted { .. }
         | O::FamilyCertified { .. }
         | O::ClassLaneCertified { .. }
+        | O::ClassLaneCertifiedTirV1 { .. }
         | O::ObjectChunk { .. }
         | O::DerivedArtifactV1 { .. }
         | O::MaterialDisclosed { .. }
@@ -251,6 +258,7 @@ pub fn palw_h1_carrier_lane_key_v1(object: &PalwConsensusObjectV2) -> Option<Pal
         O::ReporterCommitted { reporter, .. } | O::ReporterRevealed { reporter, .. } => Some(PalwH1LaneKeyV1::Reporter(*reporter)),
         O::CourtOpened { claim, .. } => Some(PalwH1LaneKeyV1::CourtOpening(*claim)),
         O::ShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
+        O::TirShardCourtAccused { accusation } => Some(PalwH1LaneKeyV1::CourtOpening(accusation.claim)),
         O::CheckpointAccused { accusation } => Some(PalwH1LaneKeyV1::CheckpointConviction(accusation.claim)),
         _ => None,
     }

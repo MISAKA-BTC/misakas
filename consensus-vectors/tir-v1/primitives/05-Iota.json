@@ -1,0 +1,230 @@
+{
+  "format": "palw-tir-v1/primitive-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "primitive": "Iota",
+  "tag": 5,
+  "cases": [
+    {
+      "name": "ascending",
+      "prim": {
+        "name": "Iota",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "start",
+            "-2"
+          ],
+          [
+            "step",
+            "3"
+          ]
+        ],
+        "borsh_hex": "0500feffffffffffffff0300000000000000"
+      },
+      "inputs": [],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          4
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          4
+        ],
+        "data": [
+          "-2",
+          "1",
+          "4",
+          "7"
+        ]
+      }
+    },
+    {
+      "name": "inner_axis",
+      "prim": {
+        "name": "Iota",
+        "attrs": [
+          [
+            "axis",
+            "1"
+          ],
+          [
+            "start",
+            "5"
+          ],
+          [
+            "step",
+            "-1"
+          ]
+        ],
+        "borsh_hex": "05010500000000000000ffffffffffffffff"
+      },
+      "inputs": [],
+      "out": {
+        "dtype": "i64",
+        "shape": [
+          2,
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "i64",
+        "shape": [
+          2,
+          3
+        ],
+        "data": [
+          "5",
+          "4",
+          "3",
+          "5",
+          "4",
+          "3"
+        ]
+      }
+    },
+    {
+      "name": "fill_step_zero",
+      "prim": {
+        "name": "Iota",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "start",
+            "9"
+          ],
+          [
+            "step",
+            "0"
+          ]
+        ],
+        "borsh_hex": "050009000000000000000000000000000000"
+      },
+      "inputs": [],
+      "out": {
+        "dtype": "i16",
+        "shape": [
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "i16",
+        "shape": [
+          3
+        ],
+        "data": [
+          "9",
+          "9",
+          "9"
+        ]
+      }
+    },
+    {
+      "name": "idx_positions",
+      "prim": {
+        "name": "Iota",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "start",
+            "0"
+          ],
+          [
+            "step",
+            "1"
+          ]
+        ],
+        "borsh_hex": "050000000000000000000100000000000000"
+      },
+      "inputs": [],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          5
+        ]
+      },
+      "expect": {
+        "dtype": "idx",
+        "shape": [
+          5
+        ],
+        "data": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "error_overflow_i8",
+      "prim": {
+        "name": "Iota",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "start",
+            "120"
+          ],
+          [
+            "step",
+            "5"
+          ]
+        ],
+        "borsh_hex": "050078000000000000000500000000000000"
+      },
+      "inputs": [],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          4
+        ]
+      },
+      "expect_error": "Overflow"
+    },
+    {
+      "name": "error_negative_idx",
+      "prim": {
+        "name": "Iota",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "start",
+            "1"
+          ],
+          [
+            "step",
+            "-1"
+          ]
+        ],
+        "borsh_hex": "05000100000000000000ffffffffffffffff"
+      },
+      "inputs": [],
+      "out": {
+        "dtype": "idx",
+        "shape": [
+          3
+        ]
+      },
+      "expect_error": "Overflow"
+    }
+  ]
+}

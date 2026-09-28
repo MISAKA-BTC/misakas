@@ -465,6 +465,9 @@ pub fn palw_evidence_contradiction_offence_v1(
         PalwOffenceKindV1::ExecutorRefuted => {
             borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|payload| palw_contradiction_tag_v1(&payload.contradiction))
         }
+        // RFC-0002 Phase F: kind 7 is an identity mismatch over an IR binding — the class of kind 4's
+        // `IdentityMismatch` (9).
+        PalwOffenceKindV1::TirIdentityMismatch => Some(PALW_CONTRADICTION_IDENTITY_MISMATCH_V1),
         _ => None,
     };
     PalwConvictedOffenceV1::Contradiction { tag: tag.unwrap_or(u8::MAX) }

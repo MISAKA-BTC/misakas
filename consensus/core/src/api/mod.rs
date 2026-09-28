@@ -1248,6 +1248,15 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// RFC-0002 Phase F: the IR class record the chain holds for `class_id` (its `tir_classes`
+    /// row) at the tip. `None` for a legacy class, an unknown one, or off ConsensusV2.
+    fn palw_tir_class_record_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
+        None
+    }
+
     /// ADR-0067 Decision 6: adopt a class declaration this node did not watch arrive (the
     /// pruned-sync path). Self-authenticating against chain state — see the processor's impl.
     fn palw_adopt_class_carriage_v1(&self, _class_id: kaspa_hashes::Hash64, _carriage: &[u8]) -> Result<(), String> {
