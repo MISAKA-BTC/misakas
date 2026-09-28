@@ -427,6 +427,10 @@ pub struct TirExecutor<'a> {
     params: &'a TirParams<'a>,
     /// Per occurrence: the block plan refined by the actual ranges of the bound params.
     occ_plans: Vec<BlockPlan>,
+    /// Per occurrence, when fused kernels are on ([`Self::set_fused`]): the regions that run fused.
+    fused: Option<Vec<Option<crate::fused::OccFused>>>,
+    /// The kernel whose deliberately broken variant runs ([`Self::set_fused_fault`]); test only.
+    fused_fault: Option<usize>,
     run: RunBufs,
     work: WorkBufs,
 }
@@ -442,6 +446,8 @@ impl<'a> TirExecutor<'a> {
             plan,
             params,
             occ_plans,
+            fused: None,
+            fused_fault: None,
             run: RunBufs::initial(plan),
             work: WorkBufs {
                 slots: (0..nb).map(|b| vec![Buf::default(); plan.blocks[b].nodes.len()]).collect(),
@@ -461,6 +467,43 @@ impl<'a> TirExecutor<'a> {
 
     pub fn plan(&self) -> &TirPlan {
         self.plan
+    }
+
+    /// **Run the fused kernels (RFC-0002 §7)** — every region of the program a kernel of this build
+    /// matched ([`crate::fused::match_program`]) whose nodes cannot fail under this executor's
+    /// refined plan ([`crate::fused::enable`]) — or none. Off by default. Byte-identical either way
+    /// (the gate is `tests/fused_gate.rs`); a step whose sink asks for every node's value runs
+    /// generic throughout.
+    pub fn set_fused(&mut self, on: bool) {
+        self.fused = on.then(|| {
+            let regions = self.plan.fused_regions();
+            self.plan
+                .occurrences
+                .iter()
+                .zip(&self.occ_plans)
+                .map(|(&(block, _), bp)| crate::fused::enable(&regions[block as usize], bp, &self.plan.program))
+                .collect()
+        });
+    }
+
+    /// **Run kernel `kernel`'s deliberately broken variant** (an index into
+    /// [`crate::fused::kernels_v1`]): it moves one output lane by one. The gate
+    /// (`tests/fused_gate.rs`) proves it catches it; nothing else calls this.
+    #[doc(hidden)]
+    pub fn set_fused_fault(&mut self, kernel: Option<usize>) {
+        self.fused_fault = kernel;
+    }
+
+    /// `(kernel name, regions)` that run fused per position, when fused kernels are on.
+    pub fn fused_summary(&self) -> Vec<(&'static str, usize)> {
+        let kernels = crate::fused::kernels_v1();
+        let mut counts = vec![0usize; kernels.len()];
+        for occ in self.fused.iter().flatten().flatten() {
+            for r in &occ.regions {
+                counts[r.kernel] += 1;
+            }
+        }
+        kernels.iter().zip(counts).map(|(k, c)| (k.name(), c)).collect()
     }
 
     /// The next position to compute.
@@ -588,7 +631,8 @@ impl<'a> TirExecutor<'a> {
         let params = self.params;
         let every = sink.every_node();
         let n_occ = plan.occurrences.len();
-        let TirExecutor { run, work, occ_plans, .. } = self;
+        let TirExecutor { run, work, occ_plans, fused, fused_fault, .. } = self;
+        let fused_fault = *fused_fault;
         work.carry.clear();
         if !run_post {
             work.logits_shape.clear();
@@ -604,13 +648,82 @@ impl<'a> TirExecutor<'a> {
             slots.resize_with(n, Buf::default);
             vals.resize(n, Val::default());
             let base = plan.slot_bases[occ];
+            // The fused regions of this occurrence — none when the sink wants every node's value.
+            let fo = if every { None } else { fused.as_ref().and_then(|f| f[occ].as_ref()) };
             for ni in 0..n {
                 let node = &bp.nodes[ni];
+                let role = fo.map_or(crate::fused::Role::Generic, |f| f.roles[ni]);
+                if role == crate::fused::Role::Skip {
+                    // Computed by its region's kernel at the region's output; read by nothing else.
+                    continue;
+                }
                 let started = work.profile.is_some().then(std::time::Instant::now);
                 let (shape, rank) = resolve(&node.out.shape, h);
                 let out_shape = &shape[..rank];
-                let val = match node.prim {
-                    Prim::StateWrite { state } => {
+                let val = match (role, &node.prim) {
+                    (crate::fused::Role::Run(ri), _) => {
+                        let region = &fo.expect("a fused role implies its occurrence's regions").regions[ri as usize];
+                        let kernel = crate::fused::kernels_v1()[region.kernel];
+                        let missing = || TirError::new(TirErrorKind::Missing, "fused state instance");
+                        let insts: Vec<u32> =
+                            region.states.iter().map(|s| plan.instance(*s, layer).ok_or_else(missing)).collect::<TirResult<_>>()?;
+                        let ranges: Vec<(i64, i64)> = region
+                            .states
+                            .iter()
+                            .map(|s| match plan.program.states[*s as usize].kind {
+                                StateKind::Fixed { lo, hi } => (lo, hi),
+                                StateKind::Hist { .. } => (0, 0),
+                            })
+                            .collect();
+                        let write_inst = region.writes.map(|s| plan.instance(s, layer).ok_or_else(missing)).transpose()?;
+                        let mut next: Vec<Buf> =
+                            write_inst.map(|k| std::mem::take(&mut run.fixed_next[k as usize])).into_iter().collect();
+                        let mut out = std::mem::take(&mut slots[ni]);
+                        let r = {
+                            let rd = Reader {
+                                plan,
+                                params,
+                                layer,
+                                fixed: &run.fixed,
+                                fixed_next: &run.fixed_next,
+                                hist: &run.hist,
+                                carry: &work.carry,
+                                slots: &slots,
+                                inputs: &work.inputs,
+                            };
+                            region
+                                .holes
+                                .iter()
+                                .map(|h| rd.opd(ref_val(plan, bp, *h, &vals, layer)?))
+                                .collect::<TirResult<Vec<_>>>()
+                                .and_then(|holes| {
+                                    let states = insts.iter().map(|k| rd.data(Src::Fixed(*k))).collect::<TirResult<Vec<_>>>()?;
+                                    kernel.run(
+                                        &region.bound,
+                                        &mut crate::fused::FusedIo {
+                                            holes: &holes,
+                                            states: &states,
+                                            state_ranges: &ranges,
+                                            state_next: &mut next,
+                                            out: &mut out,
+                                            out_store: node.store,
+                                            out_shape,
+                                            fault: fused_fault == Some(region.kernel),
+                                        },
+                                    )
+                                })
+                        };
+                        if let Some(k) = write_inst {
+                            run.fixed_next[k as usize] = next.pop().unwrap_or_default();
+                            if r.is_ok() {
+                                run.written[k as usize] = true;
+                            }
+                        }
+                        slots[ni] = out;
+                        r?;
+                        Val { src: Src::Slot(ni as u16), layout: Layout::contiguous(out_shape) }
+                    }
+                    (_, &Prim::StateWrite { state }) => {
                         let inst =
                             plan.instance(state, layer).ok_or_else(|| TirError::new(TirErrorKind::Missing, "state instance"))?;
                         let mut buf = std::mem::take(&mut run.fixed_next[inst as usize]);
@@ -634,7 +747,7 @@ impl<'a> TirExecutor<'a> {
                         run.written[inst as usize] = true;
                         Val { src: Src::FixedNext(inst), layout: Layout::contiguous(out_shape) }
                     }
-                    Prim::HistAppend { state } => {
+                    (_, &Prim::HistAppend { state }) => {
                         let inst =
                             plan.instance(state, layer).ok_or_else(|| TirError::new(TirErrorKind::Missing, "history instance"))?;
                         let mut hb = std::mem::take(&mut run.hist[inst as usize]);
