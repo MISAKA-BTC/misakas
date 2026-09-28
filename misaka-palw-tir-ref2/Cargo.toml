@@ -21,6 +21,9 @@ rand_chacha.workspace = true
 # evaluate through its public API). A dev-dependency and only that: a normal dependency would let a
 # future edit here reach for the first implementation's answer.
 misaka-palw-tir = { path = "../misaka-palw-tir" }
+# §9.5 differential: the first implementation's dissection court, as a black box (public API only).
+kaspa-consensus-core = { path = "../consensus/core" }
+borsh = { workspace = true }
 
 [lints]
 workspace = true

@@ -8,6 +8,7 @@
 //! * `programs/` — every step's logits and every commit point of every position; every cone case
 //!   and every cone refusal (spec 04b revision 2, §9.2) through the backend's cone evaluator.
 //! * `encoding.json` — acceptance of the byte strings (decode, then the plan's validation).
+//! * `demand/` — every demand-evaluation case that pins values holds the executor's values there.
 //!
 //! Where a vector pins an error class (spec 04b §9.3: one class per rule, and every vector breaks
 //! one rule) the backend must report that class.
@@ -231,6 +232,78 @@ fn every_program_vector() {
         }
     }
     eprintln!("program vectors: {steps} steps, {commits} commit points, {cones} cones, {refusals} refusals");
+}
+
+/// **The demand-evaluation vectors** (`demand/`, spec 04b §9.4): every case that pins values — a
+/// node's elements at a position, or a `Fixed` instance's after one — holds the value the typed
+/// backend computes there on the program vector's run (the demand evaluator pulls exactly those
+/// elements; the executor computes the whole node, and the two must agree element for element).
+/// Work limits, requests and refusals are the demand evaluator's own and are not the executor's.
+#[test]
+fn every_demand_vector_value() {
+    let dir = vectors().join("demand");
+    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    files.sort();
+    assert!(files.len() >= 7, "{} demand files", files.len());
+    let (mut nodes, mut states) = (0usize, 0usize);
+    for f in &files {
+        let d = read(f);
+        let v = read(&vectors().join(d["program"].as_str().unwrap()));
+        let program = TirProgramV1::decode_canonical(&common::hex_decode(v["program_borsh_hex"].as_str().unwrap())).unwrap();
+        let plan = TirPlan::compile(&program).unwrap();
+        let mut map = MapParams::default();
+        for p in v["params"].as_array().unwrap() {
+            let j = int(&p["param"]) as u16;
+            let decl = &program.params[j as usize];
+            let shape: Vec<usize> = decl.shape.iter().map(|x| *x as usize).collect();
+            let t = Tensor::from_le_bytes(decl.dtype, &shape, &common::hex_decode(p["le_hex"].as_str().unwrap())).unwrap();
+            map.tensors.insert((j, opt_u16(&p["layer"])), t);
+        }
+        let params = TirParams::from_map(&plan, &map).unwrap();
+        let mut exec = TirExecutor::new(&plan, &params).unwrap();
+        // Every node's value at every position, and every Fixed instance after it.
+        let mut at: Vec<std::collections::BTreeMap<(u8, Option<u16>, u16), Tensor>> = Vec::new();
+        let mut fixed_after: Vec<std::collections::BTreeMap<(u16, Option<u16>), Vec<i128>>> = Vec::new();
+        for s in v["steps"].as_array().unwrap() {
+            let mut sink = Collect::new(true);
+            exec.step(int(&s["token"]) as u32, &mut sink).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+            at.push(sink.values.into_iter().map(|r| ((r.block, r.layer, r.node), r.value)).collect());
+            let mut fx = std::collections::BTreeMap::new();
+            for (j, st) in program.states.iter().enumerate() {
+                let layers: Vec<Option<u16>> =
+                    if st.per_layer { (0..program.schedule.layers.len() as u16).map(Some).collect() } else { vec![None] };
+                for l in layers {
+                    if let Some(val) = exec.fixed_value(j as u16, l) {
+                        fx.insert((j as u16, l), val.to_i128s());
+                    }
+                }
+            }
+            fixed_after.push(fx);
+        }
+        for c in d["cases"].as_array().unwrap() {
+            let Some(values) = c.get("expect").map(|e| e["values"].as_array().unwrap()) else { continue };
+            let want: Vec<i128> = values.iter().map(int).collect();
+            let elements: Vec<usize> = c["elements"].as_array().unwrap().iter().map(|e| int(e) as usize).collect();
+            let name = c["name"].as_str().unwrap();
+            let got: Vec<i128> = if let Some(t) = c["target"].get("node") {
+                let pos = int(&t["pos"]) as usize;
+                let (block, layer) = plan.occurrences[int(&t["occurrence"]) as usize];
+                let value = at[pos].get(&(block, layer, int(&t["node"]) as u16)).unwrap_or_else(|| panic!("{}: {name}", f.display()));
+                nodes += 1;
+                elements.iter().map(|e| value.data[*e]).collect()
+            } else {
+                let t = &c["target"]["state_after"];
+                let pos = int(&t["pos"]) as usize;
+                let key = (int(&t["state"]) as u16, opt_u16(&t["layer"]));
+                let value = fixed_after[pos].get(&key).unwrap_or_else(|| panic!("{}: {name}", f.display()));
+                states += 1;
+                elements.iter().map(|e| value[*e]).collect()
+            };
+            assert_eq!(got, want, "{}: {name}", f.display());
+        }
+    }
+    eprintln!("demand vectors: {nodes} node cases and {states} state cases hold the executor's values");
+    assert!(nodes > 500 && states > 30);
 }
 
 /// A cone case's environment (`token` null when absent).

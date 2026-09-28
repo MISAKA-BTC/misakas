@@ -141,17 +141,28 @@ impl PalwTirCeilingsV1 {
     }
 }
 
-/// **testnet-12's IR ceilings, v1 — PROVISIONAL.** The byte cap (one carrier, design D3) and the
-/// cone-work cap (`2^16`: seventy times the 1.5B decoder's 905) are the lead's; the other five are
-/// placeholders at the format's scale until admission v10 (Phase F step F6) measures the corpus, and
-/// are fixed then. Nothing arms them: the fence is dormant.
+/// **testnet-12's IR ceilings, v1** — set from admission v10's measurement of the Qwen2.5 A16
+/// decoders as IR programs at the small history bound (`misaka-palw-base0/tests/
+/// tir_a16_admission_measure.rs`, 2026-09-28): the 1.5B costs 12,928 program bytes, 7,762 unrolled
+/// nodes, 24.1 G MACs a position at `H = W = 2^18`, 7.5 GB of state, 549 MB peak live and 838 units of
+/// admission work; the 3B 12,936 B, 9,970 nodes, 41.7 G MACs, 9.7 GB, 554 MB and 838.
+///
+/// * program bytes 88,000 — one lifecycle carrier beside the registration's other fields (D3);
+/// * unrolled nodes `2^16` — 6.5× the 3B's;
+/// * context `2^18` — the small history bound (v10 admits no held program);
+/// * MACs a position `2^37` — 5.7× the 1.5B's and 3.3× the 3B's at the full window;
+/// * state `2^35` bytes — 3.5× the 3B's full-window KV;
+/// * peak live `2^32` bytes — 7.8× the 3B's;
+/// * admission work `2^16` — seventy-eight times the decoders' 838.
+///
+/// Armed on testnet-12 by its IR flag day (`PALW_T12_TIR_FLAG_DAY_FENCES_V1` at DAA 2,000).
 pub const PALW_T12_TIR_CEILINGS_V1: PalwTirCeilingsV1 = PalwTirCeilingsV1 {
     max_program_bytes: 88_000,
-    max_unrolled_nodes: 1 << 18,
-    max_context: misaka_palw_tir::program::HISTORY_BOUND_V1_HELD,
+    max_unrolled_nodes: 1 << 16,
+    max_context: misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL,
     max_macs_per_position: 1 << 37,
-    max_state_bytes: 1 << 40,
-    max_peak_live_bytes: 1 << 36,
+    max_state_bytes: 1 << 35,
+    max_peak_live_bytes: 1 << 32,
     max_cone_work: 1 << 16,
 };
 
@@ -186,11 +197,17 @@ impl PalwTirFenceV1 {
     }
 }
 
-/// **The entry a testnet-12 flag-day list takes to arm the IR** — in NO list yet: the height is
-/// chosen at deployment, after the Phase F drill crosses it (design §4, D-F4). One line in a list
-/// arms it, through this `set`, exactly as the capacity entries wait for theirs.
-pub const PALW_T12_TIR_V1_ENTRY: PalwPostLaunchFenceV1 =
-    PalwPostLaunchFenceV1 { name: "palw_tir_v1", set: |params, at| params.palw_tir_v1 = at.map(PalwTirFenceV1::testnet12_v1) };
+/// **The entry a testnet-12 flag-day list takes to arm the IR** — the one entry of
+/// `config::params::PALW_T12_TIR_FLAG_DAY_FENCES_V1`, testnet-12's IR flag day at DAA 2,000 (the
+/// user's decision of 2026-09-28), which a drill moves with `--palw-drill-tir-at` (D-F4 crosses it).
+/// The list arms it through this `set`, which writes the bundle's mirror.
+pub const PALW_T12_TIR_V1_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {
+    name: "palw_tir_v1",
+    set: |params, at| {
+        params.palw_tir_v1 = at.map(PalwTirFenceV1::testnet12_v1);
+        params.sync_palw_tir_v1();
+    },
+};
 
 impl Params {
     /// `palw_tir_v1`, resolved: `Some` only on a `ConsensusV2` network that armed it — the ONE place
@@ -206,6 +223,18 @@ impl Params {
         self.palw_tir_v1_fence().is_some_and(|f| f.activation.is_active(daa_score))
     }
 
+    /// **The IR fence's mirror** on the V2 bundle's state params (`PalwStateParamsV2::tir_from_daa`),
+    /// which the fold reads: below the height an assembled court close carrying an IR proof reads as
+    /// bytes that do not decode, as on an older build. Written here and nowhere else; `None` where the
+    /// fence is not armed (or is `never()`). Call it wherever the fence is set on an assembled
+    /// ruleset; [`Self::validate_palw_tir_v1`] refuses a ruleset whose copy disagrees.
+    pub fn sync_palw_tir_v1(&mut self) {
+        let from_daa = self.palw_tir_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_tir_from_daa(from_daa);
+        }
+    }
+
     /// **The IR fence's own refusals**, asked by [`Params::validate_palw_v2`] before a peer is dialed:
     ///
     /// * a value naming another build's `prim_set_id` or court version — a build adjudicates only
@@ -216,10 +245,24 @@ impl Params {
     ///   objects, and only under that declaration does an older build skip a payload it cannot
     ///   decode instead of failing the block (A-2, `palw_lifecycle_objects_v2`);
     /// * arming without `palw_kary_court` in force at or below it — an IR class's disputes include
-    ///   history dissections, which that court plays.
+    ///   history dissections, which that court plays;
+    /// * arming without `palw_rcore_plus` in force at or below it — an IR claim's data-availability
+    ///   answers ride `MaterialDisclosedV2`, which exists only there;
+    /// * a V2 bundle whose mirror of the height (`PalwStateParamsV2::tir_from_daa`) is not the fence's.
     ///
     /// A `Some(never())` value is dormant and passes (it collapses out of the identity).
     pub fn validate_palw_tir_v1(&self) -> Result<(), PalwModeV2Error> {
+        let mirror = match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.tir_from_daa(),
+            _ => None,
+        };
+        let armed = self.palw_tir_v1.filter(|f| f.activation != ForkActivation::never()).map(|f| f.activation.daa_score());
+        if mirror != armed {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_tir_v1 after the bundle is \
+                 assembled",
+            ));
+        }
         let Some(fence) = self.palw_tir_v1 else { return Ok(()) };
         if fence.activation == ForkActivation::never() {
             return Ok(());
@@ -247,6 +290,18 @@ impl Params {
         if !court_ok {
             return Err(PalwModeV2Error::Invalid(
                 "palw_tir_v1 needs palw_kary_court in force at or below it: an IR class's disputes include history dissections",
+            ));
+        }
+        // An IR claim answers a data-availability demand only through `MaterialDisclosedV2`
+        // (`PalwDaAnswerV1::TirEvent`), and its one-move court's convictions are R-core+'s records:
+        // below `palw_rcore_plus` an IR producer could answer no DA session and would lose each by
+        // silence.
+        let rcore_ok =
+            self.palw_rcore_plus.is_some_and(|r| r != ForkActivation::never() && r.daa_score() <= fence.activation.daa_score());
+        if !rcore_ok {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_tir_v1 needs palw_rcore_plus in force at or below it: an IR claim's data-availability answers ride \
+                 MaterialDisclosedV2 (PalwDaAnswerV1::TirEvent), which exists only there",
             ));
         }
         Ok(())

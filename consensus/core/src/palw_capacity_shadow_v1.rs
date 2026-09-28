@@ -689,7 +689,7 @@ pub fn palw_capacity_route_of_record_v1(
             Some(PalwVoidReasonV2::CourtHeldVerdict) => PalwCapacityRouteV1::CourtHeldVerdict,
             _ => PalwCapacityRouteV1::Other,
         },
-        PalwOffenceKindV1::ExecutorRefuted => PalwCapacityRouteV1::Refuted,
+        PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch => PalwCapacityRouteV1::Refuted,
         PalwOffenceKindV1::PanelFalseValidV2 => PalwCapacityRouteV1::SeatFinding,
         PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::PanelFalseValid | PalwOffenceKindV1::CourtExecutorGuilty => {
             PalwCapacityRouteV1::Other
@@ -781,7 +781,9 @@ pub fn palw_capacity_freeze_class_v1(kind: PalwOffenceKindV1) -> PalwCapacityFre
         // rcore/cap-s1, the user's decision 1: a DA default is TIER-class (a lifting freeze); a court
         // conviction stays intent.
         PalwOffenceKindV1::CourtConviction => PalwCapacityFreezeClassV1::Intent,
-        PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::PanelFalseValidV2 => PalwCapacityFreezeClassV1::Undetermined,
+        PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::TirIdentityMismatch => {
+            PalwCapacityFreezeClassV1::Undetermined
+        }
         _ => PalwCapacityFreezeClassV1::Tier,
     }
 }

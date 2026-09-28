@@ -2,16 +2,42 @@
 
 > Scope: RFC-0002 freeze criterion 4 (`reference evaluator == independent second implementation ==
 > every backend`) for `docs/spec/palw/04b-tensor-ir.md`: its evaluator, its admission
-> (`tir_admit_v1`, §10.3 with §7 and §8) and now its demand evaluation (`eval_demanded`, §9.4). This
-> file records where the normative text is ambiguous, silent or wrong, and where the first
-> implementation (`misaka-palw-tir`, observed only as a black box through its public API) departs
+> (`tir_admit_v1`, §10.3 with §7 and §8), its demand evaluation (`eval_demanded`, §9.4) and now its
+> H dissection (§9.5, PALW-TIR-37). This file records where the normative text is ambiguous, silent
+> or wrong, and where the first implementation (`misaka-palw-tir` and, for §9.5, the dissection
+> court in `kaspa-consensus-core`, observed only as black boxes through their public APIs) departs
 > from it. Branch `tir/ref2`: revision 1 of 04b from `tir/core` b7492d601; revision 2 from a2e6ec35a
-> (merged as 5f852c190); admission from ccd8f6aae (merged as 34c9d92d3); **demand evaluation** from
-> `tir/phase-f` 23cf9235c (merged as ef0ad0984); **the A1–A7 fix** from `tir/core` b9d75a4e5 (merged
-> as 564546f52). Written without reading `misaka-palw-tir/` (its tests included), the other files of
-> this directory, or the legacy kernels; the text changes were read as `git diff` of 04b only.
+> (merged as 5f852c190); admission from ccd8f6aae (merged as 34c9d92d3); demand evaluation from
+> `tir/phase-f` 23cf9235c (merged as ef0ad0984); the A1–A7 fix from `tir/core` b9d75a4e5 (merged as
+> 564546f52); **§9.5 and the §9.4 decisions** from `tir/phase-f-f7` c0d826a1b (merged as afa519c0f).
+> Written without reading `misaka-palw-tir/`, `consensus/` (tests included), the other files of this
+> directory, or the legacy kernels; the text changes were read as `git diff` of 04b only.
 
 ## 概要(日本語)
+
+- **H dissection(§9.5)を本文だけから独立実装**: `H` 上の縮約とサイト、`eval_range`(supplied と範囲)、
+  root claim の finalize と要素閉包(1 index の probe を不動点まで)、受理手順 2〜5、cut・round 予算・部分和、
+  厳密な fold、最下層の最初の不一致 index、義務 O-1〜O-3 と O-5 の `V`。**dissect vector 32/32 を再現**。
+- **第 1 実装の court そのものと ×25 で突き合わせ**(公開 API のみ・ソース不読): 本物の step leg・binding・
+  evidence store を組み、court の root claim 生成/判定・round 生成・phase の fold 判定・bottom 生成/判定を駆動。
+  **6,787 局で不一致 0**: 各縮約への嘘 4,126 件はすべて最下層で**嘘の値の index ちょうど**で有罪、正直な
+  executor 471 件は挑戦者敗北、root claim 拒否 1,045・round 拒否 1,145 件はどちらも同じ一手で拒否。
+  phase と `eval_demanded_range` の層でも 68,590 局・192,840 手を比較。
+- **H1(第 1 実装の逸脱、正直者が負ける)**: タイルが錐の縮約の一部しか読まないと、本文(手順 2 と 5)は
+  その縮約に空の要素リストを要求するが、第 1 実装は空リストを拒否する(**自前の builder が作る claim を
+  自前の checker が拒否**)。正直な executor は受理される root claim を出せず、沈黙で負ける。×25 で 99 件。
+- **H2(admission の分岐)**: 第 1 実装の O-5 の `V` が本文の式より小さく、実際の閉包より小さい
+  (例 2 対 5)。錐内の `MatMul` の第 1 オペランドが葉のとき、第 2 オペランドへ `d·K` を渡していない。
+  上限 4096 付近で受理が割れ、正直な root claim が上限を超えうる。corpus と Qwen 形では一致。
+- 他は editorial: H3 O-3 は §2.2(形に `H` は 1 つまで)から常に成立、H4 `h_tile` の 2 冪・タイル 4 lane 以上は
+  Phase F の layout 規則で 04b にない、H5 supplied の不正に class 記述なし(両者 `Malformed`)、
+  H6 O-5 の court window 条件は ADR-0082 Z4 参照で 04b だけでは実装不能。
+- §9.4 の D1〜D5 は c0d826a1b で本文が決定(`state_after` の `[lo, hi]`、未保持 instance は `Malformed`、
+  carried walk の terms、source の拒否は常に `Missing`)。ref2 を追従、**demand vector 697/697**、差分 0
+  (第 1 実装の D4 も修正済み)。
+- Phase F API の観察(§9.5 外): `palw_tir_canonical_context_v1` が `max_context_tokens = layout.max_context`
+  を与えるのに、その context で `layout.max_context` 位置を使うジョブを `verify_tir_binding_v1` が
+  "job context shape" で拒否(`positions + 1` なら通る)。arming 前に確認を推奨。
 
 - **demand 評価(`eval_demanded`、§9.4)を本文だけから独立実装。** context `(p, o)`・2 種の target・
   要求の事前拒否(`Position`/`Malformed`)・5 つの source 質問・leaf(target は常に計算)・全 primitive の
@@ -38,6 +64,117 @@
   (拒否は limit 名と値まで完全一致、受理は全派生量一致)。**本文が全 case を決めている。**
 - 評価器: golden 250/250、両 merge(phase-f・A1 fix)後の ×25 差分(primitive 100 万・step・cone 312 万・変異ほか)も
   不一致 0。改訂 1・2 の F1〜F15・N1〜N4 は解消済み。
+
+## H dissection (§9.5, PALW-TIR-37, at c0d826a1b)
+
+### What was built
+
+`misaka-palw-tir-ref2/src/dissect.rs` and `demand::eval_range`, from §9.5 alone: which nodes reduce
+over `H` and a commit tile's site (reductions in node order, folds, §7 bounds, counts at the
+context's `H`, `h`, `h_tile`); `eval_range` — §9.4 with supplied nodes that are leaves in the
+target's context and a target that reduces over `[from, to)` only, at `to − from` terms per element,
+with the stated `Malformed` refusals; the root claim's finalize (every reduction but `n` supplied from
+the totals; for `n = r_m` the totals themselves) and element closure (the finalize's supplied reads,
+then the probes `eval_range(ctx, r_i, [e], S_i, (0, 1))` to a fixpoint, an unclaimed read refused);
+admission steps 2 to 5; the cut at arity `k`, the round budget, the tiles' positions; the partials
+against the ROOT's totals; exact `Sum` (256-bit) and `Max` folds; the bottom's first differing value
+(`i` major, then `e`); obligations O-1 to O-3 and O-5's `V` and round bytes. The chain carriage
+(§9.5.9) is Phase F's and is not modelled; a source stands for a carriage's evidence.
+
+### Results
+
+| test | result |
+| --- | --- |
+| golden vectors (`dissect/*.json`) | **32/32**: every case's site, element lists, honest totals, finalize (= the committed tile), first cut at arity 2 (tiles, positions, partials) and bottom (positions, partials); on the way the honest root claim is admitted, every round folds and the bottom finds no fault |
+| the first implementation's full court, ×25 (`dissect_court`): a real step leg from its fail-closed builder over this crate's run, a real binding and evidence store; its root-claim builder and checker, round builder, phase and bottom builder and grader | **6,787 games, 0 disagreements**: 471 honest executors (challenger defeated at the bottom); 4,126 executors that forge a tile and lie about one total, in each reduction in turn, convicted by both at exactly the lie's value index; 1,045 root claims (unforged lies) and 1,145 rounds (lies that do not fold) refused by both at the same move; its built honest claims and rounds equal this crate's |
+| the phase and `eval_demanded_range`, ×25 (`dissect_differential`): long-`H` attention layers (1–3 heads, windows to `2^18`, 6–40 positions, a committed max, a fourth reduction, two layers) and 1,500 generated programs with a dissected tile; responders honest, lying consistently (the lie in the last, first, a random child or spread), not folding, unforged, out of bound, with short, long or unsorted lists; arity 2–64 | attention: 2,348 sites, 22,610 games, 82,171 moves, 0 disagreements; generated: 7,422 sites, 45,980 games, 110,669 moves, 99 disagreements — all H1 |
+| cone functions, ×25: reductions, obligations O-1/O-2 (the named node), `V` at three tile lengths, round bytes | 127,928 commit points: identical but 13 `V` values (H2); the corpus and the Qwen2.5-1.5B-shaped decoder identical |
+| range requests: the target supplied, an index that is no node, a range on a node that does not reduce over `H`, `from ≥ to`, `to > H`, the whole history, one index | identical (`Malformed` ×6, the same values and work ×2) |
+
+Run: `cargo test --release -p misaka-palw-tir-ref2 --test dissect_golden --test dissect_differential --test dissect_court`
+(`TIR_REF2_CASES=25`: ≈ 1 min; the first build of `kaspa-consensus-core` takes ≈ 3 min).
+
+### Findings (H-series)
+
+| id | § | severity | first impl | ref2 | text supports |
+| --- | --- | --- | --- | --- | --- |
+| H1 | 9.5.3 steps 2, 5 | **honest executor loses** | refuses a root claim with an empty element list — the one its own builder makes for a tile that reads none of some reduction | admits it (the lists are exactly the closure) | ref2 |
+| H2 | 9.5.6 O-5 | **admission split near the cap** | `V` below the formula and below the real closure (2 vs 5): a `MatMul` of the cone whose first operand is a leaf passes less than `d · K` to its second operand | the formula; equals the real closure in every case | ref2 |
+| H3 | 9.5.6 O-3 | editorial | never reports it | never reports it | O-3 cannot fail: one `H` per shape (§2.2) makes every reduction's output `H`-free |
+| H4 | 9.5.1, 10.3 | editorial | a layout needs `h_tile` a power of two in `[1, 4096]` and tiles of `[4, 2^16]` lanes | any `h_tile ≥ 1`, `tile_len ≥ 1` | 04b states `h_tile ≥ 1`; the layout rules are Phase F's |
+| H5 | 9.5.2 | editorial | `Malformed` | `Malformed` | no class for a supplied set holding the target or a non-node |
+| H6 | 9.5.6 O-5 | not implementable from 04b | — | not modelled | "fits the court window … ADR-0082 Z4" |
+
+#### H1 — an empty element list (§9.5.3) — the first implementation departs; an honest executor loses
+
+> step 2: "each `L_i` strictly ascending with every element `< E_i`" · step 5: "the element closure
+> computed with `T` supplied is **exactly `L`**: no claimed element goes unread"
+
+A tile can read none of a reduction of its cone: two maxima over the history, broadcast and
+concatenated — a tile of the first half reads only the first (`h1_empty_list_probe`,
+`h1_on_the_court`); or any `Concat`, `Slice` or `Gather` that routes some rows around a reduction
+(99 cases among the generated programs at ×25). Step 5 then forces `L_i = ∅`, and step 2 allows it.
+The first implementation's claim check refuses any empty list ("a reduction's elements are
+ascending, distinct and inside it") — its own `build_tir_root_claim_v1` produces `[[0], []]` and its
+own `check_tir_root_claim_v1` refuses it. The executor owes the root claim within its window and no
+admissible claim exists, so an honest executor loses the dissection by silence. The corpus's
+batched-head attention never meets it; a lowering that concatenates per-head or per-branch
+reductions does. Fix: admit an empty list (the carriage cap and the exact-closure check already
+bound the claim); a round's children then carry empty lists too, and the bottom compares nothing
+for that reduction.
+
+#### H2 — the value bound `V` (§9.5.6 O-5) — admission split
+
+> "each computed node in descending index order passes `d · K` to each operand of a `MatMul` (`K`
+> its first operand's last extent) … `V` is the sum over the reductions of what arrives"
+
+For `r2 = ReduceMax(MatMul(Const[a, K], X[K, H]))` with `X` an `H`-local chain from an earlier
+reduction `r1`, the text passes `d · K` to `X`, and `V` counts `K` elements of `r1`; the real
+closure reads exactly those. The first implementation's `palw_tir_dissect_value_bound_v1` returns
+less — 2 against a real closure of 5, 3 against 4 (`value_bound_against_closures`: in all 13 cases
+ref2's `V` equals the largest real closure and the first implementation's is below it). `V` is what
+admission sizes the value cap, the round and the root claim against, so near the 4096 cap the two
+implementations admit differently, and a class the first admits can require root claims past its
+own cap (step 2 refuses them: the honest executor loses as in H1). The corpus programs and the
+Qwen2.5-1.5B-shaped decoder have the same `V` in both. Fix: pass `d · K` to both operands of a
+`MatMul`, `K` from the first operand.
+
+#### H3 — O-3 cannot fail (§9.5.6) — editorial
+
+A shape holds at most one `H` (§2.2). A `ReduceSum`/`ReduceMax` over `H` keeps its axis as 1 and
+has no other `H`; a `MatMul` contracting `H` has `H` only in `K` (both operands' only `H`), so its
+batch, `M` and `N` are `H`-free. Every reduction over `H` therefore has an `H`-free output, and
+neither implementation ever reported O-3 in 127,928 commit points. Keep it as a guard, or say that
+it follows from §2.2.
+
+#### H4 — `h_tile` and tile lengths (§9.5.1, §10.3) — editorial
+
+04b gives `h_tile ≥ 1` and `1 ≤ tile_len ≤ 2^16`; the first implementation's commitment layout
+refuses an `h_tile` that is not a power of two in `[1, 4096]` and commit or state tiles of fewer than
+4 lanes. The dissection's arithmetic does not need either rule; they are Phase F's layout rules and
+04b should cite them where it states the ranges.
+
+#### H5 — a malformed supplied set (§9.5.2) — editorial
+
+"`supplied` is a set of node indices of the target's block, none equal to `target`" states a
+precondition without a class; both refuse the target supplied, or an index that is no node,
+`Malformed` (as §9.2's environment malformations are). One clause would pin it.
+
+#### H6 — the court window (§9.5.6 O-5) — not implementable from 04b
+
+"the whole exchange over `⌈max_context / h_tile⌉` tiles at arity `k` fits the court window, by the
+rule that sizes the network's arity (ADR-0082 Z4 …)" refers outside 04b; the rest of O-5 (`V ≤ 4096`,
+the round and root-claim bytes) is implemented here, and `V` and the round bytes are compared.
+
+#### Observation outside §9.5 — the binding's job context (Phase F API)
+
+To drive the court, ref2 builds a job context with `palw_tir_canonical_context_v1(class, class_id,
+(positions, 1))`, which sets `max_context_tokens = layout.max_context`. For a job that touches
+exactly `layout.max_context` positions (`prefill + decode − 1`, the layout's own definition),
+`PalwTirStepSpaceV1::job_shape` accepts it but `verify_tir_binding_v1` refuses the binding ("job
+context shape") unless `max_context_tokens = positions + 1` (found by probing: `prefill + decode ≤
+max_context_tokens`). Two functions of the first implementation disagree by one about whether the
+longest job fits; worth settling before `palw_tir_v1` is armed.
 
 ## Demand evaluation (`eval_demanded`, 04b §9.4 at 23cf9235c)
 
@@ -92,7 +229,16 @@ succeed, and so do 5,000 repeats of two elements at exactly the work of two.
 Run: `cargo test --release -p misaka-palw-tir-ref2 --test demand_golden --test demand_differential`;
 `TIR_REF2_CASES=25` for the scale above (≈ 20 s).
 
-### Findings (D-series)
+### Findings (D-series) — decided by the text at c0d826a1b
+
+The §9.4 text now decides all five (merged as afa519c0f): a source's refusal fails `Missing`
+whatever reason it gives (D4 — the first implementation now reports `Missing` too), a `state_after`
+leaf must lie in `[lo, hi]` (D1), a carried walk is charged one term per position it passes and `p`
+when it finds no value (D2), an instance no run holds is `Malformed` (D3), and the vectors' boundary
+case is "the first case with the most terms" (D5). ref2 follows; the 697 updated vectors (with the
+`withhold` cases) reproduce, and the demand differential has 0 disagreements. The table below is the
+record of what the text said at 23cf9235c.
+
 
 | id | § | severity | first impl | ref2 | text supports |
 | --- | --- | --- | --- | --- | --- |

@@ -16,14 +16,18 @@ misaka-palw-base0.workspace = true
 # RFC-0002 Phase F: IR artifacts (the PALWTIR1 container) and their manifest.
 misaka-palw-tir.workspace = true
 misaka-palw-tir-artifact = { path = "../misaka-palw-tir-artifact" }
+# RFC-0002 Phase F (F9): the typed IR executor as a node runs a class — the mapped artifact, the
+# step leg, the evidence builders — behind `TirLineageV1`.
+misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec", features = ["node"] }
 # `check-architecture`'s IR mode: a Hugging Face config lowered to a PALW-TIR program (the lowerer
 # is non-consensus tooling; the verdict comes from consensus functions).
 misaka-palw-tir-lower = { path = "../misaka-palw-tir-lower" }
 # A PALWTIR1 container's declared layout is `borsh(PalwTirLayoutV1)`; the manifest decodes it.
 borsh.workspace = true
-# `palw-tir-equiv` (D-F1 offline): the IR side of a 1.5B class runs on the typed backend, the
-# random prompts are seeded.
-misaka-palw-tir-exec = { path = "../misaka-palw-tir-exec" }
+# An IR class's certification drill runs at an anchor keyed off its class id.
+blake2b_simd.workspace = true
+# `palw-tir-equiv` (D-F1 offline): the IR side of a 1.5B class runs on the typed backend (the
+# `misaka-palw-tir-exec` dependency above), the random prompts are seeded.
 rand.workspace = true
 rand_chacha.workspace = true
 # ADR-0100 `palw-class measure` / `verify`: the Measured Model Artifact is JSON, signed by the
@@ -39,3 +43,7 @@ path = "src/bin/palw-class.rs"
 [[bin]]
 name = "palw-tir-equiv"
 path = "src/bin/palw-tir-equiv.rs"
+
+[dev-dependencies]
+# The IR registration test signs and verifies under a bond's ML-DSA-87 key, as the node does.
+libcrux-ml-dsa.workspace = true

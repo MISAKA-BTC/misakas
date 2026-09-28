@@ -59,19 +59,19 @@ const SIMNET_IDS: (&str, &str, &str) = (
 
 /// testnet-12 at `befb59dfe` (the mainnet-values commit's own pins: `1870bc1f…` / `6e193d30…` /
 /// `79563f51…`) — what testnet-12 is with the cap taken away: the cap is the only thing that moved it.
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day (2026-09-27): the capacity architecture at rho 10 (ADR-0160 F-W, F-E, F-L, F-B, F-R, F-Q, F-S, F-N) armed at DAA 1,500 (was d7a1ec84…, f9eacabd…)
+// re-pin 2026-09-28 @f41ba5bbb979: int-8: palw_tir_v1 (RFC-0002 PALW-TIR) armed on testnet-12 at DAA 2,000 (PALW_T12_TIR_FLAG_DAY_FENCES_V1) (was 60f4e1e9…, 8275f4b7…)
 const T12_BEFORE_THE_CAP: (&str, &str, &str) = (
-    "2d1dab890dab39da8f2a240ced03f0b93451d182c52ac3f5a10ef1298bb14ad9",
+    "ef97201e7e32ad83e9f037165c77cf5695e1abefd252117aac9513f735aae183",
     "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
-    "79fced2bec9a2ba9b8f7207548b51d7ff6c6552a5a3c24e9dd3b555d2a2af9a7",
+    "a3918cbaf1e0d313ed5c7affa25590c6398ff019973a671c5bfd95b32c90537c",
 );
 
 /// testnet-12 as this change ships it — the ids a testnet-12 node on this build announces.
-// re-pin 2026-09-27 @b2bf20a78b0d: third post-launch flag day (2026-09-27): the capacity architecture at rho 10 (ADR-0160 F-W, F-E, F-L, F-B, F-R, F-Q, F-S, F-N) armed at DAA 1,500 (was 24e1aec3…, d263d7f2…)
+// re-pin 2026-09-28 @f41ba5bbb979: int-8: palw_tir_v1 (RFC-0002 PALW-TIR) armed on testnet-12 at DAA 2,000 (PALW_T12_TIR_FLAG_DAY_FENCES_V1) (was 770fb822…, 9410712f…)
 const T12_WITH_THE_CAP: (&str, &str, &str) = (
-    "cbe9152fa73e1c57737918bbea1e48c3f57a53ca9ab36273cbfb3407c15e257f",
+    "3db42ea638f3c4274f326b4049aa1ef82408cb044c03f4ccf52848446a77702a",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "f78b02adad83fbd4e02790142a2a03462dddb8ec4df13ad9f613f21d2dd9294a",
+    "9d6b83fe744b6374daf0fabeed391b612e9ac5c1faa2f1bd17712657d1478b67",
 );
 
 fn shipped(name: &str) -> Params {

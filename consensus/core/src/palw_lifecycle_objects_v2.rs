@@ -117,6 +117,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // transition, and the class binding is checked against the class's own profile hash.
         | PalwConsensusObjectV2::FamilyCertified { .. }
         | PalwConsensusObjectV2::ClassLaneCertified { .. }
+        // RFC-0002 Phase F (tag 63): the IR class's lane certification, checked the same way.
+        | PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. }
         | PalwConsensusObjectV2::ObjectChunk { .. }
         // **ADR-0080 design A: the split close.** The declaration carries the signature of one of
         // the two bonds the session id binds, checked at acceptance against that bond's registered
@@ -152,6 +154,24 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CourtAttnChildChosen { .. } => Err(
             "a fused-attention dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves",
         ),
+        // RFC-0002 Phase F (F7, tags 64–66): the IR history dissection's three moves ride as the
+        // ADR-0082 moves do, each carrying its party's signature, checked at acceptance.
+        // The root claim's finalize carriage references the registered program: it rides empty.
+        PalwConsensusObjectV2::CourtTirRootClaimed { root, .. } if !root.finalize.binding.class.program.is_empty() => {
+            Err("an IR root claim's binding carries no program: the chain holds the registered class's")
+        }
+        PalwConsensusObjectV2::CourtTirRootClaimed { signature, .. }
+        | PalwConsensusObjectV2::CourtTirDissected { signature, .. }
+        | PalwConsensusObjectV2::CourtTirChildChosen { signature, .. }
+            if !signature.is_empty() =>
+        {
+            Ok(())
+        }
+        PalwConsensusObjectV2::CourtTirRootClaimed { .. }
+        | PalwConsensusObjectV2::CourtTirDissected { .. }
+        | PalwConsensusObjectV2::CourtTirChildChosen { .. } => {
+            Err("an IR dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves")
+        }
         PalwConsensusObjectV2::CourtCloseDeclared { signature, .. } if !signature.is_empty() => Ok(()),
         // ADR-0087 Decision 3: a buy is bound to its carrier's sink output below; a sell must carry
         // the holder's signature, checked at acceptance against the payload it names.
@@ -251,6 +271,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // this build and on an older one that skips it undecoded (A-2) — and the acceptance walk
         // drops it by name until `palw_tir_v1` is armed.
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => Ok(()),
+        // RFC-0002 Phase F (tag 62): an IR one-move accusation rides signed and shaped (its proof
+        // an IR close about the roots it names) at every height, as the registration does; the
+        // ruleset's close ceiling and the verdict are the acceptance layer's.
+        PalwConsensusObjectV2::TirShardCourtAccused { accusation } => crate::palw_tir_one_move_v1::palw_tir_one_move_shape_v1(accusation),
         PalwConsensusObjectV2::ClassRegistered { admission: None, .. } => Err(
             "a class registered on a running chain must carry its shape profile and canonical job —              without them nothing can check its coverage, its ladder depth or its declared pwu",
         ),

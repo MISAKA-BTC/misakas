@@ -5282,6 +5282,9 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-pow-driver",
  "misaka-palw-sdk",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
+ "misaka-palw-tir-lower",
  "num_cpus",
  "rand 0.8.6",
  "rayon",
@@ -6108,6 +6111,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-gen"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "misaka-palw-job-replay"
 version = "1.1.0"
 dependencies = [
@@ -6177,11 +6190,13 @@ dependencies = [
 name = "misaka-palw-sdk"
 version = "1.1.0"
 dependencies = [
+ "blake2b_simd",
  "borsh",
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
  "kaspa-txscript",
+ "libcrux-ml-dsa",
  "misaka-palw-base0",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
@@ -6217,6 +6232,7 @@ version = "1.1.0"
 dependencies = [
  "blake2b_simd",
  "borsh",
+ "misaka-palw-gen",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
@@ -6246,6 +6262,7 @@ dependencies = [
 name = "misaka-palw-tir-exec"
 version = "1.1.0"
 dependencies = [
+ "blake2b_simd",
  "borsh",
  "kaspa-consensus-core",
  "libc",
@@ -6280,6 +6297,8 @@ dependencies = [
 name = "misaka-palw-tir-ref2"
 version = "1.1.0"
 dependencies = [
+ "borsh",
+ "kaspa-consensus-core",
  "misaka-palw-tir",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
@@ -6310,6 +6329,7 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-core",
  "kaspa-grpc-client",
+ "kaspa-hashes",
  "kaspa-notify",
  "kaspa-pow",
  "kaspa-rpc-core",

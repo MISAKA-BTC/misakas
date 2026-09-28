@@ -1,17 +1,17 @@
 //! **ADR-0160 stage 3 — the ρ = 10 capacity flag day as flag-day entries, the ready ρ 25 / ρ 100
 //! variants, F1 and the floor-only credit, through testnet-12's own fold** (rcore/cap-s1; the user's
 //! staged plan, stage 3, and the decision of 2026-09-27: the ρ = 10 architecture of stages 1, 2 and 4
-//! rides the DAA-1,500 flag day, ρ 25 / 100 are later flag days).
+//! rides the DAA-1,700 flag day, ρ 25 / 100 are later flag days).
 //!
 //! * **the entries** — [`PALW_T12_CAPACITY_RHO10_FENCES_V1`] is the capacity list with F-L at a FIXED
 //!   ρ = 10, credited; each entry is a named `PalwPostLaunchFenceV1` a flag-day list takes in one line.
-//!   Armed at DAA 1,500 over the DAA-1,300 release they validate together (and a list leaving out an
+//!   Armed at DAA 1,700 over the DAA-1,300 release they validate together (and a list leaving out an
 //!   entry another needs is refused), move the params and schedule ids but not the identity, gate the
-//!   fork id from 1,500, and `set(None)` gives the release back to the id; testnet-12 as shipped carries
+//!   fork id from 1,700, and `set(None)` gives the release back to the id; testnet-12 as shipped carries
 //!   none of them;
 //! * **the ready variants** — ρ 25 then ρ 100 (or ρ 100 straight after ρ 10) are F-L's appended steps,
 //!   each its own flag day's value and fork-id slot; a step armed before the flag days it builds on panics;
-//! * **the crossing** — below DAA 1,500 a claim is priced as today; from it the floor's claim is credited
+//! * **the crossing** — below DAA 1,700 a claim is priced as today; from it the floor's claim is credited
 //!   (`⌈E/10⌉`, its `Final` behind its audit) and paid through it;
 //! * **F1** — at every ρ, `G` reads the claim's full weight (`reserved × ρ`), so a conviction's `G` and an
 //!   uncredited claim's seat lock are today's; **D-18** — only the floor is credited (8k's escrow is `E`);
@@ -40,7 +40,7 @@ use kaspa_consensus_core::palw_state_v2::palw_claim_g_v1;
 use kaspa_consensus_core::palw_weight_cap_v1::PalwCapacityGainScaleV1;
 
 /// The capacity flag day's height (the user's decision of 2026-09-27, with the FP Job V4 pipeline).
-const FLAG_DAY: u64 = 1_500;
+const FLAG_DAY: u64 = 1_700;
 /// Two later flag days' heights for the ready variants (any heights above the ρ = 10 flag day's).
 const X25_AT: u64 = 2_222;
 const X100_AT: u64 = 2_888;
@@ -150,14 +150,14 @@ fn the_rho10_list_is_the_capacity_list_with_f_l_at_a_fixed_rho10() {
 /// **This build ships the package dormant**: testnet-12 as shipped is the release (every capacity entry
 /// dormant — the flag day's build flips exactly this assertion), and no entry is on a shipped list.
 #[test]
-fn testnet12_ships_the_package_armed_at_1500_over_the_daa1300_release() {
+fn testnet12_ships_the_package_armed_at_1700_over_the_daa1300_release() {
     let shipped = palw_t12_shipped_params();
-    // The third post-launch flag day (2026-09-27): testnet-12 as shipped IS the package armed at 1,500 over
+    // The third post-launch flag day (2026-09-27): testnet-12 as shipped IS the package armed at 1,700 over
     // the DAA-1,300 release, entry by entry, and nothing else differs.
-    assert_eq!(PALW_T12_POST_LAUNCH_FENCE_V3_DAA, Some(1_500), "the flag day's height");
-    assert_eq!(ids(&shipped), ids(&arm_rho10(release(), FLAG_DAY)), "testnet-12 as shipped arms the package at 1,500");
+    assert_eq!(PALW_T12_POST_LAUNCH_FENCE_V3_DAA, Some(1_700), "the flag day's height");
+    assert_eq!(ids(&shipped), ids(&arm_rho10(release(), FLAG_DAY)), "testnet-12 as shipped arms the package at 1,700");
     for f in PALW_T12_CAPACITY_RHO10_FENCES_V1 {
-        assert_eq!(fence_at(&shipped, f.name), Some(1_500), "{}: armed at 1,500", f.name);
+        assert_eq!(fence_at(&shipped, f.name), Some(1_700), "{}: armed at 1,700", f.name);
         assert!(PALW_T12_POST_LAUNCH_FENCES_V3.iter().any(|g| g.name == f.name), "{}: on the third list", f.name);
         assert!(
             !PALW_T12_POST_LAUNCH_FENCES_V1.iter().chain(PALW_T12_POST_LAUNCH_FENCES_V2).any(|g| g.name == f.name),
@@ -171,13 +171,13 @@ fn testnet12_ships_the_package_armed_at_1500_over_the_daa1300_release() {
     shipped.validate_palw_v2().expect("testnet-12 as shipped validates");
 }
 
-/// **The flag day at DAA 1,500**: the eight entries over the DAA-1,300 release validate together; the
-/// params and schedule ids move and the identity does not; every entry's fence is 1,500 on the fork-id
-/// list, and a node without them is refused from 1,500; ρ is 10 from 1,500 and absent below; `set(None)`
+/// **The flag day at DAA 1,700**: the eight entries over the DAA-1,300 release validate together; the
+/// params and schedule ids move and the identity does not; every entry's fence is 1,700 on the fork-id
+/// list, and a node without them is refused from 1,700; ρ is 10 from 1,700 and absent below; `set(None)`
 /// and `set(Some(never()))` give the release back to the id. A list that leaves out an entry another one
 /// needs is refused — every entry but F-N (which nothing else reads) is load-bearing for the validation.
 #[test]
-fn the_rho10_flag_day_arms_at_1500_moves_the_ids_and_gates_the_fork_id() {
+fn the_rho10_flag_day_arms_at_1700_moves_the_ids_and_gates_the_fork_id() {
     let before = release();
     let armed = arm_rho10(before.clone(), FLAG_DAY);
     let (bp, bi, bs) = ids(&before);
@@ -186,10 +186,10 @@ fn the_rho10_flag_day_arms_at_1500_moves_the_ids_and_gates_the_fork_id() {
     assert_ne!(as_, bs, "the schedule names it");
     assert_eq!(ai, bi, "the identity does not move");
     for f in PALW_T12_CAPACITY_RHO10_FENCES_V1 {
-        assert_eq!(fence_at(&armed, f.name), Some(FLAG_DAY), "{} at 1,500", f.name);
+        assert_eq!(fence_at(&armed, f.name), Some(FLAG_DAY), "{} at 1,700", f.name);
     }
     let s = fork_id_v1(&before, FLAG_DAY);
-    assert!(evaluate_fork_id_v1(&armed, FLAG_DAY, s.fired.as_bytes().as_slice(), s.next).refuses(), "gated from 1,500");
+    assert!(evaluate_fork_id_v1(&armed, FLAG_DAY, s.fired.as_bytes().as_slice(), s.next).refuses(), "gated from 1,700");
     assert_eq!(armed.palw_capacity_step_at_v1(FLAG_DAY - 1), None, "below the height: no ρ");
     assert_eq!(armed.palw_capacity_step_at_v1(FLAG_DAY).map(|s| (s.rho, s.q_credit_permille)), Some((10, 250)));
     assert_eq!(armed.palw_capacity_step_at_v1(1_000_000).map(|s| s.rho), Some(10), "fixed: never dynamic");
@@ -303,12 +303,12 @@ fn audit(sim: &mut Sim, ids: &[Hash64]) {
     }
 }
 
-/// **The flag day crosses in the fold at DAA 1,500**, beside a twin on the release fed the same blocks: a
+/// **The flag day crosses in the fold at DAA 1,700**, beside a twin on the release fed the same blocks: a
 /// floor claim accepted below it is the twin's to the sompi and reaches `Final` without an audit; a
-/// claim accepted AT 1,500 is credited — its reservation `⌈w/10⌉`, its escrow slot `⌈E/10⌉`, its `G`
+/// claim accepted AT 1,700 is credited — its reservation `⌈w/10⌉`, its escrow slot `⌈E/10⌉`, its `G`
 /// the twin's — waits for its audit and is paid through it, and the honest producer loses nothing.
 #[test]
-fn the_flag_day_crosses_at_1500_in_the_fold() {
+fn the_flag_day_crosses_at_1700_in_the_fold() {
     let mut sim = Sim::new(arm_rho10(params_for(Class::Floor, false), FLAG_DAY), Class::Floor, &[(90, 100_000)]);
     let mut twin = Sim::new(params_for(Class::Floor, false), Class::Floor, &[(90, 100_000)]);
     let mut pair = Vec::new();
@@ -324,13 +324,13 @@ fn the_flag_day_crosses_at_1500_in_the_fold() {
     assert_eq!(
         (b.reserved, b.escrowed_reward, b.accepted_daa),
         (tb.reserved, tb.escrowed_reward, tb.accepted_daa),
-        "below 1,500: the release's price"
+        "below 1,700: the release's price"
     );
-    assert!(!palw_capacity_claim_credited_v1(&sim.c.sp, &b), "below 1,500: nothing credited");
+    assert!(!palw_capacity_claim_credited_v1(&sim.c.sp, &b), "below 1,700: nothing credited");
     assert!(sim.c.s.vesting_row(&below).is_some(), "Final without an audit, as today");
     let (a, ta) = (sim.c.claim(&at), twin.c.claim(&twin_at));
     assert_eq!(a.accepted_daa, FLAG_DAY, "accepted at the flag day");
-    assert!(palw_capacity_claim_credited_v1(&sim.c.sp, &a), "the floor's claim is credited from 1,500");
+    assert!(palw_capacity_claim_credited_v1(&sim.c.sp, &a), "the floor's claim is credited from 1,700");
     assert_eq!(a.reserved, ta.reserved.div_ceil(10), "its reservation ⌈w/10⌉");
     let e = u128::from(a.escrowed_reward);
     assert_eq!(a.escrowed_reward, ta.escrowed_reward, "the same reward");
@@ -349,7 +349,7 @@ fn the_flag_day_crosses_at_1500_in_the_fold() {
     assert!(sim.c.s.vesting_row(&at).is_some(), "paid through its audit");
     assert_eq!(sim.c.s.bond(&bond_key(90)).unwrap().collateral, collateral, "the honest producer keeps its collateral");
     println!(
-        "crossing: below 1,500 the release's price (w {}), at 1,500 credited (w {} of {}), Final through its audit",
+        "crossing: below 1,700 the release's price (w {}), at 1,700 credited (w {} of {}), Final through its audit",
         tb.reserved, a.reserved, ta.reserved
     );
 }

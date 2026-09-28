@@ -15,7 +15,7 @@ use common::demsrc::{Model, grouped, hist_sources, mine_demand, occurrences, DRe
 use common::*;
 use misaka_palw_tir_ref2::Program;
 use misaka_palw_tir_ref2::codec::decode_canonical;
-use misaka_palw_tir_ref2::demand::{Ctx, Limits, Target};
+use misaka_palw_tir_ref2::demand::{Ctx, Limits, Question, Target};
 use serde_json::Value;
 
 fn layer_of(v: &Value) -> Option<u32> {
@@ -84,6 +84,28 @@ fn target_of(v: &Value) -> Target {
     }
 }
 
+/// A withheld question (`requests` form without `indices`), as its grouping key.
+fn question_of(v: &Value) -> Question {
+    let l = |x: &Value| layer_of(x);
+    if let Some(n) = v.get("node") {
+        Question::Node { ctx: Ctx { pos: u64_of(&n["pos"]), occ: u64_of(&n["occurrence"]) as u32 }, node: u64_of(&n["node"]) as u16, i: 0 }
+    } else if let Some(n) = v.get("param") {
+        Question::Param { param: u64_of(&n["param"]) as u16, layer: l(&n["layer"]), i: 0 }
+    } else if let Some(n) = v.get("state") {
+        Question::State { pos: u64_of(&n["pos"]), state: u64_of(&n["state"]) as u16, layer: l(&n["layer"]), i: 0 }
+    } else if let Some(n) = v.get("hist_row") {
+        Question::HistRow {
+            pos: u64_of(&n["pos"]),
+            state: u64_of(&n["state"]) as u16,
+            layer: l(&n["layer"]),
+            row_pos: u64_of(&n["row_pos"]),
+            i: 0,
+        }
+    } else {
+        Question::Token { pos: u64_of(&v["token"]["pos"]) }
+    }
+}
+
 /// The expected grouping, printed as `grouped` prints ours.
 fn expected_requests(v: &Value) -> Vec<String> {
     let l = |x: &Value| if x.is_null() { "null".to_string() } else { u64_of(x).to_string() };
@@ -138,6 +160,11 @@ fn demand_vectors() {
                 Some(s) => states_of(s),
                 None => file_states.clone(),
             };
+            if let Some(w) = c.get("withhold") {
+                for q in w.as_array().unwrap() {
+                    m.withheld.insert(question_of(q));
+                }
+            }
             let target = target_of(&c["target"]);
             let elements: Vec<u64> = c["elements"].as_array().unwrap().iter().map(u64_of).collect();
             let limits = Limits { max_elements: u64_of(&c["limits"]["max_elements"]), max_terms: u64_of(&c["limits"]["max_terms"]) };

@@ -1513,12 +1513,14 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
         // chain was already clocking as `AwaitDisclosure`. Every court arm in the panel switches on
         // `duty.turn`, so this is the second half of the missing responder: it would misroute even
         // a correct one.
-        let (turn, rung_deadline_daa) = crate::palw_state_v2::court_turn_and_rung_deadline_v2(
-            session,
-            crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
-        );
+        // RFC-0002 F7: an IR class's phase is a row beside the session (`tir_dissection_v1`), read
+        // through the state-aware helper the fold's deadline index reads.
+        let (turn, rung_deadline_daa) = crate::palw_state_v2::court_session_turn_and_rung_deadline_v2(state, session);
         // The round is the PHASE's once one is open, for the same reason the turn is.
-        let round = session.dissection.as_ref().map_or_else(|| session.ladder.round(), |phase| phase.round());
+        let round = match state.tir_dissection_v1(session_id) {
+            Some(phase) => phase.round(),
+            None => session.dissection.as_ref().map_or_else(|| session.ladder.round(), |phase| phase.round()),
+        };
         out.push(PalwCourtDutyV2 {
             accepted_block: claim.accepted_block,
             session_id: *session_id,

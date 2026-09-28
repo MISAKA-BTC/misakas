@@ -9,11 +9,9 @@
 //! trace root and the IR execution root.
 #![cfg(feature = "node")]
 
-#[path = "../../misaka-palw-tir/tests/common/mod.rs"]
-mod tircommon;
+mod node_common;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_step_refute::{base0_decode_token_select_v1, base0_logits_trace_root_v1, flat_logits_scheme_id_v1};
@@ -24,95 +22,11 @@ use kaspa_consensus_core::palw_tir_step_v1::{
     PalwTirLeafKindV1, PalwTirStepLegBuilderV1, PalwTirStepSpaceV1, palw_tir_execution_root_v1,
 };
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
-use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, Ref};
-use misaka_palw_tir::{DType, Interpreter, MapParams, RunState, Tensor, TirProgramV1};
+use misaka_palw_tir::program::Ref;
+use misaka_palw_tir::{Interpreter, MapParams, RunState, Tensor, TirProgramV1};
 use misaka_palw_tir_exec::node::TirClassRunnerV1;
 use misaka_palw_tir_exec::{TirParams, TirPlan};
-
-fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect()
-}
-
-/// The program under the flat logits scheme (the vectors' programs name none).
-fn flat(mut p: TirProgramV1) -> TirProgramV1 {
-    p.logits_scheme_id = flat_logits_scheme_id_v1().as_bytes();
-    p
-}
-
-fn programs() -> Vec<(String, TirProgramV1, MapParams)> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../consensus-vectors/tir-v1/programs");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir).expect("vectors").map(|e| e.unwrap().path()).collect();
-    files.sort();
-    let mut out: Vec<(String, TirProgramV1, MapParams)> = files
-        .into_iter()
-        .map(|path| {
-            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            let program = TirProgramV1::decode_canonical(&unhex(v["program_borsh_hex"].as_str().unwrap())).expect("canonical");
-            let mut params = MapParams::default();
-            for p in v["params"].as_array().unwrap() {
-                let j = p["param"].as_u64().unwrap() as u16;
-                let layer = p["layer"].as_u64().map(|l| l as u16);
-                let d = &program.params[j as usize];
-                let shape: Vec<usize> = d.shape.iter().map(|x| *x as usize).collect();
-                params
-                    .tensors
-                    .insert((j, layer), Tensor::from_le_bytes(d.dtype, &shape, &unhex(p["le_hex"].as_str().unwrap())).unwrap());
-            }
-            (v["name"].as_str().unwrap().to_string(), flat(program), params)
-        })
-        .collect();
-    use tircommon::models::*;
-    for (name, (p, gens)) in [
-        ("corpus dense", dense(&[HISTORY_BOUND_V1_SMALL, HISTORY_BOUND_V1_SMALL])),
-        ("corpus sliding", dense(&[3, HISTORY_BOUND_V1_SMALL, 3])),
-        ("corpus gdn", gdn_program(true)),
-        ("corpus mamba2", mamba2_program()),
-        ("corpus moe", moe_program()),
-    ] {
-        let params = materialize(&p, &gens, 99);
-        out.push((name.to_string(), flat(p), params));
-    }
-    out.push(h_program());
-    out
-}
-
-/// Committed nodes that CARRY `H` (a windowed history summed per position): both halves of F4's
-/// closed form, under three layer occurrences.
-fn h_program() -> (String, TirProgramV1, MapParams) {
-    use misaka_palw_tir::builder::ProgramBuilder;
-    use misaka_palw_tir::{Ref as R, TensorType};
-    let mut pb = ProgramBuilder::new(16, HISTORY_BOUND_V1_SMALL);
-    let emb = pb.param("embed", DType::I8, &[16, 4], false);
-    let hist = pb.hist_state("rows", DType::I8, &[4], 5, true);
-    let carry = TensorType::fixed(DType::I8, &[4]);
-    let pre = {
-        let mut b = pb.block("pre", vec![]);
-        let x = b.gather(emb, R::Input(0), 0, 0);
-        b.finish(&[x])
-    };
-    let layer = {
-        let mut b = pb.block("layer", vec![carry.clone()]);
-        let window = b.hist_append(hist, R::CarryIn(0));
-        let wide = b.cast(window, DType::I32);
-        let wide = b.commit(wide);
-        let sum = b.reduce_sum(wide, 0, DType::I32);
-        let sum = b.reshape_fixed(sum, &[4]);
-        let y = b.clamp(sum, -128, 127, DType::I8);
-        b.finish(&[y])
-    };
-    let (post, logits) = {
-        let mut b = pb.block("post", vec![carry]);
-        let l = b.cast(R::CarryIn(0), DType::I32);
-        let l = b.commit(l);
-        let R::Node(i) = l else { unreachable!() };
-        (b.finish(&[]), i)
-    };
-    let program = pb.finish(pre, vec![layer, layer, layer], post, logits);
-    let mut params = MapParams::default();
-    let data: Vec<i128> = (0..64).map(|i| ((i * 37 + 11) % 256) as i128 - 128).collect();
-    params.tensors.insert((0, None), Tensor::new(DType::I8, vec![16, 4], data).unwrap());
-    ("h-window-sum".to_string(), flat(program), params)
-}
+use node_common::programs;
 
 fn layout(p: &TirProgramV1, seed: u32, c: u32, h: u32, max_context: u32) -> PalwTirLayoutV1 {
     let committed: usize = p.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count()).sum();
@@ -329,4 +243,95 @@ fn a_mapped_container_runs_like_the_params_it_holds() {
     }
     std::fs::remove_dir_all(&dir).ok();
     assert!(ran >= 5, "{ran} containers");
+}
+
+/// **Resume at every checkpoint** (design §2.6): a run records its resume points; from each —
+/// as recorded, and cut to the rows it must carry — a fresh executor continues the job, and its
+/// leaves from the point's index on, its logits rows and its tokens are the uninterrupted run's.
+/// A point cut below that never continues into different leaves: it is refused or, when no later
+/// window or tile reads the missing rows, it commits the same leaves.
+#[test]
+fn a_run_resumed_at_any_checkpoint_continues_leaf_for_leaf() {
+    let (mut resumed, mut refused, mut leaves) = (0usize, 0usize, 0u64);
+    for (name, program, params) in programs() {
+        let bytes = program.encode();
+        let plan = TirPlan::compile(&program).unwrap();
+        let tparams = TirParams::from_map(&plan, &params).unwrap();
+        for (seed, c, h, prefill, decode) in
+            [(7u32, 2u32, 2u32, 3u32, 3u32), (3, 1, 4, 5, 4), (5, 3, 1, 1, 6), (11, 4, 8, 6, 5), (13, 3, 4, 2, 7)]
+        {
+            let class = PalwTirClassV1 {
+                version: PALW_TIR_CLASS_VERSION_V1,
+                program: bytes.clone(),
+                layout: layout(&program, seed, c, h, 64),
+                tokenizer_id: Hash64::from_bytes([1; 64]),
+            };
+            let class_id = class.class_id(&Hash64::from_bytes([0xA7; 64]));
+            let space = PalwTirStepSpaceV1::new(&class).unwrap();
+            let ctx = job(prefill, decode, class_id);
+            let prompt: Vec<u32> = (0..prefill).map(|i| (i * 5 + 3) % program.token_bound).collect();
+            let runner = TirClassRunnerV1::new(&space, &plan, &tparams, class_id).unwrap();
+            let full = runner.run(&ctx, &prompt, u64::MAX, true, &mut |_| {}).unwrap();
+            let (recorded, points) = runner.run_recording(&ctx, &prompt, u64::MAX, &mut |_| {}).unwrap();
+            assert_eq!(recorded, full, "{name}: a recording run commits what a run commits");
+            let positions = prefill + decode - 1;
+            assert_eq!(points.len() as u32, positions / c, "{name}: one point per checkpoint position");
+            for point in &points {
+                let pos = point.position + 1;
+                assert_eq!(pos % c, 0);
+                let windows: Vec<usize> = space
+                    .hist_instances()
+                    .iter()
+                    .map(|i| match program.states[i.state as usize].kind {
+                        misaka_palw_tir::StateKind::Hist { window } => window as usize,
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                let need: Vec<usize> = windows.iter().map(|w| (pos as usize).min(w - 1).max((pos % h) as usize)).collect();
+                for (rows, n) in point.hist.iter().zip(&need) {
+                    assert!(rows.len() >= *n, "{name}: a point with {} rows of the {n} it must carry", rows.len());
+                }
+                let cut = |extra: usize| {
+                    let mut p = point.clone();
+                    for (rows, n) in p.hist.iter_mut().zip(&need) {
+                        let keep = n.saturating_sub(extra);
+                        rows.drain(..rows.len() - keep);
+                    }
+                    p
+                };
+                let selected = pos.saturating_sub(prefill - 1) as usize;
+                for p in [point.clone(), cut(0)] {
+                    let mut seen = Vec::new();
+                    let r = runner
+                        .resume(&ctx, &prompt, u64::MAX, &p, &mut |leaf| seen.push(leaf.index))
+                        .unwrap_or_else(|e| panic!("{name} (seed {seed}, C {c}, h {h}) at {}: {e}", point.position));
+                    let first = r.first_index as usize;
+                    assert_eq!(first as u64, space.running_total(&space.job_shape(&ctx).unwrap(), pos) as u64);
+                    assert_eq!(r.leaf_hashes, full.leaf_hashes[first..], "{name} at {}: the leaves", point.position);
+                    assert_eq!(seen, (first as u64..full.leaf_count).collect::<Vec<_>>(), "{name}: leaf indices");
+                    assert_eq!(r.logits_rows, full.logits_rows[selected..], "{name}: logits rows");
+                    assert_eq!(r.generated, full.generated, "{name}: tokens");
+                    resumed += 1;
+                    leaves += r.leaf_hashes.len() as u64;
+                }
+                if need.iter().any(|n| *n > 0) {
+                    match runner.resume(&ctx, &prompt, u64::MAX, &cut(1), &mut |_| {}) {
+                        Err(_) => refused += 1,
+                        Ok(r) => assert_eq!(r.leaf_hashes, full.leaf_hashes[r.first_index as usize..], "{name}: a short point"),
+                    }
+                }
+            }
+            // A point with a token too many, or past the job's end, is refused.
+            if let Some(point) = points.first() {
+                let mut p = point.clone();
+                p.generated.push(0);
+                assert!(runner.resume(&ctx, &prompt, u64::MAX, &p, &mut |_| {}).is_err(), "{name}: an extra token");
+                p = point.clone();
+                p.position = positions;
+                assert!(runner.resume(&ctx, &prompt, u64::MAX, &p, &mut |_| {}).is_err(), "{name}: a point past the end");
+            }
+        }
+    }
+    eprintln!("{resumed} resumed runs, {leaves} leaves; {refused} short points refused");
+    assert!(resumed >= 200 && refused > 0, "{resumed} resumed, {refused} refused");
 }

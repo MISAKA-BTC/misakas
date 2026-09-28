@@ -1104,6 +1104,85 @@ pub fn palw_binding_identity_fault_v1(
     Ok(None)
 }
 
+/// **F1's identity rule over an IR binding** (RFC-0002 Phase F; the twin of
+/// [`palw_binding_identity_fault_v1`]): does the IR execution the binding pins answer the job and
+/// class the claim RECORDED?
+///
+/// The same refusals and the same checks in the same order, over the IR class's facts
+/// ([`crate::palw_tir_attempt_v1::PalwTirJobFactsV1`], read from the binding's own class, which J2
+/// has pinned to the claim's): J2, J1, J3, J5a against
+/// [`crate::palw_tir_attempt_v1::palw_tir_attempt_context_v1`] at the class's canonical job, J5b
+/// (with `with_prompt_root`) against the anchor's prompt root in the class's form, J4. J6 and J7 do
+/// not exist for an IR class: its execution root has no activation leg and no checkpoint profile
+/// (its checkpoints are step leaves). The binding must verify at `ladder` (`BindingUnverified`).
+pub fn palw_tir_binding_identity_fault_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    rules: PalwIdentityRulesV1,
+    with_prompt_root: bool,
+    ladder: u64,
+) -> Result<Option<PalwIdentityFaultV1>, PalwOffenceVerifyError> {
+    use crate::palw_attempt_rules_v1::PALW_J5_INLINE_PROMPT_IDS_V1;
+    use crate::palw_tir_attempt_v1::{
+        PalwTirJobFactsV1, palw_tir_attempt_canonical_of_v1, palw_tir_attempt_context_v1, palw_tir_attempt_prompt_root_v1,
+    };
+    let verified =
+        crate::palw_tir_step_v1::verify_tir_binding_v1(binding, ladder).map_err(|_| PalwOffenceVerifyError::BindingUnverified)?;
+    if binding.committed_execution_root != target.execution_root {
+        return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
+    }
+    let identity = target.job_identity;
+    if identity == Hash64::default() {
+        return Err(PalwOffenceVerifyError::IdentityNotRecorded);
+    }
+    let lane = target.lane.ok_or(PalwOffenceVerifyError::LaneUnknown)?;
+    let ctx = &binding.job_context;
+    let mut not_derivable = false;
+    // J2 — the class: the id the carried class hashes to (which the context names).
+    if verified.class_id != target.class_id {
+        return Ok(Some(PalwIdentityFaultV1::ClassNotTheClaims));
+    }
+    match lane {
+        PalwClaimSourceKindV1::FreePrompt => {
+            if crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(ctx) != identity {
+                return Ok(Some(PalwIdentityFaultV1::JobNotTheClaims));
+            }
+        }
+        PalwClaimSourceKindV1::Attempt => {
+            if ctx.job_id != identity {
+                return Ok(Some(PalwIdentityFaultV1::JobNotTheClaims));
+            }
+            if ctx.execution_seed[..] != identity.as_byte_slice()[..32] {
+                return Ok(Some(PalwIdentityFaultV1::SeedNotTheJobs));
+            }
+            match palw_tir_attempt_canonical_of_v1(binding.class.layout.max_context) {
+                None => not_derivable = true,
+                Some(canonical) => {
+                    let facts = PalwTirJobFactsV1::of(&binding.class, &verified.space.program, verified.class_id);
+                    let expected = palw_tir_attempt_context_v1(&facts, &identity, canonical, ctx.prompt_token_ids_hash);
+                    if ctx.context_hash() != expected.context_hash() {
+                        return Ok(Some(PalwIdentityFaultV1::ContextNotCanonical));
+                    }
+                    if with_prompt_root && canonical.0 <= PALW_J5_INLINE_PROMPT_IDS_V1 {
+                        let root = palw_tir_attempt_prompt_root_v1(&facts, &identity, canonical.0, rules.prompt_ids_form)
+                            .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+                        if ctx.prompt_token_ids_hash != root {
+                            return Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if binding.full_logits_trace_root != target.trace_root {
+        return Ok(Some(PalwIdentityFaultV1::TraceNotTheClaims));
+    }
+    if not_derivable {
+        return Err(PalwOffenceVerifyError::IdentityNotDerivable);
+    }
+    Ok(None)
+}
+
 /// **F1's output rule** (ADR-0152 v3.1 J-5, `OutputMismatch`; addendum §4-bis.4): is the claim's
 /// committed `output_root` the output its committed execution generated?
 ///
@@ -1738,6 +1817,120 @@ pub fn palw_executor_refuted_ledger_key_v1(claim_id: &Hash64) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
+/// Wire version of [`PalwTirIdentityEvidenceV1`].
+pub const PALW_TIR_IDENTITY_VERSION_V1: u16 = 1;
+/// The key of kind 7's ledger key ([`palw_tir_identity_ledger_key_v1`]).
+pub const PALW_TIR_IDENTITY_KEY_DOMAIN_V1: &[u8] = b"misaka-palw/tir-identity-key/v1";
+
+/// **Kind 7's evidence** (RFC-0002 Phase F): the claim and its own IR binding — the program EMPTY,
+/// as every IR object carries a binding (the chain holds the registered class's program and puts it
+/// back, `palw_tir_binding_with_program_v1`) — and kind 4's reporter slot, empty until its fence.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirIdentityEvidenceV1 {
+    /// = [`PALW_TIR_IDENTITY_VERSION_V1`].
+    pub version: u16,
+    pub claim_id: Hash64,
+    pub binding: crate::palw_tir_step_v1::PalwTirStepBindingV1,
+    pub reporter_reveal: Vec<u8>,
+}
+
+/// `H("misaka-palw/tir-identity-key/v1" ‖ claim_id)`: one kind-7 offence per claim.
+pub fn palw_tir_identity_ledger_key_v1(claim_id: &Hash64) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_TIR_IDENTITY_KEY_DOMAIN_V1).to_state();
+    h.update(claim_id.as_byte_slice());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **One kind-7 offence per claim**: `palw_offence_id_v1(TirIdentityMismatch, executor, H(claim))`.
+pub fn palw_tir_identity_offence_id_v1(executor: &TransactionOutpoint, claim_id: &Hash64) -> Hash64 {
+    crate::palw_offence_v1::palw_offence_id_v1(
+        crate::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch,
+        executor,
+        &palw_tir_identity_ledger_key_v1(claim_id),
+    )
+}
+
+/// **Kind 7's evidence as a filer sends it — `(evidence_id, bytes)`**: the claim, its binding with
+/// the program stripped here, and an empty reporter slot. Pure: it judges nothing.
+pub fn palw_tir_identity_evidence_v1(claim_id: Hash64, binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1) -> (Hash64, Vec<u8>) {
+    let mut binding = binding.clone();
+    crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut binding);
+    let bytes = borsh::to_vec(&PalwTirIdentityEvidenceV1 {
+        version: PALW_TIR_IDENTITY_VERSION_V1,
+        claim_id,
+        binding,
+        reporter_reveal: Vec::new(),
+    })
+    .expect("kind 7's evidence is borsh-serializable");
+    (crate::palw_offence_v1::palw_offence_evidence_digest_v1(&bytes), bytes)
+}
+
+/// **The `ObjectiveOffence { kind: TirIdentityMismatch }` object** over
+/// [`palw_tir_identity_evidence_v1`] — `accused` is the claim's executor bond.
+pub fn palw_tir_identity_object_v1(
+    executor: PalwBondKeyV2,
+    claim_id: Hash64,
+    binding: &crate::palw_tir_step_v1::PalwTirStepBindingV1,
+) -> crate::palw_state_v2::PalwConsensusObjectV2 {
+    let (evidence_id, evidence) = palw_tir_identity_evidence_v1(claim_id, binding);
+    crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
+        kind: crate::palw_offence_v1::PalwOffenceKindV1::TirIdentityMismatch,
+        accused: executor,
+        evidence_id,
+        evidence,
+    }
+}
+
+/// **The one adjudicator of kind 7** (RFC-0002 Phase F) — the processor's gate and the fold call it on
+/// the same state. In order, every refusal before the one comparison that convicts: the evidence's
+/// size, form and version, and kind 4's reporter-slot rule; the claim a target, the accused its
+/// executor, no court open on it; the claim's class an IR program (its `tir_classes` row), the
+/// binding filled with that program (a carried program is refused); then
+/// [`palw_tir_binding_identity_fault_v1`] at the class's ladder, with J5b (the prompt root, inline for
+/// every IR class: admission v10 caps its canonical prompt at the inline bound). A fault convicts the
+/// executor, forfeiting by claim; `IdentityHolds` otherwise.
+pub fn palw_check_tir_identity_mismatch_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
+    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+        return Err(PalwOffenceVerifyError::EvidenceTooLarge);
+    }
+    let payload: PalwTirIdentityEvidenceV1 =
+        borsh::from_slice(evidence).map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+    if payload.version != PALW_TIR_IDENTITY_VERSION_V1 {
+        return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
+    }
+    if !payload.reporter_reveal.is_empty() && !reporter_armed {
+        return Err(PalwOffenceVerifyError::ReporterSlotNotArmed);
+    }
+    if payload.reporter_reveal.len() > PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES {
+        return Err(PalwOffenceVerifyError::EvidenceTooLarge);
+    }
+    let target = palw_offence_target_v1(state, &payload.claim_id).ok_or(PalwOffenceVerifyError::NoTarget)?;
+    if *accused != target.executor_bond {
+        return Err(PalwOffenceVerifyError::AccusedNotTheExecutor);
+    }
+    if state.open_courts_of(&target.claim_id) > 0 {
+        return Err(PalwOffenceVerifyError::ClaimUnderSession);
+    }
+    let record = state
+        .tir_class_v1(&target.class_id)
+        .ok_or(PalwOffenceVerifyError::ContradictionNotAdmitted("the claim's class is not an IR program"))?;
+    let binding = crate::palw_tir_admission_v1::palw_tir_binding_with_program_v1(&payload.binding, record)
+        .map_err(PalwOffenceVerifyError::ContradictionNotAdmitted)?;
+    let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
+    match palw_tir_binding_identity_fault_v1(&target, &binding, rules, true, ladder)? {
+        Some(fault) => Ok(PalwExecutorRefutedFindingV1 { target, forfeit: PalwForfeitScopeV1::ByClaim, identity_fault: Some(fault) }),
+        None => Err(PalwOffenceVerifyError::IdentityHolds),
+    }
+}
+
 /// **One kind-4 offence per claim**: `palw_offence_id_v1(ExecutorRefuted, executor, H(claim))`.
 pub fn palw_executor_refuted_offence_id_v1(executor: &TransactionOutpoint, claim_id: &Hash64) -> Hash64 {
     crate::palw_offence_v1::palw_offence_id_v1(
@@ -1792,6 +1985,10 @@ pub fn palw_filed_offence_commit_key_v1(
             }
         }
         K::ExecutorEquivocation => Some(crate::palw_offence_v1::palw_offence_id_v1(kind, accused, evidence_id)),
+        K::TirIdentityMismatch => {
+            let payload: PalwTirIdentityEvidenceV1 = borsh::from_slice(evidence).ok()?;
+            Some(palw_tir_identity_offence_id_v1(accused, &payload.claim_id))
+        }
         K::PanelFalseValid | K::CourtExecutorGuilty | K::DaDefault | K::CourtConviction => None,
     }
 }

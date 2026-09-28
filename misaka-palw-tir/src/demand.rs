@@ -107,7 +107,19 @@ pub trait DemandSource {
     fn hist_row(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> TirResult<i128>;
     /// The token of position `pos` (`Input(0)`).
     fn token(&mut self, pos: u32) -> TirResult<u32>;
+    /// Element `index` of param `param` as read at position `pos`. A version-1 param is the same at
+    /// every position, so this is [`DemandSource::param`]; a version-2 program's view reads its
+    /// inputs — a per-step random input among them — through here (spec 04b §15.4).
+    fn param_at(&mut self, pos: u32, param: u16, layer: Option<u16>, index: usize) -> TirResult<i128> {
+        let _ = pos;
+        self.param(param, layer, index)
+    }
 }
+
+/// `(state, (occurrence, node))`: writers of global `Fixed` states that [`state_writer_v1`] does not
+/// see — a version-2 program's `post` writes, which its view expresses as committed `Clamp`s
+/// (spec 04b §15.3–15.4). Empty for a version-1 program.
+pub type ExtraWritersV1<'a> = &'a [(u16, (u16, u16))];
 
 /// The work an evaluation did: computed (non-leaf) elements, and reduction terms.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -186,6 +198,22 @@ pub fn commit_cone_leaves_v1(block: &Block, target: u16) -> impl Fn(u16) -> bool
     move |n: u16| n != target && block.nodes.get(n as usize).is_some_and(|node| node.commit)
 }
 
+/// **Is `(state, layer)` an instance a run holds?** A global state has its one instance (normal form
+/// uses every declared state, in `pre` or `post`, NF-15); a per-layer state has one at each layer
+/// whose scheduled block reads, writes or appends to it — the instances the step space checkpoints.
+/// Any other is no instance: `state_after` naming it is refused (`Malformed`).
+pub fn state_instance_is_held_v1(program: &TirProgramV1, state: u16, layer: Option<u16>) -> bool {
+    let Some(occ) = state_occurrence_v1(program, state, layer) else { return false };
+    if layer.is_none() {
+        return true;
+    }
+    let Some(block) = occurrence_block(program, occ) else { return false };
+    program.blocks[block as usize].nodes.iter().any(|n| {
+        n.inputs.contains(&Ref::State(state))
+            || matches!(n.prim, Prim::StateWrite { state: s } | Prim::HistAppend { state: s } if s == state)
+    })
+}
+
 /// The occurrence that runs state instance `(state, layer)`: layer `l`'s (`1 + l`) for a per-layer
 /// state, `pre`'s (`0`) for a global one — NF-15 keeps a global state in `pre` and `post`, and NF-19
 /// keeps `post` from writing or appending.
@@ -252,6 +280,19 @@ pub fn eval_demanded(
     source: &mut dyn DemandSource,
     limits: &DemandLimits,
 ) -> DemandResult<(Vec<i128>, DemandWork)> {
+    eval_demanded_ext(program, info, request, source, limits, &[])
+}
+
+/// [`eval_demanded`] with writers [`state_writer_v1`] does not see (a version-2 program's view,
+/// spec 04b §15.4).
+pub fn eval_demanded_ext<'p>(
+    program: &'p TirProgramV1,
+    info: &'p ProgramInfo,
+    request: &DemandRequest<'_>,
+    source: &mut dyn DemandSource,
+    limits: &DemandLimits,
+    extra_writers: ExtraWritersV1<'p>,
+) -> DemandResult<(Vec<i128>, DemandWork)> {
     let target_node = match request.target {
         DemandTarget::Node { ctx, node } => Some((ctx, node)),
         DemandTarget::StateAfter { .. } => None,
@@ -269,6 +310,9 @@ pub fn eval_demanded(
         pushes: 0,
         max_pushes: limits.max_pushes(),
         pending: Vec::new(),
+        supplied: Vec::new(),
+        range: None,
+        extra_writers,
     };
     let mut out = Vec::with_capacity(request.elements.len());
     match request.target {
@@ -289,8 +333,8 @@ pub fn eval_demanded(
         }
         DemandTarget::StateAfter { pos, state, layer } => {
             let s = program.states.get(state as usize).ok_or_else(|| TirError::new(TirErrorKind::Malformed, "no such state"))?;
-            if !matches!(s.kind, StateKind::Fixed { .. }) || state_occurrence_v1(program, state, layer).is_none() {
-                return fail(TirErrorKind::Malformed, "not a Fixed state instance");
+            if !matches!(s.kind, StateKind::Fixed { .. }) || !state_instance_is_held_v1(program, state, layer) {
+                return fail(TirErrorKind::Malformed, "not a Fixed state instance a run holds");
             }
             if pos >= program.history_bound {
                 return fail(TirErrorKind::Position, "position ≥ history_bound");
@@ -311,6 +355,117 @@ pub fn eval_demanded(
                 }
             }
         }
+    }
+    Ok((out, engine.work))
+}
+
+/// **A range evaluation** (spec 04b §9.5 — the history dissection's arithmetic).
+///
+/// Elements `elements` of node `target` of context `ctx`, evaluated exactly as [`eval_demanded`]
+/// evaluates a `Node` target, except that
+///
+/// * every node of `ctx` listed in `supplied` is a LEAF — its elements come from
+///   [`DemandSource::node`] — as a commit point is: a dissection supplies the claimed totals of a
+///   cone's reductions over `H` this way;
+/// * with `range = Some((from, to))`, the target — which must be a reduction over `H` (a
+///   `ReduceSum` or `ReduceMax` along an `H` axis, or a `MatMul` contracting `H`) — reduces over the
+///   positions `from .. to` only (`from < to ≤ H`): its partial over that range. Its work is
+///   `to − from` terms per element.
+#[derive(Clone, Copy, Debug)]
+pub struct DemandRangeRequest<'a> {
+    pub ctx: DemandContext,
+    pub target: u16,
+    pub elements: &'a [usize],
+    pub supplied: &'a [u16],
+    pub range: Option<(usize, usize)>,
+}
+
+/// Whether node `node` of `block` reduces over `H`: a `ReduceSum`/`ReduceMax` along an `H` axis of
+/// its input, or a `MatMul` whose contraction (`a.shape[−1]`) is `H`.
+pub fn reduces_over_h_v1(block: &Block, node: u16) -> bool {
+    let Some(n) = block.nodes.get(node as usize) else { return false };
+    let input_dims = |r: Ref| -> Option<Vec<crate::types::Dim>> {
+        match r {
+            Ref::Node(j) => block.nodes.get(j as usize).map(|m| m.out.shape.clone()),
+            Ref::CarryIn(k) => block.carry_in.get(k as usize).map(|t| t.shape.clone()),
+            _ => None,
+        }
+    };
+    match n.prim {
+        Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
+            n.inputs.first().and_then(|r| input_dims(*r)).is_some_and(|s| s.get(axis as usize).is_some_and(|d| d.is_h()))
+        }
+        Prim::MatMul => n.inputs.first().and_then(|r| input_dims(*r)).is_some_and(|s| s.last().is_some_and(|d| d.is_h())),
+        _ => false,
+    }
+}
+
+/// **Evaluate a range request** ([`DemandRangeRequest`]). Refused up front (class `Malformed`) when
+/// the context, the target or a supplied node is not the program's, when the target is supplied,
+/// when a range is given for a target that does not reduce over `H` or is empty or past `H`, and
+/// when an element is outside the target.
+pub fn eval_demanded_range(
+    program: &TirProgramV1,
+    info: &ProgramInfo,
+    request: &DemandRangeRequest<'_>,
+    source: &mut dyn DemandSource,
+    limits: &DemandLimits,
+) -> DemandResult<(Vec<i128>, DemandWork)> {
+    eval_demanded_range_ext(program, info, request, source, limits, &[])
+}
+
+/// [`eval_demanded_range`] with writers [`state_writer_v1`] does not see (spec 04b §15.4).
+pub fn eval_demanded_range_ext<'p>(
+    program: &'p TirProgramV1,
+    info: &'p ProgramInfo,
+    request: &DemandRangeRequest<'_>,
+    source: &mut dyn DemandSource,
+    limits: &DemandLimits,
+    extra_writers: ExtraWritersV1<'p>,
+) -> DemandResult<(Vec<i128>, DemandWork)> {
+    let mut engine = Engine {
+        program,
+        info,
+        target: Some((request.ctx, request.target)),
+        contexts: BTreeMap::new(),
+        ctxs: Vec::new(),
+        state_memo: BTreeMap::new(),
+        source,
+        work: DemandWork::default(),
+        limits: *limits,
+        pushes: 0,
+        max_pushes: limits.max_pushes(),
+        pending: Vec::new(),
+        supplied: request.supplied.to_vec(),
+        range: request.range,
+        extra_writers,
+    };
+    let ci = engine.context(request.ctx)?;
+    let block = &program.blocks[engine.ctxs[ci].block as usize];
+    let node = request.target;
+    if node as usize >= block.nodes.len() {
+        return fail(TirErrorKind::Malformed, "no such node");
+    }
+    if request.supplied.iter().any(|n| *n as usize >= block.nodes.len() || *n == node) {
+        return fail(TirErrorKind::Malformed, "a supplied node is not another node of the block");
+    }
+    if let Some((from, to)) = request.range {
+        if !reduces_over_h_v1(block, node) {
+            return fail(TirErrorKind::Malformed, "a range evaluation's target reduces over H");
+        }
+        let h = engine.ctxs[ci].h;
+        if from >= to || to > h {
+            return fail(TirErrorKind::Malformed, format!("the range {from}..{to} is not a non-empty range of 0..{h}"));
+        }
+    }
+    let count = engine.ctxs[ci].counts[node as usize];
+    if let Some(bad) = request.elements.iter().find(|e| **e >= count) {
+        return fail(TirErrorKind::Malformed, format!("element {bad} is outside the target's {count}"));
+    }
+    let mut out = Vec::with_capacity(request.elements.len());
+    for e in request.elements {
+        engine.run(Frame { ctx: ci, node, index: *e, charged: false })?;
+        out.push(engine.ctxs[ci].memo[node as usize][e]);
     }
     Ok((out, engine.work))
 }
@@ -354,6 +509,12 @@ struct Engine<'p, 's> {
     max_pushes: u64,
     /// Frames the last scan found missing, in operand order.
     pending: Vec<Frame>,
+    /// Range evaluation (§9.5): nodes of the target's context the source supplies as leaves.
+    supplied: Vec<u16>,
+    /// Range evaluation (§9.5): the `H` positions the target node's reduction runs over.
+    range: Option<(usize, usize)>,
+    /// Writers [`state_writer_v1`] does not see (a version-2 program's `post` writes).
+    extra_writers: ExtraWritersV1<'p>,
 }
 
 fn unravel(mut i: usize, st: &[usize]) -> Vec<usize> {
@@ -390,7 +551,25 @@ fn operand_err<T>(msg: impl Into<String>) -> DemandResult<T> {
     fail(TirErrorKind::Operand, msg)
 }
 
+/// **A source's refusal is `Missing`, whatever the source's own reason** (spec 04b §9.4): the
+/// evaluation never reads a class off the source, so two sources that refuse the same question for
+/// different reasons fail the evaluation the same way.
+fn refused(e: TirError) -> DemandError {
+    DemandError::Tir(TirError::new(TirErrorKind::Missing, format!("the source refused: {} ({:?})", e.msg, e.kind)))
+}
+
 impl Engine<'_, '_> {
+    /// The node writing `Fixed` instance `(state, layer)`: an extra writer of a global state first,
+    /// then [`state_writer_v1`].
+    fn writer(&self, state: u16, layer: Option<u16>) -> Option<(u16, u16)> {
+        if layer.is_none()
+            && let Some((_, w)) = self.extra_writers.iter().find(|(s, _)| *s == state)
+        {
+            return Some(*w);
+        }
+        state_writer_v1(self.program, state, layer)
+    }
+
     /// The index of context `key`, created on first use.
     fn context(&mut self, key: DemandContext) -> DemandResult<usize> {
         if let Some(i) = self.contexts.get(&key) {
@@ -434,7 +613,17 @@ impl Engine<'_, '_> {
     fn is_leaf(&self, ci: usize, node: u16) -> bool {
         let c = &self.ctxs[ci];
         let committed = self.program.blocks[c.block as usize].nodes.get(node as usize).is_some_and(|n| n.commit);
-        committed && self.target != Some((c.key, node))
+        let in_target_ctx = self.target.is_some_and(|(key, _)| key == c.key);
+        (committed && self.target != Some((c.key, node))) || (in_target_ctx && self.supplied.contains(&node))
+    }
+
+    /// The positions a reduction of node `node` of context `ci` runs over: the whole axis (`0..n`),
+    /// or, for the target of a range evaluation, its range.
+    fn reduction_span(&self, ci: usize, node: u16, n: usize) -> (usize, usize) {
+        match self.range {
+            Some((from, to)) if self.target == Some((self.ctxs[ci].key, node)) => (from.min(n), to.min(n)),
+            _ => (0, n),
+        }
     }
 
     fn memo_get(&self, f: &Frame) -> Option<i128> {
@@ -499,7 +688,7 @@ impl Engine<'_, '_> {
         }
         let key = self.ctxs[ci].key;
         let dtype = self.program.blocks[self.ctxs[ci].block as usize].nodes[node as usize].out.dtype;
-        let v = self.source.node(key, node, index)?;
+        let v = self.source.node(key, node, index).map_err(refused)?;
         if !dtype.contains(v) {
             return operand_err(format!("supplied node {node}: {v} is not a {}", dtype.name()));
         }
@@ -533,20 +722,14 @@ impl Engine<'_, '_> {
         }
         let program = self.program;
         let s = &program.states[state as usize];
-        let StateKind::Fixed { lo, hi } = s.kind else {
+        if !matches!(s.kind, StateKind::Fixed { .. }) {
             return fail(TirErrorKind::Shape, "a State ref names a Hist state");
-        };
-        let check = |v: i128| -> DemandResult<i128> {
-            if !s.dtype.contains(v) || v < lo as i128 || v > hi as i128 {
-                return operand_err(format!("state {}: {v} is outside [{lo}, {hi}]", s.name));
-            }
-            Ok(v)
-        };
+        }
         let mut at = pos;
         loop {
-            match self.source.state(at, state, layer, index)? {
+            match self.source.state(at, state, layer, index).map_err(refused)? {
                 StateSupply::Value(v) => {
-                    let v = check(v)?;
+                    let v = self.check_state_value(state, v)?;
                     self.state_memo.insert((pos, state, layer, index), v);
                     return Ok(Fetch::Ready(v));
                 }
@@ -554,12 +737,12 @@ impl Engine<'_, '_> {
                     if at == 0 {
                         return fail(TirErrorKind::Missing, format!("state {}: nothing precedes position 0", s.name));
                     }
-                    match state_writer_v1(program, state, layer) {
+                    match self.writer(state, layer) {
                         Some((occ, w)) => {
                             let ci = self.context(DemandContext { pos: at - 1, occurrence: occ })?;
                             return match self.node_value(ci, w, index)? {
                                 Fetch::Ready(v) => {
-                                    let v = check(v)?;
+                                    let v = self.check_state_value(state, v)?;
                                     self.state_memo.insert((pos, state, layer, index), v);
                                     Ok(Fetch::Ready(v))
                                 }
@@ -568,6 +751,8 @@ impl Engine<'_, '_> {
                         }
                         None => {
                             // Unwritten at `at − 1`: its value there is its value at the start of it.
+                            // One term for each position the walk passes, whether or not it ever
+                            // finds a value (§9.4, "Work").
                             self.tick(0, 1)?;
                             at -= 1;
                         }
@@ -577,15 +762,33 @@ impl Engine<'_, '_> {
         }
     }
 
-    /// `Fixed` instance `(state, layer)` element `index` AFTER position `pos`.
+    /// `Fixed` instance `(state, layer)` element `index` AFTER position `pos` — the writer's output
+    /// there, which must lie in `[lo, hi]` as every `Fixed` value the evaluation reads does (a computed
+    /// write is clamped into it; a committed one is checked), or, for an unwritten instance, its value
+    /// at the start of `pos`.
     fn state_after(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> DemandResult<Fetch> {
-        match state_writer_v1(self.program, state, layer) {
+        match self.writer(state, layer) {
             Some((occ, w)) => {
                 let ci = self.context(DemandContext { pos, occurrence: occ })?;
-                self.node_value(ci, w, index)
+                match self.node_value(ci, w, index)? {
+                    Fetch::Ready(v) => Ok(Fetch::Ready(self.check_state_value(state, v)?)),
+                    need => Ok(need),
+                }
             }
             None => self.state_at_start(pos, state, layer, index),
         }
+    }
+
+    /// A `Fixed` state's value: of the state's dtype and in `[lo, hi]`, else `Operand`.
+    fn check_state_value(&self, state: u16, v: i128) -> DemandResult<i128> {
+        let s = &self.program.states[state as usize];
+        let StateKind::Fixed { lo, hi } = s.kind else {
+            return fail(TirErrorKind::Shape, "a State ref names a Hist state");
+        };
+        if !s.dtype.contains(v) || v < lo as i128 || v > hi as i128 {
+            return operand_err(format!("state {}: {v} is outside [{lo}, {hi}]", s.name));
+        }
+        Ok(v)
     }
 
     /// One element of an operand of context `ci`, from wherever it lives.
@@ -613,7 +816,7 @@ impl Engine<'_, '_> {
                 let d =
                     p.params.get(j as usize).ok_or_else(|| DemandError::Tir(TirError::new(TirErrorKind::Operand, "no such param")))?;
                 let layer = if d.per_layer { self.ctxs[ci].layer } else { None };
-                let v = self.source.param(j, layer, index)?;
+                let v = self.source.param_at(self.ctxs[ci].key.pos, j, layer, index).map_err(refused)?;
                 if !d.dtype.contains(v) {
                     return operand_err(format!("param {}: {v} is not a {}", d.name, d.dtype.name()));
                 }
@@ -637,7 +840,7 @@ impl Engine<'_, '_> {
             }
             Ref::Input(j) => {
                 if j == INPUT_TOKEN {
-                    let t = self.source.token(key.pos)?;
+                    let t = self.source.token(key.pos).map_err(refused)?;
                     if t >= p.token_bound {
                         return operand_err(format!("token {t} ≥ token_bound {}", p.token_bound));
                     }
@@ -678,13 +881,21 @@ impl Engine<'_, '_> {
     }
 
     /// The reduction terms one element of `prim` costs.
-    fn terms_of(&self, ci: usize, prim: &Prim, inputs: &[Ref]) -> DemandResult<u64> {
+    fn terms_of(&self, ci: usize, node: u16, prim: &Prim, inputs: &[Ref]) -> DemandResult<u64> {
+        let span = |n: usize| {
+            let (from, to) = self.reduction_span(ci, node, n);
+            to.saturating_sub(from) as u64
+        };
         Ok(match prim {
             Prim::MatMul => {
                 let xs = self.operand_shape(ci, inputs[0])?;
-                xs.last().copied().unwrap_or(0) as u64
+                span(xs.last().copied().unwrap_or(0))
             }
-            Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => {
+            Prim::ReduceSum { axis } | Prim::ReduceMax { axis } => {
+                let xs = self.operand_shape(ci, inputs[0])?;
+                span(xs.get(*axis as usize).copied().unwrap_or(0))
+            }
+            Prim::TopK { axis, .. } => {
                 let xs = self.operand_shape(ci, inputs[0])?;
                 xs.get(*axis as usize).copied().unwrap_or(0) as u64
             }
@@ -706,7 +917,7 @@ impl Engine<'_, '_> {
             return fail(TirErrorKind::Shape, format!("{name}: {} inputs", inputs.len()));
         }
         if !f.charged {
-            let terms = self.terms_of(ci, prim, inputs)?;
+            let terms = self.terms_of(ci, f.node, prim, inputs)?;
             self.tick(1, terms)?;
             f.charged = true;
         }
@@ -837,8 +1048,9 @@ impl Engine<'_, '_> {
                 let xb = broadcast_index(batch, &xs[..xr - 2]);
                 let yb = broadcast_index(batch, &ys[..yr - 2]);
                 let (xo, yo) = (xb * m * kk + r * kk, yb * kk * nn + c);
-                let mut reqs = Vec::with_capacity(2 * kk);
-                for t in 0..kk {
+                let (from, to) = self.reduction_span(ci, f.node, kk);
+                let mut reqs = Vec::with_capacity(2 * (to - from));
+                for t in from..to {
                     reqs.push((inputs[0], xo + t));
                     reqs.push((inputs[1], yo + t * nn));
                 }
@@ -855,7 +1067,8 @@ impl Engine<'_, '_> {
                 let xs = self.operand_shape(ci, inputs[0])?;
                 let ist = strides(&xs);
                 let o = unravel(index, &ost);
-                let reqs: Vec<(Ref, usize)> = (0..xs[a])
+                let (from, to) = self.reduction_span(ci, f.node, xs[a]);
+                let reqs: Vec<(Ref, usize)> = (from..to)
                     .map(|t| {
                         let mut j = o.clone();
                         j[a] = t;
@@ -930,7 +1143,7 @@ impl Engine<'_, '_> {
                     // Row `t` of the `H` rows is the one appended at `pos + 1 − H + t`.
                     let row_pos = (pos as usize + 1 - h + t) as u32;
                     let layer = if s.per_layer { self.ctxs[ci].layer } else { None };
-                    let v = self.source.hist_row(pos, *state, layer, row_pos, within)?;
+                    let v = self.source.hist_row(pos, *state, layer, row_pos, within).map_err(refused)?;
                     if !s.dtype.contains(v) {
                         return operand_err(format!("history {}: {v} is not a {}", s.name, s.dtype.name()));
                     }
@@ -973,8 +1186,21 @@ pub struct MapSource {
     pub states: BTreeMap<(u32, u16, Option<u16>), Vec<i128>>,
     /// `Hist` rows by `(state, layer, row position)`.
     pub hist_rows: BTreeMap<(u16, Option<u16>, u32), Vec<i128>>,
+    /// Questions the source refuses, and the reason it gives (which the evaluation does not read:
+    /// every refusal is `Missing`).
+    pub withheld: BTreeMap<MapSourceKey, TirErrorKind>,
     /// Every request served, in order.
     pub requests: Vec<MapSourceRequest>,
+}
+
+/// A question a [`MapSource`] can be told to refuse: a request without its element index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MapSourceKey {
+    Node { ctx: DemandContext, node: u16 },
+    Param { param: u16, layer: Option<u16> },
+    State { pos: u32, state: u16, layer: Option<u16> },
+    HistRow { pos: u32, state: u16, layer: Option<u16>, row_pos: u32 },
+    Token { pos: u32 },
 }
 
 /// One request a [`MapSource`] served.
@@ -991,9 +1217,19 @@ fn missing<T>(what: String) -> TirResult<T> {
     Err(TirError::new(TirErrorKind::Missing, what))
 }
 
+impl MapSource {
+    fn withhold(&self, key: MapSourceKey) -> TirResult<()> {
+        match self.withheld.get(&key) {
+            Some(kind) => Err(TirError::new(*kind, format!("{key:?} is withheld"))),
+            None => Ok(()),
+        }
+    }
+}
+
 impl DemandSource for MapSource {
     fn node(&mut self, ctx: DemandContext, node: u16, index: usize) -> TirResult<i128> {
         self.requests.push(MapSourceRequest::Node { ctx, node, index });
+        self.withhold(MapSourceKey::Node { ctx, node })?;
         match self.nodes.get(&(ctx, node)).and_then(|v| v.get(index)) {
             Some(v) => Ok(*v),
             None => missing(format!("{ctx:?} node {node} element {index}")),
@@ -1001,6 +1237,7 @@ impl DemandSource for MapSource {
     }
     fn param(&mut self, param: u16, layer: Option<u16>, index: usize) -> TirResult<i128> {
         self.requests.push(MapSourceRequest::Param { param, layer, index });
+        self.withhold(MapSourceKey::Param { param, layer })?;
         match self.params.get(&(param, layer)).and_then(|v| v.get(index)) {
             Some(v) => Ok(*v),
             None => missing(format!("param {param} layer {layer:?} element {index}")),
@@ -1008,6 +1245,7 @@ impl DemandSource for MapSource {
     }
     fn state(&mut self, pos: u32, state: u16, layer: Option<u16>, index: usize) -> TirResult<StateSupply> {
         self.requests.push(MapSourceRequest::State { pos, state, layer, index });
+        self.withhold(MapSourceKey::State { pos, state, layer })?;
         match self.states.get(&(pos, state, layer)) {
             None => Ok(StateSupply::Replay),
             Some(v) => match v.get(index) {
@@ -1018,6 +1256,7 @@ impl DemandSource for MapSource {
     }
     fn hist_row(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> TirResult<i128> {
         self.requests.push(MapSourceRequest::HistRow { pos, state, layer, row_pos, index });
+        self.withhold(MapSourceKey::HistRow { pos, state, layer, row_pos })?;
         match self.hist_rows.get(&(state, layer, row_pos)).and_then(|r| r.get(index)) {
             Some(v) => Ok(*v),
             None => missing(format!("history {state} layer {layer:?} row {row_pos} element {index}")),
@@ -1025,6 +1264,7 @@ impl DemandSource for MapSource {
     }
     fn token(&mut self, pos: u32) -> TirResult<u32> {
         self.requests.push(MapSourceRequest::Token { pos });
+        self.withhold(MapSourceKey::Token { pos })?;
         self.tokens.get(&pos).copied().ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("token at {pos}")))
     }
 }

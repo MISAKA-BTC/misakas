@@ -312,6 +312,10 @@ fn main() {
         mirror(&g, prefill, decode, profile);
         return;
     }
+    if args.iter().any(|a| a == "--fused-kernels") {
+        fused_kernels(arg(&args, "--steps", 24));
+        return;
+    }
     let t = Instant::now();
     let (program, fills) = qwen2_program(&g);
     let plan = TirPlan::compile(&program).expect("the program validates");
@@ -340,6 +344,10 @@ fn main() {
     }
     println!("params: {:.2} GiB synthetic, filled in {:.1} s", weight_bytes as f64 / (1u64 << 30) as f64, t.elapsed().as_secs_f64());
     let mut exec = TirExecutor::new(&plan, &params).expect("every param bound");
+    if args.iter().any(|a| a == "--fused") {
+        exec.set_fused(true);
+        println!("fused kernels on: {:?}", exec.fused_summary());
+    }
     let tokens: Vec<u32> = (0..prefill + decode).map(|i| ((i as u64 * 7919 + 1013) % g.vocab as u64) as u32).collect();
     let t = Instant::now();
     for &tok in &tokens[..prefill] {
@@ -606,6 +614,29 @@ fn mirror(g: &Geo, prefill: usize, decode: usize, profile: bool) {
         med(&times) / med(&legacy_decode),
         rss_mib().unwrap_or(0)
     );
+    // The same program with the fused kernels on (RFC-0002 Phase G): every logit again, then the speed.
+    let mut fx = TirExecutor::new(&plan, &params).expect("every param bound");
+    fx.set_fused(true);
+    let mut ftimes = Vec::new();
+    for (pos, tok) in tokens.iter().enumerate() {
+        let s = Instant::now();
+        fx.step(*tok as u32, &mut NoSink).expect("a fused TIR step");
+        if pos >= prefill {
+            ftimes.push(s.elapsed().as_secs_f64());
+        }
+        let got: Vec<i128> = fx.logits().1.to_i128s();
+        let w: Vec<i128> = want[pos].iter().map(|v| *v as i128).collect();
+        assert_eq!(got, w, "position {pos}: the fused backend's logits differ from the legacy engine's");
+    }
+    ftimes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!(
+        "fused kernels {:?}: logits identical at all {} positions; decode median {:.1} ms/token → {:.2}× the generic backend, {:.2}× the legacy engine",
+        fx.fused_summary(),
+        tokens.len(),
+        med(&ftimes),
+        med(&ftimes) / med(&times),
+        med(&ftimes) / med(&legacy_decode)
+    );
     if std::env::var_os("TIR_EXEC_NODE_PROFILE").is_some() {
         let mut rows: Vec<(u64, usize, usize)> = Vec::new();
         for (bi, b) in exec.node_profile().iter().enumerate() {
@@ -647,6 +678,293 @@ fn mirror(g: &Geo, prefill: usize, decode: usize, profile: bool) {
             );
         }
     }
+}
+
+/// Records the committed values of a step.
+struct Commits(Vec<Vec<i128>>);
+impl misaka_palw_tir_exec::StepSink for Commits {
+    fn node(&mut self, v: &misaka_palw_tir_exec::NodeValue<'_>) {
+        if v.commit {
+            self.0.push(v.data.to_i128s());
+        }
+    }
+}
+
+/// `steps` positions of `program` over `params`, generic or fused: the per-step times (sorted) and
+/// every step's committed values.
+fn run_steps(plan: &TirPlan, params: &TirParams<'_>, fused: bool, steps: usize) -> (Vec<f64>, Vec<Vec<Vec<i128>>>) {
+    let mut exec = TirExecutor::new(plan, params).expect("every param bound");
+    exec.set_fused(fused);
+    if fused {
+        assert!(exec.fused_summary().iter().any(|(_, c)| *c > 0), "the kernel matched: {:?}", exec.fused_summary());
+    }
+    let (mut times, mut commits) = (Vec::with_capacity(steps), Vec::with_capacity(steps));
+    for i in 0..steps {
+        let mut sink = Commits(Vec::new());
+        let s = Instant::now();
+        exec.step((i % 16) as u32, &mut sink).expect("a step");
+        times.push(s.elapsed().as_secs_f64());
+        commits.push(sink.0);
+    }
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    (times, commits)
+}
+
+/// Params for a kernel program, by name: plausible magnitudes of a calibrated artifact.
+fn kernel_param(name: &str, n: usize, rng: &mut Rng) -> ParamData<'static> {
+    let tail = name.rsplit('.').next().unwrap_or(name);
+    let r = |rng: &mut Rng, lo: i64, hi: i64| rng.range(lo, hi);
+    match (name, tail) {
+        (_, "m") => ParamData::I64(Cow::Owned((0..n).map(|_| r(rng, 1 << 8, 1 << 9)).collect())),
+        (_, "s") => ParamData::I8(Cow::Owned(vec![19; n])),
+        (_, "z") => ParamData::I64(Cow::Owned((0..n).map(|_| r(rng, -64, 64)).collect())),
+        ("w", _) => fill(Fill::W8, n, rng),
+        ("write_shift", _) => ParamData::I32(Cow::Owned((0..n).map(|_| r(rng, -3, 3) as i32).collect())),
+        ("decay.table" | "beta.table", _) => ParamData::I32(Cow::Owned((0..n).map(|_| r(rng, 0, 1 << 24) as i32).collect())),
+        ("w.table", _) => ParamData::I32(Cow::Owned((0..n).map(|_| r(rng, 0, 1 << 25) as i32).collect())),
+        ("y.table" | "v.table", _) => ParamData::I32(Cow::Owned((0..n).map(|_| r(rng, -(1 << 20), 1 << 20) as i32).collect())),
+        _ => ParamData::I16(Cow::Owned((0..n).map(|_| r(rng, -32767, 32767) as i16).collect())),
+    }
+}
+
+const KERNEL_VOCAB: u32 = 16;
+
+/// `a16_matmul` as a one-layer program (the gate's, `misaka-palw-tir-lower/tests/fused_gate.rs`).
+fn a16_matmul_kernel_program(rows: u32, k: u32, wide: bool, z: bool) -> TirProgramV1 {
+    let mut pb = ProgramBuilder::new(KERNEL_VOCAB, HISTORY_BOUND_V1_SMALL);
+    let table = pb.param("x.table", DType::I16, &[KERNEL_VOCAB, k], false);
+    let w = pb.param("w", DType::I8, &[rows, k], true);
+    let m = pb.param("n.m", DType::I64, &[rows], true);
+    let s = pb.param("n.s", DType::I8, &[rows], true);
+    let zp = z.then(|| pb.param("n.z", DType::I64, &[rows], true));
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let x = b.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
+        b.finish(&[x])
+    };
+    let layer = {
+        let mut b = pb.block("layer", vec![TensorType::fixed(DType::I16, &[k])]);
+        let y = b.a16_matmul(w, Ref::CarryIn(0), &Narrowing::new(m, s, zp), wide);
+        b.commit(y);
+        let x = b.reshape_fixed(Ref::CarryIn(0), &[k]);
+        b.finish(&[x])
+    };
+    let post = {
+        let mut b = pb.block("post", vec![TensorType::fixed(DType::I16, &[k])]);
+        let l = b.reshape_fixed(Ref::CarryIn(0), &[k]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    pb.finish(pre, vec![layer], post, 0)
+}
+
+/// `moe_combine_q36` as a one-layer program.
+fn moe_kernel_program(k: u32, width: u32) -> TirProgramV1 {
+    let mut pb = ProgramBuilder::new(KERNEL_VOCAB, HISTORY_BOUND_V1_SMALL);
+    let yt = pb.param("y.table", DType::I32, &[KERNEL_VOCAB, k * width], false);
+    let wt = pb.param("w.table", DType::I32, &[KERNEL_VOCAB, k], false);
+    let m = pb.param("n.m", DType::I64, &[1], true);
+    let s = pb.param("n.s", DType::I8, &[1], true);
+    let z = pb.param("n.z", DType::I64, &[width], true);
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let y = b.gather(yt, Ref::Input(INPUT_TOKEN), 0, 0);
+        b.finish(&[y])
+    };
+    let layer = {
+        let mut b = pb.block("layer", vec![TensorType::fixed(DType::I32, &[k * width])]);
+        let y = b.reshape_fixed(Ref::CarryIn(0), &[k, width]);
+        let w = b.gather(wt, Ref::Input(INPUT_TOKEN), 0, 0);
+        let p2 = b.pow2_of(s);
+        let r = b.moe_combine_q36(y, w, m, p2, z, -32767, 32767, DType::I16);
+        b.commit(r);
+        let c = b.reshape_fixed(Ref::CarryIn(0), &[k * width]);
+        b.finish(&[c])
+    };
+    let post = {
+        let mut b = pb.block("post", vec![TensorType::fixed(DType::I32, &[k * width])]);
+        let l = b.reshape_fixed(Ref::CarryIn(0), &[k * width]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    pb.finish(pre, vec![layer], post, 0)
+}
+
+/// `gdn_step_q36` as a one-layer program over a `Fixed` state `[h, dv, dk]`.
+fn gdn_kernel_program(h: u32, dv: u32, dk: u32) -> TirProgramV1 {
+    let mut pb = ProgramBuilder::new(KERNEL_VOCAB, HISTORY_BOUND_V1_SMALL);
+    let kt = pb.param("k.table", DType::I16, &[KERNEL_VOCAB, h * dk], false);
+    let qt = pb.param("q.table", DType::I16, &[KERNEL_VOCAB, h * dk], false);
+    let vt = pb.param("v.table", DType::I32, &[KERNEL_VOCAB, h * dv], false);
+    let dect = pb.param("decay.table", DType::I32, &[KERNEL_VOCAB, h], false);
+    let bett = pb.param("beta.table", DType::I32, &[KERNEL_VOCAB, h], false);
+    let triple = |pb: &mut ProgramBuilder, name: &str| {
+        (
+            pb.param(&format!("{name}.m"), DType::I64, &[h], true),
+            pb.param(&format!("{name}.s"), DType::I8, &[h], true),
+            pb.param(&format!("{name}.z"), DType::I64, &[h], true),
+        )
+    };
+    let read = triple(&mut pb, "read");
+    let delta = triple(&mut pb, "delta");
+    let out = triple(&mut pb, "out");
+    let ws = pb.param("write_shift", DType::I32, &[h], true);
+    let smax = i32::MAX as i64;
+    let state = pb.fixed_state("S", DType::I32, &[h, dv, dk], -smax, smax, true);
+    let pre = {
+        let mut b = pb.block("pre", vec![]);
+        let v = b.gather(vt, Ref::Input(INPUT_TOKEN), 0, 0);
+        b.finish(&[v])
+    };
+    let layer = {
+        let mut b = pb.block("layer", vec![TensorType::fixed(DType::I32, &[h * dv])]);
+        let tok = Ref::Input(INPUT_TOKEN);
+        let k = b.gather(kt, tok, 0, 0);
+        let k = b.reshape_fixed(k, &[h, dk]);
+        let q = b.gather(qt, tok, 0, 0);
+        let q = b.reshape_fixed(q, &[h, dk]);
+        let v = b.reshape_fixed(Ref::CarryIn(0), &[h, dv]);
+        let decay = b.gather(dect, tok, 0, 0);
+        let beta = b.gather(bett, tok, 0, 0);
+        let narrowing = |b: &mut BlockBuilder<'_>, (m, s, z): (Ref, Ref, Ref)| (m, b.pow2_of(s), z);
+        let (r, d, o) = (narrowing(&mut b, read), narrowing(&mut b, delta), narrowing(&mut b, out));
+        let y = b.gdn_step_q36(state, k, v, q, decay, beta, r, d, ws, o);
+        let y = b.reshape_fixed(y, &[h * dv]);
+        let y = b.commit(y);
+        b.finish(&[y])
+    };
+    let post = {
+        let mut b = pb.block("post", vec![TensorType::fixed(DType::I32, &[h * dv])]);
+        let l = b.reshape_fixed(Ref::CarryIn(0), &[h * dv]);
+        b.commit(l);
+        b.finish(&[])
+    };
+    pb.finish(pre, vec![layer], post, 0)
+}
+
+/// **The fused kernels at a real model's sizes** (RFC-0002 Phase G): each kernel's template as a
+/// one-layer program, stepped `steps` times generic and fused (every commit compared), and — with
+/// `legacy-bench` — the legacy kernel on operands of the same sizes.
+fn fused_kernels(steps: usize) {
+    // `a16_matmul` and `moe_combine_q36` have no fused form (see
+    // `misaka_palw_tir_exec::fused::kernels_v1`): their rows are the generic backend against the
+    // legacy kernel, the measurement that decided it.
+    let cases: Vec<(String, TirProgramV1, &str)> = vec![
+        ("a16_matmul [1536, 1536] codes+z (q/o)".into(), a16_matmul_kernel_program(1536, 1536, false, true), "a16/1536x1536"),
+        ("a16_matmul [8960, 1536] codes (gate/up)".into(), a16_matmul_kernel_program(8960, 1536, false, false), "a16/8960x1536"),
+        ("a16_matmul [1536, 8960] wide (down)".into(), a16_matmul_kernel_program(1536, 8960, true, false), "a16/1536x8960"),
+        ("a16_matmul [151936, 1536] wide (LM head)".into(), a16_matmul_kernel_program(151_936, 1536, true, false), "a16/151936x1536"),
+        ("gdn_step_q36 h 32, d_v = d_k = 128 (Qwen3.6-35B)".into(), gdn_kernel_program(32, 128, 128), "gdn/32x128x128"),
+        ("gdn_step_q36 h 4, d_v = d_k = 8 (tiny hybrid)".into(), gdn_kernel_program(4, 8, 8), "gdn/4x8x8"),
+        ("moe_combine_q36 k 8, width 2048 (Qwen3.6-35B)".into(), moe_kernel_program(8, 2048), "moe/8x2048"),
+    ];
+    println!(
+        "{:<52} {:>18} {:>18} {:>8} {:>12}",
+        "kernel (one step of a one-layer program)", "generic µs (min)", "fused µs (min)", "min ratio", "legacy µs"
+    );
+    for (label, program, key) in cases {
+        let fusable = key.starts_with("gdn/");
+        let plan = TirPlan::compile(&program).expect("the kernel program validates");
+        let mut rng = Rng(0xF05E);
+        let mut params = TirParams::new(&plan);
+        for &(j, layer) in &plan.param_instances {
+            let d = &program.params[j as usize];
+            let n: usize = d.shape.iter().map(|x| *x as usize).product();
+            params.insert(&plan, j, layer, kernel_param(&d.name, n, &mut rng)).expect("a param of its declaration");
+        }
+        let (g, gc) = run_steps(&plan, &params, false, steps);
+        // The median over the steps and, beside it, the minimum: on a shared host the minimum is the
+        // kernel and the median is the kernel plus whoever else was running.
+        let med = |t: &[f64]| t[t.len() / 2] * 1e6;
+        let (fused, ratio) = if fusable {
+            let (f, fc) = run_steps(&plan, &params, true, steps);
+            assert_eq!(gc, fc, "{label}: the fused kernel's commits differ from the generic backend's");
+            (format!("{:.1} ({:.1})", med(&f), f[0] * 1e6), format!("{:.2}×", g[0] / f[0]))
+        } else {
+            ("—".to_string(), "—".to_string())
+        };
+        let legacy = legacy_kernel_us(key);
+        println!(
+            "{label:<52} {:>18} {:>18} {:>8} {:>12}",
+            format!("{:.1} ({:.1})", med(&g), g[0] * 1e6),
+            fused,
+            ratio,
+            legacy.map_or("—".to_string(), |us| format!("{us:.1}"))
+        );
+    }
+}
+
+/// The legacy kernel's time on operands of `key`'s sizes, in µs (median of a few runs).
+#[cfg(feature = "legacy-bench")]
+fn legacy_kernel_us(key: &str) -> Option<f64> {
+    use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
+    use kaspa_consensus_core::palw_qwen36_ops::{Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gdn_step, q36_moe_combine};
+    let mut rng = Rng(0x1E6A);
+    // The minimum of a few runs, as the fused and generic columns' parenthesised figure.
+    let median = |mut t: Vec<f64>| {
+        t.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        t[0] * 1e6
+    };
+    let (kind, dims) = key.split_once('/')?;
+    let dims: Vec<usize> = dims.split('x').map(|d| d.parse().ok()).collect::<Option<_>>()?;
+    match kind {
+        "a16" => {
+            let (rows, cols) = (dims[0], dims[1]);
+            let w: Vec<i8> = (0..rows * cols).map(|_| rng.range(-127, 127) as i8).collect();
+            let x: Vec<i32> = (0..cols).map(|_| rng.range(-32767, 32767) as i32).collect();
+            let p = vec![A16QuantParams { multiplier: 300, shift: 19, zero: 0 }; rows];
+            Some(median(
+                (0..25)
+                    .map(|_| {
+                        let s = Instant::now();
+                        std::hint::black_box(misaka_palw_base0::kernels::a16_matmul_requant_fast(&w, &x, &p).ok());
+                        s.elapsed().as_secs_f64()
+                    })
+                    .collect(),
+            ))
+        }
+        "gdn" => {
+            let (h, dv, dk) = (dims[0], dims[1], dims[2]);
+            let mut states: Vec<Qwen36GdnStateV1> = (0..h).map(|_| Qwen36GdnStateV1::zeros(dv, dk)).collect();
+            let k: Vec<i32> = (0..dk).map(|_| rng.range(-32767, 32767) as i32).collect();
+            let q = k.clone();
+            let v: Vec<i32> = (0..dv).map(|_| rng.range(-32767, 32767) as i32).collect();
+            let a = A16QuantParams { multiplier: 300, shift: 19, zero: 0 };
+            let params = Qwen36GdnParamsV1 { read: a, delta: a, write_shift: 1, out: a };
+            Some(median(
+                (0..25)
+                    .map(|_| {
+                        let s = Instant::now();
+                        for st in states.iter_mut() {
+                            std::hint::black_box(q36_gdn_step(st, &k, &v, &q, 1 << 23, 1 << 22, params).ok());
+                        }
+                        s.elapsed().as_secs_f64()
+                    })
+                    .collect(),
+            ))
+        }
+        "moe" => {
+            let (k, width) = (dims[0], dims[1]);
+            let y: Vec<i32> = (0..k * width).map(|_| rng.range(-32767, 32767) as i32).collect();
+            let w: Vec<i32> = (0..k).map(|_| rng.range(0, 1 << 24) as i32).collect();
+            let p = A16QuantParams { multiplier: 300, shift: 19, zero: 0 };
+            Some(median(
+                (0..25)
+                    .map(|_| {
+                        let s = Instant::now();
+                        std::hint::black_box(q36_moe_combine(&y, &w, width, p).ok());
+                        s.elapsed().as_secs_f64()
+                    })
+                    .collect(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "legacy-bench"))]
+fn legacy_kernel_us(_: &str) -> Option<f64> {
+    None
 }
 
 #[cfg(not(feature = "legacy-bench"))]

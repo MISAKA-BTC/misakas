@@ -36,6 +36,37 @@ USAGE:
     palw-class manifest  --network <id> [--out <path>] [--check] <artifact-path>
     palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--tile-len N] [--h-chunk N] [--json]
     palw-class check-architecture --network <id> --tir <program.tir> [--tile-len N] [--h-chunk N] [--json]
+    palw-class certify   --network <id> --out <path> [--model-id <model-id>] [--family-id <hex>] <artifact-path>
+    palw-class drill-leaves --network <id> [--model-id <model-id>] [--decode N] <artifact-path>
+    palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
+                         [--logits-scheme tiled|flat] [--model-id <model-id>] <lowered.palwtir>
+
+`drill-leaves` (RFC-0002 Phase F, drill D-F2) prints, for an IR class's attempt job — its canonical
+prefill, --decode tokens (1 where the network draws one forward, the default; 2 otherwise) — the first
+step leaf of every commit-point kind (each committed node, each Fixed state's checkpoint, each history
+tile) in prefill and decode: the leaves a live court battery tampers at with --palw-drill-tamper-leaf,
+one kind at a time. One line per leaf: `<leaf> <call> <kind>`.
+
+`declare-layout` (RFC-0002 Phase F) makes a lowered artifact a class: `palw-tir-fidelity --artifact-out`
+writes the program and its integer tensors with no layout, and an IR class is its program under a
+declared layout. It tiles every commit point and state at --tile-len (the logits node at the tiled
+scheme's 4,096 lanes), the history at --h-chunk rows (64 and 64 unless given), the context at
+--max-context (the widest the program and the network admit unless given), and declares the widest
+checkpoint interval admission v10 accepts (tir_admit_v1's min C_j, halved until the gate admits),
+then writes the container to --out with --model-id in its provenance. The class commits its logits
+under --logits-scheme (the program's own if it names one, else tiled: the lowerer leaves it unset,
+and a class under no scheme has no decode court). The path from a Hugging Face
+checkpoint to a registration: check-architecture → palw-tir-fidelity → declare-layout → preflight →
+kaspad --palw-class-artifact <out> --palw-register-class <model-id>.
+
+`certify` (RFC-0002 Phase F) drills an IR (PALWTIR1) class end to end — a lie planted at a leaf of
+every committed unit, prefill and decode, convicted by the IR court, and the honest run acquitted —
+grades the drill with this build's copy of the chain's certifier, and writes the
+`FamilyCertified { TirAttempt }` object to --out (with `<out>.chunkN` beside it when it needs more
+than one carrier) and the `ClassLaneCertifiedTirV1` that seats the registered class at the floor
+once the family is certified to `<out>.lane`. Submit them in that order with
+`misaka palw submit-object`. The drill runs the class's canonical job at dense capture: a class
+whose job is past the dense-capture cap is refused.
 
 `measure` (ADR-0100) reads the geometry off the artifact, measures its bytes from the inventory,
 evaluates every wall of ADR-0097 at 512 / 32,768 / 131,072 / 1,048,576 positions and the shard
@@ -195,6 +226,50 @@ fn run(args: &[String]) -> Result<(), String> {
                 true => Ok(()),
                 false => std::process::exit(2),
             }
+        }
+        "drill-leaves" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let wanted = take_flag(&mut args, "--model-id");
+            let decode = match take_flag(&mut args, "--decode") {
+                Some(v) => v.parse::<u32>().map_err(|e| format!("--decode {v}: {e}"))?,
+                None => 1,
+            };
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            drill_leaves(&view, &path, wanted.as_deref(), decode)
+        }
+        "declare-layout" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let out = take_flag(&mut args, "--out").ok_or(USAGE)?;
+            let model_id = take_flag(&mut args, "--model-id");
+            let number = |v: Option<String>, name: &str| -> Result<Option<u32>, String> {
+                v.map(|v| v.parse::<u32>().map_err(|e| format!("{name} {v}: {e}"))).transpose()
+            };
+            let default = misaka_palw_sdk::tir_layout::TirLayoutChoiceV1::default();
+            let choice = misaka_palw_sdk::tir_layout::TirLayoutChoiceV1 {
+                max_context: number(take_flag(&mut args, "--max-context"), "--max-context")?,
+                tile_len: number(take_flag(&mut args, "--tile-len"), "--tile-len")?.unwrap_or(default.tile_len),
+                h_chunk: number(take_flag(&mut args, "--h-chunk"), "--h-chunk")?.unwrap_or(default.h_chunk),
+                logits_scheme: match take_flag(&mut args, "--logits-scheme") {
+                    Some(s) => Some(
+                        misaka_palw_sdk::tir_layout::TirLogitsSchemeV1::parse(&s)
+                            .ok_or_else(|| format!("--logits-scheme {s}: tiled or flat"))?,
+                    ),
+                    None => None,
+                },
+            };
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            declare_layout(&view, &path, &PathBuf::from(out), &choice, model_id.as_deref())
+        }
+        "certify" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let out = take_flag(&mut args, "--out").ok_or(USAGE)?;
+            let wanted = take_flag(&mut args, "--model-id");
+            let family_id = match take_flag(&mut args, "--family-id") {
+                Some(hex) => Some(hex.trim_start_matches("0x").parse::<Hash64>().map_err(|e| format!("--family-id {hex}: {e:?}"))?),
+                None => None,
+            };
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            certify(&view, &path, wanted.as_deref(), family_id, &out)
         }
         _ => Err(USAGE.to_string()),
     }
@@ -481,11 +556,30 @@ fn tir_manifest(path: &std::path::Path, out: Option<PathBuf>, check: bool) -> Re
     Ok(())
 }
 
+/// **An IR artifact's class** (RFC-0002 Phase F): the class it declares, under the root its bytes
+/// derive, at the formula's canonical job — what a `--palw-register-class` run registers.
+fn inspect_tir(view: &NetworkView, entry: &misaka_palw_sdk::PalwTirClassEntryV1) {
+    let taken = view.genesis_classes.iter().any(|(id, _)| *id == entry.class_id());
+    println!("  IR CLASS  {}  class {}  root {}", entry.model_id, entry.class_id(), entry.artifact_root);
+    println!(
+        "            canonical job {} + {}, max_context {}, checkpoint interval {}, h_tile {}{}",
+        entry.canonical_job.0,
+        entry.canonical_job.1,
+        entry.class.layout.max_context,
+        entry.class.layout.checkpoint_interval,
+        entry.class.layout.h_tile,
+        if taken { " (class already in genesis)" } else { "" }
+    );
+}
+
 fn inspect(view: &NetworkView, path: &std::path::Path) -> Result<(), String> {
     let sdk = sdk_for(view);
     let artifact = sdk.load_artifact(path)?;
     println!("{}", artifact.summary);
     println!("lineage: {}", artifact.lineage_id);
+    for entry in misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&artifact)) {
+        inspect_tir(view, &entry);
+    }
     for (entry, paired) in sdk.pairings(&artifact) {
         match paired {
             Ok(root) => {
@@ -499,10 +593,198 @@ fn inspect(view: &NetworkView, path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `drill-leaves`: the first leaf of every commit-point kind of the class's attempt job.
+fn drill_leaves(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>, decode: u32) -> Result<(), String> {
+    let entry = misaka_palw_sdk::lineages::tir::TirLineageV1::open_entry(path)?;
+    if wanted.is_some_and(|w| w != entry.model_id) {
+        return Err(format!("{} declares {}, not the --model-id asked for", path.display(), entry.model_id));
+    }
+    let mut job = entry.canonical_context();
+    job.exact_decode_tokens = decode.max(1);
+    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(&entry.class).map_err(|e| e.to_string())?;
+    let count = space.leaf_count_capped(&job, view.bundle.court.max_step_leaf_count()).map_err(|e| e.to_string())?;
+    let leaves = misaka_palw_sdk::lineages::tir::tir_drill_covering_leaves_v1(&space, &job, count)?;
+    eprintln!(
+        "{}: class {}, job {} + {} ({count} step leaves), {} commit-point kinds",
+        entry.model_id,
+        entry.class_id(),
+        job.declared_prefill_tokens,
+        job.exact_decode_tokens,
+        leaves.len()
+    );
+    for ((kind, call), leaf) in leaves {
+        println!("{leaf} {call:?} {kind:?}");
+    }
+    Ok(())
+}
+
+/// `declare-layout`: a lowered artifact written again under a declared layout, judged by the gate.
+fn declare_layout(
+    view: &NetworkView,
+    input: &std::path::Path,
+    output: &std::path::Path,
+    choice: &misaka_palw_sdk::tir_layout::TirLayoutChoiceV1,
+    model_id: Option<&str>,
+) -> Result<(), String> {
+    let d = misaka_palw_sdk::tir_layout::tir_declare_layout_v1(&view.params, &view.bundle, input, output, choice, model_id)?;
+    let l = &d.layout;
+    println!("wrote {} (file digest {})", output.display(), Hash64::from_bytes(d.file_digest));
+    println!(
+        "  layout          max_context {}, checkpoint interval {}, h_tile {}, {} commit tiles ({:?} distinct), {} state tiles",
+        l.max_context,
+        l.checkpoint_interval,
+        l.h_tile,
+        l.commit_tiles.len(),
+        l.commit_tiles.iter().collect::<std::collections::BTreeSet<_>>(),
+        l.state_tiles.len()
+    );
+    println!("  class id        {}", d.class_id);
+    println!("  inventory root  {}", d.artifact_root);
+    match &d.admission {
+        Ok(()) => {
+            println!("  ADMISSIBLE      admission v10 {}", d.admission_at);
+            Ok(())
+        }
+        Err(why) => {
+            println!("  REFUSED         admission v10 {}: {why}", d.admission_at);
+            Err("the declared class would be refused — nothing should be signed or funded for it".to_string())
+        }
+    }
+}
+
+/// `certify`: the IR class's drill as the chain's `FamilyCertified { TirAttempt }` object, graded
+/// here first, and the lane object that seats the class once the family is certified.
+fn certify(
+    view: &NetworkView,
+    path: &std::path::Path,
+    wanted: Option<&str>,
+    family_id: Option<Hash64>,
+    out: &str,
+) -> Result<(), String> {
+    use kaspa_consensus_core::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, palw_object_chunks_v1};
+    let sdk = sdk_for(view);
+    let artifact = sdk.load_artifact(path)?;
+    let entries: Vec<_> = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&artifact))
+        .into_iter()
+        .filter(|e| wanted.is_none_or(|w| w == e.model_id))
+        .collect();
+    let [entry] = entries.as_slice() else {
+        return Err(match entries.len() {
+            0 => "this artifact declares no IR class (by that --model-id) — `certify` drills PALWTIR1 classes".to_string(),
+            n => format!("this artifact declares {n} IR classes — name one with --model-id"),
+        });
+    };
+    let write = |path: &str, object: &PalwConsensusObjectV2| -> Result<usize, String> {
+        let bytes = borsh::to_vec(object).map_err(|e| format!("the object does not serialize: {e}"))?;
+        std::fs::write(path, &bytes).map_err(|e| format!("{path}: {e}"))?;
+        Ok(bytes.len())
+    };
+    let (object, family) = misaka_palw_sdk::tir_certification::tir_family_certification_v1(
+        entry,
+        &view.bundle.court,
+        view.params.palw_prompt_ids_form_v1(),
+        family_id,
+    )?;
+    let vectors = match &object {
+        PalwConsensusObjectV2::FamilyCertified { evidence } => evidence.vector_count(),
+        _ => 0,
+    };
+    let bytes = write(out, &object)?;
+    println!(
+        "wrote {out}: FamilyCertified (TirAttempt), family {} (digest {}), class {} ({}), {vectors} fault vectors, {} kernels, {bytes} bytes",
+        family.family_id,
+        family.digest(),
+        entry.model_id,
+        family.drilled_class_id,
+        family.kernel_ids.len()
+    );
+    match palw_object_chunks_v1(&object) {
+        Ok(None) => println!("fits one carrier: submit {out} as it is"),
+        Ok(Some(chunks)) => {
+            let mut names = Vec::with_capacity(chunks.len());
+            for chunk in &chunks {
+                let PalwConsensusObjectV2::ObjectChunk { index, count, group, .. } = chunk else {
+                    return Err("the chunker returned something other than a chunk".to_string());
+                };
+                let name = format!("{out}.chunk{index}");
+                let n = write(&name, chunk)?;
+                println!("wrote {name}: ObjectChunk {index}/{count} of group {group}, {n} bytes");
+                names.push(name);
+            }
+            println!(
+                "too large for one carrier ({bytes} > {PALW_OBJECT_CHUNK_MAX_BYTES}): submit the chunks in order — misaka palw \
+                 submit-object {} --yes",
+                names.iter().map(|n| format!("--object {n}")).collect::<Vec<_>>().join(" ")
+            );
+        }
+        Err(e) => return Err(format!("the drill cannot be chunked: {e}")),
+    }
+    let lane = format!("{out}.lane");
+    let n = write(&lane, &misaka_palw_sdk::tir_certification::tir_lane_certification_v1(entry))?;
+    println!(
+        "wrote {lane}: ClassLaneCertifiedTirV1 for {} ({n} bytes) — submit it once the family is certified and the class is Active",
+        entry.class_id()
+    );
+    Ok(())
+}
+
 fn preflight(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>) -> Result<(), String> {
     let sdk = sdk_for(view);
     let artifact = sdk.load_artifact(path)?;
     println!("{}", artifact.summary);
+    // RFC-0002 Phase F: an IR artifact is its own class — gated as a `--palw-register-class` run
+    // gates it, at the point the network's `palw_tir_v1` fence arms (or refused: not armed).
+    let tir = misaka_palw_sdk::tir_registration::tir_entries_of_v1(std::slice::from_ref(&artifact));
+    if !tir.is_empty() {
+        let mut refused = false;
+        // The gate the registration will meet: at the fence's height where `palw_tir_v1` is armed,
+        // else (testnet-12, whose IR fence is a flag day not yet scheduled) as if it were.
+        let gate = misaka_palw_sdk::tir_layout::TirOfflineGateV1::of(&view.params);
+        for entry in tir.iter().filter(|e| wanted.is_none_or(|w| w == e.model_id)) {
+            inspect_tir(view, entry);
+            // The registration a `--palw-register-class` run would build, judged by admission v10 at
+            // the point the fence arms (the genesis terms: the base class's pricing, weightless).
+            let at = gate.daa;
+            let terms = kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2 {
+                min_grantable_share_permille: 0,
+                slash_value_per_pwu: 1,
+                initial_target: u128::MAX,
+                registered_class_ids: view.genesis_classes.iter().map(|(id, _)| *id).collect(),
+                registered_artifact_roots: view.genesis_classes.iter().map(|(_, root)| *root).collect(),
+                chain_certified_families: Vec::new(),
+            };
+            let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_bytes([0; 64]),
+                0,
+            ));
+            match misaka_palw_sdk::tir_registration::build_tir_registration_v1(
+                &gate.params,
+                &view.bundle,
+                entry,
+                &terms,
+                0,
+                bond,
+                Vec::new(),
+                at,
+            ) {
+                Ok(_) => println!(
+                    "  ADMISSIBLE (admission v10 {}; the live chain's terms decide the rest)  {}  root {}",
+                    gate.note(),
+                    entry.model_id,
+                    entry.artifact_root
+                ),
+                Err(why) => {
+                    refused = true;
+                    println!("  REFUSED   {}  — {why}", entry.model_id);
+                }
+            }
+        }
+        return if refused {
+            Err("the IR class would be refused — nothing should be signed or funded for it".to_string())
+        } else {
+            Ok(())
+        };
+    }
     let pairings: Vec<_> = sdk
         .pairings(&artifact)
         .into_iter()

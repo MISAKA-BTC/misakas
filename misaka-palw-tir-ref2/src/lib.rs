@@ -20,6 +20,7 @@ pub mod blake2b;
 pub mod build;
 pub mod codec;
 pub mod demand;
+pub mod dissect;
 pub mod error;
 pub mod eval;
 pub mod normal_form;

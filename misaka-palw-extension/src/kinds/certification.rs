@@ -172,6 +172,7 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
             let named = match evidence.as_ref() {
                 PalwCertificationEvidenceV1::Attempt(drill) => drill.family_id,
                 PalwCertificationEvidenceV1::FreePrompt(drill) => drill.evidence.family_id,
+                PalwCertificationEvidenceV1::TirAttempt(drill) => drill.family_id,
             };
             cx.record("family_id_named", named);
             if named != declared {

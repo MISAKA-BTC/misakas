@@ -1164,6 +1164,7 @@ fn object_kind_v1(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtVerdictPosted { .. } => "CourtVerdictPosted",
         PalwConsensusObjectV2::FamilyCertified { .. } => "FamilyCertified",
         PalwConsensusObjectV2::ClassLaneCertified { .. } => "ClassLaneCertified",
+        PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::ObjectChunk { .. } => "ObjectChunk",
         // The two ADR-0080 kinds this file MAKES. Naming them matters in the one message that
         // reads a file off disk: an operator who fed the tool a declaration it wrote earlier is
@@ -1185,6 +1186,13 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::AttnDissection { .. } => "AttnDissection",
         // ADR-0081 Decision 3: the arithmetic close with the prompt tile opened rather than carried.
         PalwCourtVerdictProofV2::ArithmeticOpened { .. } => "ArithmeticOpened",
+        // RFC-0002 Phase F (F5): an IR class's closes, named for the same reason.
+        PalwCourtVerdictProofV2::TirCone { .. } => "TirCone",
+        PalwCourtVerdictProofV2::TirLogits { .. } => "TirLogits",
+        PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. } => "TirDecodeTokenTiled",
+        PalwCourtVerdictProofV2::TirDecodeToken { .. } => "TirDecodeToken",
+        // RFC-0002 Phase F (F7): the bottom of an IR history dissection.
+        PalwCourtVerdictProofV2::TirDissection { .. } => "TirDissection",
     }
 }
 
