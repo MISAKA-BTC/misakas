@@ -296,6 +296,7 @@ misaka-palw-derive = { version = "1.1.0", path = "misaka-palw-derive" }
 misaka-palw-extension = { version = "1.1.0", path = "misaka-palw-extension" }
 misaka-palw-fp-submit = { version = "1.1.0", path = "misaka-palw-fp-submit" }
 misaka-palw-constraint = { version = "1.1.0", path = "misaka-palw-constraint" }
+misaka-palw-tir = { path = "misaka-palw-tir" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }
