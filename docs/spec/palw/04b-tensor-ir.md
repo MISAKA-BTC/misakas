@@ -2025,7 +2025,7 @@ is therefore always the executor's malformed commitment.
 ```
 TirPipelineV1 := version u16 (= 1) · stages [StageDecl] · output_stage u8
 StageDecl     := name String · program u16 · trip TripRule · max_trip u32 · tokens Option<TokenRule> · bind [Binding]
-TripRule      := tag 0: Fixed · n u32 | tag 1: JobSteps | tag 2: TokenCount
+TripRule      := tag 0: Fixed · n u32 | tag 1: JobSteps | tag 2: TokenCount | tag 3: TextStream
 TokenRule     := prefix [u32] · source TokenSource · suffix [u32] · pad Option<TokenPad>
 TokenSource   := tag 0: Prompt | tag 1: Negative
 TokenPad      := id u32 · to_len u32
@@ -2055,11 +2055,20 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   - `Fixed { n }`: `n` positions;
   - `JobSteps`: the job's step count;
   - `TokenCount`: the length of `prefix ‖ ids ‖ suffix`, padded with `pad.id` to `pad.to_len`
-    when there is a pad. A sequence longer than the pad is `Operand`.
+    when there is a pad. A sequence longer than the pad is `Operand`;
+  - `TextStream` (the text stage, RFC-0003 §II.2.1): the text job's stream, the prompt ids and then
+    the generated ids. There is one position per id whose logits the decode consumed:
+    `T = |prompt| + max(|generated|, 1) − 1`, because the last generated id is never fed back.
 
   A trip count outside `[1, max_trip]` is `Position`.
-- **Tokens.** A `TokenCount` stage's `Input(0)` at position `p` is its sequence's `p`-th id. No other
-  stage reads a token.
+- **Tokens.** A `TokenCount` stage's `Input(0)` at position `p` is its sequence's `p`-th id. A
+  `TextStream` stage's is the stream's `p`-th id. No other stage reads a token.
+- **The text stage's generated ids** are not the IR's to choose. Selection, the decode controls and
+  stop are RFC-0001 §A's, applied outside the program to the committed logits of each position from
+  `|prompt| − 1` on. `run_text_pipeline` takes a selector for them. After each such position the
+  selector answers `Next(id)` (fed back at the next position), `Last(id)` (the final id, never fed
+  back) or `End` (generation ends with no id). `run_pipeline` replays a stream whose generated ids
+  are given (`PipelineJob::generated`, the claim's committed ids).
 - **Bindings.** Each external input of the stage's program, in declaration order, takes its value
   from its binding:
   - `JobScalar`: `job.scalars[index]` as a rank-0 tensor of the input's dtype;
@@ -2079,7 +2088,8 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
 - **Random inputs.** Random inputs are drawn by the caller: once, or at every position when
   `per_step`.
 - **The pipeline's output.** A `Final` output stage gives its last position's value. A `Rows` output
-  stage gives its rows stacked `[T] ++ row shape`.
+  stage gives its rows stacked `[T] ++ row shape`. A text stage gives its logits rows stacked the same
+  way. The class's output is the generated ids (RFC-0003 §I.3.3 `Tokens`), and it has no output root.
 
 **Normal form** (`validate_pipeline`, class `NormalForm`):
 
@@ -2090,7 +2100,8 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   - a `JobSteps` stage reads no token;
   - a `TokenCount` stage reads the token and has a token rule. Its template ids are below
     `token_bound`, its pad (if any) is no shorter than the template, and a padded run has
-    `max_trip = pad.to_len`.
+    `max_trip = pad.to_len`;
+  - a `TextStream` stage reads the token and has no token rule.
 - **NF-P4.** One random input per domain across the whole pipeline (PALW-RND-7).
 - **NF-P5.** One binding per external input. An edge reads only an earlier stage.
 - **NF-P6.** A `JobScalar` binds a rank-0 input, with `index < 16`. A `JobTokens` binds an
@@ -2103,8 +2114,9 @@ fixed when the job is accepted, and nothing runs conditionally (PALW-TIR-18 per 
   type, and its proven interval lies inside the input's.
 - **NF-P8.** A `StageRowCount` edge reads a `Rows` stage, binds a rank-0 `idx`, and
   `[0, max_trip − drop]` lies inside the input's interval.
-- **NF-P9.** The output stage is a `Rows` or `Final` program, and every other stage feeds a later one
-  (no dead stage).
+- **NF-P9 (with NF-P9′).** The output stage is a `Rows` or `Final` program, or it is **the text
+  stage**: a `Logits` program whose trip is `TextStream`. No other stage is `TextStream` or a `Logits`
+  program. Every other stage feeds a later one (no dead stage).
 - **NF-P10.** A `JobImage` binds an `i16 [h, w, 3]` input whose interval contains `[0, 255]`, with
   `index < 16`. One image is bound at one size wherever it is bound. The bound images are exactly
   `0 … n − 1`, so a job carries `n` images and no index goes unread. `validate_pipeline` reports
@@ -2268,6 +2280,9 @@ image is not among the job facts.
 - **PALW-TIR-48 (job images).** A job image MUST reach a program only through `JobImage` (NF-P10).
   A court MUST read its elements only from input tiles proven under the job's `input_root`. A tile
   not proven under the root MUST NOT convict anyone.
+- **PALW-TIR-49 (the text stage).** A pipeline's `Logits` program MUST be its output stage with the
+  trip `TextStream`, and its positions MUST be the text job's stream. The IR MUST NOT select a
+  generated id: selection is RFC-0001 §A's, outside the program.
 
 ### 15.11 Open items
 
