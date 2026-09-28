@@ -7,15 +7,20 @@
 //! replay, bisection) and `resolve_tir_v1` (the IR close). The chain is the real transition
 //! (`apply_palw_transition_v2_with_extras`) and the real adjudicator (`adjudicate_court_close_v3`).
 //!
-//! * **Registration** — the node's `ClassRegisteredTirV1` (SDK builder, signed by the registrant
-//!   bond) is REFUSED by today's fold by name: admission v10 and the IR class record are F6's
-//!   consensus half. Until they land the class is stood in by a carriage-less `ClassRegistered`
-//!   of the same `(class_id, artifact_root)`, so everything downstream of registration runs now.
-//! * **An honest claim goes `Final`** — produced from the anchor's job, the served capture answers
+//! * **Registration and the walk to `Active`** (`t12_walk`, on testnet-12's own fold with
+//!   `palw_tir_v1` armed): the node's `ClassRegisteredTirV1` folds to a `Candidate` row; the
+//!   admission jury is seated on the node's readiness V2 proofs; `Prefetching → Probation →
+//!   ActiveLimited → Active` on IR probe claims the node produced going `Final`; an honest claim of
+//!   the `Active` class goes `Final`. Every block is re-applied, reverted and reloaded through the
+//!   import a node runs.
+//! * **The bisection court** (below, on a ruleset without the held regime, which plays no bisection
+//!   on testnet-12: there the IR one-move accusation is Phase F's next landing) — the class stood in
+//!   by a carriage-less registration of its `(class_id, artifact_root)`:
+//!   * **an honest claim goes `Final`** — produced from the anchor's job, the served capture answers
 //!   for the claim's roots, the seats' replay reproduces them, the panel licenses it; a false
 //!   accusation against it walks the ladder to a leaf the responder's `TirCone` close acquits
-//!   (`ChallengerDefeated`); the claim is final past the window.
-//! * **A planted lie is convicted by the IR court** — one lane of one committed leaf moved and the
+//!     (`ChallengerDefeated`); the claim is final past the window;
+//!   * **a planted lie is convicted by the IR court** — one lane of one committed leaf moved and the
 //!   commitment re-derived over it: the seat's replay does not reproduce the claim, it opens a
 //!   court, the ladder (both parties' prefix states) lands exactly on the lie, the node's close
 //!   (`palw_tir_close_candidates_v1`) is a `TirCone` the adjudicator reads `ExecutorGuilty`, and
@@ -106,6 +111,11 @@ impl Ir {
 /// lanes), two-position checkpoints and four-row history tiles, written as a `PALWTIR1` container
 /// and loaded through the SDK's door (`PalwClassSdk::load_artifact`, dispatched by the magic).
 fn ir_class(tag: &str, tiled: bool) -> Ir {
+    ir_class_with(tag, tiled, court(), FORM)
+}
+
+/// [`ir_class`] served under a network's own court and prompt form.
+fn ir_class_with(tag: &str, tiled: bool, court: PalwCourtParamsV2, form: PalwPromptIdsFormV1) -> Ir {
     use kaspa_consensus_core::palw_step_refute::{PALW_LOGITS_TILE_LANES, flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1};
     use kaspa_consensus_core::palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1};
     use misaka_palw_tir::TirProgramV1;
@@ -147,9 +157,9 @@ fn ir_class(tag: &str, tiled: bool) -> Ir {
         tensors.get(&(j, l)).cloned().ok_or_else(|| format!("no tensor {j} {l:?}"))
     })
     .expect("the container");
-    let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(court(), FORM, NETWORK.to_vec());
+    let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(court, form, NETWORK.to_vec());
     let holding = sdk.load_artifact(&path).expect("the IR lineage loads it by its magic");
-    let registry = PalwBackendRegistry::new(court(), FORM, vec![holding], NETWORK.to_vec());
+    let registry = PalwBackendRegistry::new(court, form, vec![holding], NETWORK.to_vec());
     let entry = misaka_palw_sdk::tir_registration::tir_entries_of_v1(registry.holdings()).remove(0);
     Ir { dir, class_id: entry.class_id(), root: entry.artifact_root, registry }
 }
@@ -407,48 +417,6 @@ fn open_court(s: &PalwChainStateV2, claim: &Claim, challenger: u64, daa: u64) ->
 }
 
 #[test]
-fn an_ir_registration_is_refused_by_todays_fold_by_name() {
-    use kaspa_consensus_core::config::params::{ForkActivation, palw_t12_shipped_params};
-    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-    use kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2;
-    use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
-    let ir = ir_class("reg", false);
-    let entry = misaka_palw_sdk::tir_registration::tir_entries_of_v1(ir.registry.holdings()).remove(0);
-    let mut net = palw_t12_shipped_params();
-    net.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(0)));
-    net.sync_palw_tir_v1();
-    let PalwConsensusMode::ConsensusV2(bundle) = &net.palw_consensus_mode else { panic!("t12 is V2") };
-    let terms = PalwRegistrationTermsV2 {
-        min_grantable_share_permille: 1,
-        slash_value_per_pwu: 5,
-        initial_target: u128::MAX / 2,
-        registered_class_ids: vec![h64(1)],
-        registered_artifact_roots: vec![h64(11)],
-        chain_certified_families: Vec::new(),
-    };
-    let object = misaka_palw_sdk::tir_registration::build_tir_registration_v1(
-        &net,
-        bundle,
-        &entry,
-        &terms,
-        0,
-        bond_key(PRODUCER),
-        vec![0; 8],
-        0,
-    )
-    .expect("the node builds the IR registration");
-    assert!(matches!(&object, PalwConsensusObjectV2::ClassRegisteredTirV1 { class_id, artifact_root, .. }
-        if *class_id == ir.class_id && *artifact_root == ir.root));
-    // F6's consensus half (admission v10, the IR class record) has not landed: the fold refuses the
-    // object by name. When it lands this assertion is replaced by the Candidate → Active walk.
-    let base = step(&PalwChainStateV2::genesis(), 100, &[bond(PRODUCER)]).expect("a bond");
-    match step(&base, 101, &[object]) {
-        Err(PalwStateV2Error::TirRegistrationRefused(why)) => assert!(why.contains("F6"), "{why}"),
-        other => panic!("today's fold refuses an IR registration by name, got {other:?}"),
-    }
-}
-
-#[test]
 fn an_honest_ir_claim_goes_final_and_a_false_accusation_is_defeated() {
     for tiled in [false, true] {
         let ir = ir_class(if tiled { "honest-tiled" } else { "honest-flat" }, tiled);
@@ -626,5 +594,390 @@ fn an_ir_claims_trace_events_are_answered_in_the_ir_form() {
             super::palw_da_claim_answers_v1(backend.as_ref(), &facts, vec![claim.material.clone()], |_| {}, &held, rows, false)
                 .expect("the kept capture");
         assert!(matches!(&answered.answers[0], Some(Err(why)) if why.contains("held unit")), "{:?}", answered.answers[0]);
+    }
+}
+
+/// **The whole walk on testnet-12's own fold** (F6 C(1)–C(3)): the IR class registered by the
+/// node's own object, its lifecycle row walked `Candidate → Prefetching → Probation → ActiveLimited
+/// → Active` by the chain's registry — the admission jury seated on the node's readiness V2
+/// proofs, the probation passed by IR claims the node produced going `Final` — and an honest claim
+/// of the `Active` class going `Final`.
+/// testnet-12's fold harness (`consensus/core/tests/rcore_common.rs`: the real fold with the
+/// processor's extras, every block re-applied, reverted and reloaded).
+#[path = "../../../consensus/core/tests/rcore_common.rs"]
+#[allow(dead_code, unused_imports, clippy::all)]
+mod rcore;
+
+mod t12_walk {
+    use super::Ir;
+    use kaspa_consensus_core::config::params::{ForkActivation, Params, palw_t12_shipped_params};
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2, execution_anchor_v3,
+        execution_commitment_v3,
+    };
+    use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwMaterialVerdictV1};
+    use kaspa_consensus_core::palw_model_registry_v1::{
+        PALW_READINESS_V2_BUDGET_BYTES_V1, PalwModelLifecycleV1, palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1,
+    };
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockWorkV3, PalwBondKeyV2, PalwClaimPhaseV2, PalwConsensusObjectV2, PalwRegistrationTermsV2,
+    };
+    use kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1;
+    use kaspa_hashes::Hash64;
+
+    use super::rcore;
+
+    /// The height testnet-12's IR fence arms at here (Phase F's own fold test's).
+    const AT: u64 = 1_100;
+
+    fn armed() -> Params {
+        let mut p = palw_t12_shipped_params();
+        p.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(ForkActivation::new(AT)));
+        p.sync_palw_tir_v1();
+        p
+    }
+
+    /// The registry's span on `c`'s ruleset at `daa`.
+    fn span_daa(c: &rcore::Chain, daa: u64) -> u64 {
+        rcore::registry_fold(&c.p, daa).expect("the registry governs").span_daa
+    }
+
+    fn lifecycle(c: &rcore::Chain, class: &Hash64) -> Option<PalwModelLifecycleV1> {
+        c.s.model_lifecycle(class).map(|row| row.state)
+    }
+
+    /// **One block on `c`, checked as the harness checks it — with the PRODUCTION import.** The
+    /// fold at `daa` with the processor's extras; the delta re-applied and reverted; and the carriage
+    /// reloaded under its root by `into_state_v3` with testnet-12's own `palw_uncertified_weightless`
+    /// and canonical-work height, the import every node runs (the harness's `step_at` reloads with
+    /// the fixtures' `into_state`, whose weight rule a weightless class's `Final` does not obey).
+    fn step(c: &mut rcore::Chain, daa: u64, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>, key: Hash64, subsidy: u64) {
+        use kaspa_consensus_core::palw_state_v2::{PalwStateCarriageV2, apply_delta_v2, revert_delta_v2};
+        assert!(daa > c.daa, "DAA moves forward");
+        let at = rcore::ctx(0xCA_0000 + daa, daa, daa, subsidy);
+        let parent = c.s.clone();
+        let (child, delta, skips) =
+            c.try_fold(&parent, &at, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
+        assert!(skips.is_empty(), "nothing skipped at {daa}: {skips:?}");
+        assert_eq!(apply_delta_v2(&parent, &delta, &c.sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
+        assert_eq!(revert_delta_v2(&child, &delta, &c.sp).expect("reverts"), parent, "DAA {daa}: the delta reverts");
+        let weightless = c.p.palw_uncertified_weightless.is_some_and(|f| f.is_active(daa));
+        let reloaded = PalwStateCarriageV2::from_state(&child)
+            .into_state_v3(&c.sp, Some(child.state_root()), weightless, c.p.palw_canonical_work_daa())
+            .unwrap_or_else(|e| panic!("DAA {daa}: the carriage reloads as a node imports it: {e}"));
+        assert_eq!(reloaded, child, "DAA {daa}: reload is the state");
+        c.s = child;
+        c.daa = daa;
+    }
+
+    fn empty(c: &mut rcore::Chain, daa: u64) {
+        step(c, daa, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    }
+
+    /// A floor attempt by the floor's producer in its own block at `daa` (the jury's seed anchor).
+    fn floor_claim(c: &mut rcore::Chain, seed: u64, daa: u64) {
+        let (floor, _, _, _) = rcore::genesis_classes(&c.p)[0];
+        let (bond, pubkey, operator) = rcore::floor_producer(&c.p);
+        let pwu = c.floor_pwu(daa);
+        let (env, key, id) = rcore::junk_attempt(floor, bond, pubkey, &operator, pwu, seed, 0x10C0 + seed);
+        step(c, daa, &[], PalwBlockWorkV3::Attempt(&env), key, rcore::T12_BLOCK_SUBSIDY_SOMPI);
+        assert!(c.s.claim(&id).is_some(), "the floor attempt is accepted");
+    }
+
+    /// `claim` bound to `seats` in the next block; returns its DAA.
+    fn bind(c: &mut rcore::Chain, claim: Hash64, seats: &[(PalwBondKeyV2, Hash64)]) -> u64 {
+        let daa = c.daa + 1;
+        let anchor = rcore::h(0xAC_0000 + daa);
+        step(
+            c,
+            daa,
+            &[PalwConsensusObjectV2::PanelBound { claim, anchor, seats: rcore::seats_of(seats) }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+            0,
+        );
+        daa
+    }
+
+    /// **A seat's readiness V2 proof, built as the node's readiness duty builds it** — the challenge
+    /// of `(class, bond, span)` drawn over the IR inventory, its prefix opened within the carrier's
+    /// budget from the backend's readiness material, one multiproof.
+    fn readiness(backend: &dyn PalwExecutionBackendV1, class: Hash64, bond: PalwBondKeyV2, span: u64) -> PalwConsensusObjectV2 {
+        let (root, leaf_count) = backend.artifact_root_and_leaf_count().expect("the inventory");
+        let bond_bytes = borsh::to_vec(&bond).expect("a bond key");
+        let draw = palw_readiness_v2_draw_v1(&palw_readiness_v2_challenge_seed_v1(&class, &bond_bytes, span), leaf_count);
+        let (_, leaves, drawn) = backend.artifact_readiness_material(&draw).expect("the drawn leaves open");
+        let mut opened = Vec::new();
+        let mut bytes = 0usize;
+        for (index, operand) in drawn {
+            if bytes >= PALW_READINESS_V2_BUDGET_BYTES_V1 {
+                break;
+            }
+            bytes += operand.bytes.len();
+            opened.push((index, operand));
+        }
+        opened.sort_by_key(|(index, _)| *index);
+        let proof = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &opened).expect("a multiproof");
+        kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, root).expect("it opens the class root");
+        PalwConsensusObjectV2::SeatReadinessProvedV2 { bond, class_id: class, span, proof: Box::new(proof), signature: Vec::new() }
+    }
+
+    /// Every genesis bond but the registrant proves readiness for `span`, in one block at `daa`.
+    fn prove_all(c: &mut rcore::Chain, ir: &Ir, registrant: PalwBondKeyV2, span: u64, daa: u64) {
+        let backend = ir.backend();
+        let proofs: Vec<_> = rcore::honest(&c.p)
+            .into_iter()
+            .filter(|k| *k != registrant)
+            .map(|k| readiness(backend.as_ref(), ir.class_id, k, span))
+            .collect();
+        step(c, daa, &proofs, PalwBlockWorkV3::None, Hash64::default(), 0);
+    }
+
+    /// The pwu an IR attempt of `class` carries at `daa`: the derived draw of its registry row at
+    /// the class's effective target (what admission accepts, as for any model class).
+    fn ir_pwu(c: &rcore::Chain, class: &Hash64, daa: u64) -> u64 {
+        let per_draw = c.s.palw_canonical_per_draw_v1(class, daa, Some(0)).expect("the class's registry row");
+        let target =
+            kaspa_consensus_core::palw_admission_v2::palw_effective_class_target_v1(&c.s, &c.sp, class, None).expect("a target");
+        kaspa_consensus_core::palw_admission_v2::palw_attempt_derived_pwu_v1(target, per_draw)
+    }
+
+    /// **An IR attempt by rich bond `n`**: the job its anchor names, run by the node's IR backend,
+    /// committed in the attempt envelope; accepted in its own block at `daa` (or `None` where the
+    /// class gate refuses it at that height).
+    fn ir_claim(c: &mut rcore::Chain, ir: &Ir, n: u64, seed: u64, daa: u64) -> Option<(Hash64, Vec<u8>, PalwClaimRootsV1)> {
+        let backend = ir.backend();
+        let bond = rcore::bond_key(n);
+        let (pre_pow, nonce) = (0x7C0_0000 + seed, 7u64);
+        let anchor = backend
+            .job_anchor_v1(
+                rcore::h(rcore::NET),
+                rcore::h(pre_pow),
+                ir.class_id,
+                &bond.0,
+                kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(nonce),
+            )
+            .expect("an anchor");
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor's job");
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, false);
+        let run = backend.execute(&job, &prompt).expect("the IR run");
+        let attempt = PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain: rcore::h(rcore::NET),
+            challenge: challenge_v2(rcore::h(rcore::NET), rcore::h(pre_pow), 1_700_000_000 + seed, nonce, ir.class_id, &bond.0),
+            class_id: ir.class_id,
+            executor_bond: bond.0,
+            executor_pubkey: rcore::pubkey_of(n),
+            operator_id: kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&rcore::operator_pubkey_of(n)),
+            artifact_root: ir.root,
+            trace_root: run.trace_root,
+            output_root: run.output_root,
+            pwu: ir_pwu(c, &ir.class_id, daa),
+            trace_manifest_root: run.trace_manifest_root,
+            trace_chunk_count: run.trace_chunk_count,
+            trace_retention_daa: 999_999,
+            execution_root: run.execution_root,
+        };
+        let env =
+            PalwAttemptEnvelopeV2 { attempt, signature: vec![0u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] };
+        let key = execution_commitment_v3(
+            &env.attempt,
+            execution_anchor_v3(rcore::h(rcore::NET), rcore::h(pre_pow), ir.class_id, &bond.0, nonce),
+        );
+        let id = attempt_id_v2(&env.attempt);
+        let at = rcore::ctx(0xCA_0000 + daa, daa, daa, rcore::T12_BLOCK_SUBSIDY_SOMPI);
+        if let Err(e) = c.try_fold(&c.s.clone(), &at, &[], PalwBlockWorkV3::Attempt(&env), key) {
+            eprintln!("DAA {daa}: the class gate refuses the IR attempt: {e}");
+            return None;
+        }
+        step(c, daa, &[], PalwBlockWorkV3::Attempt(&env), key, rcore::T12_BLOCK_SUBSIDY_SOMPI);
+        let roots = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor,
+            attempt_draw: Some(false),
+            output_root: Some(run.output_root),
+            job_pin: None,
+        };
+        Some((id, run.material, roots))
+    }
+
+    #[test]
+    fn an_ir_class_walks_from_candidate_to_active_on_testnet_12_and_its_claims_go_final() {
+        let mut c = rcore::Chain::new(armed());
+        c.room = true;
+        let bundle = rcore::bundle(&c.p);
+        let ir = super::ir_class_with("t12-walk", false, bundle.court, c.p.palw_prompt_ids_form_v1());
+        let backend = ir.backend();
+        let (registrant, _, _) = rcore::floor_producer(&c.p);
+
+        // 1. The node's registration (SDK builder, admission v10 at the gate), folded at the fence.
+        let entry = misaka_palw_sdk::tir_registration::tir_entries_of_v1(ir.registry.holdings()).remove(0);
+        let (floor, _, target, slash) = rcore::genesis_classes(&c.p)[0];
+        let terms = PalwRegistrationTermsV2 {
+            min_grantable_share_permille: 0,
+            slash_value_per_pwu: slash,
+            initial_target: c.s.class_target(&floor).map(|t| t.target).unwrap_or(target),
+            registered_class_ids: rcore::genesis_classes(&c.p).iter().map(|g| g.0).collect(),
+            registered_artifact_roots: Vec::new(),
+            chain_certified_families: Vec::new(),
+        };
+        let object = misaka_palw_sdk::tir_registration::build_tir_registration_v1(
+            &c.p,
+            &bundle,
+            &entry,
+            &terms,
+            AT,
+            registrant,
+            vec![9; 16],
+            AT,
+        )
+        .expect("admission v10 admits the tiny class");
+        step(&mut c, AT, &[object], PalwBlockWorkV3::None, Hash64::default(), 0);
+        assert!(c.s.tir_class_v1(&ir.class_id).is_some(), "the tir_classes row");
+        empty(&mut c, AT + 1);
+        assert_eq!(lifecycle(&c, &ir.class_id), Some(PalwModelLifecycleV1::Candidate), "a bought class opens Candidate");
+
+        // 2. The admission jury: every other genesis bond proves possession two spans before the
+        //    class's staggered audit; a floor attempt in the span before is the jury's anchor.
+        let span = span_daa(&c, c.daa);
+        let period = kaspa_consensus_core::palw_model_registry_v1::palw_admission_audit_period_spans_v2(
+            c.sp.epoch_length(),
+            span,
+            c.p.palw_admission_audit_period_daa,
+        );
+        let now_span = c.daa / span;
+        let audit = (now_span + 3..)
+            .find(|s| kaspa_consensus_core::palw_activation_pool_v1::palw_admission_audit_due_staggered_v1(&ir.class_id, *s, period))
+            .unwrap();
+        prove_all(&mut c, &ir, registrant, audit - 2, (audit - 2) * span);
+        floor_claim(&mut c, 0x7A11, (audit - 1) * span);
+        empty(&mut c, audit * span);
+        assert_eq!(lifecycle(&c, &ir.class_id), Some(PalwModelLifecycleV1::Prefetching), "the jury is seated");
+
+        // 3. Ready seats: Prefetching → Probation.
+        prove_all(&mut c, &ir, registrant, audit + 1, (audit + 1) * span);
+        empty(&mut c, (audit + 2) * span);
+        assert!(
+            matches!(lifecycle(&c, &ir.class_id), Some(PalwModelLifecycleV1::Probation { .. })),
+            "{:?}",
+            lifecycle(&c, &ir.class_id)
+        );
+
+        // 4. Probation: the class's probes — IR attempts by a rich producer, each served (the seats'
+        //    material check), bound to a panel of genesis seats, licensed, and Final.
+        let next = c.daa + 1;
+        step(&mut c, next, &[rcore::bond_obj(1, rcore::RICH)], PalwBlockWorkV3::None, Hash64::default(), 0);
+        let seats = rcore::honest_seats(&c.p, bundle.panel.seat_count() as usize);
+        let probes = rcore::registry_fold(&c.p, c.daa).expect("the registry").globals.probation_claims as usize;
+        let mut claims: Vec<Hash64> = Vec::new();
+        let mut seed = 0u64;
+        while claims.len() < probes {
+            keep_ready(&mut c, &ir, registrant);
+            seed += 1;
+            let daa = c.daa + 1;
+            match ir_claim(&mut c, &ir, 1, seed, daa) {
+                Some((id, material, roots)) => {
+                    assert_eq!(backend.verify_material(&material, roots), PalwMaterialVerdictV1::Matches, "the served capture");
+                    let replay = backend.execute_for_verdict(&job_of(&material), &prompt_of(&material)).expect("the seat's replay");
+                    assert_eq!(replay.execution_root, roots.execution_root, "the seats' replay reproduces the claim");
+                    let bound = bind(&mut c, id, &seats);
+                    let receipts = seats.iter().map(|(k, _)| rcore::valid(id, *k, bound)).collect();
+                    step(
+                        &mut c,
+                        bound + 1,
+                        &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }],
+                        PalwBlockWorkV3::None,
+                        Hash64::default(),
+                        0,
+                    );
+                    claims.push(id);
+                }
+                None => empty(&mut c, daa),
+            }
+        }
+        let last = claims.iter().map(|id| c.s.deadline_of(id).expect("a licensed claim's Final deadline")).max().unwrap();
+        advance_to(&mut c, &ir, registrant, last + 1);
+        for id in &claims {
+            assert!(matches!(c.claim(id).phase, PalwClaimPhaseV2::Final { .. }), "probe {id} is Final: {:?}", c.claim(id).phase);
+        }
+        eprintln!("walk: {:?} at DAA {} after {probes} probe Finals", lifecycle(&c, &ir.class_id), c.daa);
+
+        // 5. ActiveLimited, then stable spans to Active.
+        let span = span_daa(&c, c.daa);
+        let mut guard = 0;
+        while !matches!(lifecycle(&c, &ir.class_id), Some(PalwModelLifecycleV1::Active)) {
+            guard += 1;
+            assert!(guard < 200, "the walk stalls at {:?}", lifecycle(&c, &ir.class_id));
+            let next = (c.daa / span + 1) * span;
+            advance_to(&mut c, &ir, registrant, next);
+        }
+        eprintln!("walk: Active at DAA {}", c.daa);
+
+        // 6. An honest claim of the Active class goes Final.
+        keep_ready(&mut c, &ir, registrant);
+        let (id, material, roots) = loop {
+            seed += 1;
+            let daa = c.daa + 1;
+            if let Some(claim) = ir_claim(&mut c, &ir, 1, seed, daa) {
+                break claim;
+            }
+            empty(&mut c, daa);
+        };
+        assert_eq!(backend.verify_material(&material, roots), PalwMaterialVerdictV1::Matches);
+        let bound = bind(&mut c, id, &seats);
+        let receipts = seats.iter().map(|(k, _)| rcore::valid(id, *k, bound)).collect();
+        step(
+            &mut c,
+            bound + 1,
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+            0,
+        );
+        let deadline = c.s.deadline_of(&id).expect("its Final deadline");
+        advance_to(&mut c, &ir, registrant, deadline + 1);
+        assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::Final { .. }), "the Active class's claim is Final");
+        assert_eq!(lifecycle(&c, &ir.class_id), Some(PalwModelLifecycleV1::Active));
+    }
+
+    /// Re-prove every non-registrant genesis seat's readiness for the current span, unless their
+    /// rows are already this span's.
+    fn keep_ready(c: &mut rcore::Chain, ir: &Ir, registrant: PalwBondKeyV2) {
+        let span = span_daa(c, c.daa);
+        let now = c.daa / span;
+        let fresh = rcore::honest(&c.p)
+            .iter()
+            .filter(|k| **k != registrant)
+            .all(|k| c.s.seat_readiness(k, &ir.class_id).is_some_and(|row| row.proved_span + 4 >= now));
+        if !fresh {
+            prove_all(c, ir, registrant, now, (c.daa + 1).max(now * span));
+        }
+    }
+
+    /// Step to `target`, keeping the seats ready on the way (one block every few spans).
+    fn advance_to(c: &mut rcore::Chain, ir: &Ir, registrant: PalwBondKeyV2, target: u64) {
+        let span = span_daa(c, c.daa);
+        while c.daa + 1 < target {
+            keep_ready(c, ir, registrant);
+            let next = (c.daa + 2 * span).min(target - 1).max(c.daa + 1);
+            empty(c, next);
+        }
+        if c.daa < target {
+            empty(c, target);
+        }
+    }
+
+    fn job_of(material: &[u8]) -> kaspa_consensus_core::palw_v2::PalwJobContextV2 {
+        misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(material).expect("an IR capture").binding.job_context
+    }
+
+    fn prompt_of(material: &[u8]) -> Vec<usize> {
+        misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(material)
+            .expect("an IR capture")
+            .prompt
+            .iter()
+            .map(|t| *t as usize)
+            .collect()
     }
 }
