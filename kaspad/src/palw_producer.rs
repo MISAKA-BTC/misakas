@@ -1684,8 +1684,10 @@ pub(crate) fn palw_dissection_refusal_v1(
 /// none of those moves, so an honest producer of such a class would lose, by the clock, to anyone who
 /// names the leaf, and this node's seats could not name one. Until the F7 node side is in, the node
 /// produces no claims for such a class ([`palw_tir_dissection_refusal_v1`]); its seats still prove
-/// readiness ([`PALW_TIR_GUARD_REFUSES_READINESS_V1`] is off). **The F7 node-side commit removes this
-/// switch and the guard.**
+/// readiness ([`PALW_TIR_GUARD_REFUSES_READINESS_V1`] is off) but file no cone accusation at a dissected
+/// leaf (`palw_panel::tir_court::palw_tir_one_move_case_guarded_v1`: the chain would open a dissection
+/// there with the seat as its challenger, whose choices this build cannot file — its replay withholds
+/// the licence instead). **The F7 node-side commit removes this switch and the guard.**
 pub(crate) const PALW_TIR_NODE_PLAYS_DISSECTION_V1: bool = false;
 
 /// **The guard's readiness half — OFF in the flag-day release** (the coordinator, 2026-09-28). Set, a
@@ -1961,6 +1963,13 @@ mod tests {
         assert!(
             canonical.find("palw_producer::palw_tir_dissection_refusal_v1(session, class_id)").expect("the canonical claim")
                 < canonical.find("self.resolve_backend(").unwrap()
+        );
+        // The seat half: the one-move pass drops a cone accusation at a dissected leaf before it files.
+        let court = include_str!("palw_panel/tir_court.rs");
+        let pass = body(court, "    pub(super) async fn tir_one_move_pass_v1(");
+        assert!(
+            pass.find("palw_tir_one_move_case_guarded_v1(&tir, &accused, case)").expect("the seat half")
+                < pass.find("palw_tir_one_move_accusation_to_file_v1(").unwrap()
         );
         let readiness = body(panel, "    fn readiness_duties(");
         assert!(

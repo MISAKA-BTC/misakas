@@ -676,6 +676,63 @@ fn a_wrong_answer_over_honest_arithmetic_is_accused_in_one_move() {
     }
 }
 
+/// **The interim F7 guard's seat half** (RFC-0002; the DAA-2,000 flag-day release): on a class whose
+/// history cones are dissected, a lie planted at a DISSECTED leaf is where the seat's one-move case
+/// parts from it, and the guard drops the cone accusation there — under the held regime it would open a
+/// dissection whose challenger's choices this build cannot file — so nothing convicts and nothing is
+/// filed (the seat's replay withheld the licence already). A lie at an undissected commit leaf of the
+/// same class keeps its cone, and it convicts.
+#[test]
+fn a_seat_files_no_cone_accusation_at_a_dissected_leaf_until_it_plays_the_dissection() {
+    use super::tir_court::{
+        palw_tir_leaf_is_dissected_v1, palw_tir_one_move_accusation_to_file_v1, palw_tir_one_move_case_guarded_v1,
+        palw_tir_one_move_case_v1,
+    };
+    use kaspa_consensus_core::palw_producer_v2::palw_disputable_claims_v2;
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
+    let ir = ir_class("guard-dissected", true);
+    let tir = ir.tir();
+    let rules = tir.court_rules(&court());
+    let s = registry_with(&ir);
+    let honest = produce(&ir, 6, None);
+    let ctx = misaka_palw_sdk::lineages::tir::TirCaptureV1::decode(&honest.material).unwrap().binding.job_context;
+    let n =
+        kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(tir.class()).unwrap().leaf_count_capped(&ctx, LADDER).unwrap();
+    let dissected = (0..n).find(|&i| palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)).expect("the class dissects its history cones");
+    let undissected = (dissected + 1..n)
+        .find(|&i| {
+            !palw_tir_leaf_is_dissected_v1(&tir, &ctx, i)
+                && tir.space().leaf_at(&ctx, i).is_some_and(|l| matches!(l.kind, PalwTirLeafKindV1::Commit { .. }))
+        })
+        .expect("an undissected commit leaf after it");
+    for (lie, guarded) in [(dissected, true), (undissected, false)] {
+        let liar = produce(&ir, 6, Some(lie));
+        assert_ne!(liar.env.attempt.execution_root, honest.env.attempt.execution_root, "leaf {lie}: the lie is committed");
+        let s = licensed(&s, &liar, 101);
+        let case = palw_tir_one_move_case_v1(&tir, &liar.material, &honest.material, &rules).unwrap().expect("a case");
+        assert_eq!(case.leaf, Some(lie), "the case names the planted leaf");
+        assert!(case.candidates.iter().any(|(label, _)| *label == "cone"), "leaf {lie}: a cone candidate before the guard");
+        let (case, dropped) = palw_tir_one_move_case_guarded_v1(&tir, &liar.material, case);
+        assert_eq!(dropped, guarded, "leaf {lie}");
+        assert_eq!(case.candidates.iter().any(|(label, _)| *label == "cone"), !guarded, "leaf {lie}");
+        let target = palw_disputable_claims_v2(&s, &[bond_key(SEAT)]).into_iter().find(|t| t.claim_id == liar.id).expect("disputable");
+        let filed = palw_tir_one_move_accusation_to_file_v1(
+            case.candidates,
+            &target,
+            &tir.class().program,
+            bond_key(SEAT),
+            &court(),
+            LADDER,
+            FORM,
+        );
+        if guarded {
+            assert!(filed.is_none(), "a lie at a dissected leaf files nothing: {:?}", filed.map(|(label, _)| label));
+        } else {
+            assert_eq!(filed.map(|(label, _)| label), Some("cone"), "a lie at an undissected leaf is accused at its cone");
+        }
+    }
+}
+
 /// **An IR claim answers its data-availability demands in the IR form** (F6 D): the node's own
 /// answering path (`palw_da_claim_answers_v1`: the kept capture verified against the claim, then each
 /// unit) discloses a trace event of an IR claim as a `TirEvent` — the row's tile opened under the

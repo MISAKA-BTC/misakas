@@ -39,6 +39,7 @@ use kaspa_consensus_core::palw_tir_one_move_v1::{
     palw_tir_one_move_session_id_v1,
 };
 use kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1;
+use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_core::{info, warn};
 use misaka_palw_sdk::lineages::tir::{TirBackendV1, TirCaptureV1};
 
@@ -178,6 +179,41 @@ pub(crate) fn palw_tir_one_move_case_v1(
         return Ok(None);
     }
     Ok(Some(PalwTirOneMoveCaseV1 { leaf, row, candidates }))
+}
+
+/// **Is step leaf `index` of the job `ctx` a DISSECTED leaf of the class** — a tile of a commit point
+/// whose cone reduces over the history (RFC-0002 F7, `palw_tir_dissected_commit_points_v1`), which the
+/// held regime never tries in one move: a cone accusation there opens a dissection instead.
+pub(crate) fn palw_tir_leaf_is_dissected_v1(tir: &TirBackendV1, ctx: &PalwJobContextV2, index: u64) -> bool {
+    let space = tir.space();
+    let Some(leaf) = space.leaf_at(ctx, index) else { return false };
+    let PalwTirLeafKindV1::Commit { block, node, .. } = leaf.kind else { return false };
+    kaspa_consensus_core::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&space.program).contains(&(block, node))
+}
+
+/// **The interim F7 guard, a seat's half** (RFC-0002; the DAA-2,000 flag-day release): until this node
+/// plays an IR class's held dissection (`crate::palw_producer::PALW_TIR_NODE_PLAYS_DISSECTION_V1`), a
+/// one-move case whose first divergent leaf is DISSECTED loses its cone candidate. Under the held regime
+/// the chain answers a cone accusation there by opening a dissection with the accuser as its challenger,
+/// whose choices this build cannot file — and a challenger's silence is its own loss. The lie is still
+/// not licensed: this seat's replay withheld the licence already. The other doors (decode token, logits)
+/// are adjudicated in one move and stay. `true` beside the case when a candidate was dropped.
+pub(crate) fn palw_tir_one_move_case_guarded_v1(
+    tir: &TirBackendV1,
+    accused: &[u8],
+    mut case: PalwTirOneMoveCaseV1,
+) -> (PalwTirOneMoveCaseV1, bool) {
+    if crate::palw_producer::PALW_TIR_NODE_PLAYS_DISSECTION_V1 {
+        return (case, false);
+    }
+    let (Some(leaf), Ok(capture)) = (case.leaf, TirCaptureV1::decode(accused)) else { return (case, false) };
+    if !palw_tir_leaf_is_dissected_v1(tir, &capture.binding.job_context, leaf) {
+        return (case, false);
+    }
+    let before = case.candidates.len();
+    case.candidates.retain(|(label, _)| *label != "cone");
+    let dropped = case.candidates.len() != before;
+    (case, dropped)
 }
 
 /// **The verdict an IR close proof supports against a claim, as far as a node derives it without
@@ -435,13 +471,16 @@ impl super::PalwPanelService {
             rules.max_step_leaf_count = ladder;
             let (own, facts) = (run.material, target.clone());
             let Ok(found) = tokio::task::spawn_blocking(move || {
-                let case = palw_tir_one_move_case_v1(&tir, &accused, &own, &rules)?;
+                let Some(case) = palw_tir_one_move_case_v1(&tir, &accused, &own, &rules)? else {
+                    return Ok::<_, String>((None, None));
+                };
+                // The interim F7 guard's seat half: no cone accusation at a dissected leaf.
+                let (case, guarded) = palw_tir_one_move_case_guarded_v1(&tir, &accused, case);
                 let program = tir.class().program.clone();
-                Ok::<_, String>(case.and_then(|case| {
-                    let (leaf, row) = (case.leaf, case.row);
-                    palw_tir_one_move_accusation_to_file_v1(case.candidates, &facts, &program, bond_key, &court, ladder, form)
-                        .map(|(label, accusation)| (leaf, row, label, accusation))
-                }))
+                let (leaf, row) = (case.leaf, case.row);
+                let found = palw_tir_one_move_accusation_to_file_v1(case.candidates, &facts, &program, bond_key, &court, ladder, form)
+                    .map(|(label, accusation)| (leaf, row, label, accusation));
+                Ok((guarded.then_some(leaf).flatten(), found))
             })
             .await
             else {
@@ -449,13 +488,24 @@ impl super::PalwPanelService {
             };
             // Tried once: a claim no IR close convicts is recorded, not filed.
             books.accused.insert(target.claim_id);
+            if let Ok((Some(leaf), _)) = &found {
+                warn!(
+                    "[{PALW_PANEL}] IR claim {}: its first divergent leaf {leaf} is a dissected leaf — {} (RFC-0002 F7): its cone \
+                     accusation is not filed, and this seat's replay withholds the claim's licence",
+                    target.claim_id,
+                    crate::palw_producer::PALW_TIR_DISSECTION_GUARD_WORDS_V1
+                );
+            }
             let (leaf, row, label, mut accusation) = match found {
-                Ok(Some(found)) => found,
-                Ok(None) => {
-                    warn!(
-                        "[{PALW_PANEL}] IR claim {}: no IR close convicts where this node's execution parts from it; recorded, not filed",
-                        target.claim_id
-                    );
+                Ok((_, Some(found))) => found,
+                Ok((guarded, None)) => {
+                    if guarded.is_none() {
+                        warn!(
+                            "[{PALW_PANEL}] IR claim {}: no IR close convicts where this node's execution parts from it; recorded, not \
+                             filed",
+                            target.claim_id
+                        );
+                    }
                     continue;
                 }
                 Err(why) => {
