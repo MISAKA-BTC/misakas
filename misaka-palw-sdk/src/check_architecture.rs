@@ -146,6 +146,7 @@ pub fn check_ir_config_at_v1(params: &Params, config_text: &str, long_history: b
         } else {
             misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL
         },
+        ..Default::default()
     };
     let (ceilings, source, _) = tir_ceilings_v1(params);
     let empty = |architecture: String, verdict: ArchVerdictV1| IrReportV1 {

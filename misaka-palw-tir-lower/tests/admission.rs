@@ -78,6 +78,25 @@ fn every_lowerable_real_configuration_is_admitted() {
     assert_eq!(refused, vec!["deepseek-v3-bf16.json".to_string()]);
 }
 
+/// DeepSeek-V3's attention scales with its window: at `2^17` it still passes `2^40` MACs a
+/// position, at `2^16` (a class declaring `max_context ≤ 65,536`) it is admitted — criterion 7's
+/// "or the ceiling is revised with a stated reason" is a window, not a ceiling.
+#[test]
+fn deepseek_v3_is_admitted_at_a_window_of_2_16() {
+    let cfg = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/configs/real/deepseek-v3-bf16.json"))
+        .expect("config");
+    let spec = misaka_palw_tir_lower::parse_config_str(&cfg).expect("spec");
+    let hl = misaka_palw_tir_lower::hl::build_program(&spec).expect("hl");
+    let at = |w: u32| {
+        let lw = lower(&hl, &LowerOpts { max_window: Some(w), ..LowerOpts::default() }).expect("lowered");
+        tir_admit_program_v1(&lw.program, &inputs()).map(|a| a.position.cost.macs)
+    };
+    assert!(at(1 << 17).is_err());
+    let macs = at(1 << 16).expect("admitted at 2^16");
+    eprintln!("DeepSeek-V3 at a 2^16 window: {macs} MACs a position");
+    assert!(macs <= 1 << 40);
+}
+
 /// Freeze criterion 1's evidence: the primitives every lowered architecture uses — all of them
 /// among the 25 of PALW-TIR v1, none named after a model.
 #[test]

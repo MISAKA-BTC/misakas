@@ -74,11 +74,15 @@ pub use fill::{FillCtx, IntData, IntParams, IntTensor, Materialised, materialise
 pub struct LowerOpts {
     /// `2^18` (the default) or `2^21`.
     pub history_bound: u32,
+    /// The longest history window any block keeps (`None`: the history bound, or the NF-8 cap).
+    /// A class whose layout bounds its jobs below the history bound can keep a shorter window —
+    /// the attention is the model's up to it — and its per-position cost scales with it.
+    pub max_window: Option<u32>,
 }
 
 impl Default for LowerOpts {
     fn default() -> Self {
-        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL }
+        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL, max_window: None }
     }
 }
 
@@ -263,6 +267,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         resid_sites: BTreeMap::new(),
         tstate: BTreeMap::new(),
         history_bound: hb,
+        max_window: opts.max_window.unwrap_or(u32::MAX).max(1),
         logits_key: None,
         site_nodes: BTreeMap::new(),
         shared,
@@ -386,6 +391,8 @@ struct Cx<'h> {
     /// HL state → TIR state.
     tstate: BTreeMap<u32, u16>,
     history_bound: u32,
+    /// [`LowerOpts::max_window`].
+    max_window: u32,
     logits_key: Option<ScaleKey>,
     site_nodes: BTreeMap<(u8, u16), (String, ScaleKey, usize)>,
     /// HL params read by more than one node (a tied embedding): a projection over them keeps the
@@ -452,7 +459,7 @@ fn hist_window(cx: &Cx<'_>, hbk: usize, window: Option<usize>) -> u32 {
         })
         .max()
         .unwrap_or(1);
-    window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound).min(hist_window_cap(widest))
+    window.map(|w| w as u32).unwrap_or(cx.history_bound).min(cx.history_bound).min(hist_window_cap(widest)).min(cx.max_window)
 }
 
 /// Per-block lowering state.
