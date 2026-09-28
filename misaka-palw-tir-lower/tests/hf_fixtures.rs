@@ -168,5 +168,6 @@ fixtures!(
     rwkv,
     gemma3_vlm,
     qwen3_5_vlm,
+    mistral3_vlm,
     llava,
 );

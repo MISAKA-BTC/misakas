@@ -389,13 +389,19 @@ fn vlm_text(p: &mut P, arch: &str) -> Result<ArchSpec> {
     };
     sub.cfg.finish()?;
     p.cfg.inert(&["vocab_size"]);
-    if let Some(t) = root_tie
-        && t != spec.head.tied
-    {
-        // `tie_weights` reads `get_text_config(decoder=True).tie_word_embeddings` (as understood);
-        // a composite flag that disagrees is followed only after a fixture confirms it.
-        sub.unsure
-            .push(format!("root tie_word_embeddings={t} disagrees with text_config's {}; the text config's is used", spec.head.tied));
+    // transformers 5 ties through the COMPOSITE config (`PreTrainedModel` reads
+    // `self.config.tie_word_embeddings` on the VLM), whose class defaults differ: Gemma-3 and
+    // Mistral-3 default to tied, LLaVA to untied OR the text config's flag, Qwen3.5 to untied.
+    let tied = match arch {
+        "LlavaForConditionalGeneration" => root_tie.unwrap_or(false) || spec.head.tied,
+        "Gemma3ForConditionalGeneration" | "Mistral3ForConditionalGeneration" => root_tie.unwrap_or(true),
+        _ => root_tie.unwrap_or(false),
+    };
+    if tied != spec.head.tied {
+        spec.notes.push(format!("the VLM config's tie_word_embeddings ({tied}) overrides the text config's ({})", spec.head.tied));
+        spec.head.tied = tied;
+        let head = if tied { spec.hf.names["embed"].clone() } else { lm_head.to_string() };
+        spec.hf.names.insert("lm_head".into(), head);
     }
     spec.architecture = arch.to_string();
     spec.hf.ignored_prefixes.extend(vision);

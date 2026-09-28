@@ -10,7 +10,7 @@
 ## 概要(日本語)
 
 - **HF の `config.json` + safetensors を、モデル固有コードなしで HL グラフ(RFC-0002 §2 の「高レベル ML グラフ」)に落とす層を作った。**
-  54 種の `architectures[0]`(別名を含む)を扱い、全ファミリー(tiny 構成 56 本)で transformers 5.17 自身が出した logits と f32 参照が
+  54 種の `architectures[0]`(別名を含む)を扱い、全ファミリー(tiny 構成 57 本)で transformers 5.17 自身が出した logits と f32 参照が
   **最大誤差 2.8e-5(典型 1e-6)で一致**する。HF fixture はオフラインで生成(モデルのダウンロードなし)。
 - **保守的**: config のキーは「数式を変えるので読む」「数式を変えないと分かっている(dropout・生成設定など)」のどちらかに
   分類され、どちらでもないキー・未実装の値・未知の architecture・未モデル化の remote code・量子化済み checkpoint は
@@ -175,8 +175,11 @@ per-head keys/values are `kv_b_proj · latent`. The HL `MlaAttention` op is eval
 `Mistral3ForConditionalGeneration` and `Qwen3_5(Moe)ForConditionalGeneration` are lowered **as their
 text decoder alone**, for text-only prompts: with no image the decoder computes exactly the text
 model's function. Both weight layouts on the hub are accepted (`language_model.model.*`, ≤ 4.51, and
-`model.language_model.*`), and the vision tower / projector tensors are ignored by name. Mistral-3's
-text path has no fixture (it is the Mistral decoder under the LLaVA naming). Out of scope: anything
+`model.language_model.*`), and the vision tower / projector tensors are ignored by name. **Embedding
+tying follows the composite config** (transformers 5 reads `tie_word_embeddings` on the VLM, not on its
+text config), with each class's own default: Gemma-3 and Mistral-3 default to **tied**, LLaVA to
+untied-or-the-text-config's-flag, Qwen3.5 to untied — so a Mistral-3 config without a root flag ties
+its head in 5.17 (the `mistral3_vlm` fixture confirms it). Out of scope: anything
 whose text decoder reads vision states (Mllama cross-attention layers), prefix-LM attention over the
 prompt (PaliGemma), and audio models.
 
@@ -217,7 +220,7 @@ max |Δlogit| (scale = max |logit|); "decode" = one-token-at-a-time reference.
 | gpt_neox_seq | 8.3e-7 (3.3) | stablelm_parallel | 6.3e-7 (3.7) | qwen3_moe | 7.2e-7 (3.0) |
 | gptj | 1.1e-6 (2.8) | starcoder2 | 3.8e-6 (20.9) | olmoe | 6.7e-7 (3.6) |
 | falcon_mq | 5.5e-6 (18.9) | falcon_new | 5.3e-6 (17.4) | granitemoe | 1.3e-7 (1.0) |
-| falcon_alibi | 6.9e-6 (21.8) | llava | 8.3e-7 (3.1) | | |
+| falcon_alibi | 6.9e-6 (21.8) | llava | 8.3e-7 (3.1) | mistral3_vlm | 4.8e-6 (23.5) |
 
 ## 4. Out of scope for v1, and not yet modelled
 
@@ -424,7 +427,7 @@ llama-likes. Still unsure:
 
 ```sh
 export CARGO_TARGET_DIR=…/tir-lower-target CARGO_BUILD_JOBS=4
-cargo test -p misaka-palw-tir-lower            # 127 tests; HF fixtures are skipped if absent
+cargo test -p misaka-palw-tir-lower            # 128 tests; HF fixtures are skipped if absent
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
   …/tir-venv/bin/python misaka-palw-tir-lower/tools/gen_hf_fixtures.py [name …]   # regenerate
 cargo run -p misaka-palw-tir-lower --bin palw-tir-check -- \
