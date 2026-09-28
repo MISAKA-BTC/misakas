@@ -180,6 +180,114 @@ pub fn compare(float: &[Vec<Vec<f32>>], int: &[Vec<Vec<f64>>], seqs: &[Vec<usize
     m
 }
 
+/// [`compare`] and [`drift`] one position at a time, so a long evaluation never holds the integer
+/// side's rows (4,096 positions × a 248,320-entry vocabulary is 8 GB of `f64`).
+#[derive(Clone, Debug, Default)]
+pub struct Accumulator {
+    agree: usize,
+    kl_sum: f64,
+    nll_f: f64,
+    nll_i: f64,
+    m: Metrics,
+    early: (usize, usize),
+    late: usize,
+    e: (f64, usize),
+    l: (f64, usize),
+    late_window: (usize, usize),
+}
+
+impl Accumulator {
+    pub fn new(early: (usize, usize), late: usize) -> Self {
+        Self { early, late, late_window: (usize::MAX, 0), ..Default::default() }
+    }
+
+    /// Position `p` of a sequence of `len` tokens whose next token is `next`.
+    pub fn push(&mut self, p: usize, len: usize, f: &[f32], i: &[f64], next: Option<usize>) {
+        let (lf, li) = (log_softmax(f), log_softmax(i));
+        let kl: f64 = lf.iter().zip(&li).map(|(a, b)| a.exp() * (a - b)).sum();
+        self.kl_sum += kl;
+        self.m.kl_max = self.m.kl_max.max(kl);
+        if argmax(f) == argmax(i) {
+            self.agree += 1;
+        }
+        self.m.positions += 1;
+        if let Some(t) = next {
+            self.nll_f -= lf[t];
+            self.nll_i -= li[t];
+            self.m.scored += 1;
+        }
+        if p >= self.early.0 && p < self.early.1 {
+            self.e = (self.e.0 + kl, self.e.1 + 1);
+        }
+        let late_from = len.saturating_sub(self.late);
+        if p >= late_from {
+            self.l = (self.l.0 + kl, self.l.1 + 1);
+            self.late_window = (self.late_window.0.min(late_from), self.late_window.1.max(len));
+        }
+    }
+
+    pub fn metrics(&self) -> Metrics {
+        let mut m = self.m.clone();
+        if m.positions > 0 {
+            m.top1_agreement = self.agree as f64 / m.positions as f64;
+            m.kl_mean = self.kl_sum / m.positions as f64;
+        }
+        if m.scored > 0 {
+            m.ppl_float = (self.nll_f / m.scored as f64).exp();
+            m.ppl_int = (self.nll_i / m.scored as f64).exp();
+            m.ppl_delta = m.ppl_int / m.ppl_float - 1.0;
+        }
+        m
+    }
+
+    pub fn drift(&self) -> Drift {
+        let (kl_early, kl_late) = (self.e.0 / self.e.1.max(1) as f64, self.l.0 / self.l.1.max(1) as f64);
+        Drift {
+            early_window: self.early,
+            late_window: self.late_window,
+            kl_early,
+            kl_late,
+            ratio: if kl_early > 0.0 { kl_late / kl_early } else { f64::NAN },
+        }
+    }
+}
+
+/// [`int_logits_exec`] handing each position's row to `row(p, logits)` instead of keeping it.
+pub fn int_logits_exec_each(
+    program: &tir::TirProgramV1,
+    params: &IntParams,
+    seq: &[usize],
+    logits_scale: f64,
+    row: &mut dyn FnMut(usize, &[f64]),
+) -> Result<()> {
+    use crate::lower::IntData;
+    use misaka_palw_tir_exec::{NoSink, ParamData, TirExecutor, TirParams, TirPlan};
+    use std::borrow::Cow;
+    let fail = |e: tir::TirError| LowerError::eval(format!("typed backend: {e}"));
+    let plan = TirPlan::compile(program).map_err(fail)?;
+    let mut xp = TirParams::new(&plan);
+    for ((j, layer), t) in &params.tensors {
+        let data = match &t.data {
+            IntData::I8(v) => ParamData::I8(Cow::Borrowed(v)),
+            IntData::I16(v) => ParamData::I16(Cow::Borrowed(v)),
+            IntData::I32(v) => ParamData::I32(Cow::Borrowed(v)),
+            IntData::I64(v) => ParamData::I64(Cow::Borrowed(v)),
+            IntData::Idx(v) => ParamData::Idx(Cow::Borrowed(v)),
+        };
+        xp.insert(&plan, *j, *layer, data).map_err(fail)?;
+    }
+    let mut exec = TirExecutor::new(&plan, &xp).map_err(fail)?;
+    let mut buf = Vec::new();
+    for (p, t) in seq.iter().enumerate() {
+        exec.step(*t as u32, &mut NoSink).map_err(|e| LowerError::eval(format!("position {p}: {e}")))?;
+        let (_, l) = exec.logits();
+        buf.clear();
+        buf.extend(l.to_i128s().iter().map(|v| *v as f64 * logits_scale));
+        row(p, &buf);
+    }
+    Ok(())
+}
+
 /// **Recurrence drift** (corpus-v1 §9's column for C4–C7): the mean KL over positions
 /// `[early.0, early.1)` and over the last `late` positions, across every sequence, and their ratio
 /// (the criterion is `late ≤ 1.5 × early` at 4,096 against 128).

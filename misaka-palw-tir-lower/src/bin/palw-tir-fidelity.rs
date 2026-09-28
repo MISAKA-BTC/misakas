@@ -180,48 +180,53 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     }
     log(format!("float reference on {} sequences", eval.len()));
     let fl = fidelity::float_logits(&prep.hl, &loader, &eval, &progress("float")).map_err(|e| e.to_string())?;
-    let il: Vec<Vec<Vec<f64>>> = if a.exec {
+    // On the typed backend the integer rows are compared as they are made (a long evaluation
+    // would otherwise hold both sides' rows); on the reference evaluator they are kept.
+    let (m, drift) = if a.exec {
         log("integer program on the typed backend (misaka-palw-tir-exec)".into());
-        let il = eval
-            .iter()
-            .enumerate()
-            .map(|(si, s)| {
-                fidelity::int_logits_exec(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|p| {
-                    if (p + 1) % 64 == 0 || p + 1 == s.len() {
-                        eprintln!("[{:>7.1}s]   integer seq {si}: {}/{}", t0.elapsed().as_secs_f64(), p + 1, s.len());
-                    }
-                })
+        let mut acc = fidelity::Accumulator::new((64, 192), 128);
+        let mut first: Vec<Vec<f64>> = Vec::new();
+        for (si, s) in eval.iter().enumerate() {
+            fidelity::int_logits_exec_each(&prep.lowered.program, &mat.params, s, mat.logits_scale, &mut |p, row| {
+                acc.push(p, s.len(), &fl[si][p], row, s.get(p + 1).copied());
+                if si == 0 && p < a.cross_check {
+                    first.push(row.to_vec());
+                }
+                if (p + 1) % 64 == 0 || p + 1 == s.len() {
+                    eprintln!("[{:>7.1}s]   integer seq {si}: {}/{}", t0.elapsed().as_secs_f64(), p + 1, s.len());
+                }
             })
-            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
+        }
         if a.cross_check > 0 {
             let s = &eval[0][..a.cross_check.min(eval[0].len())];
             let r =
                 fidelity::int_logits(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|_| {}).map_err(|e| e.to_string())?;
-            if r[..] != il[0][..r.len()] {
+            if r[..] != first[..r.len()] {
                 return Err("the typed backend's logits differ from the reference evaluator's".into());
             }
             log(format!("cross-check: the first {} positions equal on the reference evaluator", r.len()));
         }
-        il
+        (acc.metrics(), a.drift.then(|| acc.drift()))
     } else {
         log("integer program on the reference evaluator".into());
         let pool = rayon::ThreadPoolBuilder::new().num_threads(a.jobs.max(1)).build().map_err(|e| e.to_string())?;
-        pool.install(|| {
-            eval.par_iter()
-                .enumerate()
-                .map(|(si, s)| {
-                    fidelity::int_logits(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|p| {
-                        if (p + 1) % 16 == 0 || p + 1 == s.len() {
-                            eprintln!("[{:>7.1}s]   integer seq {si}: {}/{}", t0.elapsed().as_secs_f64(), p + 1, s.len());
-                        }
+        let il: Vec<Vec<Vec<f64>>> = pool
+            .install(|| {
+                eval.par_iter()
+                    .enumerate()
+                    .map(|(si, s)| {
+                        fidelity::int_logits(&prep.lowered.program, &mat.params, s, mat.logits_scale, &|p| {
+                            if (p + 1) % 16 == 0 || p + 1 == s.len() {
+                                eprintln!("[{:>7.1}s]   integer seq {si}: {}/{}", t0.elapsed().as_secs_f64(), p + 1, s.len());
+                            }
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|e| e.to_string())?;
+        (fidelity::compare(&fl, &il, &eval), a.drift.then(|| fidelity::drift(&fl, &il, (64, 192), 128)))
     };
-    let m = fidelity::compare(&fl, &il, &eval);
     if a.sites > 0 {
         log(format!("site errors over the first {} positions (every weight as f32)", a.site_positions));
         let (params_f, _) =
@@ -232,7 +237,6 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             eprintln!("  site {:>40}  rel {:.5}  max|Δ| {:.4e}  |f|max {:.4e}", e.key, e.rel_l2, e.max_abs, e.float_absmax);
         }
     }
-    let drift = a.drift.then(|| fidelity::drift(&fl, &il, (64, 192), 128));
     if let Some(d) = &drift {
         log(format!(
             "drift: mean KL {:.5} over positions {}..{}, {:.5} over {}..{} (×{:.2})",
