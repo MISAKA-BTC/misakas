@@ -15,6 +15,10 @@ name = "palw-tir-check"
 path = "src/bin/palw-tir-check.rs"
 
 [[bin]]
+name = "palw-tir-generate"
+path = "src/bin/palw-tir-generate.rs"
+
+[[bin]]
 name = "palw-tir-fidelity"
 path = "src/bin/palw-tir-fidelity.rs"
 
