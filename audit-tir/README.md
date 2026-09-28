@@ -21,3 +21,30 @@ header of `df.sh` (`bash audit-tir/df.sh` with no argument prints it); the layou
   their classes landed would take one of the seven ready seats away and hold D-F1 or the small class. The
   node fix (a dropped registration is resubmitted, a registered class is done, a registrant keeps its
   duties) is on `tir/node` after 7a9ab18da.
+
+## The B/D/C piece (RFC-0002's evidence transport)
+
+`docs/design/palw/tir/evidence-transport-scope.md`: a class too large for any seat to hold the accused capture
+is convicted through the executor's served annexes (B), the chain's demand of a step leaf (C: past
+`palw_tir_fence2`, the executor discloses or its claim defaults), and F7's bottom built from the accused's root
+claim on chain (D). The piece drills all three live on the SMALL class, with its producer answering only
+(`--palw-drill-answer-only`: it announces and serves its answer envelope, never its capture — a 1.5B class's
+condition, on a class that runs in minutes):
+
+    DF1=0 TIR2_AT=30 bash audit-tir/df.sh up --bin-dir <tir/node release>   # its own chain: fence2 is set at `up`
+    DF1=0 TIR2_AT=30 bash audit-tir/df.sh bdc                               # once the small class is Active
+
+- **B**: new4 lies at an undissected leaf; the seats find it through its served annexes and convict.
+- **D**: new4 lies at the dissected kind; the named leaf opens F7's dissection and the challengers build its
+  bottom from new4's root claim on chain.
+- **C**: B's lie with `--palw-drill-refuse-leaf-evidence` (no annex served): the seats demand on chain (an event
+  demand first, whose answer carries the claim's binding, then the leaf), taking the rounds in turn (a seat waits
+  on an open demand of the unit and staggers its own); new4's node answers; the seats read the disclosures back
+  and convict.
+- **C0**: C, and new4 stopped once a demand is on chain: its claim defaults (`ProducerWithholding`, counted by
+  `dfwatch.py` as `withheld`).
+
+`DF1=0` loads no 1.5B class (the seven holders hold the small class alone, new0 is a plain seat, no old relay).
+`TIR2_AT` must be past `TIR_AT` and is fixed for the chain's life (the datadir marker's `tir2_at`). The verdict
+is `$WORK_DIR/bdc.verdict`; `BDC_LEAF` / `BDC_DISSECTED_LEAF` override the leaves read from the small class's
+`small-leaves.txt` / `small-close-sizes.txt`.

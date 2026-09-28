@@ -10,7 +10,21 @@
 #   bash audit-tir/df.sh <command> --bin-dir <release dir>      (or BIN_DIR=<dir>; KASPAD_BIN etc. still win)
 #     OLD_KASPAD_BIN=<the fleet's release kaspad>  A16_ARTIFACT=<qwen2.5-1.5B A16 .palwart>
 #     [WORK_DIR=~/.misaka-palw-tir-drill] [TIR_AT=20] [IR_CONTEXT=512] [IR_LOGITS_TILE=1024]
-#   commands: dry | class | small | up | stage1 | stage2 | df1 | df2 | df3 | df4 | status | down
+#   commands: dry | class | small | up | stage1 | stage2 | df1 | df2 | df3 | df4 | bdc | status | down
+#
+#   THE B/D/C PIECE (RFC-0002's evidence transport, docs/design/palw/tir/evidence-transport-scope.md), on its
+#   own chain: `DF1=0 TIR2_AT=30 df.sh up` (palw_tir_fence2 armed at `up` — a stored chain keeps its height;
+#   DF1=0: no node loads the 1.5B class, the seven holders hold the small class alone), then `df.sh bdc` once
+#   the small class is Active. new4 answers only (--palw-drill-answer-only: its answer envelope, never its
+#   capture — no seat holds it, the 1.5B class's condition on a class small enough to drill live), and lies:
+#     B   at an undissected leaf: the seats pursue it through new4's served annexes → convicted (CourtFraud)
+#     D   at the dissected kind: the named leaf opens F7's dissection, the challenger's bottom built from new4's
+#         root claim ON CHAIN → convicted
+#     C   B's lie, no annex served (--palw-drill-refuse-leaf-evidence): the seats demand on chain (the event
+#         demand for the binding, then the leaf's), new4's node answers, the seats read the disclosures back
+#         and convict
+#     C0  C, and new4 stopped once a demand is on chain: its claim defaults (ProducerWithholding)
+#   Verdict in $WORK_DIR/bdc.verdict. BDC_LEAF / BDC_DISSECTED_LEAF override the leaves (small-leaves.txt).
 #
 #   STAGE 1 (the arming gate, ~2-3 h from `up`): `stage1` = df4 (below the fence the IR registration dropped
 #   by name by the release and skipped by the old relay at identical tips; blocks above; the old peer refused
@@ -73,6 +87,17 @@ preflight() {
             grep -q -- "$f" <<<"$H" && ok "kaspad lists $f" || bad "kaspad lacks $f"
         done
     fi
+    if [ -n "$TIR2_AT" ] && [ -x "${KASPAD_BIN:-/nonexistent}" ]; then
+        # The B/D/C piece: the second IR fence, the answer-only and refuse-evidence drills, and C's node half.
+        local H2; H2=$("$KASPAD_BIN" --help 2>/dev/null || true)
+        for f in --palw-drill-tir2-at --palw-drill-answer-only --palw-drill-refuse-leaf-evidence; do
+            grep -q -- "$f" <<<"$H2" && ok "kaspad lists $f" || bad "kaspad lacks $f (TIR2_AT is set: the B/D/C piece)"
+        done
+        grep -aqF "RFC-0002 evidence transport C" "$KASPAD_BIN" && ok "kaspad carries C's node half (the demand and the answer)" \
+            || bad "kaspad has no evidence transport C (the B/D/C piece needs tir/node past ba20ee56f)"
+        [ "$TIR2_AT" -gt "$TIR_AT" ] 2>/dev/null && ok "palw_tir_fence2 at $TIR2_AT, past palw_tir_v1 at $TIR_AT" \
+            || bad "TIR2_AT=$TIR2_AT must be past TIR_AT=$TIR_AT (the ruleset refuses it at or below)"
+    fi
     if [ -x "${KASPAD_BIN:-/nonexistent}" ]; then
         # F7's node side ships in the DAA-2,000 release: Stage 2 needs the node's own dissection play, and a build
         # carrying the interim guard (never released) would hold D-F1 and file nothing at a dissected leaf.
@@ -104,7 +129,9 @@ preflight() {
     for step in df3 df4; do
         [ -f "$WT/scripts/misaka-palw-tir-drill-$step.sh" ] && ok "Phase F's $step script" || bad "scripts/misaka-palw-tir-drill-$step.sh missing (Phase F's)"
     done
-    if [ -s "$IR_ARTIFACT" ] && [ -s "$WORK_DIR/ir-class.id" ]; then
+    if [ "$DF1" != 1 ]; then
+        note "DF1=0: the 1.5B class is not loaded (the B/D/C piece's chain)"
+    elif [ -s "$IR_ARTIFACT" ] && [ -s "$WORK_DIR/ir-class.id" ]; then
         ok "IR class built: $IR_ARTIFACT (class $(cut -c1-16 "$WORK_DIR/ir-class.id")…)"
     else
         [ -n "$A16_ARTIFACT" ] && [ -s "$A16_ARTIFACT" ] && ok "A16 artifact $(basename "$A16_ARTIFACT") ($(du -h "$A16_ARTIFACT" | cut -f1))" \
@@ -220,22 +247,31 @@ small_class_build() {
 up() {
     preflight 1
     [ "$FAILED" = 0 ] || die "preflight failed — not starting"
-    [ -s "$WORK_DIR/ir-class.id" ] && [ -s "$IR_ARTIFACT" ] || die "no IR class yet: run \`df.sh class\` first"
+    if [ "$DF1" = 1 ]; then
+        [ -s "$WORK_DIR/ir-class.id" ] && [ -s "$IR_ARTIFACT" ] || die "no IR class yet: run \`df.sh class\` first"
+    else
+        [ -s "$WORK_DIR/small-class.id" ] && [ -s "$SMALL_ARTIFACT" ] || die "DF1=0 needs the small class: run \`df.sh small\` first"
+    fi
     mkdir -p "$WORK_DIR" "$UHOME"; chmod 700 "$WORK_DIR"
     if [ -z "${SALT:-}" ] && [ ! -s "$WORK_DIR/SALT" ]; then ( umask 077; openssl rand -hex 32 > "$WORK_DIR/SALT" ); fi
     if [ ! -e "$KR/manifest.json" ]; then
         mkdir -p "$KR" "$WORK_DIR/keyring-app"; chmod 700 "$KR"
         "$KASPAD_BIN" --testnet --netsuffix=12 --appdir="$WORK_DIR/keyring-app" --palw-drill-genesis-salt="$(salt)" \
             "--palw-drill-fence-at=$FENCE_AT" "--palw-drill-fence2-at=$FENCE2_AT" "--palw-drill-fence3-at=$FENCE3_AT" \
-            "--palw-drill-tir-at=$TIR_AT" --palw-drill-write-keyring="$KR" 2>&1 | tail -2 | sed -E "s/[0-9a-f]{64}/<64hex>/g"
+            "--palw-drill-tir-at=$TIR_AT" ${TIR2_AT:+"--palw-drill-tir2-at=$TIR2_AT"} --palw-drill-write-keyring="$KR" 2>&1 \
+            | tail -2 | sed -E "s/[0-9a-f]{64}/<64hex>/g"
         chmod 600 "$KR"/*
     fi
-    manifest "'genesis', m['genesis_hash'][:16], 'params', m['consensus_params_id'][:16], 'salt_id', m['salt_id'], 'tir_at', m.get('tir_at')"
+    manifest "'genesis', m['genesis_hash'][:16], 'params', m['consensus_params_id'][:16], 'salt_id', m['salt_id'], 'tir_at', m.get('tir_at'), 'tir2_at', m.get('tir2_at')"
     touch "$WORK_DIR/.up"
-    for n in new1 new2 new3 new0 new4 new5 new6 new7 old; do bash "$A/nodes.sh" start "$n"; sleep 3; done
-    say "the signed below-the-fence IR registration (D-F4): $WORK_DIR/ir-registration.obj"
-    cli new3 palw tir-registration --artifact "$IR_ARTIFACT" --bond "$(manifest "m['seats'][3]['bond_outpoint']")" \
-        --key-file "$KR/bond-3.seed" --out "$WORK_DIR/ir-registration.obj" || say "writing the IR registration failed — df4 needs it"
+    # The B/D/C piece's chain (DF1=0) runs no old relay: D-F4 is Stage 1's.
+    local order="new1 new2 new3 new0 new4 new5 new6 new7 old"; [ "$DF1" = 1 ] || order="new1 new2 new3 new0 new4 new5 new6 new7"
+    for n in $order; do bash "$A/nodes.sh" start "$n"; sleep 3; done
+    if [ "$DF1" = 1 ]; then
+        say "the signed below-the-fence IR registration (D-F4): $WORK_DIR/ir-registration.obj"
+        cli new3 palw tir-registration --artifact "$IR_ARTIFACT" --bond "$(manifest "m['seats'][3]['bond_outpoint']")" \
+            --key-file "$KR/bond-3.seed" --out "$WORK_DIR/ir-registration.obj" || say "writing the IR registration failed — df4 needs it"
+    fi
     ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) nohup python3 dfwatch.py >> "$WORK_DIR/dfwatch.out" 2>&1 & echo $! > "$WORK_DIR/dfwatch.pid" )
     export_layout
     say "up: tip $(tip new3); sampler pid $(cat "$WORK_DIR/dfwatch.pid"); next: df.sh df4 (below $TIR_AT), then df1"
@@ -319,6 +355,101 @@ stage2() {
     [ "$v" = PASS ]
 }
 
+# ---- THE B/D/C PIECE (see the header) — one part at a time on the small class, new4 restarted per part ----
+
+# new4's small-class claims counted by the sampler: `convicted` (a court) or `withheld` (a DA default).
+bdc_count() { python3 -c "import json; print(json.load(open('$WORK_DIR/df-state.json'))['small']['claims']['new4']['$1'])"; }
+
+# Each node's log offset at a part's start (bash 3.2: no associative arrays), and "did <node> log <text> since".
+bdc_mark() { local n; for n in $(new_nodes); do echo $(( $(wc -l < "$WORK_DIR/$n/kaspad.out" 2>/dev/null || echo 0) + 1 )) > "$WORK_DIR/bdc.off.$n"; done; }
+bdc_logged() { tail -n +"$(cat "$WORK_DIR/bdc.off.$1" 2>/dev/null || echo 1)" "$WORK_DIR/$1/kaspad.out" 2>/dev/null | grep -qF -- "$2"; }
+bdc_seat_logged() { local n; for n in new0 new1 new2 new3 new5 new6 new7; do bdc_logged "$n" "$1" && return 0; done; return 1; }
+
+# Wait (30 s samples, BDC_WAIT_SAMPLES) until new4's count `$1` passes `$2`; echo it.
+bdc_wait() {
+    local field=$1 before=$2 now=$2 i
+    for i in $(seq 1 "${BDC_WAIT_SAMPLES:-240}"); do
+        sleep 30
+        now=$(bdc_count "$field")
+        [ "$now" -gt "$before" ] && break
+    done
+    echo "$now"
+}
+
+# new4 restarted answering only (its envelope, never its capture), with `$@` more of its flags.
+bdc_new4() { printf '%s\n' --palw-drill-answer-only "$@" > "$WORK_DIR/new4/extra-args"; bash "$A/nodes.sh" stop new4; bash "$A/nodes.sh" start new4; }
+
+# B's and C's leaf: an undissected leaf past 1, a power of two where one is (the descent from leaf 0 takes the
+# fewest rounds there).
+bdc_default_leaf() {
+    python3 -c '
+import sys
+leaves = [int(l.split()[0]) for l in open(sys.argv[1]) if l.strip()]
+dissected = {int(l.split()[2]) for l in open(sys.argv[2]) if len(l.split()) > 2 and l.split()[1] == "dissected"}
+ok = [l for l in leaves if l >= 2 and l not in dissected]
+pow2 = [l for l in ok if l & (l - 1) == 0]
+print((pow2 or ok or [0])[0])
+' "$IR_DIR/small-leaves.txt" "$IR_DIR/small-close-sizes.txt"
+}
+
+bdc() {
+    [ -n "$TIR2_AT" ] || die "the B/D/C piece needs palw_tir_fence2: \`DF1=0 TIR2_AT=30 df.sh up\` (a stored chain keeps its height)"
+    [ -s "$IR_DIR/small-leaves.txt" ] && [ -s "$IR_DIR/small-close-sizes.txt" ] || die "no small-class leaves: run \`df.sh small\`"
+    ( cd "$A"; WORK_DIR=$WORK_DIR DF_PORT=$(jport new3) python3 dfwatch.py --until small-active --deadline-daa "${BDC_ACTIVE_DEADLINE_DAA:-3000}" ) \
+        || { echo "B/D/C INCOMPLETE: the small class is not Active"; return 3; }
+    local now; now=$(tip new3)
+    [ "$now" -ge "$TIR2_AT" ] 2>/dev/null || die "the chain is below palw_tir_fence2 ($now < $TIR2_AT)"
+    # The dissected kind (small-close-sizes.txt: `<n> dissected <leaf> <call> <kind>`) for D; for B and C an
+    # undissected leaf, a power of two where one is (the descent from leaf 0 takes the fewest rounds there).
+    local dissected leaf
+    dissected=${BDC_DISSECTED_LEAF:-$(awk '$2=="dissected" {print $3; exit}' "$IR_DIR/small-close-sizes.txt")}
+    leaf=${BDC_LEAF:-$(bdc_default_leaf)}
+    [ -n "$dissected" ] || die "the small class has no dissected kind in small-close-sizes.txt (D needs one)"
+    say "B/D/C on the small class: B/C at leaf $leaf, D at the dissected leaf $dissected, palw_tir_fence2 at $TIR2_AT (tip $now)"
+    local rb=1 rd=1 rcc=1 rc0=1 before after why i
+
+    # B — served annexes.
+    before=$(bdc_count convicted); bdc_mark; bdc_new4 "--palw-drill-tamper-leaf=$leaf"
+    after=$(bdc_wait convicted "$before")
+    why=""; [ "$after" -gt "$before" ] || why="$why no conviction;"
+    bdc_logged new4 "served the IR annex of leaf" || why="$why new4 served no annex;"
+    bdc_seat_logged "the annexes name leaf" || why="$why no seat named the leaf from annexes;"
+    [ -z "$why" ] && rb=0; echo "  B  (annexes)          $(verdict_of $rb)${why:+ —$why}"
+
+    # D — the dissection's bottom from the root claim on chain.
+    before=$(bdc_count convicted); bdc_mark; bdc_new4 "--palw-drill-tamper-leaf=$dissected"
+    after=$(bdc_wait convicted "$before")
+    why=""; [ "$after" -gt "$before" ] || why="$why no conviction;"
+    bdc_seat_logged "RFC-0002 evidence transport D" || why="$why no seat built the bottom from the chain;"
+    [ -z "$why" ] && rd=0; echo "  D  (root claim)       $(verdict_of $rd)${why:+ —$why}"
+
+    # C — no annex served: demanded on chain, answered, read back, convicted.
+    before=$(bdc_count convicted); bdc_mark; bdc_new4 "--palw-drill-tamper-leaf=$leaf" --palw-drill-refuse-leaf-evidence
+    after=$(bdc_wait convicted "$before")
+    why=""; [ "$after" -gt "$before" ] || why="$why no conviction;"
+    bdc_seat_logged "RFC-0002 evidence transport C" || why="$why no seat demanded on chain;"
+    bdc_logged new4 "TirStepLeaf" || why="$why new4 answered no step-leaf demand;"
+    bdc_seat_logged "is disclosed on chain" || why="$why no seat read a disclosure back;"
+    [ -z "$why" ] && rcc=0; echo "  C  (demand on chain)  $(verdict_of $rcc)${why:+ —$why}"
+
+    # C0 — the same, and new4 silent once a demand is on chain: the claim defaults.
+    before=$(bdc_count withheld); bdc_mark; bdc_new4 "--palw-drill-tamper-leaf=$leaf" --palw-drill-refuse-leaf-evidence
+    for i in $(seq 1 "${BDC_WAIT_SAMPLES:-240}"); do sleep 30; bdc_seat_logged "RFC-0002 evidence transport C" && break; done
+    bash "$A/nodes.sh" stop new4
+    after=$(bdc_wait withheld "$before")
+    why=""; [ "$after" -gt "$before" ] || why="$why no claim defaulted (ProducerWithholding);"
+    [ -z "$why" ] && rc0=0; echo "  C0 (silent executor)  $(verdict_of $rc0)${why:+ —$why}"
+
+    : > "$WORK_DIR/new4/extra-args"; bash "$A/nodes.sh" start new4
+    local v=PASS r
+    for r in $rb $rd $rcc $rc0; do [ "$r" = 0 ] || v=FAIL; done
+    {
+        echo "B/D/C $v ($(date '+%F %T'), tip $(tip new3); leaf $leaf, dissected $dissected, palw_tir_fence2 $TIR2_AT)"
+        echo "  B  $(verdict_of $rb)   D  $(verdict_of $rd)   C  $(verdict_of $rcc)   C0  $(verdict_of $rc0)"
+    } | tee "$WORK_DIR/bdc.verdict"
+    [ "$v" = PASS ]
+}
+
 case $cmd in
     dry) dry ;;
     class) class_build ;;
@@ -330,7 +461,8 @@ case $cmd in
     df2) df2 ;;
     df3) phase_f df3 ;;
     df4) phase_f df4 ;;
+    bdc) bdc ;;
     status) bash "$A/nodes.sh" status; [ -s "$WORK_DIR/df-state.json" ] && cat "$WORK_DIR/df-state.json" ;;
     down) bash "$A/nodes.sh" stop; [ -s "$WORK_DIR/dfwatch.pid" ] && kill "$(cat "$WORK_DIR/dfwatch.pid")" 2>/dev/null; rm -f "$WORK_DIR/.up" ;;
-    *) sed -n '2,45p' "$0"; exit 2 ;;
+    *) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 2 ;;
 esac

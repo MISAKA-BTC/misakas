@@ -29,6 +29,12 @@ IR_DIR=$WORK_DIR/ir
 # The flag days, moved below the IR fence so the drill runs the rules the live chain has when the fence arms
 # (validate_palw_v2: all four heights distinct, fence1 <= fence3).
 FENCE_AT=${FENCE_AT:-6}; FENCE2_AT=${FENCE2_AT:-10}; FENCE3_AT=${FENCE3_AT:-14}; TIR_AT=${TIR_AT:-20}
+# The second IR fence (palw_tir_fence2: the IR DA units of evidence transport C), for the B/D/C piece: set at
+# `up` or never — a stored drill chain is only reopened under the same height (the datadir marker's tir2_at).
+TIR2_AT=${TIR2_AT:-}
+# DF1=0: the B/D/C piece's lighter chain — no node loads or produces D-F1 (the 1.5B class); the seven holders
+# load the small class alone and new0 is a plain seat.
+DF1=${DF1:-1}
 
 # The IR class: the Qwen2.5-1.5B A16 artifact converted to PALW-TIR (its mirror program, unwindowed: F7
 # dissects its history cones), declared at IR_CONTEXT positions with its logits tiled at IR_LOGITS_TILE
@@ -118,7 +124,7 @@ class_on_chain() {
 
 # The shared ports and logs, exported for Phase F's step scripts.
 export_layout() {
-    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT FENCE_AT FENCE2_AT FENCE3_AT
+    export SALT WORK_DIR KASPAD_BIN CLI_BIN OLD_KASPAD_BIN TIR_AT TIR2_AT FENCE_AT FENCE2_AT FENCE3_AT
     NEW0_P2P=$(p2p new0); NEW0_RPC=$(borsh new0); NEW0_GRPC=$(gport new0); NEW0_LOG=$WORK_DIR/new0/kaspad.out
     OLD_P2P=$(p2p old); OLD_RPC=$(borsh old); OLD_LOG=$WORK_DIR/old/kaspad.out
     export NEW0_P2P NEW0_RPC NEW0_GRPC NEW0_LOG OLD_P2P OLD_RPC OLD_LOG
@@ -147,17 +153,20 @@ node_args() {
     fi
     a+=("--ram-scale=$RAM_SCALE" "--palw-host-memory-share=$(( $(cat "$d/share-mib" 2>/dev/null || echo "$SHARE_MIB") * 1048576))"
         "--palw-drill-tir-at=$TIR_AT")
+    [ -n "$TIR2_AT" ] && a+=("--palw-drill-tir2-at=$TIR2_AT")
     if [ "$seat" != - ]; then
         a+=("--palw-producer-key=$KR/bond-$seat.seed"
             "--palw-producer-bond=$(manifest "m['seats'][$seat]['bond_outpoint']")"
             "--palw-fee-outpoint=$(manifest "m['seats'][$seat]['fee_float_outpoint']")")
     fi
-    [ "$ir" = 1 ] && a+=("--palw-class-artifact=$IR_ARTIFACT")
+    [ "$ir" = 1 ] && [ "$DF1" = 1 ] && a+=("--palw-class-artifact=$IR_ARTIFACT")
     [ "$ir" = 1 ] && [ -s "$SMALL_ARTIFACT" ] && a+=("--palw-class-artifact=$SMALL_ARTIFACT")
     case $role in
         floor) a+=(--palw-produce) ;;
-        ir) a+=(--palw-produce "--palw-producer-class=$(ir_class_id)")
-            class_on_chain "$(ir_class_id)" || a+=("--palw-register-class=$IR_MODEL_ID") ;;
+        ir) if [ "$DF1" = 1 ]; then
+                a+=(--palw-produce "--palw-producer-class=$(ir_class_id)")
+                class_on_chain "$(ir_class_id)" || a+=("--palw-register-class=$IR_MODEL_ID")
+            fi ;;
         ir2) if [ -s "$WORK_DIR/small-class.id" ]; then
                 a+=(--palw-produce "--palw-producer-class=$(small_class_id)")
                 class_on_chain "$(small_class_id)" || a+=("--palw-register-class=$SMALL_MODEL_ID")

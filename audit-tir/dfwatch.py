@@ -7,7 +7,8 @@ the tiny HF llama D-F2's live battery runs on, new4 its registrant and producer)
 (getPalwModelRegistry: lifecycle state, ready seats), its class-context row (getPalwClassContexts: source must
 read chain_ir_registration), and the class's claims of the producers' bonds (getPalwClaims, executor, terminal
 included) counted by phase: Final, convicted by a court (CourtFraud, CourtDefault, CourtHeldVerdict — a
-proof, a default at the court's clock, a held dissection's verdict), otherwise Voided, open.
+proof, a default at the court's clock, a held dissection's verdict), defaulted on a data-availability demand
+(ProducerWithholding — the B/D/C piece's silent executor, counted apart as "withheld"), otherwise Voided, open.
 Appends one line to $WORK_DIR/df.tsv and rewrites $WORK_DIR/df-state.json (D-F1's fields at the top level,
 the small class's under "small"). Prints the first sample at which each milestone is reached (Candidate,
 Prefetching, Probation, ActiveLimited, Active, the first Final after Active; the small class's with a
@@ -24,6 +25,9 @@ PORT = int(os.environ.get("DF_PORT", str(int(os.environ.get("JSON_BASE", "58100"
 MILESTONES = ["Candidate", "Prefetching", "Probation", "ActiveLimited", "Active"]
 # A claim a court convicted: the reasons the fold writes for a proof, a default and a held verdict.
 CONVICTED = ("CourtFraud", "CourtDefault", "CourtHeldVerdict")
+# A claim voided because its executor did not answer a data-availability demand in time (R-core+'s DA default,
+# evidence transport C's silent executor): a slash, counted apart from the court's convictions.
+WITHHELD = ("ProducerWithholding",)
 
 
 def read_id(name):
@@ -43,7 +47,7 @@ def class_sample(reg, ctx, claims_by_bond, cid):
     crow = next((c for c in (pick(ctx, "classes", default=[]) or []) if pick(c, "classId") == cid), None)
     counts = {}
     for who, claims in claims_by_bond.items():
-        c = {"final": 0, "convicted": 0, "voided": 0, "open": 0}
+        c = {"final": 0, "convicted": 0, "withheld": 0, "voided": 0, "open": 0}
         for cl in claims:
             if pick(cl, "classId") not in (None, cid):
                 continue
@@ -52,6 +56,8 @@ def class_sample(reg, ctx, claims_by_bond, cid):
                 c["final"] += 1
             elif any(reason in phase for reason in CONVICTED):
                 c["convicted"] += 1
+            elif any(reason in phase for reason in WITHHELD):
+                c["withheld"] += 1
             elif phase.startswith("Voided"):
                 c["voided"] += 1
             else:
