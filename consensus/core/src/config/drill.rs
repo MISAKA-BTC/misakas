@@ -608,6 +608,19 @@ pub fn palw_drill_post_launch_fences_v3_at_v1(
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_V3)
 }
 
+/// **A drill crosses the IR fence at a low height** (RFC-0002 Phase F, drills D-F1 and D-F4;
+/// `--palw-drill-tir-at`) — [`palw_drill_post_launch_fences_at_v1`] for the one entry
+/// [`crate::palw_tir_v1::PALW_T12_TIR_V1_ENTRY`], which no flag-day list arms yet: ARMS `palw_tir_v1`
+/// at `at` — testnet-12's IR ceilings and this build's primitive set, through the entry's own `set`,
+/// so the bundle's mirror follows — and moves nothing else. Every refusal of the post-launch moves
+/// applies, named for this flag, and `validate_palw_v2` refuses the result unless the IR fence's
+/// prerequisites are in force at or below `at`: `palw_audit_2026_09_11` declared, `palw_kary_court`
+/// and `palw_rcore_plus` armed at or below it (combine with `--palw-drill-fence-at` below `at` when the
+/// release arms them later).
+pub fn palw_drill_tir_fence_at_v1(params: &mut crate::config::params::Params, at: u64) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_V1)
+}
+
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
 struct PalwDrillFlagDayV1 {
     list: &'static [crate::config::params::PalwPostLaunchFenceV1],
@@ -625,6 +638,10 @@ const PALW_DRILL_FLAG_DAY_V2: PalwDrillFlagDayV1 =
 /// The third flag day (`--palw-drill-fence3-at`, the capacity package).
 const PALW_DRILL_FLAG_DAY_V3: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_POST_LAUNCH_FENCES_V3, flag: "--palw-drill-fence3-at" };
+
+/// The IR fence alone (`--palw-drill-tir-at`, RFC-0002 Phase F).
+const PALW_DRILL_FLAG_DAY_TIR_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: &[crate::palw_tir_v1::PALW_T12_TIR_V1_ENTRY], flag: "--palw-drill-tir-at" };
 
 /// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
 fn palw_drill_move_fences_v1(
@@ -1183,6 +1200,52 @@ mod tests {
         palw_drill_post_launch_fences_at_v1(&mut both, 40).expect("the release's flag day at 40");
         palw_drill_capacity_fences_at_v1(&mut both, 60).expect("the capacity flag day at 60, over the release's");
         assert_eq!(both.palw_capacity_weight_cap, Some(ForkActivation::new(60)));
+    }
+
+    /// **A drill crosses the IR fence** ([`palw_drill_tir_fence_at_v1`], `--palw-drill-tir-at`): refused on
+    /// public testnet-12's genesis, at 0 / never and at another fence's height; below its prerequisites
+    /// the result does not validate; at a free height past them `palw_tir_v1` alone is ARMED (live from
+    /// the height, not below it, its bundle mirror following), nothing else moves and the params id moves.
+    #[test]
+    fn a_drill_crosses_the_ir_fence_and_nothing_else_moves() {
+        use crate::config::params::{palw_t12_drill_params_v1, palw_t12_shipped_params};
+        let drill = palw_t12_drill_params_v1(&salt(0x54));
+        let mut public = palw_t12_shipped_params();
+        assert!(palw_drill_tir_fence_at_v1(&mut public, 1_234).unwrap_err().contains("PUBLIC testnet-12"));
+        for bad in [0, u64::MAX] {
+            let mut p = drill.clone();
+            assert!(palw_drill_tir_fence_at_v1(&mut p, bad).is_err(), "{bad}");
+            assert_eq!(format!("{p:?}"), format!("{drill:?}"), "a refusal leaves the ruleset untouched");
+        }
+        let prerequisite = [drill.palw_kary_court, drill.palw_rcore_plus]
+            .into_iter()
+            .map(|f| f.map(|f| f.daa_score()).unwrap_or(u64::MAX))
+            .max()
+            .expect("two prerequisites");
+        if prerequisite > 1 && prerequisite < u64::MAX {
+            let mut early = drill.clone();
+            let below =
+                (1..prerequisite).rev().find(|h| drill.palw_fences_v1().iter().all(|(_, f)| f.is_none_or(|f| f.daa_score() != *h)));
+            if let Some(below) = below {
+                assert!(
+                    palw_drill_tir_fence_at_v1(&mut early, below).unwrap_err().contains("does not validate"),
+                    "below {prerequisite}"
+                );
+            }
+        }
+        let at = prerequisite.max(1_000) + 234;
+        let mut moved = drill.clone();
+        let moves = palw_drill_tir_fence_at_v1(&mut moved, at).expect("past the prerequisites");
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0].name, "palw_tir_v1");
+        assert!(moves[0].was.is_none() && moves[0].to_string().contains("ARMED"));
+        assert!(moved.palw_tir_v1_active_at(at) && !moved.palw_tir_v1_active_at(at - 1));
+        assert_ne!(moved.consensus_params_id(), drill.consensus_params_id());
+        for ((name, before), (_, after)) in drill.palw_fences_v1().iter().zip(moved.palw_fences_v1().iter()) {
+            if *name != "palw_tir_v1" {
+                assert_eq!(before, after, "{name} did not move");
+            }
+        }
     }
 
     /// **`--palw-drill-fence-at` on a drill ruleset: the release's fences at the drill's height, and

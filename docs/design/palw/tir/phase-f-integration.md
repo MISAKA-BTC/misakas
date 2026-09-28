@@ -851,7 +851,11 @@ From the lead (design) or the user (network):
     flag day with other fences (only at an unused height).
 11. **(lead)** the t12 v1 ceilings (`max_program_bytes`, `max_unrolled_nodes`, `max_context`,
     `max_macs_per_position`, `max_state_bytes`, `max_peak_live_bytes`) — proposed after F6 measures
-    the corpus.
+    the corpus. **Decided (F6, 2026-09-28)** from the Qwen2.5 A16 decoders as IR programs at the
+    small history bound (`tir_a16_admission_measure.rs`; 1.5B: 12,928 B, 7,762 unrolled nodes,
+    24.1 G MACs a position at `H = W`, 7.5 GB state, 549 MB peak live, 838 work; 3B: 9,970 nodes,
+    41.7 G MACs, 9.7 GB): 88,000 B; `2^16` nodes; context `2^18`; `2^37` MACs; `2^35` state bytes;
+    `2^32` peak live bytes; `2^16` admission work (`PALW_T12_TIR_CEILINGS_V1`).
 12. **(lead)** the free-prompt lane and ADR-0133 segment claims for IR classes stay closed (refused
     by name) until Phase H; Phase F certifies the attempt lane, panels and the court.
 
