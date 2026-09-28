@@ -662,10 +662,26 @@ useful, never whether a claim is valid.
 | --- | --- | --- | --- | --- |
 | C1/C2 dense, A16 W8 | ≥ 0.85 | ≤ 0.10 | ≤ +5 % | — |
 | C3/C8 MoE | ≥ 0.80 | ≤ 0.15 | ≤ +8 % | — |
-| C4 GDN | ≥ 0.80 | ≤ 0.15 | ≤ +8 % | KL at position 4,096 ≤ 1.5 × KL at 128 |
+| C4 GDN | ≥ 0.80 | ≤ 0.15 | ≤ +8 % | KL at 4,096 ≤ 1.5 × KL at 128, **or** KL at 4,096 ≤ 0.01 (below) |
 | C5 SSM | ≥ 0.80 | ≤ 0.15 | ≤ +8 % | as C4 |
 | C6 RWKV | ≥ 0.75 | ≤ 0.20 | ≤ +10 % | as C4 |
 | C7 hybrid | the loosest of its components | | | as C4 |
+
+**The drift column, as measured and decided** (the RFC-0002 coordinator, 2026-09-29):
+
+- **Drift is measured like-for-like**: the same target tokens, scored at full context and at short
+  context.
+  - "KL at 4,096" is the mean KL over positions 3,968–4,096 of a 4,096-token held-out sequence.
+  - "KL at short context" is the mean KL over the same tokens, scored as positions 128–256 of a
+    256-token sequence made of the document's last 256 tokens.
+  - A change of text difficulty along the document is not drift.
+- **A row passes** when KL at 4,096 ≤ 1.5 × KL at short context. As a secondary rule it also
+  passes when KL at 4,096 ≤ **0.01 nats**, an absolute floor, because a ratio of two KLs near zero
+  is not a meaningful gate.
+- The mean KL over positions 64–192 (the early window) is reported alongside, but it is not the
+  gate. It scores different tokens.
+- A recurrent program must be calibrated on at least one sequence as long as the evaluated context
+  (freeze-v1 §5.2).
 
 Anchors: the live A16 Qwen2.5-1.5B class measures top-1 0.877 calibrated and 0.917 held out (57/48
 positions, `palw_base0_a16.rs` header); the GDN integer recurrence measures 9.1e−4 → 1.1e−3 relative

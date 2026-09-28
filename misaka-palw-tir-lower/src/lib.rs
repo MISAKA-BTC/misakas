@@ -40,6 +40,7 @@ pub mod float_ref;
 pub mod hf_config;
 pub mod hf_weights;
 pub mod hl;
+pub mod lora;
 pub mod lower;
 pub mod quant;
 pub mod report;

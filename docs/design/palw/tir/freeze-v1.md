@@ -14,11 +14,22 @@ evidence.
   * Criteria 1–4, 6 and 7 hold.
   * Criterion 5 holds for every family's fidelity row: 57/57 tiny fixtures and 7/7 real
     checkpoints.
-  * Its recurrence-drift column holds for Jamba (C7). It misses for Qwen3.5-0.8B (C4/C7, ×4.00)
-    and Mamba-370m (C5, ×5.64) at 4,096 positions. Both are recorded as **quantisation gap,
-    lowering work open**, as RFC-0002 open question 3 prescribes: a family that cannot meet its
-    thresholds "is a quantisation problem, not an IR problem". The measured causes are in §5.2 and
-    the work in §8.
+  * Its recurrence-drift column held at the freeze for Jamba (C7). It missed for Qwen3.5-0.8B
+    (C4/C7, ×4.00) and Mamba-370m (C5, ×5.64) at 4,096 positions. Both were recorded as
+    **quantisation gap, lowering work open**, as RFC-0002 open question 3 prescribes: a family that
+    cannot meet its thresholds "is a quantisation problem, not an IR problem".
+  * **After the freeze** (§5.2): the post-freeze precision work (tir/lower `b60e91ef5`, `1f9c2fc80`,
+    `b5f892be4`, `251f77f23`; no primitive) takes the long-context factor to ×1.47 (Qwen3.5) and
+    ×1.46 (Mamba). The single-document ratios are ×2.15 and ×1.67.
+  * **The drift column's definition** (decided 2026-09-29 by the RFC-0002 coordinator, corpus-v1
+    §9). Drift is measured like-for-like: the same target tokens (positions 3,968–4,096) scored at
+    4,096 context against short context. A row passes if the ratio is ≤ 1.5, or, secondarily, if
+    KL at 4,096 ≤ 0.01. A change of text difficulty is not drift. All three rows pass on the ratio:
+    * Qwen3.5: 0.01227 / 0.00836 = ×1.47.
+    * Mamba: 0.00035 / 0.00024 = ×1.46. It also passes the floor.
+    * Jamba: 0.00091 / 0.00148 = ×0.61.
+  * **Criterion 5 is met**, with no exception. §9's 16 × 4,096 sample is scheduled for a quiet
+    window, for the record (§8).
 * **What the freeze fixes, and what it leaves open.** Fixed: the primitive set, its semantics (spec
   04b rev2) and the descriptor; a change to any of them is v2, with a new `prim_set_id`. Open: the
   lowering, calibration, library forms and quantisation. Those change programs and artifacts, never
@@ -49,7 +60,7 @@ full under the freeze declaration above.
 | 2 | minimality | **holds** (25 < the 30–50 target, argued) | corpus-v1 §8.2 per primitive; nothing added since Gate 1 |
 | 3 | stability under the last family | **holds** | the last families (MLA + group-limited routing, RWKV-4; RWKV-6/7 in the library) forced no primitive; `prim.rs` has held 25 since `ac7b96ae7` |
 | 4 | three-way bit identity | **holds** | golden 239/239 on ref2; 1,824 positions × 57 HF programs equal on reference/ref2/exec; admission and demand differentials 0 disagreements; D-F1: 13,846 positions of the genesis 8k artifact equal to the legacy engine |
-| 5 | fidelity | **holds** for every fidelity row: 57/57 fixtures and 7/7 real checkpoints (Mamba-370m's earlier miss was a tied-head bug, fixed). Drift at 4,096 positions: Jamba ×0.32 meets ×1.5. **Qwen3.5-0.8B ×4.00 and Mamba-370m ×5.64: quantisation gap, lowering work open** (§5.2, §8) | Mamba-370m 0.988 / KL 0.0012 / ppl −0.23 %; Qwen2.5-1.5B 0.980 / 0.0008 / +0.53 % |
+| 5 | fidelity | **met**: every fidelity row (57/57 fixtures, 7/7 real checkpoints), and every drift row under the like-for-like definition decided 2026-09-29 (the same tokens at 4,096 vs short context ≤ ×1.5; floor ≤ 0.01 secondary): Qwen3.5 ×1.47, Mamba ×1.46, Jamba ×0.61 (§5.2) | Mamba-370m 1.000 / 0.00021 / −0.14 %; Qwen2.5-1.5B 0.980 / 0.0008 / +0.53 % |
 | 6 | legacy conformance | **holds** | 38 integer catalogue kernels + `RequantizeByToken` byte-identical on the live code; the whole dense A16 tier by D-F1 (9,373,742 legacy node rows equal) |
 | 7 | static verifiability | **holds with one stated window** | `tir_admit_v1` admits every corpus and HF-lowered program at the legacy court's ceilings; DeepSeek-V3 needs a window ≤ `2^16` |
 
@@ -171,8 +182,10 @@ revisions). Calibration 8 × 128 tokens and evaluation 2 × 128 held-out tokens 
 `docs/*.md` (named per run), tokenised offline with each checkpoint's own `tokenizer.json`;
 integer program vs the f32 reference, teacher-forced.
 
-Measured on the freeze candidate's lowering (tir/lower `da38f3b03`); thresholds (top-1 / mean KL /
-ppl Δ) from corpus-v1 §9:
+Measured on tir/lower `251f77f23`, the freeze plus the post-freeze precision work. That work
+changes only the programs with a selective scan or a gated delta (Mamba, Jamba, Qwen3.5); the other
+rows are the freeze's, with identical programs. Thresholds (top-1 / mean KL / ppl Δ) are from
+corpus-v1 §9:
 
 | family (thresholds) | checkpoint | top-1 | mean KL (max) | ppl float → integer | meets |
 | --- | --- | --- | --- | --- | --- |
@@ -180,9 +193,9 @@ ppl Δ) from corpus-v1 §9:
 | C1 dense, Llama architecture (same) | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 0.973 | 0.00112 (0.0253) | 47.98 → 47.98 (+0.00 %) | yes |
 | C1 Phi, partial rotary and parallel block (same) | `microsoft/phi-1_5` | 0.980 | 0.00039 (0.0050) | 94.98 → 95.13 (+0.16 %) | yes |
 | C3/C8 MoE, GraniteMoE: 32 experts, top-8 (≥ 0.80 / ≤ 0.15 / ≤ +8 %) | `ibm-granite/granite-3.1-1b-a400m-instruct` | 0.957 | 0.00949 (0.3089) | 51.00 → 51.93 (+1.83 %) | yes |
-| C5 SSM, Mamba (≥ 0.80 / ≤ 0.15 / ≤ +8 %) | `state-spaces/mamba-370m-hf` | 0.988 | 0.00120 (0.0123) | 74.42 → 74.25 (−0.23 %) | yes |
-| C7 hybrid, Jamba: attention + Mamba + MoE (loosest component: C5's) | `ai21labs/Jamba-tiny-dev` | 0.973 | 0.00289 (0.0293) | 354.36 → 352.35 (−0.57 %) | yes |
-| C4/C7 gated delta + gated attention, Qwen3.5 (≥ 0.80 / ≤ 0.15 / ≤ +8 %) | `Qwen/Qwen3.5-0.8B` | 0.961 | 0.00682 (0.0420) | 66.87 → 67.13 (+0.38 %) | yes |
+| C5 SSM, Mamba (≥ 0.80 / ≤ 0.15 / ≤ +8 %) | `state-spaces/mamba-370m-hf` | 1.000 | 0.00021 (0.0014) | 74.42 → 74.31 (−0.14 %) | yes |
+| C7 hybrid, Jamba: attention + Mamba + MoE (loosest component: C5's) | `ai21labs/Jamba-tiny-dev` | 0.961 | 0.00342 (0.0351) | 354.36 → 351.89 (−0.70 %) | yes |
+| C4/C7 gated delta + gated attention, Qwen3.5 (≥ 0.80 / ≤ 0.15 / ≤ +8 %) | `Qwen/Qwen3.5-0.8B` | 0.965 | 0.00602 (0.0436) | 66.87 → 67.13 (+0.39 %) | yes |
 
 The integer side ran on the typed backend (`--exec`). The runs of the five downloaded checkpoints
 other than Qwen3.5 were cross-checked against the reference evaluator on their first two positions,
@@ -192,6 +205,11 @@ the one cross-checked Qwen3.5 run peaked at 7.7 GB, against the 8 GB rule. The t
 identity to the reference evaluator is criterion 4's evidence. Each run here peaked at 2.1–4.9 GB
 RSS, running one at a time, offline, on a host shared with a testnet drill. Jamba-tiny-dev is AI21's development model: its
 float perplexity is 354.
+
+Jamba's row moved from 0.973 / 0.00289 at the freeze to 0.961 / 0.00342 with the precision work.
+That is 3 tokens of 254 on AI21's development model. Its 4,096-position run improved (top-1 0.984
+→ 0.985, KL 0.00136 → 0.00117). Mamba's row went from 0.988 / 0.0012 to 1.000 / 0.00021, and
+Qwen3.5's from 0.961 / 0.00682 to 0.965 / 0.00602.
 
 The sample is smaller than corpus-v1 §9 proposed. §9 proposed 256 × 512 tokens plus 16 × 4,096 of a
 pinned multilingual corpus. These runs are 2 × 128 tokens per row and 1 × 4,096 for drift, all
@@ -225,7 +243,9 @@ path. That diagnosis was wrong, and the `i32` path is not built. The record:
    artifact drops the copy (2,505 → 2,504 tensors, 504.3 → 455.2 MiB). A test pins one `i16`
    `embed.table` on each of the 24 tied fixtures.
 
-**Mamba-370m now scores top-1 0.988, KL 0.0012, ppl −0.23 %** against C5's 0.80 / 0.15 / +8 %.
+**Mamba-370m scored top-1 0.988, KL 0.0012, ppl −0.23 % at the freeze**, against C5's 0.80 / 0.15 /
++8 %. After the post-freeze precision work it scores 1.000 / 0.00021 / −0.14 %: the scan's output
+rides the `i32` rail, and its projections read per-row `i16` weights (below).
 The mixer's remaining mid-layer errors (`mamba.C`, layers 28–38: 2–8 %) come from the `i8`
 projections. The float simulation, with `i8` weights and f32 elementwise math, gives the same
 numbers (layer 34: 0.084 simulated vs 0.083 integer; layer 31: 0.041 vs 0.043). An `i32` mixer path
@@ -264,46 +284,90 @@ measured as the mean KL over positions 64–192 against positions 3,968–4,096 
 the 8 × 128 set plus one held-out 4,096-token sequence (`docs/palw-mainnet-audit-2026-08-28.md`, a
 different document from the evaluation's).
 
-| family | checkpoint | lowering, calibration | KL 64–192 | KL 3,968–4,096 | ratio | over all 4,096 positions | meets |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` | first lowering, 8 × 128 | 0.00614 | 0.02150 | 3.50 | top-1 0.938, KL 0.0131, ppl +0.14 % | no |
-| C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` | `da38f3b03`, long | 0.00620 | 0.02480 | **4.00** | top-1 0.938, KL 0.0148, ppl +0.52 % | **no — quantisation gap, lowering work open** |
-| C5 SSM | `state-spaces/mamba-370m-hf` | `da38f3b03`, long | 0.00113 | 0.00640 | **5.64** | top-1 0.970, KL 0.0025, ppl −0.57 % | **no — quantisation gap, lowering work open** |
-| C7 hybrid | `ai21labs/Jamba-tiny-dev` | first lowering, 8 × 128 | 0.00212 | 0.41083 | 193 | top-1 0.914, KL 0.0736, ppl −2.86 % | no |
-| C7 hybrid | `ai21labs/Jamba-tiny-dev` | `da38f3b03` (untied: same program), long | 0.00253 | 0.00081 | **0.32** | top-1 0.984, KL 0.00136, ppl +0.08 % | **yes** |
+The **context factor** is a content control. The same last 256 tokens are evaluated as a
+256-position sequence, and their KL over positions 128–256 is compared with the long run's late
+window. It separates what the long context does from what the tail of the document is.
 
-Over all 4,096 positions, every run meets its family's fidelity row. Only the ratio misses.
+| family | checkpoint | lowering, calibration | KL 64–192 | KL 3,968–4,096 | ratio | the same tokens at a short context (context factor) | over all 4,096 positions | meets |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` | first lowering, 8 × 128 | 0.00614 | 0.02150 | 3.50 | — | top-1 0.938, KL 0.0131, ppl +0.14 % | no |
+| C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` | `da38f3b03` (freeze), long | 0.00620 | 0.02480 | 4.00 | 0.0104 (×2.4) | top-1 0.938, KL 0.0148, ppl +0.52 % | no |
+| C4/C7 gated delta | `Qwen/Qwen3.5-0.8B` | `b60e91ef5` (`v` 8 bits finer), long | 0.00572 | 0.01227 | **2.15** | 0.00836 (**×1.47**) | top-1 0.950, KL 0.00845, ppl +0.04 % | **ratio no — quantisation gap narrowed, lowering work open**; context factor within 1.5 |
+| C5 SSM | `state-spaces/mamba-370m-hf` | `da38f3b03` (freeze), long | 0.00113 | 0.00640 | 5.64 | 0.00136 (×4.7) | top-1 0.970, KL 0.0025, ppl −0.57 % | no |
+| C5 SSM | `state-spaces/mamba-370m-hf` | `1f9c2fc80` (scan output on the `i32` rail), long | 0.00390 | 0.00432 | 1.11 | 0.00330 (×1.31) | top-1 0.961, KL 0.00373, ppl −0.06 % | yes |
+| C5 SSM | `state-spaces/mamba-370m-hf` | `251f77f23` (+ `i16` rows for `out_proj`, `x_proj`, `dt_proj`), long | 0.00021 | 0.00035 | **1.67** | 0.00024 (**×1.46**) | top-1 0.988, KL 0.00028, ppl −0.02 % | **ratio no, at a late KL of 3.5e-4, 12× below the row above's**; context factor within 1.5 |
+| C7 hybrid | `ai21labs/Jamba-tiny-dev` | first lowering, 8 × 128 | 0.00212 | 0.41083 | 193 | — | top-1 0.914, KL 0.0736, ppl −2.86 % | no |
+| C7 hybrid | `ai21labs/Jamba-tiny-dev` | `da38f3b03` (freeze), long | 0.00253 | 0.00081 | 0.32 | — | top-1 0.984, KL 0.00136, ppl +0.08 % | yes |
+| C7 hybrid | `ai21labs/Jamba-tiny-dev` | `251f77f23`, long | 0.00248 | 0.00091 | **0.37** | 0.00148 (×0.61) | top-1 0.985, KL 0.00117, ppl +0.03 % | **yes** |
 
-**The calibration explains Jamba, and only Jamba.** A short calibration sizes every static scale of a
-state, or of a long-context activation, on short-context magnitudes, and those saturate by position
-4,096. With the long calibration, Jamba-tiny-dev goes from ×193 to ×0.32. Qwen3.5-0.8B goes the other
-way, from ×3.50 to ×4.00, and Mamba-370m measures ×5.64, both with the calibration-length rule met.
+Over all 4,096 positions, every run meets its family's fidelity row.
 
-**Part of each ratio is content, the rest is the long context.** The last 128 tokens of the drift
-document are harder than tokens 64–192. Evaluated at a short context (as positions 128–256 of a
-256-token sequence, the same tokens), they score KL 0.0104 on Qwen3.5 and 0.00136 on Mamba. So the
-long context itself multiplies the error by 2.4 (Qwen3.5) and 4.7 (Mamba).
+**The calibration explains Jamba's first miss (×193 → ×0.32).** A short calibration sizes every
+static scale of a state, or of a long-context activation, on short-context magnitudes, and those
+saturate by position 4,096. The calibration-length rule above removes that cause. It did not fix
+Qwen3.5 or Mamba, whose misses both had the rule met.
 
-**Where the long-context error comes from** — float simulations (`misaka-palw-tir-lower/tools/`
-`drift_gdn_replay.py`, `drift_scan_replay.py`, `drift_w8_float.py`), not yet confirmed on the
-integer program:
+**Where the rest came from, measured on the integer program.** `palw-tir-fidelity --site-windows
+64..192,3968..4096` runs the traced float model and the typed backend position by position and
+reports every site's error in each window.
 
-* **Qwen3.5: the gated-delta state integrates `v` on its 16-bit code grid.** The replay takes four
-  layers' recurrence inputs from `transformers` over the drift sequence and applies the lowering's
-  roundings (`q`/`k` unit codes; `v`, the read and the delta's shift on `v`'s grid; β and the decay
-  in Q24). Its core-output error grows along the sequence in the later layers: ×1.3, ×1.6 and ×3.0 at
-  layers 8, 16 and 22. With `v`, the read and the delta 8 bits finer, the error is 25–200× smaller
-  and flat.
-* **Mamba: the step size and `B`/`C` are made by `i8` rows.** The same replay of the scan's own
-  arithmetic, with `x`, `B` and `C` on their code grids, stays flat (×0.8–1.05). The growth comes
-  from what feeds the scan. In `transformers`, `x_proj` alone at per-row `i8` makes the float model
-  drift ×5.8. With `x_proj` and `dt_proj` at 16 bits and every other weight at `i8`, the drift is
-  ×1.10. These two projections are 15.7 MB at 16 bits on Mamba-370m. The integer program also
-  carries the step size's input (`dt_in`) as 16-bit codes, on the same path.
+* **Mamba: one site saturated.** Layer 29's gated product `y·silu(z)` goes from 2.0 % error early
+  to 34 % late. Its scan (1.2 % → 0.9 %) and gate (1.1 % → 1.3 %) do not grow, and every later
+  layer inherits the jump. In float, the product reaches 45.6 late in the document, against its
+  16-bit site's clamp of 20.4. Nineteen positions saturate from position 3,569 on, and one each at
+  layers 39 and 44. A scan's output grows with the context it has integrated, and one static
+  16-bit scale calibrated on shorter contexts cannot hold it. The fixes:
+  1. `1f9c2fc80`: the scan delivers its output on the `i32` rail. Its product with the gate's code
+     is exact in `i64`, narrowed once to `i32` with 256× the `i32` headroom (still 2^14 finer than
+     the code it replaces), and `out_proj` reads it wide.
+  2. `b5f892be4`: that projection reads per-row `i16` weights, recovering the precision the
+     outlier split had carried. The two are exclusive.
+  3. `251f77f23`: the projections that set the step size and `B`/`C` (`x_proj`'s parts and
+     `dt_proj`) read per-row `i16` weights. At `i8`, their input-correlated rounding biases each
+     channel's decay. In float that alone drifts ×5.8; it was real but smaller than the saturation
+     (KL 0.0006 late).
+  The artifact grows from 455 to 556 MiB. The 128-position row went from 0.988 top-1 / KL 0.0012 to
+  1.000 / 0.00021 (§5.2).
+* **Qwen3.5: no single site.** The gated-delta cores' errors double from the early window to the
+  late one across the layers (layer 10: 5.1 % → 11.3 %; layers 16–18: ×2.2–×2.6) and cascade
+  through the residual. A float replay of the step with the lowering's roundings
+  (`tools/drift_gdn_replay.py`) located the cause: the read `w = S·k`, `v − w` and the β product's
+  shift were rounded on `v`'s 16-bit grid and written back into the state at every step. With them
+  8 bits finer the replay is flat. `b60e91ef5` has `v` enter the step 8 bits finer. It costs one
+  node (the largest blocks: 468 of 512) and changes the context factor from ×2.4 to ×1.47.
 
-Both remedies are precision choices in the lowering: a wider `v` into the gated-delta state, and
-16-bit rows (and a wide `dt_in`) for the projections that set a scan's step size and `B`/`C`.
-Neither needs a primitive. Both are open (§8): quantisation gap, lowering work open.
+**The single-document ratio, its content, and its conditioning.** Two things limit what one
+document's ratio can say:
+
+* **Content.** Qwen3.5's last 128 tokens score KL 0.00836 even at a short context, 1.46 × the early
+  window's 0.00572. The ratio of this one document therefore cannot fall below about 1.46, whatever
+  the recurrence does, and 1.47 × 1.46 is the 2.15 measured.
+* **Conditioning.** A ratio of two small KLs is ill-conditioned near zero. Mamba's final lowering
+  cuts the early window's KL 19× (0.00390 → 0.00021) and the late window's 12× (0.00432 → 0.00035).
+  The ratio therefore rises from 1.11 to 1.67, although every number improved and the context
+  factor is 1.46.
+
+corpus-v1 §9 proposed 16 × 4,096 sequences, which average such tails out. The context factor
+separates the recurrence from the text and from the noise floor: Qwen3.5 ×1.47, Mamba ×1.46,
+Jamba ×0.61.
+
+**The rule that settles the column** (decided 2026-09-29, now corpus-v1 §9):
+- Drift is measured like-for-like: the same target tokens (the last 128 of a 4,096-token held-out
+  document) scored at 4,096 context against at short context (positions 128–256 of the document's
+  last 256 tokens).
+- A row passes if that ratio is ≤ 1.5, or, secondarily, if KL at 4,096 ≤ 0.01 nats.
+- A change of text difficulty is not drift. The early window (64–192) scores different tokens and is
+  reported only.
+
+| row (lowering) | KL at 4,096 (3,968–4,096) | same tokens at short context | ratio | floor | early window 64–192 | passes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Qwen3.5-0.8B (`b60e91ef5`) | 0.01227 | 0.00836 | **×1.47** | 0.0123 > 0.01 | 0.00572 | **yes** (the ratio) |
+| Mamba-370m (`251f77f23`) | 0.00035 | 0.00024 | **×1.46** | 0.00035 ≤ 0.01 | 0.00021 | **yes** (both) |
+| Jamba-tiny-dev (`251f77f23`) | 0.00091 | 0.00148 | **×0.61** | 0.00091 ≤ 0.01 | 0.00248 | **yes** (both) |
+
+One more lowering option was tried for Qwen3.5 after the rule was set: per-row `i16` weights for
+the gated delta's decay and β projections (`89c4fbcd9`, the Mamba lesson). It left the late window
+at 0.0128 (×2.22; context factor ×1.51) and was reverted (`403b38c6a`).
 
 ## 6. Criterion 6 — legacy conformance
 
@@ -367,13 +431,15 @@ provisional `palw_tir_v1` ceilings (`max_macs_per_position` 2^37, `max_cone_work
 
 ## 8. Open after the freeze (lowering work; none of it changes `prim_set_id`)
 
-1. **Recurrence drift of C4 and C5** (§5.2). At 4,096 positions Qwen3.5-0.8B drifts ×4.00 and
-   Mamba-370m ×5.64, against a limit of ×1.5, with the calibration-length rule met. The simulated
-   causes are the recurrences' input precision: `v` into the gated-delta state, and the
-   projections that set Mamba's step size and `B`/`C`. Next: build a wider `v` path, and 16-bit
-   `x_proj`/`dt_proj` rows with a wide `dt_in`, in the lowering. Then re-check the node budget
-   (NF-12; Qwen3.5-MoE and Qwen3-Next blocks are at 467 of 512 nodes), and run both drifts again
-   (54 and 26 minutes on this host). No primitive is involved.
+1. **Recurrence drift: settled** by the like-for-like definition (decided 2026-09-29; §5.2 and
+   corpus-v1 §9). What remains is for the record:
+   * **§9's 16 × 4,096 sample**, scheduled for a quiet window rather than a night with release builds
+     and a drill on this host. It takes about 7 hours, one checkpoint at a time, each run under
+     8 GB. The runner, `tir-lower-target/fidelity/real/run-sample16.sh`, and its token files are
+     prepared.
+   * **Qwen3.5's margin** (×1.47 against 1.5). Lowering options left: `v` finer at its source (a
+     Q24 SiLU on the conv's `v` part) and the conv path's own precision. The decay and β projections
+     at `i16` did not help (reverted, `403b38c6a`).
 2. **No real checkpoint under the download rules** for Gemma-3 (every official checkpoint is
    gated), Mamba-2 and RWKV-4.
    * Mamba-2 has no official HF-format checkpoint of ≤ 3B: `mistralai/Mamba-Codestral-7B-v0.1` is
