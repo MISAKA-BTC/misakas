@@ -211,7 +211,7 @@ pub fn tir_class_admission_offline_v1(
 /// a recurrent program — one with any `Fixed` state (Mamba, Jamba, the Qwen hybrids, RWKV) — drifts
 /// past the longest sequence it was calibrated on, so it is declared at a context no longer than the
 /// `calibrated_context` its converter recorded, unless the conversion waived the rule
-/// (`--allow-short-calibration`, recorded as `"rule": "waived"`). An attention-only program is not
+/// (`--allow-short-calibration`, recorded as `calibration_length_rule.rule = "waived"`). An attention-only program is not
 /// bound. A recurrent artifact that records no calibration length is refused: its context cannot be
 /// shown to be covered.
 pub fn tir_calibration_covers_context_v1(program: &TirProgramV1, meta: &serde_json::Value, max_context: u32) -> Result<(), String> {
@@ -219,8 +219,9 @@ pub fn tir_calibration_covers_context_v1(program: &TirProgramV1, meta: &serde_js
     if !recurrent {
         return Ok(());
     }
-    let waived = |v: &serde_json::Value| v.get("rule").and_then(|r| r.as_str()) == Some("waived");
-    if waived(meta) || meta.get("calibration").is_some_and(waived) {
+    // palw-tir-fidelity's record of the rule (`calibration_length_rule`: `met`, `not recurrent` or
+    // `waived`); an artifact written before it carries none, which is not a waiver.
+    if meta.get("calibration_length_rule").and_then(|r| r.get("rule")).and_then(|r| r.as_str()) == Some("waived") {
         return Ok(());
     }
     match meta.get("calibrated_context").and_then(|c| c.as_u64()) {

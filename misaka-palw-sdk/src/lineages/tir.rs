@@ -307,7 +307,11 @@ mod tests {
         let err = covers(rec, &meta(serde_json::json!({ "calibrated_context": 32 })), 64).unwrap_err();
         assert!(err.contains("at most 32 positions"), "{err}");
         assert!(covers(rec, &meta(serde_json::json!({})), 16).unwrap_err().contains("records no calibrated context"));
-        assert!(covers(rec, &meta(serde_json::json!({ "calibrated_context": 8, "rule": "waived" })), 64).is_ok(), "waived");
+        let waived = serde_json::json!({ "calibrated_context": 8, "calibration_length_rule": { "rule": "waived", "longest": 8, "context": 16 } });
+        assert!(covers(rec, &waived, 64).is_ok(), "waived at conversion");
+        let met =
+            serde_json::json!({ "calibrated_context": 8, "calibration_length_rule": { "rule": "met", "longest": 8, "context": 8 } });
+        assert!(covers(rec, &met, 64).is_err(), "met at 8 is not a waiver for 64");
         assert!(covers(att, &meta(serde_json::json!({})), 1 << 18).is_ok(), "attention is not bound");
     }
 
