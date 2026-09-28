@@ -1683,15 +1683,19 @@ pub(crate) fn palw_dissection_refusal_v1(
 /// (`CourtTirRootClaimed`), then the rounds, the child choices and the bottom close. This build files
 /// none of those moves, so an honest producer of such a class would lose, by the clock, to anyone who
 /// names the leaf, and this node's seats could not name one. Until the F7 node side is in, the node
-/// neither produces claims for such a class nor proves readiness for it
-/// ([`palw_tir_dissection_refusal_v1`]). **The F7 node-side commit removes this switch and the guard.**
+/// produces no claims for such a class ([`palw_tir_dissection_refusal_v1`]); its seats still prove
+/// readiness ([`PALW_TIR_GUARD_REFUSES_READINESS_V1`] is off). **The F7 node-side commit removes this
+/// switch and the guard.**
 pub(crate) const PALW_TIR_NODE_PLAYS_DISSECTION_V1: bool = false;
 
-/// **The guard's readiness half.** Set, a seat of this build proves no readiness for such a class, so
-/// the class cannot leave `Candidate` (its admission jury seats on readiness proofs,
-/// `palw_lifecycle_step_v1`) and no panel is ever drawn for it. It is a separate switch because only
-/// the production half protects a producer; this one keeps the class from moving at all.
-pub(crate) const PALW_TIR_GUARD_REFUSES_READINESS_V1: bool = true;
+/// **The guard's readiness half — OFF in the flag-day release** (the coordinator, 2026-09-28). Set, a
+/// seat of this build would prove no readiness for such a class, so the class could not leave
+/// `Candidate` (its admission jury seats on readiness proofs, `palw_lifecycle_step_v1`). It is off
+/// because the production half is what protects: honest producers stay out; a modified producer's lie
+/// is not licensed, because honest seats withhold on a replay that does not match; and conviction
+/// arrives with the F7 node update, before any such class can go `Active` (it cannot pass probation
+/// without probe claims, and this build files none).
+pub(crate) const PALW_TIR_GUARD_REFUSES_READINESS_V1: bool = false;
 
 /// What the guard refuses by, word for word (the D-F kit greps the node logs for it).
 pub(crate) const PALW_TIR_DISSECTION_GUARD_WORDS_V1: &str = "IR class with dissected points: this node cannot play the dissection yet";
@@ -1713,10 +1717,11 @@ pub(crate) fn palw_tir_dissection_refusal_of_v1(
     }
     Some(format!(
         "{PALW_TIR_DISSECTION_GUARD_WORDS_V1} — class {class_id} dissects {} commit point(s) {:?} over its history (RFC-0002 \
-         F7), a claim accused at one of them is answered by an IR root claim this build cannot file, so this node neither \
-         produces claims for the class nor proves readiness for it until the F7 node update",
+         F7), a claim accused at one of them is answered by an IR root claim this build cannot file, so this node produces \
+         no claims for the class{} until the F7 node update",
         record.dissected.len(),
-        record.dissected
+        record.dissected,
+        if PALW_TIR_GUARD_REFUSES_READINESS_V1 { " and proves no readiness for it" } else { "" }
     ))
 }
 
@@ -1896,8 +1901,9 @@ mod tests {
 
     /// **The interim F7 guard** (RFC-0002; the DAA-2,000 flag-day release): until the node plays an IR
     /// class's held dissection, an IR class with a dissected commit point is refused by name — no claim
-    /// produced, no readiness proved — and every other class is not; the producer's gate and draw, the
-    /// panel's canonical claim and its readiness duty all ask it, ahead of the backend.
+    /// produced (the readiness half is off in this release) — and every other class is not; the
+    /// producer's gate and draw and the panel's canonical claim ask it ahead of the backend, and the
+    /// readiness duty asks it only under the readiness half's switch.
     #[test]
     fn an_ir_class_with_dissected_points_is_refused_until_the_node_plays_the_dissection() {
         use super::{
@@ -1921,12 +1927,14 @@ mod tests {
             dissected,
             program: Default::default(),
         };
-        assert!(!PALW_TIR_NODE_PLAYS_DISSECTION_V1, "the F7 node side is not in this build: the guard is armed");
-        assert!(PALW_TIR_GUARD_REFUSES_READINESS_V1);
+        // The F7 node side is not in this build (the production guard is armed), and the flag-day release
+        // proves readiness (Candidate → Prefetching runs; the readiness half is off).
+        assert_eq!([PALW_TIR_NODE_PLAYS_DISSECTION_V1, PALW_TIR_GUARD_REFUSES_READINESS_V1], [false, false]);
         // D-F1's two history cones (block 1, nodes 127 and 138).
         let refusal = palw_tir_dissection_refusal_of_v1(class, Some(&row(vec![(1, 127), (1, 138)]))).expect("refused");
         assert!(refusal.starts_with(PALW_TIR_DISSECTION_GUARD_WORDS_V1), "{refusal}");
         assert!(refusal.contains("(1, 127)") && refusal.contains(&class.to_string()), "{refusal}");
+        assert!(refusal.contains("produces no claims") && !refusal.contains("readiness"), "{refusal}");
         assert_eq!(palw_tir_dissection_refusal_of_v1(class, Some(&row(vec![]))), None, "an IR class with no dissected point");
         assert_eq!(palw_tir_dissection_refusal_of_v1(class, None), None, "a class with no IR row");
 

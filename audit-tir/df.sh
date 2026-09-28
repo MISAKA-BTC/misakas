@@ -16,11 +16,12 @@
 #   by name by the release and skipped by the old relay at identical tips; blocks above; the old peer refused
 #   past the fence) + the registration past the fence reaching Prefetching with seats proving readiness
 #   (Candidate → the admission jury → Prefetching) + df3 (8 of 8 forged-output attacks refused, the producer
-#   on the IR class). Its verdict is printed and written to $WORK_DIR/stage1.verdict on its own. A release
-#   that carries the interim F7 guard (kaspad PALW_TIR_GUARD_REFUSES_READINESS_V1: no readiness for an IR
-#   class with dissected points until the node plays the history dissection) holds D-F1 at Candidate — the
-#   admission jury seats on readiness proofs — and the registration part then reads GUARDED (the IR holders
-#   name the refusal in their logs), not PASS: the stage is STAGE 1 GUARDED when df4 and df3 pass.
+#   on the IR class). Its verdict is printed and written to $WORK_DIR/stage1.verdict on its own.
+#   The interim F7 guard (kaspad, until the F7 node update): the release produces no claims for an IR class
+#   with dissected points, so new0's producer HOLDS on D-F1 by name and Stage 2 waits for the node update.
+#   Its readiness half (PALW_TIR_GUARD_REFUSES_READINESS_V1) is off in the flag-day release; armed, it would
+#   hold D-F1 at Candidate (the admission jury seats on readiness proofs) and the registration part would
+#   read GUARDED (the IR holders name the refusal), making the stage STAGE 1 GUARDED when df4 and df3 pass.
 #   STAGE 2 (on the same chain, after the fleet rollout): `stage2` = df1 (Active → claims → Final) + df2
 #   (representative commit-point kinds live, every kind offline with palw-class certify) + df4 court.
 #
@@ -147,10 +148,10 @@ PY
               | grep -E -- '--palw-drill|--listen=|--rpclisten=|--palw-produce$|--palw-producer-class|--palw-register-class|--palw-class-artifact|heartbeat-miner|--appdir|--ram-scale' | tr '\n' ' ')"
       done )
     rm -rf "$T"
-    # The interim F7 guard: a release that carries it proves no readiness for D-F1 (dissected history cones),
-    # so Stage 1's registration part reads GUARDED at Candidate rather than Prefetching.
+    # The interim F7 guard: a release that carries it produces no claims for D-F1 (dissected history cones)
+    # until the F7 node update — new0's producer holds on it by name, and Stage 2 waits for the update.
     if [ -x "$KASPAD_BIN" ] && grep -aqF "this node cannot play the dissection yet" "$KASPAD_BIN"; then
-        echo "== the release carries the interim F7 guard: D-F1 is held at Candidate, Stage 1 reads GUARDED at best"
+        echo "== the release carries the interim F7 guard: no D-F1 claims (new0 holds by name) until the F7 node update"
     fi
     echo "== DRY RUN done (preflight failures: $FAILED)"
     [ "$FAILED" = 0 ]

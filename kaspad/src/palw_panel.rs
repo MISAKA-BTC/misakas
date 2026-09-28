@@ -3992,9 +3992,9 @@ impl PalwPanelService {
             // (3.37 GiB), its rows lapsed at the horizon and the class went HELD with two claims
             // voided `no_capable_panel`. A replay still reserves its own bytes when it starts.
             //
-            // Ahead of it, the interim F7 guard's readiness half (RFC-0002): no proof for an IR class
-            // whose dissection this build cannot play — no panel of this seat's for a class whose
-            // producers it could not defend (`palw_tir_dissection_refusal_v1`), named once per change.
+            // Ahead of it, the interim F7 guard's readiness half (RFC-0002), OFF in the flag-day release
+            // (`PALW_TIR_GUARD_REFUSES_READINESS_V1`): armed, no proof for an IR class whose dissection
+            // this build cannot play (`palw_tir_dissection_refusal_v1`), named once per change.
             if crate::palw_producer::PALW_TIR_GUARD_REFUSES_READINESS_V1
                 && let Some(why) = crate::palw_producer::palw_tir_dissection_refusal_v1(session, class.class_id)
             {

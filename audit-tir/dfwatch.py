@@ -12,7 +12,7 @@ Active, and for D-F2 the first CourtFraud of the tampering producer) to $WORK_DI
   dfwatch.py [--once] [--until prefetching|active|final|df2]
 Exit (with --until): 0 when reached, 3 INCOMPLETE when --deadline-daa passes first, 4 GUARDED (--until
 prefetching only) when the class sits at Candidate while the IR holders' logs name the interim F7 guard's
-readiness refusal (a release that cannot play the class's history dissection proves no readiness for it)."""
+READINESS refusal (armed only by kaspad's PALW_TIR_GUARD_REFUSES_READINESS_V1, off in the flag-day release)."""
 import argparse, json, os, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rpc import call, pick
@@ -27,16 +27,14 @@ IR_HOLDERS = os.environ.get("IR_HOLDERS", "new0 new1 new2 new3 new4 new5 new6").
 
 
 def guarded_holders(cid):
-    """The IR holders whose log names the guard for this class (`... class <cid> dissects ...`)."""
+    """The IR holders whose log names the guard's READINESS refusal for this class (the panel's
+    `readiness for class <cid>: no proof — <guard words> ...`). The production half's hold (new0's
+    producer, always on until the F7 node update) is not this: it does not keep the class at Candidate."""
     logs = [f"{WORK}/{n}/kaspad.out" for n in IR_HOLDERS if os.path.exists(f"{WORK}/{n}/kaspad.out")]
     if not logs:
         return []
-    r = subprocess.run(["grep", "-lF", f"{cid} dissects", *logs], capture_output=True, text=True)
-    hits = []
-    for path in r.stdout.split():
-        if subprocess.run(["grep", "-qF", GUARD_WORDS, path]).returncode == 0:
-            hits.append(os.path.basename(os.path.dirname(path)))
-    return hits
+    r = subprocess.run(["grep", "-lF", f"readiness for class {cid}: no proof — {GUARD_WORDS}", *logs], capture_output=True, text=True)
+    return [os.path.basename(os.path.dirname(path)) for path in r.stdout.split()]
 
 
 def class_id():
