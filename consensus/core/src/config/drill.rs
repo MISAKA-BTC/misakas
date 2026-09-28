@@ -652,6 +652,21 @@ pub fn palw_drill_tir_fence2_at_v1(params: &mut crate::config::params::Params, a
     palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1)
 }
 
+/// **A drill arms the improvement fence at a low height** (RFC-0004; `--palw-drill-improve-at`) —
+/// the same machinery for the one-entry drill list
+/// [`crate::palw_improve_v1::PALW_DRILL_IMPROVE_FENCES_V1`]: ARMS `palw_improvement_v1` at `at` with
+/// this build's ids and the drill's ceilings, and moves nothing else. The fence is in no network's
+/// release. Every refusal of the post-launch moves applies, named for this flag, and
+/// `validate_palw_v2` refuses the result unless `palw_tir_v1`, `palw_gen_v1` and `palw_kary_court`
+/// are in force at or below `at` (arm them first with `--palw-drill-tir-at`, `--palw-drill-gen-at`
+/// and `--palw-drill-fence-at`).
+pub fn palw_drill_improve_fence_at_v1(
+    params: &mut crate::config::params::Params,
+    at: u64,
+) -> Result<Vec<PalwDrillFenceMoveV1>, String> {
+    palw_drill_move_fences_v1(params, at, &PALW_DRILL_FLAG_DAY_IMPROVE_V1)
+}
+
 /// One post-launch flag day a drill may cross: its list and the command-line flag that moves it.
 struct PalwDrillFlagDayV1 {
     list: &'static [crate::config::params::PalwPostLaunchFenceV1],
@@ -685,6 +700,10 @@ const PALW_DRILL_FLAG_DAY_FP_V5_V1: PalwDrillFlagDayV1 =
 /// The second IR fence alone (`--palw-drill-tir2-at`).
 const PALW_DRILL_FLAG_DAY_TIR_FENCE2_V1: PalwDrillFlagDayV1 =
     PalwDrillFlagDayV1 { list: crate::config::params::PALW_T12_TIR_FENCE2_FENCES_V1, flag: "--palw-drill-tir2-at" };
+
+/// The improvement fence alone (`--palw-drill-improve-at`, RFC-0004): a drill-only list.
+const PALW_DRILL_FLAG_DAY_IMPROVE_V1: PalwDrillFlagDayV1 =
+    PalwDrillFlagDayV1 { list: crate::palw_improve_v1::PALW_DRILL_IMPROVE_FENCES_V1, flag: "--palw-drill-improve-at" };
 
 /// The one body both flag days share — see [`palw_drill_post_launch_fences_at_v1`].
 fn palw_drill_move_fences_v1(

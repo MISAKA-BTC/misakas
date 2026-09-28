@@ -2865,6 +2865,17 @@ pub struct Params {
     /// it, or with the bundle's mirror unsynced.
     pub palw_tir_fence2: Option<ForkActivation>,
 
+    /// **RFC-0004 — the Model Improvement Protocol** (`crate::palw_improve_v1`): a line may be governed
+    /// by consensus-native improvement epochs — hard cases, datasets, a candidate registry, evaluation
+    /// jobs, promotion and rewards (spec 17). The value carries the scoring library's and the sign
+    /// table's ids, the protocol version and the network's ceilings
+    /// ([`crate::palw_improve_v1::PalwImprovementFenceV1`]). Dormant: `None` on every preset and in no
+    /// testnet-12 flag-day list; hashed Some-only in both fingerprints with the value, the activation
+    /// alone visited by `for_each_fence`, the whole option collapsed from `Some(never())` —
+    /// `palw_gen_v1`'s shape. [`Self::validate_palw_improvement_v1`] holds its refusals, among them
+    /// arming without `palw_tir_v1`, `palw_gen_v1` and `palw_kary_court` in force at or below it.
+    pub palw_improvement_v1: Option<crate::palw_improve_v1::PalwImprovementFenceV1>,
+
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
     /// A dissection tries ONE head's softmax, so a fused output tile wider than a head (or not a
@@ -3842,6 +3853,8 @@ impl Params {
         self.validate_palw_fp_job_v5_v1()?;
         // **RFC-0002 Phase F, the second IR fence's refusals** (`crate::palw_tir_fence2_v1`).
         self.validate_palw_tir_fence2()?;
+        // **RFC-0004: the improvement fence's own refusals** (`crate::palw_improve_v1`).
+        self.validate_palw_improvement_v1()?;
         // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
         // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
         // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
@@ -6059,6 +6072,10 @@ impl Params {
         // RFC-0002 Phase F's second IR fence: Some-only hashed, so the same collapse.
         if self.palw_tir_fence2 == Some(ForkActivation::never()) {
             self.palw_tir_fence2 = None;
+        }
+        // RFC-0004, likewise: the WHOLE option collapses from `Some(never())`.
+        if self.palw_improvement_v1.is_some_and(|fence| fence.activation == ForkActivation::never()) {
+            self.palw_improvement_v1 = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -9223,6 +9240,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_improvement_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -9457,6 +9475,7 @@ impl Params {
             ("palw_gen_v1", palw_gen_v1.map(|fence| fence.activation)),
             ("palw_fp_job_v5", *palw_fp_job_v5),
             ("palw_tir_fence2", *palw_tir_fence2),
+            ("palw_improvement_v1", palw_improvement_v1.map(|fence| fence.activation)),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -9712,6 +9731,12 @@ impl Params {
         if let Some(activation) = self.palw_tir_fence2 {
             h.write(b"palw_tir_fence2");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // RFC-0004, NAMED likewise, with its value reported (not gated).
+        if let Some(fence) = self.palw_improvement_v1 {
+            h.write(b"palw_improvement_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
         }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
         if let Some(dissectable) = self.palw_fused_dissectable {
@@ -10207,6 +10232,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_improvement_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -10896,6 +10922,10 @@ impl Params {
         if let Some(activation) = palw_tir_fence2.as_mut() {
             fork(activation, visit);
         }
+        // RFC-0004. Some-only, and the ACTIVATION only (the value is a limit set).
+        if let Some(fence) = palw_improvement_v1.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         // ADR-0093 Decision 6. Some-only, likewise.
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
@@ -11323,6 +11353,7 @@ impl Params {
             palw_gen_v1,
             palw_fp_job_v5,
             palw_tir_fence2,
+            palw_improvement_v1,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -12057,6 +12088,14 @@ impl Params {
             h.write(b"palw_tir_fence2");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // RFC-0004, Some-only: every shipped preset leaves it `None` and fingerprints
+        // byte-identically to a build without the field. Armed, the ruleset states its scoring
+        // library, its sign-test table, the protocol version and its ceilings.
+        if let Some(fence) = palw_improvement_v1 {
+            h.write(b"palw_improvement_v1/protocol-v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            fence.write_value_into(&mut h);
+        }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
@@ -12702,6 +12741,7 @@ impl Params {
             palw_gen_v1: self.palw_gen_v1,
             palw_fp_job_v5: self.palw_fp_job_v5,
             palw_tir_fence2: self.palw_tir_fence2,
+            palw_improvement_v1: self.palw_improvement_v1,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -13758,6 +13798,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_improvement_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14011,6 +14052,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_improvement_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -14246,6 +14288,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_improvement_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
@@ -21066,6 +21109,8 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_gen_v1();
     // RFC-0002 Phase F's second IR fence, likewise.
     params.sync_palw_tir_fence2();
+    // RFC-0004's improvement fence, likewise.
+    params.sync_palw_improvement_v1();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -21318,6 +21363,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_gen_v1: None,
     palw_fp_job_v5: None,
     palw_tir_fence2: None,
+    palw_improvement_v1: None,
     palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
