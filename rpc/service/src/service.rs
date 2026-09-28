@@ -2735,9 +2735,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) else {
             return Ok(GetPalwModelResponse { available: true, tip_daa, found: false, class_id: class_id.to_string(), ..Default::default() });
         };
+        // An IR class's window is its record's (RFC-0002 Phase F): it registered no legacy carriage.
         let n_ctx = session
             .clone()
-            .spawn_blocking(move |c| c.palw_registered_class_carriage_v1(class_id).map(|(profile, _)| profile.n_ctx))
+            .spawn_blocking(move |c| {
+                c.palw_registered_class_carriage_v1(class_id)
+                    .map(|(profile, _)| profile.n_ctx)
+                    .or_else(|| c.palw_tir_class_record_v1(class_id).map(|r| r.facts.max_context))
+            })
             .await
             .unwrap_or(0);
         let registry = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await;

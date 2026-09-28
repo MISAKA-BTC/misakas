@@ -124,7 +124,12 @@ fn main() {
         Some(p) => {
             let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(std::path::Path::new(p))
                 .unwrap_or_else(|e| die(format!("{p}: {e}")));
-            if c.program != program {
+            // A declared class commits its logits under a scheme (`palw-class declare-layout` sets it;
+            // the converter leaves it unset), which no value depends on: compare the programs with it
+            // taken from the container.
+            let mut mirror = program.clone();
+            mirror.logits_scheme_id = c.program.logits_scheme_id;
+            if c.program != mirror {
                 die(format!("{p} carries another program than this row's mirror (convert the artifact with palw-a16-to-tir)"));
             }
             c.header
