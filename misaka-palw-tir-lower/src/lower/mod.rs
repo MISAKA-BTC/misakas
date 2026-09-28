@@ -52,6 +52,7 @@
 //! hidden) plus the mid-layer residual — the pattern of corpus §2.4. Court cone sizing is
 //! `tir_admit_v1`'s job and is not attempted here.
 
+pub mod cost;
 pub mod fill;
 
 use crate::error::{LowerError, Result};

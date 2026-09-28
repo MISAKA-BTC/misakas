@@ -6184,6 +6184,7 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
+ "misaka-palw-tir-lower",
  "serde_json",
 ]
 

@@ -32,6 +32,8 @@
 //! owns its container), funding and signing (key custody is the node's), and fleet distribution.
 //! The SDK is where a model becomes a class; it is not a wallet and not a deployment tool.
 
+/// RFC-0002 Phase F (F10): `palw-class check-architecture` — IR and legacy verdicts for a config.
+pub mod check_architecture;
 pub mod class_manifest;
 pub mod conformance;
 pub mod lineage;
