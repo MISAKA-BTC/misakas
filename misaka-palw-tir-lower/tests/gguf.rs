@@ -60,6 +60,8 @@ fn same_config(mapped: &serde_json::Value, hf: &serde_json::Value) -> Result<(),
 
 struct Outcome {
     types: String,
+    /// The largest block's nodes (NF-12 allows 512).
+    block_nodes: usize,
     hf_max_abs: f64,
     hf_scale: f64,
     quantised: usize,
@@ -77,6 +79,7 @@ fn run(name: &str) -> Result<Outcome, String> {
     let spec = model.spec().map_err(|e| format!("spec: {e}"))?;
     let prep = fidelity::prepare_spec(spec, &LowerOpts::default()).map_err(|e| format!("prepare: {e}"))?;
     let quantised = prep.lowered.program.params.iter().filter(|p| p.name.ends_with(".qa")).count();
+    let block_nodes = prep.lowered.program.blocks.iter().map(|b| b.nodes.len()).max().unwrap_or(0);
     analyze_ranges(&prep.lowered.program).map_err(|e| format!("range analysis refuses the program: {e}"))?;
     let (params, unused) = ParamStore::from_source(&prep.hl, &prep.binding, &model).map_err(|e| e.to_string())?;
     if !unused.is_empty() {
@@ -124,7 +127,7 @@ fn run(name: &str) -> Result<Outcome, String> {
         v.dedup();
         v.join(",")
     });
-    Ok(Outcome { types: types.unwrap_or_default(), hf_max_abs, hf_scale, quantised, inexact, exact, w8: w8m })
+    Ok(Outcome { types: types.unwrap_or_default(), block_nodes, hf_max_abs, hf_scale, quantised, inexact, exact, w8: w8m })
 }
 
 fn check(name: &str) {
@@ -135,8 +138,9 @@ fn check(name: &str) {
     match run(name) {
         Ok(o) => {
             eprintln!(
-                "{name:>20} [{}]: HF max|Δ| {:.1e} (scale {:.1}); {} projections from integers, inexact scales {}; exact top-1 {:.3} KL {:.5}; W8 top-1 {:.3} KL {:.5}",
+                "{name:>20} [{}]: largest block {} nodes; HF max|Δ| {:.1e} (scale {:.1}); {} projections from integers, inexact scales {}; exact top-1 {:.3} KL {:.5}; W8 top-1 {:.3} KL {:.5}",
                 o.types,
+                o.block_nodes,
                 o.hf_max_abs,
                 o.hf_scale,
                 o.quantised,

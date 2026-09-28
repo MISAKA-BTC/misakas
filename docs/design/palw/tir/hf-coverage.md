@@ -1089,8 +1089,8 @@ file format and `ggml-common.h`:
 - **Checks.** Every GGUF tensor is read, and the mapped configs equal the configs the models were
   built from. The reference evaluator, ref2 and exec agree byte for byte on all 17 pre-quantised
   fixtures (`tests/three_way.rs`).
-- **Cost.** The layer block grows from 266 to 330–340 nodes (Llama-shaped; the 8-bit asymmetric
-  GPTQ case was 356).
+- **Cost.** The largest block has 301–373 nodes (NF-12 allows 512), against 266 for the W8
+  Llama twin; the K-quant mixes' `qkeep` masks and offset terms are most of the difference.
 
 **A real file.** The decoders read a real llama.cpp file and match its F16 twin within the
 quantisation's own error (`tests/gguf_real.rs`, ignored; local files only):
