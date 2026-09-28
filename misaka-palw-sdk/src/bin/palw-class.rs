@@ -472,6 +472,10 @@ fn tir_manifest(path: &std::path::Path, out: Option<PathBuf>, check: bool) -> Re
     println!("PALWTIR1 artifact {} ({} bytes, program {} bytes)", path.display(), m.artifact_bytes, m.program_bytes);
     println!("  graph_ir_root   {}", m.graph_ir_root);
     println!("  inventory root  {} over {} leaves", m.inventory_root, m.leaf_count);
+    match m.class_id {
+        Some(id) => println!("  class id        {id} (under the container's declared layout)"),
+        None => println!("  class id        — the container declares no layout (a layout makes one class per layout)"),
+    }
     std::fs::write(&target, m.to_json()).map_err(|e| format!("{}: {e}", target.display()))?;
     println!("wrote {}", target.display());
     Ok(())
