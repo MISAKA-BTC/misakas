@@ -357,11 +357,13 @@ fn image_rows_enter_the_text_stage_at_placeholder_ids() {
     // Without placeholders the image changes nothing; the rows still ran.
     let plain = |job: &PipelineJob| PipelineJob { prompt: vec![3, 4, 5], ..job.clone() };
     assert_eq!(logits_at(&plain(&base)), logits_at(&plain(&dark)));
-    // A third placeholder re-reads the last row (the cursor is clamped): total, never out of range.
+    // A third placeholder is an ordinary token (the rows are spent): embedded as the token, as HF
+    // embeds it — the image changes rows 0 and 1 only.
     let three = |job: &PipelineJob| PipelineJob { prompt: vec![PLACEHOLDER, PLACEHOLDER, PLACEHOLDER], ..job.clone() };
-    let r = logits_at(&three(&base));
-    assert_eq!(r[1], r[2], "rows 1 and 1 again");
+    let (r, dark_r) = (logits_at(&three(&base)), logits_at(&three(&dark)));
     assert_ne!(r[0], r[1], "row 0, then row 1");
+    assert!(r[0] != dark_r[0] && r[1] != dark_r[1], "the first two read the image");
+    assert_eq!(r[2], dark_r[2], "the third is the token's embedding, whatever the image");
     // Generating over it replays.
     let job = with(&base);
     let (run, generated) = run_text_pipeline(&p, &programs, &params, &random, &job, &mut greedy(3)).unwrap();

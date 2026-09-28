@@ -1316,6 +1316,7 @@ mod tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         }
     }
 
@@ -2466,6 +2467,7 @@ mod end_to_end_tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
         let class = PalwFpClassFactsV3 {

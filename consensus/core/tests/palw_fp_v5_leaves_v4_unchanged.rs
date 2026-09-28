@@ -155,7 +155,9 @@ fn a_v5_job_is_a_v4_job_with_version_8_and_its_images() {
         for rule in [PalwFpDecodeRulesV1::Dormant, PalwFpDecodeRulesV1::Scheduled, PalwFpDecodeRulesV1::Active] {
             assert!(matches!(rule.check_job(&as_v4), Err(PalwFpV3Error::UnsupportedVersion { got: 8, .. })), "{rule:?}");
         }
-        assert!(borsh::from_slice::<PalwFreePromptJobV3>(&bytes).is_err(), "strictly, the images are bytes V4 never reads");
+        // The lane's job type reads the whole of it as the V5 job it carries (version 8, its images
+        // the tail), which every V3/V4 rule refuses by version.
+        assert_eq!(borsh::from_slice::<PalwFreePromptJobV3>(&bytes).unwrap(), v5.into_carried(), "the carried form");
         assert!(borsh::from_slice::<PalwFreePromptJobV5>(&v4_bytes).is_err(), "version 7 is not V5");
         // Its own id, under its own key.
         assert_ne!(fp_job_id_v5(&v5), fp_job_id_v4(&v4));
@@ -279,4 +281,75 @@ fn the_v5_fence_is_dormant_everywhere_and_fingerprinted_only_when_armed() {
     not_v2.palw_fp_job_v5 = Some(ForkActivation::new(AT));
     assert!(not_v2.validate_palw_fp_job_v5_v1().is_err(), "a ConsensusV2 rule");
     assert!(not_v2.palw_fp_job_v5_fence().is_none());
+}
+
+/// A V4 commitment payload in the lane's shape (the walk's own test fixture's fields).
+fn payload_v4(v4: &PalwFreePromptJobV3) -> kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
+    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFpStopReasonV3, PalwFreePromptCommitmentV3};
+    let h = |w: u64| Hash64::from_u64_word(w);
+    let commitment = PalwFreePromptCommitmentV3 {
+        job: v4.clone(),
+        trace_root: h(0x7A),
+        output_root: h(0x0B),
+        schedule_root: h(0x5C),
+        execution_root: h(0x4E),
+        decode_tokens_executed: 4,
+        stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+        work_leaves: 64,
+        trace_manifest_root: h(0x3F),
+        trace_chunk_count: 1,
+        trace_retention_daa: 505_000,
+    };
+    PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: vec![], signature: vec![0x5A; 16] }
+}
+
+/// **V5 in commitments and claims**: the lane's job type carries a V5 job as version 8 with its
+/// images after the V4 tail — the wrapper's bytes exactly — so every wrapper (the commitment, the
+/// payload, the claim id, the signed message) carries it unchanged in layout; the V4 validators
+/// refuse it by name, and the V5 validator admits it past its fence over V4's own commitment rules.
+#[test]
+fn a_v5_job_rides_the_lanes_commitment_and_names_its_own_claim() {
+    use kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3;
+    let v4 = v4_jobs()
+        .into_iter()
+        .find(|j| j.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA)
+        .unwrap_or_else(|| v4_jobs().remove(0));
+    let v5 = PalwFreePromptJobV5 { v4: v4.clone(), images: vec![image(2, 3)] };
+    let carried = v5.into_carried();
+    assert_eq!(borsh::to_vec(&carried).unwrap(), borsh::to_vec(&v5).unwrap(), "the carried form is the wire");
+    assert_eq!(fp_job_id_v3(&carried), fp_job_id_v5(&v5), "the lane's one id function names V5 under V5's key");
+    assert_eq!(PalwFreePromptJobV5::from_carried(&carried), Ok(v5.clone()));
+    assert_eq!(PalwFreePromptJobV5::from_carried(&v4), Err(PalwFpV5Error::NotAV5Job { version: PALW_FP_V4_VERSION }));
+    assert!(carried.is_v5() && !carried.is_v4());
+    // Images on a V3 or V4 job are refused by name, before anything else reads them.
+    let mut v4_with_images = v4.clone();
+    v4_with_images.images = Some(vec![image(2, 3)]);
+    assert_eq!(PalwFpDecodeRulesV1::Active.check_job(&v4_with_images), Err(PalwFpV3Error::ImagesVersionMismatch { version: 7 }));
+    // The payload and its claim.
+    let p4 = payload_v4(&v4);
+    let mut p5 = p4.clone();
+    p5.commitment.job = carried.clone();
+    let bytes = borsh::to_vec(&p5).unwrap();
+    assert_eq!(borsh::from_slice::<PalwFpCommitmentTxPayloadV3>(&bytes).unwrap(), p5, "the payload round-trips with its V5 job");
+    assert_ne!(p5.claim_id(), p4.claim_id(), "its own claim");
+    let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+    let ladder = 1 << 26;
+    // The V4 walk's validator refuses it at every decode rule: the live lane carries no V5 claim.
+    for rule in [PalwFpDecodeRulesV1::Dormant, PalwFpDecodeRulesV1::Scheduled, PalwFpDecodeRulesV1::Active] {
+        assert!(p5.validate_stateless_under_ruleset_v4(v4.network_domain, true, ladder, None, form, rule).is_err(), "{rule:?}");
+    }
+    // The V5 validator: V4's commitment rules over the V4 view, past V5's fence.
+    let v4_verdict = p4.validate_stateless_under_ruleset_v4(v4.network_domain, true, ladder, None, form, PalwFpDecodeRulesV1::Active);
+    let v5_verdict = palw_fp_v5_validate_payload_v1(&p5, v4.network_domain, true, ladder, None, form, true);
+    match v4_verdict {
+        Ok(()) => assert_eq!(v5_verdict, Ok(v5.clone()), "V5 is admitted exactly when its V4 view is"),
+        Err(e) => assert_eq!(v5_verdict, Err(PalwFpV5Error::V4(e)), "and refused with its V4 view's reason"),
+    }
+    assert_eq!(palw_fp_v5_validate_payload_v1(&p5, v4.network_domain, true, ladder, None, form, false), Err(PalwFpV5Error::NotArmed));
+    assert_eq!(
+        palw_fp_v5_validate_payload_v1(&p4, v4.network_domain, true, ladder, None, form, true),
+        Err(PalwFpV5Error::NotAV5Job { version: PALW_FP_V4_VERSION })
+    );
+    // The signature covers the V5 claim id — the lane's own signed message.
+    assert_eq!(p5.signed_message(), p5.claim_id());
 }

@@ -4659,6 +4659,7 @@ mod tests {
                     sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
                     temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
                     decode: None,
+                    images: None,
                 },
             },
             signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],

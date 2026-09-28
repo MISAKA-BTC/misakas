@@ -1048,6 +1048,7 @@ pub fn fp_drill_job_v1(profile: &PalwShapeProfileV3, ids: &[u32], decode: u32) -
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         decode: None,
+        images: None,
     }
 }
 
@@ -1527,6 +1528,7 @@ mod tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         };
         let drill = drill_free_prompt_evidence_v1(base0_family_id_v1(), &backend, &profile, root, &job, &ids)
             .expect("the floor drills its free-prompt lane");

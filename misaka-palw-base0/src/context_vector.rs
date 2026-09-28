@@ -707,6 +707,7 @@ fn vector_job_v1(
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         decode: None,
+        images: None,
     };
     Ok((job, prompt))
 }

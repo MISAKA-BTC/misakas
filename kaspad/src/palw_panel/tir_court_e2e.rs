@@ -416,7 +416,7 @@ fn close(
         let proof = built.unwrap_or_else(|e| panic!("the {label} close builds: {e}"));
         assert!(proof.is_tir_v1(), "an IR close");
         let verdict =
-            kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(s, &sid, &proof, &court(), LADDER, FORM, false, false)
+            kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(s, &sid, &proof, &court(), LADDER, FORM, false, false, None)
                 .unwrap_or_else(|e| panic!("the {label} close adjudicates: {e}"));
         if palw_tir_close_is_mine_v1(verdict, i_am_responder) {
             return (label, proof, verdict);
@@ -533,6 +533,7 @@ fn a_planted_lie_in_an_ir_claim_is_convicted_by_the_ir_court() {
                 FORM,
                 false,
                 false,
+                None,
             )
             .unwrap();
             assert!(!palw_tir_close_is_mine_v1(verdict, true), "the liar's {label} close does not acquit it");

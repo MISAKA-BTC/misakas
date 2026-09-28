@@ -522,8 +522,9 @@ pub fn vlm_vision_program() -> TirProgramV2 {
 }
 
 /// A toy language model over a token stream (`Logits [1, 16]`): the token's `i8` embedding — or, with
-/// `images`, at a position whose token is [`PLACEHOLDER`], the next image row (a `Fixed` cursor
-/// counts the placeholders passed; RFC-0003 §II.2.1's placement) — projected to the vocabulary.
+/// `images`, at a position whose token is [`PLACEHOLDER`] while image rows remain, the next image row
+/// (a `Fixed` cursor counts the rows placed; RFC-0003 §II.2.1's placement: a placeholder past the
+/// last row is an ordinary token, embedded as one, as HF embeds it) — projected to the vocabulary.
 pub fn lm_program(images: bool) -> TirProgramV2 {
     let mut pb = ProgramBuilder::new(TOK, HISTORY_BOUND_V1_SMALL);
     let rows = images.then(|| pb.param("lm.image_rows", DType::I32, &[VLM_ROWS, D], false));
@@ -538,7 +539,11 @@ pub fn lm_program(images: bool) -> TirProgramV2 {
         let x = match (rows, cursor) {
             (Some(rows), Some(cursor)) => {
                 let ph = b.c(DType::Idx, PLACEHOLDER as i128);
-                let is_img = b.compare(Ref::Input(0), ph, Cmp::Eq);
+                let is_ph = b.compare(Ref::Input(0), ph, Cmp::Eq);
+                let rows_n = b.c(DType::I32, VLM_ROWS as i128);
+                let room = b.compare(Ref::State(cursor), rows_n, Cmp::Lt);
+                let no = b.c(DType::I8, 0);
+                let is_img = b.select(is_ph, room, no, DType::I8);
                 let at = b.clamp(Ref::State(cursor), 0, VLM_ROWS as i64 - 1, DType::Idx);
                 let row = b.gather(rows, at, 0, 0);
                 let row = b.shr(row, 16, Rounding::HalfAwayFromZero, DType::I32);

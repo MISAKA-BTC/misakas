@@ -3912,6 +3912,7 @@ mod free_prompt_tests {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         }
     }
 
@@ -6452,6 +6453,7 @@ mod held_real_row_probe {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         };
 
         // ---- the producer: the fold, past the network's ladder ----------------------------
@@ -6713,6 +6715,7 @@ mod held_real_row_probe {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the held producer runs");
         let leaves = run.facts.step_leaf_count;
@@ -6816,6 +6819,7 @@ mod held_real_row_probe {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the held producer runs");
         let leaves = run.facts.step_leaf_count;
@@ -6926,6 +6930,7 @@ mod held_real_row_probe {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         };
         let run = honest.execute_free_prompt(&job, &prompt).expect("the held producer runs");
         let (capture, leaves) = (run.outcome.material.clone(), run.facts.step_leaf_count);
@@ -7170,6 +7175,7 @@ mod aheld_windowed_builder {
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         };
         (job, prompt, ids)
     }

@@ -1383,6 +1383,7 @@ mod pq_output_class_enforcement_tests {
                 sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
                 temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
                 decode: None,
+                images: None,
             };
             if let Some(decode) = decode {
                 job = job.into_v4(decode);
@@ -1485,6 +1486,7 @@ mod pq_output_class_enforcement_tests {
                 sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
                 temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
                 decode: None,
+                images: None,
             };
             let payload = PalwFpCommitmentTxPayloadV3 {
                 version: PALW_FP_V3_VERSION,

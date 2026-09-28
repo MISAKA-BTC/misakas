@@ -87,7 +87,16 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV5 {
 /// **`fp_job_id_v5`**: `H64(key "misaka-palw/fp-v5/job-id/v1", le64(|bytes|) ‖ bytes)` over the
 /// whole borsh — the V3/V4 ids' construction under V5's own key.
 pub fn fp_job_id_v5(job: &PalwFreePromptJobV5) -> Hash64 {
-    let bytes = borsh::to_vec(job).expect("an FP Job V5 is borsh-serializable");
+    fp_job_id_v5_bytes(&borsh::to_vec(job).expect("an FP Job V5 is borsh-serializable"))
+}
+
+/// [`fp_job_id_v5`] of a V5 job as the lane carries it (a [`PalwFreePromptJobV3`] at version 8, its
+/// images the tail) — the same bytes, so the same id; the lane's `fp_job_id_v3` dispatches here.
+pub fn fp_job_id_v5_carried(job: &PalwFreePromptJobV3) -> Hash64 {
+    fp_job_id_v5_bytes(&borsh::to_vec(job).expect("a free-prompt job is borsh-serializable"))
+}
+
+fn fp_job_id_v5_bytes(bytes: &[u8]) -> Hash64 {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_FP_V5_DOMAIN_JOB_ID).to_state();
     state.update(&(bytes.len() as u64).to_le_bytes());
     state.update(&bytes);
@@ -103,6 +112,8 @@ pub enum PalwFpV5Error {
         "FP Job V5 is not admitted here — it arms at a height through Params::palw_fp_job_v5, and this network is below it (or has none)"
     )]
     NotArmed,
+    #[error("the job is version {version}, not FP Job V5 (version 8) with its images")]
+    NotAV5Job { version: u16 },
     #[error(
         "a V5 job embeds an FP Job V4 (version 7, its decode rules present); this one embeds version {version} (decode rules present: {decode_present})"
     )]
@@ -122,6 +133,20 @@ pub enum PalwFpV5Error {
 }
 
 impl PalwFreePromptJobV5 {
+    /// **A V5 job as the lane carries it**: its V4 job at version 8, the images its tail — the same
+    /// bytes as this wrapper's.
+    pub fn into_carried(&self) -> PalwFreePromptJobV3 {
+        PalwFreePromptJobV3 { version: PALW_FP_V5_VERSION, images: Some(self.images.clone()), ..self.v4.clone() }
+    }
+
+    /// **The V5 job a carried job is**, if it is one: version 8, its decode rules and images present.
+    pub fn from_carried(job: &PalwFreePromptJobV3) -> Result<Self, PalwFpV5Error> {
+        let Some(images) = job.images.clone().filter(|_| job.version == PALW_FP_V5_VERSION && job.decode.is_some()) else {
+            return Err(PalwFpV5Error::NotAV5Job { version: job.version });
+        };
+        Ok(Self { v4: PalwFreePromptJobV3 { version: PALW_FP_V4_VERSION, images: None, ..job.clone() }, images })
+    }
+
     /// **The V5 job's own shape**: its embedded job is an FP Job V4 that V4's own rules admit, and
     /// it carries 1..=16 images.
     pub fn validate_shape_v1(&self) -> Result<(), PalwFpV5Error> {
@@ -227,4 +252,38 @@ impl Params {
         }
         Ok(())
     }
+}
+
+/// **A V5 commitment's stateless rules** (the V5 twin of the extraction walk's
+/// `validate_stateless_under_ruleset_v4`): the fence, the carried job a V5 job of the right shape,
+/// and every commitment rule of FP Job V4 applied to its V4 view — the same commitment with the V4 job
+/// the V5 job embeds — past V4's fence. The signature is the payload's own
+/// (`validate_signature_v3` over the V5 claim id), checked by the caller as for V4.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_v5_validate_payload_v1(
+    payload: &crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3,
+    network_domain: Hash64,
+    panel_da_armed: bool,
+    max_step_leaf_count: u64,
+    ruleset_caps: Option<(u32, u32)>,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    armed: bool,
+) -> Result<PalwFreePromptJobV5, PalwFpV5Error> {
+    if !armed {
+        return Err(PalwFpV5Error::NotArmed);
+    }
+    let v5 = PalwFreePromptJobV5::from_carried(&payload.commitment.job)?;
+    v5.validate_shape_v1()?;
+    let mut view = payload.clone();
+    view.commitment.job = v5.v4.clone();
+    view.validate_stateless_under_ruleset_v4(
+        network_domain,
+        panel_da_armed,
+        max_step_leaf_count,
+        ruleset_caps,
+        prompt_ids_form,
+        PalwFpDecodeRulesV1::Active,
+    )
+    .map_err(PalwFpV5Error::V4)?;
+    Ok(v5)
 }

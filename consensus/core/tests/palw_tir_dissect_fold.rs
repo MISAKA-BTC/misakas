@@ -461,7 +461,7 @@ fn play(run: &mut Run, w: &World, x: &Execution, sid: Hash64, push: bool) -> End
         verdict: PalwCourtVerdictV2::ExecutorGuilty,
         proof: proof.clone()
     }));
-    let verdict = adjudicate_court_close_v3(&run.s, &sid, &proof, &court(), LADDER, PalwPromptIdsFormV1::Flat, false, false)
+    let verdict = adjudicate_court_close_v3(&run.s, &sid, &proof, &court(), LADDER, PalwPromptIdsFormV1::Flat, false, false, None)
         .expect("the bottom adjudicates");
     run.step(&[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof }]);
     assert!(run.s.court_session(&sid).is_none() && run.s.tir_dissection_v1(&sid).is_none(), "the session and its phase end together");
@@ -913,7 +913,7 @@ fn a_leaf_that_is_not_dissected_is_answered_by_a_declared_close() {
         assert_eq!(duty.turn, PalwBisectTurnV1::AwaitDisclosure, "the executor owes the terminal move");
         assert!(duty.fused_class);
         // Its move: the acquitting close, too large to be carried whole by this test's rule, declared.
-        let verdict = adjudicate_court_close_v3(&run.s, &sid, &proof, &court(), LADDER, PalwPromptIdsFormV1::Flat, false, false)
+        let verdict = adjudicate_court_close_v3(&run.s, &sid, &proof, &court(), LADDER, PalwPromptIdsFormV1::Flat, false, false, None)
             .expect("the close adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "the honest leaf acquits");
         let close = PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict, proof: proof.clone() };

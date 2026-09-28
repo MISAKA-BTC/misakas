@@ -340,6 +340,12 @@ pub struct PalwFreePromptJobV3 {
     /// pairing ([`PalwFpV3Error::DecodeConfigVersionMismatch`]). Serialized after every V3 field
     /// and only when present, so a V3 job's bytes are unchanged.
     pub decode: Option<DecodeConfigV4>,
+    /// **RFC-0003 §II.2.1: FP Job V5's images** — `Some` exactly at
+    /// [`crate::palw_fp_job_v5::PALW_FP_V5_VERSION`] (with `decode` present) and `None` at every other
+    /// version; validation refuses any other pairing ([`PalwFpV3Error::ImagesVersionMismatch`]).
+    /// Serialized after `decode` and only when present, so a V3 or V4 job's bytes are unchanged. A V5
+    /// job is dormant behind `Params::palw_fp_job_v5` ([`crate::palw_fp_job_v5`]).
+    pub images: Option<Vec<crate::palw_gen_class_v1::PalwGenImageInputRefV1>>,
 }
 
 /// **RFC-0001 §A.4's `PalwFreePromptJobV4`**: a [`PalwFreePromptJobV3`] at
@@ -372,6 +378,10 @@ impl borsh::BorshSerialize for PalwFreePromptJobV3 {
         if let Some(decode) = &self.decode {
             borsh::BorshSerialize::serialize(decode, writer)?;
         }
+        // The V5 tail (RFC-0003 §II.2.1), written exactly when it is present, after the V4 tail.
+        if let Some(images) = &self.images {
+            borsh::BorshSerialize::serialize(images, writer)?;
+        }
         Ok(())
     }
 }
@@ -399,10 +409,15 @@ impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
             sampling_seed: borsh::BorshDeserialize::deserialize_reader(reader)?,
             temperature_q: borsh::BorshDeserialize::deserialize_reader(reader)?,
             decode: None,
+            images: None,
         };
-        // The version decides whether the tail exists: a V3 job's bytes end at `temperature_q`.
-        if version == PALW_FP_V4_VERSION {
+        // The version decides whether the tail exists: a V3 job's bytes end at `temperature_q`; a V4
+        // job's at its decode rules; a V5 job's (RFC-0003 §II.2.1) at its images, after them.
+        if version == PALW_FP_V4_VERSION || version == crate::palw_fp_job_v5::PALW_FP_V5_VERSION {
             job.decode = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
+        }
+        if version == crate::palw_fp_job_v5::PALW_FP_V5_VERSION {
+            job.images = Some(borsh::BorshDeserialize::deserialize_reader(reader)?);
         }
         Ok(job)
     }
@@ -421,6 +436,11 @@ impl PalwFreePromptJobV3 {
         self.version == PALW_FP_V4_VERSION
     }
 
+    /// Is this a V5 job (RFC-0003 §II.2.1: a V4 job with image inputs)?
+    pub fn is_v5(&self) -> bool {
+        self.version == crate::palw_fp_job_v5::PALW_FP_V5_VERSION
+    }
+
     /// The job's ADR-0082 Decision 11 sampler inputs.
     pub fn sampling_v2(&self) -> crate::palw_decode_select_v2::PalwDecodeSamplingV2 {
         crate::palw_decode_select_v2::PalwDecodeSamplingV2 { seed: self.sampling_seed, temperature_q: self.temperature_q }
@@ -430,7 +450,8 @@ impl PalwFreePromptJobV3 {
     /// §A.3's pipeline for a V4 job — to the job's budget. What every engine's decode loop, every
     /// seat's replay and the gateway's display rule drive (`PalwFpDecoderV1`).
     pub fn decoder_v1(&self) -> crate::palw_decode_pipeline_v4::PalwFpDecoderV1 {
-        match (&self.decode, self.is_v4()) {
+        // A V5 job decodes under its V4 rules (RFC-0003 §II.2.1: V5 embeds V4 unchanged).
+        match (&self.decode, self.is_v4() || self.is_v5()) {
             (Some(decode), true) => {
                 crate::palw_decode_pipeline_v4::PalwFpDecoderV1::v4(decode.clone(), self.sampling_v2(), self.decode_token_limit)
             }
@@ -446,6 +467,10 @@ impl PalwFreePromptJobV3 {
 pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
     if job.version == PALW_FP_V4_VERSION {
         return fp_job_id_v4(job);
+    }
+    // RFC-0003 §II.2.1: a V5 job is named under its own domain too.
+    if job.version == crate::palw_fp_job_v5::PALW_FP_V5_VERSION {
+        return crate::palw_fp_job_v5::fp_job_id_v5_carried(job);
     }
     let bytes = borsh::to_vec(job).expect("PalwFreePromptJobV3 is borsh-serializable");
     canonical_id(PALW_FP_V3_DOMAIN_JOB_ID, &bytes)
@@ -1462,6 +1487,9 @@ pub enum PalwFpV3Error {
     /// carrying one. One job, one encoding.
     #[error("job version {version} does not match its decode config (present: {present}) — version 7 carries one, version 5 none")]
     DecodeConfigVersionMismatch { version: u16, present: bool },
+    /// **RFC-0003 §II.2.1: images on a job that is not FP Job V5** — only version 8 carries them.
+    #[error("job version {version} carries images — only FP Job V5 (version 8) does")]
+    ImagesVersionMismatch { version: u16 },
     /// **RFC-0001 §A.2: the V4 job's `DecodeConfigV4` is not in canonical form**, by name.
     #[error("the V4 job's decode config is not canonical: {0}")]
     DecodeConfigNotCanonical(crate::palw_decode_pipeline_v4::PalwDecodeConfigV4Error),
@@ -1583,6 +1611,9 @@ impl PalwFpDecodeRulesV1 {
                 if job.decode.is_some() {
                     return Err(PalwFpV3Error::DecodeConfigVersionMismatch { version: job.version, present: true });
                 }
+                if job.images.is_some() {
+                    return Err(PalwFpV3Error::ImagesVersionMismatch { version: job.version });
+                }
                 if !self.admits_v3() {
                     return Err(PalwFpV3Error::V3JobPastDecodeRules);
                 }
@@ -1597,6 +1628,9 @@ impl PalwFpDecodeRulesV1 {
                 let Some(decode) = &job.decode else {
                     return Err(PalwFpV3Error::DecodeConfigVersionMismatch { version: job.version, present: false });
                 };
+                if job.images.is_some() {
+                    return Err(PalwFpV3Error::ImagesVersionMismatch { version: job.version });
+                }
                 if !self.admits_v4() {
                     return Err(PalwFpV3Error::DecodeRulesNotArmed);
                 }
@@ -2643,6 +2677,7 @@ mod tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         }
     }
 
@@ -3673,6 +3708,7 @@ mod fp_material_tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         }
     }
 
@@ -3885,6 +3921,7 @@ mod fp_answer_tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             decode: None,
+            images: None,
         }
     }
 
@@ -4239,6 +4276,7 @@ mod job_v4_tests {
             sampling_seed: [0u8; 32],
             temperature_q: 0,
             decode: None,
+            images: None,
         }
     }
 
@@ -4493,6 +4531,7 @@ mod job_v4_tests {
             sampling_seed: bytes_of::<32>(&case.sampling_seed),
             temperature_q: case.temperature_q,
             decode: case.decode.clone(),
+            images: None,
         }
     }
 
