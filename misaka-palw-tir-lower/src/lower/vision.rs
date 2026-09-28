@@ -597,7 +597,7 @@ pub fn window_tables(s: &VisionSpec) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>)> {
             }
         }
     }
-    let mu = (m * m) as u32;
+    let mu = m * m;
     let perm: Vec<u32> = order.iter().flat_map(|u| (0..mu).map(move |k| u * mu + k)).collect();
     let wins: Vec<u32> = win_of_unit.iter().flat_map(|w| std::iter::repeat_n(*w, mu as usize)).collect();
     let mut inv = vec![0u32; order.len()];
@@ -939,6 +939,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
         site_nodes: BTreeMap::new(),
         shared: Default::default(),
         tables: Default::default(),
+        image_rows: None,
         split_max_readers: 0,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -1039,6 +1040,9 @@ fn vision_block(pb: &mut ProgramBuilder, cx: &mut Cx<'_>, hbk: usize, s: &Vision
                 let cols: Vec<i8> = (0..w).flat_map(|k| (0..ww).map(move |j| i8::from(k / r == j))).collect();
                 let bh = decl(&mut b, cx, &lb, "pre.box_rows", DType::I8, &[hh as usize, h as usize], false, Arc::new(move |_| Ok(IntTensor::i8(vec![hh as usize, h as usize], rows.clone()))))?;
                 let bw = decl(&mut b, cx, &lb, "pre.box_cols", DType::I8, &[w as usize, ww as usize], false, Arc::new(move |_| Ok(IntTensor::i8(vec![w as usize, ww as usize], cols.clone()))))?;
+                // The 0/1 matrices are data: their range is stated for the analysis (never fires).
+                let bh = b.clamp(bh, 0, 1, DType::I8);
+                let bw = b.clamp(bw, 0, 1, DType::I8);
                 let x = b.reshape_fixed(img, &[h, w * 3]);
                 let x = b.matmul(bh, x, DType::I32); // [hh, w·3]
                 let x = b.reshape_fixed(x, &[hh, w, 3]);

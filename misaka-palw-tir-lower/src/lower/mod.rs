@@ -76,6 +76,9 @@ pub use fill::{FillCtx, IntData, IntParams, IntTensor, Materialised, materialise
 pub struct LowerOpts {
     /// `2^18` (the default) or `2^21`.
     pub history_bound: u32,
+    /// A multimodal LM: image rows placed at the positions `start .. start + rows` (RFC-0003 II.4:
+    /// `Select(is_image_pos, Gather(img, pos − start), token embedding)`).
+    pub image_rows: Option<ImageRows>,
     /// The longest history window any block keeps (`None`: the history bound, or the NF-8 cap).
     /// A class whose layout bounds its jobs below the history bound can keep a shorter window —
     /// the attention is the model's up to it — and its per-position cost scales with it.
@@ -84,9 +87,24 @@ pub struct LowerOpts {
 
 impl Default for LowerOpts {
     fn default() -> Self {
-        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL, max_window: None }
+        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL, max_window: None, image_rows: None }
     }
 }
+
+/// Image rows an LM reads in place of its token embedding at the image's positions: `rows` rows of
+/// `width` (the LM's hidden size) in the fixed point `unit` (the vision stage's output, `2^−q`).
+/// They arrive as the input `input.image_rows` (`i32 [rows, width]`), and the first image position
+/// as `input.image_start` (`idx []`), a job scalar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageRows {
+    pub rows: usize,
+    pub width: usize,
+    pub unit: f64,
+}
+
+/// The input params of [`ImageRows`].
+pub const IMAGE_ROWS_PARAM: &str = "input.image_rows";
+pub const IMAGE_START_PARAM: &str = "input.image_start";
 
 /// What a scale is made of; resolved per occurrence at materialisation ([`FillCtx::scale`]).
 #[derive(Clone, Debug, PartialEq)]
@@ -288,6 +306,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         site_nodes: BTreeMap::new(),
         shared,
         tables,
+        image_rows: opts.image_rows,
         split_max_readers: usize::MAX,
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
@@ -418,6 +437,8 @@ struct Cx<'h> {
     /// HL params gathered by row (embeddings, learned positions): stored as per-row `i16` codes,
     /// and so is a head that reads the same tensor.
     tables: std::collections::BTreeSet<u32>,
+    /// [`LowerOpts::image_rows`].
+    image_rows: Option<ImageRows>,
     /// Split a value's outlier channels only when at most this many projections read it: each
     /// split projection costs 9 nodes more, and a block has 512 (NF-12).
     split_max_readers: usize,
@@ -1045,7 +1066,10 @@ fn lower_node(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, i: usize, 
         Op::Embedding => {
             let tp = pidx(node.inputs[1])?;
             let v = lower_row_lookup(b, cx, lb, tp, tir::Ref::Input(INPUT_TOKEN), &site, &want)?;
-            one(v)
+            match cx.image_rows {
+                Some(img) => one(inject_image_rows(b, cx, lb, v, img)?),
+                None => one(v),
+            }
         }
         Op::PosEmbedding { offset } => {
             let tp = pidx(node.inputs[1])?;
@@ -1451,6 +1475,33 @@ fn lower_row_lookup(
     let v = Val { r, dt: want.dt, key: want.key.clone(), len: cols, site: site.to_string() };
     note_resid(cx, lb, &v);
     Ok(v)
+}
+
+/// RFC-0003 II.4's placement: at positions `start .. start + rows` the LM reads the image's row
+/// `pos − start`, narrowed from the vision stage's fixed point to the residual scale; elsewhere its
+/// token embedding. The embedding must be the value the pre block carries out (residual scale).
+fn inject_image_rows(b: &mut BlockBuilder<'_>, cx: &mut Cx<'_>, lb: &mut Lb, v: Val, img: ImageRows) -> Result<Val> {
+    if !v.key.same(&ScaleKey::resid()) || v.dt != DType::I32 || v.len != img.width {
+        return Err(LowerError::not_lowerable("image rows into a pre block that does more than look up the token embedding"));
+    }
+    let (n, w) = (img.rows, img.width);
+    let rows = decl(b, cx, lb, IMAGE_ROWS_PARAM, DType::I32, &[n, w], false, bidir::input_fill(DType::I32, vec![n, w]))?;
+    let start = decl(b, cx, lb, IMAGE_START_PARAM, DType::Idx, &[], false, bidir::input_fill(DType::Idx, vec![]))?;
+    let rel = b.sub(tir::Ref::Input(INPUT_POS), start, DType::I64);
+    let zero = b.c(DType::I64, 0);
+    let top = b.c(DType::I64, n as i128);
+    let ge = b.compare(rel, zero, tir::Cmp::Ge);
+    let lt = b.compare(rel, top, tir::Cmp::Lt);
+    let off = b.c(DType::I8, 0);
+    let inside = b.select(ge, lt, off, DType::I8);
+    let at = b.clamp(rel, 0, n as i64 - 1, DType::Idx);
+    let row = b.gather(rows, at, 0, 0);
+    let unit = img.unit;
+    let (m, s) = decl_ms(b, cx, lb, "image_rows", 1, Arc::new(move |c| Ok(vec![unit / c.scale(&ScaleKey::resid())?])))?;
+    let row = narrow(b, row, m, s, None, DType::I32);
+    let r = b.select(inside, row, v.r, DType::I32);
+    b.commit(r);
+    Ok(Val { r, ..v })
 }
 
 /// Per-row `i16` codes of a gathered table (and of a head tied to it).

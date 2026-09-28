@@ -193,11 +193,14 @@ pub struct Session<'a> {
     pub sites: Option<BTreeMap<String, SiteStat>>,
     /// Every site's output of the current step, when tracing (cleared by each `step`).
     pub trace: Option<BTreeMap<String, Vec<f32>>>,
+    /// Rows that replace the pre block's output at their positions (an image's rows in a
+    /// multimodal LM, RFC-0003 II.4).
+    pub overrides: BTreeMap<usize, Vec<f32>>,
 }
 
 impl<'a> Session<'a> {
     pub fn new(prog: &'a HlProgram, params: &'a ParamStore) -> Self {
-        Session { prog, params, fixed: BTreeMap::new(), hist: BTreeMap::new(), pos: 0, sites: None, trace: None }
+        Session { prog, params, fixed: BTreeMap::new(), hist: BTreeMap::new(), pos: 0, sites: None, trace: None, overrides: BTreeMap::new() }
     }
     pub fn with_site_stats(mut self) -> Self {
         self.sites = Some(BTreeMap::new());
@@ -241,6 +244,9 @@ impl<'a> Session<'a> {
         }
         let pre = self.prog.pre;
         let mut carries = self.eval_block(pre, None, &[], token)?;
+        if let Some(row) = self.overrides.get(&self.pos) {
+            carries[0] = row.clone();
+        }
         for (l, k) in self.prog.schedule.clone().into_iter().enumerate() {
             carries = self.eval_block(k as usize, Some(l), &carries, token)?;
         }
