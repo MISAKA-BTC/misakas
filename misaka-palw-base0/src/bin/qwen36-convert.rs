@@ -1007,6 +1007,26 @@ fn main() {
             started.elapsed(),
             measured.len()
         );
+        // **P0a: the value-head order this artifact's tensors carry** (phase-f-integration.md §3.2).
+        // llama.cpp writes qwen35/qwen35moe through `_LinearAttentionVReorderBase`, which reorders every
+        // value-indexed tensor from HF's grouped order to TILED order, and this converter never
+        // permutes heads — so value head `h` reads key head `h % k_heads`, which is what the kernel,
+        // the court and a graph-v8 class's v5 map spell. Recorded BESIDE the artifact, not in it: the
+        // artifact root absorbs every header row, and the fact changes no weight.
+        if hybrid {
+            let provenance = serde_json::json!({
+                "format": "misaka-palw/qwen36-artifact-provenance/v1",
+                "gguf_architecture": arch,
+                "gdn_key_heads": linear_k_heads,
+                "gdn_value_heads": linear_v_heads,
+                "v_head_order": "tiled",
+                "v_head_order_source": "llama.cpp qwen35 V-reorder (_LinearAttentionVReorderBase): value head h reads key head h % k_heads",
+            });
+            let path = format!("{out_path}.provenance.json");
+            std::fs::write(&path, serde_json::to_string_pretty(&provenance).expect("json") + "\n")
+                .unwrap_or_else(|e| die(format!("{path}: {e}")));
+            println!("v_head_order = tiled ({linear_k_heads} key / {linear_v_heads} value heads), recorded in {path}");
+        }
     }
 
     // The reference's measured ranges, for comparing a run's magnitudes against them site by site.

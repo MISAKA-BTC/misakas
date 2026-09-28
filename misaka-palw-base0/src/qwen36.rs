@@ -2028,6 +2028,48 @@ pub fn qwen36_dev_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
     fixture_impl(layers, experts)
 }
 
+/// **P0a: the hybrid fixture at a chosen recurrence geometry** — [`qwen36_dev_fixture`]'s layer
+/// stack (full attention every fourth layer, the gate, the shared expert) with `k_heads` key heads
+/// and `v_heads` value heads of `head_dim` lanes over a `d_model`-wide residual. Phase F §3.3's
+/// fixtures are 16/32 and 16/48 at head dim 4 over 64 lanes — the key/value ratios of Qwen3.6-35B
+/// and Qwen3.8-27B, where a window row is `2 · 16 · 4 + v · 4` lanes and not `(2 · 4 + 4) · v`.
+/// Same discipline (and the same warning) as [`qwen36_dev_fixture`].
+pub fn qwen36_dev_fixture_heads(
+    layers: usize,
+    experts: usize,
+    k_heads: usize,
+    v_heads: usize,
+    head_dim: usize,
+    d_model: usize,
+) -> Qwen36ArtifactV1 {
+    use crate::artifact::LN_THETA_10000_GEN_Q;
+    let shape = Qwen36ShapeV1 {
+        layer_types: (0..layers)
+            .map(|i| if (i + 1).is_multiple_of(4) { Qwen36LayerKind::FullAttention } else { Qwen36LayerKind::LinearAttention })
+            .collect(),
+        d_model,
+        n_heads: 4,
+        n_kv_heads: 2,
+        head_dim: 16,
+        rotary_dim: 4,
+        linear_k_heads: k_heads,
+        linear_v_heads: v_heads,
+        linear_head_dim: head_dim,
+        conv_kernel: 4,
+        n_experts: experts,
+        experts_per_token: 4,
+        moe_dim: 16,
+        shared_dim: 16,
+        vocab: 64,
+        max_position: 32,
+        eps_q: 1,
+        router_up_bits: 20,
+    };
+    let rope = RopeTableV1::generate(shape.head_dim, shape.max_position, LN_THETA_10000_GEN_Q).expect("a table");
+    let artifact = Qwen36ArtifactV1::new(shape.clone(), rope).expect("a valid shape");
+    fill_fixture(artifact, shape)
+}
+
 /// The qwen3moe-flavored fixture: every layer full attention, no gate, no shared expert, full
 /// rotation. Same discipline (and the same warning) as [`qwen36_dev_fixture`].
 pub fn qwen3moe_dev_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {

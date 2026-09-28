@@ -474,6 +474,19 @@ impl<'a> Qwen36RecomputeKernelsV1<'a> {
         }
     }
 
+    /// **Kernels that continue from a restored cache** (P0a's resumed walk): `cache` is a
+    /// committed checkpoint's chunks restored through the class's map
+    /// (`qwen36_cache_from_checkpoint_chunks_v1`), and the next forward is the position after it —
+    /// so a resumed walk and a walk from row zero can be compared chunk for chunk.
+    #[cfg(test)]
+    pub(crate) fn with_cache(
+        artifact: &'a crate::qwen36::Qwen36ArtifactV1,
+        plan: &'a crate::qwen36_plan::Qwen36ProfilePlanV1,
+        cache: crate::qwen36::Qwen36Cache,
+    ) -> Self {
+        Self { engine: crate::qwen36::Qwen36Engine::new(artifact), plan, cache, shape: &artifact.shape }
+    }
+
     /// The recurrence layers' live state, in the shape [`crate::fp_capture`] chunks.
     fn recurrence_state(&self) -> (Vec<u16>, Vec<crate::fp_capture::Base0GdnLayerStateV1>) {
         qwen36_recurrence_state_v1(self.shape, &self.cache)
@@ -591,11 +604,19 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
         // recurrence at all — every position for the attention tiles, the derived spacing for the
         // recurrence state, because a `heads × k_dim × v_dim × 4` state is not prefix-stable and a
         // per-position commitment of it would hash 2 MiB a token.
-        if declared == map::hybrid_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v4() {
+        if declared == map::hybrid_state_chunk_map_id_v3() || map::palw_map_is_hybrid_held_for_version_v1(&declared, profile.version) {
             let geometry = map::hybrid_state_geometry_for_covered_v1(profile, positions)
                 .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
-            let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel)
-                .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
+            // P0a: the class's gather — v3's window for a class whose map spells its key heads.
+            let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_for_class_v1(
+                profile,
+                &layers,
+                self.shape.linear_k_heads as u32,
+                heads,
+                dim,
+                kernel,
+            )
+            .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
             // The composition promises ONE chunk per `(kind, layer, head)`; the executor's own v2
             // geometry splits a head only when its slice does not fit a chunk, which
             // `hybrid_state_geometry_v3` refuses outright. Checked rather than assumed: two

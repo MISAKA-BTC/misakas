@@ -1384,6 +1384,12 @@ pub enum Base0GdnChunkKindV1 {
 }
 
 /// Why a recurrence state cannot be chunked, or restored from chunks.
+///
+/// P0a's three: `KeyHeadsDoNotGroupTheValueHeads` (the key heads a v3 window row is cut over do
+/// not group the value heads), `KeyHeadsAreNotTheClasss` (the engine's key-head count is not the
+/// one the class's profile derives) and `ConvCopiesDisagree` (two value heads' chunks carry
+/// different values for the one key-head channel they share — bytes no state gathers to, refused
+/// rather than resolved by whichever head was scattered last).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Base0GdnStateError {
     ZeroGeometry { heads: u32, k_dim: u32, v_dim: u32 },
@@ -1394,6 +1400,9 @@ pub enum Base0GdnStateError {
     ChunkIsNotItsOwnLength { index: u64, got: usize, want: u64 },
     StateIsNotTheGeometrys { layer: u16, head: u32 },
     ConvIsNotTheGeometrys { layer: u16 },
+    KeyHeadsDoNotGroupTheValueHeads { key_heads: u32, heads: u32 },
+    KeyHeadsAreNotTheClasss { engine: u32, class: u32 },
+    ConvCopiesDisagree { layer: u16, row: u32, channel: u32 },
 }
 
 impl std::fmt::Display for Base0GdnStateError {
@@ -1416,6 +1425,15 @@ impl std::fmt::Display for Base0GdnStateError {
             }
             Self::ConvIsNotTheGeometrys { layer } => {
                 write!(f, "layer {layer} holds a convolution window this geometry does not describe")
+            }
+            Self::KeyHeadsDoNotGroupTheValueHeads { key_heads, heads } => {
+                write!(f, "{key_heads} key heads do not group {heads} value heads")
+            }
+            Self::KeyHeadsAreNotTheClasss { engine, class } => {
+                write!(f, "the engine runs {engine} key heads and the class's profile derives {class}")
+            }
+            Self::ConvCopiesDisagree { layer, row, channel } => {
+                write!(f, "layer {layer}'s window row {row} holds two values for shared channel {channel}")
             }
         }
     }
@@ -1706,12 +1724,18 @@ pub fn base0_gdn_state_from_chunks_v1(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Base0GdnStateGeometryV2 {
     pub layers: Vec<u16>,
+    /// The VALUE heads — one delta state and one window slice each.
     pub heads: u32,
+    /// **P0a: the key heads the window row's q and k regions are cut over.** `heads` under gdn v2,
+    /// whose gather is written over one head count; the class's derived `k_heads` under gdn v3
+    /// ([`base0_gdn_state_geometry_v3`]).
+    pub key_heads: u32,
     pub k_dim: u32,
     pub v_dim: u32,
     pub conv_kernel: u32,
-    /// `(2 · k_dim + v_dim) · heads` — the full window row the engine holds, which the per-head
-    /// rows are gathered OUT of. Kept so a restore can size the row it scatters back into.
+    /// `2 · key_heads · k_dim + heads · v_dim` — the full window row the engine holds, which the
+    /// per-head rows are gathered OUT of (`(2 · k_dim + v_dim) · heads` under v2). Kept so a restore
+    /// can size the row it scatters back into.
     pub conv_width: u32,
     /// `k_dim × 4`: one row of one head's delta state. v1's, unchanged.
     pub delta_row_bytes: u32,
@@ -1739,11 +1763,21 @@ impl Base0GdnStateGeometryV2 {
     }
     /// **Head `h`'s channel indices inside one full window row**, in the map's declared order
     /// `[q, k, v]`. The one spelling of the gather: the chunker and the restorer both walk it, so
-    /// they cannot disagree about which channels are whose.
+    /// they cannot disagree about which channels are whose. It is [`Self::conv_head_channels_v3`],
+    /// which under v2 (`key_heads == heads`) is v2's gather `[q:h*k, k:heads*k+h*k, v:2*heads*k+h*v]`
+    /// lane for lane.
     pub fn conv_head_channels(&self, head: u32) -> impl Iterator<Item = usize> + '_ {
-        let (k, v, heads) = (self.k_dim as usize, self.v_dim as usize, self.heads as usize);
+        self.conv_head_channels_v3(head)
+    }
+
+    /// **P0a: gdn v3's gather** — value head `h` reads key head `h % key_heads` (the tiling the
+    /// kernel, the court and the llama.cpp artifact agree on) out of a window row whose q and k
+    /// regions are `key_heads` wide: `[q:(h%kh)*k, k:kh*k+(h%kh)*k, v:2*kh*k+h*v]`.
+    pub fn conv_head_channels_v3(&self, head: u32) -> impl Iterator<Item = usize> + '_ {
+        let (k, v, kh) = (self.k_dim as usize, self.v_dim as usize, self.key_heads.max(1) as usize);
         let h = head as usize;
-        (h * k..h * k + k).chain(heads * k + h * k..heads * k + h * k + k).chain(2 * heads * k + h * v..2 * heads * k + h * v + v)
+        let key = h % kh;
+        (key * k..key * k + k).chain(kh * k + key * k..kh * k + key * k + k).chain(2 * kh * k + h * v..2 * kh * k + h * v + v)
     }
 }
 
@@ -1795,6 +1829,7 @@ pub fn base0_gdn_state_geometry_v2(
     let geometry = Base0GdnStateGeometryV2 {
         layers: layers.to_vec(),
         heads,
+        key_heads: heads,
         k_dim,
         v_dim,
         conv_kernel,
@@ -1809,6 +1844,56 @@ pub fn base0_gdn_state_geometry_v2(
         return Err(Base0GdnStateError::TooManyChunks { got: count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
     }
     Ok(geometry)
+}
+
+/// **P0a: the gdn v3 layout** — [`base0_gdn_state_geometry_v2`]'s chunks, head for head and byte for
+/// byte in size, over a window row cut at the KEY-head count: `2 · key_heads · k_dim + heads · v_dim`
+/// lanes, head `h` gathering key head `h % key_heads`. At `key_heads == heads` it IS v2's.
+pub fn base0_gdn_state_geometry_v3(
+    layers: &[u16],
+    key_heads: u32,
+    heads: u32,
+    k_dim: u32,
+    v_dim: u32,
+    conv_kernel: u32,
+) -> Result<Base0GdnStateGeometryV2, Base0GdnStateError> {
+    if key_heads == 0 || !heads.is_multiple_of(key_heads.max(1)) {
+        return Err(Base0GdnStateError::KeyHeadsDoNotGroupTheValueHeads { key_heads, heads });
+    }
+    let mut geometry = base0_gdn_state_geometry_v2(layers, heads, k_dim, v_dim, conv_kernel)?;
+    let conv_width = 2 * key_heads as u64 * k_dim as u64 + heads as u64 * v_dim as u64;
+    if conv_width > u32::MAX as u64 {
+        return Err(Base0GdnStateError::RowExceedsChunk {
+            row_bytes: conv_width * 4,
+            max: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES,
+        });
+    }
+    geometry.key_heads = key_heads;
+    geometry.conv_width = conv_width as u32;
+    Ok(geometry)
+}
+
+/// **The recurrence's capture geometry for THIS class** (P0a) — the one dispatch the producer's
+/// capture, the seat's recompute and the restore share: gdn v3's for a version-3 profile on the held
+/// composition that spells its key-head count (checked against the engine's own count), gdn v2's for
+/// every other class, whose map's gather is written over one head count.
+pub fn base0_gdn_state_geometry_for_class_v1(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    layers: &[u16],
+    key_heads: u32,
+    heads: u32,
+    head_dim: u32,
+    conv_kernel: u32,
+) -> Result<Base0GdnStateGeometryV2, Base0GdnStateError> {
+    if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_spells_key_heads_v1(profile) {
+        return base0_gdn_state_geometry_v2(layers, heads, head_dim, head_dim, conv_kernel);
+    }
+    let class = kaspa_consensus_core::palw_step::palw_gdn_key_heads_v1(profile)
+        .map_err(|_| Base0GdnStateError::KeyHeadsAreNotTheClasss { engine: key_heads, class: 0 })?;
+    if class != key_heads {
+        return Err(Base0GdnStateError::KeyHeadsAreNotTheClasss { engine: key_heads, class });
+    }
+    base0_gdn_state_geometry_v3(layers, key_heads, heads, head_dim, head_dim, conv_kernel)
 }
 
 /// The v2 entry at `chunk_index`, or `None` past the end of the map — the enumeration itself.
@@ -1907,6 +1992,12 @@ pub fn base0_gdn_state_chunks_v2(
 
 /// **Restore a recurrence state from v2 chunks** — the replay side, scattering each head's conv
 /// channels back where the gather took them from.
+///
+/// **P0a: under gdn v3 a key-head channel is gathered into every value head that reads it** (`heads
+/// / key_heads` copies), so the chunk stream is not every byte string: copies that disagree gather
+/// from no state at all, and the restore refuses them by name ([`Base0GdnStateError::ConvCopiesDisagree`])
+/// instead of keeping whichever head was scattered last. Under v2 every channel has one owner and
+/// the check never fires.
 pub fn base0_gdn_state_from_chunks_v2(
     geometry: &Base0GdnStateGeometryV2,
     chunks: &[Vec<u8>],
@@ -1923,6 +2014,10 @@ pub fn base0_gdn_state_from_chunks_v2(
             conv: vec![vec![0i32; geometry.conv_width as usize]; geometry.conv_kernel as usize],
         })
         .collect();
+    // Which window channels a chunk has already written, per layer and row — v3's shared q/k
+    // channels arrive once per value head that gathers them.
+    let mut written: Vec<Vec<Vec<bool>>> =
+        geometry.layers.iter().map(|_| vec![vec![false; geometry.conv_width as usize]; geometry.conv_kernel as usize]).collect();
     for (index, bytes) in chunks.iter().enumerate() {
         let entry = base0_gdn_chunk_entry_v2(geometry, index as u64)
             .ok_or(Base0GdnStateError::ChunkCountIsNotTheMaps { got: chunks.len(), want: geometry.chunk_count() })?;
@@ -1942,9 +2037,20 @@ pub fn base0_gdn_state_from_chunks_v2(
             }
             Base0GdnChunkKindV1::Conv => {
                 for row in 0..entry.row_count as usize {
-                    let window = &mut states[ordinal].conv[entry.row_start as usize + row];
+                    let at = entry.row_start as usize + row;
+                    let window = &mut states[ordinal].conv[at];
+                    let seen = &mut written[ordinal][at];
                     for (slot, channel) in geometry.conv_head_channels(entry.head).enumerate() {
-                        window[channel] = values[row * width + slot];
+                        let value = values[row * width + slot];
+                        if seen[channel] && window[channel] != value {
+                            return Err(Base0GdnStateError::ConvCopiesDisagree {
+                                layer: entry.layer,
+                                row: at as u32,
+                                channel: channel as u32,
+                            });
+                        }
+                        window[channel] = value;
+                        seen[channel] = true;
                     }
                 }
             }
@@ -2457,6 +2563,101 @@ mod tests {
         // And the two maps' chunk streams are genuinely different objects — a v1 capture opened
         // under v2 restores a state nobody folded, which is why they are different classes.
         assert_ne!(chunks, base0_gdn_state_chunks_v1(&v1, &live).expect("v1 chunks"));
+    }
+
+    /// **P0a: gdn v3 cuts the window row at the KEY heads, and survives its own map.**
+    ///
+    /// At 16 key and 32 value heads of 4 lanes the engine's row is `2·16·4 + 32·4 = 256` lanes;
+    /// v2's `(2·4 + 4)·32 = 384` is a row that does not exist, which is why capture refused. Under
+    /// v3 value head `h` gathers key head `h % 16` — the tiling the kernel and the court share — so
+    /// each q/k channel is read by two value heads and each v channel by one; the chunks are v2's
+    /// in count and size, and the state restores value for value. A key-head channel whose two
+    /// copies disagree is bytes no state gathers to, and is refused by name. At `key_heads ==
+    /// heads` v3 is v2 lane for lane.
+    #[test]
+    fn the_v3_window_is_cut_at_the_key_heads_and_survives_its_own_map() {
+        let (layers, kh, heads, k, v, kernel) = ([0u16, 1, 2], 16u32, 32u32, 4u32, 4u32, 4u32);
+        let v3 = base0_gdn_state_geometry_v3(&layers, kh, heads, k, v, kernel).expect("a v3 geometry");
+        let v2 = base0_gdn_state_geometry_v2(&layers, heads, k, v, kernel).expect("the v2 geometry");
+        assert_eq!(v3.conv_width, 2 * kh * k + heads * v, "the engine's window row");
+        assert_eq!(v2.conv_width, (2 * k + v) * heads, "v2's row, which the engine does not hold at k != v heads");
+        assert_ne!(v3.conv_width, v2.conv_width);
+        assert_eq!((v3.chunk_count(), v3.total_bytes()), (v2.chunk_count(), v2.total_bytes()), "one chunk per head either way");
+
+        // The gather: head h reads key head h % kh in the q and k regions and its own v block.
+        let mut readers = vec![0u32; v3.conv_width as usize];
+        for head in 0..heads {
+            let channels: Vec<usize> = v3.conv_head_channels(head).collect();
+            assert_eq!(channels.len() as u32, 2 * k + v, "one head row");
+            let key = (head % kh) as usize;
+            let (k_, v_, kh_) = (k as usize, v as usize, kh as usize);
+            assert_eq!(channels[0], key * k_, "head {head}: q region of key head {key}");
+            assert_eq!(channels[k_], kh_ * k_ + key * k_, "head {head}: k region of key head {key}");
+            assert_eq!(channels[2 * k_], 2 * kh_ * k_ + head as usize * v_, "head {head}: its own v block");
+            for c in channels {
+                readers[c] += 1;
+            }
+        }
+        let qk = (2 * kh * k) as usize;
+        assert!(readers[..qk].iter().all(|n| *n == heads / kh), "every q/k channel is read by heads/kh value heads");
+        assert!(readers[qk..].iter().all(|n| *n == 1), "every v channel has one owner");
+
+        // A live state and its round trip.
+        let mut rng = Lcg(0x0000_1632);
+        let live: Vec<Base0GdnLayerStateV1> = layers
+            .iter()
+            .map(|_| Base0GdnLayerStateV1 {
+                heads: (0..heads)
+                    .map(|_| {
+                        let mut st = Qwen36GdnStateV1::zeros(v as usize, k as usize);
+                        st.s = rng.row(st.s.len());
+                        st
+                    })
+                    .collect(),
+                conv: (0..kernel).map(|_| rng.row(v3.conv_width as usize)).collect(),
+            })
+            .collect();
+        assert!(
+            matches!(base0_gdn_state_chunks_v2(&v2, &live), Err(Base0GdnStateError::ConvIsNotTheGeometrys { layer: 0 })),
+            "v2's geometry refuses the engine's window — the defect P0a closes"
+        );
+        let chunks = base0_gdn_state_chunks_v2(&v3, &live).expect("v3 chunks");
+        assert_eq!(chunks.len() as u64, v3.chunk_count());
+        for (index, bytes) in chunks.iter().enumerate() {
+            let entry = base0_gdn_chunk_entry_v2(&v3, index as u64).expect("an entry");
+            assert_eq!(bytes.len() as u64, entry.byte_len(), "chunk {index} is its entry's length");
+        }
+        assert_eq!(base0_gdn_state_from_chunks_v2(&v3, &chunks).expect("restores"), live, "the v3 map is not a bijection");
+
+        // Two copies of one shared channel that disagree: head 20's copy of key head 4's first q
+        // lane moves, and head 4's does not.
+        let conv_chunk = (0..v3.chunk_count())
+            .find(|i| {
+                base0_gdn_chunk_entry_v2(&v3, *i).is_some_and(|e| e.kind == Base0GdnChunkKindV1::Conv && e.head == 20 && e.layer == 1)
+            })
+            .expect("head 20's window chunk") as usize;
+        let mut forged = chunks.clone();
+        forged[conv_chunk][0] ^= 1;
+        assert_eq!(
+            base0_gdn_state_from_chunks_v2(&v3, &forged),
+            Err(Base0GdnStateError::ConvCopiesDisagree { layer: 1, row: 0, channel: 4 * k }),
+            "a disagreeing copy is refused, not resolved by scatter order"
+        );
+        // A lie in a channel only one head owns is a different STATE, and restores as one.
+        let v_block = (2 * k * 4) as usize; // byte offset of head 20's v lanes inside its row
+        let mut other = chunks.clone();
+        other[conv_chunk][v_block] ^= 1;
+        assert_ne!(base0_gdn_state_from_chunks_v2(&v3, &other).expect("a state"), live);
+
+        // At key_heads == heads v3 is v2, lane for lane.
+        let same = base0_gdn_state_geometry_v3(&layers, heads, heads, k, v, kernel).expect("v3 at equal heads");
+        assert_eq!(same, v2, "v3 at equal head counts is v2");
+        // And a key-head count that does not group the value heads is refused.
+        assert_eq!(
+            base0_gdn_state_geometry_v3(&layers, 12, heads, k, v, kernel),
+            Err(Base0GdnStateError::KeyHeadsDoNotGroupTheValueHeads { key_heads: 12, heads })
+        );
+        assert!(base0_gdn_state_geometry_v3(&layers, 0, heads, k, v, kernel).is_err());
     }
 
     /// **The v2 map's cost, on the geometry that decided it.** Qwen3.6: 32 heads of 128, a

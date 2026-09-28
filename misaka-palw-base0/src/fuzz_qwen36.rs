@@ -105,6 +105,26 @@ fn tiny_class_v5() -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
     (artifact, v5)
 }
 
+/// **P0a's fixtures (Phase F §3.3): the held hybrid on profile version 3** — graph-v8
+/// (`qwen36_profile_v8`: graph-v7's tables at version 3 on the held composition v5) at `n_ctx`, over
+/// a tiny hybrid with `k_heads` key and `v_heads` value heads. 16/32 and 16/48 are
+/// [`crate::qwen36::qwen36_dev_fixture_heads`] at head dim 4 over 64 lanes (four layers at interval
+/// 4, eight tiny experts) — the key/value ratios of Qwen3.6-35B and Qwen3.8-27B; 2/4 is the existing
+/// [`qwen36_dev_fixture`] (head dim 8 over 32 lanes). The artifact's rotary table covers 32
+/// positions, so `n_ctx <= 32`.
+#[cfg(test)]
+pub(crate) fn tiny_class_v8_for_tests(k_heads: usize, v_heads: usize, n_ctx: u32) -> (Qwen36ArtifactV1, PalwShapeProfileV3) {
+    let artifact = if (k_heads, v_heads) == (2, 4) {
+        qwen36_dev_fixture(4, 8)
+    } else {
+        crate::qwen36::qwen36_dev_fixture_heads(4, 8, k_heads, v_heads, 4, 64)
+    };
+    let geometry = PalwQwen36GeometryV1 { n_ctx, ..crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4) };
+    let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v8(geometry)
+        .unwrap_or_else(|e| panic!("graph-v8 projects at {k_heads}/{v_heads}: {e}"));
+    (artifact, profile)
+}
+
 /// One random edit. The dense harness's vocabulary — structural (order, arity, count) and nominal
 /// (kernels, operands, widths, dtypes) — plus two this family adds: ROLE edits (cache writes are
 /// declared per node here, so a moved role is a moved program) and REAL operand names landing on

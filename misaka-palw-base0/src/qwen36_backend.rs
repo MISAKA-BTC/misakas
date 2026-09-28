@@ -522,6 +522,7 @@ pub fn qwen36_checkpoint_profile_v1(
 /// the geometry is how this function avoids having an opinion about that.
 fn qwen36_push_checkpoint_v1(
     checkpoints: &mut crate::legs::Base0CheckpointCaptureV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
     shape: &crate::qwen36::Qwen36ShapeV1,
     cache: &Qwen36Cache,
 ) -> Result<(), String> {
@@ -532,10 +533,12 @@ fn qwen36_push_checkpoint_v1(
     };
     let gdn_chunks = if needs_recurrence {
         let (layers, states) = crate::fp_recompute::qwen36_recurrence_state_v1(shape, cache);
-        let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_v2(
+        // P0a: v3's window (cut at the key heads) for a class whose map spells them, v2's otherwise.
+        let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_for_class_v1(
+            profile,
             &layers,
+            shape.linear_k_heads as u32,
             shape.linear_v_heads as u32,
-            shape.linear_head_dim as u32,
             shape.linear_head_dim as u32,
             shape.conv_kernel as u32,
         )
@@ -772,7 +775,7 @@ fn qwen36_execute_streaming_v1(
             // every position, and before this the hybrid producer took NO checkpoint at any
             // coordinate and then sealed at a count that is `prefill + decode_calls`.
             if checkpoints.wants_checkpoint_after_v1(0, position as u32) {
-                qwen36_push_checkpoint_v1(&mut checkpoints, &artifact.shape, &cache)
+                qwen36_push_checkpoint_v1(&mut checkpoints, profile, &artifact.shape, &cache)
                     .map_err(|e| format!("the prefill checkpoint at position {position}: {e}"))?;
             }
             last_logits = logits;
@@ -800,7 +803,7 @@ fn qwen36_execute_streaming_v1(
         logits_rows.push(logits);
         // The same predicate the prefill arm asks, so the two cannot drift into two cadences.
         if checkpoints.wants_checkpoint_after_v1(call as u32, 0) {
-            qwen36_push_checkpoint_v1(&mut checkpoints, &artifact.shape, &cache)
+            qwen36_push_checkpoint_v1(&mut checkpoints, profile, &artifact.shape, &cache)
                 .map_err(|e| format!("the checkpoint after decode call {call}: {e}"))?;
         }
     }
@@ -1249,7 +1252,16 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
         let heads = shape.linear_v_heads as u32;
         let dim = shape.linear_head_dim as u32;
         let kernel = shape.conv_kernel as u32;
-        let geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel).map_err(|e| e.to_string())?;
+        // P0a: the restore scatters under the gather the capture used — the class's.
+        let geometry = crate::fp_capture::base0_gdn_state_geometry_for_class_v1(
+            profile,
+            &layers,
+            shape.linear_k_heads as u32,
+            heads,
+            dim,
+            kernel,
+        )
+        .map_err(|e| e.to_string())?;
         let states = crate::fp_capture::base0_gdn_state_from_chunks_v2(&geometry, gdn_chunks).map_err(|e| e.to_string())?;
         for (i, layer) in layers.iter().enumerate() {
             let li = *layer as usize;
@@ -1262,7 +1274,7 @@ fn qwen36_cache_from_checkpoint_chunks_v1(
         apply_gdn(&mut cache, chunks)?;
         return Ok(cache);
     }
-    if declared == map::hybrid_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v4() {
+    if declared == map::hybrid_state_chunk_map_id_v3() || map::palw_map_is_hybrid_held_for_version_v1(&declared, profile.version) {
         let hybrid = map::hybrid_state_geometry_for_covered_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
         if chunks.len() as u64 != hybrid.chunk_count() {
             return Err(format!(
@@ -4034,5 +4046,503 @@ mod tests {
             kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&v7),
             Some(kaspa_consensus_core::palw_class_admission_v2::PalwHeldUnanswerableV1::Recurrent { .. })
         ));
+    }
+
+    // =============================================================================================
+    // P0a (Phase F §3.3): the live GDN key-heads fix, end to end on the engine
+    // =============================================================================================
+
+    /// P0a's fixtures: the dev fixture's 2/4 and Phase F's 16/32 and 16/48.
+    const P0A_HEADS: [(usize, usize); 3] = [(2, 4), (16, 32), (16, 48)];
+
+    /// A graph-v8 job on `(kh, vh)` at `n_ctx` 32: `prefill` prompt positions and `decode` tokens,
+    /// run by the producer's dense capture.
+    fn p0a_run(
+        kh: usize,
+        vh: usize,
+        prefill: u32,
+        decode: u32,
+    ) -> (
+        std::sync::Arc<Qwen36ArtifactV1>,
+        kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        crate::qwen36_plan::Qwen36ProfilePlanV1,
+        PalwJobContextV2,
+        Vec<usize>,
+        crate::produce::Base0ExecutionV1,
+    ) {
+        let (artifact, profile) = crate::fuzz_qwen36::tiny_class_v8_for_tests(kh, vh, 32);
+        let artifact = std::sync::Arc::new(artifact);
+        let plan = Qwen36Engine::new(&artifact).plan_from_profile(&profile).expect("graph-v8 compiles on the fixture");
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0x0000_0A0A_0000 + (kh * 1000 + vh) as u64),
+            artifact.shape.vocab,
+            prefill,
+            decode,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
+        let run = qwen36_execute_for_attempt_v1(&artifact, &profile, &plan, &ctx, &prompt)
+            .unwrap_or_else(|e| panic!("{kh}/{vh}: the graph-v8 capture refused: {e}"));
+        (artifact, profile, plan, ctx, prompt, run)
+    }
+
+    /// **P0a exit test (a): the capture succeeds at every checkpoint, and a resumed walk is the
+    /// fresh one at every covered position** — `the_hybrid_composition_serializes_in_the_order_its_
+    /// map_name_spells`'s shape, green on k ≠ v.
+    ///
+    /// On graph-v8 at 2/4, 16/32 and 16/48, a 17-token prompt and 4 decode tokens: twenty
+    /// per-position checkpoints, the 16th carrying the recurrence (one history tile). For every
+    /// one: the producer committed it; the leaf declares the composition's chunk count; the seat's
+    /// walk from row zero reaches its root; the memoized seat answers what the fresh walk does, in
+    /// any order. From the recurrence-carrying checkpoint the map's restore is the capture's
+    /// inverse, and the walk resumed from it is the fresh walk — chunk for chunk — at every later
+    /// covered position; a segment replay anchored there matches the committed leaves, and one
+    /// anchored a position earlier (attention only) is refused as a resume point. Graph-v7 on the
+    /// same fixtures refuses the recurrence-carrying checkpoint by the geometry's name: the defect.
+    #[test]
+    fn p0a_graph_v8_captures_every_checkpoint_and_a_resumed_walk_is_the_fresh_one() {
+        use crate::fp_recompute::{
+            Base0FpRecomputeKernelsV1, Base0FpSeatMemoV1, Qwen36RecomputeKernelsV1, base0_fp_recompute_state_at_covered_v1,
+            base0_fp_seat_state_memoized_v1,
+        };
+        use kaspa_consensus_core::palw_context_ladder::{
+            PalwCheckpointCadenceV1, palw_anchored_interval_for_profile_v1, palw_checkpoint_cadence_v1,
+            palw_checkpoint_leaf_carries_recurrence_v1,
+        };
+        use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        for (kh, vh) in P0A_HEADS {
+            let (artifact, profile, plan, ctx, prompt, run) = p0a_run(kh, vh, 17, 4);
+            let tag = format!("{kh}/{vh}");
+            assert_eq!(profile.state_chunk_map_id, map::hybrid_state_chunk_map_id_v5(), "{tag}");
+            assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerPosition, "{tag}");
+            assert_eq!(palw_anchored_interval_for_profile_v1(&profile), 16, "{tag}: one history tile");
+            let total = ctx.declared_prefill_tokens + ctx.exact_decode_tokens - 1;
+            assert_eq!(total, 20, "{tag}");
+            assert_eq!(run.checkpoints.leaves.len() as u32, total, "{tag}: a checkpoint at every position");
+            let carrying: Vec<u32> = (1..=total).filter(|p| palw_checkpoint_leaf_carries_recurrence_v1(&profile, *p)).collect();
+            assert_eq!(carrying, vec![16], "{tag}: the recurrence rides its spacing");
+
+            let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+            let out = run.generated_token_ids.clone();
+            let fresh = |covered: u32| {
+                let mut kernels = Qwen36RecomputeKernelsV1::new(&artifact, &plan);
+                base0_fp_recompute_state_at_covered_v1(&profile, &ctx, &ids, &out, covered, &mut kernels, Flat)
+                    .unwrap_or_else(|e| panic!("{tag}: the seat's walk to {covered}: {e:?}"))
+            };
+            let mut fresh_states = std::collections::BTreeMap::new();
+            for leaf in &run.checkpoints.leaves {
+                let covered = leaf.covered_decode_call;
+                let geometry = map::hybrid_state_geometry_for_covered_v1(&profile, covered).expect("the composition derives");
+                assert_eq!(u64::from(leaf.state_chunk_count), geometry.chunk_count(), "{tag} @{covered}: the leaf's chunk count");
+                assert_eq!(geometry.gdn_chunk_count() > 0, carrying.contains(&covered), "{tag} @{covered}");
+                let state = fresh(covered);
+                assert_eq!(state.state_chunks_root, leaf.state_chunks_root, "{tag} @{covered}: the seat reaches the committed root");
+                assert_eq!(state.chunks.len() as u64, geometry.chunk_count(), "{tag} @{covered}");
+                fresh_states.insert(covered, state);
+            }
+
+            // The memoized seat answers what the walk from zero does, in any order.
+            let memo = Base0FpSeatMemoV1::default();
+            for covered in [7u32, 16, 16, 3, 20, 17, 1, 16, 12] {
+                let mut kernels = Qwen36RecomputeKernelsV1::new(&artifact, &plan);
+                let got = base0_fp_seat_state_memoized_v1(&memo, &profile, &ctx, &ids, &out, covered, &mut kernels, Flat)
+                    .expect("a memoized seat state");
+                assert_eq!(&got, &fresh_states[&covered], "{tag}: memoized @{covered}");
+            }
+
+            // From the recurrence anchor: the restore is the capture's inverse, and the walk
+            // resumed from it is the walk from zero at every later covered position.
+            let anchor = &fresh_states[&16];
+            let restored = qwen36_cache_from_checkpoint_chunks_v1(&artifact.shape, &profile, &ctx, 16, &anchor.chunks)
+                .unwrap_or_else(|e| panic!("{tag}: the restore at 16: {e}"));
+            let mut resumed = Qwen36RecomputeKernelsV1::with_cache(&artifact, &plan, restored);
+            assert_eq!(resumed.state_chunks(&profile, 16).expect("re-chunks"), anchor.chunks, "{tag}: restore ∘ capture = id");
+            let prefill = ctx.declared_prefill_tokens as usize;
+            for position in 16..total as usize {
+                let token = if position < prefill { prompt[position] } else { out[position - prefill] as usize };
+                resumed.forward_no_capture(token, position).expect("the resumed walk runs");
+                let covered = position as u32 + 1;
+                let chunks = resumed.state_chunks(&profile, covered).expect("the resumed state chunks");
+                assert_eq!(chunks, fresh_states[&covered].chunks, "{tag}: resumed == fresh @{covered}");
+            }
+
+            // The production resume route (ADR-0133 S1): a segment anchored at 16 replays to the
+            // committed leaves; anchored at 15 (attention only) it is refused as a resume point.
+            let backend = Qwen36Backend::with_class_profile(
+                artifact.clone(),
+                "Qwen3.6-fixture-p0a",
+                (17, 4),
+                profile.clone(),
+                b"misaka-palw-test".to_vec(),
+            );
+            let capture = crate::produce::base0_material_encode_v1(&run).expect("the dense capture encodes");
+            let retention = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes");
+            // The fewest seats whose cut starts a segment after the recurrence anchor (step > 16),
+            // so the anchor at 16 precedes it: twenty positions, most of them prompt.
+            let starts_after_the_anchor = |seats: u16, i: u16| {
+                let segments = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
+                let (start, _) =
+                    kaspa_consensus_core::palw_verification_v2::palw_segment_leaf_range_v2(run.binding.step_leaf_count, segments, i)
+                        .expect("the cut names the segment");
+                let c = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, start).expect("a main leaf");
+                crate::fp_interval::Base0FpWindowV1::step_of_coordinate_v1(ctx.declared_prefill_tokens, c.call_index, c.position) > 16
+            };
+            let (seats, segment) = (3u16..=33)
+                .find_map(|seats| {
+                    let segments = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
+                    (0..segments).find(|&i| starts_after_the_anchor(seats, i)).map(|i| (seats, i))
+                })
+                .expect("a cut with a segment after the anchor");
+            let claim = || kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1 {
+                execution_root: run.execution_root,
+                trace_root: run.trace_root,
+                seat_count: seats,
+                segment_index: segment,
+            };
+            let opening_at = |covered: u32| {
+                let mut anchor = crate::fp_interval::base0_checkpoint_operands_v1(&run.binding, &[], &run.checkpoints.leaves, covered)
+                    .expect("the leg commits the checkpoint");
+                anchor.chunks = fresh_states[&covered].chunks.clone();
+                crate::segment_opening::base0_segment_opening_v2(
+                    &retention,
+                    seats,
+                    segment,
+                    crate::segment_opening::Base0SegmentAnchorV1::Given(anchor),
+                    Some(&profile),
+                    backend.step_ladder_cap(),
+                )
+                .expect("the producer opens the segment at the committed checkpoint")
+                .encode_v2()
+                .expect("the opening encodes")
+            };
+            let replay = backend
+                .replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening_at(16), claim())
+                .unwrap_or_else(|e| panic!("{tag}: execute-from-checkpoint at the recurrence anchor: {e}"));
+            assert!(replay.matches, "{tag}: the leaves resumed from 16 are the committed ones");
+            assert_eq!(
+                backend.replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening_at(15), claim()).expect_err("no resume point"),
+                crate::segment_opening::Base0SegmentRefusalV1::AnchorNotAResumePoint.to_string(),
+                "{tag}: an attention-only leaf is refused, not replayed into a fault"
+            );
+
+            // The defect, pinned: graph-v7 — the same graph at version 1 on the v4 map — cannot
+            // capture the recurrence-carrying checkpoint of the same job at k != v.
+            let v7 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(
+                kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+                    n_ctx: 32,
+                    ..crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4)
+                },
+            )
+            .expect("graph-v7 projects");
+            let plan7 = Qwen36Engine::new(&artifact).plan_from_profile(&v7).expect("graph-v7 compiles");
+            let (ctx7, prompt7) =
+                crate::produce::base0_rc_job_v1(&v7, Hash64::from_u64_word(0x0A07), artifact.shape.vocab, 17, 4, Flat);
+            let refused = qwen36_execute_for_attempt_v1(&artifact, &v7, &plan7, &ctx7, &prompt7)
+                .err()
+                .unwrap_or_else(|| panic!("{tag}: graph-v7 captured a k != v recurrence"));
+            assert!(refused.contains("convolution window"), "{tag}: refused by the geometry's name: {refused}");
+            assert!(refused.contains("position 15"), "{tag}: at the recurrence-carrying checkpoint: {refused}");
+        }
+    }
+
+    /// Value heads on either side of the key-head count, per fixture: one that reads its own key
+    /// head and one that wraps (`h % kh`) — 20 reads key head 4 at 16/32, 40 reads key head 8 at
+    /// 16/48, 3 reads key head 1 at 2/4.
+    const P0A_TRIED_HEADS: [(usize, usize, [u32; 2]); 3] = [(2, 4, [1, 3]), (16, 32, [3, 20]), (16, 48, [3, 40])];
+
+    /// The one-step court at `tiles` of `kernel`'s node in recurrence layer 1, on two graph-v8 jobs
+    /// on `(kh, vh)` — 3 prompt tokens and 4 decode tokens, and 17 and 4, whose twenty positions
+    /// cross the recurrence's spacing — at the last prompt position and at the last decode call:
+    /// every honest tile is cleared (`NoFaultFound`) and every one-lane fault convicts, with the
+    /// operands the prover opens proving against the class's inventory root.
+    fn p0a_one_step_court(kh: usize, vh: usize, kernel: &str, tiles: &[u32]) {
+        for job in [(3u32, 4u32), (17, 4)] {
+            p0a_one_step_court_on(kh, vh, kernel, tiles, job);
+        }
+    }
+
+    fn p0a_one_step_court_on(kh: usize, vh: usize, kernel: &str, tiles: &[u32], canonical_job: (u32, u32)) {
+        use kaspa_consensus_core::palw_step::{canonical_step_coordinates, kernel_semantics_id_v1};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        let tag = format!("{kh}/{vh} {kernel} job {canonical_job:?}");
+        let (artifact, profile) = crate::fuzz_qwen36::tiny_class_v8_for_tests(kh, vh, 32);
+        let artifact = std::sync::Arc::new(artifact);
+        let backend =
+            Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), canonical_job)
+                .expect("graph-v8 is servable");
+        assert!(backend.supports_court(), "{tag}");
+        let inventory = crate::inventory::qwen36_inventory_v1(&artifact, &profile).expect("the graph-v8 inventory");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0B0C_0000 + (kh * 1000 + vh) as u64)).expect("a job");
+        let honest = backend.execute(&job, &prompt).expect("the graph-v8 class runs");
+        let binding = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().clone();
+        let want = kernel_semantics_id_v1(kernel);
+        let last_call = job.exact_decode_tokens - 1;
+        let prove = |refutation: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| {
+            let openings = backend.operand_openings_for(refutation).expect("the prover opens what the court reads");
+            kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+                .expect("the openings prove against the class's inventory")
+        };
+        for &tile in tiles {
+            for (call, position) in [(0u32, job.declared_prefill_tokens - 1), (last_call, 0)] {
+                let index = (0..binding.step_leaf_count)
+                    .find(|i| {
+                        let c = canonical_step_coordinates(&profile, &job, *i).expect("a coordinate");
+                        c.call_index == call
+                            && c.position == position
+                            && c.tile_index == tile
+                            && profile
+                                .resolve_node_slot(c.node_slot)
+                                .is_some_and(|(n, l)| n.kernel_semantics_id == want && l == Some(1))
+                    })
+                    .unwrap_or_else(|| panic!("{tag}: no leaf at tile {tile}, call {call}, position {position}"));
+                let refutation = backend.refutation_for_index(&honest.material, index).expect("an honest leaf opens");
+                let got = check_execution_step_refutation_v1(&refutation, &prove(&refutation));
+                assert!(
+                    matches!(got, Err(PalwStepRefuteError::NoFaultFound)),
+                    "{tag}: tile {tile} at ({call}, {position}) must clear the honest capture: {got:?}"
+                );
+                let lying = backend.execute_with_injected_fault(&job, &prompt, index).expect("a one-lane fault commits");
+                let refutation = backend.refutation_for_index(&lying.material, index).expect("the faulted leaf opens");
+                let got = check_execution_step_refutation_v1(&refutation, &prove(&refutation));
+                assert!(got.is_ok(), "{tag}: tile {tile} at ({call}, {position}): a one-lane fault must convict: {got:?}");
+            }
+        }
+    }
+
+    /// **P0a exit test (b): the GdnStep arm on either side of the key-head count.** The tile is the
+    /// value head, and the slice is `qwen36_gdn_slice_v1`'s — key head `h % kh` for q and k, the
+    /// value head's own block of the window row's tail. On the held composition the arm is the
+    /// GENESIS replay (`palw_recurrence_is_checkpoint_anchored_v1` answers false for the hybrid
+    /// v3/v4/v5 maps; its checkpoint-anchored twin serves the gdn v1/v2 and hybrid v1/v2 maps), so
+    /// this is the replay from the zero state over every position up to the leaf — at a prompt
+    /// position and at the last decode call.
+    #[test]
+    fn p0a_the_gdn_step_arm_convicts_a_one_lane_fault_on_either_side_of_the_key_heads() {
+        for (kh, vh, heads) in P0A_TRIED_HEADS {
+            let (_, profile) = crate::fuzz_qwen36::tiny_class_v8_for_tests(kh, vh, 32);
+            assert!(
+                !kaspa_consensus_core::palw_step_refute::palw_recurrence_is_checkpoint_anchored_v1(&profile),
+                "{kh}/{vh}: the held composition's recurrence replays from the genesis"
+            );
+            p0a_one_step_court(kh, vh, kaspa_consensus_core::palw_step_refute::KDESC_Q36_GDN_STEP, &heads);
+        }
+    }
+
+    /// **P0a exit test (c): the SsmConv arm, which is geometry-agnostic** (`qwen36_conv_slice_v1`
+    /// cuts the window row at its refs' widths, and the refs are the q, k and v projections, so a
+    /// row of `2·kh·k + vh·v` lanes is sliced where it is). One-head tiles: key head `h`'s q lanes
+    /// (tile `h`), its k lanes (tile `kh + h`), and value head `h`'s v lanes (tile `2·kh + h`), for
+    /// the low and the high head.
+    #[test]
+    fn p0a_the_conv_arm_convicts_a_one_lane_fault_on_either_side_of_the_key_heads() {
+        for (kh, vh, [low, high]) in P0A_TRIED_HEADS {
+            let key = |h: u32| h % kh as u32;
+            let tiles = [key(low), kh as u32 + key(high), 2 * kh as u32 + low, 2 * kh as u32 + high];
+            p0a_one_step_court(kh, vh, kaspa_consensus_core::palw_step_refute::KDESC_Q36_SSM_CONV, &tiles);
+        }
+    }
+
+    /// **P0a exit test (d): the ADR-0103 checkpoint court on the V3 hybrid's attention rows**, on
+    /// a real graph-v8 capture at every fixture. The accusation is assembled the way
+    /// `palw_held_step6_accusation_v1` files one: the checkpoint's chunk holding `(kind, attention
+    /// layer 3, position)` with its path under the class's map (the seat's own recompute of the
+    /// committed state), the checkpoint leaf with its path in the leg, and the cache-write row the
+    /// step tree committed. Honest rows acquit — at a prompt position, at a decode position, and
+    /// out of the checkpoint that carries the recurrence, whose recurrence chunks are refused as
+    /// unaccusable. A checkpoint re-committed with one forged K row beside the honest step tree
+    /// convicts its executor, and its other rows still acquit.
+    #[test]
+    fn p0a_the_checkpoint_court_tries_the_v3_hybrids_attention_rows() {
+        use crate::fp_recompute::{Qwen36RecomputeKernelsV1, base0_fp_recompute_state_at_covered_v1};
+        use kaspa_consensus_core::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1, PalwAttnRowOpeningV1};
+        use kaspa_consensus_core::palw_checkpoint_court_v1::{
+            PALW_CHECKPOINT_COURT_VERSION_V1, PalwCheckpointAccusationV1, PalwCheckpointCourtError, PalwCheckpointCourtVerdictV1,
+            palw_checkpoint_court_verdict_v1,
+        };
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepTableV1, canonical_step_leaf_index};
+        use kaspa_consensus_core::palw_step_leg::{
+            PalwStepOpeningV1, binding_commitment_root_v1, checkpoint_leaf_hash_v2, step_merkle_path_v1, step_merkle_root_v1,
+            verify_binding_v1,
+        };
+        const LADDER: u64 = 1 << 26;
+        const ATTN_LAYER: u16 = 3;
+
+        for (kh, vh) in P0A_HEADS {
+            let tag = format!("{kh}/{vh}");
+            let (artifact, profile, plan, ctx, prompt, run) = p0a_run(kh, vh, 17, 4);
+            let class = profile.shape_profile_id();
+            assert_eq!(profile.layer_kind(ATTN_LAYER), kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention, "{tag}");
+            let step_leaves = &run.tiles.leaves;
+            assert_eq!(step_merkle_root_v1(step_leaves).expect("a root"), run.binding.step_merkle_root, "{tag}");
+            assert_eq!(
+                step_merkle_root_v1(&run.checkpoints.leaf_hashes).expect("a root"),
+                run.binding.checkpoint_merkle_root,
+                "{tag}"
+            );
+            let preimages: std::collections::BTreeMap<u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1> =
+                run.tiles.tiles.iter().cloned().collect();
+            let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+            let chunks_at = |covered: u32| {
+                let mut kernels = Qwen36RecomputeKernelsV1::new(&artifact, &plan);
+                base0_fp_recompute_state_at_covered_v1(
+                    &profile,
+                    &ctx,
+                    &ids,
+                    &run.generated_token_ids,
+                    covered,
+                    &mut kernels,
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                )
+                .expect("the seat recomputes the committed state")
+                .chunks
+            };
+            let bond = |w: u64| {
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::from_u64_word(w),
+                    0,
+                ))
+            };
+            // The accusation of `(kind, ATTN_LAYER, position)` out of checkpoint `c`, against
+            // `binding`'s leg (`leaves`, `hashes`) and that checkpoint's `chunks`.
+            let accuse = |binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+                          leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2],
+                          hashes: &[Hash64],
+                          chunks: &[Vec<u8>],
+                          c: usize,
+                          kind: u8,
+                          position: u32| {
+                let positions = leaves[c].covered_decode_call;
+                let geometry = map::palw_state_layout_v4(&profile, positions).expect("the held layout").attn;
+                let series = if kind == 0 { map::PalwStateChunkKindV1::Key } else { map::PalwStateChunkKindV1::Value };
+                let (index, _) = map::integer_kv_state_locate_v1(&geometry, series, ATTN_LAYER, position).expect("a chunk");
+                let siblings = map::palw_state_chunk_path_for_map_v1(&profile, positions, chunks, index as u32).expect("a chunk path");
+                let role = if kind == 0 { PalwStepNodeRoleV1::KCacheWrite } else { PalwStepNodeRoleV1::VCacheWrite };
+                let writer = profile.attn_nodes.iter().position(|n| n.role == role).expect("a cache writer");
+                let slot = profile.global_node_slot(PalwStepTableV1::Attn, ATTN_LAYER, writer).expect("a slot");
+                let prefill = ctx.declared_prefill_tokens;
+                let (call_index, at) = if position < prefill { (0, position) } else { (position - prefill + 1, 0) };
+                let rows = (0u32..)
+                    .map_while(|tile_index| {
+                        canonical_step_leaf_index(
+                            &profile,
+                            &ctx,
+                            &PalwStepCoordinateV1 { call_index, node_slot: slot, position: at, tile_index },
+                        )
+                    })
+                    .map(|index| PalwAttnRowOpeningV1 {
+                        leaf: preimages[&index].clone(),
+                        opening: PalwStepOpeningV1 {
+                            leaf_index: index,
+                            leaf_hash: step_leaves[index as usize],
+                            siblings: step_merkle_path_v1(step_leaves, index as usize).expect("a path"),
+                        },
+                    })
+                    .collect();
+                PalwCheckpointAccusationV1 {
+                    version: PALW_CHECKPOINT_COURT_VERSION_V1,
+                    claim: Hash64::from_u64_word(0xC1A1),
+                    execution_root: binding.committed_execution_root,
+                    trace_root: run.trace_root,
+                    executor_bond: bond(1),
+                    accuser_bond: bond(2),
+                    binding: binding.clone(),
+                    anchor: PalwAttnCheckpointAnchorV1 {
+                        leaf: leaves[c].clone(),
+                        opening: PalwStepOpeningV1 {
+                            leaf_index: c as u64,
+                            leaf_hash: hashes[c],
+                            siblings: step_merkle_path_v1(hashes, c).expect("a checkpoint path"),
+                        },
+                    },
+                    chunk: PalwAttnChunkOpeningV1 { chunk_index: index as u32, chunk_bytes: chunks[index as usize].clone(), siblings },
+                    kind,
+                    attn_layer: ATTN_LAYER,
+                    position,
+                    rows,
+                    signature: vec![1, 2, 3],
+                }
+            };
+            let (leaves, hashes) = (&run.checkpoints.leaves, &run.checkpoints.leaf_hashes);
+
+            // Honest rows acquit: a prompt row, a decode row, and rows out of the checkpoint that
+            // carries the recurrence (index 15, covering 16 positions).
+            for (c, kind, position) in [(19usize, 0u8, 0u32), (19, 1, 18), (15, 0, 15), (15, 1, 4), (16, 0, 16), (7, 1, 7)] {
+                let chunks = chunks_at(leaves[c].covered_decode_call);
+                let a = accuse(&run.binding, leaves, hashes, &chunks, c, kind, position);
+                assert!(!a.rows.is_empty(), "{tag}: the committed cache-write row");
+                assert_eq!(
+                    palw_checkpoint_court_verdict_v1(&a, class, LADDER),
+                    Ok(PalwCheckpointCourtVerdictV1::FalseAccusation),
+                    "{tag}: checkpoint {c}, kind {kind}, position {position}"
+                );
+            }
+            // The carrying checkpoint's recurrence chunks are no attention row's.
+            let carrying = chunks_at(16);
+            let hybrid = map::hybrid_state_geometry_for_covered_v1(&profile, 16).expect("the composition");
+            assert!(hybrid.gdn_chunk_count() > 0, "{tag}: checkpoint 15 carries the recurrence");
+            let mut a = accuse(&run.binding, leaves, hashes, &carrying, 15, 0, 3);
+            let gdn_index = hybrid.attn.chunk_count() as u32;
+            a.chunk = PalwAttnChunkOpeningV1 {
+                chunk_index: gdn_index,
+                chunk_bytes: carrying[gdn_index as usize].clone(),
+                siblings: map::palw_state_chunk_path_for_map_v1(&profile, 16, &carrying, gdn_index).expect("a path"),
+            };
+            assert_eq!(
+                palw_checkpoint_court_verdict_v1(&a, class, LADDER),
+                Err(PalwCheckpointCourtError::RecurrenceChunkNotAccusable),
+                "{tag}"
+            );
+
+            // A forged checkpoint beside the honest step tree: checkpoint 17 (18 positions) holds a
+            // K row at position 5 the execution never wrote; its leaf, the leg's chain from it,
+            // and the execution root are re-derived, so the binding still authenticates.
+            let (c, position) = (17usize, 5u32);
+            let covered = leaves[c].covered_decode_call;
+            let mut forged_chunks = chunks_at(covered);
+            let geometry = map::palw_state_layout_v4(&profile, covered).expect("the held layout").attn;
+            let (index, _) =
+                map::integer_kv_state_locate_v1(&geometry, map::PalwStateChunkKindV1::Key, ATTN_LAYER, position).expect("a chunk");
+            let entry = map::integer_kv_state_chunk_entry_v1(&geometry, index).expect("an entry");
+            let offset = ((position - entry.position_start) * entry.row_bytes) as usize;
+            forged_chunks[index as usize][offset] ^= 0x55;
+            let mut binding = run.binding.clone();
+            let mut forged_leaves = leaves.clone();
+            let mut forged_hashes = hashes.clone();
+            forged_leaves[c].state_chunks_root =
+                map::palw_state_chunks_root_for_map_v1(&profile, covered, &forged_chunks).expect("a forged state root");
+            let (context_hash, checkpoint_profile_hash) = (ctx.context_hash(), binding.checkpoint_profile.profile_hash());
+            for i in c..forged_leaves.len() {
+                if i > c {
+                    forged_leaves[i].prev_checkpoint_leaf_hash = forged_hashes[i - 1];
+                }
+                forged_hashes[i] =
+                    checkpoint_leaf_hash_v2(&context_hash, &checkpoint_profile_hash, &binding.state_chunk_map_id, &forged_leaves[i]);
+            }
+            binding.checkpoint_merkle_root = step_merkle_root_v1(&forged_hashes).expect("a forged leg");
+            binding.committed_execution_root = binding_commitment_root_v1(&binding);
+            verify_binding_v1(&binding).expect("the re-committed binding authenticates");
+            assert_eq!(
+                binding_commitment_root_v1(&run.binding),
+                run.binding.committed_execution_root,
+                "{tag}: the derivation is the capture's"
+            );
+            let a = accuse(&binding, &forged_leaves, &forged_hashes, &forged_chunks, c, 0, position);
+            assert_eq!(
+                palw_checkpoint_court_verdict_v1(&a, class, LADDER),
+                Ok(PalwCheckpointCourtVerdictV1::ExecutorGuilty),
+                "{tag}: the forged K row convicts"
+            );
+            for (kind, other) in [(0u8, 6u32), (1, 5)] {
+                let a = accuse(&binding, &forged_leaves, &forged_hashes, &forged_chunks, c, kind, other);
+                assert_eq!(
+                    palw_checkpoint_court_verdict_v1(&a, class, LADDER),
+                    Ok(PalwCheckpointCourtVerdictV1::FalseAccusation),
+                    "{tag}: an honest row of the forged checkpoint (kind {kind}, position {other})"
+                );
+            }
+        }
     }
 }
