@@ -294,3 +294,117 @@ fn a_job_image_is_bound_run_and_refused_by_name() {
     let same = stage(vec![Binding::JobImage { index: 0 }, Binding::JobImage { index: 0 }]);
     assert_eq!(refused(&same, std::slice::from_ref(&two)), TirErrorKind::NormalForm, "image 0 at 2 × 3 and at 3 × 2");
 }
+
+/// **The text stage** (RFC-0003 §II.2.1, NF-P9′): a `Logits` output stage over the text stream,
+/// generating through a selector outside the program and replaying from the committed ids.
+#[test]
+fn a_text_stage_generates_through_its_selector_and_replays() {
+    let (p, programs) = text_pipeline();
+    let params = params_for(&programs);
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let job = PipelineJob { prompt: vec![3, 7, 9], ..PipelineJob::default() };
+    let (run, generated) = run_text_pipeline(&p, &programs, &params, &random, &job, &mut greedy(4)).unwrap();
+    assert_eq!(generated.len(), 4);
+    assert_eq!(run.stages[0].trip, 3 + 4 - 1, "|prompt| + |generated| − 1: the last id is never fed back");
+    assert_eq!(run.stages[0].tokens, [&job.prompt[..], &generated[..3]].concat());
+    assert_eq!(run.output.shape, vec![6, 1, TOK as usize], "the logits rows, stacked");
+    // Replaying the committed ids is the same run, position for position.
+    let committed = PipelineJob { generated: generated.clone(), ..job.clone() };
+    assert_eq!(run_pipeline(&p, &programs, &params, &random, &committed).unwrap(), run);
+    let facts = stage_job_facts(&p, &programs, &committed).unwrap();
+    assert_eq!((facts[0].trip, &facts[0].tokens), (6, &run.stages[0].tokens));
+    // Each consumed position's greedy id is its logits' argmax: the replayed stream agrees.
+    for (k, id) in generated.iter().enumerate() {
+        let logits = &run.stages[0].steps[job.prompt.len() - 1 + k].output;
+        let best = logits.data.iter().enumerate().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(&a.0))).unwrap().0;
+        assert_eq!(*id as usize, best, "generated id {k}");
+    }
+    // Ending at once: one position past the prompt's first consumed logits, and no id.
+    let (end, none) = run_text_pipeline(&p, &programs, &params, &random, &job, &mut |_, _| TextSelectV1::End).unwrap();
+    assert!(none.is_empty());
+    assert_eq!(end.stages[0].trip, 3, "the prompt's positions ran; the last one's logits ended generation");
+    assert_eq!(run_pipeline(&p, &programs, &params, &random, &job).unwrap(), end, "no generated id replays the same");
+    // The stream may not pass max_trip, and an empty prompt has no first position.
+    assert_eq!(run_text_pipeline(&p, &programs, &params, &random, &job, &mut greedy(100)).unwrap_err().kind, TirErrorKind::Position);
+    let empty = PipelineJob::default();
+    assert_eq!(run_text_pipeline(&p, &programs, &params, &random, &empty, &mut greedy(1)).unwrap_err().kind, TirErrorKind::Position);
+    assert_eq!(text_stream_run(&PipelineJob { generated: vec![4], ..job.clone() }), job.prompt, "one id: nothing fed back");
+}
+
+/// **The vision-language pipeline**: the image rows reach the language model only at placeholder
+/// positions, by the cursor — placement is a function of the prompt ids alone.
+#[test]
+fn image_rows_enter_the_text_stage_at_placeholder_ids() {
+    let (p, programs) = vlm_pipeline();
+    let params = params_for(&programs);
+    let random = GenRandom { seed: [0; 32], position: 0 };
+    let base = vision_job();
+    let mut dark = base.clone();
+    dark.images[0].rgb.iter_mut().for_each(|b| *b /= 3);
+    let logits_at = |job: &PipelineJob| -> Vec<Vec<i128>> {
+        let committed = PipelineJob { generated: vec![1, 2], ..job.clone() };
+        let run = run_pipeline(&p, &programs, &params, &random, &committed).unwrap();
+        run.stages[1].steps.iter().map(|s| s.output.data.clone()).collect()
+    };
+    // A prompt with two placeholders: positions 1 and 2 read the image, the others do not.
+    let with = |job: &PipelineJob| PipelineJob { prompt: vec![3, PLACEHOLDER, PLACEHOLDER, 5], ..job.clone() };
+    let (a, b) = (logits_at(&with(&base)), logits_at(&with(&dark)));
+    assert_eq!(a.len(), 4 + 2 - 1);
+    for pos in 0..a.len() {
+        let reads_image = pos == 1 || pos == 2;
+        assert_eq!(a[pos] != b[pos], reads_image, "position {pos}");
+    }
+    // Without placeholders the image changes nothing; the rows still ran.
+    let plain = |job: &PipelineJob| PipelineJob { prompt: vec![3, 4, 5], ..job.clone() };
+    assert_eq!(logits_at(&plain(&base)), logits_at(&plain(&dark)));
+    // A third placeholder re-reads the last row (the cursor is clamped): total, never out of range.
+    let three = |job: &PipelineJob| PipelineJob { prompt: vec![PLACEHOLDER, PLACEHOLDER, PLACEHOLDER], ..job.clone() };
+    let r = logits_at(&three(&base));
+    assert_eq!(r[1], r[2], "rows 1 and 1 again");
+    assert_ne!(r[0], r[1], "row 0, then row 1");
+    // Generating over it replays.
+    let job = with(&base);
+    let (run, generated) = run_text_pipeline(&p, &programs, &params, &random, &job, &mut greedy(3)).unwrap();
+    assert_eq!(run_pipeline(&p, &programs, &params, &random, &PipelineJob { generated, ..job }).unwrap(), run);
+}
+
+#[test]
+fn only_the_output_stage_may_be_the_text_stage() {
+    let (p, programs) = vlm_pipeline();
+    let refused = |p: &TirPipelineV1| validate_pipeline(p, &programs).unwrap_err().kind;
+    // The text stage with a token rule, or at a fixed trip.
+    let mut ruled = p.clone();
+    ruled.stages[1].tokens = Some(TokenRule { prefix: vec![], source: TokenSource::Prompt, suffix: vec![], pad: None });
+    assert_eq!(refused(&ruled), TirErrorKind::NormalForm, "a TextStream stage has no token rule");
+    let mut fixed = p.clone();
+    fixed.stages[1].trip = TripRule::Fixed { n: 12 };
+    assert_eq!(refused(&fixed), TirErrorKind::NormalForm, "a Logits stage runs over the text stream");
+    // TextStream on a Final program.
+    let mut final_text = p.clone();
+    final_text.stages[0].trip = TripRule::TextStream;
+    final_text.stages[0].max_trip = 12;
+    assert_eq!(refused(&final_text), TirErrorKind::NormalForm, "only a Logits program is the text stage");
+    // A Logits stage that is not the output: nothing can read it, and it is not the text stage.
+    let (tp, tprogs) = text_pipeline();
+    let mut two = tp.clone();
+    two.stages.push(StageDecl { name: "after".into(), ..tp.stages[0].clone() });
+    two.output_stage = 1;
+    assert!(validate_pipeline(&two, &tprogs).is_err());
+    // Admission prices the text stage at max_trip positions, like any other.
+    let bytes: Vec<Vec<u8>> = programs.iter().map(|x| x.encode()).collect();
+    let inputs = misaka_palw_tir::admit::TirAdmitInputsV1 {
+        tile_len: 16,
+        h_chunk: 16,
+        ceilings: misaka_palw_tir::admit::TirCeilingsV1::legacy_court_v1(),
+    };
+    let a = misaka_palw_tir::admit_v2::tir_admit_pipeline_v1(
+        &p.encode(),
+        &bytes,
+        &inputs,
+        &misaka_palw_tir::admit_v2::TirJobCeilingsV1::open_v1(),
+    )
+    .unwrap();
+    assert_eq!(a.stages[1].max_trip, 12);
+    assert_eq!(a.stages[1].job_cost.macs, 12 * a.stages[1].admission.view.position.cost.macs);
+    assert_eq!(a.stages[1].admission.inputs[0].leaf, misaka_palw_tir::admit::ParamLeafV1::Committed, "the image rows: an edge");
+}

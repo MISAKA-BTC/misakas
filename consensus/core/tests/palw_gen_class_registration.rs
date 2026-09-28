@@ -260,7 +260,7 @@ fn the_toy_image_class_passes_the_preflight() {
     let c = class();
     let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap_or_else(|e| panic!("the toy class: {e}"));
     assert_eq!(report.profile, PalwGenProfileV1::Image);
-    assert_eq!(report.output_tile_len, 4, "the decoder's output tile");
+    assert_eq!(report.output_tile_len, Some(4), "the decoder's output tile");
     assert!(report.draws_randomness, "the denoiser draws the initial noise and a per-step jitter");
     assert_eq!(report.admission.stages.len(), 3);
     assert_eq!((report.admission.output_interval.lo, report.admission.output_interval.hi), (0, 255));
@@ -419,4 +419,94 @@ fn a_job_carries_exactly_one_image_per_slot_at_its_size() {
     // The reference is what the job carries: its root and size, never the bytes.
     let bytes = borsh::to_vec(&image(2, 3)).unwrap();
     assert_eq!(bytes.len(), 64 + 4 + 4);
+}
+
+/// A pipeline of `toy-text.json`-shaped or `toy-vlm.json` vectors as a Text class.
+fn text_class(vector: &str, images: Vec<PalwGenImageOfferV1>) -> PalwGenClassV1 {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/pipelines").join(vector);
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).expect("the vector")).expect("json");
+    let pipeline = unhex(v["pipeline_borsh_hex"].as_str().unwrap());
+    let programs: Vec<Vec<u8>> =
+        v["programs"].as_array().unwrap().iter().map(|p| unhex(p["program_borsh_hex"].as_str().unwrap())).collect();
+    let (p, progs) = decoded(&pipeline, &programs);
+    let max_trip = p.stages[p.output_stage as usize].max_trip;
+    PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Text as u8,
+        layouts: layouts(&p, &progs),
+        offers: PalwGenOffersV1 { steps: vec![], scalars: vec![], max_prompt_tokens: 8, max_negative_tokens: 0, images },
+        output: OutputSpecV1::tokens(max_trip),
+        pipeline,
+        programs,
+        tokenizer_id: Hash64::from_bytes([0x72; 64]),
+    }
+}
+
+fn vlm_class() -> PalwGenClassV1 {
+    text_class("toy-vlm.json", vec![PalwGenImageOfferV1 { h: 2, w: 3, tile_len: 4 }])
+}
+
+#[test]
+fn a_vision_language_class_is_a_text_class_with_image_slots() {
+    let c = vlm_class();
+    let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap_or_else(|e| panic!("the VLM class: {e}"));
+    assert_eq!(report.profile, PalwGenProfileV1::Text);
+    assert_eq!(report.output_tile_len, None, "its output is the generated ids: no output root");
+    assert_eq!(report.admission.stages.len(), 2);
+    assert_eq!(report.admission.stages[1].max_trip, 12, "the text stage at max_trip positions");
+    let refused = |edit: &dyn Fn(&mut PalwGenClassV1)| {
+        let mut other = c.clone();
+        edit(&mut other);
+        palw_gen_class_preflight_v1(&other, &fence()).expect_err("refused")
+    };
+    for (what, e) in [
+        ("as an Embedding class", refused(&|c| c.profile = PalwGenProfileV1::Embedding as u8)),
+        ("its output as 11 ids", refused(&|c| c.output = OutputSpecV1::tokens(11))),
+        ("its output as an embedding", refused(&|c| c.output = OutputSpecV1::embedding_i32(1, 4, 0, false))),
+    ] {
+        assert!(matches!(e, PalwGenClassErrorV1::Output(_)), "{what}: {e}");
+    }
+    for (what, e) in [
+        ("a prompt longer than the stream", refused(&|c| c.offers.max_prompt_tokens = 13)),
+        ("no prompt", refused(&|c| c.offers.max_prompt_tokens = 0)),
+        ("no image slot", refused(&|c| c.offers.images.clear())),
+    ] {
+        assert!(matches!(e, PalwGenClassErrorV1::Offers(_)), "{what}: {e}");
+    }
+    // A pipeline without a text stage is not a Text class.
+    let mut vision = vision_class();
+    vision.profile = PalwGenProfileV1::Text as u8;
+    vision.output = OutputSpecV1::tokens(1);
+    assert!(matches!(palw_gen_class_preflight_v1(&vision, &fence()), Err(PalwGenClassErrorV1::Output(_))));
+    // The class id covers the profile: the same pipeline as another profile is another class.
+    let root = Hash64::from_bytes([0xA9; 64]);
+    let mut other = c.clone();
+    other.profile = PalwGenProfileV1::Image as u8;
+    assert_ne!(c.class_id(&root), other.class_id(&root));
+}
+
+#[test]
+fn a_text_only_pipeline_is_a_text_class() {
+    let (p, progs) = {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../consensus-vectors/tir-v2/admission.json");
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let case =
+            v["pipelines"].as_array().unwrap().iter().find(|c| c["name"].as_str().unwrap().starts_with("toy-text")).unwrap().clone();
+        let programs: Vec<Vec<u8>> =
+            case["programs_borsh_hex"].as_array().unwrap().iter().map(|h| unhex(h.as_str().unwrap())).collect();
+        (unhex(case["pipeline_borsh_hex"].as_str().unwrap()), programs)
+    };
+    let (pipeline, decoded_progs) = decoded(&p, &progs);
+    let c = PalwGenClassV1 {
+        version: PALW_GEN_CLASS_VERSION_V1,
+        profile: PalwGenProfileV1::Text as u8,
+        layouts: layouts(&pipeline, &decoded_progs),
+        offers: PalwGenOffersV1 { steps: vec![], scalars: vec![], max_prompt_tokens: 12, max_negative_tokens: 0, images: vec![] },
+        output: OutputSpecV1::tokens(12),
+        pipeline: p,
+        programs: progs,
+        tokenizer_id: Hash64::from_bytes([0x72; 64]),
+    };
+    let report = palw_gen_class_preflight_v1(&c, &fence()).unwrap_or_else(|e| panic!("the text class: {e}"));
+    assert_eq!((report.profile, report.output_tile_len, report.draws_randomness), (PalwGenProfileV1::Text, None, false));
 }

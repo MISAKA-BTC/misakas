@@ -2,7 +2,9 @@
 //! identifies it, and what its registration carries** (RFC-0003 §I.2.3; spec 04b §15; Phase F's
 //! step F2 pattern, [`crate::palw_tir_class_v1`]).
 //!
-//! A generative class is a [`PalwGenClassV1`]: its profile; the canonical bytes of a
+//! A generative class is a [`PalwGenClassV1`]: its profile (a `Text` class's output stage is its
+//! language model, RFC-0003 §II.2.1, and its output the generated ids with no root); the canonical
+//! bytes of a
 //! `TirPipelineV1` (spec 04b §15.6) and of every `TirProgramV2` its stages run, in the pipeline's
 //! program order; one commitment layout per stage (Phase F's [`PalwTirLayoutV1`], D5 per stage); the
 //! canonical output header (`OutputSpecV1`, RFC-0003 §I.3); the job-parameter domains it offers
@@ -311,8 +313,9 @@ pub struct PalwGenClassReportV1 {
     /// The IR's admission of the pipeline at each stage's widest commit tile.
     pub admission: TirPipelineAdmissionV1,
     /// The output node's commit tile in the output stage's layout: the tile the output digest is
-    /// aligned with (PALW-OUT-3).
-    pub output_tile_len: u32,
+    /// aligned with (PALW-OUT-3). `None` for a text class, whose output is its generated ids and has
+    /// no output root (RFC-0003 §I.3.3).
+    pub output_tile_len: Option<u32>,
     /// Whether any stage draws `R` (PALW-GEN-6: a job's seed is all zeros exactly when it does not).
     pub draws_randomness: bool,
 }
@@ -321,20 +324,25 @@ fn fixed_shape(dims: &[Dim]) -> Option<Vec<u32>> {
     dims.iter().map(|d| if let Dim::Fixed(n) = d { Some(*n) } else { None }).collect()
 }
 
-/// The token rules of the pipeline, with where they are read.
-fn token_rules(pipeline: &TirPipelineV1) -> Vec<(&TokenRule, u32)> {
-    let mut rules = Vec::new();
+/// Every reader of the job's prompts: `(source, template ids around it, room)` — a token rule, or
+/// the text stage, which reads the prompt bare within its `max_trip`.
+fn prompt_readers(pipeline: &TirPipelineV1) -> Vec<(TokenSource, usize, u32)> {
+    let mut readers = Vec::new();
+    let template = |r: &TokenRule| r.prefix.len() + r.suffix.len();
     for st in &pipeline.stages {
         if let Some(rule) = &st.tokens {
-            rules.push((rule, st.max_trip));
+            readers.push((rule.source, template(rule), st.max_trip));
+        }
+        if matches!(st.trip, TripRule::TextStream) {
+            readers.push((TokenSource::Prompt, 0, st.max_trip));
         }
         for b in &st.bind {
             if let Binding::JobTokens { rule } | Binding::JobTokenCount { rule } = b {
-                rules.push((rule, rule.pad.map_or(u32::MAX, |p| p.to_len)));
+                readers.push((rule.source, template(rule), rule.pad.map_or(u32::MAX, |p| p.to_len)));
             }
         }
     }
-    rules
+    readers
 }
 
 fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &PalwGenOffersV1) -> Result<(), PalwGenClassErrorV1> {
@@ -395,16 +403,21 @@ fn check_offers(pipeline: &TirPipelineV1, programs: &[TirProgramV2], offers: &Pa
         (TokenSource::Prompt, offers.max_prompt_tokens, "prompt"),
         (TokenSource::Negative, offers.max_negative_tokens, "negative prompt"),
     ] {
-        let readers: Vec<(&TokenRule, u32)> = token_rules(pipeline).into_iter().filter(|(r, _)| r.source == source).collect();
+        let readers: Vec<(usize, u32)> =
+            prompt_readers(pipeline).into_iter().filter(|(s, _, _)| *s == source).map(|(_, t, r)| (t, r)).collect();
         if readers.is_empty() && max != 0 {
             return bad(format!("a {what} is offered and no rule reads it"));
         }
-        for (rule, room) in readers {
-            let need = rule.prefix.len() as u64 + max as u64 + rule.suffix.len() as u64;
+        for (template, room) in readers {
+            let need = template as u64 + max as u64;
             if need > room as u64 {
-                return bad(format!("the longest {what} ({max} ids) and its template need {need} positions; the rule has {room}"));
+                return bad(format!("the longest {what} ({max} ids) and its template need {need} positions; the reader has {room}"));
             }
         }
+    }
+    // A text stream starts with at least one prompt id: a text class offers a prompt.
+    if pipeline.stages.iter().any(|st| matches!(st.trip, TripRule::TextStream)) && offers.max_prompt_tokens == 0 {
+        return bad("a text class offers a prompt of at least one id".into());
     }
     Ok(())
 }
@@ -480,6 +493,20 @@ pub fn palw_gen_class_preflight_v1(
         return out(format!("kind {} is not {profile:?}'s {}", class.output.kind, profile.output_kind().name()));
     }
     let layout = class.output.layout().map_err(|e| PalwGenClassErrorV1::Output(format!("{e:?}")))?;
+    // A text class's output stage is the text stage, and only a text class has one (NF-P9′). Its
+    // output is the generated ids — `Tokens [max_trip]`, the most a stream holds — with no root.
+    let text_stage = matches!(out_prog.output, OutputDecl::Logits { .. });
+    if text_stage != (profile == PalwGenProfileV1::Text) {
+        return out(format!("a {profile:?} class's output stage {} the text stage", if text_stage { "is" } else { "is not" }));
+    }
+    if text_stage {
+        if class.output.shape != [out_stage.max_trip] {
+            return out(format!("a text class's output is Tokens [{}], its stream's most ids", out_stage.max_trip));
+        }
+        check_offers(&pipeline, &programs, &class.offers)?;
+        let admission = admit_class(class, ceilings)?;
+        return Ok(PalwGenClassReportV1 { profile, admission, output_tile_len: None, draws_randomness: draws_randomness(&programs) });
+    }
     let post = &out_prog.blocks[out_prog.schedule.post as usize];
     let node = out_prog.output.node();
     let Some(node_shape) = fixed_shape(&post.nodes[node as usize].out.shape) else {
@@ -488,7 +515,7 @@ pub fn palw_gen_class_preflight_v1(
     let expected = match out_prog.output {
         OutputDecl::Final { .. } => node_shape,
         OutputDecl::Rows { .. } => [vec![out_stage.max_trip], node_shape].concat(),
-        OutputDecl::Logits { .. } => return out("the output stage is a Rows or Final program (NF-P9)".into()),
+        OutputDecl::Logits { .. } => unreachable!("the text stage returned above"),
     };
     if class.output.shape != expected {
         return out(format!("shape {:?} is not the output stage's {expected:?}", class.output.shape));
@@ -523,6 +550,25 @@ pub fn palw_gen_class_preflight_v1(
     check_offers(&pipeline, &programs, &class.offers)?;
 
     // 6. The IR's admission under the profile's ceilings, each stage at its widest commit tile.
+    let admission = admit_class(class, ceilings)?;
+    Ok(PalwGenClassReportV1 {
+        profile,
+        admission,
+        output_tile_len: Some(output_tile_len),
+        draws_randomness: draws_randomness(&programs),
+    })
+}
+
+fn draws_randomness(programs: &[TirProgramV2]) -> bool {
+    programs.iter().any(|p| p.inputs.iter().any(|i| matches!(i.source, InputSource::Random { .. })))
+}
+
+/// The IR's admission of the class's pipeline under the profile's ceilings, each stage at its widest
+/// commit tile (a necessary condition on leaves: see the module doc).
+fn admit_class(
+    class: &PalwGenClassV1,
+    ceilings: &crate::palw_gen_v1::PalwGenProfileCeilingsV1,
+) -> Result<TirPipelineAdmissionV1, PalwGenClassErrorV1> {
     let stage_inputs: Vec<TirAdmitInputsV1> = class
         .layouts
         .iter()
@@ -549,11 +595,9 @@ pub fn palw_gen_class_preflight_v1(
         max_job_step_leaves: ceilings.max_job_step_leaves,
         max_job_cone_work: ceilings.max_job_cone_work,
     };
-    let admission = tir_admit_pipeline_staged_v1(&class.pipeline, &class.programs, &stage_inputs, &job).map_err(|e| match e {
+    tir_admit_pipeline_staged_v1(&class.pipeline, &class.programs, &stage_inputs, &job).map_err(|e| match e {
         TirAdmitError::Program(e) => PalwGenClassErrorV1::Program(e.to_string()),
         TirAdmitError::Exceeds { limit, at, value, cap } => PalwGenClassErrorV1::AdmissionExceeds { limit, at, value, cap },
         TirAdmitError::Inputs(why) => PalwGenClassErrorV1::Layout(why.into()),
-    })?;
-    let draws_randomness = programs.iter().any(|p| p.inputs.iter().any(|i| matches!(i.source, InputSource::Random { .. })));
-    Ok(PalwGenClassReportV1 { profile, admission, output_tile_len, draws_randomness })
+    })
 }

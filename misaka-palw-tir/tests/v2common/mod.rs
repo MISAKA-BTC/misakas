@@ -248,7 +248,7 @@ pub fn pre_carry(p: &TirProgramV2, k: usize) -> u16 {
 }
 
 pub fn toy_job() -> PipelineJob {
-    PipelineJob { prompt: vec![5, 6, 7], negative: vec![], steps: 3, scalars: vec![24, 1], images: vec![] }
+    PipelineJob { prompt: vec![5, 6, 7], negative: vec![], steps: 3, scalars: vec![24, 1], images: vec![], generated: vec![] }
 }
 
 /// A 64-bit LCG, so no vector depends on an RNG crate's stream.
@@ -482,6 +482,148 @@ pub fn vision_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
 pub fn vision_job() -> PipelineJob {
     let rgb = (0..VIS_H * VIS_W * 3).map(|i| ((37 * i + 11) % 256) as u8).collect();
     PipelineJob { images: vec![JobImageV1 { h: VIS_H, w: VIS_W, rgb }], ..PipelineJob::default() }
+}
+
+/// The toy language model's image placeholder id.
+pub const PLACEHOLDER: u32 = 15;
+/// Image rows the toy vision stage gives the language model.
+pub const VLM_ROWS: u32 = 2;
+
+/// The VLM's vision stage: the toy image encoder with two rows out — the six patches' projections
+/// summed in two groups of three: `Final [2, 4]`.
+pub fn vlm_vision_program() -> TirProgramV2 {
+    let mut pb = ProgramBuilder::new(1, HISTORY_BOUND_V1_SMALL);
+    let image = pb.param("vv.image", DType::I16, &[VIS_H, VIS_W, 3], false);
+    let w = pb.param("vv.w", DType::I8, &[3, D], false);
+    let pre = {
+        let mut b = pb.block("vv.pre", vec![]);
+        let x = b.cast(image, DType::I32);
+        let two = b.c(DType::I32, 2);
+        let x2 = b.mul(x, two, DType::I32);
+        let mid = b.c(DType::I32, 255);
+        let centred = b.sub(x2, mid, DType::I32);
+        let patches = b.reshape_fixed(centred, &[VIS_H * VIS_W, 3]);
+        let proj = b.matmul(patches, w, DType::I32);
+        let groups = b.reshape_fixed(proj, &[VLM_ROWS, 3, D]);
+        let rows = b.reduce_sum(groups, 1, DType::I32);
+        let rows = b.reshape_fixed(rows, &[VLM_ROWS, D]);
+        b.finish(&[rows])
+    };
+    let carry = carry_of(&pb, pre);
+    let (post, out) = {
+        let mut b = pb.block("vv.post", carry);
+        let o = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(o);
+        (b.finish(&[]), node_of(o))
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    TirProgramV2::from_v1_lifting_params(&v1, &[(0, InputSource::External { lo: 0, hi: 255 })], OutputDecl::Final { node: out })
+        .unwrap()
+}
+
+/// A toy language model over a token stream (`Logits [1, 16]`): the token's `i8` embedding — or, with
+/// `images`, at a position whose token is [`PLACEHOLDER`], the next image row (a `Fixed` cursor
+/// counts the placeholders passed; RFC-0003 §II.2.1's placement) — projected to the vocabulary.
+pub fn lm_program(images: bool) -> TirProgramV2 {
+    let mut pb = ProgramBuilder::new(TOK, HISTORY_BOUND_V1_SMALL);
+    let rows = images.then(|| pb.param("lm.image_rows", DType::I32, &[VLM_ROWS, D], false));
+    let emb = pb.param("lm.emb", DType::I8, &[TOK, D], false);
+    let w = pb.param("lm.w", DType::I8, &[D, TOK], false);
+    let cursor = images.then(|| pb.fixed_state("lm.cursor", DType::I32, &[1], 0, VLM_ROWS as i64, false));
+    let pre = {
+        let mut b = pb.block("lm.pre", vec![]);
+        let e = b.gather(emb, Ref::Input(0), 0, 0);
+        let e = b.cast(e, DType::I32);
+        let e = b.reshape_fixed(e, &[1, D]);
+        let x = match (rows, cursor) {
+            (Some(rows), Some(cursor)) => {
+                let ph = b.c(DType::Idx, PLACEHOLDER as i128);
+                let is_img = b.compare(Ref::Input(0), ph, Cmp::Eq);
+                let at = b.clamp(Ref::State(cursor), 0, VLM_ROWS as i64 - 1, DType::Idx);
+                let row = b.gather(rows, at, 0, 0);
+                let row = b.shr(row, 16, Rounding::HalfAwayFromZero, DType::I32);
+                let row = b.clamp(row, -128, 127, DType::I32);
+                let x = b.select(is_img, row, e, DType::I32);
+                let step = b.cast(is_img, DType::I32);
+                let next = b.add(Ref::State(cursor), step, DType::I32);
+                let next = b.clamp(next, 0, VLM_ROWS as i64, DType::I32);
+                b.state_write(cursor, next);
+                x
+            }
+            _ => e,
+        };
+        // Projected here, where `x`'s interval is proved (a carry-in reads as its dtype's range).
+        let l = b.matmul(x, w, DType::I32);
+        b.finish(&[l])
+    };
+    let carry = carry_of(&pb, pre);
+    let (post, out) = {
+        let mut b = pb.block("lm.post", carry);
+        let l = b.clamp(Ref::CarryIn(0), i32::MIN as i64, i32::MAX as i64, DType::I32);
+        b.commit(l);
+        (b.finish(&[]), node_of(l))
+    };
+    let v1 = pb.finish(pre, vec![], post, out);
+    let lifted: Vec<(u16, InputSource)> =
+        if images { vec![(0, InputSource::External { lo: i32::MIN as i64, hi: i32::MAX as i64 })] } else { vec![] };
+    TirProgramV2::from_v1_lifting_params(&v1, &lifted, OutputDecl::Logits { node: out, scheme_id: v1.logits_scheme_id }).unwrap()
+}
+
+/// A one-stage text pipeline: the language model over the text stream.
+pub fn text_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![StageDecl {
+            name: "lm".into(),
+            program: 0,
+            trip: TripRule::TextStream,
+            max_trip: 12,
+            tokens: None,
+            bind: vec![],
+        }],
+        output_stage: 0,
+    };
+    (p, vec![lm_program(false)])
+}
+
+/// The toy vision-language pipeline: the vision stage over job image 0, then the language model over
+/// the text stream, its image rows through a `StageFinal` edge.
+pub fn vlm_pipeline() -> (TirPipelineV1, Vec<TirProgramV2>) {
+    let p = TirPipelineV1 {
+        version: TIR_PIPELINE_VERSION_V1,
+        stages: vec![
+            StageDecl {
+                name: "vision".into(),
+                program: 0,
+                trip: TripRule::Fixed { n: 1 },
+                max_trip: 1,
+                tokens: None,
+                bind: vec![Binding::JobImage { index: 0 }],
+            },
+            StageDecl {
+                name: "lm".into(),
+                program: 1,
+                trip: TripRule::TextStream,
+                max_trip: 12,
+                tokens: None,
+                bind: vec![Binding::StageFinal { stage: 0 }],
+            },
+        ],
+        output_stage: 1,
+    };
+    (p, vec![vlm_vision_program(), lm_program(true)])
+}
+
+/// A greedy selector (the argmax, the lowest id on ties) that ends after `limit` ids — a stand-in for
+/// RFC-0001's decoder at temperature 0 with no controls.
+pub fn greedy(limit: usize) -> impl FnMut(u32, &Tensor) -> TextSelectV1 {
+    let mut n = 0;
+    move |_, logits| {
+        let (id, _) =
+            logits.data.iter().enumerate().fold((0usize, i128::MIN), |best, (i, v)| if *v > best.1 { (i, *v) } else { best });
+        n += 1;
+        if n >= limit { TextSelectV1::Last(id as u32) } else { TextSelectV1::Next(id as u32) }
+    }
 }
 
 /// A one-stage pipeline whose `Final` program gathers an `i8` embedding by the job's 8 (padded) token

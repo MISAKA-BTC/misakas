@@ -36,7 +36,7 @@ pub const MAX_TEMPLATE_TOKENS: usize = 4096;
 /// Job images a pipeline may bind (`Binding::JobImage { index }`, `index < 16`; RFC-0003 §II.4).
 pub const MAX_JOB_IMAGES: usize = 16;
 
-/// A stage's trip count `T`. Tags: `Fixed 0`, `JobSteps 1`, `TokenCount 2`.
+/// A stage's trip count `T`. Tags: `Fixed 0`, `JobSteps 1`, `TokenCount 2`, `TextStream 3`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TripRule {
     /// Always `n` positions (a decoder: `n = 1`).
@@ -45,6 +45,11 @@ pub enum TripRule {
     JobSteps,
     /// The length of the stage's token sequence (an encoder over the prompt).
     TokenCount,
+    /// **The text stage** (RFC-0003 §II.2.1): the text job's stream — the prompt ids, then the
+    /// generated ids — one position per id whose logits the decode consumed,
+    /// `T = |prompt| + max(|generated|, 1) − 1`. Only a pipeline's output stage, a `Logits`
+    /// program, has it (NF-P9′).
+    TextStream,
 }
 
 /// Which of the job's token lists a template wraps. Tags: `Prompt 0`, `Negative 1`.
@@ -149,6 +154,28 @@ pub struct PipelineJob {
     /// The job's images, pixels included — an executor's (and a reference run's) view. A court
     /// holds only each image's `input_root` and opens tiles against it (RFC-0003 §II.4).
     pub images: Vec<JobImageV1>,
+    /// The text stage's generated ids, as committed (a replay's and a court's view; a run that
+    /// generates them is [`run_text_pipeline`]). Empty for a pipeline with no text stage.
+    pub generated: Vec<u32>,
+}
+
+/// **The text stage's token run**: the prompt ids, then every generated id but the last (never fed
+/// back) — `T = |prompt| + max(|generated|, 1) − 1` ids.
+pub fn text_stream_run(job: &PipelineJob) -> Vec<u32> {
+    let fed = job.generated.len().saturating_sub(1);
+    job.prompt.iter().chain(&job.generated[..fed]).copied().collect()
+}
+
+/// A selector's answer after a text-stage position whose logits the decode consumes (RFC-0001 §A,
+/// applied outside the program).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextSelectV1 {
+    /// The next generated id, fed back at the next position.
+    Next(u32),
+    /// The final generated id (a stop matched, or the budget is spent): never fed back.
+    Last(u32),
+    /// Generation ends with no id at this position (an empty allowed set).
+    End,
 }
 
 /// One job image: `u8` HWC RGB, `rgb.len() = h · w · 3`, row-major.
@@ -250,9 +277,11 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
                     return nf(format!("{what}: a padded token run has max_trip = its pad length"));
                 }
             }
+            (TripRule::TextStream, None, true) => {}
             _ => {
                 return nf(format!(
-                    "{what}: Fixed (with max_trip = n) and JobSteps stages read no token; a TokenCount stage reads the token and has a token rule"
+                    "{what}: Fixed (with max_trip = n) and JobSteps stages read no token; a TokenCount stage reads the token and has a \
+                     token rule; a TextStream stage reads the token and has none"
                 ));
             }
         }
@@ -376,10 +405,17 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
         }
         externals.push(ext);
     }
-    // NF-P9: the output stage ends in a tensor, and no other stage is dead.
-    let out_prog = &programs[p.stages[p.output_stage as usize].program as usize];
-    if matches!(out_prog.output, OutputDecl::Logits { .. }) {
-        return nf("the output stage is a Rows or Final program");
+    // NF-P9 (with NF-P9′): the output stage ends in a tensor or is the text stage — a Logits program
+    // over the text stream — and no other stage is either; no other stage is dead.
+    for (s, st) in p.stages.iter().enumerate() {
+        let logits = matches!(programs[st.program as usize].output, OutputDecl::Logits { .. });
+        let text = matches!(st.trip, TripRule::TextStream);
+        if (logits || text) && !(logits && text && s == p.output_stage as usize) {
+            return nf(format!(
+                "stage {s} ({}): a Logits program is the text stage — the output stage, over TextStream — and only it is",
+                st.name
+            ));
+        }
     }
     if let Some(dead) = (0..p.stages.len()).find(|s| *s != p.output_stage as usize && !consumed[*s]) {
         return nf(format!("stage {dead} feeds no later stage and is not the output"));
@@ -465,15 +501,7 @@ pub fn stage_job_facts(p: &TirPipelineV1, programs: &[TirProgramV2], job: &Pipel
     let mut facts: Vec<StageJobFacts> = Vec::with_capacity(p.stages.len());
     for st in &p.stages {
         let prog = &programs[st.program as usize];
-        let tokens = match &st.tokens {
-            Some(rule) => apply_rule(rule, job)?,
-            None => Vec::new(),
-        };
-        let trip = match st.trip {
-            TripRule::Fixed { n } => n,
-            TripRule::JobSteps => job.steps,
-            TripRule::TokenCount => tokens.len() as u32,
-        };
+        let (tokens, trip) = stage_tokens(st, job)?;
         if trip == 0 || trip > st.max_trip {
             return err(TirErrorKind::Position, format!("stage {}: trip count {trip} outside [1, {}]", st.name, st.max_trip));
         }
@@ -539,18 +567,128 @@ pub fn run_pipeline(
     let mut runs: Vec<StageRun> = Vec::with_capacity(p.stages.len());
     for st in &p.stages {
         let prog = &programs[st.program as usize];
-        let tokens = match &st.tokens {
-            Some(rule) => apply_rule(rule, job)?,
-            None => Vec::new(),
-        };
-        let trip = match st.trip {
-            TripRule::Fixed { n } => n,
-            TripRule::JobSteps => job.steps,
-            TripRule::TokenCount => tokens.len() as u32,
-        };
-        if trip == 0 || trip > st.max_trip {
-            return err(TirErrorKind::Position, format!("stage {}: trip count {trip} outside [1, {}]", st.name, st.max_trip));
+        let (tokens, trip) = stage_tokens(st, job)?;
+        let inputs = stage_inputs(st, prog, &runs, job, random)?;
+        let interp = InterpreterV2::new(prog)?;
+        let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
+        let steps = interp.run(params.params(st.program), &inputs, &run_tokens)?;
+        runs.push(StageRun { trip, tokens, steps });
+    }
+    let output = pipeline_output(p, programs, &runs)?;
+    Ok(PipelineRun { stages: runs, output })
+}
+
+/// A stage's token run and trip count, from the job: refused when the trip count leaves
+/// `[1, max_trip]` (`Position`) or a template overflows its pad (`Operand`).
+fn stage_tokens(st: &StageDecl, job: &PipelineJob) -> TirResult<(Vec<u32>, u32)> {
+    let tokens = match (&st.tokens, st.trip) {
+        (Some(rule), _) => apply_rule(rule, job)?,
+        (None, TripRule::TextStream) => text_stream_run(job),
+        (None, _) => Vec::new(),
+    };
+    let trip = match st.trip {
+        TripRule::Fixed { n } => n,
+        TripRule::JobSteps => job.steps,
+        TripRule::TokenCount | TripRule::TextStream => tokens.len() as u32,
+    };
+    if trip == 0 || trip > st.max_trip {
+        return err(TirErrorKind::Position, format!("stage {}: trip count {trip} outside [1, {}]", st.name, st.max_trip));
+    }
+    Ok((tokens, trip))
+}
+
+/// The pipeline's output tensor: a `Final` stage's last value, or a `Rows` (or text) stage's rows
+/// stacked `[T] ++ row shape`.
+fn pipeline_output(p: &TirPipelineV1, programs: &[TirProgramV2], runs: &[StageRun]) -> TirResult<Tensor> {
+    let out_stage = &runs[p.output_stage as usize];
+    let out_prog = &programs[p.stages[p.output_stage as usize].program as usize];
+    // A stage runs at least one position (its trip count is checked), so `last` exists.
+    let last = out_stage.last().cloned().ok_or_else(|| TirError::new(TirErrorKind::Position, "the output stage ran no position"))?;
+    match out_prog.output {
+        OutputDecl::Rows { .. } | OutputDecl::Logits { .. } => {
+            let mut shape = vec![out_stage.steps.len()];
+            shape.extend_from_slice(&last.shape);
+            Tensor::new(last.dtype, shape, out_stage.steps.iter().flat_map(|s| s.output.data.iter().copied()).collect())
         }
+        OutputDecl::Final { .. } => Ok(last),
+    }
+}
+
+/// **Run a text pipeline, generating** (RFC-0003 §II.2.1): every stage before the text stage as
+/// [`run_pipeline`] runs it, then the text stage position by position over the prompt, asking
+/// `select` after each position whose logits the decode consumes (from `|prompt| − 1` on) for the
+/// next id — the RFC-0001 §A decoder's answer, which the IR never computes itself. Returns the run
+/// and the generated ids; [`run_pipeline`] over the same job with `generated` set replays it
+/// exactly.
+pub fn run_text_pipeline(
+    p: &TirPipelineV1,
+    programs: &[TirProgramV2],
+    params: &dyn PipelineParams,
+    random: &dyn RandomSource,
+    job: &PipelineJob,
+    select: &mut dyn FnMut(u32, &Tensor) -> TextSelectV1,
+) -> TirResult<(PipelineRun, Vec<u32>)> {
+    validate_pipeline(p, programs)?;
+    let text = p.output_stage as usize;
+    if !matches!(p.stages[text].trip, TripRule::TextStream) {
+        return nf("run_text_pipeline runs a pipeline whose output stage is the text stage");
+    }
+    if job.prompt.is_empty() {
+        return err(TirErrorKind::Position, "a text stream starts with at least one prompt id");
+    }
+    let mut runs: Vec<StageRun> = Vec::with_capacity(p.stages.len());
+    for st in &p.stages[..text] {
+        let prog = &programs[st.program as usize];
+        let (tokens, trip) = stage_tokens(st, job)?;
+        let inputs = stage_inputs(st, prog, &runs, job, random)?;
+        let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
+        let steps = InterpreterV2::new(prog)?.run(params.params(st.program), &inputs, &run_tokens)?;
+        runs.push(StageRun { trip, tokens, steps });
+    }
+    let st = &p.stages[text];
+    let prog = &programs[st.program as usize];
+    let inputs = stage_inputs(st, prog, &runs, job, random)?;
+    let interp = InterpreterV2::new(prog)?;
+    let mut state = crate::interp::RunState::default();
+    let (mut stream, mut generated, mut steps) = (job.prompt.clone(), Vec::new(), Vec::new());
+    let mut pos = 0usize;
+    loop {
+        if pos as u32 >= st.max_trip {
+            return err(TirErrorKind::Position, format!("stage {}: the stream passes max_trip {}", st.name, st.max_trip));
+        }
+        let out = interp.step(params.params(st.program), &inputs, &mut state, stream[pos])?;
+        let consumed = pos + 1 >= job.prompt.len();
+        let answer = if consumed { Some(select(pos as u32, &out.output)) } else { None };
+        steps.push(out);
+        match answer {
+            None => {}
+            Some(TextSelectV1::Next(id)) => {
+                generated.push(id);
+                stream.push(id);
+            }
+            Some(TextSelectV1::Last(id)) => {
+                generated.push(id);
+                break;
+            }
+            Some(TextSelectV1::End) => break,
+        }
+        pos += 1;
+    }
+    let tokens = stream[..steps.len()].to_vec();
+    runs.push(StageRun { trip: steps.len() as u32, tokens, steps });
+    let output = pipeline_output(p, programs, &runs)?;
+    Ok((PipelineRun { stages: runs, output }, generated))
+}
+
+/// A stage's inputs from its bindings, the earlier stages' runs, the job and `R`.
+fn stage_inputs<'a>(
+    st: &StageDecl,
+    prog: &TirProgramV2,
+    runs: &[StageRun],
+    job: &PipelineJob,
+    random: &'a dyn RandomSource,
+) -> TirResult<StageInputs<'a>> {
+    {
         let mut inputs = StageInputs { constant: BTreeMap::new(), per_step: BTreeMap::new(), random };
         let mut bindings = st.bind.iter();
         for (k, d) in prog.inputs.iter().enumerate() {
@@ -623,22 +761,6 @@ pub fn run_pipeline(
                 inputs.constant.insert(k, v);
             }
         }
-        let interp = InterpreterV2::new(prog)?;
-        let run_tokens = if tokens.is_empty() { vec![0; trip as usize] } else { tokens.clone() };
-        let steps = interp.run(params.params(st.program), &inputs, &run_tokens)?;
-        runs.push(StageRun { trip, tokens, steps });
+        Ok(inputs)
     }
-    let out_stage = &runs[p.output_stage as usize];
-    let out_prog = &programs[p.stages[p.output_stage as usize].program as usize];
-    // A stage runs at least one position (its trip count is checked above), so `last` exists.
-    let last = out_stage.last().cloned().ok_or_else(|| TirError::new(TirErrorKind::Position, "the output stage ran no position"))?;
-    let output = match out_prog.output {
-        OutputDecl::Rows { .. } => {
-            let mut shape = vec![out_stage.steps.len()];
-            shape.extend_from_slice(&last.shape);
-            Tensor::new(last.dtype, shape, out_stage.steps.iter().flat_map(|s| s.output.data.iter().copied()).collect())?
-        }
-        _ => last,
-    };
-    Ok(PipelineRun { stages: runs, output })
 }

@@ -137,6 +137,7 @@ fn the_value_is_fingerprinted_profile_by_profile() {
                 PalwGenProfileV1::Embedding => &mut f.ceilings.embedding,
                 PalwGenProfileV1::Audio => &mut f.ceilings.audio,
                 PalwGenProfileV1::Video => &mut f.ceilings.video,
+                PalwGenProfileV1::Text => &mut f.ceilings.text,
             };
             c.max_job_macs -= 1;
         });

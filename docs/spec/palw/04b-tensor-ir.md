@@ -2168,13 +2168,18 @@ root names its tiling.
   records the image's bytes, its `input_root` at an input tile of 4 bytes, and every input tile with
   its authentication path. It also records the run and the `EmbeddingI32` output with its
   `output_root`.
+- **`pipelines/toy-vlm.json`** holds a vision-language pipeline: a vision stage over a job image,
+  then the text stage over a prompt with two placeholder ids. It records the image, the generated
+  ids (a greedy selector's, a stand-in for RFC-0001's decoder), every stage's positions and the text
+  stage's logits rows. `run_pipeline` over the committed ids replays the generating run exactly. A
+  text class has no output root, so its `output_image` fields are empty.
 - **`admission.json`** (`palw-tir-v2/admission-vectors/1`) holds §15.9's derived numbers:
   - for each toy program admitted on its own: the inputs' intervals and openings, the `post`-written
     states, the per-position quantities, every cone with its leaves (inputs named `input:k`), the
     checkpoint intervals, and every node's interval;
   - for each pipeline (the toy image, the bidirectional encoder, a MatMul stage that carries the
-    job's MACs, the image encoder): every stage under its bindings' openings, the job's totals and
-    the output's interval;
+    job's MACs, the image encoder, a one-stage text pipeline, the vision-language pipeline): every
+    stage under its bindings' openings, the job's totals and the output's interval;
   - refusals: an input interval that lets the update overflow, and each job ceiling one short.
 - **`demand/<program>.json`** (`palw-tir-v2/demand-vectors/1`) holds §15.4 over the run of
   `programs/<program>.json`:
@@ -2291,7 +2296,11 @@ class, its identity, its registration object (tag 67, dropped by name at every h
 preflight (`palw_gen_class_v1.rs`); and the court's answers — `R` recomputed, job facts, PALW-TIR-33
 on edges, the output-digest check and fault 21 (`palw_gen_court_v1.rs`). Job images (`JobImage`,
 RFC-0003 §II.4) are built too: the class's image slots, the job's `(input_root, h, w)` reference and
-its check, and the court's reading of image lanes from proven tiles.
+its check, and the court's reading of image lanes from proven tiles. So is the text stage
+(`TextStream`, RFC-0003 §II.2.1): the IR's generating and replaying runs, the `Text` profile (a text
+pipeline, with image slots a vision-language class) and its preflight, and the court over a
+vision-language claim's text stage. The vision-language job (FP Job V5) belongs to RFC-0001's lane
+and is not built.
 
 The following are not yet built:
 
