@@ -60,6 +60,7 @@ fn tir_section(c: &report::Checked, a: &Args) -> (serde_json::Value, String, boo
             misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL
         },
         max_window: a.max_window,
+        quant: c.quant.clone(),
         ..Default::default()
     };
     match lower::lower(&c.program, &opts) {

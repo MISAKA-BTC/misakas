@@ -35,10 +35,33 @@ impl M<'_> {
         self.out.insert(name, src);
         Ok(())
     }
-    /// The `[out, in]` weight of a linear role (GPT-2's `Conv1D` stores `[in, out]`).
+    /// The `[out, in]` weight of a linear role (GPT-2's `Conv1D` stores `[in, out]`); a
+    /// pre-quantised checkpoint's projection reads its stored integers ([`Src::Quant`]).
     fn w(&self, role: &str) -> Result<Src> {
+        if let Some(fmt) = self.quantised(role)? {
+            return Ok(Src::Quant { module: self.role(role)?, fmt });
+        }
         let t = Src::t(format!("{}.weight", self.role(role)?));
         Ok(if self.st.conv1d_weights { t.transpose() } else { t })
+    }
+    /// The format a linear role is stored in, when the checkpoint is pre-quantised and the role is
+    /// one of a block's projections the config converts (`crate::prequant::QuantConfig`).
+    fn quantised(&self, role: &str) -> Result<Option<crate::prequant::QFormat>> {
+        const PROJECTIONS: &[&str] =
+            &["attn.q", "attn.k", "attn.v", "attn.qkv", "attn.o", "mlp.gate", "mlp.up", "mlp.gate_up", "mlp.down"];
+        let Some(q) = &self.st.quant else { return Ok(None) };
+        if role == "lm_head" {
+            return Ok(q.lm_head.then(|| q.fmt.clone()));
+        }
+        if !PROJECTIONS.contains(&role) {
+            return Ok(None);
+        }
+        let t = self.role(role)?;
+        let (a, b) = (q.converts(&t.replace("{L}", "0")), q.converts(&t.replace("{L}", "1")));
+        if a != b {
+            return Err(LowerError::not_lowerable(format!("`{t}`: quantised in some layers and not in others")));
+        }
+        Ok(a.then(|| q.fmt.clone()))
     }
     fn b(&self, role: &str) -> Result<Src> {
         Ok(Src::t(format!("{}.bias", self.role(role)?)))
@@ -104,7 +127,11 @@ pub fn bind(spec: &ArchSpec, prog: &HlProgram) -> Result<Binding> {
         m.put("head.proj_out.w", w)?;
     }
     if logits && !spec.head.tied {
-        m.put("head.w", Src::t(format!("{}.weight", m.role("lm_head")?)))?;
+        let w = match m.quantised("lm_head")? {
+            Some(fmt) => Src::Quant { module: m.role("lm_head")?, fmt },
+            None => Src::t(format!("{}.weight", m.role("lm_head")?)),
+        };
+        m.put("head.w", w)?;
     }
     if logits && spec.head.bias {
         let b = match spec.hf.name("lm_head_bias") {

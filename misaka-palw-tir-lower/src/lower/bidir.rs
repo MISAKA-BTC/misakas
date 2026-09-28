@@ -139,6 +139,7 @@ pub fn lower_bidir(hl: &HlProgram, spec: &ArchSpec, cfg: &BidirCfg) -> Result<Lo
         image_cursor: None,
         image_cursor_layer: None,
         split_max_readers: 0,
+        quant: BTreeMap::new(),
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];

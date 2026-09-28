@@ -43,6 +43,7 @@ pub mod hf_weights;
 pub mod hl;
 pub mod lora;
 pub mod lower;
+pub mod prequant;
 pub mod quant;
 pub mod report;
 pub mod rope;

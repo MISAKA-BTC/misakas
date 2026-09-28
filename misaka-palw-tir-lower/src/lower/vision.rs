@@ -956,6 +956,7 @@ pub fn lower_vision(hl: &HlProgram, s: &VisionSpec) -> Result<Lowered> {
         image_cursor: None,
         image_cursor_layer: None,
         split_max_readers: 0,
+        quant: BTreeMap::new(),
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     let mut order: Vec<usize> = vec![hl.pre];

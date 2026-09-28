@@ -8,7 +8,9 @@
 //! code range; the residual scale is one number for the program, sized on every value carried
 //! at it (`Lowered::resid_sites`).
 
+use super::qlinear::QInts;
 use super::{Base, Lowered, ScaleKey, occurrences};
+use crate::prequant::QLayout;
 use crate::error::{LowerError, Result};
 use crate::float_ref::stream::OccParams;
 use crate::float_ref::{ParamStore, SiteStat};
@@ -147,6 +149,7 @@ pub struct FillCtx<'a> {
     memo: Mutex<BTreeMap<u32, Arc<RowCodes>>>,
     memo16: Mutex<BTreeMap<u32, Arc<RowCodes16>>>,
     split_memo: Mutex<BTreeMap<String, Arc<SplitCodes>>>,
+    qmemo: Mutex<BTreeMap<String, Arc<QInts>>>,
 }
 
 impl<'a> FillCtx<'a> {
@@ -172,7 +175,36 @@ impl<'a> FillCtx<'a> {
             memo: Mutex::new(BTreeMap::new()),
             memo16: Mutex::new(BTreeMap::new()),
             split_memo: Mutex::new(BTreeMap::new()),
+            qmemo: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// A pre-quantised projection's integers in `layout`, for the input key `kx` (its outlier
+    /// columns route around the codes), computed once per occurrence.
+    pub fn qints(&self, p: u32, layout: QLayout, kx: &ScaleKey) -> Result<Arc<QInts>> {
+        let outl = self.outliers(kx)?;
+        let mk = format!("{p}:{outl:?}");
+        if let Some(r) = self.qmemo.lock().expect("memo").get(&mk) {
+            return Ok(r.clone());
+        }
+        let q = self
+            .params
+            .get_q(p, self.layer)
+            .ok_or_else(|| LowerError::eval(format!("param {p} is lowered as pre-quantised, but the checkpoint gave no integers")))?;
+        let ratio: Vec<f64> = if outl.is_empty() {
+            Vec::new()
+        } else {
+            let (tv, tn) = (self.scale_vec(kx, q.inp)?, self.scale(kx)?);
+            outl.iter().map(|c| tv[*c] / tn).collect()
+        };
+        let qi = Arc::new(super::qlinear::build(q, layout, &outl, &ratio)?);
+        self.qmemo.lock().expect("memo").insert(mk, qi.clone());
+        Ok(qi)
+    }
+
+    /// Scales of this occurrence's quantised projections that are not exact at their row's unit.
+    pub fn quant_inexact(&self) -> usize {
+        self.qmemo.lock().expect("memo").values().map(|q| q.inexact).sum()
     }
 
     /// A float param of this occurrence.
@@ -360,6 +392,9 @@ pub struct Materialised {
     pub resid_scale: f64,
     /// Float value of one unit of the logits.
     pub logits_scale: f64,
+    /// Pre-quantised projections' per-group scales that are not exact at their row's unit (0 when
+    /// every stored scale is represented exactly, `lower::qlinear`).
+    pub quant_inexact: usize,
 }
 
 /// Params each TIR block references.
@@ -400,6 +435,7 @@ pub fn materialise(
     let used = params_of_blocks(&lw.program);
     let mut out = IntParams::default();
     let mut logits_scale = None;
+    let mut quant_inexact = 0usize;
     let occs = occurrences(hl);
     let total = occs.len();
     for (oi, (hbk, layer, prefix)) in occs.into_iter().enumerate() {
@@ -416,6 +452,7 @@ pub fn materialise(
             memo: Mutex::new(BTreeMap::new()),
             memo16: Mutex::new(BTreeMap::new()),
             split_memo: Mutex::new(BTreeMap::new()),
+            qmemo: Mutex::new(BTreeMap::new()),
         };
         for &pi in &used[tb] {
             let d = &lw.program.params[pi as usize];
@@ -439,9 +476,10 @@ pub fn materialise(
         if hbk == hl.post {
             logits_scale = Some(ctx.scale(&lw.logits_key)?);
         }
+        quant_inexact += ctx.quant_inexact();
         progress(oi + 1, total);
     }
-    Ok(Materialised { params: out, resid_scale: resid, logits_scale: logits_scale.expect("post runs") })
+    Ok(Materialised { params: out, resid_scale: resid, logits_scale: logits_scale.expect("post runs"), quant_inexact })
 }
 
 /// The smallest power of two `≥ s`, as `2^−q` with `q` in `[0, 31]` (an `EmbeddingI32` output's

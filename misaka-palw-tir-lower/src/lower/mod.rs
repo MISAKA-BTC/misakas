@@ -56,6 +56,7 @@
 
 pub mod bidir;
 pub mod encdec;
+pub mod qlinear;
 pub mod vision;
 pub mod fill;
 
@@ -84,11 +85,14 @@ pub struct LowerOpts {
     /// A class whose layout bounds its jobs below the history bound can keep a shorter window —
     /// the attention is the model's up to it — and its per-position cost scales with it.
     pub max_window: Option<u32>,
+    /// Pre-quantised projections (GPTQ, AWQ), by HL param: lowered from the stored integers
+    /// (`qlinear`), not re-quantised. [`crate::weights::quant_layouts`] of the binding.
+    pub quant: BTreeMap<u32, crate::prequant::QLayout>,
 }
 
 impl Default for LowerOpts {
     fn default() -> Self {
-        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL, max_window: None, image_rows: None }
+        Self { history_bound: tir::program::HISTORY_BOUND_V1_SMALL, max_window: None, image_rows: None, quant: BTreeMap::new() }
     }
 }
 
@@ -321,6 +325,7 @@ pub fn lower(hl: &HlProgram, opts: &LowerOpts) -> Result<Lowered> {
         image_cursor: None,
         image_cursor_layer: None,
         split_max_readers: usize::MAX,
+        quant: opts.quant.clone(),
     };
     let mut block_map = vec![u8::MAX; hl.blocks.len()];
     // HL order is pre, layer kinds, post; TIR keeps it.
@@ -460,6 +465,8 @@ struct Cx<'h> {
     /// Split a value's outlier channels only when at most this many projections read it: each
     /// split projection costs 9 nodes more, and a block has 512 (NF-12).
     split_max_readers: usize,
+    /// [`LowerOpts::quant`].
+    quant: BTreeMap<u32, crate::prequant::QLayout>,
 }
 
 /// A lowered value: a TIR operand, its dtype, its scale, and the HL site whose statistics
@@ -1788,6 +1795,9 @@ fn lower_linear(
     site: &str,
     want: &Want,
 ) -> Result<Val> {
+    if let Some(layout) = cx.quant.get(&w).copied() {
+        return qlinear::lower_linear_q(b, cx, lb, x, w, bias, site, want, layout);
+    }
     let hl = cx.hl;
     let d = &hl.params[w as usize];
     let (out, inp) = (d.shape[0], d.shape[1]);

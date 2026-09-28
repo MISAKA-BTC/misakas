@@ -216,12 +216,15 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
     if root.get("add_cross_attention").and_then(Value::as_bool) == Some(true) {
         return Err(LowerError::not_lowerable(format!("{arch}: cross-attention is out of scope for v1")));
     }
-    if let Some(q) = root.get("quantization_config").filter(|q| !q.is_null()) {
-        let method = q.get("quant_method").and_then(Value::as_str).unwrap_or("unknown");
-        return Err(LowerError::not_lowerable(format!(
-            "{arch}: pre-quantized checkpoint (quant_method={method}); lower from a BF16/F16/F32 export — the integer program is quantized by the lowerer, not inherited"
-        )));
-    }
+    // A pre-quantised checkpoint (GPTQ, AWQ): its integers are lowered as stored
+    // (`crate::prequant`); every other method is refused there.
+    let quant = match root.get("quantization_config").filter(|q| !q.is_null()) {
+        Some(q) => {
+            let mt = root.get("model_type").and_then(Value::as_str).unwrap_or("");
+            Some(crate::prequant::parse_quant_config(q, &arch, mt)?)
+        }
+        None => None,
+    };
     let reference = match root.get("auto_map").and_then(Value::as_object) {
         Some(m) => {
             let module = remote_module(m).unwrap_or_default();
@@ -328,7 +331,35 @@ pub fn parse_config(v: &Value) -> Result<ArchSpec> {
         }
     };
     p.cfg.finish()?;
+    let mut spec = spec;
+    if let Some(q) = quant {
+        quantised_spec(&mut spec, q)?;
+    }
     Ok(spec)
+}
+
+/// Attach a pre-quantised checkpoint's config to a parsed spec: dense attention + MLP decoders,
+/// the checkpoint's projections read as stored integers (`crate::prequant`).
+fn quantised_spec(spec: &mut ArchSpec, q: crate::prequant::QuantConfig) -> Result<()> {
+    let arch = spec.architecture.clone();
+    if !matches!(spec.output, OutputSpec::Logits) || spec.hf.conv1d_weights || spec.adapter.is_some() {
+        return Err(LowerError::not_lowerable(format!(
+            "{arch}: a pre-quantised checkpoint of this kind (only decoders with nn.Linear projections)"
+        )));
+    }
+    if spec.hf.names.keys().any(|k| k.starts_with("vision") || k.contains("projector")) || !spec.hf.ignored_prefixes.is_empty() {
+        return Err(LowerError::not_lowerable(format!("{arch}: a pre-quantised multimodal checkpoint")));
+    }
+    for (l, ls) in spec.layers.iter().enumerate() {
+        if !matches!(ls.mixer, Mixer::Attention(_)) || !matches!(ls.ffn, Ffn::Mlp(_)) {
+            return Err(LowerError::not_lowerable(format!(
+                "{arch}: layer {l} of a pre-quantised checkpoint is not attention + MLP (quantised experts, latent attention and recurrent mixers are not lowered from their integers yet)"
+            )));
+        }
+    }
+    spec.notes.push(format!("pre-quantised checkpoint ({}): projections lowered from the stored integers", q.fmt.label()));
+    spec.hf.quant = Some(q);
+    Ok(())
 }
 
 /// The text decoder of a VLM, lowered alone (text-only prompts). The vision tower, projector and
@@ -572,6 +603,7 @@ impl P<'_> {
                 experts: self.layouts.experts,
                 gdn: self.layouts.gdn,
                 ignored_prefixes: std::mem::take(&mut self.ignored_prefixes),
+                quant: None,
             },
             notes: std::mem::take(&mut self.notes),
         }
@@ -713,10 +745,17 @@ mod tests {
         assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("encoder–decoder")), "{e}");
         let e = parse_config(&serde_json::json!({"hidden_size": 8})).unwrap_err();
         assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("architectures")), "{e}");
-        let e =
-            parse_config(&serde_json::json!({"architectures": ["LlamaForCausalLM"], "quantization_config": {"quant_method": "gptq"}}))
-                .unwrap_err();
-        assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("gptq")), "{e}");
+        // GPTQ and AWQ are read (crate::prequant); every other method is refused up front.
+        let e = parse_config(
+            &serde_json::json!({"architectures": ["LlamaForCausalLM"], "quantization_config": {"quant_method": "bitsandbytes"}}),
+        )
+        .unwrap_err();
+        assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("bitsandbytes")), "{e}");
+        let e = parse_config(
+            &serde_json::json!({"architectures": ["LlamaForCausalLM"], "quantization_config": {"quant_method": "gptq", "bits": 3}}),
+        )
+        .unwrap_err();
+        assert!(matches!(e, LowerError::NotLowerable(ref s) if s.contains("GPTQ 3-bit")), "{e}");
         let e = parse_config(&serde_json::json!({
             "architectures": ["LlamaForCausalLM"],
             "auto_map": {"AutoModelForCausalLM": "modeling_custom.CustomLlama"}

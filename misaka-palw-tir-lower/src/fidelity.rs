@@ -35,7 +35,10 @@ pub fn prepare(config_text: &str, opts: &LowerOpts) -> Result<Prepared> {
     let spec = crate::parse_config_str(config_text)?;
     let hl = crate::hl::build_program(&spec)?;
     let binding = crate::hf_weights::bind(&spec, &hl)?;
-    let lowered = lower(&hl, opts)?;
+    // A pre-quantised checkpoint's projections lower from their stored integers.
+    let mut opts = opts.clone();
+    opts.quant = crate::weights::quant_layouts(&hl, &binding)?;
+    let lowered = lower(&hl, &opts)?;
     Ok(Prepared { spec, hl, binding, lowered })
 }
 

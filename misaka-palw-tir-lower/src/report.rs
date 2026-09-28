@@ -24,6 +24,8 @@ pub struct Checked {
     pub program: HlProgram,
     pub cost: cost::CostReport,
     pub weights: Option<WeightReport>,
+    /// Pre-quantised projections' TIR structure (`LowerOpts::quant`).
+    pub quant: std::collections::BTreeMap<u32, crate::prequant::QLayout>,
 }
 
 pub fn check(config_text: &str, weights: Option<WeightsArg>) -> Result<Checked> {
@@ -42,7 +44,8 @@ pub fn check(config_text: &str, weights: Option<WeightsArg>) -> Result<Checked> 
             Some(weights::check_names(&program, &binding, &idx.0))
         }
     };
-    Ok(Checked { spec, program, cost, weights })
+    let quant = weights::quant_layouts(&program, &binding)?;
+    Ok(Checked { spec, program, cost, weights, quant })
 }
 
 fn human(n: u64) -> String {

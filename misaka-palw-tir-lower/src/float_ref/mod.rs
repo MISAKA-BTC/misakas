@@ -16,10 +16,12 @@ use crate::error::{LowerError, Result};
 use crate::hl::*;
 use crate::rope::{RopeStyle, bf16_round};
 use crate::spec::{Act, Glu, GroupScore, HeadMap, NormKind, RouterSpec, Scoring};
-use crate::weights::{Binding, Resolver, Tensor, TensorSource, eval_src, layers_of_param};
+use crate::prequant::QWeight;
+use crate::weights::{Binding, Resolver, Src, Tensor, TensorSource, eval_qsrc, eval_src, layers_of_param};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub mod stream;
 
@@ -28,6 +30,20 @@ pub mod stream;
 pub struct ParamStore {
     global: BTreeMap<u32, Tensor>,
     layered: BTreeMap<(u32, usize), Tensor>,
+    /// A pre-quantised param's stored integers (its float tensor above is their dequantisation).
+    quant: BTreeMap<(u32, Option<usize>), Arc<QWeight>>,
+}
+
+/// One param instance from its source: the float tensor, and the stored integers when the param
+/// is pre-quantised (the float tensor is then their dequantisation, read once).
+pub(crate) fn bind_one(src: &Src, r: &Resolver, layer: Option<usize>) -> Result<(Tensor, Option<QWeight>)> {
+    let none = BTreeMap::new();
+    if src.is_quant() {
+        let q = eval_qsrc(src, r, layer, &none)?.ok_or_else(|| LowerError::eval("internal: a quantised source read no integers"))?;
+        Ok((q.dequant(), Some(q)))
+    } else {
+        Ok((eval_src(src, r, layer, &none)?, None))
+    }
 }
 
 impl ParamStore {
@@ -39,6 +55,28 @@ impl ParamStore {
         .ok_or_else(|| LowerError::eval(format!("param {p} (layer {layer:?}) is not bound")))
     }
 
+    /// A pre-quantised param's stored integers (`None`: the param is float).
+    pub fn get_q(&self, p: u32, layer: Option<usize>) -> Option<&Arc<QWeight>> {
+        match layer {
+            Some(l) => self.quant.get(&(p, Some(l))).or_else(|| self.quant.get(&(p, None))),
+            None => self.quant.get(&(p, None)),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, p: u32, layer: Option<usize>, t: Tensor, q: Option<QWeight>) {
+        if let Some(q) = q {
+            self.quant.insert((p, layer), Arc::new(q));
+        }
+        match layer {
+            Some(l) => {
+                self.layered.insert((p, l), t);
+            }
+            None => {
+                self.global.insert(p, t);
+            }
+        }
+    }
+
     /// Bind every param from checkpoint tensors; returns the store and the checkpoint tensors
     /// the program never read.
     pub fn from_source(prog: &HlProgram, binding: &Binding, source: &dyn TensorSource) -> Result<(ParamStore, Vec<String>)> {
@@ -47,21 +85,20 @@ impl ParamStore {
         }
         let r = Resolver::new(source, &binding.aliases).with_ignored(&binding.ignored_prefixes);
         let mut st = ParamStore::default();
-        let none = BTreeMap::new();
         for (pi, d) in prog.params.iter().enumerate() {
             let pi = pi as u32;
             if d.per_layer {
                 for l in layers_of_param(prog, pi) {
-                    let t = eval_src(&binding.srcs[pi as usize], &r, Some(l), &none)
+                    let (t, q) = bind_one(&binding.srcs[pi as usize], &r, Some(l))
                         .map_err(|e| LowerError::weights(format!("param `{}` layer {l}: {e}", d.name)))?;
                     check_shape(&d.name, &t, &d.shape)?;
-                    st.layered.insert((pi, l), t);
+                    st.insert(pi, Some(l), t, q);
                 }
             } else {
-                let t = eval_src(&binding.srcs[pi as usize], &r, None, &none)
+                let (t, q) = bind_one(&binding.srcs[pi as usize], &r, None)
                     .map_err(|e| LowerError::weights(format!("param `{}`: {e}", d.name)))?;
                 check_shape(&d.name, &t, &d.shape)?;
-                st.global.insert(pi, t);
+                st.insert(pi, None, t, q);
             }
         }
         Ok((st, r.untouched()))

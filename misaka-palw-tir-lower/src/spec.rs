@@ -519,6 +519,8 @@ pub struct HfStorage {
     /// Checkpoint tensors a text-only lowering does not read by design (a VLM's vision tower
     /// and projector, multi-token-prediction heads). Every OTHER unread tensor is reported.
     pub ignored_prefixes: Vec<String>,
+    /// A pre-quantised checkpoint (GPTQ, AWQ): which linears are stored as integers, and how.
+    pub quant: Option<crate::prequant::QuantConfig>,
 }
 
 impl HfStorage {

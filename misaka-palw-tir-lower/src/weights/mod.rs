@@ -9,6 +9,7 @@
 
 use crate::error::{LowerError, Result};
 use crate::hl::HlProgram;
+use crate::prequant::{QFormat, QLayout, QWeight, unpack_awq, unpack_gptq};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,6 +38,10 @@ pub trait TensorSource {
     fn shape(&self, name: &str) -> Option<Vec<usize>>;
     fn load(&self, name: &str) -> Result<Tensor>;
     fn names(&self) -> Vec<String>;
+    /// An `I32` tensor as stored (a pre-quantised checkpoint's packed words, `g_idx`).
+    fn load_i32(&self, name: &str) -> Result<(Vec<usize>, Vec<i32>)> {
+        Err(LowerError::weights(format!("`{name}`: this source holds no integer tensors")))
+    }
 }
 
 /// Two sources read as one: `over` (an adapter's tensors) before `base` (the parent checkpoint).
@@ -58,6 +63,9 @@ impl TensorSource for Overlay<'_> {
         n.sort();
         n.dedup();
         n
+    }
+    fn load_i32(&self, name: &str) -> Result<(Vec<usize>, Vec<i32>)> {
+        if self.over.shape(name).is_some() { self.over.load_i32(name) } else { self.base.load_i32(name) }
     }
 }
 
@@ -98,6 +106,17 @@ fn dtype_size(d: &str) -> Option<usize> {
         "BF16" | "F16" => 2,
         "F32" => 4,
         "F64" => 8,
+        _ => return None,
+    })
+}
+
+/// Element size of an integer dtype (validated in the header; read by [`SafetensorsFile::read_i32`]).
+fn int_size(d: &str) -> Option<usize> {
+    Some(match d {
+        "I8" | "U8" | "BOOL" => 1,
+        "I16" | "U16" => 2,
+        "I32" | "U32" => 4,
+        "I64" | "U64" => 8,
         _ => return None,
     })
 }
@@ -168,7 +187,7 @@ pub fn parse_header(bytes: &[u8], file_len: u64) -> Result<(BTreeMap<String, Ent
         if e < b || e > data_len {
             return Err(LowerError::weights(format!("`{name}`: data_offsets out of range")));
         }
-        if let Some(sz) = dtype_size(&dtype) {
+        if let Some(sz) = dtype_size(&dtype).or_else(|| int_size(&dtype)) {
             let want = shape
                 .iter()
                 .try_fold(sz as u64, |a, d| a.checked_mul(*d as u64))
@@ -216,6 +235,21 @@ impl SafetensorsFile {
             other => return Err(LowerError::weights(format!("`{name}`: dtype {other}"))),
         };
         Ok(Tensor::new(e.shape.clone(), data))
+    }
+}
+
+impl SafetensorsFile {
+    /// An `I32` tensor as stored.
+    pub fn read_i32(&self, name: &str) -> Result<(Vec<usize>, Vec<i32>)> {
+        let e = self.entries.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}` in {}", self.path.display())))?;
+        if e.dtype != "I32" {
+            return Err(LowerError::weights(format!("`{name}` is {}, not I32", e.dtype)));
+        }
+        let mut f = std::fs::File::open(&self.path).map_err(|x| LowerError::Io(x.to_string()))?;
+        f.seek(SeekFrom::Start(self.data_offset + e.begin)).map_err(|x| LowerError::Io(x.to_string()))?;
+        let mut raw = vec![0u8; (e.end - e.begin) as usize];
+        f.read_exact(&mut raw).map_err(|x| LowerError::weights(format!("`{name}`: {x}")))?;
+        Ok((e.shape.clone(), raw.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()))
     }
 }
 
@@ -277,6 +311,10 @@ impl TensorSource for Checkpoint {
     }
     fn names(&self) -> Vec<String> {
         self.index.keys().cloned().collect()
+    }
+    fn load_i32(&self, name: &str) -> Result<(Vec<usize>, Vec<i32>)> {
+        let i = self.index.get(name).ok_or_else(|| LowerError::weights(format!("no tensor `{name}`")))?;
+        self.files[*i].read_i32(name)
     }
 }
 
@@ -366,9 +404,36 @@ pub enum Src {
         src: Box<Src>,
         shape: Vec<usize>,
     },
+    /// A group-quantised linear stored as `{module}.qweight`, `.qzeros`, `.scales` (and GPTQ's
+    /// `.g_idx`): its value is the `[out, in]` weight the format defines ([`QWeight::dequant`]);
+    /// [`eval_qsrc`] reads the stored integers themselves.
+    Quant {
+        module: String,
+        fmt: QFormat,
+    },
 }
 
 impl Src {
+    /// Whether a pre-quantised tensor is read somewhere inside.
+    pub fn is_quant(&self) -> bool {
+        match self {
+            Src::Quant { .. } => true,
+            Src::Tensor(_) => false,
+            Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } => {
+                src.is_quant()
+            }
+        }
+    }
+    /// The quantised format read inside, if any.
+    pub fn quant_format(&self) -> Option<&QFormat> {
+        match self {
+            Src::Quant { fmt, .. } => Some(fmt),
+            Src::Tensor(_) => None,
+            Src::Take { src, .. } | Src::Transpose(src) | Src::Stack { src, .. } | Src::Map { src, .. } | Src::Reshape { src, .. } => {
+                src.quant_format()
+            }
+        }
+    }
     pub fn t(name: impl Into<String>) -> Src {
         Src::Tensor(name.into())
     }
@@ -560,7 +625,95 @@ pub fn src_shape(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<
             }
             Ok(shape.clone())
         }
+        Src::Quant { module, fmt } => {
+            let m = expand(module, layer, vars)?;
+            let names = quant_names(&m, r)?;
+            let qw = r.src.shape(&names[0]).ok_or_else(|| LowerError::weights(format!("no shape for `{}`", names[0])))?;
+            let sc = r.src.shape(&names[2]).ok_or_else(|| LowerError::weights(format!("no shape for `{}`", names[2])))?;
+            for n in &names {
+                r.touched.borrow_mut().insert(n.clone());
+            }
+            match (fmt, qw.as_slice(), sc.as_slice()) {
+                (QFormat::Gptq { bits, .. }, [rows, out], _) => Ok(vec![*out, rows * (32 / *bits as usize)]),
+                (QFormat::Awq { .. }, [inp, _], [_, out]) => Ok(vec![*out, *inp]),
+                _ => Err(LowerError::weights(format!("`{m}`: quantised shapes {qw:?} / {sc:?}"))),
+            }
+        }
     }
+}
+
+/// The resolved names of a quantised module's tensors: `qweight`, `qzeros`, `scales`, then
+/// `g_idx` when the checkpoint has it.
+fn quant_names(module: &str, r: &Resolver) -> Result<Vec<String>> {
+    let mut v = Vec::with_capacity(4);
+    for part in ["qweight", "qzeros", "scales"] {
+        let n = format!("{module}.{part}");
+        v.push(r.resolve(&n).ok_or_else(|| {
+            if r.resolve(&format!("{module}.weight")).is_some() {
+                LowerError::weights(format!("`{module}` is stored in float, but the config says it is quantised"))
+            } else {
+                LowerError::weights(format!("missing tensor `{n}`"))
+            }
+        })?);
+    }
+    if let Some(g) = r.resolve(&format!("{module}.g_idx")) {
+        v.push(g);
+    }
+    Ok(v)
+}
+
+/// Read a quantised module's integers.
+fn load_quant(module: &str, fmt: &QFormat, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<QWeight> {
+    let m = expand(module, layer, vars)?;
+    let names = quant_names(&m, r)?;
+    for n in &names {
+        r.touched.borrow_mut().insert(n.clone());
+    }
+    let (qs, qw) = r.src.load_i32(&names[0])?;
+    let (zs, qz) = r.src.load_i32(&names[1])?;
+    let sc = r.src.load(&names[2])?;
+    let w = match fmt {
+        QFormat::Gptq { .. } => {
+            let g = match names.get(3) {
+                Some(n) => Some(r.src.load_i32(n)?),
+                None => None,
+            };
+            unpack_gptq(fmt, (&qs, &qw), (&zs, &qz), &sc, g.as_ref().map(|(s, v)| (s.as_slice(), v.as_slice())))
+        }
+        QFormat::Awq { .. } => unpack_awq(fmt, (&qs, &qw), (&zs, &qz), &sc),
+    };
+    w.map_err(|e| LowerError::weights(format!("`{m}`: {e}")))
+}
+
+/// The stored integers of a quantised param (`None` when the param is not quantised): the
+/// module's [`QWeight`], through the row slices a fused projection takes. Anything else on the
+/// way (a transpose, a reshape, a map) is refused — it would not keep the integers.
+pub fn eval_qsrc(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<char, usize>) -> Result<Option<QWeight>> {
+    match src {
+        Src::Quant { module, fmt } => Ok(Some(load_quant(module, fmt, r, layer, vars)?)),
+        Src::Take { src: inner, axis: 0, pick } => match eval_qsrc(inner, r, layer, vars)? {
+            Some(q) => Ok(Some(q.take_rows(&pick.indices())?)),
+            None => Ok(None),
+        },
+        other if other.is_quant() => {
+            Err(LowerError::not_lowerable(format!("a quantised weight read through {other:?} (only row slices keep the integers)")))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The TIR structure of every quantised param of `prog` ([`QLayout`]), by param index.
+pub fn quant_layouts(prog: &HlProgram, binding: &Binding) -> Result<BTreeMap<u32, QLayout>> {
+    let mut out = BTreeMap::new();
+    for (pi, s) in binding.srcs.iter().enumerate() {
+        if let Some(fmt) = s.quant_format() {
+            if prog.params[pi].shape.len() != 2 {
+                return Err(LowerError::not_lowerable(format!("quantised param `{}` is not a matrix", prog.params[pi].name)));
+            }
+            out.insert(pi as u32, fmt.layout());
+        }
+    }
+    Ok(out)
 }
 
 /// Evaluate a `Src` to a tensor.
@@ -612,6 +765,7 @@ pub fn eval_src(src: &Src, r: &Resolver, layer: Option<usize>, vars: &BTreeMap<c
             }
             Ok(Tensor::new(shape.clone(), t.data))
         }
+        Src::Quant { module, fmt } => Ok(load_quant(module, fmt, r, layer, vars)?.dequant()),
     }
 }
 
@@ -685,6 +839,11 @@ pub fn check_names(prog: &HlProgram, binding: &Binding, names: &BTreeSet<String>
     fn leaves(s: &Src, out: &mut Vec<(String, Vec<(char, usize)>)>) {
         match s {
             Src::Tensor(t) => out.push((t.clone(), vec![])),
+            Src::Quant { module, .. } => {
+                for part in ["qweight", "qzeros", "scales"] {
+                    out.push((format!("{module}.{part}"), vec![]));
+                }
+            }
             Src::Take { src, .. } | Src::Transpose(src) | Src::Map { src, .. } | Src::Reshape { src, .. } => leaves(src, out),
             Src::Stack { src, var, count } => {
                 let mut inner = vec![];
