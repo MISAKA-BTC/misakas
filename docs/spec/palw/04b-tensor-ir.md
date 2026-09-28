@@ -297,8 +297,10 @@ panics.
 **Declarations**
 - NF-7 Param names, and state names, are 1..=128 bytes and unique among params (resp. states); block
   names are 1..=128 bytes. Params are not `i128`.
-- NF-8 Every param, const, `Fixed` state shape has rank `≤ 4` (a `Hist` row: `≤ 3`), dimensions in
-  `[1, 2^24]` and `≤ 2^28` elements.
+- NF-8 Every param, const, `Fixed` state shape has rank `≤ 4` (a `Hist` row: `≤ 3`) and dimensions in
+  `[1, 2^24]`; consts and states have `≤ 2^28` elements, params `≤ 2^40` (an artifact tensor — a
+  152,064 × 3,584 embedding, a 256-expert weight — is read by rows and tiles, and its size is the
+  artifact's business, chapter 03).
 - NF-9 A const's `data` has exactly `elements × width(dtype)` bytes; the consts total `≤ 65,536`
   bytes; no two consts are identical in `(dtype, shape, data)`.
 - NF-10 States are `i8`, `i16` or `i32`. `Fixed`: `lo ≤ 0 ≤ hi`, both inside the dtype. `Hist`:
@@ -951,6 +953,9 @@ Deviations (each argued in `docs/design/palw/tir/corpus-v1.md`):
 5. **`token_bound`** is a program field (the embedding `Gather` needs a provable index range).
 6. **Committed operands are checked against proven intervals** (PALW-TIR-33), so the range analysis
    is sound for cones evaluated from commitments; CarryIn takes the full dtype range.
+7. **The 2^28-element cap is for computed tensors only.** Applied to params (RFC §5.4 lists it for
+   "any tensor") it would refuse every real vocabulary embedding and every large MoE layer; params
+   get a sanity bound of 2^40 elements instead (NF-8).
 
 Open items for Gate 2 and later: the param binding for per-layer params and for legacy 17-byte A16
 triples (the IR artifact stores `m`, `s`, `z` as separate tensors); the checkpoint leg's encoding of

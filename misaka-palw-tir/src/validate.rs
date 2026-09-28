@@ -44,6 +44,28 @@ fn check_name(what: &str, name: &str) -> TirResult<()> {
     Ok(())
 }
 
+/// Params are artifact tensors, not computed ones: a 152,064 × 3,584 embedding (5.4·10^8 elements) or
+/// a 256-expert tensor (3.8·10^9) must be declarable, and the evaluator (like the court) reads them
+/// by rows and tiles. Their size is the artifact's business (chapter 03); this is a sanity bound.
+pub const MAX_PARAM_ELEMENTS: u64 = 1 << 40;
+
+fn check_param_shape(what: &str, shape: &[u32]) -> TirResult<u64> {
+    if shape.len() > MAX_RANK {
+        return nf(format!("{what}: rank {} exceeds {MAX_RANK}", shape.len()));
+    }
+    let mut n = 1u64;
+    for d in shape {
+        if *d == 0 || *d > MAX_DIM {
+            return nf(format!("{what}: dimension {d} outside [1, 2^24]"));
+        }
+        n = n.saturating_mul(*d as u64);
+    }
+    if n > MAX_PARAM_ELEMENTS {
+        return nf(format!("{what}: {n} elements exceed 2^40"));
+    }
+    Ok(n)
+}
+
 fn check_static_shape(what: &str, shape: &[u32], max_rank: usize) -> TirResult<u64> {
     if shape.len() > max_rank {
         return nf(format!("{what}: rank {} exceeds {max_rank}", shape.len()));
@@ -358,7 +380,7 @@ pub fn validate(p: &TirProgramV1) -> TirResult<ProgramInfo> {
         if d.dtype == DType::I128 {
             return nf(format!("param {j} may not be i128"));
         }
-        check_static_shape(&format!("param {j}"), &d.shape, MAX_RANK)?;
+        check_param_shape(&format!("param {j}"), &d.shape)?;
     }
     let mut const_bytes = 0usize;
     let mut seen_consts = BTreeSet::new();
