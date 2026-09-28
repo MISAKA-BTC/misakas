@@ -1191,6 +1191,8 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::TirLogits { .. } => "TirLogits",
         PalwCourtVerdictProofV2::TirDecodeTokenTiled { .. } => "TirDecodeTokenTiled",
         PalwCourtVerdictProofV2::TirDecodeToken { .. } => "TirDecodeToken",
+        // RFC-0002 Phase F (F7): the bottom of an IR history dissection.
+        PalwCourtVerdictProofV2::TirDissection { .. } => "TirDissection",
     }
 }
 
