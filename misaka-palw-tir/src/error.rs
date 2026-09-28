@@ -1,11 +1,11 @@
 //! The one error type. Every malformed program, every out-of-range value and every overflow of an
 //! exact primitive is one of these — never a panic (PALW-TIR-9's totality, PALW-EX-5).
 //!
-//! **Normative content is `Ok` versus `Err`, not the class.** Two conforming implementations must
-//! agree on whether a program decodes, whether it is in normal form and whether an evaluation
-//! succeeds. The [`TirErrorKind`] is diagnostic: it names which rule fired so a disagreement can be
-//! localised, and the golden vectors record it, but a second implementation that reports a
-//! different class for the same failing input is not in conflict with this one.
+//! **Normative content is `Ok` versus `Err`; the class is fixed by a table.** Two conforming
+//! implementations must agree on whether a program decodes, whether it is in normal form and whether
+//! an evaluation succeeds. Spec 04b §9.3 maps every rule to the one [`TirErrorKind`] it reports, so
+//! two implementations also agree on the class and the golden vectors can pin it; no class changes a
+//! verdict (spec 04b §9.3 says what each one leads to in the court).
 
 use thiserror::Error;
 
@@ -32,6 +32,9 @@ pub enum TirErrorKind {
     Missing,
     /// The position is at or beyond `history_bound`, or a history has the wrong length.
     Position,
+    /// A cone's environment is ill-formed: it supplies the value of the target itself, or a value
+    /// at an index that is not a node of the block (spec 04b §9.2).
+    Malformed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]

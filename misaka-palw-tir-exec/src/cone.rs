@@ -1,7 +1,16 @@
 //! Cone evaluation (spec 04b §9.2, PALW-TIR-30) on the typed backend: one node of one occurrence
 //! from supplied values, evaluating only the backward closure of the target that stops at
-//! supplied nodes. The environment's reading follows the reference evaluator (`Interpreter::
-//! eval_cone`) value for value and failure for failure.
+//! supplied nodes — the reference evaluator's `Interpreter::eval_cone`, value for value, failure
+//! for failure, and class for class (spec 04b revision 2, §9.3):
+//!
+//! * a request that names no occurrence or no node, or an environment that supplies the target
+//!   itself or an index that is no node of the block — `Malformed`, before anything else;
+//! * `pos ≥ history_bound` — `Position`; a token the closure reads that is absent — `Missing`, at or
+//!   past `token_bound` — `Operand`; both before any node runs;
+//! * a `Fixed` value or a history the closure reads is never implied: absent is `Missing`, even when
+//!   the history needs zero rows; a carry-in or param absent is `Missing`; any of them of the wrong
+//!   dtype, shape or values (a `Fixed` value outside `[lo, hi]`) is `Operand`; a history with the
+//!   wrong number of rows is `Position`.
 
 use std::collections::BTreeMap;
 
@@ -47,20 +56,28 @@ pub fn eval_cone(
     env: &ConeEnv,
 ) -> TirResult<Tensor> {
     let p = &plan.program;
-    let bp = plan.blocks.get(block as usize).ok_or_else(|| operand_err("no such block".into()))?;
+    let malformed = |what: &str| TirError::new(TirErrorKind::Malformed, what.to_string());
+    let bp = plan.blocks.get(block as usize).ok_or_else(|| malformed("no such block"))?;
     let n = bp.nodes.len();
     if target as usize >= n {
-        return Err(operand_err("no such node".into()));
-    }
-    if env.pos >= p.history_bound {
-        return Err(TirError::new(TirErrorKind::Position, "position ≥ history_bound"));
+        return Err(malformed("no such node"));
     }
     match layer {
         Some(l) if !bp.is_layer || l as usize >= p.schedule.layers.len() || p.schedule.layers[l as usize] != block => {
-            return Err(operand_err("the block does not run at that layer".into()));
+            return Err(malformed("the block does not run at that layer"));
         }
-        None if bp.is_layer => return Err(operand_err("a layer block needs its layer".into())),
+        None if bp.is_layer => return Err(malformed("a layer block needs its layer")),
         _ => {}
+    }
+    // The target is always recomputed; an entry that names no node is about another program.
+    if env.supplied.contains_key(&target) {
+        return Err(malformed("the environment supplies the target itself"));
+    }
+    if env.supplied.keys().any(|k| *k as usize >= n) {
+        return Err(malformed("the environment supplies an index that is no node of the block"));
+    }
+    if env.pos >= p.history_bound {
+        return Err(TirError::new(TirErrorKind::Position, "position ≥ history_bound"));
     }
     let h = bp.window.map(|w| (env.pos as usize + 1).min(w as usize)).unwrap_or(1);
     // The closure: backward from the target, stopping at supplied nodes.
@@ -74,6 +91,15 @@ pub fn eval_cone(
             if let Ref::Node(j) = r {
                 stack.push(*j as usize);
             }
+        }
+    }
+    // The token, when the evaluated part reads it: present and inside `token_bound`, first.
+    let evaluated = |i: usize| needed[i] && !env.supplied.contains_key(&(i as u16));
+    if (0..n).filter(|i| evaluated(*i)).any(|i| bp.nodes[i].inputs.contains(&Ref::Input(INPUT_TOKEN))) {
+        match env.token {
+            None => return Err(TirError::new(TirErrorKind::Missing, "token")),
+            Some(t) if t >= p.token_bound => return Err(operand_err(format!("token {t} ≥ token_bound {}", p.token_bound))),
+            Some(_) => {}
         }
     }
     // Every leaf the evaluated part reads, checked as the reference checks it when it reads it.
@@ -94,21 +120,17 @@ pub fn eval_cone(
                 Ref::State(j) => {
                     let s = &p.states[j as usize];
                     let inst = plan.instance(j, layer).ok_or_else(|| TirError::new(TirErrorKind::Missing, format!("state {j}")))?;
-                    let shape: Vec<usize> = s.shape.iter().map(|d| *d as usize).collect();
-                    let t = env.fixed.get(&j).cloned().unwrap_or_else(|| Tensor::zeros(s.dtype, &shape));
-                    check_value(&t, &TensorType::fixed(s.dtype, &s.shape), h, &format!("state {}", s.name))?;
+                    // Opened from a commitment, never implied (not zeros, not the initial value).
+                    let t = env.fixed.get(&j).ok_or_else(|| {
+                        TirError::new(TirErrorKind::Missing, format!("state {} (a cone's Fixed value is supplied)", s.name))
+                    })?;
+                    check_value(t, &TensorType::fixed(s.dtype, &s.shape), h, &format!("state {}", s.name))?;
                     if let StateKind::Fixed { lo, hi } = s.kind
                         && t.data.iter().any(|v| *v < lo as i128 || *v > hi as i128)
                     {
                         return Err(operand_err(format!("state {}: a value outside [{lo}, {hi}]", s.name)));
                     }
                     fixed[inst as usize] = Buf::from_i128s(s.dtype, &t.data);
-                }
-                Ref::Input(k) if k == INPUT_TOKEN => {
-                    let t = env.token.ok_or_else(|| TirError::new(TirErrorKind::Missing, "token"))?;
-                    if t >= p.token_bound {
-                        return Err(operand_err(format!("token {t} ≥ token_bound {}", p.token_bound)));
-                    }
                 }
                 Ref::Param(j) => {
                     if params.get(j, layer).is_none() {
@@ -165,7 +187,13 @@ pub fn eval_cone(
                     let StateKind::Hist { window } = s.kind else {
                         return Err(TirError::new(TirErrorKind::Shape, "HistAppend on a Fixed state"));
                     };
-                    let prior: Vec<Tensor> = env.hist_prior.get(&state).cloned().unwrap_or_default();
+                    // Supplied even when no row is needed: absent is `Missing`.
+                    let prior: Vec<Tensor> = env.hist_prior.get(&state).cloned().ok_or_else(|| {
+                        TirError::new(
+                            TirErrorKind::Missing,
+                            format!("history {} (a cone's prior rows are supplied, even when none)", s.name),
+                        )
+                    })?;
                     let want = (env.pos as usize).min(window as usize - 1);
                     if prior.len() != want {
                         return Err(TirError::new(

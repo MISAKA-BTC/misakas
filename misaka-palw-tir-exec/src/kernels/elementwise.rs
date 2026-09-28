@@ -119,7 +119,7 @@ where
         Prim::Mul => map2(res, out_shape, av, sa, bv, sb, |x, y| Some(x.wmul(y))),
         Prim::Div { rule } => {
             if !div::<W>(res, out_shape, av, sa, bv, sb, *rule) {
-                return Err(TirError::new(TirErrorKind::Divisor, "Div: a divisor below 1"));
+                return Err(div_failure(out_shape, av, sa, bv, sb, *rule, node.check_out.then_some(node.out.dtype)));
             }
             true
         }
@@ -145,6 +145,38 @@ fn holds<W: Wide>(c: Cmp, a: W, b: W) -> bool {
         Cmp::Gt => a > b,
         Cmp::Ge => a >= b,
     }
+}
+
+/// The class of a failed `Div`: that of its first failing element in output order, as the
+/// reference reports it — a divisor below 1 (`Divisor`) or a quotient outside the dtype
+/// (`Overflow`, when `check` names the dtype). Only on the failure path.
+fn div_failure<W: Wide>(
+    shape: &[usize],
+    x: &[W],
+    sx: &[usize],
+    d: &[W],
+    sd: &[usize],
+    rule: Rounding,
+    check: Option<DType>,
+) -> TirError {
+    let mut first: Option<TirError> = None;
+    Joint::<2>::new(shape, [sx, sd]).for_each(|_, [xb, db], len, [ix, id]| {
+        for i in 0..len {
+            if first.is_some() {
+                return;
+            }
+            let dv = d[db + i * id];
+            if dv < W::from_i64(1) {
+                first = Some(TirError::new(TirErrorKind::Divisor, format!("Div: divisor {dv:?} < 1")));
+            } else if let Some(dt) = check {
+                let q = W::div_rule(x[xb + i * ix], dv, rule).to_i128();
+                if !dt.contains(q) {
+                    first = Some(TirError::new(TirErrorKind::Overflow, format!("Div: {q} does not fit {}", dt.name())));
+                }
+            }
+        }
+    });
+    first.unwrap_or_else(|| TirError::new(TirErrorKind::Divisor, "Div: a divisor below 1"))
 }
 
 /// `Div` over the broadcast space; `false` when a divisor is below 1. A single divisor that is a

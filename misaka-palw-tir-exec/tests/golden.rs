@@ -6,16 +6,20 @@
 //!   executor; the node's value must be `expect`, or the case must fail where it records
 //!   `expect_error` (only success versus failure is normative, PALW-TIR-34).
 //! * `programs/` — every step's logits and every commit point of every position; every cone case
-//!   through the backend's cone evaluator.
+//!   and every cone refusal (spec 04b revision 2, §9.2) through the backend's cone evaluator.
 //! * `encoding.json` — acceptance of the byte strings (decode, then the plan's validation).
+//!
+//! Where a vector pins an error class (spec 04b §9.3: one class per rule, and every vector breaks
+//! one rule) the backend must report that class.
 
 mod common;
 
 use std::path::PathBuf;
 
 use common::Collect;
+use misaka_palw_tir::prim::PRIM_SET_ID_V1;
 use misaka_palw_tir::program::{Block, ConstDecl, HISTORY_BOUND_V1_SMALL, Node, ParamDecl, Schedule, TirProgramV1};
-use misaka_palw_tir::{ConeEnv, DType, MapParams, Prim, Ref, Tensor, TensorType};
+use misaka_palw_tir::{ConeEnv, DType, MapParams, Prim, Ref, Tensor, TensorType, TirError};
 use misaka_palw_tir_exec::{TirExecutor, TirParams, TirPlan, eval_cone};
 use serde_json::Value;
 
@@ -94,7 +98,7 @@ fn primitive_program(prim: &Prim, inputs: &[Tensor], out: &TensorType, as_params
     };
     let program = TirProgramV1 {
         version: 1,
-        prim_set_id: [0; 64],
+        prim_set_id: PRIM_SET_ID_V1,
         token_bound: 16,
         history_bound: HISTORY_BOUND_V1_SMALL,
         params,
@@ -109,13 +113,13 @@ fn primitive_program(prim: &Prim, inputs: &[Tensor], out: &TensorType, as_params
 }
 
 /// The executor's value of node 0, or the failure.
-fn run_primitive(prim: &Prim, inputs: &[Tensor], out: &TensorType, as_params: bool) -> Result<Tensor, String> {
+fn run_primitive(prim: &Prim, inputs: &[Tensor], out: &TensorType, as_params: bool) -> Result<Tensor, TirError> {
     let (program, map) = primitive_program(prim, inputs, out, as_params);
-    let plan = TirPlan::compile(&program).map_err(|e| format!("{e}"))?;
-    let params = TirParams::from_map(&plan, &map).map_err(|e| format!("{e}"))?;
-    let mut exec = TirExecutor::new(&plan, &params).map_err(|e| format!("{e}"))?;
+    let plan = TirPlan::compile(&program)?;
+    let params = TirParams::from_map(&plan, &map)?;
+    let mut exec = TirExecutor::new(&plan, &params)?;
     let mut sink = Collect::new(true);
-    exec.step(0, &mut sink).map_err(|e| format!("{e}"))?;
+    exec.step(0, &mut sink)?;
     Ok(sink.values.iter().find(|r| r.block == 0 && r.node == 0).expect("node 0 delivered").value.clone())
 }
 
@@ -144,7 +148,13 @@ fn every_primitive_vector() {
                         assert_eq!(got.as_ref(), Ok(&want), "{} / {name} (params: {as_params})", f.display());
                     }
                     (Value::Null, class) => {
-                        assert!(got.is_err(), "{} / {name} (params: {as_params}): expected {class}, got {got:?}", f.display());
+                        let class = class.as_str().unwrap();
+                        match &got {
+                            Err(e) => {
+                                assert_eq!(format!("{:?}", e.kind), class, "{} / {name} (params: {as_params}): {e}", f.display())
+                            }
+                            Ok(v) => panic!("{} / {name} (params: {as_params}): expected {class}, got {v:?}", f.display()),
+                        }
                     }
                     _ => panic!("a case has both expect and expect_error"),
                 }
@@ -162,7 +172,7 @@ fn every_program_vector() {
     let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
     files.sort();
     assert_eq!(files.len(), 7);
-    let (mut steps, mut commits, mut cones) = (0usize, 0usize, 0usize);
+    let (mut steps, mut commits, mut cones, mut refusals) = (0usize, 0usize, 0usize, 0usize);
     for f in &files {
         let v = read(f);
         let program = TirProgramV1::decode_canonical(&common::hex_decode(v["program_borsh_hex"].as_str().unwrap())).unwrap();
@@ -199,29 +209,42 @@ fn every_program_vector() {
         }
         let lenient = TirParams::from_map_lenient(&plan, &map).unwrap();
         for c in v["cones"].as_array().unwrap() {
-            let named = |key: &str| -> std::collections::BTreeMap<u16, Tensor> {
-                c[key].as_array().unwrap().iter().map(|e| (int(&e["index"]) as u16, tensor(&e["value"]))).collect()
-            };
-            let env = ConeEnv {
-                token: Some(int(&c["token"]) as u32),
-                pos: int(&c["pos"]) as u32,
-                carry_in: named("carry_in").into_iter().map(|(k, v)| (k as u8, v)).collect(),
-                fixed: named("fixed"),
-                hist_prior: c["hist_prior"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|h| (int(&h["state"]) as u16, h["rows"].as_array().unwrap().iter().map(tensor).collect()))
-                    .collect(),
-                supplied: named("supplied"),
-            };
-            let got = eval_cone(&plan, &lenient, int(&c["block"]) as u8, opt_u16(&c["layer"]), int(&c["target"]) as u16, &env)
+            let got = eval_cone(&plan, &lenient, int(&c["block"]) as u8, opt_u16(&c["layer"]), int(&c["target"]) as u16, &cone_env(c))
                 .unwrap_or_else(|e| panic!("{}: cone failed: {e}", f.display()));
             assert_eq!(got, tensor(&c["expect"]), "{}: cone of node {}", f.display(), int(&c["target"]));
             cones += 1;
         }
+        for c in v["refusals"].as_array().unwrap() {
+            let what = c["what"].as_str().unwrap();
+            let got = eval_cone(&plan, &lenient, int(&c["block"]) as u8, opt_u16(&c["layer"]), int(&c["target"]) as u16, &cone_env(c));
+            match got {
+                Err(e) => assert_eq!(format!("{:?}", e.kind), c["expect_error"].as_str().unwrap(), "{}: {what}: {e}", f.display()),
+                Ok(t) => panic!("{}: {what}: expected {}, got {t:?}", f.display(), c["expect_error"]),
+            }
+            refusals += 1;
+        }
     }
-    eprintln!("program vectors: {steps} steps, {commits} commit points, {cones} cones");
+    eprintln!("program vectors: {steps} steps, {commits} commit points, {cones} cones, {refusals} refusals");
+}
+
+/// A cone case's environment (`token` null when absent).
+fn cone_env(c: &Value) -> ConeEnv {
+    let named = |key: &str| -> std::collections::BTreeMap<u16, Tensor> {
+        c[key].as_array().unwrap().iter().map(|e| (int(&e["index"]) as u16, tensor(&e["value"]))).collect()
+    };
+    ConeEnv {
+        token: if c["token"].is_null() { None } else { Some(int(&c["token"]) as u32) },
+        pos: int(&c["pos"]) as u32,
+        carry_in: named("carry_in").into_iter().map(|(k, v)| (k as u8, v)).collect(),
+        fixed: named("fixed"),
+        hist_prior: c["hist_prior"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| (int(&h["state"]) as u16, h["rows"].as_array().unwrap().iter().map(tensor).collect()))
+            .collect(),
+        supplied: named("supplied"),
+    }
 }
 
 #[test]
@@ -231,7 +254,11 @@ fn every_encoding_vector() {
     for c in v["cases"].as_array().unwrap() {
         let bytes = common::hex_decode(c["hex"].as_str().unwrap());
         let r = TirProgramV1::decode_canonical(&bytes).and_then(|p| TirPlan::compile(&p).map(|_| ()));
-        assert_eq!(r.is_ok(), c["expect"].as_str() == Some("ok"), "{}", c["name"]);
+        let got = match r {
+            Ok(()) => "ok".to_string(),
+            Err(e) => format!("{:?}", e.kind),
+        };
+        assert_eq!(got, c["expect"].as_str().unwrap(), "{}", c["name"]);
         n += 1;
     }
     assert!(n >= 12);

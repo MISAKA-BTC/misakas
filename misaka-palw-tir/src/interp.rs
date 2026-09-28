@@ -116,6 +116,10 @@ struct OccurrenceEnv<'a> {
     fixed: &'a dyn Fn(u16) -> Option<Tensor>,
     hist_prior: &'a dyn Fn(u16) -> Option<Vec<Tensor>>,
     supplied: &'a BTreeMap<u16, Tensor>,
+    /// A RUN STATE may omit an instance never written: absent is the initial value (all zeros, no
+    /// rows) — spec 04b §9.1. A cone's environment may not: its state values and history rows are
+    /// opened from commitments, and one that is absent is `Missing` (§9.2, ref2 F1/F3).
+    absent_is_initial: bool,
 }
 
 impl<'p> Interpreter<'p> {
@@ -181,8 +185,18 @@ impl<'p> Interpreter<'p> {
                     Ref::Const(j) => self.constant(j)?,
                     Ref::State(j) => {
                         let s = &self.program.states[j as usize];
-                        let t = (env.fixed)(j)
-                            .unwrap_or_else(|| Tensor::zeros(s.dtype, &s.shape.iter().map(|d| *d as usize).collect::<Vec<_>>()));
+                        let t = match (env.fixed)(j) {
+                            Some(t) => t,
+                            None if env.absent_is_initial => {
+                                Tensor::zeros(s.dtype, &s.shape.iter().map(|d| *d as usize).collect::<Vec<_>>())
+                            }
+                            None => {
+                                return err(
+                                    TirErrorKind::Missing,
+                                    format!("state {} (a cone's Fixed value is supplied, never implied)", s.name),
+                                );
+                            }
+                        };
                         check_value(&t, &TensorType::fixed(s.dtype, &s.shape), h, &format!("state {}", s.name))?;
                         if let StateKind::Fixed { lo, hi } = s.kind
                             && t.data.iter().any(|v| *v < lo as i128 || *v > hi as i128)
@@ -211,7 +225,16 @@ impl<'p> Interpreter<'p> {
             let value = if let Prim::HistAppend { state } = node.prim {
                 let s = &self.program.states[state as usize];
                 let StateKind::Hist { window: w } = s.kind else { return err(TirErrorKind::Shape, "HistAppend on a Fixed state") };
-                let prior = (env.hist_prior)(state).unwrap_or_default();
+                let prior = match (env.hist_prior)(state) {
+                    Some(rows) => rows,
+                    None if env.absent_is_initial => Vec::new(),
+                    None => {
+                        return err(
+                            TirErrorKind::Missing,
+                            format!("history {} (a cone's prior rows are supplied, even when none)", s.name),
+                        );
+                    }
+                };
                 let want_rows = (env.pos as usize).min(w as usize - 1);
                 if prior.len() != want_rows {
                     return err(TirErrorKind::Position, format!("history {}: {} prior rows, want {want_rows}", s.name, prior.len()));
@@ -233,12 +256,22 @@ impl<'p> Interpreter<'p> {
         Ok(values)
     }
 
+    /// Whether any of `nodes` reads `Input(0)`, the token.
+    fn reads_token<'n>(&self, mut nodes: impl Iterator<Item = &'n crate::program::Node>) -> bool {
+        nodes.any(|n| n.inputs.iter().any(|r| matches!(r, Ref::Input(INPUT_TOKEN))))
+    }
+
     /// One position: `token` at `state.pos`. On success the state advances by one position.
     pub fn step(&self, params: &dyn ParamSource, state: &mut RunState, token: u32) -> TirResult<StepOutput> {
         let p = self.program;
         let pos = state.pos;
         if pos >= p.history_bound {
             return err(TirErrorKind::Position, format!("position {pos} ≥ history_bound {}", p.history_bound));
+        }
+        // The token is NEEDED when some node of the program reads it (§9.1(1)); it is checked
+        // before any node runs, so the class of a bad token never depends on evaluation order.
+        if self.reads_token(p.blocks.iter().flat_map(|b| b.nodes.iter())) && token >= p.token_bound {
+            return err(TirErrorKind::Operand, format!("token {token} ≥ token_bound {}", p.token_bound));
         }
         let bases = p.occurrence_slot_bases();
         let mut carry: BTreeMap<u8, Tensor> = BTreeMap::new();
@@ -251,8 +284,16 @@ impl<'p> Interpreter<'p> {
             let b = &p.blocks[block as usize];
             let fixed = |j: u16| state.fixed.get(&(j, layer)).cloned();
             let hist = |j: u16| state.hist.get(&(j, layer)).map(|rows| rows.iter().cloned().collect::<Vec<_>>());
-            let env =
-                OccurrenceEnv { token: Some(token), pos, layer, carry_in: &carry, fixed: &fixed, hist_prior: &hist, supplied: &empty };
+            let env = OccurrenceEnv {
+                token: Some(token),
+                pos,
+                layer,
+                carry_in: &carry,
+                fixed: &fixed,
+                hist_prior: &hist,
+                supplied: &empty,
+                absent_is_initial: true,
+            };
             let values = self.eval_occurrence(block, &env, params, &vec![true; b.nodes.len()])?;
             for (ni, node) in b.nodes.iter().enumerate() {
                 let v = values[ni].as_ref().expect("a full step evaluates every node");
@@ -307,31 +348,60 @@ impl<'p> Interpreter<'p> {
     /// stops at every supplied node.
     pub fn eval_cone(&self, block: u8, layer: Option<u16>, target: u16, params: &dyn ParamSource, env: &ConeEnv) -> TirResult<Tensor> {
         let p = self.program;
-        let b = p.blocks.get(block as usize).ok_or_else(|| TirError::new(TirErrorKind::Operand, "no such block"))?;
+        // The request names an occurrence of the schedule and a node of its block, or it is about
+        // some other program (class `Malformed`, spec 04b §9.2).
+        let b = p.blocks.get(block as usize).ok_or_else(|| TirError::new(TirErrorKind::Malformed, "no such block"))?;
         if target as usize >= b.nodes.len() {
-            return err(TirErrorKind::Operand, "no such node");
-        }
-        if env.pos >= p.history_bound {
-            return err(TirErrorKind::Position, "position ≥ history_bound");
+            return err(TirErrorKind::Malformed, "no such node");
         }
         let info = &self.info.blocks[block as usize];
         match layer {
             Some(l) if !info.is_layer || l as usize >= p.schedule.layers.len() || p.schedule.layers[l as usize] != block => {
-                return err(TirErrorKind::Operand, "the block does not run at that layer");
+                return err(TirErrorKind::Malformed, "the block does not run at that layer");
             }
-            None if info.is_layer => return err(TirErrorKind::Operand, "a layer block needs its layer"),
+            None if info.is_layer => return err(TirErrorKind::Malformed, "a layer block needs its layer"),
             _ => {}
+        }
+        // A malformed environment is refused, never read around (§9.2, ref2 F2/F4): the target is
+        // always RECOMPUTED — a court that supplied the disputed value would otherwise "recompute"
+        // exactly the claim under dispute — and an entry that names no node of the block is a
+        // request about some other program.
+        if env.supplied.contains_key(&target) {
+            return err(TirErrorKind::Malformed, format!("the environment supplies the target node {target} itself"));
+        }
+        if let Some(k) = env.supplied.keys().find(|k| **k as usize >= b.nodes.len()) {
+            return err(TirErrorKind::Malformed, format!("the environment supplies node {k}, which the block does not have"));
+        }
+        // §9.1(1) applies to a cone.
+        if env.pos >= p.history_bound {
+            return err(TirErrorKind::Position, "position ≥ history_bound");
         }
         let mut needed = vec![false; b.nodes.len()];
         let mut stack = vec![target as usize];
         while let Some(i) = stack.pop() {
-            if std::mem::replace(&mut needed[i], true) || env.supplied.contains_key(&(i as u16)) {
+            if std::mem::replace(&mut needed[i], true) || (i != target as usize && env.supplied.contains_key(&(i as u16))) {
                 continue;
             }
             for r in &b.nodes[i].inputs {
                 if let Ref::Node(j) = r {
                     stack.push(*j as usize);
                 }
+            }
+        }
+        // The token is needed when a node of the CLOSURE reads it (a supplied node's inputs are
+        // not read): present, and inside `token_bound`, before any node runs.
+        let closure = b
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| needed[*i] && (*i == target as usize || !env.supplied.contains_key(&(*i as u16))));
+        if self.reads_token(closure.map(|(_, n)| n)) {
+            match env.token {
+                None => return err(TirErrorKind::Missing, "token"),
+                Some(t) if t >= p.token_bound => {
+                    return err(TirErrorKind::Operand, format!("token {t} ≥ token_bound {}", p.token_bound));
+                }
+                Some(_) => {}
             }
         }
         let fixed = |j: u16| env.fixed.get(&j).cloned();
@@ -344,6 +414,7 @@ impl<'p> Interpreter<'p> {
             fixed: &fixed,
             hist_prior: &hist,
             supplied: &env.supplied,
+            absent_is_initial: false,
         };
         let mut values = self.eval_occurrence(block, &occ, params, &needed)?;
         values[target as usize].take().ok_or_else(|| TirError::new(TirErrorKind::Missing, "target not evaluated"))

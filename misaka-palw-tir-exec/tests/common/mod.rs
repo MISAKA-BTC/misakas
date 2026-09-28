@@ -10,7 +10,7 @@ pub mod typing;
 use std::collections::{BTreeMap, VecDeque};
 
 use misaka_palw_tir::interp::CommitRecord;
-use misaka_palw_tir::program::TirProgramV1;
+use misaka_palw_tir::program::{StateKind, TirProgramV1};
 use misaka_palw_tir::{ConeEnv, Interpreter, MapParams, RunState, Tensor};
 use misaka_palw_tir_exec::{NodeValue, StepSink, TirExecutor, TirParams, TirPlan};
 
@@ -62,6 +62,10 @@ pub struct Outcome {
     pub nodes: usize,
     /// The program itself was refused by both (normal form / types).
     pub refused: bool,
+    /// Steps both failed with different classes (legitimate only when the input breaks several
+    /// rules, spec 04b §9.3), with an example.
+    pub class_diffs: usize,
+    pub class_examples: Vec<String>,
 }
 
 impl std::ops::AddAssign for Outcome {
@@ -71,6 +75,10 @@ impl std::ops::AddAssign for Outcome {
         self.commits += o.commits;
         self.nodes += o.nodes;
         self.refused |= o.refused;
+        self.class_diffs += o.class_diffs;
+        if self.class_examples.len() < 8 {
+            self.class_examples.extend(o.class_examples);
+        }
     }
 }
 
@@ -139,9 +147,26 @@ fn cone_env(program: &TirProgramV1, before: &RunState, commits: &[CommitRecord],
             })
             .collect()
     };
-    let fixed = before.fixed.iter().filter(|((_, l), _)| *l == layer).map(|((j, _), v)| (*j, v.clone())).collect();
-    let hist_prior =
-        before.hist.iter().filter(|((_, l), _)| *l == layer).map(|((j, _), v)| (*j, v.iter().cloned().collect())).collect();
+    // The court's environment is complete (spec 04b §9.2): every state of the occurrence's role, a
+    // never-written one as its initial value and a history with no rows as an empty list.
+    let is_layer = layer.is_some();
+    let fixed = program
+        .states
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.per_layer == is_layer && matches!(s.kind, StateKind::Fixed { .. }))
+        .map(|(j, s)| {
+            let zero = || Tensor::zeros(s.dtype, &s.shape.iter().map(|d| *d as usize).collect::<Vec<_>>());
+            (j as u16, before.fixed.get(&(j as u16, layer)).cloned().unwrap_or_else(zero))
+        })
+        .collect();
+    let hist_prior = program
+        .states
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.per_layer == is_layer && matches!(s.kind, StateKind::Hist { .. }))
+        .map(|(j, _)| (j as u16, before.hist.get(&(j as u16, layer)).map(|r| r.iter().cloned().collect()).unwrap_or_default()))
+        .collect();
     ConeEnv { token: Some(token), pos: before.pos, carry_in, fixed, hist_prior, supplied }
 }
 
@@ -152,8 +177,11 @@ pub fn differential(program: &TirProgramV1, params: &MapParams, tokens: &[u32], 
     let plan = TirPlan::compile(program);
     let (interp, plan) = match (reference, plan) {
         (Ok(i), Ok(p)) => (i, p),
-        (Err(_), Err(_)) => {
+        (Err(a), Err(b)) => {
             out.refused = true;
+            if a.kind != b.kind {
+                return Err(format!("validation classes differ: reference {a}, executor {b}"));
+            }
             return Ok(out);
         }
         (a, b) => return Err(format!("validation differs: reference {:?}, executor {:?}", a.err(), b.err())),
@@ -165,8 +193,13 @@ pub fn differential(program: &TirProgramV1, params: &MapParams, tokens: &[u32], 
         Err(e) => {
             // The executor refuses the params: every reference step must fail.
             for &t in tokens {
-                if let Ok(s) = interp.step(params, &mut ref_state, t) {
-                    return Err(format!("executor refused params ({e}) but the reference stepped pos {}", s.pos));
+                match interp.step(params, &mut ref_state, t) {
+                    Ok(s) => return Err(format!("executor refused params ({e}) but the reference stepped pos {}", s.pos)),
+                    Err(r) if r.kind != e.kind => {
+                        out.class_diffs += 1;
+                        out.class_examples.push(format!("params: reference {r}, executor {e}"));
+                    }
+                    Err(_) => {}
                 }
                 out.steps_err += 1;
             }
@@ -224,7 +257,13 @@ pub fn differential(program: &TirProgramV1, params: &MapParams, tokens: &[u32], 
                     }
                 }
             }
-            (Err(_), Err(_)) => out.steps_err += 1,
+            (Err(a), Err(b)) => {
+                out.steps_err += 1;
+                if a.kind != b.kind {
+                    out.class_diffs += 1;
+                    out.class_examples.push(format!("pos {}: reference {a}, executor {b}", before.pos));
+                }
+            }
             (Ok(s), Err(e)) => return Err(format!("step {i} (pos {}): reference ok, executor failed: {e}", s.pos)),
             (Err(e), Ok(())) => return Err(format!("step {i} (pos {}): reference failed ({e}), executor ok", before.pos)),
         }

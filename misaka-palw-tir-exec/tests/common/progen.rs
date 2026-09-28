@@ -33,14 +33,15 @@ pub type R = ChaCha8Rng;
 
 #[derive(Clone, Copy, Debug)]
 pub struct GenCfg {
-    /// Let pre and post write the same global Fixed state (04b is silent on which write wins).
-    pub double_global_write: bool,
+    /// Let post write states (StateWrite, HistAppend, also of a state pre writes): programs NF-19
+    /// (revision 2) refuses, generated to check that both implementations refuse them.
+    pub post_writes: bool,
     pub max_nodes: usize,
 }
 
 impl Default for GenCfg {
     fn default() -> Self {
-        GenCfg { double_global_write: false, max_nodes: 18 }
+        GenCfg { post_writes: false, max_nodes: 18 }
     }
 }
 
@@ -819,14 +820,18 @@ impl<'r> G<'r> {
         }
         match self.global_writer.get(&j) {
             None => true,
-            Some(&b) => b == bb.b || self.cfg.double_global_write && matches!(self.states[j as usize].kind, StateKind::Fixed { .. }),
+            Some(&b) => b == bb.b || self.cfg.post_writes,
         }
     }
 
     fn try_state_write(&mut self, bb: &mut BB) -> Option<(Ref, TensorType)> {
         let per_layer = bb.role == Role::Layer;
-        // With double_global_write, post prefers a global state pre already writes (same shape).
-        let prefer: Option<u16> = if self.cfg.double_global_write && bb.role == Role::Post {
+        // NF-19 (revision 2): post writes no state — unless generating refused programs.
+        if bb.role == Role::Post && !self.cfg.post_writes {
+            return None;
+        }
+        // With post_writes, post prefers a global state pre already writes (same shape).
+        let prefer: Option<u16> = if self.cfg.post_writes && bb.role == Role::Post {
             self.global_writer
                 .iter()
                 .find(|(j, b)| {
@@ -932,6 +937,9 @@ impl<'r> G<'r> {
 
     fn hist_append_row(&mut self, bb: &mut BB, row: (Ref, TensorType)) -> Option<(Ref, TensorType)> {
         let w = bb.window?;
+        if bb.role == Role::Post && !self.cfg.post_writes {
+            return None;
+        }
         let (rr, rt) = row;
         if let Ref::Node(i) = rr {
             bb.nodes[i as usize].commit = true;
@@ -1284,8 +1292,8 @@ pub fn gen_program(rng: &mut R, cfg: GenCfg) -> Generated {
         }
         blocks[lb] = Some(Block { name: format!("layer{lb}"), carry_in: sig.clone(), nodes: bb.nodes, carry_out: carry });
     }
-    // post
-    let w = window_of(&mut g);
+    // post: a window needs a HistAppend, which NF-19 (revision 2) forbids in post.
+    let w = if g.cfg.post_writes { window_of(&mut g) } else { None };
     let mut bb = g.gen_block(post, Role::Post, &sig, w);
     let shape = g.rand_fixed_shape(2);
     let want = TensorType::fixed(committable_dtype(g.rng), &shape);
@@ -1310,7 +1318,7 @@ pub fn gen_program(rng: &mut R, cfg: GenCfg) -> Generated {
     }
     let mut prog = Program {
         version: 1,
-        prim_set_id: [0; 64],
+        prim_set_id: misaka_palw_tir::prim::PRIM_SET_ID_V1,
         token_bound: g.token_bound,
         history_bound: g.history_bound,
         params: g.params,
