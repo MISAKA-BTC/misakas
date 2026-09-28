@@ -7282,7 +7282,11 @@ impl PalwPanelService {
                         info!("[{PALW_PANEL}] built a class registration for this node's worker");
                         class_registration = Some(object);
                     }
-                    Err(e) => warn!("[{PALW_PANEL}] cannot register this node's class: {e}"),
+                    // Once a minute: a gate that refuses (an IR class below `palw_tir_v1`, say) refuses
+                    // every tick until the chain moves, and the retry each tick is what registers it then.
+                    Err(e) => crate::palw_backends::note_throttled_v1("class-registration-build", || {
+                        format!("[{PALW_PANEL}] cannot register this node's class: {e}")
+                    }),
                 }
             }
             // **Submit HERE, before the duty sweep.** The funded carrier used to be built at the
