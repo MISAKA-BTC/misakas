@@ -1467,18 +1467,63 @@ so the acquitting close of every tile — the whole tile's for a cone that is no
 bottom's for one that is — MUST be one the chain can carry: its bytes AS CARRIED at most
 `min(max_close_chunks, 32) × 100,000` — the chunks the fold assembles (its bitmap addresses 32) of
 one carrier each, 3,200,000 bytes on testnet-12, whose ruleset's close ceiling (202 chunks) is wider
-than that. As carried, a close is the close frame (16 KiB) and every opened unit whole: an inventory
-leaf's bytes, its full path (64 bytes a level) and its header; a step leaf's preimage and its share
-of its run's siblings; the prompt's ids or openings. The program is referenced by the class, never
-carried. A class past it is refused, naming the bytes and the cap; the registrant declares smaller
-tiles. Under the tiled logits scheme the logits node's tile length MUST divide the scheme's 4,096
-lanes (a step tile then lies inside one trace tile, at an offset, and the logits consistency check
-compares it with that part), so a large vocabulary's head can be tiled finer: at `d_model = 1,536`
-(Qwen2.5-1.5B A16, a 20-level inventory) a logits lane carries one 1,536-byte row with its path and
-header, ≈ 2,860 bytes, and the D-F1 class declares 1,024 lanes (≈ 2.93 MB with the frame; 2,048
-would be ≈ 5.9 MB). Admission v10 prices the opened bytes element by element until `tir_admit_v1`
-reports the carried units (§14); the boundary it pins now, on that class's FFN gate tile, is 2,045
-lanes admitted and 2,046 refused (3,200,470 bytes > 3,200,000) —
+than that — and a dissected tile's root claim MUST fit the one carrier its move rides (100,000
+bytes). The program is referenced by the class, never carried. Admission prices the close the court
+builds (`TirCloseDemandV1`, `palw_tir_close_size_v1`), over every job of the layout:
+
+- *What a close reads* is the court's read set, never the box rule's over-approximation: an abstract
+  twin of the demand evaluator (§9.4) over element SETS, primitive by primitive, mapping every read
+  to the unit the court's source serves — a commit tile's step leaf (a carry-out is its producer's), a
+  `Fixed` checkpoint or the replay to it, a history row's tile once complete and its row commit
+  before, an inventory leaf, the prompt or a decode token. Where the court reads by a value the twin
+  reads a superset: `Select` its condition and both operands; `Gather` its index exactly and, for its
+  data, one location-free row per index element (a param gathered along its rows, priced as a run of
+  its own), or the whole indexed fiber.
+- *Every job, without enumerating positions.* A tile that is `H`-free and not dissected is read at the
+  position with the longest replay (`≡ C − 1 (mod C)`). A tile of an `H`-carrying commit point is read
+  tile by tile at every position where a tile spans more than two rows (`H · inner < T`); past that it
+  is at most two row-parts — the end of one row, with the position's own history row, and the start of
+  the next. What they read other than through a history row is bounded by the union of the `T`-window
+  ending a row and the one starting the next, over the tile's rows. What they read through history
+  rows: a tile whose cone reduces nothing over `H` is *H-local* (*Dissectability is structural*,
+  below) — its element at history index `t` reads row `t` only, through the same history tiles and row
+  commits at every position — so its early tiles count their history rows exactly from one row's
+  pattern (a complete history tile, or the row's commit) and a late part is at most `T` rows priced in
+  both forms (*both-mode*: a history row as its history tile AND its row commit) over the most history
+  tiles `T` rows can touch; any other tile is bounded by the worst `T`-window of a row read in
+  both-mode at every alignment of the history tiles. Every history leaf is priced as a run of its own —
+  a bound no alignment, position or job exceeds. A tile that reads an `H`-carrying commit point other
+  than as history is allowed one more leaf per run of those. A dissected tile: position 0 whole (the
+  close is the executor's move); the root claim as the builder assembles it (the finalize and the
+  fixpoint of its probes at the history's first row); the bottom as its first and last history tiles
+  together, in both-mode. The longest job (prefill 1) has the deepest tree and every position's `post`
+  leaves, which only separate runs.
+- *As carried.* The frame is the close object itself with nothing opened, serialized — the binding
+  with its program referenced and the job context at its widest network id, the disputed leaf's
+  opening at the tree's depth — plus the leaf's lanes; every step leaf's preimage; a sibling set per
+  contiguous run (one sibling a level for a single leaf, two for a longer run — at any alignment); the
+  parameters as the ONE `PalwArtifactMultiproofV1` the close carries (§2.12.1 of the Phase F design)
+  in its byte-exact format (`palw_artifact_operand_borsh_len_v1`, `palw_artifact_multiproof_borsh_len_v1`),
+  a run of leaves' siblings bounded the same way, so one layer's count holds for every layer's
+  instance; the token at its larger form. A root claim adds its element lists and totals (20 bytes a
+  value), the move's ML-DSA-87 signature and its carrier's key reference.
+
+A class past either bound is refused, naming the bytes and the cap (`CourtCostExceedsCeiling { what:
+"IR terminal close bytes as carried" }`, `{ what: "IR dissection root claim bytes" }`); a sizing
+that would take more than `2^28` steps is refused rather than run (`TirExceeds { limit: "IR close
+sizing work" }`). The registrant declares smaller tiles. Under the tiled logits scheme the logits
+node's tile length MUST divide the scheme's 4,096 lanes (a step tile then lies inside one trace tile,
+at an offset, and the logits consistency check compares it with that part), so a large vocabulary's
+head can be tiled finer. At `d_model = 1,536` (Qwen2.5-1.5B A16 at 8,192 positions, `h_tile` 64, a
+20-level inventory) the D-F1 class declares 1,024 logits lanes and is admitted: its largest carried
+closes are the attention scores tile's at the first positions — 2,519,468 bytes, where one 128-lane
+tile covers all twelve heads and reads all of `W_q` — the logits tile's (1,626,216: a run of 1,024
+head rows shares its two boundary paths) and the layer output's (1,273,759); its dissected context's
+bottom is 441,871 bytes and its root claim 84,688. At 2,048 lanes the logits tile carries 3,233,896
+bytes and the class is refused. Sizing D-F1 takes 42.9 M of the `2^28` steps. Every close the court's
+own builders make on the corpus (a whole tile's cone close, a dissected leaf's root claim and its
+bottom played to the first and to the last tile) is within its bound —
+`consensus/core/tests/palw_tir_close_size.rs`; D-F1 in
 `misaka-palw-base0/tests/tir_a16_admission_dissected.rs`.
 
 **Checkpoint intervals.** The *update cone* of `Fixed` state `j` in a block that writes it is the
@@ -1727,8 +1772,9 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
   no corpus family has a recurrence inside a position, heads/experts/channels are batched as tensor
   axes, and a reduction with a user body is order-dependent unless proved associative and exact.
 - **PALW-TIR-38 (carriable closes).** As §10.3: every terminal close of a class — a whole tile's or a
-  dissected cone's bottom — fits the chunks the chain assembles; under the tiled logits scheme the
-  logits tile length divides 4,096.
+  dissected cone's bottom — priced as carried over the court's own read set, fits the chunks the
+  chain assembles, and a dissected cone's root claim fits one carrier; under the tiled logits scheme
+  the logits tile length divides 4,096.
 - **PALW-TIR-37 (H dissection).** A committed tile whose cone reduces over `H` is dissected as §9.5
   states: its reductions and site are the program's; a root claim is admitted only if it finalizes
   to the committed tile and its element lists are exactly the element closure; every round folds
@@ -1777,11 +1823,11 @@ are applied too: unread environment entries are ignored whatever their key (N1, 
 error outside a program is `Shape` (N2, §9.3), every row of §9.2's table checks values (N3), and
 `graph_ir_root`'s hash and key are stated, with a vector (N4, §3.6).
 
-Open items: **admission prices a terminal close element by element** (the tile's opened bytes plus
-the frame) where PALW-TIR-38 prices every opened unit whole with its path — a lower bound, exact
-only when every unit is opened whole with a negligible path; `tir_admit_v1` is to report each commit
-point's close in carried units (Phase F, `TirCloseDemandV1`, with per-commit-point tile lengths), and
-v10 then applies PALW-TIR-38 exactly. The param binding for per-layer params (the IR artifact stores a legacy 17-byte A16
+Open items: **PALW-TIR-38's sizing is a sound bound, not an equality** (§10.3): past the early
+positions an `H`-carrying tile is priced as two row-parts with every history row in both forms and
+every history leaf a run of its own, and a dissected tile's bottom as its first and last history tiles
+together — a later fence may enumerate the alignment classes instead (admission only widens). The
+param binding for per-layer params (the IR artifact stores a legacy 17-byte A16
 triple as three typed tensors `m`, `s`, `z`, repacked at conversion — a re-registered legacy class
 gets a new inventory root with the same numbers); the cost coefficients (Phase D); the network values
 of the admission ceilings (Phase F's `palw_tir_v1` fence — the legacy terminal ceiling of 16 Mi MACs
