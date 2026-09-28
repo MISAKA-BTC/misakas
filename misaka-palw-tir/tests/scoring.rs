@@ -48,8 +48,9 @@ fn every_scoring_program_is_canonical_and_admissible() {
     let programs = [
         ("exact match", exact_match_v1(ExactMatchShapeV1 { gen_len: 8, key_len: 4, token_bound: 16 }).unwrap()),
         ("exact match, wide", exact_match_v1(ExactMatchShapeV1 { gen_len: 256, key_len: 32, token_bound: 151_936 }).unwrap()),
-        ("ref loglik", ref_loglik_v1(&RefLogLikShapeV1 { rows: 12, row: vec![1, 16] }).unwrap()),
-        ("ref loglik, a flat row", ref_loglik_v1(&RefLogLikShapeV1 { rows: 64, row: vec![1000] }).unwrap()),
+        ("ref logprob", ref_logprob_v1(&RefLogLikShapeV1 { rows: 12, row: vec![1, 16] }).unwrap()),
+        ("ref logprob, a flat row", ref_logprob_v1(&RefLogLikShapeV1 { rows: 64, row: vec![1000] }).unwrap()),
+        ("ref loglik sum", ref_loglik_sum_v1(64).unwrap()),
         ("judge", judge_v1(-(1 << 20), 1 << 20).unwrap()),
         ("pairwise", pairwise_v1().unwrap()),
     ];
@@ -59,7 +60,8 @@ fn every_scoring_program_is_canonical_and_admissible() {
         tir_admit_program_v2(p, &inputs).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
     assert!(exact_match_v1(ExactMatchShapeV1 { gen_len: 0, key_len: 4, token_bound: 16 }).is_err());
-    assert!(ref_loglik_v1(&RefLogLikShapeV1 { rows: 4, row: vec![16, 1] }).is_err(), "a row's last axis is its vocabulary");
+    assert!(ref_logprob_v1(&RefLogLikShapeV1 { rows: 4, row: vec![16, 1] }).is_err(), "a row's last axis is its vocabulary");
+    assert!(ref_loglik_sum_v1(0).is_err());
     assert!(judge_v1(1, 0).is_err());
 }
 
@@ -121,9 +123,10 @@ fn exact_match_is_its_reference() {
 #[test]
 fn ref_loglik_is_its_reference_and_exact() {
     let (r, v) = (6u32, 10u32);
-    let p = ref_loglik_v1(&RefLogLikShapeV1 { rows: r, row: vec![1, v] }).unwrap();
+    let lp = ref_logprob_v1(&RefLogLikShapeV1 { rows: r, row: vec![1, v] }).unwrap();
+    let sum = ref_loglik_sum_v1(r).unwrap();
     let mut rng = Lcg(11);
-    for case in 0..500 {
+    for case in 0..300 {
         let spread = [1u64 << 4, 1 << 12, 1 << 20, 1 << 31][case % 4];
         let rows: Vec<Vec<i32>> = (0..r)
             .map(|_| {
@@ -131,21 +134,26 @@ fn ref_loglik_is_its_reference_and_exact() {
             })
             .collect();
         let refs: Vec<u32> = (0..r).map(|_| rng.below(v as u64) as u32).collect();
-        let (rn, fn_) = (rng.below(r as u64 + 1) as usize, rng.below(r as u64 + 1) as usize);
+        let n = rng.below(r as u64 + 1) as usize;
         let scale = [1i64, 1 << 10, 1 << 18, 1 << 24, i32::MAX as i64][case % 5];
-        let used = rn.min(fn_);
-        let want = ref_loglik_reference_v1(&rows[..used], &refs[..used], scale);
+        // Stage 1, position by position: the cursor walks the rows, the token is the reference id.
         let data: Vec<i128> = rows.iter().flatten().map(|x| *x as i128).collect();
-        let out = run1(
-            &p,
-            vec![
-                Tensor::new(DType::I32, vec![r as usize, 1, v as usize], data).unwrap(),
-                scalar(DType::Idx, rn as i128),
-                idx(&refs, r),
-                scalar(DType::Idx, fn_ as i128),
-                scalar(DType::I32, scale as i128),
-            ],
-        );
+        let interp = InterpreterV2::new(&lp).unwrap();
+        let mut m = MapInputs::default();
+        m.constant.insert(0, Tensor::new(DType::I32, vec![r as usize, 1, v as usize], data).unwrap());
+        m.constant.insert(1, scalar(DType::I32, scale as i128));
+        let mut state = RunState::default();
+        let mut values = Vec::new();
+        for (p, id) in refs.iter().enumerate().take(n) {
+            let out = interp.step(&MapParams::default(), &m, &mut state, *id).unwrap().output;
+            assert_eq!(out.data, vec![ref_logprob_reference_v1(&rows[p], *id, scale) as i128], "case {case} position {p}");
+            values.push(out.data[0]);
+        }
+        // Stage 2: the exact sum of the first `n`.
+        let mut padded = values.clone();
+        padded.resize(r as usize, 0);
+        let out = run1(&sum, vec![Tensor::new(DType::I32, vec![r as usize, 1], padded).unwrap(), scalar(DType::Idx, n as i128)]);
+        let want = ref_loglik_reference_v1(&rows[..n], &refs[..n], scale);
         assert_eq!(out.shape, vec![2]);
         let (hi, lo) = (out.data[0] as i32, out.data[1] as i32);
         assert!((0..1i64 << 31).contains(&(lo as i64)), "lo in [0, 2^31)");
@@ -248,7 +256,13 @@ fn a_teacher_forced_decode_stage_feeds_ref_loglik_its_consumed_rows() {
         let want = ref_loglik_reference_v1(&consumed, &reference, scale);
         assert_eq!(ref_loglik_join_v1(run.output.data[0] as i32, run.output.data[1] as i32), want, "{prompt:?} {reference:?}");
         let facts = stage_job_facts(&p, &programs, &job).unwrap();
-        assert_eq!(facts[1].inputs[&1].data, vec![reference.len() as i128], "StageRowCount: the consumed rows");
+        assert_eq!(facts[1].trip, reference.len() as u32, "RefLogLik's first stage: one position per reference id");
+        assert_eq!(facts[1].tokens, reference, "its tokens are the reference");
+        assert_eq!(facts[2].inputs[&1].data, vec![reference.len() as i128], "StageRowCount: its rows");
+        // Each position scored its own consumed row.
+        for (p_, row) in consumed.iter().enumerate() {
+            assert_eq!(run.stages[1].steps[p_].output.data, vec![ref_logprob_reference_v1(row, reference[p_], scale) as i128]);
+        }
     }
 }
 

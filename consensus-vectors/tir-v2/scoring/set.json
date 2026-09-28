@@ -1,0 +1,29 @@
+{
+  "format": "palw-tir-v2/scoring-set/1",
+  "spec": "docs/rfc/0004-palw-model-improvement.md §7.3",
+  "key": "misaka-palw/improve/scoring-set/v1",
+  "library_version": 1,
+  "programs": [
+    {
+      "name": "exact-match",
+      "graph_ir_root_hex": "8eaaf4727336b86f48d9543d6c45721f4531e44301adde1baf7242836d69996461ddb5abbdcda86ff760e41a51ecdf8665f421f42365c999d8945a506787d6f0"
+    },
+    {
+      "name": "ref-logprob",
+      "graph_ir_root_hex": "e5a9b890caa95aed84f0ce670c2dbe1d97db7d5d074095ed26f83e626fb4365afdf0693c39f1be389cf3373b3791221f437b73a2c9af269eb7a73415c0219d7a"
+    },
+    {
+      "name": "ref-loglik-sum",
+      "graph_ir_root_hex": "4be80b832ac45efa2d34762bfd28ff29d98a87bbd1bd36089edcfa5093e42c85c0d64ac08f707aad614946a160d59cbd94680c7af1aa5427beb936d0e08a2309"
+    },
+    {
+      "name": "judge",
+      "graph_ir_root_hex": "f9d12c78416e5644598162725044d0390cfd5c7598bcd0a0d2493c70cbc5359a41b93924bb506ca268c4879ba478cbe2572dd147cd03ece34eeb26f3b0784ae9"
+    },
+    {
+      "name": "pairwise",
+      "graph_ir_root_hex": "2f449ff1db27e24c0e94fb52dbdd91829b4c3520dafb48ea637e7dfda9df4875e7275c11478182e561f470478765e70bcf5bf545656f56e7793de3db49a5afa4"
+    }
+  ],
+  "scoring_set_id_hex": "056b8977b71ac88d4a5489095f3f692813b0eaf2b21a92530d8767a78a24648ee237acfe4f2c5df2da516f62e67c56d740c6817285db74a7b303edaaf2e5e624"
+}
