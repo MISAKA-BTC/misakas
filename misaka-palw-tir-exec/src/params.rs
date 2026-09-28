@@ -189,6 +189,23 @@ impl<'a> TirParams<'a> {
         Ok(())
     }
 
+    /// `[min, max]` of one bound instance's elements (the interval [`TirPlan::refine`] plans with).
+    pub fn range(&self, j: u16, layer: Option<u16>) -> Option<misaka_palw_tir::interval::Interval> {
+        use rayon::prelude::*;
+        fn minmax<T: Elem>(v: &[T]) -> Option<(T, T)> {
+            let fold = |c: &[T]| c.iter().fold((c[0], c[0]), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
+            if v.is_empty() {
+                return None;
+            }
+            if v.len() < 1 << 20 {
+                return Some(fold(v));
+            }
+            v.par_chunks(1 << 20).map(fold).reduce_with(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+        }
+        let s = self.get(j, layer)?;
+        crate::with_slice!(s, v => minmax(v).map(|(lo, hi)| misaka_palw_tir::interval::Interval::new(lo.to_i128(), hi.to_i128())))
+    }
+
     /// The instance an occurrence at `layer` reads.
     #[inline]
     pub fn get(&self, j: u16, layer: Option<u16>) -> Option<Slice<'_>> {

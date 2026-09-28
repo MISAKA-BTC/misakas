@@ -23,9 +23,10 @@ rayon.workspace = true
 # Only for `tir-exec-bench --legacy`: the legacy A16 engine at the same geometry, the comparison
 # the Phase F plan names (F9). Off by default so the backend builds without the consensus crates.
 misaka-palw-base0 = { workspace = true, optional = true }
+kaspa-consensus-core = { workspace = true, optional = true }
 
 [features]
-legacy-bench = ["dep:misaka-palw-base0"]
+legacy-bench = ["dep:misaka-palw-base0", "dep:kaspa-consensus-core"]
 
 [dev-dependencies]
 # The golden vectors carry each primitive as its canonical Borsh encoding.

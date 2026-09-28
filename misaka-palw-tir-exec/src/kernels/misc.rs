@@ -43,6 +43,8 @@ pub fn gather(node: &NodePlan, data: &Opd<'_>, idx: &Opd<'_>, out: &mut Buf, scr
         }
         sub
     };
+    let post_n = post_layout.numel();
+    let post_contiguous = post_layout.is_contiguous();
     let pre_rm = row_major(&dsh[..a]);
     let dst_ = data.layout.strides();
     with_slice!(data.data, dv => {
@@ -59,18 +61,41 @@ pub fn gather(node: &NodePlan, data: &Opd<'_>, idx: &Opd<'_>, out: &mut Buf, scr
                 off += i * dst_[d];
             }
             let batch_lin = if b == 0 { 0 } else { p / (pre / batch_n) };
-            for j in 0..tail {
-                let v = iv[batch_lin * tail + j];
-                let src = off + v as usize * dst_[a];
-                let mut l = post_layout;
-                l.offset = src;
-                l.for_each_run(|s, len, st| {
-                    if st == 1 {
-                        o.extend_from_slice(&dv[s..s + len]);
-                    } else {
-                        o.extend((0..len).map(|t| dv[s + t * st]));
-                    }
-                });
+            let idx = &iv[batch_lin * tail..(batch_lin + 1) * tail];
+            let sa = dst_[a];
+            if post_n == 1 {
+                // One element per index: a table lookup (`2^s`, an activation table).
+                if idx.len() >= *super::PAR_ELEMS {
+                    use rayon::prelude::*;
+                    let start = o.len();
+                    o.resize(start + idx.len(), Default::default());
+                    let chunk = super::par_chunk(idx.len());
+                    o[start..].par_chunks_mut(chunk).zip(idx.par_chunks(chunk)).for_each(|(o, ix)| {
+                        for (d, v) in o.iter_mut().zip(ix) {
+                            *d = dv[off + *v as usize * sa];
+                        }
+                    });
+                } else {
+                    o.extend(idx.iter().map(|v| dv[off + *v as usize * sa]));
+                }
+            } else if post_contiguous {
+                // One contiguous row per index (embedding rows, expert matrices).
+                for v in idx {
+                    let src = off + *v as usize * sa;
+                    o.extend_from_slice(&dv[src..src + post_n]);
+                }
+            } else {
+                for v in idx {
+                    let mut l = post_layout;
+                    l.offset = off + *v as usize * sa;
+                    l.for_each_run(|s, len, st| {
+                        if st == 1 {
+                            o.extend_from_slice(&dv[s..s + len]);
+                        } else {
+                            o.extend((0..len).map(|t| dv[s + t * st]));
+                        }
+                    });
+                }
             }
         }
     });
@@ -145,11 +170,28 @@ fn concat_t<T: Elem>(ins: &[Opd<'_>], a: usize, out_shape: &[usize], out: &mut B
     let whole = Layout::contiguous(out_shape);
     let mut start = 0usize;
     for op in ins {
-        let src = T::slice_of(op.data).ok_or_else(|| TirError::new(TirErrorKind::Shape, "Concat: dtypes differ"))?;
         let e = op.shape()[a];
         let region = whole.sliced(a, start, e);
-        Joint::<2>::new(op.shape(), [region.strides(), op.layout.strides()]).for_each(|_, [ob, ib], len, [os, is]| {
-            let (ob, ib) = (region.offset + ob, op.layout.offset + ib);
+        let converted: Vec<T>;
+        let (src, soff) = match T::slice_of(op.data) {
+            Some(src) => (src, op.layout.offset),
+            None => {
+                // An input held narrower than its declared dtype (an i128 node stored in i64).
+                converted = crate::with_slice!(op.data, v => {
+                    let mut c = Vec::new();
+                    crate::layout::gather_strided(v, &op.layout, &mut c, |x| T::from_i128(x.to_i128()));
+                    c
+                });
+                (&converted[..], 0)
+            }
+        };
+        let in_strides: Vec<usize> = if T::slice_of(op.data).is_some() {
+            op.layout.strides().to_vec()
+        } else {
+            crate::layout::row_major(op.shape())[..op.shape().len()].to_vec()
+        };
+        Joint::<2>::new(op.shape(), [region.strides(), &in_strides]).for_each(|_, [ob, ib], len, [os, is]| {
+            let (ob, ib) = (region.offset + ob, soff + ib);
             if os == 1 && is == 1 {
                 o[ob..ob + len].copy_from_slice(&src[ib..ib + len]);
             } else {

@@ -113,14 +113,14 @@ fn for_chunks<T: Send>(res: &mut [T], work_per_output: usize, body: impl Fn(usiz
 
 pub fn matmul(node: &NodePlan, a: &Opd<'_>, b: &Opd<'_>, out_shape: &[usize], out: &mut Buf, scratch: &mut Scratch) -> TirResult<()> {
     let g = Geo::new(a, b, out_shape);
-    let dt = node.out.dtype;
+    let (dt, store) = (node.out.dtype, node.store);
     match node.acc {
         Acc::Fast64 => {
             let res = &mut scratch.r64;
             res.clear();
             res.resize(g.outputs(), 0);
             fast64(a.data, b.data, &g, res)?;
-            narrow(res, out, dt, false)
+            narrow(res, out, store, None)
         }
         Acc::Fast128 => {
             let res = &mut scratch.r128;
@@ -138,7 +138,7 @@ pub fn matmul(node: &NodePlan, a: &Opd<'_>, b: &Opd<'_>, out_shape: &[usize], ou
                 }
                 *r = s;
             }
-            narrow(res, out, dt, false)
+            narrow(res, out, store, None)
         }
         Acc::Pn64 | Acc::Pn128 => {
             let res = &mut scratch.r128;
@@ -165,7 +165,7 @@ pub fn matmul(node: &NodePlan, a: &Opd<'_>, b: &Opd<'_>, out_shape: &[usize], ou
                 }
                 *r = pos + neg;
             }
-            narrow(res, out, dt, false)
+            narrow(res, out, store, None)
         }
     }
 }

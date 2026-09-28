@@ -54,7 +54,7 @@ where
             }
         }
     }
-    narrow(res, out, node.out.dtype, false)
+    narrow(res, out, node.store, None)
 }
 
 fn sum_checked(node: &NodePlan, x: &Opd<'_>, axis: usize, out: &mut Buf, scratch: &mut Scratch) -> TirResult<()> {
@@ -80,7 +80,7 @@ fn sum_checked(node: &NodePlan, x: &Opd<'_>, axis: usize, out: &mut Buf, scratch
             res[o * inner + i] = pos + neg;
         }
     }
-    narrow(res, out, dt, false)
+    narrow(res, out, node.store, None)
 }
 
 fn over() -> TirError {
@@ -110,5 +110,5 @@ where
             }
         }
     }
-    narrow(res, out, node.out.dtype, false)
+    narrow(res, out, node.store, None)
 }

@@ -152,38 +152,47 @@ pub struct Joint<const N: usize> {
 impl<const N: usize> Joint<N> {
     /// `strides[k]` are operand `k`'s strides over `shape` (same rank; 0 for broadcast).
     pub fn new(shape: &[usize], strides: [&[usize]; N]) -> Self {
-        // Dimensions of extent 1 never move an index; drop them.
-        let mut dims: Vec<(usize, [usize; N])> = Vec::with_capacity(MAX_RANK);
+        // Dimensions of extent 1 never move an index; drop them. Merge an outer dimension into
+        // the next inner one when, for every operand, the outer stride is the inner stride times
+        // the inner extent. (Fixed arrays: this runs for every elementwise node.)
+        let mut j = Joint { nd: 0, shape: [1; MAX_RANK], strides: [[0; MAX_RANK]; N] };
         for i in 0..shape.len() {
-            if shape[i] != 1 {
-                let mut s = [0usize; N];
-                for k in 0..N {
-                    s[k] = strides[k][i];
-                }
-                dims.push((shape[i], s));
-            }
-        }
-        // Merge an outer dimension into the next inner one when, for every operand, the outer
-        // stride is the inner stride times the inner extent.
-        let mut merged: Vec<(usize, [usize; N])> = Vec::with_capacity(dims.len());
-        for (d, s) in dims {
-            if let Some((pd, ps)) = merged.last_mut()
-                && (0..N).all(|k| ps[k] == s[k] * d)
-            {
-                *pd *= d;
-                *ps = s;
+            let d = shape[i];
+            if d == 1 {
                 continue;
             }
-            merged.push((d, s));
-        }
-        let mut j = Joint { nd: merged.len(), shape: [1; MAX_RANK], strides: [[0; MAX_RANK]; N] };
-        for (i, (d, s)) in merged.into_iter().enumerate() {
-            j.shape[i] = d;
-            for k in 0..N {
-                j.strides[k][i] = s[k];
+            if j.nd > 0 {
+                let last = j.nd - 1;
+                if (0..N).all(|k| j.strides[k][last] == strides[k][i] * d) {
+                    j.shape[last] *= d;
+                    for k in 0..N {
+                        j.strides[k][last] = strides[k][i];
+                    }
+                    continue;
+                }
             }
+            j.shape[j.nd] = d;
+            for k in 0..N {
+                j.strides[k][j.nd] = strides[k][i];
+            }
+            j.nd += 1;
         }
         j
+    }
+
+    /// The whole walk as ONE run `(bases, len, strides)`, when the merged space is a single run.
+    pub fn single_run(&self) -> Option<([usize; N], usize, [usize; N])> {
+        match self.nd {
+            0 => Some(([0; N], 1, [0; N])),
+            1 => {
+                let mut st = [0usize; N];
+                for k in 0..N {
+                    st[k] = self.strides[k][0];
+                }
+                Some(([0; N], self.shape[0], st))
+            }
+            _ => None,
+        }
     }
 
     /// `f(run_index, operand_bases, len, operand_inner_strides)` for every inner run, in row-major

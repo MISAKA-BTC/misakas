@@ -56,6 +56,19 @@ pub(crate) fn overflow<T>(what: &str) -> TirResult<T> {
     Err(TirError::new(TirErrorKind::Overflow, what.to_string()))
 }
 
+/// Elementwise kernels at or above this many outputs split across the pool (every output element
+/// is its own exact function, so the split cannot change a value). Only the vocabulary-wide rows
+/// qualify: below this a split costs more in wake-ups than it saves, and on a loaded host (a node
+/// shares its cores) a preempted worker stalls the whole node. `TIR_EXEC_PAR_ELEMS` overrides it
+/// (measurement only; it cannot change a value).
+pub static PAR_ELEMS: std::sync::LazyLock<usize> =
+    std::sync::LazyLock::new(|| std::env::var("TIR_EXEC_PAR_ELEMS").ok().and_then(|v| v.parse().ok()).unwrap_or(1 << 16));
+
+/// The chunk of a parallel elementwise split: a few per thread, never tiny.
+pub fn par_chunk(n: usize) -> usize {
+    n.div_ceil(rayon::current_num_threads().max(1) * 2).max(2048)
+}
+
 /// A working type: the integer width an elementwise node computes in.
 pub trait Wide: Elem + std::ops::Add<Output = Self> {
     const WMIN: Self;
@@ -254,10 +267,11 @@ pub fn widen<'s, W: Wide>(op: &Opd<'s>, scratch: &'s mut Vec<W>) -> &'s [W] {
     scratch
 }
 
-/// Move `res` (values of `W`) into `out` as `dtype`. With `check`, every value must lie in the
-/// dtype, else the step fails (PALW-TIR-23) — the caller proved the check away otherwise.
-pub fn narrow<W: Wide>(res: &mut Vec<W>, out: &mut Buf, dtype: DType, check: bool) -> TirResult<()> {
-    if check {
+/// Move `res` (values of `W`) into `out`, stored as `store`. With `check = Some(dtype)`, every
+/// value must lie in the declared `dtype`, else the step fails (PALW-TIR-23) — the plan proved the
+/// check away otherwise, and proved that every value fits `store`.
+pub fn narrow<W: Wide>(res: &mut Vec<W>, out: &mut Buf, store: DType, check: Option<DType>) -> TirResult<()> {
+    if let Some(dtype) = check {
         // Bounds clamped into W: a dtype wider than W cannot be left by a value of W.
         let (lo, hi) = W::bounds(dtype);
         let mut bad = false;
@@ -268,7 +282,7 @@ pub fn narrow<W: Wide>(res: &mut Vec<W>, out: &mut Buf, dtype: DType, check: boo
             return overflow(&format!("a result outside {}", dtype.name()));
         }
     }
-    if W::DTYPE == dtype {
+    if W::DTYPE == store {
         if let Some(o) = W::vec_of(out) {
             std::mem::swap(o, res);
             return Ok(());
@@ -276,10 +290,23 @@ pub fn narrow<W: Wide>(res: &mut Vec<W>, out: &mut Buf, dtype: DType, check: boo
         *out = W::into_buf(std::mem::take(res));
         return Ok(());
     }
-    crate::with_dtype!(dtype, T => {
+    crate::with_dtype!(store, T => {
+        use rayon::prelude::*;
         let o = out_vec::<T>(out);
         o.clear();
-        o.extend(res.iter().map(|v| T::from_i128(v.to_i128())));
+        o.resize(res.len(), T::default());
+        if res.len() >= *PAR_ELEMS {
+            let chunk = par_chunk(res.len());
+            o.par_chunks_mut(chunk).zip(res.par_chunks(chunk)).for_each(|(o, r)| {
+                for (d, v) in o.iter_mut().zip(r) {
+                    *d = T::from_i128(v.to_i128());
+                }
+            });
+        } else {
+            for (d, v) in o.iter_mut().zip(res.iter()) {
+                *d = T::from_i128(v.to_i128());
+            }
+        }
     });
     Ok(())
 }

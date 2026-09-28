@@ -24,7 +24,52 @@ pub fn bcast_strides(s: &[usize], out: &[usize]) -> [usize; MAX_RANK] {
     st
 }
 
+/// One inner run of [`map2`]: `o[i] = f(a[ab + i·ia], b[bb + i·ib])`.
+#[inline(always)]
+fn run2<W: Wide>(o: &mut [W], a: &[W], ab: usize, ia: usize, b: &[W], bb: usize, ib: usize, f: &impl Fn(W, W) -> Option<W>) -> bool {
+    let len = o.len();
+    let mut ok = true;
+    match (ia, ib) {
+        (1, 1) => {
+            for ((r, x), y) in o.iter_mut().zip(&a[ab..ab + len]).zip(&b[bb..bb + len]) {
+                match f(*x, *y) {
+                    Some(v) => *r = v,
+                    None => ok = false,
+                }
+            }
+        }
+        (1, 0) => {
+            let y = b[bb];
+            for (r, x) in o.iter_mut().zip(&a[ab..ab + len]) {
+                match f(*x, y) {
+                    Some(v) => *r = v,
+                    None => ok = false,
+                }
+            }
+        }
+        (0, 1) => {
+            let x = a[ab];
+            for (r, y) in o.iter_mut().zip(&b[bb..bb + len]) {
+                match f(x, *y) {
+                    Some(v) => *r = v,
+                    None => ok = false,
+                }
+            }
+        }
+        _ => {
+            for (i, r) in o.iter_mut().enumerate() {
+                match f(a[ab + i * ia], b[bb + i * ib]) {
+                    Some(v) => *r = v,
+                    None => ok = false,
+                }
+            }
+        }
+    }
+    ok
+}
+
 /// `res[i] = f(a[·], b[·])` over the broadcast index space; `false` if `f` failed anywhere.
+/// Every element is independent, so a large single-run space is split across the pool.
 #[inline(always)]
 fn map2<W: Wide>(
     res: &mut Vec<W>,
@@ -33,51 +78,29 @@ fn map2<W: Wide>(
     sa: &[usize],
     b: &[W],
     sb: &[usize],
-    f: impl Fn(W, W) -> Option<W>,
+    f: impl Fn(W, W) -> Option<W> + Sync,
 ) -> bool {
+    use rayon::prelude::*;
     let n = numel(shape);
     res.clear();
     res.resize(n, W::default());
-    let mut ok = true;
     let j = Joint::<2>::new(shape, [sa, sb]);
+    if n >= *super::PAR_ELEMS
+        && let Some(([ab, bb], _, [ia, ib])) = j.single_run()
+    {
+        let chunk = super::par_chunk(n);
+        return res
+            .par_chunks_mut(chunk)
+            .enumerate()
+            .map(|(ci, o)| {
+                let c0 = ci * chunk;
+                run2(o, a, ab + c0 * ia, ia, b, bb + c0 * ib, ib, &f)
+            })
+            .reduce(|| true, |x, y| x && y);
+    }
+    let mut ok = true;
     j.for_each(|pos, [ab, bb], len, [ia, ib]| {
-        let o = &mut res[pos..pos + len];
-        match (ia, ib) {
-            (1, 1) => {
-                for ((r, x), y) in o.iter_mut().zip(&a[ab..ab + len]).zip(&b[bb..bb + len]) {
-                    match f(*x, *y) {
-                        Some(v) => *r = v,
-                        None => ok = false,
-                    }
-                }
-            }
-            (1, 0) => {
-                let y = b[bb];
-                for (r, x) in o.iter_mut().zip(&a[ab..ab + len]) {
-                    match f(*x, y) {
-                        Some(v) => *r = v,
-                        None => ok = false,
-                    }
-                }
-            }
-            (0, 1) => {
-                let x = a[ab];
-                for (r, y) in o.iter_mut().zip(&b[bb..bb + len]) {
-                    match f(x, *y) {
-                        Some(v) => *r = v,
-                        None => ok = false,
-                    }
-                }
-            }
-            _ => {
-                for (i, r) in o.iter_mut().enumerate() {
-                    match f(a[ab + i * ia], b[bb + i * ib]) {
-                        Some(v) => *r = v,
-                        None => ok = false,
-                    }
-                }
-            }
-        }
+        ok &= run2(&mut res[pos..pos + len], a, ab, ia, b, bb, ib, &f);
     });
     ok
 }
@@ -132,7 +155,7 @@ where
     if !ok {
         return overflow(&format!("{name}: past i128"));
     }
-    narrow(res, out, node.out.dtype, node.check_out)
+    narrow(res, out, node.store, node.check_out.then_some(node.out.dtype))
 }
 
 #[inline(always)]
@@ -242,7 +265,7 @@ where
             *o = if cv[cb + i * ic] != zero { av[ab + i * ia] } else { bv[bb + i * ib] };
         }
     });
-    narrow(res, out, node.out.dtype, node.check_out)
+    narrow(res, out, node.store, node.check_out.then_some(node.out.dtype))
 }
 
 /// The unary primitives: out shape = in shape, one value per element.
@@ -272,20 +295,20 @@ where
     let (ws, _) = scratch.parts();
     let [s0, _, _] = ws;
     let xv = widen::<W>(x, s0);
-    let dt = node.out.dtype;
-    let check = node.check_out;
+    let dt = node.store;
+    let check = node.check_out.then_some(node.out.dtype);
     match &node.prim {
         Prim::Cast => write_mapped(out, dt, xv, check, |v| v),
         Prim::Clamp { lo, hi } => {
             let (lo, hi) = (*lo as i128, *hi as i128);
-            write_mapped(out, dt, xv, false, move |v| v.clamp_i128(lo, hi))
+            write_mapped(out, dt, xv, None, move |v| v.clamp_i128(lo, hi))
         }
         Prim::StateWrite { state } => {
             let StateKind::Fixed { lo, hi } = states[*state as usize].kind else {
                 return Err(TirError::new(TirErrorKind::Shape, "StateWrite on a Hist state"));
             };
             let (lo, hi) = (lo as i128, hi as i128);
-            write_mapped(out, dt, xv, false, move |v| v.clamp_i128(lo, hi))
+            write_mapped(out, dt, xv, None, move |v| v.clamp_i128(lo, hi))
         }
         Prim::Log2Floor => write_mapped(out, dt, xv, check, W::log2_floor),
         Prim::IntExp => write_mapped(out, dt, xv, check, W::int_exp),
@@ -295,28 +318,34 @@ where
     }
 }
 
-/// `out[i] = f(x[i])` narrowed to `dt`, checking the dtype when `check`.
-fn write_mapped<W: Wide>(out: &mut Buf, dt: DType, x: &[W], check: bool, f: impl Fn(W) -> W) -> TirResult<()> {
-    crate::with_dtype!(dt, T => write_mapped_t::<W, T>(out_vec::<T>(out), dt, x, check, f))
+/// `out[i] = f(x[i])`, stored as `store`, checking the declared dtype when `check` names it.
+fn write_mapped<W: Wide>(out: &mut Buf, store: DType, x: &[W], check: Option<DType>, f: impl Fn(W) -> W + Sync) -> TirResult<()> {
+    crate::with_dtype!(store, T => write_mapped_t::<W, T>(out_vec::<T>(out), x, check, f))
 }
 
 #[inline(always)]
-fn write_mapped_t<W: Wide, T: Elem>(o: &mut Vec<T>, dt: DType, x: &[W], check: bool, f: impl Fn(W) -> W) -> TirResult<()> {
+fn write_mapped_t<W: Wide, T: Elem>(o: &mut Vec<T>, x: &[W], check: Option<DType>, f: impl Fn(W) -> W + Sync) -> TirResult<()> {
+    use rayon::prelude::*;
     o.clear();
-    o.reserve(x.len());
-    if check {
-        let (lo, hi) = W::bounds(dt);
+    o.resize(x.len(), T::default());
+    let (lo, hi) = check.map(W::bounds).unwrap_or((W::WMIN, W::WMAX));
+    let body = |o: &mut [T], x: &[W]| -> bool {
         let mut bad = false;
-        o.extend(x.iter().map(|v| {
-            let r = f(*v);
-            bad |= r < lo || r > hi;
-            T::from_i128(r.to_i128())
-        }));
-        if bad {
-            return overflow(&format!("a result outside {}", dt.name()));
+        for (r, v) in o.iter_mut().zip(x) {
+            let y = f(*v);
+            bad |= y < lo || y > hi;
+            *r = T::from_i128(y.to_i128());
         }
+        bad
+    };
+    let bad = if x.len() >= *super::PAR_ELEMS {
+        let chunk = super::par_chunk(x.len());
+        o.par_chunks_mut(chunk).zip(x.par_chunks(chunk)).map(|(o, x)| body(o, x)).reduce(|| false, |a, b| a || b)
     } else {
-        o.extend(x.iter().map(|v| T::from_i128(f(*v).to_i128())));
+        body(o, x)
+    };
+    if bad {
+        return overflow(&format!("a result outside {}", check.map(|d| d.name()).unwrap_or("its dtype")));
     }
     Ok(())
 }

@@ -18,7 +18,11 @@
 //! * **Proved-away checks** ([`ranges`], [`plan`]): the interval rules of spec 04b §7 decide per
 //!   node whether the reference's runtime checks (PALW-TIR-23/24, divisors, indices) can fire; where
 //!   they cannot, the kernel runs in wrapping native arithmetic, which is then exact. Where they
-//!   can, the kernel checks exactly what the reference checks, so success and failure agree.
+//!   can, the kernel checks exactly what the reference checks, so success, failure and the failure
+//!   class agree. An executor plans each occurrence once more with the ACTUAL ranges of the params
+//!   it holds ([`plan::TirPlan::refine`]) — sound for its whole life, since its params never change —
+//!   so an A16 narrowing that must be typed `i128` for arbitrary weights computes, and is stored, in
+//!   `i64` for the weights at hand.
 //! * **Reordering only where it is free** ([`kernels::matmul`]): an exact sum's value and its
 //!   success are order-independent (the order-free rule, PALW-TIR-24), so `MatMul` and `ReduceSum`
 //!   vectorise and thread; every lossy site (`Div`, `Clamp`, the transcendentals, selection,

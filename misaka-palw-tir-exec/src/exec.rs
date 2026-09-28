@@ -388,12 +388,16 @@ struct WorkBufs {
     logits: Buf,
     logits_shape: Vec<usize>,
     inputs: [u32; 2],
+    /// Per primitive tag: nanoseconds and node evaluations (when profiling).
+    profile: Option<Box<[(u64, u64); 25]>>,
 }
 
 /// Runs one program over positions, holding its run state.
 pub struct TirExecutor<'a> {
     plan: &'a TirPlan,
     params: &'a TirParams<'a>,
+    /// Per occurrence: the block plan refined by the actual ranges of the bound params.
+    occ_plans: Vec<BlockPlan>,
     run: RunBufs,
     work: WorkBufs,
 }
@@ -404,9 +408,11 @@ impl<'a> TirExecutor<'a> {
     pub fn new(plan: &'a TirPlan, params: &'a TirParams<'a>) -> TirResult<Self> {
         params.check_complete(plan)?;
         let nb = plan.blocks.len();
+        let occ_plans = plan.refine(&|j, l| params.range(j, l));
         Ok(TirExecutor {
             plan,
             params,
+            occ_plans,
             run: RunBufs::initial(plan),
             work: WorkBufs {
                 slots: (0..nb).map(|b| vec![Buf::default(); plan.blocks[b].nodes.len()]).collect(),
@@ -418,6 +424,7 @@ impl<'a> TirExecutor<'a> {
                 logits: Buf::default(),
                 logits_shape: Vec::new(),
                 inputs: [0, 0],
+                profile: None,
             },
         })
     }
@@ -429,6 +436,16 @@ impl<'a> TirExecutor<'a> {
     /// The next position to compute.
     pub fn pos(&self) -> u32 {
         self.run.pos
+    }
+
+    /// Accumulate the time spent per primitive (for benchmarks; off by default).
+    pub fn set_profile(&mut self, on: bool) {
+        self.work.profile = on.then(|| Box::new([(0u64, 0u64); 25]));
+    }
+
+    /// `(nanoseconds, evaluations)` per primitive tag since profiling was switched on.
+    pub fn profile(&self) -> Option<&[(u64, u64); 25]> {
+        self.work.profile.as_deref()
     }
 
     /// The last successful step's logits.
@@ -476,10 +493,10 @@ impl<'a> TirExecutor<'a> {
         let params = self.params;
         let every = sink.every_node();
         let n_occ = plan.occurrences.len();
-        let TirExecutor { run, work, .. } = self;
+        let TirExecutor { run, work, occ_plans, .. } = self;
         work.carry.clear();
         for (occ, &(block, layer)) in plan.occurrences.iter().enumerate() {
-            let bp = &plan.blocks[block as usize];
+            let bp = &occ_plans[occ];
             let h = bp.window.map(|w| (pos as usize + 1).min(w as usize)).unwrap_or(1);
             let n = bp.nodes.len();
             let mut slots = std::mem::take(&mut work.slots[block as usize]);
@@ -489,6 +506,7 @@ impl<'a> TirExecutor<'a> {
             let base = plan.slot_bases[occ];
             for ni in 0..n {
                 let node = &bp.nodes[ni];
+                let started = work.profile.is_some().then(std::time::Instant::now);
                 let (shape, rank) = resolve(&node.out.shape, h);
                 let out_shape = &shape[..rank];
                 let val = match node.prim {
@@ -574,6 +592,11 @@ impl<'a> TirExecutor<'a> {
                     }
                 };
                 vals[ni] = val;
+                if let (Some(t0), Some(prof)) = (started, work.profile.as_mut()) {
+                    let e = &mut prof[node.prim.tag() as usize];
+                    e.0 += t0.elapsed().as_nanos() as u64;
+                    e.1 += 1;
+                }
                 if node.commit || every {
                     let rd = Reader {
                         plan,
