@@ -239,6 +239,14 @@ impl OutputSpecV1 {
         if values.len() as u64 != l.elements {
             return Err(OutputErrorV1::Count { want: l.elements, got: values.len() as u64 });
         }
+        self.lane_bytes(values)
+    }
+
+    /// **The canonical bytes of a run of elements** — a tile's lanes, say — in the kind's element
+    /// encoding; a value outside the kind's domain is refused at its index within the run. The whole
+    /// output's bytes are this over every element ([`Self::canonical_bytes`]).
+    pub fn lane_bytes(&self, values: &[i64]) -> Result<Vec<u8>, OutputErrorV1> {
+        let l = self.layout()?;
         let mut out = Vec::with_capacity(values.len() * l.element_bytes);
         for (i, v) in values.iter().enumerate() {
             if *v < l.lo || *v > l.hi {
@@ -377,9 +385,74 @@ pub fn verify_output_tile_v1(
     used == proof.len() && root_from_merkle(spec, tile_len, &h) == *root
 }
 
+/// **A job image's header** (RFC-0003 §II.4): a job image is committed exactly as an `ImageRgb8
+/// [h, w, 3]` output is (§I.3.2) — `u8` HWC RGB, row-major — so its `input_root` is that
+/// construction over the image's bytes at the class's input tile length, and a court verifies an
+/// opened input tile with [`verify_output_tile_v1`] under this header.
+pub fn input_image_spec_v1(h: u32, w: u32) -> OutputSpecV1 {
+    OutputSpecV1::image_rgb8(h, w)
+}
+
+/// **A job image's `input_root`**: [`output_root_v1`] of its bytes under [`input_image_spec_v1`].
+pub fn input_image_root_v1(h: u32, w: u32, tile_len: u32, rgb: &[u8]) -> Result<[u8; 64], OutputErrorV1> {
+    let values: Vec<i64> = rgb.iter().map(|b| *b as i64).collect();
+    output_root_v1(&input_image_spec_v1(h, w), &values, tile_len)
+}
+
+/// A job image's input tiles, each with its authentication path under `input_root`.
+pub fn input_image_tiles_v1(h: u32, w: u32, tile_len: u32, rgb: &[u8]) -> Result<Vec<(Vec<u8>, Vec<[u8; 64]>)>, OutputErrorV1> {
+    let spec = input_image_spec_v1(h, w);
+    let values: Vec<i64> = rgb.iter().map(|b| *b as i64).collect();
+    let leaves = output_leaves_v1(&spec, &values, tile_len)?;
+    let tiles = output_tiles_v1(&spec, &values, tile_len)?;
+    Ok(tiles.into_iter().enumerate().map(|(t, b)| (b, output_tile_proof_v1(&leaves, t).expect("t is a leaf"))).collect())
+}
+
+/// The key of [`output_set_id_v1`].
+pub const OUTPUT_SET_ID_KEY_V1: &[u8] = b"misaka-palw/output-set-id/v1";
+
+/// **The output-set descriptor**: every kind (tag, name, element encoding, shape rule, metadata) and
+/// the digest's construction (its three keys, the root's preimage), as one ASCII line. The fence
+/// `palw_gen_v1` carries its hash, so two builds whose canonical outputs differ in any way have
+/// different consensus identities where the fence is armed.
+pub fn output_set_descriptor_v1() -> String {
+    let kinds = [
+        "0:Tokens:u32le:[n]:-",
+        "1:ImageRgb8:u8:[H,W,3]:-",
+        "2:PcmI16:i16le:[frames,channels]:le32(sample_rate>=1)",
+        "3:EmbeddingI32:i32le:[n,d]:[q<=31,normalised<=1]",
+        "4:VideoRgb8:u8:[T,H,W,3]:le32(fps_num>=1)le32(fps_den>=1)",
+        "5:TensorLe:i8|i16|i32le:rank1-4:[dtype<=2,q<=62]",
+    ];
+    format!(
+        "palw-output/v1/kinds={}/tile_len=[{OUTPUT_MIN_TILE_LEN_V1},{OUTPUT_MAX_TILE_LEN_V1}]/leaf={}(le32(t)|bytes)/node={}(left|right)/odd=promoted/root={}(borsh(spec)|le32(tile_len)|merkle)",
+        kinds.join(","),
+        String::from_utf8_lossy(OUTPUT_TILE_KEY_V1),
+        String::from_utf8_lossy(OUTPUT_NODE_KEY_V1),
+        String::from_utf8_lossy(OUTPUT_ROOT_KEY_V1),
+    )
+}
+
+/// `output_set_id = BLAKE2b-512(key = "misaka-palw/output-set-id/v1", output_set_descriptor_v1())`.
+pub fn output_set_id_v1() -> [u8; 64] {
+    keyed64(OUTPUT_SET_ID_KEY_V1, &[output_set_descriptor_v1().as_bytes()])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_output_set_descriptor_names_every_kind_and_every_key() {
+        let d = output_set_descriptor_v1();
+        for k in OutputKindV1::ALL {
+            assert!(d.contains(&format!("{}:{}:", k.tag(), k.name())), "{}", k.name());
+        }
+        for key in [OUTPUT_TILE_KEY_V1, OUTPUT_NODE_KEY_V1, OUTPUT_ROOT_KEY_V1] {
+            assert!(d.contains(std::str::from_utf8(key).unwrap()));
+        }
+        assert!(d.is_ascii());
+    }
 
     #[test]
     fn every_kind_round_trips_its_tag() {
@@ -444,5 +517,29 @@ mod tests {
         assert!(matches!(OutputSpecV1::embedding_i32(1, 4, 32, true).layout(), Err(OutputErrorV1::Meta(_))));
         assert!(matches!(OutputSpecV1::tensor_le(3, vec![4], 0).layout(), Err(OutputErrorV1::Meta(_))));
         assert!(matches!(output_root_v1(&OutputSpecV1::image_rgb8(1, 1), &[0, 0, 0], 3), Err(OutputErrorV1::TileLen(3))));
+    }
+
+    #[test]
+    fn a_job_image_is_committed_as_an_rgb8_output_is() {
+        let (h, w, tile) = (2, 3, 4);
+        let rgb: Vec<u8> = (0..18u32).map(|i| (i * 37 + 11) as u8).collect();
+        let root = input_image_root_v1(h, w, tile, &rgb).unwrap();
+        let values: Vec<i64> = rgb.iter().map(|b| *b as i64).collect();
+        assert_eq!(root, output_root_v1(&OutputSpecV1::image_rgb8(h, w), &values, tile).unwrap(), "§I.3.2 over the bytes");
+        let tiles = input_image_tiles_v1(h, w, tile, &rgb).unwrap();
+        assert_eq!(tiles.len(), 5, "18 bytes in tiles of 4: the last ragged, an odd leaf promoted");
+        let spec = input_image_spec_v1(h, w);
+        for (t, (bytes, proof)) in tiles.iter().enumerate() {
+            assert_eq!(bytes[..], rgb[t * 4..(t * 4 + 4).min(18)]);
+            assert!(verify_output_tile_v1(&root, &spec, tile, t as u64, bytes, proof));
+            let mut forged = bytes.clone();
+            forged[0] ^= 1;
+            assert!(!verify_output_tile_v1(&root, &spec, tile, t as u64, &forged, proof), "a forged pixel is not under the root");
+        }
+        assert!(
+            !verify_output_tile_v1(&root, &input_image_spec_v1(w, h), tile, 0, &tiles[0].0, &tiles[0].1),
+            "the size is in the root"
+        );
+        assert!(input_image_root_v1(h, w, tile, &rgb[1..]).is_err(), "h · w · 3 bytes exactly");
     }
 }

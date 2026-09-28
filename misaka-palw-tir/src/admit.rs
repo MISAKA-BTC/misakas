@@ -173,6 +173,9 @@ pub enum ParamLeafV1 {
     /// Derived by the court from the job and the step space (a random input, a row or token count):
     /// nothing opened.
     Derived,
+    /// A job image (RFC-0003 §II.4): 1 byte a lane — a `u8` pixel — opened by tiles against the
+    /// image's `input_root`, and so an operand of its own.
+    JobImage,
 }
 
 impl ParamLeafV1 {
@@ -182,7 +185,14 @@ impl ParamLeafV1 {
             ParamLeafV1::Artifact => dtype.width() as u64,
             ParamLeafV1::Committed | ParamLeafV1::JobData => 4,
             ParamLeafV1::Derived => 0,
+            ParamLeafV1::JobImage => 1,
         }
+    }
+
+    /// Is the leaf a rooted source a cone's close opens tiles of with their paths (a committed
+    /// value, a job image), and so one of a cone's operands?
+    pub fn is_operand(self) -> bool {
+        matches!(self, ParamLeafV1::Committed | ParamLeafV1::JobImage)
     }
 }
 
@@ -808,10 +818,9 @@ pub(crate) fn admit_core(
                 Some((c, o, _)) => (Some(c), Some(o)),
                 None => (None, None),
             };
-            let operands = leaves
-                .iter()
-                .filter(|l| l.is_committed() || matches!(l, LeafV1::Param(j) if param_leaf(*j) == ParamLeafV1::Committed))
-                .count() as u64;
+            let operands =
+                leaves.iter().filter(|l| l.is_committed() || matches!(l, LeafV1::Param(j) if param_leaf(*j).is_operand())).count()
+                    as u64;
             let cone = ConeV1 {
                 block: bi as u8,
                 node: ni as u16,

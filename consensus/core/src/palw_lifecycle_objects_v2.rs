@@ -271,6 +271,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // this build and on an older one that skips it undecoded (A-2) — and the acceptance walk
         // drops it by name until `palw_tir_v1` is armed.
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => Ok(()),
+        // RFC-0003 (tag 67): a generative registration carries its pipeline and every program, so it
+        // is checkable whenever it is admitted. It RIDES at every height, as the IR registration does
+        // (A-2), and the acceptance walk drops it by name until the pipeline admission lands.
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => Ok(()),
         // RFC-0002 Phase F (tag 62): an IR one-move accusation rides signed and shaped (its proof
         // an IR close about the roots it names) at every height, as the registration does; the
         // ruleset's close ceiling and the verdict are the acceptance layer's.

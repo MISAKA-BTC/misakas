@@ -555,6 +555,9 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_tir_v1` (RFC-0002 Phase F): may a class be a PALW-TIR program on this chain, and
     /// may the IR court arms be filed. Resolved in ONE place, [`Self::palw_tir_at`], at the block.
     pub(super) palw_tir_v1: Option<kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1>,
+    /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
+    /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
+    pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
     /// `Params::palw_fused_dissectable` (ADR-0093 Decision 6): must a fused registration's output
     /// tile be one head's. Resolved in ONE place, [`Self::palw_fused_dissectable_at`].
     pub(super) palw_fused_dissectable: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1122,6 +1125,7 @@ impl VirtualStateProcessor {
             palw_token_lift: params.palw_token_lift_fence(),
             palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_tir_v1: params.palw_tir_v1_fence(),
+            palw_gen_v1: params.palw_gen_v1_fence(),
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
@@ -7300,6 +7304,12 @@ impl VirtualStateProcessor {
                 info!("Block {block}: an IR object was dropped by name below palw_tir_v1, and the block stands (RFC-0002 Phase F)");
                 continue;
             }
+            // **RFC-0003: below `palw_gen_v1` a generative object is dropped by name**, first and
+            // charged nothing, for the IR objects' reason above (an older build skips it undecoded).
+            if kaspa_consensus_core::palw_state_v2::palw_object_is_gen_v1(&object) && !self.palw_gen_at(point.daa_score) {
+                info!("Block {block}: a generative object was dropped by name below palw_gen_v1, and the block stands (RFC-0003)");
+                continue;
+            }
             // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
             //
             // A group holds one of `PALW_OBJECT_CHUNK_MAX_GROUPS` rows in the state root for up to
@@ -11286,6 +11296,21 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::FreePromptCommitted { .. } => {}
+                // **RFC-0003 (tag 67): a generative class registration is dropped by name, and the
+                // block stands.** Below `palw_gen_v1` exactly as an older build skips the payload it
+                // cannot decode (A-2; the walk dropped it first); above it until the pipeline admission
+                // lands. Never charged a registration slot: `palw_class_registration_buyer_v1` does not
+                // name it.
+                Obj::ClassRegisteredGenV1 { class_id, .. } => {
+                    if !self.palw_gen_at(point.daa_score) {
+                        return Err(format!(
+                            "generative class {class_id} is refused: palw_gen_v1 is not in force at this block (RFC-0003)"
+                        ));
+                    }
+                    return Err(format!(
+                        "generative class {class_id} is refused: the pipeline admission is not in this build (RFC-0003)"
+                    ));
+                }
                 // **RFC-0002 Phase F (tag 61): an IR class registration is dropped by name, and the
                 // block stands.** Below `palw_tir_v1` exactly as an older build skips the payload it
                 // cannot decode (A-2); above it until admission v10 lands (step F6). Never charged a
@@ -12747,6 +12772,11 @@ impl VirtualStateProcessor {
     /// **RFC-0002 Phase F, resolved in exactly one place.**
     fn palw_tir_at(&self, daa_score: u64) -> bool {
         self.palw_tir_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
+    }
+
+    /// **RFC-0003, resolved in exactly one place.**
+    fn palw_gen_at(&self, daa_score: u64) -> bool {
+        self.palw_gen_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -18671,6 +18701,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
+        O::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
         O::TirShardCourtAccused { .. } => "TirShardCourtAccused",
         O::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         O::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

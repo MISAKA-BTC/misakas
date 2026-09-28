@@ -1283,6 +1283,112 @@
       }
     },
     {
+      "name": "toy-vision (JobImage: 1 byte a lane, an operand)",
+      "pipeline_borsh_hex": "01000100000006000000766973696f6e00000001000000010000000001000000060000",
+      "programs_borsh_hex": [
+        "020061fa4aa57adfc79053c5e517515e50c7ae7c036abc43ff931053144691ba31c9212539a93514f831a8472ca75a39b094177736aa5818eeae547bb31fbf89f589010000000000040001000000090000007669732e696d6167650103000000020000000300000003000000000000000000000000ff0000000000000001000000050000007669732e7700020000000300000004000000000200000002000000000400000002000000020000000004000000ff0000000000000002000000070000007669732e7072650000000006000000070100000005020203000000000200000000030000000003000000000a0200000000000003000002030000000002000000000300000000030000000009020000000001000301000203000000000200000000030000000003000000000001000000000200020200000000060000000003000000000b02000000000300020000020200000000060000000004000000000c000100000000040002020000000001000000000400000001010000000500080000007669732e706f737401000000020200000000010000000004000000010000000f00000080ffffffffffffff7f000000000100000001000202000000000100000000040000000100000000000000000001020000"
+      ],
+      "job_ceilings": {
+        "max_job_macs": "1125899906842624",
+        "max_job_transcendentals": "1099511627776",
+        "max_job_step_leaves": "4294967296",
+        "max_job_cone_work": "4194304"
+      },
+      "expect": "admitted",
+      "admission": {
+        "job_cost": {
+          "macs": "72",
+          "elementwise": "100",
+          "transcendentals": "0",
+          "bytes_read": "456",
+          "bytes_written": "416"
+        },
+        "job_step_leaves": "2",
+        "cone_work": "17",
+        "output_interval": [
+          "-2147483648",
+          "2147483647"
+        ],
+        "stages": [
+          {
+            "stage": "0",
+            "max_trip": "1",
+            "inputs": [
+              {
+                "interval": [
+                  "0",
+                  "255"
+                ],
+                "leaf": "JobImage"
+              }
+            ],
+            "position": {
+              "cost": {
+                "macs": "72",
+                "elementwise": "100",
+                "transcendentals": "0",
+                "bytes_read": "456",
+                "bytes_written": "416"
+              },
+              "state_bytes": "0",
+              "peak_live_bytes": "168",
+              "commit_lanes": "8",
+              "step_leaves": "2"
+            },
+            "job_cost": {
+              "macs": "72",
+              "elementwise": "100",
+              "transcendentals": "0",
+              "bytes_read": "456",
+              "bytes_written": "416"
+            },
+            "job_step_leaves": "2",
+            "cones": [
+              {
+                "block": "0",
+                "node": "5",
+                "leaves": [
+                  "param:0",
+                  "input:0",
+                  "const:0",
+                  "const:1"
+                ],
+                "tiles": "1",
+                "tile": {
+                  "macs": "72",
+                  "elementwise": "96",
+                  "transcendentals": "0",
+                  "bytes_read": "440",
+                  "bytes_written": "400"
+                },
+                "tile_opened_bytes": "38",
+                "operands": "1",
+                "h_reductions": []
+              },
+              {
+                "block": "1",
+                "node": "0",
+                "leaves": [
+                  "carry_in:0"
+                ],
+                "tiles": "1",
+                "tile": {
+                  "macs": "0",
+                  "elementwise": "4",
+                  "transcendentals": "0",
+                  "bytes_read": "16",
+                  "bytes_written": "16"
+                },
+                "tile_opened_bytes": "16",
+                "operands": "1",
+                "h_reductions": []
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "name": "refused: max_job_macs one short",
       "pipeline_borsh_hex": "010001000000020000006d6d000000030000000300000000010000000100000000000000000001000000000800000000",
       "programs_borsh_hex": [

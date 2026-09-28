@@ -7,7 +7,9 @@
 //! * `consensus-vectors/rand-v1/normal.json` — `Normal` draws of every noise domain;
 //! * `consensus-vectors/output-v1/digests.json` — canonical bytes, tile leaves, `output_root` and
 //!   tile proofs for every output kind, including a ragged last tile and a promoted odd leaf, and the
-//!   refusals.
+//!   refusals;
+//! * `consensus-vectors/output-v1/kinds.json` — the output-set descriptor (every kind, its bytes, its
+//!   metadata's bounds, the tile rule and the three keys) and its id, which the fence `palw_gen_v1` pins.
 //!
 //! The test regenerates every file in memory and requires the bytes on disk to be identical.
 //! `PALW_GEN_BLESS=1 cargo test -p misaka-palw-gen --test vectors` rewrites them — which is a change
@@ -386,4 +388,26 @@ fn output_digests() {
         .collect();
     let file = OutputFileJson { format: "palw-output-v1/digest-vectors/1".into(), spec: SPEC.into(), cases, refusals };
     check_or_bless("output-v1/digests.json", serde_json::to_string_pretty(&file).unwrap());
+}
+
+// ---- output-v1/kinds.json ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct KindsFileJson {
+    format: String,
+    spec: String,
+    output_set_descriptor: String,
+    output_set_id_hex: String,
+}
+
+#[test]
+fn output_kinds() {
+    use misaka_palw_gen::output::{output_set_descriptor_v1, output_set_id_v1};
+    let file = KindsFileJson {
+        format: "palw-output-v1/kinds-vectors/1".into(),
+        spec: SPEC.into(),
+        output_set_descriptor: output_set_descriptor_v1(),
+        output_set_id_hex: hex(&output_set_id_v1()),
+    };
+    check_or_bless("output-v1/kinds.json", serde_json::to_string_pretty(&file).unwrap());
 }

@@ -66,6 +66,9 @@ libcrux-ml-dsa.workspace = true
 # RFC-0002 Phase F: PALW-TIR v1 — the primitive set, programs, the reference evaluator and the demand
 # evaluator the IR court runs. A leaf crate (borsh + thiserror), consensus-grade by construction.
 misaka-palw-tir.workspace = true
+# RFC-0003 Part I: deterministic randomness R and canonical outputs (rand_set_id, output_set_id, the
+# court's derived inputs and output digests). A leaf crate (blake2b + borsh).
+misaka-palw-gen.workspace = true
 wasm-bindgen.workspace = true
 workflow-core.workspace = true
 workflow-log.workspace = true

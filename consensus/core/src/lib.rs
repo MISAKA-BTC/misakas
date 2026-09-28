@@ -453,6 +453,12 @@ pub mod palw_step_leg;
 pub mod palw_step_refute;
 /// RFC-0002 Phase F: PALW-TIR v1 on chain — the dormant `palw_tir_v1` fence and the network's IR constants.
 pub mod palw_tir_v1;
+/// RFC-0003: generative model classes on chain — the dormant `palw_gen_v1` fence and the network's generative constants.
+pub mod palw_gen_v1;
+/// RFC-0003: a generative class — a pipeline of PALW-TIR version-2 programs — its identity, its registration carriage and its preflight.
+pub mod palw_gen_class_v1;
+/// RFC-0003: the generative court's own questions — R's inputs recomputed from the job, PALW-TIR-33 on edges, the output digest (fault 21).
+pub mod palw_gen_court_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
 /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.

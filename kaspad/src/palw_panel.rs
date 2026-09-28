@@ -2417,6 +2417,7 @@ pub(crate) fn palw_carrier_replaceable_v1(tx: &Transaction) -> bool {
             PalwConsensusObjectV2::BondRegistered { .. }
                 | PalwConsensusObjectV2::ClassRegistered { .. }
                 | PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }
+                | PalwConsensusObjectV2::ClassRegisteredGenV1 { .. }
                 | PalwConsensusObjectV2::FreePromptCommitted { .. }
         ),
         Err(_) => false,
@@ -12235,6 +12236,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
         PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => "ClassRegisteredGenV1",
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => "TirShardCourtAccused",
         PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => "ClassLaneCertifiedTirV1",
         PalwConsensusObjectV2::CourtTirRootClaimed { .. } => "CourtTirRootClaimed",

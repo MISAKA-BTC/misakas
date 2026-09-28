@@ -33,6 +33,8 @@ pub const MAX_STAGES: usize = 16;
 pub const MAX_JOB_SCALARS: usize = 16;
 /// A token template's prefix or suffix is at most this long.
 pub const MAX_TEMPLATE_TOKENS: usize = 4096;
+/// Job images a pipeline may bind (`Binding::JobImage { index }`, `index < 16`; RFC-0003 §II.4).
+pub const MAX_JOB_IMAGES: usize = 16;
 
 /// A stage's trip count `T`. Tags: `Fixed 0`, `JobSteps 1`, `TokenCount 2`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -69,7 +71,7 @@ pub struct TokenRule {
 }
 
 /// Where an external input's value comes from. Tags: `JobScalar 0`, `JobTokens 1`, `StageRows 2`,
-/// `StageFinal 3`, `StageRowCount 4`, `JobTokenCount 5`.
+/// `StageFinal 3`, `StageRowCount 4`, `JobTokenCount 5`, `JobImage 6`.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Binding {
     /// `job.scalars[index]`, a rank-0 input.
@@ -85,6 +87,10 @@ pub enum Binding {
     /// `|prefix ‖ ids ‖ suffix|` — the template's length BEFORE padding, a rank-0 `idx`: the tokens a
     /// bidirectional encoder's mask admits (`Compare(Iota < count)`), whatever ids the pad uses.
     JobTokenCount { rule: TokenRule },
+    /// The job's image `index` (RFC-0003 §II.4): `u8` HWC RGB at the input's size, into an `i16`
+    /// input `[h, w, 3]` whose interval contains `[0, 255]` (NF-P10). The chain holds only the
+    /// image's `input_root`; a court opens its tiles against it.
+    JobImage { index: u8 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -140,6 +146,17 @@ pub struct PipelineJob {
     pub negative: Vec<u32>,
     pub steps: u32,
     pub scalars: Vec<i64>,
+    /// The job's images, pixels included — an executor's (and a reference run's) view. A court
+    /// holds only each image's `input_root` and opens tiles against it (RFC-0003 §II.4).
+    pub images: Vec<JobImageV1>,
+}
+
+/// One job image: `u8` HWC RGB, `rgb.len() = h · w · 3`, row-major.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JobImageV1 {
+    pub h: u32,
+    pub w: u32,
+    pub rgb: Vec<u8>,
 }
 
 /// Random inputs: `dist(R(seed, domain, step, position, lane))` for lanes `0..Π shape`, with the
@@ -182,10 +199,12 @@ fn check_rule(what: &str, rule: &TokenRule, token_bound: u32) -> TirResult<()> {
     Ok(())
 }
 
-/// What validation learned: each stage's external inputs, in order.
+/// What validation learned: each stage's external inputs, in order, and the job's image slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PipelineInfo {
     pub externals: Vec<Vec<u16>>,
+    /// Image `i`'s `[h, w]`, for `i` in `0..n`: the images every job of the pipeline carries (NF-P10).
+    pub images: Vec<[u32; 2]>,
 }
 
 /// **Normal form of a pipeline** (NF-P1 … NF-P9, spec 04b §15.6), every edge's shape, dtype and
@@ -207,6 +226,7 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
     let mut domains = BTreeSet::new();
     let mut consumed = vec![false; p.stages.len()];
     let mut externals = Vec::with_capacity(p.stages.len());
+    let mut images: BTreeMap<u8, [u32; 2]> = BTreeMap::new();
     for (s, st) in p.stages.iter().enumerate() {
         let what = format!("stage {s} ({})", st.name);
         if st.name.is_empty() || st.name.len() > MAX_NAME_BYTES || !names.insert(st.name.as_str()) {
@@ -334,6 +354,24 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
                         return nf(format!("{edge}: [0, {}] exceeds [{lo}, {hi}]", pad.to_len));
                     }
                 }
+                // NF-P10: a job image is `i16 [h, w, 3]` over `[0, 255]`, one size per image.
+                Binding::JobImage { index } => {
+                    if *index as usize >= MAX_JOB_IMAGES {
+                        return nf(format!("{edge}: a job image index is below {MAX_JOB_IMAGES}"));
+                    }
+                    if d.dtype != DType::I16 || d.shape.len() != 3 || d.shape[2] != 3 {
+                        return nf(format!("{edge}: a job image is an i16 [h, w, 3] input"));
+                    }
+                    if lo > 0 || hi < 255 {
+                        return nf(format!("{edge}: a pixel's [0, 255] exceeds [{lo}, {hi}]"));
+                    }
+                    let size = [d.shape[0], d.shape[1]];
+                    if let Some(prev) = images.insert(*index, size)
+                        && prev != size
+                    {
+                        return nf(format!("{edge}: job image {index} is bound at {prev:?} and at {size:?}"));
+                    }
+                }
             }
         }
         externals.push(ext);
@@ -346,7 +384,11 @@ pub fn validate_pipeline(p: &TirPipelineV1, programs: &[TirProgramV2]) -> TirRes
     if let Some(dead) = (0..p.stages.len()).find(|s| *s != p.output_stage as usize && !consumed[*s]) {
         return nf(format!("stage {dead} feeds no later stage and is not the output"));
     }
-    Ok(PipelineInfo { externals })
+    // NF-P10: the bound images are `0..n` — a job carries exactly these, and no index goes unread.
+    if let Some((i, _)) = images.iter().enumerate().find(|(i, (index, _))| *i != **index as usize) {
+        return nf(format!("job image {i} is bound by no stage, but a later one is"));
+    }
+    Ok(PipelineInfo { externals, images: images.into_values().collect() })
 }
 
 /// One stage of a run.
@@ -400,6 +442,72 @@ fn apply_rule(rule: &TokenRule, job: &PipelineJob) -> TirResult<Vec<u32>> {
         seq.resize(pad.to_len as usize, pad.id);
     }
     Ok(seq)
+}
+
+/// **What a job fixes of a stage before anything runs** — its trip count, its token run, and every
+/// input the court derives from the job rather than opening (spec 04b §15.4): job scalars, token
+/// tensors, token counts and row counts (an earlier stage's row count is its trip count, a job fact).
+/// An input bound to an earlier stage's committed output, and a random input, are not here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StageJobFacts {
+    pub trip: u32,
+    /// `Input(0)` at each position (empty for a stage that reads no token).
+    pub tokens: Vec<u32>,
+    /// Input index → its value.
+    pub inputs: BTreeMap<u16, Tensor>,
+}
+
+/// **The job facts of every stage**, in order — what [`run_pipeline`] computes before it runs a
+/// stage, without running anything. Refused as the run refuses: a template longer than its pad, a
+/// trip count outside `[1, max_trip]`, a job scalar the job does not carry.
+pub fn stage_job_facts(p: &TirPipelineV1, programs: &[TirProgramV2], job: &PipelineJob) -> TirResult<Vec<StageJobFacts>> {
+    validate_pipeline(p, programs)?;
+    let mut facts: Vec<StageJobFacts> = Vec::with_capacity(p.stages.len());
+    for st in &p.stages {
+        let prog = &programs[st.program as usize];
+        let tokens = match &st.tokens {
+            Some(rule) => apply_rule(rule, job)?,
+            None => Vec::new(),
+        };
+        let trip = match st.trip {
+            TripRule::Fixed { n } => n,
+            TripRule::JobSteps => job.steps,
+            TripRule::TokenCount => tokens.len() as u32,
+        };
+        if trip == 0 || trip > st.max_trip {
+            return err(TirErrorKind::Position, format!("stage {}: trip count {trip} outside [1, {}]", st.name, st.max_trip));
+        }
+        let mut inputs = BTreeMap::new();
+        let externals = prog.inputs.iter().enumerate().filter(|(_, d)| d.is_external());
+        for (b, (k, d)) in st.bind.iter().zip(externals) {
+            let shape: Vec<usize> = d.shape.iter().map(|x| *x as usize).collect();
+            let value = match b {
+                Binding::JobScalar { index } => {
+                    let v = job.scalars.get(*index as usize).ok_or_else(|| {
+                        TirError::new(TirErrorKind::Missing, format!("stage {}: the job carries no scalar {index}", st.name))
+                    })?;
+                    Tensor::scalar(d.dtype, *v as i128)?
+                }
+                Binding::JobTokens { rule } => {
+                    let seq = apply_rule(rule, job)?;
+                    Tensor::new(DType::Idx, shape, seq.iter().map(|t| *t as i128).collect())?
+                }
+                Binding::JobTokenCount { rule } => {
+                    let n = apply_rule(rule, job)?.len() - pad_count(rule, job);
+                    Tensor::scalar(DType::Idx, n as i128)?
+                }
+                Binding::StageRowCount { stage, drop } => {
+                    Tensor::scalar(DType::Idx, facts[*stage as usize].trip.saturating_sub(*drop) as i128)?
+                }
+                // An edge's values are an earlier stage's commitments, and an image's are opened
+                // against its `input_root`: neither is a fact the job fixes for the court.
+                Binding::StageRows { .. } | Binding::StageFinal { .. } | Binding::JobImage { .. } => continue,
+            };
+            inputs.insert(k as u16, value);
+        }
+        facts.push(StageJobFacts { trip, tokens, inputs });
+    }
+    Ok(facts)
 }
 
 /// A stage's inputs: external ones computed once, random ones drawn per position when per-step.
@@ -488,6 +596,26 @@ pub fn run_pipeline(
                             let n = apply_rule(rule, job)?.len() - pad_count(rule, job);
                             Some(Tensor::scalar(DType::Idx, n as i128)?)
                         }
+                        Binding::JobImage { index } => match job.images.get(*index as usize) {
+                            Some(img) => {
+                                let bytes = img.h as u64 * img.w as u64 * 3;
+                                if [img.h, img.w, 3] != d.shape[..] || img.rgb.len() as u64 != bytes {
+                                    return err(
+                                        TirErrorKind::Operand,
+                                        format!(
+                                            "stage {}: job image {index} is {}×{} in {} bytes; the input is {:?}",
+                                            st.name,
+                                            img.h,
+                                            img.w,
+                                            img.rgb.len(),
+                                            d.shape
+                                        ),
+                                    );
+                                }
+                                Some(Tensor::new(DType::I16, shape, img.rgb.iter().map(|b| *b as i128).collect())?)
+                            }
+                            None => None,
+                        },
                     }
                 }
             };

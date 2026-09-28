@@ -109,6 +109,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::ClassRegistered { .. }
         // RFC-0002 Phase F (tag 61): an IR registration is a registration, like the one above.
         | O::ClassRegisteredTirV1 { .. }
+        // RFC-0003 (tag 67): a generative registration, likewise.
+        | O::ClassRegisteredGenV1 { .. }
         | O::ClassFrozen(..)
         | O::PanelBound { .. }
         | O::ReceiptLicensed { .. }

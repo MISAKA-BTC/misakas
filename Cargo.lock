@@ -3820,6 +3820,7 @@ dependencies = [
  "kaspa-txscript-errors",
  "kaspa-utils",
  "libcrux-ml-dsa",
+ "misaka-palw-gen",
  "misaka-palw-tir",
  "rand 0.8.6",
  "secp256k1",
