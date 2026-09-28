@@ -712,6 +712,24 @@ impl<'a> BlockBuilder<'a> {
         self.select(empty, zero, y, DType::I32)
     }
 
+    /// **LayerNorm without a lossy division** (corpus §6.2.7): `c = n·x − Σx` is exact — it is
+    /// `n·(x − μ)` with no rounding — and `LayerNorm(x) = RMSNorm(c)` with `eps' = n²·eps`, because
+    /// `Σc² = n³·Var(x)`. The only divisions left are the RMS mean's `÷ n` and `IntRsqrt`. `x` is a
+    /// row of codes (`n·x` must fit `i32`); the wide RMSNorm takes the exponent out, so a quiet row
+    /// keeps its precision. Returns the unit row in Q24 (`i32`); gain and bias are the caller's
+    /// narrowing.
+    pub fn layer_norm_exact(&mut self, x: Ref, eps_zero: Ref, eps_shift: Ref) -> Ref {
+        let sh = self.shape(x);
+        let axis = sh.len() - 1;
+        let Dim::Fixed(n) = sh[axis] else { panic!("norm over H") };
+        let nn = self.c(DType::I64, n as i128);
+        let nx = self.mul(x, nn, DType::I64);
+        let s = self.reduce_sum(x, axis, DType::I64);
+        let c = self.sub(nx, s, DType::I64);
+        let c = self.cast(c, DType::I32);
+        self.rms_norm_wide_q36(c, eps_zero, eps_shift)
+    }
+
     /// `palw_qwen36_ops::q36_router_topk` over the last axis of a logit row: `softmax_shifted`,
     /// `TopK` (committed; lowest index on ties, index order), the kept probabilities renormalised
     /// through `IntRecip`. Returns `(indices [k], weights [k] Q24)`. Legacy's uniform fallback for
