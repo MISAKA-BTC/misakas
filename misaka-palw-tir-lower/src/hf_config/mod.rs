@@ -22,7 +22,8 @@ use crate::spec::*;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-/// Every `architectures[0]` this lowerer models, with the corpus families it exercises.
+/// Every `architectures[0]` this lowerer lowers, with the corpus families it exercises. (RWKV-5/6/7
+/// are dispatched to parsers that refuse them with the reason.)
 pub const SUPPORTED: &[(&str, &str)] = &[
     ("LlamaForCausalLM", "C1 C2"),
     ("MistralForCausalLM", "C1 C2"),
@@ -78,9 +79,6 @@ pub const SUPPORTED: &[(&str, &str)] = &[
     ("FalconMambaForCausalLM", "C5"),
     ("Mamba2ForCausalLM", "C5"),
     ("RwkvForCausalLM", "C6"),
-    ("Rwkv5ForCausalLM", "C6"),
-    ("Rwkv6ForCausalLM", "C6"),
-    ("RWKV7ForCausalLM", "C6"),
 ];
 
 /// Architectures refused on purpose, with the reason (printed instead of "unknown").
