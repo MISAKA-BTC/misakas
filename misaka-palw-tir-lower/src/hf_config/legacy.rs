@@ -308,6 +308,9 @@ pub(crate) fn gptj(p: &mut P) -> Result<ArchSpec> {
     let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
     let hd = hidden / h;
     let rd = p.cfg.usize_or_null("rotary_dim", Some(64))?.unwrap_or(hd);
+    // Legacy keys of the original GPT-J release: GPTJ always rotates and always scales.
+    p.cfg.require_eq("rotary", &serde_json::json!(true), "GPT-J always uses rotary positions")?;
+    p.cfg.require_eq("scale_attn_weights", &serde_json::json!(true), "GPT-J always scales by 1/sqrt(d)")?;
     let rope = RopeSpec { rotary_dim: rd, offset: 0, style: RopeStyle::Interleaved, freqs: RopeFreqs::plain(10000.0, rd) };
     let norm = ln(eps);
     let at = attn(h, h, hd, Position::Rope(rope), (false, false));
@@ -467,8 +470,19 @@ pub(crate) fn gpt_bigcode(p: &mut P) -> Result<ArchSpec> {
     {
         return Err(LowerError::bad("gpt_bigcode: num_key_value_heads disagrees with multi_query"));
     }
-    // Upcasting flags change only where float32 is used; the fp32 reference is the function.
-    p.cfg.inert(&["attention_softmax_in_fp32", "scale_attention_softmax_in_fp32"]);
+    // Upcasting flags change only where float32 is used; the fp32 reference is the function. The
+    // `*_runner`/`pre_allocate_kv_cache`/`max_*` keys belonged to an inference runner the
+    // modeling file never reads.
+    p.cfg.inert(&[
+        "attention_softmax_in_fp32",
+        "scale_attention_softmax_in_fp32",
+        "inference_runner",
+        "validate_runner_input",
+        "pre_allocate_kv_cache",
+        "pad_key_length",
+        "max_batch_size",
+        "max_sequence_length",
+    ]);
     let hd = hidden / h;
     let kv = if mq { 1 } else { h };
     let norm = ln(eps);

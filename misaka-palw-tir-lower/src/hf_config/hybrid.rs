@@ -129,6 +129,7 @@ pub(crate) fn qwen3_next(p: &mut P) -> Result<ArchSpec> {
     let norm_topk = p.cfg.bool_or("norm_topk_prob", true)?;
     let step = p.cfg.usize_or("decoder_sparse_step", 1)?;
     let mlp_only = p.cfg.opt_usize_list("mlp_only_layers")?.unwrap_or_default();
+    p.cfg.forbid("use_sliding_window", "Qwen3-Next has no sliding-window attention")?;
     if k == 0 || k > e.max(1) {
         return Err(LowerError::bad("qwen3_next: top-k"));
     }
@@ -369,6 +370,16 @@ pub(crate) fn mamba(p: &mut P, falcon: bool) -> Result<ArchSpec> {
     if act != "silu" && act != "swish" {
         return Err(LowerError::not_lowerable(format!("mamba: hidden_act {act}")));
     }
+    // Keys the -hf conversions carried over from mamba_ssm: `n_layer` (an alias that must agree),
+    // `fused_add_norm` (a kernel choice), `pad_vocab_size_multiple` (training-time padding, already
+    // in vocab_size) and `rms_norm` (MambaRMSNorm is the only norm transformers implements).
+    if let Some(nl) = p.cfg.opt_usize("n_layer")?
+        && nl != n
+    {
+        return Err(LowerError::bad(format!("mamba: n_layer {nl} ≠ num_hidden_layers {n}")));
+    }
+    p.cfg.inert(&["fused_add_norm", "pad_vocab_size_multiple"]);
+    p.cfg.require_eq("rms_norm", &serde_json::json!(true), "transformers' Mamba always uses RMSNorm")?;
     let dt_rank = time_step_rank(p, hidden)?;
     let inner = expand * hidden;
     if let Some(i) = p.cfg.opt_usize("intermediate_size")?
@@ -445,6 +456,10 @@ pub(crate) fn mamba2(p: &mut P) -> Result<ArchSpec> {
         return Err(LowerError::not_lowerable(format!("mamba2: hidden_act {act}")));
     }
     p.cfg.require_eq("rms_norm", &serde_json::json!(true), "Mamba2Mixer always applies the gated RMSNorm")?;
+    // transformers 5 always multiplies by the gate BEFORE the norm (mamba_ssm's
+    // norm_before_gate=False) and never reads this key.
+    p.cfg.forbid("norm_before_gate", "transformers' Mamba2 gates before the norm")?;
+    p.cfg.inert(&["time_step_init_scheme", "time_step_scale"]);
     let (dt_min, dt_max) = match p.cfg.opt_list("time_step_limit")? {
         None => (0.0, f64::INFINITY),
         Some(l) if l.len() == 2 => {

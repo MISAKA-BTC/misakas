@@ -95,6 +95,10 @@ pub(crate) fn llama_with_prefix(p: &mut P, f: Flavor, model: &str, lm_head: &str
             return finish_llama(p, f, FinishArgs { vocab, hidden, inter, n, h, kv, hd, act, max_pos, eps, tied, qkv_bias, o_bias, mlp_bias, types: t, sw, model, lm_head, arch });
         }
         Flavor::Qwen2 | Flavor::Qwen3 | Flavor::SmolLm3 => {
+            if f == Flavor::Qwen2 {
+                // Some Qwen2.5 text configs carry the VL flag; the text model never reads it.
+                p.cfg.forbid("use_mrope", "multimodal rope positions are not a text decoder's")?;
+            }
             let use_sw = p.cfg.bool_or("use_sliding_window", false)?;
             let sw_default = if f == Flavor::SmolLm3 { None } else { Some(4096) };
             let sw_raw = p.cfg.usize_or_null("sliding_window", sw_default)?;
@@ -490,6 +494,10 @@ pub(crate) fn starcoder2(p: &mut P) -> Result<ArchSpec> {
     let tied = p.cfg.bool_or("tie_word_embeddings", true)?;
     let bias = p.cfg.bool_or("use_bias", true)?;
     let sw = p.cfg.opt_usize("sliding_window")?;
+    // Legacy keys of the original release; transformers never reads them, so they must name
+    // the one wiring it implements.
+    p.cfg.require_eq("mlp_type", &serde_json::json!("default"), "Starcoder2MLP is the plain c_fc/c_proj MLP")?;
+    p.cfg.require_eq("norm_type", &serde_json::json!("layer_norm"), "Starcoder2 uses LayerNorm")?;
     let rope = p.rope(hd, RopeStyle::Half, Some(10000.0), None, 1.0, Some(max_pos), None)?;
     let norm = NormSpec::layer(eps);
     let mut at = attn(h, kv, hd, Position::Rope(rope), (bias, bias));
@@ -532,6 +540,7 @@ pub(crate) fn olmo(p: &mut P) -> Result<ArchSpec> {
     let tied = p.cfg.bool_or("tie_word_embeddings", false)?;
     let bias = p.cfg.bool_or("attention_bias", false)?;
     let clip = p.cfg.opt_f64("clip_qkv")?;
+    p.cfg.inert(&["pretraining_tp"]);
     let rope = p.rope(hd, RopeStyle::Half, Some(10000.0), None, 1.0, Some(max_pos), None)?;
     let norm = NormSpec { kind: NormKind::Layer, eps: 1e-5, gain: Gain::None, bias: false };
     let mut at = attn(h, kv, hd, Position::Rope(rope), (bias, bias));
@@ -623,7 +632,22 @@ pub(crate) fn cohere(p: &mut P, v2: bool) -> Result<ArchSpec> {
     let tied = p.cfg.bool_or("tie_word_embeddings", true)?;
     let bias = p.cfg.bool_or("attention_bias", false)?;
     let logit_scale = p.cfg.f64_or("logit_scale", 0.0625)?;
-    let rope = p.rope(hd, RopeStyle::Interleaved, Some(10000.0), None, 1.0, Some(max_pos), None)?;
+    // A tokenizer limit some Cohere configs carry.
+    p.cfg.inert(&["model_max_length", "cache_implementation"]);
+    if v2 {
+        // Keys of the original Cohere2 release that transformers does not read; each must name
+        // the behaviour transformers hard-codes.
+        p.cfg.require_eq("order_of_interleaved_layers", &serde_json::json!("local_attn_first"), "sliding layers come first in each group")?;
+        p.cfg.require_eq("position_embedding_type", &serde_json::json!("rope_gptj"), "interleaved (GPT-J) rope")?;
+        p.cfg.require_eq("rotary_pct", &serde_json::json!(1.0), "full rotary")?;
+        p.cfg.require_eq("use_gated_activation", &serde_json::json!(true), "SwiGLU MLP")?;
+        if let Some(share) = p.cfg.opt_bool("use_embedding_sharing")?
+            && share != tied
+        {
+            return Err(LowerError::not_lowerable("cohere2: use_embedding_sharing disagrees with tie_word_embeddings"));
+        }
+    }
+    let rope = p.rope(hd, RopeStyle::Interleaved, Some(if v2 { 10000.0 } else { 500000.0 }), None, 1.0, Some(max_pos), None)?;
     let norm = NormSpec::layer_nobias(eps);
     let (qk_norm, types, sw) = if v2 {
         p.cfg.forbid("use_qk_norm", "Cohere2 has no QK norm")?;
@@ -669,23 +693,15 @@ pub(crate) fn cohere(p: &mut P, v2: bool) -> Result<ArchSpec> {
     }))
 }
 
-fn gemma_act(p: &mut P, default: &str) -> Result<Act> {
-    let ha = p.cfg.opt_str("hidden_activation")?;
-    let hact = p.cfg.opt_str("hidden_act")?;
-    let name = match (&ha, &hact) {
-        (Some(a), _) => a.clone(),
-        (None, Some(b)) if b == "gelu" => {
-            p.unsure.push("Gemma: hidden_act=gelu without hidden_activation — transformers 4.40+ uses gelu_pytorch_tanh; followed".into());
-            "gelu_pytorch_tanh".into()
-        }
-        (None, Some(b)) => b.clone(),
-        (None, None) => default.into(),
-    };
-    if let (Some(a), Some(b)) = (&ha, &hact)
-        && a != b
-        && !(b == "gelu" && a == "gelu_pytorch_tanh")
+/// Gemma's activation. transformers 5 reads `hidden_act` for Gemma-1 and `hidden_activation` for
+/// Gemma-2/3 and ignores the other key; 4.40–4.4x read `hidden_activation` for Gemma-1 too. When
+/// both are present and disagree, the transformers-5 choice is followed and the gap is flagged.
+fn gemma_act(p: &mut P, primary: &str, other: &str) -> Result<Act> {
+    let name = p.cfg.str_or(primary, "gelu_pytorch_tanh")?;
+    if let Some(o) = p.cfg.opt_str(other)?
+        && o != name
     {
-        p.unsure.push(format!("Gemma: hidden_activation={a} and hidden_act={b} disagree; hidden_activation used"));
+        p.unsure.push(format!("Gemma: `{primary}`={name} is used (transformers 5); `{other}`={o} disagrees and older transformers may have used it"));
     }
     Act::from_hf(&name).ok_or_else(|| LowerError::not_lowerable(format!("{}: activation `{name}`", p.cfg.arch)))
 }
@@ -697,7 +713,7 @@ pub(crate) fn gemma(p: &mut P) -> Result<ArchSpec> {
     let inter = p.cfg.usize_or("intermediate_size", 24576)?;
     let n = p.cfg.usize_or("num_hidden_layers", 28)?;
     let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 16, Some(16), Some(256))?;
-    let act = gemma_act(p, "gelu_pytorch_tanh")?;
+    let act = gemma_act(p, "hidden_act", "hidden_activation")?;
     let max_pos = p.cfg.usize_or("max_position_embeddings", 8192)?;
     let eps = p.cfg.f64_or("rms_norm_eps", 1e-6)?;
     let tied = p.cfg.bool_or("tie_word_embeddings", true)?;
@@ -744,13 +760,18 @@ pub(crate) fn gemma2(p: &mut P) -> Result<ArchSpec> {
     let inter = p.cfg.usize_or("intermediate_size", 9216)?;
     let n = p.cfg.usize_or("num_hidden_layers", 26)?;
     let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 8, Some(4), Some(256))?;
-    let act = gemma_act(p, "gelu_pytorch_tanh")?;
+    let act = gemma_act(p, "hidden_activation", "hidden_act")?;
     let max_pos = p.cfg.usize_or("max_position_embeddings", 8192)?;
     let eps = p.cfg.f64_or("rms_norm_eps", 1e-6)?;
     let tied = p.cfg.bool_or("tie_word_embeddings", true)?;
     let bias = p.cfg.bool_or("attention_bias", false)?;
     let qpas = p.cfg.f64_or("query_pre_attn_scalar", 256.0)?;
     let sw = p.cfg.usize_or_null("sliding_window", Some(4096))?;
+    if let Some(a) = p.cfg.opt_usize("sliding_window_size")?
+        && Some(a) != sw
+    {
+        return Err(LowerError::not_lowerable(format!("gemma2: legacy sliding_window_size {a} disagrees with sliding_window {sw:?}")));
+    }
     let final_cap = p.cfg.f64_or_null("final_logit_softcapping", Some(30.0))?;
     let attn_cap = p.cfg.f64_or_null("attn_logit_softcapping", Some(50.0))?;
     p.cfg.forbid("use_bidirectional_attention", "bidirectional attention is not a causal LM")?;
@@ -812,7 +833,7 @@ pub(crate) fn gemma3_text(p: &mut P, model: &str, lm_head: &str, aliases: Vec<(S
     let inter = p.cfg.usize_or("intermediate_size", 9216)?;
     let n = p.cfg.usize_or("num_hidden_layers", 26)?;
     let (h, kv, hd) = heads(p, hidden, "num_attention_heads", 8, Some(4), Some(256))?;
-    let act = gemma_act(p, "gelu_pytorch_tanh")?;
+    let act = gemma_act(p, "hidden_activation", "hidden_act")?;
     let max_pos = p.cfg.usize_or("max_position_embeddings", 131072)?;
     let eps = p.cfg.f64_or("rms_norm_eps", 1e-6)?;
     let tied = p.cfg.bool_or("tie_word_embeddings", true)?;
