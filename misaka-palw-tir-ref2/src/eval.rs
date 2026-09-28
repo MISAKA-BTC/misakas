@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::error::{Class, Res, err};
+use crate::error::{Class, Res, TirError, err};
 use crate::normal_form::block_window;
 use crate::prims::eval_prim;
 use crate::program::{Prim, Program, Ref, StateKind};
@@ -139,7 +139,7 @@ fn evaluate_nodes(
         for r in &n.inputs {
             match *r {
                 Ref::Node(k) => {
-                    if vals[k as usize].is_none() {
+                    if k as usize >= i || vals[k as usize].is_none() {
                         return err(Class::Missing, format!("node {k} has no value"));
                     }
                     from_node.push(Some(k as usize));
@@ -232,8 +232,29 @@ fn program_reads_token(p: &Program) -> bool {
     p.blocks.iter().any(|b| b.nodes.iter().any(|n| n.inputs.contains(&Ref::Input(0))))
 }
 
+/// One occurrence of a traced step: its carry-in and the value of every node.
+#[derive(Clone, Debug)]
+pub struct OccTrace {
+    pub block: u8,
+    pub layer: Option<u32>,
+    pub slot_base: u64,
+    pub carry_in: BTreeMap<u8, Tensor>,
+    pub values: Vec<Tensor>,
+}
+
 /// §9.1: one step from `st` with `token`. Returns the step's result and the next run state.
 pub fn step(p: &Program, params: &Params, st: &RunState, token: u64) -> Res<(StepOutput, RunState)> {
+    step_inner(p, params, st, token, None)
+}
+
+/// [`step`], also returning every occurrence's carry-in and node values (for building cones).
+pub fn step_traced(p: &Program, params: &Params, st: &RunState, token: u64) -> Res<(StepOutput, RunState, Vec<OccTrace>)> {
+    let mut trace = Vec::new();
+    let (o, next) = step_inner(p, params, st, token, Some(&mut trace))?;
+    Ok((o, next, trace))
+}
+
+fn step_inner(p: &Program, params: &Params, st: &RunState, token: u64, mut trace: Option<&mut Vec<OccTrace>>) -> Res<(StepOutput, RunState)> {
     if st.pos >= p.history_bound as u64 {
         return err(Class::Position, format!("pos {} ≥ history_bound", st.pos));
     }
@@ -247,25 +268,39 @@ pub fn step(p: &Program, params: &Params, st: &RunState, token: u64) -> Res<(Ste
     let mut logits = None;
     for (b, layer) in occurrences(p) {
         let bu = b as usize;
-        let block = &p.blocks[bu];
+        let Some(block) = p.blocks.get(bu) else {
+            return err(Class::NormalForm, "schedule names no block");
+        };
         let h = history_len(p, bu, st.pos)?;
         let fixed = |j: u16| st.fixed.get(&(j, instance(p.states[j as usize].per_layer, layer)));
         let hist = |j: u16| st.hist.get(&(j, instance(p.states[j as usize].per_layer, layer))).map(|v| v.as_slice());
         let leaves = Leaves { token, pos: st.pos, carry_in: &carry, fixed: &fixed, hist: &hist };
         let todo = vec![true; block.nodes.len()];
         let vals = evaluate_nodes(p, params, bu, layer, h, &leaves, &todo, vec![None; block.nodes.len()], &mut effects)?;
-        let vals: Vec<Tensor> = vals.into_iter().map(|v| v.unwrap()).collect();
+        let vals: Vec<Tensor> = vals.into_iter().map(|v| v.unwrap_or_else(|| Tensor::zeros(DType::I8, vec![]))).collect();
         for (i, n) in block.nodes.iter().enumerate() {
             if n.commit {
                 commits.push(Commit { slot: slot_base + i as u64, block: b, layer, node: i as u16, value: vals[i].clone() });
             }
         }
         if bu == p.schedule.post as usize {
-            logits = Some(vals[p.logits as usize].clone());
+            logits = vals.get(p.logits as usize).cloned();
         }
-        carry = block.carry_out.iter().enumerate().map(|(k, &c)| (k as u8, vals[c as usize].clone())).collect();
+        let next_carry = block
+            .carry_out
+            .iter()
+            .enumerate()
+            .map(|(k, &c)| vals.get(c as usize).cloned().map(|v| (k as u8, v)).ok_or_else(|| TirError::new(Class::NormalForm, "carry-out")))
+            .collect::<Res<BTreeMap<u8, Tensor>>>()?;
+        if let Some(t) = trace.as_deref_mut() {
+            t.push(OccTrace { block: b, layer, slot_base, carry_in: carry.clone(), values: vals });
+        }
+        carry = next_carry;
         slot_base += block.nodes.len() as u64;
     }
+    let Some(logits) = logits else {
+        return err(Class::NormalForm, "no logits");
+    };
     // Effects, only now that every node of every occurrence succeeded.
     let mut next = st.clone();
     for (prim, layer, v) in effects {
@@ -276,20 +311,22 @@ pub fn step(p: &Program, params: &Params, st: &RunState, token: u64) -> Res<(Ste
             }
             Prim::HistAppend { state } => {
                 let s = &p.states[state as usize];
-                let StateKind::Hist { window } = s.kind else { unreachable!() };
-                let key = (state, instance(s.per_layer, layer));
-                let rows = next.hist.entry(key).or_default();
-                rows.push(v);
-                let keep = window as usize - 1;
-                if rows.len() > keep {
-                    rows.drain(..rows.len() - keep);
+                if let StateKind::Hist { window } = s.kind {
+                    let key = (state, instance(s.per_layer, layer));
+                    let rows = next.hist.entry(key).or_default();
+                    rows.push(v);
+                    // At most window − 1 rows stay visible to the next position.
+                    let keep = (window as usize).saturating_sub(1);
+                    if rows.len() > keep {
+                        rows.drain(..rows.len() - keep);
+                    }
                 }
             }
             _ => {}
         }
     }
     next.pos = st.pos + 1;
-    Ok((StepOutput { logits: logits.unwrap(), commits }, next))
+    Ok((StepOutput { logits, commits }, next))
 }
 
 /// A run: steps at positions `0 … T−1` from the initial state (§9.1).

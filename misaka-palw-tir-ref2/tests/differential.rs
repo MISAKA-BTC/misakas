@@ -1,0 +1,1099 @@
+//! The differential of RFC-0002 freeze criterion 4: this implementation against the first one
+//! (`misaka-palw-tir`, a black box) on
+//!   A. single primitives with random and range-extreme operands and random output types;
+//!   B. random well-formed programs (this crate's generator): decode, every step's logits and
+//!      commits, the run state, and cones built from honest steps;
+//!   C. malformed bytes: random mutations of valid encodings;
+//!   D. structural mutations of valid programs (every field class), re-encoded.
+//! Both must agree on success versus failure (normative) and on every value; the error class is
+//! diagnostic and only tallied. A panic on either side is a totality defect (PALW-TIR-34).
+//!
+//! `TIR_REF2_CASES` scales the case counts (default 1 = the counts below).
+
+mod common;
+
+use std::collections::BTreeMap;
+
+use common::bridge::*;
+use common::progen::{GenCfg, R, gen_params, gen_program, pick, rand_profile, rand_value};
+use misaka_palw_tir as first;
+use misaka_palw_tir_ref2 as ref2;
+use rand::{Rng, SeedableRng};
+use ref2::codec::{decode_canonical, encode};
+use ref2::eval::{ConeEnv, Params, RunState, eval_cone, initial_state, step_traced};
+use ref2::{Class, Cmp, DType, Dim, Prim, Program, Ref, Rounding, StateKind, Tensor, TensorType, eval_primitive};
+
+fn scale() -> usize {
+    std::env::var("TIR_REF2_CASES").ok().and_then(|s| s.parse().ok()).unwrap_or(1)
+}
+
+#[derive(Default, Debug)]
+struct Tally {
+    cases: usize,
+    both_ok: usize,
+    both_err: usize,
+    class_same: usize,
+    class_diff: BTreeMap<(Class, Class), usize>,
+    class_examples: BTreeMap<(Class, Class), Vec<String>>,
+    disagreements: Vec<String>,
+    panics_first: Vec<String>,
+}
+
+impl Tally {
+    fn record<T: PartialEq + std::fmt::Debug>(&mut self, what: &str, a: &Outcome<T>, f: &Outcome<T>) -> bool {
+        self.cases += 1;
+        match (a, f) {
+            (Outcome::Ok(x), Outcome::Ok(y)) => {
+                if x == y {
+                    self.both_ok += 1;
+                    true
+                } else {
+                    self.disagreements.push(format!("{what}: values differ: ref2 {x:?} / first {y:?}"));
+                    false
+                }
+            }
+            (Outcome::Err(x), Outcome::Err(y)) => {
+                self.both_err += 1;
+                if x == y {
+                    self.class_same += 1;
+                } else {
+                    *self.class_diff.entry((*x, *y)).or_default() += 1;
+                    let ex = self.class_examples.entry((*x, *y)).or_default();
+                    if ex.len() < 4 {
+                        ex.push(what.chars().take(160).collect());
+                    }
+                }
+                true
+            }
+            (_, Outcome::Panic(s)) => {
+                self.panics_first.push(format!("{what}: first panicked: {s}"));
+                false
+            }
+            (Outcome::Panic(s), _) => {
+                self.disagreements.push(format!("{what}: ref2 panicked: {s}"));
+                false
+            }
+            _ => {
+                self.disagreements.push(format!("{what}: ref2 {} / first {}", brief(a), brief(f)));
+                false
+            }
+        }
+    }
+
+    fn report(&self, name: &str) {
+        println!(
+            "{name}: {} cases, {} both ok (identical), {} both failed ({} same class), {} disagreements, {} first-impl panics",
+            self.cases,
+            self.both_ok,
+            self.both_err,
+            self.class_same,
+            self.disagreements.len(),
+            self.panics_first.len()
+        );
+        for ((a, b), n) in &self.class_diff {
+            println!("  class (diagnostic) ref2 {} / first {}: {n}", a.name(), b.name());
+            if std::env::var("TIR_REF2_CLASS_EXAMPLES").is_ok() {
+                for e in &self.class_examples[&(*a, *b)] {
+                    println!("      e.g. {e}");
+                }
+            }
+        }
+        for d in self.disagreements.iter().take(25) {
+            println!("  DISAGREE {d}");
+        }
+        for d in self.panics_first.iter().take(10) {
+            println!("  PANIC {d}");
+        }
+    }
+}
+
+fn brief<T: std::fmt::Debug>(o: &Outcome<T>) -> String {
+    match o {
+        Outcome::Ok(v) => {
+            let s = format!("{v:?}");
+            if s.len() > 300 { format!("ok {}…", &s[..300]) } else { format!("ok {s}") }
+        }
+        Outcome::Err(c) => format!("err {}", c.name()),
+        Outcome::Panic(s) => format!("panic {s}"),
+    }
+}
+
+// =============================================================== A. primitives
+
+fn rand_shape(rng: &mut R, max_rank: usize) -> Vec<u64> {
+    let r = rng.gen_range(0..=max_rank);
+    (0..r).map(|_| pick(rng, &[1u64, 1, 2, 3, 4])).collect()
+}
+
+fn rand_t(rng: &mut R, dt: DType, shape: &[u64]) -> Tensor {
+    let n: u64 = shape.iter().product();
+    let prof = rand_profile(rng);
+    let data = (0..n)
+        .map(|_| {
+            let pr = if rng.gen_bool(0.8) { prof } else { rand_profile(rng) };
+            rand_value(rng, dt, pr)
+        })
+        .collect();
+    Tensor::new(dt, shape.to_vec(), data).unwrap()
+}
+
+/// A random tensor of a random dtype.
+fn rt(rng: &mut R, shape: &[u64]) -> Tensor {
+    let dt = any_dt(rng);
+    rand_t(rng, dt, shape)
+}
+
+fn any_dt(rng: &mut R) -> DType {
+    pick(rng, &DType::ALL)
+}
+
+fn compat(rng: &mut R, s: &[u64]) -> Vec<u64> {
+    let drop = if s.is_empty() { 0 } else { rng.gen_range(0..=s.len()) };
+    s[drop..].iter().map(|&d| if rng.gen_bool(0.3) { 1 } else { d }).collect()
+}
+
+fn bshape(a: &[u64], b: &[u64]) -> Option<Vec<u64>> {
+    let r = a.len().max(b.len());
+    let mut out = vec![0; r];
+    for i in 0..r {
+        let da = if i + a.len() >= r { a[i + a.len() - r] } else { 1 };
+        let db = if i + b.len() >= r { b[i + b.len() - r] } else { 1 };
+        out[i] = if da == db || db == 1 {
+            da
+        } else if da == 1 {
+            db
+        } else {
+            return None;
+        };
+    }
+    Some(out)
+}
+
+/// Divisor/dividend pairs around exact halves.
+fn half_case(rng: &mut R, dt_x: DType, dt_d: DType) -> (i128, i128) {
+    let d = pick(rng, &[1i128, 2, 3, 4, 5, 7, 8, 16, 1 << 24, 1 << 31, (1 << 31) - 1, 1 << 62, i64::MAX as i128, i128::MAX, u32::MAX as i128]);
+    let d = d.clamp(1, dt_d.max());
+    let any: i128 = rng.gen_range(-1000..1000);
+    let q: i128 = pick(rng, &[0i128, 1, 2, 3, 100, -1, -2, -3, -100, any]);
+    let r: i128 = pick(rng, &[0i128, d / 2, d / 2 + 1, d / 2 + d % 2, d - 1, (d - 1) / 2]).min(d - 1);
+    let x = q.checked_mul(d).and_then(|v: i128| v.checked_add(if q < 0 { -r } else { r })).unwrap_or(0);
+    (x.clamp(dt_x.min(), dt_x.max()), d)
+}
+
+/// One random primitive case: (prim, operands, out dtype, out shape). Mostly well typed.
+fn prim_case(rng: &mut R) -> (Prim, Vec<Tensor>, DType, Vec<u64>) {
+    let k = rng.gen_range(0..23);
+    let mut case = match k {
+        0 => {
+            let dt = any_dt(rng);
+            let s = rand_shape(rng, 4);
+            let n: u64 = s.iter().product();
+            let mut out = Vec::new();
+            let mut rem = n;
+            while rem > 1 && out.len() < 3 {
+                let divs: Vec<u64> = (1..=rem).filter(|d| rem % d == 0).collect();
+                let d = pick(rng, &divs);
+                out.push(d);
+                rem /= d;
+            }
+            if rem > 1 || rng.gen_bool(0.3) {
+                out.push(rem);
+            }
+            (Prim::Reshape, vec![rand_t(rng, dt, &s)], dt, out)
+        }
+        1 => {
+            let dt = any_dt(rng);
+            let s = rand_shape(rng, 4);
+            let mut perm: Vec<u8> = (0..s.len() as u8).collect();
+            use rand::seq::SliceRandom;
+            perm.shuffle(rng);
+            let out = perm.iter().map(|&p| s[p as usize]).collect();
+            (Prim::Transpose { perm }, vec![rand_t(rng, dt, &s)], dt, out)
+        }
+        2 => {
+            let dt = any_dt(rng);
+            let mut s = rand_shape(rng, 4);
+            if s.is_empty() {
+                s.push(3);
+            }
+            let a = rng.gen_range(0..s.len());
+            let n = s[a];
+            let len = rng.gen_range(1..=n);
+            let start = rng.gen_range(0..=n - len) as u32;
+            let mut out = s.clone();
+            out[a] = len;
+            (Prim::Slice { axis: a as u8, start }, vec![rand_t(rng, dt, &s)], dt, out)
+        }
+        3 => {
+            let dt = any_dt(rng);
+            let mut s = rand_shape(rng, 4);
+            if s.is_empty() {
+                s.push(2);
+            }
+            let a = rng.gen_range(0..s.len());
+            let m = rng.gen_range(2..=8);
+            let mut ins = Vec::new();
+            let mut total = 0;
+            for _ in 0..m {
+                let mut si = s.clone();
+                si[a] = pick(rng, &[1u64, 2, 3]);
+                total += si[a];
+                ins.push(rand_t(rng, dt, &si));
+            }
+            let mut out = s.clone();
+            out[a] = total;
+            (Prim::Concat { axis: a as u8 }, ins, dt, out)
+        }
+        4 => {
+            let dt = any_dt(rng);
+            let s = rand_shape(rng, 3);
+            let extra = rng.gen_range(0..=4 - s.len());
+            let mut out: Vec<u64> = (0..extra).map(|_| pick(rng, &[1u64, 2, 3])).collect();
+            out.extend(s.iter().map(|&d| if d == 1 && rng.gen_bool(0.6) { pick(rng, &[2u64, 3, 4]) } else { d }));
+            (Prim::Broadcast, vec![rand_t(rng, dt, &s)], dt, out)
+        }
+        5 => {
+            let dt = any_dt(rng);
+            let mut out = rand_shape(rng, 4);
+            if out.is_empty() {
+                out.push(4);
+            }
+            let axis = rng.gen_range(0..out.len()) as u8;
+            let start = pick(rng, &[0i64, 1, -1, 127, -128, i64::MIN, i64::MAX, 1 << 31, -(1 << 31), 4294967295]);
+            let step = pick(rng, &[0i64, 1, -1, 2, i64::MIN, i64::MAX, 1 << 32, -7]);
+            (Prim::Iota { axis, start, step }, vec![], dt, out)
+        }
+        6 => {
+            let dt = any_dt(rng);
+            let rd = rng.gen_range(1..=3);
+            let ds: Vec<u64> = (0..rd).map(|_| pick(rng, &[1u64, 2, 3, 4])).collect();
+            let a = rng.gen_range(0..rd);
+            let b = rng.gen_range(0..=a);
+            let mut is: Vec<u64> = ds[..b].to_vec();
+            for _ in 0..rng.gen_range(0..=(4 + b - rd).min(2)) {
+                is.push(pick(rng, &[1u64, 2, 3]));
+            }
+            let idt = pick(rng, &[DType::Idx, DType::I8, DType::I16, DType::I32, DType::I64, DType::I128]);
+            let n: u64 = is.iter().product();
+            let ext = ds[a] as i128;
+            let iv: Vec<i128> =
+                (0..n).map(|_| if rng.gen_bool(0.9) { rng.gen_range(0..ext) } else { pick(rng, &[-1, ext, i128::MIN, idt.max()]) }.clamp(idt.min(), idt.max())).collect();
+            let mut out = ds[..a].to_vec();
+            out.extend_from_slice(&is[b..]);
+            out.extend_from_slice(&ds[a + 1..]);
+            (Prim::Gather { axis: a as u8, batch_dims: b as u8 }, vec![rand_t(rng, dt, &ds), Tensor::new(idt, is, iv).unwrap()], dt, out)
+        }
+        7 => {
+            let s = rand_shape(rng, 3);
+            let (a, b) = (any_dt(rng), any_dt(rng));
+            (Prim::Cast, vec![rand_t(rng, a, &s)], b, s)
+        }
+        8..=10 => {
+            let s = rand_shape(rng, 3);
+            let s2 = compat(rng, &s);
+            let (s, s2) = if rng.gen_bool(0.5) { (s, s2) } else { (s2, s) };
+            let out = bshape(&s, &s2).unwrap();
+            let prim = [Prim::Add, Prim::Sub, Prim::Mul][k - 8].clone();
+            let ins = vec![rt(rng, &s), rt(rng, &s2)];
+            (prim, ins, any_dt(rng), out)
+        }
+        11 => {
+            let ok = [DType::I8, DType::I16, DType::I32, DType::I64];
+            let batch = rand_shape(rng, 2);
+            let (m, kk, n) = (pick(rng, &[1u64, 2, 3]), pick(rng, &[1u64, 2, 3, 5]), pick(rng, &[1u64, 2, 3]));
+            let mut sa = compat(rng, &batch);
+            sa.extend([m, kk]);
+            let mut sb = compat(rng, &batch);
+            sb.extend([kk, n]);
+            let mut out = bshape(&sa[..sa.len() - 2], &sb[..sb.len() - 2]).unwrap();
+            out.extend([m, n]);
+            let od = pick(rng, &[DType::I8, DType::I16, DType::I32, DType::I64, DType::I128]);
+            let (da, db) = (pick(rng, &ok), pick(rng, &ok));
+            let ins = vec![rand_t(rng, da, &sa), rand_t(rng, db, &sb)];
+            (Prim::MatMul, ins, od, out)
+        }
+        12 | 13 => {
+            let dt = any_dt(rng);
+            let mut s = rand_shape(rng, 4);
+            if s.is_empty() {
+                s.push(4);
+            }
+            let a = rng.gen_range(0..s.len());
+            let mut out = s.clone();
+            out[a] = 1;
+            if k == 12 {
+                (Prim::ReduceSum { axis: a as u8 }, vec![rand_t(rng, dt, &s)], any_dt(rng), out)
+            } else {
+                (Prim::ReduceMax { axis: a as u8 }, vec![rand_t(rng, dt, &s)], dt, out)
+            }
+        }
+        14 => {
+            let s = rand_shape(rng, 3);
+            let s2 = compat(rng, &s);
+            let (xd, dd) = (any_dt(rng), any_dt(rng));
+            let n1: u64 = s.iter().product();
+            let n2: u64 = s2.iter().product();
+            let mut xs = Vec::new();
+            let mut ds = Vec::new();
+            for _ in 0..n1.max(n2) {
+                let (x, d): (i128, i128) = if rng.gen_bool(0.7) {
+                    half_case(rng, xd, dd)
+                } else {
+                    let (p1, p2) = (rand_profile(rng), rand_profile(rng));
+                    (rand_value(rng, xd, p1), rand_value(rng, dd, p2))
+                };
+                xs.push(x);
+                ds.push(d.clamp(dd.min(), dd.max()));
+            }
+            xs.truncate(n1 as usize);
+            ds.truncate(n2 as usize);
+            let rule = pick(rng, &[Rounding::Floor, Rounding::HalfUp, Rounding::HalfAwayFromZero]);
+            let out = bshape(&s, &s2).unwrap();
+            (Prim::Div { rule }, vec![Tensor::new(xd, s, xs).unwrap(), Tensor::new(dd, s2, ds).unwrap()], any_dt(rng), out)
+        }
+        15 => {
+            let s = rand_shape(rng, 3);
+            let od = any_dt(rng);
+            let (p1, p2) = (rand_profile(rng), rand_profile(rng));
+            let lo = rand_value(rng, od, p1).clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+            let hi = rand_value(rng, od, p2).clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+            let (lo, hi) = if rng.gen_bool(0.9) { (lo.min(hi), lo.max(hi)) } else { (lo, hi) };
+            (Prim::Clamp { lo, hi }, vec![rt(rng, &s)], od, s)
+        }
+        16..=19 => {
+            let s = rand_shape(rng, 3);
+            let prim = [Prim::Log2Floor, Prim::IntExp, Prim::IntRsqrt, Prim::IntLn][k - 16].clone();
+            let xd = if k == 16 { any_dt(rng) } else { pick(rng, &[DType::I8, DType::I16, DType::I32, DType::I64, DType::Idx, DType::I64]) };
+            let x = if k == 17 {
+                // IntExp's range-reduction bucket edges and the saturation threshold.
+                let n: u64 = s.iter().product();
+                let ln2 = 11_629_080i128;
+                let v: Vec<i128> = (0..n)
+                    .map(|_| {
+                        let z = rng.gen_range(0..=32i128);
+                        let any = rand_value(rng, xd, 1);
+                        (pick(rng, &[-z * ln2, -z * ln2 + 1, -z * ln2 - 1, -31 * ln2, -31 * ln2 + 1, 0, 1, any])).clamp(xd.min(), xd.max())
+                    })
+                    .collect();
+                Tensor::new(xd, s.clone(), v).unwrap()
+            } else {
+                rand_t(rng, xd, &s)
+            };
+            (prim, vec![x], pick(rng, &[DType::I32, DType::I64, DType::I128, DType::Idx, DType::I16, DType::I8]), s)
+        }
+        20 => {
+            let s = rand_shape(rng, 3);
+            let s2 = compat(rng, &s);
+            let out = bshape(&s, &s2).unwrap();
+            let cmp = pick(rng, &[Cmp::Eq, Cmp::Ne, Cmp::Lt, Cmp::Le, Cmp::Gt, Cmp::Ge]);
+            (Prim::Compare { cmp }, vec![rt(rng, &s), rt(rng, &s2)], DType::I8, out)
+        }
+        21 => {
+            let s = rand_shape(rng, 3);
+            let s2 = compat(rng, &s);
+            let s3 = compat(rng, &s);
+            let out = bshape(&bshape(&s, &s2).unwrap(), &s3).unwrap();
+            (Prim::Select, vec![rt(rng, &s), rt(rng, &s2), rt(rng, &s3)], any_dt(rng), out)
+        }
+        _ => {
+            let dt = any_dt(rng);
+            let mut s = rand_shape(rng, 3);
+            if s.is_empty() {
+                s.push(5);
+            }
+            let a = rng.gen_range(0..s.len());
+            let kk = rng.gen_range(1..=s[a]);
+            let mut out = s.clone();
+            out[a] = kk;
+            // Ties: small value ranges.
+            let n: u64 = s.iter().product();
+            let x = Tensor::new(dt, s.clone(), (0..n).map(|_| if rng.gen_bool(0.7) { rng.gen_range(-2..=2i128).clamp(dt.min(), dt.max()) } else { rand_value(rng, dt, 2) }).collect()).unwrap();
+            (Prim::TopK { axis: a as u8, k: kk as u32 }, vec![x], DType::Idx, out)
+        }
+    };
+    // Occasionally perturb the output type (type rules).
+    if rng.gen_bool(0.08) {
+        case.2 = any_dt(rng);
+    }
+    if rng.gen_bool(0.05) && !case.3.is_empty() {
+        let i = rng.gen_range(0..case.3.len());
+        case.3[i] = pick(rng, &[1u64, 2, 3, 5]);
+    }
+    if rng.gen_bool(0.03) {
+        case.3.push(1);
+    }
+    case
+}
+
+#[test]
+fn a_primitive_differential() {
+    let n = 40_000 * scale();
+    let mut rng = R::seed_from_u64(0xA11CE);
+    let mut t = Tally::default();
+    let mut per_prim: BTreeMap<&'static str, (usize, usize)> = BTreeMap::new();
+    for i in 0..n {
+        let (prim, ins, od, os) = prim_case(&mut rng);
+        let a = mine(eval_primitive(&prim, &ins, od, &os));
+        let f = first_eval_primitive(&prim, &ins, od, &os);
+        let e = per_prim.entry(prim.name()).or_default();
+        e.0 += 1;
+        if a.is_ok() {
+            e.1 += 1;
+        }
+        let what = format!("case {i} {prim:?} ins {:?} out {} {:?}", ins.iter().map(|x| (x.dtype.name(), x.shape.clone(), x.data.clone())).collect::<Vec<_>>(), od.name(), os);
+        t.record(&what, &a, &f);
+    }
+    t.report("A. primitives");
+    for (p, (c, ok)) in &per_prim {
+        println!("  {p}: {c} cases, {ok} succeeded");
+    }
+    assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
+}
+
+// =============================================================== B. programs
+
+fn commits_of(o: &Outcome<(Tensor, Commits)>) -> Outcome<(Tensor, Commits)> {
+    o.clone()
+}
+
+/// Normalises a run state for comparison: the first implementation materialises instances lazily
+/// (an absent Fixed instance is all zeros, an absent history is empty), this one eagerly.
+fn normalise(p: &Program, st: &RunState) -> RunState {
+    let mut s = st.clone();
+    s.fixed.retain(|(j, _), t| {
+        let d = &p.states[*j as usize];
+        let _ = d;
+        t.data.iter().any(|&v| v != 0)
+    });
+    s.hist.retain(|_, rows| !rows.is_empty());
+    s
+}
+
+#[derive(Default)]
+struct ProgStats {
+    programs: usize,
+    decode: Tally,
+    steps: Tally,
+    states: Tally,
+    cones: Tally,
+    cones_subset: Tally,
+    cone_matches_step: usize,
+    cone_mismatch_step: Vec<String>,
+    h_programs: usize,
+    windows_hit: usize,
+    ok_steps_with_h: usize,
+    prim_seen: BTreeMap<&'static str, usize>,
+    /// Features of programs with at least one step both implementations completed.
+    features_ok: BTreeMap<String, usize>,
+    fail_classes: BTreeMap<&'static str, usize>,
+}
+
+/// The structural features of a program the differential should cover.
+fn features(p: &Program) -> Vec<String> {
+    let mut f = Vec::new();
+    let is_h = |t: &TensorType| t.shape.contains(&Dim::H);
+    for (bi, b) in p.blocks.iter().enumerate() {
+        let role = ref2::normal_form::role_of(p, bi);
+        let ty = |r: &Ref, i: usize| ref2::normal_form::ref_type(p, bi, i, r);
+        for (i, n) in b.nodes.iter().enumerate() {
+            let ins: Vec<TensorType> = n.inputs.iter().filter_map(|r| ty(r, i)).collect();
+            let any_h = ins.iter().any(is_h) || is_h(&n.out);
+            if any_h {
+                f.push(format!("{} with H", n.prim.name()));
+            }
+            match &n.prim {
+                Prim::MatMul if ins.len() == 2 && ins[0].shape.last() == Some(&Dim::H) => f.push("MatMul contracting H".into()),
+                Prim::ReduceSum { axis } | Prim::ReduceMax { axis } if ins.first().is_some_and(|t| t.shape.get(*axis as usize) == Some(&Dim::H)) => {
+                    f.push(format!("{} along H", n.prim.name()))
+                }
+                Prim::Gather { batch_dims, .. } if *batch_dims > 0 => f.push("Gather batch_dims > 0".into()),
+                Prim::HistAppend { state } => {
+                    let s = &p.states[*state as usize];
+                    if let StateKind::Hist { window } = s.kind {
+                        f.push(format!("HistAppend window {}", if window >= 1 << 18 { "history_bound".to_string() } else { window.to_string() }));
+                    }
+                    f.push(format!("HistAppend {}", if s.per_layer { "per-layer" } else { "global" }));
+                }
+                Prim::StateWrite { state } => f.push(format!("StateWrite {}", if p.states[*state as usize].per_layer { "per-layer" } else { "global" })),
+                _ => {}
+            }
+            for r in &n.inputs {
+                match r {
+                    Ref::Input(0) => f.push("reads the token".into()),
+                    Ref::Input(_) => f.push("reads pos".into()),
+                    Ref::Param(j) if p.params[*j as usize].per_layer => f.push("per-layer param".into()),
+                    Ref::State(j) => f.push(format!("State read in {:?}", role)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let globals_written: Vec<u16> = p.blocks[p.schedule.pre as usize]
+        .nodes
+        .iter()
+        .filter_map(|n| if let Prim::StateWrite { state } = n.prim { Some(state) } else { None })
+        .collect();
+    if p.blocks[p.schedule.post as usize].nodes.iter().any(|n| matches!(n.prim, Prim::StateWrite { state } if globals_written.contains(&state))) {
+        f.push("a global state written by pre and post".into());
+    }
+    if p.schedule.layers.len() > p.schedule.layers.iter().collect::<std::collections::BTreeSet<_>>().len() {
+        f.push("a layer block at several layers".into());
+    }
+    f.sort();
+    f.dedup();
+    f
+}
+
+fn run_program_case(seed: u64, cfg: GenCfg, st: &mut ProgStats) {
+    let mut rng = R::seed_from_u64(seed);
+    let g = gen_program(&mut rng, cfg);
+    let bytes = encode(&g.prog);
+    st.programs += 1;
+    let a = mine(decode_canonical(&bytes));
+    if let Outcome::Err(c) = &a {
+        panic!("seed {seed}: this crate's generator made a program this crate refuses ({c:?}): {:?}", decode_canonical(&bytes).err());
+    }
+    let f = first_decode(&bytes);
+    let fa: Outcome<()> = match &f {
+        Outcome::Ok(_) => Outcome::Ok(()),
+        Outcome::Err(c) => Outcome::Err(*c),
+        Outcome::Panic(s) => Outcome::Panic(s.clone()),
+    };
+    if !st.decode.record(&format!("seed {seed} decode"), &Outcome::Ok(()), &fa) {
+        return;
+    }
+    let Outcome::Ok(fp) = f else { return };
+    // The first implementation's re-encoding must be byte-identical (§4 is the interface).
+    assert_eq!(fp.encode(), bytes, "seed {seed}: first re-encodes differently");
+    let p = &g.prog;
+    for b in &p.blocks {
+        for n in &b.nodes {
+            *st.prim_seen.entry(n.prim.name()).or_default() += 1;
+        }
+    }
+    let has_hist = p.states.iter().any(|s| matches!(s.kind, StateKind::Hist { .. }));
+    if has_hist {
+        st.h_programs += 1;
+    }
+    let fparams = params_to(&g.params);
+    let mut mst = initial_state(p);
+    let mut fst = first::interp::RunState::default();
+    let steps = rng.gen_range(1..=7);
+    let mut counted = false;
+    for s in 0..steps {
+        let token: u64 = if rng.gen_bool(0.9) || p.token_bound == u32::MAX {
+            rng.gen_range(0..p.token_bound.min(64) as u64)
+        } else {
+            pick(&mut rng, &[p.token_bound as u64, u32::MAX as u64])
+        };
+        let traced = step_traced(p, &g.params, &mst, token);
+        let a: Outcome<(Tensor, Commits)> = match &traced {
+            Ok((o, _, _)) => Outcome::Ok((o.logits.clone(), o.commits.iter().map(|c| (c.slot, c.block, c.layer, c.node, c.value.clone())).collect())),
+            Err(e) => Outcome::Err(e.class),
+        };
+        let before = fst.clone();
+        let f = first_step(&fp, &fparams, &mut fst, token as u32);
+        let what = format!("seed {seed} step {s} pos {} token {token}", mst.pos);
+        if let Outcome::Err(c) = &a {
+            *st.fail_classes.entry(c.name()).or_default() += 1;
+        }
+        if a.is_ok() && f.is_ok() && !counted {
+            counted = true;
+            for x in features(p) {
+                *st.features_ok.entry(x).or_default() += 1;
+            }
+        }
+        st.steps.record(&what, &commits_of(&a), &f);
+        if !f.is_ok() && fst != before {
+            st.steps.disagreements.push(format!("{what}: first changed its run state on a failed step"));
+        }
+        if let Ok((_, next, trace)) = traced {
+            if has_hist {
+                st.ok_steps_with_h += 1;
+            }
+            // Cones from this honest step.
+            cones_for_step(seed, p, &g.params, &fp, &fparams, &mst, token, &trace, &mut rng, st);
+            mst = next;
+            if f.is_ok() {
+                let fs = state_from(&fst);
+                let (x, y) = (normalise(p, &mst), normalise(p, &fs));
+                st.states.record(&format!("{what} run state"), &Outcome::Ok(x), &Outcome::Ok(y));
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cones_for_step(
+    seed: u64,
+    p: &Program,
+    params: &Params,
+    fp: &first::program::TirProgramV1,
+    fparams: &first::interp::MapParams,
+    st: &RunState,
+    token: u64,
+    trace: &[ref2::eval::OccTrace],
+    rng: &mut R,
+    stats: &mut ProgStats,
+) {
+    for occ in trace {
+        let b = occ.block as usize;
+        let block = &p.blocks[b];
+        let inst = |j: u16| if p.states[j as usize].per_layer { occ.layer } else { None };
+        let mut env = ConeEnv { token, pos: st.pos, carry_in: occ.carry_in.clone(), ..Default::default() };
+        for n in &block.nodes {
+            for r in &n.inputs {
+                if let Ref::State(j) = *r {
+                    if let Some(v) = st.fixed.get(&(j, inst(j))) {
+                        env.fixed.insert(j, v.clone());
+                    }
+                }
+            }
+            if let Prim::HistAppend { state } = n.prim {
+                env.hist_prior.insert(state, st.hist.get(&(state, inst(state))).cloned().unwrap_or_default());
+            }
+        }
+        // Targets: every commit point (the court's case) and a few random nodes.
+        let mut targets: Vec<u16> = (0..block.nodes.len() as u16).filter(|&i| block.nodes[i as usize].commit).collect();
+        for _ in 0..2 {
+            targets.push(rng.gen_range(0..block.nodes.len()) as u16);
+        }
+        for &target in &targets {
+            // (1) The court's environment: every other commit point supplied.
+            let mut e = env.clone();
+            for (i, n) in block.nodes.iter().enumerate() {
+                if n.commit && i as u16 != target {
+                    e.supplied.insert(i as u16, occ.values[i].clone());
+                }
+            }
+            let what = format!("seed {seed} pos {} cone ({}, {:?}) target {target}", st.pos, occ.block, occ.layer);
+            let a = mine(eval_cone(p, params, occ.block, occ.layer, target, &e));
+            let f = first_cone(fp, fparams, occ.block, occ.layer, target, &env_to(&e, true));
+            stats.cones.record(&what, &a, &f);
+            match &a {
+                Outcome::Ok(v) if *v == occ.values[target as usize] => stats.cone_matches_step += 1,
+                o => stats.cone_mismatch_step.push(format!("{what}: ref2 cone {} vs step value", brief(o))),
+            }
+            // (2) A random subset of honest node values supplied (never the target).
+            let mut e = env.clone();
+            for (i, v) in occ.values.iter().enumerate() {
+                if i as u16 != target && rng.gen_bool(0.3) {
+                    e.supplied.insert(i as u16, v.clone());
+                }
+            }
+            let a = mine(eval_cone(p, params, occ.block, occ.layer, target, &e));
+            let f = first_cone(fp, fparams, occ.block, occ.layer, target, &env_to(&e, true));
+            stats.cones_subset.record(&format!("{what} (random supplied subset)"), &a, &f);
+            if let Outcome::Ok(v) = &a {
+                if *v != occ.values[target as usize] {
+                    stats.cone_mismatch_step.push(format!("{what}: ref2 subset cone differs from the step"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn b_program_differential() {
+    let n = 1500 * scale() as u64;
+    let mut st = ProgStats::default();
+    for seed in 0..n {
+        run_program_case(seed, GenCfg::default(), &mut st);
+    }
+    println!("B. {} random programs ({} with histories, {} successful steps of those)", st.programs, st.h_programs, st.ok_steps_with_h);
+    st.decode.report("B. decode");
+    st.steps.report("B. steps");
+    st.states.report("B. run states after each step");
+    st.cones.report("B. cones (court env: every other commit point supplied)");
+    st.cones_subset.report("B. cones (random honest subset supplied)");
+    println!("B. ref2 cones equal to the step's value: {} ({} not)", st.cone_matches_step, st.cone_mismatch_step.len());
+    for m in st.cone_mismatch_step.iter().take(10) {
+        println!("  {m}");
+    }
+    println!("B. primitives exercised: {:?}", st.prim_seen);
+    println!("B. ref2 failure classes of steps: {:?}", st.fail_classes);
+    println!("B. features of programs with at least one step both completed:");
+    for (k, v) in &st.features_ok {
+        println!("    {v:6}  {k}");
+    }
+    let _ = st.windows_hit;
+    assert!(st.cone_mismatch_step.is_empty());
+    for t in [&st.decode, &st.steps, &st.states, &st.cones, &st.cones_subset] {
+        assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
+    }
+}
+
+#[test]
+fn b2_program_differential_double_global_writes() {
+    // 04b is silent on two StateWrites of one global state in one step (pre and post): measured
+    // separately so the main differential stays on text the spec fixes.
+    let n = 300 * scale() as u64;
+    let mut st = ProgStats::default();
+    for seed in 0..n {
+        run_program_case(1_000_000 + seed, GenCfg { double_global_write: true, ..GenCfg::default() }, &mut st);
+    }
+    println!("B2. features of programs with at least one step both completed:");
+    for (k, v) in &st.features_ok {
+        if k.contains("global") {
+            println!("    {v:6}  {k}");
+        }
+    }
+    st.decode.report("B2. decode");
+    st.steps.report("B2. steps");
+    st.states.report("B2. run states");
+    st.cones.report("B2. cones");
+}
+
+// =============================================================== C. malformed bytes
+
+#[test]
+fn c_malformed_bytes() {
+    let n = 400 * scale() as u64;
+    let mut t = Tally::default();
+    let mut both_accept_reencode_ok = 0;
+    for seed in 0..n {
+        let mut rng = R::seed_from_u64(0xC0DE_0000 + seed);
+        let g = gen_program(&mut rng, GenCfg::default());
+        let bytes = encode(&g.prog);
+        for m in 0..40 {
+            let mut b = bytes.clone();
+            let kind = rng.gen_range(0..8);
+            match kind {
+                0 => {
+                    let i = rng.gen_range(0..b.len());
+                    b[i] ^= 1 << rng.gen_range(0..8);
+                }
+                1 => {
+                    let i = rng.gen_range(0..b.len());
+                    b[i] = rng.r#gen();
+                }
+                2 => {
+                    let i = rng.gen_range(0..=b.len());
+                    b.truncate(i);
+                }
+                3 => {
+                    let i = rng.gen_range(0..=b.len());
+                    b.insert(i, rng.r#gen());
+                }
+                4 => {
+                    if !b.is_empty() {
+                        let i = rng.gen_range(0..b.len());
+                        b.remove(i);
+                    }
+                }
+                5 => b.push(rng.r#gen()),
+                6 => {
+                    // A small integer change to a 4-byte little-endian field (counts, dims).
+                    if b.len() > 4 {
+                        let i = rng.gen_range(0..b.len() - 4);
+                        let v = u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+                        let v = v.wrapping_add(pick(&mut rng, &[1u32, u32::MAX, 2, 1 << 24]));
+                        b[i..i + 4].copy_from_slice(&v.to_le_bytes());
+                    }
+                }
+                _ => {
+                    // Tags and bools: a byte set to 0..=30.
+                    let i = rng.gen_range(0..b.len());
+                    b[i] = rng.gen_range(0..=30);
+                }
+            }
+            if b == bytes {
+                continue;
+            }
+            let a = mine(decode_canonical(&b));
+            let f = first_decode(&b);
+            let (a2, f2): (Outcome<Vec<u8>>, Outcome<Vec<u8>>) = (
+                match &a {
+                    Outcome::Ok(p) => Outcome::Ok(encode(p)),
+                    Outcome::Err(c) => Outcome::Err(*c),
+                    Outcome::Panic(s) => Outcome::Panic(s.clone()),
+                },
+                match &f {
+                    Outcome::Ok(p) => Outcome::Ok(p.encode()),
+                    Outcome::Err(c) => Outcome::Err(*c),
+                    Outcome::Panic(s) => Outcome::Panic(s.clone()),
+                },
+            );
+            if t.record(&format!("seed {seed} mutation {m} kind {kind} ({} bytes)", b.len()), &a2, &f2) && a2.is_ok() {
+                both_accept_reencode_ok += 1;
+            }
+        }
+    }
+    t.report("C. malformed bytes");
+    println!("C. mutations both accepted (and both re-encode to the input): {both_accept_reencode_ok}");
+    assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
+}
+
+// =============================================================== D. structural mutations
+
+fn mutate(rng: &mut R, p: &mut Program) -> String {
+    let nb = p.blocks.len();
+    let b = rng.gen_range(0..nb);
+    let nn = p.blocks[b].nodes.len();
+    let i = rng.gen_range(0..nn);
+    let k = rng.gen_range(0..40);
+    let dim = |rng: &mut R| pick(rng, &[Dim::Fixed(0), Dim::Fixed(1), Dim::Fixed(2), Dim::Fixed(3), Dim::Fixed(1 << 24), Dim::Fixed((1 << 24) + 1), Dim::H]);
+    match k {
+        0 => p.version = pick(rng, &[0u16, 2, u16::MAX]),
+        1 => p.history_bound = pick(rng, &[0u32, 1, 1 << 17, (1 << 18) + 1, 1 << 20, 1 << 22, u32::MAX]),
+        2 => p.token_bound = 0,
+        3 => p.schedule.pre = rng.gen_range(0..=nb as u8),
+        4 => p.schedule.post = rng.gen_range(0..=nb as u8),
+        5 => {
+            let l = rng.gen_range(0..=nb as u8);
+            p.schedule.layers.push(l)
+        }
+        6 => {
+            if !p.schedule.layers.is_empty() {
+                p.schedule.layers.pop();
+            }
+        }
+        7 => p.logits = rng.gen_range(0..=p.blocks[p.schedule.post as usize].nodes.len() as u16),
+        8 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.commit = !n.commit;
+        }
+        9 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.out.dtype = pick(rng, &DType::ALL);
+        }
+        10 => {
+            let n = &mut p.blocks[b].nodes[i];
+            if n.out.shape.is_empty() {
+                n.out.shape.push(dim(rng));
+            } else {
+                let j = rng.gen_range(0..n.out.shape.len());
+                n.out.shape[j] = dim(rng);
+            }
+        }
+        11 => {
+            let n = &mut p.blocks[b].nodes[i];
+            if !n.inputs.is_empty() {
+                let j = rng.gen_range(0..n.inputs.len());
+                n.inputs[j] = match rng.gen_range(0..6) {
+                    0 => Ref::Node(rng.gen_range(0..=nn as u16)),
+                    1 => Ref::CarryIn(rng.gen_range(0..4)),
+                    2 => Ref::Param(rng.gen_range(0..=p.params.len() as u16)),
+                    3 => Ref::Const(rng.gen_range(0..=p.consts.len() as u16)),
+                    4 => Ref::State(rng.gen_range(0..=p.states.len() as u16)),
+                    _ => Ref::Input(rng.gen_range(0..3)),
+                };
+            }
+        }
+        12 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.inputs.push(Ref::Input(1));
+        }
+        13 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.inputs.pop();
+        }
+        14 => {
+            if !p.params.is_empty() {
+                let j = rng.gen_range(0..p.params.len());
+                p.params[j].per_layer = !p.params[j].per_layer;
+            }
+        }
+        15 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].per_layer = !p.states[j].per_layer;
+            }
+        }
+        16 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].kind = match p.states[j].kind {
+                    StateKind::Fixed { .. } => StateKind::Fixed { lo: pick(rng, &[1, -200, 0]), hi: pick(rng, &[-1, 200, 0, 1 << 40]) },
+                    StateKind::Hist { .. } => StateKind::Hist { window: pick(rng, &[0, 1, 2, 7, 1 << 18, (1 << 18) + 1, 1 << 21]) },
+                };
+            }
+        }
+        17 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].dtype = pick(rng, &DType::ALL);
+            }
+        }
+        18 => p.params.push(ref2::ParamDecl { name: "unused".into(), dtype: DType::I8, shape: vec![1], per_layer: false }),
+        19 => p.consts.push(ref2::ConstDecl { dtype: DType::I8, shape: vec![1], data: vec![9] }),
+        20 => {
+            if let Some(c) = p.consts.first().cloned() {
+                p.consts.push(c);
+            }
+        }
+        21 => {
+            if !p.consts.is_empty() {
+                let j = rng.gen_range(0..p.consts.len());
+                if rng.gen_bool(0.5) {
+                    p.consts[j].data.push(0);
+                } else {
+                    p.consts[j].data.pop();
+                }
+            }
+        }
+        22 => {
+            if !p.params.is_empty() {
+                let j = rng.gen_range(0..p.params.len());
+                p.params[j].name = pick(rng, &[String::new(), "x".repeat(129), "x".repeat(128), "p0".into()]);
+            }
+        }
+        23 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].name = pick(rng, &[String::new(), "x".repeat(129), "s0".into()]);
+            }
+        }
+        24 => p.blocks[b].name = pick(rng, &[String::new(), "x".repeat(129), "pre".into()]),
+        25 => p.blocks[b].carry_out.push(rng.gen_range(0..=nn as u16)),
+        26 => {
+            p.blocks[b].carry_out.pop();
+        }
+        27 => p.blocks[b].carry_in.push(TensorType::fixed(DType::I32, &[2])),
+        28 => {
+            p.blocks[b].carry_in.pop();
+        }
+        29 => {
+            // An extra dead node.
+            p.blocks[b].nodes.push(ref2::Node { prim: Prim::Iota { axis: 0, start: 0, step: 1 }, inputs: vec![], out: TensorType::fixed(DType::I32, &[2]), commit: false });
+        }
+        30 => {
+            // Change an attribute.
+            let n = &mut p.blocks[b].nodes[i];
+            let mut reverse = false;
+            match n.prim {
+                Prim::Transpose { ref mut perm } => {
+                    if !perm.is_empty() {
+                        perm[0] = perm[0].wrapping_add(1);
+                    } else {
+                        perm.push(0);
+                    }
+                }
+                Prim::Slice { ref mut start, .. } => {
+                    let v = pick(rng, &[start.wrapping_add(1), u32::MAX, 0]);
+                    *start = v;
+                }
+                Prim::Concat { ref mut axis } | Prim::ReduceSum { ref mut axis } | Prim::ReduceMax { ref mut axis } => *axis = axis.wrapping_add(1),
+                Prim::Iota { ref mut axis, ref mut step, .. } => {
+                    *axis = axis.wrapping_add(rng.gen_range(0..2));
+                    *step = step.wrapping_mul(3);
+                }
+                Prim::Gather { ref mut axis, ref mut batch_dims } => {
+                    if rng.gen_bool(0.5) {
+                        *axis = axis.wrapping_add(1)
+                    } else {
+                        *batch_dims = batch_dims.wrapping_add(1)
+                    }
+                }
+                Prim::Clamp { ref mut lo, ref mut hi } => std::mem::swap(lo, hi),
+                Prim::TopK { ref mut k, .. } => {
+                    let v = pick(rng, &[0, k.wrapping_add(1), u32::MAX]);
+                    *k = v;
+                }
+                Prim::StateWrite { ref mut state } | Prim::HistAppend { ref mut state } => *state = state.wrapping_add(1),
+                Prim::Div { ref mut rule } => *rule = pick(rng, &[Rounding::Floor, Rounding::HalfUp, Rounding::HalfAwayFromZero]),
+                _ => reverse = true,
+            }
+            if reverse {
+                n.out.shape.reverse();
+            }
+        }
+        31 => {
+            // Swap two nodes (forward refs, reordered slots).
+            let j = rng.gen_range(0..nn);
+            p.blocks[b].nodes.swap(i, j);
+        }
+        32 => {
+            // Duplicate a StateWrite/HistAppend.
+            if let Some(n) = p.blocks[b].nodes.iter().find(|n| matches!(n.prim, Prim::StateWrite { .. } | Prim::HistAppend { .. })).cloned() {
+                p.blocks[b].nodes.push(n);
+            }
+        }
+        33 => {
+            if !p.params.is_empty() {
+                let j = rng.gen_range(0..p.params.len());
+                p.params[j].dtype = pick(rng, &DType::ALL);
+            }
+        }
+        34 => {
+            if !p.params.is_empty() {
+                let j = rng.gen_range(0..p.params.len());
+                p.params[j].shape.push(pick(rng, &[0u32, 1, 2, 1 << 24, (1 << 24) + 1]));
+            }
+        }
+        35 => {
+            if !p.states.is_empty() {
+                let j = rng.gen_range(0..p.states.len());
+                p.states[j].shape.push(pick(rng, &[0u32, 1, 2]));
+            }
+        }
+        36 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.out.shape.push(Dim::H);
+        }
+        37 => {
+            // Many blocks / layers.
+            p.schedule.layers.extend(std::iter::repeat_n(p.schedule.layers.first().copied().unwrap_or(0), 1025));
+        }
+        38 => {
+            let n = &mut p.blocks[b].nodes[i];
+            n.out.shape = vec![Dim::Fixed(1 << 14), Dim::Fixed(1 << 14), Dim::Fixed(2)];
+        }
+        _ => {
+            // Remove a node (dangling refs, carries, logits).
+            p.blocks[b].nodes.remove(i);
+        }
+    }
+    format!("mutation {k} block {b} node {i}")
+}
+
+#[test]
+fn d_structural_mutations() {
+    let n = 1500 * scale() as u64;
+    let mut t = Tally::default();
+    let mut runs = Tally::default();
+    for seed in 0..n {
+        let mut rng = R::seed_from_u64(0xD00D_0000 + seed);
+        let g = gen_program(&mut rng, GenCfg::default());
+        for m in 0..6 {
+            let mut p = g.prog.clone();
+            let what = mutate(&mut rng, &mut p);
+            let bytes = encode(&p);
+            let a = mine(decode_canonical(&bytes));
+            let f = first_decode(&bytes);
+            let (a2, f2): (Outcome<()>, Outcome<()>) = (
+                match &a {
+                    Outcome::Ok(_) => Outcome::Ok(()),
+                    Outcome::Err(c) => Outcome::Err(*c),
+                    Outcome::Panic(s) => Outcome::Panic(s.clone()),
+                },
+                match &f {
+                    Outcome::Ok(_) => Outcome::Ok(()),
+                    Outcome::Err(c) => Outcome::Err(*c),
+                    Outcome::Panic(s) => Outcome::Panic(s.clone()),
+                },
+            );
+            t.record(&format!("seed {seed} #{m} {what}"), &a2, &f2);
+            // A mutant both accept is a different valid program: run it on both.
+            if let (Outcome::Ok(mp), Outcome::Ok(fp)) = (a, f) {
+                let params = gen_params(&mut rng, &mp);
+                let fparams = params_to(&params);
+                let mut mst = initial_state(&mp);
+                let mut fst = first::interp::RunState::default();
+                for s in 0..3 {
+                    let token = rng.gen_range(0..mp.token_bound.min(16) as u64);
+                    let (x, next) = ref2_step(&mp, &params, &mst, token);
+                    let y = first_step(&fp, &fparams, &mut fst, token as u32);
+                    runs.record(&format!("seed {seed} #{m} {what} step {s}"), &x, &y);
+                    if let Some(nx) = next {
+                        mst = nx;
+                    }
+                }
+            }
+        }
+    }
+    t.report("D. structural mutations (decode)");
+    runs.report("D. steps of mutants both accept");
+    assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
+    assert!(runs.disagreements.is_empty() && runs.panics_first.is_empty());
+}
