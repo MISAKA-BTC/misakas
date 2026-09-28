@@ -115,16 +115,16 @@ fn summary(o: &Outcome<(Tensor, Commits)>) -> String {
 
 #[test]
 fn p01_two_statewrites_of_one_global_state_in_one_step() {
+    // Revision 2, NF-19: post writes no state, so pre and post cannot both write one (was F5).
     let p = base(true);
     let (a, f, _) = both_decode(&p);
     println!("decode: ref2 {a:?} first {f:?}");
-    assert_eq!(a, Outcome::Ok(()));
-    if f.is_ok() {
-        let r = run_both("p01", &p, &Params::new(), &[3, 5, 1]);
-        for (a, f) in r {
-            assert_eq!(a.is_ok(), f.is_ok());
-        }
-    }
+    assert_eq!(a, Outcome::Err(Class::NormalForm));
+    assert_eq!(f, Outcome::Err(Class::NormalForm));
+    // Without the second writer the program runs, and post reads the start-of-position value.
+    let p = base(false);
+    let r = run_both("p01 pre writes, post reads", &p, &Params::new(), &[3, 5, 1]);
+    assert!(r.iter().all(|(a, f)| a.is_ok() && a == f));
 }
 
 #[test]
@@ -150,11 +150,14 @@ fn p02_with_window(window: u32) {
     let p = b.finish();
     let (a, f, _) = both_decode(&p);
     println!("decode: ref2 {a:?} first {f:?}");
-    if a.is_ok() && f.is_ok() {
-        run_both("p02", &p, &Params::new(), &[3, 5, 1, 2, 9]);
-    }
+    // Revision 2, NF-19: refused whatever the window (was F6).
+    assert_eq!(a, Outcome::Err(Class::NormalForm));
+    assert_eq!(f, Outcome::Err(Class::NormalForm));
 }
 
+/// Runs a cone on both and asserts the verdict 04b (revision 2) gives: `None` = success (both
+/// equal), `Some(class)` = refused with that class by both.
+#[allow(clippy::too_many_arguments)]
 fn cone_both(
     name: &str,
     p: &Program,
@@ -163,15 +166,27 @@ fn cone_both(
     layer: Option<u32>,
     target: u16,
     env: &ConeEnv,
-    token_supplied: bool,
+    text: Option<Class>,
 ) -> (Outcome<Tensor>, Outcome<Tensor>) {
     let fp = match first_decode(&encode(p)) {
         Outcome::Ok(fp) => fp,
         o => panic!("{name}: first refuses: {o:?}"),
     };
     let a = mine(eval_cone(p, params, block, layer, target, env));
-    let f = first_cone(&fp, &params_to(params), block, layer, target, &env_to(env, token_supplied));
-    println!("{name}: ref2 {:?}\n{:>w$}first {:?}", a.clone().map_tensor(), "", f.clone().map_tensor(), w = name.len() + 2);
+    let f = first_cone(&fp, &params_to(params), block, layer, target, &env_to(env));
+    println!(
+        "{name}: text {} ref2 {:?} / first {:?}",
+        text.map(|c| c.name()).unwrap_or("ok"),
+        a.clone().map_tensor(),
+        f.clone().map_tensor()
+    );
+    match text {
+        None => assert!(a.is_ok() && a == f, "{name}"),
+        Some(c) => {
+            assert_eq!(a, Outcome::Err(c), "{name}: ref2");
+            assert_eq!(f, Outcome::Err(c), "{name}: first");
+        }
+    }
     (a, f)
 }
 
@@ -189,62 +204,66 @@ impl MapT for Outcome<Tensor> {
 }
 
 fn honest_env(token: u64, pos: u64) -> ConeEnv {
-    let mut e = ConeEnv { token, pos, ..Default::default() };
+    let mut e = ConeEnv { token: Some(token), pos, ..Default::default() };
     e.fixed.insert(0, t(DType::I32, &[2], &[4, -4]));
     e
 }
 
 #[test]
 fn p03_cone_edges() {
+    use Class::*;
     let p = base(false);
     let params = Params::new();
     // Honest: the carry-out node 4 of pre from token 3, s0 = (4, −4).
-    let (a, f) = cone_both("p03 honest", &p, &params, 0, None, 4, &honest_env(3, 2), true);
-    assert_eq!(a, f);
-    // The target itself supplied (with a wrong value): recomputed, or taken?
+    let (a, _) = cone_both("p03 honest", &p, &params, 0, None, 4, &honest_env(3, 2), None);
+    assert_eq!(a, Outcome::Ok(t(DType::I32, &[2], &[7, -1])));
+    // The target itself supplied (F2): Malformed.
     let mut e = honest_env(3, 2);
     e.supplied.insert(4, t(DType::I32, &[2], &[99, 99]));
-    cone_both("p03 target supplied", &p, &params, 0, None, 4, &e, true);
-    // pos ≥ history_bound.
-    cone_both("p03 pos = history_bound", &p, &params, 0, None, 4, &honest_env(3, HB as u64), true);
-    cone_both("p03 pos = u32::MAX", &p, &params, 0, None, 4, &honest_env(3, u32::MAX as u64), true);
-    // token ≥ token_bound, and no token supplied at all.
-    cone_both("p03 token = token_bound", &p, &params, 0, None, 4, &honest_env(16, 2), true);
-    cone_both("p03 no token", &p, &params, 0, None, 4, &honest_env(3, 2), false);
-    // A supplied node that does not exist, and a wrong-typed supplied node outside the closure.
+    cone_both("p03 target supplied", &p, &params, 0, None, 4, &e, Some(Malformed));
+    // pos ≥ history_bound (F7).
+    cone_both("p03 pos = history_bound", &p, &params, 0, None, 4, &honest_env(3, HB as u64), Some(Position));
+    cone_both("p03 pos = u32::MAX", &p, &params, 0, None, 4, &honest_env(3, u32::MAX as u64), Some(Position));
+    // The token: at token_bound, absent (F7, F10).
+    cone_both("p03 token = token_bound", &p, &params, 0, None, 4, &honest_env(16, 2), Some(Operand));
+    let mut e = honest_env(3, 2);
+    e.token = None;
+    cone_both("p03 no token", &p, &params, 0, None, 4, &e, Some(Missing));
+    // A supplied index that is no node (F4): Malformed; a wrong-typed entry the closure does not
+    // reach: ignored.
     let mut e = honest_env(3, 2);
     e.supplied.insert(40, t(DType::I32, &[2], &[1, 1]));
-    cone_both("p03 supplied node 40 (no such node)", &p, &params, 0, None, 4, &e, true);
+    cone_both("p03 supplied node 40 (no such node)", &p, &params, 0, None, 4, &e, Some(Malformed));
     let mut e = honest_env(3, 2);
     e.supplied.insert(3, t(DType::I8, &[7], &[1, 1, 1, 1, 1, 1, 1]));
-    cone_both("p03 wrong-typed supplied node outside the closure", &p, &params, 0, None, 4, &e, true);
+    cone_both("p03 wrong-typed supplied node outside the closure", &p, &params, 0, None, 4, &e, None);
     // A wrong-typed supplied node inside the closure.
     let mut e = honest_env(3, 2);
     e.supplied.insert(2, t(DType::I64, &[2], &[1, 1]));
-    cone_both("p03 wrong-typed supplied node inside the closure", &p, &params, 0, None, 4, &e, true);
-    // Fixed value out of [lo, hi], of the wrong shape, missing.
+    cone_both("p03 wrong-typed supplied node inside the closure", &p, &params, 0, None, 4, &e, Some(Operand));
+    // Fixed value out of [lo, hi], of the wrong shape, missing (F1).
     let mut e = honest_env(3, 2);
     e.fixed.insert(0, t(DType::I32, &[2], &[101, 0]));
-    cone_both("p03 fixed outside [lo, hi]", &p, &params, 0, None, 4, &e, true);
+    cone_both("p03 fixed outside [lo, hi]", &p, &params, 0, None, 4, &e, Some(Operand));
     let mut e = honest_env(3, 2);
     e.fixed.insert(0, t(DType::I32, &[3], &[1, 0, 0]));
-    cone_both("p03 fixed wrong shape", &p, &params, 0, None, 4, &e, true);
+    cone_both("p03 fixed wrong shape", &p, &params, 0, None, 4, &e, Some(Operand));
     let mut e = honest_env(3, 2);
     e.fixed.clear();
-    cone_both("p03 fixed missing", &p, &params, 0, None, 4, &e, true);
-    // post: carry-in of the wrong dtype / shape / missing.
+    cone_both("p03 fixed missing", &p, &params, 0, None, 4, &e, Some(Missing));
+    // post: carry-in of the wrong dtype / shape / missing (F8).
     let mut e = honest_env(3, 2);
     e.carry_in.insert(0, t(DType::I16, &[2], &[1, 2]));
-    cone_both("p03 carry-in wrong dtype", &p, &params, 1, None, 1, &e, true);
+    cone_both("p03 carry-in wrong dtype", &p, &params, 1, None, 1, &e, Some(Operand));
     let mut e = honest_env(3, 2);
     e.carry_in.insert(0, t(DType::I32, &[1], &[1]));
-    cone_both("p03 carry-in wrong shape", &p, &params, 1, None, 1, &e, true);
+    cone_both("p03 carry-in wrong shape", &p, &params, 1, None, 1, &e, Some(Operand));
     let e = honest_env(3, 2);
-    cone_both("p03 carry-in missing", &p, &params, 1, None, 1, &e, true);
-    // Not an occurrence.
-    cone_both("p03 (pre, Some(0))", &p, &params, 0, Some(0), 4, &honest_env(3, 2), true);
-    cone_both("p03 block 7", &p, &params, 7, None, 4, &honest_env(3, 2), true);
-    cone_both("p03 target 9", &p, &params, 0, None, 9, &honest_env(3, 2), true);
+    cone_both("p03 carry-in missing", &p, &params, 1, None, 1, &e, Some(Missing));
+    // Not an occurrence, not a node.
+    cone_both("p03 (pre, Some(0))", &p, &params, 0, Some(0), 4, &honest_env(3, 2), Some(Malformed));
+    cone_both("p03 block 7", &p, &params, 7, None, 4, &honest_env(3, 2), Some(Malformed));
+    cone_both("p03 target 9", &p, &params, 0, None, 9, &honest_env(3, 2), Some(Malformed));
 }
 
 #[test]
@@ -297,11 +316,21 @@ fn p05_hostile_run_states() {
             s
         }),
     ];
-    for (name, st) in cases {
+    // Revision 2: §9.1(2) checks (Operand), the position (Position), and run-state completeness —
+    // an absent Fixed instance is all zeros (F11).
+    let text = [Some(Class::Operand), Some(Class::Operand), None, Some(Class::Position), None];
+    for ((name, st), want) in cases.into_iter().zip(text) {
         let (a, _) = ref2_step(&p, &params, &st, 3);
         let mut fst = state_to(&st);
         let f = first_step(&fp, &fparams, &mut fst, 3);
-        println!("p05 {}{name}: ref2 {} / first {}", if a.is_ok() == f.is_ok() { "" } else { "DIFFER " }, summary(&a), summary(&f));
+        println!("p05 {name}: text {} ref2 {} / first {}", want.map(|c| c.name()).unwrap_or("ok"), summary(&a), summary(&f));
+        match want {
+            None => assert!(a.is_ok() && a == f, "{name}"),
+            Some(c) => {
+                assert_eq!(a.class(), Some(c), "{name}");
+                assert_eq!(f.class(), Some(c), "{name}");
+            }
+        }
     }
 }
 
@@ -518,9 +547,10 @@ fn p06_primitive_extremes() {
     for (name, prim, ins, od, os) in cases {
         let a = mine(eval_primitive(&prim, &ins, od, &os));
         let f = first_eval_primitive(&prim, &ins, od, &os);
+        // Revision 2 (§9.3): each case breaks one rule, so the class must agree too.
         let same = match (&a, &f) {
             (Outcome::Ok(x), Outcome::Ok(y)) => x == y,
-            (Outcome::Err(_), Outcome::Err(_)) => true,
+            (Outcome::Err(x), Outcome::Err(y)) => x == y,
             _ => false,
         };
         if !same {
@@ -534,6 +564,7 @@ fn p06_primitive_extremes() {
         );
     }
     println!("p06: {differ} disagreements");
+    assert_eq!(differ, 0);
 }
 
 #[test]
@@ -609,17 +640,24 @@ fn p08_param_binding() {
         }
         m
     };
-    run_both("p08 exact", &p, &mk(&[0, 2], DType::I8), &[1, 2]);
-    run_both("p08 extra instance at layer 1", &p, &mk(&[0, 1, 2], DType::I8), &[1]);
-    run_both("p08 missing layer 2", &p, &mk(&[0], DType::I8), &[1]);
-    run_both("p08 wrong dtype", &p, &mk(&[0, 2], DType::I16), &[1]);
+    let check = |name: &str, params: &Params, tokens: &[u64], want: Option<Class>| {
+        for (a, f) in run_both(name, &p, params, tokens) {
+            match want {
+                None => assert!(a.is_ok() && a == f, "{name}"),
+                Some(c) => assert_eq!((a.class(), f.class()), (Some(c), Some(c)), "{name}"),
+            }
+        }
+    };
+    check("p08 exact", &mk(&[0, 2], DType::I8), &[1, 2], None);
+    check("p08 extra instance at layer 1", &mk(&[0, 1, 2], DType::I8), &[1], None);
+    check("p08 missing layer 2", &mk(&[0], DType::I8), &[1], Some(Class::Missing));
+    check("p08 wrong dtype", &mk(&[0, 2], DType::I16), &[1], Some(Class::Operand));
     let mut extra = mk(&[0, 2], DType::I8);
     extra.insert((w, None), t(DType::I8, &[2], &[1, 1]));
-    run_both("p08 extra global instance of a per-layer param", &p, &extra, &[1]);
+    check("p08 extra global instance of a per-layer param", &extra, &[1], None);
     let mut extra = mk(&[0, 2], DType::I8);
     extra.insert((9, None), t(DType::I8, &[2], &[1, 1]));
-    run_both("p08 a param that is not declared", &p, &extra, &[1]);
-    let _ = Class::Missing;
+    check("p08 a param that is not declared", &extra, &[1], None);
 }
 
 /// A layer block with a per-layer Hist (window 3) and a per-layer Fixed state: cone evaluation
@@ -654,9 +692,10 @@ fn p09_cone_histories_and_layer_instances() {
     assert_eq!((a.is_ok(), f.is_ok()), (true, true));
     let r = run_both("p09 run", &p, &params, &[1, 2, 3, 4, 5]);
     assert!(r.iter().all(|(a, f)| a == f));
+    use Class::*;
     let row = |x: i128| t(DType::I16, &[2], &[x, -x]);
     let env = |pos: u64, rows: Option<Vec<Tensor>>, fixed: Option<Tensor>| {
-        let mut e = ConeEnv { token: 1, pos, ..Default::default() };
+        let mut e = ConeEnv { token: Some(1), pos, ..Default::default() };
         e.carry_in.insert(0, row(5));
         if let Some(r) = rows {
             e.hist_prior.insert(0, r);
@@ -667,82 +706,61 @@ fn p09_cone_histories_and_layer_instances() {
         e
     };
     let acc = t(DType::I32, &[2], &[3, -3]);
-    let (a, f) = cone_both(
-        "p09 pos 4 honest (2 rows)",
-        &p,
-        &params,
-        1,
-        Some(1),
-        5,
-        &env(4, Some(vec![row(1), row(2)]), Some(acc.clone())),
-        true,
-    );
-    assert_eq!(a, f);
-    cone_both("p09 pos 4 history missing", &p, &params, 1, Some(1), 5, &env(4, None, Some(acc.clone())), true);
-    cone_both("p09 pos 4 one row (short)", &p, &params, 1, Some(1), 5, &env(4, Some(vec![row(1)]), Some(acc.clone())), true);
-    cone_both(
-        "p09 pos 4 three rows (long)",
-        &p,
-        &params,
-        1,
-        Some(1),
-        5,
-        &env(4, Some(vec![row(1), row(2), row(3)]), Some(acc.clone())),
-        true,
-    );
-    cone_both("p09 pos 0 no rows", &p, &params, 1, Some(0), 5, &env(0, Some(vec![]), Some(acc.clone())), true);
-    cone_both("p09 pos 0 history missing", &p, &params, 1, Some(0), 5, &env(0, None, Some(acc.clone())), true);
-    cone_both(
-        "p09 pos 4 a row of the wrong dtype",
-        &p,
-        &params,
-        1,
-        Some(1),
-        5,
-        &env(4, Some(vec![row(1), t(DType::I32, &[2], &[2, -2])]), Some(acc.clone())),
-        true,
-    );
-    cone_both("p09 pos 4 fixed missing", &p, &params, 1, Some(1), 5, &env(4, Some(vec![row(1), row(2)]), None), true);
-    cone_both("p09 (layer, None)", &p, &params, 1, None, 5, &env(4, Some(vec![row(1), row(2)]), Some(acc.clone())), true);
-    cone_both(
-        "p09 (layer, Some(2)) past the schedule",
-        &p,
-        &params,
-        1,
-        Some(2),
-        5,
-        &env(4, Some(vec![row(1), row(2)]), Some(acc)),
-        true,
-    );
-    // The HistAppend node itself as a target.
-    cone_both("p09 target = HistAppend", &p, &params, 1, Some(1), 0, &env(4, Some(vec![row(1), row(2)]), None), true);
-    // A hostile RunState for a step: history rows that do not match the position.
+    let two = || Some(vec![row(1), row(2)]);
+    let (a, _) = cone_both("p09 pos 4 honest (2 rows)", &p, &params, 1, Some(1), 5, &env(4, two(), Some(acc.clone())), None);
+    assert_eq!(a, Outcome::Ok(t(DType::I16, &[2], &[11, -11])));
+    cone_both("p09 pos 4 history missing", &p, &params, 1, Some(1), 5, &env(4, None, Some(acc.clone())), Some(Missing));
+    cone_both("p09 pos 4 one row (short)", &p, &params, 1, Some(1), 5, &env(4, Some(vec![row(1)]), Some(acc.clone())), Some(Position));
+    let three = Some(vec![row(1), row(2), row(3)]);
+    cone_both("p09 pos 4 three rows (long)", &p, &params, 1, Some(1), 5, &env(4, three, Some(acc.clone())), Some(Position));
+    cone_both("p09 pos 0 no rows", &p, &params, 1, Some(0), 5, &env(0, Some(vec![]), Some(acc.clone())), None);
+    cone_both("p09 pos 0 history missing (F3)", &p, &params, 1, Some(0), 5, &env(0, None, Some(acc.clone())), Some(Missing));
+    let bad_row = Some(vec![row(1), t(DType::I32, &[2], &[2, -2])]);
+    cone_both("p09 pos 4 a row of the wrong dtype", &p, &params, 1, Some(1), 5, &env(4, bad_row, Some(acc.clone())), Some(Operand));
+    cone_both("p09 pos 4 fixed missing (F1)", &p, &params, 1, Some(1), 5, &env(4, two(), None), Some(Missing));
+    cone_both("p09 (layer, None)", &p, &params, 1, None, 5, &env(4, two(), Some(acc.clone())), Some(Malformed));
+    cone_both("p09 (layer, Some(2)) past the schedule", &p, &params, 1, Some(2), 5, &env(4, two(), Some(acc)), Some(Malformed));
+    // The HistAppend node itself as a target (its closure reads no Fixed value).
+    cone_both("p09 target = HistAppend", &p, &params, 1, Some(1), 0, &env(4, two(), None), None);
+    // Hostile run states for a step: history rows that do not match the position (Position), and
+    // no history instance at pos 0 (run-state completeness: empty).
     let fp = match first_decode(&encode(&p)) {
         Outcome::Ok(fp) => fp,
         o => panic!("{o:?}"),
     };
+    let mut cases = Vec::new();
     let mut st = initial_state(&p);
     st.pos = 3;
     st.hist.insert((0, Some(0)), vec![row(1)]);
     st.hist.insert((0, Some(1)), vec![row(1), row(2)]);
-    let (a, _) = ref2_step(&p, &params, &st, 1);
-    let mut fst = state_to(&st);
-    let f = first_step(&fp, &params_to(&params), &mut fst, 1);
-    println!("p09 step with a short history at layer 0: ref2 {} / first {}", summary(&a), summary(&f));
+    cases.push(("a short history at layer 0", st, Some(Position)));
     let mut st = initial_state(&p);
     st.pos = 1;
     st.hist.insert((0, Some(0)), vec![row(1), row(2), row(3)]);
     st.hist.insert((0, Some(1)), vec![row(1)]);
-    let (a, _) = ref2_step(&p, &params, &st, 1);
-    let mut fst = state_to(&st);
-    let f = first_step(&fp, &params_to(&params), &mut fst, 1);
-    println!("p09 step with a long history at layer 0: ref2 {} / first {}", summary(&a), summary(&f));
+    cases.push(("a long history at layer 0", st, Some(Position)));
     let mut st = initial_state(&p);
     st.hist.clear();
-    let (a, _) = ref2_step(&p, &params, &st, 1);
-    let mut fst = state_to(&st);
-    let f = first_step(&fp, &params_to(&params), &mut fst, 1);
-    println!("p09 step with no history instance: ref2 {} / first {}", summary(&a), summary(&f));
+    cases.push(("no history instance at pos 0", st, None));
+    // An omitted instance is empty (run-state completeness), so at pos 2 it has too few rows.
+    let mut st = initial_state(&p);
+    st.pos = 2;
+    st.hist.insert((0, Some(1)), vec![row(1), row(2)]);
+    st.hist.remove(&(0, Some(0)));
+    cases.push(("an omitted history instance at pos 2", st, Some(Position)));
+    for (name, st, want) in cases {
+        let (a, _) = ref2_step(&p, &params, &st, 1);
+        let mut fst = state_to(&st);
+        let f = first_step(&fp, &params_to(&params), &mut fst, 1);
+        println!("p09 step with {name}: text {} ref2 {} / first {}", want.map(|c| c.name()).unwrap_or("ok"), summary(&a), summary(&f));
+        match want {
+            None => assert!(a.is_ok() && a == f),
+            Some(c) => {
+                assert_eq!(a.class(), Some(c));
+                assert_eq!(f.class(), Some(c));
+            }
+        }
+    }
 }
 
 /// Tensors whose values are outside their dtype, handed to both evaluators directly (bypassing
@@ -763,24 +781,24 @@ fn p10_values_outside_their_dtype() {
     let mut params = Params::new();
     params.insert((w, None), raw(DType::I8, &[2], &[200, 1]));
     let r = run_both("p10 param i8 holding 200", &p, &params, &[1]);
-    assert!(!r[0].0.is_ok() && !r[0].1.is_ok());
+    assert_eq!((r[0].0.class(), r[0].1.class()), (Some(Class::Operand), Some(Class::Operand)));
     params.insert((w, None), raw(DType::I8, &[2], &[1]));
     let r = run_both("p10 param with too few elements", &p, &params, &[1]);
-    assert!(!r[0].0.is_ok() && !r[0].1.is_ok());
+    assert_eq!((r[0].0.class(), r[0].1.class()), (Some(Class::Operand), Some(Class::Operand)));
     // A Fixed state value outside its dtype, a carry-in outside its dtype, a supplied node outside.
     let p = base(false);
     let mut e = honest_env(3, 2);
     e.fixed.insert(0, raw(DType::I32, &[2], &[1i128 << 40, 0]));
-    cone_both("p10 fixed value outside i32", &p, &Params::new(), 0, None, 4, &e, true);
+    cone_both("p10 fixed value outside i32", &p, &Params::new(), 0, None, 4, &e, Some(Class::Operand));
     let mut e = honest_env(3, 2);
     e.carry_in.insert(0, raw(DType::I32, &[2], &[1i128 << 40, 0]));
-    cone_both("p10 carry-in outside i32", &p, &Params::new(), 1, None, 1, &e, true);
+    cone_both("p10 carry-in outside i32", &p, &Params::new(), 1, None, 1, &e, Some(Class::Operand));
     let mut e = honest_env(3, 2);
     e.supplied.insert(2, raw(DType::I32, &[2], &[1i128 << 40, 0]));
-    cone_both("p10 supplied node outside i32", &p, &Params::new(), 0, None, 4, &e, true);
+    cone_both("p10 supplied node outside i32", &p, &Params::new(), 0, None, 4, &e, Some(Class::Operand));
     let mut e = honest_env(3, 2);
     e.supplied.insert(2, raw(DType::I32, &[2], &[1]));
-    cone_both("p10 supplied node with too few elements", &p, &Params::new(), 0, None, 4, &e, true);
+    cone_both("p10 supplied node with too few elements", &p, &Params::new(), 0, None, 4, &e, Some(Class::Operand));
 }
 
 /// The largest H at run time: a history of window `history_bound` at pos `history_bound − 1`, and the
@@ -819,4 +837,100 @@ fn p11_the_largest_window_at_the_last_position() {
         assert_eq!(a, f);
         assert_eq!(a.is_ok(), pos < HB as u64);
     }
+}
+
+/// Environment entries §9.2 (revision 2) does not mention: entries the closure never reads, keys
+/// that name no state or no carry-in, entries of the wrong state kind. The text only says that
+/// supplied entries the closure does not reach are ignored.
+#[test]
+fn p12_env_entries_the_closure_never_reads() {
+    let p = hist_program();
+    let params = Params::new();
+    let row = |x: i128| t(DType::I16, &[2], &[x, -x]);
+    let honest = || {
+        let mut e = ConeEnv { token: Some(1), pos: 4, ..Default::default() };
+        e.carry_in.insert(0, row(5));
+        e.hist_prior.insert(0, vec![row(1), row(2)]);
+        e.fixed.insert(1, t(DType::I32, &[2], &[3, -3]));
+        e
+    };
+    let fp = match first_decode(&encode(&p)) {
+        Outcome::Ok(fp) => fp,
+        o => panic!("{o:?}"),
+    };
+    let cases: Vec<(&str, u16, Box<dyn Fn(&mut ConeEnv)>)> = vec![
+        (
+            "a Fixed entry for a state index that does not exist",
+            5,
+            Box::new(|e| {
+                e.fixed.insert(9, t(DType::I8, &[1], &[0]));
+            }),
+        ),
+        (
+            "a history entry for a state index that does not exist",
+            5,
+            Box::new(|e| {
+                e.hist_prior.insert(9, vec![]);
+            }),
+        ),
+        (
+            "a carry-in entry past the block's carry-ins",
+            5,
+            Box::new(|e| {
+                e.carry_in.insert(7, t(DType::I8, &[1], &[0]));
+            }),
+        ),
+        (
+            "a Fixed entry keyed by a Hist state",
+            5,
+            Box::new(|e| {
+                e.fixed.insert(0, t(DType::I16, &[2], &[0, 0]));
+            }),
+        ),
+        (
+            "a history entry keyed by a Fixed state",
+            5,
+            Box::new(|e| {
+                e.hist_prior.insert(1, vec![]);
+            }),
+        ),
+        (
+            "a wrong-typed Fixed value the closure does not read (target 0)",
+            0,
+            Box::new(|e| {
+                e.fixed.insert(1, t(DType::I8, &[7], &[0; 7]));
+            }),
+        ),
+        (
+            "a wrong-length history the closure does not read (target 4, node 3 supplied)",
+            4,
+            Box::new(|e| {
+                e.hist_prior.insert(0, vec![]);
+                e.supplied.insert(3, t(DType::I32, &[2], &[1, 1]));
+            }),
+        ),
+    ];
+    for (name, target, f) in cases {
+        let mut e = honest();
+        f(&mut e);
+        let a = mine(eval_cone(&p, &params, 1, Some(1), target, &e));
+        let fo = first_cone(&fp, &params_to(&params), 1, Some(1), target, &env_to(&e));
+        println!(
+            "p12 {}{name}: ref2 {} / first {}",
+            if a == fo { "" } else { "DIFFER " },
+            a.clone().map_tensor(),
+            fo.clone().map_tensor()
+        );
+        // Unread entries are ignored by both (the text says so only for supplied nodes).
+        assert!(a.is_ok() && a == fo, "{name}");
+    }
+    // An arity error outside a program (eval_primitive): NF-14 names arity a normal-form rule of a
+    // node; a lone primitive has no node.
+    let ins: Vec<Tensor> = (0..9).map(|i| t(DType::I8, &[1], &[i])).collect();
+    let a = mine(eval_primitive(&Prim::Concat { axis: 0 }, &ins, DType::I8, &[9]));
+    let f = first_eval_primitive(&Prim::Concat { axis: 0 }, &ins, DType::I8, &[9]);
+    println!("p12 eval_primitive Concat of 9: ref2 {} / first {}", a.clone().map_tensor(), f.clone().map_tensor());
+    let a = mine(eval_primitive(&Prim::Add, &ins[..1], DType::I8, &[1]));
+    let f = first_eval_primitive(&Prim::Add, &ins[..1], DType::I8, &[1]);
+    println!("p12 eval_primitive Add of 1: ref2 {} / first {}", a.clone().map_tensor(), f.clone().map_tensor());
 }

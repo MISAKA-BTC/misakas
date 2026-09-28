@@ -206,5 +206,39 @@ pub const PRIM_NAMES: [&str; 25] = [
 /// The prim-set descriptor of §6.0, rebuilt from the table rather than copied.
 pub fn prim_set_descriptor() -> String {
     let prims: Vec<String> = PRIM_NAMES.iter().enumerate().map(|(i, n)| format!("{i}:{n}")).collect();
-    format!("palw-tir/v1/spec=04b-tensor-ir/rev1/q=24/prims={}", prims.join(","))
+    format!("palw-tir/v1/spec=04b-tensor-ir/rev2/q=24/prims={}", prims.join(","))
+}
+
+/// The key of §6.0: 30 ASCII bytes.
+pub const PRIM_SET_ID_KEY: &[u8] = b"misaka-palw/tir-prim-set-id/v1";
+
+/// `PRIM_SET_ID_V1` as §6.0 defines it: BLAKE2b-512 keyed by [`PRIM_SET_ID_KEY`] over the
+/// descriptor's ASCII bytes. Computed, not copied; `tests` compare it with the value the text states.
+pub fn prim_set_id_v1() -> [u8; 64] {
+    static ID: std::sync::OnceLock<[u8; 64]> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| {
+        let h = crate::blake2b::blake2b(64, PRIM_SET_ID_KEY, prim_set_descriptor().as_bytes());
+        let mut a = [0u8; 64];
+        a.copy_from_slice(&h);
+        a
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prim_set_id_is_the_stated_constant() {
+        assert_eq!(PRIM_SET_ID_KEY.len(), 30);
+        let hex: String = prim_set_id_v1().iter().map(|b| format!("{b:02x}")).collect();
+        // 04b §6.0 (rev2), as printed there.
+        assert_eq!(
+            hex,
+            concat!(
+                "61fa4aa57adfc79053c5e517515e50c7ae7c036abc43ff931053144691ba31c9",
+                "212539a93514f831a8472ca75a39b094177736aa5818eeae547bb31fbf89f589"
+            )
+        );
+    }
 }

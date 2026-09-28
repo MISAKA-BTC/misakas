@@ -101,13 +101,41 @@ fn check_tensor(t: &Tensor, ty: &TensorType, h: u64, what: &str) -> Res<()> {
     Ok(())
 }
 
-/// Where a node's leaves come from: a run state (a step) or a cone environment.
+/// Where a node's leaves come from: a run state (a step) or a cone environment. `fixed` and `hist`
+/// return `None` for an absent value; a step maps absence to the initial value first (§9.1
+/// run-state completeness), a cone never does (§9.2).
 struct Leaves<'a> {
-    token: u64,
+    token: Option<u64>,
     pos: u64,
     carry_in: &'a BTreeMap<u8, Tensor>,
-    fixed: &'a dyn Fn(u16) -> Option<&'a Tensor>,
-    hist: &'a dyn Fn(u16) -> Option<&'a [Tensor]>,
+    fixed: &'a dyn Fn(u16) -> Option<Tensor>,
+    hist: &'a dyn Fn(u16) -> Option<Vec<Tensor>>,
+}
+
+/// Checks a `Fixed` value against its declaration (§9.1(2)): dtype, shape, values in `[lo, hi]`.
+fn check_fixed(p: &Program, j: u16, t: &Tensor) -> Res<()> {
+    let s = &p.states[j as usize];
+    check_tensor(t, &TensorType::fixed(s.dtype, &s.shape), 1, "Fixed state")?;
+    if let StateKind::Fixed { lo, hi } = s.kind
+        && t.data.iter().any(|&v| v < lo as i128 || v > hi as i128)
+    {
+        return err(Class::Operand, format!("Fixed state {j} outside [{lo}, {hi}]"));
+    }
+    Ok(())
+}
+
+/// Checks a history against its declaration: exactly `H − 1 = min(pos, window − 1)` rows
+/// (`Position`), each of the state's dtype and row shape (`Operand`).
+fn check_hist(p: &Program, j: u16, rows: &[Tensor], h: u64) -> Res<()> {
+    if rows.len() as u64 + 1 != h {
+        return err(Class::Position, format!("history of state {j} has {} rows, H − 1 = {}", rows.len(), h - 1));
+    }
+    let s = &p.states[j as usize];
+    let ty = TensorType::fixed(s.dtype, &s.shape);
+    for r in rows {
+        check_tensor(r, &ty, 1, "history row")?;
+    }
+    Ok(())
 }
 
 fn const_tensor(p: &Program, j: u16) -> Res<Tensor> {
@@ -115,8 +143,110 @@ fn const_tensor(p: &Program, j: u16) -> Res<Tensor> {
     Tensor::from_le_bytes(c.dtype, c.shape.iter().map(|&d| d as u64).collect(), &c.data)
 }
 
+/// An effect of a node: a `StateWrite` value or a `HistAppend` row, at a layer.
+type Effect = (Prim, Option<u32>, Tensor);
+
+/// Evaluates node `i` of occurrence `(b, layer)` from its operands (§3.2, §6, §9.1(2)); node operands
+/// are read from `vals`, which must hold them.
+#[allow(clippy::too_many_arguments)]
+fn eval_one(
+    p: &Program,
+    params: &Params,
+    b: usize,
+    layer: Option<u32>,
+    h: u64,
+    leaves: &Leaves<'_>,
+    i: usize,
+    vals: &[Option<Tensor>],
+) -> Res<(Tensor, Option<Effect>)> {
+    let block = &p.blocks[b];
+    let n = &block.nodes[i];
+    let mut owned: Vec<Tensor> = Vec::with_capacity(n.inputs.len());
+    let mut from_node: Vec<Option<usize>> = Vec::with_capacity(n.inputs.len());
+    for r in &n.inputs {
+        match *r {
+            Ref::Node(k) => {
+                if k as usize >= i || vals[k as usize].is_none() {
+                    return err(Class::Missing, format!("node {k} has no value"));
+                }
+                from_node.push(Some(k as usize));
+                owned.push(Tensor::zeros(DType::I8, vec![])); // placeholder, never read
+            }
+            Ref::CarryIn(k) => {
+                let Some(t) = leaves.carry_in.get(&k) else {
+                    return err(Class::Missing, format!("carry-in {k} not supplied"));
+                };
+                check_tensor(t, &block.carry_in[k as usize], h, "carry-in")?;
+                from_node.push(None);
+                owned.push(t.clone());
+            }
+            Ref::Param(j) => {
+                let d = &p.params[j as usize];
+                let Some(t) = params.get(&(j, instance(d.per_layer, layer))) else {
+                    return err(Class::Missing, format!("param {j} ({}) at layer {layer:?} not supplied", d.name));
+                };
+                check_tensor(t, &TensorType::fixed(d.dtype, &d.shape), h, "param")?;
+                from_node.push(None);
+                owned.push(t.clone());
+            }
+            Ref::Const(j) => {
+                from_node.push(None);
+                owned.push(const_tensor(p, j)?);
+            }
+            Ref::State(j) => {
+                let Some(t) = (leaves.fixed)(j) else {
+                    return err(Class::Missing, format!("Fixed state {j} not supplied"));
+                };
+                check_fixed(p, j, &t)?;
+                from_node.push(None);
+                owned.push(t);
+            }
+            Ref::Input(0) => {
+                let Some(token) = leaves.token else {
+                    return err(Class::Missing, "the token is read and absent");
+                };
+                if token >= p.token_bound as u64 {
+                    return err(Class::Operand, format!("token {token} ≥ token_bound {}", p.token_bound));
+                }
+                from_node.push(None);
+                owned.push(Tensor { dtype: DType::Idx, shape: vec![], data: vec![token as i128] });
+            }
+            Ref::Input(_) => {
+                from_node.push(None);
+                owned.push(Tensor { dtype: DType::Idx, shape: vec![], data: vec![leaves.pos as i128] });
+            }
+        }
+    }
+    let ins: Vec<&Tensor> = from_node
+        .iter()
+        .zip(owned.iter())
+        .map(|(f, o)| match f {
+            Some(k) => vals[*k].as_ref().unwrap(),
+            None => o,
+        })
+        .collect();
+    let prior = match n.prim {
+        Prim::HistAppend { state } => {
+            let Some(rows) = (leaves.hist)(state) else {
+                return err(Class::Missing, format!("history of state {state} not supplied"));
+            };
+            // The rows visible at this position: exactly H − 1 of them.
+            check_hist(p, state, &rows, h)?;
+            Some(rows)
+        }
+        _ => None,
+    };
+    let v = eval_prim(&n.prim, &ins, n.out.dtype, &n.out.extents(h), &p.states, prior.as_deref())?;
+    let effect = match n.prim {
+        Prim::StateWrite { .. } => Some((n.prim.clone(), layer, v.clone())),
+        Prim::HistAppend { .. } => Some((n.prim.clone(), layer, ins[0].clone())),
+        _ => None,
+    };
+    Ok((v, effect))
+}
+
 /// Evaluates the nodes of occurrence `(b, layer)` selected by `todo` (in index order), with the
-/// values of `known` nodes taken as given. Returns every value computed or given, by node index.
+/// values already in `vals` taken as given. Returns every value computed or given, by node index.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_nodes(
     p: &Program,
@@ -127,102 +257,83 @@ fn evaluate_nodes(
     leaves: &Leaves<'_>,
     todo: &[bool],
     mut vals: Vec<Option<Tensor>>,
-    effects: &mut Vec<(Prim, Option<u32>, Tensor)>,
+    effects: &mut Vec<Effect>,
 ) -> Res<Vec<Option<Tensor>>> {
-    let block = &p.blocks[b];
-    for (i, n) in block.nodes.iter().enumerate() {
+    for i in 0..p.blocks[b].nodes.len() {
         if !todo[i] {
             continue;
         }
-        let mut owned: Vec<Tensor> = Vec::with_capacity(n.inputs.len());
-        let mut from_node: Vec<Option<usize>> = Vec::with_capacity(n.inputs.len());
-        for r in &n.inputs {
-            match *r {
-                Ref::Node(k) => {
-                    if k as usize >= i || vals[k as usize].is_none() {
-                        return err(Class::Missing, format!("node {k} has no value"));
-                    }
-                    from_node.push(Some(k as usize));
-                    owned.push(Tensor::zeros(DType::I8, vec![])); // placeholder, never read
-                }
-                Ref::CarryIn(k) => {
-                    let Some(t) = leaves.carry_in.get(&k) else {
-                        return err(Class::Missing, format!("carry-in {k} not supplied"));
-                    };
-                    check_tensor(t, &block.carry_in[k as usize], h, "carry-in")?;
-                    from_node.push(None);
-                    owned.push(t.clone());
-                }
-                Ref::Param(j) => {
-                    let d = &p.params[j as usize];
-                    let Some(t) = params.get(&(j, instance(d.per_layer, layer))) else {
-                        return err(Class::Missing, format!("param {j} ({}) at layer {layer:?} not supplied", d.name));
-                    };
-                    check_tensor(t, &TensorType::fixed(d.dtype, &d.shape), h, "param")?;
-                    from_node.push(None);
-                    owned.push(t.clone());
-                }
-                Ref::Const(j) => {
-                    from_node.push(None);
-                    owned.push(const_tensor(p, j)?);
-                }
-                Ref::State(j) => {
-                    let s = &p.states[j as usize];
-                    let Some(t) = (leaves.fixed)(j) else {
-                        return err(Class::Missing, format!("Fixed state {j} not supplied"));
-                    };
-                    check_tensor(t, &TensorType::fixed(s.dtype, &s.shape), h, "Fixed state")?;
-                    if let StateKind::Fixed { lo, hi } = s.kind
-                        && t.data.iter().any(|&v| v < lo as i128 || v > hi as i128)
-                    {
-                        return err(Class::Operand, format!("Fixed state {j} outside [{lo}, {hi}]"));
-                    }
-                    from_node.push(None);
-                    owned.push(t.clone());
-                }
-                Ref::Input(0) => {
-                    if leaves.token >= p.token_bound as u64 {
-                        return err(Class::Operand, format!("token {} ≥ token_bound {}", leaves.token, p.token_bound));
-                    }
-                    from_node.push(None);
-                    owned.push(Tensor { dtype: DType::Idx, shape: vec![], data: vec![leaves.token as i128] });
-                }
-                Ref::Input(_) => {
-                    from_node.push(None);
-                    owned.push(Tensor { dtype: DType::Idx, shape: vec![], data: vec![leaves.pos as i128] });
-                }
-            }
-        }
-        let ins: Vec<&Tensor> = from_node
-            .iter()
-            .zip(owned.iter())
-            .map(|(f, o)| match f {
-                Some(k) => vals[*k].as_ref().unwrap(),
-                None => o,
-            })
-            .collect();
-        let prior = match n.prim {
-            Prim::HistAppend { state } => {
-                let Some(rows) = (leaves.hist)(state) else {
-                    return err(Class::Missing, format!("history of state {state} not supplied"));
-                };
-                // The rows visible at this position: exactly H − 1 of them.
-                if rows.len() as u64 + 1 != h {
-                    return err(Class::Operand, format!("history of state {state} has {} rows, H − 1 = {}", rows.len(), h - 1));
-                }
-                Some(rows)
-            }
-            _ => None,
-        };
-        let v = eval_prim(&n.prim, &ins, n.out.dtype, &n.out.extents(h), &p.states, prior)?;
-        match n.prim {
-            Prim::StateWrite { .. } => effects.push((n.prim.clone(), layer, v.clone())),
-            Prim::HistAppend { .. } => effects.push((n.prim.clone(), layer, ins[0].clone())),
-            _ => {}
+        let (v, e) = eval_one(p, params, b, layer, h, leaves, i, &vals)?;
+        if let Some(e) = e {
+            effects.push(e);
         }
         vals[i] = Some(v);
     }
     Ok(vals)
+}
+
+/// Every rule a step breaks, as the set of their §9.3 classes — for checking "an input that breaks
+/// several rules reports the class of one of them" (§9.3). The early checks of §9.1(1), then every
+/// node whose operands can be computed: a node that fails adds its class and poisons its consumers
+/// (and, through the carry, the next occurrence's readers), which are not evaluable. Empty iff the
+/// step succeeds.
+pub fn step_violations(p: &Program, params: &Params, st: &RunState, token: u64) -> BTreeSet<Class> {
+    let mut out = BTreeSet::new();
+    if st.pos >= p.history_bound as u64 {
+        out.insert(Class::Position);
+        return out;
+    }
+    if program_reads_token(p) && token >= p.token_bound as u64 {
+        out.insert(Class::Operand);
+    }
+    let mut carry: BTreeMap<u8, Tensor> = BTreeMap::new();
+    for (b, layer) in occurrences(p) {
+        let bu = b as usize;
+        let block = &p.blocks[bu];
+        let h = match history_len(p, bu, st.pos) {
+            Ok(h) => h,
+            Err(e) => {
+                out.insert(e.class);
+                return out;
+            }
+        };
+        let fixed = |j: u16| {
+            let s = &p.states[j as usize];
+            Some(match st.fixed.get(&(j, instance(s.per_layer, layer))) {
+                Some(t) => t.clone(),
+                None => Tensor::zeros(s.dtype, s.shape.iter().map(|&d| d as u64).collect()),
+            })
+        };
+        let hist = |j: u16| Some(st.hist.get(&(j, instance(p.states[j as usize].per_layer, layer))).cloned().unwrap_or_default());
+        let leaves = Leaves { token: Some(token), pos: st.pos, carry_in: &carry, fixed: &fixed, hist: &hist };
+        let mut vals: Vec<Option<Tensor>> = vec![None; block.nodes.len()];
+        let mut poisoned = vec![false; block.nodes.len()];
+        for (i, n) in block.nodes.iter().enumerate() {
+            let blocked = n.inputs.iter().any(|r| match *r {
+                Ref::Node(k) => poisoned.get(k as usize).copied().unwrap_or(true),
+                Ref::CarryIn(k) => !carry.contains_key(&k),
+                _ => false,
+            });
+            if blocked {
+                poisoned[i] = true;
+                continue;
+            }
+            match eval_one(p, params, bu, layer, h, &leaves, i, &vals) {
+                Ok((v, _)) => vals[i] = Some(v),
+                Err(e) => {
+                    out.insert(e.class);
+                    poisoned[i] = true;
+                }
+            }
+        }
+        carry = block
+            .carry_out
+            .iter()
+            .enumerate()
+            .filter_map(|(k, &c)| vals.get(c as usize).cloned().flatten().map(|v| (k as u8, v)))
+            .collect();
+    }
+    out
 }
 
 /// The history length `H = min(pos + 1, W)` of block `b` (1 when the block has no window; no
@@ -275,7 +386,7 @@ fn step_inner(
     }
     let mut commits = Vec::new();
     let mut carry: BTreeMap<u8, Tensor> = BTreeMap::new();
-    let mut effects: Vec<(Prim, Option<u32>, Tensor)> = Vec::new();
+    let mut effects: Vec<Effect> = Vec::new();
     let mut slot_base: u64 = 0;
     let mut logits = None;
     for (b, layer) in occurrences(p) {
@@ -284,9 +395,17 @@ fn step_inner(
             return err(Class::NormalForm, "schedule names no block");
         };
         let h = history_len(p, bu, st.pos)?;
-        let fixed = |j: u16| st.fixed.get(&(j, instance(p.states[j as usize].per_layer, layer)));
-        let hist = |j: u16| st.hist.get(&(j, instance(p.states[j as usize].per_layer, layer))).map(|v| v.as_slice());
-        let leaves = Leaves { token, pos: st.pos, carry_in: &carry, fixed: &fixed, hist: &hist };
+        // Run-state completeness (§9.1): an absent Fixed instance is all zeros, an absent history
+        // is empty; the values present are checked as they are read.
+        let fixed = |j: u16| {
+            let s = &p.states[j as usize];
+            Some(match st.fixed.get(&(j, instance(s.per_layer, layer))) {
+                Some(t) => t.clone(),
+                None => Tensor::zeros(s.dtype, s.shape.iter().map(|&d| d as u64).collect()),
+            })
+        };
+        let hist = |j: u16| Some(st.hist.get(&(j, instance(p.states[j as usize].per_layer, layer))).cloned().unwrap_or_default());
+        let leaves = Leaves { token: Some(token), pos: st.pos, carry_in: &carry, fixed: &fixed, hist: &hist };
         let todo = vec![true; block.nodes.len()];
         let vals = evaluate_nodes(p, params, bu, layer, h, &leaves, &todo, vec![None; block.nodes.len()], &mut effects)?;
         let vals: Vec<Tensor> = vals.into_iter().map(|v| v.unwrap_or_else(|| Tensor::zeros(DType::I8, vec![]))).collect();
@@ -315,9 +434,8 @@ fn step_inner(
     let Some(logits) = logits else {
         return err(Class::NormalForm, "no logits");
     };
-    // Effects, only now that every node of every occurrence succeeded, in occurrence order: a global
-    // state written by pre and post takes post's value (the text is silent — finding F5; two
-    // appenders of one history are finding F6).
+    // Effects, only now that every node of every occurrence succeeded. NF-19 (revision 2) leaves one
+    // writer per state instance per step, so the order they are applied in is immaterial.
     let mut next = st.clone();
     for (prim, layer, v) in effects {
         match prim {
@@ -360,73 +478,114 @@ pub fn run(p: &Program, params: &Params, tokens: &[u64]) -> Res<Vec<StepOutput>>
 /// The environment of a cone evaluation (§9.2).
 #[derive(Clone, Debug, Default)]
 pub struct ConeEnv {
-    pub token: u64,
+    /// The token, or none.
+    pub token: Option<u64>,
     pub pos: u64,
     pub carry_in: BTreeMap<u8, Tensor>,
     /// `Fixed` values at the start of the position, by state (the instance at the cone's layer).
     pub fixed: BTreeMap<u16, Tensor>,
-    /// For each `Hist` state, the prior rows, oldest first.
+    /// For each `Hist` state, the prior rows, oldest first (possibly none).
     pub hist_prior: BTreeMap<u16, Vec<Tensor>>,
     /// Supplied node values of the occurrence.
     pub supplied: BTreeMap<u16, Tensor>,
 }
 
-/// §9.2 `eval_cone(block, layer, target, env)`.
-///
-/// Readings taken where the text is silent (`docs/design/palw/tir/ref2-findings.md`): the target is
-/// always recomputed (F2); an absent `Fixed` value or history the closure needs fails `Missing`, even
-/// a history of zero rows (F1, F3); a supplied index that is not a node of the block is refused (F4);
-/// `pos` must be a position (`< history_bound`) and a token the closure reads must be below
-/// `token_bound` (F7); every carry-in, state and history row the closure reads is checked against
-/// its declaration (F8).
+/// §9.2 `eval_cone(block, layer, target, env)`, revision 2, in the text's order: the request
+/// (`Malformed`), the environment's two malformations (`Malformed`), then before any node is
+/// evaluated the position (`Position`) and the token (`Missing`/`Operand`), then every value the
+/// closure reads against the §9.2 table (absent → `Missing`, never implied; ill-formed → `Operand`;
+/// a history with the wrong number of rows → `Position`), and only then the evaluation.
 pub fn eval_cone(p: &Program, params: &Params, block: u8, layer: Option<u32>, target: u16, env: &ConeEnv) -> Res<Tensor> {
     let bu = block as usize;
-    let is_occurrence = match layer {
-        None => block == p.schedule.pre || block == p.schedule.post,
-        Some(l) => p.schedule.layers.get(l as usize) == Some(&block),
-    };
-    if bu >= p.blocks.len() || !is_occurrence {
-        return err(Class::Operand, "(block, layer) is not an occurrence of the schedule");
+    // The request.
+    let is_occurrence = bu < p.blocks.len()
+        && match layer {
+            None => block == p.schedule.pre || block == p.schedule.post,
+            Some(l) => p.schedule.layers.get(l as usize) == Some(&block),
+        };
+    if !is_occurrence {
+        return err(Class::Malformed, "(block, layer) is not an occurrence of the schedule");
     }
     let blk = &p.blocks[bu];
     let n = blk.nodes.len();
     if target as usize >= n {
-        return err(Class::Operand, "target is not a node of the block");
+        return err(Class::Malformed, "target is not a node of the block");
     }
-    if env.pos >= p.history_bound as u64 {
-        return err(Class::Position, format!("pos {} ≥ history_bound", env.pos));
+    // The environment's malformations.
+    if env.supplied.contains_key(&target) {
+        return err(Class::Malformed, "the environment supplies the target itself");
     }
     if let Some((&k, _)) = env.supplied.iter().find(|(k, _)| **k as usize >= n) {
-        return err(Class::Operand, format!("supplied node {k} is not a node of the block"));
+        return err(Class::Malformed, format!("supplied index {k} is not a node of the block"));
     }
-    let h = history_len(p, bu, env.pos)?;
-    // The backward closure of the target, stopping at supplied nodes (the target itself is always
-    // recomputed).
+    // The closure: backward from the target through Node refs, stopping at supplied nodes.
     let mut todo = vec![false; n];
-    let mut vals: Vec<Option<Tensor>> = vec![None; n];
     todo[target as usize] = true;
     for i in (0..=target as usize).rev() {
-        if !todo[i] {
-            continue;
-        }
-        for r in &blk.nodes[i].inputs {
-            if let Ref::Node(k) = *r {
-                let k = k as usize;
-                if let Some(v) = env.supplied.get(&(k as u16)) {
-                    if vals[k].is_none() {
-                        check_tensor(v, &blk.nodes[k].out, h, "supplied node")?;
-                        vals[k] = Some(v.clone());
-                    }
-                } else {
-                    todo[k] = true;
+        if todo[i] {
+            for r in &blk.nodes[i].inputs {
+                if let Ref::Node(k) = *r
+                    && !env.supplied.contains_key(&k)
+                {
+                    todo[k as usize] = true;
                 }
             }
         }
     }
-    let fixed = |j: u16| env.fixed.get(&j);
-    let hist = |j: u16| env.hist_prior.get(&j).map(|v| v.as_slice());
+    let closure: Vec<usize> = (0..n).filter(|&i| todo[i]).collect();
+    // Before any node is evaluated: the position, then the token if the closure reads it.
+    if env.pos >= p.history_bound as u64 {
+        return err(Class::Position, format!("pos {} ≥ history_bound", env.pos));
+    }
+    if closure.iter().any(|&i| blk.nodes[i].inputs.contains(&Ref::Input(0))) {
+        match env.token {
+            None => return err(Class::Missing, "the closure reads the token and the environment has none"),
+            Some(t) if t >= p.token_bound as u64 => return err(Class::Operand, format!("token {t} ≥ token_bound {}", p.token_bound)),
+            _ => {}
+        }
+    }
+    // Every value the closure reads, checked before evaluation.
+    let h = history_len(p, bu, env.pos)?;
+    let mut vals: Vec<Option<Tensor>> = vec![None; n];
+    for &i in &closure {
+        let node = &blk.nodes[i];
+        for r in &node.inputs {
+            match *r {
+                Ref::Node(k) => {
+                    if let Some(v) = env.supplied.get(&k) {
+                        check_tensor(v, &blk.nodes[k as usize].out, h, "supplied node")?;
+                        vals[k as usize] = Some(v.clone());
+                    }
+                }
+                Ref::CarryIn(k) => match env.carry_in.get(&k) {
+                    None => return err(Class::Missing, format!("carry-in {k} not supplied")),
+                    Some(t) => check_tensor(t, &blk.carry_in[k as usize], h, "carry-in")?,
+                },
+                Ref::State(j) => match env.fixed.get(&j) {
+                    None => return err(Class::Missing, format!("Fixed state {j} not supplied (never implied)")),
+                    Some(t) => check_fixed(p, j, t)?,
+                },
+                Ref::Param(j) => {
+                    let d = &p.params[j as usize];
+                    match params.get(&(j, instance(d.per_layer, layer))) {
+                        None => return err(Class::Missing, format!("param {j} at layer {layer:?} not supplied")),
+                        Some(t) => check_tensor(t, &TensorType::fixed(d.dtype, &d.shape), h, "param")?,
+                    }
+                }
+                Ref::Const(_) | Ref::Input(_) => {}
+            }
+        }
+        if let Prim::HistAppend { state } = node.prim {
+            match env.hist_prior.get(&state) {
+                None => return err(Class::Missing, format!("history of state {state} not supplied (even when empty)")),
+                Some(rows) => check_hist(p, state, rows, h)?,
+            }
+        }
+    }
+    let fixed = |j: u16| env.fixed.get(&j).cloned();
+    let hist = |j: u16| env.hist_prior.get(&j).cloned();
     let leaves = Leaves { token: env.token, pos: env.pos, carry_in: &env.carry_in, fixed: &fixed, hist: &hist };
     let mut effects = Vec::new();
     let vals = evaluate_nodes(p, params, bu, layer, h, &leaves, &todo, vals, &mut effects)?;
-    Ok(vals[target as usize].clone().unwrap())
+    vals[target as usize].clone().ok_or_else(|| TirError::new(Class::Missing, "the target has no value"))
 }

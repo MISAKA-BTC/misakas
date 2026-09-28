@@ -39,6 +39,7 @@ pub fn class_from(k: first::error::TirErrorKind) -> Class {
         K::Operand => Class::Operand,
         K::Missing => Class::Missing,
         K::Position => Class::Position,
+        K::Malformed => Class::Malformed,
     }
 }
 
@@ -172,9 +173,9 @@ pub fn state_from(s: &first::interp::RunState) -> RunState {
     }
 }
 
-pub fn env_to(e: &ConeEnv, token_supplied: bool) -> first::interp::ConeEnv {
+pub fn env_to(e: &ConeEnv) -> first::interp::ConeEnv {
     first::interp::ConeEnv {
-        token: if token_supplied { Some(e.token as u32) } else { None },
+        token: e.token.map(|t| t as u32),
         pos: e.pos as u32,
         carry_in: e.carry_in.iter().map(|(k, t)| (*k, tensor_to(t))).collect(),
         fixed: e.fixed.iter().map(|(k, t)| (*k, tensor_to(t))).collect(),

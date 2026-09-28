@@ -8,7 +8,7 @@ mod common;
 use common::bridge::*;
 use misaka_palw_tir_ref2 as ref2;
 use ref2::build::{ProgBuilder, fixed, ty};
-use ref2::codec::{decode_canonical, encode};
+use ref2::codec::{decode_canonical, decode_violations, encode};
 use ref2::{DType, Dim, Prim, Program, Ref, StateKind};
 
 const HB: u32 = 1 << 18;
@@ -64,8 +64,19 @@ fn cases() -> Vec<Case> {
         v.push(case(format!("token_bound {tb}"), &with(|b| b.p.token_bound = tb), ok));
     }
     v.push(case("version 0", &with(|b| b.p.version = 0), false));
-    // prim_set_id and logits_scheme_id: the text checks neither (finding F14).
-    v.push(case("prim_set_id all 0xFF", &with(|b| b.p.prim_set_id = [0xFF; 64]), true));
+    // prim_set_id MUST be PRIM_SET_ID_V1 (revision 2, NF-1; was F14); logits_scheme_id is free.
+    v.push(case("prim_set_id all 0xFF", &with(|b| b.p.prim_set_id = [0xFF; 64]), false));
+    v.push(case("prim_set_id all zero", &with(|b| b.p.prim_set_id = [0; 64]), false));
+    v.push(case("prim_set_id with its last bit flipped", &with(|b| b.p.prim_set_id[63] ^= 1), false));
+    v.push(case(
+        "prim_set_id of the rev1 descriptor",
+        &with(|b| {
+            let d = ref2::prim_set_descriptor().replace("/rev2/", "/rev1/");
+            let h = ref2::blake2b::blake2b(64, ref2::PRIM_SET_ID_KEY, d.as_bytes());
+            b.p.prim_set_id.copy_from_slice(&h);
+        }),
+        false,
+    ));
     v.push(case("logits_scheme_id all 0xFF", &with(|b| b.p.logits_scheme_id = [0xFF; 64]), true));
     // NF-2 blocks: 16 accepted, 17 refused (every block scheduled once as a layer).
     for (n, ok) in [(16usize, true), (17, false)] {
@@ -409,12 +420,52 @@ fn cases() -> Vec<Case> {
         false,
     ));
     v.push(case(
-        "HistAppend of a carry-in (post)",
+        "HistAppend of a carry-in (a layer block)",
+        &with(|b| {
+            let h = b.hist_state("h", DType::I32, &[2], 4, true);
+            let l = b.block("l", vec![fixed(DType::I32, &[2])]);
+            b.node(l, Prim::HistAppend { state: h }, &[Ref::CarryIn(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
+            let x = b.node(l, Prim::Clamp { lo: -9, hi: 9 }, &[Ref::CarryIn(0)], fixed(DType::I32, &[2]), true);
+            b.carry_out(l, &[x]);
+            b.schedule(0, &[l], 1, 0);
+        }),
+        true,
+    ));
+    // NF-19 (revision 2): post writes no state; a global state is written by pre only.
+    v.push(case(
+        "HistAppend of a carry-in in post",
         &with(|b| {
             let h = b.hist_state("h", DType::I32, &[2], 4, false);
             b.node(1, Prim::HistAppend { state: h }, &[Ref::CarryIn(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
         }),
+        false,
+    ));
+    v.push(case(
+        "a StateWrite in post",
+        &with(|b| {
+            let s = b.fixed_state("s", DType::I32, &[2], -1, 1, false);
+            b.node(1, Prim::StateWrite { state: s }, &[Ref::CarryIn(0)], fixed(DType::I32, &[2]), false);
+        }),
+        false,
+    ));
+    v.push(case(
+        "pre writes a global state, post reads it",
+        &with(|b| {
+            let s = b.fixed_state("s", DType::I32, &[2], -1, 1, false);
+            b.node(0, Prim::StateWrite { state: s }, &[Ref::Node(0)], fixed(DType::I32, &[2]), false);
+            b.node(1, Prim::Add, &[Ref::CarryIn(0), Ref::State(s)], fixed(DType::I64, &[2]), false);
+            b.node(1, Prim::Clamp { lo: -5, hi: 5 }, &[Ref::Node(1)], fixed(DType::I32, &[2]), true);
+        }),
         true,
+    ));
+    v.push(case(
+        "pre and post write one global state",
+        &with(|b| {
+            let s = b.fixed_state("s", DType::I32, &[2], -1, 1, false);
+            b.node(0, Prim::StateWrite { state: s }, &[Ref::Node(0)], fixed(DType::I32, &[2]), false);
+            b.node(1, Prim::StateWrite { state: s }, &[Ref::CarryIn(0)], fixed(DType::I32, &[2]), false);
+        }),
+        false,
     ));
     v.push(case(
         "H in a block without a window",
@@ -537,7 +588,7 @@ fn cases() -> Vec<Case> {
             b.node(0, Prim::HistAppend { state: h }, &[Ref::Node(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
             b.node(1, Prim::HistAppend { state: h }, &[Ref::CarryIn(0)], ty(DType::I32, &[Dim::H, Dim::Fixed(2)]), false);
         }),
-        true,
+        false,
     ));
     v
 }
@@ -547,9 +598,17 @@ fn every_limit_at_and_past_its_edge() {
     let mut disagree = Vec::new();
     let mut text = Vec::new();
     let all = cases();
+    let mut classes = Vec::new();
     for c in &all {
         let a = mine(decode_canonical(&c.bytes)).is_ok();
         let f = first_decode(&c.bytes);
+        // Revision 2 (§9.3): the first implementation's class must be the class of a rule the input
+        // breaks (the only one, when it breaks one).
+        if let (Err(set), Outcome::Err(k)) = (decode_violations(&c.bytes), &f)
+            && !set.contains(k)
+        {
+            classes.push(format!("{}: first {} not in {set:?}", c.name, k.name()));
+        }
         let fs = match &f {
             Outcome::Ok(_) => "accept".to_string(),
             Outcome::Err(k) => format!("refuse ({})", k.name()),
@@ -567,9 +626,16 @@ fn every_limit_at_and_past_its_edge() {
             disagree.push(c.name.clone());
         }
     }
-    println!("{} limit cases; ref2 differs from the text on {:?}; ref2 and first differ on {:?}", all.len(), text, disagree);
+    println!(
+        "{} limit cases; ref2 differs from the text on {:?}; ref2 and first differ on {:?}; classes off the broken rules {:?}",
+        all.len(),
+        text,
+        disagree,
+        classes
+    );
     assert!(text.is_empty());
     assert!(disagree.is_empty());
+    assert!(classes.is_empty());
 }
 
 #[test]

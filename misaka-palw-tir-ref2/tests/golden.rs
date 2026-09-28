@@ -2,9 +2,8 @@
 //! implementation byte for byte. The vectors are the first implementation's outputs, so a mismatch
 //! here is a finding to adjudicate against the text (ref2-findings.md), not automatically a bug.
 //!
-//! Error classes are diagnostic (PALW-TIR-34): a vector's `expect_error` requires failure; the
-//! class is compared and every disagreement is listed, but only success versus failure and the
-//! exact bytes of every success are required.
+//! Revision 2 of 04b (§9.3): every rule names the class of its refusal and every vector breaks one
+//! rule, so a vector's `expect_error` class is required exactly, as are the bytes of every success.
 
 mod common;
 
@@ -104,7 +103,9 @@ fn run_primitive_file(path: &std::path::Path, t: &mut Tally) {
             (None, Some(cls), Err(e)) => {
                 t.reproduced += 1;
                 if cls.as_str() != Some(e.class.name()) {
+                    // Revision 2 (§9.3): a vector breaks one rule, so its class is required.
                     t.class_disagreements.push(format!("{name}: vector {} / ref2 {}", cls, e));
+                    t.failures.push(format!("{name}: class {cls} expected (§9.3), ref2 {e}"));
                 }
             }
             (None, Some(cls), Ok(v)) => t.failures.push(format!("{name}: expected error {cls}, got {}", tensor_json(&v))),
@@ -153,7 +154,7 @@ fn indexed(v: &Value, key: &str) -> BTreeMap<u64, Tensor> {
 
 fn run_program_file(path: &std::path::Path) -> (usize, usize, Vec<String>) {
     let d = read_json(path);
-    assert_eq!(d["format"], "palw-tir-v1/program-vectors/1");
+    assert_eq!(d["format"], "palw-tir-v1/program-vectors/2");
     let name = d["name"].as_str().unwrap().to_string();
     let bytes = hex_decode(d["program_borsh_hex"].as_str().unwrap());
     let prog = decode_canonical(&bytes).unwrap_or_else(|e| panic!("{name}: the program is refused: {e}"));
@@ -221,29 +222,46 @@ fn run_program_file(path: &std::path::Path) -> (usize, usize, Vec<String>) {
     for (ci, c) in d["cones"].as_array().unwrap().iter().enumerate() {
         total += 1;
         let layer = if c["layer"].is_null() { None } else { Some(int_of(&c["layer"]) as u32) };
-        let env = ConeEnv {
-            token: int_of(&c["token"]) as u64,
-            pos: int_of(&c["pos"]) as u64,
-            carry_in: indexed(&c["carry_in"], "index").into_iter().map(|(k, v)| (k as u8, v)).collect(),
-            fixed: indexed(&c["fixed"], "index").into_iter().map(|(k, v)| (k as u16, v)).collect(),
-            hist_prior: c["hist_prior"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|h| (int_of(&h["state"]) as u16, h["rows"].as_array().unwrap().iter().map(tensor_of).collect()))
-                .collect(),
-            supplied: indexed(&c["supplied"], "index").into_iter().map(|(k, v)| (k as u16, v)).collect(),
-        };
+        let env = env_of(c);
         let got = eval_cone(&prog, &params, int_of(&c["block"]) as u8, layer, int_of(&c["target"]) as u16, &env);
         match (c.get("expect"), got) {
             (Some(exp), Ok(v)) if tensor_of(exp) == v => ok += 1,
             (Some(exp), Ok(v)) => fails.push(format!("{name} cone {ci}: expected {exp} got {}", tensor_json(&v))),
             (Some(exp), Err(e)) => fails.push(format!("{name} cone {ci}: expected {exp} got error {e}")),
-            (None, Err(_)) if c.get("expect_error").is_some() => ok += 1,
-            (None, r) => fails.push(format!("{name} cone {ci}: expected an error, got {r:?}")),
+            (None, r) => fails.push(format!("{name} cone {ci}: no expect, got {r:?}")),
+        }
+    }
+    // Refusals (revision 2): an honest environment with one defect, and the §9.3 class.
+    for (ri, c) in d["refusals"].as_array().unwrap().iter().enumerate() {
+        total += 1;
+        let layer = if c["layer"].is_null() { None } else { Some(int_of(&c["layer"]) as u32) };
+        let env = env_of(c);
+        let got = eval_cone(&prog, &params, int_of(&c["block"]) as u8, layer, int_of(&c["target"]) as u16, &env);
+        let want = c["expect_error"].as_str().unwrap();
+        match got {
+            Err(e) if e.class.name() == want => ok += 1,
+            Err(e) => fails.push(format!("{name} refusal {ri} ({}): expected {want}, got {e}", c["what"])),
+            Ok(v) => fails.push(format!("{name} refusal {ri} ({}): expected {want}, got {}", c["what"], tensor_json(&v))),
         }
     }
     (total, ok, fails)
+}
+
+/// A cone environment from a vector (`token` null = absent).
+fn env_of(c: &Value) -> ConeEnv {
+    ConeEnv {
+        token: if c["token"].is_null() { None } else { Some(int_of(&c["token"]) as u64) },
+        pos: int_of(&c["pos"]) as u64,
+        carry_in: indexed(&c["carry_in"], "index").into_iter().map(|(k, v)| (k as u8, v)).collect(),
+        fixed: indexed(&c["fixed"], "index").into_iter().map(|(k, v)| (k as u16, v)).collect(),
+        hist_prior: c["hist_prior"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| (int_of(&h["state"]) as u16, h["rows"].as_array().unwrap().iter().map(tensor_of).collect()))
+            .collect(),
+        supplied: indexed(&c["supplied"], "index").into_iter().map(|(k, v)| (k as u16, v)).collect(),
+    }
 }
 
 #[test]
@@ -260,7 +278,7 @@ fn program_vectors() {
         ok += o;
         fails.extend(fl);
     }
-    println!("program vectors (steps + cones): {ok}/{total} reproduced");
+    println!("program vectors (steps + cones + refusals): {ok}/{total} reproduced");
     for f in &fails {
         println!("  FAIL {f}");
     }
@@ -287,6 +305,7 @@ fn encoding_vectors() {
                 assert!(Class::from_name(cls).is_some(), "{name}: unknown class {cls}");
                 if cls != e.class.name() {
                     classes.push(format!("{name}: vector {cls} / ref2 {e}"));
+                    fails.push(format!("{name}: class {cls} expected (§9.3), ref2 {e}"));
                 }
             }
         }

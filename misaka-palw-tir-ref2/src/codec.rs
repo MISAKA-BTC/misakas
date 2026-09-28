@@ -278,6 +278,19 @@ pub fn decode_canonical(bytes: &[u8]) -> Res<Program> {
     Ok(p)
 }
 
+/// The classes of every rule a byte string breaks (§9.3): `{Encoding}` when §4.4's decoding fails
+/// (normal form is then not evaluable), else the classes of every violated NF rule; `Ok` when the
+/// bytes are a program in normal form.
+pub fn decode_violations(bytes: &[u8]) -> Result<Program, std::collections::BTreeSet<Class>> {
+    let enc = || std::collections::BTreeSet::from([Class::Encoding]);
+    let p = decode_structural(bytes).map_err(|_| enc())?;
+    if encode(&p) != bytes {
+        return Err(enc());
+    }
+    let v = crate::normal_form::violations(&p);
+    if v.is_empty() { Ok(p) } else { Err(v.into_iter().map(|x| x.class).collect()) }
+}
+
 struct Writer {
     v: Vec<u8>,
 }

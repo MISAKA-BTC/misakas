@@ -20,7 +20,7 @@ impl ProgBuilder {
         ProgBuilder {
             p: Program {
                 version: 1,
-                prim_set_id: [0; 64],
+                prim_set_id: crate::program::prim_set_id_v1(),
                 token_bound,
                 history_bound,
                 params: vec![],

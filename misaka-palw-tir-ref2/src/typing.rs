@@ -188,8 +188,8 @@ pub fn check_type(prim: &Prim, ins: &[TensorType], out: &TensorType, states: &[S
             want(prim, out.shape == x.unwrap().shape, "shape changes")
         }
         Prim::IntExp | Prim::IntRsqrt | Prim::IntLn => {
-            // §6.5 states only "inputs MUST NOT be i128"; the elementwise shape rule is the reading
-            // (finding F9 in ref2-findings.md).
+            // §6.5 *Type* (revision 2): 1 input of any dtype but i128; out.shape = x.shape; any
+            // out.dtype.
             let x = x.unwrap();
             want(prim, x.dtype != DType::I128, "i128 input")?;
             want(prim, out.shape == x.shape, "shape changes")

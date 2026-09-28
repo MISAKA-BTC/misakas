@@ -12,15 +12,15 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use common::bridge::*;
 use common::progen::{GenCfg, R, gen_params, gen_program, pick, rand_profile, rand_value};
 use misaka_palw_tir as first;
 use misaka_palw_tir_ref2 as ref2;
 use rand::{Rng, SeedableRng};
-use ref2::codec::{decode_canonical, encode};
-use ref2::eval::{ConeEnv, Params, RunState, eval_cone, initial_state, step_traced};
+use ref2::codec::{decode_canonical, decode_violations, encode};
+use ref2::eval::{ConeEnv, Params, RunState, eval_cone, initial_state, step_traced, step_violations};
 use ref2::{Class, Cmp, DType, Dim, Prim, Program, Ref, Rounding, StateKind, Tensor, TensorType, eval_primitive};
 
 fn scale() -> usize {
@@ -37,9 +37,44 @@ struct Tally {
     class_examples: BTreeMap<(Class, Class), Vec<String>>,
     disagreements: Vec<String>,
     panics_first: Vec<String>,
+    /// Both failed, and the first implementation's class is not the class of any rule the input
+    /// breaks (§9.3, revision 2: "an input that breaks several reports the class of one of them").
+    class_outside_set: Vec<String>,
+    /// Cases whose violation set had exactly one class (the class is then fixed by the text).
+    single_class: usize,
 }
 
 impl Tally {
+    /// As [`Tally::record`], and when both fail, the first implementation's class must be the class
+    /// of a rule the input breaks: one of `set` (this crate's violation classes), which must also
+    /// contain this crate's own class.
+    fn record_set<T: PartialEq + std::fmt::Debug>(
+        &mut self,
+        what: &str,
+        a: &Outcome<T>,
+        set: &std::collections::BTreeSet<Class>,
+        f: &Outcome<T>,
+    ) -> bool {
+        let ok = self.record(what, a, f);
+        if let (Outcome::Err(x), Outcome::Err(y)) = (a, f) {
+            if set.len() == 1 {
+                self.single_class += 1;
+            }
+            if !set.contains(x) {
+                self.disagreements.push(format!("{what}: ref2's own class {} is not in its violation set {set:?}", x.name()));
+            }
+            if !set.contains(y) {
+                self.class_outside_set.push(format!(
+                    "{what}: first {} not among the broken rules' classes {set:?} (ref2 {})",
+                    y.name(),
+                    x.name()
+                ));
+                return false;
+            }
+        }
+        ok
+    }
+
     fn record<T: PartialEq + std::fmt::Debug>(&mut self, what: &str, a: &Outcome<T>, f: &Outcome<T>) -> bool {
         self.cases += 1;
         match (a, f) {
@@ -83,16 +118,21 @@ impl Tally {
 
     fn report(&self, name: &str) {
         println!(
-            "{name}: {} cases, {} both ok (identical), {} both failed ({} same class), {} disagreements, {} first-impl panics",
+            "{name}: {} cases, {} both ok (identical), {} both failed ({} same class, {} single-class inputs), {} disagreements, {} classes outside the broken rules, {} first-impl panics",
             self.cases,
             self.both_ok,
             self.both_err,
             self.class_same,
+            self.single_class,
             self.disagreements.len(),
+            self.class_outside_set.len(),
             self.panics_first.len()
         );
+        for d in self.class_outside_set.iter().take(15) {
+            println!("  CLASS {d}");
+        }
         for ((a, b), n) in &self.class_diff {
-            println!("  class (diagnostic) ref2 {} / first {}: {n}", a.name(), b.name());
+            println!("  class differs (both are classes of rules the input breaks) ref2 {} / first {}: {n}", a.name(), b.name());
             if std::env::var("TIR_REF2_CLASS_EXAMPLES").is_ok() {
                 for e in &self.class_examples[&(*a, *b)] {
                     println!("      e.g. {e}");
@@ -689,6 +729,7 @@ struct ProgStats {
     /// Features of programs with at least one step both implementations completed.
     features_ok: BTreeMap<String, usize>,
     fail_classes: BTreeMap<&'static str, usize>,
+    refused_programs: usize,
 }
 
 /// The structural features of a program the differential should cover.
@@ -763,9 +804,15 @@ fn run_program_case(seed: u64, cfg: GenCfg, st: &mut ProgStats) {
     let g = gen_program(&mut rng, cfg);
     let bytes = encode(&g.prog);
     st.programs += 1;
-    let a = mine(decode_canonical(&bytes));
-    if let Outcome::Err(c) = &a {
-        panic!("seed {seed}: this crate's generator made a program this crate refuses ({c:?}): {:?}", decode_canonical(&bytes).err());
+    let (a, set) = match decode_violations(&bytes) {
+        Ok(_) => (Outcome::Ok(()), BTreeSet::new()),
+        Err(set) => (Outcome::Err(decode_canonical(&bytes).err().unwrap().class), set),
+    };
+    if !cfg.post_writes && !a.is_ok() {
+        panic!("seed {seed}: this crate's generator made a program this crate refuses: {:?}", decode_canonical(&bytes).err());
+    }
+    if !a.is_ok() {
+        st.refused_programs += 1;
     }
     let f = first_decode(&bytes);
     let fa: Outcome<()> = match &f {
@@ -773,7 +820,7 @@ fn run_program_case(seed: u64, cfg: GenCfg, st: &mut ProgStats) {
         Outcome::Err(c) => Outcome::Err(*c),
         Outcome::Panic(s) => Outcome::Panic(s.clone()),
     };
-    if !st.decode.record(&format!("seed {seed} decode"), &Outcome::Ok(()), &fa) {
+    if !st.decode.record_set(&format!("seed {seed} decode"), &a, &set, &fa) || !a.is_ok() {
         return;
     }
     let Outcome::Ok(fp) = f else { return };
@@ -820,7 +867,8 @@ fn run_program_case(seed: u64, cfg: GenCfg, st: &mut ProgStats) {
                 *st.features_ok.entry(x).or_default() += 1;
             }
         }
-        st.steps.record(&what, &commits_of(&a), &f);
+        let set = if a.is_ok() { BTreeSet::new() } else { step_violations(p, &g.params, &mst, token) };
+        st.steps.record_set(&what, &commits_of(&a), &set, &f);
         if !f.is_ok() && fst != before {
             st.steps.disagreements.push(format!("{what}: first changed its run state on a failed step"));
         }
@@ -857,7 +905,7 @@ fn cones_for_step(
         let b = occ.block as usize;
         let block = &p.blocks[b];
         let inst = |j: u16| if p.states[j as usize].per_layer { occ.layer } else { None };
-        let mut env = ConeEnv { token, pos: st.pos, carry_in: occ.carry_in.clone(), ..Default::default() };
+        let mut env = ConeEnv { token: Some(token), pos: st.pos, carry_in: occ.carry_in.clone(), ..Default::default() };
         for n in &block.nodes {
             for r in &n.inputs {
                 if let Ref::State(j) = *r
@@ -885,7 +933,7 @@ fn cones_for_step(
             }
             let what = format!("seed {seed} pos {} cone ({}, {:?}) target {target}", st.pos, occ.block, occ.layer);
             let a = mine(eval_cone(p, params, occ.block, occ.layer, target, &e));
-            let f = first_cone(fp, fparams, occ.block, occ.layer, target, &env_to(&e, true));
+            let f = first_cone(fp, fparams, occ.block, occ.layer, target, &env_to(&e));
             stats.cones.record(&what, &a, &f);
             match &a {
                 Outcome::Ok(v) if *v == occ.values[target as usize] => stats.cone_matches_step += 1,
@@ -899,7 +947,7 @@ fn cones_for_step(
                 }
             }
             let a = mine(eval_cone(p, params, occ.block, occ.layer, target, &e));
-            let f = first_cone(fp, fparams, occ.block, occ.layer, target, &env_to(&e, true));
+            let f = first_cone(fp, fparams, occ.block, occ.layer, target, &env_to(&e));
             stats.cones_subset.record(&format!("{what} (random supplied subset)"), &a, &f);
             if let Outcome::Ok(v) = &a
                 && *v != occ.values[target as usize]
@@ -939,29 +987,26 @@ fn b_program_differential() {
     let _ = st.windows_hit;
     assert!(st.cone_mismatch_step.is_empty());
     for t in [&st.decode, &st.steps, &st.states, &st.cones, &st.cones_subset] {
-        assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
+        assert!(t.disagreements.is_empty() && t.panics_first.is_empty() && t.class_outside_set.is_empty());
     }
 }
 
 #[test]
-fn b2_program_differential_double_global_writes() {
-    // 04b is silent on two StateWrites of one global state in one step (pre and post): measured
-    // separately so the main differential stays on text the spec fixes.
+fn b2_post_writes_are_refused() {
+    // Revision 2's NF-19: post contains no StateWrite and no HistAppend (so no global state has two
+    // writers). Programs whose post writes states — also states pre writes, also histories — must be
+    // refused by both, with NF-19's class (NormalForm) or the class of another rule they break.
     let n = 300 * scale() as u64;
     let mut st = ProgStats::default();
     for seed in 0..n {
-        run_program_case(1_000_000 + seed, GenCfg { double_global_write: true, ..GenCfg::default() }, &mut st);
+        run_program_case(1_000_000 + seed, GenCfg { post_writes: true, ..GenCfg::default() }, &mut st);
     }
-    println!("B2. features of programs with at least one step both completed:");
-    for (k, v) in &st.features_ok {
-        if k.contains("global") {
-            println!("    {v:6}  {k}");
-        }
-    }
+    println!("B2. {} programs, {} of them with a state write in post (refused by ref2)", st.programs, st.refused_programs);
     st.decode.report("B2. decode");
-    st.steps.report("B2. steps");
-    st.states.report("B2. run states");
-    st.cones.report("B2. cones");
+    st.steps.report("B2. steps of the programs without post writes");
+    assert!(st.refused_programs > st.programs / 4);
+    assert!(st.decode.disagreements.is_empty() && st.decode.class_outside_set.is_empty() && st.decode.panics_first.is_empty());
+    assert!(st.steps.disagreements.is_empty() && st.steps.class_outside_set.is_empty());
 }
 
 // =============================================================== C. malformed bytes
@@ -1034,14 +1079,15 @@ fn c_malformed_bytes() {
                     Outcome::Panic(s) => Outcome::Panic(s.clone()),
                 },
             );
-            if t.record(&format!("seed {seed} mutation {m} kind {kind} ({} bytes)", b.len()), &a2, &f2) && a2.is_ok() {
+            let set = decode_violations(&b).err().unwrap_or_default();
+            if t.record_set(&format!("seed {seed} mutation {m} kind {kind} ({} bytes)", b.len()), &a2, &set, &f2) && a2.is_ok() {
                 both_accept_reencode_ok += 1;
             }
         }
     }
     t.report("C. malformed bytes");
     println!("C. mutations both accepted (and both re-encode to the input): {both_accept_reencode_ok}");
-    assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
+    assert!(t.disagreements.is_empty() && t.panics_first.is_empty() && t.class_outside_set.is_empty());
 }
 
 // =============================================================== D. structural mutations
@@ -1309,7 +1355,17 @@ fn d_structural_mutations() {
                     Outcome::Panic(s) => Outcome::Panic(s.clone()),
                 },
             );
-            t.record(&format!("seed {seed} #{m} {what}"), &a2, &f2);
+            let set = decode_violations(&bytes).err().unwrap_or_default();
+            if std::env::var("TIR_REF2_SHOW_SETS").is_ok()
+                && let (Outcome::Err(x), Outcome::Err(y)) = (&a2, &f2)
+                && x != y
+            {
+                let rules: Vec<String> = ref2::codec::decode_structural(&bytes)
+                    .map(|q| ref2::normal_form::violations(&q).into_iter().map(|v| format!("{} {}", v.rule, v.reason)).collect())
+                    .unwrap_or_default();
+                println!("  SET seed {seed} #{m} {what}: ref2 {} first {}: {rules:?}", x.name(), y.name());
+            }
+            t.record_set(&format!("seed {seed} #{m} {what}"), &a2, &set, &f2);
             // A mutant both accept is a different valid program: run it on both.
             if let (Outcome::Ok(mp), Outcome::Ok(fp)) = (a, f) {
                 let params = gen_params(&mut rng, &mp);
@@ -1320,7 +1376,8 @@ fn d_structural_mutations() {
                     let token = rng.gen_range(0..mp.token_bound.min(16) as u64);
                     let (x, next) = ref2_step(&mp, &params, &mst, token);
                     let y = first_step(&fp, &fparams, &mut fst, token as u32);
-                    runs.record(&format!("seed {seed} #{m} {what} step {s}"), &x, &y);
+                    let set = if x.is_ok() { BTreeSet::new() } else { step_violations(&mp, &params, &mst, token) };
+                    runs.record_set(&format!("seed {seed} #{m} {what} step {s}"), &x, &set, &y);
                     if let Some(nx) = next {
                         mst = nx;
                     }
@@ -1330,8 +1387,8 @@ fn d_structural_mutations() {
     }
     t.report("D. structural mutations (decode)");
     runs.report("D. steps of mutants both accept");
-    assert!(t.disagreements.is_empty() && t.panics_first.is_empty());
-    assert!(runs.disagreements.is_empty() && runs.panics_first.is_empty());
+    assert!(t.disagreements.is_empty() && t.panics_first.is_empty() && t.class_outside_set.is_empty());
+    assert!(runs.disagreements.is_empty() && runs.panics_first.is_empty() && runs.class_outside_set.is_empty());
 }
 
 // =============================================================== B3. hostile cone environments
@@ -1358,22 +1415,32 @@ fn closure(p: &Program, b: usize, target: u16, supplied: &BTreeMap<u16, Tensor>)
 
 #[test]
 fn b3_hostile_cone_envs() {
-    // Each perturbation of an honest court environment, and what 04b §9.2 says about it:
-    const KINDS: [(&str, &str); 11] = [
-        ("drop a needed carry-in", "fails (Missing)"),
-        ("drop a needed Fixed value", "fails (Missing)"),
-        ("drop a needed history of 0 rows (pos 0 or window 1)", "fails (Missing)"),
-        ("supply the target with a wrong value", "silent"),
-        ("supply an index that is no node", "silent"),
-        ("a wrong-shaped supplied node inside the closure", "fails"),
-        ("pos = history_bound", "silent"),
-        ("one history row too many", "fails"),
-        ("a wrong-shaped supplied node outside the closure", "silent"),
-        ("a Fixed value outside [lo, hi]", "fails (§9.1(2))"),
-        ("drop a needed history of ≥ 1 row", "fails (Missing)"),
+    // Each perturbation of an honest court environment and the verdict 04b §9.2/§9.3 (revision 2)
+    // gives it: `None` = succeeds with the honest value, `Some(class)` = refused with that class.
+    use Class::*;
+    const KINDS: [(&str, Option<Class>); 18] = [
+        ("drop a needed carry-in", Some(Missing)),
+        ("drop a needed Fixed value", Some(Missing)),
+        ("drop a needed history of 0 rows (pos 0 or window 1)", Some(Missing)),
+        ("supply the target with a wrong value", Some(Malformed)),
+        ("supply an index that is no node", Some(Malformed)),
+        ("a wrong-shaped supplied node inside the closure", Some(Operand)),
+        ("pos = history_bound", Some(Position)),
+        ("one history row too many", Some(Position)),
+        ("a wrong-shaped supplied node outside the closure", None),
+        ("a Fixed value outside [lo, hi]", Some(Operand)),
+        ("drop a needed history of ≥ 1 row", Some(Missing)),
+        ("no token, the closure reads it", Some(Missing)),
+        ("token = token_bound, the closure reads it", Some(Operand)),
+        ("no token, the closure does not read it", None),
+        ("a history row of the wrong dtype", Some(Operand)),
+        ("a carry-in of the wrong shape", Some(Operand)),
+        ("a request that is no occurrence", Some(Malformed)),
+        ("drop a param the closure reads", Some(Missing)),
     ];
     let n = 600 * scale() as u64;
-    let mut per: Vec<(usize, usize, usize, usize, usize)> = vec![(0, 0, 0, 0, 0); KINDS.len()]; // (applicable, agree-ok, agree-err, ref2 ok/first err, ref2 err/first ok)
+    // (applicable, ref2 = text, first = text, first = ref2)
+    let mut per: Vec<(usize, usize, usize, usize)> = vec![(0, 0, 0, 0); KINDS.len()];
     let mut examples: Vec<Vec<String>> = vec![Vec::new(); KINDS.len()];
     for seed in 0..n {
         let mut rng = R::seed_from_u64(0xB3B3_0000 + seed);
@@ -1394,7 +1461,7 @@ fn b3_hostile_cone_envs() {
                 }
                 let target = pick(&mut rng, &commits);
                 let inst = |j: u16| if p.states[j as usize].per_layer { occ.layer } else { None };
-                let mut env = ConeEnv { token, pos: st.pos, carry_in: occ.carry_in.clone(), ..Default::default() };
+                let mut env = ConeEnv { token: Some(token), pos: st.pos, carry_in: occ.carry_in.clone(), ..Default::default() };
                 for nd in &block.nodes {
                     for r in &nd.inputs {
                         if let Ref::State(j) = *r
@@ -1413,6 +1480,8 @@ fn b3_hostile_cone_envs() {
                     }
                 }
                 let todo = closure(p, b, target, &env.supplied);
+                let reads =
+                    |f: &dyn Fn(&Ref) -> bool| block.nodes.iter().enumerate().any(|(i, nd)| todo[i] && nd.inputs.iter().any(f));
                 let needed_carry: Vec<u8> = block
                     .nodes
                     .iter()
@@ -1427,6 +1496,13 @@ fn b3_hostile_cone_envs() {
                     .filter(|(i, _)| todo[*i])
                     .flat_map(|(_, nd)| nd.inputs.iter().filter_map(|r| if let Ref::State(j) = r { Some(*j) } else { None }))
                     .collect();
+                let needed_param: Vec<u16> = block
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| todo[*i])
+                    .flat_map(|(_, nd)| nd.inputs.iter().filter_map(|r| if let Ref::Param(j) = r { Some(*j) } else { None }))
+                    .collect();
                 let needed_hist: Vec<u16> = block
                     .nodes
                     .iter()
@@ -1434,20 +1510,28 @@ fn b3_hostile_cone_envs() {
                     .filter(|(i, _)| todo[*i])
                     .filter_map(|(_, nd)| if let Prim::HistAppend { state } = nd.prim { Some(state) } else { None })
                     .collect();
+                let reads_token = reads(&|r| *r == Ref::Input(0));
+                let rows_needed = |j: u16| match p.states[j as usize].kind {
+                    StateKind::Hist { window } => st.pos.min(window as u64 - 1),
+                    _ => 0,
+                };
                 let outside: Vec<u16> =
                     (0..block.nodes.len() as u16).filter(|&i| !todo[i as usize] && !env.supplied.contains_key(&i)).collect();
                 let inside: Vec<u16> = (0..target).filter(|&i| todo[i as usize]).collect();
-                let mut k = rng.gen_range(0..KINDS.len() - 1);
-                if k == 2 {
-                    let rows_needed = needed_hist.first().map(|&j| match p.states[j as usize].kind {
-                        StateKind::Hist { window } => st.pos.min(window as u64 - 1),
-                        _ => 0,
-                    });
-                    if rows_needed.is_some_and(|r| r > 0) {
-                        k = 10;
-                    }
+                let mut k = rng.gen_range(0..KINDS.len());
+                if k == 2 && needed_hist.first().is_some_and(|&j| rows_needed(j) > 0) {
+                    k = 10;
+                } else if k == 10 && needed_hist.first().is_some_and(|&j| rows_needed(j) == 0) {
+                    k = 2;
+                }
+                if k == 11 && !reads_token {
+                    k = 13;
+                } else if k == 13 && reads_token {
+                    k = 11;
                 }
                 let mut e = env.clone();
+                let mut params = g.params.clone();
+                let (mut blk_req, mut layer_req) = (occ.block, occ.layer);
                 let wrong = Tensor::new(DType::I8, vec![7], vec![1; 7]).unwrap();
                 let applicable = match k {
                     0 => needed_carry.first().map(|c| e.carry_in.remove(c)).is_some(),
@@ -1470,82 +1554,114 @@ fn b3_hostile_cone_envs() {
                         e.pos = p.history_bound as u64;
                         true
                     }
-                    7 => {
-                        needed_hist.first().map(|j| e.hist_prior.get_mut(j).unwrap().push(occ.values[0].clone())).is_some()
-                            && !needed_hist.is_empty()
-                    }
+                    7 => match needed_hist.first() {
+                        Some(j) => {
+                            e.hist_prior.get_mut(j).unwrap().push(occ.values[0].clone());
+                            true
+                        }
+                        None => false,
+                    },
                     8 => outside.first().map(|&i| e.supplied.insert(i, wrong.clone())).is_some(),
-                    _ => {
+                    9 => {
                         let mut done = false;
                         if let Some(&j) = needed_fixed.first()
                             && let StateKind::Fixed { hi, .. } = p.states[j as usize].kind
+                            && (hi as i128) < p.states[j as usize].dtype.max()
                         {
-                            let d = p.states[j as usize].dtype;
-                            if (hi as i128) < d.max() {
-                                let v = e.fixed.get_mut(&j).unwrap();
-                                v.data[0] = hi as i128 + 1;
-                                done = true;
-                            }
+                            e.fixed.get_mut(&j).unwrap().data[0] = hi as i128 + 1;
+                            done = true;
                         }
                         done
                     }
+                    11 | 13 => {
+                        e.token = None;
+                        true
+                    }
+                    12 => {
+                        e.token = Some(p.token_bound as u64);
+                        reads_token
+                    }
+                    14 => match needed_hist.first() {
+                        Some(j) if rows_needed(*j) > 0 => {
+                            let rows = e.hist_prior.get_mut(j).unwrap();
+                            let r0 = &rows[0];
+                            let other = if r0.dtype == DType::I32 { DType::I16 } else { DType::I32 };
+                            rows[0] = Tensor::new(other, r0.shape.clone(), vec![0; r0.data.len()]).unwrap();
+                            true
+                        }
+                        _ => false,
+                    },
+                    15 => match needed_carry.first() {
+                        Some(c) => {
+                            let t = e.carry_in.get_mut(c).unwrap();
+                            let mut shape = t.shape.clone();
+                            shape.push(2);
+                            *t = Tensor::zeros(t.dtype, shape);
+                            true
+                        }
+                        None => false,
+                    },
+                    16 => {
+                        // A layer that runs another block, or pre/post with a layer.
+                        match occ.layer {
+                            None => layer_req = Some(0),
+                            Some(_) => {
+                                blk_req = p.schedule.pre;
+                            }
+                        }
+                        let _ = &mut blk_req;
+                        true
+                    }
+                    _ => match needed_param.first() {
+                        Some(&j) => {
+                            let key = (j, if p.params[j as usize].per_layer { occ.layer } else { None });
+                            params.remove(&key).is_some()
+                        }
+                        None => false,
+                    },
                 };
                 if !applicable {
                     continue;
                 }
-                let a = mine(eval_cone(p, &g.params, occ.block, occ.layer, target, &e));
-                let f = first_cone(&fp, &fparams, occ.block, occ.layer, target, &env_to(&e, true));
+                let a = mine(eval_cone(p, &params, blk_req, layer_req, target, &e));
+                let f = first_cone(&fp, &params_to(&params), blk_req, layer_req, target, &env_to(&e));
+                let want: Outcome<Tensor> = match KINDS[k].1 {
+                    None => Outcome::Ok(occ.values[target as usize].clone()),
+                    Some(c) => Outcome::Err(c),
+                };
                 let slot = &mut per[k];
                 slot.0 += 1;
-                match (a.is_ok(), f.is_ok()) {
-                    (true, true) => {
-                        if a == f {
-                            slot.1 += 1
-                        } else {
-                            slot.3 += 1;
-                            if examples[k].len() < 2 {
-                                examples[k].push(format!(
-                                    "seed {seed}: both ok, values differ: ref2 {} / first {}",
-                                    brief(&a),
-                                    brief(&f)
-                                ));
-                            }
-                        }
-                    }
-                    (false, false) => slot.2 += 1,
-                    (true, false) => {
-                        slot.3 += 1;
-                        if examples[k].len() < 2 {
-                            examples[k].push(format!("seed {seed} pos {}: ref2 {} / first {}", st.pos, brief(&a), brief(&f)));
-                        }
-                    }
-                    (false, true) => {
-                        slot.4 += 1;
-                        if examples[k].len() < 2 {
-                            examples[k].push(format!("seed {seed} pos {}: ref2 {} / first {}", st.pos, brief(&a), brief(&f)));
-                        }
-                    }
+                slot.1 += (a == want) as usize;
+                slot.2 += (f == want) as usize;
+                slot.3 += (f == a) as usize;
+                if (a != want || f != want) && examples[k].len() < 3 {
+                    examples[k].push(format!(
+                        "seed {seed} pos {}: text {} ref2 {} first {}",
+                        st.pos,
+                        brief(&want),
+                        brief(&a),
+                        brief(&f)
+                    ));
                 }
+                let _ = &fparams;
             }
             st = next;
         }
     }
-    println!("B3. hostile cone environments (each an honest court env with one perturbation):");
-    println!(
-        "    {:52} {:18} {:>6} {:>8} {:>8} {:>10} {:>10}",
-        "perturbation", "04b says", "cases", "both ok", "both err", "ref2 ok", "first ok"
-    );
+    println!("B3. hostile cone environments (an honest court env with one defect; revision 2 fixes each verdict):");
+    println!("    {:55} {:10} {:>6} {:>9} {:>9} {:>9}", "defect", "04b", "cases", "ref2=text", "first=text", "first=ref2");
+    let mut bad = Vec::new();
     for (i, (name, says)) in KINDS.iter().enumerate() {
-        let (c, ok, er, a_only, f_only) = per[i];
-        println!("    {:52} {:18} {:>6} {:>8} {:>8} {:>10} {:>10}", name, says, c, ok, er, a_only, f_only);
+        let (c, a, f, same) = per[i];
+        let says = says.map(|c| c.name().to_string()).unwrap_or_else(|| "ok".into());
+        println!("    {:55} {:10} {:>6} {:>9} {:>9} {:>9}", name, says, c, a, f, same);
         for e in &examples[i] {
             println!("        e.g. {e}");
         }
+        if a != c || f != c {
+            bad.push(*name);
+        }
+        assert!(c > 0 || scale() == 0, "perturbation {name} never applied");
     }
-    // Where 04b is explicit, this implementation follows it; the first implementation's
-    // departures are findings (ref2-findings.md), reported above, not asserted.
-    assert_eq!(per[5].3 + per[5].4, 0);
-    assert_eq!(per[7].3 + per[7].4, 0);
-    assert_eq!(per[9].3 + per[9].4, 0);
-    assert_eq!(per[10].3 + per[10].4, 0);
+    assert!(bad.is_empty(), "verdicts off the text: {bad:?}");
 }

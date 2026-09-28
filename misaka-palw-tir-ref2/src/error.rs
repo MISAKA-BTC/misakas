@@ -1,5 +1,6 @@
-//! Errors (04b §9.3). The class is diagnostic; only success versus error is normative
-//! (PALW-TIR-34). Every failure of this crate is one of these values — never a panic.
+//! Errors (04b §9.3). Success versus error is normative; since revision 2 every rule also names the
+//! class of its refusal (the §9.3 table), and no class decides a verdict (PALW-TIR-34). Every
+//! failure of this crate is one of these values — never a panic.
 
 use std::fmt;
 
@@ -15,6 +16,9 @@ pub enum Class {
     Operand,
     Missing,
     Position,
+    /// A cone request naming no occurrence or no node, or an environment that supplies the target
+    /// or an index that is no node (§9.2, §9.3; added by revision 2).
+    Malformed,
 }
 
 impl Class {
@@ -29,6 +33,7 @@ impl Class {
             Class::Operand => "Operand",
             Class::Missing => "Missing",
             Class::Position => "Position",
+            Class::Malformed => "Malformed",
         }
     }
 
@@ -43,6 +48,7 @@ impl Class {
             "Operand" => Class::Operand,
             "Missing" => Class::Missing,
             "Position" => Class::Position,
+            "Malformed" => Class::Malformed,
             _ => return None,
         })
     }
