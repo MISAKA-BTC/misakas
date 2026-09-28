@@ -3820,6 +3820,7 @@ dependencies = [
  "kaspa-txscript-errors",
  "kaspa-utils",
  "libcrux-ml-dsa",
+ "misaka-palw-tir",
  "rand 0.8.6",
  "secp256k1",
  "serde",
@@ -6000,6 +6001,8 @@ dependencies = [
  "kaspa-txscript",
  "libc",
  "misaka-palw",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
  "rayon",
  "serde_json",
  "unicode-normalization",
@@ -6179,6 +6182,9 @@ dependencies = [
  "kaspa-pq-validator-core",
  "kaspa-txscript",
  "misaka-palw-base0",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
+ "misaka-palw-tir-lower",
  "serde_json",
 ]
 
@@ -6215,6 +6221,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-tir-artifact"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "misaka-palw-tir",
+ "thiserror 1.0.64",
+]
+
+[[package]]
 name = "misaka-palw-tir-conformance"
 version = "1.1.0"
 dependencies = [
@@ -6234,6 +6250,22 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rayon",
  "serde_json",
+]
+
+[[package]]
+name = "misaka-palw-tir-lower"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "clap 4.5.51",
+ "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
 ]
 
 [[package]]

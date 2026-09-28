@@ -100,6 +100,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         | O::BondCapabilityDeclared { .. }
         | O::BondRetireRequested { .. }
         | O::ClassRegistered { .. }
+        // RFC-0002 Phase F (tag 61): an IR registration is a registration, like the one above.
+        | O::ClassRegisteredTirV1 { .. }
         | O::ClassFrozen(..)
         | O::PanelBound { .. }
         | O::ReceiptLicensed { .. }

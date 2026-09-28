@@ -34,6 +34,8 @@ USAGE:
                          [--key-file <ml-dsa-87 seed>] [--out <measured.json>] <artifact-path>
     palw-class verify    --network <id> [--artifact <artifact-path>] <measured.json>
     palw-class manifest  --network <id> [--out <path>] [--check] <artifact-path>
+    palw-class check-architecture --network <id> --config <config.json> [--legacy] [--held] [--json]
+    palw-class check-architecture --network <id> --tir <program.tir> [--json]
 
 `measure` (ADR-0100) reads the geometry off the artifact, measures its bytes from the inventory,
 evaluates every wall of ADR-0097 at 512 / 32,768 / 131,072 / 1,048,576 positions and the shard
@@ -44,10 +46,22 @@ or a signature that does not verify.
 
 `manifest` writes `<artifact-path>.palwmanifest`: the inventory root of every class this artifact
 pairs with, derived through the SAME call a producer's class resolve uses, plus the artifact digest
-that binds the file to the sidecar. It exists so nobody types an inventory root into a genesis card
+that binds the file to the sidecar. For a PALWTIR1 (PALW-TIR) artifact it records the one
+inventory root over the program's params (streamed through the consensus inventory) and the
+program's graph_ir_root. It exists so nobody types an inventory root into a genesis card
 again — that substitution (the flat artifact digest where the operand-inventory root belonged) shut
 the dense tier of testnet-11 and then of testnet-12. `--check` recomputes an existing sidecar and
 exits 1 on any disagreement instead of writing.
+
+`check-architecture` (RFC-0002 Phase F): would this Hugging Face architecture be admitted on this
+network? IR mode lowers the config to a PALW-TIR program and checks it against the network's
+palw_tir_v1 ceilings (testnet-12's provisional values while the fence is dormant — said in the
+output), the network's primitive set and the spec 04b range analysis; tir_admit_v1's court-cost half
+is named as pending until it exists. --legacy maps the config to the shipped lineage that can
+express it (dense A16, Qwen3.6 hybrid) and runs the processor-same admission gate on each class
+row — the shipped rows at the config's geometry, else the family's graph projected at its
+dimensions. Verdicts: ADMISSIBLE, EXCEEDS(limit, value, cap), NEEDS_PRIMITIVE, NOT_LOWERABLE,
+REFUSED, UNVERIFIED, NEEDS_KERNEL. Exits 0 on ADMISSIBLE, 2 otherwise.
 
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
@@ -163,8 +177,114 @@ fn run(args: &[String]) -> Result<(), String> {
             let path = PathBuf::from(args.first().ok_or(USAGE)?);
             bind_tokenizer(&view, &path, &PathBuf::from(tokenizer), &PathBuf::from(out), wanted.as_deref())
         }
+        "check-architecture" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let config = take_flag(&mut args, "--config");
+            let tir = take_flag(&mut args, "--tir");
+            let legacy = args.iter().any(|a| a == "--legacy");
+            let held = args.iter().any(|a| a == "--held");
+            let json = args.iter().any(|a| a == "--json");
+            match check_architecture(&view, config.as_deref(), tir.as_deref(), legacy, held, json)? {
+                true => Ok(()),
+                false => std::process::exit(2),
+            }
+        }
         _ => Err(USAGE.to_string()),
     }
+}
+
+/// `check-architecture`: returns whether the verdict is ADMISSIBLE.
+fn check_architecture(
+    view: &NetworkView,
+    config: Option<&str>,
+    tir: Option<&str>,
+    legacy: bool,
+    held: bool,
+    json: bool,
+) -> Result<bool, String> {
+    use misaka_palw_sdk::check_architecture::*;
+    if legacy {
+        let path = config.ok_or("--legacy needs --config")?;
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        let sdk = sdk_for(view);
+        let r = check_legacy_config_v1(&view.params, &view.bundle, &sdk, &text);
+        if json {
+            let rows: Vec<serde_json::Value> = r
+                .rows
+                .iter()
+                .map(|x| {
+                    serde_json::json!({ "model_id": x.model_id, "n_ctx": x.n_ctx, "shipped": x.shipped,
+                                        "class_id": x.class_id.to_string(), "verdict": x.verdict.to_string() })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "mode": "legacy", "network": view.network_id.to_string(),
+                    "architecture": r.architecture, "lineage": r.lineage, "verdict": r.verdict.to_string(), "rows": rows }))
+                .unwrap_or_default()
+            );
+        } else {
+            println!("legacy mode on {} — {} → lineage {}", view.network_id, r.architecture, r.lineage.unwrap_or("none"));
+            println!("  verdict: {}", r.verdict);
+            for x in &r.rows {
+                println!(
+                    "  {:<52} n_ctx {:>8}  {}  class {}  {}",
+                    x.model_id,
+                    x.n_ctx,
+                    if x.shipped { "shipped  " } else { "projected" },
+                    x.class_id,
+                    x.verdict
+                );
+            }
+        }
+        return Ok(r.verdict.is_admissible());
+    }
+    let r = match (config, tir) {
+        (Some(path), None) => {
+            let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+            check_ir_config_v1(&view.params, &text, held)
+        }
+        (None, Some(path)) => {
+            let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+            let program = misaka_palw_tir::TirProgramV1::decode_canonical(&bytes).map_err(|e| format!("{path}: {e}"))?;
+            check_ir_program_v1(&view.params, &program)
+        }
+        _ => return Err("give exactly one of --config and --tir".into()),
+    };
+    if json {
+        let cost = r.cost.as_ref().map(|c| {
+            serde_json::json!({ "unrolled_nodes": c.unrolled_nodes, "macs": c.macs.to_string(), "state_bytes": c.state_bytes.to_string(),
+                                "peak_live_bytes": c.peak_live_bytes.to_string() })
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "mode": "ir", "network": view.network_id.to_string(),
+                "architecture": r.architecture, "verdict": r.verdict.to_string(), "ceilings": r.ceilings_source,
+                "program_bytes": r.program_bytes, "blocks": r.blocks, "nodes": r.nodes, "max_context": r.max_context,
+                "graph_ir_root": r.graph_ir_root.map(|h| h.to_string()), "cost": cost, "unverified": r.unverified }))
+            .unwrap_or_default()
+        );
+    } else {
+        println!("IR mode on {} — {}", view.network_id, if r.architecture.is_empty() { "(program)" } else { &r.architecture });
+        println!("  verdict: {}", r.verdict);
+        println!("  ceilings: {}", r.ceilings_source);
+        if r.program_bytes > 0 {
+            println!("  program: {} bytes, {} blocks, {} nodes", r.program_bytes, r.blocks, r.nodes);
+        }
+        if let Some(h) = r.graph_ir_root {
+            println!("  graph_ir_root {h}");
+        }
+        if let Some(c) = &r.cost {
+            println!(
+                "  per position at max_context {}: {} unrolled nodes, {} MACs, {} state bytes, {} peak live bytes",
+                r.max_context, c.unrolled_nodes, c.macs, c.state_bytes, c.peak_live_bytes
+            );
+        }
+        for u in &r.unverified {
+            println!("  unverified: {u}");
+        }
+    }
+    Ok(r.verdict.is_admissible())
 }
 
 /// **ADR-0096 Decision 10: bind a tokenizer into a converted artifact, and MEASURE that the
@@ -284,6 +404,9 @@ fn ledger(view: &NetworkView) {
 /// serve a registered class. A manifest built any other way would be the second mapping this is
 /// replacing rather than a record of the first.
 fn manifest(view: &NetworkView, path: &std::path::Path, out: Option<PathBuf>, check: bool) -> Result<(), String> {
+    if misaka_palw_sdk::tir_manifest::PalwTirManifestV1::sniff(path) {
+        return tir_manifest(path, out, check);
+    }
     let sdk = sdk_for(view);
     let artifact = sdk.load_artifact(path)?;
     let bytes = std::fs::metadata(path).map(|m| m.len()).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -318,6 +441,32 @@ fn manifest(view: &NetworkView, path: &std::path::Path, out: Option<PathBuf>, ch
         println!("  {}  class {}  root {}{note}", r.model_id, r.class_id, r.inventory_root);
     }
     std::fs::write(&target, derived.to_json()).map_err(|e| format!("{}: {e}", target.display()))?;
+    println!("wrote {}", target.display());
+    Ok(())
+}
+
+/// A `PALWTIR1` artifact (RFC-0002 Phase F, F3): ONE inventory root over the program's params,
+/// whatever layouts its registrations declare, so the sidecar records it once.
+fn tir_manifest(path: &std::path::Path, out: Option<PathBuf>, check: bool) -> Result<(), String> {
+    use misaka_palw_sdk::tir_manifest::PalwTirManifestV1;
+    let target = out.unwrap_or_else(|| misaka_palw_sdk::PalwClassManifestFileV1::path_beside(path));
+    if check {
+        let text = std::fs::read_to_string(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+        let on_disk = PalwTirManifestV1::from_json(&text)?;
+        on_disk.check(path)?;
+        println!(
+            "{}: agrees with {} — inventory root re-derived over {} leaves",
+            target.display(),
+            path.display(),
+            on_disk.leaf_count
+        );
+        return Ok(());
+    }
+    let m = PalwTirManifestV1::derive(path)?;
+    println!("PALWTIR1 artifact {} ({} bytes, program {} bytes)", path.display(), m.artifact_bytes, m.program_bytes);
+    println!("  graph_ir_root   {}", m.graph_ir_root);
+    println!("  inventory root  {} over {} leaves", m.inventory_root, m.leaf_count);
+    std::fs::write(&target, m.to_json()).map_err(|e| format!("{}: {e}", target.display()))?;
     println!("wrote {}", target.display());
     Ok(())
 }

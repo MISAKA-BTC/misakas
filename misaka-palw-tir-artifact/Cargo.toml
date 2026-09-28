@@ -1,0 +1,22 @@
+[package]
+name = "misaka-palw-tir-artifact"
+description = "RFC-0002 Phase F (F3): the PALWTIR1 container of a PALW-TIR artifact — the program, its commitment layout and tokenizer id, and every param tensor, typed little-endian and 64-byte aligned for mapping. Written by the lowerer and the legacy converter, read by the node. Not a consensus object: the inventory root (kaspa-consensus-core palw_tir_artifact_v1) is."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Light on purpose: the lowerer (non-consensus tooling) writes this container and the node's
+# evaluator reads it, and neither should pull the other's dependencies. The IR crate is a leaf.
+[dependencies]
+misaka-palw-tir = { path = "../misaka-palw-tir" }
+borsh.workspace = true
+blake2b_simd.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
