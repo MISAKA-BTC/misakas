@@ -552,6 +552,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_token_lift: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_kimi_k3`: may a registration reach the fenced Kimi K3 kernels.
     pub(super) palw_kimi_k3: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_tir_v1` (RFC-0002 Phase F): may a class be a PALW-TIR program on this chain, and
+    /// may the IR court arms be filed. Resolved in ONE place, [`Self::palw_tir_at`], at the block.
+    pub(super) palw_tir_v1: Option<kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1>,
     /// `Params::palw_fused_dissectable` (ADR-0093 Decision 6): must a fused registration's output
     /// tile be one head's. Resolved in ONE place, [`Self::palw_fused_dissectable_at`].
     pub(super) palw_fused_dissectable: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1118,6 +1121,7 @@ impl VirtualStateProcessor {
             palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_token_lift: params.palw_token_lift_fence(),
             palw_kimi_k3: params.palw_kimi_k3_fence(),
+            palw_tir_v1: params.palw_tir_v1_fence(),
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
@@ -10990,6 +10994,18 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::FreePromptCommitted { .. } => {}
+                // **RFC-0002 Phase F (tag 61): an IR class registration is dropped by name, and the
+                // block stands.** Below `palw_tir_v1` exactly as an older build skips the payload it
+                // cannot decode (A-2); above it until admission v10 lands (step F6). Never charged a
+                // registration slot: `palw_class_registration_buyer_v1` does not name it.
+                Obj::ClassRegisteredTirV1 { class_id, .. } => {
+                    if !self.palw_tir_at(point.daa_score) {
+                        return Err(format!(
+                            "IR class {class_id} is refused: palw_tir_v1 is not in force at this block (RFC-0002 Phase F)"
+                        ));
+                    }
+                    return Err(format!("IR class {class_id} is refused: admission v10 is not in this build (RFC-0002 Phase F, F6)"));
+                }
                 // ADR-0075: both certification objects are judged entirely by the transition —
                 // the evidence by the court's grader, the class binding by the class's own profile
                 // hash and kernel coverage — and neither needs a signature, a bundle or a store.
@@ -12363,6 +12379,11 @@ impl VirtualStateProcessor {
 
     fn palw_kimi_k3_at(&self, daa_score: u64) -> bool {
         self.palw_kimi_k3.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **RFC-0002 Phase F, resolved in exactly one place.**
+    fn palw_tir_at(&self, daa_score: u64) -> bool {
+        self.palw_tir_v1.is_some_and(|fence| fence.activation.is_active(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -18281,6 +18302,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         O::ReceiptLicensedBatchV1 { .. } => "ReceiptLicensedBatchV1",
         O::AuditReceiptBatchV1 { .. } => "AuditReceiptBatchV1",
+        O::ClassRegisteredTirV1 { .. } => "ClassRegisteredTirV1",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
         // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
         O::ReporterCommitted { .. } => "ReporterCommitted",

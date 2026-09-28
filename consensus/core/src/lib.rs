@@ -455,6 +455,10 @@ pub mod palw_step_refute;
 pub mod palw_tir_v1;
 /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
 pub mod palw_tir_artifact_v1;
+/// RFC-0002 Phase F step F2: an IR class — the program, its commitment layout, its identity and its registration carriage.
+pub mod palw_tir_class_v1;
+/// RFC-0002 Phase F step F4: the step space of an IR class — commit-point tiles, Fixed-state checkpoints and history tiles as step leaves, in closed form.
+pub mod palw_tir_step_v1;
 pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in

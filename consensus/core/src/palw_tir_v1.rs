@@ -10,9 +10,10 @@
 //!
 //! **What the value carries** (`docs/design/palw/tir/phase-f-integration.md` §2.1):
 //!
-//! * `prim_set_id` — the network's keyed hash of the primitive-set descriptor
-//!   ([`misaka_palw_tir::prim::prim_set_descriptor_v1`]); every IR program a network admits names
-//!   it, and [`Params::validate_palw_tir_v1`] refuses a fence that names anything but THIS build's;
+//! * `prim_set_id` — BLAKE2b-512 keyed by `misaka-palw/tir-prim-set-id/v1` over the primitive-set
+//!   descriptor ([`misaka_palw_tir::prim::prim_set_descriptor_v1`], spec 04b §6.0); every IR program
+//!   declares it (normal form NF-1), and [`Params::validate_palw_tir_v1`] refuses a fence that names
+//!   anything but THIS build's;
 //! * `court_version` — the semantics version of the IR court (cone evaluation, the demand rule,
 //!   PALW-TIR-33, the dissection claim form, the step-space layout);
 //! * `ceilings` — the network's IR ceilings, which may only tighten the format caps of spec 04b §5.
@@ -29,8 +30,8 @@ use crate::Hash64;
 use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 
-/// Key of [`palw_tir_prim_set_id_v1`].
-pub const PALW_TIR_PRIM_SET_DOMAIN_V1: &[u8] = b"misaka-palw/tir/prim-set/v1";
+/// Key of [`palw_tir_prim_set_id_v1`] — the spec's (04b §6.0), exported by the IR crate.
+pub const PALW_TIR_PRIM_SET_DOMAIN_V1: &[u8] = misaka_palw_tir::prim::PRIM_SET_ID_DOMAIN_V1;
 /// Key of [`palw_tir_court_root_v1`].
 pub const PALW_TIR_COURT_ROOT_DOMAIN_V1: &[u8] = b"misaka-palw/tir/court-root/v1";
 /// The IR court's semantics version this build implements.
@@ -47,8 +48,9 @@ fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
 }
 
 /// **The network's `prim_set_id`**: BLAKE2b-512 keyed with [`PALW_TIR_PRIM_SET_DOMAIN_V1`] over the
-/// ASCII prim-set descriptor of spec 04b §6.0. Every `TirProgramV1` a network admits carries this
-/// value in its `prim_set_id` field; a lowerer computes the same bytes.
+/// ASCII prim-set descriptor of spec 04b §6.0 — computed here, where the hashing lives, and equal to
+/// the constant the IR crate's normal form requires every program to declare
+/// ([`misaka_palw_tir::prim::PRIM_SET_ID_V1`]; `tests/palw_tir_v1_fence.rs` holds the two equal).
 pub fn palw_tir_prim_set_id_v1() -> Hash64 {
     keyed64(PALW_TIR_PRIM_SET_DOMAIN_V1, &[&misaka_palw_tir::prim::prim_set_descriptor_v1()])
 }
