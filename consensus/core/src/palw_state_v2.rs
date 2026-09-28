@@ -7176,6 +7176,19 @@ pub enum PalwConsensusObjectV2 {
     TirShardCourtAccused {
         accusation: Box<crate::palw_tir_one_move_v1::PalwTirOneMoveAccusationV1>,
     },
+    /// **RFC-0002 Phase F (tag 63): an IR class bound to a certified family by primitive coverage**
+    /// — `ClassLaneCertified`'s attempt lane, with the class (program, layout, tokenizer) and its
+    /// inventory root in the profile's place. The class must be a registered IR class whose id the
+    /// carried class hashes to, and every primitive its program reaches must lie in one family this
+    /// chain certified for the attempt lane; an Active class holding no share is then seated at the
+    /// minimum grantable share, exactly as the legacy lane. (The free-prompt lane is closed for IR
+    /// classes until Phase H.) Needs no signature: whoever carries it, the class and the family are
+    /// checked. Appended; dropped by name below `palw_tir_v1`.
+    ClassLaneCertifiedTirV1 {
+        class_id: Hash64,
+        artifact_root: Hash64,
+        class: Box<crate::palw_tir_class_v1::PalwTirClassV1>,
+    },
 }
 
 /// **Is this object an RFC-0002 IR move** — one that carries an appended IR variant (an IR class
@@ -7188,6 +7201,8 @@ pub fn palw_object_is_tir_v1(object: &PalwConsensusObjectV2) -> bool {
         PalwConsensusObjectV2::CourtClosed { proof, .. } => proof.is_tir_v1(),
         PalwConsensusObjectV2::MaterialDisclosedV2 { answer, .. } => answer.is_tir_v1(),
         PalwConsensusObjectV2::TirShardCourtAccused { .. } => true,
+        PalwConsensusObjectV2::FamilyCertified { evidence } => evidence.is_tir_v1(),
+        PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => true,
         _ => false,
     }
 }
@@ -7356,12 +7371,17 @@ impl std::fmt::Display for PalwCertifiedLaneV1 {
 pub enum PalwCertificationEvidenceV1 {
     Attempt(crate::palw_e2e_adjudicability::PalwE2eDrillEvidenceV1),
     FreePrompt(crate::palw_e2e_adjudicability::PalwE2eFreePromptDrillEvidenceV1),
+    /// **RFC-0002 Phase F: an IR family's attempt-lane drill** (appended, so no earlier tag moves),
+    /// graded by the shipped IR court into a family over the program's primitives
+    /// ([`crate::palw_tir_certify_v1::certify_tir_e2e_family_v1`]). A `FamilyCertified` carrying it is
+    /// an IR object: dropped by name below `palw_tir_v1`, directly or assembled from chunks.
+    TirAttempt(crate::palw_tir_certify_v1::PalwTirE2eDrillEvidenceV1),
 }
 
 impl PalwCertificationEvidenceV1 {
     pub fn lane(&self) -> PalwCertifiedLaneV1 {
         match self {
-            Self::Attempt(_) => PalwCertifiedLaneV1::Attempt,
+            Self::Attempt(_) | Self::TirAttempt(_) => PalwCertifiedLaneV1::Attempt,
             Self::FreePrompt(_) => PalwCertifiedLaneV1::FreePrompt,
         }
     }
@@ -7370,7 +7390,13 @@ impl PalwCertificationEvidenceV1 {
         match self {
             Self::Attempt(drill) => drill.vectors.len(),
             Self::FreePrompt(drill) => drill.evidence.vectors.len(),
+            Self::TirAttempt(drill) => drill.vectors.len(),
         }
+    }
+
+    /// Is this an IR drill (RFC-0002 Phase F)? A certification only past `palw_tir_v1`.
+    pub fn is_tir_v1(&self) -> bool {
+        matches!(self, Self::TirAttempt(_))
     }
 
     /// The family the shipped court's grader produces from this evidence — the ONLY way a
@@ -7379,6 +7405,7 @@ impl PalwCertificationEvidenceV1 {
         Ok(match self {
             Self::Attempt(drill) => crate::palw_e2e_adjudicability::certify_e2e_family_v1(drill)?.family,
             Self::FreePrompt(drill) => crate::palw_e2e_adjudicability::certify_e2e_free_prompt_lane_v1(drill)?.family,
+            Self::TirAttempt(drill) => crate::palw_tir_certify_v1::certify_tir_e2e_family_v1(drill)?.family,
         })
     }
 }
@@ -29373,6 +29400,68 @@ fn apply_receipt_licensed_v2(
     Ok(())
 }
 
+/// **The attempt lane's seat for a certified class** (ADR-0069 Decision 6, ADR-0075 Decision 5) —
+/// the one body the legacy `ClassLaneCertified` and RFC-0002's `ClassLaneCertifiedTirV1` fold through.
+fn seat_attempt_lane_class_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    class_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
+    // ADR-0069 Decision 6, as an object: the class registered weightless because
+    // no build could prosecute it; now one can, and it is seated at the floor the
+    // registration gate would have required — through the same share table, so
+    // the incumbents donate by the same largest-remainder rule.
+    let held = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
+    if held != 0 {
+        return Err(PalwStateV2Error::ClassAlreadyWeighted { class: *class_id, share: held });
+    }
+    let floor = builder.params.min_grantable_share_permille();
+    let outstanding: u32 = builder
+        .state
+        .classes
+        .iter()
+        .filter(|(id, _)| *id != class_id && !builder.state.class_shares.contains_key(*id))
+        .filter_map(|(_, record)| match record.status {
+            PalwClassStatusV2::Registered { pending_share_permille, .. } => Some(pending_share_permille as u32),
+            _ => None,
+        })
+        .sum();
+    let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, floor)?;
+    if outstanding > 0 {
+        let committed = outstanding.checked_add(floor as u32).ok_or(PalwStateV2Error::Overflow("outstanding pending shares"))?;
+        if committed > 1000 {
+            return Err(PalwStateV2Error::PendingSharesExceedTable { outstanding, requested: floor });
+        }
+        granted_share_table_v2(
+            builder.params,
+            &builder.state.class_shares,
+            *class_id,
+            u16::try_from(committed).expect("committed is bounded by 1000 above"),
+        )?;
+    }
+    for (id, share) in table {
+        if builder.state.class_shares.get(&id).copied() != Some(share) {
+            builder.write_share(id, Some(share));
+        }
+    }
+    // **A class being seated is a class being PRICED** (ADR-0076).
+    //
+    // It registered weightless, so its registration was priced for the cadence it
+    // then held — none — and the target it has carried since is whatever that
+    // registration declared. Granting it a share without re-seeding leaves the one
+    // number that decides how often it may produce entirely unrelated to the share
+    // just granted, in either direction: a stranger who declared `MAX/2` would sit
+    // thousands of times easier than the floor it is joining, and one who declared
+    // conservatively would sit locked out with no retarget able to reach it (an
+    // idle class only converges toward a price a PRODUCING class pays, and it
+    // produces nothing). So the seat comes with the seat's price, derived from the
+    // share the table just wrote and the class's own counted work.
+    let seated = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
+    let pwu = builder.class_seed_pwu(class_id, ctx.daa_score);
+    builder.write_target(*class_id, Some(PalwClassTargetV2 { target: crate::palw_class_daa::attempt_target_seed_v1(seated, pwu) }));
+    Ok(())
+}
+
 /// **What the fold reads of a class registration, whichever door it came through** — the legacy
 /// `ClassRegistered` (its optional carriage's profile) or RFC-0002's `ClassRegisteredTirV1` (its
 /// program): the object's fields, the carriage's registrant, and the three facts the fold derives
@@ -30815,65 +30904,33 @@ fn apply_object(
                         builder.write_fp_work_profile(*class_id, Some(profile.clone()));
                     }
                 }
-                PalwCertifiedLaneV1::Attempt => {
-                    // ADR-0069 Decision 6, as an object: the class registered weightless because
-                    // no build could prosecute it; now one can, and it is seated at the floor the
-                    // registration gate would have required — through the same share table, so
-                    // the incumbents donate by the same largest-remainder rule.
-                    let held = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
-                    if held != 0 {
-                        return Err(PalwStateV2Error::ClassAlreadyWeighted { class: *class_id, share: held });
-                    }
-                    let floor = builder.params.min_grantable_share_permille();
-                    let outstanding: u32 = builder
-                        .state
-                        .classes
-                        .iter()
-                        .filter(|(id, _)| *id != class_id && !builder.state.class_shares.contains_key(*id))
-                        .filter_map(|(_, record)| match record.status {
-                            PalwClassStatusV2::Registered { pending_share_permille, .. } => Some(pending_share_permille as u32),
-                            _ => None,
-                        })
-                        .sum();
-                    let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, floor)?;
-                    if outstanding > 0 {
-                        let committed =
-                            outstanding.checked_add(floor as u32).ok_or(PalwStateV2Error::Overflow("outstanding pending shares"))?;
-                        if committed > 1000 {
-                            return Err(PalwStateV2Error::PendingSharesExceedTable { outstanding, requested: floor });
-                        }
-                        granted_share_table_v2(
-                            builder.params,
-                            &builder.state.class_shares,
-                            *class_id,
-                            u16::try_from(committed).expect("committed is bounded by 1000 above"),
-                        )?;
-                    }
-                    for (id, share) in table {
-                        if builder.state.class_shares.get(&id).copied() != Some(share) {
-                            builder.write_share(id, Some(share));
-                        }
-                    }
-                    // **A class being seated is a class being PRICED** (ADR-0076).
-                    //
-                    // It registered weightless, so its registration was priced for the cadence it
-                    // then held — none — and the target it has carried since is whatever that
-                    // registration declared. Granting it a share without re-seeding leaves the one
-                    // number that decides how often it may produce entirely unrelated to the share
-                    // just granted, in either direction: a stranger who declared `MAX/2` would sit
-                    // thousands of times easier than the floor it is joining, and one who declared
-                    // conservatively would sit locked out with no retarget able to reach it (an
-                    // idle class only converges toward a price a PRODUCING class pays, and it
-                    // produces nothing). So the seat comes with the seat's price, derived from the
-                    // share the table just wrote and the class's own counted work.
-                    let seated = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
-                    let pwu = builder.class_seed_pwu(class_id, ctx.daa_score);
-                    builder.write_target(
-                        *class_id,
-                        Some(PalwClassTargetV2 { target: crate::palw_class_daa::attempt_target_seed_v1(seated, pwu) }),
-                    );
-                }
+                PalwCertifiedLaneV1::Attempt => seat_attempt_lane_class_v1(builder, ctx, class_id)?,
             }
+        }
+        // **RFC-0002 Phase F (tag 63): an IR class bound to a certified family.** The legacy attempt
+        // lane's rule over the IR class: an Active class, the carried class hashing to its id, a
+        // registered IR class, and one family certified for the attempt lane covering every primitive
+        // the program reaches — then the lane's own seat.
+        PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { class_id, artifact_root, class } => {
+            let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
+            if !matches!(record.status, PalwClassStatusV2::Active) {
+                return Err(PalwStateV2Error::CertificationNeedsActiveClass { class: *class_id });
+            }
+            let derived = class.class_id(artifact_root);
+            if derived != *class_id || record.artifact_root != *artifact_root || !builder.state.tir_classes.contains_key(class_id) {
+                return Err(PalwStateV2Error::CertificationProfileIsNotTheClass { class: *class_id, derived });
+            }
+            let program = class.decode_program().map_err(|e| PalwStateV2Error::CertificationProfileInvalid(e.to_string()))?;
+            let reachable = crate::palw_tir_admission_v1::palw_tir_reachable_prims_v1(&program);
+            if !builder
+                .state
+                .certified_family_records(PalwCertifiedLaneV1::Attempt)
+                .iter()
+                .any(|(_, record)| reachable.is_subset(&record.family.kernel_ids))
+            {
+                return Err(PalwStateV2Error::NoCertifiedFamilyCovers { class: *class_id, lane: PalwCertifiedLaneV1::Attempt });
+            }
+            seat_attempt_lane_class_v1(builder, ctx, class_id)?;
         }
         PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes } => {
             if *count == 0 || *count > PALW_OBJECT_CHUNK_MAX_COUNT {
@@ -54732,6 +54789,79 @@ pub(crate) mod tests {
         )
         .expect_err("refused below the fence");
         assert!(matches!(below, PalwStateV2Error::TirRegistrationRefused(_)), "{below:?}");
+    }
+
+    /// **RFC-0002 Phase F (F6): an IR family certified on chain, and an IR class seated by it.** A
+    /// `FamilyCertified` carrying the tiny class's drill is graded by the IR court into a family over
+    /// its primitives; `ClassLaneCertifiedTirV1` then seats the registered IR class at the floor —
+    /// refused without a covering family, for a class the carried one does not hash to, and below
+    /// the fence (both objects are IR objects there).
+    #[test]
+    fn an_ir_family_is_certified_and_seats_its_class() {
+        use crate::palw_tir_certify_v1::test_support::evidence;
+        let p = params().with_tir_from_daa(Some(0));
+        let drill = evidence(None);
+        let class = drill.class.clone();
+        let artifact_root = drill.artifact_root;
+        let class_id = class.class_id(&artifact_root);
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 40 },
+            initial_target: u128::MAX / 2,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: Box::new(crate::palw_tir_class_v1::PalwTirAdmissionCarriageV1 {
+                class: class.clone(),
+                canonical: crate::palw_tir_court_v1::test_support::tiny_execution(None).binding.job_context,
+                registrant_bond: bond_key(1),
+                signature: vec![9; 8],
+            }),
+        });
+        let (s1, _) = apply_da(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        assert_eq!(s1.class_shares.get(&class_id).copied().unwrap_or(0), 0, "registered weightless");
+        let lane = PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { class_id, artifact_root, class: Box::new(class.clone()) };
+        let refused = |state: &PalwChainStateV2, params: &PalwStateParamsV2, object: &PalwConsensusObjectV2| {
+            apply_palw_transition_v2_with_policies(
+                state,
+                params,
+                &ctx(9, 200, 9),
+                std::slice::from_ref(object),
+                None,
+                false,
+                false,
+                false,
+                true,
+            )
+            .expect_err("refused")
+        };
+        assert!(matches!(refused(&s1, &p, &lane), PalwStateV2Error::NoCertifiedFamilyCovers { .. }), "no family yet");
+
+        let certified =
+            PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::TirAttempt(drill.clone())) };
+        let (s2, _) = apply_da(&s1, &p, &ctx(2, 101, 2), &[certified.clone()], None);
+        let program = class.decode_program().unwrap();
+        let reachable = crate::palw_tir_admission_v1::palw_tir_reachable_prims_v1(&program);
+        assert!(
+            s2.certified_family_records(PalwCertifiedLaneV1::Attempt).iter().any(|(_, r)| r.family.kernel_ids == reachable),
+            "the IR family is certified for the attempt lane"
+        );
+        assert!(s2.chain_certified_families(PalwCertifiedLaneV1::Attempt).iter().any(|f| reachable.is_subset(&f.kernel_ids)));
+
+        let (s3, _) = apply_da(&s2, &p, &ctx(3, 102, 3), &[lane.clone()], None);
+        assert!(s3.class_shares.get(&class_id).copied().unwrap_or(0) > 0, "seated at the floor");
+        let mut other = class.clone();
+        other.tokenizer_id = h64(77);
+        let wrong = PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { class_id, artifact_root, class: Box::new(other) };
+        let err = refused(&s2, &p, &wrong);
+        assert!(matches!(err, PalwStateV2Error::CertificationProfileIsNotTheClass { .. }), "{err:?}");
+        // Below the fence both are IR objects, refused before any arm reads them.
+        assert!(matches!(refused(&s1, &params(), &certified), PalwStateV2Error::TirRegistrationRefused(_)));
+        assert!(matches!(refused(&s2, &params(), &lane), PalwStateV2Error::TirRegistrationRefused(_)));
+        assert!(palw_object_is_tir_v1(&certified) && palw_object_is_tir_v1(&lane));
+        assert_eq!(borsh::to_vec(&lane).unwrap()[0], 63, "tag 63, after the one-move court's 62");
     }
 
     // ---------------------------------------------------------------------------------------------

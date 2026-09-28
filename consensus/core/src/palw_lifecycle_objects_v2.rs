@@ -117,6 +117,8 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // transition, and the class binding is checked against the class's own profile hash.
         | PalwConsensusObjectV2::FamilyCertified { .. }
         | PalwConsensusObjectV2::ClassLaneCertified { .. }
+        // RFC-0002 Phase F (tag 63): the IR class's lane certification, checked the same way.
+        | PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. }
         | PalwConsensusObjectV2::ObjectChunk { .. }
         // **ADR-0080 design A: the split close.** The declaration carries the signature of one of
         // the two bonds the session id binds, checked at acceptance against that bond's registered
