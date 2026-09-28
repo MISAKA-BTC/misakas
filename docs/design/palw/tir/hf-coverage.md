@@ -880,3 +880,69 @@ fixtures scale the embedding and the decoder's output norm. Every float referenc
 3. **Evidence size.** The cross K/V edge is `D·2·L·inner` codes (bart-large at 512: 12.6 M
    lanes). A dispute over one of its leaves is the encoder's (PALW-TIR-33), and it rides the same
    material limits as D-F1's captures.
+
+## 18. Coverage sweep (2026-09-29): end to end, and the next families
+
+**What "admitted end to end" means here.** It is a tiny random model from transformers' own
+config class, rebuilt with its position limits at 1,024 (`tools/audit_e2e.py`), and
+`tools/audit_e2e.sh` takes it through every step:
+1. lowering, calibrated at 512 (`palw-tir-fidelity --artifact-out`);
+2. the int-8 `palw-class`: `declare-layout --max-context 512` on testnet-12's ceilings (ADMISSIBLE),
+   then `close-sizes` (every close fits);
+3. greedy ids against HF `generate` (3 prompts × 12 ids, no EOS stop), and teacher-forced top-1/KL
+   against HF's logits (2 × 48 positions), through `palw-tir-generate`.
+
+A departure is judged by HF's top-2 margin there against the integer logits' RMS error.
+
+**The 57 fixture families of §3.** 56 were admitted end to end at the first pass. Falcon-ALiBi
+was refused: its bf16 bias table spans the whole history bound, a 17 MB close. It is now sized by
+the lowering window, and lowered with `--max-window 512` it is admitted (worst close 69 KB,
+greedy 36/36).
+
+- Worst closes 69–203 KB (the recurrent families are the largest); programs 236–1,392 nodes.
+- Teacher-forced top-1 ≥ 0.927 (median 0.990), KL median 8e-5 (max 5.5e-3). Greedy
+  1,876/2,016 identical.
+- Every departure is a near-tie, except three explained cases:
+  - phi3_longrope (0/36): HF's `generate` prefills the whole prompt with LongRoPE's long factors,
+    and its own decode path does not (§7). The class follows the per-position semantics, and
+    teacher-forced on those it agrees (top-1 0.99, KL 8e-5).
+  - qwen3_5_moe (20/36) and deepseek_v3 (27/36): an expert-routing near-tie flips one layer's
+    experts, and the row's error jumps (0.38 RMS against 0.05). This is the MoE sensitivity, not a
+    lowering fault.
+- The rest: InternLM2, MiniCPM and EXAONE-3 need remote code (no offline fixture). Of §2's
+  not-covered list, native transformers has GLM, Phi-3.5-MoE, Llama-4, Gemma-3n and DBRX.
+
+**New families (first batch).** Each has an HF fixture, integer fidelity and the end-to-end audit:
+
+| family | what it needed | float vs HF | integer vs float (top-1, KL) | end to end at 512: greedy, worst close |
+| --- | --- | --- | --- | --- |
+| `GlmForCausalLM` (GLM-4-9B-chat-hf, GLM-Edge) | fused `gate_up`, q/k/v bias, partial rotary 0.5 on interleaved pairs | 9.8e-7 | 0.972, 5e-5 | 29/36 (ties ≤ 0.2×), 69.7 KB |
+| `Glm4ForCausalLM` (GLM-4-0414, Z1) | GLM + post-attention/post-MLP norms | 1.0e-6 | 1.000, 7e-5 | 36/36, 69.9 KB |
+| `MinistralForCausalLM` (Ministral-8B) | Mistral with `layer_types` | 1.4e-6 | 0.972, 8e-5 | 28/36 (ties ≤ 0.6×), 70.0 KB |
+| `Olmo3ForCausalLM` (OLMo-3) | OLMo-2, 3 sliding : 1 full, rope per layer type | 1.1e-6 | 0.972, 2.1e-4 | 36/36, 70.0 KB |
+| `MPNetModel` / `…ForMaskedLM` (all-mpnet-base-v2) | bidirectional + relative-position bias (T5 buckets) | 1.6–1.9e-7 | cosine ≥ 0.99995 | real config admitted at 128–512 |
+| `DistilBertModel` / `…ForMaskedLM` | BERT without token types | 1.6–2.6e-7 | cosine ≥ 0.99991 | real config admitted at 128–512 |
+
+**The registrable share, updated.** Counts are the hub's on 2026-09-28; the architecture shares
+are §2's estimates, adjusted for 2026 families not in that table.
+- **Text generation (RFC-0002, live on testnet-12 from DAA 2,000):** text-generation repos with
+  safetensors (325,599 of 416,122) × a covered architecture (≈ 0.89: §2's 91–92 % less ≈ 3 % of
+  2026 families not yet covered) × weights in bf16/f16/f32 rather than a pre-quantised format
+  (≈ 0.9). That is **≈ 260 k repos, ≈ 63 % of text-generation, ≈ 8.4 % of all 3.10 M HF repos**.
+- **With RFC-0003's classes (dormant under `palw_gen_v1`):**
+  - embeddings: ≈ 75 % of the 41 k feature-extraction + sentence-similarity repos (BERT, RoBERTa,
+    XLM-R, MPNet, DistilBERT, CLIP text, decoder embedders);
+  - encoder–decoders: ≈ 70 % of the 53 k text2text repos (T5, BART, mBART, Marian, Pegasus);
+  - VLM text stages: ≈ 35 % of the 41 k image-text-to-text repos (LLaVA, Qwen2-VL, Qwen2.5-VL).
+
+  That adds ≈ 82 k, **≈ 340 k in all, ≈ 11 % of all HF**. By downloads the share is far higher;
+  this is not measured.
+- **The largest still missing,** by estimated repo share:
+  - Gemma-4 (per-layer head sizes, K = V globals, KV sharing, per-layer inputs, a parallel MoE:
+    the heaviest);
+  - Llama-4 (chunked attention, NoPE temperature, MoE);
+  - Ministral-3 (Llama-4 query scaling);
+  - Gemma-3n; GLM-4.5 MoE; Phi-3.5-MoE;
+  - the remote-code families (ChatGLM, InternLM2, Baichuan, MiniCPM, EXAONE-3), which have no
+    offline fixture;
+  - GGUF and pre-quantised checkpoints: an importer, not a lowering.
