@@ -140,12 +140,25 @@ pub fn layout(p: &TirProgramV1, positions: u32) -> PalwTirLayoutV1 {
     }
 }
 
-pub fn fixture(name: String, mut program: TirProgramV1, params: MapParams, tokens: Vec<u32>) -> Fixture {
+pub fn fixture(name: String, program: TirProgramV1, params: MapParams, tokens: Vec<u32>) -> Fixture {
+    fixture_with(name, program, params, tokens, PREFILL, DECODE)
+}
+
+/// [`fixture`] with a job of `prefill` prompt tokens and `decode` generated ones — a longer history
+/// for the dissection's chain runs (RFC-0002 F7).
+pub fn fixture_with(
+    name: String,
+    mut program: TirProgramV1,
+    params: MapParams,
+    tokens: Vec<u32>,
+    prefill: u32,
+    decode: u32,
+) -> Fixture {
     program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
     let bytes = program.encode();
     let program = TirProgramV1::decode_canonical(&bytes).expect("still canonical under the tiled scheme");
-    let positions = PREFILL + DECODE - 1;
-    let prompt: Vec<u32> = (0..PREFILL as usize).map(|i| tokens[i % tokens.len()]).collect();
+    let positions = prefill + decode - 1;
+    let prompt: Vec<u32> = (0..prefill as usize).map(|i| tokens[i % tokens.len()]).collect();
     // The honest run: prompt, then each selected token fed back.
     let interp = Interpreter::new(&program).expect("valid");
     let mut state = RunState::default();
@@ -160,7 +173,7 @@ pub fn fixture(name: String, mut program: TirProgramV1, params: MapParams, token
     let (mut commits, mut after) = (Vec::new(), Vec::new());
     let (mut generated, mut rows, mut greedy) = (Vec::new(), Vec::new(), true);
     for a in 0..positions {
-        let token = if a < PREFILL { prompt[a as usize] } else { generated[(a - PREFILL) as usize] };
+        let token = if a < prefill { prompt[a as usize] } else { generated[(a - prefill) as usize] };
         let step = interp.step(&params, &mut state, token).expect("an honest step");
         let mut c: BTreeMap<(usize, u16), Tensor> = BTreeMap::new();
         for r in step.commits {
@@ -168,7 +181,7 @@ pub fn fixture(name: String, mut program: TirProgramV1, params: MapParams, token
         }
         commits.push(c);
         after.push(state.clone());
-        if a + 1 >= PREFILL {
+        if a + 1 >= prefill {
             let row: Vec<i32> = step.logits.data.iter().map(|v| *v as i32).collect();
             let mut pick = base0_decode_token_select_v1(&row) as u32;
             if pick >= program.token_bound {
@@ -208,8 +221,8 @@ pub fn fixture(name: String, mut program: TirProgramV1, params: MapParams, token
         cu_ruleset_id: z,
         tokenizer_id: class.tokenizer_id,
         prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt),
-        declared_prefill_tokens: PREFILL,
-        exact_decode_tokens: DECODE,
+        declared_prefill_tokens: prefill,
+        exact_decode_tokens: decode,
         max_context_tokens: 64,
     };
     let space = PalwTirStepSpaceV1::new(&class).expect("the layout fits");

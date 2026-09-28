@@ -499,6 +499,31 @@ impl PalwTirDissectPhaseV1 {
         })
     }
 
+    /// A phase with every field derived from `session_id` alone — for tests that need a row to exist.
+    #[cfg(test)]
+    pub(crate) fn test_phase_v1(session_id: Hash64) -> Self {
+        let claim = PalwTirRangeClaimV1 { partials: vec![vec![1]] };
+        Self {
+            session_id,
+            arity: 2,
+            leaf_index: 0,
+            reductions: vec![1],
+            folds: vec![PalwTirFoldV1::Sum],
+            bounds: vec![(0, 9)],
+            elements: vec![vec![0]],
+            history_positions: 8,
+            tile_positions: 2,
+            root: claim.clone(),
+            claim,
+            tile_first: 0,
+            tile_count: 4,
+            round: 0,
+            turn: PalwBisectTurnV1::AwaitDisclosure,
+            last_deadline_daa: 9,
+            pending: Vec::new(),
+        }
+    }
+
     pub fn session_id(&self) -> Hash64 {
         self.session_id
     }
@@ -688,19 +713,45 @@ impl PalwTirDissectPhaseV1 {
     }
 }
 
-/// **The message the responder signs for its root claim** — the session and the claim, not the
-/// carriage (the carriage is checked against the chain; the claim is the responder's word).
+// =================================================================================================
+// The messages the movers sign
+// =================================================================================================
+
+/// The domain the root claim's message opens with. The three moves are signed under the ADR-0082
+/// contexts (the responder's for the root claim and the rounds, the challenger's for the choice);
+/// the contexts are shared with the legacy moves, so each IR message opens with its own domain and
+/// no signature over a legacy move is ever a signature over an IR one.
+pub const PALW_TIR_DISSECT_DOMAIN_ROOT_V1: &[u8] = b"misaka-palw/tir/dissect/root/v1";
+/// The domain a round's message opens with.
+pub const PALW_TIR_DISSECT_DOMAIN_ROUND_V1: &[u8] = b"misaka-palw/tir/dissect/round/v1";
+/// The domain a choice's message opens with.
+pub const PALW_TIR_DISSECT_DOMAIN_CHOICE_V1: &[u8] = b"misaka-palw/tir/dissect/choice/v1";
+
+/// **The message the responder signs for its root claim**: the domain, the session and the claim —
+/// its version, element lists and totals — not the carriage (the carriage is checked against the
+/// chain; the claim is the responder's word).
 pub fn palw_tir_root_claim_message_v1(session_id: &Hash64, root: &PalwTirRootClaimV1) -> Vec<u8> {
-    let mut m = session_id.as_byte_slice().to_vec();
+    let mut m = PALW_TIR_DISSECT_DOMAIN_ROOT_V1.to_vec();
+    m.extend_from_slice(session_id.as_byte_slice());
     m.extend(borsh::to_vec(&(root.version, &root.elements, &root.totals)).expect("borsh"));
     m
 }
 
-/// **The message the responder signs for a round** — bound to the phase's round, so a disclosure
-/// signed for one round is not a move at another.
+/// **The message the responder signs for a round**: the domain, the session, the phase's round
+/// (little-endian `u32`, so a disclosure signed for one round is not a move at another) and the
+/// round's encoding.
 pub fn palw_tir_round_message_v1(session_id: &Hash64, round: u32, msg: &PalwTirDissectRoundV1) -> Vec<u8> {
-    let mut m = session_id.as_byte_slice().to_vec();
+    let mut m = PALW_TIR_DISSECT_DOMAIN_ROUND_V1.to_vec();
+    m.extend_from_slice(session_id.as_byte_slice());
     m.extend(round.to_le_bytes());
     m.extend(borsh::to_vec(msg).expect("borsh"));
+    m
+}
+
+/// **The message the challenger signs for a choice**: the domain and the choice's encoding (which
+/// carries its session and round).
+pub fn palw_tir_choice_message_v1(choice: &PalwTirDissectChoiceV1) -> Vec<u8> {
+    let mut m = PALW_TIR_DISSECT_DOMAIN_CHOICE_V1.to_vec();
+    m.extend(borsh::to_vec(choice).expect("borsh"));
     m
 }

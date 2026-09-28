@@ -1387,6 +1387,75 @@ pub fn check_tir_dissect_bottom_v1(
     }
 }
 
+/// **The site a root claim opens on, as the fold derives it** (spec 04b §9.5.1): the binding the
+/// claim carries verified at its own canonical count, the leaf it opens the one the ladder narrowed
+/// to, and that leaf's site from the class's program — no carriage read, no evaluation. The claim's
+/// pins (class, artifact root, roots) are the caller's, and the finalize is the acceptance layer's
+/// ([`check_tir_root_claim_v1`], at the court's limits); what the fold needs is the site, which
+/// nothing a mover supplies may choose.
+pub fn palw_tir_root_claim_site_v1(root: &PalwTirRootClaimV1, narrowed: u64) -> Result<PalwTirDissectSiteV1, String> {
+    let binding = &root.finalize.binding;
+    let v = crate::palw_tir_step_v1::verify_tir_binding_v1(binding, binding.step_leaf_count).map_err(|e| e.to_string())?;
+    if root.finalize.output_opening.leaf_index != narrowed {
+        return Err(format!(
+            "the root claim opens leaf {}, the ladder narrowed to {narrowed}",
+            root.finalize.output_opening.leaf_index
+        ));
+    }
+    let leaf = v.space.leaf_at(&binding.job_context, narrowed).ok_or_else(|| format!("{narrowed} is not a leaf of this execution"))?;
+    let intervals = analyze_ranges(&v.space.program).map_err(|e| e.to_string())?;
+    palw_tir_dissect_site_v1(&v.space, &intervals, &leaf).ok_or_else(|| "the narrowed leaf is not dissected".to_string())
+}
+
+/// **Is a cone close's leaf a dissected leaf of its execution?** (spec 04b §9.5.1; the held
+/// regime's one-move court, ADR-0103 Decision 5.) Steps 1–4 of [`check_tir_cone_refutation_v1`] at
+/// the binding's own canonical count — the binding verifies, the leaf opens under it, and neither
+/// the binding, the leaf's structure nor its lanes' interval convicts on its face — then the leaf's
+/// site: `Some(leaf index)` when its cone reduces over `H`. `Ok(None)` for a leaf that is not
+/// dissected and for one those steps convict (the whole close convicts it, cheaply, without an
+/// evaluation); `Err` for evidence about another execution. Reads no operand: the accusation names
+/// the leaf, and the dissection it opens is where its cone is argued.
+pub fn palw_tir_named_dissected_leaf_v1(refutation: &PalwTirConeRefutationV1) -> Result<Option<u64>, PalwStepRefuteError> {
+    let binding = &refutation.binding;
+    let v = match check_binding(binding)? {
+        BindingOutcome::Convicted(_) => return Ok(None),
+        BindingOutcome::Verified(v) => v,
+    };
+    let leaf = match check_output_leaf(binding, &v, &refutation.output_opening, &refutation.output_preimage, binding.step_leaf_count)?
+    {
+        Ok(leaf) => leaf,
+        Err(_) => return Ok(None),
+    };
+    let intervals = analyze_ranges(&v.space.program).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    let out = palw_tir_leaf_interval_v1(&v.space, &intervals, &leaf).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    if first_outside(leaf.dtype, &refutation.output_preimage.values_le, out).is_some() {
+        return Ok(None);
+    }
+    Ok(palw_tir_dissect_site_v1(&v.space, &intervals, &leaf).map(|_| refutation.output_opening.leaf_index))
+}
+
+/// **A cone close that names a leaf and carries nothing else** — the binding, the leaf's opening
+/// and preimage, no operand: the proof of a one-move accusation at a dissected leaf under the held
+/// regime, where the accusation opens a dissection rather than being adjudicated
+/// ([`palw_tir_named_dissected_leaf_v1`]).
+pub fn build_tir_named_leaf_refutation_v1(
+    binding: &PalwTirStepBindingV1,
+    leaf: u64,
+    store: &dyn PalwTirEvidenceStoreV1,
+) -> Result<PalwTirConeRefutationV1, PalwTirEvidenceErrorV1> {
+    let missing = |what: String| PalwTirEvidenceErrorV1::Store(what);
+    Ok(PalwTirConeRefutationV1 {
+        binding: binding.clone(),
+        output_opening: store.step_opening(leaf).ok_or_else(|| missing(format!("the opening of leaf {leaf}")))?,
+        output_preimage: store.step_leaf(leaf).ok_or_else(|| missing(format!("step leaf {leaf}")))?,
+        operands: PalwStepInputRowV1 { preimages: Vec::new(), run_siblings: Vec::new() },
+        params: Vec::new(),
+        prompt_token_ids: Vec::new(),
+        prompt_ids_openings: Vec::new(),
+        decode_tokens: None,
+    })
+}
+
 /// The site of `leaf` for a builder.
 fn builder_site(v: &PalwTirVerifiedBindingV1, leaf: &PalwTirLeafV1) -> Result<PalwTirDissectSiteV1, PalwTirEvidenceErrorV1> {
     let intervals = analyze_ranges(&v.space.program).map_err(|e| PalwTirEvidenceErrorV1::Binding(e.to_string()))?;
